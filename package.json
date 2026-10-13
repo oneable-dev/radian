@@ -1,0 +1,29 @@
+{
+  "name": "radian",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A terminal-based, AI-driven development editor powered by Pi Agent.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oneable-dev/radian.git"
+  },
+  "packageManager": "bun@1.4.3",
+  "engines": {
+    "bun": ">=1.4.3"
+  },
+  "scripts": {
+    "start": "bun src/index.ts",
+    "dev": "bun src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.2.0",
+    "@opentui/core": "0.6.2"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.3",
+    "typescript": "7.0.2"
+  }
+}
