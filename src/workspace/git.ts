@@ -1,6 +1,8 @@
 import { basename, resolve } from "node:path";
 import { realpath } from "node:fs/promises";
 import type { Repository, Worktree } from "./model.ts";
+import { capture, ExpectedError } from "../errors.ts";
+import { err, ok, type Result } from "../result.ts";
 
 export function parseWorktrees(porcelain: string): Worktree[] {
   const worktrees: Worktree[] = [];
@@ -26,7 +28,9 @@ export function parseWorktrees(porcelain: string): Worktree[] {
   return worktrees;
 }
 
-export class GitDiscoveryError extends Error {}
+export class GitDiscoveryError extends ExpectedError {
+  constructor(message: string) { super("GIT_DISCOVERY_FAILED", message); }
+}
 
 async function git(cwd: string, args: string[]): Promise<string> {
   const process = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
@@ -37,9 +41,12 @@ async function git(cwd: string, args: string[]): Promise<string> {
   return output;
 }
 
-export async function discoverRepository(cwd: string): Promise<Repository> {
-  const commonDir = await realpath(resolve(cwd, (await git(cwd, ["rev-parse", "--git-common-dir"])).trim()));
-  const worktrees = parseWorktrees(await git(cwd, ["worktree", "list", "--porcelain", "-z"]));
-  const mainTree = worktrees[0];
-  return { id: commonDir, name: mainTree?.name ?? basename(cwd), worktrees };
+export async function discoverRepository(cwd: string): Promise<Result<Repository, ExpectedError>> {
+  const discovered = await capture(async () => {
+    const commonDir = await realpath(resolve(cwd, (await git(cwd, ["rev-parse", "--git-common-dir"])).trim()));
+    const worktrees = parseWorktrees(await git(cwd, ["worktree", "list", "--porcelain", "-z"]));
+    const mainTree = worktrees[0];
+    return { id: commonDir, name: mainTree?.name ?? basename(cwd), worktrees };
+  });
+  return discovered.ok ? ok(discovered.value) : err(discovered.error);
 }

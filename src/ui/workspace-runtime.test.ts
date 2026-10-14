@@ -7,6 +7,7 @@ import { piSessionFactory } from "../sessions/pi-session-adapter.ts";
 import { offlineRuntime } from "../testing/offline-runtime.ts";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { WorkspaceView } from "./workspace.ts";
+import { expectOk } from "../testing/results.ts";
 
 async function mount() {
   const fixture = await createWorktreeFixture();
@@ -17,9 +18,9 @@ async function mount() {
   const prompts: { id: string; text: string; done: Promise<void> }[] = [];
   const closes: Promise<void>[] = [];
   const view = new WorkspaceView(setup.renderer, selection, {
-    onNewSession: (id) => { creation.push(registry.create(id)); },
-    onCloseSession: (_tree, id) => { closes.push(registry.close(id)); },
-    onPrompt: (id, text) => { prompts.push({ id, text, done: registry.prompt(id, text) }); },
+    onNewSession: (id) => { creation.push(registry.create(id).then(expectOk)); },
+    onCloseSession: (_tree, id) => { closes.push(registry.close(id).then(expectOk)); },
+    onPrompt: (id, text) => { prompts.push({ id, text, done: registry.prompt(id, text).then((result) => { if (!result.ok && result.error.code !== "CANCELLED") expectOk(result); }) }); },
     getSessionDetails: (id) => registry.details(id),
   });
   const unsubscribe = registry.subscribe(() => selection.replaceSnapshot(registry.snapshot));

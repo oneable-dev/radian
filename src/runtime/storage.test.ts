@@ -6,6 +6,7 @@ import { Value } from "typebox/value";
 import { commandSchema, emptyPreferences, parseSnapshot, protocolVersion, type RuntimeManifest } from "./protocol.ts";
 import { privateDirectory, runtimePaths, RuntimeStore } from "./storage.ts";
 import { RuntimeClient } from "./client.ts";
+import { expectOk, expectError } from "../testing/results.ts";
 
 test("유효하지 않은 프로토콜 명령과 snapshot은 실행 경계에서 거부한다", () => {
   // Local IPC is private but still receives untyped JSON across a process boundary.
@@ -16,7 +17,7 @@ test("유효하지 않은 프로토콜 명령과 snapshot은 실행 경계에서
 
   // Unknown operations and incompatible snapshots cannot mutate runtime state.
   expect(accepted).toEqual([false, false, false]);
-  expect(() => parseSnapshot({ version: 99 })).toThrow("Incompatible");
+  expect(expectError(parseSnapshot({ version: 99 })).code).toBe("PROTOCOL_ERROR");
 });
 
 test("live/test 모드와 상태 디렉터리는 다른 endpoint를 사용하고 긴 경로도 socket 제한을 넘지 않는다", () => {
@@ -44,7 +45,7 @@ test("손상된 manifest는 빈 성공으로 바꾸거나 원본 파일을 덮�
     const store = new RuntimeStore(paths);
 
     // Refuse the incompatible file rather than creating a new empty checkpoint.
-    await expect(store.load("/repo/.git")).rejects.toThrow("Invalid runtime manifest");
+    expect(expectError(await store.load("/repo/.git")).code).toBe("STORAGE_FAILED");
 
     // The original input remains available for recovery.
     expect(await readFile(paths.manifest, "utf8")).toBe('{"version":99}');
@@ -65,8 +66,8 @@ test("manifest는 원자적으로 저장되고 다른 레포의 상태로 복원
     await Promise.all([store.save(first), store.save(second)]);
 
     // Restore returns the last checkpoint only to its matching repository.
-    expect((await store.load("/repo/.git"))?.preferences.drafts.id).toBe("latest draft");
-    await expect(store.load("/other/.git")).rejects.toThrow("Invalid runtime manifest");
+    expect(expectOk(await store.load("/repo/.git"))?.preferences.drafts.id).toBe("latest draft");
+    expect(expectError(await store.load("/other/.git")).code).toBe("STORAGE_FAILED");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -78,8 +79,8 @@ test("이전 실행 서비스에는 history 지원 부재를 설명하고 자동
   });
 
   // The guard rejects locally, without sending a stop or starting a replacement daemon.
-  await expect(client.listHistory("worktree")).rejects.toThrow("Finish its jobs");
-  await expect(client.resume("worktree", "saved")).rejects.toThrow("predates history support");
+  expect(expectError(await client.listHistory("worktree")).code).toBe("UNSUPPORTED_CAPABILITY");
+  expect(expectError(await client.resume("worktree", "saved")).code).toBe("UNSUPPORTED_CAPABILITY");
 
   // The original service identity remains intact for ordinary execution and user-directed shutdown.
   expect(client.snapshot.instance).toBe("legacy");

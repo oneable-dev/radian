@@ -2,6 +2,8 @@ import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import type { Repository } from "../workspace/model.ts";
 import type { SessionRecord } from "../sessions/session-registry.ts";
+import { errorCodes, ExpectedError, InputError, parseJson, ProtocolError, type ErrorCode } from "../errors.ts";
+import { err, ok, type Result } from "../result.ts";
 
 export const protocolVersion = 1;
 export const maxFrameBytes = 8 * 1024 * 1024;
@@ -50,13 +52,33 @@ export const commandSchema = Type.Union([
   Type.Object({ type: Type.Literal("stop") }),
 ]);
 export type RuntimeCommand = Static<typeof commandSchema>;
+export const wireErrorSchema = Type.Object({
+  // JSON enum and TypeScript union share one source; Type.Union(map()) loses tuple inference.
+  code: Type.Unsafe<ErrorCode>({ type: "string", enum: [...errorCodes] }), message: Type.String(),
+  outcome: Type.Union([Type.Literal("rejected"), Type.Literal("unknown")]),
+});
+export type WireError = { code: ErrorCode; message: string; outcome: "rejected" | "unknown" };
 export const replySchema = Type.Union([
-  Type.Object({ ok: Type.Literal(true), value: Type.Union([Type.String(), Type.Null()]) }),
-  Type.Object({ ok: Type.Literal(false), error: Type.String() }),
+  Type.Object({ ok: Type.Literal(true), value: Type.Union([Type.String(), Type.Null()]), warnings: Type.Optional(Type.Array(wireErrorSchema)) }),
+  Type.Object({ ok: Type.Literal(false), error: Type.Union([Type.String(), wireErrorSchema]) }),
 ]);
-
-export function parseSnapshot(value: unknown): RuntimeSnapshot {
-  if (!Value.Check(snapshotSchema, value)) throw new Error("Incompatible or malformed runtime snapshot.");
-  return value;
+export function wireError(error: ExpectedError, outcome: WireError["outcome"] = "rejected"): WireError {
+  return { code: error.code, message: error.message, outcome };
 }
-export function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
+export function errorStatus(error: ExpectedError): number {
+  switch (error.code) {
+    case "INVALID_INPUT": return 400;
+    case "SESSION_NOT_OPEN": case "HISTORY_UNAVAILABLE": return 404;
+    case "SESSION_BUSY": case "SESSION_CONFLICT": case "CANCELLED": return 409;
+    case "RUNTIME_STOPPING": case "RUNTIME_ABSENT": case "CONNECTION_FAILED": case "CONNECTION_TIMEOUT": return 503;
+    case "UNSUPPORTED_CAPABILITY": case "PROTOCOL_ERROR": return 422;
+    default: return 500;
+  }
+}
+export function parseCommand(text: string): Result<RuntimeCommand, InputError> {
+  const parsed = parseJson(text, "command"); if (!parsed.ok) return parsed;
+  return Value.Check(commandSchema, parsed.value) ? ok(parsed.value) : err(new InputError("Malformed runtime command."));
+}
+export function parseSnapshot(value: unknown): Result<RuntimeSnapshot, ProtocolError> {
+  return Value.Check(snapshotSchema, value) ? ok(value) : err(new ProtocolError("Incompatible or malformed runtime snapshot."));
+}

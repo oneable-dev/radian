@@ -1,6 +1,7 @@
 import { chmod } from "node:fs/promises";
 import { join } from "node:path";
-import { Value } from "typebox/value";
+import { CancelledError, collectCleanup, InputError, SessionError, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
+import { err, ok, type Result } from "../result.ts";
 import { SessionRegistry, type SessionRecord } from "../sessions/session-registry.ts";
 import { piSessionFactory } from "../sessions/pi-session-adapter.ts";
 import { SessionHistory } from "../sessions/history.ts";
@@ -8,20 +9,23 @@ import { offlineRuntime } from "../testing/offline-runtime.ts";
 import { discoverRepository } from "../workspace/git.ts";
 import type { Repository } from "../workspace/model.ts";
 import { acquireRuntime, privateDirectory, RuntimeStore, runtimePaths } from "./storage.ts";
-import { commandSchema, emptyPreferences, errorMessage, maxFrameBytes, protocolVersion,
+import { emptyPreferences, errorStatus, maxFrameBytes, parseCommand, protocolVersion, wireError,
   type RuntimeCommand, type RuntimeManifest, type RuntimePreferences, type RuntimeSnapshot } from "./protocol.ts";
 
 export async function runRuntime(cwd: string, offline: boolean, stateRoot?: string): Promise<void> {
-  const repository = await discoverRepository(cwd);
+  const discovered = await discoverRepository(cwd); if (!discovered.ok) throw discovered.error;
+  const repository = discovered.value;
   const paths = runtimePaths(repository.id, offline, stateRoot);
   await privateDirectory(paths.directory);
   const release = await acquireRuntime(paths);
   if (!release) return; // Another launch owns initialization or the active service.
   let server: Bun.Server<undefined> | undefined;
   let runtime: WorkspaceRuntime | undefined;
-  try {
+  await withCleanup(async () => {
     const store = new RuntimeStore(paths);
-    const manifest = await store.load(repository.id);
+    const loaded = await store.load(repository.id);
+    if (!loaded.ok) throw loaded.error; // CLI startup boundary, not a domain API.
+    const manifest = loaded.value;
     const repositories = mergeRepositories(repository, manifest);
     const options = offline ? await offlineRuntime(join(paths.directory, "offline-agent")) : undefined;
     const registry = new SessionRegistry(repositories, piSessionFactory(options));
@@ -36,13 +40,15 @@ export async function runRuntime(cwd: string, offline: boolean, stateRoot?: stri
     const stop = (): void => stopped.resolve();
     process.on("SIGTERM", stop); process.on("SIGINT", stop);
     runtime.onStop = stop;
-    try { await stopped.promise; await runtime.stop(); }
+    try { await stopped.promise; const result = await runtime.stop(); if (!result.ok) throw result.error; }
     finally { process.off("SIGTERM", stop); process.off("SIGINT", stop); }
-  } finally {
-    await server?.stop(true);
-    if (runtime && !runtime.stopped) await runtime.stop();
-    await release();
-  }
+  }, async () => {
+    await withCleanup(async () => {
+      await withCleanup(async () => { await server?.stop(true); }, async () => {
+        if (runtime && !runtime.stopped) { const result = await runtime.stop(); if (!result.ok) throw result.error; }
+      });
+    }, release);
+  });
 }
 
 class WorkspaceRuntime {
@@ -66,15 +72,15 @@ class WorkspaceRuntime {
 
   async restore(records: readonly SessionRecord[]): Promise<void> {
     for (const record of records) {
-      try { await this.registry.restore(record); }
-      catch (error) {
-        const state = { ...record.state, status: "failure" as const, error: `Could not restore: ${errorMessage(error)}` };
+      const restored = await this.registry.restore(record);
+      if (!restored.ok) {
+        const state = { ...record.state, status: "failure" as const, error: `Could not restore: ${restored.error.message}` };
         this.failedRecovery.set(record.id, { ...record, state,
           subagents: record.subagents.map((agent) => ({ ...agent, status: agent.status === "working" ? null : agent.status })) });
       }
     }
     this.initializing = false;
-    await this.checkpoint();
+    const saved = await this.checkpoint(); if (!saved.ok) throw saved.error;
   }
 
   get snapshot(): RuntimeSnapshot {
@@ -85,7 +91,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "typed-errors"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || this.notice };
   }
@@ -97,49 +103,57 @@ class WorkspaceRuntime {
       if (path === "/events" && request.method === "GET") return this.events();
       if (path === "/history" && request.method === "GET") {
         const worktreeId = new URL(request.url).searchParams.get("worktreeId");
-        if (!worktreeId) throw new Error("Missing worktree for history.");
-        return Response.json(await this.history.list(worktreeId));
+        if (!worktreeId) return this.rejected(new InputError("Missing worktree for history."));
+        const history = await this.history.list(worktreeId);
+        return history.ok ? Response.json(history.value) : this.rejected(history.error);
       }
       if (path !== "/command" || request.method !== "POST") return new Response("Not found", { status: 404 });
-      if (Number(request.headers.get("content-length")) > maxFrameBytes) throw new Error("Command is too large.");
+      if (Number(request.headers.get("content-length")) > maxFrameBytes) return this.rejected(new InputError("Command is too large."));
       const text = await request.text();
-      if (Buffer.byteLength(text) > maxFrameBytes) throw new Error("Command is too large.");
-      const command: unknown = JSON.parse(text);
-      if (!Value.Check(commandSchema, command)) throw new Error("Malformed runtime command.");
-      if (this.stopped) throw new Error("Runtime is stopping.");
-      const value = await this.command(command);
-      return Response.json({ ok: true, value });
-    } catch (error) { return Response.json({ ok: false, error: errorMessage(error) }, { status: 400 }); }
+      if (Buffer.byteLength(text) > maxFrameBytes) return this.rejected(new InputError("Command is too large."));
+      const command = parseCommand(text); if (!command.ok) return this.rejected(command.error);
+      if (this.stopped) return this.rejected(new SessionError("RUNTIME_STOPPING", "Runtime is stopping."));
+      const result = await this.command(command.value);
+      if (!result.ok) return this.rejected(result.error);
+      // Commands above have already been accepted. A checkpoint failure is NOT a rejected action.
+      const checkpoint = await this.checkpoint();
+      return Response.json({ ok: true, value: result.value, ...(!checkpoint.ok ? { warnings: [wireError(checkpoint.error)] } : {}) });
+    } catch (error) {
+      reportUnexpected(error, "runtime request");
+      return Response.json({ ok: false, error: { code: "REMOTE_INTERNAL_ERROR", message: "Unexpected runtime error. Inspect runtime.log; action outcome may be unknown.", outcome: "unknown" } }, { status: 500 });
+    }
   }
 
-  private async command(command: RuntimeCommand): Promise<string | null> {
+  private rejected(error: ExpectedError): Response {
+    const status = errorStatus(error);
+    if (status >= 500) console.error(`[radian:${error.code}] Runtime operation failed`, error);
+    return Response.json({ ok: false, error: wireError(error) }, { status });
+  }
+
+  private async command(command: RuntimeCommand): Promise<Result<string | null, ExpectedError>> {
     switch (command.type) {
       case "create": {
-        const id = await this.registry.create(command.worktreeId);
-        await this.checkpoint(); return id;
+        return this.registry.create(command.worktreeId);
       }
       case "resume": {
-        const id = await this.history.resume(command.worktreeId, command.savedId);
-        await this.checkpoint(); return id;
+        return this.history.resume(command.worktreeId, command.savedId);
       }
       case "close": {
         if (this.failedRecovery.delete(command.sessionId)) this.changed();
-        else void this.registry.close(command.sessionId).catch((error: unknown) => this.report(error));
-        await this.checkpoint(); return null;
+        else this.observe(this.registry.close(command.sessionId));
+        return ok(null);
       }
       case "prompt": {
-        if (this.failedRecovery.has(command.sessionId)) throw new Error("This session needs recovery before it can run.");
+        if (this.failedRecovery.has(command.sessionId)) return err(new SessionError("SESSION_NOT_OPEN", "This session needs recovery before it can run."));
         const state = this.registry.details(command.sessionId);
-        if (!state) throw new Error("Session is not open.");
-        if (state.status === "working") throw new Error("This session is already running.");
-        if (!command.text.trim()) throw new Error("A prompt must not be empty.");
-        // The response acknowledges submission, not completion. The daemon owns this task.
-        void this.registry.prompt(command.sessionId, command.text).catch((error: unknown) => this.report(error));
-        await this.checkpoint();
-        return null;
+        if (!state) return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
+        if (state.status === "working") return err(new SessionError("SESSION_BUSY", "This session is already running."));
+        if (!command.text.trim()) return err(new InputError("A prompt must not be empty."));
+        this.observe(this.registry.prompt(command.sessionId, command.text));
+        return ok(null);
       }
-      case "preferences": this.preferences = command.preferences; await this.checkpoint(); return null;
-      case "stop": setTimeout(() => this.onStop(), 20); return null;
+      case "preferences": this.preferences = command.preferences; return ok(null);
+      case "stop": setTimeout(() => this.onStop(), 20); return ok(null);
     }
   }
 
@@ -168,29 +182,38 @@ class WorkspaceRuntime {
     this.checkpointTimer = setTimeout(() => {
       this.checkpointTimer = undefined;
       void this.checkpoint().catch((error: unknown) => {
-        this.persistenceError = `Runtime persistence failed: ${errorMessage(error)}`;
+        this.persistenceError = reportUnexpected(error, "checkpoint");
         for (const subscriber of this.subscribers) subscriber(this.snapshot);
       });
     }, 100);
   }
 
-  private report(error: unknown): void { this.notice = errorMessage(error); this.changed(); }
-  private async checkpoint(manifest?: RuntimeManifest): Promise<void> {
-    await this.store.save(manifest ?? { version: protocolVersion, repositoryId: this.repositoryId,
+  private observe(task: Promise<Result<void, ExpectedError>>): void {
+    void task.then((result) => {
+      if (!result.ok && !(result.error instanceof CancelledError)) {
+        if (errorStatus(result.error) >= 500) console.error(`[radian:${result.error.code}] Background operation failed`, result.error);
+        this.notice = result.error.message; this.changed();
+      }
+    }).catch((error: unknown) => { this.notice = reportUnexpected(error, "background operation"); this.changed(); });
+  }
+  private async checkpoint(manifest?: RuntimeManifest): Promise<Result<void, ExpectedError>> {
+    const saved = await this.store.save(manifest ?? { version: protocolVersion, repositoryId: this.repositoryId,
       repositories: this.registry.snapshot, records: [...this.registry.records, ...this.failedRecovery.values()], preferences: this.preferences });
-    this.persistenceError = "";
+    if (!saved.ok && !this.persistenceError) console.error(`[radian:${saved.error.code}] Checkpoint failed`, saved.error);
+    this.persistenceError = saved.ok ? "" : `Runtime persistence failed: ${saved.error.message}`;
+    if (!saved.ok) for (const subscriber of this.subscribers) subscriber(this.snapshot);
+    return saved;
   }
 
-  async stop(): Promise<void> {
-    if (this.stopped) return;
+  async stop(): Promise<Result<void, ExpectedError>> {
+    if (this.stopped) return ok(undefined);
     this.stopped = true;
     if (this.checkpointTimer) clearTimeout(this.checkpointTimer);
     this.unsubscribe();
     // Stopping the service is NOT explicit session close. Freeze open intent before teardown emits removals.
     const manifest: RuntimeManifest = { version: protocolVersion, repositoryId: this.repositoryId,
       repositories: this.registry.snapshot, records: [...this.registry.records, ...this.failedRecovery.values()], preferences: this.preferences };
-    try { await this.checkpoint(manifest); }
-    finally { await this.registry.shutdown(); }
+    return collectCleanup([this.checkpoint(manifest), this.registry.shutdown()], "Checkpoint or runtime shutdown failed.");
   }
 }
 

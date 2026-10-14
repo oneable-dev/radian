@@ -3,6 +3,7 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discoverRepository, GitDiscoveryError, parseWorktrees } from "./git.ts";
+import { expectOk, expectError } from "../testing/results.ts";
 
 test("NUL 형식은 공백과 개행 경로 및 detached HEAD를 구분한다", () => {
   // NUL delimiters preserve paths that line-based parsing would corrupt.
@@ -34,12 +35,12 @@ test("실제 임시 Git 레포의 linked worktree에서 공통 레포를 찾는�
     await git(["-C", main, "worktree", "add", "-b", "feature/ui", linked]);
 
     // Discovery is read-only and starts from the linked worktree, not the main one.
-    const repository = await discoverRepository(linked);
+    const repository = expectOk(await discoverRepository(linked));
 
     // Both worktree branches and their common repository identity are preserved.
     expect(repository.name).toBe("main repository");
     expect(repository.id).toBe(await realpath(join(main, ".git")));
-    expect((await discoverRepository(main)).id).toBe(repository.id);
+    expect(expectOk(await discoverRepository(main)).id).toBe(repository.id);
     expect(repository.worktrees.map((tree) => tree.branch)).toEqual(["main", "feature/ui"]);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -54,7 +55,7 @@ test("Git 레포가 아닌 경로의 오류를 빈 성공 결과로 숨기지 �
     const result = discoverRepository(directory);
 
     // The app's error boundary receives the original diagnostic.
-    await expect(result).rejects.toBeInstanceOf(GitDiscoveryError);
+    expect(expectError(await result)).toBeInstanceOf(GitDiscoveryError);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

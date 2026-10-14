@@ -140,6 +140,26 @@ History lookup is a capability added to the existing service protocol. A service
 feature keeps its running jobs and is **not** automatically restarted. The UI reports that it lacks
 history support; finish its jobs and explicitly stop/restart that service to enable the new capability.
 
+### Error contracts
+
+Expected failures use `Result<T, E>` (`ok`/`err` in `src/result.ts`) and custom errors from
+`src/errors.ts`. Session/history/storage/client operations return a failure value with a stable
+code such as `SESSION_BUSY`, `SESSION_CONFLICT`, `HISTORY_CORRUPT`, or `STORAGE_FAILED`.
+Callers branch on the discriminant rather than catch or match human-readable messages.
+
+Exception-based SDK/OS calls classify only known failures and preserve their cause. Unexpected
+exceptions keep their original stack and are logged at the service/UI boundary. SDK tools convert
+failed Results to rejection because that is the SDK tool contract. Cleanup keeps both the original
+and cleanup errors instead of replacing the first failure.
+
+IPC preserves error codes and distinguishes invalid input (400), state conflicts (409), unavailable
+history (404), and operational/internal failures (500). A command already accepted before a
+checkpoint failure returns success **with a persistence warning**; it is not safe to replay that
+command as if it had been rejected. A connection timeout reports an uncertain action outcome.
+Only a missing/refused endpoint triggers service bootstrap, not permission errors or timeouts.
+Older daemon string errors are explicitly tagged `LEGACY_REMOTE_ERROR`; existing services are
+not automatically restarted to upgrade error handling.
+
 ### Workspace search
 
 Click the search field, press `Ctrl+f`, or use `Tab` to focus it. Results update while typing,

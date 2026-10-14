@@ -1,10 +1,12 @@
 import { BoxRenderable, ScrollBoxRenderable, TextRenderable, type CliRenderer, type KeyEvent } from "@opentui/core";
 import type { HistoryItem } from "../sessions/history.ts";
 import type { Worktree } from "../workspace/model.ts";
+import { reportUnexpected, type ExpectedError } from "../errors.ts";
+import type { Result } from "../result.ts";
 
 export type HistoryActions = {
-  list?: (worktreeId: string) => Promise<readonly HistoryItem[]>;
-  resume?: (worktreeId: string, savedId: string) => Promise<string>;
+  list?: (worktreeId: string) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
+  resume?: (worktreeId: string, savedId: string) => Promise<Result<string, ExpectedError>>;
   onOpened: (worktreeId: string, sessionId: string) => void;
   onError: (message: string) => void;
   button: (label: string, activate: () => void) => BoxRenderable;
@@ -54,32 +56,29 @@ export class SessionHistoryPanel {
     if (!this.actions.list) { this.message.content = "Session history UI is deferred."; return; }
     if (!worktree) { this.message.content = "No worktree selected"; return; }
     this.message.content = "Loading saved sessions...";
-    try {
-      const items = await this.actions.list(worktree.id);
-      if (!this.current(generation)) return;
-      this.items = items;
-      this.cursor = Math.max(0, items.findIndex((item) => item.id === selected));
-      this.message.content = items.length ? "↑/↓ select · Enter open" : "No saved sessions";
-      for (const [index, item] of items.entries()) {
-        const row = new BoxRenderable(this.renderer, { id: `history:${item.id}`, height: 2, flexShrink: 0, flexDirection: "column",
-          onMouseDown: (event) => {
-            if (event.button !== 0) return;
-            event.preventDefault(); event.stopPropagation(); this.list.focus(); this.cursor = index; this.paint();
-            void this.openSelected();
-          },
-        });
-        const prefix = item.unavailableReason ? "[Busy] " : item.openSessionId ? "[Open] " : "";
-        row.add(this.text(prefix + item.title, "#CBD5E1"));
-        row.add(this.text(`${item.modified.slice(0, 16).replace("T", " ")} · ${item.messageCount} messages`, "#94A3B8"));
-        this.list.add(row); this.rows.push(row);
-      }
-      this.paint();
-    } catch (error) {
-      if (this.current(generation)) {
-        const message = `History error: ${error instanceof Error ? error.message : String(error)}`;
-        this.message.content = message; this.actions.onError(message);
-      }
+    let result: Result<readonly HistoryItem[], ExpectedError>;
+    try { result = await this.actions.list(worktree.id); }
+    catch (error) { this.showFailure(reportUnexpected(error, "history lookup"), generation); return; }
+    if (!this.current(generation)) return;
+    if (!result.ok) { this.showFailure(`History error: ${result.error.message}`, generation); return; }
+    const items = result.value;
+    this.items = items;
+    this.cursor = Math.max(0, items.findIndex((item) => item.id === selected));
+    this.message.content = items.length ? "↑/↓ select · Enter open" : "No saved sessions";
+    for (const [index, item] of items.entries()) {
+      const row = new BoxRenderable(this.renderer, { id: `history:${item.id}`, height: 2, flexShrink: 0, flexDirection: "column",
+        onMouseDown: (event) => {
+          if (event.button !== 0) return;
+          event.preventDefault(); event.stopPropagation(); this.list.focus(); this.cursor = index; this.paint();
+          void this.openSelected();
+        },
+      });
+      const prefix = item.unavailableReason ? "[Busy] " : item.openSessionId ? "[Open] " : "";
+      row.add(this.text(prefix + item.title, "#CBD5E1"));
+      row.add(this.text(`${item.modified.slice(0, 16).replace("T", " ")} · ${item.messageCount} messages`, "#94A3B8"));
+      this.list.add(row); this.rows.push(row);
     }
+    this.paint();
   }
 
   private async openSelected(): Promise<void> {
@@ -89,15 +88,18 @@ export class SessionHistoryPanel {
     if (item.unavailableReason) { this.message.content = item.unavailableReason; return; }
     const generation = this.generation;
     this.resuming = true; this.message.content = "Opening saved session...";
-    try {
-      const id = await this.actions.resume(worktree.id, item.id);
-      if (this.current(generation)) this.actions.onOpened(worktree.id, id);
-    } catch (error) {
-      if (this.current(generation)) {
-        const message = `Resume error: ${error instanceof Error ? error.message : String(error)}`;
-        this.message.content = message; this.actions.onError(message);
-      }
-    } finally { this.resuming = false; }
+    let result: Result<string, ExpectedError>;
+    try { result = await this.actions.resume(worktree.id, item.id); }
+    catch (error) { this.showFailure(reportUnexpected(error, "history resume"), generation); return; }
+    finally { this.resuming = false; }
+    if (!this.current(generation)) return;
+    if (!result.ok) { this.showFailure(`Resume error: ${result.error.message}`, generation); return; }
+    this.actions.onOpened(worktree.id, result.value);
+  }
+
+  private showFailure(message: string, generation: number): void {
+    if (!this.current(generation)) return;
+    this.message.content = message; this.actions.onError(message);
   }
 
   private handleKey(key: KeyEvent): void {

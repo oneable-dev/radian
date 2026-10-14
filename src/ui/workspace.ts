@@ -9,6 +9,8 @@ import { rowPresentation, workspaceIcons } from "../workspace/status.ts";
 import type { ExecutionState } from "../sessions/session-registry.ts";
 import type { HistoryItem } from "../sessions/history.ts";
 import { SessionHistoryPanel } from "./session-history.ts";
+import type { Result } from "../result.ts";
+import type { ExpectedError } from "../errors.ts";
 
 export type WorkspaceActions = {
   onNewSession: (worktreeId: string) => void;
@@ -17,8 +19,8 @@ export type WorkspaceActions = {
   getSessionDetails?: (sessionId: string) => ExecutionState | null;
   initialDrafts?: Readonly<Record<string, string>>;
   onDraftChange?: (drafts: Record<string, string>) => void;
-  onListHistory?: (worktreeId: string) => Promise<readonly HistoryItem[]>;
-  onResumeSession?: (worktreeId: string, savedId: string) => Promise<string>;
+  onListHistory?: (worktreeId: string) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
+  onResumeSession?: (worktreeId: string, savedId: string) => Promise<Result<string, ExpectedError>>;
 };
 
 const colors = { text: "#CBD5E1", muted: "#94A3B8", selected: "#1E3A5F", panel: "#0F172A", accent: "#7DD3FC" };

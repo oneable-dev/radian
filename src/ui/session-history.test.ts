@@ -4,6 +4,7 @@ import { demoWorkspace } from "../workspace/demo.ts";
 import { WorkspaceSelection } from "../workspace/selection.ts";
 import type { HistoryItem } from "../sessions/history.ts";
 import { WorkspaceView } from "./workspace.ts";
+import { capture, HistoryError } from "../errors.ts";
 
 const saved = (id: string, title: string, tree = "demo:main"): HistoryItem => ({
   id, title, worktreeId: tree, modified: "2026-10-14T12:34:00.000Z", messageCount: 4, openSessionId: null, unavailableReason: null,
@@ -13,8 +14,8 @@ async function mount(list: (id: string) => Promise<readonly HistoryItem[]>, resu
   const selection = new WorkspaceSelection(demoWorkspace());
   const resumed: string[] = [];
   const view = new WorkspaceView(setup.renderer, selection, {
-    onNewSession: () => {}, onCloseSession: () => {}, onListHistory: list,
-    onResumeSession: async (tree, id) => { resumed.push(`${tree}/${id}`); return resume(tree, id); },
+    onNewSession: () => {}, onCloseSession: () => {}, onListHistory: (id) => capture(() => list(id)),
+    onResumeSession: async (tree, id) => { resumed.push(`${tree}/${id}`); return capture(() => resume(tree, id)); },
   });
   await setup.renderOnce();
   return { ...setup, selection, resumed, view,
@@ -108,7 +109,7 @@ test("새 워크트리로 바뀐 뒤 늦게 온 이전 history 응답은 현재 
 test("empty와 조회 오류를 구분하고 Refresh로 재조회해도 새 세션을 만들지 않는다", async () => {
   // First load fails; refreshing succeeds with an empty history.
   let calls = 0;
-  const app = await mount(async () => { if (++calls === 1) throw new Error("listing unavailable"); return []; });
+  const app = await mount(async () => { if (++calls === 1) throw new HistoryError("HISTORY_UNAVAILABLE", "listing unavailable"); return []; });
   try {
     await app.click("History"); await app.visible("History error:");
 
@@ -126,7 +127,7 @@ test("busy 기록과 resume 실패는 history에서 설명하고 열린 선택�
   // A live writer blocks one saved context; another resume operation reports a host error.
   const app = await mount(async () => [
     { ...saved("busy", "Busy saved"), unavailableReason: "Session is still closing." }, saved("broken", "Broken saved"),
-  ], async () => { throw new Error("Cannot resume saved session"); });
+  ], async () => { throw new HistoryError("HISTORY_UNAVAILABLE", "Cannot resume saved session"); });
   try {
     await app.click("History"); await app.visible("Busy saved");
 
