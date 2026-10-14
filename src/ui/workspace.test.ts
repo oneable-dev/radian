@@ -3,6 +3,7 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { demoWorkspace } from "../workspace/demo.ts";
 import type { Repository } from "../workspace/model.ts";
 import { WorkspaceSelection } from "../workspace/selection.ts";
+import { workspaceIcons } from "../workspace/status.ts";
 import { WorkspaceView } from "./workspace.ts";
 
 async function mount(repositories: readonly Repository[] = demoWorkspace()) {
@@ -123,7 +124,7 @@ test("키보드로 화면 밖 세션을 선택하면 트리를 스크롤하며 �
   const fixture: Repository[] = [{ id: "long-repo", name: "long-repo", worktrees: [{
     id: "long-tree", path: "/demo/long", name: "long", branch: "main",
     sessions: Array.from({ length: 40 }, (_, index) => ({
-      id: `long-${index}`, name: `Long session ${index}`, subagents: [],
+      id: `long-${index}`, name: `Long session ${index}`, status: null, subagents: [],
     })),
   }] }];
   const app = await mount(fixture);
@@ -156,6 +157,50 @@ test("위쪽 화살표로 세션과 워크트리 행을 지나 이전 워크트�
     // Moving beyond B's parent reaches A's last displayed session.
     expect(app.selection.worktree?.id).toBe("demo:main");
     expect(app.selection.sessionId).toBe("a3");
+  } finally { await app.close(); }
+});
+
+test("세션 집계와 subagent의 상태 아이콘을 종류 아이콘과 별도로 표시한다", async () => {
+  // Main A1 is complete but its subagent is working; A2 completed and A3 failed.
+  const app = await mount();
+  try {
+    // Paint normalized fixture data, not SDK events or live runs.
+    const frame = app.captureCharFrame();
+
+    // Repository/worktree icons remain type-specific; each agent row has its own outcome.
+    expect(frame).toContain(`${workspaceIcons.repository} radian [demo]`);
+    expect(frame).toContain(`${workspaceIcons.worktree} radian (main)`);
+    expect(frame).toContain(`${workspaceIcons.working} Workspace layout`);
+    expect(frame).toContain(`${workspaceIcons.working} UI review`);
+    expect(frame).toContain(`${workspaceIcons.complete} Session navigation`);
+    expect(frame).toContain(`${workspaceIcons.failure} Empty states`);
+    expect(frame).toContain(`${workspaceIcons.unreported} Sidebar prototype`);
+  } finally { await app.close(); }
+});
+
+test("트리가 숨겨진 동안 주입한 실패 상태도 다시 표시할 때 선택과 무관하게 반영한다", async () => {
+  // B is selected while A1's working child is tracked in the display snapshot.
+  const app = await mount();
+  try {
+    await app.clickText("Sidebar prototype");
+    await app.clickText("History");
+
+    // A host snapshot reports failure while the tree is not being painted.
+    app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({
+      ...repo, worktrees: repo.worktrees.map((tree) => ({
+        ...tree, sessions: tree.sessions.map((session) => session.id !== "a1" ? session : {
+          ...session, subagents: session.subagents.map((agent) => ({ ...agent, status: "failure" as const })),
+        }),
+      })),
+    })));
+    await app.clickText("Workspace History");
+
+    // The aggregate changes without selecting A or changing repository/worktree types.
+    expect(app.selection.sessionId).toBe("b1");
+    expect(app.captureCharFrame()).toContain(`${workspaceIcons.failure} Workspace layout`);
+    expect(app.captureCharFrame()).toContain(`${workspaceIcons.worktree} radian (main)`);
+    await app.clickText("radian (main)");
+    expect(app.captureCharFrame()).toContain(`${workspaceIcons.failure} Workspace layout`);
   } finally { await app.close(); }
 });
 

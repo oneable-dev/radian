@@ -4,6 +4,7 @@ import {
 } from "@opentui/core";
 import { workspaceRows, type WorkspaceRow } from "../workspace/model.ts";
 import { WorkspaceSelection } from "../workspace/selection.ts";
+import { rowPresentation, workspaceIcons } from "../workspace/status.ts";
 
 export type WorkspaceActions = {
   onNewSession: (worktreeId: string) => void;
@@ -78,6 +79,7 @@ export class WorkspaceView {
     this.root.add(panels);
     this.notice = this.text("UI preview only · no agents running", colors.muted);
     this.root.add(this.notice);
+    this.root.add(this.text(`${workspaceIcons.working} Working · ${workspaceIcons.complete} Complete · ${workspaceIcons.failure} Failure · ${workspaceIcons.unreported} Status not supplied`, colors.muted));
     this.root.add(this.text("Tab focus · ↑/↓ select · n new · x close · Ctrl+C quit", colors.muted));
     renderer.root.add(this.root);
     renderer.keyInput.on("keypress", this.handleGlobalKey);
@@ -173,7 +175,7 @@ export class WorkspaceView {
   };
 
   private resize = (): void => {
-    this.sidebar.width = this.renderer.width < 80 ? 26 : 34;
+    this.sidebar.width = this.renderer.width < 80 ? 26 : 36;
     this.right.visible = this.renderer.width >= 110;
   };
 
@@ -211,8 +213,10 @@ export class WorkspaceView {
     for (const row of rows) {
       const view = this.rows.get(row.key);
       if (!view) continue;
-      view.text.content = row.label;
-      view.text.fg = row.key === this.navigationKey ? colors.accent : colors.text;
+      const presentation = rowPresentation(row);
+      view.text.content = `${presentation.icon} ${row.label}`;
+      view.text.fg = row.key === this.navigationKey && (row.kind === "repository" || row.kind === "worktree")
+        ? colors.accent : presentation.color;
       view.box.backgroundColor = this.selected(row) ? colors.selected : colors.panel;
     }
     const worktree = this.selection.worktree;
