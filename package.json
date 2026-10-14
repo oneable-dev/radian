@@ -16,7 +16,8 @@
   "scripts": {
     "start": "bun src/index.ts",
     "dev": "bun src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.2.0",
