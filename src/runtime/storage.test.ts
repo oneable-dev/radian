@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Value } from "typebox/value";
 import { commandSchema, emptyPreferences, parseSnapshot, protocolVersion, type RuntimeManifest } from "./protocol.ts";
 import { privateDirectory, runtimePaths, RuntimeStore } from "./storage.ts";
+import { RuntimeClient } from "./client.ts";
 
 test("유효하지 않은 프로토콜 명령과 snapshot은 실행 경계에서 거부한다", () => {
   // Local IPC is private but still receives untyped JSON across a process boundary.
@@ -67,4 +68,20 @@ test("manifest는 원자적으로 저장되고 다른 레포의 상태로 복원
     expect((await store.load("/repo/.git"))?.preferences.drafts.id).toBe("latest draft");
     await expect(store.load("/other/.git")).rejects.toThrow("Invalid runtime manifest");
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("이전 실행 서비스에는 history 지원 부재를 설명하고 자동으로 종료하거나 교체하지 않는다", async () => {
+  // Protocol-v1 services may already own user jobs before the additive history capability ships.
+  const client = new RuntimeClient(runtimePaths("/repo/.git", true, "/unused"), {
+    version: protocolVersion, pid: process.pid, instance: "legacy", repositoryId: "/repo/.git", mode: "offline",
+    repositories: [], details: {}, closingCount: 0, preferences: structuredClone(emptyPreferences), notice: "",
+  });
+
+  // The guard rejects locally, without sending a stop or starting a replacement daemon.
+  await expect(client.listHistory("worktree")).rejects.toThrow("Finish its jobs");
+  await expect(client.resume("worktree", "saved")).rejects.toThrow("predates history support");
+
+  // The original service identity remains intact for ordinary execution and user-directed shutdown.
+  expect(client.snapshot.instance).toBe("legacy");
+  await client.disconnect();
 });

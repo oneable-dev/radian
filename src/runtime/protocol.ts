@@ -20,6 +20,7 @@ export type RuntimePreferences = Static<typeof preferencesSchema>;
 export const emptyPreferences: RuntimePreferences = { selection: { worktreeId: null, sessions: {} }, drafts: {} };
 export const snapshotSchema = Type.Object({
   version: Type.Literal(protocolVersion), pid: Type.Integer({ minimum: 1 }), instance: id,
+  capabilities: Type.Optional(Type.Array(Type.String())),
   mode: Type.Union([Type.Literal("live"), Type.Literal("offline")]), repositoryId: id,
   repositories: Type.Array(repository), details: Type.Record(Type.String(), execution),
   closingCount: Type.Integer({ minimum: 0 }), preferences: preferencesSchema, notice: Type.String(),
@@ -37,8 +38,12 @@ export type RuntimeManifest = Omit<Static<typeof manifestSchema>, "repositories"
   readonly repositories: readonly Repository[];
   readonly records: readonly SessionRecord[];
 };
+export const historySchema = Type.Array(Type.Object({ id, worktreeId: id, title: Type.String(), modified: Type.String(),
+  messageCount: Type.Integer({ minimum: 0 }), openSessionId: Type.Union([id, Type.Null()]), unavailableReason: Type.Union([Type.String(), Type.Null()]),
+}));
 export const commandSchema = Type.Union([
   Type.Object({ type: Type.Literal("create"), worktreeId: id }),
+  Type.Object({ type: Type.Literal("resume"), worktreeId: id, savedId: id }),
   Type.Object({ type: Type.Literal("close"), sessionId: id }),
   Type.Object({ type: Type.Literal("prompt"), sessionId: id, text: Type.String({ minLength: 1, maxLength: 1000000 }) }),
   Type.Object({ type: Type.Literal("preferences"), preferences: preferencesSchema }),

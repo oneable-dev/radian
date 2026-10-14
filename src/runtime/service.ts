@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { Value } from "typebox/value";
 import { SessionRegistry, type SessionRecord } from "../sessions/session-registry.ts";
 import { piSessionFactory } from "../sessions/pi-session-adapter.ts";
+import { SessionHistory } from "../sessions/history.ts";
 import { offlineRuntime } from "../testing/offline-runtime.ts";
 import { discoverRepository } from "../workspace/git.ts";
 import type { Repository } from "../workspace/model.ts";
@@ -24,7 +25,8 @@ export async function runRuntime(cwd: string, offline: boolean, stateRoot?: stri
     const repositories = mergeRepositories(repository, manifest);
     const options = offline ? await offlineRuntime(join(paths.directory, "offline-agent")) : undefined;
     const registry = new SessionRegistry(repositories, piSessionFactory(options));
-    runtime = new WorkspaceRuntime(registry, repository.id, offline, store, manifest?.preferences ?? emptyPreferences);
+    runtime = new WorkspaceRuntime(registry, repository.id, offline, store, manifest?.preferences ?? emptyPreferences,
+      new SessionHistory(repositories, registry, options?.sessionDir));
     await runtime.restore(manifest?.records ?? []);
     server = Bun.serve({ unix: paths.socket,
       fetch: (request) => runtime!.fetch(request),
@@ -57,7 +59,7 @@ class WorkspaceRuntime {
   private initializing = true;
 
   constructor(private readonly registry: SessionRegistry, private readonly repositoryId: string,
-    private readonly offline: boolean, private readonly store: RuntimeStore, preferences: RuntimePreferences) {
+    private readonly offline: boolean, private readonly store: RuntimeStore, preferences: RuntimePreferences, private readonly history: SessionHistory) {
     this.preferences = preferences;
     this.unsubscribe = registry.subscribe(() => this.changed());
   }
@@ -83,7 +85,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || this.notice };
   }
@@ -93,6 +95,11 @@ class WorkspaceRuntime {
       const path = new URL(request.url).pathname;
       if (path === "/snapshot" && request.method === "GET") return Response.json(this.snapshot);
       if (path === "/events" && request.method === "GET") return this.events();
+      if (path === "/history" && request.method === "GET") {
+        const worktreeId = new URL(request.url).searchParams.get("worktreeId");
+        if (!worktreeId) throw new Error("Missing worktree for history.");
+        return Response.json(await this.history.list(worktreeId));
+      }
       if (path !== "/command" || request.method !== "POST") return new Response("Not found", { status: 404 });
       if (Number(request.headers.get("content-length")) > maxFrameBytes) throw new Error("Command is too large.");
       const text = await request.text();
@@ -109,6 +116,10 @@ class WorkspaceRuntime {
     switch (command.type) {
       case "create": {
         const id = await this.registry.create(command.worktreeId);
+        await this.checkpoint(); return id;
+      }
+      case "resume": {
+        const id = await this.history.resume(command.worktreeId, command.savedId);
         await this.checkpoint(); return id;
       }
       case "close": {

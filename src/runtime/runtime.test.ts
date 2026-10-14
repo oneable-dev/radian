@@ -193,3 +193,50 @@ test("손상된 저장 기록은 복원 오류로 표시하고 빈 세션으로 
     expect(await readFile(file, "utf8")).toBe("corrupt conversation\n");
   } finally { await app.cleanup(); }
 }, 20000);
+
+test("IPC history는 워크트리별 SDK 기록을 열고 이미 열린 saved ID는 기존 항목을 반환한다", async () => {
+  // The real daemon discovers saved SDK files in a shared offline history directory.
+  const app = await setup();
+  try {
+    const client = await app.connect();
+    const main = app.repository.worktrees[0]!.id; const feature = app.repository.worktrees[1]!.id;
+    const a = await client.create(main); const b = await client.create(feature);
+    await client.prompt(a, "read"); await client.prompt(b, "write");
+    await observed(client, (state) => state.details[a]?.status === "complete" && state.details[b]?.status === "complete");
+    const saved = (await client.listHistory(main))[0]!;
+    const file = (await app.manifest()).records.find((record) => record.id === a)!.sessionFile!;
+
+    // Existing and closed histories both use the resume boundary, never SDK switch/fork.
+    expect(await client.resume(main, saved.id)).toBe(a);
+    await client.closeSession(a); await observed(client, (state) => state.closingCount === 0 && !state.details[a]);
+    const reopened = await client.resume(main, saved.id);
+
+    // The same file/context appears as another open item, and cross-worktree IDs stay rejected.
+    expect(reopened).not.toBe(a);
+    expect(client.snapshot.details[reopened]?.output).toContain("main-worktree-marker");
+    expect((await app.manifest()).records.find((record) => record.id === reopened)?.sessionFile).toBe(file);
+    expect(await client.listHistory(main)).toHaveLength(1);
+    expect((await client.listHistory(feature))[0]?.title).toBe("write");
+    await expect(client.resume(feature, saved.id)).rejects.toThrow("not available");
+  } finally { await app.cleanup(); }
+}, 20000);
+
+test("현재 실행 중인 subagent의 저장 파일은 history로 중복 실행하지 않는다", async () => {
+  // A child is an owned writer even though its file is a valid SDK saved conversation.
+  const app = await setup();
+  try {
+    const client = await app.connect(); const main = app.repository.worktrees[0]!.id;
+    const id = await client.create(main); await client.prompt(id, "delegate");
+    await observed(client, (state) => state.repositories[0]?.worktrees[0]?.sessions[0]?.subagents[0]?.status === "working");
+    let childId: string | undefined;
+    await until(async () => { childId = (await client.listHistory(main)).find((entry) => entry.title === "slow")?.id; return !!childId; });
+
+    // A history request cannot turn an active owned child into a second independent writer.
+    const item = (await client.listHistory(main)).find((entry) => entry.id === childId)!;
+    await expect(client.resume(main, childId!)).rejects.toThrow("active subagent");
+
+    // Parent ownership and the single open-session item are unchanged.
+    expect(item.unavailableReason).toContain("active subagent");
+    expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions.map((session) => session.id)).toEqual([id]);
+  } finally { await app.cleanup(); }
+}, 20000);

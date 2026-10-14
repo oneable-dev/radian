@@ -98,6 +98,16 @@ export class SessionRegistry {
     return this.entries.get(id)?.executor?.sessionFile;
   }
 
+  historyOwnership(canonicalFile: string): { openSessionId: string | null; unavailableReason: string | null } {
+    const owner = this.fileOwners.get(canonicalFile);
+    if (!owner) return { openSessionId: null, unavailableReason: null };
+    const entry = this.entries.get(owner);
+    if (entry?.phase === "open") return { openSessionId: entry.id, unavailableReason: null };
+    const unavailableReason = !entry ? "Saved session belongs to an active subagent."
+      : entry.phase === "creating" ? "Saved session is being opened. Try again shortly." : "Session is still closing. Try again after cleanup.";
+    return { openSessionId: null, unavailableReason };
+  }
+
   get records(): readonly SessionRecord[] {
     return [...this.entries.values()].filter((entry) => entry.phase === "open").map((entry) => ({
       id: entry.id, name: entry.name, worktreeId: entry.worktree.id,

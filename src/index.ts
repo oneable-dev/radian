@@ -98,6 +98,8 @@ if (args.includes("--runtime-service")) {
         ...(client ? {
           onPrompt: (id: string, text: string) => { void client.prompt(id, text).catch(report); },
           getSessionDetails: (id: string) => client.snapshot.details[id] ?? null,
+          onListHistory: (worktreeId: string) => client.listHistory(worktreeId),
+          onResumeSession: (worktreeId: string, savedId: string) => client.resume(worktreeId, savedId),
           initialDrafts: preferences.drafts,
           onDraftChange: (drafts: Record<string, string>) => { preferences.drafts = drafts; persist(); },
         } : {}),

@@ -3,7 +3,8 @@ import { open } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Value } from "typebox/value";
 import type { Repository } from "../workspace/model.ts";
-import { emptyPreferences, errorMessage, maxFrameBytes, parseSnapshot, replySchema,
+import type { HistoryItem } from "../sessions/history.ts";
+import { emptyPreferences, errorMessage, historySchema, maxFrameBytes, parseSnapshot, replySchema,
   type RuntimeCommand, type RuntimePreferences, type RuntimeSnapshot } from "./protocol.ts";
 import { privateDirectory, runtimePaths, type RuntimePaths } from "./storage.ts";
 
@@ -82,6 +83,44 @@ export class RuntimeClient {
     if (!id) throw new Error("Runtime did not return a session ID.");
     return id;
   }
+  async listHistory(worktreeId: string): Promise<readonly HistoryItem[]> {
+    this.requireHistory();
+    const response = await fetch(`http://localhost/history?worktreeId=${encodeURIComponent(worktreeId)}`, {
+      unix: this.paths.socket, signal: AbortSignal.timeout(15000),
+    });
+    const value: unknown = await response.json();
+    if (!response.ok) {
+      if (Value.Check(replySchema, value) && !value.ok) throw new Error(value.error);
+      throw new Error("History request failed.");
+    }
+    if (!Value.Check(historySchema, value)) throw new Error("Malformed history response.");
+    return value;
+  }
+  async resume(worktreeId: string, savedId: string): Promise<string> {
+    this.requireHistory();
+    const id = await this.command({ type: "resume", worktreeId, savedId });
+    if (!id) throw new Error("Runtime did not return a resumed session ID.");
+    await this.waitForOpen(id);
+    return id;
+  }
+  private waitForOpen(id: string): Promise<void> {
+    const present = () => this.snapshot.repositories.some((repo) => repo.worktrees.some((tree) => tree.sessions.some((session) => session.id === id)));
+    if (present()) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { unsubscribe(); reject(new Error("Resumed session did not reach the workspace snapshot.")); }, 15000);
+      const unsubscribe = this.subscribe(() => {
+        if (!present() && !this.failure) return;
+        clearTimeout(timer); unsubscribe();
+        if (this.failure) reject(new Error(this.failure)); else resolve();
+      });
+    });
+  }
+  private requireHistory(): void {
+    if (!this.state.capabilities?.includes("history")) {
+      throw new Error("Running service predates history support. Finish its jobs, explicitly stop it, then restart radian.");
+    }
+  }
+
   closeSession(sessionId: string): Promise<void> {
     this.hidden.add(sessionId); this.emit();
     return this.command({ type: "close", sessionId }).then(() => {}).catch((error: unknown) => {

@@ -7,6 +7,8 @@ import { WorkspaceSelection } from "../workspace/selection.ts";
 import { filterWorkspaces } from "../workspace/filter-workspaces.ts";
 import { rowPresentation, workspaceIcons } from "../workspace/status.ts";
 import type { ExecutionState } from "../sessions/session-registry.ts";
+import type { HistoryItem } from "../sessions/history.ts";
+import { SessionHistoryPanel } from "./session-history.ts";
 
 export type WorkspaceActions = {
   onNewSession: (worktreeId: string) => void;
@@ -15,6 +17,8 @@ export type WorkspaceActions = {
   getSessionDetails?: (sessionId: string) => ExecutionState | null;
   initialDrafts?: Readonly<Record<string, string>>;
   onDraftChange?: (drafts: Record<string, string>) => void;
+  onListHistory?: (worktreeId: string) => Promise<readonly HistoryItem[]>;
+  onResumeSession?: (worktreeId: string, savedId: string) => Promise<string>;
 };
 
 const colors = { text: "#CBD5E1", muted: "#94A3B8", selected: "#1E3A5F", panel: "#0F172A", accent: "#7DD3FC" };
@@ -27,7 +31,7 @@ export class WorkspaceView {
   private readonly search: InputRenderable;
   private readonly tree: ScrollBoxRenderable;
   private readonly resultMessage: TextRenderable;
-  private readonly history: TextRenderable;
+  private readonly history: SessionHistoryPanel;
   private readonly center: BoxRenderable;
   private readonly centerTitle: TextRenderable;
   private readonly centerDetails: TextRenderable;
@@ -83,10 +87,19 @@ export class WorkspaceView {
       contentOptions: { flexDirection: "column" }, onKeyDown: (key) => this.handleTreeKey(key),
     });
     this.resultMessage = this.text("", colors.muted);
-    this.history = this.text("Session history UI is deferred.", colors.muted);
+    this.history = new SessionHistoryPanel(renderer, {
+      ...(actions.onListHistory ? { list: actions.onListHistory } : {}),
+      ...(actions.onResumeSession ? { resume: actions.onResumeSession } : {}),
+      button: (label, activate) => this.button(label, activate),
+      onError: (message) => this.setNotice(message),
+      onOpened: (worktreeId, sessionId) => {
+        this.selection.selectSession(worktreeId, sessionId);
+        this.setTab("workspace"); this.tree.focus();
+      },
+    });
     this.sidebar.add(this.resultMessage);
     this.sidebar.add(this.tree);
-    this.sidebar.add(this.history);
+    this.sidebar.add(this.history.root);
     this.center = new BoxRenderable(renderer, { flexGrow: 1, minWidth: 0, padding: 1, flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
     this.centerTitle = this.text("", colors.accent);
     this.centerDetails = this.text("", colors.muted);
@@ -181,6 +194,8 @@ export class WorkspaceView {
 
   private setTab(tab: "workspace" | "history"): void {
     this.tab = tab;
+    if (tab === "workspace") this.history.hide();
+    else this.history.show(this.selection.worktree);
     this.render();
   }
 
@@ -211,10 +226,11 @@ export class WorkspaceView {
       key.preventDefault();
       key.stopPropagation();
       this.search.value = "";
-    } else if (key.name === "return" && this.tab === "workspace") {
+    } else if (key.name === "return") {
       key.preventDefault();
       key.stopPropagation();
-      this.tree.focus();
+      if (this.tab === "workspace") this.tree.focus();
+      else this.history.list.focus();
     }
   }
 
@@ -268,6 +284,10 @@ export class WorkspaceView {
     key.stopPropagation();
     const targets = [this.search, this.workspaceTab, this.historyTab];
     if (this.tab === "workspace") targets.push(this.newButton, this.closeButton, this.tree);
+    else {
+      if (this.history.refreshButton.visible) targets.push(this.history.refreshButton);
+      targets.push(this.history.list);
+    }
     if (this.emptyNewButton.visible) targets.push(this.emptyNewButton);
     if (this.runtimePanel.visible) targets.push(this.prompt);
     const index = targets.findIndex((target) => target === this.renderer.currentFocusedRenderable);
@@ -352,7 +372,8 @@ export class WorkspaceView {
     this.resultMessage.content = this.search.value ? "No matching workspaces" : "No repositories";
     this.resultMessage.visible = this.tab === "workspace" && rows.length === 0;
     this.tree.visible = this.tab === "workspace";
-    this.history.visible = this.tab === "history";
+    this.history.root.visible = this.tab === "history";
+    if (this.tab === "history") this.history.updateScope(worktree);
     this.newButton.visible = this.tab === "workspace";
     this.closeButton.visible = this.tab === "workspace";
     this.workspaceTab.backgroundColor = this.tab === "workspace" ? colors.selected : colors.panel;
@@ -365,6 +386,7 @@ export class WorkspaceView {
     if (this.disposed) return;
     this.disposed = true;
     this.unsubscribe();
+    this.history.dispose();
     this.search.off(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.prompt.off(InputRenderableEvents.INPUT, this.handleDraftInput);
     this.renderer.keyInput.off("keypress", this.handleGlobalKey);
