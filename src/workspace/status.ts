@@ -1,13 +1,13 @@
+import { icons } from "../icons.ts";
 import type { AgentStatus, OpenSession, WorkspaceRow } from "./model.ts";
 
-// Codicon names/code points from Nerd Fonts 3.5.1 glyphnames.json.
 export const workspaceIcons = {
-  repository: "\uEA62", // nf-cod-repo
-  worktree: "\uEA83", // nf-cod-folder
-  working: "\uEB19", // nf-cod-loading
-  complete: "\uEBA4", // nf-cod-pass
-  failure: "\uEA87", // nf-cod-error
-  unreported: "\uEC20", // nf-cod-robot
+  repository: icons.repo,
+  worktree: icons.folder,
+  working: icons.loading,
+  complete: icons.pass,
+  failure: icons.error,
+  unreported: icons.robot,
 } as const;
 
 const statusColors = {
