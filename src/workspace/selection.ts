@@ -1,5 +1,7 @@
 import type { Repository, Worktree } from "./model.ts";
 
+export type SelectionState = { readonly worktreeId: string | null; readonly sessions: Readonly<Record<string, string>> };
+
 export class WorkspaceSelection {
   private repositories: readonly Repository[];
   private selectedWorktreeId: string | null;
@@ -29,6 +31,28 @@ export class WorkspaceSelection {
       ?? worktree.sessions[0]?.id ?? null;
   }
 
+  get state(): SelectionState {
+    const sessions: Record<string, string> = {};
+    for (const tree of this.repositories.flatMap((repo) => repo.worktrees)) {
+      const selected = tree.sessions.find((session) => session.id === this.lastSessions.get(tree.id)) ?? tree.sessions[0];
+      if (selected) sessions[tree.id] = selected.id;
+    }
+    return { worktreeId: this.worktree?.id ?? null, sessions };
+  }
+
+  restore(state: SelectionState): void {
+    this.lastSessions.clear();
+    for (const tree of this.repositories.flatMap((repo) => repo.worktrees)) {
+      const id = state.sessions[tree.id];
+      if (id && tree.sessions.some((session) => session.id === id)) this.lastSessions.set(tree.id, id);
+    }
+    if (this.repositories.some((repo) => repo.worktrees.some((tree) => tree.id === state.worktreeId))) {
+      this.selectedWorktreeId = state.worktreeId;
+    }
+    this.rememberSession();
+    this.emit();
+  }
+
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -49,8 +73,8 @@ export class WorkspaceSelection {
     this.emit();
   }
 
-  // The host supplies snapshots after lifecycle operations finish. Removing an
-  // item here never aborts an agent or deletes its persisted history.
+  // The host supplies display snapshots, including optimistic removals. Removing
+  // an item here never aborts an agent or deletes its persisted history.
   replaceSnapshot(repositories: readonly Repository[]): void {
     for (const previous of this.repositories.flatMap((repo) => repo.worktrees)) {
       const next = repositories.flatMap((repo) => repo.worktrees).find((tree) => tree.id === previous.id);

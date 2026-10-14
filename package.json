@@ -17,11 +17,14 @@
     "start": "bun src/index.ts",
     "dev": "bun src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "test:workspace": "bun src/testing/worktree-fixture.ts"
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "1.2.0",
     "@earendil-works/pi-coding-agent": "1.2.0",
-    "@opentui/core": "0.6.2"
+    "@opentui/core": "0.6.2",
+    "typebox": "1.3.27"
   },
   "devDependencies": {
     "@types/bun": "1.4.3",
