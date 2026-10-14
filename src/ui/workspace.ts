@@ -50,8 +50,8 @@ export class WorkspaceView {
     tabs.add(this.historyTab);
     this.sidebar.add(tabs);
     const toolbar = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    this.newButton = this.button("+ New session", () => this.requestNewSession());
-    this.closeButton = this.button("Close selected", () => this.requestCloseSession());
+    this.newButton = this.button("+ New session", () => this.openNewSession());
+    this.closeButton = this.button("Close selected", () => this.closeSession());
     toolbar.add(this.newButton);
     toolbar.add(this.closeButton);
     this.sidebar.add(toolbar);
@@ -65,7 +65,7 @@ export class WorkspaceView {
     this.center = new BoxRenderable(renderer, { flexGrow: 1, minWidth: 0, padding: 1, flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
     this.centerTitle = this.text("", colors.accent);
     this.centerDetails = this.text("", colors.muted);
-    this.emptyNewButton = this.button("+ New session", () => this.requestNewSession());
+    this.emptyNewButton = this.button("+ New session", () => this.openNewSession());
     this.center.add(this.centerTitle);
     this.center.add(this.centerDetails);
     this.center.add(this.emptyNewButton);
@@ -119,11 +119,11 @@ export class WorkspaceView {
     return button;
   }
 
-  private requestNewSession(): void {
+  private openNewSession(): void {
     if (this.selection.worktree) this.actions.onNewSession(this.selection.worktree.id);
   }
 
-  private requestCloseSession(): void {
+  private closeSession(): void {
     const worktree = this.selection.worktree;
     const sessionId = this.selection.sessionId;
     if (worktree && sessionId) this.actions.onCloseSession(worktree.id, sessionId);
@@ -146,8 +146,8 @@ export class WorkspaceView {
   }
 
   private handleTreeKey(key: KeyEvent): void {
-    if (key.name === "n") { this.requestNewSession(); return; }
-    if (key.name === "x") { this.requestCloseSession(); return; }
+    if (key.name === "n") { this.openNewSession(); return; }
+    if (key.name === "x") { this.closeSession(); return; }
     if (!["up", "down", "home", "end"].includes(key.name)) return;
     key.preventDefault();
     key.stopPropagation();
