@@ -31,6 +31,22 @@ report the request without creating an agent or changing selection. The Pi SDK i
 no model requests, credentials, saved sessions, or runtime lifecycle operations are involved.
 History and the full editor/inspector remain deferred.
 
+### Display status
+
+Repository and worktree rows retain their Nerd Font type icons. Session rows aggregate the
+main agent and subagents: any failure wins, otherwise any working agent keeps the session
+working, and completion requires every agent to have completed. Subagent rows display their
+own status. Selection and focus do not change execution-state icons.
+
+This stage accepts **normalized display snapshots only**; Pi SDK event/retry/abort handling is
+not implemented. A missing status is displayed with a neutral robot icon, never as successful
+completion. Additional idle/waiting/cancelled UI policies are not defined here.
+
+Use a Nerd Font-enabled terminal to view the glyphs. Current mappings are `nf-cod-repo`
+(U+EA62), `nf-cod-folder` (U+EA83), `nf-cod-loading` (U+EB19), `nf-cod-pass` (U+EBA4),
+`nf-cod-error` (U+EA87), and `nf-cod-robot` (U+EC20), from Nerd Fonts 3.5.1. Headless tests
+verify code-point output, not font installation or actual terminal glyph appearance.
+
 ```sh
 bun run dev        # Run the TUI during development
 bun run typecheck  # Check TypeScript types
