@@ -6,6 +6,8 @@ import { Type } from "@earendil-works/pi-ai";
 import { mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExecutionState, SessionContext, SessionExecutor, SessionFactory } from "./session-registry.ts";
+import { AgentRunError, CancelledError, capture, InputError, SessionError, withCleanup, type ExpectedError } from "../errors.ts";
+import { err, ok, type Result } from "../result.ts";
 
 export type PiSessionOptions = {
   agentDir?: string;
@@ -19,7 +21,7 @@ export type PiSessionOptions = {
 export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory {
   let runtime: Promise<ModelRuntime> | undefined;
   return async (context) => {
-    if (!(await stat(context.cwd)).isDirectory()) throw new Error("Session working directory is not a directory.");
+    if (!(await stat(context.cwd)).isDirectory()) throw new InputError("Session working directory is not a directory.");
     const agentDir = options.agentDir ?? getAgentDir();
     runtime ??= options.modelRuntime ? Promise.resolve(options.modelRuntime) : ModelRuntime.create({
       authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json"),
@@ -45,15 +47,15 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       ...(options.model ? { model: options.model } : {}),
       ...(context.role === "main" ? { customTools: [subagentTool(context)] } : {}),
     });
-    try {
+    let adopted = false;
+    return withCleanup(async () => {
       await mkdir(session.sessionManager.getSessionDir(), { recursive: true });
       if (options.streamFn) session.agent.streamFunction = options.streamFn;
       await session.bindExtensions({});
-      return new PiSessionExecutor(session);
-    } catch (error) {
-      session.dispose();
-      throw error;
-    }
+      const executor = new PiSessionExecutor(session);
+      adopted = true;
+      return executor;
+    }, async () => { if (!adopted) session.dispose(); });
   };
 }
 
@@ -63,9 +65,12 @@ function subagentTool(context: SessionContext) {
     description: "Delegate a bounded task to an owned subagent in the same worktree. Wait for its result. The child cannot delegate further.",
     promptSnippet: "Delegate a task to a subagent in this worktree.",
     parameters: Type.Object({ name: Type.String({ minLength: 1 }), task: Type.String({ minLength: 1 }) }),
-    execute: async (_id, { name, task }, signal) => ({
-      content: [{ type: "text" as const, text: await context.spawnSubagent(name, task, signal) }], details: {},
-    }),
+    execute: async (_id, { name, task }, signal) => {
+      const result = await context.spawnSubagent(name, task, signal);
+      // SDK tools require rejection for failures; never pass a Result error as successful tool content.
+      if (!result.ok) throw result.error;
+      return { content: [{ type: "text" as const, text: result.value }], details: {} };
+    },
   });
 }
 
@@ -76,8 +81,9 @@ export class PiSessionExecutor implements SessionExecutor {
   private error: string | null = null;
   private partial = "";
   private readonly activeTools = new Map<string, string>();
-  private running: Promise<void> | undefined;
-  private closeTask: Promise<void> | undefined;
+  private running: Promise<Result<void, ExpectedError>> | undefined;
+  private closeTask: Promise<Result<void, ExpectedError>> | undefined;
+  private aborted = false;
   private closing = false;
   private disposed = false;
 
@@ -108,38 +114,41 @@ export class PiSessionExecutor implements SessionExecutor {
     return () => this.listeners.delete(listener);
   }
 
-  prompt(text: string): Promise<void> {
-    if (this.closing || this.disposed) return Promise.reject(new Error("Session is closing."));
-    if (this.running || !this.session.isIdle) return Promise.reject(new Error("This session is already running. Wait for it to finish."));
-    this.status = "working";
-    this.error = null;
-    const task = this.session.prompt(text).catch((error: unknown) => {
-      if (!this.closing) { this.status = "failure"; this.error = error instanceof Error ? error.message : String(error); }
+  prompt(text: string): Promise<Result<void, ExpectedError>> {
+    if (this.closing || this.disposed) return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
+    if (this.running || !this.session.isIdle) return Promise.resolve(err(new SessionError("SESSION_BUSY", "This session is already running. Wait for it to finish.")));
+    this.status = "working"; this.error = null; this.aborted = false;
+    const task = capture(() => this.session.prompt(text)).then((result): Result<void, ExpectedError> => {
+      if (!result.ok) {
+        if (!this.closing) { this.status = "failure"; this.error = result.error.message; }
+        return result;
+      }
+      if (this.aborted) return err(new CancelledError());
+      if (this.state.status === "failure") return err(new AgentRunError(this.error ?? "Agent failed."));
+      return ok(undefined);
+    }).catch((error: unknown) => {
+      this.status = "failure"; this.error = "Unexpected agent execution failure. Inspect runtime.log.";
       throw error;
     }).finally(() => { this.running = undefined; this.emit(); });
-    this.running = task;
-    this.emit();
-    return task;
+    this.running = task; this.emit(); return task;
   }
 
-  close(): Promise<void> {
-    if (this.disposed) return Promise.resolve();
+  close(): Promise<Result<void, ExpectedError>> {
+    if (this.disposed) return Promise.resolve(ok(undefined));
     if (this.closeTask) return this.closeTask;
     this.closing = true;
-    const task = Promise.resolve().then(async () => {
-      this.session.clearQueue();
-      this.session.abortBash();
+    const task = capture(async () => {
+      this.session.clearQueue(); this.session.abortBash();
       await this.session.abort();
-      if (this.running) await Promise.allSettled([this.running]);
-      await this.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-      this.session.dispose();
-      this.unsubscribe();
-      this.listeners.clear();
-      this.disposed = true;
-    });
-    this.closeTask = task;
-    void task.catch(() => { this.closeTask = undefined; });
-    return task;
+      await withCleanup(async () => {
+        // Run failure/cancellation is not cleanup failure, but unexpected rejections still propagate.
+        if (this.running) await this.running;
+        await this.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+      }, async () => {
+        this.session.dispose(); this.unsubscribe(); this.listeners.clear(); this.disposed = true;
+      });
+    }).then((result) => { if (!result.ok) this.closeTask = undefined; return result; });
+    this.closeTask = task; void task.catch(() => { this.closeTask = undefined; }); return task;
   }
 
   private handleEvent(event: AgentSessionEvent): void {
@@ -154,7 +163,7 @@ export class PiSessionExecutor implements SessionExecutor {
       case "tool_execution_start": this.activeTools.set(event.toolCallId, `Running ${event.toolName}`); break;
       case "tool_execution_update": this.activeTools.set(event.toolCallId, `Running ${event.toolName}: ${toolText(event.partialResult)}`); break;
       case "tool_execution_end": this.activeTools.delete(event.toolCallId); break;
-      case "agent_settled": this.status = this.finalStatus(event.aborted); break;
+      case "agent_settled": this.aborted = event.aborted; this.status = this.finalStatus(event.aborted); break;
       // agent_end may precede retry/compaction/follow-up; never mark it complete.
     }
     this.emit();

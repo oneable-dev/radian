@@ -21,7 +21,8 @@ export async function createWorktreeFixture() {
     await git(main, ["worktree", "add", "-b", "feature/probe", feature]);
     await writeFile(join(feature, "workspace.txt"), "feature-worktree-marker\n");
     await git(feature, ["commit", "-am", "Create feature worktree marker"]);
-    return { directory, main, feature, repository: await discoverRepository(main),
+    const repository = await discoverRepository(main); if (!repository.ok) throw repository.error;
+    return { directory, main, feature, repository: repository.value,
       cleanup: () => rm(directory, { recursive: true, force: true }) };
   } catch (error) {
     await rm(directory, { recursive: true, force: true });

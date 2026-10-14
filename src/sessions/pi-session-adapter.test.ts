@@ -8,6 +8,7 @@ import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { WorkspaceSelection } from "../workspace/selection.ts";
 import { SessionRegistry, type SessionExecutor } from "./session-registry.ts";
 import { piSessionFactory, type PiSessionOptions } from "./pi-session-adapter.ts";
+import { expectOk, expectError } from "../testing/results.ts";
 
 function controlledStreams(options: PiSessionOptions) {
   const gates = new Map<string, { aborted: boolean; abortReceived: Promise<void>; finish(text: string): void }>();
@@ -72,8 +73,8 @@ test("실제 SDK read/write는 선택한 워크트리의 cwd를 사용하며 다
   // Real Git worktrees and SDK built-in tools are used; only model responses are scripted.
   const app = await sdkFixture();
   try {
-    const a = await app.registry.create(app.main.id);
-    const b = await app.registry.create(app.feature.id);
+    const a = expectOk(await app.registry.create(app.main.id));
+    const b = expectOk(await app.registry.create(app.feature.id));
     const originalCwd = process.cwd();
 
     // Concurrent prompts route identical relative paths to different workspace handles.
@@ -95,8 +96,8 @@ test("실제 SDK 실행 두 개가 워크트리 전환 중 유지되고 비선�
   // Provider completion is held explicitly, so switching cannot accidentally occur after work ended.
   const app = await sdkFixture(true);
   try {
-    const a = await app.registry.create(app.main.id);
-    const b = await app.registry.create(app.feature.id);
+    const a = expectOk(await app.registry.create(app.main.id));
+    const b = expectOk(await app.registry.create(app.feature.id));
     const runA = app.registry.prompt(a, "hold A");
     const runB = app.registry.prompt(b, "hold B");
     await Promise.all([app.streams.waitFor("A"), app.streams.waitFor("B")]);
@@ -124,24 +125,26 @@ test("실제 SDK 부모와 subagent는 즉시 숨겨지고 백그라운드 종�
   // The registered custom tool starts an actual owned SDK child, not a display-only fixture.
   const app = await sdkFixture(true);
   try {
-    const parent = await app.registry.create(app.main.id);
-    const other = await app.registry.create(app.feature.id);
+    const parent = expectOk(await app.registry.create(app.main.id));
+    const other = expectOk(await app.registry.create(app.feature.id));
     const delegating = app.registry.prompt(parent, "delegate");
     const unrelated = app.registry.prompt(other, "hold B");
     await Promise.all([app.streams.waitFor("child"), app.streams.waitFor("B")]);
     expect(app.registry.snapshot[0]!.worktrees[0]!.sessions[0]!.subagents).toHaveLength(1);
     const file = app.registry.sessionFile(parent)!;
-    await expect(app.registry.create(app.main.id, app.executors[2]!.sessionFile!)).rejects.toThrow("already open");
+    expect(expectError(await app.registry.create(app.main.id, app.executors[2]!.sessionFile!)).code).toBe("SESSION_CONFLICT");
 
     // UI removal is synchronous, while the child deliberately delays its cancellation acknowledgement.
     const closing = app.registry.close(parent);
     expect(app.registry.details(parent)).toBeNull();
     expect(app.registry.closingCount).toBe(1);
     await app.streams.gates.get("child")!.abortReceived;
-    await expect(app.registry.create(app.main.id, file)).rejects.toThrow("still closing");
+    expect(expectError(await app.registry.create(app.main.id, file)).code).toBe("SESSION_CONFLICT");
     expect(app.streams.gates.get("B")!.aborted).toBe(false);
     app.streams.gates.get("child")!.finish("child cancelled");
-    await Promise.all([closing, delegating]);
+    const [closed, cancelled] = await Promise.all([closing, delegating]);
+    expectOk(closed);
+    expect(expectError(cancelled).code).toBe("CANCELLED");
 
     // Cleanup completes for the owned family, preserves history, and leaves B untouched.
     expect(app.registry.closingCount).toBe(0);
@@ -156,14 +159,14 @@ test("닫은 SDK 세션을 다시 열면 동일 저장 ID와 대화 기록을 �
   // A finalized user/assistant exchange has been persisted in an isolated session directory.
   const app = await sdkFixture();
   try {
-    const original = await app.registry.create(app.main.id);
+    const original = expectOk(await app.registry.create(app.main.id));
     await app.registry.prompt(original, "read");
     const file = app.registry.sessionFile(original)!;
     const savedId = SessionManager.open(file).getSessionId();
 
     // Close and reopen use a new display ID but the original persisted session file.
     await app.registry.close(original);
-    const reopened = await app.registry.create(app.main.id, file);
+    const reopened = expectOk(await app.registry.create(app.main.id, file));
 
     // SDK restoration, not transcript copying, reconstructs the conversation.
     expect(reopened).not.toBe(original);
@@ -178,12 +181,12 @@ test("실행 중인 SDK 세션의 추가 입력은 실패로 명시하고 다른
   // An active provider stream holds the current run open.
   const app = await sdkFixture(true);
   try {
-    const id = await app.registry.create(app.main.id);
+    const id = expectOk(await app.registry.create(app.main.id));
     const running = app.registry.prompt(id, "hold A");
     await app.streams.waitFor("A");
 
     // No implicit steering/follow-up policy is invented for a second submission.
-    await expect(app.registry.prompt(id, "read")).rejects.toThrow("already running");
+    expect(expectError(await app.registry.prompt(id, "read")).code).toBe("SESSION_BUSY");
     app.streams.gates.get("A")!.finish("original run completed");
     await running;
 
@@ -208,7 +211,7 @@ test("SDK 자동 재시도 사이의 agent_end는 완료로 표시하지 않고 
     },
   }));
   try {
-    const id = await app.registry.create(app.main.id);
+    const id = expectOk(await app.registry.create(app.main.id));
     const observed: (string | null)[] = [];
     const unsubscribe = app.registry.subscribe(() => { observed.push(app.registry.details(id)?.status ?? null); });
 
@@ -243,7 +246,7 @@ test("실제 SDK bash 작업은 닫기 시 취소되고 소속 shell 프로세�
     },
   }));
   try {
-    const id = await app.registry.create(app.main.id);
+    const id = expectOk(await app.registry.create(app.main.id));
     const started = Promise.withResolvers<void>();
     const unsubscribe = app.registry.subscribe(() => {
       if (app.registry.details(id)?.output.includes("BASH_STARTED")) started.resolve();
@@ -268,12 +271,32 @@ test("별도 sessionDir를 지정하지 않아도 SDK 기록은 지정한 agentD
     const scoped = { ...options }; delete scoped.sessionDir; return scoped;
   });
   try {
-    const id = await app.registry.create(app.main.id);
+    const id = expectOk(await app.registry.create(app.main.id));
 
     // The SDK chooses its own cwd-encoded directory under the explicit agent directory.
     await app.registry.prompt(id, "read");
 
     // No hand-written encoding or accidental global SessionManager default is used.
     expect(app.registry.sessionFile(id)?.startsWith(join(app.directory, "agent", "sessions") + "/")).toBe(true);
+  } finally { await app.cleanup(); }
+});
+
+test("SDK가 보고한 최종 provider 실패는 AgentRunError Result이며 취소와 구분된다", async () => {
+  // The SDK reports a terminal provider failure through its actual event contract, not a thrown bug.
+  const app = await sdkFixture(false, (options) => ({ ...options, streamFn: (model) => {
+    const stream = createAssistantMessageEventStream();
+    const message = fixtureMessage(model.api, model.provider, model.id);
+    message.stopReason = "error"; message.errorMessage = "Provider rejected this test request";
+    stream.push({ type: "error", reason: "error", error: message }); stream.end(); return stream;
+  } }));
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+
+    // A settled failed run produces an explicit domain value instead of a generic rejection.
+    const result = await app.registry.prompt(id, "fixture request");
+
+    expect(expectError(result).code).toBe("AGENT_FAILED");
+    expect(app.registry.details(id)?.status).toBe("failure");
+    expect(app.registry.details(id)?.error).toBe("Provider rejected this test request");
   } finally { await app.cleanup(); }
 });

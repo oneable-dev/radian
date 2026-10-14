@@ -36,8 +36,9 @@ steering/follow-up UI policy is not implemented.
 
 `--demo` remains display-only: closing removes fixture metadata and creation only reports a
 request. It does not invoke Pi, access credentials, or create stored sessions.
-History UI and the full editor/inspector remain deferred; the central panel is a minimal execution
-probe, not the finished conversation editor.
+The History tab lists saved SDK conversations for the selected worktree and opens them explicitly.
+The full editor/inspector remains deferred; the central panel is a minimal execution probe, not the
+finished conversation editor.
 
 ### Runtime ownership and closing
 
@@ -60,7 +61,7 @@ on explicit service shutdown; repeated close requests coalesce. Disconnecting or
 does not abort work or remove open items. Creation/closing operations also finish independently
 of the originating UI connection.
 Stored JSONL history is never deleted or forked by closing. The registry's `create(worktreeId, file)`
-API reopens the same saved session; a history picker is not implemented. Duplicate writers,
+API reopens the same saved session; the History tab uses this same-file resume boundary. Duplicate writers,
 including attempts to reopen while closing, are rejected. Unused-session persistence follows
 SDK defaults: a session with no user/assistant exchange may not have a history file.
 
@@ -118,6 +119,46 @@ intent and saved history; it is different from closing a session, which removes 
 The central probe displays a bounded recent transcript (12 messages / 12,000 characters), not the
 complete conversation editor or Orca's terminal scrollback. Full SDK history remains in JSONL.
 Pi CLI extensions/MCP and remote-machine services are still outside this initial host.
+
+### Saved session history
+
+Select a worktree, then open **History**. The list uses SDK-provided conversation names (falling back
+to the first prompt or `Untitled session`), last activity and message count, newest first. It is scoped
+to that worktree even when the offline session directory is shared. Viewing or refreshing history
+never starts a model run or creates an open item. `Refresh history` / `r` reloads the selected scope;
+empty, loading, discovery and resume failures have distinct messages.
+
+Click a row, or `Tab` into the list and use arrows/Home/End plus `Enter`, to open its saved context.
+The original SDK session ID/file is retained without copying/forking; the open item becomes selected
+in Workspace. Already-open records select their existing item rather than create a second writer.
+Closing records and active owned-child writers are unavailable until cleanup finishes. Completed
+SDK child conversations can also appear in SDK history; this initial list does not invent a history
+retention/deletion or main-only filtering policy. History has no deletion action or name search;
+the top search field remains the existing workspace-name projection.
+
+History lookup is a capability added to the existing service protocol. A service started before this
+feature keeps its running jobs and is **not** automatically restarted. The UI reports that it lacks
+history support; finish its jobs and explicitly stop/restart that service to enable the new capability.
+
+### Error contracts
+
+Expected failures use `Result<T, E>` (`ok`/`err` in `src/result.ts`) and custom errors from
+`src/errors.ts`. Session/history/storage/client operations return a failure value with a stable
+code such as `SESSION_BUSY`, `SESSION_CONFLICT`, `HISTORY_CORRUPT`, or `STORAGE_FAILED`.
+Callers branch on the discriminant rather than catch or match human-readable messages.
+
+Exception-based SDK/OS calls classify only known failures and preserve their cause. Unexpected
+exceptions keep their original stack and are logged at the service/UI boundary. SDK tools convert
+failed Results to rejection because that is the SDK tool contract. Cleanup keeps both the original
+and cleanup errors instead of replacing the first failure.
+
+IPC preserves error codes and distinguishes invalid input (400), state conflicts (409), unavailable
+history (404), and operational/internal failures (500). A command already accepted before a
+checkpoint failure returns success **with a persistence warning**; it is not safe to replay that
+command as if it had been rejected. A connection timeout reports an uncertain action outcome.
+Only a missing/refused endpoint triggers service bootstrap, not permission errors or timeouts.
+Older daemon string errors are explicitly tagged `LEGACY_REMOTE_ERROR`; existing services are
+not automatically restarted to upgrade error handling.
 
 ### Workspace search
 
