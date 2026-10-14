@@ -1,9 +1,10 @@
 import {
-  BoxRenderable, ScrollBoxRenderable, TextRenderable,
+  BoxRenderable, InputRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderable,
   type CliRenderer, type KeyEvent,
 } from "@opentui/core";
 import { workspaceRows, type WorkspaceRow } from "../workspace/model.ts";
 import { WorkspaceSelection } from "../workspace/selection.ts";
+import { filterWorkspaces } from "../workspace/filter-workspaces.ts";
 import { rowPresentation, workspaceIcons } from "../workspace/status.ts";
 
 export type WorkspaceActions = {
@@ -18,7 +19,9 @@ type RowView = { box: BoxRenderable; text: TextRenderable };
 export class WorkspaceView {
   readonly root: BoxRenderable;
   private readonly sidebar: BoxRenderable;
+  private readonly search: InputRenderable;
   private readonly tree: ScrollBoxRenderable;
+  private readonly resultMessage: TextRenderable;
   private readonly history: TextRenderable;
   private readonly center: BoxRenderable;
   private readonly centerTitle: TextRenderable;
@@ -43,7 +46,13 @@ export class WorkspaceView {
     const panels = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, flexDirection: "row" });
     this.sidebar = new BoxRenderable(renderer, { width: 34, flexShrink: 0, flexDirection: "column", border: ["right"], borderColor: colors.muted, paddingX: 1 });
     this.sidebar.add(this.text("radian / Workspace preview", colors.accent));
-    this.sidebar.add(this.text("Search workspace — pending OA-8", colors.muted));
+    this.search = new InputRenderable(renderer, {
+      id: "workspace-search", width: "100%", flexShrink: 0,
+      placeholder: "Search repo/worktree/branch", placeholderColor: colors.muted,
+      textColor: colors.text, backgroundColor: colors.panel, focusedBackgroundColor: colors.selected,
+      onKeyDown: (key) => this.handleSearchKey(key),
+    });
+    this.sidebar.add(this.search);
     const tabs = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.workspaceTab = this.button("Workspace", () => this.setTab("workspace"));
     this.historyTab = this.button("History", () => this.setTab("history"));
@@ -60,7 +69,9 @@ export class WorkspaceView {
       id: "workspace-tree", flexGrow: 1, minHeight: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onKeyDown: (key) => this.handleTreeKey(key),
     });
+    this.resultMessage = this.text("", colors.muted);
     this.history = this.text("Session history UI is deferred.", colors.muted);
+    this.sidebar.add(this.resultMessage);
     this.sidebar.add(this.tree);
     this.sidebar.add(this.history);
     this.center = new BoxRenderable(renderer, { flexGrow: 1, minWidth: 0, padding: 1, flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
@@ -80,10 +91,11 @@ export class WorkspaceView {
     this.notice = this.text("UI preview only · no agents running", colors.muted);
     this.root.add(this.notice);
     this.root.add(this.text(`${workspaceIcons.working} Working · ${workspaceIcons.complete} Complete · ${workspaceIcons.failure} Failure · ${workspaceIcons.unreported} Status not supplied`, colors.muted));
-    this.root.add(this.text("Tab focus · ↑/↓ select · n new · x close · Ctrl+C quit", colors.muted));
+    this.root.add(this.text("Ctrl+f search · Esc clear · Tab focus · ↑/↓ select · n new · x close · Ctrl+C quit", colors.muted));
     renderer.root.add(this.root);
     renderer.keyInput.on("keypress", this.handleGlobalKey);
     renderer.on("resize", this.resize);
+    this.search.on(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.unsubscribe = selection.subscribe(() => this.render());
     this.resize();
     this.render();
@@ -147,13 +159,36 @@ export class WorkspaceView {
       || (row.kind === "session" && this.selection.worktree?.id === row.worktree.id && this.selection.sessionId === row.session.id);
   }
 
+  private visibleRows(): WorkspaceRow[] {
+    return workspaceRows(filterWorkspaces(this.selection.snapshot, this.search.value));
+  }
+
+  private handleSearchInput = (): void => {
+    this.tree.scrollTo(0);
+    this.navigationKey = null;
+    this.lastScrolledKey = null;
+    this.render();
+  };
+
+  private handleSearchKey(key: KeyEvent): void {
+    if (key.name === "escape") {
+      key.preventDefault();
+      key.stopPropagation();
+      this.search.value = "";
+    } else if (key.name === "return" && this.tab === "workspace") {
+      key.preventDefault();
+      key.stopPropagation();
+      this.tree.focus();
+    }
+  }
+
   private handleTreeKey(key: KeyEvent): void {
     if (key.name === "n") { this.openNewSession(); return; }
     if (key.name === "x") { this.closeSession(); return; }
     if (!["up", "down", "home", "end"].includes(key.name)) return;
     key.preventDefault();
     key.stopPropagation();
-    const rows = workspaceRows(this.selection.snapshot).filter((row) => row.kind === "worktree" || row.kind === "session");
+    const rows = this.visibleRows().filter((row) => row.kind === "worktree" || row.kind === "session");
     const index = rows.findIndex((row) => row.key === this.navigationKey);
     let next = key.name === "up" ? index - 1 : index + 1;
     if (key.name === "home") next = 0;
@@ -163,10 +198,16 @@ export class WorkspaceView {
   }
 
   private handleGlobalKey = (key: KeyEvent): void => {
+    if (key.ctrl && key.name === "f") {
+      key.preventDefault();
+      key.stopPropagation();
+      this.search.focus();
+      return;
+    }
     if (key.name !== "tab") return;
     key.preventDefault();
     key.stopPropagation();
-    const targets = [this.workspaceTab, this.historyTab];
+    const targets = [this.search, this.workspaceTab, this.historyTab];
     if (this.tab === "workspace") targets.push(this.newButton, this.closeButton, this.tree);
     if (this.emptyNewButton.visible) targets.push(this.emptyNewButton);
     const index = targets.findIndex((target) => target === this.renderer.currentFocusedRenderable);
@@ -180,7 +221,7 @@ export class WorkspaceView {
   };
 
   private render(): void {
-    const rows = workspaceRows(this.selection.snapshot);
+    const rows = this.visibleRows();
     const order = rows.map((row) => row.key);
     if (order.join("\0") !== this.rowOrder.join("\0")) {
       const focusedRow = this.tree.content.hasFocusedDescendant;
@@ -206,6 +247,7 @@ export class WorkspaceView {
         this.rows.set(row.key, { box, text });
       }
       this.rowOrder = order;
+      this.lastScrolledKey = null;
       if (focusedRow) this.tree.focus();
     }
     const selectedKey = rows.find((row) => this.selected(row))?.key ?? null;
@@ -226,6 +268,8 @@ export class WorkspaceView {
       ? session ? `Workspace: ${worktree.name} · display preview only` : `Workspace: ${worktree.name} · create a session explicitly`
       : "Open radian inside a Git repository.";
     this.emptyNewButton.visible = Boolean(worktree && !session);
+    this.resultMessage.content = this.search.value ? "No matching workspaces" : "No repositories";
+    this.resultMessage.visible = this.tab === "workspace" && rows.length === 0;
     this.tree.visible = this.tab === "workspace";
     this.history.visible = this.tab === "history";
     this.newButton.visible = this.tab === "workspace";
@@ -240,6 +284,7 @@ export class WorkspaceView {
     if (this.disposed) return;
     this.disposed = true;
     this.unsubscribe();
+    this.search.off(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.renderer.keyInput.off("keypress", this.handleGlobalKey);
     this.renderer.off("resize", this.resize);
     this.root.destroyRecursively();

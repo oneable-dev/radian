@@ -31,6 +31,22 @@ report the request without creating an agent or changing selection. The Pi SDK i
 no model requests, credentials, saved sessions, or runtime lifecycle operations are involved.
 History and the full editor/inspector remain deferred.
 
+### Workspace search
+
+Click the search field, press `Ctrl+f`, or use `Tab` to focus it. Results update while typing,
+deleting or pasting, without submitting the field. Matching is case-insensitive, literal substring
+search over repository names, worktree folder names and actual branch names only.
+Repository-name matches retain all worktrees; folder/branch matches retain the matching worktree,
+its parent repository, and every open session/subagent underneath. Session and subagent titles,
+paths, status text and history are not searched.
+
+Press `Esc` in the search field to clear the query and restore the complete tree. Press `Enter`
+to focus the workspace results. No matches shows a sidebar message, not a new central empty
+session state. Filtering changes only the displayed tree: the current worktree/session selection
+and source snapshots stay intact, even when selected items are hidden. Keyboard tree navigation
+uses the visible results, and host snapshot changes are re-filtered with the current query.
+No Git commands or runtime operations are triggered by search input.
+
 ### Display status
 
 Repository and worktree rows retain their Nerd Font type icons. Session rows aggregate the
