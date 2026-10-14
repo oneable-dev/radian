@@ -1,5 +1,5 @@
-// Runtime adapters will normalize outcomes later (OA-5). Null is unreported,
-// not a new idle/waiting state and never implicit successful completion.
+// Runtime adapters normalize outcomes before presenting them. Null is unreported
+// or aborted, not a new idle/waiting state and never implicit successful completion.
 export type AgentStatus = "working" | "complete" | "failure";
 
 export type Subagent = {

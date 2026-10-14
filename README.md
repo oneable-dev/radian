@@ -15,21 +15,109 @@ bun install --frozen-lockfile
 bun run start
 ```
 
-The UI preview discovers the current Git repository's worktrees and shows an always-expanded
-workspace sidebar. Worktree folders and branches share one row. Press `Ctrl+C` to quit.
-Use `Tab`/`Shift+Tab` to move focus, arrow keys to select tree items, `n` to request a new
-session, and `x` to request closing the selected session while the tree is focused.
-Mouse selection and close actions are also supported.
+The app discovers the current Git repository's worktrees and shows an always-expanded
+workspace sidebar. Worktree folders and branches share one row. Use `Tab`/`Shift+Tab`
+to move focus, arrow keys to select tree items, `n` to create a new session, and `x` to
+close the selected session while the tree is focused. Mouse actions are also supported.
+`Ctrl+e` focuses the minimal session prompt; `Enter` submits and `Esc` returns to the tree.
+`Ctrl+C` **detaches the TUI only**. Agents and subagents keep running in a separate local service.
 
 ```sh
 bun run start --demo  # Display fixture sessions/subagents and exercise selection and closing
 ```
 
-**This is a UI-only preview.** Default mode has no open sessions; `--demo` uses display-only
-fixtures. Closing a demo item removes only its in-memory display metadata. New-session actions
-report the request without creating an agent or changing selection. The Pi SDK is not invoked;
-no model requests, credentials, saved sessions, or runtime lifecycle operations are involved.
-History and the full editor/inspector remain deferred.
+On first launch, default mode has no open sessions and creates independent **Pi SDK sessions**
+only on explicit requests. Later launches reattach to the existing service and restore its open items,
+last-selected worktree/session, input drafts and current output. Model selection and provider credentials use Pi configuration. Submitting
+a prompt in default mode can make real model requests and run coding tools in that worktree.
+Additional sessions do not forcibly replace the current selection. Each session retains its input
+draft while switching worktrees. Submitting during an active run is rejected with the draft retained;
+steering/follow-up UI policy is not implemented.
+
+`--demo` remains display-only: closing removes fixture metadata and creation only reports a
+request. It does not invoke Pi, access credentials, or create stored sessions.
+History UI and the full editor/inspector remain deferred; the central panel is a minimal execution
+probe, not the finished conversation editor.
+
+### Runtime ownership and closing
+
+A detached Bun service owns the registry and an independent SDK instance for each open item,
+with an explicit worktree `cwd`. The TUI uses private Unix-domain HTTP/NDJSON to send actions
+and receive snapshots; it never owns or disposes SDK executions. macOS/Linux are the supported
+local-service platforms for this implementation.
+Changing selection/search never calls SDK `switchSession()`, aborts an execution, or changes
+`process.cwd()`. Nonselected sessions continue streaming and publishing snapshots.
+The `radian_subagent` tool creates an owned SDK child in the same worktree and waits for its result.
+Children cannot delegate further. Finished children retain display metadata but release execution
+resources. Pi CLI extensions/MCP launchers and their terminal-specific UI are not loaded in this
+initial host; context files, skills and prompt templates use SDK discovery. Cache warming is disabled.
+
+Closing immediately removes the UI item and applies the existing next/previous/empty fallback.
+The registry retains its closing handle, rejects new work, and cancels the main agent and every
+owned child concurrently. It waits for tool completion, then releases resources/subscriptions.
+Late events cannot resurrect a closed row. Cleanup failures are surfaced and retained for retry
+on explicit service shutdown; repeated close requests coalesce. Disconnecting or crashing the TUI
+does not abort work or remove open items. Creation/closing operations also finish independently
+of the originating UI connection.
+Stored JSONL history is never deleted or forked by closing. The registry's `create(worktreeId, file)`
+API reopens the same saved session; a history picker is not implemented. Duplicate writers,
+including attempts to reopen while closing, are rejected. Unused-session persistence follows
+SDK defaults: a session with no user/assistant exchange may not have a history file.
+
+### Test real SDK switching without a paid model
+
+```sh
+bun run test:workspace
+```
+
+This creates an **isolated temporary Git repository** with `main` and `feature/probe` linked
+worktrees and different `workspace.txt` markers. It does not add worktrees/branches to this
+repository. Follow the printed `cd` and `bun ... --test-runtime` commands, then create a session
+in each worktree and submit these scripted commands:
+
+- `slow`: a ten-second SDK response stream; switch worktrees and return to inspect progress.
+- `read`: invoke the real SDK read tool on the selected worktree's `workspace.txt`.
+- `write`: invoke the real SDK write tool on `radian-probe.txt` in the selected worktree.
+- `delegate`: invoke `radian_subagent` with an owned slow SDK child; close its parent while working.
+
+**`--test-runtime` uses scripted model responses, not real AI.** It uses isolated credentials/settings
+and no provider requests, while exercising the real SDK session, tools, persistence and cancellation.
+Test mode uses a stable isolated directory per repository, separate from live-mode state and
+credentials. It reconnects to the same test service after TUI exit, instead of making a new temporary
+session store. Stop the test service before removing the fixture directory. Never treat these results as live-provider
+validation. Use `bun run start` for real provider execution after configuring Pi authentication.
+
+### Service lifetime and recovery
+
+The service starts automatically on first connection. Its Unix socket is user-private (directory
+`0700`, socket `0600`), and manifests/logs use private files. No TCP port is exposed.
+State defaults to `~/.radian/workspaces/<identity>/`; use `--state-dir PATH` or `RADIAN_STATE_DIR`
+to isolate another instance. Identity includes the canonical Git repository, state root and live/test
+mode, so launching from different worktrees attaches to the same service.
+
+```sh
+bun run start --runtime-status                   # Inspect this repository's existing service
+bun run start --stop-runtime                     # Explicitly stop its service and owned executions
+bun run start --test-runtime --runtime-status    # Inspect the separate offline service
+bun run start --test-runtime --stop-runtime      # Stop the separate offline service
+```
+
+These administrative commands do not start a missing service. `--stop-runtime` retains open-session
+intent and saved history; it is different from closing a session, which removes that open item.
+
+- **Warm reconnect:** the same service PID, SDK instances, owned children and ongoing output survive
+  TUI exit. No prompt is replayed or agent restarted.
+- **Service restart/reboot:** open IDs, selection, drafts and saved contexts are restored from an atomic
+  checkpoint. Previously working agents are marked interrupted/unreported; model requests and tool
+  calls are **not** automatically replayed. Submit a new prompt explicitly to continue.
+- **Missing/corrupt saved history:** recovery reports an error rather than silently making an empty
+  replacement. Unused items without a history file can be restored as empty items with the same UI ID.
+- **Force-killed service:** SDK executions stop and stale endpoints are recovered on the next launch.
+  Unlike graceful stop, hard crashes cannot guarantee cleanup of arbitrary tool subprocesses.
+
+The central probe displays a bounded recent transcript (12 messages / 12,000 characters), not the
+complete conversation editor or Orca's terminal scrollback. Full SDK history remains in JSONL.
+Pi CLI extensions/MCP and remote-machine services are still outside this initial host.
 
 ### Workspace search
 
@@ -54,9 +142,10 @@ main agent and subagents: any failure wins, otherwise any working agent keeps th
 working, and completion requires every agent to have completed. Subagent rows display their
 own status. Selection and focus do not change execution-state icons.
 
-This stage accepts **normalized display snapshots only**; Pi SDK event/retry/abort handling is
-not implemented. A missing status is displayed with a neutral robot icon, never as successful
-completion. Additional idle/waiting/cancelled UI policies are not defined here.
+The SDK adapter normalizes events into display snapshots. `agent_end` alone is not completion:
+automatic retries keep the run working, and `agent_settled` plus the final outcome determine
+completion/failure. Aborted or unreported outcomes use the neutral robot icon, never successful
+completion. Additional idle/waiting/cancelled icon policies are not defined here.
 
 Use a Nerd Font-enabled terminal to view the glyphs. Current mappings are `nf-cod-repo`
 (U+EA62), `nf-cod-folder` (U+EA83), `nf-cod-loading` (U+EB19), `nf-cod-pass` (U+EBA4),
