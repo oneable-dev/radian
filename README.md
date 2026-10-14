@@ -15,12 +15,26 @@ bun install --frozen-lockfile
 bun run start
 ```
 
-The demo displays `Hello, Radian!`. Press `q`, `Esc`, or `Ctrl+C` to quit.
-The Pi SDK is installed for future integration; this demo does not make model requests or require API keys.
+The UI preview discovers the current Git repository's worktrees and shows an always-expanded
+workspace sidebar. Worktree folders and branches share one row. Press `Ctrl+C` to quit.
+Use `Tab`/`Shift+Tab` to move focus, arrow keys to select tree items, `n` to request a new
+session, and `x` to request closing the selected session while the tree is focused.
+Mouse selection and close actions are also supported.
+
+```sh
+bun run start --demo  # Display fixture sessions/subagents and exercise selection and closing
+```
+
+**This is a UI-only preview.** Default mode has no open sessions; `--demo` uses display-only
+fixtures. Closing a demo item removes only its in-memory display metadata. New-session actions
+report the request without creating an agent or changing selection. The Pi SDK is not invoked;
+no model requests, credentials, saved sessions, or runtime lifecycle operations are involved.
+History and the full editor/inspector remain deferred.
 
 ```sh
 bun run dev        # Run the TUI during development
 bun run typecheck  # Check TypeScript types
+bun run test       # Run unit and OpenTUI headless interaction tests
 ```
 
 ## Repository
