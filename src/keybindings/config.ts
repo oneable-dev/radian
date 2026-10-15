@@ -1,0 +1,91 @@
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { capture, InputError, parseJson, StorageError, type ExpectedError } from "../errors.ts";
+import { err, ok, type Result } from "../result.ts";
+import { commandIds, contexts, defaultBindings, inScope, isCommand, type CommandId, type KeyContext, type KeyScope } from "./commands.ts";
+
+export type Binding = { command: CommandId; keys: readonly string[]; scope: KeyScope };
+const aliases: Record<string, string> = { enter: "return", esc: "escape", pgup: "pageup", pgdn: "pagedown", " ": "space", "+": "plus" };
+const named = new Set(["space", "plus", "return", "escape", "tab", "backspace", "delete", "insert", "home", "end", "up", "down", "left", "right", "pageup", "pagedown"]);
+const scopes = new Set<string>([...contexts, "global", "app", "pty"]);
+
+function chord(value: string): string | null {
+  const parts = value.toLowerCase().split("+");
+  let name = parts.pop(); if (!name) return null;
+  name = aliases[name] ?? name;
+  const modifiers = parts.map((part) => part === "control" ? "ctrl" : ["option", "meta"].includes(part) ? "alt" : part);
+  if (new Set(modifiers).size !== modifiers.length || modifiers.some((part) => !["ctrl", "alt", "shift", "super"].includes(part))) return null;
+  if (!named.has(name) && [...name].length !== 1 && !/^f([1-9]|[12]\d|3[0-5])$/.test(name)) return null;
+  return [...["ctrl", "alt", "shift", "super"].filter((part) => modifiers.includes(part)), name].join("+");
+}
+function sequence(value: string, leader?: readonly string[]): string[] | null {
+  const result: string[] = [];
+  for (const part of value.trim().split(/\s+/)) {
+    if (part.toLowerCase() === "<leader>") { if (!leader) return null; result.push(...leader); }
+    else { const key = chord(part); if (!key) return null; result.push(key); }
+  }
+  return result.length && result.length <= 8 ? result : null;
+}
+export function keyToken(key: { name: string; ctrl: boolean; meta: boolean; option: boolean; shift: boolean; super?: boolean }): string {
+  const name = aliases[key.name.toLowerCase()] ?? key.name.toLowerCase();
+  return [key.ctrl && "ctrl", (key.meta || key.option) && "alt", key.shift && "shift", key.super && "super", name].filter(Boolean).join("+");
+}
+const labels: Record<string, string> = { ctrl: "Ctrl", alt: "Alt", shift: "Shift", super: "Super", space: "Space", plus: "+", return: "Enter", escape: "Esc", tab: "Tab", up: "↑", down: "↓", left: "←", right: "→", home: "Home", end: "End", pageup: "PgUp", pagedown: "PgDn", backspace: "Backspace", delete: "Delete", insert: "Insert" };
+export function formatKeys(keys: readonly string[]): string { return keys.map((key) => key.split("+").map((part) => labels[part] ?? part).join("+")).join(" → "); }
+
+export class Keymap {
+  constructor(readonly bindings: readonly Binding[], readonly leader: readonly string[], readonly timeoutMs: number) {}
+  bound(firstKey: string, context: KeyContext): boolean { return this.bindings.some((binding) => binding.keys[0] === firstKey && inScope(binding.scope, context)); }
+  hint(command: CommandId, context: KeyContext): string {
+    const match = this.bindings.find((binding) => binding.command === command && inScope(binding.scope, context));
+    return match ? formatKeys(match.keys) : "";
+  }
+  hints(command: CommandId, context: KeyContext): string {
+    return this.bindings.filter((binding) => binding.command === command && inScope(binding.scope, context)).map((binding) => formatKeys(binding.keys)).join("/");
+  }
+}
+function object(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
+export function parseKeymap(value: unknown): Result<Keymap, InputError> {
+  const invalid = (message: string) => err(new InputError(`Invalid keybindings: ${message}`));
+  if (!object(value) || Object.keys(value).some((key) => !["leader", "timeoutMs", "bindings"].includes(key))) return invalid("expected leader, timeoutMs and/or bindings.");
+  const leaderText = value.leader ?? "ctrl+space";
+  const timeout = value.timeoutMs ?? 1000;
+  if (typeof leaderText !== "string") return invalid("leader must be a key sequence.");
+  const leader = sequence(leaderText); if (!leader) return invalid("leader is empty or invalid.");
+  if (typeof timeout !== "number" || !Number.isInteger(timeout) || timeout < 100 || timeout > 5000) return invalid("timeoutMs must be an integer between 100 and 5000.");
+  const overrides = value.bindings ?? {};
+  if (!object(overrides) || Object.keys(overrides).some((name) => !isCommand(name))) return invalid("unknown command in bindings.");
+  const bindings: Binding[] = [];
+  for (const command of commandIds) {
+    const choices = Object.hasOwn(overrides, command) ? overrides[command] : defaultBindings[command];
+    if (!Array.isArray(choices)) return invalid(`${command} must be an array (use [] to disable it).`);
+    for (const choice of choices) {
+      const input: unknown = typeof choice === "string" ? { keys: choice, scope: "global" } : choice;
+      if (!object(input) || Object.keys(input).some((key) => !["keys", "scope"].includes(key)) || typeof input.keys !== "string") return invalid(`${command} has an invalid binding.`);
+      const scope = input.scope ?? "global";
+      if (typeof scope !== "string" || !scopes.has(scope)) return invalid(`${command} has an unknown scope.`);
+      const keys = sequence(input.keys, leader); if (!keys) return invalid(`${command} has an invalid key sequence.`);
+      // Membership above validates the runtime scope before it enters the typed keymap.
+      bindings.push({ command, keys, scope: scope as KeyScope });
+    }
+  }
+  for (const [index, a] of bindings.entries()) for (const b of bindings.slice(index + 1)) {
+    if (!contexts.some((context) => inScope(a.scope, context) && inScope(b.scope, context))) continue;
+    const length = Math.min(a.keys.length, b.keys.length);
+    if (a.keys.slice(0, length).every((key, i) => key === b.keys[i])) return invalid(`${a.command} and ${b.command} have conflicting/prefix bindings (${formatKeys(a.keys)} / ${formatKeys(b.keys)}).`);
+  }
+  return ok(new Keymap(bindings, leader, timeout));
+}
+export function defaultKeymap(): Keymap {
+  const result = parseKeymap({}); if (!result.ok) throw result.error;
+  return result.value;
+}
+export async function loadKeymap(explicitPath?: string): Promise<Result<Keymap, ExpectedError>> {
+  const path = explicitPath ?? join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "radian", "keybindings.json");
+  const file = await capture(() => readFile(path, "utf8"));
+  if (!file.ok) return !explicitPath && file.error instanceof StorageError && file.error.systemCode === "ENOENT" ? ok(defaultKeymap()) : file;
+  const parsed = parseJson(file.value, path); if (!parsed.ok) return parsed;
+  const keymap = parseKeymap(parsed.value);
+  return keymap.ok ? keymap : err(new InputError(`${path}: ${keymap.error.message}`, { cause: keymap.error }));
+}

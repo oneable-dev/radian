@@ -1,10 +1,11 @@
-import { BoxRenderable, ScrollBoxRenderable, TextRenderable, type CliRenderer, type KeyEvent } from "@opentui/core";
+import { BoxRenderable, ScrollBoxRenderable, TextRenderable, type CliRenderer } from "@opentui/core";
 import type { HistoryItem } from "../sessions/history.ts";
 import type { Worktree } from "../workspace/model.ts";
 import { reportUnexpected, type ExpectedError } from "../errors.ts";
 import type { Result } from "../result.ts";
 import type { FooterShortcut } from "./footer.ts";
 import { LoadingSpinner } from "./loading-spinner.ts";
+import type { CommandId } from "../keybindings/commands.ts";
 
 export type HistoryActions = {
   list?: (worktreeId: string) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
@@ -12,6 +13,7 @@ export type HistoryActions = {
   onOpened: (worktreeId: string, sessionId: string) => void;
   onError: (message: string) => void;
   onChange?: () => void;
+  keyHint: (command: Extract<CommandId, `history.${string}`>) => string;
   button: (label: string, activate: () => void) => BoxRenderable;
 };
 
@@ -37,20 +39,22 @@ export class SessionHistoryPanel {
     this.title.flexGrow = 1; this.title.flexShrink = 1; this.title.minWidth = 0;
     this.spinner = new LoadingSpinner(renderer, { fg: "#7DD3FC" });
     heading.add(this.title); heading.add(this.spinner.root);
-    this.refreshButton = actions.button("Refresh history [r]", () => { void this.refresh(); });
+    this.refreshButton = actions.button(`Refresh history${actions.keyHint("history.refresh") ? ` [${actions.keyHint("history.refresh")}]` : ""}`, () => { void this.refresh(); });
     this.message = this.text("", "#94A3B8");
     this.list = new ScrollBoxRenderable(renderer, { id: "history-list", flexGrow: 1, minHeight: 0, scrollX: false,
-      contentOptions: { flexDirection: "column" }, onKeyDown: (key) => this.handleKey(key) });
+      contentOptions: { flexDirection: "column" } });
     this.root.add(heading); this.root.add(this.refreshButton); this.root.add(this.message); this.root.add(this.list);
   }
 
   get shortcuts(): readonly FooterShortcut[] {
     const item = this.items[this.cursor];
+    const hint = this.actions.keyHint;
     return [
-      ...(this.items.length ? [{ key: "↑/↓", label: "Select" }, { key: "Home/End", label: "First/last" }] : []),
-      ...(item && !item.unavailableReason && this.actions.resume && !this.resuming ? [{ key: "Enter", label: "Open" }] : []),
-      ...(this.worktree && this.actions.list ? [{ key: "r", label: "Refresh" }] : []),
-    ];
+      ...(this.items.length ? [{ key: [hint("history.previous"), hint("history.next")].filter(Boolean).join("/"), label: "Select" },
+        { key: [hint("history.first"), hint("history.last")].filter(Boolean).join("/"), label: "First/last" }] : []),
+      ...(item && !item.unavailableReason && this.actions.resume && !this.resuming ? [{ key: hint("history.open"), label: "Open" }] : []),
+      ...(this.worktree && this.actions.list ? [{ key: hint("history.refresh"), label: "Refresh" }] : []),
+    ].filter((shortcut) => shortcut.key);
   }
 
   show(worktree: Worktree | null): void {
@@ -85,7 +89,7 @@ export class SessionHistoryPanel {
     const items = result.value;
     this.items = items;
     this.cursor = Math.max(0, items.findIndex((item) => item.id === selected));
-    this.message.content = items.length ? "↑/↓ select · Enter open" : "No saved sessions";
+    this.message.content = items.length ? "Select a saved session to open" : "No saved sessions";
     for (const [index, item] of items.entries()) {
       const row = new BoxRenderable(this.renderer, { id: `history:${item.id}`, height: 2, flexShrink: 0, flexDirection: "column",
         onMouseDown: (event) => {
@@ -124,14 +128,12 @@ export class SessionHistoryPanel {
     this.message.content = message; this.actions.onError(message); this.actions.onChange?.();
   }
 
-  private handleKey(key: KeyEvent): void {
-    if (key.name === "r") { key.preventDefault(); key.stopPropagation(); void this.refresh(); return; }
-    if (key.name === "return") { key.preventDefault(); key.stopPropagation(); void this.openSelected(); return; }
-    if (!["up", "down", "home", "end"].includes(key.name)) return;
-    key.preventDefault(); key.stopPropagation();
-    if (key.name === "home") this.cursor = 0;
-    else if (key.name === "end") this.cursor = this.items.length - 1;
-    else this.cursor += key.name === "up" ? -1 : 1;
+  command(command: "refresh" | "open" | "previous" | "next" | "first" | "last"): void {
+    if (command === "refresh") { void this.refresh(); return; }
+    if (command === "open") { void this.openSelected(); return; }
+    if (command === "first") this.cursor = 0;
+    else if (command === "last") this.cursor = this.items.length - 1;
+    else this.cursor += command === "previous" ? -1 : 1;
     this.cursor = Math.max(0, Math.min(this.items.length - 1, this.cursor)); this.paint();
   }
   private paint(): void {

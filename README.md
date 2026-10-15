@@ -20,7 +20,8 @@ workspace sidebar. Worktree folders and branches share one row. Use `Tab`/`Shift
 to move focus, arrow keys to select tree items, `n` to create a new session, and `x` to
 close the selected session while the tree is focused. Mouse actions are also supported.
 `Ctrl+e` focuses the minimal session prompt; `Enter` submits and `Esc` returns to the tree.
-`Ctrl+C` **detaches the TUI only**. Agents and subagents keep running in a separate local service.
+`Ctrl+Space`, then `c`, **detaches the TUI only**. Agents and subagents keep running in a separate local service.
+These are default application bindings; see [Keybindings](#keybindings) to customize them.
 
 ```sh
 bun run start --demo  # Display fixture sessions/subagents and exercise selection and closing
@@ -37,16 +38,119 @@ steering/follow-up UI policy is not implemented.
 `--demo` remains display-only: closing removes fixture metadata and creation only reports a
 request. It does not invoke Pi, access credentials, or create stored sessions.
 The History tab lists saved SDK conversations for the selected worktree and opens them explicitly.
-The full editor/inspector remains deferred; the central panel is a minimal execution probe, not the
-finished conversation editor.
+The Agent view remains a minimal execution interface, not the finished conversation editor.
+The Editor view embeds Neovim; Git currently provides its tab/state foundation only.
+
+### Work views
+
+The left panel retains Workspace/History navigation. The right panel switches between **Agent**,
+**Editor**, **Git** and **Terminal**, with one visible view per worktree and Agent as the initial view.
+Selecting a worktree restores its last view; explicitly selecting a session (including History resume)
+selects that session and switches to Agent, even if that worktree previously showed Editor or Git.
+Search and background snapshots do not override the active view. Session creation/closing retain
+their existing rules and never implicitly launch an editor.
+
+Every worktree remembers its active tab. Agent retains its selected session, draft and transcript
+scroll position; Neovim retains its actual files, cursor, editing mode and unsaved buffers in the
+detached runtime. Terminal retains its shell list, selected shell and log viewport. All four views
+restore on TUI reconnect while that runtime remains alive.
+Git intentionally displays a **planned native UI** notice: no file list, diff, stage, commit, push,
+or lazygit integration is implemented in this stage.
+
+Select Editor to explicitly open/attach Neovim. Worktree navigation and reconnect attach an existing
+editor without restarting it. If no process remains after runtime restart, the view offers an explicit
+open action instead of silently replacing lost editing state. `:q`/`:qa` remain Neovim's commands;
+when Neovim exits the Editor tab stays selected and offers an explicit reopen action.
+
+While the embedded terminal is focused, Neovim receives Tab, Esc, Ctrl+f/e, mouse and paste.
+**Ctrl+]** moves focus to the visible sidebar; outside the editor, existing application focus keys
+and Tab/Shift+Tab traversal work. **Ctrl+C is native input**, not an application detach binding.
+Use the configured detach sequence (default **Ctrl+Space, then c**). The footer follows the actual
+focused control and effective keymap. Opening, switching and resizing do not
+send a prompt to an agent or run a Git operation.
+
+### Terminal tabs
+
+Select **Terminal**, then **+ New** (or the configured new-terminal command). Merely viewing an
+empty Terminal view never launches a shell. Each worktree has an independent list of shells;
+creating one selects it unless a later navigation action supersedes that request. **Close** removes
+the selected tab and selects its next/previous neighbor, or leaves an explicit empty state.
+
+The default shell is the runtime's `SHELL`, falling back to `/bin/sh`, started interactively in the
+selected worktree. Normal mode uses its ordinary user configuration. Test runtime uses a clean
+`/bin/sh` with no `ENV`/`BASH_ENV` startup file and no history file. **Shell commands are real even
+in test runtime; this is not a filesystem/process sandbox.** No model is invoked by shell input.
+
+Shells and development servers keep running when switching tabs/worktrees or detaching the TUI.
+A shell that exits remains visible with its final output and exit code; it is not automatically
+restarted. There are up to **5,000 scrollback lines per shell in memory**, navigated with the wheel
+or default Shift+PgUp/PgDn. Typing returns to live output. History/viewport survive warm reconnect;
+radian does not save terminal output/commands to its manifest. A live shell may save its own
+history according to its user configuration.
+
+Closing a tab stops its shell and other processes in its **owned POSIX session**, including ordinary
+foreground/background development servers. Each tab retains a Bun supervisor as the
+session ownership anchor, even after its shell exits. The runtime verifies the live anchor and kernel
+`getsid()` membership before signaling **individual positive PIDs only**. It never uses `ps sess`
+values or negative/group/broadcast kills, and refuses cleanup on lost ownership. Graceful termination
+is followed by bounded escalation for still-owned processes; failures remain tracked and are reported.
+`runtime-status` reports the supervisor `pid` separately from `shellPid`.
+
+This boundary does not claim control over processes that intentionally escape into another session,
+remote services, privileged jobs the user cannot terminate, or arbitrary effects of shell commands.
+Hard runtime death may leave processes behind; there is no automatic command replay or cold shell
+recreation. Explicit `--stop-runtime` closes all tracked terminals and their owned jobs. Existing
+services without `terminal-tabs` are not silently upgraded. The new view preference is stored in
+additive fields so the original three-view wire enum remains readable by older clients.
+
+### Keybindings
+
+The default leader is **Ctrl+Space**. Press and release it, then press `c` to detach radian,
+`1`/`2`/`3`/`4` to select Agent/Editor/Git/Terminal, `w` to focus the sidebar or `f` to focus search.
+`<leader> t` creates a terminal, `<leader> x` closes the selected terminal, and `<leader> [` / `]`
+select the previous/next terminal while the Terminal view is active.
+Ctrl+C is not intercepted by default: Neovim and shells receive it as native input.
+If macOS reserves Ctrl+Space for input-source switching, change that system shortcut or radian's leader.
+
+Settings are read when the TUI starts from `$XDG_CONFIG_HOME/radian/keybindings.json`, falling back
+to `~/.config/radian/keybindings.json`. `--keybindings PATH` selects an explicit file. Restart only
+the TUI to apply edits; the runtime and its processes do not need restarting. There is no settings UI yet.
+
+```json
+{
+  "leader": "ctrl+space",
+  "timeoutMs": 1000,
+  "bindings": {
+    "app.detach": ["<leader> c"],
+    "view.editor": ["<leader> e"],
+    "session.new": [{ "keys": "s", "scope": "workspace" }]
+  }
+}
+```
+
+Spaces separate sequential keys (`"space r"` is a two-key leader); `+` combines modifiers.
+Use explicit `shift+c` for uppercase C. A string binding is global; an object can specify `scope`:
+`global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `prompt`, `button`,
+`transcript`, `editor`, `terminal`, or `none`. An override replaces that command's defaults;
+`[]` disables it. Command IDs/defaults are defined in `src/keybindings/commands.ts`.
+Unknown commands, invalid keys and overlapping/prefix bindings are errors rather than silent fallbacks.
+For example, a printable Space leader conflicts with the default button Space activation unless that
+binding is changed. Missing default files use defaults; missing explicitly requested files are errors.
+
+Incomplete/mismatched sequences are returned once, in order, to their original input target. Focus
+changes flush the old prefix to the old target, never the newly selected terminal. Paste is never
+interpreted as commands, and kitty key-release events do not duplicate replayed text. These settings
+control radian commands, not Neovim's own configuration or shell editing bindings. Configured but
+currently unavailable commands are consumed without executing, never replayed as accidental edits.
 
 ### Common footer
 
-The left, center and right panels share one full-width footer. The bottom row shows the package
+The left navigation and right work panel share one full-width footer. The bottom row shows the package
 name/version on the left and shortcuts for the **currently focused control** on the right. Keys
 are highlighted separately from their descriptions. Tree, search, History, buttons and prompt
 contexts update on actual focus/state changes; unrelated/global shortcuts are not appended.
-Existing global bindings such as `Ctrl+f`, `Ctrl+e`, `Tab` and `Ctrl+C` still work.
+Application bindings such as `Ctrl+f`, `Ctrl+e` and `Tab` still work outside Neovim input focus;
+the configured leader detach command works in every input context. See the input ownership rules above.
 
 Errors and service notices occupy a separate row immediately above the footer, so they never
 replace shortcut hints. The existing fixed-height notice allocation and status-icon legend are
@@ -135,10 +239,23 @@ A connection must remain healthy for 10 s before a later disconnect receives a f
 a peer that repeatedly opens and closes cannot retry indefinitely. Permission/protocol failures and
 unexpected programming errors stop recovery rather than being treated as transient outages.
 A successful subscription restores the latest snapshot and refreshes visible history. If recovery
-stops, the notice asks you to detach with Ctrl+C and reopen radian. Detaching cancels pending retries.
+stops, the notice asks you to use the configured detach command and reopen radian. Detaching cancels pending retries.
 Reconnection never launches/restarts a service or replays prompts, creation, closing, or other commands.
 A replacement service is accepted only for the same repository and live/test mode. Services already
 running older code still require an explicit stop/restart after their jobs finish to load these fixes.
+
+A main-subscription interruption invalidates attached PTY input handles and discards their unsent
+input rather than allowing old keystrokes to run after recovery. The underlying Neovim/shell processes
+are not closed. After the main subscription recovers, reconnect the editor or select/reconnect the
+terminal explicitly; a new attachment does not relaunch its process. Already-sent input can have an
+uncertain outcome and is never resent. Intentional TUI detach stops subscription retries immediately,
+while draining already-queued healthy PTY input once and allowing final preference writes.
+
+Commands and PTY attachments include an `X-Radian-Instance` fence. Services advertising
+`instance-guard` reject requests for a different instance before accepting actions or leases. Older
+clients may omit the header, and older services need an explicit upgrade for server-side fencing.
+A late acknowledgement remains an acknowledgement of the original accepted action, but does not
+replace notices belonging to a recovered connection or new service.
 
 - **Warm reconnect:** the same service PID, SDK instances, owned children and ongoing output survive
   TUI exit. No prompt is replayed or agent restarted.
@@ -153,6 +270,44 @@ running older code still require an explicit stop/restart after their jobs finis
 The central probe displays a bounded recent transcript (12 messages / 12,000 characters), not the
 complete conversation editor or Orca's terminal scrollback. Full SDK history remains in JSONL.
 Pi CLI extensions/MCP and remote-machine services are still outside this initial host.
+
+### Work-view runtime foundation
+
+The additive `work-views` capability provides a daemon-owned Neovim per worktree and optional
+work-view preferences, used by the right-panel UI above.
+Neovim must be installed as `nvim` on the daemon's PATH; normal mode uses your Neovim configuration,
+while `--test-runtime` launches it with `--clean -i NONE -n` (no user plugins, ShaDa or swap files). `--demo` never launches an editor.
+Editor integration tests require Neovim as well as Bun and Git.
+
+The service owns Bun PTYs and bounded VT screens (`@xterm/headless`): Neovim uses zero scrollback,
+while shells retain the bounded history described above. A local encoder uses public visible-cell
+APIs, including after a resize shrinks retained rows.
+Attachments receive complete ANSI screen/mode snapshots, not an ever-growing
+or truncated byte history. Buffer contents are retained by the **same Neovim process** while a TUI
+is absent. Terminal contents are not written to radian's checkpoint. The UI uses the existing
+OpenTUI terminal renderer; the headless screen exists to support reconnects without restarting Neovim.
+
+Each PTY allows one input/resize attachment at a time. Generation IDs and attachment leases reject
+stale inputs, and input is ordered, bounded and never replayed. Detaching releases the attachment, not
+the process. An exited editor is reopened only by an explicit action. No Git operations or lazygit
+integration are provided by this capability. Legacy manifests remain readable; older clients do not
+clear work-view preferences they do not understand. Older services are never automatically restarted.
+
+Runtime/editor snapshot streams send heartbeats every 5 seconds to keep long-lived idle views alive
+under Bun's HTTP idle timeout. Slow readers receive only the latest complete snapshot.
+The configured detach command closes only the TUI. **Explicit `--stop-runtime` also terminates Neovim**:
+save buffers first. Runtime restart/reboot does not restore unsaved editor buffers or automatically
+launch an editor, even when a saved tab preference points to Editor.
+
+### Shared terminal layers
+
+`src/runtime/pty-session.ts` owns a PTY, bounded VT screen and input/resize lease independently
+of the launched program. `EditorSessions` retains only Neovim launch, one-editor-per-worktree,
+and editor compatibility policies. `pty-client.ts` owns ordered IPC input and frame attachment;
+its caller supplies the channel-specific commands. `pty-screen.ts` encodes visible terminal cells.
+`src/ui/terminal-surface.ts` handles native rendering/input and viewport synchronization, while
+`EditorPanel` decides when to open, display or reconnect an editor. Adding shell tabs must use
+these shared layers rather than duplicate the Neovim transport or renderer.
 
 ### Saved session history
 

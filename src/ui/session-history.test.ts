@@ -5,15 +5,18 @@ import { WorkspaceSelection } from "../workspace/selection.ts";
 import type { HistoryItem } from "../sessions/history.ts";
 import { WorkspaceView } from "./workspace.ts";
 import { capture, ConnectionError, HistoryError } from "../errors.ts";
+import { parseKeymap, type Keymap } from "../keybindings/config.ts";
+import { expectOk } from "../testing/results.ts";
 
 const saved = (id: string, title: string, tree = "demo:main"): HistoryItem => ({
   id, title, worktreeId: tree, modified: "2026-10-14T12:34:00.000Z", messageCount: 4, openSessionId: null, unavailableReason: null,
 });
-async function mount(list: (id: string) => Promise<readonly HistoryItem[]>, resume: (id: string, savedId: string) => Promise<string> = async () => "a2", clock?: ManualClock) {
+async function mount(list: (id: string) => Promise<readonly HistoryItem[]>, resume: (id: string, savedId: string) => Promise<string> = async () => "a2", clock?: ManualClock, keymap?: Keymap) {
   const setup = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true, ...(clock ? { clock } : {}) });
   const selection = new WorkspaceSelection(demoWorkspace());
   const resumed: string[] = [];
   const view = new WorkspaceView(setup.renderer, selection, {
+    ...(keymap ? { keymap } : {}),
     onNewSession: () => {}, onCloseSession: () => {}, onListHistory: (id) => capture(() => list(id)),
     onResumeSession: async (tree, id) => { resumed.push(`${tree}/${id}`); return capture(() => resume(tree, id)); },
   });
@@ -120,6 +123,22 @@ test("이전 조회 응답은 새 조회의 스피너를 끄지 않고 현재 �
     expect(app.captureCharFrame()).toContain("Lookup failed");
     expect(calls).toBe(2);
   } finally { await app.disposeApp(); }
+});
+
+test("커스텀 History 새로고침 키와 푸터를 유지하면서 새 조회의 스피너를 표시한다", async () => {
+  const clock = new ManualClock();
+  const pending = Promise.withResolvers<readonly HistoryItem[]>(); let calls = 0;
+  const keymap = expectOk(parseKeymap({ bindings: { "history.refresh": [{ keys: "q", scope: "history" }] } }));
+  const app = await mount(() => { calls++; return pending.promise; }, undefined, clock, keymap);
+  try {
+    await app.click("History"); app.mockInput.pressTab(); app.mockInput.pressTab(); await app.renderOnce();
+    expect(app.captureCharFrame().split("\n")[23]).toContain("q Refresh");
+    app.mockInput.pressKey("q"); app.mockInput.pressKey("r"); await app.renderOnce();
+    expect(calls).toBe(2); expect(app.captureCharFrame()).toMatch(/History · radian\s+⠋/);
+    pending.resolve([saved("latest", "Latest custom history")]); await app.visible("Latest custom history");
+    clock.advance(500); await app.renderOnce();
+    expect(app.captureCharFrame()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+  } finally { pending.resolve([]); await app.disposeApp(); }
 });
 
 test("History를 숨기거나 화면을 제거하면 진행 중인 스피너 타이머도 종료한다", async () => {
@@ -234,12 +253,13 @@ test("연결 복구 알림은 보이는 History 오류를 새 목록으로 바�
     return [saved("saved-a", "Restored history")];
   });
   try {
-    await app.click("History"); await app.visible("History error:");
+    await app.click("Git"); await app.click("History"); await app.visible("History error:");
 
     // The host resets its connection notice and refreshes metadata after a fresh event snapshot.
     online = true; app.view.setNotice("Runtime connected"); app.view.refreshHistory(); await app.visible("Restored history");
 
     expect(app.captureCharFrame()).not.toContain("History error:");
+    expect(app.captureCharFrame()).toContain("Native Git UI is planned");
     expect(app.selection.sessionId).toBe("a1");
     expect(app.resumed).toEqual([]);
     expect(calls).toBe(2);

@@ -1,6 +1,6 @@
 import { chmod } from "node:fs/promises";
 import { join } from "node:path";
-import { CancelledError, collectCleanup, InputError, SessionError, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
+import { CancelledError, collectCleanup, InputError, ProtocolError, SessionError, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { SessionRegistry, type SessionRecord } from "../sessions/session-registry.ts";
 import { piSessionFactory } from "../sessions/pi-session-adapter.ts";
@@ -9,6 +9,9 @@ import { offlineRuntime } from "../testing/offline-runtime.ts";
 import { discoverRepository } from "../workspace/git.ts";
 import type { Repository } from "../workspace/model.ts";
 import { acquireRuntime, privateDirectory, RuntimeStore, runtimePaths } from "./storage.ts";
+import { EditorSessions } from "./editor-sessions.ts";
+import { TerminalSessions } from "./terminal-sessions.ts";
+import { snapshotEvents } from "./events.ts";
 import { emptyPreferences, errorStatus, maxFrameBytes, parseCommand, protocolVersion, wireError,
   type RuntimeCommand, type RuntimeManifest, type RuntimePreferences, type RuntimeSnapshot } from "./protocol.ts";
 
@@ -30,7 +33,7 @@ export async function runRuntime(cwd: string, offline: boolean, stateRoot?: stri
     const options = offline ? await offlineRuntime(join(paths.directory, "offline-agent")) : undefined;
     const registry = new SessionRegistry(repositories, piSessionFactory(options));
     runtime = new WorkspaceRuntime(registry, repository.id, offline, store, manifest?.preferences ?? emptyPreferences,
-      new SessionHistory(repositories, registry, options?.sessionDir));
+      new SessionHistory(repositories, registry, options?.sessionDir), paths.directory);
     await runtime.restore(manifest?.records ?? []);
     server = Bun.serve({ unix: paths.socket,
       fetch: (request) => runtime!.fetch(request),
@@ -56,7 +59,9 @@ class WorkspaceRuntime {
   onStop: () => void = () => {};
   stopped = false;
   private preferences: RuntimePreferences;
-  private readonly subscribers = new Set<(snapshot: RuntimeSnapshot) => void>();
+  private readonly subscribers = new Set<() => void>();
+  private readonly editors: EditorSessions;
+  private readonly terminals: TerminalSessions;
   private readonly failedRecovery = new Map<string, SessionRecord>();
   private readonly unsubscribe: () => void;
   private notice = "";
@@ -65,8 +70,10 @@ class WorkspaceRuntime {
   private initializing = true;
 
   constructor(private readonly registry: SessionRegistry, private readonly repositoryId: string,
-    private readonly offline: boolean, private readonly store: RuntimeStore, preferences: RuntimePreferences, private readonly history: SessionHistory) {
+    private readonly offline: boolean, private readonly store: RuntimeStore, preferences: RuntimePreferences, private readonly history: SessionHistory, supervisorDirectory: string) {
     this.preferences = preferences;
+    this.editors = new EditorSessions(registry.snapshot, () => this.changed(), { clean: offline });
+    this.terminals = new TerminalSessions(registry.snapshot, () => this.changed(), supervisorDirectory, offline);
     this.unsubscribe = registry.subscribe(() => this.changed());
   }
 
@@ -91,16 +98,26 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "typed-errors"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "typed-errors", "work-views", "terminal-tabs", "instance-guard"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
-      preferences: this.preferences, notice: this.persistenceError || this.notice };
+      preferences: this.preferences, notice: this.persistenceError || this.notice, editors: this.editors.infos,
+      terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
   }
 
   async fetch(request: Request): Promise<Response> {
     try {
       const path = new URL(request.url).pathname;
+      const expectedInstance = request.headers.get("X-Radian-Instance");
+      if (expectedInstance && expectedInstance !== this.instance) return this.rejected(new ProtocolError("Runtime instance changed; refresh the connection before retrying. No action was accepted."));
       if (path === "/snapshot" && request.method === "GET") return Response.json(this.snapshot);
       if (path === "/events" && request.method === "GET") return this.events();
+      if ((path === "/editor/events" || path === "/terminal/events") && request.method === "GET") {
+        const params = new URL(request.url).searchParams;
+        const id = params.get("id"), lease = params.get("lease");
+        if (!id || !lease || id.length > 4096 || lease.length > 4096) return this.rejected(new InputError("Missing editor attachment identity."));
+        const attached = path === "/editor/events" ? this.editors.attach(id, lease) : this.terminals.attach(id, lease);
+        return attached.ok ? attached.value : this.rejected(attached.error);
+      }
       if (path === "/history" && request.method === "GET") {
         const worktreeId = new URL(request.url).searchParams.get("worktreeId");
         if (!worktreeId) return this.rejected(new InputError("Missing worktree for history."));
@@ -116,7 +133,9 @@ class WorkspaceRuntime {
       const result = await this.command(command.value);
       if (!result.ok) return this.rejected(result.error);
       // Commands above have already been accepted. A checkpoint failure is NOT a rejected action.
-      const checkpoint = await this.checkpoint();
+      // Keystrokes/resize affect the live editor only, never the manifest or a replay log.
+      const transient = ["editor-input", "editor-resize", "editor-detach", "terminal-input", "terminal-resize", "terminal-scroll", "terminal-detach"].includes(command.value.type);
+      const checkpoint = transient ? ok(undefined) : await this.checkpoint();
       return Response.json({ ok: true, value: result.value, ...(!checkpoint.ok ? { warnings: [wireError(checkpoint.error)] } : {}) });
     } catch (error) {
       reportUnexpected(error, "runtime request");
@@ -152,43 +171,55 @@ class WorkspaceRuntime {
         this.observe(this.registry.prompt(command.sessionId, command.text));
         return ok(null);
       }
-      case "preferences": this.preferences = command.preferences; return ok(null);
+      case "preferences": {
+        const workViews = command.preferences.workViews ?? this.preferences.workViews;
+        const terminalViews = command.preferences.terminalViews ?? this.preferences.terminalViews;
+        this.preferences = { ...command.preferences, ...(workViews ? { workViews } : {}), ...(terminalViews ? { terminalViews } : {}) };
+        return ok(null);
+      }
+      case "terminal-create": return this.terminals.create(command.worktreeId, command);
+      case "terminal-close": this.observe(this.terminals.close(command.terminalId)); return ok(null);
+      case "terminal-detach": this.terminals.detach(command.terminalId, command.lease); return ok(null);
+      case "terminal-input": {
+        const result = this.terminals.input(command.terminalId, command.lease, Buffer.from(command.data, "base64"));
+        return result.ok ? ok(null) : result;
+      }
+      case "terminal-resize": {
+        const result = await this.terminals.resize(command.terminalId, command.lease, command.cols, command.rows);
+        return result.ok ? ok(null) : result;
+      }
+      case "terminal-scroll": {
+        const result = await this.terminals.scroll(command.terminalId, command.lease, command.lines);
+        return result.ok ? ok(null) : result;
+      }
+      case "editor-open": return this.editors.open(command.worktreeId, { cols: command.cols ?? 80, rows: command.rows ?? 24 });
+      case "editor-detach": this.editors.detach(command.editorId, command.lease); return ok(null);
+      case "editor-input": {
+        const result = this.editors.input(command.editorId, command.lease, Buffer.from(command.data, "base64"));
+        return result.ok ? ok(null) : result;
+      }
+      case "editor-resize": {
+        const result = await this.editors.resize(command.editorId, command.lease, command.cols, command.rows);
+        return result.ok ? ok(null) : result;
+      }
       case "stop": setTimeout(() => this.onStop(), 20); return ok(null);
     }
   }
 
   private events(): Response {
-    let pending: Uint8Array | undefined;
-    let send: ((snapshot: RuntimeSnapshot) => void) | undefined;
-    let heartbeat: ReturnType<typeof setInterval> | undefined;
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream<Uint8Array>({
-      start: (controller) => {
-        send = (snapshot) => {
-          const data = encoder.encode(JSON.stringify(snapshot) + "\n");
-          if ((controller.desiredSize ?? 0) > 0) controller.enqueue(data);
-          else pending = data; // Slow readers receive the latest snapshot, not an unbounded token queue.
-        };
-        this.subscribers.add(send); send(this.snapshot);
-        // Bun 1.4.3 can reset streaming sockets despite timeout(request, 0). Valid v1 snapshots
-        // keep only subscriptions alive without disabling ordinary request timeouts or writing checkpoints.
-        heartbeat = setInterval(() => send?.(this.snapshot), 5000);
-        heartbeat.unref();
-      },
-      pull: (controller) => { if (pending) { controller.enqueue(pending); pending = undefined; } },
-      cancel: () => { clearInterval(heartbeat); if (send) this.subscribers.delete(send); },
+    return snapshotEvents(() => this.snapshot, (send) => {
+      this.subscribers.add(send); return () => { this.subscribers.delete(send); };
     });
-    return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" } });
   }
 
   private changed(): void {
-    for (const subscriber of this.subscribers) subscriber(this.snapshot);
+    for (const subscriber of this.subscribers) subscriber();
     if (this.initializing || this.stopped || this.checkpointTimer) return;
     this.checkpointTimer = setTimeout(() => {
       this.checkpointTimer = undefined;
       void this.checkpoint().catch((error: unknown) => {
         this.persistenceError = reportUnexpected(error, "checkpoint");
-        for (const subscriber of this.subscribers) subscriber(this.snapshot);
+        for (const subscriber of this.subscribers) subscriber();
       });
     }, 100);
   }
@@ -206,7 +237,7 @@ class WorkspaceRuntime {
       repositories: this.registry.snapshot, records: [...this.registry.records, ...this.failedRecovery.values()], preferences: this.preferences });
     if (!saved.ok && !this.persistenceError) console.error(`[radian:${saved.error.code}] Checkpoint failed`, saved.error);
     this.persistenceError = saved.ok ? "" : `Runtime persistence failed: ${saved.error.message}`;
-    if (!saved.ok) for (const subscriber of this.subscribers) subscriber(this.snapshot);
+    if (!saved.ok) for (const subscriber of this.subscribers) subscriber();
     return saved;
   }
 
@@ -218,7 +249,7 @@ class WorkspaceRuntime {
     // Stopping the service is NOT explicit session close. Freeze open intent before teardown emits removals.
     const manifest: RuntimeManifest = { version: protocolVersion, repositoryId: this.repositoryId,
       repositories: this.registry.snapshot, records: [...this.registry.records, ...this.failedRecovery.values()], preferences: this.preferences };
-    return collectCleanup([this.checkpoint(manifest), this.registry.shutdown()], "Checkpoint or runtime shutdown failed.");
+    return collectCleanup([this.checkpoint(manifest), this.registry.shutdown(), this.editors.stop(), this.terminals.stop()], "Checkpoint or runtime shutdown failed.");
   }
 }
 

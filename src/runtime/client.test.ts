@@ -1,6 +1,6 @@
 import { expect, jest, spyOn, test } from "bun:test";
 import { RuntimeClient } from "./client.ts";
-import { emptyPreferences, protocolVersion, type RuntimeSnapshot } from "./protocol.ts";
+import { emptyPreferences, protocolVersion, type RuntimeSnapshot, type PtyFrame } from "./protocol.ts";
 import { runtimePaths } from "./storage.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 
@@ -29,6 +29,7 @@ function events(value: unknown, signal?: AbortSignal | null) {
     cancel: remove,
   }));
   return { response,
+    frame(value: unknown) { if (open) controller.enqueue(encoder.encode(JSON.stringify(value) + "\n")); },
     end() { if (open) { remove(); controller.close(); } },
     fail(error: unknown) { if (open) { remove(); controller.error(error); } },
   };
@@ -92,7 +93,8 @@ test("반복되는 짧은 연결은 snapshot 하나만 받아도 재시도 횟�
 
     expect(streams).toHaveLength(5);
     expect(client.snapshot.notice).toContain("Reconnection stopped");
-    expect(client.snapshot.notice).toContain("Ctrl+C");
+    expect(client.snapshot.notice).toContain("configured detach command");
+    expect(client.snapshot.notice).not.toContain("Ctrl+C");
     expect(expectError(await client.listHistory("worktree")).code).toBe("CONNECTION_FAILED");
   } finally { await client.disconnect(); fetchMock.mockRestore(); jest.useRealTimers(); }
 });
@@ -136,7 +138,7 @@ test("UI 분리 시 재접속 대기를 취소하고 추가 연결을 시작하�
 });
 
 test("첫 snapshot을 기다리는 중 UI를 분리해도 연결 작업과 타이머가 종료된다", async () => {
-  // A stalled initial handshake must not prevent Ctrl+C from disposing the client.
+  // A stalled initial handshake must not prevent the configured detach action from disposing the client.
   jest.useFakeTimers();
   const fetchMock = stubFetch(async (_input, options) => events(undefined, options?.signal).response);
   const client = new RuntimeClient(paths, snapshot());
@@ -237,4 +239,125 @@ test("예상하지 못한 스트림 오류는 원인을 기록하고 자동 재�
     expect(log.mock.calls.some((args) => args.includes(defect))).toBe(true);
     expect(client.snapshot.notice).toContain("Unexpected");
   } finally { await client.disconnect(); log.mockRestore(); fetchMock.mockRestore(); jest.useRealTimers(); }
+});
+
+test("같은 runtime으로 복구돼도 끊긴 PTY의 대기 입력과 detach를 뒤늦게 전송하지 않는다", async () => {
+  // One input is already in flight; later keys have not crossed the transport boundary.
+  jest.useFakeTimers();
+  const state = snapshot(); state.capabilities = ["history", "terminal-tabs"];
+  const mainStreams: ReturnType<typeof events>[] = [];
+  const commands: { type: string; data?: string; lease?: string }[] = [];
+  const acknowledgement = Promise.withResolvers<Response>();
+  let inputs = 0;
+  const fetchMock = stubFetch(async (input, options) => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/events") { const stream = events(state, options?.signal); mainStreams.push(stream); return stream.response; }
+    if (path === "/terminal/events") {
+      const frame: PtyFrame = { id: "shell", worktreeId: "tree", pid: 123, exited: false, exitCode: null, cols: 80, rows: 24, revision: 0, ansi: "" };
+      expect(new Headers(options?.headers).get("X-Radian-Instance")).toBe("first");
+      return events(frame, options?.signal).response;
+    }
+    const command = JSON.parse(String(options?.body)); commands.push(command);
+    if (command.type === "terminal-input" && ++inputs === 1) return acknowledgement.promise;
+    return Response.json({ ok: true, value: null });
+  });
+  const client = new RuntimeClient(paths, state); const failures: unknown[] = [];
+  try {
+    expectOk(await client.attach());
+    const old = expectOk(await client.attachTerminal("shell", () => {}, (error) => failures.push(error)));
+    old.input(encoder.encode("sent-once")); old.input(encoder.encode("must-not-run")); await settle();
+    expect(commands).toHaveLength(1);
+
+    mainStreams[0]!.end(); await settle(); await advance(250);
+    expect(client.connected).toBe(true);
+    acknowledgement.resolve(Response.json({ ok: true, value: null })); await old.closed;
+    old.input(encoder.encode("old-handle")); await settle();
+
+    expect(commands.map((command) => command.type)).toEqual(["terminal-input"]);
+    expect(Buffer.from(commands[0]!.data!, "base64").toString()).toBe("sent-once");
+    expect(failures).toHaveLength(1);
+    const fresh = expectOk(await client.attachTerminal("shell", () => {}, () => {}));
+    expect(fresh.lease).not.toBe(old.lease);
+    fresh.input(encoder.encode("explicit-new-input")); await settle();
+    expect(commands.filter((command) => command.type === "terminal-input").map((command) => Buffer.from(command.data!, "base64").toString())).toEqual(["sent-once", "explicit-new-input"]);
+  } finally { acknowledgement.resolve(Response.json({ ok: true, value: null })); await client.disconnect(); fetchMock.mockRestore(); jest.useRealTimers(); }
+});
+
+test("PTY 입력 응답 대기 중 분리해도 재연결은 즉시 중단하고 마지막 preferences만 flush한다", async () => {
+  jest.useFakeTimers();
+  const state = snapshot(); state.capabilities = ["terminal-tabs"];
+  const acknowledgement = Promise.withResolvers<Response>();
+  const commands: string[] = []; let subscriptions = 0;
+  const fetchMock = stubFetch(async (input, options) => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/events") { subscriptions++; return events(state, options?.signal).response; }
+    if (path === "/terminal/events") return events({ id: "shell", worktreeId: "tree", pid: 123, exited: false, exitCode: null, cols: 80, rows: 24, revision: 0, ansi: "" }, options?.signal).response;
+    const command = JSON.parse(String(options?.body)); commands.push(command.type);
+    return command.type === "terminal-input" ? acknowledgement.promise : Response.json({ ok: true, value: null });
+  });
+  const client = new RuntimeClient(paths, state);
+  try {
+    expectOk(await client.attach()); const terminal = expectOk(await client.attachTerminal("shell", () => {}, () => {}));
+    terminal.input(encoder.encode("accepted-before-detach")); await settle();
+
+    client.beginDetach(); client.beginDetach(); terminal.input(encoder.encode("too-late")); await advance(10000);
+    expect(client.connected).toBe(false); expect(subscriptions).toBe(1);
+    expect(expectError(await client.create("tree")).code).toBe("CONNECTION_FAILED");
+    expectOk(await client.savePreferences({ ...state.preferences, drafts: { saved: "last draft" } }));
+    acknowledgement.resolve(Response.json({ ok: true, value: null })); await client.disconnect();
+
+    expect(commands).toEqual(["terminal-input", "preferences", "terminal-detach"]);
+    expect(expectError(await client.savePreferences(state.preferences)).code).toBe("CONNECTION_FAILED");
+  } finally { acknowledgement.resolve(Response.json({ ok: true, value: null })); await client.disconnect(); fetchMock.mockRestore(); jest.useRealTimers(); }
+});
+
+test("PTY 첫 헤더 대기 중 분리는 취소 Result로 끝나며 명령을 보내지 않는다", async () => {
+  const state = snapshot(); state.capabilities = ["terminal-tabs"];
+  const commands: string[] = [];
+  const fetchMock = stubFetch(async (input, options) => {
+    if (new URL(String(input)).pathname === "/events") return events(state, options?.signal).response;
+    if (new URL(String(input)).pathname === "/terminal/events") return new Promise((_resolve, reject) => {
+      const aborted = () => reject(options?.signal?.reason);
+      if (options?.signal?.aborted) aborted(); else options?.signal?.addEventListener("abort", aborted, { once: true });
+    });
+    commands.push(String(options?.body)); return Response.json({ ok: true, value: null });
+  });
+  const client = new RuntimeClient(paths, state);
+  try {
+    expectOk(await client.attach());
+    const pending = client.attachTerminal("shell", () => {}, () => {}); await settle();
+    await client.disconnect();
+    expect(expectError(await pending).code).toBe("CONNECTION_FAILED");
+    expect(commands).toEqual([]);
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
+
+test("handshake timeout과 동시에 발생한 내부 버그도 timeout으로 숨기지 않는다", async () => {
+  jest.useFakeTimers();
+  const defect = new TypeError("defect racing timeout");
+  const fetchMock = stubFetch(async (_input, options) => new Promise((_resolve, reject) => {
+    if (options?.signal?.aborted) reject(defect);
+    else options?.signal?.addEventListener("abort", () => reject(defect), { once: true });
+  }));
+  const client = new RuntimeClient(paths, snapshot());
+  try {
+    const attached = client.attach().catch((error: unknown) => error);
+    await settle(); await advance(2000);
+    expect(await attached).toBe(defect);
+    await advance(60000); expect(fetchMock).toHaveBeenCalledTimes(1);
+  } finally { await client.disconnect(); fetchMock.mockRestore(); jest.useRealTimers(); }
+});
+
+test("하나의 스트림 안에서 instance가 바뀌면 거부하고 재시도하지 않는다", async () => {
+  jest.useFakeTimers();
+  const stream = events(snapshot());
+  const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(stream.response);
+  const client = new RuntimeClient(paths, snapshot());
+  try {
+    expectOk(await client.attach());
+    stream.frame({ ...snapshot(), instance: "unexpected" }); await settle(); await advance(60000);
+    expect(client.snapshot.instance).toBe("first"); expect(client.connected).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(client.snapshot.notice).toContain("within the event stream");
+  } finally { await client.disconnect(); fetchMock.mockRestore(); jest.useRealTimers(); }
 });
