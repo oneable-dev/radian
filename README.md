@@ -147,8 +147,9 @@ Neovim must be installed as `nvim` on the daemon's PATH; normal mode uses your N
 while isolated `--test-runtime` launches it with `--clean -i NONE`. `--demo` never launches an editor.
 Editor integration tests require Neovim as well as Bun and Git.
 
-The service owns Bun PTYs and bounded, zero-scrollback VT screens (`@xterm/headless` and its
-serialization addon). Attachments receive complete ANSI screen/mode snapshots, not an ever-growing
+The service owns Bun PTYs and bounded, zero-scrollback VT screens (`@xterm/headless`). A local
+encoder uses its public visible-cell APIs, including after a resize shrinks retained rows.
+Attachments receive complete ANSI screen/mode snapshots, not an ever-growing
 or truncated byte history. Buffer contents are retained by the **same Neovim process** while a TUI
 is absent. Terminal contents are not written to radian's checkpoint. The UI uses the existing
 OpenTUI terminal renderer; the headless screen exists to support reconnects without restarting Neovim.

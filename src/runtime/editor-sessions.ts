@@ -1,5 +1,5 @@
 import { Terminal as Screen } from "@xterm/headless";
-import { SerializeAddon } from "@xterm/addon-serialize";
+import { editorScreen } from "./editor-screen.ts";
 import { capture, collectCleanup, EditorError, InputError, knownError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import type { Repository } from "../workspace/model.ts";
@@ -13,7 +13,6 @@ class EditorSession {
   readonly process: Bun.Subprocess;
   lease: string | null = null;
   private readonly screen = new Screen({ cols: 80, rows: 24, scrollback: 0, allowProposedApi: true });
-  private readonly serializer = new SerializeAddon();
   private readonly listeners = new Set<() => void>();
   private readonly terminal: Bun.Terminal;
   private readonly modes = new Map<number, boolean>();
@@ -27,8 +26,7 @@ class EditorSession {
   readonly settled: Promise<void>;
 
   constructor(readonly worktreeId: string, cwd: string, executable: string, clean: boolean, private readonly changed: () => void) {
-    this.screen.loadAddon(this.serializer);
-    // SerializeAddon exports buffers and most input modes; retain these additional public VT modes.
+    // Retain public VT modes not exposed by xterm's buffer/modes APIs.
     for (const final of ["h", "l"]) this.screen.parser.registerCsiHandler({ prefix: "?", final }, (params) => {
       for (const mode of params) if (typeof mode === "number" && [25, 1005, 1006, 1015, 1016].includes(mode)) this.modes.set(mode, final === "h");
       return false;
@@ -57,7 +55,7 @@ class EditorSession {
     if (!this.cached) {
       const modes = [...this.modes].map(([mode, enabled]) => `\x1b[?${mode}${enabled ? "h" : "l"}`).join("");
       this.cached = { ...this.info, cols: this.screen.cols, rows: this.screen.rows, revision: this.revision,
-        ansi: `\x1bc${this.serializer.serialize({ scrollback: 0 })}${modes}\x1b[${this.cursorStyle} q` };
+        ansi: `${editorScreen(this.screen)}${modes}\x1b[${this.cursorStyle} q` };
     }
     return this.cached;
   }
