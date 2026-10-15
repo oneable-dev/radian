@@ -21,15 +21,19 @@ export const workViewsSchema = Type.Object({
   agentScroll: Type.Record(Type.String(), Type.Integer({ minimum: 0 })),
 });
 export type WorkViewPreferences = Static<typeof workViewsSchema>;
-export const editorInfoSchema = Type.Object({
+export const ptyInfoSchema = Type.Object({
   id, worktreeId: id, pid: Type.Integer({ minimum: 1 }), exited: Type.Boolean(), exitCode: Type.Union([Type.Integer(), Type.Null()]),
 });
-export type EditorInfo = Static<typeof editorInfoSchema>;
-export const editorFrameSchema = Type.Object({ ...editorInfoSchema.properties,
+export type PtyInfo = Static<typeof ptyInfoSchema>;
+export const editorInfoSchema = ptyInfoSchema;
+export type EditorInfo = PtyInfo;
+export const ptyFrameSchema = Type.Object({ ...ptyInfoSchema.properties,
   cols: Type.Integer({ minimum: 2, maximum: 500 }), rows: Type.Integer({ minimum: 1, maximum: 200 }),
   revision: Type.Integer({ minimum: 0 }), ansi: Type.String({ maxLength: maxFrameBytes }),
 });
-export type EditorFrame = Static<typeof editorFrameSchema>;
+export type PtyFrame = Static<typeof ptyFrameSchema>;
+export const editorFrameSchema = ptyFrameSchema;
+export type EditorFrame = PtyFrame;
 export const preferencesSchema = Type.Object({
   selection: Type.Object({ worktreeId: Type.Union([id, Type.Null()]), sessions: Type.Record(Type.String(), Type.String()) }),
   drafts: Type.Record(Type.String(), Type.String({ maxLength: 1000000 })),
@@ -92,8 +96,8 @@ export function wireError(error: ExpectedError, outcome: WireError["outcome"] = 
 export function errorStatus(error: ExpectedError): number {
   switch (error.code) {
     case "INVALID_INPUT": return 400;
-    case "SESSION_NOT_OPEN": case "HISTORY_UNAVAILABLE": case "EDITOR_NOT_OPEN": return 404;
-    case "SESSION_BUSY": case "SESSION_CONFLICT": case "CANCELLED": case "EDITOR_BUSY": return 409;
+    case "SESSION_NOT_OPEN": case "HISTORY_UNAVAILABLE": case "EDITOR_NOT_OPEN": case "PTY_NOT_OPEN": return 404;
+    case "SESSION_BUSY": case "SESSION_CONFLICT": case "CANCELLED": case "EDITOR_BUSY": case "PTY_BUSY": return 409;
     case "RUNTIME_STOPPING": case "RUNTIME_ABSENT": case "CONNECTION_FAILED": case "CONNECTION_TIMEOUT": return 503;
     case "UNSUPPORTED_CAPABILITY": case "PROTOCOL_ERROR": case "EDITOR_UNAVAILABLE": return 422;
     default: return 500;

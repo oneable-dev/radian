@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Terminal } from "@xterm/headless";
-import { editorScreen } from "./editor-screen.ts";
+import { terminalScreen } from "./pty-screen.ts";
 
 const write = (terminal: Terminal, text: string) => new Promise<void>((resolve) => terminal.write(text, resolve));
 
@@ -12,7 +12,7 @@ test("줄 너비가 줄어든 화면 복원은 숨겨진 옛 셀을 출력해 �
     await write(original, `\x1b[?1049hfirst-line\x1b[23;1H${"s".repeat(84)}\x1b[1;5H`);
     original.resize(64, 24);
 
-    await write(restored, editorScreen(original));
+    await write(restored, terminalScreen(original));
 
     expect(restored.buffer.active.getLine(0)?.translateToString(true)).toBe("first-line");
     expect(restored.buffer.active.getLine(22)?.translateToString(true)).toBe("s".repeat(64));
@@ -27,7 +27,7 @@ test("전체 화면 스냅샷은 넓은 문자·색상·스타일·입력 모드
   try {
     await write(original, "\x1b[?1049h\x1b[1;3;4;38;2;18;52;86;48;5;7m편집🙂\x1b[4;7H\x1b[?1h\x1b[?2004h\x1b[?1002h");
 
-    await write(restored, editorScreen(original));
+    await write(restored, terminalScreen(original));
 
     expect(restored.buffer.active.getLine(0)?.translateToString(true)).toBe("편집🙂");
     const cell = restored.buffer.active.getLine(0)!.getCell(0)!;
