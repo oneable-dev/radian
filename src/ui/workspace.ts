@@ -1,7 +1,8 @@
 import {
   BoxRenderable, InputRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderable,
-  type CliRenderer, type KeyEvent,
+  type CliRenderer, type KeyEvent, type Renderable,
 } from "@opentui/core";
+import packageInfo from "../../package.json";
 import { workspaceRows, type WorkspaceRow } from "../workspace/model.ts";
 import { WorkspaceSelection } from "../workspace/selection.ts";
 import { filterWorkspaces } from "../workspace/filter-workspaces.ts";
@@ -9,6 +10,7 @@ import { rowPresentation, workspaceIcons } from "../workspace/status.ts";
 import type { ExecutionState } from "../sessions/session-registry.ts";
 import type { HistoryItem } from "../sessions/history.ts";
 import { SessionHistoryPanel } from "./session-history.ts";
+import { Footer, type FooterShortcut } from "./footer.ts";
 import type { Result } from "../result.ts";
 import type { ExpectedError } from "../errors.ts";
 
@@ -46,7 +48,8 @@ export class WorkspaceView {
   private lastTranscriptKey = "";
   private syncingDraft = false;
   private readonly right: BoxRenderable;
-  private readonly notice: TextRenderable;
+  private readonly footer: Footer;
+  private readonly buttonHints = new WeakMap<Renderable, readonly FooterShortcut[]>();
   private readonly workspaceTab: BoxRenderable;
   private readonly historyTab: BoxRenderable;
   private readonly newButton: BoxRenderable;
@@ -73,14 +76,14 @@ export class WorkspaceView {
     });
     this.sidebar.add(this.search);
     const tabs = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    this.workspaceTab = this.button("Workspace", () => this.setTab("workspace"));
-    this.historyTab = this.button("History", () => this.setTab("history"));
+    this.workspaceTab = this.button("Workspace", () => this.setTab("workspace"), "Open Workspace");
+    this.historyTab = this.button("History", () => this.setTab("history"), "Open History");
     tabs.add(this.workspaceTab);
     tabs.add(this.historyTab);
     this.sidebar.add(tabs);
     const toolbar = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    this.newButton = this.button("+ New session", () => this.openNewSession());
-    this.closeButton = this.button("Close selected", () => this.closeSession());
+    this.newButton = this.button("+ New session", () => this.openNewSession(), "New session");
+    this.closeButton = this.button("Close selected", () => this.closeSession(), "Close session");
     toolbar.add(this.newButton);
     toolbar.add(this.closeButton);
     this.sidebar.add(toolbar);
@@ -92,7 +95,8 @@ export class WorkspaceView {
     this.history = new SessionHistoryPanel(renderer, {
       ...(actions.onListHistory ? { list: actions.onListHistory } : {}),
       ...(actions.onResumeSession ? { resume: actions.onResumeSession } : {}),
-      button: (label, activate) => this.button(label, activate),
+      button: (label, activate) => this.button(label, activate, "Refresh history"),
+      onChange: () => this.updateFooter(),
       onError: (message) => this.setNotice(message),
       onOpened: (worktreeId, sessionId) => {
         this.selection.selectSession(worktreeId, sessionId);
@@ -105,7 +109,7 @@ export class WorkspaceView {
     this.center = new BoxRenderable(renderer, { flexGrow: 1, minWidth: 0, padding: 1, flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
     this.centerTitle = this.text("", colors.accent);
     this.centerDetails = this.text("", colors.muted);
-    this.emptyNewButton = this.button("+ New session", () => this.openNewSession());
+    this.emptyNewButton = this.button("+ New session", () => this.openNewSession(), "New session");
     this.center.add(this.centerTitle);
     this.center.add(this.centerDetails);
     this.center.add(this.emptyNewButton);
@@ -129,13 +133,14 @@ export class WorkspaceView {
     panels.add(this.center);
     panels.add(this.right);
     this.root.add(panels);
-    this.notice = this.text("UI preview only · no agents running", colors.muted);
-    this.root.add(this.notice);
     this.root.add(this.text(`${workspaceIcons.working} Working · ${workspaceIcons.complete} Complete · ${workspaceIcons.failure} Failure · ${workspaceIcons.unreported} Status not supplied`, colors.muted));
-    this.root.add(this.text(`Ctrl+f search · Esc clear · Tab focus · ↑/↓ select · n new · x close${actions.onPrompt ? " · Ctrl+e prompt · Ctrl+C detach" : " · Ctrl+C quit"}`, colors.muted));
+    this.footer = new Footer(renderer, `${packageInfo.name} ${packageInfo.version}`);
+    this.footer.setNotice("UI preview only · no agents running");
+    this.root.add(this.footer.root);
     renderer.root.add(this.root);
     renderer.keyInput.on("keypress", this.handleGlobalKey);
     renderer.on("resize", this.resize);
+    renderer.on("focused_renderable", this.updateFooter);
     this.search.on(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.unsubscribe = selection.subscribe(() => this.render());
     this.resize();
@@ -151,17 +156,42 @@ export class WorkspaceView {
     if (this.syncingDraft || !this.promptSessionId) return;
     this.drafts.set(this.promptSessionId, this.prompt.value);
     this.actions.onDraftChange?.(this.promptDrafts);
+    this.updateFooter();
   };
 
   setNotice(message: string): void {
-    if (!this.disposed && !this.root.isDestroyed) this.notice.content = message;
+    if (!this.disposed && !this.root.isDestroyed) this.footer.setNotice(message);
   }
+
+  private updateFooter = (): void => {
+    if (this.disposed || !this.footer || this.root.isDestroyed) return;
+    const focused = this.renderer.currentFocusedRenderable;
+    let shortcuts: readonly FooterShortcut[] = [];
+    if (focused === this.search) shortcuts = [
+      { key: "Enter", label: this.tab === "history" ? "History" : "Results" }, { key: "Esc", label: "Clear" },
+    ];
+    else if (focused === this.tree && this.tab === "workspace") shortcuts = [
+      { key: "↑/↓", label: "Select" }, { key: "Home/End", label: "First/last" },
+      ...(this.selection.worktree ? [{ key: "n", label: "New session" }] : []),
+      ...(this.selection.sessionId ? [{ key: "x", label: "Close session" }] : []),
+    ];
+    else if (focused === this.prompt && this.runtimePanel.visible) {
+      const ready = this.promptSessionId && this.prompt.value.trim() && this.actions.getSessionDetails?.(this.promptSessionId)?.status !== "working";
+      shortcuts = [...(ready ? [{ key: "Enter", label: "Run" }] : []), { key: "Esc", label: "Workspace" }];
+    } else if (focused === this.history.list && this.tab === "history") shortcuts = this.history.shortcuts;
+    else if (focused) {
+      const unavailable = (focused === this.newButton || focused === this.emptyNewButton) && !this.selection.worktree
+        || focused === this.closeButton && !this.selection.sessionId;
+      if (!unavailable && focused.visible) shortcuts = this.buttonHints.get(focused) ?? [];
+    }
+    this.footer.setShortcuts(shortcuts);
+  };
 
   private text(content: string, fg: string = colors.text): TextRenderable {
     return new TextRenderable(this.renderer, { content, fg, selectable: false, wrapMode: "none", height: 1, flexShrink: 0 });
   }
 
-  private button(label: string, activate: () => void): BoxRenderable {
+  private button(label: string, activate: () => void, actionLabel = label): BoxRenderable {
     const button = new BoxRenderable(this.renderer, {
       height: 1, flexShrink: 0, focusable: true,
       onMouseDown: (event) => {
@@ -178,6 +208,7 @@ export class WorkspaceView {
         activate();
       },
     });
+    this.buttonHints.set(button, [{ key: "Enter/Space", label: actionLabel }]);
     button.add(this.text(label, colors.accent));
     button.on("focused", () => { button.backgroundColor = colors.selected; });
     button.on("blurred", () => { button.backgroundColor = colors.panel; });
@@ -325,7 +356,7 @@ export class WorkspaceView {
         text.flexShrink = 1;
         text.minWidth = 0;
         box.add(text);
-        if (row.kind === "session") box.add(this.button("[x]", () => this.actions.onCloseSession(row.worktree.id, row.session.id)));
+        if (row.kind === "session") box.add(this.button("[x]", () => this.actions.onCloseSession(row.worktree.id, row.session.id), "Close session"));
         this.tree.add(box);
         this.rows.set(row.key, { box, text });
       }
@@ -382,6 +413,7 @@ export class WorkspaceView {
     this.historyTab.backgroundColor = this.tab === "history" ? colors.selected : colors.panel;
     if (this.navigationKey && this.navigationKey !== this.lastScrolledKey) this.tree.scrollChildIntoView(this.navigationKey);
     this.lastScrolledKey = this.navigationKey;
+    this.updateFooter();
   }
 
   dispose(): void {
@@ -393,6 +425,7 @@ export class WorkspaceView {
     this.prompt.off(InputRenderableEvents.INPUT, this.handleDraftInput);
     this.renderer.keyInput.off("keypress", this.handleGlobalKey);
     this.renderer.off("resize", this.resize);
+    this.renderer.off("focused_renderable", this.updateFooter);
     this.root.destroyRecursively();
   }
 }

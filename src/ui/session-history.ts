@@ -3,12 +3,14 @@ import type { HistoryItem } from "../sessions/history.ts";
 import type { Worktree } from "../workspace/model.ts";
 import { reportUnexpected, type ExpectedError } from "../errors.ts";
 import type { Result } from "../result.ts";
+import type { FooterShortcut } from "./footer.ts";
 
 export type HistoryActions = {
   list?: (worktreeId: string) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
   resume?: (worktreeId: string, savedId: string) => Promise<Result<string, ExpectedError>>;
   onOpened: (worktreeId: string, sessionId: string) => void;
   onError: (message: string) => void;
+  onChange?: () => void;
   button: (label: string, activate: () => void) => BoxRenderable;
 };
 
@@ -36,6 +38,15 @@ export class SessionHistoryPanel {
     this.root.add(this.title); this.root.add(this.refreshButton); this.root.add(this.message); this.root.add(this.list);
   }
 
+  get shortcuts(): readonly FooterShortcut[] {
+    const item = this.items[this.cursor];
+    return [
+      ...(this.items.length ? [{ key: "↑/↓", label: "Select" }, { key: "Home/End", label: "First/last" }] : []),
+      ...(item && !item.unavailableReason && this.actions.resume && !this.resuming ? [{ key: "Enter", label: "Open" }] : []),
+      ...(this.worktree && this.actions.list ? [{ key: "r", label: "Refresh" }] : []),
+    ];
+  }
+
   show(worktree: Worktree | null): void {
     this.worktree = worktree; this.root.visible = true;
     void this.refresh();
@@ -51,6 +62,7 @@ export class SessionHistoryPanel {
     const selected = this.items[this.cursor]?.id;
     const worktree = this.worktree;
     this.items = []; this.clearRows();
+    this.actions.onChange?.();
     this.title.content = worktree ? `History · ${worktree.name}` : "History";
     this.refreshButton.visible = Boolean(worktree && this.actions.list);
     if (!this.actions.list) { this.message.content = "Session history UI is deferred."; return; }
@@ -88,10 +100,11 @@ export class SessionHistoryPanel {
     if (item.unavailableReason) { this.message.content = item.unavailableReason; return; }
     const generation = this.generation;
     this.resuming = true; this.message.content = "Opening saved session...";
+    this.actions.onChange?.();
     let result: Result<string, ExpectedError>;
     try { result = await this.actions.resume(worktree.id, item.id); }
     catch (error) { this.showFailure(reportUnexpected(error, "history resume"), generation); return; }
-    finally { this.resuming = false; }
+    finally { this.resuming = false; if (this.current(generation)) this.actions.onChange?.(); }
     if (!this.current(generation)) return;
     if (!result.ok) { this.showFailure(`Resume error: ${result.error.message}`, generation); return; }
     this.actions.onOpened(worktree.id, result.value);
@@ -99,7 +112,7 @@ export class SessionHistoryPanel {
 
   private showFailure(message: string, generation: number): void {
     if (!this.current(generation)) return;
-    this.message.content = message; this.actions.onError(message);
+    this.message.content = message; this.actions.onError(message); this.actions.onChange?.();
   }
 
   private handleKey(key: KeyEvent): void {
@@ -115,6 +128,7 @@ export class SessionHistoryPanel {
   private paint(): void {
     this.rows.forEach((row, index) => { row.backgroundColor = index === this.cursor ? "#1E3A5F" : "#0F172A"; });
     const row = this.rows[this.cursor]; if (row) this.list.scrollChildIntoView(row.id);
+    this.actions.onChange?.();
   }
   private clearRows(): void {
     const focused = this.list.content.hasFocusedDescendant;
