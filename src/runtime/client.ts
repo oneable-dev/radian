@@ -4,12 +4,16 @@ import { resolve } from "node:path";
 import { Value } from "typebox/value";
 import type { Repository } from "../workspace/model.ts";
 import type { HistoryItem } from "../sessions/history.ts";
-import { CapabilityError, capture, ConnectionError, parseJson, ProtocolError, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
+import { CapabilityError, capture, ConnectionError, parseJson, ProtocolError, reportUnexpected, systemCode, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { emptyPreferences, historySchema, maxFrameBytes, parseSnapshot, replySchema, type RuntimeCommand, type RuntimePreferences, type RuntimeSnapshot, type EditorFrame } from "./protocol.ts";
 import { privateDirectory, runtimePaths, type RuntimePaths } from "./storage.ts";
 import { connectionError, readJson, remoteError, transport } from "./transport.ts";
 import { PtyConnection } from "./pty-client.ts";
+
+const reconnectDelays = [250, 500, 1000, 2000] as const;
+const streamHandshakeMs = 2000;
+const stableConnectionMs = 10000;
 
 export type ConnectOptions = { offline?: boolean; stateRoot?: string; entry?: string; start?: boolean };
 export async function connectRuntime(repository: Repository, cwd: string, options: ConnectOptions = {}): Promise<Result<RuntimeClient | null, ExpectedError>> {
@@ -54,11 +58,17 @@ export class RuntimeClient {
   private readonly hiddenTerminals = new Set<string>();
   private readonly streamAbort = new AbortController();
   private streamTask: Promise<void> | undefined;
+  private attachment: Promise<Result<void, ExpectedError>> | undefined;
   private disconnected = false;
+  private detaching = false;
+  private ptyDetachment: Promise<void> | undefined;
+  private disconnection: Promise<void> | undefined;
+  private connectionEpoch = 0;
   private readonly connections = new Set<PtyConnection>();
   private failure = "";
   private warning = "";
   constructor(readonly paths: RuntimePaths, snapshot: RuntimeSnapshot) { this.state = snapshot; }
+  get connected(): boolean { return !this.detaching && !this.failure; }
   get snapshot(): RuntimeSnapshot {
     if (!this.hidden.size && !this.hiddenTerminals.size && !this.failure && !this.warning) return this.state;
     const details = Object.fromEntries(Object.entries(this.state.details).filter(([id]) => !this.hidden.has(id)).map(([id, state]) => [id,
@@ -74,16 +84,75 @@ export class RuntimeClient {
     };
   }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
-  async attach(): Promise<Result<void, ExpectedError>> {
-    const response = await transport(this.paths, "/events", { signal: this.streamAbort.signal }); if (!response.ok) return response;
-    if (!response.value.ok || !response.value.body) return err(new ProtocolError("Runtime event stream is unavailable."));
-    this.streamTask = this.consume(response.value.body).then((result) => {
-      if (!this.disconnected && !result.ok) { this.failure = result.error.message; this.emit(); }
+  attach(): Promise<Result<void, ExpectedError>> {
+    if (this.detaching) return Promise.resolve(err(this.connectionClosed()));
+    if (this.attachment) return this.attachment;
+    const ready = Promise.withResolvers<Result<void, ExpectedError>>();
+    let established = false;
+    this.attachment = ready.promise;
+    this.streamTask = this.watch(() => { established = true; ready.resolve(ok(undefined)); }).then((result) => {
+      if (!this.detaching && !result.ok) {
+        this.failure = `${result.error.message} Reconnection stopped; use the configured detach command and reopen radian. No commands were replayed.`;
+        this.emit();
+      }
+      ready.resolve(this.detaching ? err(this.connectionClosed()) : result);
     }).catch((error: unknown) => {
-      if (this.disconnected) return;
-      this.failure = reportUnexpected(error, "runtime stream"); this.emit();
+      if (!established) { this.failure = "Runtime attachment failed."; ready.reject(error); return; }
+      this.failure = reportUnexpected(error, "runtime stream");
+      this.invalidatePtys();
+      if (!this.detaching) this.emit();
     });
+    return this.attachment;
+  }
+
+  private async watch(onReady: () => void): Promise<Result<void, ExpectedError>> {
+    let retries = 0;
+    while (!this.detaching) {
+      let connectedAt: number | undefined;
+      const result = await this.listen(() => { connectedAt ??= Date.now(); onReady(); });
+      if (this.detaching) return ok(undefined);
+      if (result.ok) return result;
+      this.failure = result.error.message;
+      this.invalidatePtys();
+      // Permission/protocol errors and programming defects are not transient disconnections.
+      if (!(result.error instanceof ConnectionError) || ["EACCES", "EPERM"].includes(systemCode(result.error.cause) ?? "")) return result;
+      if (connectedAt !== undefined && Date.now() - connectedAt >= stableConnectionMs) retries = 0;
+      const delay = reconnectDelays[retries++];
+      if (delay === undefined) return result;
+      this.failure = `${result.error.message} Reconnecting (${retries}/${reconnectDelays.length})...`;
+      this.emit();
+      await this.waitToReconnect(delay);
+    }
     return ok(undefined);
+  }
+
+  private async listen(onReady: () => void): Promise<Result<void, ExpectedError>> {
+    const handshake = new AbortController();
+    const signal = AbortSignal.any([this.streamAbort.signal, handshake.signal]);
+    const timer = setTimeout(() => handshake.abort(new DOMException("Runtime stream handshake timed out.", "TimeoutError")), streamHandshakeMs);
+    try {
+      const response = await transport(this.paths, "/events", { signal }); if (!response.ok) return response;
+      if (!response.value.ok || !response.value.body) {
+        await response.value.body?.cancel();
+        return err(new ProtocolError("Runtime event stream is unavailable."));
+      }
+      return await this.consume(response.value.body, () => { clearTimeout(timer); onReady(); });
+    } catch (error) {
+      if (this.detaching && error instanceof Error && error.name === "AbortError") return ok(undefined);
+      if (handshake.signal.aborted && (error === handshake.signal.reason || error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name))) {
+        return err(new ConnectionError("CONNECTION_TIMEOUT", "Runtime stream handshake timed out.", { cause: error }));
+      }
+      throw error;
+    } finally { clearTimeout(timer); }
+  }
+
+  private waitToReconnect(milliseconds: number): Promise<void> {
+    return new Promise((resolve) => {
+      const finish = () => { clearTimeout(timer); this.streamAbort.signal.removeEventListener("abort", finish); resolve(); };
+      const timer = setTimeout(finish, milliseconds);
+      this.streamAbort.signal.addEventListener("abort", finish, { once: true });
+      if (this.detaching) finish();
+    });
   }
   async create(worktreeId: string): Promise<Result<string, ExpectedError>> {
     const result = await this.command({ type: "create", worktreeId });
@@ -112,7 +181,7 @@ export class RuntimeClient {
   }
   private waitForState(present: () => boolean, action: string): Promise<Result<void, ExpectedError>> {
     if (present()) return Promise.resolve(ok(undefined));
-    if (this.disconnected || this.failure) return Promise.resolve(err(this.connectionClosed()));
+    if (this.detaching || this.failure) return Promise.resolve(err(this.connectionClosed()));
     return new Promise((resolve) => {
       const finish = (result: Result<void, ExpectedError>) => { clearTimeout(timer); unsubscribe(); this.streamAbort.signal.removeEventListener("abort", aborted); resolve(result); };
       const timer = setTimeout(() => finish(err(new ConnectionError("CONNECTION_TIMEOUT", `${action} was accepted, but its snapshot did not arrive. Reconnect before retrying.`))), 15000);
@@ -122,7 +191,7 @@ export class RuntimeClient {
     });
   }
   private requireHistory(): Result<void, ExpectedError> {
-    if (this.disconnected || this.failure) return err(this.connectionClosed());
+    if (this.detaching || this.failure) return err(this.connectionClosed());
     return this.state.capabilities?.includes("history") ? ok(undefined) : err(new CapabilityError("Running service predates history support. Finish its jobs, explicitly stop it, then restart radian."));
   }
   closeSession(sessionId: string): Promise<Result<void, ExpectedError>> {
@@ -146,19 +215,20 @@ export class RuntimeClient {
   }
   async attachEditor(id: string, onFrame: (frame: EditorFrame) => void, onFailure: (error: unknown) => void): Promise<Result<PtyConnection, ExpectedError>> {
     const capability = this.requireWorkViews(); if (!capability.ok) return capability;
+    const binding = this.ptyBinding();
     const editor = new PtyConnection(this.paths, id, "/editor/events", (request) => {
       switch (request.type) {
-        case "input": return this.command({ type: "editor-input", editorId: id, lease: request.lease, data: request.data });
-        case "resize": return this.command({ type: "editor-resize", editorId: id, lease: request.lease, cols: request.cols, rows: request.rows });
-        case "detach": return this.command({ type: "editor-detach", editorId: id, lease: request.lease });
+        case "input": return binding.send({ type: "editor-input", editorId: id, lease: request.lease, data: request.data });
+        case "resize": return binding.send({ type: "editor-resize", editorId: id, lease: request.lease, cols: request.cols, rows: request.rows });
+        case "detach": return binding.send({ type: "editor-detach", editorId: id, lease: request.lease });
         case "scroll": return Promise.resolve(err(new CapabilityError("Editor does not provide shell scrollback.")));
       }
-    }, onFrame, onFailure);
+    }, onFrame, onFailure, binding.instance);
     return this.attachPty(editor);
   }
   get supportsTerminals(): boolean { return this.state.capabilities?.includes("terminal-tabs") ?? false; }
   private requireTerminals(): Result<void, ExpectedError> {
-    if (this.disconnected || this.failure) return err(this.connectionClosed());
+    if (this.detaching || this.failure) return err(this.connectionClosed());
     return this.supportsTerminals ? ok(undefined) : err(new CapabilityError("Running service predates terminal tabs. Save work and explicitly restart the service when ready; no service was restarted."));
   }
   async createTerminal(worktreeId: string, size: { cols: number; rows: number }): Promise<Result<string, ExpectedError>> {
@@ -172,14 +242,15 @@ export class RuntimeClient {
   }
   async attachTerminal(id: string, onFrame: (frame: EditorFrame) => void, onFailure: (error: unknown) => void): Promise<Result<PtyConnection, ExpectedError>> {
     const supported = this.requireTerminals(); if (!supported.ok) return supported;
+    const binding = this.ptyBinding();
     return this.attachPty(new PtyConnection(this.paths, id, "/terminal/events", (request) => {
       switch (request.type) {
-        case "input": return this.command({ type: "terminal-input", terminalId: id, lease: request.lease, data: request.data });
-        case "resize": return this.command({ type: "terminal-resize", terminalId: id, lease: request.lease, cols: request.cols, rows: request.rows });
-        case "scroll": return this.command({ type: "terminal-scroll", terminalId: id, lease: request.lease, lines: request.lines });
-        case "detach": return this.command({ type: "terminal-detach", terminalId: id, lease: request.lease });
+        case "input": return binding.send({ type: "terminal-input", terminalId: id, lease: request.lease, data: request.data });
+        case "resize": return binding.send({ type: "terminal-resize", terminalId: id, lease: request.lease, cols: request.cols, rows: request.rows });
+        case "scroll": return binding.send({ type: "terminal-scroll", terminalId: id, lease: request.lease, lines: request.lines });
+        case "detach": return binding.send({ type: "terminal-detach", terminalId: id, lease: request.lease });
       }
-    }, onFrame, onFailure));
+    }, onFrame, onFailure, binding.instance));
   }
   async closeTerminal(id: string): Promise<Result<void, ExpectedError>> {
     const supported = this.requireTerminals(); if (!supported.ok) return supported;
@@ -197,37 +268,71 @@ export class RuntimeClient {
     try { attached = await editor.attach(); }
     catch (error) { await editor.disconnect(); throw error; }
     if (!attached.ok) { await editor.disconnect(); return attached; }
+    if (this.detaching) { await editor.disconnect(); return err(this.connectionClosed()); }
     return ok(editor);
   }
   private requireWorkViews(): Result<void, ExpectedError> {
-    if (this.disconnected || this.failure) return err(this.connectionClosed());
+    if (this.detaching || this.failure) return err(this.connectionClosed());
     return this.state.capabilities?.includes("work-views") ? ok(undefined)
       : err(new CapabilityError("Running service predates work views. Finish its jobs, explicitly stop it, then restart radian. No service was restarted."));
   }
-  async disconnect(): Promise<void> {
-    await Promise.all([...this.connections].map((editor) => editor.disconnect()));
-    this.disconnected = true; this.streamAbort.abort(); await this.streamTask; this.listeners.clear();
+  private ptyBinding() {
+    const instance = this.state.instance, epoch = this.connectionEpoch;
+    return { instance, send: (command: RuntimeCommand) => this.command(command, { instance, epoch }) };
+  }
+  private invalidatePtys(): void {
+    this.connectionEpoch++;
+    const error = new ConnectionError("CONNECTION_FAILED", "Runtime subscription interrupted. Reconnect this editor/terminal explicitly; no input was replayed.");
+    for (const connection of [...this.connections]) connection.invalidate(error);
+  }
+  // Cancel recovery immediately while the UI finishes its final preference writes.
+  // Already-queued healthy PTY input is drained once; no new input is accepted.
+  beginDetach(): void {
+    if (this.detaching) return;
+    this.detaching = true; this.streamAbort.abort();
+    this.ptyDetachment = Promise.allSettled([...this.connections].map((connection) => connection.disconnect())).then((results) => {
+      const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+      if (errors.length) throw new AggregateError(errors, "PTY client detach failed.");
+    });
+    void this.ptyDetachment.catch(() => {}); // disconnect() below owns the eventual cleanup result.
+  }
+  disconnect(): Promise<void> {
+    this.beginDetach();
+    this.disconnection ??= this.finishDisconnect();
+    return this.disconnection;
+  }
+  private async finishDisconnect(): Promise<void> {
+    try { await this.ptyDetachment; }
+    finally { this.disconnected = true; await this.streamTask; this.listeners.clear(); }
   }
 
-  private async command(command: RuntimeCommand): Promise<Result<string | null, ExpectedError>> {
-    if (this.disconnected || this.failure) return err(this.connectionClosed());
+  private async command(command: RuntimeCommand, binding?: { instance: string; epoch: number }): Promise<Result<string | null, ExpectedError>> {
+    if (this.disconnected || this.failure || this.detaching && !binding && command.type !== "preferences") return err(this.connectionClosed());
+    if (binding && (binding.instance !== this.state.instance || binding.epoch !== this.connectionEpoch)) return err(this.connectionClosed());
+    const instance = binding?.instance ?? this.state.instance;
     const response = await transport(this.paths, "/command", { method: "POST", body: JSON.stringify(command),
-      headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(15000) });
+      headers: { "Content-Type": "application/json", "X-Radian-Instance": instance }, signal: AbortSignal.timeout(15000) });
     if (!response.ok) return err(new ConnectionError(response.error.code, `${response.error.message} Action outcome is unknown; reconnect before retrying.`, { cause: response.error }));
     const body = await readJson(response.value); if (!body.ok) return body;
     if (!Value.Check(replySchema, body.value)) return err(new ProtocolError("Malformed runtime reply; action outcome is unknown."));
     if (!body.value.ok) return err(remoteError(body.value.error));
-    this.warning = body.value.warnings?.map((warning) => `Action accepted; ${warning.message}`).join(" · ") ?? "";
-    if (this.warning) this.emit();
+    // A late acknowledgement still reports the accepted action, but cannot overwrite
+    // notices belonging to a replacement service or recovered connection.
+    if (instance === this.state.instance && (!binding || binding.epoch === this.connectionEpoch)) {
+      this.warning = body.value.warnings?.map((warning) => `Action accepted; ${warning.message}`).join(" · ") ?? "";
+      if (this.warning) this.emit();
+    }
     return ok(body.value.value);
   }
-  private async consume(body: ReadableStream<Uint8Array>): Promise<Result<void, ExpectedError>> {
+  private async consume(body: ReadableStream<Uint8Array>, onReady: () => void): Promise<Result<void, ExpectedError>> {
     const reader = body.getReader(); const decoder = new TextDecoder(); let buffer = "";
+    let firstFrame = true;
     try {
-      while (!this.disconnected) {
+      while (!this.detaching) {
         let chunk: Awaited<ReturnType<typeof reader.read>>;
         try { chunk = await reader.read(); }
-        catch (error) { if (this.disconnected) return ok(undefined); const known = connectionError(error); if (known) return err(known); throw error; }
+        catch (error) { if (this.detaching) return ok(undefined); const known = connectionError(error); if (known) return err(known); throw error; }
+        if (this.detaching) return ok(undefined);
         if (chunk.done) return err(this.connectionClosed());
         buffer += decoder.decode(chunk.value, { stream: true });
         let newline: number;
@@ -236,11 +341,19 @@ export class RuntimeClient {
           if (Buffer.byteLength(frame) > maxFrameBytes) return err(new ProtocolError("Runtime frame is too large."));
           const json = parseJson(frame, "runtime event"); if (!json.ok) return err(new ProtocolError(json.error.message, { cause: json.error }));
           const parsed = parseSnapshot(json.value); if (!parsed.ok) return parsed;
-          if (parsed.value.instance !== this.state.instance) return err(new ProtocolError("Service instance changed."));
+          if (parsed.value.repositoryId !== this.state.repositoryId || parsed.value.mode !== this.state.mode) return err(new ProtocolError("Runtime identity does not match this workspace."));
+          if (parsed.value.instance !== this.state.instance) {
+            if (!firstFrame) return err(new ProtocolError("Service instance changed within the event stream."));
+            this.invalidatePtys();
+            this.hidden.clear(); this.hiddenTerminals.clear();
+            this.warning = "Runtime restarted; state restored. Interrupted actions were not replayed.";
+          }
           this.state = parsed.value;
+          this.failure = "";
           const open = new Set(this.state.repositories.flatMap((repo) => repo.worktrees.flatMap((tree) => tree.sessions.map((session) => session.id))));
           for (const id of this.hidden) if (!open.has(id)) this.hidden.delete(id);
           for (const id of this.hiddenTerminals) if (!this.state.terminals?.some((terminal) => terminal.id === id)) this.hiddenTerminals.delete(id);
+          if (firstFrame) { firstFrame = false; onReady(); }
           this.emit();
         }
         if (Buffer.byteLength(buffer) > maxFrameBytes) return err(new ProtocolError("Runtime frame is too large."));
@@ -248,7 +361,7 @@ export class RuntimeClient {
       return ok(undefined);
     } finally {
       try { await reader.cancel(); }
-      catch (error) { if (!connectionError(error) && !(this.disconnected && error instanceof Error && error.name === "AbortError")) reportUnexpected(error, "stream cleanup"); }
+      catch (error) { if (!connectionError(error) && !(this.detaching && error instanceof Error && error.name === "AbortError")) reportUnexpected(error, "stream cleanup"); }
       reader.releaseLock();
     }
   }

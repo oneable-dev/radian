@@ -1,5 +1,5 @@
 import { Value } from "typebox/value";
-import { ConnectionError, InputError, parseJson, ProtocolError, type ExpectedError } from "../errors.ts";
+import { ConnectionError, InputError, parseJson, ProtocolError, reportUnexpected, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { ptyFrameSchema, maxFrameBytes, replySchema, type PtyFrame } from "./protocol.ts";
 import type { RuntimePaths } from "./storage.ts";
@@ -20,18 +20,21 @@ export class PtyConnection {
   private pending: Promise<void> = Promise.resolve();
   private closing: Promise<void> | undefined;
   private failed = false;
+  private invalidated = false;
   private queuedBytes = 0;
   private attached = false;
   private revision = -1;
 
   constructor(private readonly paths: RuntimePaths, readonly id: string, private readonly endpoint: string, private readonly send: Send,
-    private readonly onFrame: (frame: PtyFrame) => void, private readonly onFailure: (error: unknown) => void) {}
+    private readonly onFrame: (frame: PtyFrame) => void, private readonly onFailure: (error: unknown) => void,
+    private readonly instance?: string) {}
 
   async attach(): Promise<Result<void, ExpectedError>> {
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; this.abort.abort(); }, 2000);
     try {
-      const response = await transport(this.paths, `${this.endpoint}?id=${encodeURIComponent(this.id)}&lease=${this.lease}`, { signal: this.abort.signal });
+      const response = await transport(this.paths, `${this.endpoint}?id=${encodeURIComponent(this.id)}&lease=${this.lease}`, { signal: this.abort.signal,
+        ...(this.instance ? { headers: { "X-Radian-Instance": this.instance } } : {}) });
       if (!response.ok) return response;
       if (!response.value.ok) {
         const body = await readJson(response.value); if (!body.ok) return body;
@@ -46,7 +49,9 @@ export class PtyConnection {
       const result = await ready.promise;
       return timedOut ? err(new ConnectionError("CONNECTION_TIMEOUT", "Terminal attachment timed out; no input was sent.")) : result;
     } catch (error) {
-      if (timedOut) return err(new ConnectionError("CONNECTION_TIMEOUT", "Terminal attachment timed out; no input was sent."));
+      const aborted = error === this.abort.signal.reason || error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name);
+      if (timedOut && aborted) return err(new ConnectionError("CONNECTION_TIMEOUT", "Terminal attachment timed out; no input was sent.", { cause: error }));
+      if (this.closing && aborted) return err(new ConnectionError("CONNECTION_FAILED", "Terminal attachment was cancelled.", { cause: error }));
       throw error;
     } finally { clearTimeout(timer); }
   }
@@ -75,13 +80,20 @@ export class PtyConnection {
     }).catch((error: unknown) => this.fail(error)).finally(() => { this.queuedBytes -= bytes; });
   }
   private fail(error: unknown): void { if (this.failed) return; this.failed = true; this.onFailure(error); }
+  invalidate(error: ExpectedError): void {
+    this.invalidated = true;
+    this.fail(error); this.abort.abort();
+    // Read cancellation releases the old lease. Never POST a stale detach or queued
+    // input to a replacement runtime; already-sent input has an uncertain outcome.
+    void this.disconnect().catch((error: unknown) => { reportUnexpected(error, "PTY invalidation cleanup"); });
+  }
   disconnect(): Promise<void> {
     this.closing ??= this.detach(); return this.closing;
   }
   private async detach(): Promise<void> {
     try {
       await this.pending;
-      if (this.attached) {
+      if (this.attached && !this.invalidated) {
         const result = await this.send({ type: "detach", lease: this.lease });
         if (!result.ok && !this.failed) this.fail(result.error);
       }
@@ -112,7 +124,9 @@ export class PtyConnection {
       return ok(undefined);
     } finally {
       try { await reader.cancel(); }
-      catch (error) { if (!this.abort.signal.aborted && !connectionError(error)) this.fail(error); }
+      catch (error) {
+        if (!connectionError(error) && !(this.abort.signal.aborted && error instanceof Error && error.name === "AbortError")) reportUnexpected(error, "PTY stream cleanup");
+      }
       reader.releaseLock();
     }
   }

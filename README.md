@@ -229,6 +229,34 @@ bun run start --test-runtime --stop-runtime      # Stop the separate offline ser
 These administrative commands do not start a missing service. `--stop-runtime` retains open-session
 intent and saved history; it is different from closing a session, which removes that open item.
 
+Event subscriptions send the current snapshot every 5 s while idle, keeping `GET /events` alive
+without disabling ordinary request timeouts. These heartbeat snapshots use the existing protocol and
+do not run agents or write checkpoints. A heartbeat is used because the installed Bun 1.4.3 can still
+time out streaming Unix requests after `server.timeout(request, 0)`.
+On an unexpected disconnect, the TUI makes at most four read-only resubscription attempts after
+250 ms, 500 ms, 1 s, and 2 s. Each attempt must receive headers and a valid first snapshot within 2 s.
+A connection must remain healthy for 10 s before a later disconnect receives a fresh retry budget;
+a peer that repeatedly opens and closes cannot retry indefinitely. Permission/protocol failures and
+unexpected programming errors stop recovery rather than being treated as transient outages.
+A successful subscription restores the latest snapshot and refreshes visible history. If recovery
+stops, the notice asks you to use the configured detach command and reopen radian. Detaching cancels pending retries.
+Reconnection never launches/restarts a service or replays prompts, creation, closing, or other commands.
+A replacement service is accepted only for the same repository and live/test mode. Services already
+running older code still require an explicit stop/restart after their jobs finish to load these fixes.
+
+A main-subscription interruption invalidates attached PTY input handles and discards their unsent
+input rather than allowing old keystrokes to run after recovery. The underlying Neovim/shell processes
+are not closed. After the main subscription recovers, reconnect the editor or select/reconnect the
+terminal explicitly; a new attachment does not relaunch its process. Already-sent input can have an
+uncertain outcome and is never resent. Intentional TUI detach stops subscription retries immediately,
+while draining already-queued healthy PTY input once and allowing final preference writes.
+
+Commands and PTY attachments include an `X-Radian-Instance` fence. Services advertising
+`instance-guard` reject requests for a different instance before accepting actions or leases. Older
+clients may omit the header, and older services need an explicit upgrade for server-side fencing.
+A late acknowledgement remains an acknowledgement of the original accepted action, but does not
+replace notices belonging to a recovered connection or new service.
+
 - **Warm reconnect:** the same service PID, SDK instances, owned children and ongoing output survive
   TUI exit. No prompt is replayed or agent restarted.
 - **Service restart/reboot:** open IDs, selection, drafts and saved contexts are restored from an atomic
@@ -287,7 +315,9 @@ Select a worktree, then open **History**. The list uses SDK-provided conversatio
 to the first prompt or `Untitled session`), last activity and message count, newest first. It is scoped
 to that worktree even when the offline session directory is shared. Viewing or refreshing history
 never starts a model run or creates an open item. `Refresh history` / `r` reloads the selected scope;
-empty, loading, discovery and resume failures have distinct messages.
+empty, loading, discovery and resume failures have distinct messages. The heading's shared loading
+spinner stays animated for at least 500 ms, without delaying results or errors. Leaving the tab or
+destroying the view cancels it immediately; the same component/policy applies to other UI loaders.
 
 Click a row, or `Tab` into the list and use arrows/Home/End plus `Enter`, to open its saved context.
 The original SDK session ID/file is retained without copying/forking; the open item becomes selected

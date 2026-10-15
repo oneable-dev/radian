@@ -1,6 +1,6 @@
 import { chmod } from "node:fs/promises";
 import { join } from "node:path";
-import { CancelledError, collectCleanup, InputError, SessionError, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
+import { CancelledError, collectCleanup, InputError, ProtocolError, SessionError, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { SessionRegistry, type SessionRecord } from "../sessions/session-registry.ts";
 import { piSessionFactory } from "../sessions/pi-session-adapter.ts";
@@ -98,7 +98,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "typed-errors", "work-views", "terminal-tabs"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "typed-errors", "work-views", "terminal-tabs", "instance-guard"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || this.notice, editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
@@ -107,6 +107,8 @@ class WorkspaceRuntime {
   async fetch(request: Request): Promise<Response> {
     try {
       const path = new URL(request.url).pathname;
+      const expectedInstance = request.headers.get("X-Radian-Instance");
+      if (expectedInstance && expectedInstance !== this.instance) return this.rejected(new ProtocolError("Runtime instance changed; refresh the connection before retrying. No action was accepted."));
       if (path === "/snapshot" && request.method === "GET") return Response.json(this.snapshot);
       if (path === "/events" && request.method === "GET") return this.events();
       if ((path === "/editor/events" || path === "/terminal/events") && request.method === "GET") {

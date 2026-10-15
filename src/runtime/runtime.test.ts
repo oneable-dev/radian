@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { WorkspaceSelection } from "../workspace/selection.ts";
-import { connectRuntime, fetchSnapshot, type RuntimeClient } from "./client.ts";
+import { connectRuntime, fetchSnapshot, RuntimeClient } from "./client.ts";
 import { runtimePaths, pidAlive } from "./storage.ts";
 import { replySchema, type RuntimeManifest, type RuntimeSnapshot } from "./protocol.ts";
 import { Value } from "typebox/value";
@@ -92,6 +92,34 @@ test("별도 프로세스는 모든 UI가 분리된 동안에도 agent와 subage
   } finally { await app.cleanup(); }
 }, 20000);
 
+test("31초 유휴 상태에도 이벤트 연결을 유지하고 같은 서비스에서 history와 새 명령을 처리한다", async () => {
+  // An isolated SDK service must keep its subscription even when no state changes are emitted.
+  const app = await setup();
+  try {
+    const client = await app.connect();
+    const worktree = app.repository.worktrees[0]!.id;
+    const id = expectOk(await client.create(worktree));
+    expectOk(await client.prompt(id, "read"));
+    await observed(client, (state) => state.details[id]?.status === "complete");
+    const instance = client.snapshot.instance;
+    const notices: string[] = [];
+    const unsubscribe = client.subscribe(() => { if (client.snapshot.notice) notices.push(client.snapshot.notice); });
+
+    // Real elapsed time is intentional: mocked timers cannot exercise Bun's native socket idle timeout.
+    await Bun.sleep(31000);
+    unsubscribe();
+
+    // Reconnection must not mask an incorrectly configured idle stream; no failure should occur at all.
+    expect(notices).toEqual([]);
+    expect(client.snapshot.notice).toBe("");
+    expect(client.snapshot.instance).toBe(instance);
+    expect(expectOk(await client.listHistory(worktree))).toHaveLength(1);
+    const next = expectOk(await client.create(worktree));
+    await observed(client, (state) => !!state.details[next]);
+    expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions.map((session) => session.id)).toEqual([id, next]);
+  } finally { await app.cleanup(); }
+}, 45000);
+
 test("IPC 닫기는 UI에서 먼저 제거하고 소속 자식만 취소하며 다른 세션과 저장 기록은 유지한다", async () => {
   // Parent/child and an unrelated slow run coexist in one detached SDK service.
   const app = await setup();
@@ -146,6 +174,107 @@ test("서비스 종료 후 재시작은 열린 ID와 기록·선택을 복원하
     await restored.prompt(a, "read"); await observed(restored, (state) => state.details[a]?.status === "complete");
   } finally { await app.cleanup(); }
 }, 20000);
+
+test("명시적으로 교체한 서비스에 기존 클라이언트가 재접속하며 저장 대화와 명령을 재실행하지 않는다", async () => {
+  // Only a test-owned daemon is restarted; the first UI client remains mounted throughout.
+  const app = await setup();
+  try {
+    const client = await app.connect();
+    const worktree = app.repository.worktrees[0]!.id;
+    const id = expectOk(await client.create(worktree));
+    expectOk(await client.prompt(id, "read"));
+    await observed(client, (state) => state.details[id]?.status === "complete");
+    const file = (await app.manifest()).records.find((record) => record.id === id)!.sessionFile!;
+    const original = await readFile(file, "utf8");
+    const pid = client.snapshot.pid;
+
+    // Service startup is explicit, not something the disconnected subscriber does automatically.
+    expectOk(await client.stopRuntime()); await app.stopped(pid);
+    await until(() => !client.connected);
+    expect(expectError(await client.prompt(id, "must not run")).code).toBe("CONNECTION_FAILED");
+    const replacement = await app.connect();
+    await observed(client, (state) => client.connected && state.instance === replacement.snapshot.instance);
+
+    // Fresh history/capabilities and the same conversation are available without another UI launch.
+    expect(client.snapshot.pid).not.toBe(pid);
+    expect(client.snapshot.details[id]?.output).toContain("main-worktree-marker");
+    expect(expectOk(await client.listHistory(worktree))[0]?.openSessionId).toBe(id);
+    expect(await readFile(file, "utf8")).toBe(original);
+    expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions.map((session) => session.id)).toEqual([id]);
+  } finally { await app.cleanup(); }
+}, 20000);
+
+test("runtime 구독만 끊겨도 실제 쉘을 유지하며 이전 PTY를 닫고 명시적으로 다시 연결할 수 있다", async () => {
+  // A test-owned Unix relay ends only /events; it does not restart or stop the daemon/shell.
+  const app = await setup();
+  const relayPaths = runtimePaths(app.repository.id, true, join(app.directory, "relay"));
+  let relay: ReturnType<typeof Bun.serve> | undefined;
+  let client: RuntimeClient | undefined;
+  let drop: (() => void) | undefined;
+  const commands: string[] = [];
+  try {
+    const owner = await app.connect();
+    const id = expectOk(await owner.createTerminal(app.repository.worktrees[0]!.id, { cols: 80, rows: 12 }));
+    const shell = owner.snapshot.terminals!.find((item) => item.id === id)!;
+    relay = Bun.serve({ unix: relayPaths.socket, async fetch(request) {
+      const path = new URL(request.url).pathname;
+      const body = request.method === "POST" ? await request.text() : undefined;
+      if (body) commands.push((JSON.parse(body) as { type: string }).type);
+      const response = await fetch(request.url, { unix: owner.paths.socket, method: request.method, headers: request.headers, signal: request.signal,
+        ...(body !== undefined ? { body } : {}) });
+      if (path !== "/events" || !response.body) return response;
+      const reader = response.body.getReader(); let closed = false;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          drop = () => { if (!closed) { closed = true; controller.close(); void reader.cancel(); } };
+          void (async () => {
+            try {
+              while (!closed) { const chunk = await reader.read(); if (chunk.done) break; if (!closed) controller.enqueue(chunk.value); }
+              if (!closed) { closed = true; controller.close(); }
+            } catch (error) { if (!closed) { closed = true; controller.error(error); } }
+          })();
+        },
+        async cancel() { closed = true; await reader.cancel(); },
+      });
+      return new Response(stream, { headers: response.headers });
+    } });
+    client = new RuntimeClient(relayPaths, owner.snapshot); expectOk(await client.attach());
+    const failures: unknown[] = [];
+    const old = expectOk(await client.attachTerminal(id, () => {}, (error) => failures.push(error)));
+
+    drop!(); await until(() => !client!.connected); await until(() => client!.connected);
+    await old.closed;
+    expect(commands).toEqual([]); expect(failures).toHaveLength(1);
+    expect(client.snapshot.terminals!.find((item) => item.id === id)!.shellPid).toBe(shell.shellPid);
+    expect(pidAlive(shell.shellPid)).toBe(true);
+    const fresh = expectOk(await client.attachTerminal(id, () => {}, () => {}));
+    expect(fresh.lease).not.toBe(old.lease);
+  } finally { await client?.disconnect(); await relay?.stop(true); await rm(relayPaths.socket, { force: true }); await app.cleanup(); }
+}, 20000);
+
+test("이전 runtime instance에 대한 명령과 PTY attach는 실행 전에 거절하고 이전 클라이언트는 계속 지원한다", async () => {
+  // A replacement endpoint must not accept delayed mutation requests for the previous owner.
+  const app = await setup();
+  try {
+    const client = await app.connect();
+    const command = { type: "create", worktreeId: app.repository.worktrees[0]!.id };
+    const response = await fetch("http://localhost/command", { unix: client.paths.socket, method: "POST",
+      headers: { "X-Radian-Instance": "stale-instance" }, body: JSON.stringify(command) });
+    expect(response.status).toBe(422);
+    const rejected = await response.json();
+    if (!Value.Check(replySchema, rejected) || rejected.ok || typeof rejected.error === "string") throw new Error("Expected a typed rejection.");
+    expect(rejected.error.code).toBe("PROTOCOL_ERROR");
+    expect(rejected.error.message).toContain("No action was accepted");
+    const pty = await fetch("http://localhost/terminal/events?id=missing&lease=stale", { unix: client.paths.socket, headers: { "X-Radian-Instance": "stale-instance" } });
+    expect(pty.status).toBe(422);
+    expect(expectOk(await fetchSnapshot(client.paths))!.repositories[0]!.worktrees[0]!.sessions).toEqual([]);
+
+    // The optional fencing header does not remove the existing v1 command contract.
+    const legacy = await fetch("http://localhost/command", { unix: client.paths.socket, method: "POST", body: JSON.stringify(command) });
+    const accepted = await legacy.json();
+    expect(legacy.status).toBe(200); expect(Value.Check(replySchema, accepted) && accepted.ok).toBe(true);
+  } finally { await app.cleanup(); }
+});
 
 test("동시에 접속해도 데몬 하나만 실행되고 강제 종료 후 stale endpoint를 회수한다", async () => {
   // Simultaneous clients exercise real process/endpoint ownership, not an in-memory singleton.

@@ -4,6 +4,7 @@ import type { Worktree } from "../workspace/model.ts";
 import { reportUnexpected, type ExpectedError } from "../errors.ts";
 import type { Result } from "../result.ts";
 import type { FooterShortcut } from "./footer.ts";
+import { LoadingSpinner } from "./loading-spinner.ts";
 import type { CommandId } from "../keybindings/commands.ts";
 
 export type HistoryActions = {
@@ -21,6 +22,7 @@ export class SessionHistoryPanel {
   readonly refreshButton: BoxRenderable;
   readonly list: ScrollBoxRenderable;
   private readonly title: TextRenderable;
+  private readonly spinner: LoadingSpinner;
   private readonly message: TextRenderable;
   private worktree: Worktree | null = null;
   private items: readonly HistoryItem[] = [];
@@ -32,12 +34,16 @@ export class SessionHistoryPanel {
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: HistoryActions) {
     this.root = new BoxRenderable(renderer, { id: "session-history", flexGrow: 1, minHeight: 0, flexDirection: "column" });
+    const heading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.title = this.text("History", "#7DD3FC");
+    this.title.flexGrow = 1; this.title.flexShrink = 1; this.title.minWidth = 0;
+    this.spinner = new LoadingSpinner(renderer, { fg: "#7DD3FC" });
+    heading.add(this.title); heading.add(this.spinner.root);
     this.refreshButton = actions.button(`Refresh history${actions.keyHint("history.refresh") ? ` [${actions.keyHint("history.refresh")}]` : ""}`, () => { void this.refresh(); });
     this.message = this.text("", "#94A3B8");
     this.list = new ScrollBoxRenderable(renderer, { id: "history-list", flexGrow: 1, minHeight: 0, scrollX: false,
       contentOptions: { flexDirection: "column" } });
-    this.root.add(this.title); this.root.add(this.refreshButton); this.root.add(this.message); this.root.add(this.list);
+    this.root.add(heading); this.root.add(this.refreshButton); this.root.add(this.message); this.root.add(this.list);
   }
 
   get shortcuts(): readonly FooterShortcut[] {
@@ -55,7 +61,7 @@ export class SessionHistoryPanel {
     this.worktree = worktree; this.root.visible = true;
     void this.refresh();
   }
-  hide(): void { this.root.visible = false; this.generation++; }
+  hide(): void { this.root.visible = false; this.generation++; this.spinner.cancel(); }
   updateScope(worktree: Worktree | null): void {
     if (!this.root.visible || this.worktree?.id === worktree?.id) return;
     this.worktree = worktree; void this.refresh();
@@ -63,6 +69,7 @@ export class SessionHistoryPanel {
 
   private async refresh(): Promise<void> {
     const generation = ++this.generation;
+    this.spinner.cancel();
     const selected = this.items[this.cursor]?.id;
     const worktree = this.worktree;
     this.items = []; this.clearRows();
@@ -71,10 +78,12 @@ export class SessionHistoryPanel {
     this.refreshButton.visible = Boolean(worktree && this.actions.list);
     if (!this.actions.list) { this.message.content = "Session history UI is deferred."; return; }
     if (!worktree) { this.message.content = "No worktree selected"; return; }
-    this.message.content = "Loading saved sessions...";
+    this.message.content = "";
+    this.spinner.start();
     let result: Result<readonly HistoryItem[], ExpectedError>;
     try { result = await this.actions.list(worktree.id); }
     catch (error) { this.showFailure(reportUnexpected(error, "history lookup"), generation); return; }
+    finally { if (this.current(generation)) this.spinner.stop(); }
     if (!this.current(generation)) return;
     if (!result.ok) { this.showFailure(`History error: ${result.error.message}`, generation); return; }
     const items = result.value;
@@ -141,5 +150,5 @@ export class SessionHistoryPanel {
   private text(content: string, fg: string): TextRenderable {
     return new TextRenderable(this.renderer, { content, fg, height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
   }
-  dispose(): void { this.disposed = true; this.generation++; }
+  dispose(): void { this.disposed = true; this.generation++; this.spinner.cancel(); }
 }

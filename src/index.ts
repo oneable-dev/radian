@@ -76,9 +76,10 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
   const renderer = await createCliRenderer({ exitOnCtrlC: false });
   let view: InstanceType<typeof WorkspaceView> | undefined;
   const detachHint = keymap.hint("app.detach", "none") || "No detach binding";
-  let message = discoveryError ?? (options.demo ? `DEMO · display fixtures only · ${detachHint} detaches` : options.offline
+  const defaultMessage = discoveryError ?? (options.demo ? `DEMO · display fixtures only · ${detachHint} detaches` : options.offline
     ? `OFFLINE SDK · scripted slow / read / write / delegate · ${detachHint} detaches`
     : `Pi SDK service · ${detachHint} detaches; agents/editors/terminals keep running`);
+  let message = defaultMessage;
   const updateNotice = (): void => {
     const closing = (client?.snapshot.closingCount ?? 0) + (client?.snapshot.terminalClosingCount ?? 0);
     view?.setNotice(`${client?.snapshot.notice || message}${closing ? ` · Closing ${closing}` : ""}`);
@@ -100,10 +101,18 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
     observe(pendingPreferences);
   };
   const unsubscribeSelection = selection.subscribe(persist);
-  const unsubscribe = client?.subscribe(() => { selection.replaceSnapshot(client.snapshot.repositories); updateNotice(); });
+  let wasConnected = client?.connected ?? false;
+  const unsubscribe = client?.subscribe(() => {
+    const restored = !wasConnected && client.connected;
+    wasConnected = client.connected;
+    if (restored) message = defaultMessage;
+    selection.replaceSnapshot(client.snapshot.repositories);
+    if (restored) view?.refreshHistory();
+    updateNotice();
+  });
   const detach = (): void => {
     unsubscribe?.(); unsubscribeSelection();
-    const mounted = view; view = undefined; mounted?.dispose(); renderer.destroy();
+    const mounted = view; view = undefined; mounted?.dispose(); client?.beginDetach(); renderer.destroy();
   };
   try {
     view = new WorkspaceView(renderer, selection, {
@@ -146,7 +155,7 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
   } finally {
     unsubscribe?.(); unsubscribeSelection();
     preferences.drafts = view?.promptDrafts ?? preferences.drafts; persist();
-    const mounted = view; view = undefined; mounted?.dispose(); renderer.destroy(); await renderer.closed;
+    const mounted = view; view = undefined; mounted?.dispose(); client?.beginDetach(); renderer.destroy(); await renderer.closed;
     const saved = await pendingPreferences;
     if (!saved.ok) console.error(`[${saved.error.code}] Could not save UI preferences: ${saved.error.message}`);
   }

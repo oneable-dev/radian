@@ -1,19 +1,22 @@
-import { expect, test } from "bun:test";
-import { createTestRenderer } from "@opentui/core/testing";
+import { expect, spyOn, test } from "bun:test";
+import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { demoWorkspace } from "../workspace/demo.ts";
 import { WorkspaceSelection } from "../workspace/selection.ts";
 import type { HistoryItem } from "../sessions/history.ts";
 import { WorkspaceView } from "./workspace.ts";
-import { capture, HistoryError } from "../errors.ts";
+import { capture, ConnectionError, HistoryError } from "../errors.ts";
+import { parseKeymap, type Keymap } from "../keybindings/config.ts";
+import { expectOk } from "../testing/results.ts";
 
 const saved = (id: string, title: string, tree = "demo:main"): HistoryItem => ({
   id, title, worktreeId: tree, modified: "2026-10-14T12:34:00.000Z", messageCount: 4, openSessionId: null, unavailableReason: null,
 });
-async function mount(list: (id: string) => Promise<readonly HistoryItem[]>, resume: (id: string, savedId: string) => Promise<string> = async () => "a2") {
-  const setup = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
+async function mount(list: (id: string) => Promise<readonly HistoryItem[]>, resume: (id: string, savedId: string) => Promise<string> = async () => "a2", clock?: ManualClock, keymap?: Keymap) {
+  const setup = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true, ...(clock ? { clock } : {}) });
   const selection = new WorkspaceSelection(demoWorkspace());
   const resumed: string[] = [];
   const view = new WorkspaceView(setup.renderer, selection, {
+    ...(keymap ? { keymap } : {}),
     onNewSession: () => {}, onCloseSession: () => {}, onListHistory: (id) => capture(() => list(id)),
     onResumeSession: async (tree, id) => { resumed.push(`${tree}/${id}`); return capture(() => resume(tree, id)); },
   });
@@ -50,6 +53,123 @@ test("History를 열면 저장 제목·활동 시간·메시지 수를 표시하
     expect(app.selection.sessionId).toBe("a1");
     expect(app.resumed).toEqual([]);
   } finally { await app.disposeApp(); }
+});
+
+test("History 조회가 즉시 끝나도 목록은 바로 표시하고 스피너는 500ms 동안 유지한다", async () => {
+  // Minimum spinner visibility must not add artificial latency to the actual history result.
+  const clock = new ManualClock();
+  const app = await mount(async () => [saved("fast", "Fast history")], undefined, clock);
+  try {
+    await app.click("History"); await app.visible("Fast history");
+
+    // Fast results are already usable while the visual indicator finishes its minimum interval.
+    expect(app.captureCharFrame()).toMatch(/History · radian\s+⠋/);
+    clock.advance(499); await app.renderOnce();
+    expect(app.captureCharFrame()).toMatch(/History · radian\s+[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+    clock.advance(1); await app.renderOnce();
+
+    expect(app.captureCharFrame()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+    expect(app.captureCharFrame()).toContain("Fast history");
+    expect(app.resumed).toEqual([]);
+  } finally { await app.disposeApp(); }
+});
+
+test("조회 중 스피너는 History 제목 오른쪽에서 움직이고 완료되면 사라진다", async () => {
+  // A pending read keeps loading visible without starting an agent or changing selection.
+  const clock = new ManualClock();
+  const pending = Promise.withResolvers<readonly HistoryItem[]>();
+  const app = await mount(() => pending.promise, undefined, clock);
+  try {
+    await app.click("History");
+    const heading = () => app.captureCharFrame().split("\n").find((line) => line.includes("History · radian"));
+
+    // Loading occupies the heading's right side, not the list's message row, at both terminal widths.
+    expect(heading()).toMatch(/History · radian\s+⠋/);
+    expect(app.captureCharFrame()).not.toContain("Loading saved sessions");
+    clock.advance(80); await app.renderOnce();
+    expect(heading()).toMatch(/History · radian\s+⠙/);
+    app.resize(60, 12); await app.renderOnce();
+    expect(heading()).toMatch(/History · radian\s+⠙/);
+    pending.resolve([]); await app.visible("No saved sessions");
+
+    // Results arrive immediately; only the indicator waits for the remainder of its 500 ms minimum.
+    expect(heading()).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+    clock.advance(420); await app.renderOnce();
+    expect(heading()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+    expect(app.selection.sessionId).toBe("a1");
+    expect(app.resumed).toEqual([]);
+  } finally { await app.disposeApp(); }
+});
+
+test("이전 조회 응답은 새 조회의 스피너를 끄지 않고 현재 오류 응답은 스피너를 종료한다", async () => {
+  // Refresh can supersede an outstanding read; only the current generation owns loading state.
+  const clock = new ManualClock();
+  const first = Promise.withResolvers<readonly HistoryItem[]>();
+  const second = Promise.withResolvers<readonly HistoryItem[]>();
+  let calls = 0;
+  const app = await mount(() => ++calls === 1 ? first.promise : second.promise, undefined, clock);
+  try {
+    await app.click("History"); await app.click("Refresh history");
+
+    // A stale success must leave the current loading indicator running until its own response arrives.
+    first.resolve([]); await app.renderOnce(); clock.advance(80); await app.renderOnce();
+    expect(app.captureCharFrame()).toMatch(/History · radian\s+⠙/);
+    second.reject(new HistoryError("HISTORY_UNAVAILABLE", "Lookup failed")); await app.visible("History error:");
+
+    // Errors are not delayed, but the same minimum visibility applies to the loading indicator.
+    expect(app.captureCharFrame()).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+    clock.advance(420); await app.renderOnce();
+    expect(app.captureCharFrame()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+    expect(app.captureCharFrame()).toContain("Lookup failed");
+    expect(calls).toBe(2);
+  } finally { await app.disposeApp(); }
+});
+
+test("커스텀 History 새로고침 키와 푸터를 유지하면서 새 조회의 스피너를 표시한다", async () => {
+  const clock = new ManualClock();
+  const pending = Promise.withResolvers<readonly HistoryItem[]>(); let calls = 0;
+  const keymap = expectOk(parseKeymap({ bindings: { "history.refresh": [{ keys: "q", scope: "history" }] } }));
+  const app = await mount(() => { calls++; return pending.promise; }, undefined, clock, keymap);
+  try {
+    await app.click("History"); app.mockInput.pressTab(); app.mockInput.pressTab(); await app.renderOnce();
+    expect(app.captureCharFrame().split("\n")[23]).toContain("q Refresh");
+    app.mockInput.pressKey("q"); app.mockInput.pressKey("r"); await app.renderOnce();
+    expect(calls).toBe(2); expect(app.captureCharFrame()).toMatch(/History · radian\s+⠋/);
+    pending.resolve([saved("latest", "Latest custom history")]); await app.visible("Latest custom history");
+    clock.advance(500); await app.renderOnce();
+    expect(app.captureCharFrame()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+  } finally { pending.resolve([]); await app.disposeApp(); }
+});
+
+test("History를 숨기거나 화면을 제거하면 진행 중인 스피너 타이머도 종료한다", async () => {
+  // A slow request may outlive the panel, but its animation must not outlive the visible UI.
+  const clock = new ManualClock();
+  const pending = Promise.withResolvers<readonly HistoryItem[]>();
+  const app = await mount(() => pending.promise, undefined, clock);
+  const scheduled = spyOn(clock, "setInterval");
+  const cleared = spyOn(clock, "clearInterval");
+  const animationTimer = () => {
+    const index = scheduled.mock.calls.findLastIndex(([, delay]) => delay === 80);
+    const result = scheduled.mock.results[index];
+    if (!result || result.type !== "return") throw new Error("Loading animation did not acquire a timer.");
+    return result.value;
+  };
+  try {
+    await app.click("History");
+    const first = animationTimer();
+
+    // Observe timer cancellation at the clock boundary, independent of renderer/input timeout counts.
+    await app.click("Workspace History");
+    expect(cleared).toHaveBeenCalledWith(first);
+    await app.click("History");
+    const second = animationTimer();
+    app.view.dispose();
+
+    expect(second).not.toBe(first);
+    expect(cleared).toHaveBeenCalledWith(second);
+    pending.resolve([]); clock.advance(80); await app.renderOnce();
+    expect(app.captureCharFrame()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+  } finally { await app.disposeApp(); scheduled.mockRestore(); cleared.mockRestore(); }
 });
 
 test("저장 항목을 클릭하면 해당 기존 세션을 열고 워크스페이스 탭과 중앙 선택으로 이동한다", async () => {
@@ -120,6 +240,31 @@ test("empty와 조회 오류를 구분하고 Refresh로 재조회해도 새 세�
     expect(calls).toBe(2);
     expect(app.resumed).toEqual([]);
     expect(app.selection.sessionId).toBe("a1");
+  } finally { await app.disposeApp(); }
+});
+
+test("연결 복구 알림은 보이는 History 오류를 새 목록으로 바꾸되 세션을 재실행하지 않는다", async () => {
+  // History was requested while disconnected; the selected live item must remain untouched.
+  let online = false;
+  let calls = 0;
+  const app = await mount(async () => {
+    calls++;
+    if (!online) throw new ConnectionError("CONNECTION_FAILED", "Disconnected");
+    return [saved("saved-a", "Restored history")];
+  });
+  try {
+    await app.click("Git"); await app.click("History"); await app.visible("History error:");
+
+    // The host resets its connection notice and refreshes metadata after a fresh event snapshot.
+    online = true; app.view.setNotice("Runtime connected"); app.view.refreshHistory(); await app.visible("Restored history");
+
+    expect(app.captureCharFrame()).not.toContain("History error:");
+    expect(app.captureCharFrame()).toContain("Native Git UI is planned");
+    expect(app.selection.sessionId).toBe("a1");
+    expect(app.resumed).toEqual([]);
+    expect(calls).toBe(2);
+    await app.click("Workspace History"); app.view.refreshHistory(); await app.renderOnce();
+    expect(calls).toBe(2);
   } finally { await app.disposeApp(); }
 });
 
