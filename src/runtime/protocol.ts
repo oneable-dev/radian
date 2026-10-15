@@ -14,9 +14,26 @@ const session = Type.Object({ id, name: Type.String(), status, subagents: Type.A
 const worktree = Type.Object({ id, path: id, name: Type.String(), branch: Type.Union([Type.String(), Type.Null()]), sessions: Type.Array(session) });
 const repository = Type.Object({ id, name: Type.String(), worktrees: Type.Array(worktree) });
 const execution = Type.Object({ status, output: Type.String(), error: Type.Union([Type.String(), Type.Null()]) });
+export const workViewSchema = Type.Union([Type.Literal("agent"), Type.Literal("editor"), Type.Literal("git")]);
+export type WorkView = Static<typeof workViewSchema>;
+export const workViewsSchema = Type.Object({
+  active: Type.Record(Type.String(), workViewSchema),
+  agentScroll: Type.Record(Type.String(), Type.Integer({ minimum: 0 })),
+});
+export type WorkViewPreferences = Static<typeof workViewsSchema>;
+export const editorInfoSchema = Type.Object({
+  id, worktreeId: id, pid: Type.Integer({ minimum: 1 }), exited: Type.Boolean(), exitCode: Type.Union([Type.Integer(), Type.Null()]),
+});
+export type EditorInfo = Static<typeof editorInfoSchema>;
+export const editorFrameSchema = Type.Object({ ...editorInfoSchema.properties,
+  cols: Type.Integer({ minimum: 2, maximum: 500 }), rows: Type.Integer({ minimum: 1, maximum: 200 }),
+  revision: Type.Integer({ minimum: 0 }), ansi: Type.String({ maxLength: maxFrameBytes }),
+});
+export type EditorFrame = Static<typeof editorFrameSchema>;
 export const preferencesSchema = Type.Object({
   selection: Type.Object({ worktreeId: Type.Union([id, Type.Null()]), sessions: Type.Record(Type.String(), Type.String()) }),
   drafts: Type.Record(Type.String(), Type.String({ maxLength: 1000000 })),
+  workViews: Type.Optional(workViewsSchema),
 });
 export type RuntimePreferences = Static<typeof preferencesSchema>;
 export const emptyPreferences: RuntimePreferences = { selection: { worktreeId: null, sessions: {} }, drafts: {} };
@@ -26,6 +43,7 @@ export const snapshotSchema = Type.Object({
   mode: Type.Union([Type.Literal("live"), Type.Literal("offline")]), repositoryId: id,
   repositories: Type.Array(repository), details: Type.Record(Type.String(), execution),
   closingCount: Type.Integer({ minimum: 0 }), preferences: preferencesSchema, notice: Type.String(),
+  editors: Type.Optional(Type.Array(editorInfoSchema)),
 });
 export type RuntimeSnapshot = Omit<Static<typeof snapshotSchema>, "repositories"> & { readonly repositories: readonly Repository[] };
 const record = Type.Object({
@@ -50,6 +68,12 @@ export const commandSchema = Type.Union([
   Type.Object({ type: Type.Literal("prompt"), sessionId: id, text: Type.String({ minLength: 1, maxLength: 1000000 }) }),
   Type.Object({ type: Type.Literal("preferences"), preferences: preferencesSchema }),
   Type.Object({ type: Type.Literal("stop") }),
+  Type.Object({ type: Type.Literal("editor-open"), worktreeId: id,
+    cols: Type.Optional(Type.Integer({ minimum: 2, maximum: 500 })), rows: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })) }),
+  Type.Object({ type: Type.Literal("editor-detach"), editorId: id, lease: id }),
+  Type.Object({ type: Type.Literal("editor-input"), editorId: id, lease: id, data: Type.String({ maxLength: 131072, pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$" }) }),
+  Type.Object({ type: Type.Literal("editor-resize"), editorId: id, lease: id,
+    cols: Type.Integer({ minimum: 2, maximum: 500 }), rows: Type.Integer({ minimum: 1, maximum: 200 }) }),
 ]);
 export type RuntimeCommand = Static<typeof commandSchema>;
 export const wireErrorSchema = Type.Object({
@@ -68,10 +92,10 @@ export function wireError(error: ExpectedError, outcome: WireError["outcome"] = 
 export function errorStatus(error: ExpectedError): number {
   switch (error.code) {
     case "INVALID_INPUT": return 400;
-    case "SESSION_NOT_OPEN": case "HISTORY_UNAVAILABLE": return 404;
-    case "SESSION_BUSY": case "SESSION_CONFLICT": case "CANCELLED": return 409;
+    case "SESSION_NOT_OPEN": case "HISTORY_UNAVAILABLE": case "EDITOR_NOT_OPEN": return 404;
+    case "SESSION_BUSY": case "SESSION_CONFLICT": case "CANCELLED": case "EDITOR_BUSY": return 409;
     case "RUNTIME_STOPPING": case "RUNTIME_ABSENT": case "CONNECTION_FAILED": case "CONNECTION_TIMEOUT": return 503;
-    case "UNSUPPORTED_CAPABILITY": case "PROTOCOL_ERROR": return 422;
+    case "UNSUPPORTED_CAPABILITY": case "PROTOCOL_ERROR": case "EDITOR_UNAVAILABLE": return 422;
     default: return 500;
   }
 }

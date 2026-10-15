@@ -139,6 +139,33 @@ The central probe displays a bounded recent transcript (12 messages / 12,000 cha
 complete conversation editor or Orca's terminal scrollback. Full SDK history remains in JSONL.
 Pi CLI extensions/MCP and remote-machine services are still outside this initial host.
 
+### Work-view runtime foundation
+
+The additive `work-views` capability provides a daemon-owned Neovim per worktree and optional
+work-view preferences. The right-panel UI is delivered separately on top of this foundation.
+Neovim must be installed as `nvim` on the daemon's PATH; normal mode uses your Neovim configuration,
+while isolated `--test-runtime` launches it with `--clean -i NONE`. `--demo` never launches an editor.
+Editor integration tests require Neovim as well as Bun and Git.
+
+The service owns Bun PTYs and bounded, zero-scrollback VT screens (`@xterm/headless`). A local
+encoder uses its public visible-cell APIs, including after a resize shrinks retained rows.
+Attachments receive complete ANSI screen/mode snapshots, not an ever-growing
+or truncated byte history. Buffer contents are retained by the **same Neovim process** while a TUI
+is absent. Terminal contents are not written to radian's checkpoint. The UI uses the existing
+OpenTUI terminal renderer; the headless screen exists to support reconnects without restarting Neovim.
+
+Each editor allows one input/resize attachment at a time. Generation IDs and attachment leases reject
+stale inputs, and input is ordered, bounded and never replayed. Detaching releases the attachment, not
+the process. An exited editor is reopened only by an explicit action. No Git operations or lazygit
+integration are provided by this capability. Legacy manifests remain readable; older clients do not
+clear work-view preferences they do not understand. Older services are never automatically restarted.
+
+Runtime/editor snapshot streams send heartbeats every 5 seconds to keep long-lived idle views alive
+under Bun's HTTP idle timeout. Slow readers receive only the latest complete snapshot.
+`Ctrl+C` continues to detach only the TUI. **Explicit `--stop-runtime` also terminates Neovim**:
+save buffers first. Runtime restart/reboot does not restore unsaved editor buffers or automatically
+launch an editor, even when a saved tab preference points to Editor.
+
 ### Saved session history
 
 Select a worktree, then open **History**. The list uses SDK-provided conversation names (falling back
