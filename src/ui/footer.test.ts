@@ -1,0 +1,107 @@
+import { expect, test } from "bun:test";
+import { BoxRenderable, InputRenderable } from "@opentui/core";
+import { createTestRenderer } from "@opentui/core/testing";
+import { Footer } from "./footer.ts";
+
+async function mount(width = 100) {
+  const app = await createTestRenderer({ width, height: 8, kittyKeyboard: true });
+  const screen = new BoxRenderable(app.renderer, { width: "100%", height: "100%", flexDirection: "column" });
+  const body = new BoxRenderable(app.renderer, { flexGrow: 1, minHeight: 0 });
+  const input = new InputRenderable(app.renderer, { width: "100%", value: "draft" });
+  const footer = new Footer(app.renderer, "radian 0.0.0");
+  body.add(input); screen.add(body); screen.add(footer.root); app.renderer.root.add(screen);
+  footer.setShortcuts([{ key: "Enter", label: "Run" }, { key: "Esc", label: "Workspace" }]);
+  input.focus(); await app.renderOnce();
+  return { ...app, footer, body, input,
+    footerLine: () => app.captureCharFrame().split("\n")[footer.bar.y]!,
+  };
+}
+
+test("공통 푸터는 화면 마지막 한 줄에 있고 별도 알림은 바로 위에서 단축키를 가리지 않는다", async () => {
+  // A host supplies identity and context-specific shortcuts; the footer owns no actions.
+  const app = await mount();
+  try {
+    const before = app.footerLine();
+
+    app.footer.setNotice("Runtime disconnected · reconnecting"); await app.renderOnce();
+
+    expect(app.footer.bar.height).toBe(1);
+    expect(app.footer.bar.y).toBe(7);
+    expect(app.footer.notice.y).toBe(6);
+    expect(app.body.y + app.body.height).toBeLessThanOrEqual(app.footer.notice.y);
+    expect(app.footerLine()).toBe(before);
+    expect(before.trimStart()).toStartWith("radian 0.0.0");
+    expect(before.trimEnd()).toEndWith("Enter Run  Esc Workspace");
+    expect(app.captureCharFrame().split("\n")[6]).toContain("reconnecting");
+    const spans = app.captureSpans().lines[7]!.spans;
+    const key = spans.find((span) => span.text.includes("Enter"));
+    const label = spans.find((span) => span.text.includes("Run"));
+    expect(key).toBeDefined(); expect(label).toBeDefined();
+    expect(key?.fg.equals(label?.fg)).toBe(false);
+  } finally { await app.dispose(); }
+});
+
+test("좁은 폭에서는 단축키와 설명을 통째로 생략하고 resize 후 다시 표시한다", async () => {
+  // Width fitting must not advertise a cut-off key/action pair or add another footer row.
+  const app = await mount();
+  try {
+    app.resize(30, 8); await app.renderOnce();
+
+    expect(app.footer.bar.height).toBe(1);
+    expect(app.footerLine()).toContain("Enter Run");
+    expect(app.footerLine()).toContain("…");
+    expect(app.footerLine()).not.toContain("Esc");
+    expect(Bun.stringWidth(app.footerLine())).toBeLessThanOrEqual(30);
+    app.resize(10, 8); await app.renderOnce();
+    expect(app.footer.bar.height).toBe(1);
+    expect(Bun.stringWidth(app.footerLine())).toBeLessThanOrEqual(10);
+    app.resize(100, 8); await app.renderOnce();
+
+    expect(app.footerLine()).toContain("Esc Workspace");
+    expect(app.footerLine()).not.toContain("…");
+  } finally { await app.dispose(); }
+});
+
+test("한글 설명도 문자 수가 아닌 터미널 셀 너비로 배치한다", async () => {
+  // Wide characters occupy two cells and must not overlap the app identity or edge.
+  const app = await mount(34);
+  try {
+    app.footer.setShortcuts([{ key: "↑/↓", label: "선택" }, { key: "Enter", label: "열기" }]);
+
+    await app.renderOnce();
+
+    expect(app.footerLine()).toContain("↑/↓ 선택");
+    expect(app.footerLine()).toContain("…");
+    expect(app.footerLine()).not.toContain("Enter");
+    expect(Bun.stringWidth(app.footerLine())).toBeLessThanOrEqual(34);
+  } finally { await app.dispose(); }
+});
+
+test("푸터를 클릭해도 입력 포커스와 초안을 변경하거나 액션을 실행하지 않는다", async () => {
+  // The notice and shortcut bar are deliberately not interactive or focusable.
+  const app = await mount();
+  try {
+    const x = app.footerLine().indexOf("Enter");
+
+    await app.mockMouse.click(x, app.footer.bar.y); await app.renderOnce();
+
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+    expect(app.input.value).toBe("draft");
+    expect(app.footer.bar.focusable).toBe(false);
+  } finally { await app.dispose(); }
+});
+
+test("포커스 단축키가 없으면 공통 키를 대신 표시하지 않고 빈 알림 행의 높이는 유지한다", async () => {
+  // Empty context is not permission to invent global hints or collapse the existing notice allocation.
+  const app = await mount();
+  try {
+    const y = app.footer.bar.y;
+
+    app.footer.setShortcuts([]); app.footer.setNotice(""); await app.renderOnce();
+
+    expect(app.footerLine().trim()).toBe("radian 0.0.0");
+    expect(app.footer.notice.height).toBe(1);
+    expect(app.footer.bar.y).toBe(y);
+    expect(app.captureCharFrame()).not.toContain("Ctrl+C");
+  } finally { await app.dispose(); }
+});

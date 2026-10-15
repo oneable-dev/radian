@@ -40,6 +40,25 @@ The History tab lists saved SDK conversations for the selected worktree and open
 The full editor/inspector remains deferred; the central panel is a minimal execution probe, not the
 finished conversation editor.
 
+### Common footer
+
+The left, center and right panels share one full-width footer. The bottom row shows the package
+name/version on the left and shortcuts for the **currently focused control** on the right. Keys
+are highlighted separately from their descriptions. Tree, search, History, buttons and prompt
+contexts update on actual focus/state changes; unrelated/global shortcuts are not appended.
+Existing global bindings such as `Ctrl+f`, `Ctrl+e`, `Tab` and `Ctrl+C` still work.
+
+Errors and service notices occupy a separate row immediately above the footer, so they never
+replace shortcut hints. The existing fixed-height notice allocation and status-icon legend are
+preserved; the legend sits above the notice row. This avoids adding an unapproved hide/show policy.
+The footer itself is read-only: clicking it neither runs an action nor takes input focus.
+
+The footer stays one line on narrow terminals. Identity stays on the left; complete shortcut/label
+pairs fit in the owner's supplied order and trailing pairs are omitted with an ellipsis. Resize
+restores them when space permits. There is no extra Help action or invented priority category.
+`src/ui/footer.ts` is a reusable presentation component; it does not own keyboard handlers,
+workspace selection, or agent execution.
+
 ### Runtime ownership and closing
 
 A detached Bun service owns the registry and an independent SDK instance for each open item,
