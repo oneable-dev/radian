@@ -7,7 +7,7 @@ import { expectOk } from "../testing/results.ts";
 import { TerminalSurface } from "../ui/terminal-surface.ts";
 
 async function mount(keymap: Keymap = defaultKeymap()) {
-  const clock = new ManualClock(); const app = await createTestRenderer({ width: 60, height: 8, clock, kittyKeyboard: true });
+  const clock = new ManualClock(); const app = await createTestRenderer({ width: 60, height: 8, clock, kittyKeyboard: true, exitOnCtrlC: false });
   const a = new InputRenderable(app.renderer, { width: 60 }), b = new InputRenderable(app.renderer, { width: 60 });
   app.renderer.root.add(a); app.renderer.root.add(b); a.focus();
   const commands: string[] = [];
@@ -69,7 +69,7 @@ test("kitty release는 문자 재생을 중복하지 않고 명령 소비 후 na
 });
 
 test("기본 Ctrl+C는 공통 native terminal에 전달하고 leader 명령만 가로챈다", async () => {
-  const app = await createTestRenderer({ width: 60, height: 8, kittyKeyboard: true });
+  const app = await createTestRenderer({ width: 60, height: 8, kittyKeyboard: true, exitOnCtrlC: false });
   const surface = new TerminalSurface(app.renderer, "test-terminal"); app.renderer.root.add(surface.root);
   const bytes: string[] = [], commands: string[] = [];
   surface.connect({ input: (value) => bytes.push(Buffer.from(value).toString("hex")), resize: () => {}, disconnect: async () => {} });

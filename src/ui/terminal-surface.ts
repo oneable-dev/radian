@@ -5,6 +5,7 @@ export type PtyAttachment = {
   input(data: Uint8Array): void;
   resize(cols: number, rows: number): void;
   disconnect(): Promise<void>;
+  scroll?(lines: number): void;
 };
 
 // A presentation/input adapter only. Owners decide what to launch, which tab is
@@ -15,14 +16,23 @@ export class TerminalSurface {
   private frame: PtyFrame | undefined;
   private dimensions = "";
   private paintQueued = false;
+  acceptsInput = true;
 
   constructor(private readonly renderer: CliRenderer, id: string) {
     this.root = new EmbeddedTerminalRenderable(renderer, { id, width: "100%", flexGrow: 1, flexShrink: 1,
       minHeight: 1, maxWidth: 500, maxHeight: 200, maxScrollback: 0,
-      onData: (bytes, source) => { if (source === "input" && !this.frame?.exited) this.connection?.input(bytes); },
+      onData: (bytes, source) => { if (source === "input" && this.acceptsInput && !this.frame?.exited) this.connection?.input(bytes); },
       onTerminalResize: (cols, rows) => { this.resize(cols, rows); this.queuePaint(); },
+      onMouseScroll: (event) => {
+        if (this.canScroll && (event.scroll?.direction === "up" || event.scroll?.direction === "down")) {
+          event.preventDefault(); event.stopPropagation(); this.scroll(event.scroll.direction === "up" ? -3 : 3);
+        }
+      },
     });
   }
+  get canScroll(): boolean { return this.frame?.scrollback?.enabled ?? false; }
+  get scrollOffset(): number { return this.frame?.scrollback?.offset ?? 0; }
+  scroll(lines: number): void { if (this.canScroll) this.connection?.scroll?.(lines); }
   connect(connection: PtyAttachment): void {
     this.connection = connection; this.resize(); this.queuePaint();
   }
@@ -39,7 +49,7 @@ export class TerminalSurface {
     this.root.write(frame.ansi);
   };
   private resize(cols = this.root?.width ?? 0, rows = this.root?.height ?? 0): void {
-    if (!this.connection || !this.root || this.root.isDestroyed || !this.root.visible || cols < 2 || rows < 1 || this.frame?.exited) return;
+    if (!this.connection || !this.root || this.root.isDestroyed || !this.root.visible || cols < 2 || rows < 1) return;
     const key = `${cols}:${rows}`;
     if (key === this.dimensions) return;
     this.dimensions = key; this.connection.resize(cols, rows);

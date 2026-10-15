@@ -4,6 +4,7 @@ import { WorkspaceSelection } from "./workspace/selection.ts";
 import type { Repository } from "./workspace/model.ts";
 import { connectRuntime, defaultPreferences, fetchSnapshot, type RuntimeClient } from "./runtime/client.ts";
 import type { RuntimePreferences, WorkViewPreferences } from "./runtime/protocol.ts";
+import { restoreWorkViews, saveWorkViews } from "./runtime/work-view-preferences.ts";
 import { capture, ConnectionError, InputError, reportUnexpected, type ExpectedError } from "./errors.ts";
 import { err, ok, type Result } from "./result.ts";
 import { defaultKeymap, loadKeymap, type Keymap } from "./keybindings/config.ts";
@@ -51,6 +52,7 @@ async function main(): Promise<Result<void, ExpectedError>> {
       if (!client) { console.log("No running workspace service."); return ok(undefined); }
       if (options.status) { console.log(JSON.stringify(client.snapshot, null, 2)); return ok(undefined); }
       if (client.snapshot.editors?.some((editor) => !editor.exited)) console.error("Stopping the runtime also closes Neovim. Unsaved editor buffers are not restored after restart; save them before using --stop-runtime.");
+      if (client.snapshot.terminals?.length) console.error("Stopping the runtime also closes all terminal shells and their owned jobs.");
       const stopped = await client.stopRuntime(); if (!stopped.ok) return stopped;
       const deadline = Date.now() + 15000;
       while (true) {
@@ -76,8 +78,11 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
   const detachHint = keymap.hint("app.detach", "none") || "No detach binding";
   let message = discoveryError ?? (options.demo ? `DEMO · display fixtures only · ${detachHint} detaches` : options.offline
     ? `OFFLINE SDK · scripted slow / read / write / delegate · ${detachHint} detaches`
-    : `Pi SDK service · ${detachHint} detaches; agents/editors keep running`);
-  const updateNotice = (): void => view?.setNotice(`${client?.snapshot.notice || message}${client?.snapshot.closingCount ? ` · Closing ${client.snapshot.closingCount}` : ""}`);
+    : `Pi SDK service · ${detachHint} detaches; agents/editors/terminals keep running`);
+  const updateNotice = (): void => {
+    const closing = (client?.snapshot.closingCount ?? 0) + (client?.snapshot.terminalClosingCount ?? 0);
+    view?.setNotice(`${client?.snapshot.notice || message}${closing ? ` · Closing ${closing}` : ""}`);
+  };
   const showFailure = (error: ExpectedError): void => { message = `[${error.code}] ${error.message}`; updateNotice(); };
   const unexpected = (error: unknown): void => { message = reportUnexpected(error, "UI action"); updateNotice(); };
   const observe = <T>(task: Promise<Result<T, ExpectedError>>): void => {
@@ -122,8 +127,14 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
         onResumeSession: (worktreeId: string, savedId: string) => client.resume(worktreeId, savedId),
         initialDrafts: preferences.drafts,
         onDraftChange: (drafts: Record<string, string>) => { preferences.drafts = drafts; persist(); },
-        ...(preferences.workViews ? { initialWorkViews: preferences.workViews } : {}),
-        onWorkViewsChange: (workViews: WorkViewPreferences) => { preferences.workViews = workViews; persist(); },
+        initialWorkViews: restoreWorkViews(preferences),
+        onWorkViewsChange: (workViews: WorkViewPreferences) => { saveWorkViews(preferences, workViews); persist(); },
+        ...(client.supportsTerminals ? { terminal: {
+          list: () => client.snapshot.terminals ?? [],
+          create: (worktreeId, size) => client.createTerminal(worktreeId, size),
+          attach: (id, frame, failed) => client.attachTerminal(id, frame, failed),
+          close: (id) => client.closeTerminal(id),
+        } } : { terminalUnavailable: "Running service predates terminal tabs. Save work and restart the service explicitly when ready." }),
         editor: {
           info: (worktreeId: string) => client.snapshot.editors?.find((editor) => editor.worktreeId === worktreeId),
           open: (worktreeId: string, size) => client.openEditor(worktreeId, size),

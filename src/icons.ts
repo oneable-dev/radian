@@ -7,3 +7,5 @@ export const icons = {
   error: "\uEA87", // nf-cod-error
   robot: "\uEC20", // nf-cod-robot
 } as const;
+
+export const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
