@@ -9,6 +9,10 @@ import { err, ok, type Result } from "../result.ts";
 import { emptyPreferences, historySchema, maxFrameBytes, parseSnapshot, replySchema, type RuntimeCommand, type RuntimePreferences, type RuntimeSnapshot, type WireError } from "./protocol.ts";
 import { privateDirectory, runtimePaths, type RuntimePaths } from "./storage.ts";
 
+const reconnectDelays = [250, 500, 1000, 2000] as const;
+const streamHandshakeMs = 2000;
+const stableConnectionMs = 10000;
+
 export type ConnectOptions = { offline?: boolean; stateRoot?: string; entry?: string; start?: boolean };
 export async function connectRuntime(repository: Repository, cwd: string, options: ConnectOptions = {}): Promise<Result<RuntimeClient | null, ExpectedError>> {
   const paths = runtimePaths(repository.id, options.offline ?? false, options.stateRoot);
@@ -51,10 +55,12 @@ export class RuntimeClient {
   private readonly hidden = new Set<string>();
   private readonly streamAbort = new AbortController();
   private streamTask: Promise<void> | undefined;
+  private attachment: Promise<Result<void, ExpectedError>> | undefined;
   private disconnected = false;
   private failure = "";
   private warning = "";
   constructor(readonly paths: RuntimePaths, snapshot: RuntimeSnapshot) { this.state = snapshot; }
+  get connected(): boolean { return !this.disconnected && !this.failure; }
   get snapshot(): RuntimeSnapshot {
     if (!this.hidden.size && !this.failure && !this.warning) return this.state;
     const details = Object.fromEntries(Object.entries(this.state.details).filter(([id]) => !this.hidden.has(id)).map(([id, state]) => [id,
@@ -69,16 +75,70 @@ export class RuntimeClient {
     };
   }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
-  async attach(): Promise<Result<void, ExpectedError>> {
-    const response = await transport(this.paths, "/events", { signal: this.streamAbort.signal }); if (!response.ok) return response;
-    if (!response.value.ok || !response.value.body) return err(new ProtocolError("Runtime event stream is unavailable."));
-    this.streamTask = this.consume(response.value.body).then((result) => {
-      if (!this.disconnected && !result.ok) { this.failure = result.error.message; this.emit(); }
+  attach(): Promise<Result<void, ExpectedError>> {
+    if (this.disconnected) return Promise.resolve(err(this.connectionClosed()));
+    if (this.attachment) return this.attachment;
+    const ready = Promise.withResolvers<Result<void, ExpectedError>>();
+    let established = false;
+    this.attachment = ready.promise;
+    this.streamTask = this.watch(() => { established = true; ready.resolve(ok(undefined)); }).then((result) => {
+      if (!this.disconnected && !result.ok) {
+        this.failure = `${result.error.message} Reconnection stopped; Ctrl+C and reopen radian to reconnect. No commands were replayed.`;
+        this.emit();
+      }
+      ready.resolve(this.disconnected ? err(this.connectionClosed()) : result);
     }).catch((error: unknown) => {
-      if (this.disconnected) return;
-      this.failure = reportUnexpected(error, "runtime stream"); this.emit();
+      if (!established) { ready.reject(error); return; }
+      this.failure = reportUnexpected(error, "runtime stream");
+      if (!this.disconnected) this.emit();
     });
+    return this.attachment;
+  }
+
+  private async watch(onReady: () => void): Promise<Result<void, ExpectedError>> {
+    let retries = 0;
+    while (!this.disconnected) {
+      let connectedAt: number | undefined;
+      const result = await this.listen(() => { connectedAt ??= Date.now(); onReady(); });
+      if (this.disconnected) return ok(undefined);
+      if (result.ok) return result;
+      // Permission/protocol errors and programming defects are not transient disconnections.
+      if (!(result.error instanceof ConnectionError) || ["EACCES", "EPERM"].includes(systemCode(result.error.cause) ?? "")) return result;
+      if (connectedAt !== undefined && Date.now() - connectedAt >= stableConnectionMs) retries = 0;
+      const delay = reconnectDelays[retries++];
+      if (delay === undefined) return result;
+      this.failure = `${result.error.message} Reconnecting (${retries}/${reconnectDelays.length})...`;
+      this.emit();
+      await this.waitToReconnect(delay);
+    }
     return ok(undefined);
+  }
+
+  private async listen(onReady: () => void): Promise<Result<void, ExpectedError>> {
+    const handshake = new AbortController();
+    const signal = AbortSignal.any([this.streamAbort.signal, handshake.signal]);
+    const timer = setTimeout(() => handshake.abort(new DOMException("Runtime stream handshake timed out.", "TimeoutError")), streamHandshakeMs);
+    try {
+      const response = await transport(this.paths, "/events", { signal }); if (!response.ok) return response;
+      if (!response.value.ok || !response.value.body) {
+        await response.value.body?.cancel();
+        return err(new ProtocolError("Runtime event stream is unavailable."));
+      }
+      return await this.consume(response.value.body, () => { clearTimeout(timer); onReady(); });
+    } catch (error) {
+      if (this.disconnected && error instanceof Error && error.name === "AbortError") return ok(undefined);
+      if (handshake.signal.aborted) return err(new ConnectionError("CONNECTION_TIMEOUT", "Runtime stream handshake timed out.", { cause: error }));
+      throw error;
+    } finally { clearTimeout(timer); }
+  }
+
+  private waitToReconnect(milliseconds: number): Promise<void> {
+    return new Promise((resolve) => {
+      const finish = () => { clearTimeout(timer); this.streamAbort.signal.removeEventListener("abort", finish); resolve(); };
+      const timer = setTimeout(finish, milliseconds);
+      this.streamAbort.signal.addEventListener("abort", finish, { once: true });
+      if (this.disconnected) finish();
+    });
   }
   async create(worktreeId: string): Promise<Result<string, ExpectedError>> {
     const result = await this.command({ type: "create", worktreeId });
@@ -144,13 +204,15 @@ export class RuntimeClient {
     if (this.warning) this.emit();
     return ok(body.value.value);
   }
-  private async consume(body: ReadableStream<Uint8Array>): Promise<Result<void, ExpectedError>> {
+  private async consume(body: ReadableStream<Uint8Array>, onReady: () => void): Promise<Result<void, ExpectedError>> {
     const reader = body.getReader(); const decoder = new TextDecoder(); let buffer = "";
+    let firstFrame = true;
     try {
       while (!this.disconnected) {
         let chunk: Awaited<ReturnType<typeof reader.read>>;
         try { chunk = await reader.read(); }
         catch (error) { if (this.disconnected) return ok(undefined); const known = connectionError(error); if (known) return err(known); throw error; }
+        if (this.disconnected) return ok(undefined);
         if (chunk.done) return err(this.connectionClosed());
         buffer += decoder.decode(chunk.value, { stream: true });
         let newline: number;
@@ -159,10 +221,17 @@ export class RuntimeClient {
           if (Buffer.byteLength(frame) > maxFrameBytes) return err(new ProtocolError("Runtime frame is too large."));
           const json = parseJson(frame, "runtime event"); if (!json.ok) return err(new ProtocolError(json.error.message, { cause: json.error }));
           const parsed = parseSnapshot(json.value); if (!parsed.ok) return parsed;
-          if (parsed.value.instance !== this.state.instance) return err(new ProtocolError("Service instance changed."));
+          if (parsed.value.repositoryId !== this.state.repositoryId || parsed.value.mode !== this.state.mode) return err(new ProtocolError("Runtime identity does not match this workspace."));
+          if (parsed.value.instance !== this.state.instance) {
+            if (!firstFrame) return err(new ProtocolError("Service instance changed within the event stream."));
+            this.hidden.clear();
+            this.warning = "Runtime restarted; state restored. Interrupted actions were not replayed.";
+          }
           this.state = parsed.value;
+          this.failure = "";
           const open = new Set(this.state.repositories.flatMap((repo) => repo.worktrees.flatMap((tree) => tree.sessions.map((session) => session.id))));
           for (const id of this.hidden) if (!open.has(id)) this.hidden.delete(id);
+          if (firstFrame) { firstFrame = false; onReady(); }
           this.emit();
         }
         if (Buffer.byteLength(buffer) > maxFrameBytes) return err(new ProtocolError("Runtime frame is too large."));

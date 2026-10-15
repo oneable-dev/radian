@@ -160,6 +160,7 @@ class WorkspaceRuntime {
   private events(): Response {
     let pending: Uint8Array | undefined;
     let send: ((snapshot: RuntimeSnapshot) => void) | undefined;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
       start: (controller) => {
@@ -169,9 +170,13 @@ class WorkspaceRuntime {
           else pending = data; // Slow readers receive the latest snapshot, not an unbounded token queue.
         };
         this.subscribers.add(send); send(this.snapshot);
+        // Bun 1.4.3 can reset streaming sockets despite timeout(request, 0). Valid v1 snapshots
+        // keep only subscriptions alive without disabling ordinary request timeouts or writing checkpoints.
+        heartbeat = setInterval(() => send?.(this.snapshot), 5000);
+        heartbeat.unref();
       },
       pull: (controller) => { if (pending) { controller.enqueue(pending); pending = undefined; } },
-      cancel: () => { if (send) this.subscribers.delete(send); },
+      cancel: () => { clearInterval(heartbeat); if (send) this.subscribers.delete(send); },
     });
     return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" } });
   }

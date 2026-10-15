@@ -187,6 +187,10 @@ export class WorkspaceView {
     this.footer.setShortcuts(shortcuts);
   };
 
+  refreshHistory(): void {
+    if (!this.disposed && !this.root.isDestroyed && this.tab === "history") this.history.show(this.selection.worktree);
+  }
+
   private text(content: string, fg: string = colors.text): TextRenderable {
     return new TextRenderable(this.renderer, { content, fg, selectable: false, wrapMode: "none", height: 1, flexShrink: 0 });
   }

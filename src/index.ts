@@ -69,9 +69,10 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
   if (client) selection.restore(preferences.selection);
   const renderer = await createCliRenderer({ exitOnCtrlC: false });
   let view: InstanceType<typeof WorkspaceView> | undefined;
-  let message = discoveryError ?? (options.demo ? "DEMO · display fixtures only" : options.offline
+  const defaultMessage = discoveryError ?? (options.demo ? "DEMO · display fixtures only" : options.offline
     ? "OFFLINE SDK · scripted slow / read / write / delegate · Ctrl+C detaches"
     : "Pi SDK service · Ctrl+e prompt · Ctrl+C detaches; agents keep running");
+  let message = defaultMessage;
   const updateNotice = (): void => view?.setNotice(`${client?.snapshot.notice || message}${client?.snapshot.closingCount ? ` · Closing ${client.snapshot.closingCount}` : ""}`);
   const showFailure = (error: ExpectedError): void => { message = `[${error.code}] ${error.message}`; updateNotice(); };
   const unexpected = (error: unknown): void => { message = reportUnexpected(error, "UI action"); updateNotice(); };
@@ -90,7 +91,15 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
     observe(pendingPreferences);
   };
   const unsubscribeSelection = selection.subscribe(persist);
-  const unsubscribe = client?.subscribe(() => { selection.replaceSnapshot(client.snapshot.repositories); updateNotice(); });
+  let wasConnected = client?.connected ?? false;
+  const unsubscribe = client?.subscribe(() => {
+    const restored = !wasConnected && client.connected;
+    wasConnected = client.connected;
+    if (restored) message = defaultMessage;
+    selection.replaceSnapshot(client.snapshot.repositories);
+    if (restored) view?.refreshHistory();
+    updateNotice();
+  });
   const quit = (key: import("@opentui/core").KeyEvent): void => {
     if (!key.ctrl || key.name !== "c") return;
     key.preventDefault(); key.stopPropagation(); unsubscribe?.(); unsubscribeSelection();

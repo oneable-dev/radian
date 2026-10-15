@@ -92,6 +92,34 @@ test("별도 프로세스는 모든 UI가 분리된 동안에도 agent와 subage
   } finally { await app.cleanup(); }
 }, 20000);
 
+test("31초 유휴 상태에도 이벤트 연결을 유지하고 같은 서비스에서 history와 새 명령을 처리한다", async () => {
+  // An isolated SDK service must keep its subscription even when no state changes are emitted.
+  const app = await setup();
+  try {
+    const client = await app.connect();
+    const worktree = app.repository.worktrees[0]!.id;
+    const id = expectOk(await client.create(worktree));
+    expectOk(await client.prompt(id, "read"));
+    await observed(client, (state) => state.details[id]?.status === "complete");
+    const instance = client.snapshot.instance;
+    const notices: string[] = [];
+    const unsubscribe = client.subscribe(() => { if (client.snapshot.notice) notices.push(client.snapshot.notice); });
+
+    // Real elapsed time is intentional: mocked timers cannot exercise Bun's native socket idle timeout.
+    await Bun.sleep(31000);
+    unsubscribe();
+
+    // Reconnection must not mask an incorrectly configured idle stream; no failure should occur at all.
+    expect(notices).toEqual([]);
+    expect(client.snapshot.notice).toBe("");
+    expect(client.snapshot.instance).toBe(instance);
+    expect(expectOk(await client.listHistory(worktree))).toHaveLength(1);
+    const next = expectOk(await client.create(worktree));
+    await observed(client, (state) => !!state.details[next]);
+    expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions.map((session) => session.id)).toEqual([id, next]);
+  } finally { await app.cleanup(); }
+}, 45000);
+
 test("IPC 닫기는 UI에서 먼저 제거하고 소속 자식만 취소하며 다른 세션과 저장 기록은 유지한다", async () => {
   // Parent/child and an unrelated slow run coexist in one detached SDK service.
   const app = await setup();
@@ -144,6 +172,35 @@ test("서비스 종료 후 재시작은 열린 ID와 기록·선택을 복원하
     expect(restored.snapshot.preferences.selection.sessions[app.repository.worktrees[1]!.id]).toBe(running);
     expect((await app.manifest()).records.find((record) => record.id === a)?.sessionFile).toBe(file);
     await restored.prompt(a, "read"); await observed(restored, (state) => state.details[a]?.status === "complete");
+  } finally { await app.cleanup(); }
+}, 20000);
+
+test("명시적으로 교체한 서비스에 기존 클라이언트가 재접속하며 저장 대화와 명령을 재실행하지 않는다", async () => {
+  // Only a test-owned daemon is restarted; the first UI client remains mounted throughout.
+  const app = await setup();
+  try {
+    const client = await app.connect();
+    const worktree = app.repository.worktrees[0]!.id;
+    const id = expectOk(await client.create(worktree));
+    expectOk(await client.prompt(id, "read"));
+    await observed(client, (state) => state.details[id]?.status === "complete");
+    const file = (await app.manifest()).records.find((record) => record.id === id)!.sessionFile!;
+    const original = await readFile(file, "utf8");
+    const pid = client.snapshot.pid;
+
+    // Service startup is explicit, not something the disconnected subscriber does automatically.
+    expectOk(await client.stopRuntime()); await app.stopped(pid);
+    await until(() => !client.connected);
+    expect(expectError(await client.prompt(id, "must not run")).code).toBe("CONNECTION_FAILED");
+    const replacement = await app.connect();
+    await observed(client, (state) => client.connected && state.instance === replacement.snapshot.instance);
+
+    // Fresh history/capabilities and the same conversation are available without another UI launch.
+    expect(client.snapshot.pid).not.toBe(pid);
+    expect(client.snapshot.details[id]?.output).toContain("main-worktree-marker");
+    expect(expectOk(await client.listHistory(worktree))[0]?.openSessionId).toBe(id);
+    expect(await readFile(file, "utf8")).toBe(original);
+    expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions.map((session) => session.id)).toEqual([id]);
   } finally { await app.cleanup(); }
 }, 20000);
 

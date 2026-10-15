@@ -1,5 +1,9 @@
 Use English for repository documentation and commit messages.
 
+## UI feedback
+
+- Use `LoadingSpinner` from `src/ui/loading-spinner.ts` for loading indicators across the UI. It keeps the animation visible for at least 500 ms without delaying results or errors. Call `cancel()` when the owning screen is hidden; destroying its renderable also clears its timers.
+
 ## Error handling
 
 - Return `Result<T, E>` with custom error types and stable codes for expected domain, I/O, cancellation and protocol failures. Callers must explicitly handle both branches.
