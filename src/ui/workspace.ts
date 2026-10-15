@@ -19,6 +19,7 @@ import type { WorkView, WorkViewPreferences } from "../runtime/protocol.ts";
 import { defaultKeymap, type Keymap } from "../keybindings/config.ts";
 import { KeyRouter } from "../keybindings/router.ts";
 import type { CommandId, KeyContext } from "../keybindings/commands.ts";
+import type { TerminalTheme } from "./terminal-theme.ts";
 
 export type WorkspaceActions = {
   onNewSession: (worktreeId: string) => void;
@@ -32,6 +33,7 @@ export type WorkspaceActions = {
   editor?: EditorActions;
   terminal?: TerminalActions;
   terminalUnavailable?: string;
+  terminalTheme?: TerminalTheme;
   initialWorkViews?: WorkViewPreferences;
   onWorkViewsChange?: (preferences: WorkViewPreferences) => void;
   onNotice?: (message: string) => void;
@@ -167,7 +169,7 @@ export class WorkspaceView {
     this.runtimePanel.add(this.prompt);
     this.center.add(this.runtimePanel);
     this.editor = new EditorPanel(renderer, actions.editor, (label, activate) => this.button(label, activate, "Open editor"),
-      (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); }, () => this.updateFooter(), this.keymap.hint("focus.sidebar", "editor"));
+      (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); }, () => this.updateFooter(), this.keymap.hint("focus.sidebar", "editor"), actions.terminalTheme);
     this.terminals = new TerminalPanel(renderer, actions.terminal, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
       (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); },
       (worktreeId, id) => {
@@ -175,7 +177,7 @@ export class WorkspaceView {
         if ((selected[worktreeId] ?? null) === id) return;
         if (id) selected[worktreeId] = id; else delete selected[worktreeId];
         this.saveWorkViews();
-      }, () => this.updateFooter(), actions.terminalUnavailable);
+      }, () => this.updateFooter(), actions.terminalUnavailable, actions.terminalTheme);
     this.gitView = new BoxRenderable(renderer, { id: "git-view", flexGrow: 1, minHeight: 0, padding: 1, flexDirection: "column", gap: 1, visible: false });
     this.gitTitle = this.text("Git", colors.accent);
     this.gitView.add(this.gitTitle);

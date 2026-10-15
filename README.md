@@ -85,17 +85,23 @@ selected worktree. Normal mode uses its ordinary user configuration. Test runtim
 `/bin/sh` with no `ENV`/`BASH_ENV` startup file and no history file. **Shell commands are real even
 in test runtime; this is not a filesystem/process sandbox.** No model is invoked by shell input.
 
+The embedded terminal's default foreground/background and ANSI palette follow the outer terminal's
+reported theme, including after a TUI reconnect. Programs' explicit RGB colors are preserved. If the
+outer terminal cannot report a color, the embedded renderer keeps its fallback for that color.
+
 Shells and development servers keep running when switching tabs/worktrees or detaching the TUI.
-A shell that exits remains visible with its final output and exit code; it is not automatically
-restarted. There are up to **5,000 scrollback lines per shell in memory**, navigated with the wheel
+When a shell exits, its tab closes automatically and its remaining owned jobs are cleaned up through
+the same verified close procedure. The next/previous tab is selected, or the view remains empty;
+no replacement shell is started. Automatic cleanup also runs while the TUI is detached.
+There are up to **5,000 scrollback lines per shell in memory**, navigated with the wheel
 or default Shift+PgUp/PgDn. Typing returns to live output. History/viewport survive warm reconnect;
 radian does not save terminal output/commands to its manifest. A live shell may save its own
 history according to its user configuration.
 
 Closing a tab stops its shell and other processes in its **owned POSIX session**, including ordinary
 foreground/background development servers. Each tab retains a Bun supervisor as the
-session ownership anchor, even after its shell exits. The runtime verifies the live anchor and kernel
-`getsid()` membership before signaling **individual positive PIDs only**. It never uses `ps sess`
+session ownership anchor until its cleanup completes, including after shell exit. The runtime verifies
+the live anchor and kernel `getsid()` membership before signaling **individual positive PIDs only**. It never uses `ps sess`
 values or negative/group/broadcast kills, and refuses cleanup on lost ownership. Graceful termination
 is followed by bounded escalation for still-owned processes; failures remain tracked and are reported.
 `runtime-status` reports the supervisor `pid` separately from `shellPid`.

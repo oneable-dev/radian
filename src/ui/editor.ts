@@ -5,6 +5,7 @@ import type { EditorFrame, EditorInfo } from "../runtime/protocol.ts";
 import type { Worktree } from "../workspace/model.ts";
 
 import { TerminalSurface, type PtyAttachment } from "./terminal-surface.ts";
+import type { TerminalTheme } from "./terminal-theme.ts";
 
 export type EditorAttachment = PtyAttachment;
 export type EditorActions = {
@@ -27,7 +28,7 @@ export class EditorPanel {
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: EditorActions | undefined,
     button: (label: string, activate: () => void) => BoxRenderable, private readonly notice: (message: string) => void,
-    private readonly changed: () => void, private readonly sidebarHint: string) {
+    private readonly changed: () => void, private readonly sidebarHint: string, private readonly terminalTheme?: TerminalTheme) {
     this.root = new BoxRenderable(renderer, { id: "editor-view", width: "100%", flexGrow: 1, minHeight: 0, flexDirection: "column", visible: false });
     this.message = new TextRenderable(renderer, { content: "", fg: "#94A3B8", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.openButton = button("Open / reconnect editor", () => { if (this.worktree) this.show(this.worktree, true); });
@@ -58,7 +59,7 @@ export class EditorPanel {
       }
       if (!id) { this.message.content = "Editor is not running · open explicitly to start Neovim."; return; }
       this.openButton.visible = false;
-      const terminal = new TerminalSurface(this.renderer, "editor-terminal");
+      const terminal = new TerminalSurface(this.renderer, "editor-terminal", this.terminalTheme);
       this.terminal = terminal; this.root.add(terminal.root);
       const attached = await this.actions.attach(id, (frame) => {
         if (!this.current(generation) || terminal.root.isDestroyed) return;
