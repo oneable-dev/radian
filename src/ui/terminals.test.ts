@@ -33,6 +33,7 @@ async function mount(initial?: WorkViewPreferences) {
     ...(initial ? { initialWorkViews: initial } : {}) });
   await app.renderOnce();
   return { ...app, selection, view, actions, created, closed, inputs, detaches, commands,
+    exit(id: string) { items = items.filter((item) => item.id !== id); selection.replaceSnapshot(selection.snapshot); },
     async click(text: string, right = false) {
       const lines = app.captureCharFrame().split("\n");
       const start = right ? (app.renderer.width < 80 ? 26 : 36) : 0;
@@ -79,6 +80,32 @@ test("활성 하위 탭 닫기는 다음·이전·빈 상태로 이동하며 마
     expect(app.closed).toEqual(["shell-2", "shell-3", "shell-1"]);
     expect(app.created).toHaveLength(3); expect(app.view.workViewPreferences.active["demo:main"]).toBe("terminal");
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBeUndefined();
+  } finally { await app.close(); }
+});
+
+test("쉘이 종료된 탭은 이웃 탭으로 이동하고 마지막 종료는 새 터미널 없이 빈 화면을 남긴다", async () => {
+  // 서버가 종료된 탭을 목록에서 제거하는 동안 현재 터미널 입력에 포커스가 있다.
+  const app = await mount();
+  try {
+    app.leader("t"); await app.visible("Shell shell-1");
+    app.leader("t"); await app.visible("Shell shell-2");
+    app.leader("t"); await app.visible("Shell shell-3");
+    await app.click("Terminal 2", true);
+
+    // 가운데 탭의 자연 종료는 다음 이웃을, 마지막 탭의 종료는 이전 이웃을 고른다.
+    app.exit("shell-2"); await app.visible("Shell shell-3");
+    expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-3");
+    app.exit("shell-3"); await app.visible("Shell shell-1");
+    app.exit("shell-1"); await app.visible("No terminals");
+
+    expect(app.captureCharFrame()).not.toContain("Terminal 1");
+    expect(app.created).toHaveLength(3);
+    expect(app.closed).toEqual([]);
+    expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBeUndefined();
+    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).toContain("Enter/Space New terminal");
+    await app.click("Agent", true); await app.click("Terminal", true);
+    expect(app.captureCharFrame()).toContain("No terminals");
+    expect(app.created).toHaveLength(3);
   } finally { await app.close(); }
 });
 

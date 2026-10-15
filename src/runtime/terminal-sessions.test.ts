@@ -4,6 +4,7 @@ import { TerminalSessions } from "./terminal-sessions.ts";
 import type { PtyFrame } from "./protocol.ts";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectOk } from "../testing/results.ts";
+import { pidAlive } from "./storage.ts";
 
 async function until(check: () => boolean | Promise<boolean>) {
   const deadline = Date.now() + 8000;
@@ -53,19 +54,27 @@ test("동일 워크트리의 쉘은 독립적이며 종료는 다른 터미널�
   }
 }, 20000);
 
-test("shell exit 뒤에도 소유권 anchor와 로그를 유지하고 명시적 닫기로 회수한다", async () => {
+test("shell exit은 탭과 소유 작업을 자동 회수하되 다른 터미널은 보존한다", async () => {
+  // 서로 다른 탭의 실행과 종료된 탭의 background 작업을 구분한다.
   const fixture = await createWorktreeFixture(); const sessions = new TerminalSessions([fixture.repository], () => {}, fixture.directory, true);
   let reader: Awaited<ReturnType<typeof watch>> | undefined;
   try {
     const tree = fixture.repository.worktrees.find((item) => item.path === fixture.feature)!;
-    const id = expectOk(await sessions.create(tree.id, { cols: 80, rows: 12 })); reader = await watch(sessions, id); await reader.seen("radian$");
-    reader.input("pwd > shell-cwd.txt; printf 'shell-done\\n'; exit 7\r");
-    await until(() => sessions.infos[0]?.exited === true);
-    expect(sessions.infos[0]!.exitCode).toBe(7);
-    expect((await Bun.file(join(fixture.feature, "shell-cwd.txt")).text()).trim()).toBe(fixture.feature);
-    await reader.seen("shell-done");
+    const id = expectOk(await sessions.create(tree.id, { cols: 80, rows: 12 }));
+    const neighbor = expectOk(await sessions.create(tree.id, { cols: 80, rows: 12 }));
+    const anchor = sessions.infos.find((item) => item.id === id)!.pid;
+    reader = await watch(sessions, id); await reader.seen("radian$");
 
-    expectOk(await sessions.close(id)); expect(sessions.infos).toEqual([]);
+    // 정상 종료가 아닌 exit code도 동일하게 탭을 닫고 새 쉘을 만들지 않는다.
+    reader.input("sleep 30 & echo $! > background-pid.txt; pwd > shell-cwd.txt; exit 7\r");
+    await until(() => !sessions.infos.some((item) => item.id === id) && sessions.closingCount === 0 && !pidAlive(anchor));
+
+    const background = Number((await Bun.file(join(fixture.feature, "background-pid.txt")).text()).trim());
+    expect(pidAlive(background)).toBe(false);
+    expect((await Bun.file(join(fixture.feature, "shell-cwd.txt")).text()).trim()).toBe(fixture.feature);
+    expect(sessions.infos.map((item) => item.id)).toEqual([neighbor]);
+    expect(sessions.infos[0]!.exited).toBe(false);
+    expectOk(await sessions.close(id)); // 이미 자동으로 닫힌 탭은 다시 닫아도 안전하다.
   } finally { await reader?.disconnect(); expectOk(await sessions.stop()); await fixture.cleanup(); }
 }, 15000);
 

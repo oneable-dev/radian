@@ -71,6 +71,7 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
   const { createCliRenderer, destroyTreeSitterClient } = await import("@opentui/core");
   const { WorkspaceView } = await import("./ui/workspace.ts");
   const { GitRepository } = await import("./git/repository.ts");
+  const { TerminalTheme } = await import("./ui/terminal-theme.ts");
   const selection = new WorkspaceSelection(client?.snapshot.repositories ?? repositories);
   const preferences: RuntimePreferences = client ? structuredClone(client.snapshot.preferences) : defaultPreferences();
   if (client) selection.restore(preferences.selection);
@@ -116,8 +117,9 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
     const mounted = view; view = undefined; mounted?.dispose(); client?.beginDetach(); renderer.destroy();
   };
   try {
+    const terminalTheme = new TerminalTheme(renderer, await renderer.getPalette({ size: 256, timeout: 200 }));
     view = new WorkspaceView(renderer, selection, {
-      keymap, onDetach: detach,
+      keymap, onDetach: detach, terminalTheme,
       onNotice: (text) => { message = text; updateNotice(); },
       onNewSession: (worktreeId) => {
         if (!client) { message = "Demo creation request · no agents running"; updateNotice(); return; }
