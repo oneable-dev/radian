@@ -9,7 +9,7 @@ import { err, ok, type Result } from "../result.ts";
 import { emptyPreferences, historySchema, maxFrameBytes, parseSnapshot, replySchema, type RuntimeCommand, type RuntimePreferences, type RuntimeSnapshot, type EditorFrame } from "./protocol.ts";
 import { privateDirectory, runtimePaths, type RuntimePaths } from "./storage.ts";
 import { connectionError, readJson, remoteError, transport } from "./transport.ts";
-import { EditorConnection } from "./editor-client.ts";
+import { PtyConnection } from "./pty-client.ts";
 
 export type ConnectOptions = { offline?: boolean; stateRoot?: string; entry?: string; start?: boolean };
 export async function connectRuntime(repository: Repository, cwd: string, options: ConnectOptions = {}): Promise<Result<RuntimeClient | null, ExpectedError>> {
@@ -54,7 +54,7 @@ export class RuntimeClient {
   private readonly streamAbort = new AbortController();
   private streamTask: Promise<void> | undefined;
   private disconnected = false;
-  private readonly editors = new Set<EditorConnection>();
+  private readonly editors = new Set<PtyConnection>();
   private failure = "";
   private warning = "";
   constructor(readonly paths: RuntimePaths, snapshot: RuntimeSnapshot) { this.state = snapshot; }
@@ -139,9 +139,15 @@ export class RuntimeClient {
     if (!result.ok) return result;
     return result.value ? ok(result.value) : err(new ProtocolError("Runtime did not return an editor ID."));
   }
-  async attachEditor(id: string, onFrame: (frame: EditorFrame) => void, onFailure: (error: unknown) => void): Promise<Result<EditorConnection, ExpectedError>> {
+  async attachEditor(id: string, onFrame: (frame: EditorFrame) => void, onFailure: (error: unknown) => void): Promise<Result<PtyConnection, ExpectedError>> {
     const capability = this.requireWorkViews(); if (!capability.ok) return capability;
-    const editor = new EditorConnection(this.paths, id, (command) => this.command(command), onFrame, onFailure);
+    const editor = new PtyConnection(this.paths, id, "/editor/events", (request) => {
+      switch (request.type) {
+        case "input": return this.command({ type: "editor-input", editorId: id, lease: request.lease, data: request.data });
+        case "resize": return this.command({ type: "editor-resize", editorId: id, lease: request.lease, cols: request.cols, rows: request.rows });
+        case "detach": return this.command({ type: "editor-detach", editorId: id, lease: request.lease });
+      }
+    }, onFrame, onFailure);
     this.editors.add(editor);
     editor.closed.finally(() => this.editors.delete(editor));
     let attached: Result<void, ExpectedError>;

@@ -19,7 +19,7 @@ function style(cell: IBufferCell): string {
 // Serialize only visible cells. xterm's buffers can retain wider hidden rows after a
 // shrink; serializing line.length instead of cols wraps those cells and loses row 1.
 // Every frame is complete, so the client never needs hidden buffers or scrollback.
-export function editorScreen(screen: Terminal): string {
+export function terminalScreen(screen: Terminal): string {
   const buffer = screen.buffer.active;
   let output = `\x1bc${buffer.type === "alternate" ? "\x1b[?1049h" : ""}\x1b[?7l`;
   let previousStyle = "";

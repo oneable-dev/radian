@@ -1,14 +1,12 @@
-import { BoxRenderable, EmbeddedTerminalRenderable, TextRenderable, type CliRenderer } from "@opentui/core";
+import { BoxRenderable, TextRenderable, type EmbeddedTerminalRenderable, type CliRenderer } from "@opentui/core";
 import { ExpectedError, reportUnexpected } from "../errors.ts";
 import type { Result } from "../result.ts";
 import type { EditorFrame, EditorInfo } from "../runtime/protocol.ts";
 import type { Worktree } from "../workspace/model.ts";
 
-export type EditorAttachment = {
-  input(data: Uint8Array): void;
-  resize(cols: number, rows: number): void;
-  disconnect(): Promise<void>;
-};
+import { TerminalSurface, type PtyAttachment } from "./terminal-surface.ts";
+
+export type EditorAttachment = PtyAttachment;
 export type EditorActions = {
   info(worktreeId: string): EditorInfo | undefined;
   open(worktreeId: string, size: { cols: number; rows: number }): Promise<Result<string, ExpectedError>>;
@@ -19,15 +17,12 @@ export class EditorPanel {
   readonly root: BoxRenderable;
   readonly openButton: BoxRenderable;
   private readonly message: TextRenderable;
-  private terminal: EmbeddedTerminalRenderable | undefined;
+  private terminal: TerminalSurface | undefined;
   private connection: EditorAttachment | undefined;
   private worktree: Worktree | null = null;
   private generation = 0;
   private task: Promise<void> = Promise.resolve();
   private disposed = false;
-  private dimensions = "";
-  private frame: EditorFrame | undefined;
-  private paintQueued = false;
   private cancelLayout: (() => void) | undefined;
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: EditorActions | undefined,
@@ -38,7 +33,7 @@ export class EditorPanel {
     this.openButton = button("Open / reconnect editor", () => { if (this.worktree) this.show(this.worktree, true); });
     this.root.add(this.message); this.root.add(this.openButton);
   }
-  get input(): EmbeddedTerminalRenderable | undefined { return this.terminal?.visible ? this.terminal : undefined; }
+  get input(): EmbeddedTerminalRenderable | undefined { return this.terminal?.root.visible ? this.terminal.root : undefined; }
   show(worktree: Worktree | null, explicit = false): void {
     if (this.disposed || this.root.isDestroyed) return;
     if (this.root.visible && this.worktree?.id === worktree?.id && !explicit) return;
@@ -63,25 +58,21 @@ export class EditorPanel {
       }
       if (!id) { this.message.content = "Editor is not running · open explicitly to start Neovim."; return; }
       this.openButton.visible = false;
-      const terminal = new EmbeddedTerminalRenderable(this.renderer, { id: "editor-terminal", width: "100%", flexGrow: 1, flexShrink: 1,
-        minHeight: 1, maxWidth: 500, maxHeight: 200, maxScrollback: 0,
-        onData: (bytes, source) => { if (source === "input" && this.current(generation) && !this.frame?.exited) this.connection?.input(bytes); },
-        onTerminalResize: (cols, rows) => { this.resizeTerminal(cols, rows); this.queuePaint(); },
-      });
-      this.terminal = terminal; this.dimensions = ""; this.root.add(terminal);
+      const terminal = new TerminalSurface(this.renderer, "editor-terminal");
+      this.terminal = terminal; this.root.add(terminal.root);
       const attached = await this.actions.attach(id, (frame) => {
-        if (!this.current(generation) || terminal.isDestroyed) return;
-        this.frame = frame;
+        if (!this.current(generation) || terminal.root.isDestroyed) return;
+        terminal.display(frame);
         this.message.content = frame.exited ? `Neovim exited (${frame.exitCode ?? "signal"}) · open again explicitly` : `Neovim · ${worktree.name} · Ctrl+] sidebar`;
         this.openButton.visible = frame.exited;
-        if (frame.exited && terminal.focused) this.openButton.focus();
-        terminal.visible = !frame.exited;
-        this.queuePaint(); this.changed();
+        if (frame.exited && terminal.root.focused) this.openButton.focus();
+        terminal.root.visible = !frame.exited;
+        this.changed();
       }, (error) => { if (this.current(generation)) this.failed(error); });
       if (!attached.ok) { if (this.current(generation)) this.failed(attached.error); return; }
-      if (!this.current(generation)) { await attached.value.disconnect(); return; }
-      this.connection = attached.value; this.resizeTerminal(); this.queuePaint();
-      if (explicit && terminal.visible) terminal.focus();
+      if (!this.current(generation) || terminal.root.isDestroyed) { await attached.value.disconnect(); return; }
+      this.connection = attached.value; terminal.connect(attached.value);
+      if (explicit && terminal.root.visible) terminal.root.focus();
       this.changed();
     }).catch((error: unknown) => { if (this.current(generation)) this.failed(error); else reportUnexpected(error, "editor cleanup"); });
   }
@@ -90,7 +81,7 @@ export class EditorPanel {
     const text = error instanceof ExpectedError ? `[${error.code}] ${error.message}` : reportUnexpected(error, "editor view");
     this.message.content = "Editor unavailable · open / reconnect explicitly";
     this.openButton.visible = true;
-    if (this.terminal?.focused) this.openButton.focus();
+    if (this.terminal?.root.focused) this.openButton.focus();
     this.removeTerminal(); this.notice(text); this.changed();
   }
   private laidOut(): Promise<void> {
@@ -99,37 +90,14 @@ export class EditorPanel {
       this.cancelLayout = done; this.renderer.once("frame", done); this.renderer.requestRender();
     });
   }
-  private queuePaint(): void {
-    if (!this.paintQueued) { this.paintQueued = true; this.renderer.once("frame", this.paintFrame); }
-    this.renderer.requestRender();
-  }
-  private paintFrame = (): void => {
-    this.paintQueued = false;
-    const terminal = this.terminal, frame = this.frame;
-    // Restoring into an unlaid-out/differently sized VT can scroll its first line away.
-    // A local resize must repaint even if the daemon already has that exact size/revision.
-    if (!terminal || terminal.isDestroyed || !frame || frame.exited || terminal.width !== frame.cols || terminal.height !== frame.rows) return;
-    terminal.write(frame.ansi);
-  };
-  private resizeTerminal(cols = this.terminal?.width ?? 0, rows = this.terminal?.height ?? 0): void {
-    const terminal = this.terminal;
-    if (!this.connection || !terminal || terminal.isDestroyed || !terminal.visible || !this.root.visible || cols < 2 || rows < 1) return;
-    const key = `${cols}:${rows}`;
-    if (key === this.dimensions) return;
-    this.dimensions = key; this.connection.resize(cols, rows);
-  }
-  private removeTerminal(): void {
-    this.renderer.off("frame", this.paintFrame); this.paintQueued = false;
-    if (this.terminal && !this.terminal.isDestroyed) this.terminal.destroyRecursively();
-    this.terminal = undefined; this.dimensions = ""; this.frame = undefined;
-  }
+  private removeTerminal(): void { this.terminal?.dispose(); this.terminal = undefined; }
   private async detach(): Promise<void> {
     const connection = this.connection; this.connection = undefined;
     await connection?.disconnect();
   }
   hide(): void {
     if (!this.root.visible) return;
-    if (this.terminal && !this.terminal.isDestroyed) this.terminal.blur();
+    if (this.terminal && !this.terminal.root.isDestroyed) this.terminal.root.blur();
     this.generation++; this.cancelLayout?.(); this.worktree = null;
     if (!this.root.isDestroyed) this.root.visible = false;
     this.removeTerminal();

@@ -193,6 +193,16 @@ under Bun's HTTP idle timeout. Slow readers receive only the latest complete sna
 save buffers first. Runtime restart/reboot does not restore unsaved editor buffers or automatically
 launch an editor, even when a saved tab preference points to Editor.
 
+### Shared terminal layers
+
+`src/runtime/pty-session.ts` owns a PTY, bounded VT screen and input/resize lease independently
+of the launched program. `EditorSessions` retains only Neovim launch, one-editor-per-worktree,
+and editor compatibility policies. `pty-client.ts` owns ordered IPC input and frame attachment;
+its caller supplies the channel-specific commands. `pty-screen.ts` encodes visible terminal cells.
+`src/ui/terminal-surface.ts` handles native rendering/input and viewport synchronization, while
+`EditorPanel` decides when to open, display or reconnect an editor. Adding shell tabs must use
+these shared layers rather than duplicate the Neovim transport or renderer.
+
 ### Saved session history
 
 Select a worktree, then open **History**. The list uses SDK-provided conversation names (falling back
