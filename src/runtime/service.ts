@@ -169,14 +169,14 @@ class WorkspaceRuntime {
         this.preferences = { ...command.preferences, ...(workViews ? { workViews } : {}) };
         return ok(null);
       }
-      case "editor-open": return this.editors.open(command.worktreeId);
+      case "editor-open": return this.editors.open(command.worktreeId, { cols: command.cols ?? 80, rows: command.rows ?? 24 });
       case "editor-detach": this.editors.detach(command.editorId, command.lease); return ok(null);
       case "editor-input": {
         const result = this.editors.input(command.editorId, command.lease, Buffer.from(command.data, "base64"));
         return result.ok ? ok(null) : result;
       }
       case "editor-resize": {
-        const result = this.editors.resize(command.editorId, command.lease, command.cols, command.rows);
+        const result = await this.editors.resize(command.editorId, command.lease, command.cols, command.rows);
         return result.ok ? ok(null) : result;
       }
       case "stop": setTimeout(() => this.onStop(), 20); return ok(null);

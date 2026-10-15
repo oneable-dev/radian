@@ -133,9 +133,9 @@ export class RuntimeClient {
   async prompt(sessionId: string, text: string): Promise<Result<void, ExpectedError>> { const result = await this.command({ type: "prompt", sessionId, text }); return result.ok ? ok(undefined) : result; }
   async savePreferences(preferences: RuntimePreferences): Promise<Result<void, ExpectedError>> { const result = await this.command({ type: "preferences", preferences }); return result.ok ? ok(undefined) : result; }
   async stopRuntime(): Promise<Result<void, ExpectedError>> { const result = await this.command({ type: "stop" }); return result.ok ? ok(undefined) : result; }
-  async openEditor(worktreeId: string): Promise<Result<string, ExpectedError>> {
+  async openEditor(worktreeId: string, size?: { cols: number; rows: number }): Promise<Result<string, ExpectedError>> {
     const capability = this.requireWorkViews(); if (!capability.ok) return capability;
-    const result = await this.command({ type: "editor-open", worktreeId });
+    const result = await this.command({ type: "editor-open", worktreeId, ...size });
     if (!result.ok) return result;
     return result.value ? ok(result.value) : err(new ProtocolError("Runtime did not return an editor ID."));
   }

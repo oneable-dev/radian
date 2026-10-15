@@ -12,7 +12,7 @@ class EditorSession {
   readonly id = crypto.randomUUID();
   readonly process: Bun.Subprocess;
   lease: string | null = null;
-  private readonly screen = new Screen({ cols: 80, rows: 24, scrollback: 0, allowProposedApi: true });
+  private readonly screen: Screen;
   private readonly listeners = new Set<() => void>();
   private readonly terminal: Bun.Terminal;
   private readonly modes = new Map<number, boolean>();
@@ -25,7 +25,8 @@ class EditorSession {
   private disposed = false;
   readonly settled: Promise<void>;
 
-  constructor(readonly worktreeId: string, cwd: string, executable: string, clean: boolean, private readonly changed: () => void) {
+  constructor(readonly worktreeId: string, cwd: string, executable: string, clean: boolean, private readonly changed: () => void, size: { cols: number; rows: number }) {
+    this.screen = new Screen({ ...size, scrollback: 0, allowProposedApi: true });
     // Retain public VT modes not exposed by xterm's buffer/modes APIs.
     for (const final of ["h", "l"]) this.screen.parser.registerCsiHandler({ prefix: "?", final }, (params) => {
       for (const mode of params) if (typeof mode === "number" && [25, 1005, 1006, 1015, 1016].includes(mode)) this.modes.set(mode, final === "h");
@@ -37,8 +38,8 @@ class EditorSession {
     });
     let terminal: Bun.Terminal | undefined;
     try {
-      terminal = new Bun.Terminal({ cols: 80, rows: 24, name: "xterm-256color",
-        data: (_terminal, bytes) => this.screen.write(bytes, () => this.invalidate()),
+      terminal = new Bun.Terminal({ ...size, name: "xterm-256color",
+        data: (_terminal, bytes) => this.screen.write(new Uint8Array(bytes), () => this.invalidate()),
       });
       this.terminal = terminal;
       this.screen.onData((data) => { if (!this.terminal.closed) this.terminal.write(data); });
@@ -78,9 +79,15 @@ class EditorSession {
     }));
   }
   input(data: Uint8Array): void { this.terminal.write(data); }
-  resize(cols: number, rows: number): void {
+  async resize(cols: number, rows: number, lease: string): Promise<void> {
+    // Parse already-received output at its original dimensions before changing the PTY.
+    await new Promise<void>((resolve) => this.screen.write("", resolve));
+    if (this.exited) throw new EditorError("EDITOR_NOT_OPEN", "Neovim has exited.");
+    if (this.lease !== lease) throw new EditorError("EDITOR_BUSY", "Editor attachment changed before resize.");
     if (cols === this.screen.cols && rows === this.screen.rows) return;
-    this.screen.resize(cols, rows); this.terminal.resize(cols, rows); this.invalidate();
+    this.screen.resize(cols, rows); this.terminal.resize(cols, rows);
+    // Bun 1.4.3 can update the PTY size without notifying Neovim's TUI process.
+    this.process.kill("SIGWINCH"); this.invalidate();
   }
   async dispose(): Promise<Result<void, ExpectedError>> {
     // Only explicit runtime stop (or removal of an already-exited editor) owns termination.
@@ -105,12 +112,12 @@ export class EditorSessions {
     private readonly options: { clean?: boolean; executable?: string } = {}) {}
   get infos(): EditorInfo[] { return [...this.sessions.values()].map((session) => session.info); }
 
-  open(worktreeId: string): Promise<Result<string, ExpectedError>> {
+  open(worktreeId: string, size = { cols: 80, rows: 24 }): Promise<Result<string, ExpectedError>> {
     const pending = this.opening.get(worktreeId); if (pending) return pending;
-    const task = this.openOnce(worktreeId).finally(() => this.opening.delete(worktreeId));
+    const task = this.openOnce(worktreeId, size).finally(() => this.opening.delete(worktreeId));
     this.opening.set(worktreeId, task); return task;
   }
-  private async openOnce(worktreeId: string): Promise<Result<string, ExpectedError>> {
+  private async openOnce(worktreeId: string, size: { cols: number; rows: number }): Promise<Result<string, ExpectedError>> {
     if (this.stopping) return err(new EditorError("EDITOR_UNAVAILABLE", "Editor runtime is stopping."));
     const worktree = this.repositories.flatMap((repo) => repo.worktrees).find((tree) => tree.id === worktreeId);
     if (!worktree) return err(new InputError("Unknown editor worktree."));
@@ -125,7 +132,7 @@ export class EditorSessions {
     const executable = Bun.which(this.options.executable ?? "nvim");
     if (!executable) return err(new EditorError("EDITOR_UNAVAILABLE", "Neovim is not installed or is not on the runtime PATH. Install nvim, then open Editor again."));
     try {
-      const session = new EditorSession(worktreeId, worktree.path, executable, this.options.clean ?? false, this.changed);
+      const session = new EditorSession(worktreeId, worktree.path, executable, this.options.clean ?? false, this.changed, size);
       this.sessions.set(worktreeId, session); this.changed(); return ok(session.id);
     } catch (error) {
       if (!knownError(error)) throw error;
@@ -143,9 +150,9 @@ export class EditorSessions {
     const session = this.owned(editorId, lease); if (!session.ok) return session;
     return this.io(() => session.value.input(data));
   }
-  resize(editorId: string, lease: string, cols: number, rows: number): Result<void, ExpectedError> {
+  async resize(editorId: string, lease: string, cols: number, rows: number): Promise<Result<void, ExpectedError>> {
     const session = this.owned(editorId, lease); if (!session.ok) return session;
-    return this.io(() => session.value.resize(cols, rows));
+    return capture(() => session.value.resize(cols, rows, lease));
   }
   private io(operation: () => void): Result<void, ExpectedError> {
     try { operation(); return ok(undefined); }

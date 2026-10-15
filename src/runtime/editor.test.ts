@@ -67,6 +67,10 @@ test("워크트리별 실제 Neovim의 미저장 버퍼와 커서는 TUI 재접�
     second.connection.input(new TextEncoder().encode(":edit workspace.txt\riunsaved-B\x1b"));
     await first.text("unsaved-Amain-worktree-marker"); await second.text("unsaved-Bfeature-worktree-marker");
     first.connection.resize(93, 19); await until(() => first.frame.cols === 93 && first.frame.rows === 19);
+    // Verify the actual Neovim dimensions, not only the service's VT metadata.
+    first.connection.input(new TextEncoder().encode(":call writefile([printf('%dx%d', &columns, &lines)], 'editor-size.txt')\r"));
+    await until(() => Bun.file(join(app.main, "editor-size.txt")).exists());
+    expect(await Bun.file(join(app.main, "editor-size.txt")).text()).toBe("93x19\n");
     const before = await screen(first.frame), pid = first.frame.pid;
     const preferences = { ...client.snapshot.preferences, workViews: { active: { [a.id]: "editor" as const, [b.id]: "git" as const }, agentScroll: { saved: 7 } } };
     expectOk(await client.savePreferences(preferences));
