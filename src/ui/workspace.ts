@@ -1,6 +1,6 @@
 import {
   BoxRenderable, InputRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderable,
-  type CliRenderer, type KeyEvent, type Renderable,
+  type CliRenderer, type Renderable,
 } from "@opentui/core";
 import packageInfo from "../../package.json";
 import { workspaceRows, type WorkspaceRow } from "../workspace/model.ts";
@@ -15,6 +15,9 @@ import type { Result } from "../result.ts";
 import type { ExpectedError } from "../errors.ts";
 import { EditorPanel, type EditorActions } from "./editor.ts";
 import type { WorkView, WorkViewPreferences } from "../runtime/protocol.ts";
+import { defaultKeymap, type Keymap } from "../keybindings/config.ts";
+import { KeyRouter } from "../keybindings/router.ts";
+import type { CommandId, KeyContext } from "../keybindings/commands.ts";
 
 export type WorkspaceActions = {
   onNewSession: (worktreeId: string) => void;
@@ -29,6 +32,8 @@ export type WorkspaceActions = {
   initialWorkViews?: WorkViewPreferences;
   onWorkViewsChange?: (preferences: WorkViewPreferences) => void;
   onNotice?: (message: string) => void;
+  keymap?: Keymap;
+  onDetach?: () => void;
 };
 
 const colors = { text: "#CBD5E1", muted: "#94A3B8", selected: "#1E3A5F", panel: "#0F172A", accent: "#7DD3FC" };
@@ -63,7 +68,10 @@ export class WorkspaceView {
   private pendingScroll: number | null = null;
   private syncingScroll = false;
   private readonly footer: Footer;
-  private readonly buttonHints = new WeakMap<Renderable, readonly FooterShortcut[]>();
+  private readonly buttonHints = new WeakMap<Renderable, string>();
+  private readonly buttonActions = new WeakMap<Renderable, () => void>();
+  private readonly keymap: Keymap;
+  private readonly router: KeyRouter;
   private readonly workspaceTab: BoxRenderable;
   private readonly historyTab: BoxRenderable;
   private readonly newButton: BoxRenderable;
@@ -78,6 +86,7 @@ export class WorkspaceView {
   private disposed = false;
 
   constructor(private readonly renderer: CliRenderer, private readonly selection: WorkspaceSelection, private readonly actions: WorkspaceActions) {
+    this.keymap = actions.keymap ?? defaultKeymap();
     this.workViews = structuredClone(actions.initialWorkViews ?? { active: {}, agentScroll: {} });
     this.root = new BoxRenderable(renderer, { id: "workspace-screen", width: "100%", height: "100%", flexDirection: "column", backgroundColor: colors.panel });
     const panels = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, flexDirection: "row" });
@@ -87,7 +96,6 @@ export class WorkspaceView {
       id: "workspace-search", width: "100%", flexShrink: 0,
       placeholder: "Search repo/worktree/branch", placeholderColor: colors.muted,
       textColor: colors.text, backgroundColor: colors.panel, focusedBackgroundColor: colors.selected,
-      onKeyDown: (key) => this.handleSearchKey(key),
     });
     this.sidebar.add(this.search);
     const tabs = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
@@ -104,7 +112,7 @@ export class WorkspaceView {
     this.sidebar.add(toolbar);
     this.tree = new ScrollBoxRenderable(renderer, {
       id: "workspace-tree", flexGrow: 1, minHeight: 0, scrollX: false,
-      contentOptions: { flexDirection: "column" }, onKeyDown: (key) => this.handleTreeKey(key),
+      contentOptions: { flexDirection: "column" },
     });
     this.resultMessage = this.text("", colors.muted);
     this.history = new SessionHistoryPanel(renderer, {
@@ -112,6 +120,7 @@ export class WorkspaceView {
       ...(actions.onResumeSession ? { resume: actions.onResumeSession } : {}),
       button: (label, activate) => this.button(label, activate, "Refresh history"),
       onChange: () => this.updateFooter(),
+      keyHint: (command) => this.keymap.hint(command, "history"),
       onError: (message) => this.setNotice(message),
       onOpened: (worktreeId, sessionId) => {
         this.activateSession(worktreeId, sessionId);
@@ -144,7 +153,7 @@ export class WorkspaceView {
     this.transcriptScroll.verticalScrollBar.on("change", this.rememberAgentScroll);
     this.prompt = new InputRenderable(renderer, {
       id: "session-prompt", width: "100%", flexShrink: 0, placeholder: "Prompt · Enter to run", textColor: colors.text,
-      backgroundColor: colors.panel, focusedBackgroundColor: colors.selected, onKeyDown: (key) => this.handlePromptKey(key),
+      backgroundColor: colors.panel, focusedBackgroundColor: colors.selected,
     });
     for (const [id, draft] of Object.entries(actions.initialDrafts ?? {})) this.drafts.set(id, draft);
     this.prompt.on(InputRenderableEvents.INPUT, this.handleDraftInput);
@@ -152,7 +161,7 @@ export class WorkspaceView {
     this.runtimePanel.add(this.prompt);
     this.center.add(this.runtimePanel);
     this.editor = new EditorPanel(renderer, actions.editor, (label, activate) => this.button(label, activate, "Open editor"),
-      (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); }, () => this.updateFooter());
+      (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); }, () => this.updateFooter(), this.keymap.hint("focus.sidebar", "editor"));
     this.gitView = new BoxRenderable(renderer, { id: "git-view", flexGrow: 1, minHeight: 0, padding: 1, flexDirection: "column", gap: 1, visible: false });
     this.gitTitle = this.text("Git", colors.accent);
     this.gitView.add(this.gitTitle);
@@ -167,7 +176,7 @@ export class WorkspaceView {
     this.footer.setNotice("UI preview only · no agents running");
     this.root.add(this.footer.root);
     renderer.root.add(this.root);
-    renderer.keyInput.on("keypress", this.handleGlobalKey);
+    this.router = new KeyRouter(renderer, this.keymap, () => this.keyContext(), (command) => this.commandAvailable(command), (command) => this.command(command));
     renderer.on("resize", this.resize);
     renderer.on("focused_renderable", this.updateFooter);
     renderer.on("frame", this.restoreAgentScroll);
@@ -224,30 +233,30 @@ export class WorkspaceView {
     if (this.disposed || !this.footer || this.root.isDestroyed) return;
     const focused = this.renderer.currentFocusedRenderable;
     let shortcuts: readonly FooterShortcut[] = [];
-    if (focused === this.search) shortcuts = [
-      { key: "Enter", label: this.tab === "history" ? "History" : "Results" }, { key: "Esc", label: "Clear" },
-    ];
+    const context = this.keyContext();
+    const hint = (command: CommandId, label: string): FooterShortcut => ({ key: this.keymap.hint(command, context), label });
+    const pair = (a: CommandId, b: CommandId, label: string): FooterShortcut => ({ key: [this.keymap.hint(a, context), this.keymap.hint(b, context)].filter(Boolean).join("/"), label });
+    if (focused === this.search) shortcuts = [hint("focus.results", this.tab === "history" ? "History" : "Results"), hint("search.clear", "Clear")];
     else if (focused === this.tree && this.tab === "workspace") shortcuts = [
-      { key: "↑/↓", label: "Select" }, { key: "Home/End", label: "First/last" },
-      ...(this.selection.worktree ? [{ key: "n", label: "New session" }] : []),
-      ...(this.selection.sessionId ? [{ key: "x", label: "Close session" }] : []),
+      pair("workspace.previous", "workspace.next", "Select"), pair("workspace.first", "workspace.last", "First/last"),
+      ...(this.selection.worktree ? [hint("session.new", "New session")] : []),
+      ...(this.selection.sessionId ? [hint("session.close", "Close session")] : []),
     ];
-    else if (focused && focused === this.editor?.input) shortcuts = [
-      { key: "Ctrl+]", label: "Sidebar" }, { key: "Esc", label: "Normal mode" },
-    ];
+    else if (focused && focused === this.editor?.input) shortcuts = [hint("focus.sidebar", "Sidebar"), { key: "Esc", label: "Normal mode" }];
     else if (focused === this.transcriptScroll && this.runtimePanel.visible) shortcuts = [
       { key: "↑/↓", label: "Scroll" }, { key: "PgUp/PgDn", label: "Page" },
     ];
     else if (focused === this.prompt && this.runtimePanel.visible) {
       const ready = this.promptSessionId && this.prompt.value.trim() && this.actions.getSessionDetails?.(this.promptSessionId)?.status !== "working";
-      shortcuts = [...(ready ? [{ key: "Enter", label: "Run" }] : []), { key: "Esc", label: "Workspace" }];
+      shortcuts = [...(ready ? [hint("agent.send", "Run")] : []), hint("focus.sidebar", "Workspace")];
     } else if (focused === this.history.list && this.tab === "history") shortcuts = this.history.shortcuts;
     else if (focused) {
       const unavailable = (focused === this.newButton || focused === this.emptyNewButton) && !this.selection.worktree
         || focused === this.closeButton && !this.selection.sessionId;
-      if (!unavailable && focused.visible) shortcuts = this.buttonHints.get(focused) ?? [];
+      const label = this.buttonHints.get(focused);
+      if (!unavailable && focused.visible && label) shortcuts = [{ key: this.keymap.hints("button.activate", "button"), label }];
     }
-    this.footer.setShortcuts(shortcuts);
+    this.footer.setShortcuts(shortcuts.filter((shortcut) => shortcut.key));
   };
 
   private text(content: string, fg: string = colors.text): TextRenderable {
@@ -264,14 +273,8 @@ export class WorkspaceView {
         button.focus();
         activate();
       },
-      onKeyDown: (key) => {
-        if (key.name !== "return" && key.name !== "space") return;
-        key.preventDefault();
-        key.stopPropagation();
-        activate();
-      },
     });
-    this.buttonHints.set(button, [{ key: "Enter/Space", label: actionLabel }]);
+    this.buttonHints.set(button, actionLabel); this.buttonActions.set(button, activate);
     button.add(this.text(label, colors.accent));
     button.on("focused", () => { button.backgroundColor = colors.selected; });
     button.on("blurred", () => { button.backgroundColor = colors.panel; });
@@ -317,26 +320,7 @@ export class WorkspaceView {
     this.render();
   };
 
-  private handleSearchKey(key: KeyEvent): void {
-    if (key.name === "escape") {
-      key.preventDefault();
-      key.stopPropagation();
-      this.search.value = "";
-    } else if (key.name === "return") {
-      key.preventDefault();
-      key.stopPropagation();
-      if (this.tab === "workspace") this.tree.focus();
-      else this.history.list.focus();
-    }
-  }
-
-  private handlePromptKey(key: KeyEvent): void {
-    if (key.name === "escape") {
-      key.preventDefault(); key.stopPropagation(); this.tree.focus();
-      return;
-    }
-    if (key.name !== "return") return;
-    key.preventDefault(); key.stopPropagation();
+  private submitPrompt(): void {
     const id = this.selection.sessionId;
     if (!id || !this.prompt.value.trim() || !this.actions.onPrompt) return;
     if (this.actions.getSessionDetails?.(id)?.status === "working") {
@@ -349,42 +333,67 @@ export class WorkspaceView {
     this.actions.onPrompt(id, text);
   }
 
-  private handleTreeKey(key: KeyEvent): void {
-    if (key.name === "n") { this.openNewSession(); return; }
-    if (key.name === "x") { this.closeSession(); return; }
-    if (!["up", "down", "home", "end"].includes(key.name)) return;
-    key.preventDefault();
-    key.stopPropagation();
+  private moveTree(direction: "up" | "down" | "home" | "end"): void {
     const rows = this.visibleRows().filter((row) => row.kind === "worktree" || row.kind === "session");
     const index = rows.findIndex((row) => row.key === this.navigationKey);
-    let next = key.name === "up" ? index - 1 : index + 1;
-    if (key.name === "home") next = 0;
-    if (key.name === "end") next = rows.length - 1;
+    let next = direction === "up" ? index - 1 : index + 1;
+    if (direction === "home") next = 0;
+    if (direction === "end") next = rows.length - 1;
     const row = rows[Math.max(0, Math.min(rows.length - 1, next))];
     if (row) this.activateRow(row);
   }
 
-  private handleGlobalKey = (key: KeyEvent): void => {
-    if (this.editor.input?.focused) {
-      if (key.ctrl && ["]", "rightbracket"].includes(key.name)) {
-        key.preventDefault(); key.stopPropagation();
-        if (this.tab === "history") this.history.list.focus(); else this.tree.focus();
-      }
-      return; // Neovim owns Tab, Esc, Ctrl+f/e, paste and mouse while focused.
+  private keyContext(): KeyContext {
+    const focused = this.renderer.currentFocusedRenderable;
+    if (!focused) return "none";
+    if (focused === this.editor.input) return "editor";
+    if (focused === this.tree) return "workspace";
+    if (focused === this.search) return "search";
+    if (focused === this.prompt) return "prompt";
+    if (focused === this.history.list) return "history";
+    if (focused === this.transcriptScroll) return "transcript";
+    return "button";
+  }
+  private commandAvailable(command: CommandId): boolean {
+    switch (command) {
+      case "app.detach": return Boolean(this.actions.onDetach);
+      case "session.new": case "view.agent": case "view.editor": case "view.git": return Boolean(this.selection.worktree);
+      case "session.close": return Boolean(this.selection.sessionId);
+      case "focus.prompt": return this.runtimePanel.visible;
+      case "agent.send": return this.runtimePanel.visible && Boolean(this.promptSessionId);
+      case "button.activate": return !!this.renderer.currentFocusedRenderable && this.buttonActions.has(this.renderer.currentFocusedRenderable);
+      default: return true;
     }
-    if (key.ctrl && key.name === "f") {
-      key.preventDefault();
-      key.stopPropagation();
-      this.search.focus();
-      return;
+  }
+  private command(command: CommandId): void {
+    switch (command) {
+      case "app.detach": this.actions.onDetach?.(); break;
+      case "focus.sidebar": case "focus.results": if (this.tab === "history") this.history.list.focus(); else this.tree.focus(); break;
+      case "focus.search": this.search.focus(); break;
+      case "focus.prompt": this.prompt.focus(); break;
+      case "focus.next": this.moveFocus(1); break;
+      case "focus.previous": this.moveFocus(-1); break;
+      case "search.clear": this.search.value = ""; break;
+      case "view.agent": this.selectWorkView("agent"); break;
+      case "view.editor": this.selectWorkView("editor", true); break;
+      case "view.git": this.selectWorkView("git"); break;
+      case "session.new": this.openNewSession(); break;
+      case "session.close": this.closeSession(); break;
+      case "workspace.previous": this.moveTree("up"); break;
+      case "workspace.next": this.moveTree("down"); break;
+      case "workspace.first": this.moveTree("home"); break;
+      case "workspace.last": this.moveTree("end"); break;
+      case "history.refresh": this.history.command("refresh"); break;
+      case "history.open": this.history.command("open"); break;
+      case "history.previous": this.history.command("previous"); break;
+      case "history.next": this.history.command("next"); break;
+      case "history.first": this.history.command("first"); break;
+      case "history.last": this.history.command("last"); break;
+      case "agent.send": this.submitPrompt(); break;
+      case "button.activate": { const focused = this.renderer.currentFocusedRenderable; if (focused) this.buttonActions.get(focused)?.(); break; }
     }
-    if (key.ctrl && key.name === "e" && this.runtimePanel.visible) {
-      key.preventDefault(); key.stopPropagation(); this.prompt.focus();
-      return;
-    }
-    if (key.name !== "tab") return;
-    key.preventDefault();
-    key.stopPropagation();
+  }
+  private moveFocus(direction: 1 | -1): void {
     const targets: Renderable[] = [this.search, this.workspaceTab, this.historyTab];
     if (this.tab === "workspace") targets.push(this.newButton, this.closeButton, this.tree);
     else {
@@ -399,9 +408,9 @@ export class WorkspaceView {
       if (this.editor.input) targets.push(this.editor.input);
     }
     const index = targets.findIndex((target) => target === this.renderer.currentFocusedRenderable);
-    const next = (index + (key.shift ? -1 : 1) + targets.length) % targets.length;
+    const next = (index + direction + targets.length) % targets.length;
     targets[next]?.focus();
-  };
+  }
 
   private resize = (): void => {
     this.sidebar.width = this.renderer.width < 80 ? 26 : 36;
@@ -512,7 +521,7 @@ export class WorkspaceView {
     this.transcriptScroll.verticalScrollBar.off("change", this.rememberAgentScroll);
     this.search.off(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.prompt.off(InputRenderableEvents.INPUT, this.handleDraftInput);
-    this.renderer.keyInput.off("keypress", this.handleGlobalKey);
+    this.router.dispose();
     this.renderer.off("resize", this.resize);
     this.renderer.off("focused_renderable", this.updateFooter);
     this.renderer.off("frame", this.restoreAgentScroll);
