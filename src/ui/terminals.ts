@@ -5,6 +5,7 @@ import type { PtyFrame, TerminalInfo } from "../runtime/protocol.ts";
 import type { Worktree } from "../workspace/model.ts";
 import { TerminalSurface, type PtyAttachment } from "./terminal-surface.ts";
 import { LoadingSpinner } from "./loading-spinner.ts";
+import type { TerminalTheme } from "./terminal-theme.ts";
 
 export type TerminalActions = {
   list(): readonly TerminalInfo[];
@@ -39,7 +40,7 @@ export class TerminalPanel {
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: TerminalActions | undefined,
     private readonly button: Button, private readonly notice: (message: string) => void,
-    private readonly selectionChanged: (worktreeId: string, id: string | null) => void, private readonly changed: () => void, private readonly unavailable?: string) {
+    private readonly selectionChanged: (worktreeId: string, id: string | null) => void, private readonly changed: () => void, private readonly unavailable?: string, private readonly terminalTheme?: TerminalTheme) {
     this.root = new BoxRenderable(renderer, { id: "terminal-view", flexGrow: 1, minHeight: 0, flexDirection: "column", visible: false });
     const toolbar = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.tabs = new ScrollBoxRenderable(renderer, { height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0, scrollX: true, scrollY: false,
@@ -143,12 +144,12 @@ export class TerminalPanel {
     this.cancelLayout?.(); this.removeSurface(); this.reconnectButton.visible = false;
     if (!id || !this.actions) {
       this.task = this.task.then(() => this.detach()).catch((error: unknown) => { reportUnexpected(error, "terminal detach"); });
-      this.spinner.cancel(); return;
+      this.spinner.cancel(); if (focus) this.newButton.focus(); return;
     }
     this.spinner.start();
     this.task = this.task.then(async () => {
       await this.detach(); if (!this.current(generation)) return;
-      const surface = new TerminalSurface(this.renderer, "shell-terminal"); this.surface = surface; this.viewport.add(surface.root);
+      const surface = new TerminalSurface(this.renderer, "shell-terminal", this.terminalTheme); this.surface = surface; this.viewport.add(surface.root);
       const attached = await this.actions!.attach(id, (frame) => {
         if (!this.current(generation) || surface.root.isDestroyed) return;
         surface.display(frame); surface.acceptsInput = !frame.exited;

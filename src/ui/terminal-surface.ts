@@ -1,5 +1,6 @@
 import { EmbeddedTerminalRenderable, type CliRenderer } from "@opentui/core";
 import type { PtyFrame } from "../runtime/protocol.ts";
+import type { TerminalTheme } from "./terminal-theme.ts";
 
 export type PtyAttachment = {
   input(data: Uint8Array): void;
@@ -16,9 +17,10 @@ export class TerminalSurface {
   private frame: PtyFrame | undefined;
   private dimensions = "";
   private paintQueued = false;
+  private readonly unsubscribeTheme: (() => void) | undefined;
   acceptsInput = true;
 
-  constructor(private readonly renderer: CliRenderer, id: string) {
+  constructor(private readonly renderer: CliRenderer, id: string, private readonly theme?: TerminalTheme) {
     this.root = new EmbeddedTerminalRenderable(renderer, { id, width: "100%", flexGrow: 1, flexShrink: 1,
       minHeight: 1, maxWidth: 500, maxHeight: 200, maxScrollback: 0,
       onData: (bytes, source) => { if (source === "input" && this.acceptsInput && !this.frame?.exited) this.connection?.input(bytes); },
@@ -29,6 +31,7 @@ export class TerminalSurface {
         }
       },
     });
+    this.unsubscribeTheme = theme?.subscribe(() => this.queuePaint());
   }
   get canScroll(): boolean { return this.frame?.scrollback?.enabled ?? false; }
   get scrollOffset(): number { return this.frame?.scrollback?.offset ?? 0; }
@@ -46,7 +49,10 @@ export class TerminalSurface {
     const frame = this.frame;
     // A local resize repaints even when the server already has the same revision.
     if (this.root.isDestroyed || !this.root.visible || !frame || this.root.width !== frame.cols || this.root.height !== frame.rows) return;
-    this.root.write(frame.ansi);
+    // Full snapshots start with RIS, which resets the embedded VT's palette.
+    // Apply the host theme after that reset, before painting any default cells.
+    const reset = "\x1bc", colors = this.theme?.ansi ?? "";
+    this.root.write(frame.ansi.startsWith(reset) ? reset + colors + frame.ansi.slice(reset.length) : colors + frame.ansi);
   };
   private resize(cols = this.root?.width ?? 0, rows = this.root?.height ?? 0): void {
     if (!this.connection || !this.root || this.root.isDestroyed || !this.root.visible || cols < 2 || rows < 1) return;
@@ -55,6 +61,7 @@ export class TerminalSurface {
     this.dimensions = key; this.connection.resize(cols, rows);
   }
   dispose(): void {
+    this.unsubscribeTheme?.();
     this.renderer.off("frame", this.paint); this.paintQueued = false;
     if (!this.root.isDestroyed) this.root.destroyRecursively();
     this.connection = undefined; this.frame = undefined;

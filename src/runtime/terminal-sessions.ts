@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { capture, collectCleanup, InputError, knownError, PtyError, type ExpectedError } from "../errors.ts";
+import { capture, collectCleanup, InputError, knownError, PtyError, reportUnexpected, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import type { Repository } from "../workspace/model.ts";
 import type { TerminalInfo } from "./protocol.ts";
@@ -17,7 +17,8 @@ export class TerminalSessions {
   private readonly numbers = new Map<string, number>();
   private stopping = false;
   constructor(private readonly repositories: readonly Repository[], private readonly changed: () => void,
-    private readonly supervisorDirectory: string, private readonly clean = false) {}
+    private readonly supervisorDirectory: string, private readonly clean = false,
+    private readonly observe: (task: Promise<Result<void, ExpectedError>>) => void = reportCleanup) {}
   get infos(): TerminalInfo[] {
     return [...this.records.values()].filter((record) => record.phase === "open").map((record) => ({
       ...record.session.info, title: record.title, shellPid: record.shellPid,
@@ -32,7 +33,12 @@ export class TerminalSessions {
     if (!shell) return err(new PtyError("PTY_UNAVAILABLE", "The configured SHELL executable is unavailable."));
     return capture(async () => {
       let session: PtySession | undefined;
-      const handshake = new ShellHandshake((code) => session?.finish(code));
+      const handshake = new ShellHandshake((code) => {
+        session?.finish(code);
+        // Cleanup belongs to the runtime, even while no TUI is attached. The same
+        // verified close path collects any jobs left after the shell has exited.
+        if (session && this.records.get(session.id)?.phase === "open") this.observe(this.close(session.id));
+      });
       session = new PtySession(worktreeId, { argv: [process.execPath, "--no-env-file", "--config=/dev/null", "--eval", shellSupervisorSource], cwd: this.supervisorDirectory, size,
         detached: true, scrollback: 5000, ipc: (message) => handshake.receive(message),
         ...(this.clean ? { env: { HISTFILE: "/dev/null", ENV: undefined, BASH_ENV: undefined, PS1: "radian$ ", PROMPT_COMMAND: undefined } } : {}),
@@ -50,6 +56,7 @@ export class TerminalSessions {
         record.startSent = true; session.process.send({ type: "start", argv: [shell, "-i"], cwd: worktree.path });
         record.shellPid = await shellHandshake(handshake.started.promise, "startup");
         if (this.stopping || record.phase !== "starting") throw new PtyError("PTY_UNAVAILABLE", "Terminal creation was interrupted by shutdown.");
+        if (session.info.exited) throw new PtyError("PTY_NOT_OPEN", "Shell exited during startup; no replacement was created.");
         record.phase = "open"; this.changed(); return session.id;
       } catch (error) {
         const cleanup = await this.close(session.id);
@@ -109,4 +116,10 @@ export class TerminalSessions {
     this.stopping = true;
     return collectCleanup([...this.records.keys()].map((id) => this.close(id)), "Terminal cleanup failed.");
   }
+}
+
+function reportCleanup(task: Promise<Result<void, ExpectedError>>): void {
+  void task.then((result) => {
+    if (!result.ok) console.error(`[radian:${result.error.code}] Automatic terminal cleanup failed`, result.error);
+  }).catch((error: unknown) => { reportUnexpected(error, "automatic terminal cleanup"); });
 }

@@ -73,7 +73,7 @@ class WorkspaceRuntime {
     private readonly offline: boolean, private readonly store: RuntimeStore, preferences: RuntimePreferences, private readonly history: SessionHistory, supervisorDirectory: string) {
     this.preferences = preferences;
     this.editors = new EditorSessions(registry.snapshot, () => this.changed(), { clean: offline });
-    this.terminals = new TerminalSessions(registry.snapshot, () => this.changed(), supervisorDirectory, offline);
+    this.terminals = new TerminalSessions(registry.snapshot, () => this.changed(), supervisorDirectory, offline, (task) => this.observe(task));
     this.unsubscribe = registry.subscribe(() => this.changed());
   }
 
