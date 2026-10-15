@@ -37,16 +37,43 @@ steering/follow-up UI policy is not implemented.
 `--demo` remains display-only: closing removes fixture metadata and creation only reports a
 request. It does not invoke Pi, access credentials, or create stored sessions.
 The History tab lists saved SDK conversations for the selected worktree and opens them explicitly.
-The full editor/inspector remains deferred; the central panel is a minimal execution probe, not the
-finished conversation editor.
+The Agent view remains a minimal execution interface, not the finished conversation editor.
+The Editor view embeds Neovim; Git currently provides its tab/state foundation only.
+
+### Work views
+
+The left panel retains Workspace/History navigation. The right panel switches between **Agent**,
+**Editor** and **Git**, with one visible view per worktree and Agent as the initial view.
+Selecting a worktree restores its last view; explicitly selecting a session (including History resume)
+selects that session and switches to Agent, even if that worktree previously showed Editor or Git.
+Search and background snapshots do not override the active view. Session creation/closing retain
+their existing rules and never implicitly launch an editor.
+
+Every worktree remembers its active tab. Agent retains its selected session, draft and transcript
+scroll position; Neovim retains its actual files, cursor, editing mode and unsaved buffers in the
+detached runtime. All three tabs restore on TUI reconnect while that runtime remains alive.
+Git intentionally displays a **planned native UI** notice: no file list, diff, stage, commit, push,
+or lazygit integration is implemented in this stage.
+
+Select Editor to explicitly open/attach Neovim. Worktree navigation and reconnect attach an existing
+editor without restarting it. If no process remains after runtime restart, the view offers an explicit
+open action instead of silently replacing lost editing state. `:q`/`:qa` remain Neovim's commands;
+when Neovim exits the Editor tab stays selected and offers an explicit reopen action.
+
+While the embedded terminal is focused, Neovim receives Tab, Esc, Ctrl+f/e, mouse and paste.
+**Ctrl+]** moves focus to the visible sidebar; outside the editor, existing application focus keys
+and Tab/Shift+Tab traversal work. **Ctrl+C always detaches radian**, rather than sending an interrupt
+to Neovim. The footer follows the actual focused control. Opening, switching and resizing do not
+send a prompt to an agent or run a Git operation.
 
 ### Common footer
 
-The left, center and right panels share one full-width footer. The bottom row shows the package
+The left navigation and right work panel share one full-width footer. The bottom row shows the package
 name/version on the left and shortcuts for the **currently focused control** on the right. Keys
 are highlighted separately from their descriptions. Tree, search, History, buttons and prompt
 contexts update on actual focus/state changes; unrelated/global shortcuts are not appended.
-Existing global bindings such as `Ctrl+f`, `Ctrl+e`, `Tab` and `Ctrl+C` still work.
+Application bindings such as `Ctrl+f`, `Ctrl+e` and `Tab` still work outside Neovim input focus;
+`Ctrl+C` always detaches. See the Editor input ownership rules above.
 
 Errors and service notices occupy a separate row immediately above the footer, so they never
 replace shortcut hints. The existing fixed-height notice allocation and status-icon legend are
@@ -142,7 +169,7 @@ Pi CLI extensions/MCP and remote-machine services are still outside this initial
 ### Work-view runtime foundation
 
 The additive `work-views` capability provides a daemon-owned Neovim per worktree and optional
-work-view preferences. The right-panel UI is delivered separately on top of this foundation.
+work-view preferences, used by the right-panel UI above.
 Neovim must be installed as `nvim` on the daemon's PATH; normal mode uses your Neovim configuration,
 while isolated `--test-runtime` launches it with `--clean -i NONE`. `--demo` never launches an editor.
 Editor integration tests require Neovim as well as Bun and Git.
