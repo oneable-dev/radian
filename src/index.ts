@@ -68,8 +68,9 @@ async function main(): Promise<Result<void, ExpectedError>> {
 }
 
 async function runUI(repositories: readonly Repository[], client: RuntimeClient | null, options: Options, discoveryError: string | null, keymap: Keymap): Promise<void> {
-  const { createCliRenderer } = await import("@opentui/core");
+  const { createCliRenderer, destroyTreeSitterClient } = await import("@opentui/core");
   const { WorkspaceView } = await import("./ui/workspace.ts");
+  const { GitRepository } = await import("./git/repository.ts");
   const selection = new WorkspaceSelection(client?.snapshot.repositories ?? repositories);
   const preferences: RuntimePreferences = client ? structuredClone(client.snapshot.preferences) : defaultPreferences();
   if (client) selection.restore(preferences.selection);
@@ -131,6 +132,11 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
       },
       ...(client ? {
         onPrompt: (id: string, text: string) => client.prompt(id, text),
+        git: {
+          source: (worktree) => new GitRepository(worktree.path),
+          createSession: (worktreeId) => client.create(worktreeId),
+          prompt: (sessionId, text) => client.prompt(sessionId, text),
+        },
         getSessionDetails: (id: string) => client.snapshot.details[id] ?? null,
         onListHistory: (worktreeId: string) => client.listHistory(worktreeId),
         onResumeSession: (worktreeId: string, savedId: string) => client.resume(worktreeId, savedId),
@@ -156,6 +162,7 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
     unsubscribe?.(); unsubscribeSelection();
     preferences.drafts = view?.promptDrafts ?? preferences.drafts; persist();
     const mounted = view; view = undefined; mounted?.dispose(); client?.beginDetach(); renderer.destroy(); await renderer.closed;
+    await destroyTreeSitterClient();
     const saved = await pendingPreferences;
     if (!saved.ok) console.error(`[${saved.error.code}] Could not save UI preferences: ${saved.error.message}`);
   }

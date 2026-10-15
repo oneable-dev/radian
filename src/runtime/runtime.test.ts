@@ -8,6 +8,7 @@ import { runtimePaths, pidAlive } from "./storage.ts";
 import { replySchema, type RuntimeManifest, type RuntimeSnapshot } from "./protocol.ts";
 import { Value } from "typebox/value";
 import { expectOk, expectError } from "../testing/results.ts";
+import { initialGitState } from "../git/model.ts";
 
 async function until(predicate: () => Promise<boolean> | boolean): Promise<void> {
   const deadline = Date.now() + 12000;
@@ -369,6 +370,27 @@ test("현재 실행 중인 subagent의 저장 파일은 history로 중복 실행
     // Parent ownership and the single open-session item are unchanged.
     expect(item.unavailableReason).toContain("active subagent");
     expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions.map((session) => session.id)).toEqual([id]);
+  } finally { await app.cleanup(); }
+}, 20000);
+
+test("Git preference는 실제 runtime 재접속과 구형 preference 저장에도 보존된다", async () => {
+  // The detached runtime owns the warm-reconnect state; UI caches are not enough.
+  const app = await setup();
+  try {
+    const client = await app.connect(), worktreeId = app.repository.worktrees[0]!.id;
+    const state = { ...initialGitState(), selected: "a".repeat(40), file: "commit:src/file.ts", diff: true, diffScroll: 42 };
+
+    expectOk(await client.savePreferences({ ...client.snapshot.preferences, gitViews: { [worktreeId]: state } }));
+    await observed(client, (snapshot) => snapshot.preferences.gitViews?.[worktreeId]?.diffScroll === 42);
+    await client.disconnect();
+    const reattached = await app.connect();
+    expect(reattached.snapshot.preferences.gitViews?.[worktreeId]).toEqual(state);
+    const legacy = { ...reattached.snapshot.preferences }; delete legacy.gitViews;
+    expectOk(await reattached.savePreferences(legacy));
+    const later = await app.connect();
+
+    expect(later.snapshot.preferences.gitViews?.[worktreeId]).toEqual(state);
+    expect((await app.manifest()).preferences.gitViews?.[worktreeId]).toEqual(state);
   } finally { await app.cleanup(); }
 }, 20000);
 

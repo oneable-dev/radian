@@ -178,7 +178,8 @@ class WorkspaceRuntime {
       case "preferences": {
         const workViews = command.preferences.workViews ?? this.preferences.workViews;
         const terminalViews = command.preferences.terminalViews ?? this.preferences.terminalViews;
-        this.preferences = { ...command.preferences, ...(workViews ? { workViews } : {}), ...(terminalViews ? { terminalViews } : {}) };
+        const gitViews = command.preferences.gitViews ?? this.preferences.gitViews;
+        this.preferences = { ...command.preferences, ...(workViews ? { workViews } : {}), ...(terminalViews ? { terminalViews } : {}), ...(gitViews ? { gitViews } : {}) };
         return ok(null);
       }
       case "terminal-create": return this.terminals.create(command.worktreeId, command);

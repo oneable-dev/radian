@@ -1,4 +1,4 @@
-export const contexts = ["workspace", "search", "history", "prompt", "button", "transcript", "editor", "terminal", "none"] as const;
+export const contexts = ["workspace", "search", "history", "prompt", "button", "transcript", "editor", "terminal", "git", "git-prompt", "none"] as const;
 export type KeyContext = typeof contexts[number];
 export type KeyScope = KeyContext | "global" | "app" | "pty";
 export type BindingInput = { keys: string; scope: KeyScope };
@@ -36,6 +36,22 @@ export const defaultBindings = {
   "history.first": [key("home", "history")],
   "history.last": [key("end", "history")],
   "agent.send": [key("enter", "prompt")],
+  "git.ask": [key("a", "git")],
+  "git.copy": [key("y", "git")],
+  "git.submit": [key("enter", "git-prompt")],
+  "git.cancel": [key("escape", "git-prompt")],
+  "git.open": [key("enter", "git")],
+  "git.back": [key("escape", "git")],
+  "git.refresh": [key("r", "git")],
+  "git.more": [key("plus", "git")],
+  "git.previous": [key("up", "git"), key("k", "git")],
+  "git.next": [key("down", "git"), key("j", "git")],
+  "git.first": [key("home", "git")],
+  "git.last": [key("end", "git")],
+  "git.page-up": [key("pageup", "git")],
+  "git.page-down": [key("pagedown", "git")],
+  "git.left": [key("left", "git")],
+  "git.right": [key("right", "git")],
   "button.activate": [key("enter", "button"), key("space", "button")],
 } satisfies Record<string, readonly BindingInput[]>;
 export type CommandId = keyof typeof defaultBindings;

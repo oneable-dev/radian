@@ -15,6 +15,7 @@ import type { Result } from "../result.ts";
 import { reportUnexpected, type ExpectedError } from "../errors.ts";
 import { EditorPanel, type EditorActions } from "./editor.ts";
 import { TerminalPanel, type TerminalActions } from "./terminals.ts";
+import { GitPanel, type GitActions } from "./git.ts";
 import type { WorkView, WorkViewPreferences } from "../runtime/protocol.ts";
 import { defaultKeymap, type Keymap } from "../keybindings/config.ts";
 import { KeyRouter } from "../keybindings/router.ts";
@@ -31,6 +32,7 @@ export type WorkspaceActions = {
   onResumeSession?: (worktreeId: string, savedId: string) => Promise<Result<string, ExpectedError>>;
   editor?: EditorActions;
   terminal?: TerminalActions;
+  git?: GitActions;
   terminalUnavailable?: string;
   initialWorkViews?: WorkViewPreferences;
   onWorkViewsChange?: (preferences: WorkViewPreferences) => void;
@@ -66,8 +68,7 @@ export class WorkspaceView {
   private readonly workTabs: Record<WorkView, BoxRenderable>;
   private readonly editor: EditorPanel;
   private readonly terminals: TerminalPanel;
-  private readonly gitView: BoxRenderable;
-  private readonly gitTitle: TextRenderable;
+  private readonly git: GitPanel;
   private readonly workViews: WorkViewPreferences;
   private displayedWorkView: WorkView = "agent";
   private pendingScroll: number | null = null;
@@ -176,12 +177,14 @@ export class WorkspaceView {
         if (id) selected[worktreeId] = id; else delete selected[worktreeId];
         this.saveWorkViews();
       }, () => this.updateFooter(), actions.terminalUnavailable);
-    this.gitView = new BoxRenderable(renderer, { id: "git-view", flexGrow: 1, minHeight: 0, padding: 1, flexDirection: "column", gap: 1, visible: false });
-    this.gitTitle = this.text("Git", colors.accent);
-    this.gitView.add(this.gitTitle);
-    this.gitView.add(new TextRenderable(renderer, { content: "Native Git UI is planned. File lists, diffs, staging, commits and push are not implemented yet.",
-      fg: colors.muted, wrapMode: "word", selectable: false }));
-    this.workPanel.add(this.center); this.workPanel.add(this.editor.root); this.workPanel.add(this.gitView); this.workPanel.add(this.terminals.root);
+    this.git = new GitPanel(renderer, actions.git, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
+      (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); }, () => this.updateFooter(),
+      (id, state) => {
+        const views = this.workViews.gitViews ??= {};
+        if (JSON.stringify(views[id]) === JSON.stringify(state)) return;
+        views[id] = state; this.saveWorkViews();
+      }, this.workViews.gitViews ?? {}, (command, context) => this.keymap.hint(command, context));
+    this.workPanel.add(this.center); this.workPanel.add(this.editor.root); this.workPanel.add(this.git.root); this.workPanel.add(this.terminals.root);
     panels.add(this.sidebar);
     panels.add(this.workPanel);
     this.root.add(panels);
@@ -213,6 +216,7 @@ export class WorkspaceView {
     this.rememberAgentScroll();
     this.workViews.active[worktree.id] = view; this.saveWorkViews(); this.render();
     if (view === "editor" && explicit) this.editor.show(worktree, true);
+    if (view === "git") this.git.focus();
   }
   private activateSession(worktreeId: string, sessionId: string): void {
     this.rememberAgentScroll();
@@ -268,7 +272,8 @@ export class WorkspaceView {
       const ready = this.promptSessionId && this.prompt.value.trim() && !this.submitting.has(this.promptSessionId);
       const busy = this.promptSessionId && this.actions.getSessionDetails?.(this.promptSessionId)?.status === "working";
       shortcuts = [...(ready ? [hint("agent.send", busy ? "Queue" : "Run")] : []), hint("focus.sidebar", "Workspace")];
-    } else if (focused === this.history.list && this.tab === "history") shortcuts = this.history.shortcuts;
+    } else if (context === "git" || context === "git-prompt") shortcuts = this.git.shortcuts;
+    else if (focused === this.history.list && this.tab === "history") shortcuts = this.history.shortcuts;
     else if (focused) {
       const unavailable = (focused === this.newButton || focused === this.emptyNewButton) && !this.selection.worktree
         || focused === this.closeButton && !this.selection.sessionId;
@@ -374,6 +379,7 @@ export class WorkspaceView {
   private keyContext(): KeyContext {
     const focused = this.renderer.currentFocusedRenderable;
     if (!focused) return "none";
+    const gitContext = this.git?.keyContext(); if (gitContext) return gitContext;
     if (focused === this.editor.input) return "editor";
     if (focused === this.terminals.input) return "terminal";
     if (focused === this.tree) return "workspace";
@@ -384,6 +390,7 @@ export class WorkspaceView {
     return "button";
   }
   private commandAvailable(command: CommandId): boolean {
+    if (command.startsWith("git.")) return this.git.available(command);
     switch (command) {
       case "app.detach": return Boolean(this.actions.onDetach);
       case "session.new": case "view.agent": case "view.editor": case "view.git": case "view.terminal": return Boolean(this.selection.worktree);
@@ -398,6 +405,7 @@ export class WorkspaceView {
     }
   }
   private command(command: CommandId): void {
+    if (command.startsWith("git.")) { this.git.command(command); return; }
     switch (command) {
       case "app.detach": this.actions.onDetach?.(); break;
       case "focus.sidebar": case "focus.results": if (this.tab === "history") this.history.list.focus(); else this.tree.focus(); break;
@@ -433,6 +441,11 @@ export class WorkspaceView {
     }
   }
   private moveFocus(direction: 1 | -1): void {
+    if (this.git.modal) {
+      const targets = this.git.focusTargets;
+      const index = targets.indexOf(this.renderer.currentFocusedRenderable!);
+      targets[(index + direction + targets.length) % targets.length]?.focus(); return;
+    }
     const targets: Renderable[] = [this.search, this.workspaceTab, this.historyTab];
     if (this.tab === "workspace") targets.push(this.newButton, this.closeButton, this.tree);
     else {
@@ -447,6 +460,7 @@ export class WorkspaceView {
       if (this.editor.input) targets.push(this.editor.input);
     }
     if (this.terminals.root.visible) targets.push(...this.terminals.focusTargets);
+    if (this.git.root.visible) targets.push(...this.git.focusTargets);
     const index = targets.findIndex((target) => target === this.renderer.currentFocusedRenderable);
     const next = (index + direction + targets.length) % targets.length;
     targets[next]?.focus();
@@ -505,8 +519,7 @@ export class WorkspaceView {
     const returningAgent = workView === "agent" && this.displayedWorkView !== "agent";
     this.displayedWorkView = workView;
     this.center.visible = workView === "agent";
-    this.gitView.visible = workView === "git";
-    this.gitTitle.content = `Git · ${worktree?.name ?? "No workspace"}`;
+    if (workView === "git") this.git.show(worktree, this.selection.sessionId); else this.git.hide();
     if (workView === "editor") this.editor.show(worktree); else this.editor.hide();
     if (workView === "terminal") this.terminals.show(worktree, worktree ? this.workViews.terminalSelection?.[worktree.id] : undefined); else this.terminals.hide();
     for (const [name, tab] of Object.entries(this.workTabs)) tab.backgroundColor = name === workView ? colors.selected : colors.panel;
@@ -558,7 +571,7 @@ export class WorkspaceView {
     this.rememberAgentScroll();
     this.disposed = true;
     this.unsubscribe();
-    this.history.dispose(); this.editor.dispose(); this.terminals.dispose();
+    this.history.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
     this.transcriptScroll.verticalScrollBar.off("change", this.rememberAgentScroll);
     this.search.off(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.prompt.off(InputRenderableEvents.INPUT, this.handleDraftInput);

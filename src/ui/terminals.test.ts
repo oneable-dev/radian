@@ -118,7 +118,7 @@ test("늦은 터미널 생성 결과는 다른 워크트리의 Git 화면이나 
     await app.click("radian-ui (feature"); await app.click("Git", true);
     ready.resolve(ok("ready")); await Bun.sleep(0); await app.renderOnce();
 
-    expect(app.selection.worktree?.id).toBe("demo:feature"); expect(app.captureCharFrame()).toContain("Native Git UI is planned");
+    expect(app.selection.worktree?.id).toBe("demo:feature"); expect(app.captureCharFrame()).toContain("Git preview");
     expect(app.view.workViewPreferences.active["demo:feature"]).toBe("git");
   } finally { ready.resolve(ok("ready")); await app.close(); }
 });

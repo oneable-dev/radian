@@ -2,6 +2,8 @@ import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import type { Repository } from "../workspace/model.ts";
 import type { SessionRecord } from "../sessions/session-registry.ts";
+import type { GitViewState } from "../git/model.ts";
+import { gitViewsSchema } from "../git/preferences.ts";
 import { errorCodes, ExpectedError, InputError, parseJson, ProtocolError, type ErrorCode } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 
@@ -21,7 +23,7 @@ export const workViewsSchema = Type.Object({
   active: Type.Record(Type.String(), Type.Union([Type.Literal("agent"), Type.Literal("editor"), Type.Literal("git")])),
   agentScroll: Type.Record(Type.String(), Type.Integer({ minimum: 0 })),
 });
-export type WorkViewPreferences = { active: Record<string, WorkView>; agentScroll: Record<string, number>; terminalSelection?: Record<string, string> };
+export type WorkViewPreferences = { active: Record<string, WorkView>; agentScroll: Record<string, number>; terminalSelection?: Record<string, string>; gitViews?: Record<string, GitViewState> };
 export const ptyInfoSchema = Type.Object({
   id, worktreeId: id, pid: Type.Integer({ minimum: 1 }), exited: Type.Boolean(), exitCode: Type.Union([Type.Integer(), Type.Null()]),
 });
@@ -42,6 +44,7 @@ export const preferencesSchema = Type.Object({
   selection: Type.Object({ worktreeId: Type.Union([id, Type.Null()]), sessions: Type.Record(Type.String(), Type.String()) }),
   drafts: Type.Record(Type.String(), Type.String({ maxLength: 1000000 })),
   workViews: Type.Optional(workViewsSchema),
+  gitViews: Type.Optional(gitViewsSchema),
   terminalViews: Type.Optional(Type.Object({ active: Type.Array(id), selected: Type.Record(Type.String(), id) })),
 });
 export type RuntimePreferences = Static<typeof preferencesSchema>;
