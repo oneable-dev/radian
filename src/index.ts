@@ -6,11 +6,12 @@ import { connectRuntime, defaultPreferences, fetchSnapshot, type RuntimeClient }
 import type { RuntimePreferences, WorkViewPreferences } from "./runtime/protocol.ts";
 import { capture, ConnectionError, InputError, reportUnexpected, type ExpectedError } from "./errors.ts";
 import { err, ok, type Result } from "./result.ts";
+import { defaultKeymap, loadKeymap, type Keymap } from "./keybindings/config.ts";
 
-type Options = { demo: boolean; offline: boolean; service: boolean; status: boolean; stop: boolean; cwd: string; stateRoot: string | undefined };
+type Options = { demo: boolean; offline: boolean; service: boolean; status: boolean; stop: boolean; cwd: string; stateRoot: string | undefined; keybindings: string | undefined };
 function parseOptions(args: string[]): Result<Options, InputError> {
   const values = new Map<string, string>();
-  for (const name of ["--state-dir", "--runtime-cwd"]) {
+  for (const name of ["--state-dir", "--runtime-cwd", "--keybindings"]) {
     const index = args.indexOf(name); if (index < 0) continue;
     const value = args[index + 1];
     if (!value || value.startsWith("--")) return err(new InputError(`Missing value for ${name}`));
@@ -19,7 +20,7 @@ function parseOptions(args: string[]): Result<Options, InputError> {
   const demo = args.includes("--demo"), offline = args.includes("--test-runtime");
   if (demo && offline) return err(new InputError("Choose --demo or --test-runtime, not both."));
   return ok({ demo, offline, service: args.includes("--runtime-service"), status: args.includes("--runtime-status"), stop: args.includes("--stop-runtime"),
-    cwd: values.get("--runtime-cwd") ?? process.cwd(), stateRoot: values.get("--state-dir") });
+    cwd: values.get("--runtime-cwd") ?? process.cwd(), stateRoot: values.get("--state-dir"), keybindings: values.get("--keybindings") });
 }
 async function main(): Promise<Result<void, ExpectedError>> {
   const parsed = parseOptions(process.argv.slice(2)); if (!parsed.ok) return parsed;
@@ -28,6 +29,9 @@ async function main(): Promise<Result<void, ExpectedError>> {
     const { runRuntime } = await import("./runtime/service.ts");
     return capture(() => runRuntime(options.cwd, options.offline, options.stateRoot));
   }
+  const administrative = options.stop || options.status;
+  const keymap = administrative ? ok(defaultKeymap()) : await loadKeymap(options.keybindings);
+  if (!keymap.ok) return keymap;
   let repositories: readonly Repository[] = [];
   let discoveryError: string | null = null;
   if (options.demo) repositories = demoWorkspace();
@@ -36,7 +40,6 @@ async function main(): Promise<Result<void, ExpectedError>> {
     if (discovered.ok) repositories = [discovered.value];
     else discoveryError = discovered.error.message;
   }
-  const administrative = options.stop || options.status;
   if (administrative && !repositories[0]) return err(new InputError(discoveryError ?? "No repository available."));
   const connected = !options.demo && repositories[0] ? await connectRuntime(repositories[0], options.cwd, {
     offline: options.offline, ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}), start: !administrative,
@@ -57,12 +60,12 @@ async function main(): Promise<Result<void, ExpectedError>> {
         await new Promise<void>((resolve) => setTimeout(resolve, 40));
       }
       console.log("Workspace service stopped. Open-session state and saved history were retained.");
-    } else await runUI(repositories, client, options, discoveryError);
+    } else await runUI(repositories, client, options, discoveryError, keymap.value);
     return ok(undefined);
   } finally { await client?.disconnect(); }
 }
 
-async function runUI(repositories: readonly Repository[], client: RuntimeClient | null, options: Options, discoveryError: string | null): Promise<void> {
+async function runUI(repositories: readonly Repository[], client: RuntimeClient | null, options: Options, discoveryError: string | null, keymap: Keymap): Promise<void> {
   const { createCliRenderer } = await import("@opentui/core");
   const { WorkspaceView } = await import("./ui/workspace.ts");
   const selection = new WorkspaceSelection(client?.snapshot.repositories ?? repositories);
@@ -70,9 +73,10 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
   if (client) selection.restore(preferences.selection);
   const renderer = await createCliRenderer({ exitOnCtrlC: false });
   let view: InstanceType<typeof WorkspaceView> | undefined;
-  let message = discoveryError ?? (options.demo ? "DEMO · display fixtures only" : options.offline
-    ? "OFFLINE SDK · scripted slow / read / write / delegate · Ctrl+C detaches"
-    : "Pi SDK service · Ctrl+e prompt · Ctrl+C detaches; agents keep running");
+  const detachHint = keymap.hint("app.detach", "none") || "No detach binding";
+  let message = discoveryError ?? (options.demo ? `DEMO · display fixtures only · ${detachHint} detaches` : options.offline
+    ? `OFFLINE SDK · scripted slow / read / write / delegate · ${detachHint} detaches`
+    : `Pi SDK service · ${detachHint} detaches; agents/editors keep running`);
   const updateNotice = (): void => view?.setNotice(`${client?.snapshot.notice || message}${client?.snapshot.closingCount ? ` · Closing ${client.snapshot.closingCount}` : ""}`);
   const showFailure = (error: ExpectedError): void => { message = `[${error.code}] ${error.message}`; updateNotice(); };
   const unexpected = (error: unknown): void => { message = reportUnexpected(error, "UI action"); updateNotice(); };
@@ -92,14 +96,13 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
   };
   const unsubscribeSelection = selection.subscribe(persist);
   const unsubscribe = client?.subscribe(() => { selection.replaceSnapshot(client.snapshot.repositories); updateNotice(); });
-  const quit = (key: import("@opentui/core").KeyEvent): void => {
-    if (!key.ctrl || key.name !== "c") return;
-    key.preventDefault(); key.stopPropagation(); unsubscribe?.(); unsubscribeSelection();
+  const detach = (): void => {
+    unsubscribe?.(); unsubscribeSelection();
     const mounted = view; view = undefined; mounted?.dispose(); renderer.destroy();
   };
-  renderer.keyInput.on("keypress", quit);
   try {
     view = new WorkspaceView(renderer, selection, {
+      keymap, onDetach: detach,
       onNotice: (text) => { message = text; updateNotice(); },
       onNewSession: (worktreeId) => {
         if (!client) { message = "Demo creation request · no agents running"; updateNotice(); return; }
@@ -130,7 +133,7 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
     });
     updateNotice(); await renderer.closed;
   } finally {
-    renderer.keyInput.off("keypress", quit); unsubscribe?.(); unsubscribeSelection();
+    unsubscribe?.(); unsubscribeSelection();
     preferences.drafts = view?.promptDrafts ?? preferences.drafts; persist();
     const mounted = view; view = undefined; mounted?.dispose(); renderer.destroy(); await renderer.closed;
     const saved = await pendingPreferences;

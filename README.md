@@ -20,7 +20,8 @@ workspace sidebar. Worktree folders and branches share one row. Use `Tab`/`Shift
 to move focus, arrow keys to select tree items, `n` to create a new session, and `x` to
 close the selected session while the tree is focused. Mouse actions are also supported.
 `Ctrl+e` focuses the minimal session prompt; `Enter` submits and `Esc` returns to the tree.
-`Ctrl+C` **detaches the TUI only**. Agents and subagents keep running in a separate local service.
+`Ctrl+Space`, then `c`, **detaches the TUI only**. Agents and subagents keep running in a separate local service.
+These are default application bindings; see [Keybindings](#keybindings) to customize them.
 
 ```sh
 bun run start --demo  # Display fixture sessions/subagents and exercise selection and closing
@@ -62,9 +63,47 @@ when Neovim exits the Editor tab stays selected and offers an explicit reopen ac
 
 While the embedded terminal is focused, Neovim receives Tab, Esc, Ctrl+f/e, mouse and paste.
 **Ctrl+]** moves focus to the visible sidebar; outside the editor, existing application focus keys
-and Tab/Shift+Tab traversal work. **Ctrl+C always detaches radian**, rather than sending an interrupt
-to Neovim. The footer follows the actual focused control. Opening, switching and resizing do not
+and Tab/Shift+Tab traversal work. **Ctrl+C is native input**, not an application detach binding.
+Use the configured detach sequence (default **Ctrl+Space, then c**). The footer follows the actual
+focused control and effective keymap. Opening, switching and resizing do not
 send a prompt to an agent or run a Git operation.
+
+### Keybindings
+
+The default leader is **Ctrl+Space**. Press and release it, then press `c` to detach radian,
+`1`/`2`/`3` to select Agent/Editor/Git, `w` to focus the sidebar or `f` to focus search.
+Ctrl+C is not intercepted by default: Neovim and shells receive it as native input.
+If macOS reserves Ctrl+Space for input-source switching, change that system shortcut or radian's leader.
+
+Settings are read when the TUI starts from `$XDG_CONFIG_HOME/radian/keybindings.json`, falling back
+to `~/.config/radian/keybindings.json`. `--keybindings PATH` selects an explicit file. Restart only
+the TUI to apply edits; the runtime and its processes do not need restarting. There is no settings UI yet.
+
+```json
+{
+  "leader": "ctrl+space",
+  "timeoutMs": 1000,
+  "bindings": {
+    "app.detach": ["<leader> c"],
+    "view.editor": ["<leader> e"],
+    "session.new": [{ "keys": "s", "scope": "workspace" }]
+  }
+}
+```
+
+Spaces separate sequential keys (`"space r"` is a two-key leader); `+` combines modifiers.
+Use explicit `shift+c` for uppercase C. A string binding is global; an object can specify `scope`:
+`global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `prompt`, `button`,
+`transcript`, `editor`, `terminal`, or `none`. An override replaces that command's defaults;
+`[]` disables it. Command IDs/defaults are defined in `src/keybindings/commands.ts`.
+Unknown commands, invalid keys and overlapping/prefix bindings are errors rather than silent fallbacks.
+For example, a printable Space leader conflicts with the default button Space activation unless that
+binding is changed. Missing default files use defaults; missing explicitly requested files are errors.
+
+Incomplete/mismatched sequences are returned once, in order, to their original input target. Focus
+changes flush the old prefix to the old target, never the newly selected terminal. Paste is never
+interpreted as commands, and kitty key-release events do not duplicate replayed text. These settings
+control radian commands, not Neovim's own configuration or shell editing bindings.
 
 ### Common footer
 
@@ -73,7 +112,7 @@ name/version on the left and shortcuts for the **currently focused control** on 
 are highlighted separately from their descriptions. Tree, search, History, buttons and prompt
 contexts update on actual focus/state changes; unrelated/global shortcuts are not appended.
 Application bindings such as `Ctrl+f`, `Ctrl+e` and `Tab` still work outside Neovim input focus;
-`Ctrl+C` always detaches. See the Editor input ownership rules above.
+the configured leader detach command works in every input context. See the input ownership rules above.
 
 Errors and service notices occupy a separate row immediately above the footer, so they never
 replace shortcut hints. The existing fixed-height notice allocation and status-icon legend are
@@ -189,7 +228,7 @@ clear work-view preferences they do not understand. Older services are never aut
 
 Runtime/editor snapshot streams send heartbeats every 5 seconds to keep long-lived idle views alive
 under Bun's HTTP idle timeout. Slow readers receive only the latest complete snapshot.
-`Ctrl+C` continues to detach only the TUI. **Explicit `--stop-runtime` also terminates Neovim**:
+The configured detach command closes only the TUI. **Explicit `--stop-runtime` also terminates Neovim**:
 save buffers first. Runtime restart/reboot does not restore unsaved editor buffers or automatically
 launch an editor, even when a saved tab preference points to Editor.
 

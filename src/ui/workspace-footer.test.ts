@@ -12,6 +12,7 @@ const saved = (id: string, unavailableReason: string | null = null): HistoryItem
 
 async function mount(list: () => Promise<readonly HistoryItem[]> = async () => []) {
   const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
+  const initialFocusListeners = app.renderer.listenerCount("focused_renderable");
   const selection = new WorkspaceSelection(demoWorkspace());
   let status: ExecutionState["status"] = "complete";
   const calls: string[] = [];
@@ -23,7 +24,7 @@ async function mount(list: () => Promise<readonly HistoryItem[]> = async () => [
     onResumeSession: async (_tree, id) => { calls.push(`resume:${id}`); return ok("a1"); },
   });
   await app.renderOnce();
-  return { ...app, selection, calls, view,
+  return { ...app, selection, calls, view, initialFocusListeners,
     footerLine: () => app.captureCharFrame().split("\n")[app.renderer.height - 1]!,
     setStatus(next: ExecutionState["status"]) { status = next; selection.replaceSnapshot(selection.snapshot); },
     async click(text: string) {
@@ -140,11 +141,9 @@ test("포커스를 해제하거나 화면을 제거하면 오래된 단축키와
   try {
     app.renderer.currentFocusedRenderable?.blur(); await app.renderOnce();
     expect(app.footerLine().trim()).toBe("radian 0.0.0");
-    const listeners = app.renderer.listenerCount("focused_renderable");
-
     app.view.dispose();
 
-    expect(app.renderer.listenerCount("focused_renderable")).toBe(listeners - 1);
+    expect(app.renderer.listenerCount("focused_renderable")).toBe(app.initialFocusListeners);
     app.view.setNotice("Late update"); await app.renderOnce();
     expect(app.captureCharFrame()).not.toContain("Late update");
   } finally { await app.close(); }
