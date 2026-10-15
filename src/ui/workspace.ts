@@ -12,7 +12,7 @@ import type { HistoryItem } from "../sessions/history.ts";
 import { SessionHistoryPanel } from "./session-history.ts";
 import { Footer, type FooterShortcut } from "./footer.ts";
 import type { Result } from "../result.ts";
-import type { ExpectedError } from "../errors.ts";
+import { reportUnexpected, type ExpectedError } from "../errors.ts";
 import { EditorPanel, type EditorActions } from "./editor.ts";
 import { TerminalPanel, type TerminalActions } from "./terminals.ts";
 import type { WorkView, WorkViewPreferences } from "../runtime/protocol.ts";
@@ -23,7 +23,7 @@ import type { CommandId, KeyContext } from "../keybindings/commands.ts";
 export type WorkspaceActions = {
   onNewSession: (worktreeId: string) => void;
   onCloseSession: (worktreeId: string, sessionId: string) => void;
-  onPrompt?: (sessionId: string, text: string) => void;
+  onPrompt?: (sessionId: string, text: string) => Result<void, ExpectedError> | Promise<Result<void, ExpectedError>>;
   getSessionDetails?: (sessionId: string) => ExecutionState | null;
   initialDrafts?: Readonly<Record<string, string>>;
   onDraftChange?: (drafts: Record<string, string>) => void;
@@ -58,6 +58,7 @@ export class WorkspaceView {
   private readonly transcriptScroll: ScrollBoxRenderable;
   private readonly prompt: InputRenderable;
   private readonly drafts = new Map<string, string>();
+  private readonly submitting = new Set<string>();
   private promptSessionId: string | null = null;
   private lastTranscriptKey = "";
   private syncingDraft = false;
@@ -264,8 +265,9 @@ export class WorkspaceView {
       { key: "↑/↓", label: "Scroll" }, { key: "PgUp/PgDn", label: "Page" },
     ];
     else if (focused === this.prompt && this.runtimePanel.visible) {
-      const ready = this.promptSessionId && this.prompt.value.trim() && this.actions.getSessionDetails?.(this.promptSessionId)?.status !== "working";
-      shortcuts = [...(ready ? [hint("agent.send", "Run")] : []), hint("focus.sidebar", "Workspace")];
+      const ready = this.promptSessionId && this.prompt.value.trim() && !this.submitting.has(this.promptSessionId);
+      const busy = this.promptSessionId && this.actions.getSessionDetails?.(this.promptSessionId)?.status === "working";
+      shortcuts = [...(ready ? [hint("agent.send", busy ? "Queue" : "Run")] : []), hint("focus.sidebar", "Workspace")];
     } else if (focused === this.history.list && this.tab === "history") shortcuts = this.history.shortcuts;
     else if (focused) {
       const unavailable = (focused === this.newButton || focused === this.emptyNewButton) && !this.selection.worktree
@@ -341,17 +343,22 @@ export class WorkspaceView {
     this.render();
   };
 
-  private submitPrompt(): void {
+  private async submitPrompt(): Promise<void> {
     const id = this.selection.sessionId;
-    if (!id || !this.prompt.value.trim() || !this.actions.onPrompt) return;
-    if (this.actions.getSessionDetails?.(id)?.status === "working") {
-      this.setNotice("This session is already running · prompt retained");
-      return;
-    }
+    if (!id || !this.prompt.value.trim() || !this.actions.onPrompt || this.submitting.has(id)) return;
     const text = this.prompt.value;
-    this.prompt.value = "";
-    this.drafts.delete(id);
-    this.actions.onPrompt(id, text);
+    this.submitting.add(id); this.updateFooter();
+    try {
+      const result = await this.actions.onPrompt(id, text);
+      if (!result.ok) { this.setNotice(`[${result.error.code}] ${result.error.message} · prompt retained`); return; }
+      if (this.drafts.get(id) === text) {
+        this.drafts.delete(id);
+        if (!this.disposed && !this.root.isDestroyed && this.promptSessionId === id && this.prompt.value === text) {
+          this.syncingDraft = true; this.prompt.value = ""; this.syncingDraft = false;
+        }
+        this.actions.onDraftChange?.(this.promptDrafts);
+      }
+    } finally { this.submitting.delete(id); this.updateFooter(); }
   }
 
   private moveTree(direction: "up" | "down" | "home" | "end"): void {
@@ -421,7 +428,7 @@ export class WorkspaceView {
       case "history.next": this.history.command("next"); break;
       case "history.first": this.history.command("first"); break;
       case "history.last": this.history.command("last"); break;
-      case "agent.send": this.submitPrompt(); break;
+      case "agent.send": void this.submitPrompt().catch((error: unknown) => this.setNotice(reportUnexpected(error, "prompt submission"))); break;
       case "button.activate": { const focused = this.renderer.currentFocusedRenderable; if (focused) this.buttonActions.get(focused)?.(); break; }
     }
   }

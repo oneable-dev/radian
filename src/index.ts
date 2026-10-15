@@ -130,7 +130,7 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
         message = "Demo item removed · no runtime or saved history was modified"; updateNotice();
       },
       ...(client ? {
-        onPrompt: (id: string, text: string) => { observe(client.prompt(id, text)); },
+        onPrompt: (id: string, text: string) => client.prompt(id, text),
         getSessionDetails: (id: string) => client.snapshot.details[id] ?? null,
         onListHistory: (worktreeId: string) => client.listHistory(worktreeId),
         onResumeSession: (worktreeId: string, savedId: string) => client.resume(worktreeId, savedId),

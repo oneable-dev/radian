@@ -10,7 +10,8 @@ export type SessionExecutor = {
   readonly sessionFile: string | undefined;
   readonly state: ExecutionState;
   subscribe(listener: () => void): () => void;
-  prompt(text: string): Promise<Result<void, ExpectedError>>;
+  // Resolves on run completion; the optional callback marks SDK input acceptance.
+  prompt(text: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>>;
   close(): Promise<Result<void, ExpectedError>>;
 };
 export type SessionContext = {
@@ -155,12 +156,12 @@ export class SessionRegistry {
     entry.unsubscribe = created.value.subscribe(() => { if (entry.phase === "open") this.emit(); });
     entry.phase = "open"; this.emit(); return ok(entry.id);
   }
-  async prompt(id: string, text: string): Promise<Result<void, ExpectedError>> {
+  async prompt(id: string, text: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>> {
     const selected = this.requireOpen(id);
     if (!selected.ok) return selected;
     if (!text.trim()) return err(new InputError("A prompt must not be empty."));
     delete selected.value.recoveredState;
-    return selected.value.executor!.prompt(text);
+    return selected.value.executor!.prompt(text, onAccepted);
   }
   close(id: string): Promise<Result<void, ExpectedError>> {
     const entry = this.entries.get(id);

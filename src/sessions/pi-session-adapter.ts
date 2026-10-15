@@ -81,7 +81,9 @@ export class PiSessionExecutor implements SessionExecutor {
   private error: string | null = null;
   private partial = "";
   private readonly activeTools = new Map<string, string>();
-  private running: Promise<Result<void, ExpectedError>> | undefined;
+  private readonly runs = new Set<Promise<Result<void, ExpectedError>>>();
+  // Serialize only SDK admission, not model execution; messages live in Pi's queue.
+  private admission: Promise<void> = Promise.resolve();
   private closeTask: Promise<Result<void, ExpectedError>> | undefined;
   private aborted = false;
   private closing = false;
@@ -114,11 +116,20 @@ export class PiSessionExecutor implements SessionExecutor {
     return () => this.listeners.delete(listener);
   }
 
-  prompt(text: string): Promise<Result<void, ExpectedError>> {
+  prompt(text: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>> {
     if (this.closing || this.disposed) return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
-    if (this.running || !this.session.isIdle) return Promise.resolve(err(new SessionError("SESSION_BUSY", "This session is already running. Wait for it to finish.")));
-    this.status = "working"; this.error = null; this.aborted = false;
-    const task = capture(() => this.session.prompt(text)).then((result): Result<void, ExpectedError> => {
+    const admitted = Promise.withResolvers<void>();
+    const previous = this.admission;
+    this.admission = admitted.promise;
+    const task = previous.then(async (): Promise<Result<void, ExpectedError>> => {
+      if (this.closing || this.disposed) return err(new SessionError("SESSION_NOT_OPEN", "Session is closing."));
+      if (this.session.isCompacting && !this.session.isStreaming) return err(new SessionError("SESSION_BUSY", "Session is compacting; retry after it finishes."));
+      if (this.session.isIdle) { this.status = "working"; this.error = null; this.aborted = false; }
+      const result = await capture(() => this.session.prompt(text, {
+        streamingBehavior: "steer",
+        // Pi acknowledges prepared/queued/handled input before the run finishes.
+        preflightResult: () => { admitted.resolve(); onAccepted?.(); },
+      }));
       if (!result.ok) {
         if (!this.closing) { this.status = "failure"; this.error = result.error.message; }
         return result;
@@ -129,8 +140,8 @@ export class PiSessionExecutor implements SessionExecutor {
     }).catch((error: unknown) => {
       this.status = "failure"; this.error = "Unexpected agent execution failure. Inspect runtime.log.";
       throw error;
-    }).finally(() => { this.running = undefined; this.emit(); });
-    this.running = task; this.emit(); return task;
+    }).finally(() => { admitted.resolve(); this.runs.delete(task); this.emit(); });
+    this.runs.add(task); this.emit(); return task;
   }
 
   close(): Promise<Result<void, ExpectedError>> {
@@ -138,11 +149,12 @@ export class PiSessionExecutor implements SessionExecutor {
     if (this.closeTask) return this.closeTask;
     this.closing = true;
     const task = capture(async () => {
+      await this.admission;
       this.session.clearQueue(); this.session.abortBash();
       await this.session.abort();
       await withCleanup(async () => {
         // Run failure/cancellation is not cleanup failure, but unexpected rejections still propagate.
-        if (this.running) await this.running;
+        await Promise.all(this.runs);
         await this.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
       }, async () => {
         this.session.dispose(); this.unsubscribe(); this.listeners.clear(); this.disposed = true;

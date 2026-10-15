@@ -395,8 +395,9 @@ test("실행 수락 후 checkpoint 저장 실패는 거절 응답이 아니라 �
     expect(reply.warnings?.[0]?.code).toBe("STORAGE_FAILED");
     expect(client.snapshot.details[id]?.status).toBe("working");
     expect(client.snapshot.notice).toContain("persistence failed");
-    const busy = expectError(await client.prompt(id, "read"));
-    expect(busy.code).toBe("SESSION_BUSY");
+    // A second submission is accepted into Pi's queue even while the run continues.
+    expectOk(await client.prompt(id, "read"));
+    expect(client.snapshot.details[id]?.status).toBe("working");
   } finally {
     if (damaged) { await rm(app.paths.manifest, { recursive: true }); await rename(app.paths.manifest + ".backup", app.paths.manifest); }
     await app.cleanup();

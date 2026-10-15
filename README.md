@@ -32,8 +32,12 @@ only on explicit requests. Later launches reattach to the existing service and r
 last-selected worktree/session, input drafts and current output. Model selection and provider credentials use Pi configuration. Submitting
 a prompt in default mode can make real model requests and run coding tools in that worktree.
 Additional sessions do not forcibly replace the current selection. Each session retains its input
-draft while switching worktrees. Submitting during an active run is rejected with the draft retained;
-steering/follow-up UI policy is not implemented.
+draft while switching worktrees. Submitting during an active run uses Pi's existing steering queue:
+the message enters after the current assistant turn and its tools, before the next response. This is
+not follow-up-after-task behavior and does not interrupt or replace the running session. Both Agent
+and Git callers use the same runtime prompt path. The runtime acknowledges SDK acceptance separately
+from run completion; input is retained until acceptance, and rejection/unknown timeout outcomes do
+not automatically replay a prompt. No separate queue-management or follow-up mode UI is added.
 
 `--demo` remains display-only: closing removes fixture metadata and creation only reports a
 request. It does not invoke Pi, access credentials, or create stored sessions.
