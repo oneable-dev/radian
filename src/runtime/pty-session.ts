@@ -12,6 +12,7 @@ export type PtyLaunch = {
   env?: Record<string, string | undefined>;
   detached?: boolean;
   scrollback?: number;
+  ipc?: (message: unknown) => void;
 };
 
 // Process selection and collection policies belong to the editor/shell registries.
@@ -44,27 +45,40 @@ export class PtySession {
       return false;
     });
     let terminal: Bun.Terminal | undefined;
+    let child: Bun.Subprocess | undefined;
     try {
-      terminal = new Bun.Terminal({ ...launch.size, name: "xterm-256color",
-        data: (_terminal, bytes) => this.screen.write(new Uint8Array(bytes), () => this.invalidate()),
+      // Creating the PTY through spawn establishes a controlling terminal. Reusing a
+      // separately allocated Bun.Terminal can leave shell job control unavailable.
+      child = Bun.spawn([...launch.argv], {
+        cwd: launch.cwd, env: { ...process.env, ...launch.env, TERM: "xterm-256color" },
+        terminal: { ...launch.size, name: "xterm-256color", data: (_terminal, bytes) => this.screen.write(new Uint8Array(bytes), () => this.invalidate()) },
+        ...(launch.detached ? { detached: true } : {}),
+        ...(launch.ipc ? { ipc: (message: unknown) => launch.ipc?.(message) } : {}),
       });
+      this.process = child; terminal = child.terminal;
+      if (!terminal) throw new Error("Bun did not allocate the requested PTY.");
       this.terminal = terminal;
       this.screen.onData((data) => { if (!this.terminal.closed) this.terminal.write(data); });
-      this.process = Bun.spawn([...launch.argv], {
-        cwd: launch.cwd, env: { ...process.env, ...launch.env, TERM: "xterm-256color" }, terminal,
-        ...(launch.detached ? { detached: true } : {}),
-      });
-    } catch (error) { terminal?.close(); this.screen.dispose(); throw error; }
+    } catch (error) {
+      if (child?.exitCode === null) child.kill("SIGTERM");
+      terminal?.close(); this.screen.dispose(); throw error;
+    }
     this.settled = this.process.exited.then((code) => {
-      this.exited = true; this.exitCode = code; this.terminal.close(); this.invalidate(); this.changed();
+      this.finish(code); this.terminal.close();
     });
+  }
+  finish(code: number): void {
+    if (this.exited) return;
+    this.exited = true; this.exitCode = code; this.invalidate(); this.changed();
   }
   get info(): PtyInfo { return { id: this.id, worktreeId: this.worktreeId, pid: this.process.pid, exited: this.exited, exitCode: this.exitCode }; }
   frame(): PtyFrame {
     if (!this.cached) {
       const modes = [...this.modes].map(([mode, enabled]) => `\x1b[?${mode}${enabled ? "h" : "l"}`).join("");
+      const buffer = this.screen.buffer.active, offset = buffer.baseY - buffer.viewportY;
       this.cached = { ...this.info, cols: this.screen.cols, rows: this.screen.rows, revision: this.revision,
-        ansi: `${terminalScreen(this.screen)}${modes}\x1b[${this.cursorStyle} q` };
+        ansi: `${terminalScreen(this.screen)}${modes}\x1b[${this.cursorStyle} q${offset ? "\x1b[?25l" : ""}`,
+        scrollback: { offset, available: buffer.baseY, enabled: (this.screen.options.scrollback ?? 0) > 0 && buffer.type === "normal" && this.screen.modes.mouseTrackingMode === "none" } };
     }
     return this.cached;
   }
@@ -86,19 +100,29 @@ export class PtySession {
       return () => { this.listeners.delete(send); if (this.lease === lease) this.lease = null; };
     }));
   }
-  input(data: Uint8Array): void { this.terminal.write(data); }
+  input(data: Uint8Array): void {
+    const focusEvent = data.length === 3 && data[0] === 27 && data[1] === 91 && (data[2] === 73 || data[2] === 79);
+    if (!focusEvent && this.screen.buffer.active.viewportY !== this.screen.buffer.active.baseY) { this.screen.scrollToBottom(); this.invalidate(); }
+    this.terminal.write(data);
+  }
+  async scroll(lines: number, lease: string): Promise<void> {
+    await new Promise<void>((resolve) => this.screen.write("", resolve));
+    if (this.lease !== lease) throw new PtyError("PTY_BUSY", "Terminal attachment changed before scrolling.");
+    this.screen.scrollLines(lines); this.invalidate();
+  }
   async resize(cols: number, rows: number, lease: string): Promise<void> {
     await new Promise<void>((resolve) => this.screen.write("", resolve));
-    if (this.exited) throw new PtyError("PTY_NOT_OPEN", "Terminal process has exited.");
     if (this.lease !== lease) throw new PtyError("PTY_BUSY", "Terminal attachment changed before resize.");
     if (cols === this.screen.cols && rows === this.screen.rows) return;
-    this.screen.resize(cols, rows); this.terminal.resize(cols, rows);
+    this.screen.resize(cols, rows);
+    if (this.exited) { this.invalidate(); return; }
+    this.terminal.resize(cols, rows);
     // Bun 1.4.3 can update PTY dimensions without notifying the attached process.
     this.process.kill("SIGWINCH"); this.invalidate();
   }
   async dispose(): Promise<Result<void, ExpectedError>> {
     const result = await capture(async () => {
-      if (!this.exited) this.process.kill("SIGTERM");
+      if (this.process.exitCode === null) this.process.kill("SIGTERM");
       await this.settled;
     });
     if (!result.ok) return result;

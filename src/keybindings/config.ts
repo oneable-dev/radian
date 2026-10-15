@@ -36,6 +36,7 @@ export function formatKeys(keys: readonly string[]): string { return keys.map((k
 
 export class Keymap {
   constructor(readonly bindings: readonly Binding[], readonly leader: readonly string[], readonly timeoutMs: number) {}
+  bound(firstKey: string, context: KeyContext): boolean { return this.bindings.some((binding) => binding.keys[0] === firstKey && inScope(binding.scope, context)); }
   hint(command: CommandId, context: KeyContext): string {
     const match = this.bindings.find((binding) => binding.command === command && inScope(binding.scope, context));
     return match ? formatKeys(match.keys) : "";

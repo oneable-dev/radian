@@ -8,7 +8,8 @@ import { connectionError, readJson, remoteError, transport } from "./transport.t
 export type PtyRequest =
   | { type: "input"; lease: string; data: string }
   | { type: "resize"; lease: string; cols: number; rows: number }
-  | { type: "detach"; lease: string };
+  | { type: "detach"; lease: string }
+  | { type: "scroll"; lease: string; lines: number };
 type Send = (command: PtyRequest) => Promise<Result<unknown, ExpectedError>>;
 export class PtyConnection {
   readonly lease = crypto.randomUUID();
@@ -60,6 +61,9 @@ export class PtyConnection {
   resize(cols: number, rows: number): void {
     this.enqueue({ type: "resize", lease: this.lease,
       cols: Math.max(2, Math.min(500, Math.floor(cols))), rows: Math.max(1, Math.min(200, Math.floor(rows))) }, 0);
+  }
+  scroll(lines: number): void {
+    this.enqueue({ type: "scroll", lease: this.lease, lines: Math.max(-10000, Math.min(10000, Math.round(lines))) }, 0);
   }
   private enqueue(command: PtyRequest, bytes: number): void {
     if (this.failed || this.closing) return;

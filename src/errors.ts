@@ -5,7 +5,7 @@ export const errorCodes = [
   "CANCELLED", "AGENT_FAILED", "CLEANUP_FAILED", "HISTORY_UNAVAILABLE", "HISTORY_CORRUPT",
   "STORAGE_FAILED", "RUNTIME_ABSENT", "CONNECTION_FAILED", "CONNECTION_TIMEOUT", "PROTOCOL_ERROR",
   "UNSUPPORTED_CAPABILITY", "LEGACY_REMOTE_ERROR", "REMOTE_INTERNAL_ERROR", "GIT_DISCOVERY_FAILED",
-  "EDITOR_UNAVAILABLE", "EDITOR_NOT_OPEN", "EDITOR_BUSY", "PTY_NOT_OPEN", "PTY_BUSY",
+  "EDITOR_UNAVAILABLE", "EDITOR_NOT_OPEN", "EDITOR_BUSY", "PTY_NOT_OPEN", "PTY_BUSY", "PTY_UNAVAILABLE", "PTY_OWNERSHIP_LOST", "PTY_CLEANUP_FAILED",
 ] as const;
 export type ErrorCode = typeof errorCodes[number];
 
@@ -41,8 +41,9 @@ export class ConnectionError extends ExpectedError<"RUNTIME_ABSENT" | "CONNECTIO
 export class ProtocolError extends ExpectedError<"PROTOCOL_ERROR"> {
   constructor(message: string, options?: ErrorOptions) { super("PROTOCOL_ERROR", message, options); }
 }
-export class PtyError extends ExpectedError<"PTY_NOT_OPEN" | "PTY_BUSY"> {
-  constructor(code: "PTY_NOT_OPEN" | "PTY_BUSY", message: string, options?: ErrorOptions) { super(code, message, options); }
+type PtyErrorCode = "PTY_NOT_OPEN" | "PTY_BUSY" | "PTY_UNAVAILABLE" | "PTY_OWNERSHIP_LOST" | "PTY_CLEANUP_FAILED";
+export class PtyError extends ExpectedError<PtyErrorCode> {
+  constructor(code: PtyErrorCode, message: string, options?: ErrorOptions) { super(code, message, options); }
 }
 export class EditorError extends ExpectedError<"EDITOR_UNAVAILABLE" | "EDITOR_NOT_OPEN" | "EDITOR_BUSY"> {
   constructor(code: "EDITOR_UNAVAILABLE" | "EDITOR_NOT_OPEN" | "EDITOR_BUSY", message: string, options?: ErrorOptions) { super(code, message, options); }

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { createTestRenderer } from "@opentui/core/testing";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { connectRuntime, fetchSnapshot } from "../runtime/client.ts";
+import { restoreWorkViews, saveWorkViews } from "../runtime/work-view-preferences.ts";
 import { WorkspaceSelection } from "../workspace/selection.ts";
 import { WorkspaceView } from "./workspace.ts";
 import { expectOk } from "../testing/results.ts";
@@ -32,8 +33,8 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
     };
     const view = new WorkspaceView(app.renderer, selection, {
       onNewSession: () => {}, onCloseSession: () => {},
-      ...(preferences.workViews ? { initialWorkViews: preferences.workViews } : {}),
-      onWorkViewsChange: (state) => { preferences.workViews = state; persist(); },
+      initialWorkViews: restoreWorkViews(preferences),
+      onWorkViewsChange: (state) => { saveWorkViews(preferences, state); persist(); },
       editor: { info: (tree) => client.snapshot.editors?.find((item) => item.worktreeId === tree), open: (tree, size) => client.openEditor(tree, size),
         attach: (id, frame, failed) => client.attachEditor(id, (value) => { diagnosticFrame = value; frame(value); }, failed) },
     });

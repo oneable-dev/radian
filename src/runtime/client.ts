@@ -51,18 +51,20 @@ export class RuntimeClient {
   private state: RuntimeSnapshot;
   private readonly listeners = new Set<() => void>();
   private readonly hidden = new Set<string>();
+  private readonly hiddenTerminals = new Set<string>();
   private readonly streamAbort = new AbortController();
   private streamTask: Promise<void> | undefined;
   private disconnected = false;
-  private readonly editors = new Set<PtyConnection>();
+  private readonly connections = new Set<PtyConnection>();
   private failure = "";
   private warning = "";
   constructor(readonly paths: RuntimePaths, snapshot: RuntimeSnapshot) { this.state = snapshot; }
   get snapshot(): RuntimeSnapshot {
-    if (!this.hidden.size && !this.failure && !this.warning) return this.state;
+    if (!this.hidden.size && !this.hiddenTerminals.size && !this.failure && !this.warning) return this.state;
     const details = Object.fromEntries(Object.entries(this.state.details).filter(([id]) => !this.hidden.has(id)).map(([id, state]) => [id,
       this.failure && state.status === "working" ? { ...state, status: null, error: this.failure } : state]));
     return { ...this.state, notice: this.failure || this.warning || this.state.notice, details,
+      ...(this.state.terminals ? { terminals: this.state.terminals.filter((terminal) => !this.hiddenTerminals.has(terminal.id)) } : {}),
       repositories: this.state.repositories.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
         sessions: tree.sessions.filter((session) => !this.hidden.has(session.id)).map((session) => ({ ...session,
           status: this.failure && session.status === "working" ? null : session.status,
@@ -106,11 +108,14 @@ export class RuntimeClient {
   }
   private waitForOpen(id: string): Promise<Result<void, ExpectedError>> {
     const present = () => this.snapshot.repositories.some((repo) => repo.worktrees.some((tree) => tree.sessions.some((session) => session.id === id)));
+    return this.waitForState(present, "Resume");
+  }
+  private waitForState(present: () => boolean, action: string): Promise<Result<void, ExpectedError>> {
     if (present()) return Promise.resolve(ok(undefined));
     if (this.disconnected || this.failure) return Promise.resolve(err(this.connectionClosed()));
     return new Promise((resolve) => {
       const finish = (result: Result<void, ExpectedError>) => { clearTimeout(timer); unsubscribe(); this.streamAbort.signal.removeEventListener("abort", aborted); resolve(result); };
-      const timer = setTimeout(() => finish(err(new ConnectionError("CONNECTION_TIMEOUT", "Resume was accepted, but its snapshot did not arrive. Reconnect before retrying."))), 15000);
+      const timer = setTimeout(() => finish(err(new ConnectionError("CONNECTION_TIMEOUT", `${action} was accepted, but its snapshot did not arrive. Reconnect before retrying.`))), 15000);
       const aborted = () => finish(err(this.connectionClosed()));
       const unsubscribe = this.subscribe(() => { if (present()) finish(ok(undefined)); else if (this.failure) finish(err(this.connectionClosed())); });
       this.streamAbort.signal.addEventListener("abort", aborted, { once: true });
@@ -146,10 +151,48 @@ export class RuntimeClient {
         case "input": return this.command({ type: "editor-input", editorId: id, lease: request.lease, data: request.data });
         case "resize": return this.command({ type: "editor-resize", editorId: id, lease: request.lease, cols: request.cols, rows: request.rows });
         case "detach": return this.command({ type: "editor-detach", editorId: id, lease: request.lease });
+        case "scroll": return Promise.resolve(err(new CapabilityError("Editor does not provide shell scrollback.")));
       }
     }, onFrame, onFailure);
-    this.editors.add(editor);
-    editor.closed.finally(() => this.editors.delete(editor));
+    return this.attachPty(editor);
+  }
+  get supportsTerminals(): boolean { return this.state.capabilities?.includes("terminal-tabs") ?? false; }
+  private requireTerminals(): Result<void, ExpectedError> {
+    if (this.disconnected || this.failure) return err(this.connectionClosed());
+    return this.supportsTerminals ? ok(undefined) : err(new CapabilityError("Running service predates terminal tabs. Save work and explicitly restart the service when ready; no service was restarted."));
+  }
+  async createTerminal(worktreeId: string, size: { cols: number; rows: number }): Promise<Result<string, ExpectedError>> {
+    const supported = this.requireTerminals(); if (!supported.ok) return supported;
+    const result = await this.command({ type: "terminal-create", worktreeId, ...size });
+    if (!result.ok) return result;
+    const id = result.value;
+    if (!id) return err(new ProtocolError("Runtime did not return a terminal ID."));
+    const present = await this.waitForState(() => this.snapshot.terminals?.some((terminal) => terminal.id === id) ?? false, "Terminal creation");
+    return present.ok ? ok(id) : present;
+  }
+  async attachTerminal(id: string, onFrame: (frame: EditorFrame) => void, onFailure: (error: unknown) => void): Promise<Result<PtyConnection, ExpectedError>> {
+    const supported = this.requireTerminals(); if (!supported.ok) return supported;
+    return this.attachPty(new PtyConnection(this.paths, id, "/terminal/events", (request) => {
+      switch (request.type) {
+        case "input": return this.command({ type: "terminal-input", terminalId: id, lease: request.lease, data: request.data });
+        case "resize": return this.command({ type: "terminal-resize", terminalId: id, lease: request.lease, cols: request.cols, rows: request.rows });
+        case "scroll": return this.command({ type: "terminal-scroll", terminalId: id, lease: request.lease, lines: request.lines });
+        case "detach": return this.command({ type: "terminal-detach", terminalId: id, lease: request.lease });
+      }
+    }, onFrame, onFailure));
+  }
+  async closeTerminal(id: string): Promise<Result<void, ExpectedError>> {
+    const supported = this.requireTerminals(); if (!supported.ok) return supported;
+    this.hiddenTerminals.add(id); this.emit();
+    try {
+      const result = await this.command({ type: "terminal-close", terminalId: id });
+      if (!result.ok) { this.hiddenTerminals.delete(id); this.emit(); return result; }
+      return ok(undefined);
+    } catch (error) { this.hiddenTerminals.delete(id); this.emit(); throw error; }
+  }
+  private async attachPty(editor: PtyConnection): Promise<Result<PtyConnection, ExpectedError>> {
+    this.connections.add(editor);
+    editor.closed.finally(() => this.connections.delete(editor));
     let attached: Result<void, ExpectedError>;
     try { attached = await editor.attach(); }
     catch (error) { await editor.disconnect(); throw error; }
@@ -162,7 +205,7 @@ export class RuntimeClient {
       : err(new CapabilityError("Running service predates work views. Finish its jobs, explicitly stop it, then restart radian. No service was restarted."));
   }
   async disconnect(): Promise<void> {
-    await Promise.all([...this.editors].map((editor) => editor.disconnect()));
+    await Promise.all([...this.connections].map((editor) => editor.disconnect()));
     this.disconnected = true; this.streamAbort.abort(); await this.streamTask; this.listeners.clear();
   }
 
@@ -197,6 +240,7 @@ export class RuntimeClient {
           this.state = parsed.value;
           const open = new Set(this.state.repositories.flatMap((repo) => repo.worktrees.flatMap((tree) => tree.sessions.map((session) => session.id))));
           for (const id of this.hidden) if (!open.has(id)) this.hidden.delete(id);
+          for (const id of this.hiddenTerminals) if (!this.state.terminals?.some((terminal) => terminal.id === id)) this.hiddenTerminals.delete(id);
           this.emit();
         }
         if (Buffer.byteLength(buffer) > maxFrameBytes) return err(new ProtocolError("Runtime frame is too large."));

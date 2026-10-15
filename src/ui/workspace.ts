@@ -14,6 +14,7 @@ import { Footer, type FooterShortcut } from "./footer.ts";
 import type { Result } from "../result.ts";
 import type { ExpectedError } from "../errors.ts";
 import { EditorPanel, type EditorActions } from "./editor.ts";
+import { TerminalPanel, type TerminalActions } from "./terminals.ts";
 import type { WorkView, WorkViewPreferences } from "../runtime/protocol.ts";
 import { defaultKeymap, type Keymap } from "../keybindings/config.ts";
 import { KeyRouter } from "../keybindings/router.ts";
@@ -29,6 +30,8 @@ export type WorkspaceActions = {
   onListHistory?: (worktreeId: string) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
   onResumeSession?: (worktreeId: string, savedId: string) => Promise<Result<string, ExpectedError>>;
   editor?: EditorActions;
+  terminal?: TerminalActions;
+  terminalUnavailable?: string;
   initialWorkViews?: WorkViewPreferences;
   onWorkViewsChange?: (preferences: WorkViewPreferences) => void;
   onNotice?: (message: string) => void;
@@ -61,6 +64,7 @@ export class WorkspaceView {
   private readonly workPanel: BoxRenderable;
   private readonly workTabs: Record<WorkView, BoxRenderable>;
   private readonly editor: EditorPanel;
+  private readonly terminals: TerminalPanel;
   private readonly gitView: BoxRenderable;
   private readonly gitTitle: TextRenderable;
   private readonly workViews: WorkViewPreferences;
@@ -136,6 +140,7 @@ export class WorkspaceView {
       agent: this.button("Agent", () => this.selectWorkView("agent"), "Show Agent"),
       editor: this.button("Editor", () => this.selectWorkView("editor", true), "Show Editor"),
       git: this.button("Git", () => this.selectWorkView("git"), "Show Git"),
+      terminal: this.button("Terminal", () => this.selectWorkView("terminal"), "Show Terminal"),
     };
     for (const tab of Object.values(this.workTabs)) workTabs.add(tab);
     this.workPanel.add(workTabs);
@@ -162,12 +167,20 @@ export class WorkspaceView {
     this.center.add(this.runtimePanel);
     this.editor = new EditorPanel(renderer, actions.editor, (label, activate) => this.button(label, activate, "Open editor"),
       (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); }, () => this.updateFooter(), this.keymap.hint("focus.sidebar", "editor"));
+    this.terminals = new TerminalPanel(renderer, actions.terminal, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
+      (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); },
+      (worktreeId, id) => {
+        const selected = this.workViews.terminalSelection ??= {};
+        if ((selected[worktreeId] ?? null) === id) return;
+        if (id) selected[worktreeId] = id; else delete selected[worktreeId];
+        this.saveWorkViews();
+      }, () => this.updateFooter(), actions.terminalUnavailable);
     this.gitView = new BoxRenderable(renderer, { id: "git-view", flexGrow: 1, minHeight: 0, padding: 1, flexDirection: "column", gap: 1, visible: false });
     this.gitTitle = this.text("Git", colors.accent);
     this.gitView.add(this.gitTitle);
     this.gitView.add(new TextRenderable(renderer, { content: "Native Git UI is planned. File lists, diffs, staging, commits and push are not implemented yet.",
       fg: colors.muted, wrapMode: "word", selectable: false }));
-    this.workPanel.add(this.center); this.workPanel.add(this.editor.root); this.workPanel.add(this.gitView);
+    this.workPanel.add(this.center); this.workPanel.add(this.editor.root); this.workPanel.add(this.gitView); this.workPanel.add(this.terminals.root);
     panels.add(this.sidebar);
     panels.add(this.workPanel);
     this.root.add(panels);
@@ -242,7 +255,11 @@ export class WorkspaceView {
       ...(this.selection.worktree ? [hint("session.new", "New session")] : []),
       ...(this.selection.sessionId ? [hint("session.close", "Close session")] : []),
     ];
-    else if (focused && focused === this.editor?.input) shortcuts = [hint("focus.sidebar", "Sidebar"), { key: "Esc", label: "Normal mode" }];
+    else if (focused && focused === this.editor?.input) shortcuts = [hint("focus.sidebar", "Sidebar"), ...(!this.keymap.bound("escape", "editor") ? [{ key: "Esc", label: "Normal mode" }] : [])];
+    else if (focused && focused === this.terminals?.input) shortcuts = [
+      ...(!this.keymap.bound("ctrl+c", "terminal") ? [{ key: "Ctrl+C", label: "Interrupt" }] : []),
+      ...(this.terminals.canScroll ? [pair("terminal.scroll-up", "terminal.scroll-down", "Scroll")] : []), hint("focus.sidebar", "Sidebar"),
+    ];
     else if (focused === this.transcriptScroll && this.runtimePanel.visible) shortcuts = [
       { key: "↑/↓", label: "Scroll" }, { key: "PgUp/PgDn", label: "Page" },
     ];
@@ -347,6 +364,7 @@ export class WorkspaceView {
     const focused = this.renderer.currentFocusedRenderable;
     if (!focused) return "none";
     if (focused === this.editor.input) return "editor";
+    if (focused === this.terminals.input) return "terminal";
     if (focused === this.tree) return "workspace";
     if (focused === this.search) return "search";
     if (focused === this.prompt) return "prompt";
@@ -357,7 +375,10 @@ export class WorkspaceView {
   private commandAvailable(command: CommandId): boolean {
     switch (command) {
       case "app.detach": return Boolean(this.actions.onDetach);
-      case "session.new": case "view.agent": case "view.editor": case "view.git": return Boolean(this.selection.worktree);
+      case "session.new": case "view.agent": case "view.editor": case "view.git": case "view.terminal": return Boolean(this.selection.worktree);
+      case "terminal.new": return Boolean(this.selection.worktree && this.actions.terminal);
+      case "terminal.close": case "terminal.next": case "terminal.previous": return this.terminals.root.visible && this.terminals.canClose;
+      case "terminal.scroll-up": case "terminal.scroll-down": return this.terminals.root.visible && this.terminals.canScroll;
       case "session.close": return Boolean(this.selection.sessionId);
       case "focus.prompt": return this.runtimePanel.visible;
       case "agent.send": return this.runtimePanel.visible && Boolean(this.promptSessionId);
@@ -377,6 +398,13 @@ export class WorkspaceView {
       case "view.agent": this.selectWorkView("agent"); break;
       case "view.editor": this.selectWorkView("editor", true); break;
       case "view.git": this.selectWorkView("git"); break;
+      case "view.terminal": this.selectWorkView("terminal"); break;
+      case "terminal.new": this.selectWorkView("terminal"); this.terminals.create(); break;
+      case "terminal.close": this.terminals.closeSelected(); break;
+      case "terminal.previous": this.terminals.next(-1); break;
+      case "terminal.next": this.terminals.next(1); break;
+      case "terminal.scroll-up": this.terminals.scroll(-1); break;
+      case "terminal.scroll-down": this.terminals.scroll(1); break;
       case "session.new": this.openNewSession(); break;
       case "session.close": this.closeSession(); break;
       case "workspace.previous": this.moveTree("up"); break;
@@ -407,6 +435,7 @@ export class WorkspaceView {
       if (this.editor.openButton.visible) targets.push(this.editor.openButton);
       if (this.editor.input) targets.push(this.editor.input);
     }
+    if (this.terminals.root.visible) targets.push(...this.terminals.focusTargets);
     const index = targets.findIndex((target) => target === this.renderer.currentFocusedRenderable);
     const next = (index + direction + targets.length) % targets.length;
     targets[next]?.focus();
@@ -468,6 +497,7 @@ export class WorkspaceView {
     this.gitView.visible = workView === "git";
     this.gitTitle.content = `Git · ${worktree?.name ?? "No workspace"}`;
     if (workView === "editor") this.editor.show(worktree); else this.editor.hide();
+    if (workView === "terminal") this.terminals.show(worktree, worktree ? this.workViews.terminalSelection?.[worktree.id] : undefined); else this.terminals.hide();
     for (const [name, tab] of Object.entries(this.workTabs)) tab.backgroundColor = name === workView ? colors.selected : colors.panel;
     const session = worktree?.sessions.find((item) => item.id === this.selection.sessionId);
     this.centerTitle.content = session?.name ?? (worktree ? "No open sessions" : "No workspace available");
@@ -517,7 +547,7 @@ export class WorkspaceView {
     this.rememberAgentScroll();
     this.disposed = true;
     this.unsubscribe();
-    this.history.dispose(); this.editor.dispose();
+    this.history.dispose(); this.editor.dispose(); this.terminals.dispose();
     this.transcriptScroll.verticalScrollBar.off("change", this.rememberAgentScroll);
     this.search.off(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.prompt.off(InputRenderableEvents.INPUT, this.handleDraftInput);

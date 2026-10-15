@@ -7,7 +7,7 @@ import { demoWorkspace } from "../workspace/demo.ts";
 import { WorkspaceView } from "./workspace.ts";
 
 test("사용자 키맵은 트리 명령·비활성화·푸터와 leader 뷰 전환에 함께 적용된다", async () => {
-  const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
+  const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true, exitOnCtrlC: false });
   const calls: string[] = [];
   const keymap = expectOk(parseKeymap({ leader: "ctrl+b", bindings: {
     "session.new": [{ keys: "s", scope: "workspace" }], "session.close": [], "view.git": ["<leader> g"],
