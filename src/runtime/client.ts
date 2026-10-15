@@ -4,10 +4,12 @@ import { resolve } from "node:path";
 import { Value } from "typebox/value";
 import type { Repository } from "../workspace/model.ts";
 import type { HistoryItem } from "../sessions/history.ts";
-import { CapabilityError, capture, ConnectionError, parseJson, ProtocolError, RemoteError, reportUnexpected, systemCode, withCleanup, type ExpectedError } from "../errors.ts";
+import { CapabilityError, capture, ConnectionError, parseJson, ProtocolError, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
-import { emptyPreferences, historySchema, maxFrameBytes, parseSnapshot, replySchema, type RuntimeCommand, type RuntimePreferences, type RuntimeSnapshot, type WireError } from "./protocol.ts";
+import { emptyPreferences, historySchema, maxFrameBytes, parseSnapshot, replySchema, type RuntimeCommand, type RuntimePreferences, type RuntimeSnapshot, type EditorFrame } from "./protocol.ts";
 import { privateDirectory, runtimePaths, type RuntimePaths } from "./storage.ts";
+import { connectionError, readJson, remoteError, transport } from "./transport.ts";
+import { EditorConnection } from "./editor-client.ts";
 
 export type ConnectOptions = { offline?: boolean; stateRoot?: string; entry?: string; start?: boolean };
 export async function connectRuntime(repository: Repository, cwd: string, options: ConnectOptions = {}): Promise<Result<RuntimeClient | null, ExpectedError>> {
@@ -52,6 +54,7 @@ export class RuntimeClient {
   private readonly streamAbort = new AbortController();
   private streamTask: Promise<void> | undefined;
   private disconnected = false;
+  private readonly editors = new Set<EditorConnection>();
   private failure = "";
   private warning = "";
   constructor(readonly paths: RuntimePaths, snapshot: RuntimeSnapshot) { this.state = snapshot; }
@@ -130,7 +133,32 @@ export class RuntimeClient {
   async prompt(sessionId: string, text: string): Promise<Result<void, ExpectedError>> { const result = await this.command({ type: "prompt", sessionId, text }); return result.ok ? ok(undefined) : result; }
   async savePreferences(preferences: RuntimePreferences): Promise<Result<void, ExpectedError>> { const result = await this.command({ type: "preferences", preferences }); return result.ok ? ok(undefined) : result; }
   async stopRuntime(): Promise<Result<void, ExpectedError>> { const result = await this.command({ type: "stop" }); return result.ok ? ok(undefined) : result; }
-  async disconnect(): Promise<void> { this.disconnected = true; this.streamAbort.abort(); await this.streamTask; this.listeners.clear(); }
+  async openEditor(worktreeId: string): Promise<Result<string, ExpectedError>> {
+    const capability = this.requireWorkViews(); if (!capability.ok) return capability;
+    const result = await this.command({ type: "editor-open", worktreeId });
+    if (!result.ok) return result;
+    return result.value ? ok(result.value) : err(new ProtocolError("Runtime did not return an editor ID."));
+  }
+  async attachEditor(id: string, onFrame: (frame: EditorFrame) => void, onFailure: (error: unknown) => void): Promise<Result<EditorConnection, ExpectedError>> {
+    const capability = this.requireWorkViews(); if (!capability.ok) return capability;
+    const editor = new EditorConnection(this.paths, id, (command) => this.command(command), onFrame, onFailure);
+    this.editors.add(editor);
+    editor.closed.finally(() => this.editors.delete(editor));
+    let attached: Result<void, ExpectedError>;
+    try { attached = await editor.attach(); }
+    catch (error) { await editor.disconnect(); throw error; }
+    if (!attached.ok) { await editor.disconnect(); return attached; }
+    return ok(editor);
+  }
+  private requireWorkViews(): Result<void, ExpectedError> {
+    if (this.disconnected || this.failure) return err(this.connectionClosed());
+    return this.state.capabilities?.includes("work-views") ? ok(undefined)
+      : err(new CapabilityError("Running service predates work views. Finish its jobs, explicitly stop it, then restart radian. No service was restarted."));
+  }
+  async disconnect(): Promise<void> {
+    await Promise.all([...this.editors].map((editor) => editor.disconnect()));
+    this.disconnected = true; this.streamAbort.abort(); await this.streamTask; this.listeners.clear();
+  }
 
   private async command(command: RuntimeCommand): Promise<Result<string | null, ExpectedError>> {
     if (this.disconnected || this.failure) return err(this.connectionClosed());
@@ -183,25 +211,5 @@ export async function fetchSnapshot(paths: RuntimePaths): Promise<Result<Runtime
   if (!response.ok) return response.error.code === "RUNTIME_ABSENT" ? ok(null) : response;
   if (!response.value.ok) return err(new ProtocolError(`Runtime snapshot failed: ${response.value.status}`));
   const body = await readJson(response.value); return body.ok ? parseSnapshot(body.value) : body;
-}
-async function transport(paths: RuntimePaths, path: string, options: RequestInit): Promise<Result<Response, ConnectionError>> {
-  try { return ok(await fetch(`http://localhost${path}`, { ...options, unix: paths.socket })); }
-  catch (error) { const known = connectionError(error); if (known) return err(known); throw error; }
-}
-function connectionError(error: unknown): ConnectionError | null {
-  const code = systemCode(error);
-  if (code === "ENOENT" || code === "ECONNREFUSED") return new ConnectionError("RUNTIME_ABSENT", "No runtime service is listening.", { cause: error });
-  if ((error instanceof Error && error.name === "TimeoutError") || code === "ETIMEDOUT") return new ConnectionError("CONNECTION_TIMEOUT", "Runtime request timed out.", { cause: error });
-  if (["EACCES", "EPERM", "ECONNRESET", "EPIPE", "EIO"].includes(code ?? "")) return new ConnectionError("CONNECTION_FAILED", `Runtime connection failed (${code}).`, { cause: error });
-  return null;
-}
-async function readJson(response: Response): Promise<Result<unknown, ExpectedError>> {
-  let text: string;
-  try { text = await response.text(); }
-  catch (error) { const known = connectionError(error); if (known) return err(known); throw error; }
-  const json = parseJson(text, "runtime response"); return json.ok ? json : err(new ProtocolError(json.error.message, { cause: json.error }));
-}
-function remoteError(error: string | WireError): RemoteError {
-  return typeof error === "string" ? new RemoteError("LEGACY_REMOTE_ERROR", error, "unknown") : new RemoteError(error.code, error.message, error.outcome);
 }
 export function defaultPreferences(): RuntimePreferences { return structuredClone(emptyPreferences); }

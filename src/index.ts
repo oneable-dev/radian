@@ -47,6 +47,7 @@ async function main(): Promise<Result<void, ExpectedError>> {
     if (administrative) {
       if (!client) { console.log("No running workspace service."); return ok(undefined); }
       if (options.status) { console.log(JSON.stringify(client.snapshot, null, 2)); return ok(undefined); }
+      if (client.snapshot.editors?.some((editor) => !editor.exited)) console.error("Stopping the runtime also closes Neovim. Unsaved editor buffers are not restored after restart; save them before using --stop-runtime.");
       const stopped = await client.stopRuntime(); if (!stopped.ok) return stopped;
       const deadline = Date.now() + 15000;
       while (true) {
