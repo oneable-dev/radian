@@ -3,7 +3,7 @@ import { demoWorkspace } from "./workspace/demo.ts";
 import { WorkspaceSelection } from "./workspace/selection.ts";
 import type { Repository } from "./workspace/model.ts";
 import { connectRuntime, defaultPreferences, fetchSnapshot, type RuntimeClient } from "./runtime/client.ts";
-import type { RuntimePreferences } from "./runtime/protocol.ts";
+import type { RuntimePreferences, WorkViewPreferences } from "./runtime/protocol.ts";
 import { capture, ConnectionError, InputError, reportUnexpected, type ExpectedError } from "./errors.ts";
 import { err, ok, type Result } from "./result.ts";
 
@@ -100,6 +100,7 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
   renderer.keyInput.on("keypress", quit);
   try {
     view = new WorkspaceView(renderer, selection, {
+      onNotice: (text) => { message = text; updateNotice(); },
       onNewSession: (worktreeId) => {
         if (!client) { message = "Demo creation request · no agents running"; updateNotice(); return; }
         observe(client.create(worktreeId));
@@ -118,6 +119,13 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
         onResumeSession: (worktreeId: string, savedId: string) => client.resume(worktreeId, savedId),
         initialDrafts: preferences.drafts,
         onDraftChange: (drafts: Record<string, string>) => { preferences.drafts = drafts; persist(); },
+        ...(preferences.workViews ? { initialWorkViews: preferences.workViews } : {}),
+        onWorkViewsChange: (workViews: WorkViewPreferences) => { preferences.workViews = workViews; persist(); },
+        editor: {
+          info: (worktreeId: string) => client.snapshot.editors?.find((editor) => editor.worktreeId === worktreeId),
+          open: (worktreeId: string, size) => client.openEditor(worktreeId, size),
+          attach: (id, frame, failed) => client.attachEditor(id, frame, failed),
+        },
       } : {}),
     });
     updateNotice(); await renderer.closed;
