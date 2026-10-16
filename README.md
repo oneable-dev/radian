@@ -145,6 +145,31 @@ and transcript paging is not implemented. Older services remain usable with a cl
 preview. Finish their jobs and explicitly stop/restart them to load the new capability; no service
 is automatically restarted.
 
+### Agent input status
+
+A passive row directly above and outside the prompt box shows the selected model, effort and last
+observed Fast setting, followed by **context** and **weekly** remaining percentages. Both bars represent the
+remaining allowance, not consumption. Filled cells fade from the terminal's accent toward the
+panel color; empty cells stay subdued. Palette changes repaint the existing row. The transcript mode
+row, telemetry row and prompt box share their left/right edges, with one blank row between each on
+normal screens. Screens shorter than 18 rows remove both gaps together. The prompt retains its own
+internal padding. Narrow panels shorten bars and omit settings before dropping either resource label
+or percentage.
+
+Context comes from Pi's estimated context usage and model limit. Immediately after compaction,
+its size may be unknown until the next response. Fast reports the outgoing OpenAI request's priority
+service tier, not a guarantee of server speed. The row does not enable Fast, change effort/model,
+install extensions, or add a paid request. Before a request is observed, or on unsupported providers,
+Fast is unknown.
+
+Weekly is the last observed account allowance from Codex response headers or `codex.rate_limits`
+stream events. A seven-day window is identified by its duration, not by assuming `secondary` means
+weekly. No proactive account query or extra authentication is performed. Missing/invalid data,
+other metered buckets, a reset deadline, and runtime restart leave the value unknown rather than
+inventing 0% or 100%. Unknown resource values use **-** without a progress bar, for example `weekly -`.
+Older runtime snapshots without telemetry remain compatible and show unknown values; finish jobs
+before explicitly restarting an old service to load the new capability.
+
 ### Native Git
 
 Git has **Commits / Reflog** navigation. Commits shows the colored commit history or a file comparison

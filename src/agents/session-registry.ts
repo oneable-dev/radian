@@ -5,8 +5,10 @@ import type { AgentStatus, Subagent } from "./model.ts";
 import { AgentRunError, CancelledError, capture, CleanupError, collectCleanup, HistoryError, InputError, parseJson, SessionError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import type { TranscriptSection } from "./transcript.ts";
+import type { SessionTelemetry } from "./telemetry.ts";
 
-export type ExecutionState = { readonly status: AgentStatus | null; readonly output: string; readonly error: string | null; readonly sections?: readonly TranscriptSection[] };
+export type ExecutionState = { readonly status: AgentStatus | null; readonly output: string; readonly error: string | null;
+  readonly sections?: readonly TranscriptSection[]; readonly telemetry?: SessionTelemetry };
 export type SessionExecutor = {
   readonly savedSessionId: string;
   readonly sessionFile: string | undefined;
@@ -99,6 +101,8 @@ export class SessionRegistry {
     entry.recoveredState = {
       output: restored.output.length >= record.state.output.length ? restored.output : record.state.output,
       ...(restored.sections ? { sections: restored.sections } : record.state.sections ? { sections: record.state.sections } : {}),
+      // Restore SDK-derived telemetry, never a saved account quota or Fast setting.
+      ...(restored.telemetry ? { telemetry: restored.telemetry } : {}),
       status: record.state.status === "working" ? null : restored.status,
       error: record.state.status === "working" ? "Previous runtime ended during this run; submit a new prompt to continue." : restored.error,
     };

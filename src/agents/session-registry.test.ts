@@ -222,6 +222,23 @@ test("동일 저장 파일과 심볼릭 링크의 중복 열기는 종료가 끝
   } finally { executor.finishClose.resolve(); await registry.shutdown(); await rm(directory, { recursive: true, force: true }); }
 });
 
+test("런타임 복구는 저장된 Fast·weekly 대신 새 SDK 텔레메트리를 사용한다", async () => {
+  // A previous process's account allowance and request tier are not current measurements.
+  const executor = new ControlledExecutor();
+  const fresh: NonNullable<ExecutionState["telemetry"]> = { provider: "provider", model: "current-model", effort: "high", fast: null,
+    context: { usedTokens: 1000, maxTokens: 200000 }, weekly: null };
+  executor.state = { status: "complete", output: "", error: null, telemetry: fresh };
+  const registry = new SessionRegistry(demoWorkspace(), async () => executor);
+  try {
+    expectOk(await registry.restore({ id: "restored", name: "Restored", worktreeId: "demo:main", subagents: [],
+      state: { status: "complete", output: "", error: null, telemetry: { ...fresh, model: "old-model", fast: true,
+        weekly: { remainingPercent: 82, observedAt: 1800000000000, resetsAt: 1800003600000 } } } }));
+
+    expect(registry.details("restored")?.telemetry).toEqual(fresh);
+    expect(registry.records[0]?.state.telemetry?.weekly).toBeNull();
+  } finally { executor.finishClose.resolve(); await registry.shutdown(); }
+});
+
 test("생성 실패는 빈 워크트리를 유지하며 자동 재생성하지 않는다", async () => {
   // Factory failure is a user-visible failure, not an invented placeholder session.
   let calls = 0;

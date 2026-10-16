@@ -65,6 +65,12 @@ test("별도 프로세스는 모든 UI가 분리된 동안에도 agent와 subage
     const a = expectOk(await client.create(main.id)); const b = expectOk(await client.create(feature.id));
     await client.prompt(a, "read");
     await observed(client, (state) => state.details[a]?.status === "complete");
+    // SDK metadata survives the real process/IPC boundary without inventing provider quotas.
+    expect(client.snapshot.capabilities).toContain("agent-telemetry");
+    expect(client.snapshot.details[a]?.telemetry?.model).toBe("fixture");
+    expect(client.snapshot.details[a]?.telemetry?.context?.maxTokens).toBe(200000);
+    expect(client.snapshot.details[a]?.telemetry?.weekly).toBeNull();
+    expect(client.snapshot.details[a]?.telemetry?.fast).toBeNull();
     await client.prompt(a, "slow"); await client.prompt(b, "delegate");
     await observed(client, (state) => progress(state.details[a]?.output) >= 1 && state.repositories[0]?.worktrees[1]?.sessions[0]?.subagents[0]?.status === "working");
     const pid = client.snapshot.pid; const instance = client.snapshot.instance;

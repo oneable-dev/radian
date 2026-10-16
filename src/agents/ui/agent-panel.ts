@@ -11,6 +11,7 @@ import { TranscriptPanel, type TranscriptOptions } from "./transcript-panel.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
+import { SessionStatus } from "./session-status.ts";
 
 export type AgentActions = {
   onNewSession: (worktreeId: string) => void;
@@ -32,6 +33,7 @@ export class AgentPanel {
   private readonly details: TextRenderable;
   private readonly runtimePanel: BoxRenderable;
   private readonly composer: BoxRenderable;
+  private readonly sessionStatus: SessionStatus;
   private readonly transcript: TranscriptPanel;
   private readonly newButton: BoxRenderable;
   private readonly drafts = new Map<string, string>();
@@ -64,8 +66,9 @@ export class AgentPanel {
     const marker = new TextRenderable(renderer, { content: "›", height: 1, flexShrink: 0, selectable: false });
     this.prompt.width = "auto"; this.prompt.flexGrow = 1; this.prompt.minWidth = 0;
     composer.add(marker); composer.add(this.prompt);
+    this.sessionStatus = new SessionStatus(renderer);
     this.runtimePanel.add(this.transcriptScroll); this.runtimePanel.add(this.transcript.status);
-    this.runtimePanel.add(composer); this.root.add(this.runtimePanel);
+    this.runtimePanel.add(this.sessionStatus.root); this.runtimePanel.add(composer); this.root.add(this.runtimePanel);
     theme.input(this.prompt); theme.scrollbars(this.transcriptScroll); theme.focusBorder(composer);
     theme.bind(this.root, (colors) => {
       this.title.fg = colors.text; this.details.fg = colors.muted;
@@ -110,6 +113,7 @@ export class AgentPanel {
     }
     for (const id of this.drafts.keys()) if (!openIds.has(id)) this.drafts.delete(id);
     this.runtimePanel.visible = Boolean(visible && session && this.actions.onPrompt);
+    this.sessionStatus.update(details?.telemetry, this.active);
     this.root.gap = this.active ? 0 : 1;
     this.root.alignItems = this.active ? "stretch" : "center";
     this.root.justifyContent = this.active ? "flex-start" : "center";
@@ -125,6 +129,7 @@ export class AgentPanel {
     const { horizontal, vertical } = panelSpacing(this.renderer);
     this.runtimePanel.marginTop = vertical;
     this.runtimePanel.gap = vertical;
+    // The mode line, telemetry and composer share one full-width column and responsive gap.
     this.composer.height = 1 + vertical * 2;
     this.composer.paddingX = horizontal;
   };
@@ -158,7 +163,7 @@ export class AgentPanel {
     if (this.disposed) return;
     this.rememberScroll(); this.disposed = true;
     this.renderer.off("resize", this.resize);
-    this.transcript.dispose();
+    this.sessionStatus.dispose(); this.transcript.dispose();
     this.prompt.off(InputRenderableEvents.INPUT, this.handleDraftInput);
   }
 }

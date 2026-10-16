@@ -9,6 +9,7 @@ import type { ExecutionState, SessionContext, SessionExecutor, SessionFactory } 
 import { AgentRunError, CancelledError, capture, InputError, SessionError, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { SessionTranscript } from "./transcript.ts";
+import { PiSessionTelemetry } from "./pi-session-telemetry.ts";
 
 export type PiSessionOptions = {
   agentDir?: string;
@@ -82,6 +83,7 @@ export class PiSessionExecutor implements SessionExecutor {
   private partial = "";
   private readonly activeTools = new Map<string, string>();
   private readonly transcript: SessionTranscript;
+  private readonly telemetry: PiSessionTelemetry;
   private readonly runs = new Set<Promise<Result<void, ExpectedError>>>();
   // Serialize only SDK admission, not model execution; messages live in Pi's queue.
   private admission: Promise<void> = Promise.resolve();
@@ -93,6 +95,7 @@ export class PiSessionExecutor implements SessionExecutor {
   constructor(private readonly session: AgentSession) {
     this.status = this.finalStatus(false);
     this.transcript = new SessionTranscript(session.sessionManager.getBranch());
+    this.telemetry = new PiSessionTelemetry(session, () => this.emit());
     this.unsubscribe = session.subscribe((event) => this.handleEvent(event));
   }
 
@@ -110,7 +113,8 @@ export class PiSessionExecutor implements SessionExecutor {
     });
     if (this.partial) messages.push(`Agent (streaming): ${this.partial}`);
     messages.push(...this.activeTools.values());
-    return { status: this.status, output: messages.join("\n\n").slice(-12000), error: this.error, sections: this.transcript.sections };
+    return { status: this.status, output: messages.join("\n\n").slice(-12000), error: this.error,
+      sections: this.transcript.sections, telemetry: this.telemetry.read() };
   }
 
   subscribe(listener: () => void): () => void {
@@ -159,7 +163,7 @@ export class PiSessionExecutor implements SessionExecutor {
         await Promise.all(this.runs);
         await this.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
       }, async () => {
-        this.session.dispose(); this.unsubscribe(); this.listeners.clear(); this.disposed = true;
+        this.telemetry.dispose(); this.session.dispose(); this.unsubscribe(); this.listeners.clear(); this.disposed = true;
       });
     }).then((result) => { if (!result.ok) this.closeTask = undefined; return result; });
     this.closeTask = task; void task.catch(() => { this.closeTask = undefined; }); return task;

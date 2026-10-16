@@ -23,7 +23,17 @@ const transcriptSection = Type.Object({
   summary: Type.Optional(Type.String()), error: Type.Optional(Type.String()), toolCallId: Type.Optional(Type.String()),
   skillName: Type.Optional(Type.String({ minLength: 1 })),
 });
-const execution = Type.Object({ status, output: Type.String(), error: Type.Union([Type.String(), Type.Null()]), sections: Type.Optional(Type.Array(transcriptSection)) });
+const nullableText = Type.Union([Type.String(), Type.Null()]);
+const telemetry = Type.Object({
+  provider: nullableText, model: nullableText, effort: nullableText, fast: Type.Union([Type.Boolean(), Type.Null()]),
+  context: Type.Union([Type.Object({ usedTokens: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
+    maxTokens: Type.Number({ exclusiveMinimum: 0 }) }), Type.Null()]),
+  weekly: Type.Union([Type.Object({ remainingPercent: Type.Number({ minimum: 0, maximum: 100 }),
+    resetsAt: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    observedAt: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }) }), Type.Null()]),
+});
+const execution = Type.Object({ status, output: Type.String(), error: Type.Union([Type.String(), Type.Null()]),
+  sections: Type.Optional(Type.Array(transcriptSection)), telemetry: Type.Optional(telemetry) });
 export const workViewSchema = Type.Union([Type.Literal("agent"), Type.Literal("editor"), Type.Literal("git"), Type.Literal("terminal")]);
 export type WorkView = Static<typeof workViewSchema>;
 // Preserve the original three-view wire enum for existing clients/manifests.

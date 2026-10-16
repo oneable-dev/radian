@@ -182,6 +182,11 @@ test("낮은 터미널에서도 Agent 입력창은 범례와 알림 및 푸터�
     const notice = app.renderer.root.findDescendantById("footer-notice")!;
 
     expect(composer.height).toBe(1);
+    const status = app.renderer.root.findDescendantById("session-status")!;
+    expect(status.y + status.height).toBe(composer.y);
+    expect(status.y + status.height).toBeLessThanOrEqual(notice.y - 1);
+    expect(app.captureCharFrame().split("\n")[status.y]).toContain("context");
+    expect(app.captureCharFrame().split("\n")[status.y]).toContain("weekly");
     expect(prompt.y + prompt.height).toBeLessThanOrEqual(notice.y - 1);
     expect(app.captureCharFrame().split("\n")[prompt.y]).toContain("compact draft");
     expect(app.captureCharFrame().split("\n")[notice.y - 1]).toContain("Working");
