@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { ExecutionState, SessionContext, SessionExecutor, SessionFactory } from "./session-registry.ts";
 import { AgentRunError, CancelledError, capture, InputError, SessionError, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
+import { SessionTranscript } from "./transcript.ts";
 
 export type PiSessionOptions = {
   agentDir?: string;
@@ -81,6 +82,7 @@ export class PiSessionExecutor implements SessionExecutor {
   private error: string | null = null;
   private partial = "";
   private readonly activeTools = new Map<string, string>();
+  private readonly transcript: SessionTranscript;
   private readonly runs = new Set<Promise<Result<void, ExpectedError>>>();
   // Serialize only SDK admission, not model execution; messages live in Pi's queue.
   private admission: Promise<void> = Promise.resolve();
@@ -91,6 +93,7 @@ export class PiSessionExecutor implements SessionExecutor {
 
   constructor(private readonly session: AgentSession) {
     this.status = this.finalStatus(false);
+    this.transcript = new SessionTranscript(session.sessionManager.getBranch());
     this.unsubscribe = session.subscribe((event) => this.handleEvent(event));
   }
 
@@ -108,7 +111,7 @@ export class PiSessionExecutor implements SessionExecutor {
     });
     if (this.partial) messages.push(`Agent (streaming): ${this.partial}`);
     messages.push(...this.activeTools.values());
-    return { status: this.status, output: messages.join("\n\n").slice(-12000), error: this.error };
+    return { status: this.status, output: messages.join("\n\n").slice(-12000), error: this.error, sections: this.transcript.sections };
   }
 
   subscribe(listener: () => void): () => void {
@@ -164,6 +167,7 @@ export class PiSessionExecutor implements SessionExecutor {
   }
 
   private handleEvent(event: AgentSessionEvent): void {
+    this.transcript.handle(event);
     switch (event.type) {
       case "agent_start": case "auto_retry_start": case "compaction_start":
         this.status = "working";

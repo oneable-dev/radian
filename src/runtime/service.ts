@@ -98,7 +98,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "typed-errors", "work-views", "terminal-tabs", "instance-guard"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || this.notice, editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
@@ -179,7 +179,8 @@ class WorkspaceRuntime {
         const workViews = command.preferences.workViews ?? this.preferences.workViews;
         const terminalViews = command.preferences.terminalViews ?? this.preferences.terminalViews;
         const gitViews = command.preferences.gitViews ?? this.preferences.gitViews;
-        this.preferences = { ...command.preferences, ...(workViews ? { workViews } : {}), ...(terminalViews ? { terminalViews } : {}), ...(gitViews ? { gitViews } : {}) };
+        const agentViews = command.preferences.agentViews ?? this.preferences.agentViews;
+        this.preferences = { ...command.preferences, ...(workViews ? { workViews } : {}), ...(terminalViews ? { terminalViews } : {}), ...(gitViews ? { gitViews } : {}), ...(agentViews ? { agentViews } : {}) };
         return ok(null);
       }
       case "terminal-create": return this.terminals.create(command.worktreeId, command);

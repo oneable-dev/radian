@@ -4,8 +4,9 @@ import type { Repository, Worktree } from "../workspace/model.ts";
 import type { AgentStatus, Subagent } from "./model.ts";
 import { AgentRunError, CancelledError, capture, CleanupError, collectCleanup, HistoryError, InputError, parseJson, SessionError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
+import type { TranscriptSection } from "./transcript.ts";
 
-export type ExecutionState = { readonly status: AgentStatus | null; readonly output: string; readonly error: string | null };
+export type ExecutionState = { readonly status: AgentStatus | null; readonly output: string; readonly error: string | null; readonly sections?: readonly TranscriptSection[] };
 export type SessionExecutor = {
   readonly savedSessionId: string;
   readonly sessionFile: string | undefined;
@@ -97,6 +98,7 @@ export class SessionRegistry {
     const restored = entry.executor!.state;
     entry.recoveredState = {
       output: restored.output.length >= record.state.output.length ? restored.output : record.state.output,
+      ...(restored.sections ? { sections: restored.sections } : record.state.sections ? { sections: record.state.sections } : {}),
       status: record.state.status === "working" ? null : restored.status,
       error: record.state.status === "working" ? "Previous runtime ended during this run; submit a new prompt to continue." : restored.error,
     };

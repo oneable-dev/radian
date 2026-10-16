@@ -1,14 +1,19 @@
-export const contexts = ["workspace", "search", "history", "prompt", "button", "transcript", "editor", "terminal", "git", "git-prompt", "none"] as const;
+export const contexts = ["workspace", "search", "history", "prompt", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "none"] as const;
 export type KeyContext = typeof contexts[number];
 export type KeyScope = KeyContext | "global" | "app" | "pty";
 export type BindingInput = { keys: string; scope: KeyScope };
 const key = (keys: string, scope: KeyScope = "global"): BindingInput => ({ keys, scope });
 
+const transcriptContexts = ["transcript", "transcript-text", "transcript-visual"] as const;
+const transcriptKeys = (keys: string): BindingInput[] => transcriptContexts.map((scope) => key(keys, scope));
+const textKeys = (...keys: string[]): BindingInput[] => keys.flatMap((keys) => [key(keys, "transcript-text"), key(keys, "transcript-visual")]);
+
 export const defaultBindings = {
   "app.detach": [key("<leader> c")],
   "focus.sidebar": [key("ctrl+]", "pty"), key("escape", "prompt"), key("<leader> w")],
   "focus.search": [key("ctrl+f", "app"), key("<leader> f")],
-  "focus.prompt": [key("ctrl+e", "app"), key("<leader> p")],
+  "focus.prompt": [key("ctrl+e", "app"), key("<leader> p"), key("i", "transcript"), key("i", "transcript-text")],
+  "focus.transcript": [key("ctrl+t", "app"), key("<leader> o")],
   "focus.next": [key("tab", "app")],
   "focus.previous": [key("shift+tab", "app")],
   "focus.results": [key("enter", "search")],
@@ -36,6 +41,35 @@ export const defaultBindings = {
   "history.first": [key("home", "history")],
   "history.last": [key("end", "history")],
   "agent.send": [key("enter", "prompt")],
+  "transcript.previous": [key("k", "transcript"), key("up", "transcript")],
+  "transcript.next": [key("j", "transcript"), key("down", "transcript")],
+  "transcript.first": [key("home", "transcript"), key("g g", "transcript")],
+  "transcript.last": [key("end", "transcript"), key("shift+g", "transcript")],
+  "transcript.enter": [key("enter", "transcript")],
+  "transcript.back": [key("escape", "transcript"), key("escape", "transcript-text"), key("escape", "transcript-visual")],
+  "transcript.fold": [...transcriptKeys("ctrl+o"), ...transcriptKeys("z a")],
+  "transcript.fold-all": transcriptKeys("z m"),
+  "transcript.unfold-all": transcriptKeys("z r"),
+  "transcript.latest": transcriptKeys("g e"),
+  "transcript.copy": transcriptKeys("y"),
+  "transcript.copy-section": transcriptKeys("shift+y"),
+  "transcript.help": transcriptKeys("f1"),
+  "transcript.left": textKeys("h", "left"),
+  "transcript.right": textKeys("l", "right"),
+  "transcript.up": textKeys("k", "up"),
+  "transcript.down": textKeys("j", "down"),
+  "transcript.word-next": textKeys("w"),
+  "transcript.word-previous": textKeys("b"),
+  "transcript.line-start": textKeys("0", "home"),
+  "transcript.line-end": textKeys("$", "shift+$", "shift+4", "end"),
+  "transcript.buffer-start": textKeys("g g", "ctrl+home"),
+  "transcript.buffer-end": textKeys("shift+g", "ctrl+end"),
+  "transcript.visual": textKeys("v"),
+  "transcript.visual-line": textKeys("shift+v"),
+  "transcript.half-page-up": transcriptKeys("ctrl+u"),
+  "transcript.half-page-down": transcriptKeys("ctrl+d"),
+  "transcript.page-up": transcriptKeys("pageup"),
+  "transcript.page-down": transcriptKeys("pagedown"),
   "git.ask": [key("a", "git")],
   "git.copy": [key("y", "git")],
   "git.submit": [key("enter", "git-prompt")],

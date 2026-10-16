@@ -42,7 +42,7 @@ not automatically replay a prompt. No separate queue-management or follow-up mod
 `--demo` remains display-only: closing removes fixture metadata and creation only reports a
 request. It does not invoke Pi, access credentials, or create stored sessions.
 The History tab lists saved SDK conversations for the selected worktree and opens them explicitly.
-The Agent view remains a minimal execution interface, not the finished conversation editor.
+The Agent view provides a keyboard-first, read-only transcript and prompt, not a conversation-content editor.
 The Editor view embeds Neovim; Git provides a native, read-only history and whole-file diff UI.
 
 ### Work views
@@ -54,8 +54,8 @@ selects that session and switches to Agent, even if that worktree previously sho
 Search and background snapshots do not override the active view. Session creation/closing retain
 their existing rules and never implicitly launch an editor.
 
-Every worktree remembers its active tab. Agent retains its selected session, draft and transcript
-scroll position; Neovim retains its actual files, cursor, editing mode and unsaved buffers in the
+Every worktree remembers its active tab. Agent retains its selected session, draft, transcript
+scroll position and section/cursor/folding state; Neovim retains its actual files, cursor, editing mode and unsaved buffers in the
 detached runtime. Terminal retains its shell list, selected shell and log viewport. All four views
 restore on TUI reconnect while that runtime remains alive.
 Git restores its internal tabs, ref filter, selected commit/file, comparison and scroll positions.
@@ -74,6 +74,76 @@ and Tab/Shift+Tab traversal work. **Ctrl+C is native input**, not an application
 Use the configured detach sequence (default **Ctrl+Space, then c**). The footer follows the actual
 focused control and effective keymap. Opening, switching and resizing do not
 send a prompt to an agent or run a Git mutation. Entering Git may perform read-only queries.
+
+### Agent transcript
+
+An upgraded runtime supplies separate **You**, **Agent**, **Thinking** and **tool execution** sections.
+Tool calls and results are joined by call ID, not tool name; unknown tools and MCP bridges use the
+same generic interactions. MCP-specific actions and loading new MCP integrations are not included.
+Thinking and tool details start folded; user/Agent text starts expanded. Any nonempty section can
+be folded manually. Error summaries stay visible outside the folded body, and folding never deletes text.
+Image attachments have a text placeholder; image rendering is not part of this reader.
+
+Sections have subtle, distinct host-palette backgrounds for user text, Agent replies, Thinking,
+tools and notices. A left accent and heading highlight identify the selected section without hiding
+its kind color. Expanded cards separate headings from body text and leave two rows between sections;
+screens shorter than 18 rows use one-row section gaps and remove internal vertical spacing.
+
+Explicit SDK skill invocation blocks appear as **one-line skill names only**, with no disclosure
+control or expandable instructions. They are excluded from individual and all-section folding, but
+the name remains navigable/selectable/copyable. Arguments following the invocation remain a separate
+user message. A generic `read` of `SKILL.md` stays a tool call; filenames alone do not identify a skill.
+
+Outside an embedded PTY, **Ctrl+T** (or **leader, then o**) enters the transcript. **Ctrl+E** returns
+to the input without sending it. All commands are configurable in the existing keymap:
+
+| Mode | Default keys | Action |
+| --- | --- | --- |
+| Sections | j/k or arrows; Home/End or gg/G | Previous/next or first/last section |
+| Sections | Enter | Put the cursor in visible text: folded heading/summary or expanded body |
+| Sections/Text/Visual | Ctrl+O (also za); zm/zr | Toggle the selected section; fold/unfold all |
+| Text/Visual | h/j/k/l or arrows | Grapheme/visual-line cursor movement |
+| Text/Visual | w/b; 0/$ or Home/End; gg/G or Ctrl+Home/End | Word, logical-line and section boundaries |
+| Text/Visual | v / V | Character selection / whole-logical-line selection; repeat the same key to stop |
+| Visual Line | j/k | Move by logical source lines, including wrapped paragraphs |
+| Sections/Text/Visual | Ctrl+D / Ctrl+U | Move down/up half the transcript viewport |
+| Sections/Text/Visual | y | Copy the section, current logical line, or selected range, respectively |
+| Sections/Text/Visual | Y | Copy the whole raw section, including folded details |
+| Sections/Text/Visual | ge | Jump to the latest output and resume following |
+| Sections/Text/Visual | PgUp/PgDn; F1 | Page; open/close scrollable keyboard help |
+| Visual/Text/Sections | Esc | Return to Text, Sections, then Input |
+| Sections/Text | i | Return to input |
+
+**Enter never changes folding**. It always enters text navigation: a folded section exposes its
+visible heading/summary, while an expanded section exposes its body. Disclosure markers are not part
+of selectable text. `y` copies the current visible line/selection; `Y` still copies the complete raw
+section, even when folded. Heading and body cursor positions are retained independently.
+Shared Visual bindings also apply to **Visual Line**. `V` selects whole logical lines of the active text surface,
+including their original LF/CRLF endings when present, never soft-wrap breaks or an invented EOF
+newline. `v`/`V` can switch selection kind while retaining the anchor. Both kinds survive streaming,
+resize and warm reconnect. `Ctrl+D/U` scrolls the viewport in Sections and moves the cursor in Text
+or Visual; it does not select another section. To jump between sections while reading, press `Esc`
+to return to Sections, then j/k (or gg/G). A selection first needs `Esc` to return to Text.
+
+The status row shows the mode, selected section and whether output following is paused. Entering
+transcript navigation pauses following; new output does not pull a reader back to the bottom.
+Streaming preserves section identity, explicit folding choices, cursor/selection and the viewport
+anchor where scrolling permits. Copying preserves raw text, including original line breaks, rather
+than inserting display-wrap breaks. Unbound keys, timed-out prefixes and paste cannot edit transcript
+content. Help uses the same scroll viewport and returns to the prior position/mode when closed.
+
+The shared OpenTUI clipboard service uses best-available host/terminal delivery. A host write is
+reported as copied; OSC52 is reported only as a request sent to the terminal. Unsupported delivery
+and failures are explicit and retain the selection. Acceptance by a real SSH terminal or multiplexer
+is not inferred from dispatch. Reading/copying does not send prompts or change saved SDK history.
+
+Only navigation state is stored in the additive `agentViews` preference; it survives switching
+sessions/views and reconnecting to the same live runtime. Stable live section IDs do not promise
+restoration of temporary selections after a service restart. Full transcript text is not limited to
+the legacy 12-message/12,000-character preview; the existing **8 MiB IPC frame limit** still applies,
+and transcript paging is not implemented. Older services remain usable with a clearly marked legacy
+preview. Finish their jobs and explicitly stop/restart them to load the new capability; no service
+is automatically restarted.
 
 ### Native Git
 
@@ -240,7 +310,8 @@ the TUI to apply edits; the runtime and its processes do not need restarting. Th
 Spaces separate sequential keys (`"space r"` is a two-key leader); `+` combines modifiers.
 Use explicit `shift+c` for uppercase C. A string binding is global; an object can specify `scope`:
 `global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `prompt`, `button`,
-`transcript`, `editor`, `terminal`, or `none`. An override replaces that command's defaults;
+`transcript` (section navigation), `transcript-text`, `transcript-visual`, `editor`, `terminal`,
+`git`, `git-prompt`, or `none`. An override replaces that command's defaults;
 `[]` disables it. Command IDs/defaults are defined in `src/keybindings/commands.ts`.
 Unknown commands, invalid keys and overlapping/prefix bindings are errors rather than silent fallbacks.
 For example, a printable Space leader conflicts with the default button Space activation unless that
@@ -269,7 +340,8 @@ The footer itself is read-only: clicking it neither runs an action nor takes inp
 
 The footer stays one line on narrow terminals. Identity stays on the left; complete shortcut/label
 pairs fit in the owner's supplied order and trailing pairs are omitted with an ellipsis. Resize
-restores them when space permits. There is no extra Help action or invented priority category.
+restores them when space permits. The footer does not invent Help actions or priority categories;
+a control may supply its own contextual help shortcut.
 `src/ui/footer.ts` is a reusable presentation component; it does not own keyboard handlers,
 workspace selection, or agent execution.
 
@@ -377,9 +449,10 @@ replace notices belonging to a recovered connection or new service.
 - **Force-killed service:** SDK executions stop and stale endpoints are recovered on the next launch.
   Unlike graceful stop, hard crashes cannot guarantee cleanup of arbitrary tool subprocesses.
 
-The central probe displays a bounded recent transcript (12 messages / 12,000 characters), not the
-complete conversation editor or Orca's terminal scrollback. Full SDK history remains in JSONL.
-Pi CLI extensions/MCP and remote-machine services are still outside this initial host.
+The Agent view uses the structured read-only transcript described above on services advertising
+`agent-transcript`; the bounded recent `output` field remains for compatibility with older clients.
+Full SDK history remains in JSONL. Pi CLI extensions/MCP and remote-machine services are still outside
+this initial host.
 
 ### Work-view runtime foundation
 
@@ -519,7 +592,7 @@ This is an incremental domain-oriented layout, not a requirement to give every f
 | `src/workspace/` | Repository/worktree discovery, snapshot models and search projection |
 | `src/runtime/` | Detached service, IPC, recovery, checkpoints and shared `pty/` implementation |
 | `src/keybindings/` | Application commands, binding configuration and input routing |
-| `src/ui/` | Shared footer, loading feedback, theme and embedded-terminal presentation |
+| `src/ui/` | Shared footer, loading feedback, clipboard, theme and embedded-terminal presentation |
 | `src/testing/` | Isolated repositories, scripted SDK responses and test helpers |
 
 `src/index.ts` is the executable entry point. `app/bootstrap.ts` wires the runtime and feature
@@ -528,7 +601,8 @@ interfaces; features do not import the workbench. Keep feature runtime modules i
 exports that load OpenTUI when the daemon imports Agent, Editor or Terminal lifecycle code.
 Workspace models remain outside `app`; the workbench owns tree rows and navigation presentation.
 The existing repository/worktree snapshot still includes Agent summaries for compatibility, not
-execution ownership. Wire schemas and checkpoint formats remain in `runtime/protocol.ts` unchanged.
+execution ownership. Wire schemas and checkpoint contracts remain owned by `runtime/protocol.ts`; transcript sections
+and navigation preferences extend those contracts with optional fields.
 
 Tests live beside their feature or integration owner. Whole-workbench tests are under `app/ui/`;
 feature interaction tests may compose the real workbench. Pure file moves do not change renderable

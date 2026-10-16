@@ -89,6 +89,11 @@ test("실제 SDK read/write는 선택한 워크트리의 cwd를 사용하며 다
     expect(await Bun.file(join(app.main.path, "radian-probe.txt")).exists()).toBe(false);
     expect(process.cwd()).toBe(originalCwd);
     expect(app.registry.details(a)?.status).toBe("complete");
+    const read = app.registry.details(a)?.sections?.find((section) => section.kind === "tool" && section.title === "read");
+    expect(read?.status).toBe("complete");
+    expect(read?.text).toContain("main-worktree-marker");
+    expect(read?.text).toContain("Arguments:");
+    expect(app.registry.details(a)?.sections?.some((section) => section.kind === "user")).toBe(true);
   } finally { await app.cleanup(); }
 });
 
@@ -173,6 +178,7 @@ test("닫은 SDK 세션을 다시 열면 동일 저장 ID와 대화 기록을 �
     expect(app.registry.sessionFile(reopened)).toBe(file);
     expect(app.executors.at(-1)!.savedSessionId).toBe(savedId);
     expect(app.registry.details(reopened)?.output).toContain("main-worktree-marker");
+    expect(app.registry.details(reopened)?.sections?.find((section) => section.kind === "tool")?.text).toContain("main-worktree-marker");
     expect((await readFile(file, "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((entry) => entry.type === "session")).toHaveLength(1);
   } finally { await app.cleanup(); }
 });

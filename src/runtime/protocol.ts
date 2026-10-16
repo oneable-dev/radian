@@ -1,9 +1,10 @@
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import type { Repository } from "../workspace/model.ts";
-import type { SessionRecord } from "../agents/session-registry.ts";
+import type { ExecutionState, SessionRecord } from "../agents/session-registry.ts";
 import type { GitViewState } from "../git/model.ts";
 import { gitViewsSchema } from "../git/preferences.ts";
+import { agentViewsSchema, type TranscriptViewState } from "../agents/transcript-preferences.ts";
 import { errorCodes, ExpectedError, InputError, parseJson, ProtocolError, type ErrorCode } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 
@@ -15,7 +16,14 @@ const agent = Type.Object({ id, name: Type.String(), status });
 const session = Type.Object({ id, name: Type.String(), status, subagents: Type.Array(agent) });
 const worktree = Type.Object({ id, path: id, name: Type.String(), branch: Type.Union([Type.String(), Type.Null()]), sessions: Type.Array(session) });
 const repository = Type.Object({ id, name: Type.String(), worktrees: Type.Array(worktree) });
-const execution = Type.Object({ status, output: Type.String(), error: Type.Union([Type.String(), Type.Null()]) });
+const transcriptSection = Type.Object({
+  id, kind: Type.Union([Type.Literal("user"), Type.Literal("assistant"), Type.Literal("thinking"), Type.Literal("tool"), Type.Literal("notice")]),
+  title: Type.String(), text: Type.String(),
+  status: Type.Union([Type.Literal("complete"), Type.Literal("streaming"), Type.Literal("pending"), Type.Literal("running"), Type.Literal("error"), Type.Literal("cancelled"), Type.Literal("unfinished")]),
+  summary: Type.Optional(Type.String()), error: Type.Optional(Type.String()), toolCallId: Type.Optional(Type.String()),
+  skillName: Type.Optional(Type.String({ minLength: 1 })),
+});
+const execution = Type.Object({ status, output: Type.String(), error: Type.Union([Type.String(), Type.Null()]), sections: Type.Optional(Type.Array(transcriptSection)) });
 export const workViewSchema = Type.Union([Type.Literal("agent"), Type.Literal("editor"), Type.Literal("git"), Type.Literal("terminal")]);
 export type WorkView = Static<typeof workViewSchema>;
 // Preserve the original three-view wire enum for existing clients/manifests.
@@ -23,7 +31,7 @@ export const workViewsSchema = Type.Object({
   active: Type.Record(Type.String(), Type.Union([Type.Literal("agent"), Type.Literal("editor"), Type.Literal("git")])),
   agentScroll: Type.Record(Type.String(), Type.Integer({ minimum: 0 })),
 });
-export type WorkViewPreferences = { active: Record<string, WorkView>; agentScroll: Record<string, number>; terminalSelection?: Record<string, string>; gitViews?: Record<string, GitViewState> };
+export type WorkViewPreferences = { active: Record<string, WorkView>; agentScroll: Record<string, number>; terminalSelection?: Record<string, string>; gitViews?: Record<string, GitViewState>; agentViews?: Record<string, TranscriptViewState> };
 export const ptyInfoSchema = Type.Object({
   id, worktreeId: id, pid: Type.Integer({ minimum: 1 }), exited: Type.Boolean(), exitCode: Type.Union([Type.Integer(), Type.Null()]),
 });
@@ -45,6 +53,7 @@ export const preferencesSchema = Type.Object({
   drafts: Type.Record(Type.String(), Type.String({ maxLength: 1000000 })),
   workViews: Type.Optional(workViewsSchema),
   gitViews: Type.Optional(gitViewsSchema),
+  agentViews: Type.Optional(agentViewsSchema),
   terminalViews: Type.Optional(Type.Object({ active: Type.Array(id), selected: Type.Record(Type.String(), id) })),
 });
 export type RuntimePreferences = Static<typeof preferencesSchema>;
@@ -59,7 +68,7 @@ export const snapshotSchema = Type.Object({
   terminals: Type.Optional(Type.Array(terminalInfoSchema)),
   terminalClosingCount: Type.Optional(Type.Integer({ minimum: 0 })),
 });
-export type RuntimeSnapshot = Omit<Static<typeof snapshotSchema>, "repositories"> & { readonly repositories: readonly Repository[] };
+export type RuntimeSnapshot = Omit<Static<typeof snapshotSchema>, "repositories" | "details"> & { readonly repositories: readonly Repository[]; readonly details: Readonly<Record<string, ExecutionState>> };
 const record = Type.Object({
   id, name: Type.String(), worktreeId: id, sessionFile: Type.Optional(id),
   state: execution, subagents: Type.Array(agent),

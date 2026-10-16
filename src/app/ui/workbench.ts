@@ -142,7 +142,11 @@ export class Workbench {
     this.workPanel.add(workTabs);
     this.agent = new AgentPanel(renderer, actions, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
       (message) => this.setNotice(message), () => this.updateFooter(), () => this.tree.focus(), this.workViews.agentScroll,
-      (id, position) => { this.workViews.agentScroll[id] = position; this.saveWorkViews(); });
+      (id, position) => { this.workViews.agentScroll[id] = position; this.saveWorkViews(); }, {
+        ...(this.workViews.agentViews ? { initialViews: this.workViews.agentViews } : {}),
+        saveView: (id, state) => { (this.workViews.agentViews ??= {})[id] = state; this.saveWorkViews(); },
+        keyHint: (command, context) => this.keymap.hint(command, context),
+      });
     this.editor = new EditorPanel(renderer, actions.editor, (label, activate) => this.button(label, activate, "Open editor"),
       (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); }, () => this.updateFooter(), this.keymap.hint("focus.sidebar", "editor"), actions.terminalTheme);
     this.terminals = new TerminalPanel(renderer, actions.terminal, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
@@ -229,11 +233,9 @@ export class Workbench {
       ...(!this.keymap.bound("ctrl+c", "terminal") ? [{ key: "Ctrl+C", label: "Interrupt" }] : []),
       ...(this.terminals.canScroll ? [pair("terminal.scroll-up", "terminal.scroll-down", "Scroll")] : []), hint("focus.sidebar", "Sidebar"),
     ];
-    else if (focused === this.agent.transcriptScroll && this.agent.active) shortcuts = [
-      { key: "↑/↓", label: "Scroll" }, { key: "PgUp/PgDn", label: "Page" },
-    ];
+    else if (this.agent.transcriptContext()) shortcuts = this.agent.transcriptShortcuts;
     else if (focused === this.agent.prompt && this.agent.active) {
-      shortcuts = [...(this.agent.canSubmit ? [hint("agent.send", this.agent.working ? "Queue" : "Run")] : []), hint("focus.sidebar", "Workspace")];
+      shortcuts = [...(this.agent.canSubmit ? [hint("agent.send", this.agent.working ? "Queue" : "Run")] : []), hint("focus.transcript", "Transcript"), hint("focus.sidebar", "Workspace")];
     } else if (context === "git" || context === "git-prompt") shortcuts = this.git.shortcuts;
     else if (focused === this.history.list && this.tab === "history") shortcuts = this.history.shortcuts;
     else if (focused) {
@@ -314,6 +316,7 @@ export class Workbench {
     const focused = this.renderer.currentFocusedRenderable;
     if (!focused) return "none";
     const gitContext = this.git?.keyContext(); if (gitContext) return gitContext;
+    const transcriptContext = this.agent?.transcriptContext(); if (transcriptContext) return transcriptContext;
     if (focused === this.editor.input) return "editor";
     if (focused === this.terminals.input) return "terminal";
     if (focused === this.tree) return "workspace";
@@ -325,6 +328,7 @@ export class Workbench {
   }
   private commandAvailable(command: CommandId): boolean {
     if (command.startsWith("git.")) return this.git.available(command);
+    if (command.startsWith("transcript.")) return this.agent.transcriptAvailable(command);
     switch (command) {
       case "app.detach": return Boolean(this.actions.onDetach);
       case "session.new": case "view.agent": case "view.editor": case "view.git": case "view.terminal": return Boolean(this.selection.worktree);
@@ -332,7 +336,7 @@ export class Workbench {
       case "terminal.close": case "terminal.next": case "terminal.previous": return this.terminals.root.visible && this.terminals.canClose;
       case "terminal.scroll-up": case "terminal.scroll-down": return this.terminals.root.visible && this.terminals.canScroll;
       case "session.close": return Boolean(this.selection.sessionId);
-      case "focus.prompt": return this.agent.active;
+      case "focus.prompt": case "focus.transcript": return this.agent.active;
       case "agent.send": return this.agent.active && Boolean(this.agent.sessionId);
       case "button.activate": return !!this.renderer.currentFocusedRenderable && this.buttonActions.has(this.renderer.currentFocusedRenderable);
       default: return true;
@@ -340,11 +344,13 @@ export class Workbench {
   }
   private command(command: CommandId): void {
     if (command.startsWith("git.")) { this.git.command(command); return; }
+    if (command.startsWith("transcript.")) { this.agent.transcriptCommand(command); return; }
     switch (command) {
       case "app.detach": this.actions.onDetach?.(); break;
       case "focus.sidebar": case "focus.results": if (this.tab === "history") this.history.list.focus(); else this.tree.focus(); break;
       case "focus.search": this.search.focus(); break;
       case "focus.prompt": this.agent.prompt.focus(); break;
+      case "focus.transcript": this.agent.focusTranscript(); break;
       case "focus.next": this.moveFocus(1); break;
       case "focus.previous": this.moveFocus(-1); break;
       case "search.clear": this.search.value = ""; break;
