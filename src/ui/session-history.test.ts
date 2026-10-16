@@ -259,7 +259,7 @@ test("연결 복구 알림은 보이는 History 오류를 새 목록으로 바�
     online = true; app.view.setNotice("Runtime connected"); app.view.refreshHistory(); await app.visible("Restored history");
 
     expect(app.captureCharFrame()).not.toContain("History error:");
-    expect(app.captureCharFrame()).toContain("Native Git UI is planned");
+    expect(app.captureCharFrame()).toContain("Git preview");
     expect(app.selection.sessionId).toBe("a1");
     expect(app.resumed).toEqual([]);
     expect(calls).toBe(2);

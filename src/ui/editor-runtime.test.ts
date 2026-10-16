@@ -74,7 +74,7 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
 
     expect(app.client.snapshot.editors![0]!.pid).toBe(pid);
     expect(app.view.workViewPreferences.active[fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!.id]).toBe("editor");
-    await app.click("feature (feature/probe)"); await app.visible("Native Git UI is planned");
+    await app.click("feature (feature/probe)"); await app.visible("Git preview");
     expect(app.captureCharFrame()).not.toContain("unsaved-native-editor");
 
     // Normal Neovim exit must not turn the focus-out notification into a stale-input error.

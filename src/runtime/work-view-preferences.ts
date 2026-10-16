@@ -4,6 +4,7 @@ export function restoreWorkViews(preferences: RuntimePreferences): WorkViewPrefe
   const views: WorkViewPreferences = structuredClone(preferences.workViews ?? { active: {}, agentScroll: {} });
   for (const worktreeId of preferences.terminalViews?.active ?? []) views.active[worktreeId] = "terminal";
   views.terminalSelection = { ...preferences.terminalViews?.selected };
+  if (preferences.gitViews) views.gitViews = structuredClone(preferences.gitViews);
   return views;
 }
 export function saveWorkViews(preferences: RuntimePreferences, views: WorkViewPreferences): void {
@@ -16,4 +17,5 @@ export function saveWorkViews(preferences: RuntimePreferences, views: WorkViewPr
   }
   preferences.workViews = { active, agentScroll: { ...views.agentScroll } };
   preferences.terminalViews = { active: terminals, selected: { ...views.terminalSelection } };
+  if (views.gitViews) preferences.gitViews = structuredClone(views.gitViews);
 }

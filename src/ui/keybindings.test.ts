@@ -22,7 +22,7 @@ test("사용자 키맵은 트리 명령·비활성화·푸터와 leader 뷰 전�
     expect(calls).toEqual(["new"]);
 
     app.mockInput.pressKey("b", { ctrl: true }); app.mockInput.pressKey("g"); await app.renderOnce();
-    expect(app.captureCharFrame()).toContain("Native Git UI is planned");
+    expect(app.captureCharFrame()).toContain("Git preview");
     app.mockInput.pressCtrlC(); expect(calls).toEqual(["new"]);
     app.mockInput.pressKey("b", { ctrl: true }); app.mockInput.pressKey("c");
     expect(calls).toEqual(["new", "detach"]);

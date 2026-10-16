@@ -5,6 +5,7 @@ export const errorCodes = [
   "CANCELLED", "AGENT_FAILED", "CLEANUP_FAILED", "HISTORY_UNAVAILABLE", "HISTORY_CORRUPT",
   "STORAGE_FAILED", "RUNTIME_ABSENT", "CONNECTION_FAILED", "CONNECTION_TIMEOUT", "PROTOCOL_ERROR",
   "UNSUPPORTED_CAPABILITY", "LEGACY_REMOTE_ERROR", "REMOTE_INTERNAL_ERROR", "GIT_DISCOVERY_FAILED",
+  "GIT_QUERY_FAILED", "GIT_PREVIEW_UNAVAILABLE", "GIT_PROTOCOL_ERROR", "CLIPBOARD_UNAVAILABLE",
   "EDITOR_UNAVAILABLE", "EDITOR_NOT_OPEN", "EDITOR_BUSY", "PTY_NOT_OPEN", "PTY_BUSY", "PTY_UNAVAILABLE", "PTY_OWNERSHIP_LOST", "PTY_CLEANUP_FAILED",
 ] as const;
 export type ErrorCode = typeof errorCodes[number];
@@ -47,6 +48,12 @@ export class PtyError extends ExpectedError<PtyErrorCode> {
 }
 export class EditorError extends ExpectedError<"EDITOR_UNAVAILABLE" | "EDITOR_NOT_OPEN" | "EDITOR_BUSY"> {
   constructor(code: "EDITOR_UNAVAILABLE" | "EDITOR_NOT_OPEN" | "EDITOR_BUSY", message: string, options?: ErrorOptions) { super(code, message, options); }
+}
+export class GitError extends ExpectedError<"GIT_QUERY_FAILED" | "GIT_PREVIEW_UNAVAILABLE" | "GIT_PROTOCOL_ERROR"> {
+  constructor(code: "GIT_QUERY_FAILED" | "GIT_PREVIEW_UNAVAILABLE" | "GIT_PROTOCOL_ERROR", message: string, options?: ErrorOptions) { super(code, message, options); }
+}
+export class ClipboardError extends ExpectedError<"CLIPBOARD_UNAVAILABLE"> {
+  constructor(message: string, options?: ErrorOptions) { super("CLIPBOARD_UNAVAILABLE", message, options); }
 }
 export class CapabilityError extends ExpectedError<"UNSUPPORTED_CAPABILITY"> {
   constructor(message: string) { super("UNSUPPORTED_CAPABILITY", message); }

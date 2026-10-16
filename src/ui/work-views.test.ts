@@ -62,7 +62,7 @@ test("좌우 두 패널과 푸터를 표시하고 워크트리별 Editor·Git �
     await app.click("radian (main)");
     expect(app.captureCharFrame()).toContain("Editor preview");
     await app.click("radian-ui (feature");
-    expect(app.captureCharFrame()).toContain("Native Git UI is planned");
+    expect(app.captureCharFrame()).toContain("Git preview");
     expect(app.view.workViewPreferences.active).toEqual({ "demo:main": "editor", "demo:feature": "git" });
     expect(app.requests).toEqual([]);
     app.resize(60, 12); await app.renderOnce();
@@ -96,7 +96,7 @@ test("검색과 백그라운드 snapshot은 Git 화면을 강제로 Agent로 바
     app.mockInput.pressKey("f", { ctrl: true }); await app.mockInput.typeText("feature/workspace");
     app.selection.replaceSnapshot(demoWorkspace()); await app.renderOnce();
 
-    expect(app.captureCharFrame()).toContain("Native Git UI is planned");
+    expect(app.captureCharFrame()).toContain("Git preview");
     expect(app.selection.worktree?.id).toBe("demo:main");
     expect(app.view.workViewPreferences.active["demo:main"]).toBe("git");
   } finally { await app.close(); }
@@ -153,7 +153,7 @@ test("느린 Editor 열기 응답은 새로 선택한 Git 화면이나 포커스
 
     ready.resolve(ok("demo:main")); await Bun.sleep(0); await app.renderOnce();
 
-    expect(app.captureCharFrame()).toContain("Native Git UI is planned");
+    expect(app.captureCharFrame()).toContain("Git preview");
     expect(app.renderer.currentFocusedRenderable).toBe(focus);
     expect(app.view.workViewPreferences.active["demo:feature"]).toBe("git");
     expect(app.captureCharFrame()).not.toContain("Editor buffer");

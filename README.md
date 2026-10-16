@@ -43,7 +43,7 @@ not automatically replay a prompt. No separate queue-management or follow-up mod
 request. It does not invoke Pi, access credentials, or create stored sessions.
 The History tab lists saved SDK conversations for the selected worktree and opens them explicitly.
 The Agent view remains a minimal execution interface, not the finished conversation editor.
-The Editor view embeds Neovim; Git currently provides its tab/state foundation only.
+The Editor view embeds Neovim; Git provides a native, read-only history and whole-file diff UI.
 
 ### Work views
 
@@ -58,8 +58,10 @@ Every worktree remembers its active tab. Agent retains its selected session, dra
 scroll position; Neovim retains its actual files, cursor, editing mode and unsaved buffers in the
 detached runtime. Terminal retains its shell list, selected shell and log viewport. All four views
 restore on TUI reconnect while that runtime remains alive.
-Git intentionally displays a **planned native UI** notice: no file list, diff, stage, commit, push,
-or lazygit integration is implemented in this stage.
+Git restores its internal tabs, ref filter, selected commit/file, comparison and scroll positions.
+Only view identities/positions are stored in the additive `gitViews` preference, not file contents
+or requests to replay. Git data is read again on a fresh TUI attachment. Demo mode remains display-only.
+See **Native Git** below for the supported operations and resource limits.
 
 Select Editor to explicitly open/attach Neovim. Worktree navigation and reconnect attach an existing
 editor without restarting it. If no process remains after runtime restart, the view offers an explicit
@@ -71,7 +73,65 @@ While the embedded terminal is focused, Neovim receives Tab, Esc, Ctrl+f/e, mous
 and Tab/Shift+Tab traversal work. **Ctrl+C is native input**, not an application detach binding.
 Use the configured detach sequence (default **Ctrl+Space, then c**). The footer follows the actual
 focused control and effective keymap. Opening, switching and resizing do not
-send a prompt to an agent or run a Git operation.
+send a prompt to an agent or run a Git mutation. Entering Git may perform read-only queries.
+
+### Native Git
+
+Git has **Commits / Reflog** navigation. Commits shows the colored commit history or a file comparison
+in the main area, with **Commit / Refs** tabs on the right. Commit contains details and changed files;
+Refs contains Local / Remote / Tags and an All refs action. Reflog uses the full width and hides the
+right panel. The application's Workspace sidebar stays; Git does not duplicate worktree navigation
+or provide submodules. Selecting a ref filters history, never checks it out.
+
+The initial selection is Working tree, with staged, unstaged and untracked changes. A commit compares
+against its first parent (or empty content for a root commit). Staged compares HEAD/index, unstaged
+compares index/worktree, and untracked compares empty/worktree. A staged rename followed by an
+unstaged edit uses the new index path. Git queries disable optional locks and external diff/textconv;
+they never stage, commit, push or change branches.
+
+Selecting a changed file replaces **only the main history area** with a whole-file Before / After
+comparison. The right file list stays available, and selecting another file updates the comparison.
+Both columns share one keyboard-focus target and synchronized wheel/keyboard scrolling. Esc or
+Back returns to the prior history position. No collapsed-context feature is required: unchanged
+content is included, not silently omitted by a default short-context patch.
+
+Git-specific actions are scoped to Git browsing controls and can be rebound in the normal keymap:
+
+| Focus | `a`: attach to an Agent prompt | `y`: copy the complete identifier |
+| --- | --- | --- |
+| Commit history row | Commit hash only | Full hash |
+| Commit details | Full metadata, message and tags | Full hash |
+| Changed file / entire Diff | Relative path and historical revision/change identity | Relative path |
+| Local / Remote branch | Name only; no automatic tip hash | Name, including remote prefix |
+| Tag | Name only | Name |
+| Reflog | Event details and target hash | Full target hash |
+
+`a` freezes the chosen context and opens a small prompt with a session selector. The default is the
+last selected session in that worktree; New session creates one only when Send is pressed. Enter
+submits through the same runtime path as Agent input, including SDK steering when busy. Esc cancels.
+The existing Agent draft is untouched, and sending keeps Git visible. No extra execution-status or
+Agent-navigation panel is added. Prompt typing treats a/y as ordinary text; A/Y actions do not exist.
+
+Click selects; dragging selects text without activating a row. Releasing a drag automatically copies
+its text, excluding graph decorations and line numbers. Split comparisons clamp selection to the
+starting code column. `y` still copies the focused object's identifier, regardless of text selection.
+Local clipboard writes use OpenTUI's clipboard service. Remote terminals use OSC52 when available,
+without writing an unrelated remote host clipboard. OSC52 is reported as a **request sent**, not
+confirmed clipboard contents; unsupported/failed delivery is reported explicitly. Real SSH terminal
+acceptance depends on the terminal/multiplexer configuration and is not assumed from dispatch alone.
+
+Arrows/j/k navigate, Enter selects, r refreshes, + loads another 300 commits, Home/End jump, and
+PgUp/PgDn scroll. Diff arrows scroll both columns (left/right horizontally). History is bounded to
+3,000 commits per ref filter. Text preview is bounded to 1 MiB per version and 20,000 combined lines;
+Git command output is bounded to 4 MiB with a 10-second query timeout. Exceeding a preview/computation
+limit, binary content, gitlinks and unmerged files produce an explicit notice rather than a partial
+successful preview. Three-way conflict resolution and Git mutation actions are out of scope.
+
+Rendering uses the existing OpenTUI `DiffRenderable`, directly declared jsdiff 9.0.0 for full-context
+patch construction, and the pinned web-tree-sitter 0.25.10 peer. JavaScript/JSX, TypeScript/TSX,
+Markdown and Zig use the bundled grammars; other file types remain readable without syntax colors.
+The graph lane routing ports the user's `nvim/lua/git/graph.lua`; Git does not require Neovim,
+lazygit, delta or difftastic. Tree-sitter workers are released when the TUI detaches.
 
 ### Terminal tabs
 
