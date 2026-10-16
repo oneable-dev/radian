@@ -515,6 +515,7 @@ export class GitPanel {
     if (this.disposed) return;
     this.hide(); this.disposed = true;
     this.renderer.off("selection", this.selectionFinished); this.renderer.off("frame", this.restoreScroll);
-    this.clipboard.dispose(); this.root.destroyRecursively(); this.syntax?.destroy();
+    void this.clipboard.dispose().catch((error: unknown) => reportUnexpected(error, "Git clipboard cleanup"));
+    this.root.destroyRecursively(); this.syntax?.destroy();
   }
 }

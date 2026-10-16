@@ -87,10 +87,16 @@ export class GitRepository implements GitSource {
       return Buffer.concat(chunks).toString("utf8");
     };
     try {
-      const [stdout, stderr, code] = await Promise.all([collect(child.stdout), collect(child.stderr), child.exited]);
+      const collected = await capture(async () => Promise.all([collect(child.stdout), collect(child.stderr), child.exited]));
+      if (!collected.ok) return collected;
+      const [stdout, stderr, code] = collected.value;
       if (failure) return err(failure);
       return allowedCodes.includes(code) ? ok(stdout) : err(new GitError("GIT_QUERY_FAILED", `Git ${args[0]} failed (${code}): ${stderr.trim()}`));
-    } finally { clearTimeout(timer); signal.removeEventListener("abort", cancel); }
+    } finally {
+      clearTimeout(timer); signal.removeEventListener("abort", cancel);
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+      await child.exited;
+    }
   }
 
   async load(reference: string | null, limit: number, signal: AbortSignal): Promise<Result<GitSnapshot, ExpectedError>> {

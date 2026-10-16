@@ -15,5 +15,5 @@ export class GitClipboard {
     if (result.host.status === "failed") return err(new ClipboardError("Clipboard write failed.", { cause: result.host.error }));
     return err(new ClipboardError(`Clipboard unavailable (host: ${result.host.status}; terminal: ${result.terminal.capability}).`));
   }
-  dispose(): void { this.abort.abort(); this.service?.dispose(); }
+  async dispose(): Promise<void> { this.abort.abort(); await this.service?.dispose(); }
 }
