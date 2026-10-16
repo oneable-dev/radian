@@ -4,7 +4,7 @@ import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { KeyRouter } from "./router.ts";
 import { defaultKeymap, parseKeymap, type Keymap } from "./config.ts";
 import { expectOk } from "../testing/results.ts";
-import { TerminalSurface } from "../ui/terminal-surface.ts";
+import { TerminalSurface } from "../ui/embedded-terminal/surface.ts";
 
 async function mount(keymap: Keymap = defaultKeymap()) {
   const clock = new ManualClock(); const app = await createTestRenderer({ width: 60, height: 8, clock, kittyKeyboard: true, exitOnCtrlC: false });

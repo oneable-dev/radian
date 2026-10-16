@@ -5,7 +5,7 @@ import { expectError, expectOk } from "./testing/results.ts";
 import { RuntimeClient, fetchSnapshot } from "./runtime/client.ts";
 import { runtimePaths } from "./runtime/storage.ts";
 import { emptyPreferences, errorStatus, parseCommand, protocolVersion, type RuntimeSnapshot } from "./runtime/protocol.ts";
-import { SessionRegistry } from "./sessions/session-registry.ts";
+import { SessionRegistry } from "./agents/session-registry.ts";
 import { demoWorkspace } from "./workspace/demo.ts";
 
 const paths = runtimePaths("/fixture/.git", true, "/tmp/radian-result-unit-test");

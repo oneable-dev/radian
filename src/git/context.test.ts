@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { commitContext, detailsContext, fileContext, gitPrompt, refContext, reflogContext } from "./context.ts";
-import { layoutGraph } from "./graph.ts";
+import { layoutGraph } from "./ui/graph.ts";
 import { fullFilePatch } from "./patch.ts";
 import type { GitCommit } from "./model.ts";
 import { expectOk } from "../testing/results.ts";

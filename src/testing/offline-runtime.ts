@@ -2,7 +2,7 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { PiSessionOptions } from "../sessions/pi-session-adapter.ts";
+import type { PiSessionOptions } from "../agents/pi-session-adapter.ts";
 
 // These are scripted SDK responses, not a language model or a substitute for live-provider validation.
 export async function offlineRuntime(directory: string): Promise<PiSessionOptions> {

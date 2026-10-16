@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverRepository } from "../workspace/git.ts";
+import { discoverRepository } from "../workspace/discovery.ts";
 
 export async function createWorktreeFixture() {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "radian-worktrees-")));
