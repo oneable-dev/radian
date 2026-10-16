@@ -1,7 +1,7 @@
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import type { Repository } from "../workspace/model.ts";
-import type { SessionRecord } from "../sessions/session-registry.ts";
+import type { SessionRecord } from "../agents/session-registry.ts";
 import type { GitViewState } from "../git/model.ts";
 import { gitViewsSchema } from "../git/preferences.ts";
 import { errorCodes, ExpectedError, InputError, parseJson, ProtocolError, type ErrorCode } from "../errors.ts";

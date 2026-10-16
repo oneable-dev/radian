@@ -400,13 +400,14 @@ launch an editor, even when a saved tab preference points to Editor.
 
 ### Shared terminal layers
 
-`src/runtime/pty-session.ts` owns a PTY, bounded VT screen and input/resize lease independently
-of the launched program. `EditorSessions` retains only Neovim launch, one-editor-per-worktree,
-and editor compatibility policies. `pty-client.ts` owns ordered IPC input and frame attachment;
-its caller supplies the channel-specific commands. `pty-screen.ts` encodes visible terminal cells.
-`src/ui/terminal-surface.ts` handles native rendering/input and viewport synchronization, while
-`EditorPanel` decides when to open, display or reconnect an editor. Adding shell tabs must use
-these shared layers rather than duplicate the Neovim transport or renderer.
+`src/runtime/pty/session.ts` owns a PTY, bounded VT screen and input/resize lease independently
+of the launched program. `src/editor/sessions.ts` retains Neovim launch, one-editor-per-worktree,
+and editor compatibility policies; `src/terminal/sessions.ts` owns shell-tab lifecycle policies.
+`src/runtime/pty/client.ts` owns ordered IPC input and frame attachment; its caller supplies the
+channel-specific commands. `src/runtime/pty/screen.ts` encodes visible terminal cells.
+`src/ui/embedded-terminal/surface.ts` handles native rendering/input and viewport synchronization,
+while each feature's panel decides when to display or reconnect. Editor and Terminal share these
+technical layers; neither feature depends on the other's implementation.
 
 ### Saved session history
 
@@ -488,6 +489,40 @@ bun run dev        # Run the TUI during development
 bun run typecheck  # Check TypeScript types
 bun run test       # Run unit and OpenTUI headless interaction tests
 ```
+
+## Source organization
+
+The source is organized by feature ownership, with shared runtime and presentation infrastructure.
+This is an incremental domain-oriented layout, not a requirement to give every feature identical
+`domain/application/infrastructure` directories.
+
+| Directory | Responsibility |
+| --- | --- |
+| `src/app/` | CLI/UI bootstrap, workspace selection and whole-application composition |
+| `src/app/ui/workbench.ts` | Overall layout, left navigation, view switching, focus and footer coordination; no separate Sidebar abstraction |
+| `src/agents/` | Agent session/subagent models and lifecycle, saved History and Pi SDK integration |
+| `src/agents/ui/` | Agent transcript/prompt/drafts/scroll and saved-History panel, regardless of where they appear on screen |
+| `src/editor/` | Worktree Neovim lifecycle and its UI panel |
+| `src/terminal/` | Shell-tab lifecycle, ownership supervisor/cleanup and its UI panel |
+| `src/git/` | Read-only Git queries, comparisons and Agent context; Git-specific rendering lives in `ui/` |
+| `src/workspace/` | Repository/worktree discovery, snapshot models and search projection |
+| `src/runtime/` | Detached service, IPC, recovery, checkpoints and shared `pty/` implementation |
+| `src/keybindings/` | Application commands, binding configuration and input routing |
+| `src/ui/` | Shared footer, loading feedback, theme and embedded-terminal presentation |
+| `src/testing/` | Isolated repositories, scripted SDK responses and test helpers |
+
+`src/index.ts` is the executable entry point. `app/bootstrap.ts` wires the runtime and feature
+interfaces; features do not import the workbench. Keep feature runtime modules independent of their
+`ui/` subdirectories: co-location does not mean they execute in the same process. Do not add barrel
+exports that load OpenTUI when the daemon imports Agent, Editor or Terminal lifecycle code.
+Workspace models remain outside `app`; the workbench owns tree rows and navigation presentation.
+The existing repository/worktree snapshot still includes Agent summaries for compatibility, not
+execution ownership. Wire schemas and checkpoint formats remain in `runtime/protocol.ts` unchanged.
+
+Tests live beside their feature or integration owner. Whole-workbench tests are under `app/ui/`;
+feature interaction tests may compose the real workbench. Pure file moves do not change renderable
+IDs, key commands, runtime namespaces or saved-session identifiers. View-controller separation and
+further model/transport decoupling are follow-up work, not implied by the folder names.
 
 ## Repository
 

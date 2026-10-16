@@ -3,13 +3,13 @@ import { open } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Value } from "typebox/value";
 import type { Repository } from "../workspace/model.ts";
-import type { HistoryItem } from "../sessions/history.ts";
+import type { HistoryItem } from "../agents/history.ts";
 import { CapabilityError, capture, ConnectionError, parseJson, ProtocolError, reportUnexpected, systemCode, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { emptyPreferences, historySchema, maxFrameBytes, parseSnapshot, replySchema, type RuntimeCommand, type RuntimePreferences, type RuntimeSnapshot, type EditorFrame } from "./protocol.ts";
 import { privateDirectory, runtimePaths, type RuntimePaths } from "./storage.ts";
 import { connectionError, readJson, remoteError, transport } from "./transport.ts";
-import { PtyConnection } from "./pty-client.ts";
+import { PtyConnection } from "./pty/client.ts";
 
 const reconnectDelays = [250, 500, 1000, 2000] as const;
 const streamHandshakeMs = 2000;

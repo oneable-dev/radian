@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
-import { WorkspaceSelection } from "../workspace/selection.ts";
+import { WorkspaceSelection } from "../app/workspace-selection.ts";
 import { connectRuntime, fetchSnapshot, RuntimeClient } from "./client.ts";
 import { runtimePaths, pidAlive } from "./storage.ts";
 import { replySchema, type RuntimeManifest, type RuntimeSnapshot } from "./protocol.ts";

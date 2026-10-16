@@ -1,9 +1,9 @@
 import { expect, spyOn, test } from "bun:test";
 import { BoxRenderable, InputRenderable, NativeSession, type RGBA, type TerminalColors } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
-import { WorkspaceView } from "./workspace.ts";
+import { Workbench } from "../app/ui/workbench.ts";
 import { uiTheme } from "./theme.ts";
-import { WorkspaceSelection } from "../workspace/selection.ts";
+import { WorkspaceSelection } from "../app/workspace-selection.ts";
 import { demoWorkspace } from "../workspace/demo.ts";
 import { ok } from "../result.ts";
 
@@ -19,7 +19,7 @@ async function mount() {
   const app = await createTestRenderer({ width: 140, height: 28, kittyKeyboard: true });
   uiTheme(app.renderer).configure(palette());
   const selection = new WorkspaceSelection(demoWorkspace());
-  const view = new WorkspaceView(app.renderer, selection, {
+  const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {}, onCloseSession: () => {}, onPrompt: () => ok(undefined),
     getSessionDetails: () => ({ status: null, error: null, output: "Theme-sensitive transcript" }),
     initialDrafts: { a1: "unsent request" },
