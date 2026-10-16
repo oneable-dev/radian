@@ -78,13 +78,13 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
         expect(app.client.snapshot.editors![0]!.pid).toBe(pid);
       } finally { app.renderer.off("frame", capture); }
     }
-    // The editor receives the two rows formerly reserved for routine footer hints.
-    expect(app.editorFrame?.rows).toBe(17);
+    // The editor viewport excludes the text row and the footer's thin partial-block cap.
+    expect(app.editorFrame?.rows).toBe(16);
     expect(app.editorFrame?.cols).toBe(76);
     expect(app.captureCharFrame().split("\n")[23]).toContain("Radian 0.0.0");
     app.resize(100, 28); await app.renderOnce();
-    await until(() => app!.editorFrame?.rows === 21); await app.visible("unsaved-native-editor");
-    expect(app.editorFrame?.rows).toBe(21);
+    await until(() => app!.editorFrame?.rows === 20); await app.visible("unsaved-native-editor");
+    expect(app.editorFrame?.rows).toBe(20);
     expect(app.editorFrame?.cols).toBe(56);
     await app.click("feature (feature/probe)"); await app.click("Editor"); await app.visible("[No Name]");
     await app.mockInput.typeText("iSECOND-WORKTREE-CACHE"); app.mockInput.pressEscape(); await app.visible("SECOND-WORKTREE-CACHE");

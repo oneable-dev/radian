@@ -75,14 +75,12 @@ export class AgentPanel {
     this.transcript = new TranscriptPanel(renderer, { notice, changed, focusPrompt: () => this.prompt.focus(), initialScroll, saveScroll,
       ...transcriptOptions, ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}) });
     this.transcriptScroll = this.transcript.scroll;
-    this.prompt = new InputRenderable(renderer, { id: "session-prompt", width: "100%", flexShrink: 0, placeholder: "Prompt · Enter to run" });
+    this.prompt = new InputRenderable(renderer, { id: "session-prompt", width: "auto", flexGrow: 1, minWidth: 0, flexShrink: 0 });
     for (const [id, draft] of Object.entries(actions.initialDrafts ?? {})) this.drafts.set(id, draft);
     this.prompt.on(InputRenderableEvents.INPUT, this.handleDraftInput);
-    const composer = this.composer = new BoxRenderable(renderer, { id: "agent-composer", width: "100%", height: 3, flexShrink: 0,
-      flexDirection: "row", alignItems: "center", paddingX: 1, gap: 1, border: ["left"] });
-    const marker = new TextRenderable(renderer, { content: "›", height: 1, flexShrink: 0, selectable: false });
-    this.prompt.width = "auto"; this.prompt.flexGrow = 1; this.prompt.minWidth = 0;
-    composer.add(marker); composer.add(this.prompt);
+    const composer = this.composer = new BoxRenderable(renderer, { id: "agent-composer", width: "auto", height: 3, flexShrink: 0,
+      flexDirection: "row", alignItems: "center", border: ["left"] });
+    composer.add(this.prompt);
     this.sessionStatus = new SessionStatus(renderer);
     this.completion = new CompletionMenu(renderer, this.prompt, () => this.active ? this.promptSessionId : null, actions.onComplete, changed);
     const statusRow = new BoxRenderable(renderer, { id: "transcript-status-row", width: "100%", height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
@@ -95,7 +93,8 @@ export class AgentPanel {
     theme.input(this.prompt); theme.scrollbars(this.transcriptScroll); theme.focusBorder(composer);
     theme.bind(this.root, (colors) => {
       this.title.fg = colors.text; this.details.fg = colors.muted;
-      composer.backgroundColor = colors.surface; marker.fg = colors.accent;
+      composer.backgroundColor = colors.surface;
+      this.prompt.focusedBackgroundColor = colors.surface;
     });
     bindPanelSpacing(renderer, this.root);
     renderer.on("resize", this.resize); this.resize();
@@ -164,9 +163,11 @@ export class AgentPanel {
     const { horizontal, vertical } = panelSpacing(this.renderer);
     this.runtimePanel.marginTop = vertical;
     this.runtimePanel.gap = vertical;
-    // The mode line, telemetry and composer share one full-width column and responsive gap.
+    // Bleed the surface through the pane inset, keeping its text aligned with the other rows.
     this.composer.height = 1 + vertical * 2;
-    this.composer.paddingX = horizontal;
+    this.composer.marginX = -horizontal;
+    this.composer.paddingLeft = horizontal - 1; // The left focus border occupies one cell of the inset.
+    this.composer.paddingRight = horizontal;
   };
 
   rememberScroll = (): void => { this.transcript.rememberScroll(); };

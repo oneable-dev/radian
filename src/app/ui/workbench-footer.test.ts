@@ -48,11 +48,11 @@ test("기본 화면은 고정 범례나 안내 행 없이 푸터 바로 위까�
   // The normal screen should spend its vertical space on work, not permanent help text.
   const app = await mount();
   try {
-    const footer = app.renderer.root.findDescendantById("footer-bar")!;
+    const footer = app.renderer.root.findDescendantById("app-footer")!;
     const panel = app.renderer.root.findDescendantById("work-panel")!;
 
-    // Rendering an idle screen requires only the identity and contextual shortcut row.
-    expect(app.renderer.root.findDescendantById("app-footer")?.height).toBe(1);
+    // The footer reserves one text row and a partial-block cap, without routine notice rows.
+    expect(footer.height).toBe(2);
     expect(app.renderer.root.findDescendantById("footer-notice")?.visible).toBe(false);
     expect(panel.y + panel.height).toBe(footer.y);
     expect(app.captureCharFrame()).not.toContain("Status not supplied");
@@ -151,6 +151,26 @@ test("패널이 숨겨지는 좁은 화면에서도 푸터와 알림은 하단�
   } finally { await app.close(); }
 });
 
+test("사이드바 구분선은 셀 오른쪽 끝에 붙어 프롬프트 배경과 반 셀 틈을 남기지 않는다", async () => {
+  // A centered box-drawing line leaves half of its reserved cell outside the Agent pane.
+  const app = await mount();
+  try {
+    // The edge-aligned divider must keep its cell and the prompt's text alignment on resize.
+    for (const [width, height, inset] of [[120, 24, 2], [60, 12, 1], [120, 24, 2]] as const) {
+      app.resize(width, height); await app.renderOnce();
+      const sidebar = app.renderer.root.findDescendantById("workspace-sidebar")!;
+      const composer = app.renderer.root.findDescendantById("agent-composer")!;
+      const prompt = app.renderer.root.findDescendantById("session-prompt")!;
+      const column = sidebar.x + sidebar.width - 1;
+
+      // The right-edge block touches the next cell instead of drawing at the center like │.
+      expect(app.captureCharFrame().split("\n")[composer.y]!.slice(column, column + 1)).toBe("▕");
+      expect(composer.x).toBe(column + 1); expect(prompt.x).toBe(composer.x + inset);
+      expect(app.calls).toEqual([]);
+    }
+  } finally { await app.close(); }
+});
+
 test("일반 화면의 넉넉한 여백은 좁은 화면에서 줄어들고 복원 시 초안과 함께 돌아온다", async () => {
   // Content and branding share a two-cell inset, without moving the gradient away from the edge.
   const app = await mount();
@@ -162,7 +182,8 @@ test("일반 화면의 넉넉한 여백은 좁은 화면에서 줄어들고 복�
   try {
     expect(search.x - sidebar.x).toBe(2);
     expect(transcript.x - sidebar.x - sidebar.width).toBe(2);
-    expect(prompt.x - composer.x).toBe(5);
+    expect(composer.x).toBe(sidebar.x + sidebar.width);
+    expect(prompt.x - composer.x).toBe(2);
     expect(app.footerLine().indexOf("Radian")).toBe(2);
 
     // Shrinking the real renderer reduces insets rather than clipping the active input.
@@ -171,7 +192,8 @@ test("일반 화면의 넉넉한 여백은 좁은 화면에서 줄어들고 복�
 
     expect(search.x - sidebar.x).toBe(1);
     expect(transcript.x - sidebar.x - sidebar.width).toBe(1);
-    expect(prompt.x - composer.x).toBe(4);
+    expect(composer.x).toBe(sidebar.x + sidebar.width);
+    expect(prompt.x - composer.x).toBe(1);
     expect(app.footerLine().indexOf("Radian")).toBe(1);
     expect(app.renderer.currentFocusedRenderable).toBe(prompt);
 
@@ -180,7 +202,8 @@ test("일반 화면의 넉넉한 여백은 좁은 화면에서 줄어들고 복�
 
     expect(search.x - sidebar.x).toBe(2);
     expect(transcript.x - sidebar.x - sidebar.width).toBe(2);
-    expect(prompt.x - composer.x).toBe(5);
+    expect(composer.x).toBe(sidebar.x + sidebar.width);
+    expect(prompt.x - composer.x).toBe(2);
     expect(app.footerLine().indexOf("Radian")).toBe(2);
     expect(app.view.promptDrafts.a1).toBe("keep this draft");
     expect(app.calls).toEqual([]);

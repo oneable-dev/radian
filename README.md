@@ -200,10 +200,13 @@ Filled bar cells fade from the terminal's accent toward the panel color; empty c
 Context labels and known values use the same foreground as account usage. Model names use the theme's
 number (yellow/gold) color, effort uses keyword, and `fast` uses success when on or info when off; unknown values
 and separators stay muted. These are terminal palette roles, not fixed product colors.
-The transcript mode row, telemetry row and prompt box share their left/right edges, with one blank
-row between each on normal screens. Screens shorter than 18 rows remove both gaps together. The
-prompt retains its internal padding. Narrow panels shorten bars and omit settings or the countdown
-before dropping either resource percentage. Theme changes preserve the current draft and focus.
+The prompt surface reaches both edges of the Agent pane; its internal padding aligns the editable
+text with the transcript mode and telemetry rows. The sidebar divider sits at the right edge of its
+character cell, avoiding a half-cell gap beside the prompt surface. The empty prompt has no marker or placeholder,
+and focusing it keeps the same surface background; the caret and left border indicate focus.
+Normal screens leave one blank row between the mode, telemetry and prompt rows. Screens shorter
+than 18 rows remove both gaps together. Narrow panels shorten bars and omit settings or the
+countdown before dropping either resource percentage. Theme changes preserve the current draft and focus.
 
 Provider logos reserve two columns. On terminals reporting Kitty/Sixel graphics and pixel resolution,
 OpenTUI renders a font-derived, theme-tinted image with approximately 1.5x the ordinary glyph width,
@@ -427,8 +430,12 @@ currently unavailable commands are consumed without executing, never replayed as
 
 ### Common footer
 
-The left navigation and right work panel share one full-width footer. The bottom row shows `Radian`
-and its version on the left and shortcuts for the **currently focused control** on the right. A subtle
+The left navigation and right work panel share one full-width footer. Its single text row places
+`Radian` and its version on the left and shortcuts for the **currently focused control** on the right.
+On screens at least 18 rows tall, the preceding row paints only its bottom quarter (`▂`) in the
+footer colors, giving a thin cap rather than full rows of colored padding. This reserves two grid
+rows but colors approximately 1.25 rows; shorter screens omit the cap. Errors and notices remain
+separate above it. A subtle
 background gradient starts at the screen's left edge, including the product text's inset, and fades
 the terminal's accent into the footer surface toward the right. It follows palette changes and optional theme overrides. Keys are highlighted separately
 from their descriptions. Tree, search, History, buttons and prompt contexts update on actual focus/state changes; unrelated/global shortcuts are not appended.
@@ -440,7 +447,7 @@ appear in a separate row immediately above the footer only when nonempty, so the
 shortcut hints. Clearing a notice returns its row to the work panels.
 The footer itself is read-only: clicking it neither runs an action nor takes input focus.
 
-The footer stays one line on narrow terminals. Identity stays on the left; complete shortcut/label
+The footer text stays one line on narrow terminals. Identity stays on the left; complete shortcut/label
 pairs fit in the owner's supplied order and trailing pairs are omitted with an ellipsis. Resize
 restores them when space permits. The footer does not invent Help actions or priority categories;
 a control may supply its own contextual help shortcut. Active completion uses the configurable

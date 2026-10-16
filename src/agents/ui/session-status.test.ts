@@ -40,7 +40,9 @@ test("프롬프트 위에 남은 context와 제공자 아이콘·사용한 usage
 
     const prompt = app.renderer.root.findDescendantById("session-prompt")!, composer = app.renderer.root.findDescendantById("agent-composer")!;
     expect(app.root.y + app.root.height + 1).toBe(composer.y);
-    expect(app.root.x).toBe(composer.x); expect(app.root.x + app.root.width).toBe(composer.x + composer.width);
+    const panel = app.renderer.root.findDescendantById("agent-view")!;
+    expect(composer.x).toBe(panel.x); expect(composer.width).toBe(panel.width);
+    expect(prompt.x).toBe(app.root.x); expect(prompt.x + prompt.width).toBe(app.root.x + app.root.width);
     expect(app.line()).toContain("gpt-5.5 · high · fast on");
     expect(app.line()).toMatch(/context [█▏▎▍▌▋▊▉░]+ 64%/);
     expect(app.line()).toContain(icons.openai); expect(app.line()).toContain("18% used 1h 0m");
@@ -59,21 +61,67 @@ test("프롬프트 위에 남은 context와 제공자 아이콘·사용한 usage
   } finally { await app.close(); }
 });
 
-test("TRANSCRIPT·모델 줄·입력 박스는 양끝을 맞추고 사이마다 한 줄씩 띄운다", async () => {
+test("입력 배경은 패널 양끝을 채우고 입력 내용은 TRANSCRIPT·모델 줄과 같은 내부 여백에 정렬한다", async () => {
+  // The surface reaches the pane edges; its editable content keeps the shared responsive inset.
   const app = await mount({ ...sample(), model: "gpt-6.1-sol", effort: "xhigh", fast: null,
     context: { usedTokens: 6000, maxTokens: 200000 }, usage: unavailable() });
   try {
-    await app.renderOnce();
-    const frame = app.captureCharFrame().split("\n"), modeY = frame.findIndex((line) => line.includes("TRANSCRIPT ·"));
-    const composer = app.renderer.root.findDescendantById("agent-composer")!;
-    const modelColumn = Bun.stringWidth(app.line().slice(0, app.line().indexOf("gpt-6.1-sol")));
-    const modeColumn = Bun.stringWidth(frame[modeY]!.slice(0, frame[modeY]!.indexOf("TRANSCRIPT")));
+    // Crossing the 80-column and 18-row thresholds must not leave stale margins or padding.
+    for (const [width, height, inset, gap] of [[120, 24, 2, 1], [79, 18, 1, 1], [80, 18, 2, 1], [60, 12, 1, 0], [120, 24, 2, 1]] as const) {
+      app.resize(width, height); await app.renderOnce();
+      const frame = app.captureCharFrame().split("\n"), modeY = frame.findIndex((line) => line.includes("TRANSCRIPT ·"));
+      const composer = app.renderer.root.findDescendantById("agent-composer")!;
+      const prompt = app.renderer.root.findDescendantById("session-prompt")!;
+      const panel = app.renderer.root.findDescendantById("agent-view")!;
+      const modeColumn = Bun.stringWidth(frame[modeY]!.slice(0, frame[modeY]!.indexOf("TRANSCRIPT")));
 
-    expect(modeColumn).toBe(composer.x); expect(modelColumn).toBe(composer.x);
-    expect(Bun.stringWidth(app.line().trimEnd())).toBe(composer.x + composer.width);
-    expect(app.root.y - modeY - 1).toBe(1); expect(composer.y - app.root.y - app.root.height).toBe(1);
-    expect(frame[app.root.y - 1]!.slice(composer.x, composer.x + composer.width).trim()).toBe("");
-    expect(frame[app.root.y + app.root.height]!.slice(composer.x, composer.x + composer.width).trim()).toBe("");
+      // Only the background expands; the mode line, telemetry and editable text stay aligned.
+      expect(composer.x).toBe(panel.x); expect(composer.width).toBe(panel.width);
+      expect(prompt.x - composer.x).toBe(inset); expect(composer.x + composer.width - prompt.x - prompt.width).toBe(inset);
+      expect(modeColumn).toBe(prompt.x); expect(app.root.x).toBe(prompt.x);
+      expect(app.root.x + app.root.width).toBe(prompt.x + prompt.width);
+      expect(app.root.y - modeY - 1).toBe(gap); expect(composer.y - app.root.y - app.root.height).toBe(gap);
+      if (gap) {
+        expect(frame[app.root.y - 1]!.slice(composer.x, composer.x + composer.width).trim()).toBe("");
+        expect(frame[app.root.y + app.root.height]!.slice(composer.x, composer.x + composer.width).trim()).toBe("");
+      }
+    }
+  } finally { await app.close(); }
+});
+
+test("빈 입력창은 안내·기호 없이 표시하고 포커스와 테마 변경에도 내부 배경을 바꾸지 않는다", async () => {
+  // The caret and border identify focus without a second background stripe inside the composer.
+  const app = await mount();
+  const composer = app.renderer.root.findDescendantById("agent-composer")!;
+  const prompt = app.renderer.root.findDescendantById("session-prompt")!;
+  const verifyBackground = () => {
+    const frame = app.captureSpans(), surface = uiTheme(app.renderer).colors.surface.toInts();
+    for (let y = composer.y; y < composer.y + composer.height; y++) {
+      let column = 0;
+      for (const span of frame.lines[y]!.spans) {
+        if (column < composer.x + composer.width && column + span.width > composer.x) expect(span.bg.toInts()).toEqual(surface);
+        column += span.width;
+      }
+    }
+  };
+  try {
+    // Empty, focused and unfocused states must look consistent in both terminal palettes.
+    for (const light of [false, true]) {
+      app.renderer.emit("palette", palette(light));
+      for (const focused of [false, true]) {
+        if (focused) prompt.focus(); else prompt.blur();
+        await app.renderOnce();
+
+        expect(app.captureCharFrame().split("\n")[prompt.y]!.slice(composer.x + 1, composer.x + composer.width).trim()).toBe("");
+        verifyBackground();
+      }
+    }
+    await app.mockInput.typeText("aligned draft"); await app.renderOnce();
+
+    // Removing the decoration must not change focus, draft editing or text alignment.
+    expect(app.captureCharFrame().split("\n")[prompt.y]!.indexOf("aligned draft")).toBe(app.root.x);
+    expect(app.renderer.currentFocusedRenderable).toBe(prompt); expect(app.view.promptDrafts.a1).toBe("aligned draft");
+    verifyBackground();
   } finally { await app.close(); }
 });
 
@@ -136,7 +184,7 @@ test("좁은 화면은 바·설정·시간을 축약해 두 비율과 초안을 
       const footer = app.renderer.root.findDescendantById("footer-bar")!;
       const modeY = app.captureCharFrame().split("\n").findIndex((line) => line.includes("INPUT ·"));
       expect(app.root.y - modeY - 1).toBe(gap); expect(composer.y - app.root.y - app.root.height).toBe(gap);
-      expect(app.root.x).toBe(composer.x); expect(app.root.x + app.root.width).toBe(composer.x + composer.width);
+      expect(app.root.x).toBe(prompt.x); expect(app.root.x + app.root.width).toBe(prompt.x + prompt.width);
       expect(composer.y + composer.height).toBeLessThanOrEqual(footer.y);
       expect(app.renderer.currentFocusedRenderable).toBe(prompt); expect(app.view.promptDrafts.a1).toBe("resize draft");
     }

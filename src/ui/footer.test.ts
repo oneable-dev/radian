@@ -4,8 +4,8 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { Footer } from "./footer.ts";
 import { blendColors, uiTheme } from "./theme.ts";
 
-async function mount(width = 100) {
-  const app = await createTestRenderer({ width, height: 8, kittyKeyboard: true });
+async function mount(width = 100, height = 8) {
+  const app = await createTestRenderer({ width, height, kittyKeyboard: true });
   const screen = new BoxRenderable(app.renderer, { width: "100%", height: "100%", flexDirection: "column" });
   const body = new BoxRenderable(app.renderer, { flexGrow: 1, minHeight: 0 });
   const input = new InputRenderable(app.renderer, { width: "100%", value: "draft" });
@@ -40,6 +40,54 @@ test("공통 푸터는 화면 마지막 한 줄에 있고 별도 알림은 바�
     const label = spans.find((span) => span.text.includes("Run"));
     expect(key).toBeDefined(); expect(label).toBeDefined();
     expect(key?.fg.equals(label?.fg)).toBe(false);
+  } finally { await app.dispose(); }
+});
+
+test("일반 화면의 푸터는 한 줄 텍스트 위에 1/4셀 두께의 배경만 덧댄다", async () => {
+  // A partial block adds a thin cap without the oversized three-row colored surface.
+  const app = await mount(100, 24);
+  try {
+    await app.renderOnce();
+    const lines = app.captureCharFrame().split("\n");
+
+    expect(app.footer.root.height).toBe(2); expect(app.footer.bar.height).toBe(1);
+    expect(app.footer.bar.y).toBe(23); expect(lines[22]).toBe("▂".repeat(100));
+    expect(lines[23]).toContain("Radian 0.0.0"); expect(lines[23]).toContain("Enter Run  Esc Workspace");
+    expect(app.body.y + app.body.height).toBe(app.footer.root.y);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.input.value).toBe("draft");
+  } finally { await app.dispose(); }
+});
+
+test("세로 리사이즈는 알림을 보존하며 얇은 푸터 덧댐을 낮은 화면에서만 숨긴다", async () => {
+  // Width stays fixed so height-only changes cannot rely on a bar-width resize callback.
+  const app = await mount(100, 24);
+  try {
+    app.footer.setNotice("Runtime reconnecting");
+    for (const [height, footerHeight] of [[24, 2], [17, 1], [18, 2], [12, 1], [24, 2]] as const) {
+      app.resize(100, height); await app.renderOnce();
+      const lines = app.captureCharFrame().split("\n");
+
+      // Only decorative padding collapses; notices, input focus and the draft remain intact.
+      expect(app.footer.bar.height).toBe(1); expect(app.footer.root.height).toBe(footerHeight + 1);
+      expect(lines[height - 1]).toContain("Radian 0.0.0"); expect(lines[height - 1]).toContain("Esc Workspace");
+      expect(app.footer.bar.y + app.footer.bar.height).toBe(height);
+      expect(lines[height - footerHeight - 1]).toContain("Runtime reconnecting");
+      expect(app.body.y + app.body.height).toBe(app.footer.notice.y);
+      expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.input.value).toBe("draft");
+    }
+    app.footer.setNotice(""); await app.renderOnce();
+    expect(app.footer.root.height).toBe(2); expect(app.footerLine()).toContain("Esc Workspace");
+  } finally { await app.dispose(); }
+});
+
+test("푸터를 제거하면 세로 리사이즈 구독을 정리한다", async () => {
+  const app = await mount(100, 24);
+  try {
+    const before = app.renderer.listenerCount("resize");
+
+    app.footer.root.destroyRecursively();
+
+    expect(app.renderer.listenerCount("resize")).toBe(before - 1);
   } finally { await app.dispose(); }
 });
 
@@ -107,14 +155,14 @@ test("푸터를 클릭해도 입력 포커스와 초안을 변경하거나 액�
 
 test("좌측 Radian 제품명에서 오른쪽으로 흐려지는 그라데이션은 터미널 테마와 리사이즈를 따른다", async () => {
   // A known palette distinguishes accent-derived branding from a hardcoded product color.
-  const app = await mount();
+  const app = await mount(100, 24);
   const palette = (light: boolean): TerminalColors => ({ palette: ["#000000", "#CC2222", "#228822", "#998800", "#2255AA", "#AA22AA", light ? "#996633" : "#117799", "#DDDDDD"],
     defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
     cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null,
     highlightForeground: null, highlightBackground: null });
-  const spanAt = (column: number) => {
+  const spanAt = (column: number, row = app.footer.bar.y) => {
     let x = 0;
-    return app.captureSpans().lines[app.footer.bar.y]!.spans.find((span) => { x += span.width; return x > column; })!;
+    return app.captureSpans().lines[row]!.spans.find((span) => { x += span.width; return x > column; })!;
   };
   const verifyBrand = (expectedInset = 2) => {
     const colors = uiTheme(app.renderer).colors;
@@ -129,6 +177,12 @@ test("좌측 Radian 제품명에서 오른쪽으로 흐려지는 그라데이션
     expect(right.bg.equals(colors.surface)).toBe(true);
     expect(left.fg.equals(colors.text)).toBe(true);
     expect(spanAt(app.footerLine().indexOf("Enter")).bg.equals(colors.surface)).toBe(true);
+    const edge = app.renderer.root.findDescendantById("footer-edge")!;
+    if (edge.visible) {
+      expect(spanAt(app.footer.bar.x, edge.y).fg.toInts()).toEqual(left.bg.toInts());
+      expect(spanAt(app.footer.bar.x, edge.y).bg.toInts()).toEqual(colors.panel.toInts());
+      expect(spanAt(app.footerLine().indexOf("Enter"), edge.y).fg.toInts()).toEqual(colors.surface.toInts());
+    }
     return left.bg.toInts();
   };
   try {
@@ -136,7 +190,7 @@ test("좌측 Radian 제품명에서 오른쪽으로 흐려지는 그라데이션
     app.renderer.emit("palette", palette(false)); await app.renderOnce();
     const dark = verifyBrand();
 
-    // Repainting the existing footer must preserve its text and one-row geometry.
+    // Repainting the existing footer must preserve its text and thin cap.
     app.renderer.emit("palette", palette(true)); await app.renderOnce();
     expect(verifyBrand()).not.toEqual(dark);
     app.resize(30, 8); await app.renderOnce();
