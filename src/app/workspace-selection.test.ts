@@ -85,17 +85,17 @@ test("마지막 항목 제거와 빈 워크트리 선택 모두 세션을 자동
   expect(selection.worktree?.sessions).toHaveLength(0);
 });
 
-test("워크트리와 브랜치는 같은 행이며 존재하는 subagent만 표시한다", () => {
-  // Only A1 owns a subagent in the display fixture.
+test("Workspace 목록은 세션 데이터를 유지하면서 레포와 워크트리 행만 표시한다", () => {
+  // Open sessions and owned children remain available to the Agents panel.
   const fixture = demoWorkspace();
 
-  // Flattening preserves every hierarchy without expansion flags.
+  // Workspace navigation deliberately excludes both deeper levels.
   const rows = workspaceRows(fixture);
 
-  // Branches are labels rather than additional tree nodes.
   expect(rows.find((row) => row.key === "worktree:demo:main")?.label).toBe("radian (main)");
-  expect(rows.filter((row) => row.kind === "subagent").map((row) => [row.label, row.depth])).toEqual([["UI review", 3]]);
-  expect(rows.filter((row) => row.kind === "session")).toHaveLength(4);
+  expect(rows.map((row) => row.depth)).toEqual([0, 1, 1, 1]);
+  expect(rows).toHaveLength(4);
+  expect(fixture[0]!.worktrees[0]!.sessions[0]!.subagents[0]!.name).toBe("UI review");
 });
 
 test("없는 선택 ID는 현재 선택을 변경하지 않는다", () => {

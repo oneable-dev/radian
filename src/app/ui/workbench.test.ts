@@ -4,6 +4,7 @@ import { demoWorkspace } from "../../workspace/demo.ts";
 import type { Repository } from "../../workspace/model.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { workspaceIcons } from "./workspace-status.ts";
+import { spinnerFrames } from "../../icons.ts";
 import { Workbench } from "./workbench.ts";
 
 async function mount(repositories: readonly Repository[] = demoWorkspace(), options: { kittyKeyboard?: boolean; clock?: ManualClock } = {}) {
@@ -29,6 +30,10 @@ async function mount(repositories: readonly Repository[] = demoWorkspace(), opti
       if (x < 0 || y < 0) throw new Error(`Visible text not found: ${text}\n${setup.captureCharFrame()}`);
       await setup.mockMouse.click(x, y);
       await setup.renderOnce();
+    },
+    tabFrame(id: string): string {
+      const tab = setup.renderer.root.findDescendantById(`session:${selection.worktree!.id}:${id}`)!;
+      return setup.captureCharFrame().split("\n")[tab.y]!.slice(tab.x, tab.x + tab.width);
     },
     treeFrame(): string {
       const tree = setup.renderer.root.findDescendantById("workspace-tree");
@@ -67,7 +72,8 @@ test("닫기 키는 끝 항목의 이전 세션을 선택하고 마지막 항목
   const app = await mount();
   try {
     // Select the last item and close each surviving selected item.
-    await app.clickText("Empty states");
+    app.renderer.root.findDescendantById("agent-session-list")!.focus();
+    app.mockInput.pressKey("END");
     app.mockInput.pressKey("x");
     await app.renderOnce();
     expect(app.selection.sessionId).toBe("a2");
@@ -89,11 +95,11 @@ test("행의 닫기 액션은 부모 세션을 잘못 선택하지 않는다", a
   const app = await mount();
   try {
     await app.clickText("Session navigation");
-    const row = app.renderer.root.findDescendantById("session:demo:main:a1");
-    if (!row) throw new Error("Missing displayed session row");
+    const close = app.renderer.root.findDescendantById("close-session:a1");
+    if (!close) throw new Error("Missing session tab close control");
 
-    // Activate A1's visible close control, rather than selecting A1's row.
-    await app.mockMouse.click(row.x + row.width - 2, row.y);
+    // Activate A1's visible close control, rather than selecting A1's tab.
+    await app.mockMouse.click(close.x + 1, close.y);
     await app.renderOnce();
 
     // Event propagation leaves the existing A2 selection unchanged.
@@ -133,7 +139,7 @@ test("History 탭은 후속 UI임을 표시하고 선택을 유지한다", async
   } finally { await app.close(); }
 });
 
-test("키보드로 화면 밖 세션을 선택하면 트리를 스크롤하며 작은 터미널에서도 동작한다", async () => {
+test("세션 탭의 End는 화면 밖 세션을 표시하고 작은 터미널에서도 선택을 유지한다", async () => {
   // Long display-only data exceeds the viewport; no agent timers drive the UI.
   const fixture: Repository[] = [{ id: "long-repo", name: "long-repo", worktrees: [{
     id: "long-tree", path: "/demo/long", name: "long", branch: "main",
@@ -143,52 +149,49 @@ test("키보드로 화면 밖 세션을 선택하면 트리를 스크롤하며 �
   }] }];
   const app = await mount(fixture);
   try {
-    // End selects the final navigable item and scrolls it into the viewport.
+    // End is scoped to the horizontal session strip, not the left workspace tree.
+    app.renderer.root.findDescendantById("agent-session-list")!.focus();
     app.mockInput.pressKey("END");
-    await app.renderOnce();
+    await app.renderOnce(); await app.renderOnce();
     expect(app.selection.sessionId).toBe("long-39");
-    expect(app.captureCharFrame().split("\n").map((line) => line.slice(0, 34)).join("\n")).toContain("Long session 39");
+    expect(app.captureCharFrame()).toContain("Long session 39");
+    expect(app.treeFrame()).not.toContain("Long session");
     app.resize(60, 12);
-    await app.renderOnce();
+    await app.renderOnce(); await app.renderOnce();
 
-    // The optional inspector yields space while tree and central selection remain usable.
+    // The selected tab keeps its status visible rather than clipping it behind New session.
+    expect(app.tabFrame("long-39")).toContain(workspaceIcons.unreported);
     expect(app.captureCharFrame()).not.toContain("Inspector");
     expect(app.selection.sessionId).toBe("long-39");
   } finally { await app.close(); }
 });
 
-test("위쪽 화살표로 세션과 워크트리 행을 지나 이전 워크트리로 돌아갈 수 있다", async () => {
-  // B has one session; selecting its parent restores that session.
+test("위쪽 화살표는 이전 워크트리를 가리키고 Enter를 눌러야 마지막 세션을 복원한다", async () => {
   const app = await mount();
   try {
-    await app.clickText("Sidebar prototype");
+    await app.clickText("radian-ui (feature/workspace)");
+    app.mockInput.pressArrow("up"); await app.renderOnce();
+    expect(app.selection.worktree?.id).toBe("demo:feature");
+    app.mockInput.pressEnter(); await app.renderOnce();
 
-    // The navigation cursor must not get trapped by the restored child selection.
-    app.mockInput.pressArrow("up");
-    app.mockInput.pressArrow("up");
-    await app.renderOnce();
-
-    // Moving beyond B's parent reaches A's last displayed session.
     expect(app.selection.worktree?.id).toBe("demo:main");
-    expect(app.selection.sessionId).toBe("a3");
+    expect(app.selection.sessionId).toBe("a1");
   } finally { await app.close(); }
 });
 
-test("세션 집계와 subagent의 상태 아이콘을 종류 아이콘과 별도로 표시한다", async () => {
-  // Main A1 is complete but its subagent is working; A2 completed and A3 failed.
+test("종류 아이콘은 왼쪽에 두고 부모·자식의 합산 상태는 오른쪽 세션 탭에 표시한다", async () => {
   const app = await mount();
   try {
-    // Paint normalized fixture data, not SDK events or live runs.
-    const frame = app.captureCharFrame();
-
-    // Repository/worktree icons remain type-specific; each agent row has its own outcome.
-    expect(frame).toContain(`${workspaceIcons.repository} radian [demo]`);
-    expect(frame).toContain(`${workspaceIcons.worktree} radian (main)`);
-    expect(frame).toContain(`${workspaceIcons.working} Workspace layout`);
-    expect(frame).toContain(`${workspaceIcons.working} UI review`);
-    expect(frame).toContain(`${workspaceIcons.complete} Session navigation`);
-    expect(frame).toContain(`${workspaceIcons.failure} Empty states`);
-    expect(frame).toContain(`${workspaceIcons.unreported} Sidebar prototype`);
+    expect(app.treeFrame()).toContain(`${workspaceIcons.repository} radian [demo]`);
+    expect(app.treeFrame()).toContain(`${workspaceIcons.worktree} radian (main)`);
+    expect(app.treeFrame()).not.toContain("UI review");
+    expect(spinnerFrames.some((frame) => app.tabFrame("a1").includes(frame))).toBe(true);
+    expect(app.tabFrame("a2")).toContain(workspaceIcons.complete);
+    app.renderer.root.findDescendantById("agent-session-list")!.focus(); app.mockInput.pressKey("END");
+    await app.renderOnce(); await app.renderOnce();
+    expect(app.tabFrame("a3")).toContain(workspaceIcons.failure);
+    await app.clickText("radian-ui (feature/workspace)");
+    expect(app.tabFrame("b1")).toContain(workspaceIcons.unreported);
   } finally { await app.close(); }
 });
 
@@ -196,7 +199,7 @@ test("트리가 숨겨진 동안 주입한 실패 상태도 다시 표시할 때
   // B is selected while A1's working child is tracked in the display snapshot.
   const app = await mount();
   try {
-    await app.clickText("Sidebar prototype");
+    await app.clickText("radian-ui (feature/workspace)");
     await app.clickText("History");
 
     // A host snapshot reports failure while the tree is not being painted.
@@ -211,10 +214,9 @@ test("트리가 숨겨진 동안 주입한 실패 상태도 다시 표시할 때
 
     // The aggregate changes without selecting A or changing repository/worktree types.
     expect(app.selection.sessionId).toBe("b1");
-    expect(app.captureCharFrame()).toContain(`${workspaceIcons.failure} Workspace layout`);
-    expect(app.captureCharFrame()).toContain(`${workspaceIcons.worktree} radian (main)`);
+    expect(app.treeFrame()).toContain(`${workspaceIcons.worktree} radian (main)`);
     await app.clickText("radian (main)");
-    expect(app.captureCharFrame()).toContain(`${workspaceIcons.failure} Workspace layout`);
+    expect(app.tabFrame("a1")).toContain(workspaceIcons.failure);
   } finally { await app.close(); }
 });
 
@@ -236,7 +238,7 @@ test("Tab과 Shift+Tab은 표시된 입력 대상 사이에서 포커스를 이�
   } finally { await app.close(); }
 });
 
-test("검색창에 브랜치를 입력하면 제출 없이 하위 세션과 subagent를 즉시 표시한다", async () => {
+test("브랜치 검색은 워크트리 목록만 필터하고 오른쪽 세션과 입력 포커스를 유지한다", async () => {
   // The search starts empty and has no connection to an agent runtime.
   const app = await mount();
   try {
@@ -249,9 +251,10 @@ test("검색창에 브랜치를 입력하면 제출 없이 하위 세션과 suba
     await app.renderOnce();
 
     // Matching the branch keeps every child and the same focused input instance.
-    expect(app.treeFrame()).toContain("Workspace layout");
-    expect(app.treeFrame()).toContain("Session navigation");
-    expect(app.treeFrame()).toContain("UI review");
+    expect(app.treeFrame()).toContain("radian (main)");
+    expect(app.treeFrame()).not.toContain("Workspace layout");
+    expect(app.treeFrame()).not.toContain("UI review");
+    expect(app.captureCharFrame()).toContain("Session navigation");
     expect(app.treeFrame()).not.toContain("Sidebar prototype");
     expect(app.treeFrame()).not.toContain("radian-empty");
     expect(app.renderer.currentFocusedRenderable).toBe(input);
@@ -276,8 +279,8 @@ test("q・n・x를 검색에 입력해도 종료나 세션 액션을 실행하�
     await app.renderOnce();
 
     // Clearing restores the tree without creating, closing or selecting another session.
-    expect(app.treeFrame()).toContain("Sidebar prototype");
-    expect(app.treeFrame()).toContain("UI review");
+    expect(app.treeFrame()).toContain("radian-ui (feature/workspace)");
+    expect(app.treeFrame()).not.toContain("UI review");
     expect(app.captureCharFrame()).not.toContain("No matching workspaces");
     expect(app.renderer.currentFocusedRenderable).toBe(input);
     expect(app.selection.sessionId).toBe("a1");
@@ -295,7 +298,7 @@ test("검색어 삭제와 붙여넣기도 결과를 갱신하고 입력 포커�
     // Backspace restores the branch match; pasted text is another live input change.
     app.mockInput.pressBackspace();
     await app.renderOnce();
-    expect(app.treeFrame()).toContain("Workspace layout");
+    expect(app.treeFrame()).toContain("radian (main)");
     app.mockInput.pressEscape();
     await app.renderOnce();
     await app.mockInput.pasteBracketedText("FEATURE/EMPTY");
@@ -323,10 +326,12 @@ test("부분 일치 검색 후 키보드 탐색은 숨겨진 행 대신 표시�
     app.mockInput.pressArrow("up");
     await app.renderOnce();
 
-    // Traversing above the visible parent cannot reach the hidden main worktree.
+    // Navigation does not commit selection, even when only one result remains.
+    expect(app.selection.worktree?.id).toBe("demo:main");
+    app.mockInput.pressEnter(); await app.renderOnce();
     expect(app.selection.worktree?.id).toBe("demo:feature");
     expect(app.selection.sessionId).toBe("b1");
-    expect(app.treeFrame()).toContain("Sidebar prototype");
+    expect(app.treeFrame()).toContain("radian-ui (feature/workspace)");
     expect(app.treeFrame()).not.toContain("Workspace layout");
   } finally { await app.close(); }
 });
@@ -339,13 +344,14 @@ test("필터가 적용된 트리에서 닫아도 원본 목록의 다음 세션�
 
     // Only the explicit close command asks the demo host to remove display metadata.
     app.mockInput.pressEnter();
+    app.renderer.root.findDescendantById("agent-session-list")!.focus();
     app.mockInput.pressKey("x");
     await app.renderOnce();
 
     // Canonical fallback and filtering remain separate; B's hidden session is untouched.
     expect(app.selection.sessionId).toBe("a2");
     expect(app.treeFrame()).not.toContain("Workspace layout");
-    expect(app.treeFrame()).toContain("Session navigation");
+    expect(app.captureCharFrame()).toContain("Session navigation");
     expect(app.selection.snapshot.flatMap((repo) => repo.worktrees).find((tree) => tree.id === "demo:feature")?.sessions).toHaveLength(1);
   } finally { await app.close(); }
 });
@@ -372,14 +378,15 @@ test("검색 중 주입한 snapshot은 현재 검색어로 갱신되고 숨겨�
       })),
     })));
     await app.renderOnce();
-    expect(app.treeFrame()).toContain("Fresh child");
+    expect(app.treeFrame()).toContain("radian-ui (feature/workspace)");
+    expect(app.treeFrame()).not.toContain("Fresh child");
     expect(app.treeFrame()).not.toContain("Workspace layout");
     app.mockInput.pressEscape();
     await app.renderOnce();
 
     // Clearing renders current aggregate state without moving the selection or input focus.
-    expect(app.treeFrame()).toContain(`${workspaceIcons.failure} Workspace layout`);
-    expect(app.treeFrame()).toContain("Fresh child");
+    expect(app.tabFrame("a1")).toContain(workspaceIcons.failure);
+    expect(app.treeFrame()).toContain("radian-ui (feature/workspace)");
     expect(app.renderer.currentFocusedRenderable).toBe(input);
     expect(app.selection.sessionId).toBe("a1");
   } finally { await app.close(); }
@@ -392,8 +399,8 @@ test("레포명 검색은 모든 워크트리를 유지하고 Tab 복귀 후에�
     await app.searchFor("DIAN [DE");
     const input = app.renderer.currentFocusedRenderable;
     expect(app.treeFrame()).toContain("radian-empty");
-    expect(app.treeFrame()).toContain("UI review");
-    expect(app.treeFrame()).toContain("Sidebar prototype");
+    expect(app.treeFrame()).toContain("radian (main)");
+    expect(app.treeFrame()).toContain("radian-ui (feature/workspace)");
 
     // Moving focus away and back must not recreate or reset the search field.
     app.mockInput.pressTab();
@@ -444,7 +451,7 @@ test("작은 터미널로 크기를 바꿔도 검색어와 포커스를 유지�
     // The edited query still matches main and the optional inspector gives way to the UI.
     expect(app.captureCharFrame()).toContain("MAI");
     expect(app.treeFrame()).toContain("radian (main)");
-    expect(app.captureCharFrame()).toContain("Workspace layout");
+    expect(app.renderer.root.findDescendantById("agent-session-tabs")?.visible).toBe(true);
     expect(app.captureCharFrame()).not.toContain("Inspector");
     expect(app.renderer.currentFocusedRenderable).toBe(input);
     expect(app.selection.sessionId).toBe("a1");
@@ -471,7 +478,7 @@ test("레거시 Esc의 20ms 구분 시간이 지나면 검색어가 지워지고
 
     // The next query is not interpreted as an Alt-prefixed character sequence.
     expect(app.captureCharFrame()).toContain("MAIN");
-    expect(app.treeFrame()).toContain("Workspace layout");
-    expect(app.treeFrame()).not.toContain("Sidebar prototype");
+    expect(app.treeFrame()).toContain("radian (main)");
+    expect(app.treeFrame()).not.toContain("radian-ui (feature/workspace)");
   } finally { await app.close(); }
 });

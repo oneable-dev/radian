@@ -121,7 +121,8 @@ test("실행 중 닫기는 즉시 빈 UI로 전환하고 마지막 세션을 자
     app.mockInput.pressEnter(); await childStarted.promise; unsubscribe();
     app.mockInput.pressEscape();
 
-    // Closing removes the item synchronously; the model/tool cancellation runs separately.
+    // The explicit close command belongs to the Agents session strip, not Workspace traversal.
+    app.renderer.root.findDescendantById("agent-session-list")!.focus();
     app.mockInput.pressKey("x");
     expect(app.selection.sessionId).toBeNull();
     expect(app.registry.details(id)).toBeNull();
@@ -133,7 +134,7 @@ test("실행 중 닫기는 즉시 빈 UI로 전환하고 마지막 세션을 자
     // Late SDK events cannot resurrect a row, steal focus or create a replacement session.
     expect(app.creation).toHaveLength(1);
     expect(app.registry.closingCount).toBe(0);
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree");
+    expect(app.renderer.root.findDescendantById("agent-session-tabs")!.hasFocusedDescendant).toBe(true);
     expect(app.captureCharFrame()).not.toContain("Worktree probe");
   } finally { await app.closeApp(); }
 });

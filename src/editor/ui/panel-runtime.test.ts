@@ -59,6 +59,25 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
     app = await mount(); await app.click("Editor"); await app.visible("[No Name]");
     await app.mockInput.typeText("iunsaved-native-editor"); app.mockInput.pressEscape(); await app.visible("unsaved-native-editor");
     const pid = app.client.snapshot.editors![0]!.pid;
+    const originalSurface = app.renderer.currentFocusedRenderable;
+    // Every presented return frame must retain the unsaved buffer, not merely converge later.
+    for (const away of ["Agents", "Git"]) {
+      await app.click(away);
+      const frames: string[] = [];
+      const capture = () => {
+        if (app!.renderer.root.findDescendantById("editor-view")!.visible) frames.push(app!.captureCharFrame());
+      };
+      app.renderer.on("frame", capture);
+      try {
+        await app.click("Editor"); await app.visible("unsaved-native-editor");
+        await until(() => app!.renderer.currentFocusedRenderable === originalSurface);
+        await app.click("Editor"); await app.renderOnce();
+        expect(frames.length).toBeGreaterThan(0);
+        expect(frames.every((frame) => frame.includes("unsaved-native-editor"))).toBe(true);
+        expect(app.renderer.currentFocusedRenderable).toBe(originalSurface);
+        expect(app.client.snapshot.editors![0]!.pid).toBe(pid);
+      } finally { app.renderer.off("frame", capture); }
+    }
     // The editor receives the two rows formerly reserved for routine footer hints.
     expect(app.editorFrame?.rows).toBe(17);
     expect(app.editorFrame?.cols).toBe(76);
@@ -67,8 +86,20 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
     await until(() => app!.editorFrame?.rows === 21); await app.visible("unsaved-native-editor");
     expect(app.editorFrame?.rows).toBe(21);
     expect(app.editorFrame?.cols).toBe(56);
-    await app.click("feature (feature/probe)"); await app.click("Git");
-    await app.click("main (main)"); await app.visible("unsaved-native-editor");
+    await app.click("feature (feature/probe)"); await app.click("Editor"); await app.visible("[No Name]");
+    await app.mockInput.typeText("iSECOND-WORKTREE-CACHE"); app.mockInput.pressEscape(); await app.visible("SECOND-WORKTREE-CACHE");
+    expect(app.captureCharFrame()).not.toContain("unsaved-native-editor");
+    await app.click("Git");
+    const returns: string[] = [];
+    const captureReturn = () => {
+      if (app!.renderer.root.findDescendantById("editor-view")!.visible) returns.push(app!.captureCharFrame());
+    };
+    app.renderer.on("frame", captureReturn);
+    try {
+      await app.click("main (main)"); await app.visible("unsaved-native-editor");
+      expect(returns.length).toBeGreaterThan(0);
+      expect(returns.every((frame) => frame.includes("unsaved-native-editor") && !frame.includes("SECOND-WORKTREE-CACHE"))).toBe(true);
+    } finally { app.renderer.off("frame", captureReturn); }
 
     // Destroy every native view and IPC client, then reconstruct from daemon-owned state.
     await app.close(); app = undefined;
@@ -85,7 +116,7 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
     await app.mockInput.typeText(":qa!"); app.mockInput.pressEnter(); await app.visible("Neovim exited (0)");
     await app.renderOnce(); expect(app.captureCharFrame()).not.toContain("Editor unavailable");
     await app.click("Open / reconnect editor");
-    await until(async () => { await app!.renderOnce(); return app!.client.snapshot.editors![0]!.pid !== pid && app!.renderer.currentFocusedRenderable?.id === "editor-terminal"; });
+    await until(async () => { await app!.renderOnce(); return app!.client.snapshot.editors![0]!.pid !== pid && app!.renderer.currentFocusedRenderable?.id === `editor-terminal:${app!.selection.worktree!.id}`; });
     await app.mockInput.typeText("ireopened-editor"); await app.visible("reopened-editor");
     expect(app.client.snapshot.editors![0]!.pid).not.toBe(pid);
   } finally {

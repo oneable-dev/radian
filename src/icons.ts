@@ -3,8 +3,9 @@ export const icons = {
   repo: "\uEA62", // nf-cod-repo
   folder: "\uEA83", // nf-cod-folder
   loading: "\uEB19", // nf-cod-loading
-  pass: "\uEBA4", // nf-cod-pass
-  error: "\uEA87", // nf-cod-error
+  pass: "\uEAB2", // nf-cod-check
+  error: "\uEA76", // nf-cod-close
+  unknown: "\uEAD9", // nf-cod-dash; unreported/aborted, not a confirmed idle state
   robot: "\uEC20", // nf-cod-robot
   openai: "\uEC81", // nf-cod-openai
   claude: "\uEC82", // nf-cod-claude

@@ -1,4 +1,4 @@
-export const contexts = ["workspace", "search", "history", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "none"] as const;
+export const contexts = ["workspace", "search", "history", "session-tabs", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "none"] as const;
 export type KeyContext = typeof contexts[number];
 export type KeyScope = KeyContext | "global" | "app" | "pty";
 export type BindingInput = { keys: string; scope: KeyScope };
@@ -11,7 +11,7 @@ const tabContexts = contexts.filter((context) => context !== "editor" && context
 
 export const defaultBindings = {
   "app.detach": [key("<leader> c")],
-  "focus.sidebar": [key("ctrl+]", "pty"), key("escape", "prompt"), key("<leader> w")],
+  "focus.sidebar": [key("ctrl+]", "pty"), key("escape", "prompt"), key("escape", "session-tabs"), key("<leader> w")],
   "focus.search": [key("ctrl+f", "app"), key("<leader> f")],
   "focus.prompt": [key("ctrl+e", "app"), key("<leader> p"), key("i", "transcript"), key("i", "transcript-text")],
   "focus.transcript": [key("ctrl+t", "app"), key("<leader> o")],
@@ -29,8 +29,13 @@ export const defaultBindings = {
   "terminal.next": [key("<leader> ]")],
   "terminal.scroll-up": [key("shift+pageup", "terminal")],
   "terminal.scroll-down": [key("shift+pagedown", "terminal")],
-  "session.new": [key("n", "workspace")],
-  "session.close": [key("x", "workspace")],
+  "session.new": [key("n", "session-tabs")],
+  "session.close": [key("x", "session-tabs")],
+  "session.previous": [key("h", "session-tabs"), key("left", "session-tabs")],
+  "session.next": [key("l", "session-tabs"), key("right", "session-tabs")],
+  "session.first": [key("home", "session-tabs")],
+  "session.last": [key("end", "session-tabs")],
+  "workspace.open": [key("enter", "workspace")],
   "workspace.previous": [key("k", "workspace"), key("up", "workspace")],
   "workspace.next": [key("j", "workspace"), key("down", "workspace")],
   "workspace.first": [key("home", "workspace")],

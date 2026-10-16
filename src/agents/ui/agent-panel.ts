@@ -13,9 +13,13 @@ import type { FooterShortcut } from "../../ui/footer.ts";
 import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
 import { SessionStatus } from "./session-status.ts";
 import { CompletionMenu, type CompletionProvider } from "./completion-menu.ts";
+import { SessionTabs } from "./session-tabs.ts";
+import { SubagentSummary } from "./subagent-summary.ts";
 
 export type AgentActions = {
   onNewSession: (worktreeId: string) => void;
+  onSelectSession?: (worktreeId: string, sessionId: string) => void;
+  onCloseSession?: (worktreeId: string, sessionId: string) => void;
   onPrompt?: (sessionId: string, text: string) => Result<void, ExpectedError> | Promise<Result<void, ExpectedError>>;
   getSessionDetails?: (sessionId: string) => ExecutionState | null;
   initialDrafts?: Readonly<Record<string, string>>;
@@ -33,12 +37,14 @@ export class AgentPanel {
   readonly transcriptScroll: ScrollBoxRenderable;
   private readonly title: TextRenderable;
   private readonly details: TextRenderable;
+  private readonly emptyPanel: BoxRenderable;
+  private readonly sessions: SessionTabs;
+  private readonly children: SubagentSummary;
   private readonly runtimePanel: BoxRenderable;
   private readonly composer: BoxRenderable;
   private readonly sessionStatus: SessionStatus;
   private readonly completion: CompletionMenu;
   private readonly transcript: TranscriptPanel;
-  private readonly newButton: BoxRenderable;
   private readonly drafts = new Map<string, string>();
   private readonly submitting = new Set<string>();
   private worktree: Worktree | null = null;
@@ -55,8 +61,16 @@ export class AgentPanel {
     this.root = new BoxRenderable(renderer, { id: "agent-view", flexGrow: 1, minHeight: 0, minWidth: 0, padding: 1, flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
     this.title = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false, attributes: TextAttributes.BOLD });
     this.details = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
-    this.newButton = button("+ New session", () => { if (this.worktree) actions.onNewSession(this.worktree.id); }, "New session");
-    this.root.add(this.title); this.root.add(this.details); this.root.add(this.newButton);
+    this.sessions = new SessionTabs(renderer, { button, changed,
+      select: (id) => { if (this.worktree) actions.onSelectSession?.(this.worktree.id, id); },
+      create: () => { if (this.worktree) actions.onNewSession(this.worktree.id); },
+      close: (id) => { if (this.worktree) actions.onCloseSession?.(this.worktree.id, id); },
+      keyHint: (command, context) => transcriptOptions.keyHint?.(command, context) ?? "",
+    });
+    this.emptyPanel = new BoxRenderable(renderer, { width: "100%", flexGrow: 1, minHeight: 0,
+      flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
+    this.emptyPanel.add(this.title); this.emptyPanel.add(this.details);
+    this.root.add(this.sessions.root); this.root.add(this.emptyPanel);
     this.runtimePanel = new BoxRenderable(renderer, { width: "100%", flexGrow: 1, minHeight: 0, marginTop: 1, flexDirection: "column", gap: 1 });
     this.transcript = new TranscriptPanel(renderer, { notice, changed, focusPrompt: () => this.prompt.focus(), initialScroll, saveScroll,
       ...transcriptOptions, ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}) });
@@ -71,7 +85,12 @@ export class AgentPanel {
     composer.add(marker); composer.add(this.prompt);
     this.sessionStatus = new SessionStatus(renderer);
     this.completion = new CompletionMenu(renderer, this.prompt, () => this.active ? this.promptSessionId : null, actions.onComplete, changed);
-    this.runtimePanel.add(this.transcriptScroll); this.runtimePanel.add(this.transcript.status);
+    const statusRow = new BoxRenderable(renderer, { id: "transcript-status-row", width: "100%", height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
+    this.transcript.status.flexGrow = 1; this.transcript.status.flexShrink = 1; this.transcript.status.minWidth = 0;
+    this.children = new SubagentSummary(renderer);
+    statusRow.add(this.transcript.status); statusRow.add(this.children.root);
+    this.root.on("resize", () => this.children.resize(this.root.width));
+    this.runtimePanel.add(this.transcriptScroll); this.runtimePanel.add(statusRow);
     this.runtimePanel.add(this.sessionStatus.root); this.runtimePanel.add(composer); this.runtimePanel.add(this.completion.root); this.root.add(this.runtimePanel);
     theme.input(this.prompt); theme.scrollbars(this.transcriptScroll); theme.focusBorder(composer);
     theme.bind(this.root, (colors) => {
@@ -89,6 +108,10 @@ export class AgentPanel {
   get working(): boolean { return !!this.promptSessionId && this.actions.getSessionDetails?.(this.promptSessionId)?.status === "working"; }
   get transcriptShortcuts(): readonly FooterShortcut[] { return this.transcript.shortcuts; }
   get completionOpen(): boolean { return this.completion.engaged; }
+  get sessionTabsFocused(): boolean { return this.root.visible && this.sessions.focused; }
+  get sessionShortcuts(): readonly FooterShortcut[] { return this.sessions.shortcuts; }
+  sessionAvailable(command: CommandId): boolean { return this.root.visible && this.sessions.available(command); }
+  sessionCommand(command: CommandId): void { this.sessions.command(command); }
   completionAvailable(command: CommandId): boolean { return this.active && this.completion.available(command); }
   completionCommand(command: CommandId): void { this.completion.command(command); }
   transcriptContext(): KeyContext | null { return this.transcript.keyContext(); }
@@ -96,13 +119,15 @@ export class AgentPanel {
   transcriptAvailable(command: CommandId): boolean { return this.active && this.transcript.available(command); }
   transcriptCommand(command: CommandId): void { this.transcript.command(command); }
   get focusTargets(): Renderable[] {
-    return [...(this.newButton.visible ? [this.newButton] : []), ...(this.active ? [this.prompt, this.transcript.focusTarget] : [])];
+    return this.root.visible ? [...this.sessions.focusTargets, ...(this.active ? [this.prompt, this.transcript.focusTarget] : [])] : [];
   }
 
   update(worktree: Worktree | null, selectedId: string | null, openIds: ReadonlySet<string>, visible: boolean): void {
     if (this.disposed || this.root.isDestroyed) return;
     this.rememberScroll();
+    const tabsFocused = this.sessions.containsFocus;
     this.root.visible = visible; this.worktree = worktree;
+    this.sessions.update(worktree?.id ?? null, worktree?.sessions ?? [], selectedId, visible);
     const session = worktree?.sessions.find((item) => item.id === selectedId);
     this.title.content = session?.name ?? (worktree ? "No open sessions" : "No workspace available");
     const details = session ? this.actions.getSessionDetails?.(session.id) : null;
@@ -122,14 +147,15 @@ export class AgentPanel {
     for (const id of this.drafts.keys()) if (!openIds.has(id)) this.drafts.delete(id);
     this.runtimePanel.visible = Boolean(visible && session && this.actions.onPrompt);
     this.sessionStatus.update(details?.telemetry, this.active);
-    this.root.gap = this.active ? 0 : 1;
-    this.root.alignItems = this.active ? "stretch" : "center";
-    this.root.justifyContent = this.active ? "flex-start" : "center";
+    this.emptyPanel.visible = visible && !this.active;
+    this.children.update(session?.subagents ?? [], this.active);
+    this.root.gap = 0;
+    this.root.alignItems = "stretch";
+    this.root.justifyContent = "flex-start";
     const output = details?.output || "Enter a prompt to start this session explicitly.";
     const transcriptFocused = this.transcript.focused;
     this.transcript.update(sessionId, details?.sections, output, this.active);
-    if (!this.active && (this.prompt.focused || transcriptFocused)) this.focusSidebar();
-    this.newButton.visible = Boolean(visible && worktree && !session);
+    if ((!this.active && (this.prompt.focused || transcriptFocused)) || (!visible && tabsFocused)) this.focusSidebar();
     if (!this.active) this.completion.hide(); else this.completion.refresh();
   }
 
@@ -173,7 +199,7 @@ export class AgentPanel {
     if (this.disposed) return;
     this.rememberScroll(); this.disposed = true;
     this.renderer.off("resize", this.resize);
-    this.completion.dispose(); this.sessionStatus.dispose(); this.transcript.dispose();
+    this.completion.dispose(); this.sessionStatus.dispose(); this.transcript.dispose(); this.sessions.dispose(); this.children.dispose();
     this.prompt.off(InputRenderableEvents.INPUT, this.handleDraftInput);
   }
 }

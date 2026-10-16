@@ -55,7 +55,7 @@ test("좌우 두 패널과 푸터를 표시하고 워크트리별 Editor·Git �
   // Demo mode provides navigation without launching any native editor or Git command.
   const app = await mount();
   try {
-    expect(app.captureCharFrame()).toContain("Agent  Editor  Git");
+    expect(app.captureCharFrame()).toContain("Agents  Editor  Git");
     expect(app.captureCharFrame()).not.toContain("Inspector");
     await app.click("Editor"); await app.click("radian-ui (feature"); await app.click("Git");
 
@@ -70,21 +70,19 @@ test("좌우 두 패널과 푸터를 표시하고 워크트리별 Editor·Git �
   } finally { await app.close(); }
 });
 
-test("같은 세션 재선택과 다른 워크트리의 세션 직접 선택은 모두 Agent로 전환한다", async () => {
-  const app = await mount();
+test("세션 탭은 Agents 안에서만 선택하고 다른 워크트리의 마지막 작업 탭은 유지한다", async () => {
+  const app = await mount({ initialDrafts: { a1: "main draft", b1: "feature draft" } });
   try {
-    await app.click("Editor");
-    // Selecting the already-selected session is still an explicit Agent activation.
-    await app.click("Workspace layout");
-    expect(app.view.workViewPreferences.active["demo:main"]).toBe("agent");
-    expect(app.captureCharFrame()).toContain("Prompt · Enter to run");
-    await app.click("radian-ui (feature"); await app.click("Git"); await app.click("radian (main)"); await app.click("Editor");
-
+    // Session switching is local to Agents, rather than an incidental tree action.
+    await app.click("Editor"); await app.click("Agents"); await app.click("Workspace layout");
+    expect(app.captureCharFrame()).toContain("main draft");
+    await app.click("Editor"); await app.click("radian-ui (feature"); await app.click("Agents");
     await app.click("Sidebar prototype");
 
     expect(app.selection.sessionId).toBe("b1");
     expect(app.view.workViewPreferences.active["demo:feature"]).toBe("agent");
-    expect(app.captureCharFrame()).toContain("Prompt · Enter to run");
+    expect(app.view.workViewPreferences.active["demo:main"]).toBe("editor");
+    expect(app.captureCharFrame()).toContain("feature draft");
     expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
@@ -128,24 +126,24 @@ test("Editor에 포커스가 있으면 Neovim 키를 전달하고 Ctrl+]로 앱 
   const editor = editorFixture(), app = await mount({ editor: editor.actions });
   try {
     await app.click("Editor"); await app.visible("Editor buffer");
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("editor-terminal");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("editor-terminal:demo:main");
     app.mockInput.pressTab(); app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressKey("e", { ctrl: true });
     app.mockInput.pressEscape(); await app.renderOnce();
     expect(editor.inputs.join("")).toContain("\t"); expect(editor.inputs.join("")).toContain("\x06"); expect(editor.inputs.join("")).toContain("\x05");
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("editor-terminal");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("editor-terminal:demo:main");
     expect(app.captureCharFrame().split("\n")[23]).toContain("Ctrl+] Sidebar");
 
     app.mockInput.pressKey("]", { ctrl: true }); await app.renderOnce();
 
     expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree");
     expect(editor.inputs.join("")).not.toContain("\x1d");
-    expect(editor.opens).toEqual(["demo:main"]);
+    expect(editor.opens).toEqual([]); // Existing editor metadata requires attachment, not another open.
   } finally { await app.close(); }
 });
 
 test("느린 Editor 열기 응답은 새로 선택한 Git 화면이나 포커스를 덮어쓰지 않는다", async () => {
   const ready = Promise.withResolvers<ReturnType<typeof ok<string>>>();
-  const editor = editorFixture(); editor.actions.open = () => ready.promise;
+  const editor = editorFixture(); editor.actions.info = () => undefined; editor.actions.open = () => ready.promise;
   const app = await mount({ editor: editor.actions });
   try {
     await app.click("Editor"); await app.click("radian-ui (feature"); await app.click("Git");

@@ -16,9 +16,11 @@ bun run start
 ```
 
 The app discovers the current Git repository's worktrees and shows an always-expanded
-workspace sidebar. Worktree folders and branches share one row. Use `Tab`/`Shift+Tab`
-to move focus, `j/k` (or arrow keys) to select tree items, `n` to create a new session, and `x` to
-close the selected session while the tree is focused. Mouse actions are also supported.
+workspace sidebar containing **repositories and worktrees only**. Worktree folders and branches
+share one row. Use `Tab`/`Shift+Tab` to move focus. `j/k`, arrows and Home/End move the tree cursor
+without changing the current workspace; **Enter** opens the highlighted worktree and restores its
+last work view/session. Mouse clicks open a worktree directly. Open sessions are tabs within Agents;
+focus that strip to use `h/l` (or left/right), Home/End, `n` for new and `x` for close.
 `Ctrl+e` focuses the minimal session prompt; `Enter` submits and `Esc` returns to the tree.
 `Ctrl+Space`, then `c`, **detaches the TUI only**. Agents and subagents keep running in a separate local service.
 These are default application bindings; see [Keybindings](#keybindings) to customize them.
@@ -47,12 +49,14 @@ The Editor view embeds Neovim; Git provides a native, read-only history and whol
 
 ### Work views
 
-The left panel retains Workspace/History navigation. The right panel switches between **Agent**,
-**Editor**, **Git** and **Terminal**, with one visible view per worktree and Agent as the initial view.
-Selecting a worktree restores its last view; explicitly selecting a session (including History resume)
-selects that session and switches to Agent, even if that worktree previously showed Editor or Git.
-Search and background snapshots do not override the active view. Session creation/closing retain
-their existing rules and never implicitly launch an editor.
+The left panel retains Workspace/History navigation. The right panel switches between **Agents**,
+**Editor**, **Git** and **Terminal**, with one visible view per worktree and Agents as the initial view.
+Tree cursor movement is only navigation; Enter or a direct worktree click commits the selection.
+Each worktree separately remembers its work view and selected Agent session. Within Agents, session
+tabs show their name and trailing aggregate status, with a close control and explicit new-session
+button. Session-tab selection and History resume open the chosen session in Agents. Restoring a
+selection, filtering and background snapshots never implicitly activate another work view.
+Session creation/closing retain their existing rules and never implicitly launch an editor.
 
 Every worktree remembers its active tab. Agent retains its selected session, draft, transcript
 scroll position and section/cursor/folding state; Neovim retains its actual files, cursor, editing mode and unsaved buffers in the
@@ -67,6 +71,10 @@ Select Editor to explicitly open/attach Neovim. Worktree navigation and reconnec
 editor without restarting it. If no process remains after runtime restart, the view offers an explicit
 open action instead of silently replacing lost editing state. `:q`/`:qa` remain Neovim's commands;
 when Neovim exits the Editor tab stays selected and offers an explicit reopen action.
+Within one TUI, each editor's native surface retains its last screen while hidden. Returning to an
+existing editor immediately displays that screen instead of recreating a blank VT. Its old attachment
+is still detached, and input stays disabled until a fresh exclusive attachment is acknowledged.
+Clicking an already connected Editor focuses it without opening or reconnecting again.
 
 While the embedded terminal is focused, Neovim receives Tab, Esc, Ctrl+f/e, mouse and paste.
 **Ctrl+]** moves focus to the visible sidebar; outside the editor, existing application focus keys
@@ -379,7 +387,7 @@ and programs' explicit RGB colors or Neovim colorschemes remain unchanged.
 ### Keybindings
 
 The default leader is **Ctrl+Space**. Press and release it, then press `c` to detach radian,
-`1`/`2`/`3`/`4` to select Agent/Editor/Git/Terminal, `w` to focus the sidebar or `f` to focus search.
+`1`/`2`/`3`/`4` to select Agents/Editor/Git/Terminal, `w` to focus the sidebar or `f` to focus search.
 `<leader> t` creates a terminal, `<leader> x` closes the selected terminal, and `<leader> [` / `]`
 select the previous/next terminal while the Terminal view is active.
 Ctrl+C is not intercepted by default: Neovim and shells receive it as native input.
@@ -396,14 +404,14 @@ the TUI to apply edits; the runtime and its processes do not need restarting. Th
   "bindings": {
     "app.detach": ["<leader> c"],
     "view.editor": ["<leader> e"],
-    "session.new": [{ "keys": "s", "scope": "workspace" }]
+    "session.new": [{ "keys": "s", "scope": "session-tabs" }]
   }
 }
 ```
 
 Spaces separate sequential keys (`"space r"` is a two-key leader); `+` combines modifiers.
 Use explicit `shift+c` for uppercase C. A string binding is global; an object can specify `scope`:
-`global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `prompt`, `prompt-completion`, `button`,
+`global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `session-tabs`, `prompt`, `prompt-completion`, `button`,
 `transcript` (section navigation), `transcript-text`, `transcript-visual`, `editor`, `terminal`,
 `git`, `git-prompt`, or `none`. An override replaces that command's defaults;
 `[]` disables it. Command IDs/defaults are defined in `src/keybindings/commands.ts`.
@@ -639,9 +647,9 @@ not automatically restarted to upgrade error handling.
 Click the search field, press `Ctrl+f`, or use `Tab` to focus it. Results update while typing,
 deleting or pasting, without submitting the field. Matching is case-insensitive, literal substring
 search over repository names, worktree folder names and actual branch names only.
-Repository-name matches retain all worktrees; folder/branch matches retain the matching worktree,
-its parent repository, and every open session/subagent underneath. Session and subagent titles,
-paths, status text and history are not searched.
+Repository-name matches retain all worktrees; folder/branch matches retain the matching worktree
+and its parent repository. Session tabs stay with the active Agents view and are not part of the tree
+projection. Session/subagent titles, paths, status text and history are not searched.
 
 Press `Esc` in the search field to clear the query and restore the complete tree. Press `Enter`
 to focus the workspace results. No matches shows a sidebar message, not a new central empty
@@ -652,19 +660,29 @@ No Git commands or runtime operations are triggered by search input.
 
 ### Display status
 
-Repository and worktree rows retain their Nerd Font type icons. Session rows aggregate the
-main agent and subagents: any failure wins, otherwise any working agent keeps the session
-working, and completion requires every agent to have completed. Subagent rows display their
-own status. Selection and focus do not change execution-state icons.
+Repository and worktree rows retain their Nerd Font type icons. Worktrees show a compact
+working/failure summary so background activity remains visible without nested agent rows.
+Session tabs aggregate the main agent and subagents: any failure wins, otherwise any working
+agent keeps the session working, and completion requires every agent to have completed.
+Working uses the shared animated spinner; final outcomes appear immediately in a fixed-width
+badge, independently of the spinner's minimum-visible tail. Hidden views cancel their animations.
+Selection and focus do not change execution status.
+
+The transcript mode/Input row shows the selected session's subagent counts at its right edge.
+Working, failure, complete and unknown counts use reserved widths; narrow panels omit less urgent
+counts or shorten the prefix without adding rows. Counts only include runtime-owned children
+already supplied by the snapshot, not arbitrary extension-managed processes. The row's `paused`
+means transcript auto-follow is paused, not agent execution. Model/context/account usage remains
+on the separate telemetry row.
 
 The SDK adapter normalizes events into display snapshots. `agent_end` alone is not completion:
 automatic retries keep the run working, and `agent_settled` plus the final outcome determine
-completion/failure. Aborted or unreported outcomes use the neutral robot icon, never successful
-completion. Additional idle/waiting/cancelled icon policies are not defined here.
+completion/failure. Aborted or unreported outcomes use a neutral dash, never successful completion
+or a guessed idle/waiting state. Additional idle/waiting/cancelled icon policies are not defined here.
 
 Use a Nerd Font-enabled terminal to view the glyphs. Current mappings are `nf-cod-repo`
-(U+EA62), `nf-cod-folder` (U+EA83), `nf-cod-loading` (U+EB19), `nf-cod-pass` (U+EBA4),
-`nf-cod-error` (U+EA87), `nf-cod-robot` (U+EC20), `nf-cod-openai` (U+EC81), and
+(U+EA62), `nf-cod-folder` (U+EA83), `nf-cod-check` (U+EAB2), `nf-cod-close` (U+EA76),
+`nf-cod-dash` (U+EAD9), `nf-cod-openai` (U+EC81), and
 `nf-cod-claude` (U+EC82), from Nerd Fonts 3.5.1. Headless tests
 verify code-point output, not font installation or actual terminal glyph appearance.
 
@@ -685,7 +703,7 @@ This is an incremental domain-oriented layout, not a requirement to give every f
 | `src/app/` | CLI/UI bootstrap, workspace selection and whole-application composition |
 | `src/app/ui/workbench.ts` | Overall layout, left navigation, view switching, focus and footer coordination; no separate Sidebar abstraction |
 | `src/agents/` | Agent session/subagent models and lifecycle, saved History and Pi SDK integration |
-| `src/agents/ui/` | Agent transcript/prompt/drafts/scroll and saved-History panel, regardless of where they appear on screen |
+| `src/agents/ui/` | Session tabs/status, Agent transcript/prompt/drafts/scroll and saved-History panel |
 | `src/usage/` | Provider-neutral account usage snapshots, shared polling/cache and isolated provider sources |
 | `src/editor/` | Worktree Neovim lifecycle and its UI panel |
 | `src/terminal/` | Shell-tab lifecycle, ownership supervisor/cleanup and its UI panel |

@@ -22,6 +22,11 @@ async function mount(list: (id: string) => Promise<readonly HistoryItem[]>, resu
   });
   await setup.renderOnce();
   return { ...setup, selection, resumed, view,
+    historyFrame() {
+      const node = setup.renderer.root.findDescendantById("session-history")!;
+      return setup.captureCharFrame().split("\n").slice(node.y, node.y + node.height)
+        .map((line) => line.slice(node.x, node.x + node.width)).join("\n");
+    },
     async click(text: string) {
       const lines = setup.captureCharFrame().split("\n"); const y = lines.findIndex((line) => line.includes(text));
       const x = lines[y]?.indexOf(text) ?? -1;
@@ -68,7 +73,8 @@ test("History 조회가 즉시 끝나도 목록은 바로 표시하고 스피너
     expect(app.captureCharFrame()).toMatch(/History · radian\s+[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
     clock.advance(1); await app.renderOnce();
 
-    expect(app.captureCharFrame()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+    // Other panes may legitimately animate their own running Agent status.
+    expect(app.historyFrame()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
     expect(app.captureCharFrame()).toContain("Fast history");
     expect(app.resumed).toEqual([]);
   } finally { await app.disposeApp(); }
@@ -117,9 +123,9 @@ test("이전 조회 응답은 새 조회의 스피너를 끄지 않고 현재 �
     second.reject(new HistoryError("HISTORY_UNAVAILABLE", "Lookup failed")); await app.visible("History error:");
 
     // Errors are not delayed, but the same minimum visibility applies to the loading indicator.
-    expect(app.captureCharFrame()).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+    expect(app.historyFrame()).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
     clock.advance(420); await app.renderOnce();
-    expect(app.captureCharFrame()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+    expect(app.historyFrame()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
     expect(app.captureCharFrame()).toContain("Lookup failed");
     expect(calls).toBe(2);
   } finally { await app.disposeApp(); }
@@ -137,7 +143,7 @@ test("커스텀 History 새로고침 키와 푸터를 유지하면서 새 조회
     expect(calls).toBe(2); expect(app.captureCharFrame()).toMatch(/History · radian\s+⠋/);
     pending.resolve([saved("latest", "Latest custom history")]); await app.visible("Latest custom history");
     clock.advance(500); await app.renderOnce();
-    expect(app.captureCharFrame()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+    expect(app.historyFrame()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
   } finally { pending.resolve([]); await app.disposeApp(); }
 });
 
@@ -179,7 +185,7 @@ test("저장 항목을 클릭하면 해당 기존 세션을 열고 워크스페�
     await app.click("History"); await app.visible("Saved layout review");
 
     // Mouse activation, not history listing, makes the explicit resume request.
-    await app.click("Saved layout review"); await app.visible("Session navigation");
+    await app.click("Saved layout review"); await app.waitFor(() => app.selection.sessionId === "a2");
 
     // The host ID is selected and the normal workspace hierarchy is shown again.
     expect(app.resumed).toEqual(["demo:main/saved-a"]);
@@ -200,7 +206,7 @@ test("History 키보드 탐색은 Enter 전에는 live 선택을 바꾸지 않�
     expect(app.renderer.currentFocusedRenderable?.id).toBe("history-list");
     app.mockInput.pressArrow("down");
     expect(app.selection.sessionId).toBe("a1");
-    app.mockInput.pressEnter(); await app.visible("Session navigation");
+    app.mockInput.pressEnter(); await app.waitFor(() => app.selection.sessionId === "a2");
 
     // Enter opens the second saved ID, not the selected live session or the first history row.
     expect(app.resumed).toEqual(["demo:main/second"]);

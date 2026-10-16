@@ -39,6 +39,8 @@ export class TerminalSurface {
   connect(connection: PtyAttachment): void {
     this.connection = connection; this.resize(); this.queuePaint();
   }
+  // Release presentation/input ownership without discarding the last painted VT.
+  suspend(): void { this.acceptsInput = false; this.connection = undefined; this.dimensions = ""; }
   display(frame: PtyFrame): void { this.frame = frame; this.queuePaint(); }
   private queuePaint(): void {
     if (!this.paintQueued) { this.paintQueued = true; this.renderer.once("frame", this.paint); }
