@@ -44,6 +44,24 @@ async function mount(list: () => Promise<readonly HistoryItem[]> = async () => [
   };
 }
 
+test("기본 화면은 고정 범례나 안내 행 없이 푸터 바로 위까지 본문을 사용한다", async () => {
+  // The normal screen should spend its vertical space on work, not permanent help text.
+  const app = await mount();
+  try {
+    const footer = app.renderer.root.findDescendantById("footer-bar")!;
+    const panel = app.renderer.root.findDescendantById("work-panel")!;
+
+    // Rendering an idle screen requires only the identity and contextual shortcut row.
+    expect(app.renderer.root.findDescendantById("app-footer")?.height).toBe(1);
+    expect(app.renderer.root.findDescendantById("footer-notice")?.visible).toBe(false);
+    expect(panel.y + panel.height).toBe(footer.y);
+    expect(app.captureCharFrame()).not.toContain("Status not supplied");
+    expect(app.captureCharFrame()).not.toContain("UI preview only");
+    expect(app.footerLine()).toContain("Radian 0.0.0");
+    expect(app.calls).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("트리에서 검색창으로 포커스를 옮기면 해당 영역의 단축키만 바뀌고 실제 입력은 유지한다", async () => {
   // Context comes from actual renderer focus, including existing global focus shortcuts.
   const app = await mount();
@@ -169,7 +187,7 @@ test("일반 화면의 넉넉한 여백은 좁은 화면에서 줄어들고 복�
   } finally { await app.close(); }
 });
 
-test("낮은 터미널에서도 Agent 입력창은 범례와 알림 및 푸터를 침범하지 않는다", async () => {
+test("낮은 터미널에서도 Agent 상태와 입력창은 한 줄 푸터를 침범하지 않는다", async () => {
   // A short screen must surrender decorative spacing before hiding usable input or footer rows.
   const app = await mount();
   try {
@@ -179,17 +197,17 @@ test("낮은 터미널에서도 Agent 입력창은 범례와 알림 및 푸터�
     app.resize(60, 12); await app.renderOnce();
     const composer = app.renderer.root.findDescendantById("agent-composer")!;
     const prompt = app.renderer.root.findDescendantById("session-prompt")!;
-    const notice = app.renderer.root.findDescendantById("footer-notice")!;
+    const footer = app.renderer.root.findDescendantById("footer-bar")!;
 
     expect(composer.height).toBe(1);
     const status = app.renderer.root.findDescendantById("session-status")!;
     expect(status.y + status.height).toBe(composer.y);
-    expect(status.y + status.height).toBeLessThanOrEqual(notice.y - 1);
+    expect(status.y + status.height).toBeLessThanOrEqual(footer.y);
     expect(app.captureCharFrame().split("\n")[status.y]).toContain("context");
     expect(app.captureCharFrame().split("\n")[status.y]).toContain("weekly");
-    expect(prompt.y + prompt.height).toBeLessThanOrEqual(notice.y - 1);
+    expect(prompt.y + prompt.height).toBeLessThanOrEqual(footer.y);
     expect(app.captureCharFrame().split("\n")[prompt.y]).toContain("compact draft");
-    expect(app.captureCharFrame().split("\n")[notice.y - 1]).toContain("Working");
+    expect(app.captureCharFrame()).not.toContain("Status not supplied");
     expect(app.footerLine().trimStart()).toStartWith("Radian 0.0.0");
     expect(app.selection.sessionId).toBe("a1");
     expect(app.renderer.currentFocusedRenderable).toBe(prompt);

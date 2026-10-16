@@ -84,11 +84,11 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
   const detachHint = keymap.hint("app.detach", "none") || "No detach binding";
   const defaultMessage = discoveryError ?? (options.demo ? `DEMO · display fixtures only · ${detachHint} detaches` : options.offline
     ? `OFFLINE SDK · scripted slow / read / write / delegate · ${detachHint} detaches`
-    : `Pi SDK service · ${detachHint} detaches; agents/editors/terminals keep running`);
+    : "");
   let message = defaultMessage;
   const updateNotice = (): void => {
     const closing = (client?.snapshot.closingCount ?? 0) + (client?.snapshot.terminalClosingCount ?? 0);
-    view?.setNotice(`${client?.snapshot.notice || message}${closing ? ` · Closing ${closing}` : ""}`);
+    view?.setNotice([client?.snapshot.notice || message, closing ? `Closing ${closing}` : ""].filter(Boolean).join(" · "));
   };
   const showFailure = (error: ExpectedError): void => { message = `[${error.code}] ${error.message}`; updateNotice(); };
   const unexpected = (error: unknown): void => { message = reportUnexpected(error, "UI action"); updateNotice(); };

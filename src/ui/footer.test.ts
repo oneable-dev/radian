@@ -134,8 +134,29 @@ test("좌측 Radian 제품명에서 오른쪽으로 흐려지는 그라데이션
   } finally { await app.dispose(); }
 });
 
-test("포커스 단축키가 없으면 공통 키를 대신 표시하지 않고 빈 알림 행의 높이는 유지한다", async () => {
-  // Empty context is not permission to invent global hints or collapse the existing notice allocation.
+test("알림을 지우면 사용하던 행을 본문에 돌려주고 초안과 포커스를 유지한다", async () => {
+  // Real warnings remain visible while routine empty notices consume no terminal space.
+  const app = await mount();
+  try {
+    app.footer.setNotice("Runtime disconnected"); await app.renderOnce();
+    const bodyHeight = app.body.height;
+    expect(app.captureCharFrame()).toContain("Runtime disconnected");
+
+    // Clearing a notice, including whitespace-only content, must reclaim its entire row.
+    app.footer.setNotice(" \n "); await app.renderOnce();
+
+    expect(app.footer.notice.visible).toBe(false);
+    expect(app.footer.root.height).toBe(1);
+    expect(app.body.height).toBe(bodyHeight + 1);
+    expect(app.footer.bar.y).toBe(7);
+    expect(app.captureCharFrame()).not.toContain("Runtime disconnected");
+    expect(app.input.value).toBe("draft");
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+  } finally { await app.dispose(); }
+});
+
+test("포커스 단축키가 없으면 앱 이름만 남기고 빈 알림 행을 접는다", async () => {
+  // Empty context must not invent global shortcuts or reserve an unused notice row.
   const app = await mount();
   try {
     const y = app.footer.bar.y;
@@ -143,7 +164,9 @@ test("포커스 단축키가 없으면 공통 키를 대신 표시하지 않고 
     app.footer.setShortcuts([]); app.footer.setNotice(""); await app.renderOnce();
 
     expect(app.footerLine().trim()).toBe("Radian 0.0.0");
-    expect(app.footer.notice.height).toBe(1);
+    expect(app.footer.notice.visible).toBe(false);
+    expect(app.footer.root.height).toBe(1);
+    expect(app.body.y + app.body.height).toBe(app.footer.bar.y);
     expect(app.footer.bar.y).toBe(y);
     expect(app.captureCharFrame()).not.toContain("Ctrl+C");
   } finally { await app.dispose(); }

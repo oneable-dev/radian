@@ -6,7 +6,7 @@ import packageInfo from "../../../package.json";
 import { workspaceRows, type WorkspaceRow } from "./workspace-rows.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { filterWorkspaces } from "../../workspace/filter-workspaces.ts";
-import { rowPresentation, workspaceIcons } from "./workspace-status.ts";
+import { rowPresentation } from "./workspace-status.ts";
 import { AgentPanel, type AgentActions } from "../../agents/ui/agent-panel.ts";
 import type { HistoryItem } from "../../agents/history.ts";
 import { SessionHistoryPanel } from "../../agents/ui/history-panel.ts";
@@ -63,7 +63,6 @@ export class Workbench {
   private readonly workViews: WorkViewPreferences;
   private displayedWorkView: WorkView = "agent";
   private readonly footer: Footer;
-  private readonly legend: TextRenderable;
   private readonly buttonHints = new WeakMap<Renderable, string>();
   private readonly buttonActions = new WeakMap<Renderable, () => void>();
   private readonly keymap: Keymap;
@@ -168,10 +167,7 @@ export class Workbench {
     panels.add(this.sidebar);
     panels.add(this.workPanel);
     this.root.add(panels);
-    this.legend = this.text(`${workspaceIcons.working} Working · ${workspaceIcons.complete} Complete · ${workspaceIcons.failure} Failure · ${workspaceIcons.unreported} Status not supplied`, "muted");
-    this.root.add(this.legend);
     this.footer = new Footer(renderer, `Radian ${packageInfo.version}`);
-    this.footer.setNotice("UI preview only · no agents running");
     this.root.add(this.footer.root);
     renderer.root.add(this.root);
     this.router = new KeyRouter(renderer, this.keymap, () => this.keyContext(), (command) => this.commandAvailable(command), (command) => this.command(command));
@@ -415,8 +411,6 @@ export class Workbench {
     this.viewTabs.paddingX = horizontal;
     this.search.marginBottom = vertical;
     this.tree.marginTop = vertical;
-    this.legend.marginLeft = horizontal;
-    this.legend.width = Math.max(0, this.renderer.width - horizontal * 2);
     this.workContext.visible = this.renderer.width >= 100;
     this.workPanel.minWidth = 0;
   };

@@ -358,9 +358,9 @@ from their descriptions. Tree, search, History, buttons and prompt contexts upda
 Application bindings such as `Ctrl+f`, `Ctrl+e` and `Tab` still work outside Neovim input focus;
 the configured leader detach command works in every input context. See the input ownership rules above.
 
-Errors and service notices occupy a separate row immediately above the footer, so they never
-replace shortcut hints. The existing fixed-height notice allocation and status-icon legend are
-preserved; the legend sits above the notice row. This avoids adding an unapproved hide/show policy.
+The status-icon legend and routine live-service banner are not shown. Errors and service notices
+appear in a separate row immediately above the footer only when nonempty, so they never replace
+shortcut hints. Clearing a notice returns its row to the work panels.
 The footer itself is read-only: clicking it neither runs an action nor takes input focus.
 
 The footer stays one line on narrow terminals. Identity stays on the left; complete shortcut/label

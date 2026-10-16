@@ -17,10 +17,9 @@ export class Footer {
 
   constructor(renderer: CliRenderer, private readonly appIdentity: string) {
     this.theme = uiTheme(renderer);
-    this.root = new BoxRenderable(renderer, { id: "app-footer", width: "100%", height: 2, flexShrink: 0, flexDirection: "column" });
-    // Preserve the existing one-row notice allocation, including when empty, to avoid layout jumps.
+    this.root = new BoxRenderable(renderer, { id: "app-footer", width: "100%", height: 1, flexShrink: 0, flexDirection: "column" });
     this.notice = new TextRenderable(renderer, { id: "footer-notice", width: "100%", height: 1, flexShrink: 0,
-      content: "", wrapMode: "none", selectable: false });
+      content: "", visible: false, wrapMode: "none", selectable: false });
     this.bar = new BoxRenderable(renderer, { id: "footer-bar", width: "100%", height: 1, flexShrink: 0,
       flexDirection: "row", paddingRight: 1, gap: 2, onSizeChange: () => this.renderShortcuts() });
     this.identity = new TextRenderable(renderer, { id: "footer-identity", content: appIdentity, height: 1, flexShrink: 0,
@@ -36,7 +35,11 @@ export class Footer {
   }
 
   setNotice(message: string): void {
-    if (!this.root.isDestroyed) this.notice.content = message.replace(/\s+/g, " ");
+    if (this.root.isDestroyed) return;
+    const content = message.replace(/\s+/g, " ").trim();
+    this.notice.content = content;
+    this.notice.visible = Boolean(content);
+    this.root.height = content ? 2 : 1;
   }
 
   setShortcuts(shortcuts: readonly FooterShortcut[]): void {
