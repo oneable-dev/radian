@@ -86,6 +86,8 @@ export class GitPanel {
     private readonly hint: (command: CommandId, context: KeyContext) => string) {
     this.clipboard = new GitClipboard(renderer);
     this.root = new BoxRenderable(renderer, { id: "git-view", flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "column", visible: false,
+      // Restore against measured list/diff geometry before any viewport is presented.
+      renderBefore: this.restoreScroll,
       onMouseDown: (event) => { if (event.button === 0) this.pointer = { x: event.x, y: event.y, moved: false }; },
       onMouseDrag: (event) => { if (this.pointer && (this.pointer.x !== event.x || this.pointer.y !== event.y)) this.pointer.moved = true; } });
     this.toolbar = this.row();
@@ -156,9 +158,11 @@ export class GitPanel {
     const cancel = button("Cancel", () => this.closeAsk(), "Cancel request");
     this.dialogButtons.push(this.targetButton, this.prompt, send, cancel); dialogControls.add(send); dialogControls.add(cancel);
     this.dialog.add(dialogControls); this.root.add(this.dialog);
-    renderer.on("selection", this.selectionFinished); renderer.on("frame", this.restoreScroll);
-    for (const list of [this.history, this.files, this.refs]) list.root.verticalScrollBar.on("change", this.remember);
-    this.details.verticalScrollBar.on("change", this.remember);
+    renderer.on("selection", this.selectionFinished);
+    for (const box of [this.history.root, this.files.root, this.refs.root, this.details]) {
+      box.verticalScrollBar.on("change", this.remember);
+      box.content.on("resize", this.applyScroll); box.viewport.on("resize", this.applyScroll);
+    }
   }
 
   private row(): BoxRenderable { return new BoxRenderable(this.renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1, minWidth: 0 }); }
@@ -359,7 +363,7 @@ export class GitPanel {
     for (const [index, kind] of ["local", "remote", "tag"].entries()) this.refButtons[index]!.backgroundColor = state.refs === kind ? gitColors.selected : gitColors.panel;
     this.history.root.visible = state.tab === "reflog" || !state.diff;
     this.diffFocus.visible = state.tab === "commits" && state.diff;
-    this.renderDiff(); this.persist(); this.changed();
+    this.renderDiff(); this.applyScroll(); this.persist(); this.changed();
   }
   private renderDiff(): void {
     const cache = this.cache; if (!cache || !this.diffFocus.visible) return;
@@ -394,16 +398,28 @@ export class GitPanel {
     if (this.diff) state.diffScroll = this.codePanes()[0]?.scrollY ?? 0;
     this.persist();
   };
-  private restoreScroll = (): void => {
-    if (!this.pendingRestore || !this.root.visible || !this.cache || this.root.isDestroyed) return;
+  private canRestore(): boolean {
+    const cache = this.cache;
+    return this.pendingRestore && this.root.visible && !this.root.isDestroyed && !!cache?.data
+      && (!cache.state.selected || !!cache.details || !!cache.error);
+  }
+  private applyScroll = (): void => {
+    if (!this.canRestore()) return;
     this.restoring = true;
-    const state = this.cache.state;
-    // Do not clamp saved positions against loading placeholders or an empty detail list.
-    if (!this.cache.data || (state.selected && !this.cache.details && !this.cache.error)) { this.restoring = false; return; }
-    this.history.root.scrollTo(state.historyScroll); this.files.root.scrollTo(state.filesScroll);
-    this.refs.root.scrollTo(state.refsScroll); this.details.scrollTo(state.detailsScroll);
-    for (const code of this.codePanes()) code.scrollY = state.diffScroll;
-    this.pendingRestore = false; this.restoring = false;
+    try {
+      const state = this.cache!.state;
+      // Prime unchanged geometry immediately and reapply after native resize
+      // callbacks update each scroll range. Never restore against placeholders.
+      this.history.root.scrollTo(state.historyScroll); this.files.root.scrollTo(state.filesScroll);
+      this.refs.root.scrollTo(state.refsScroll); this.details.scrollTo(state.detailsScroll);
+      for (const code of this.codePanes()) code.scrollY = state.diffScroll;
+    } finally { this.restoring = false; }
+  };
+  private restoreScroll = (): void => {
+    if (!this.canRestore()) return;
+    // Native code-pane viewports are measured now; their scroll offset changes
+    // drawing, unlike ScrollBox translations which were settled during layout.
+    this.applyScroll(); this.pendingRestore = false;
   };
 
   command(command: CommandId): void {
@@ -514,7 +530,10 @@ export class GitPanel {
   dispose(): void {
     if (this.disposed) return;
     this.hide(); this.disposed = true;
-    this.renderer.off("selection", this.selectionFinished); this.renderer.off("frame", this.restoreScroll);
+    this.renderer.off("selection", this.selectionFinished);
+    for (const box of [this.history.root, this.files.root, this.refs.root, this.details]) {
+      box.content.off("resize", this.applyScroll); box.viewport.off("resize", this.applyScroll);
+    }
     void this.clipboard.dispose().catch((error: unknown) => reportUnexpected(error, "Git clipboard cleanup"));
     this.root.destroyRecursively(); this.syntax?.destroy();
   }

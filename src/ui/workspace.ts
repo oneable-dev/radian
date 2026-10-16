@@ -156,10 +156,13 @@ export class WorkspaceView {
     this.center.add(this.centerDetails);
     this.center.add(this.emptyNewButton);
     this.runtimePanel = new BoxRenderable(renderer, { width: "100%", flexGrow: 1, minHeight: 0, flexDirection: "column", gap: 1 });
-    this.transcriptScroll = new ScrollBoxRenderable(renderer, { id: "session-transcript", flexGrow: 1, minHeight: 0, scrollX: false });
+    this.transcriptScroll = new ScrollBoxRenderable(renderer, { id: "session-transcript", flexGrow: 1, minHeight: 0, scrollX: false,
+      renderBefore: this.finishAgentScroll });
     this.transcript = new TextRenderable(renderer, { width: "100%", content: "", fg: colors.text, wrapMode: "word", selectable: false });
     this.transcriptScroll.add(this.transcript);
     this.transcriptScroll.verticalScrollBar.on("change", this.rememberAgentScroll);
+    this.transcriptScroll.content.on("resize", this.applyAgentScroll);
+    this.transcriptScroll.viewport.on("resize", this.applyAgentScroll);
     this.prompt = new InputRenderable(renderer, {
       id: "session-prompt", width: "100%", flexShrink: 0, placeholder: "Prompt · Enter to run", textColor: colors.text,
       backgroundColor: colors.panel, focusedBackgroundColor: colors.selected,
@@ -198,7 +201,6 @@ export class WorkspaceView {
     this.router = new KeyRouter(renderer, this.keymap, () => this.keyContext(), (command) => this.commandAvailable(command), (command) => this.command(command));
     renderer.on("resize", this.resize);
     renderer.on("focused_renderable", this.updateFooter);
-    renderer.on("frame", this.restoreAgentScroll);
     this.search.on(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.unsubscribe = selection.subscribe(() => this.render());
     this.resize();
@@ -231,11 +233,18 @@ export class WorkspaceView {
     if (this.workViews.agentScroll[this.promptSessionId] === position) return;
     this.workViews.agentScroll[this.promptSessionId] = position; this.saveWorkViews();
   };
-  private restoreAgentScroll = (): void => {
+  private applyAgentScroll = (): void => {
     if (this.disposed || this.root.isDestroyed || this.pendingScroll === null || !this.runtimePanel.visible) return;
     this.syncingScroll = true;
-    this.transcriptScroll.scrollTo(this.pendingScroll); this.pendingScroll = null;
-    this.syncingScroll = false;
+    try { this.transcriptScroll.scrollTo(this.pendingScroll); }
+    finally { this.syncingScroll = false; }
+  };
+  private finishAgentScroll = (): void => {
+    if (!this.runtimePanel.visible) return;
+    // Scroll translations must settle during layout, not in a post-present frame
+    // callback. Keep the target through content/viewport resize rounds so a short
+    // previous transcript cannot clamp a longer session's saved position.
+    this.pendingScroll = null;
   };
 
   private handleDraftInput = (): void => {
@@ -565,6 +574,7 @@ export class WorkspaceView {
     this.historyTab.backgroundColor = this.tab === "history" ? colors.selected : colors.panel;
     if (this.navigationKey && this.navigationKey !== this.lastScrolledKey) this.tree.scrollChildIntoView(this.navigationKey);
     this.lastScrolledKey = this.navigationKey;
+    this.applyAgentScroll();
     this.updateFooter();
   }
 
@@ -575,12 +585,13 @@ export class WorkspaceView {
     this.unsubscribe();
     this.history.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
     this.transcriptScroll.verticalScrollBar.off("change", this.rememberAgentScroll);
+    this.transcriptScroll.content.off("resize", this.applyAgentScroll);
+    this.transcriptScroll.viewport.off("resize", this.applyAgentScroll);
     this.search.off(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.prompt.off(InputRenderableEvents.INPUT, this.handleDraftInput);
     this.router.dispose();
     this.renderer.off("resize", this.resize);
     this.renderer.off("focused_renderable", this.updateFooter);
-    this.renderer.off("frame", this.restoreAgentScroll);
     this.root.destroyRecursively();
   }
 }
