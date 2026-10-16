@@ -31,9 +31,8 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
     const settingsManager = options.streamFn ? SettingsManager.inMemory({
       retry: { enabled: false }, compaction: { enabled: false },
     }) : SettingsManager.create(context.cwd, agentDir);
-    // Pi's terminal-specific extensions and their untracked child launchers are not hosted here.
     const resourceLoader = new DefaultResourceLoader({
-      cwd: context.cwd, agentDir, settingsManager, noExtensions: true, noThemes: true,
+      cwd: context.cwd, agentDir, settingsManager, noThemes: true,
       ...(options.streamFn ? { noSkills: true, noContextFiles: true, noPromptTemplates: true } : {}),
     });
     await resourceLoader.reload();

@@ -79,7 +79,7 @@ send a prompt to an agent or run a Git mutation. Entering Git may perform read-o
 
 An upgraded runtime supplies separate **You**, **Agent**, **Thinking** and **tool execution** sections.
 Tool calls and results are joined by call ID, not tool name; unknown tools and MCP bridges use the
-same generic interactions. MCP-specific actions and loading new MCP integrations are not included.
+same generic interactions. MCP-specific transcript actions are not included.
 Thinking and tool details start folded; user/Agent text starts expanded. Any nonempty section can
 be folded manually. Error summaries stay visible outside the folded body, and folding never deletes text.
 Image attachments have a text placeholder; image rendering is not part of this reader.
@@ -355,8 +355,9 @@ Changing selection/search never calls SDK `switchSession()`, aborts an execution
 `process.cwd()`. Nonselected sessions continue streaming and publishing snapshots.
 The `radian_subagent` tool creates an owned SDK child in the same worktree and waits for its result.
 Children cannot delegate further. Finished children retain display metadata but release execution
-resources. Pi CLI extensions/MCP launchers and their terminal-specific UI are not loaded in this
-initial host; context files, skills and prompt templates use SDK discovery. Cache warming is disabled.
+resources. Configured Pi extensions, context files, skills and prompt templates use SDK discovery.
+Pi's interactive terminal UI is not embedded; extension-specific UI compatibility and subprocess
+cleanup depend on the extension's SDK integration. Cache warming is disabled.
 
 Closing immediately removes the UI item and applies the existing next/previous/empty fallback.
 The registry retains its closing handle, rejects new work, and cancels the main agent and every
@@ -451,8 +452,8 @@ replace notices belonging to a recovered connection or new service.
 
 The Agent view uses the structured read-only transcript described above on services advertising
 `agent-transcript`; the bounded recent `output` field remains for compatibility with older clients.
-Full SDK history remains in JSONL. Pi CLI extensions/MCP and remote-machine services are still outside
-this initial host.
+Full SDK history remains in JSONL. Configured Pi extensions, including MCP adapters, use SDK discovery;
+this does not embed Pi's interactive CLI UI or provide remote-machine services.
 
 ### Work-view runtime foundation
 

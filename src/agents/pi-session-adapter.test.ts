@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import { join } from "node:path";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { offlineRuntime, fixtureMessage } from "../testing/offline-runtime.ts";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
@@ -68,6 +68,35 @@ async function sdkFixture(controlled = false, configure?: (options: PiSessionOpt
     await shutdown; unsubscribe(); await fixture.cleanup();
   } };
 }
+
+test("SDK 세션은 지정한 agentDir의 확장을 발견하고 등록된 도구를 실행한다", async () => {
+  // Isolate extension discovery from the user's packages, credentials and external services.
+  const app = await sdkFixture(false, (options) => ({ ...options, streamFn: (model, context, request) => {
+    if (context.messages.at(-1)?.role !== "user") return options.streamFn!(model, context, request);
+    const stream = createAssistantMessageEventStream();
+    const message = fixtureMessage(model.api, model.provider, model.id);
+    message.content = [{ type: "toolCall", id: "extension-probe", name: "extension_probe", arguments: {} }];
+    message.stopReason = "toolUse";
+    stream.push({ type: "done", reason: "toolUse", message }); stream.end(); return stream;
+  } }));
+  try {
+    const directory = join(app.directory, "agent", "extensions");
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "probe.ts"), `
+      import { Type } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai"))};
+      export default function (pi) {
+        pi.registerTool({ name: "extension_probe", label: "Extension probe", description: "Isolated extension probe",
+          parameters: Type.Object({}), execute: async () => ({ content: [{ type: "text", text: "EXTENSION_PROBE_OK" }], details: {} }) });
+      }
+    `);
+
+    const id = expectOk(await app.registry.create(app.main.id));
+    expectOk(await app.registry.prompt(id, "run extension probe"));
+
+    const tool = app.registry.details(id)?.sections?.find((section) => section.kind === "tool" && section.title === "extension_probe");
+    expect(tool?.status).toBe("complete"); expect(tool?.text).toContain("EXTENSION_PROBE_OK");
+  } finally { await app.cleanup(); }
+});
 
 test("실제 SDK read/write는 선택한 워크트리의 cwd를 사용하며 다른 워크트리를 변경하지 않는다", async () => {
   // Real Git worktrees and SDK built-in tools are used; only model responses are scripted.
