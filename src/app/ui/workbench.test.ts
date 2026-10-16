@@ -207,7 +207,7 @@ test("트리가 숨겨진 동안 주입한 실패 상태도 다시 표시할 때
         }),
       })),
     })));
-    await app.clickText("Workspace History");
+    await app.clickText("Workspace");
 
     // The aggregate changes without selecting A or changing repository/worktree types.
     expect(app.selection.sessionId).toBe("b1");

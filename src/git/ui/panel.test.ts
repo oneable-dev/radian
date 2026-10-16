@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { CodeRenderable, DiffRenderable, InputRenderable, type Renderable, type TerminalColors } from "@opentui/core";
+import { CodeRenderable, DiffRenderable, InputRenderable, TextAttributes, type Renderable, type TerminalColors } from "@opentui/core";
 import { uiTheme } from "../../ui/theme.ts";
 import { createTestRenderer, MockTreeSitterClient } from "@opentui/core/testing";
 import { Workbench } from "../../app/ui/workbench.ts";
@@ -77,13 +77,18 @@ test("Git은 Commits/Reflog와 오른쪽 Commit/Refs를 표시하고 Reflog에�
   // No model, OS clipboard, or actual repository mutation is needed for layout interaction.
   const app = await mount();
   try {
-    expect(app.captureCharFrame()).toContain("Commits Reflog"); expect(app.captureCharFrame()).toContain("Commit Refs");
+    expect(app.captureCharFrame()).toMatch(/Commits\s+Reflog/); expect(app.captureCharFrame()).toMatch(/Commit\s+Refs/);
+    const tab = (label: string) => app.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text === label)!;
+    expect(tab("Commits").attributes & TextAttributes.UNDERLINE).not.toBe(0);
+    expect(tab("Reflog").attributes & TextAttributes.UNDERLINE).toBe(0);
     expect(app.captureCharFrame()).toContain("UNSTAGED"); expect(app.captureCharFrame()).toContain("UNTRACKED");
     expect(app.captureCharFrame()).not.toContain("Submodules"); expect(app.get("git-right").visible).toBe(true);
 
     await app.click("Reflog");
 
     expect(app.get("git-right").visible).toBe(false);
+    expect(tab("Reflog").attributes & TextAttributes.UNDERLINE).not.toBe(0);
+    expect(tab("Commits").attributes & TextAttributes.UNDERLINE).toBe(0);
     expect(app.captureCharFrame()).toContain("HEAD@{0}"); expect(app.captureCharFrame()).not.toContain("Changed files");
     expect(app.requests).toEqual([]);
   } finally { await app.close(); }
@@ -323,7 +328,7 @@ test("좁은 화면의 diff와 Reflog 전환은 기존 선택과 하단 푸터�
 
     app.resize(60, 12); await app.renderOnce(); app.resize(160, 32); await app.renderOnce(); await app.click("Reflog");
 
-    expect(app.get("git-right").visible).toBe(false); expect(app.captureCharFrame()).toContain("radian 0.0.0");
+    expect(app.get("git-right").visible).toBe(false); expect(app.captureCharFrame()).toContain("Radian 0.0.0");
     expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid);
     expect(app.requests).toEqual([]);
   } finally { await app.close(); }

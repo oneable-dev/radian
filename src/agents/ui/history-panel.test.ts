@@ -159,7 +159,7 @@ test("History를 숨기거나 화면을 제거하면 진행 중인 스피너 타
     const first = animationTimer();
 
     // Observe timer cancellation at the clock boundary, independent of renderer/input timeout counts.
-    await app.click("Workspace History");
+    await app.click("Workspace");
     expect(cleared).toHaveBeenCalledWith(first);
     await app.click("History");
     const second = animationTimer();
@@ -263,7 +263,7 @@ test("연결 복구 알림은 보이는 History 오류를 새 목록으로 바�
     expect(app.selection.sessionId).toBe("a1");
     expect(app.resumed).toEqual([]);
     expect(calls).toBe(2);
-    await app.click("Workspace History"); app.view.refreshHistory(); await app.renderOnce();
+    await app.click("Workspace"); app.view.refreshHistory(); await app.renderOnce();
     expect(calls).toBe(2);
   } finally { await app.disposeApp(); }
 });

@@ -11,6 +11,8 @@ import { AgentPanel, type AgentActions } from "../../agents/ui/agent-panel.ts";
 import type { HistoryItem } from "../../agents/history.ts";
 import { SessionHistoryPanel } from "../../agents/ui/history-panel.ts";
 import { Footer, type FooterShortcut } from "../../ui/footer.ts";
+import { Button } from "../../ui/button.ts";
+import { panelSpacing } from "../../ui/spacing.ts";
 import type { Result } from "../../result.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import { EditorPanel, type EditorActions } from "../../editor/ui/panel.ts";
@@ -51,19 +53,23 @@ export class Workbench {
   private readonly history: SessionHistoryPanel;
   private readonly agent: AgentPanel;
   private readonly workPanel: BoxRenderable;
-  private readonly workTabs: Record<WorkView, BoxRenderable>;
+  private readonly workTabs: Record<WorkView, Button>;
+  private readonly workContext: TextRenderable;
+  private readonly sidebarTabs: BoxRenderable;
+  private readonly viewTabs: BoxRenderable;
   private readonly editor: EditorPanel;
   private readonly terminals: TerminalPanel;
   private readonly git: GitPanel;
   private readonly workViews: WorkViewPreferences;
   private displayedWorkView: WorkView = "agent";
   private readonly footer: Footer;
+  private readonly legend: TextRenderable;
   private readonly buttonHints = new WeakMap<Renderable, string>();
   private readonly buttonActions = new WeakMap<Renderable, () => void>();
   private readonly keymap: Keymap;
   private readonly router: KeyRouter;
-  private readonly workspaceTab: BoxRenderable;
-  private readonly historyTab: BoxRenderable;
+  private readonly workspaceTab: Button;
+  private readonly historyTab: Button;
   private readonly newButton: BoxRenderable;
   private readonly closeButton: BoxRenderable;
   private readonly rows = new Map<string, RowView>();
@@ -82,28 +88,27 @@ export class Workbench {
     this.workViews = structuredClone(actions.initialWorkViews ?? { active: {}, agentScroll: {} });
     this.root = new BoxRenderable(renderer, { id: "workspace-screen", width: "100%", height: "100%", flexDirection: "column", backgroundColor: colors.panel });
     const panels = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, flexDirection: "row" });
-    this.sidebar = new BoxRenderable(renderer, { width: 34, flexShrink: 0, flexDirection: "column", border: ["right"], borderColor: colors.muted, paddingX: 1 });
-    this.sidebar.add(this.text(actions.onPrompt ? "radian / Workspace" : "radian / Workspace preview", "accent"));
+    this.sidebar = new BoxRenderable(renderer, { id: "workspace-sidebar", width: 34, flexShrink: 0, flexDirection: "column", border: ["right"], paddingX: 1 });
     this.search = new InputRenderable(renderer, {
       id: "workspace-search", width: "100%", flexShrink: 0,
       placeholder: "Search repo/worktree/branch", placeholderColor: colors.muted,
       textColor: colors.text, backgroundColor: colors.panel, focusedBackgroundColor: colors.selected,
     });
-    this.sidebar.add(this.search);
-    const tabs = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
+    const tabs = this.sidebarTabs = new BoxRenderable(renderer, { height: 3, paddingY: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.workspaceTab = this.button("Workspace", () => this.setTab("workspace"), "Open Workspace");
     this.historyTab = this.button("History", () => this.setTab("history"), "Open History");
     tabs.add(this.workspaceTab);
     tabs.add(this.historyTab);
     this.sidebar.add(tabs);
+    this.sidebar.add(this.search);
     const toolbar = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.newButton = this.button("+ New session", () => this.openNewSession(), "New session");
-    this.closeButton = this.button("Close selected", () => this.closeSession(), "Close session");
+    this.closeButton = this.button("Close", () => this.closeSession(), "Close session");
     toolbar.add(this.newButton);
     toolbar.add(this.closeButton);
     this.sidebar.add(toolbar);
     this.tree = new ScrollBoxRenderable(renderer, {
-      id: "workspace-tree", flexGrow: 1, minHeight: 0, scrollX: false,
+      id: "workspace-tree", flexGrow: 1, minHeight: 0, marginTop: 1, scrollX: false,
       contentOptions: { flexDirection: "column" },
     });
     this.resultMessage = this.text("", "muted");
@@ -123,7 +128,7 @@ export class Workbench {
     this.sidebar.add(this.tree);
     this.sidebar.add(this.history.root);
     this.workPanel = new BoxRenderable(renderer, { id: "work-panel", flexGrow: 1, minWidth: 0, flexDirection: "column" });
-    const workTabs = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", paddingX: 1, gap: 2 });
+    const workTabs = this.viewTabs = new BoxRenderable(renderer, { height: 3, paddingY: 1, flexShrink: 0, flexDirection: "row", paddingX: 1 });
     this.workTabs = {
       agent: this.button("Agent", () => this.selectWorkView("agent"), "Show Agent"),
       editor: this.button("Editor", () => this.selectWorkView("editor", true), "Show Editor"),
@@ -131,6 +136,9 @@ export class Workbench {
       terminal: this.button("Terminal", () => this.selectWorkView("terminal"), "Show Terminal"),
     };
     for (const tab of Object.values(this.workTabs)) workTabs.add(tab);
+    this.workContext = this.text("", "muted");
+    this.workContext.flexGrow = 1; this.workContext.flexShrink = 1; this.workContext.minWidth = 0;
+    this.workContext.textAlign = "right"; workTabs.add(this.workContext);
     this.workPanel.add(workTabs);
     this.agent = new AgentPanel(renderer, actions, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
       (message) => this.setNotice(message), () => this.updateFooter(), () => this.tree.focus(), this.workViews.agentScroll,
@@ -156,8 +164,9 @@ export class Workbench {
     panels.add(this.sidebar);
     panels.add(this.workPanel);
     this.root.add(panels);
-    this.root.add(this.text(`${workspaceIcons.working} Working · ${workspaceIcons.complete} Complete · ${workspaceIcons.failure} Failure · ${workspaceIcons.unreported} Status not supplied`, "muted"));
-    this.footer = new Footer(renderer, `${packageInfo.name} ${packageInfo.version}`);
+    this.legend = this.text(`${workspaceIcons.working} Working · ${workspaceIcons.complete} Complete · ${workspaceIcons.failure} Failure · ${workspaceIcons.unreported} Status not supplied`, "muted");
+    this.root.add(this.legend);
+    this.footer = new Footer(renderer, `Radian ${packageInfo.version}`);
     this.footer.setNotice("UI preview only · no agents running");
     this.root.add(this.footer.root);
     renderer.root.add(this.root);
@@ -171,8 +180,10 @@ export class Workbench {
     this.tree.focus();
     this.theme.input(this.search);
     this.theme.scrollbars(this.tree);
+    this.theme.focusBorder(this.sidebar);
+    this.tree.on("focused", this.repaintRows); this.tree.on("blurred", this.repaintRows);
     this.theme.bind(this.root, (colors) => {
-      this.root.backgroundColor = colors.panel; this.sidebar.borderColor = colors.muted;
+      this.root.backgroundColor = colors.panel;
       this.paintRows(this.visibleRows()); this.paintTabs();
     });
   }
@@ -244,21 +255,9 @@ export class Workbench {
     return text;
   }
 
-  private button(label: string, activate: () => void, actionLabel = label): BoxRenderable {
-    const button = new BoxRenderable(this.renderer, {
-      height: 1, flexShrink: 0, focusable: true,
-      onMouseDown: (event) => {
-        if (event.button !== 0) return;
-        event.stopPropagation();
-        event.preventDefault();
-        button.focus();
-        activate();
-      },
-    });
+  private button(label: string, activate: () => void, actionLabel = label): Button {
+    const button = new Button(this.renderer, label, activate);
     this.buttonHints.set(button, actionLabel); this.buttonActions.set(button, activate);
-    button.add(this.text(label, "accent"));
-    const paint = () => { button.backgroundColor = button.focused ? this.theme.colors.selected : this.theme.colors.panel; };
-    this.theme.bind(button, paint); button.on("focused", paint); button.on("blurred", paint);
     return button;
   }
 
@@ -401,7 +400,18 @@ export class Workbench {
   }
 
   private resize = (): void => {
-    this.sidebar.width = this.renderer.width < 80 ? 26 : 36;
+    const { horizontal, vertical } = panelSpacing(this.renderer);
+    this.sidebar.width = this.renderer.width < 80 ? 26 : 40;
+    this.sidebar.paddingX = horizontal; this.sidebar.paddingBottom = vertical;
+    for (const tabs of [this.sidebarTabs, this.viewTabs]) {
+      tabs.height = 1 + vertical * 2; tabs.paddingY = vertical;
+    }
+    this.viewTabs.paddingX = horizontal;
+    this.search.marginBottom = vertical;
+    this.tree.marginTop = vertical;
+    this.legend.marginLeft = horizontal;
+    this.legend.width = Math.max(0, this.renderer.width - horizontal * 2);
+    this.workContext.visible = this.renderer.width >= 100;
     this.workPanel.minWidth = 0;
   };
 
@@ -440,6 +450,7 @@ export class Workbench {
     if (!rows.some((row) => row.key === this.navigationKey)) this.navigationKey = selectedKey;
     this.paintRows(rows);
     const worktree = this.selection.worktree;
+    this.workContext.content = worktree ? `${worktree.name} · ${worktree.branch ?? "detached"}` : "";
     const workView = worktree ? this.workViews.active[worktree.id] ?? "agent" : "agent";
     this.displayedWorkView = workView;
     const openIds = new Set(this.selection.snapshot.flatMap((repo) => repo.worktrees.flatMap((tree) => tree.sessions.map((item) => item.id))));
@@ -460,8 +471,14 @@ export class Workbench {
     this.updateFooter();
   }
 
+  private repaintRows = (): void => {
+    if (this.disposed || this.root.isDestroyed || this.search.isDestroyed) return;
+    this.paintRows(this.visibleRows());
+  };
+
   private paintRows(rows: readonly WorkspaceRow[]): void {
     const colors = this.theme.colors;
+    const selected = this.tree.focused ? colors.selected : colors.surface;
     for (const row of rows) {
       const view = this.rows.get(row.key);
       if (!view) continue;
@@ -469,14 +486,13 @@ export class Workbench {
       view.text.content = `${presentation.icon} ${row.label}`;
       view.text.fg = row.key === this.navigationKey && (row.kind === "repository" || row.kind === "worktree")
         ? colors.accent : colors[presentation.color];
-      view.box.backgroundColor = this.selected(row) ? colors.selected : colors.panel;
+      view.box.backgroundColor = this.selected(row) ? selected : colors.panel;
     }
   }
   private paintTabs(): void {
-    const colors = this.theme.colors;
-    for (const [name, tab] of Object.entries(this.workTabs)) tab.backgroundColor = name === this.displayedWorkView ? colors.selected : colors.panel;
-    this.workspaceTab.backgroundColor = this.tab === "workspace" ? colors.selected : colors.panel;
-    this.historyTab.backgroundColor = this.tab === "history" ? colors.selected : colors.panel;
+    for (const [name, tab] of Object.entries(this.workTabs)) tab.active = name === this.displayedWorkView;
+    this.workspaceTab.active = this.tab === "workspace";
+    this.historyTab.active = this.tab === "history";
   }
 
   dispose(): void {

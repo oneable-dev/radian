@@ -7,6 +7,7 @@ import type { Worktree } from "../../workspace/model.ts";
 import { TerminalSurface, type PtyAttachment } from "../../ui/embedded-terminal/surface.ts";
 import type { TerminalTheme } from "../../ui/embedded-terminal/theme.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
 
 export type EditorAttachment = PtyAttachment;
 export type EditorActions = {
@@ -35,6 +36,7 @@ export class EditorPanel {
     uiTheme(renderer).bind(this.message, (colors) => { this.message.fg = colors.muted; });
     this.openButton = button("Open / reconnect editor", () => { if (this.worktree) this.show(this.worktree, true); });
     this.root.add(this.message); this.root.add(this.openButton);
+    bindPanelSpacing(renderer, this.root);
   }
   get input(): EmbeddedTerminalRenderable | undefined { return this.terminal?.root.visible ? this.terminal.root : undefined; }
   show(worktree: Worktree | null, explicit = false): void {
@@ -54,7 +56,11 @@ export class EditorPanel {
         this.message.content = `Opening Neovim · ${worktree.name}`; this.openButton.visible = false;
         await this.laidOut();
         if (!this.current(generation)) return;
-        const opened = await this.actions.open(worktree.id, { cols: Math.max(2, Math.min(500, this.root.width)), rows: Math.max(1, Math.min(200, this.root.height - 1)) });
+        const { horizontal, vertical } = panelSpacing(this.renderer);
+        const opened = await this.actions.open(worktree.id, {
+          cols: Math.max(2, Math.min(500, this.root.width - horizontal * 2)),
+          rows: Math.max(1, Math.min(200, this.root.height - vertical * 2 - 1)),
+        });
         if (!this.current(generation)) return;
         if (!opened.ok) { this.failed(opened.error); return; }
         id = opened.value;

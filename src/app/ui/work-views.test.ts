@@ -66,7 +66,7 @@ test("좌우 두 패널과 푸터를 표시하고 워크트리별 Editor·Git �
     expect(app.view.workViewPreferences.active).toEqual({ "demo:main": "editor", "demo:feature": "git" });
     expect(app.requests).toEqual([]);
     app.resize(60, 12); await app.renderOnce();
-    expect(app.captureCharFrame().split("\n")[11]).toContain("radian 0.0.0");
+    expect(app.captureCharFrame().split("\n")[11]).toContain("Radian 0.0.0");
   } finally { await app.close(); }
 });
 

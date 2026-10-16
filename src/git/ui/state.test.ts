@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BoxRenderable } from "@opentui/core";
+import { Button } from "../../ui/button.ts";
 import { createTestRenderer } from "@opentui/core/testing";
 import { GitPanel } from "./panel.ts";
 import { initialGitState, type GitSnapshot, type GitViewState } from "../model.ts";
@@ -17,7 +17,7 @@ test("로딩 중 화면을 숨겨도 저장된 스크롤을 빈 placeholder 높�
   const panel = new GitPanel(app.renderer, {
     source: () => ({ load: () => pending.promise, details: async () => err(new InputError("unused")), compare: async () => err(new InputError("unused")) }),
     createSession: async () => err(new InputError("unused")), prompt: () => ok(undefined),
-  }, () => new BoxRenderable(app.renderer, { height: 1 }), () => {}, () => {}, (_id, value) => { retained = value; }, { [worktree.id]: state }, () => "");
+  }, (label, activate) => new Button(app.renderer, label, activate), () => {}, () => {}, (_id, value) => { retained = value; }, { [worktree.id]: state }, () => "");
   app.renderer.root.add(panel.root);
   try {
     panel.show(worktree, null); await app.renderOnce();

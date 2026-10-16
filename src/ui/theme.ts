@@ -1,11 +1,11 @@
-import { RGBA, RenderableEvents, type CliRenderer, type InputRenderable, type Renderable, type ScrollBoxRenderable, type TerminalColors } from "@opentui/core";
+import { RGBA, Renderable, RenderableEvents, type BoxRenderable, type CliRenderer, type InputRenderable, type ScrollBoxRenderable, type TerminalColors } from "@opentui/core";
 import { isThemeColor, themeRoles, type ThemeOverrides, type ThemeRole } from "./theme-config.ts";
 import { reportUnexpected } from "../errors.ts";
 
 export type UiColors = Readonly<Record<ThemeRole, RGBA>>;
 const themes = new WeakMap<CliRenderer, UiTheme>();
 const fallbackAnsi = ["#000000", "#CD3131", "#0DBC79", "#E5C07B", "#2472C8", "#BC3FBC", "#11A8CD", "#E5E5E5"];
-const blend = (background: RGBA, foreground: RGBA, amount: number): RGBA => RGBA.fromValues(
+export const blendColors = (background: RGBA, foreground: RGBA, amount: number): RGBA => RGBA.fromValues(
   background.r + (foreground.r - background.r) * amount,
   background.g + (foreground.g - background.g) * amount,
   background.b + (foreground.b - background.b) * amount,
@@ -21,11 +21,11 @@ function resolveColors(palette: TerminalColors | undefined, overrides: ThemeOver
   const success = ansi("success", 2), error = ansi("error", 1);
   return {
     text, panel, success, error,
-    surface: override("surface", blend(panel, text, 0.05)),
-    muted: override("muted", blend(panel, text, 0.65)),
-    selected: override("selected", blend(panel, text, 0.16)),
+    surface: override("surface", blendColors(panel, text, 0.05)),
+    muted: override("muted", blendColors(panel, text, 0.65)),
+    selected: override("selected", blendColors(panel, text, 0.16)),
     accent: ansi("accent", 6), info: ansi("info", 4), warning: ansi("warning", 3), keyword: ansi("keyword", 5), number: ansi("number", 3),
-    added: override("added", blend(panel, success, 0.14)), removed: override("removed", blend(panel, error, 0.14)),
+    added: override("added", blendColors(panel, success, 0.14)), removed: override("removed", blendColors(panel, error, 0.14)),
   };
 }
 
@@ -59,9 +59,23 @@ export class UiTheme {
   input(input: InputRenderable): void {
     this.bind(input, (colors) => {
       input.textColor = colors.text; input.focusedTextColor = colors.text;
-      input.backgroundColor = colors.panel; input.focusedBackgroundColor = colors.selected;
+      input.backgroundColor = colors.surface; input.focusedBackgroundColor = colors.selected;
       input.placeholderColor = colors.muted; input.selectionBg = colors.selected; input.selectionFg = colors.text;
     });
+  }
+  focusBorder(panel: BoxRenderable): void {
+    const paint = () => {
+      if (panel.isDestroyed) return;
+      // The renderer announces focus before ancestor hasFocusedDescendant flags settle.
+      let focused = false;
+      for (let node = this.renderer.currentFocusedRenderable; node; node = node.parent instanceof Renderable ? node.parent : null) {
+        if (node === panel) { focused = true; break; }
+      }
+      panel.borderColor = focused ? this.colors.accent : blendColors(this.colors.panel, this.colors.text, 0.22);
+    };
+    this.bind(panel, paint);
+    this.renderer.on("focused_renderable", paint);
+    panel.once(RenderableEvents.DESTROYED, () => this.renderer.off("focused_renderable", paint));
   }
   scrollbars(scroll: ScrollBoxRenderable): void {
     this.bind(scroll, (colors) => {

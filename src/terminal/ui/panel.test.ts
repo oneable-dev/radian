@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
-import { parseKeypress } from "@opentui/core";
+import { parseKeypress, TextAttributes } from "@opentui/core";
 import { Workbench } from "../../app/ui/workbench.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -129,10 +129,12 @@ test("여러 하위 탭과 좁은 화면에서도 선택한 탭과 생성·닫�
   try {
     for (let i = 1; i <= 6; i++) { app.leader("t"); await app.visible(`Shell shell-${i}`); }
     await app.renderOnce();
-    expect(app.captureCharFrame().split("\n")[1]).toContain("[Terminal 6]");
+    expect(app.captureCharFrame()).toContain("Terminal 6");
+    const selectedTab = app.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text === "Terminal 6")!;
+    expect(selectedTab.attributes & TextAttributes.UNDERLINE).not.toBe(0);
     app.resize(60, 12); await app.renderOnce(); await app.renderOnce();
-    const row = app.captureCharFrame().split("\n")[1]!;
-    expect(row).toContain("[Terminal 6]"); expect(row).toContain("+ New"); expect(row).toContain("Close");
+    const row = app.captureCharFrame().split("\n").find((line) => line.includes("Terminal 6"))!;
+    expect(row).toContain("Terminal 6"); expect(row).toContain("+ New"); expect(row).toContain("Close");
   } finally { await app.close(); }
 });
 

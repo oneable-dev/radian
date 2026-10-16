@@ -181,6 +181,16 @@ footer and diff backgrounds are derived from those colors for both light and dar
 Reported palette changes repaint the UI without restarting the runtime or losing prompt drafts,
 focus or Git navigation/scroll positions. Each attached TUI has its own theme.
 
+Navigation uses understated separators and underlined active tabs rather than boxed controls.
+Sidebar, work-view content and footer text use two-cell horizontal insets, reduced to one on terminals
+narrower than 80 columns. Work-view content has one blank row above and below; screens shorter than
+18 rows drop that vertical padding. The sidebar widens to retain room for its tree. Embedded programs
+receive the measured inner viewport rather than rendering beneath the padding. The footer remains
+one row, with its gradient extending through the product text's inset to the screen's left edge.
+Keyboard focus is separate from selection: the focused sidebar or input border uses the terminal's
+accent, while an unfocused selection stays softly highlighted. Agent input has a dedicated surface.
+These are presentation changes only; keybindings and embedded program input ownership are unchanged.
+
 No theme file is required. Optional `#RRGGBB` color overrides are read at TUI startup from
 `$XDG_CONFIG_HOME/radian/theme.json`, falling back to `~/.config/radian/theme.json`.
 Use `--theme PATH` to choose an explicit file. For example:
@@ -244,10 +254,11 @@ currently unavailable commands are consumed without executing, never replayed as
 
 ### Common footer
 
-The left navigation and right work panel share one full-width footer. The bottom row shows the package
-name/version on the left and shortcuts for the **currently focused control** on the right. Keys
-are highlighted separately from their descriptions. Tree, search, History, buttons and prompt
-contexts update on actual focus/state changes; unrelated/global shortcuts are not appended.
+The left navigation and right work panel share one full-width footer. The bottom row shows `Radian`
+and its version on the left and shortcuts for the **currently focused control** on the right. A subtle
+background gradient starts at the screen's left edge, including the product text's inset, and fades
+the terminal's accent into the footer surface toward the right. It follows palette changes and optional theme overrides. Keys are highlighted separately
+from their descriptions. Tree, search, History, buttons and prompt contexts update on actual focus/state changes; unrelated/global shortcuts are not appended.
 Application bindings such as `Ctrl+f`, `Ctrl+e` and `Tab` still work outside Neovim input focus;
 the configured leader detach command works in every input context. See the input ownership rules above.
 

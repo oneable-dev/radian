@@ -70,7 +70,7 @@ test("History 버튼·조회 중 목록·사용 가능한 기록에 따라 표�
   const pending = Promise.withResolvers<readonly HistoryItem[]>();
   const app = await mount(() => pending.promise);
   try {
-    await app.click("Workspace History"); app.mockInput.pressTab(); app.mockInput.pressEnter(); await app.renderOnce();
+    await app.click("Workspace"); app.mockInput.pressTab(); app.mockInput.pressEnter(); await app.renderOnce();
     expect(app.footerLine()).toContain("Enter/Space Open History");
     app.mockInput.pressTab(); await app.renderOnce();
     expect(app.footerLine()).toContain("Enter/Space Refresh history");
@@ -122,7 +122,7 @@ test("패널이 숨겨지는 좁은 화면에서도 푸터와 알림은 하단�
 
     await app.mockMouse.click(2, 11); await app.renderOnce();
 
-    expect(app.footerLine()).toContain("radian 0.0.0");
+    expect(app.footerLine()).toContain("Radian 0.0.0");
     expect(app.captureCharFrame().split("\n")[10]).toContain("Runtime reconnecting");
     expect(app.captureCharFrame()).not.toContain("Inspector");
     expect(app.renderer.currentFocusedRenderable).toBe(focus);
@@ -133,12 +133,76 @@ test("패널이 숨겨지는 좁은 화면에서도 푸터와 알림은 하단�
   } finally { await app.close(); }
 });
 
+test("일반 화면의 넉넉한 여백은 좁은 화면에서 줄어들고 복원 시 초안과 함께 돌아온다", async () => {
+  // Content and branding share a two-cell inset, without moving the gradient away from the edge.
+  const app = await mount();
+  const sidebar = app.renderer.root.findDescendantById("workspace-sidebar")!;
+  const search = app.renderer.root.findDescendantById("workspace-search")!;
+  const transcript = app.renderer.root.findDescendantById("session-transcript")!;
+  const composer = app.renderer.root.findDescendantById("agent-composer")!;
+  const prompt = app.renderer.root.findDescendantById("session-prompt")!;
+  try {
+    expect(search.x - sidebar.x).toBe(2);
+    expect(transcript.x - sidebar.x - sidebar.width).toBe(2);
+    expect(prompt.x - composer.x).toBe(5);
+    expect(app.footerLine().indexOf("Radian")).toBe(2);
+
+    // Shrinking the real renderer reduces insets rather than clipping the active input.
+    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("keep this draft");
+    app.resize(60, 12); await app.renderOnce();
+
+    expect(search.x - sidebar.x).toBe(1);
+    expect(transcript.x - sidebar.x - sidebar.width).toBe(1);
+    expect(prompt.x - composer.x).toBe(4);
+    expect(app.footerLine().indexOf("Radian")).toBe(1);
+    expect(app.renderer.currentFocusedRenderable).toBe(prompt);
+
+    // The normal spacing returns without rebuilding the Agent or replacing its draft.
+    app.resize(120, 24); await app.renderOnce();
+
+    expect(search.x - sidebar.x).toBe(2);
+    expect(transcript.x - sidebar.x - sidebar.width).toBe(2);
+    expect(prompt.x - composer.x).toBe(5);
+    expect(app.footerLine().indexOf("Radian")).toBe(2);
+    expect(app.view.promptDrafts.a1).toBe("keep this draft");
+    expect(app.calls).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("낮은 터미널에서도 Agent 입력창은 범례와 알림 및 푸터를 침범하지 않는다", async () => {
+  // A short screen must surrender decorative spacing before hiding usable input or footer rows.
+  const app = await mount();
+  try {
+    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("compact draft");
+
+    // Resizing while typing must preserve the active draft and fit every control above the footer.
+    app.resize(60, 12); await app.renderOnce();
+    const composer = app.renderer.root.findDescendantById("agent-composer")!;
+    const prompt = app.renderer.root.findDescendantById("session-prompt")!;
+    const notice = app.renderer.root.findDescendantById("footer-notice")!;
+
+    expect(composer.height).toBe(1);
+    expect(prompt.y + prompt.height).toBeLessThanOrEqual(notice.y - 1);
+    expect(app.captureCharFrame().split("\n")[prompt.y]).toContain("compact draft");
+    expect(app.captureCharFrame().split("\n")[notice.y - 1]).toContain("Working");
+    expect(app.footerLine().trimStart()).toStartWith("Radian 0.0.0");
+    expect(app.selection.sessionId).toBe("a1");
+    expect(app.renderer.currentFocusedRenderable).toBe(prompt);
+
+    // Returning to a normal screen restores the padded input without losing its state.
+    app.resize(120, 24); await app.renderOnce();
+    expect(composer.height).toBe(3);
+    expect(app.view.promptDrafts.a1).toBe("compact draft");
+    expect(app.calls).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("포커스를 해제하거나 화면을 제거하면 오래된 단축키와 포커스 구독을 남기지 않는다", async () => {
   // Footer integration must not keep listeners alive after the view has been disposed.
   const app = await mount();
   try {
     app.renderer.currentFocusedRenderable?.blur(); await app.renderOnce();
-    expect(app.footerLine().trim()).toBe("radian 0.0.0");
+    expect(app.footerLine().trim()).toBe("Radian 0.0.0");
     app.view.dispose();
 
     expect(app.renderer.listenerCount("focused_renderable")).toBe(app.initialFocusListeners);

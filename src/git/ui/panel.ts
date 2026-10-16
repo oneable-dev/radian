@@ -16,6 +16,8 @@ import { uiTheme } from "../../ui/theme.ts";
 import type { ThemeRole } from "../../ui/theme-config.ts";
 import { GitClipboard } from "./clipboard.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
+import type { Button, ButtonFactory } from "../../ui/button.ts";
+import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
 
 export type GitActions = {
   source(worktree: Worktree): GitSource;
@@ -26,7 +28,6 @@ export type GitActions = {
 };
 type Cache = { state: GitViewState; source: GitSource; data?: GitSnapshot; details?: GitDetails | undefined; comparison?: GitComparison | undefined; error?: string | undefined; diffError?: string | undefined };
 type Ask = { context: GitContext; worktree: Worktree; session: string | null; createdSession?: string; owner: Renderable | null; sending: boolean };
-type Button = (label: string, activate: () => void, actionLabel?: string) => BoxRenderable;
 const workingKey = "__working_tree__";
 const display = (value: string) => value.replace(/[\x00-\x1f\x7f-\x9f]/g, (character) => `\\x${character.charCodeAt(0).toString(16).padStart(2, "0")}`);
 const within = (target: Renderable | null, parent: Renderable): boolean => {
@@ -60,9 +61,9 @@ export class GitPanel {
   private readonly targetText: TextRenderable;
   private readonly targetButton: BoxRenderable;
   private readonly prompt: InputRenderable;
-  private readonly topButtons: BoxRenderable[] = [];
-  private readonly rightButtons: BoxRenderable[] = [];
-  private readonly refButtons: BoxRenderable[] = [];
+  private readonly topButtons: Button[] = [];
+  private readonly rightButtons: Button[] = [];
+  private readonly refButtons: Button[] = [];
   private readonly dialogButtons: Renderable[] = [];
   private readonly clipboard: GitClipboard;
   private readonly caches = new Map<string, Cache>();
@@ -82,18 +83,18 @@ export class GitPanel {
   private pendingRestore = false;
   private pointer: { x: number; y: number; moved: boolean } | undefined;
 
-  constructor(private readonly renderer: CliRenderer, private readonly actions: GitActions | undefined, button: Button,
+  constructor(private readonly renderer: CliRenderer, private readonly actions: GitActions | undefined, button: ButtonFactory,
     private readonly notice: (message: string) => void, private readonly changed: () => void,
     private readonly saved: (id: string, state: GitViewState) => void, private readonly initial: Readonly<Record<string, GitViewState>>,
     private readonly hint: (command: CommandId, context: KeyContext) => string) {
     const gitColors = uiTheme(renderer).colors;
     this.clipboard = new GitClipboard(renderer);
-    this.root = new BoxRenderable(renderer, { id: "git-view", flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "column", visible: false,
+    this.root = new BoxRenderable(renderer, { id: "git-view", flexGrow: 1, minHeight: 0, minWidth: 0, paddingX: 1, flexDirection: "column", visible: false,
       // Restore against measured list/diff geometry before any viewport is presented.
       renderBefore: this.restoreScroll,
       onMouseDown: (event) => { if (event.button === 0) this.pointer = { x: event.x, y: event.y, moved: false }; },
       onMouseDrag: (event) => { if (this.pointer && (this.pointer.x !== event.x || this.pointer.y !== event.y)) this.pointer.moved = true; } });
-    this.toolbar = this.row();
+    this.toolbar = this.row(); this.toolbar.marginBottom = 1;
     for (const [index, label] of ["Commits", "Reflog"].entries()) {
       const control = button(label, () => this.setTab(index === 0 ? "commits" : "reflog"));
       this.topButtons.push(control); this.toolbar.add(control);
@@ -120,7 +121,7 @@ export class GitPanel {
     this.diffBody = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "column" });
     this.diffNotice = new TextRenderable(renderer, { content: "", fg: gitColors.muted, wrapMode: "word", selectable: false });
     this.diffBody.add(this.diffNotice); this.diffFocus.add(this.diffBody); this.main.add(this.diffFocus);
-    this.right = new BoxRenderable(renderer, { id: "git-right", width: "38%", minWidth: 16, flexShrink: 0, minHeight: 0, flexDirection: "column", border: ["left"], borderColor: gitColors.muted });
+    this.right = new BoxRenderable(renderer, { id: "git-right", width: "38%", minWidth: 16, flexShrink: 0, minHeight: 0, paddingLeft: 1, flexDirection: "column", border: ["left"] });
     const rightTabs = this.row();
     for (const name of ["Commit", "Refs"] as const) {
       const control = button(name, () => { const state = this.cache?.state; if (state) { this.remember(); state.right = name === "Commit" ? "commit" : "refs"; this.persist(); this.render(); } });
@@ -131,7 +132,7 @@ export class GitPanel {
     this.details = new ScrollBoxRenderable(renderer, { id: "git-details", height: "40%", minHeight: 3, scrollX: false, onMouseDown: () => this.details.focus() });
     this.detailText = new TextRenderable(renderer, { id: "git-detail-text", content: "", fg: gitColors.text, width: "100%", wrapMode: "word", selectable: true });
     this.details.add(this.detailText); this.commitPanel.add(this.details);
-    this.filesTitle = this.text("Changed files", "accent"); this.commitPanel.add(this.filesTitle);
+    this.filesTitle = this.text("Changed files", "muted"); this.filesTitle.marginTop = 1; this.commitPanel.add(this.filesTitle);
     this.files = new GitList(renderer, "git-files", (key) => {
       if (this.cache) { this.cache.state.file = key; this.persist(); this.changed(); if (this.cache.state.diff) this.openDiff(false); }
     }, () => { if (!this.cache?.state.diff) this.openDiff(false); });
@@ -161,16 +162,17 @@ export class GitPanel {
     const cancel = button("Cancel", () => this.closeAsk(), "Cancel request");
     this.dialogButtons.push(this.targetButton, this.prompt, send, cancel); dialogControls.add(send); dialogControls.add(cancel);
     this.dialog.add(dialogControls); this.root.add(this.dialog);
+    bindPanelSpacing(renderer, this.root);
     renderer.on("selection", this.selectionFinished);
     for (const box of [this.history.root, this.files.root, this.refs.root, this.details]) {
       box.verticalScrollBar.on("change", this.remember);
       box.content.on("resize", this.applyScroll); box.viewport.on("resize", this.applyScroll);
     }
     const theme = uiTheme(renderer);
-    theme.input(this.prompt); theme.scrollbars(this.details);
+    theme.input(this.prompt); theme.scrollbars(this.details); theme.focusBorder(this.right);
     theme.bind(this.root, (colors) => {
       this.spinner.root.fg = colors.accent; this.status.fg = colors.muted; this.diffNotice.fg = colors.muted;
-      this.right.borderColor = colors.muted; this.dialog.borderColor = colors.accent; this.dialog.backgroundColor = colors.panel;
+      this.dialog.borderColor = colors.accent; this.dialog.backgroundColor = colors.panel;
       this.detailText.fg = colors.text; this.detailText.selectionBg = colors.selected; this.detailText.selectionFg = colors.text;
       this.dialogContext.fg = colors.text; this.paintTabs();
       // Rebuild once with all diff colors, rather than invoking a full native rebuild for every color setter.
@@ -190,13 +192,13 @@ export class GitPanel {
     return text;
   }
   private paintTabs(): void {
-    const state = this.cache?.state, colors = uiTheme(this.renderer).colors;
+    const state = this.cache?.state;
     if (!state) return;
-    this.topButtons[0]!.backgroundColor = state.tab === "commits" ? colors.selected : colors.panel;
-    this.topButtons[1]!.backgroundColor = state.tab === "reflog" ? colors.selected : colors.panel;
-    this.rightButtons[0]!.backgroundColor = state.right === "commit" ? colors.selected : colors.panel;
-    this.rightButtons[1]!.backgroundColor = state.right === "refs" ? colors.selected : colors.panel;
-    for (const [index, kind] of ["local", "remote", "tag"].entries()) this.refButtons[index]!.backgroundColor = state.refs === kind ? colors.selected : colors.panel;
+    this.topButtons[0]!.active = state.tab === "commits";
+    this.topButtons[1]!.active = state.tab === "reflog";
+    this.rightButtons[0]!.active = state.right === "commit";
+    this.rightButtons[1]!.active = state.right === "refs";
+    for (const [index, kind] of ["local", "remote", "tag"].entries()) this.refButtons[index]!.active = state.refs === kind;
   }
   get modal(): boolean { return this.dialog.visible; }
   focus(): void { if (this.root.visible && this.cache) this.history.root.focus(); }
@@ -351,6 +353,8 @@ export class GitPanel {
     this.paintTabs();
     this.topButtons[3]!.visible = state.tab === "commits" && !!data && data.commits.length === state.limit && state.limit < 3000;
     this.right.visible = state.tab === "commits";
+    const { horizontal } = panelSpacing(this.renderer);
+    this.right.paddingLeft = horizontal; this.dialog.paddingX = horizontal;
     this.commitPanel.visible = state.right === "commit"; this.refsPanel.visible = state.right === "refs";
     this.history.root.visible = state.tab === "reflog" || !state.diff;
     this.diffFocus.visible = state.tab === "commits" && state.diff;

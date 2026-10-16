@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import { BoxRenderable, InputRenderable, NativeSession, type RGBA, type TerminalColors } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench } from "../app/ui/workbench.ts";
-import { uiTheme } from "./theme.ts";
+import { blendColors, uiTheme } from "./theme.ts";
 import { WorkspaceSelection } from "../app/workspace-selection.ts";
 import { demoWorkspace } from "../workspace/demo.ts";
 import { ok } from "../result.ts";
@@ -30,7 +30,14 @@ async function mount() {
     if (!value) throw new Error(`Missing colored text: ${text}`);
     return value;
   };
-  return { ...app, view, selection, span, async close() { view.dispose(); await app.dispose(); } };
+  const identitySpan = () => {
+    const column = app.captureCharFrame().split("\n")[app.renderer.height - 1]!.indexOf("Radian");
+    let x = 0;
+    const value = app.captureSpans().lines.at(-1)!.spans.find((item) => { x += item.width; return x > column; });
+    if (!value) throw new Error("Missing footer identity");
+    return value;
+  };
+  return { ...app, view, selection, span, identitySpan, async close() { view.dispose(); await app.dispose(); } };
 }
 
 test("화면 전체가 터미널 기본색과 ANSI 팔레트를 사용하고 밝은 테마로 즉시 전환한다", async () => {
@@ -39,8 +46,8 @@ test("화면 전체가 터미널 기본색과 ANSI 팔레트를 사용하고 밝
   try {
     expect(rgb(app.span("Theme-sensitive transcript").fg)).toEqual([236, 236, 236]);
     expect(rgb(app.span("Theme-sensitive transcript").bg)).toEqual([20, 20, 20]);
-    expect(rgb(app.span("radian / Workspace").fg)).toEqual([17, 119, 153]);
-    expect(rgb(app.span("radian 0.0.0").bg)[0]).toBeLessThan(40);
+    expect(rgb(app.span("+ New session").fg)).toEqual([17, 119, 153]);
+    expect(rgb(app.identitySpan().fg)).toEqual([236, 236, 236]);
     const prompt = app.renderer.root.findDescendantById("session-prompt");
     if (!(prompt instanceof InputRenderable)) throw new Error("Missing Agent input");
     prompt.focus(); await app.mockInput.typeText(" draft"); await app.renderOnce();
@@ -56,7 +63,33 @@ test("화면 전체가 터미널 기본색과 ANSI 팔레트를 사용하고 밝
     expect(rgb(app.span("Theme-sensitive transcript").fg)).toEqual([32, 32, 32]);
     expect(rgb(app.span("Theme-sensitive transcript").bg)).toEqual([250, 250, 246]);
     expect(rgb(app.span("unsent request draft").fg)).toEqual([32, 32, 32]);
-    expect(rgb(app.span("radian 0.0.0").bg)[0]).toBeGreaterThan(230);
+    expect(rgb(app.identitySpan().fg)).toEqual([32, 32, 32]);
+  } finally { await app.close(); }
+});
+
+test("포커스가 사이드바에서 입력창으로 이동하면 경계 강조만 옮기고 선택과 초안을 유지한다", async () => {
+  // Both a selected session and an existing draft remain owned by the same Agent view.
+  const app = await mount();
+  const sidebar = app.renderer.root.findDescendantById("workspace-sidebar")!;
+  const composer = app.renderer.root.findDescendantById("agent-composer")!;
+  const border = (box: typeof sidebar) => {
+    let x = 0;
+    const column = box === sidebar ? box.x + box.width - 1 : box.x;
+    return app.captureSpans().lines[box.y]!.spans.find((span) => { x += span.width; return x > column; })!.fg;
+  };
+  try {
+    const colors = uiTheme(app.renderer).colors;
+    expect(border(sidebar).equals(colors.accent)).toBe(true);
+
+    // Focusing an input must not activate another tab, select a session or send its draft.
+    app.mockInput.pressKey("e", { ctrl: true }); await app.renderOnce();
+
+    expect(border(composer).equals(colors.accent)).toBe(true);
+    expect(border(sidebar).toInts()).toEqual(blendColors(colors.panel, colors.text, 0.22).toInts());
+    expect(app.selection.sessionId).toBe("a1");
+    expect(app.view.promptDrafts.a1).toBe("unsent request");
+    expect(app.captureCharFrame()).toContain("Theme-sensitive transcript");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
   } finally { await app.close(); }
 });
 
@@ -83,7 +116,7 @@ test("자체 색상 재정의만 고정하고 나머지는 이후 터미널 테�
 
     app.renderer.emit("palette", palette(true)); await app.renderOnce();
 
-    expect(rgb(app.span("radian / Workspace").fg)).toEqual([171, 205, 239]);
+    expect(rgb(app.span("+ New session").fg)).toEqual([171, 205, 239]);
     expect(rgb(app.span("Theme-sensitive transcript").bg)).toEqual([250, 250, 246]);
     expect(theme.colors.accent.intent).toBe("rgb");
     expect(theme.colors.panel.intent).toBe("default");

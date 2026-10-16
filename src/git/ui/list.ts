@@ -18,6 +18,7 @@ export class GitList {
     this.root = new ScrollBoxRenderable(renderer, { id, flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.root.focus() });
     uiTheme(renderer).scrollbars(this.root);
+    this.root.on("focused", () => this.highlight()); this.root.on("blurred", () => this.highlight());
   }
   get selectedKey(): string | null { return this.selected; }
   update(items: readonly GitListItem[], selected: string | null): void {
@@ -42,7 +43,7 @@ export class GitList {
         uiTheme(this.renderer).bind(label, (colors) => {
           label.fg = colors[item.color ?? "text"]; label.selectionBg = colors.selected; label.selectionFg = colors.text;
         });
-        uiTheme(this.renderer).bind(row, (colors) => { row.backgroundColor = item.key === this.selected ? colors.selected : colors.panel; });
+        uiTheme(this.renderer).bind(row, (colors) => { row.backgroundColor = item.key === this.selected ? this.selectionColor : colors.panel; });
         line.add(label); row.add(line);
         if (item.connector) row.add(this.graph(item.connector));
         this.root.add(row); this.rows.set(item.key, row);
@@ -55,9 +56,13 @@ export class GitList {
     uiTheme(this.renderer).bind(text, (colors) => { text.content = styledGraph(cells, colors); });
     return text;
   }
+  private get selectionColor() {
+    const colors = uiTheme(this.renderer).colors;
+    return this.root.focused ? colors.selected : colors.surface;
+  }
   private highlight(): void {
     const colors = uiTheme(this.renderer).colors;
-    for (const [key, row] of this.rows) row.backgroundColor = key === this.selected ? colors.selected : colors.panel;
+    for (const [key, row] of this.rows) row.backgroundColor = key === this.selected ? this.selectionColor : colors.panel;
   }
   select(key: string): void {
     if (this.items.find((item) => item.key === key)?.disabled) return;

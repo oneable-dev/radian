@@ -59,11 +59,13 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
     app = await mount(); await app.click("Editor"); await app.visible("[No Name]");
     await app.mockInput.typeText("iunsaved-native-editor"); app.mockInput.pressEscape(); await app.visible("unsaved-native-editor");
     const pid = app.client.snapshot.editors![0]!.pid;
-    expect(app.editorFrame?.rows).toBe(19);
-    expect(app.captureCharFrame().split("\n")[23]).toContain("radian 0.0.0");
+    expect(app.editorFrame?.rows).toBe(15);
+    expect(app.editorFrame?.cols).toBe(76);
+    expect(app.captureCharFrame().split("\n")[23]).toContain("Radian 0.0.0");
     app.resize(100, 28); await app.renderOnce();
-    await until(() => app!.editorFrame?.rows === 23); await app.visible("unsaved-native-editor");
-    expect(app.editorFrame?.rows).toBe(23);
+    await until(() => app!.editorFrame?.rows === 19); await app.visible("unsaved-native-editor");
+    expect(app.editorFrame?.rows).toBe(19);
+    expect(app.editorFrame?.cols).toBe(56);
     await app.click("feature (feature/probe)"); await app.click("Git");
     await app.click("main (main)"); await app.visible("unsaved-native-editor");
 

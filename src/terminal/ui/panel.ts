@@ -7,6 +7,8 @@ import { TerminalSurface, type PtyAttachment } from "../../ui/embedded-terminal/
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import type { TerminalTheme } from "../../ui/embedded-terminal/theme.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import type { Button, ButtonFactory } from "../../ui/button.ts";
+import { bindPanelSpacing } from "../../ui/spacing.ts";
 
 export type TerminalActions = {
   list(): readonly TerminalInfo[];
@@ -14,7 +16,6 @@ export type TerminalActions = {
   attach(id: string, frame: (frame: PtyFrame) => void, failed: (error: unknown) => void): Promise<Result<PtyAttachment, ExpectedError>>;
   close(id: string): Promise<Result<void, ExpectedError>>;
 };
-type Button = (label: string, activate: () => void, actionLabel?: string) => BoxRenderable;
 export class TerminalPanel {
   readonly root: BoxRenderable;
   private readonly tabs: ScrollBoxRenderable;
@@ -24,7 +25,7 @@ export class TerminalPanel {
   private readonly newButton: BoxRenderable;
   private readonly closeButton: BoxRenderable;
   private readonly reconnectButton: BoxRenderable;
-  private readonly tabButtons = new Map<string, BoxRenderable>();
+  private readonly tabButtons = new Map<string, Button>();
   private readonly creating = new Set<string>();
   private worktree: Worktree | null = null;
   private items: readonly TerminalInfo[] = [];
@@ -40,7 +41,7 @@ export class TerminalPanel {
   private cancelLayout: (() => void) | undefined;
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: TerminalActions | undefined,
-    private readonly button: Button, private readonly notice: (message: string) => void,
+    private readonly button: ButtonFactory, private readonly notice: (message: string) => void,
     private readonly selectionChanged: (worktreeId: string, id: string | null) => void, private readonly changed: () => void, private readonly unavailable?: string, private readonly terminalTheme?: TerminalTheme) {
     this.root = new BoxRenderable(renderer, { id: "terminal-view", flexGrow: 1, minHeight: 0, flexDirection: "column", visible: false });
     const toolbar = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
@@ -52,7 +53,7 @@ export class TerminalPanel {
     this.reconnectButton = button("Reconnect", () => { this.intent++; this.activate(this.selected, true); }, "Reconnect terminal");
     this.reconnectButton.visible = false;
     toolbar.add(this.tabs); toolbar.add(this.newButton); toolbar.add(this.closeButton); toolbar.add(this.reconnectButton);
-    const status = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
+    const status = new BoxRenderable(renderer, { height: 1, flexShrink: 0, marginBottom: 1, flexDirection: "row", gap: 1 });
     this.message = new TextRenderable(renderer, { content: "", flexGrow: 1, minWidth: 0, height: 1, wrapMode: "none", selectable: false });
     this.spinner = new LoadingSpinner(renderer, { id: "terminal-spinner" });
     uiTheme(renderer).bind(this.message, (colors) => { this.message.fg = colors.muted; });
@@ -61,6 +62,7 @@ export class TerminalPanel {
     status.add(this.message); status.add(this.spinner.root);
     this.viewport = new BoxRenderable(renderer, { id: "terminal-viewport", flexGrow: 1, minHeight: 0, flexDirection: "column" });
     this.root.add(toolbar); this.root.add(status); this.root.add(this.viewport);
+    bindPanelSpacing(renderer, this.root);
     renderer.on("frame", this.revealSelected);
   }
   get input(): Renderable | undefined { return this.surface?.root; }
@@ -98,8 +100,9 @@ export class TerminalPanel {
     this.tabButtons.clear();
     for (const item of this.items) {
       const wrapper = new BoxRenderable(this.renderer, { id: `terminal-tab:${item.id}`, height: 1, flexShrink: 0 });
-      const label = `${item.id === this.selected ? "[" : ""}${item.title}${item.exited ? " (exited)" : ""}${item.id === this.selected ? "]" : ""}`;
+      const label = `${item.title}${item.exited ? " (exited)" : ""}`;
       const tab = this.button(label, () => { this.intent++; if (this.worktree) this.selectionChanged(this.worktree.id, item.id); this.activate(item.id, true); this.paintTabs(); }, "Select terminal");
+      tab.active = item.id === this.selected;
       this.tabButtons.set(item.id, tab); wrapper.add(tab); this.tabs.add(wrapper);
     }
     if (this.selected) {

@@ -1,5 +1,5 @@
 import {
-  BoxRenderable, InputRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderable,
+  BoxRenderable, InputRenderable, InputRenderableEvents, ScrollBoxRenderable, TextAttributes, TextRenderable,
   type CliRenderer, type Renderable,
 } from "@opentui/core";
 import type { ExecutionState } from "../session-registry.ts";
@@ -7,6 +7,7 @@ import type { Worktree } from "../../workspace/model.ts";
 import type { ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
 
 export type AgentActions = {
   onNewSession: (worktreeId: string) => void;
@@ -26,6 +27,7 @@ export class AgentPanel {
   private readonly title: TextRenderable;
   private readonly details: TextRenderable;
   private readonly runtimePanel: BoxRenderable;
+  private readonly composer: BoxRenderable;
   private readonly transcript: TextRenderable;
   private readonly newButton: BoxRenderable;
   private readonly drafts = new Map<string, string>();
@@ -39,18 +41,18 @@ export class AgentPanel {
   private syncingScroll = false;
   private disposed = false;
 
-  constructor(renderer: CliRenderer, private readonly actions: AgentActions, button: Button,
+  constructor(private readonly renderer: CliRenderer, private readonly actions: AgentActions, button: Button,
     private readonly notice: (message: string) => void, private readonly changed: () => void,
     private readonly focusSidebar: () => void, initialScroll: Readonly<Record<string, number>>,
     private readonly saveScroll: (sessionId: string, position: number) => void) {
     const theme = uiTheme(renderer);
     this.scrollPositions = { ...initialScroll };
     this.root = new BoxRenderable(renderer, { id: "agent-view", flexGrow: 1, minHeight: 0, minWidth: 0, padding: 1, flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
-    this.title = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
+    this.title = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false, attributes: TextAttributes.BOLD });
     this.details = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.newButton = button("+ New session", () => { if (this.worktree) actions.onNewSession(this.worktree.id); }, "New session");
     this.root.add(this.title); this.root.add(this.details); this.root.add(this.newButton);
-    this.runtimePanel = new BoxRenderable(renderer, { width: "100%", flexGrow: 1, minHeight: 0, flexDirection: "column", gap: 1 });
+    this.runtimePanel = new BoxRenderable(renderer, { width: "100%", flexGrow: 1, minHeight: 0, marginTop: 1, flexDirection: "column", gap: 1 });
     this.transcriptScroll = new ScrollBoxRenderable(renderer, { id: "session-transcript", flexGrow: 1, minHeight: 0, scrollX: false,
       renderBefore: this.finishScroll });
     this.transcript = new TextRenderable(renderer, { width: "100%", content: "", wrapMode: "word", selectable: false });
@@ -61,9 +63,19 @@ export class AgentPanel {
     this.prompt = new InputRenderable(renderer, { id: "session-prompt", width: "100%", flexShrink: 0, placeholder: "Prompt · Enter to run" });
     for (const [id, draft] of Object.entries(actions.initialDrafts ?? {})) this.drafts.set(id, draft);
     this.prompt.on(InputRenderableEvents.INPUT, this.handleDraftInput);
-    this.runtimePanel.add(this.transcriptScroll); this.runtimePanel.add(this.prompt); this.root.add(this.runtimePanel);
-    theme.input(this.prompt); theme.scrollbars(this.transcriptScroll);
-    theme.bind(this.root, (colors) => { this.title.fg = colors.accent; this.details.fg = colors.muted; this.transcript.fg = colors.text; });
+    const composer = this.composer = new BoxRenderable(renderer, { id: "agent-composer", width: "100%", height: 3, flexShrink: 0,
+      flexDirection: "row", alignItems: "center", paddingX: 1, gap: 1, border: ["left"] });
+    const marker = new TextRenderable(renderer, { content: "›", height: 1, flexShrink: 0, selectable: false });
+    this.prompt.width = "auto"; this.prompt.flexGrow = 1; this.prompt.minWidth = 0;
+    composer.add(marker); composer.add(this.prompt);
+    this.runtimePanel.add(this.transcriptScroll); this.runtimePanel.add(composer); this.root.add(this.runtimePanel);
+    theme.input(this.prompt); theme.scrollbars(this.transcriptScroll); theme.focusBorder(composer);
+    theme.bind(this.root, (colors) => {
+      this.title.fg = colors.text; this.details.fg = colors.muted; this.transcript.fg = colors.text;
+      composer.backgroundColor = colors.surface; marker.fg = colors.accent;
+    });
+    bindPanelSpacing(renderer, this.root);
+    renderer.on("resize", this.resize); this.resize();
   }
 
   get promptDrafts(): Record<string, string> { return Object.fromEntries(this.drafts); }
@@ -98,6 +110,9 @@ export class AgentPanel {
     }
     for (const id of this.drafts.keys()) if (!openIds.has(id)) this.drafts.delete(id);
     this.runtimePanel.visible = Boolean(visible && session && this.actions.onPrompt);
+    this.root.gap = this.active ? 0 : 1;
+    this.root.alignItems = this.active ? "stretch" : "center";
+    this.root.justifyContent = this.active ? "flex-start" : "center";
     const output = details?.output || "Enter a prompt to start this session explicitly.";
     const transcriptKey = `${sessionId ?? ""}\0${output}`;
     if (this.lastTranscriptKey !== transcriptKey) {
@@ -110,6 +125,15 @@ export class AgentPanel {
     this.newButton.visible = Boolean(visible && worktree && !session);
     this.applyScroll();
   }
+
+  private resize = (): void => {
+    if (this.disposed || this.root.isDestroyed) return;
+    const { horizontal, vertical } = panelSpacing(this.renderer);
+    this.runtimePanel.marginTop = vertical;
+    this.runtimePanel.gap = vertical;
+    this.composer.height = 1 + vertical * 2;
+    this.composer.paddingX = horizontal;
+  };
 
   rememberScroll = (): void => {
     if (this.disposed || this.root.isDestroyed || this.syncingScroll || this.pendingScroll !== null || !this.promptSessionId || !this.active) return;
@@ -156,6 +180,7 @@ export class AgentPanel {
   dispose(): void {
     if (this.disposed) return;
     this.rememberScroll(); this.disposed = true;
+    this.renderer.off("resize", this.resize);
     this.transcriptScroll.verticalScrollBar.off("change", this.rememberScroll);
     this.transcriptScroll.content.off("resize", this.applyScroll);
     this.transcriptScroll.viewport.off("resize", this.applyScroll);
