@@ -173,6 +173,35 @@ recreation. Explicit `--stop-runtime` closes all tracked terminals and their own
 services without `terminal-tabs` are not silently upgraded. The new view preference is stored in
 additive fields so the original three-view wire enum remains readable by older clients.
 
+### Theme
+
+The UI follows the attached terminal by default: text/background use its default colors, while
+accents, status indicators and Git graph/syntax colors use its ANSI palette. Muted text, selection,
+footer and diff backgrounds are derived from those colors for both light and dark terminals.
+Reported palette changes repaint the UI without restarting the runtime or losing prompt drafts,
+focus or Git navigation/scroll positions. Each attached TUI has its own theme.
+
+No theme file is required. Optional `#RRGGBB` color overrides are read at TUI startup from
+`$XDG_CONFIG_HOME/radian/theme.json`, falling back to `~/.config/radian/theme.json`.
+Use `--theme PATH` to choose an explicit file. For example:
+
+```json
+{
+  "accent": "#7DD3FC",
+  "selected": "#1E3A5F"
+}
+```
+
+Available roles: `text`, `panel`, `surface`, `muted`, `selected`, `accent`, `success`, `error`,
+`warning`, `info`, `keyword`, `number`, `added` and `removed`. Omitted roles continue to follow the
+terminal; derived roles use the overridden base colors. Missing optional files use the terminal
+theme; invalid files or missing explicit paths are errors. Restart only the TUI after editing a file.
+
+If color queries are unsupported, native default/ANSI color intent is retained. Derived colors use
+fallback snapshots (light when the terminal reports light mode, dark otherwise); explicit overrides
+can correct them. Overrides affect Radian's UI only: embedded shells still follow the host terminal,
+and programs' explicit RGB colors or Neovim colorschemes remain unchanged.
+
 ### Keybindings
 
 The default leader is **Ctrl+Space**. Press and release it, then press `c` to detach radian,

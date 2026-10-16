@@ -10,9 +10,10 @@ export const workspaceIcons = {
   unreported: icons.robot,
 } as const;
 
+type StatusColor = "text" | "muted" | "accent" | "success" | "error";
 const statusColors = {
-  working: "#7DD3FC", complete: "#86EFAC", failure: "#FB7185",
-} satisfies Record<AgentStatus, string>;
+  working: "accent", complete: "success", failure: "error",
+} satisfies Record<AgentStatus, StatusColor>;
 
 export function sessionStatus(session: OpenSession): AgentStatus | null {
   const statuses = [session.status, ...session.subagents.map((agent) => agent.status)];
@@ -22,16 +23,16 @@ export function sessionStatus(session: OpenSession): AgentStatus | null {
   return null;
 }
 
-export function rowPresentation(row: WorkspaceRow): { icon: string; color: string } {
+export function rowPresentation(row: WorkspaceRow): { icon: string; color: StatusColor } {
   switch (row.kind) {
-    case "repository": return { icon: workspaceIcons.repository, color: "#CBD5E1" };
-    case "worktree": return { icon: workspaceIcons.worktree, color: "#CBD5E1" };
+    case "repository": return { icon: workspaceIcons.repository, color: "text" };
+    case "worktree": return { icon: workspaceIcons.worktree, color: "text" };
     case "session": return statusPresentation(sessionStatus(row.session));
     case "subagent": return statusPresentation(row.subagent.status);
   }
 }
 
-function statusPresentation(status: AgentStatus | null): { icon: string; color: string } {
-  if (status === null) return { icon: workspaceIcons.unreported, color: "#94A3B8" };
+function statusPresentation(status: AgentStatus | null): { icon: string; color: StatusColor } {
+  if (status === null) return { icon: workspaceIcons.unreported, color: "muted" };
   return { icon: workspaceIcons[status], color: statusColors[status] };
 }

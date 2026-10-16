@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { CodeRenderable, type Renderable } from "@opentui/core";
+import { CodeRenderable, DiffRenderable, InputRenderable, type Renderable, type TerminalColors } from "@opentui/core";
+import { uiTheme } from "./theme.ts";
 import { createTestRenderer, MockTreeSitterClient } from "@opentui/core/testing";
 import { WorkspaceView } from "./workspace.ts";
 import { WorkspaceSelection } from "../workspace/selection.ts";
@@ -277,6 +278,40 @@ test("지원하지 않는 클립보드는 복사 성공으로 표시하지 않�
     await app.waitForFrame((frame) => frame.includes("Clipboard denied"));
 
     expect(app.captureCharFrame()).not.toContain("Copied to clipboard"); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Git diff의 테마 변경은 밝은 배경·구문색을 반영하고 스크롤과 요청 초안을 보존한다", async () => {
+  // Theme updates must not reset navigation or accidentally send the open request.
+  const app = await mount();
+  const dark: TerminalColors = { palette: ["#000000", "#AA2222", "#228822", "#887700", "#2255AA", "#AA22AA", "#117799", "#DDDDDD"],
+    defaultForeground: "#EEEEEE", defaultBackground: "#121212", cursorColor: null, mouseForeground: null, mouseBackground: null,
+    tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null };
+  try {
+    uiTheme(app.renderer).configure(dark);
+    await app.chooseCommit(); await app.click("M src/login.ts"); await app.waitForFrame((frame) => frame.includes("const line00"));
+    const oldDiff = app.get("git-file-diff");
+    if (!(oldDiff instanceof DiffRenderable)) throw new Error("Missing whole-file diff");
+    expect(oldDiff.contextBg.toInts().slice(0, 3)).toEqual([18, 18, 18]);
+    app.get("git-diff").focus(); app.mockInput.pressKey("END"); await app.renderOnce();
+    const scroll = app.codes()[0]!.scrollY;
+    app.mockInput.pressKey("a"); await app.renderOnce(); await app.mockInput.typeText("keep this request");
+    const prompt = app.get("git-prompt");
+
+    app.renderer.emit("palette", { ...dark, defaultForeground: "#202020", defaultBackground: "#FAFAFA", palette: [...dark.palette.slice(0, 5), "#664488", "#117799", "#DDDDDD"] });
+    await app.renderOnce(); await app.renderOnce();
+
+    const diff = app.get("git-file-diff");
+    if (!(diff instanceof DiffRenderable) || !(prompt instanceof InputRenderable)) throw new Error("Missing themed controls");
+    expect(diff.contextBg.toInts().slice(0, 3)).toEqual([250, 250, 250]);
+    expect(diff.lineNumberFg.toInts()[0]).toBeLessThan(160);
+    expect(diff.addedBg.toInts()[0]).toBeGreaterThan(210);
+    expect(diff.removedBg.toInts()[1]).toBeGreaterThan(210);
+    expect(diff.syntaxStyle?.getStyle("keyword")?.fg?.toInts().slice(0, 3)).toEqual([102, 68, 136]);
+    expect(app.codes()[0]!.scrollY).toBe(scroll); expect(app.codes()[1]!.scrollY).toBe(scroll);
+    expect(prompt.value).toBe("keep this request"); expect(app.renderer.currentFocusedRenderable).toBe(prompt);
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid);
+    expect(app.view.promptDrafts.a1).toBe("existing Agent draft"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 

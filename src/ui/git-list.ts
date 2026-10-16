@@ -1,9 +1,10 @@
-import { BoxRenderable, RGBA, ScrollBoxRenderable, StyledText, TextRenderable, type CliRenderer } from "@opentui/core";
+import { BoxRenderable, ScrollBoxRenderable, StyledText, TextRenderable, type CliRenderer } from "@opentui/core";
 import type { GraphCell } from "../git/graph.ts";
+import { uiTheme, type UiColors } from "./theme.ts";
+import type { ThemeRole } from "./theme-config.ts";
 
-export const gitColors = { text: "#CBD5E1", muted: "#94A3B8", accent: "#7DD3FC", selected: "#1E3A5F", panel: "#0F172A" };
-export type GitListItem = { key: string; label: string; graph?: GraphCell[]; connector?: GraphCell[]; color?: string; disabled?: boolean };
-const styledGraph = (cells: GraphCell[]) => new StyledText(cells.map((cell) => ({ __isChunk: true as const, text: cell.text, ...(cell.color ? { fg: RGBA.fromHex(cell.color) } : {}) })));
+export type GitListItem = { key: string; label: string; graph?: GraphCell[]; connector?: GraphCell[]; color?: ThemeRole; disabled?: boolean };
+const styledGraph = (cells: GraphCell[], colors: UiColors) => new StyledText(cells.map((cell) => ({ __isChunk: true as const, text: cell.text, ...(cell.color ? { fg: colors[cell.color] } : {}) })));
 
 export class GitList {
   readonly root: ScrollBoxRenderable;
@@ -16,6 +17,7 @@ export class GitList {
     private readonly activate: (key: string) => void) {
     this.root = new ScrollBoxRenderable(renderer, { id, flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.root.focus() });
+    uiTheme(renderer).scrollbars(this.root);
   }
   get selectedKey(): string | null { return this.selected; }
   update(items: readonly GitListItem[], selected: string | null): void {
@@ -34,18 +36,28 @@ export class GitList {
             down = undefined; this.select(item.key); this.activate(item.key);
           } });
         const line = new BoxRenderable(this.renderer, { height: 1, flexDirection: "row", flexShrink: 0, minWidth: 0 });
-        if (item.graph) line.add(new TextRenderable(this.renderer, { content: styledGraph(item.graph), width: item.graph.length, height: 1, selectable: false, flexShrink: 0 }));
-        line.add(new TextRenderable(this.renderer, { content: item.label, fg: item.color ?? gitColors.text, height: 1, flexGrow: 1,
-          minWidth: 0, wrapMode: "none", selectable: !item.disabled }));
-        row.add(line);
-        if (item.connector) row.add(new TextRenderable(this.renderer, { content: styledGraph(item.connector), height: 1, selectable: false, flexShrink: 0 }));
+        if (item.graph) line.add(this.graph(item.graph, item.graph.length));
+        const label = new TextRenderable(this.renderer, { content: item.label, height: 1, flexGrow: 1,
+          minWidth: 0, wrapMode: "none", selectable: !item.disabled });
+        uiTheme(this.renderer).bind(label, (colors) => {
+          label.fg = colors[item.color ?? "text"]; label.selectionBg = colors.selected; label.selectionFg = colors.text;
+        });
+        uiTheme(this.renderer).bind(row, (colors) => { row.backgroundColor = item.key === this.selected ? colors.selected : colors.panel; });
+        line.add(label); row.add(line);
+        if (item.connector) row.add(this.graph(item.connector));
         this.root.add(row); this.rows.set(item.key, row);
       }
     }
     this.highlight();
   }
+  private graph(cells: GraphCell[], width?: number): TextRenderable {
+    const text = new TextRenderable(this.renderer, { ...(width ? { width } : {}), height: 1, selectable: false, flexShrink: 0 });
+    uiTheme(this.renderer).bind(text, (colors) => { text.content = styledGraph(cells, colors); });
+    return text;
+  }
   private highlight(): void {
-    for (const [key, row] of this.rows) row.backgroundColor = key === this.selected ? gitColors.selected : gitColors.panel;
+    const colors = uiTheme(this.renderer).colors;
+    for (const [key, row] of this.rows) row.backgroundColor = key === this.selected ? colors.selected : colors.panel;
   }
   select(key: string): void {
     if (this.items.find((item) => item.key === key)?.disabled) return;

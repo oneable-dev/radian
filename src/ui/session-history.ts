@@ -6,6 +6,8 @@ import type { Result } from "../result.ts";
 import type { FooterShortcut } from "./footer.ts";
 import { LoadingSpinner } from "./loading-spinner.ts";
 import type { CommandId } from "../keybindings/commands.ts";
+import { uiTheme } from "./theme.ts";
+import type { ThemeRole } from "./theme-config.ts";
 
 export type HistoryActions = {
   list?: (worktreeId: string) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
@@ -35,15 +37,17 @@ export class SessionHistoryPanel {
   constructor(private readonly renderer: CliRenderer, private readonly actions: HistoryActions) {
     this.root = new BoxRenderable(renderer, { id: "session-history", flexGrow: 1, minHeight: 0, flexDirection: "column" });
     const heading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    this.title = this.text("History", "#7DD3FC");
+    this.title = this.text("History", "accent");
     this.title.flexGrow = 1; this.title.flexShrink = 1; this.title.minWidth = 0;
-    this.spinner = new LoadingSpinner(renderer, { fg: "#7DD3FC" });
+    this.spinner = new LoadingSpinner(renderer);
+    uiTheme(renderer).bind(this.spinner.root, (colors) => { this.spinner.root.fg = colors.accent; });
     heading.add(this.title); heading.add(this.spinner.root);
     this.refreshButton = actions.button(`Refresh history${actions.keyHint("history.refresh") ? ` [${actions.keyHint("history.refresh")}]` : ""}`, () => { void this.refresh(); });
-    this.message = this.text("", "#94A3B8");
+    this.message = this.text("", "muted");
     this.list = new ScrollBoxRenderable(renderer, { id: "history-list", flexGrow: 1, minHeight: 0, scrollX: false,
       contentOptions: { flexDirection: "column" } });
     this.root.add(heading); this.root.add(this.refreshButton); this.root.add(this.message); this.root.add(this.list);
+    uiTheme(renderer).scrollbars(this.list);
   }
 
   get shortcuts(): readonly FooterShortcut[] {
@@ -99,8 +103,9 @@ export class SessionHistoryPanel {
         },
       });
       const prefix = item.unavailableReason ? "[Busy] " : item.openSessionId ? "[Open] " : "";
-      row.add(this.text(prefix + item.title, "#CBD5E1"));
-      row.add(this.text(`${item.modified.slice(0, 16).replace("T", " ")} · ${item.messageCount} messages`, "#94A3B8"));
+      uiTheme(this.renderer).bind(row, (colors) => { row.backgroundColor = index === this.cursor ? colors.selected : colors.panel; });
+      row.add(this.text(prefix + item.title, "text"));
+      row.add(this.text(`${item.modified.slice(0, 16).replace("T", " ")} · ${item.messageCount} messages`, "muted"));
       this.list.add(row); this.rows.push(row);
     }
     this.paint();
@@ -137,7 +142,8 @@ export class SessionHistoryPanel {
     this.cursor = Math.max(0, Math.min(this.items.length - 1, this.cursor)); this.paint();
   }
   private paint(): void {
-    this.rows.forEach((row, index) => { row.backgroundColor = index === this.cursor ? "#1E3A5F" : "#0F172A"; });
+    const colors = uiTheme(this.renderer).colors;
+    this.rows.forEach((row, index) => { row.backgroundColor = index === this.cursor ? colors.selected : colors.panel; });
     const row = this.rows[this.cursor]; if (row) this.list.scrollChildIntoView(row.id);
     this.actions.onChange?.();
   }
@@ -147,8 +153,10 @@ export class SessionHistoryPanel {
     if (focused) this.list.focus();
   }
   private current(generation: number): boolean { return !this.disposed && !this.root.isDestroyed && this.root.visible && generation === this.generation; }
-  private text(content: string, fg: string): TextRenderable {
-    return new TextRenderable(this.renderer, { content, fg, height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
+  private text(content: string, role: ThemeRole): TextRenderable {
+    const text = new TextRenderable(this.renderer, { content, height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
+    uiTheme(this.renderer).bind(text, (colors) => { text.fg = colors[role]; });
+    return text;
   }
   dispose(): void { this.disposed = true; this.generation++; this.spinner.cancel(); }
 }

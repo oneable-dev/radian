@@ -6,6 +6,7 @@ import type { Worktree } from "../workspace/model.ts";
 
 import { TerminalSurface, type PtyAttachment } from "./terminal-surface.ts";
 import type { TerminalTheme } from "./terminal-theme.ts";
+import { uiTheme } from "./theme.ts";
 
 export type EditorAttachment = PtyAttachment;
 export type EditorActions = {
@@ -30,7 +31,8 @@ export class EditorPanel {
     button: (label: string, activate: () => void) => BoxRenderable, private readonly notice: (message: string) => void,
     private readonly changed: () => void, private readonly sidebarHint: string, private readonly terminalTheme?: TerminalTheme) {
     this.root = new BoxRenderable(renderer, { id: "editor-view", width: "100%", flexGrow: 1, minHeight: 0, flexDirection: "column", visible: false });
-    this.message = new TextRenderable(renderer, { content: "", fg: "#94A3B8", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
+    this.message = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
+    uiTheme(renderer).bind(this.message, (colors) => { this.message.fg = colors.muted; });
     this.openButton = button("Open / reconnect editor", () => { if (this.worktree) this.show(this.worktree, true); });
     this.root.add(this.message); this.root.add(this.openButton);
   }

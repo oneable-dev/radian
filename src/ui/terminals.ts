@@ -6,6 +6,7 @@ import type { Worktree } from "../workspace/model.ts";
 import { TerminalSurface, type PtyAttachment } from "./terminal-surface.ts";
 import { LoadingSpinner } from "./loading-spinner.ts";
 import type { TerminalTheme } from "./terminal-theme.ts";
+import { uiTheme } from "./theme.ts";
 
 export type TerminalActions = {
   list(): readonly TerminalInfo[];
@@ -52,8 +53,11 @@ export class TerminalPanel {
     this.reconnectButton.visible = false;
     toolbar.add(this.tabs); toolbar.add(this.newButton); toolbar.add(this.closeButton); toolbar.add(this.reconnectButton);
     const status = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    this.message = new TextRenderable(renderer, { content: "", fg: "#94A3B8", flexGrow: 1, minWidth: 0, height: 1, wrapMode: "none", selectable: false });
-    this.spinner = new LoadingSpinner(renderer, { id: "terminal-spinner", fg: "#7DD3FC" });
+    this.message = new TextRenderable(renderer, { content: "", flexGrow: 1, minWidth: 0, height: 1, wrapMode: "none", selectable: false });
+    this.spinner = new LoadingSpinner(renderer, { id: "terminal-spinner" });
+    uiTheme(renderer).bind(this.message, (colors) => { this.message.fg = colors.muted; });
+    uiTheme(renderer).bind(this.spinner.root, (colors) => { this.spinner.root.fg = colors.accent; });
+    uiTheme(renderer).scrollbars(this.tabs);
     status.add(this.message); status.add(this.spinner.root);
     this.viewport = new BoxRenderable(renderer, { id: "terminal-viewport", flexGrow: 1, minHeight: 0, flexDirection: "column" });
     this.root.add(toolbar); this.root.add(status); this.root.add(this.viewport);

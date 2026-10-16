@@ -8,11 +8,12 @@ import { restoreWorkViews, saveWorkViews } from "./runtime/work-view-preferences
 import { capture, ConnectionError, InputError, reportUnexpected, type ExpectedError } from "./errors.ts";
 import { err, ok, type Result } from "./result.ts";
 import { defaultKeymap, loadKeymap, type Keymap } from "./keybindings/config.ts";
+import { loadTheme, type ThemeOverrides } from "./ui/theme-config.ts";
 
-type Options = { demo: boolean; offline: boolean; service: boolean; status: boolean; stop: boolean; cwd: string; stateRoot: string | undefined; keybindings: string | undefined };
+type Options = { demo: boolean; offline: boolean; service: boolean; status: boolean; stop: boolean; cwd: string; stateRoot: string | undefined; keybindings: string | undefined; theme: string | undefined };
 function parseOptions(args: string[]): Result<Options, InputError> {
   const values = new Map<string, string>();
-  for (const name of ["--state-dir", "--runtime-cwd", "--keybindings"]) {
+  for (const name of ["--state-dir", "--runtime-cwd", "--keybindings", "--theme"]) {
     const index = args.indexOf(name); if (index < 0) continue;
     const value = args[index + 1];
     if (!value || value.startsWith("--")) return err(new InputError(`Missing value for ${name}`));
@@ -21,7 +22,7 @@ function parseOptions(args: string[]): Result<Options, InputError> {
   const demo = args.includes("--demo"), offline = args.includes("--test-runtime");
   if (demo && offline) return err(new InputError("Choose --demo or --test-runtime, not both."));
   return ok({ demo, offline, service: args.includes("--runtime-service"), status: args.includes("--runtime-status"), stop: args.includes("--stop-runtime"),
-    cwd: values.get("--runtime-cwd") ?? process.cwd(), stateRoot: values.get("--state-dir"), keybindings: values.get("--keybindings") });
+    cwd: values.get("--runtime-cwd") ?? process.cwd(), stateRoot: values.get("--state-dir"), keybindings: values.get("--keybindings"), theme: values.get("--theme") });
 }
 async function main(): Promise<Result<void, ExpectedError>> {
   const parsed = parseOptions(process.argv.slice(2)); if (!parsed.ok) return parsed;
@@ -33,6 +34,8 @@ async function main(): Promise<Result<void, ExpectedError>> {
   const administrative = options.stop || options.status;
   const keymap = administrative ? ok(defaultKeymap()) : await loadKeymap(options.keybindings);
   if (!keymap.ok) return keymap;
+  const theme = administrative ? ok({}) : await loadTheme(options.theme);
+  if (!theme.ok) return theme;
   let repositories: readonly Repository[] = [];
   let discoveryError: string | null = null;
   if (options.demo) repositories = demoWorkspace();
@@ -62,16 +65,17 @@ async function main(): Promise<Result<void, ExpectedError>> {
         await new Promise<void>((resolve) => setTimeout(resolve, 40));
       }
       console.log("Workspace service stopped. Open-session state and saved history were retained.");
-    } else await runUI(repositories, client, options, discoveryError, keymap.value);
+    } else await runUI(repositories, client, options, discoveryError, keymap.value, theme.value);
     return ok(undefined);
   } finally { await client?.disconnect(); }
 }
 
-async function runUI(repositories: readonly Repository[], client: RuntimeClient | null, options: Options, discoveryError: string | null, keymap: Keymap): Promise<void> {
+async function runUI(repositories: readonly Repository[], client: RuntimeClient | null, options: Options, discoveryError: string | null, keymap: Keymap, theme: ThemeOverrides): Promise<void> {
   const { createCliRenderer, destroyTreeSitterClient } = await import("@opentui/core");
   const { WorkspaceView } = await import("./ui/workspace.ts");
   const { GitRepository } = await import("./git/repository.ts");
   const { TerminalTheme } = await import("./ui/terminal-theme.ts");
+  const { uiTheme } = await import("./ui/theme.ts");
   const selection = new WorkspaceSelection(client?.snapshot.repositories ?? repositories);
   const preferences: RuntimePreferences = client ? structuredClone(client.snapshot.preferences) : defaultPreferences();
   if (client) selection.restore(preferences.selection);
@@ -117,7 +121,9 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
     const mounted = view; view = undefined; mounted?.dispose(); client?.beginDetach(); renderer.destroy();
   };
   try {
-    const terminalTheme = new TerminalTheme(renderer, await renderer.getPalette({ size: 256, timeout: 200 }));
+    const palette = await renderer.getPalette({ size: 256, timeout: 200 });
+    uiTheme(renderer).configure(palette, theme);
+    const terminalTheme = new TerminalTheme(renderer, palette);
     view = new WorkspaceView(renderer, selection, {
       keymap, onDetach: detach, terminalTheme,
       onNotice: (text) => { message = text; updateNotice(); },

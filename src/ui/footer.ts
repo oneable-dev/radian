@@ -1,8 +1,7 @@
 import { BoxRenderable, StyledText, TextRenderable, fg, type CliRenderer } from "@opentui/core";
+import { uiTheme, type UiTheme } from "./theme.ts";
 
 export type FooterShortcut = { readonly key: string; readonly label: string };
-
-const colors = { background: "#111827", identity: "#64748B", label: "#94A3B8", key: "#D87DB7" };
 
 // Presentation only: the owner supplies shortcuts for the actual focus context, not global actions.
 export class Footer {
@@ -13,20 +12,26 @@ export class Footer {
   private readonly hints: TextRenderable;
   private shortcuts: readonly FooterShortcut[] = [];
   private lastLayout = "";
+  private readonly theme: UiTheme;
 
   constructor(renderer: CliRenderer, private readonly appIdentity: string) {
+    this.theme = uiTheme(renderer);
     this.root = new BoxRenderable(renderer, { id: "app-footer", width: "100%", height: 2, flexShrink: 0, flexDirection: "column" });
     // Preserve the existing one-row notice allocation, including when empty, to avoid layout jumps.
     this.notice = new TextRenderable(renderer, { id: "footer-notice", width: "100%", height: 1, flexShrink: 0,
-      content: "", fg: colors.label, wrapMode: "none", selectable: false });
+      content: "", wrapMode: "none", selectable: false });
     this.bar = new BoxRenderable(renderer, { id: "footer-bar", width: "100%", height: 1, flexShrink: 0,
-      flexDirection: "row", paddingX: 1, gap: 2, backgroundColor: colors.background, onSizeChange: () => this.renderShortcuts() });
+      flexDirection: "row", paddingX: 1, gap: 2, onSizeChange: () => this.renderShortcuts() });
     this.identity = new TextRenderable(renderer, { content: appIdentity, height: 1, flexShrink: 0,
-      fg: colors.identity, wrapMode: "none", selectable: false });
+      wrapMode: "none", selectable: false });
     this.hints = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0,
       textAlign: "right", wrapMode: "none", selectable: false });
     this.bar.add(this.identity); this.bar.add(this.hints);
     this.root.add(this.notice); this.root.add(this.bar);
+    this.theme.bind(this.root, (colors) => {
+      this.notice.fg = colors.muted; this.identity.fg = colors.muted; this.bar.backgroundColor = colors.surface;
+      this.lastLayout = ""; this.renderShortcuts();
+    });
   }
 
   setNotice(message: string): void {
@@ -62,10 +67,11 @@ export class Footer {
       if (used + size > budget) break;
       visible.push(shortcut); used += size;
     }
+    const colors = this.theme.colors;
     const chunks = visible.flatMap(({ key, label }, index) => [
-      fg(colors.key)(`${index ? "  " : ""}${key}`), fg(colors.label)(` ${label}`),
+      fg(colors.keyword)(`${index ? "  " : ""}${key}`), fg(colors.muted)(` ${label}`),
     ]);
-    if (truncated && available > 0) chunks.push(fg(colors.label)(`${visible.length ? "  " : ""}…`));
+    if (truncated && available > 0) chunks.push(fg(colors.muted)(`${visible.length ? "  " : ""}…`));
     this.hints.content = new StyledText(chunks);
   }
 }

@@ -1,12 +1,13 @@
 import type { GitCommit } from "./model.ts";
 
 // Port of the user's nvim/lua/git/graph.lua lane routing, independent of Neovim.
-export const graphPalette = ["#98C379", "#61AFEF", "#E5C07B", "#E06C75", "#56B6C2", "#C678DD", "#D19A66", "#ABB2BF"];
-type Lane = { target: string | null; color: string; dotted?: boolean };
-type Edge = { from: number; to: number; color: string; dotted: boolean; kind: "lane" | "parent" };
+export const graphPalette = ["success", "info", "warning", "error", "accent", "keyword", "number", "text"] as const;
+type GraphColor = typeof graphPalette[number];
+type Lane = { target: string | null; color: GraphColor; dotted?: boolean };
+type Edge = { from: number; to: number; color: GraphColor; dotted: boolean; kind: "lane" | "parent" };
 export type GraphCommit = GitCommit & { workingTree?: boolean };
-export type GraphCell = { text: string; color?: string };
-export type GraphRow = { commit: GraphCommit; color: string; node: GraphCell[]; connector: GraphCell[] };
+export type GraphCell = { text: string; color?: GraphColor };
+export type GraphRow = { commit: GraphCommit; color: GraphColor; node: GraphCell[]; connector: GraphCell[] };
 const glyphs = [" ", "│", "│", "│", "─", "╯", "╮", "┤", "─", "╰", "╭", "├", "─", "┴", "┬", "┼"];
 const column = (lane: number) => lane * 3 + 1;
 const find = (lanes: Lane[], target: string) => lanes.findIndex((lane) => lane.target === target);
@@ -46,7 +47,7 @@ export function layoutGraph(commits: readonly GraphCommit[], width = 24): GraphR
     for (const [i, item] of before.entries()) if (item.target && column(i) < width) node[column(i)] = {
       text: i === lane ? commit.workingTree ? "◌" : "●" : item.dotted ? "┊" : "│", color: item.color,
     };
-    const cells = Array.from({ length: width }, () => ({ mask: 0, color: undefined as string | undefined, dotted: false, lane: false }));
+    const cells = Array.from({ length: width }, () => ({ mask: 0, color: undefined as GraphColor | undefined, dotted: false, lane: false }));
     for (const edge of edges) {
       const from = column(edge.from), to = column(edge.to);
       if (from >= width || to >= width) continue;

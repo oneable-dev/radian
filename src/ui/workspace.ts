@@ -21,6 +21,8 @@ import { defaultKeymap, type Keymap } from "../keybindings/config.ts";
 import { KeyRouter } from "../keybindings/router.ts";
 import type { CommandId, KeyContext } from "../keybindings/commands.ts";
 import type { TerminalTheme } from "./terminal-theme.ts";
+import { uiTheme, type UiTheme } from "./theme.ts";
+import type { ThemeRole } from "./theme-config.ts";
 
 export type WorkspaceActions = {
   onNewSession: (worktreeId: string) => void;
@@ -42,8 +44,6 @@ export type WorkspaceActions = {
   keymap?: Keymap;
   onDetach?: () => void;
 };
-
-const colors = { text: "#CBD5E1", muted: "#94A3B8", selected: "#1E3A5F", panel: "#0F172A", accent: "#7DD3FC" };
 
 type RowView = { box: BoxRenderable; text: TextRenderable };
 
@@ -92,14 +92,17 @@ export class WorkspaceView {
   private lastScrolledKey: string | null = null;
   private readonly unsubscribe: () => void;
   private disposed = false;
+  private readonly theme: UiTheme;
 
   constructor(private readonly renderer: CliRenderer, private readonly selection: WorkspaceSelection, private readonly actions: WorkspaceActions) {
+    this.theme = uiTheme(renderer);
+    const colors = this.theme.colors;
     this.keymap = actions.keymap ?? defaultKeymap();
     this.workViews = structuredClone(actions.initialWorkViews ?? { active: {}, agentScroll: {} });
     this.root = new BoxRenderable(renderer, { id: "workspace-screen", width: "100%", height: "100%", flexDirection: "column", backgroundColor: colors.panel });
     const panels = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, flexDirection: "row" });
     this.sidebar = new BoxRenderable(renderer, { width: 34, flexShrink: 0, flexDirection: "column", border: ["right"], borderColor: colors.muted, paddingX: 1 });
-    this.sidebar.add(this.text(actions.onPrompt ? "radian / Workspace" : "radian / Workspace preview", colors.accent));
+    this.sidebar.add(this.text(actions.onPrompt ? "radian / Workspace" : "radian / Workspace preview", "accent"));
     this.search = new InputRenderable(renderer, {
       id: "workspace-search", width: "100%", flexShrink: 0,
       placeholder: "Search repo/worktree/branch", placeholderColor: colors.muted,
@@ -122,7 +125,7 @@ export class WorkspaceView {
       id: "workspace-tree", flexGrow: 1, minHeight: 0, scrollX: false,
       contentOptions: { flexDirection: "column" },
     });
-    this.resultMessage = this.text("", colors.muted);
+    this.resultMessage = this.text("", "muted");
     this.history = new SessionHistoryPanel(renderer, {
       ...(actions.onListHistory ? { list: actions.onListHistory } : {}),
       ...(actions.onResumeSession ? { resume: actions.onResumeSession } : {}),
@@ -149,8 +152,8 @@ export class WorkspaceView {
     for (const tab of Object.values(this.workTabs)) workTabs.add(tab);
     this.workPanel.add(workTabs);
     this.center = new BoxRenderable(renderer, { id: "agent-view", flexGrow: 1, minHeight: 0, minWidth: 0, padding: 1, flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
-    this.centerTitle = this.text("", colors.accent);
-    this.centerDetails = this.text("", colors.muted);
+    this.centerTitle = this.text("", "accent");
+    this.centerDetails = this.text("", "muted");
     this.emptyNewButton = this.button("+ New session", () => this.openNewSession(), "New session");
     this.center.add(this.centerTitle);
     this.center.add(this.centerDetails);
@@ -193,7 +196,7 @@ export class WorkspaceView {
     panels.add(this.sidebar);
     panels.add(this.workPanel);
     this.root.add(panels);
-    this.root.add(this.text(`${workspaceIcons.working} Working · ${workspaceIcons.complete} Complete · ${workspaceIcons.failure} Failure · ${workspaceIcons.unreported} Status not supplied`, colors.muted));
+    this.root.add(this.text(`${workspaceIcons.working} Working · ${workspaceIcons.complete} Complete · ${workspaceIcons.failure} Failure · ${workspaceIcons.unreported} Status not supplied`, "muted"));
     this.footer = new Footer(renderer, `${packageInfo.name} ${packageInfo.version}`);
     this.footer.setNotice("UI preview only · no agents running");
     this.root.add(this.footer.root);
@@ -206,6 +209,13 @@ export class WorkspaceView {
     this.resize();
     this.render();
     this.tree.focus();
+    this.theme.input(this.search); this.theme.input(this.prompt);
+    this.theme.scrollbars(this.tree); this.theme.scrollbars(this.transcriptScroll);
+    this.theme.bind(this.root, (colors) => {
+      this.root.backgroundColor = colors.panel; this.sidebar.borderColor = colors.muted;
+      this.transcript.fg = colors.text;
+      this.paintRows(this.visibleRows()); this.paintTabs();
+    });
   }
 
   get promptDrafts(): Record<string, string> {
@@ -298,8 +308,10 @@ export class WorkspaceView {
     if (!this.disposed && !this.root.isDestroyed && this.tab === "history") this.history.show(this.selection.worktree);
   }
 
-  private text(content: string, fg: string = colors.text): TextRenderable {
-    return new TextRenderable(this.renderer, { content, fg, selectable: false, wrapMode: "none", height: 1, flexShrink: 0 });
+  private text(content: string, role: ThemeRole = "text"): TextRenderable {
+    const text = new TextRenderable(this.renderer, { content, selectable: false, wrapMode: "none", height: 1, flexShrink: 0 });
+    this.theme.bind(text, (colors) => { text.fg = colors[role]; });
+    return text;
   }
 
   private button(label: string, activate: () => void, actionLabel = label): BoxRenderable {
@@ -314,9 +326,9 @@ export class WorkspaceView {
       },
     });
     this.buttonHints.set(button, actionLabel); this.buttonActions.set(button, activate);
-    button.add(this.text(label, colors.accent));
-    button.on("focused", () => { button.backgroundColor = colors.selected; });
-    button.on("blurred", () => { button.backgroundColor = colors.panel; });
+    button.add(this.text(label, "accent"));
+    const paint = () => { button.backgroundColor = button.focused ? this.theme.colors.selected : this.theme.colors.panel; };
+    this.theme.bind(button, paint); button.on("focused", paint); button.on("blurred", paint);
     return button;
   }
 
@@ -500,7 +512,7 @@ export class WorkspaceView {
             this.activateRow(row);
           },
         });
-        const text = this.text(row.label);
+        const text = new TextRenderable(this.renderer, { content: row.label, height: 1, wrapMode: "none", selectable: false });
         text.flexGrow = 1;
         text.flexShrink = 1;
         text.minWidth = 0;
@@ -515,15 +527,7 @@ export class WorkspaceView {
     }
     const selectedKey = rows.find((row) => this.selected(row))?.key ?? null;
     if (!rows.some((row) => row.key === this.navigationKey)) this.navigationKey = selectedKey;
-    for (const row of rows) {
-      const view = this.rows.get(row.key);
-      if (!view) continue;
-      const presentation = rowPresentation(row);
-      view.text.content = `${presentation.icon} ${row.label}`;
-      view.text.fg = row.key === this.navigationKey && (row.kind === "repository" || row.kind === "worktree")
-        ? colors.accent : presentation.color;
-      view.box.backgroundColor = this.selected(row) ? colors.selected : colors.panel;
-    }
+    this.paintRows(rows);
     this.rememberAgentScroll();
     const worktree = this.selection.worktree;
     const workView = worktree ? this.workViews.active[worktree.id] ?? "agent" : "agent";
@@ -533,7 +537,6 @@ export class WorkspaceView {
     if (workView === "git") this.git.show(worktree, this.selection.sessionId); else this.git.hide();
     if (workView === "editor") this.editor.show(worktree); else this.editor.hide();
     if (workView === "terminal") this.terminals.show(worktree, worktree ? this.workViews.terminalSelection?.[worktree.id] : undefined); else this.terminals.hide();
-    for (const [name, tab] of Object.entries(this.workTabs)) tab.backgroundColor = name === workView ? colors.selected : colors.panel;
     const session = worktree?.sessions.find((item) => item.id === this.selection.sessionId);
     this.centerTitle.content = session?.name ?? (worktree ? "No open sessions" : "No workspace available");
     const details = session ? this.actions.getSessionDetails?.(session.id) : null;
@@ -570,12 +573,30 @@ export class WorkspaceView {
     if (this.tab === "history") this.history.updateScope(worktree);
     this.newButton.visible = this.tab === "workspace";
     this.closeButton.visible = this.tab === "workspace";
-    this.workspaceTab.backgroundColor = this.tab === "workspace" ? colors.selected : colors.panel;
-    this.historyTab.backgroundColor = this.tab === "history" ? colors.selected : colors.panel;
+    this.paintTabs();
     if (this.navigationKey && this.navigationKey !== this.lastScrolledKey) this.tree.scrollChildIntoView(this.navigationKey);
     this.lastScrolledKey = this.navigationKey;
     this.applyAgentScroll();
     this.updateFooter();
+  }
+
+  private paintRows(rows: readonly WorkspaceRow[]): void {
+    const colors = this.theme.colors;
+    for (const row of rows) {
+      const view = this.rows.get(row.key);
+      if (!view) continue;
+      const presentation = rowPresentation(row);
+      view.text.content = `${presentation.icon} ${row.label}`;
+      view.text.fg = row.key === this.navigationKey && (row.kind === "repository" || row.kind === "worktree")
+        ? colors.accent : colors[presentation.color];
+      view.box.backgroundColor = this.selected(row) ? colors.selected : colors.panel;
+    }
+  }
+  private paintTabs(): void {
+    const colors = this.theme.colors;
+    for (const [name, tab] of Object.entries(this.workTabs)) tab.backgroundColor = name === this.displayedWorkView ? colors.selected : colors.panel;
+    this.workspaceTab.backgroundColor = this.tab === "workspace" ? colors.selected : colors.panel;
+    this.historyTab.backgroundColor = this.tab === "history" ? colors.selected : colors.panel;
   }
 
   dispose(): void {
