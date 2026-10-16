@@ -5,7 +5,7 @@ import type { ExecutionState, SessionRecord } from "../agents/session-registry.t
 import type { GitViewState } from "../git/model.ts";
 import { gitViewsSchema } from "../git/preferences.ts";
 import { agentViewsSchema, type TranscriptViewState } from "../agents/transcript-preferences.ts";
-import { errorCodes, ExpectedError, InputError, parseJson, ProtocolError, type ErrorCode } from "../errors.ts";
+import { errorCodes, AgentRunError, ExpectedError, InputError, parseJson, ProtocolError, type ErrorCode } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 
 export const protocolVersion = 1;
@@ -127,7 +127,7 @@ export const replySchema = Type.Union([
   Type.Object({ ok: Type.Literal(true), value: Type.Union([Type.String(), Type.Null()]), warnings: Type.Optional(Type.Array(wireErrorSchema)) }),
   Type.Object({ ok: Type.Literal(false), error: Type.Union([Type.String(), wireErrorSchema]) }),
 ]);
-export function wireError(error: ExpectedError, outcome: WireError["outcome"] = "rejected"): WireError {
+export function wireError(error: ExpectedError, outcome: WireError["outcome"] = error instanceof AgentRunError ? "unknown" : "rejected"): WireError {
   return { code: error.code, message: error.message, outcome };
 }
 export function errorStatus(error: ExpectedError): number {

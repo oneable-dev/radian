@@ -491,6 +491,7 @@ export class GitPanel {
     this.remember();
   }
   available(command: CommandId): boolean {
+    if (command === "git.left" || command === "git.right") return within(this.renderer.currentFocusedRenderable, this.diffFocus);
     if (command === "git.ask" || command === "git.copy") return !!this.context;
     if (command === "git.submit") return !!this.ask && !this.ask.sending && !!this.prompt.value.trim();
     if (command === "git.cancel") return !!this.ask;

@@ -2,10 +2,12 @@ import { realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { Repository, Worktree } from "../workspace/model.ts";
 import type { AgentStatus, Subagent } from "./model.ts";
-import { AgentRunError, CancelledError, capture, CleanupError, collectCleanup, HistoryError, InputError, parseJson, SessionError, type ExpectedError } from "../errors.ts";
+import { AgentRunError, CancelledError, capture, CleanupError, collectCleanup, HistoryError, InputError, parseJson, SessionError, CapabilityError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import type { TranscriptSection } from "./transcript.ts";
 import type { SessionTelemetry } from "./telemetry.ts";
+import { filterCompletions, type CompletionItem, type CompletionQuery, type CompletionResult } from "./completion.ts";
+import { completeFiles } from "./completion-files.ts";
 
 export type ExecutionState = { readonly status: AgentStatus | null; readonly output: string; readonly error: string | null;
   readonly sections?: readonly TranscriptSection[]; readonly telemetry?: SessionTelemetry };
@@ -13,6 +15,7 @@ export type SessionExecutor = {
   readonly savedSessionId: string;
   readonly sessionFile: string | undefined;
   readonly state: ExecutionState;
+  commands?(): readonly CompletionItem[];
   subscribe(listener: () => void): () => void;
   // Resolves on run completion; the optional callback marks SDK input acceptance.
   prompt(text: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>>;
@@ -163,6 +166,20 @@ export class SessionRegistry {
     entry.unsubscribe = created.value.subscribe(() => { if (entry.phase === "open") this.emit(); });
     entry.phase = "open"; this.emit(); return ok(entry.id);
   }
+  async complete(id: string, query: CompletionQuery, signal?: AbortSignal): Promise<Result<CompletionResult, ExpectedError>> {
+    if (signal?.aborted) return err(new CancelledError());
+    const selected = this.requireOpen(id);
+    if (!selected.ok) return selected;
+    const entry = selected.value;
+    if (query.kind === "file") {
+      const result = await completeFiles(entry.worktree.path, query.query, signal);
+      return entry.phase === "open" ? result : err(new SessionError("SESSION_NOT_OPEN", "Session closed during file discovery."));
+    }
+    const commands = entry.executor?.commands;
+    return commands ? ok(filterCompletions(commands.call(entry.executor), query.query))
+      : err(new CapabilityError("This executor does not provide command discovery."));
+  }
+
   async prompt(id: string, text: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>> {
     const selected = this.requireOpen(id);
     if (!selected.ok) return selected;

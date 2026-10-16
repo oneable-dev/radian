@@ -43,6 +43,18 @@ test("공통 푸터는 화면 마지막 한 줄에 있고 별도 알림은 바�
   } finally { await app.dispose(); }
 });
 
+test("일시적으로 사용할 수 없는 단축키는 위치를 유지하고 키 색상만 비활성화한다", async () => {
+  const app = await mount();
+  try {
+    const before = app.footerLine();
+    app.footer.setShortcuts([{ key: "Enter", label: "Run", disabled: true }, { key: "Esc", label: "Workspace" }]); await app.renderOnce();
+    expect(app.footerLine()).toBe(before);
+    const spans = app.captureSpans().lines[app.footer.bar.y]!.spans;
+    expect(spans.find((span) => span.text.includes("Enter"))?.fg.equals(uiTheme(app.renderer).colors.muted)).toBe(true);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.input.value).toBe("draft");
+  } finally { await app.dispose(); }
+});
+
 test("좁은 폭에서는 단축키와 설명을 통째로 생략하고 resize 후 다시 표시한다", async () => {
   // Width fitting must not advertise a cut-off key/action pair or add another footer row.
   const app = await mount();

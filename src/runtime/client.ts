@@ -4,12 +4,14 @@ import { resolve } from "node:path";
 import { Value } from "typebox/value";
 import type { Repository } from "../workspace/model.ts";
 import type { HistoryItem } from "../agents/history.ts";
-import { CapabilityError, capture, ConnectionError, parseJson, ProtocolError, reportUnexpected, systemCode, withCleanup, type ExpectedError } from "../errors.ts";
+import { CapabilityError, CancelledError, capture, ConnectionError, InputError, parseJson, ProtocolError, reportUnexpected, systemCode, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { emptyPreferences, historySchema, maxFrameBytes, parseSnapshot, replySchema, type RuntimeCommand, type RuntimePreferences, type RuntimeSnapshot, type EditorFrame } from "./protocol.ts";
 import { privateDirectory, runtimePaths, type RuntimePaths } from "./storage.ts";
 import { connectionError, readJson, remoteError, transport } from "./transport.ts";
 import { PtyConnection } from "./pty/client.ts";
+import { completionQuerySchema, completionResultSchema } from "./completion-protocol.ts";
+import type { CompletionQuery, CompletionResult } from "../agents/completion.ts";
 
 const reconnectDelays = [250, 500, 1000, 2000] as const;
 const streamHandshakeMs = 2000;
@@ -158,6 +160,23 @@ export class RuntimeClient {
     const result = await this.command({ type: "create", worktreeId });
     if (!result.ok) return result;
     return result.value ? ok(result.value) : err(new ProtocolError("Runtime did not return a session ID."));
+  }
+  async complete(sessionId: string, query: CompletionQuery, signal?: AbortSignal): Promise<Result<CompletionResult, ExpectedError>> {
+    if (this.detaching || this.failure) return err(this.connectionClosed());
+    if (!this.state.capabilities?.includes("prompt-completion")) return err(new CapabilityError("Running service predates prompt completion. Save work and restart it explicitly when ready; no service was restarted."));
+    if (signal?.aborted) return err(new CancelledError());
+    if (!Value.Check(completionQuerySchema, { sessionId, kind: query.kind, query: query.query })) return err(new InputError("Invalid completion query; names and queries are limited to 4,096 characters."));
+    const instance = this.state.instance, epoch = this.connectionEpoch;
+    const abort = AbortSignal.any([this.streamAbort.signal, AbortSignal.timeout(8000), ...(signal ? [signal] : [])]);
+    const params = new URLSearchParams({ sessionId, kind: query.kind, query: query.query });
+    const attempted = await capture(() => transport(this.paths, `/completions?${params}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
+    if (!attempted.ok) return attempted;
+    const response = attempted.value; if (!response.ok) return response;
+    const decoded = await capture(() => readJson(response.value)); if (!decoded.ok) return decoded;
+    const body = decoded.value; if (!body.ok) return body;
+    if (epoch !== this.connectionEpoch || instance !== this.state.instance || signal?.aborted) return err(new CancelledError("Completion belongs to an outdated connection."));
+    if (!response.value.ok) return Value.Check(replySchema, body.value) && !body.value.ok ? err(remoteError(body.value.error)) : err(new ProtocolError("Malformed completion failure response."));
+    return Value.Check(completionResultSchema, body.value) ? ok(body.value) : err(new ProtocolError("Malformed completion response."));
   }
   async listHistory(worktreeId: string): Promise<Result<readonly HistoryItem[], ExpectedError>> {
     const capability = this.requireHistory(); if (!capability.ok) return capability;

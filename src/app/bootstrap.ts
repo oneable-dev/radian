@@ -140,6 +140,7 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
       },
       ...(client ? {
         onPrompt: (id: string, text: string) => client.prompt(id, text),
+        onComplete: (id, query, signal) => client.complete(id, query, signal),
         git: {
           source: (worktree) => new GitRepository(worktree.path),
           createSession: (worktreeId) => client.create(worktreeId),

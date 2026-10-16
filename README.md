@@ -17,7 +17,7 @@ bun run start
 
 The app discovers the current Git repository's worktrees and shows an always-expanded
 workspace sidebar. Worktree folders and branches share one row. Use `Tab`/`Shift+Tab`
-to move focus, arrow keys to select tree items, `n` to create a new session, and `x` to
+to move focus, `j/k` (or arrow keys) to select tree items, `n` to create a new session, and `x` to
 close the selected session while the tree is focused. Mouse actions are also supported.
 `Ctrl+e` focuses the minimal session prompt; `Enter` submits and `Esc` returns to the tree.
 `Ctrl+Space`, then `c`, **detaches the TUI only**. Agents and subagents keep running in a separate local service.
@@ -74,6 +74,41 @@ and Tab/Shift+Tab traversal work. **Ctrl+C is native input**, not an application
 Use the configured detach sequence (default **Ctrl+Space, then c**). The footer follows the actual
 focused control and effective keymap. Opening, switching and resizing do not
 send a prompt to an agent or run a Git mutation. Entering Git may perform read-only queries.
+
+### Prompt completion
+
+The Agent prompt shows a read-only completion menu directly below the input. `/` opens command
+suggestions only in the first token at the beginning of the prompt. `@` opens file suggestions at
+the beginning of any whitespace-delimited token, including in the middle of a sentence; email
+addresses do not trigger it. Matching uses the text before the cursor, not just the end of the draft.
+Lookups use a **150 ms trailing debounce**; input, cursor movement and candidate navigation remain
+immediate. During refresh the previous candidates and selection stay visible, and the open menu
+reserves a stable bounded height, including for loading, errors and no matches. Stale candidates
+cannot be inserted until results for the current query arrive. Footer shortcuts retain their positions
+and unavailable actions use muted keys instead of disappearing.
+
+- **Ctrl+N / Ctrl+P** selects the next/previous candidate. `hjkl` remains ordinary input.
+- **Tab / Enter** inserts the selected candidate without sending the prompt or executing a command.
+  Press Enter again after insertion to submit. **Esc** dismisses only the menu and preserves focus/text.
+- Selection replaces only the current token, preserving the surrounding text and native Unicode cursor.
+  Paths containing spaces, quotes or backslashes use `@"quoted paths"`. File references insert paths,
+  not file contents or attachments.
+
+Command candidates come from the selected SDK session's registered extension commands, prompt
+templates and enabled Skill commands. Pi CLI-only commands such as `/model` and `/settings` are not
+advertised as implemented. Pi's interactive dialogs/custom terminal components are not embedded.
+Extension session replacement, tree navigation and reload fail explicitly instead of bypassing Radian's
+ownership; commands can wait for the current run to become idle. A handled command without a model
+turn preserves the previous status. Command failures retain the draft and report an uncertain action
+outcome because an extension may already have changed state; do not blindly retry.
+
+File discovery lists existing tracked and nonignored untracked file paths in the selected session's
+worktree. It does not search other worktrees or read file contents. Responses contain at most 100
+candidates and indicate when further filtering is needed. Git listing is bounded to 5 seconds and
+4 MiB; failures are not replaced by empty successful lists. Session switching, dismissing, hiding or
+disposing the menu cancels pending lookups and ignores stale results. Lookup is read-only and never
+starts a model turn. The additive `prompt-completion` runtime capability is required: an older service
+gets an explicit upgrade notice and is never automatically restarted.
 
 ### Agent transcript
 
@@ -216,7 +251,7 @@ confirmed clipboard contents; unsupported/failed delivery is reported explicitly
 acceptance depends on the terminal/multiplexer configuration and is not assumed from dispatch alone.
 
 Arrows/j/k navigate, Enter selects, r refreshes, + loads another 300 commits, Home/End jump, and
-PgUp/PgDn scroll. Diff arrows scroll both columns (left/right horizontally). History is bounded to
+PgUp/PgDn scroll. Diff j/k scrolls both columns vertically, and h/l or left/right arrows scroll them horizontally. History is bounded to
 3,000 commits per ref filter. Text preview is bounded to 1 MiB per version and 20,000 combined lines;
 Git command output is bounded to 4 MiB with a 10-second query timeout. Exceeding a preview/computation
 limit, binary content, gitlinks and unmerged files produce an explicit notice rather than a partial
@@ -334,7 +369,7 @@ the TUI to apply edits; the runtime and its processes do not need restarting. Th
 
 Spaces separate sequential keys (`"space r"` is a two-key leader); `+` combines modifiers.
 Use explicit `shift+c` for uppercase C. A string binding is global; an object can specify `scope`:
-`global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `prompt`, `button`,
+`global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `prompt`, `prompt-completion`, `button`,
 `transcript` (section navigation), `transcript-text`, `transcript-visual`, `editor`, `terminal`,
 `git`, `git-prompt`, or `none`. An override replaces that command's defaults;
 `[]` disables it. Command IDs/defaults are defined in `src/keybindings/commands.ts`.
@@ -366,7 +401,11 @@ The footer itself is read-only: clicking it neither runs an action nor takes inp
 The footer stays one line on narrow terminals. Identity stays on the left; complete shortcut/label
 pairs fit in the owner's supplied order and trailing pairs are omitted with an ellipsis. Resize
 restores them when space permits. The footer does not invent Help actions or priority categories;
-a control may supply its own contextual help shortcut.
+a control may supply its own contextual help shortcut. Active completion uses the configurable
+`completion.next`, `completion.previous`, `completion.accept` and `completion.dismiss` commands.
+Default Tab focus traversal excludes `prompt-completion`; overriding Tab globally requires rebinding
+or disabling the conflicting completion acceptance binding. Input editing, Ctrl+F/E focus shortcuts,
+and Neovim/shell input ownership are otherwise unchanged.
 `src/ui/footer.ts` is a reusable presentation component; it does not own keyboard handlers,
 workspace selection, or agent execution.
 
@@ -529,7 +568,7 @@ empty, loading, discovery and resume failures have distinct messages. The headin
 spinner stays animated for at least 500 ms, without delaying results or errors. Leaving the tab or
 destroying the view cancels it immediately; the same component/policy applies to other UI loaders.
 
-Click a row, or `Tab` into the list and use arrows/Home/End plus `Enter`, to open its saved context.
+Click a row, or `Tab` into the list and use j/k (or arrows), Home/End and `Enter`, to open its saved context.
 The original SDK session ID/file is retained without copying/forking; the open item becomes selected
 in Workspace. Already-open records select their existing item rather than create a second writer.
 Closing records and active owned-child writers are unavailable until cleanup finishes. Completed

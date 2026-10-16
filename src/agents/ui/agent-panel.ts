@@ -12,6 +12,7 @@ import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
 import { SessionStatus } from "./session-status.ts";
+import { CompletionMenu, type CompletionProvider } from "./completion-menu.ts";
 
 export type AgentActions = {
   onNewSession: (worktreeId: string) => void;
@@ -20,6 +21,7 @@ export type AgentActions = {
   initialDrafts?: Readonly<Record<string, string>>;
   onDraftChange?: (drafts: Record<string, string>) => void;
   onCopyTranscript?: (text: string) => Promise<Result<string, ExpectedError>>;
+  onComplete?: CompletionProvider;
 };
 type Button = (label: string, activate: () => void, actionLabel: string) => BoxRenderable;
 
@@ -34,6 +36,7 @@ export class AgentPanel {
   private readonly runtimePanel: BoxRenderable;
   private readonly composer: BoxRenderable;
   private readonly sessionStatus: SessionStatus;
+  private readonly completion: CompletionMenu;
   private readonly transcript: TranscriptPanel;
   private readonly newButton: BoxRenderable;
   private readonly drafts = new Map<string, string>();
@@ -67,8 +70,9 @@ export class AgentPanel {
     this.prompt.width = "auto"; this.prompt.flexGrow = 1; this.prompt.minWidth = 0;
     composer.add(marker); composer.add(this.prompt);
     this.sessionStatus = new SessionStatus(renderer);
+    this.completion = new CompletionMenu(renderer, this.prompt, () => this.active ? this.promptSessionId : null, actions.onComplete, changed);
     this.runtimePanel.add(this.transcriptScroll); this.runtimePanel.add(this.transcript.status);
-    this.runtimePanel.add(this.sessionStatus.root); this.runtimePanel.add(composer); this.root.add(this.runtimePanel);
+    this.runtimePanel.add(this.sessionStatus.root); this.runtimePanel.add(composer); this.runtimePanel.add(this.completion.root); this.root.add(this.runtimePanel);
     theme.input(this.prompt); theme.scrollbars(this.transcriptScroll); theme.focusBorder(composer);
     theme.bind(this.root, (colors) => {
       this.title.fg = colors.text; this.details.fg = colors.muted;
@@ -84,6 +88,9 @@ export class AgentPanel {
   get canSubmit(): boolean { return Boolean(this.promptSessionId && this.prompt.value.trim() && !this.submitting.has(this.promptSessionId)); }
   get working(): boolean { return !!this.promptSessionId && this.actions.getSessionDetails?.(this.promptSessionId)?.status === "working"; }
   get transcriptShortcuts(): readonly FooterShortcut[] { return this.transcript.shortcuts; }
+  get completionOpen(): boolean { return this.completion.engaged; }
+  completionAvailable(command: CommandId): boolean { return this.active && this.completion.available(command); }
+  completionCommand(command: CommandId): void { this.completion.command(command); }
   transcriptContext(): KeyContext | null { return this.transcript.keyContext(); }
   focusTranscript(): void { this.transcript.focus(); }
   transcriptAvailable(command: CommandId): boolean { return this.active && this.transcript.available(command); }
@@ -105,6 +112,7 @@ export class AgentPanel {
     const sessionId = session?.id ?? null;
     const switchedSession = sessionId !== this.promptSessionId;
     if (switchedSession) {
+      this.completion.hide();
       if (this.promptSessionId) this.drafts.set(this.promptSessionId, this.prompt.value);
       this.promptSessionId = sessionId;
       this.syncingDraft = true;
@@ -122,6 +130,7 @@ export class AgentPanel {
     this.transcript.update(sessionId, details?.sections, output, this.active);
     if (!this.active && (this.prompt.focused || transcriptFocused)) this.focusSidebar();
     this.newButton.visible = Boolean(visible && worktree && !session);
+    if (!this.active) this.completion.hide(); else this.completion.refresh();
   }
 
   private resize = (): void => {
@@ -138,10 +147,11 @@ export class AgentPanel {
   private handleDraftInput = (): void => {
     if (this.syncingDraft || !this.promptSessionId) return;
     this.drafts.set(this.promptSessionId, this.prompt.value);
-    this.actions.onDraftChange?.(this.promptDrafts); this.changed();
+    this.actions.onDraftChange?.(this.promptDrafts); this.completion.refresh(); this.changed();
   };
 
   async submitPrompt(): Promise<void> {
+    if (this.completionOpen) { this.completion.command("completion.accept"); return; }
     const id = this.promptSessionId;
     if (!id || !this.prompt.value.trim() || !this.actions.onPrompt || this.submitting.has(id)) return;
     const text = this.prompt.value;
@@ -163,7 +173,7 @@ export class AgentPanel {
     if (this.disposed) return;
     this.rememberScroll(); this.disposed = true;
     this.renderer.off("resize", this.resize);
-    this.sessionStatus.dispose(); this.transcript.dispose();
+    this.completion.dispose(); this.sessionStatus.dispose(); this.transcript.dispose();
     this.prompt.off(InputRenderableEvents.INPUT, this.handleDraftInput);
   }
 }

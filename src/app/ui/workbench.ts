@@ -231,7 +231,14 @@ export class Workbench {
     ];
     else if (this.agent.transcriptContext()) shortcuts = this.agent.transcriptShortcuts;
     else if (focused === this.agent.prompt && this.agent.active) {
-      shortcuts = [...(this.agent.canSubmit ? [hint("agent.send", this.agent.working ? "Queue" : "Run")] : []), hint("focus.transcript", "Transcript"), hint("focus.sidebar", "Workspace")];
+      shortcuts = this.agent.completionOpen
+        ? [
+          { ...hint("completion.next", "Next"), disabled: !this.agent.completionAvailable("completion.next") },
+          { ...hint("completion.previous", "Previous"), disabled: !this.agent.completionAvailable("completion.previous") },
+          { key: this.keymap.hints("completion.accept", context), label: "Insert", disabled: !this.agent.completionAvailable("completion.accept") },
+          hint("completion.dismiss", "Dismiss"),
+        ]
+        : [...(this.agent.canSubmit ? [hint("agent.send", this.agent.working ? "Queue" : "Run")] : []), hint("focus.transcript", "Transcript"), hint("focus.sidebar", "Workspace")];
     } else if (context === "git" || context === "git-prompt") shortcuts = this.git.shortcuts;
     else if (focused === this.history.list && this.tab === "history") shortcuts = this.history.shortcuts;
     else if (focused) {
@@ -317,12 +324,13 @@ export class Workbench {
     if (focused === this.terminals.input) return "terminal";
     if (focused === this.tree) return "workspace";
     if (focused === this.search) return "search";
-    if (focused === this.agent.prompt) return "prompt";
+    if (focused === this.agent.prompt) return this.agent.completionOpen ? "prompt-completion" : "prompt";
     if (focused === this.history.list) return "history";
     if (focused === this.agent.transcriptScroll) return "transcript";
     return "button";
   }
   private commandAvailable(command: CommandId): boolean {
+    if (command.startsWith("completion.")) return this.agent.completionAvailable(command);
     if (command.startsWith("git.")) return this.git.available(command);
     if (command.startsWith("transcript.")) return this.agent.transcriptAvailable(command);
     switch (command) {
@@ -339,6 +347,7 @@ export class Workbench {
     }
   }
   private command(command: CommandId): void {
+    if (command.startsWith("completion.")) { this.agent.completionCommand(command); return; }
     if (command.startsWith("git.")) { this.git.command(command); return; }
     if (command.startsWith("transcript.")) { this.agent.transcriptCommand(command); return; }
     switch (command) {

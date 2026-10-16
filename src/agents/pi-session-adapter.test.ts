@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import { join } from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -68,6 +68,61 @@ async function sdkFixture(controlled = false, configure?: (options: PiSessionOpt
     await shutdown; unsubscribe(); await fixture.cleanup();
   } };
 }
+
+async function commandExtension(directory: string) {
+  const extensions = join(directory, "agent", "extensions"); await mkdir(extensions, { recursive: true });
+  await writeFile(join(extensions, "commands.ts"), `export default function (pi) {
+    pi.registerCommand("fixture-command", { description: "Fixture slash command", handler: async (args) => { pi.appendEntry("command-probe", { args }); } });
+    pi.registerCommand("fixture-broken", { handler: async () => { throw new Error("Fixture command failure"); } });
+    pi.registerCommand("fixture-wait", { handler: async (_args, ctx) => { await ctx.waitForIdle(); } });
+  }`);
+}
+
+test("SDK 명령 목록 조회와 실행은 모델을 호출하지 않고 이전 실행 상태를 보존한다", async () => {
+  const app = await sdkFixture();
+  try {
+    await commandExtension(app.directory);
+    const id = expectOk(await app.registry.create(app.main.id));
+    const items = expectOk(await app.registry.complete(id, { kind: "command", query: "fixture-command" })).items;
+    expect(items.map((item) => [item.value, item.description])).toEqual([["fixture-command", "Fixture slash command"]]);
+    let accepted = 0;
+    expectOk(await app.registry.prompt(id, "/fixture-command argument", () => accepted++));
+    expect(app.registry.details(id)?.status).toBeNull(); expect(app.registry.details(id)?.output).toBe(""); expect(accepted).toBe(1);
+    expectOk(await app.registry.prompt(id, "read"));
+    expectOk(await app.registry.prompt(id, "/fixture-command"));
+    expect(app.registry.details(id)?.status).toBe("complete");
+  } finally { await app.cleanup(); }
+});
+
+test("SDK가 알림으로 보고한 명령 실패는 성공 수락으로 숨기지 않고 Result로 반환한다", async () => {
+  const app = await sdkFixture(); const log = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await commandExtension(app.directory); const id = expectOk(await app.registry.create(app.main.id));
+    let accepted = false;
+    const failure = expectError(await app.registry.prompt(id, "/fixture-broken", () => { accepted = true; }));
+    expect(failure.code).toBe("AGENT_FAILED"); expect(failure.message).toContain("Fixture command failure");
+    expect(accepted).toBe(false); expect(app.registry.details(id)?.status).toBeNull(); expect(log).not.toHaveBeenCalled();
+  } finally { log.mockRestore(); await app.cleanup(); }
+});
+
+test("모델 완료를 기다리는 명령은 완료 상태를 working으로 되돌리지 않고 닫기에도 교착하지 않는다", async () => {
+  const app = await sdkFixture(true);
+  try {
+    await commandExtension(app.directory); const id = expectOk(await app.registry.create(app.main.id));
+    const run = app.registry.prompt(id, "hold A"); await app.streams.waitFor("A");
+    const command = app.registry.prompt(id, "/fixture-wait");
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    app.streams.gates.get("A")!.finish("finished");
+    expectOk(await run); expectOk(await command); expect(app.registry.details(id)?.status).toBe("complete");
+
+    const next = app.registry.prompt(id, "hold B"); await app.streams.waitFor("B");
+    const waiting = app.registry.prompt(id, "/fixture-wait");
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    const close = app.registry.close(id); const gate = app.streams.gates.get("B")!;
+    await gate.abortReceived; gate.finish("aborted");
+    await Promise.all([next, waiting]); expectOk(await close); expect(app.registry.details(id)).toBeNull();
+  } finally { await app.cleanup(); }
+});
 
 test("SDK 세션은 지정한 agentDir의 확장을 발견하고 등록된 도구를 실행한다", async () => {
   // Isolate extension discovery from the user's packages, credentials and external services.

@@ -19,8 +19,9 @@ export class KeyRouter {
   private consume(key: KeyEvent): void { key.preventDefault(); key.stopPropagation(); }
   private press = (key: KeyEvent): void => {
     if (this.disposed) return;
-    if (key.eventType === "repeat" && this.consumed.get(key.name)) { this.consume(key); return; }
-    if (key.eventType !== "repeat") this.consumed.delete(key.name);
+    const repeated = key.eventType === "repeat" || key.repeated === true;
+    if (repeated && this.consumed.get(key.name)) { this.consume(key); return; }
+    if (!repeated) this.consumed.delete(key.name);
     const token = keyToken(key);
     if (!this.pending) {
       const candidates = this.keymap.bindings.filter((binding) => binding.keys[0] === token && inScope(binding.scope, this.context()));
@@ -30,13 +31,15 @@ export class KeyRouter {
     const pending = this.pending;
     this.consume(key);
     pending.events.push(new KeyEvent(key));
-    if (key.eventType === "repeat" && pending.held.has(key.name)) return; // Preserve repetitions for a literal replay, not multiple app actions.
+    if (repeated && pending.held.has(key.name)) return; // Preserve repetitions for a literal replay, not multiple app actions.
     pending.held.add(key.name); pending.keys.push(token);
     const candidates = pending.candidates.filter((binding) => binding.keys[pending.keys.length - 1] === token);
     const complete = candidates.find((binding) => binding.keys.length === pending.keys.length);
     if (complete) {
       this.clear();
-      for (const name of pending.held) this.consumed.set(name, complete.keys.length > 1);
+      const once = complete.keys.length > 1 || complete.command === "completion.accept" || complete.command === "completion.dismiss";
+      // A held accept/dismiss key must not turn into Send or Leave after the completion context closes.
+      for (const name of pending.held) this.consumed.set(name, once);
       // A configured command with an unavailable target is still an app command.
       // Never turn a disabled close/focus action into literal edits in Neovim/a shell.
       if (this.available(complete.command)) this.execute(complete.command);

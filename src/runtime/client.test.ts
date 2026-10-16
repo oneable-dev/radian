@@ -35,6 +35,44 @@ function events(value: unknown, signal?: AbortSignal | null) {
   };
 }
 
+test("이전 런타임의 자동완성은 요청이나 재시작 없이 지원 부족 Result로 안내한다", async () => {
+  const fetchMock = stubFetch(async () => { throw new Error("Must not contact an older service"); });
+  const client = new RuntimeClient(paths, snapshot());
+  try {
+    expect(expectError(await client.complete("session", { kind: "command", query: "" })).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(fetchMock).not.toHaveBeenCalled();
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
+
+test("자동완성은 instance가 지정된 읽기 요청이며 잘못된 응답을 정상 후보로 사용하지 않는다", async () => {
+  const state = snapshot(); state.capabilities = ["prompt-completion"];
+  let malformed = false; const requests: string[] = [];
+  const fetchMock = stubFetch(async (input, options) => {
+    const url = new URL(String(input)); requests.push(url.pathname);
+    expect(url.searchParams.get("query")).toBe("문서/a b"); expect(new Headers(options?.headers).get("X-Radian-Instance")).toBe("first");
+    return Response.json(malformed ? { items: [{ value: "missing-kind" }], truncated: false }
+      : { items: [{ kind: "file", value: "문서/a b.ts", description: "File" }], truncated: false });
+  });
+  const client = new RuntimeClient(paths, state);
+  try {
+    expect(expectOk(await client.complete("session", { kind: "file", query: "문서/a b" })).items[0]?.value).toBe("문서/a b.ts");
+    malformed = true; expect(expectError(await client.complete("session", { kind: "file", query: "문서/a b" })).code).toBe("PROTOCOL_ERROR");
+    expect(requests).toEqual(["/completions", "/completions"]);
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
+
+test("사용자가 취소한 자동완성 fetch는 예외나 빈 성공 대신 CANCELLED를 반환한다", async () => {
+  const state = snapshot(); state.capabilities = ["prompt-completion"];
+  const fetchMock = stubFetch(async (_input, options) => new Promise((_resolve, reject) => {
+    options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+  }));
+  const client = new RuntimeClient(paths, state); const abort = new AbortController();
+  try {
+    const request = client.complete("session", { kind: "command", query: "" }, abort.signal); abort.abort();
+    expect(expectError(await request).code).toBe("CANCELLED");
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
+
 for (const failure of ["eof", "reset"] as const) {
   test(`이벤트 ${failure} 후 최신 snapshot으로 복구하며 변경 명령을 재전송하지 않는다`, async () => {
     // Only the transport boundary is replaced; public client actions and stream parsing remain real.

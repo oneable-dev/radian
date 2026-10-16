@@ -99,7 +99,7 @@ test("History 버튼·조회 중 목록·사용 가능한 기록에 따라 표�
     pending.resolve([saved("Available saved"), saved("Busy saved", "Still closing")]); await app.visible("Available saved");
 
     expect(app.footerLine()).toContain("Enter Open");
-    expect(app.footerLine()).toContain("↑/↓ Select");
+    expect(app.footerLine()).toContain("k/j Select");
     expect(app.footerLine()).not.toContain("New session");
     app.mockInput.pressArrow("down"); await app.renderOnce();
     expect(app.footerLine()).not.toContain("Enter Open");

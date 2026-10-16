@@ -1,4 +1,6 @@
 import { chmod } from "node:fs/promises";
+import { Value } from "typebox/value";
+import { completionQuerySchema } from "./completion-protocol.ts";
 import { join } from "node:path";
 import { CancelledError, collectCleanup, InputError, ProtocolError, SessionError, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
@@ -98,7 +100,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "agent-telemetry"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "agent-telemetry", "prompt-completion"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || this.notice, editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
@@ -117,6 +119,14 @@ class WorkspaceRuntime {
         if (!id || !lease || id.length > 4096 || lease.length > 4096) return this.rejected(new InputError("Missing editor attachment identity."));
         const attached = path === "/editor/events" ? this.editors.attach(id, lease) : this.terminals.attach(id, lease);
         return attached.ok ? attached.value : this.rejected(attached.error);
+      }
+      if (path === "/completions" && request.method === "GET") {
+        if (expectedInstance !== this.instance) return this.rejected(new ProtocolError("Completion requires the current runtime instance identity."));
+        if (this.stopped) return this.rejected(new SessionError("RUNTIME_STOPPING", "Runtime is stopping."));
+        const query = Object.fromEntries(new URL(request.url).searchParams);
+        if (!Value.Check(completionQuerySchema, query)) return this.rejected(new InputError("Malformed completion query."));
+        const result = await this.registry.complete(query.sessionId, query, request.signal);
+        return result.ok ? Response.json(result.value) : this.rejected(result.error);
       }
       if (path === "/history" && request.method === "GET") {
         const worktreeId = new URL(request.url).searchParams.get("worktreeId");

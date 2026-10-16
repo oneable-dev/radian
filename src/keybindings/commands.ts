@@ -1,4 +1,4 @@
-export const contexts = ["workspace", "search", "history", "prompt", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "none"] as const;
+export const contexts = ["workspace", "search", "history", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "none"] as const;
 export type KeyContext = typeof contexts[number];
 export type KeyScope = KeyContext | "global" | "app" | "pty";
 export type BindingInput = { keys: string; scope: KeyScope };
@@ -7,6 +7,7 @@ const key = (keys: string, scope: KeyScope = "global"): BindingInput => ({ keys,
 const transcriptContexts = ["transcript", "transcript-text", "transcript-visual"] as const;
 const transcriptKeys = (keys: string): BindingInput[] => transcriptContexts.map((scope) => key(keys, scope));
 const textKeys = (...keys: string[]): BindingInput[] => keys.flatMap((keys) => [key(keys, "transcript-text"), key(keys, "transcript-visual")]);
+const tabContexts = contexts.filter((context) => context !== "editor" && context !== "terminal" && context !== "prompt-completion");
 
 export const defaultBindings = {
   "app.detach": [key("<leader> c")],
@@ -14,7 +15,7 @@ export const defaultBindings = {
   "focus.search": [key("ctrl+f", "app"), key("<leader> f")],
   "focus.prompt": [key("ctrl+e", "app"), key("<leader> p"), key("i", "transcript"), key("i", "transcript-text")],
   "focus.transcript": [key("ctrl+t", "app"), key("<leader> o")],
-  "focus.next": [key("tab", "app")],
+  "focus.next": tabContexts.map((context) => key("tab", context)),
   "focus.previous": [key("shift+tab", "app")],
   "focus.results": [key("enter", "search")],
   "search.clear": [key("escape", "search")],
@@ -30,17 +31,21 @@ export const defaultBindings = {
   "terminal.scroll-down": [key("shift+pagedown", "terminal")],
   "session.new": [key("n", "workspace")],
   "session.close": [key("x", "workspace")],
-  "workspace.previous": [key("up", "workspace")],
-  "workspace.next": [key("down", "workspace")],
+  "workspace.previous": [key("k", "workspace"), key("up", "workspace")],
+  "workspace.next": [key("j", "workspace"), key("down", "workspace")],
   "workspace.first": [key("home", "workspace")],
   "workspace.last": [key("end", "workspace")],
   "history.refresh": [key("r", "history")],
   "history.open": [key("enter", "history")],
-  "history.previous": [key("up", "history")],
-  "history.next": [key("down", "history")],
+  "history.previous": [key("k", "history"), key("up", "history")],
+  "history.next": [key("j", "history"), key("down", "history")],
   "history.first": [key("home", "history")],
   "history.last": [key("end", "history")],
   "agent.send": [key("enter", "prompt")],
+  "completion.next": [key("ctrl+n", "prompt-completion")],
+  "completion.previous": [key("ctrl+p", "prompt-completion")],
+  "completion.accept": [key("tab", "prompt-completion"), key("enter", "prompt-completion")],
+  "completion.dismiss": [key("escape", "prompt-completion")],
   "transcript.previous": [key("k", "transcript"), key("up", "transcript")],
   "transcript.next": [key("j", "transcript"), key("down", "transcript")],
   "transcript.first": [key("home", "transcript"), key("g g", "transcript")],
@@ -84,8 +89,8 @@ export const defaultBindings = {
   "git.last": [key("end", "git")],
   "git.page-up": [key("pageup", "git")],
   "git.page-down": [key("pagedown", "git")],
-  "git.left": [key("left", "git")],
-  "git.right": [key("right", "git")],
+  "git.left": [key("h", "git"), key("left", "git")],
+  "git.right": [key("l", "git"), key("right", "git")],
   "button.activate": [key("enter", "button"), key("space", "button")],
 } satisfies Record<string, readonly BindingInput[]>;
 export type CommandId = keyof typeof defaultBindings;

@@ -55,6 +55,42 @@ async function setup() {
   };
 }
 
+test("자동완성 IPC는 선택 세션의 SDK 명령과 워크트리 파일만 읽고 모델을 실행하지 않는다", async () => {
+  const app = await setup();
+  try {
+    const extensions = join(app.paths.directory, "offline-agent", "extensions"); await mkdir(extensions, { recursive: true });
+    await writeFile(join(extensions, "commands.ts"), `export default function (pi) {
+      pi.registerCommand("lookup-probe", { description: "Read-only command catalog probe", handler: async () => {} });
+      pi.registerCommand("lookup-broken", { handler: async () => { throw new Error("Fixture command rejected"); } });
+    }`);
+    await writeFile(join(app.main, "main-only.ts"), "never load this content"); await writeFile(join(app.feature, "feature-only.ts"), "other worktree");
+    const client = await app.connect(); const main = app.repository.worktrees.find((tree) => tree.path === app.main)!;
+    const id = expectOk(await client.create(main.id));
+
+    expect(client.snapshot.capabilities).toContain("prompt-completion");
+    const commands = expectOk(await client.complete(id, { kind: "command", query: "lookup-probe" }));
+    expect(commands.items.map((item) => item.value)).toEqual(["lookup-probe"]);
+    const files = expectOk(await client.complete(id, { kind: "file", query: "only.ts" }));
+    expect(files.items.map((item) => item.value)).toEqual(["main-only.ts"]);
+    expectOk(await client.prompt(id, "/lookup-probe"));
+    expect((await app.manifest()).records[0]?.state.output).toBe("");
+    const commandError = expectError(await client.prompt(id, "/lookup-broken"));
+    expect(commandError.code).toBe("AGENT_FAILED"); expect(commandError).toHaveProperty("outcome", "unknown");
+    expect(commandError.message).toContain("may have changed state");
+
+    // The read-only endpoint still validates the instance fence and its wire input.
+    for (const [params, instance, code] of [[`sessionId=${id}&kind=wrong&query=`, client.snapshot.instance, "INVALID_INPUT"],
+      [`sessionId=${id}&kind=file&query=`, "old-instance", "PROTOCOL_ERROR"]] as const) {
+      const response = await fetch(`http://localhost/completions?${params}`, { unix: app.paths.socket, headers: { "X-Radian-Instance": instance } });
+      const body = await response.json();
+      if (!Value.Check(replySchema, body) || body.ok || typeof body.error === "string") throw new Error("Expected a typed completion rejection.");
+      expect(body.error.code).toBe(code);
+    }
+    expectOk(await client.closeSession(id));
+    expect(expectError(await client.complete(id, { kind: "file", query: "" })).code).toBe("SESSION_NOT_OPEN");
+  } finally { await app.cleanup(); }
+});
+
 test("별도 프로세스는 모든 UI가 분리된 동안에도 agent와 subagent를 진행하고 같은 실행에 재접속한다", async () => {
   // The detached Bun process owns actual SDK instances in two real Git worktrees.
   const app = await setup();

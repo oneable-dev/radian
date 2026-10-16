@@ -6,10 +6,11 @@ import { Type } from "@earendil-works/pi-ai";
 import { mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExecutionState, SessionContext, SessionExecutor, SessionFactory } from "./session-registry.ts";
-import { AgentRunError, CancelledError, capture, InputError, SessionError, withCleanup, type ExpectedError } from "../errors.ts";
+import { AgentRunError, CancelledError, CapabilityError, capture, InputError, SessionError, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { SessionTranscript } from "./transcript.ts";
 import { PiSessionTelemetry } from "./pi-session-telemetry.ts";
+import { CommandDiagnostics, sessionCommands } from "./session-commands.ts";
 
 export type PiSessionOptions = {
   agentDir?: string;
@@ -52,8 +53,13 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
     return withCleanup(async () => {
       await mkdir(session.sessionManager.getSessionDir(), { recursive: true });
       if (options.streamFn) session.agent.streamFunction = options.streamFn;
-      await session.bindExtensions({});
-      const executor = new PiSessionExecutor(session);
+      const diagnostics = new CommandDiagnostics();
+      const unsupportedSessionAction = async (): Promise<never> => { throw new CapabilityError("Pi session replacement/reload is not hosted here. Use Radian's session controls instead."); };
+      await session.bindExtensions({ onError: diagnostics.report, commandContextActions: {
+        waitForIdle: () => session.waitForIdle(), newSession: unsupportedSessionAction, fork: unsupportedSessionAction,
+        switchSession: unsupportedSessionAction, navigateTree: unsupportedSessionAction, reload: unsupportedSessionAction,
+      } });
+      const executor = new PiSessionExecutor(session, diagnostics);
       adopted = true;
       return executor;
     }, async () => { if (!adopted) session.dispose(); });
@@ -89,16 +95,18 @@ export class PiSessionExecutor implements SessionExecutor {
   private admission: Promise<void> = Promise.resolve();
   private closeTask: Promise<Result<void, ExpectedError>> | undefined;
   private aborted = false;
+  private runRevision = 0;
   private closing = false;
   private disposed = false;
 
-  constructor(private readonly session: AgentSession) {
+  constructor(private readonly session: AgentSession, private readonly diagnostics = new CommandDiagnostics()) {
     this.status = this.finalStatus(false);
     this.transcript = new SessionTranscript(session.sessionManager.getBranch());
     this.telemetry = new PiSessionTelemetry(session, () => this.emit());
     this.unsubscribe = session.subscribe((event) => this.handleEvent(event));
   }
 
+  commands() { return sessionCommands(this.session); }
   get savedSessionId(): string { return this.session.sessionId; }
   get sessionFile(): string | undefined { return this.session.sessionFile; }
   get state(): ExecutionState {
@@ -130,16 +138,27 @@ export class PiSessionExecutor implements SessionExecutor {
     const task = previous.then(async (): Promise<Result<void, ExpectedError>> => {
       if (this.closing || this.disposed) return err(new SessionError("SESSION_NOT_OPEN", "Session is closing."));
       if (this.session.isCompacting && !this.session.isStreaming) return err(new SessionError("SESSION_BUSY", "Session is compacting; retry after it finishes."));
+      const before = { status: this.status, error: this.error, aborted: this.aborted };
+      const revision = this.runRevision;
+      const name = text.startsWith("/") ? text.slice(1).split(" ", 1)[0]! : "";
+      const command = name && this.session.extensionRunner.getCommand(name) ? this.diagnostics.begin(name) : undefined;
+      let handled = false;
       if (this.session.isIdle) { this.status = "working"; this.error = null; this.aborted = false; }
-      const result = await capture(() => this.session.prompt(text, {
+      const result = await withCleanup(() => capture(() => this.session.prompt(text, {
         streamingBehavior: "steer",
-        // Pi acknowledges prepared/queued/handled input before the run finishes.
-        preflightResult: () => { admitted.resolve(); onAccepted?.(); },
-      }));
+        // Handled input may never start a model run; restore its previous display state.
+        preflightResult: (disposition) => {
+          handled = disposition === "handled";
+          if (handled && this.session.isIdle && revision === this.runRevision) { this.status = before.status; this.error = before.error; this.aborted = before.aborted; }
+          admitted.resolve(); if (!command?.failure) onAccepted?.();
+        },
+      })), async () => { if (command) this.diagnostics.end(command); });
+      if (command?.failure) return err(new AgentRunError(`Command /${name} failed: ${command.failure.error}. It may have changed state; inspect before retrying.`, { cause: command.failure }));
       if (!result.ok) {
         if (!this.closing) { this.status = "failure"; this.error = result.error.message; }
         return result;
       }
+      if (handled) return ok(undefined);
       if (this.aborted) return err(new CancelledError());
       if (this.state.status === "failure") return err(new AgentRunError(this.error ?? "Agent failed."));
       return ok(undefined);
@@ -155,9 +174,10 @@ export class PiSessionExecutor implements SessionExecutor {
     if (this.closeTask) return this.closeTask;
     this.closing = true;
     const task = capture(async () => {
-      await this.admission;
       this.session.clearQueue(); this.session.abortBash();
+      // Commands may be waiting for this run to become idle; abort before waiting for their admission.
       await this.session.abort();
+      await this.admission;
       await withCleanup(async () => {
         // Run failure/cancellation is not cleanup failure, but unexpected rejections still propagate.
         await Promise.all(this.runs);
@@ -172,7 +192,8 @@ export class PiSessionExecutor implements SessionExecutor {
   private handleEvent(event: AgentSessionEvent): void {
     this.transcript.handle(event);
     switch (event.type) {
-      case "agent_start": case "auto_retry_start": case "compaction_start":
+      case "agent_start": this.runRevision++; this.status = "working"; break;
+      case "auto_retry_start": case "compaction_start":
         this.status = "working";
         break;
       case "message_update":
@@ -182,7 +203,9 @@ export class PiSessionExecutor implements SessionExecutor {
       case "tool_execution_start": this.activeTools.set(event.toolCallId, `Running ${event.toolName}`); break;
       case "tool_execution_update": this.activeTools.set(event.toolCallId, `Running ${event.toolName}: ${toolText(event.partialResult)}`); break;
       case "tool_execution_end": this.activeTools.delete(event.toolCallId); break;
-      case "agent_settled": this.aborted = event.aborted; this.status = this.finalStatus(event.aborted); break;
+      case "agent_settled":
+        this.runRevision++; this.aborted = event.aborted; this.status = this.finalStatus(event.aborted);
+        break;
       // agent_end may precede retry/compaction/follow-up; never mark it complete.
     }
     this.emit();

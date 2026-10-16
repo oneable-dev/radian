@@ -2,7 +2,7 @@ import { BoxRenderable, StyledText, TextRenderable, fg, type CliRenderer } from 
 import { blendColors, uiTheme, type UiTheme } from "./theme.ts";
 import { horizontalInset } from "./spacing.ts";
 
-export type FooterShortcut = { readonly key: string; readonly label: string };
+export type FooterShortcut = { readonly key: string; readonly label: string; readonly disabled?: boolean };
 
 // Presentation only: the owner supplies shortcuts for the actual focus context, not global actions.
 export class Footer {
@@ -78,8 +78,8 @@ export class Footer {
       visible.push(shortcut); used += size;
     }
     const colors = this.theme.colors;
-    const chunks = visible.flatMap(({ key, label }, index) => [
-      fg(colors.keyword)(`${index ? "  " : ""}${key}`), fg(colors.muted)(` ${label}`),
+    const chunks = visible.flatMap(({ key, label, disabled }, index) => [
+      fg(disabled ? colors.muted : colors.keyword)(`${index ? "  " : ""}${key}`), fg(colors.muted)(` ${label}`),
     ]);
     if (truncated && available > 0) chunks.push(fg(colors.muted)(`${visible.length ? "  " : ""}…`));
     this.hints.content = new StyledText(chunks);

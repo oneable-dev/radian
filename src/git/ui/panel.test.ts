@@ -142,6 +142,20 @@ test("Refs의 Local/Remote/Tags는 이름만 첨부·복사하고 Enter는 조�
   } finally { await app.close(); }
 });
 
+test("Git diff의 h/l은 양쪽 코드의 가로 위치를 함께 움직이고 키 입력을 전송하지 않는다", async () => {
+  const longLine = `const horizontal = "${"wide content ".repeat(30)}";\n`;
+  const source: GitSource = { load: async () => ok(snapshot()), details: async () => { throw new Error("Unexpected details request"); },
+    compare: async () => ok({ before: longLine, after: longLine + "// after\n", beforeLabel: "before", afterLabel: "after" }) };
+  const app = await mount({ source });
+  try {
+    await app.click("M src/login.ts"); await app.waitForFrame((frame) => frame.includes("const horizontal"));
+    app.get("git-diff").focus(); app.mockInput.pressKey("l"); await app.renderOnce();
+    const panes = app.codes(); expect(panes).toHaveLength(2); expect(panes[0]!.scrollX).toBe(4); expect(panes[1]!.scrollX).toBe(4);
+    app.mockInput.pressKey("h"); await app.renderOnce();
+    expect(panes[0]!.scrollX).toBe(0); expect(panes[1]!.scrollX).toBe(0); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("파일 선택은 중앙만 전체 파일 diff로 바꾸고 양쪽을 하나의 포커스로 스크롤한다", async () => {
   // The comparison has unchanged content far outside the modified middle line.
   const app = await mount();
