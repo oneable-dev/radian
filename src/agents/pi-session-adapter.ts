@@ -11,6 +11,8 @@ import { err, ok, type Result } from "../result.ts";
 import { SessionTranscript } from "./transcript.ts";
 import { PiSessionTelemetry } from "./pi-session-telemetry.ts";
 import { CommandDiagnostics, sessionCommands } from "./session-commands.ts";
+import { FastMode } from "./fast-mode.ts";
+import type { UsageMonitor } from "../usage/monitor.ts";
 
 export type PiSessionOptions = {
   agentDir?: string;
@@ -19,6 +21,7 @@ export type PiSessionOptions = {
   model?: NonNullable<AgentSession["model"]>;
   streamFn?: AgentSession["agent"]["streamFunction"];
   settings?: Partial<ReturnType<SettingsManager["getSettings"]>>;
+  usageMonitor?: UsageMonitor;
 };
 
 export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory {
@@ -33,8 +36,9 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
     const settingsManager = options.streamFn ? SettingsManager.inMemory({
       retry: { enabled: false }, compaction: { enabled: false },
     }) : SettingsManager.create(context.cwd, agentDir);
+    const fast = new FastMode();
     const resourceLoader = new DefaultResourceLoader({
-      cwd: context.cwd, agentDir, settingsManager, noThemes: true,
+      cwd: context.cwd, agentDir, settingsManager, noThemes: true, extensionFactories: [fast.extension],
       ...(options.streamFn ? { noSkills: true, noContextFiles: true, noPromptTemplates: true } : {}),
     });
     await resourceLoader.reload();
@@ -59,7 +63,7 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         waitForIdle: () => session.waitForIdle(), newSession: unsupportedSessionAction, fork: unsupportedSessionAction,
         switchSession: unsupportedSessionAction, navigateTree: unsupportedSessionAction, reload: unsupportedSessionAction,
       } });
-      const executor = new PiSessionExecutor(session, diagnostics);
+      const executor = new PiSessionExecutor(session, options.usageMonitor, diagnostics, fast);
       adopted = true;
       return executor;
     }, async () => { if (!adopted) session.dispose(); });
@@ -99,10 +103,10 @@ export class PiSessionExecutor implements SessionExecutor {
   private closing = false;
   private disposed = false;
 
-  constructor(private readonly session: AgentSession, private readonly diagnostics = new CommandDiagnostics()) {
+  constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode) {
     this.status = this.finalStatus(false);
     this.transcript = new SessionTranscript(session.sessionManager.getBranch());
-    this.telemetry = new PiSessionTelemetry(session, () => this.emit());
+    this.telemetry = new PiSessionTelemetry(session, () => this.emit(), usage, fast);
     this.unsubscribe = session.subscribe((event) => this.handleEvent(event));
   }
 
@@ -205,7 +209,7 @@ export class PiSessionExecutor implements SessionExecutor {
       case "tool_execution_end": this.activeTools.delete(event.toolCallId); break;
       case "agent_settled":
         this.runRevision++; this.aborted = event.aborted; this.status = this.finalStatus(event.aborted);
-        break;
+        this.telemetry.refreshUsage(); break;
       // agent_end may precede retry/compaction/follow-up; never mark it complete.
     }
     this.emit();

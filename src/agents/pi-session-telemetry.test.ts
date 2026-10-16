@@ -1,15 +1,20 @@
 import { expect, test } from "bun:test";
-import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { ManualClock } from "@opentui/core/testing";
+import { UsageMonitor } from "../usage/monitor.ts";
+import { ok } from "../result.ts";
+import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream, type Api, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { offlineRuntime, fixtureMessage } from "../testing/offline-runtime.ts";
-import { expectOk } from "../testing/results.ts";
+import { expectOk, expectError } from "../testing/results.ts";
+import { FastMode } from "./fast-mode.ts";
+import { CommandDiagnostics } from "./session-commands.ts";
 import { PiSessionExecutor } from "./pi-session-adapter.ts";
 
 type Script = (request: SimpleStreamOptions | undefined, model: Model<Api>) => Promise<void>;
-async function mount(script: Script, extensions: ExtensionFactory[] = []) {
+async function mount(script: Script, extensions: InlineExtension[] = [], usage?: UsageMonitor, fast?: FastMode) {
   const directory = await mkdtemp(join(tmpdir(), "radian-telemetry-"));
   const options = await offlineRuntime(directory);
   const modelRuntime = options.modelRuntime!;
@@ -19,7 +24,7 @@ async function mount(script: Script, extensions: ExtensionFactory[] = []) {
   const model = modelRuntime.getModel("telemetry-fixture", "model-fixture")!;
   const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false }, cacheWarming: "off" });
   const resourceLoader = new DefaultResourceLoader({ cwd: directory, agentDir: directory, settingsManager,
-    noSkills: true, noContextFiles: true, noPromptTemplates: true, noThemes: true, extensionFactories: extensions });
+    noSkills: true, noContextFiles: true, noPromptTemplates: true, noThemes: true, extensionFactories: [...(fast ? [fast.extension] : []), ...extensions] });
   await resourceLoader.reload();
   const { session } = await createAgentSession({ cwd: directory, agentDir: directory, modelRuntime, model, thinkingLevel: "high",
     settingsManager, resourceLoader, sessionManager: SessionManager.inMemory(directory) });
@@ -31,15 +36,103 @@ async function mount(script: Script, extensions: ExtensionFactory[] = []) {
     message.usage.input = 72000; message.usage.totalTokens = 72000;
     stream.push({ type: "done", reason: "stop", message }); stream.end(); return stream;
   };
-  await session.bindExtensions({});
+  const diagnostics = new CommandDiagnostics();
+  await session.bindExtensions({ onError: diagnostics.report });
   const original = { payload: session.agent.onPayload, response: session.agent.onResponse, event: session.agent.onProviderStreamEvent };
-  const executor = new PiSessionExecutor(session);
+  const executor = new PiSessionExecutor(session, usage, diagnostics, fast);
   return { executor, session, original, async close() { expectOk(await executor.close()); await rm(directory, { recursive: true, force: true }); } };
 }
 
 const futureReset = () => Math.floor(Date.now() / 1000) + 3600;
 const headers = (reset: number): Record<string, string> => ({ "x-codex-secondary-used-percent": "18", "x-codex-secondary-window-minutes": "10080",
   "x-codex-secondary-reset-at": String(reset) });
+
+test("Fast는 모델 호출 전부터 off이며 명시적 명령만 상태와 실제 전송 tier를 바꾼다", async () => {
+  const fast = new FastMode(); let requests = 0, outgoing: unknown;
+  const app = await mount(async (request, model) => {
+    requests++;
+    outgoing = await request?.onPayload?.({ model: model.id, service_tier: "priority" }, model);
+  }, [], undefined, fast);
+  try {
+    expect(app.executor.state.telemetry?.fast).toBe(false);
+    expect(app.executor.commands().filter((command) => command.value === "fast")).toHaveLength(1);
+    const before = app.session.messages.length;
+
+    expectOk(await app.executor.prompt("/fast on"));
+    expect(app.executor.state.telemetry?.fast).toBe(true); expect(requests).toBe(0); expect(app.session.messages).toHaveLength(before);
+    expectOk(await app.executor.prompt("ordinary request"));
+    expect(outgoing).toEqual({ model: "model-fixture", service_tier: "priority" });
+
+    expectOk(await app.executor.prompt("/fast off"));
+    expect(app.executor.state.telemetry?.fast).toBe(false); expect(requests).toBe(1);
+    expectOk(await app.executor.prompt("ordinary standard request"));
+    expect(outgoing).toEqual({ model: "model-fixture" }); expect(requests).toBe(2);
+    expect(app.executor.state.telemetry?.effort).toBe("high");
+  } finally { await app.close(); }
+});
+
+test("Fast 명령 검증은 요청을 보내지 않고 모델별·세션별 상태를 분리한다", async () => {
+  const fast = new FastMode(); let requests = 0;
+  const app = await mount(async () => { requests++; }, [], undefined, fast);
+  const other = await mount(async () => { requests++; }, [], undefined, new FastMode());
+  try {
+    expect(expectError(fast.command("invalid", app.session.model)).code).toBe("INVALID_INPUT");
+    expectOk(await app.executor.prompt("/fast on")); expect(app.executor.state.telemetry?.fast).toBe(true);
+    expect(other.executor.state.telemetry?.fast).toBe(false);
+    expect(fast.read({ ...app.session.model!, id: "another-model" })).toBe(false);
+    const redirected = { model: "another-model" };
+    expect(fast.apply(redirected, app.session.model!)).toBe(redirected);
+    expect(expectError(fast.command("on", { ...app.session.model!, api: "openai-completions" })).code).toBe("UNSUPPORTED_CAPABILITY");
+    expectOk(await app.executor.prompt("/fast status")); expect(requests).toBe(0);
+  } finally { await app.close(); await other.close(); }
+});
+
+test("이미 설치된 /fast 확장은 Radian 기본 명령을 대체하고 기존 요청 변환을 유지한다", async () => {
+  let handled = false;
+  const app = await mount(async (request, model) => { await request?.onPayload?.({}, model); }, [(pi) => {
+    pi.registerCommand("fast", { description: "Existing Fast control", handler: async () => { handled = true; } });
+    pi.on("before_provider_request", () => ({ service_tier: "priority" }));
+  }], undefined, new FastMode());
+  try {
+    expect(app.executor.commands().filter((command) => command.value === "fast")).toHaveLength(1);
+    expect(app.executor.state.telemetry?.fast).toBeNull();
+    expectOk(await app.executor.prompt("/fast on")); expect(handled).toBe(true);
+    expectOk(await app.executor.prompt("ordinary request"));
+    expect(app.executor.state.telemetry?.fast).toBe(true);
+  } finally { await app.close(); }
+});
+
+test("기존 요청 훅의 null 대체 값도 원본 payload로 되돌리지 않는다", async () => {
+  let outgoing: unknown = "not observed";
+  const app = await mount(async (request, model) => { outgoing = await request?.onPayload?.({ model: model.id }, model); },
+    [(pi) => { pi.on("before_provider_request", () => null); }], undefined, new FastMode());
+  try {
+    expectOk(await app.executor.prompt("/fast on"));
+
+    expectOk(await app.executor.prompt("scripted request"));
+
+    expect(outgoing).toBeNull();
+  } finally { await app.close(); }
+});
+
+test("SDK 세션은 프롬프트 전에도 usage를 받고 작업이 최종 완료되면 다시 갱신한다", async () => {
+  // A real SDK session observes an injected account source without making a model request for usage.
+  const clock = new ManualClock(); let lookups = 0, prompts = 0;
+  const usage = new UsageMonitor(async () => ok({ key: "private-account", provider: "acme", load: async () => {
+    lookups++; return ok([{ id: "period", usedPercent: 10, periodMs: 604800000, resetsAt: 604800000 }]);
+  } }), clock);
+  const app = await mount(async () => { prompts++; }, [], usage);
+  const settle = async () => { for (let i = 0; i < 70; i++) await Promise.resolve(); };
+  try {
+    expect(app.executor.state.telemetry?.usage?.status).toBe("loading"); await settle();
+    expect(app.executor.state.telemetry?.usage?.windows[0]?.usedPercent).toBe(10);
+    expect(prompts).toBe(0); expect(lookups).toBe(1);
+
+    clock.advance(2500); expectOk(await app.executor.prompt("ordinary model request")); await settle();
+
+    expect(prompts).toBe(1); expect(lookups).toBe(2);
+  } finally { await app.close(); await usage.stop(); }
+});
 
 test("SDK 모델·effort·컨텍스트를 전달하고 Fast를 임의로 활성화하지 않는다", async () => {
   // The real SDK supplies context accounting; only the provider boundary is scripted.

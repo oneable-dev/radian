@@ -1,0 +1,14 @@
+Provider icon alpha masks
+
+The OpenAI and Claude masks are rasterized adaptations of Codicons by Microsoft and contributors,
+as distributed in Nerd Fonts 3.5 (nf-cod-openai U+EC81 and nf-cod-claude U+EC82).
+Radian rasterizes, resizes, centers, and recolors these icons for terminal graphics. No font is bundled.
+
+Codicons source: https://github.com/microsoft/vscode-codicons
+Nerd Fonts glyph mapping: https://github.com/ryanoasis/nerd-fonts/blob/v3.5.0/glyphnames.json
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+License terms and warranty disclaimer: https://creativecommons.org/licenses/by/4.0/legalcode
+Upstream license: https://github.com/microsoft/vscode-codicons/blob/main/LICENSE
+
+The icons are provided as-is without warranties. Trademark rights are not granted by this license.
+Their use identifies the corresponding providers and does not imply endorsement.

@@ -223,7 +223,18 @@ export class RuntimeClient {
       throw error;
     });
   }
-  async prompt(sessionId: string, text: string): Promise<Result<void, ExpectedError>> { const result = await this.command({ type: "prompt", sessionId, text }); return result.ok ? ok(undefined) : result; }
+  async prompt(sessionId: string, text: string): Promise<Result<void, ExpectedError>> {
+    if (/^\/fast(?:\s|$)/.test(text)) {
+      // An older SDK treats unknown slash commands as model input. Never turn a settings command into a paid prompt.
+      const unsupported = () => err(new CapabilityError("Running service has no /fast control. Finish jobs and restart it explicitly. No prompt was sent."));
+      if (!this.state.capabilities?.includes("prompt-completion")) return unsupported();
+      const commands = await this.complete(sessionId, { kind: "command", query: "fast" });
+      if (!commands.ok) return commands;
+      if (!commands.value.items.some((command) => command.kind === "command" && command.value === "fast")) return unsupported();
+    }
+    const result = await this.command({ type: "prompt", sessionId, text });
+    return result.ok ? ok(undefined) : result;
+  }
   async savePreferences(preferences: RuntimePreferences): Promise<Result<void, ExpectedError>> { const result = await this.command({ type: "preferences", preferences }); return result.ok ? ok(undefined) : result; }
   async stopRuntime(): Promise<Result<void, ExpectedError>> { const result = await this.command({ type: "stop" }); return result.ok ? ok(undefined) : result; }
   async openEditor(worktreeId: string, size?: { cols: number; rows: number }): Promise<Result<string, ExpectedError>> {

@@ -5,7 +5,7 @@ import type { ExecutionState, SessionRecord } from "../agents/session-registry.t
 import type { GitViewState } from "../git/model.ts";
 import { gitViewsSchema } from "../git/preferences.ts";
 import { agentViewsSchema, type TranscriptViewState } from "../agents/transcript-preferences.ts";
-import { errorCodes, AgentRunError, ExpectedError, InputError, parseJson, ProtocolError, type ErrorCode } from "../errors.ts";
+import { errorCodes, usageErrorCodes, AgentRunError, ExpectedError, InputError, parseJson, ProtocolError, type ErrorCode, type UsageErrorCode } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 
 export const protocolVersion = 1;
@@ -24,8 +24,17 @@ const transcriptSection = Type.Object({
   skillName: Type.Optional(Type.String({ minLength: 1 })),
 });
 const nullableText = Type.Union([Type.String(), Type.Null()]);
+const usage = Type.Object({
+  provider: Type.String(), status: Type.Union([Type.Literal("loading"), Type.Literal("ready"), Type.Literal("unavailable"), Type.Literal("error")]),
+  windows: Type.Array(Type.Object({ id: Type.String(), usedPercent: Type.Number({ minimum: 0, maximum: 100 }),
+    periodMs: Type.Union([Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }), Type.Null()]),
+    resetsAt: Type.Union([Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }), Type.Null()]) })),
+  updatedAt: Type.Union([Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), Type.Null()]),
+  errorCode: Type.Union([Type.Unsafe<UsageErrorCode>({ type: "string", enum: [...usageErrorCodes] }), Type.Null()]),
+});
 const telemetry = Type.Object({
   provider: nullableText, model: nullableText, effort: nullableText, fast: Type.Union([Type.Boolean(), Type.Null()]),
+  usage: Type.Optional(usage),
   context: Type.Union([Type.Object({ usedTokens: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
     maxTokens: Type.Number({ exclusiveMinimum: 0 }) }), Type.Null()]),
   weekly: Type.Union([Type.Object({ remainingPercent: Type.Number({ minimum: 0, maximum: 100 }),

@@ -22,6 +22,17 @@ test("텔레메트리는 선택적 wire 필드이며 미확정 값과 소수 잔
   expect(fresh.details.session?.telemetry?.weekly?.remainingPercent).toBe(82.5);
 });
 
+test("제공자 공통 usage의 사용률·기간·리셋·오류 상태는 wire를 왕복한다", () => {
+  const usage: NonNullable<SessionTelemetry["usage"]> = { provider: "acme", status: "ready", windows: [{ id: "quota", usedPercent: 10, periodMs: 604800000, resetsAt: 1800003600000 }],
+    updatedAt: 1800000000000, errorCode: null };
+
+  const decoded = expectOk(parseSnapshot(JSON.parse(JSON.stringify(snapshot({ ...telemetry, usage })))));
+
+  expect(decoded.details.session?.telemetry?.usage).toEqual(usage);
+  expect(expectError(parseSnapshot(snapshot({ ...telemetry, usage: { ...usage, windows: [{ ...usage.windows[0], usedPercent: 101 }] } }))).code).toBe("PROTOCOL_ERROR");
+  expect(expectError(parseSnapshot(snapshot({ ...telemetry, usage: { ...usage, errorCode: "INVENTED_ERROR" } }))).code).toBe("PROTOCOL_ERROR");
+});
+
 test("잘못된 잔량·토큰·타임스탬프는 IPC 경계에서 typed 프로토콜 오류로 거부한다", () => {
   // A private local endpoint still receives untyped JSON, not a trusted SDK object.
   const invalid = [

@@ -204,7 +204,7 @@ test("낮은 터미널에서도 Agent 상태와 입력창은 한 줄 푸터를 �
     expect(status.y + status.height).toBe(composer.y);
     expect(status.y + status.height).toBeLessThanOrEqual(footer.y);
     expect(app.captureCharFrame().split("\n")[status.y]).toContain("context");
-    expect(app.captureCharFrame().split("\n")[status.y]).toContain("weekly");
+    expect(app.captureCharFrame().split("\n")[status.y]).toContain("usage");
     expect(prompt.y + prompt.height).toBeLessThanOrEqual(footer.y);
     expect(app.captureCharFrame().split("\n")[prompt.y]).toContain("compact draft");
     expect(app.captureCharFrame()).not.toContain("Status not supplied");

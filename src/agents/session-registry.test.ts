@@ -236,6 +236,10 @@ test("런타임 복구는 저장된 Fast·weekly 대신 새 SDK 텔레메트리�
 
     expect(registry.details("restored")?.telemetry).toEqual(fresh);
     expect(registry.records[0]?.state.telemetry?.weekly).toBeNull();
+    // Background usage publication must remain live even while the restored transcript is frozen.
+    executor.update({ ...executor.state, telemetry: { ...fresh, usage: { provider: "acme", status: "ready",
+      windows: [{ id: "quota", usedPercent: 10, periodMs: 604800000, resetsAt: 1800003600000 }], updatedAt: 1800000000000, errorCode: null } } });
+    expect(registry.details("restored")?.telemetry?.usage?.windows[0]?.usedPercent).toBe(10);
   } finally { executor.finishClose.resolve(); await registry.shutdown(); }
 });
 

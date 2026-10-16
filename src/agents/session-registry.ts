@@ -64,7 +64,10 @@ export class SessionRegistry {
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   details(id: string): ExecutionState | null {
     const entry = this.entries.get(id);
-    return entry?.phase === "open" ? entry.recoveredState ?? entry.executor?.state ?? null : null;
+    if (entry?.phase !== "open") return null;
+    const live = entry.executor?.state;
+    // Recovery keeps transcript/status history, but account usage continues updating in the live SDK.
+    return entry.recoveredState ? { ...entry.recoveredState, ...(live?.telemetry ? { telemetry: live.telemetry } : {}) } : live ?? null;
   }
   sessionFile(id: string): string | undefined { return this.entries.get(id)?.executor?.sessionFile; }
   historyOwnership(canonicalFile: string): { openSessionId: string | null; unavailableReason: string | null } {

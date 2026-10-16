@@ -1,6 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import { join } from "node:path";
+import { zstdDecompressSync } from "node:zlib";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { offlineRuntime, fixtureMessage } from "../testing/offline-runtime.ts";
@@ -151,6 +152,50 @@ test("SDK 세션은 지정한 agentDir의 확장을 발견하고 등록된 도�
     const tool = app.registry.details(id)?.sections?.find((section) => section.kind === "tool" && section.title === "extension_probe");
     expect(tool?.status).toBe("complete"); expect(tool?.text).toContain("EXTENSION_PROBE_OK");
   } finally { await app.cleanup(); }
+});
+
+test("Fast 명령은 모델 호출 없이 처리되고 native Codex HTTP 요청에 priority를 실제로 적용·제거한다", async () => {
+  // A loopback SSE server exercises the real provider encoder without a paid model or user credentials.
+  const bodies: Record<string, unknown>[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (request) => {
+    const bytes = Buffer.from(await request.arrayBuffer());
+    const json = request.headers.get("content-encoding") === "zstd" ? zstdDecompressSync(bytes) : bytes;
+    const body = JSON.parse(json.toString("utf8")) as Record<string, unknown>; bodies.push(body);
+    const message = { id: "msg-fixture", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Native fixture response", annotations: [] }] };
+    const response = { id: `resp-${bodies.length}`, status: "completed", model: "native-fixture", output: [message],
+      service_tier: body.service_tier ?? "default", usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } };
+    const events = [{ type: "response.created", response: { id: response.id, status: "in_progress" } },
+      { type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } },
+      { type: "response.output_text.delta", output_index: 0, content_index: 0, delta: "Native fixture response" },
+      { type: "response.output_item.done", output_index: 0, item: message }, { type: "response.completed", response }];
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "Content-Type": "text/event-stream" } });
+  } });
+  const app = await sdkFixture(false, (options) => {
+    const modelRuntime = options.modelRuntime!;
+    const apiKey = `e30.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "fixture-account" } })).toString("base64url")}.fixture`;
+    modelRuntime.registerProvider("native-fast-fixture", { api: "openai-codex-responses", apiKey, baseUrl: server.url.origin,
+      models: [{ id: "native-fixture", name: "Native fixture", reasoning: true, input: ["text"], contextWindow: 200000, maxTokens: 8192,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] });
+    const configured: PiSessionOptions = { ...options, model: modelRuntime.getModel("native-fast-fixture", "native-fixture")!,
+      settings: { transport: "sse", defaultThinkingLevel: "high", retry: { enabled: false }, compaction: { enabled: false } } };
+    delete configured.streamFn;
+    return configured;
+  });
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    expect(app.registry.details(id)?.telemetry?.fast).toBe(false);
+    expectOk(await app.registry.prompt(id, "/fast on")); expect(bodies).toHaveLength(0);
+
+    expectOk(await app.registry.prompt(id, "priority fixture request"));
+
+    expect(bodies[0]?.service_tier).toBe("priority"); expect(bodies[0]?.reasoning).toMatchObject({ effort: "high" });
+    expect(app.registry.details(id)?.telemetry?.fast).toBe(true);
+    expectOk(await app.registry.prompt(id, "/fast off")); expect(bodies).toHaveLength(1);
+    expect(app.registry.details(id)?.telemetry?.fast).toBe(false);
+    expectOk(await app.registry.prompt(id, "standard fixture request"));
+    expect(bodies).toHaveLength(2); expect(bodies[1]).not.toHaveProperty("service_tier");
+    expect(bodies[1]?.reasoning).toMatchObject({ effort: "high" });
+  } finally { await app.cleanup(); await server.stop(true); }
 });
 
 test("실제 SDK read/write는 선택한 워크트리의 cwd를 사용하며 다른 워크트리를 변경하지 않는다", async () => {

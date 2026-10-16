@@ -35,6 +35,37 @@ function events(value: unknown, signal?: AbortSignal | null) {
   };
 }
 
+test("이전 런타임의 /fast는 일반 모델 프롬프트로 보내지 않고 명시적으로 거부한다", async () => {
+  const fetchMock = stubFetch(async () => { throw new Error("Settings must not become model input"); });
+  const client = new RuntimeClient(paths, snapshot());
+  try {
+    const result = await client.prompt("session", "/fast on");
+
+    expect(expectError(result).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(fetchMock).not.toHaveBeenCalled();
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
+
+for (const registered of [false, true]) {
+  test(`기존 확장 /fast 등록 여부 ${registered}는 읽기 조회로 확인하고 있을 때만 명령을 보낸다`, async () => {
+    const state = snapshot(); state.capabilities = ["prompt-completion"];
+    const requests: string[] = [];
+    const fetchMock = stubFetch(async (input) => {
+      const path = new URL(String(input)).pathname; requests.push(path);
+      return path === "/completions" ? Response.json({ items: registered ? [{ kind: "command", value: "fast", description: "Existing Fast control" }] : [], truncated: false })
+        : Response.json({ ok: true, value: null });
+    });
+    const client = new RuntimeClient(paths, state);
+    try {
+      const result = await client.prompt("session", "/fast off");
+
+      if (registered) expectOk(result);
+      else expect(expectError(result).code).toBe("UNSUPPORTED_CAPABILITY");
+      expect(requests).toEqual(registered ? ["/completions", "/command"] : ["/completions"]);
+    } finally { await client.disconnect(); fetchMock.mockRestore(); }
+  });
+}
+
 test("이전 런타임의 자동완성은 요청이나 재시작 없이 지원 부족 Result로 안내한다", async () => {
   const fetchMock = stubFetch(async () => { throw new Error("Must not contact an older service"); });
   const client = new RuntimeClient(paths, snapshot());

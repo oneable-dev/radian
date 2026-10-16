@@ -1,10 +1,12 @@
 import { err, ok, type Result } from "./result.ts";
 
+export const usageErrorCodes = ["USAGE_AUTH_REQUIRED", "USAGE_QUERY_FAILED", "USAGE_PROTOCOL_ERROR", "USAGE_RATE_LIMITED", "USAGE_TIMEOUT"] as const;
 export const errorCodes = [
   "INVALID_INPUT", "SESSION_NOT_OPEN", "SESSION_BUSY", "SESSION_CONFLICT", "RUNTIME_STOPPING",
   "CANCELLED", "AGENT_FAILED", "CLEANUP_FAILED", "HISTORY_UNAVAILABLE", "HISTORY_CORRUPT",
   "STORAGE_FAILED", "RUNTIME_ABSENT", "CONNECTION_FAILED", "CONNECTION_TIMEOUT", "PROTOCOL_ERROR",
   "UNSUPPORTED_CAPABILITY", "LEGACY_REMOTE_ERROR", "REMOTE_INTERNAL_ERROR", "GIT_DISCOVERY_FAILED",
+  ...usageErrorCodes,
   "GIT_QUERY_FAILED", "GIT_PREVIEW_UNAVAILABLE", "GIT_PROTOCOL_ERROR", "CLIPBOARD_UNAVAILABLE",
   "EDITOR_UNAVAILABLE", "EDITOR_NOT_OPEN", "EDITOR_BUSY", "PTY_NOT_OPEN", "PTY_BUSY", "PTY_UNAVAILABLE", "PTY_OWNERSHIP_LOST", "PTY_CLEANUP_FAILED",
 ] as const;
@@ -54,6 +56,10 @@ export class GitError extends ExpectedError<"GIT_QUERY_FAILED" | "GIT_PREVIEW_UN
 }
 export class ClipboardError extends ExpectedError<"CLIPBOARD_UNAVAILABLE"> {
   constructor(message: string, options?: ErrorOptions) { super("CLIPBOARD_UNAVAILABLE", message, options); }
+}
+export type UsageErrorCode = typeof usageErrorCodes[number];
+export class UsageError extends ExpectedError<UsageErrorCode> {
+  constructor(code: UsageErrorCode, message: string, readonly retryAfterMs?: number, options?: ErrorOptions) { super(code, message, options); }
 }
 export class CapabilityError extends ExpectedError<"UNSUPPORTED_CAPABILITY"> {
   constructor(message: string) { super("UNSUPPORTED_CAPABILITY", message); }

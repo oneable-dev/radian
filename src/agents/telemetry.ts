@@ -1,12 +1,15 @@
+import type { ProviderUsage } from "../usage/model.ts";
+
 // Plain, provider-neutral data carried by runtime snapshots. Timestamps are Unix milliseconds.
 export type SessionTelemetry = {
   readonly provider: string | null;
   readonly model: string | null;
   readonly effort: string | null;
-  // The last observed outgoing request's priority setting, not a speed guarantee.
+  // Session-local requested/observed priority mode, not a server speed guarantee.
   readonly fast: boolean | null;
   readonly context: { readonly usedTokens: number | null; readonly maxTokens: number } | null;
   readonly weekly: WeeklyQuota | null;
+  readonly usage?: ProviderUsage;
 };
 
 export type WeeklyQuota = {

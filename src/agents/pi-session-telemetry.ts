@@ -1,6 +1,9 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionTelemetry, WeeklyQuota } from "./telemetry.ts";
+import type { UsageMonitor } from "../usage/monitor.ts";
+import type { UsageSubscription } from "../usage/model.ts";
+import type { FastMode } from "./fast-mode.ts";
 
 const weekMinutes = 7 * 24 * 60;
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -41,15 +44,20 @@ function weeklyEvent(event: Record<string, unknown>, now: number): WeeklyQuota |
   return null;
 }
 
-// Observes the existing SDK callbacks; it never changes a payload, tier, transport, or credentials.
+// Preserves SDK observers and applies only explicitly selected, session-local request settings.
 export class PiSessionTelemetry {
   private requestScope: string | null = null;
   private fast: boolean | null = null;
   private weekly: WeeklyQuota | null = null;
   private contextCache: { key: string; value: SessionTelemetry["context"] } | undefined;
   private readonly previous;
+  private readonly usage: UsageSubscription | undefined;
+  private readonly unsubscribeFast: (() => void) | undefined;
 
-  constructor(private readonly session: AgentSession, private readonly changed: () => void) {
+  constructor(private readonly session: AgentSession, private readonly changed: () => void, usage?: UsageMonitor,
+    private readonly fastMode?: FastMode) {
+    this.usage = usage?.watch(changed);
+    this.unsubscribeFast = fastMode?.subscribe(changed);
     const agent = session.agent;
     this.previous = { payload: agent.onPayload, response: agent.onResponse, event: agent.onProviderStreamEvent };
     agent.onPayload = this.payload;
@@ -65,13 +73,15 @@ export class PiSessionTelemetry {
 
   private payload: NonNullable<AgentSession["agent"]["onPayload"]> = async (payload, model) => {
     const replacement = await this.previous.payload?.(payload, model);
-    const outgoing = replacement ?? payload;
+    const transformed = replacement === undefined ? payload : replacement;
+    const outgoing = this.fastMode ? this.fastMode.apply(transformed, model) : transformed;
     this.useScope(model);
     this.fast = priorityApi(model) && record(outgoing) ? outgoing.service_tier === "priority" || outgoing.service_tier === "fast" : null;
+    if (this.fast !== null) this.fastMode?.observe(model, this.fast);
     // A fresh response must confirm the account allowance again; do not carry it across credentials or buckets.
     this.weekly = null;
     this.changed();
-    return replacement;
+    return outgoing === transformed ? replacement : outgoing;
   };
 
   private response: NonNullable<AgentSession["agent"]["onResponse"]> = async (response, model) => {
@@ -102,11 +112,15 @@ export class PiSessionTelemetry {
     const matches = model !== undefined && scope(model) === this.requestScope;
     return { provider: model?.provider ?? null, model: model?.id ?? null,
       effort: routed?.thinkingLevel ?? this.session.thinkingLevel ?? null,
-      fast: matches ? this.fast : null, context: this.contextCache.value,
-      weekly: matches && this.weekly && this.weekly.resetsAt > Date.now() ? this.weekly : null };
+      fast: this.fastMode?.read(model) ?? (matches ? this.fast : null), context: this.contextCache.value,
+      weekly: matches && this.weekly && this.weekly.resetsAt > Date.now() ? this.weekly : null,
+      ...(this.usage ? { usage: this.usage.read(model?.provider ?? null) } : {}) };
   }
 
+  refreshUsage(): void { this.read(); this.usage?.refresh(); }
+
   dispose(): void {
+    this.usage?.dispose(); this.unsubscribeFast?.();
     const agent = this.session.agent;
     if (agent.onPayload === this.payload) agent.onPayload = this.previous.payload;
     if (agent.onResponse === this.response) agent.onResponse = this.previous.response;

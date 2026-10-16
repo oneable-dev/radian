@@ -182,28 +182,62 @@ is automatically restarted.
 
 ### Agent input status
 
-A passive row directly above and outside the prompt box shows the selected model, effort and last
-observed Fast setting, followed by **context** and **weekly** remaining percentages. Both bars represent the
-remaining allowance, not consumption. Filled cells fade from the terminal's accent toward the
-panel color; empty cells stay subdued. Palette changes repaint the existing row. The transcript mode
-row, telemetry row and prompt box share their left/right edges, with one blank row between each on
-normal screens. Screens shorter than 18 rows remove both gaps together. The prompt retains its own
-internal padding. Narrow panels shorten bars and omit settings before dropping either resource label
-or percentage.
+A passive row above and outside the prompt box shows the selected model, effort and current `fast`
+setting, followed by **context remaining** and **account usage**. Both meters use the same block-bar
+style. A provider icon identifies the account meter; `18% used 1h 20m` means consumption followed by
+time until reset, without a middle-dot separator. Reset times use `5d 23h`, `1h 20m` or `18m`. The compact meter selects the longest returned
+quota window; all returned windows remain available in the IPC snapshot. There is no refresh button.
 
-Context comes from Pi's estimated context usage and model limit. Immediately after compaction,
-its size may be unknown until the next response. Fast reports the outgoing OpenAI request's priority
-service tier, not a guarantee of server speed. The row does not enable Fast, change effort/model,
-install extensions, or add a paid request. Before a request is observed, or on unsupported providers,
-Fast is unknown.
+Filled bar cells fade from the terminal's accent toward the panel color; empty cells stay subdued.
+Context labels and known values use the same foreground as account usage. Model names use the theme's
+number (yellow/gold) color, effort uses keyword, and `fast` uses success when on or info when off; unknown values
+and separators stay muted. These are terminal palette roles, not fixed product colors.
+The transcript mode row, telemetry row and prompt box share their left/right edges, with one blank
+row between each on normal screens. Screens shorter than 18 rows remove both gaps together. The
+prompt retains its internal padding. Narrow panels shorten bars and omit settings or the countdown
+before dropping either resource percentage. Theme changes preserve the current draft and focus.
 
-Weekly is the last observed account allowance from Codex response headers or `codex.rate_limits`
-stream events. A seven-day window is identified by its duration, not by assuming `secondary` means
-weekly. No proactive account query or extra authentication is performed. Missing/invalid data,
-other metered buckets, a reset deadline, and runtime restart leave the value unknown rather than
-inventing 0% or 100%. Unknown resource values use **-** without a progress bar, for example `weekly -`.
-Older runtime snapshots without telemetry remain compatible and show unknown values; finish jobs
-before explicitly restarting an old service to load the new capability.
+Provider logos reserve two columns. On terminals reporting Kitty/Sixel graphics and pixel resolution,
+OpenTUI renders a font-derived, theme-tinted image with approximately 1.5x the ordinary glyph width,
+within the same row. Other terminals retain a bold Nerd Font glyph; individual character scaling is
+not assumed. No terminal font settings are changed. Asset attribution is in
+`src/ui/provider-icon-data.LICENSE`.
+
+Context comes from Pi's estimated usage and model limit. After compaction it can be unknown until
+the next response. Radian supplies `/fast [on|off|status]` for OpenAI Responses/Codex models, including
+prompt completion. Its per-model, per-session state starts **off**, so a restored session does not
+remain unknown merely because it has not sent a request. `/fast on` opts into `service_tier: priority`;
+`/fast off` removes an explicit priority/fast tier. These commands themselves never invoke a model or
+add conversation messages. They do not change effort, write global configuration, or persist priority
+across a runtime restart. Priority can increase usage and is not a guarantee of server speed.
+
+An existing extension registering `/fast` replaces the default control; its request observers remain
+intact. Such an extension may leave the initial state unknown until its first outgoing request.
+Older services without a registered `/fast` command reject it from the new client rather than treating
+it as a paid model prompt. Finish existing jobs and explicitly restart the runtime to load this control.
+Displaying usage, context or `fast` state never enables priority by itself.
+
+Account usage has a provider-neutral model and runtime monitor under `src/usage/`; provider-specific
+authentication and HTTP stay in `src/usage/providers/`. The initial source supports **OpenAI/Codex
+subscription OAuth only**, reusing Pi's resolved login. OpenAI API keys and other providers report
+unavailable until a matching source is implemented. No third-party extension or Codex CLI is required.
+The source uses the undocumented ChatGPT `backend-api/wham/usage` endpoint also used by Codex, so its
+format and availability are not guaranteed. Usage lookup itself is read-only and sends no model prompt.
+
+A session starts its first lookup without waiting for a prompt. Reconnection, provider selection and
+final `agent_settled` events request fresh usage; short bursts and simultaneous sessions share work.
+While any TUI is attached, the runtime polls every 60 seconds and at returned reset deadlines. Account
+identity is checked during each lookup; external login changes are picked up on the next lookup.
+The cache is shared by matching accounts within one workspace runtime, not across separate runtimes.
+Detaching all TUIs stops periodic polling. Shutdown aborts lookups and invalidates late responses.
+
+The countdown is calculated locally and ticks every minute or at its reset deadline, without HTTP requests.
+Resetting a window triggers another lookup, never an invented 0%/100%. Missing, unsupported or failed
+usage shows the provider icon and **-**, without a bar or fake countdown; typed failure codes remain in
+the snapshot for diagnostics. Credentials and private account/cache identifiers are never sent to the
+TUI or saved in its preferences. Restoring history always uses live usage rather than saved quotas.
+Earlier telemetry snapshots with only `weekly` remain readable and are converted to `used` for display.
+Finish existing jobs before explicitly restarting an old runtime to load the new usage source.
 
 ### Native Git
 
@@ -630,7 +664,8 @@ completion. Additional idle/waiting/cancelled icon policies are not defined here
 
 Use a Nerd Font-enabled terminal to view the glyphs. Current mappings are `nf-cod-repo`
 (U+EA62), `nf-cod-folder` (U+EA83), `nf-cod-loading` (U+EB19), `nf-cod-pass` (U+EBA4),
-`nf-cod-error` (U+EA87), and `nf-cod-robot` (U+EC20), from Nerd Fonts 3.5.1. Headless tests
+`nf-cod-error` (U+EA87), `nf-cod-robot` (U+EC20), `nf-cod-openai` (U+EC81), and
+`nf-cod-claude` (U+EC82), from Nerd Fonts 3.5.1. Headless tests
 verify code-point output, not font installation or actual terminal glyph appearance.
 
 ```sh
@@ -651,6 +686,7 @@ This is an incremental domain-oriented layout, not a requirement to give every f
 | `src/app/ui/workbench.ts` | Overall layout, left navigation, view switching, focus and footer coordination; no separate Sidebar abstraction |
 | `src/agents/` | Agent session/subagent models and lifecycle, saved History and Pi SDK integration |
 | `src/agents/ui/` | Agent transcript/prompt/drafts/scroll and saved-History panel, regardless of where they appear on screen |
+| `src/usage/` | Provider-neutral account usage snapshots, shared polling/cache and isolated provider sources |
 | `src/editor/` | Worktree Neovim lifecycle and its UI panel |
 | `src/terminal/` | Shell-tab lifecycle, ownership supervisor/cleanup and its UI panel |
 | `src/git/` | Read-only Git queries, comparisons and Agent context; Git-specific rendering lives in `ui/` |

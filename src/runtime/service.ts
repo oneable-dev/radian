@@ -1,6 +1,9 @@
 import { chmod } from "node:fs/promises";
 import { Value } from "typebox/value";
 import { completionQuerySchema } from "./completion-protocol.ts";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { UsageMonitor } from "../usage/monitor.ts";
+import { openAiUsageResolver } from "../usage/providers/openai.ts";
 import { join } from "node:path";
 import { CancelledError, collectCleanup, InputError, ProtocolError, SessionError, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
@@ -33,9 +36,11 @@ export async function runRuntime(cwd: string, offline: boolean, stateRoot?: stri
     const manifest = loaded.value;
     const repositories = mergeRepositories(repository, manifest);
     const options = offline ? await offlineRuntime(join(paths.directory, "offline-agent")) : undefined;
-    const registry = new SessionRegistry(repositories, piSessionFactory(options));
+    const modelRuntime = options?.modelRuntime ?? await ModelRuntime.create();
+    const usage = offline ? undefined : new UsageMonitor(openAiUsageResolver(modelRuntime));
+    const registry = new SessionRegistry(repositories, piSessionFactory({ ...options, modelRuntime, ...(usage ? { usageMonitor: usage } : {}) }));
     runtime = new WorkspaceRuntime(registry, repository.id, offline, store, manifest?.preferences ?? emptyPreferences,
-      new SessionHistory(repositories, registry, options?.sessionDir), paths.directory);
+      new SessionHistory(repositories, registry, options?.sessionDir), paths.directory, usage);
     await runtime.restore(manifest?.records ?? []);
     server = Bun.serve({ unix: paths.socket,
       fetch: (request) => runtime!.fetch(request),
@@ -72,7 +77,8 @@ class WorkspaceRuntime {
   private initializing = true;
 
   constructor(private readonly registry: SessionRegistry, private readonly repositoryId: string,
-    private readonly offline: boolean, private readonly store: RuntimeStore, preferences: RuntimePreferences, private readonly history: SessionHistory, supervisorDirectory: string) {
+    private readonly offline: boolean, private readonly store: RuntimeStore, preferences: RuntimePreferences, private readonly history: SessionHistory,
+    supervisorDirectory: string, private readonly usage?: UsageMonitor) {
     this.preferences = preferences;
     this.editors = new EditorSessions(registry.snapshot, () => this.changed(), { clean: offline });
     this.terminals = new TerminalSessions(registry.snapshot, () => this.changed(), supervisorDirectory, offline, (task) => this.observe(task));
@@ -84,6 +90,7 @@ class WorkspaceRuntime {
       const restored = await this.registry.restore(record);
       if (!restored.ok) {
         const state = { ...record.state, status: "failure" as const, error: `Could not restore: ${restored.error.message}` };
+        delete state.telemetry;
         this.failedRecovery.set(record.id, { ...record, state,
           subagents: record.subagents.map((agent) => ({ ...agent, status: agent.status === "working" ? null : agent.status })) });
       }
@@ -100,7 +107,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "agent-telemetry", "prompt-completion"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "agent-telemetry", "provider-usage", "prompt-completion"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || this.notice, editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
@@ -224,7 +231,8 @@ class WorkspaceRuntime {
 
   private events(): Response {
     return snapshotEvents(() => this.snapshot, (send) => {
-      this.subscribers.add(send); return () => { this.subscribers.delete(send); };
+      this.subscribers.add(send); this.usage?.setActive(true);
+      return () => { this.subscribers.delete(send); this.usage?.setActive(this.subscribers.size > 0); };
     });
   }
 
@@ -265,7 +273,8 @@ class WorkspaceRuntime {
     // Stopping the service is NOT explicit session close. Freeze open intent before teardown emits removals.
     const manifest: RuntimeManifest = { version: protocolVersion, repositoryId: this.repositoryId,
       repositories: this.registry.snapshot, records: [...this.registry.records, ...this.failedRecovery.values()], preferences: this.preferences };
-    return collectCleanup([this.checkpoint(manifest), this.registry.shutdown(), this.editors.stop(), this.terminals.stop()], "Checkpoint or runtime shutdown failed.");
+    return collectCleanup([this.checkpoint(manifest), this.registry.shutdown(), this.editors.stop(), this.terminals.stop(),
+      this.usage ? this.usage.stop().then(() => ok(undefined)) : Promise.resolve(ok(undefined))], "Checkpoint or runtime shutdown failed.");
   }
 }
 
