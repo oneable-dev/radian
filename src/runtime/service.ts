@@ -166,10 +166,14 @@ class WorkspaceRuntime {
         if (this.failedRecovery.has(command.sessionId)) return err(new SessionError("SESSION_NOT_OPEN", "This session needs recovery before it can run."));
         const state = this.registry.details(command.sessionId);
         if (!state) return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
-        if (state.status === "working") return err(new SessionError("SESSION_BUSY", "This session is already running."));
         if (!command.text.trim()) return err(new InputError("A prompt must not be empty."));
-        this.observe(this.registry.prompt(command.sessionId, command.text));
-        return ok(null);
+        const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
+        const run = this.registry.prompt(command.sessionId, command.text, () => accepted.resolve(ok(undefined)));
+        // Observe execution separately; an accepted request can still fail later.
+        this.observe(run);
+        void run.then(accepted.resolve, accepted.reject);
+        const result = await accepted.promise;
+        return result.ok ? ok(null) : result;
       }
       case "preferences": {
         const workViews = command.preferences.workViews ?? this.preferences.workViews;

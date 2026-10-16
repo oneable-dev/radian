@@ -18,7 +18,7 @@ async function mount(list: () => Promise<readonly HistoryItem[]> = async () => [
   const calls: string[] = [];
   const view = new WorkspaceView(app.renderer, selection, {
     onNewSession: () => { calls.push("create"); }, onCloseSession: () => { calls.push("close"); },
-    onPrompt: (_id, text) => { calls.push(`prompt:${text}`); },
+    onPrompt: (_id, text) => { calls.push(`prompt:${text}`); return ok(undefined); },
     getSessionDetails: () => ({ status, output: "Transcript", error: null }),
     onListHistory: async () => ok(await list()),
     onResumeSession: async (_tree, id) => { calls.push(`resume:${id}`); return ok("a1"); },
@@ -92,7 +92,7 @@ test("History 버튼·조회 중 목록·사용 가능한 기록에 따라 표�
 });
 
 test("프롬프트의 실행 가능 여부와 별도 오류 알림은 단축키 안내·초안·선택을 보존한다", async () => {
-  // A busy execution retains its draft instead of accepting another prompt.
+  // Busy input uses the same submission path, with a Queue hint instead of Run.
   const app = await mount();
   try {
     app.mockInput.pressKey("e", { ctrl: true }); await app.renderOnce();
@@ -101,16 +101,14 @@ test("프롬프트의 실행 가능 여부와 별도 오류 알림은 단축키 
     await app.mockInput.typeText("hello"); await app.renderOnce();
     expect(app.footerLine()).toContain("Enter Run");
 
-    app.setStatus("working"); await app.renderOnce(); app.mockInput.pressEnter(); await app.renderOnce();
+    app.setStatus("working"); await app.renderOnce();
+    expect(app.footerLine()).toContain("Enter Queue");
+    app.mockInput.pressEnter(); await app.renderOnce();
 
-    expect(app.calls).toEqual([]);
-    expect(app.footerLine()).toContain("Esc Workspace");
-    expect(app.footerLine()).not.toContain("Enter Run");
-    expect(app.captureCharFrame().split("\n")[22]).toContain("already running");
-    expect(app.view.promptDrafts.a1).toBe("hello");
-    expect(app.selection.sessionId).toBe("a1");
-    app.setStatus("complete"); await app.renderOnce(); app.mockInput.pressEnter(); await app.renderOnce();
     expect(app.calls).toEqual(["prompt:hello"]);
+    expect(app.footerLine()).toContain("Esc Workspace");
+    expect(app.view.promptDrafts.a1).toBeUndefined();
+    expect(app.selection.sessionId).toBe("a1");
     expect(app.footerLine()).not.toContain("Enter Run");
   } finally { await app.close(); }
 });

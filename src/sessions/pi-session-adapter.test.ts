@@ -177,22 +177,54 @@ test("닫은 SDK 세션을 다시 열면 동일 저장 ID와 대화 기록을 �
   } finally { await app.cleanup(); }
 });
 
-test("실행 중인 SDK 세션의 추가 입력은 실패로 명시하고 다른 실행을 교체하지 않는다", async () => {
-  // An active provider stream holds the current run open.
+test("실행 중 SDK 입력은 현재 응답 뒤에 대기하고 세션을 교체하지 않는다", async () => {
+  // Hold the real provider response so admission cannot be confused with completion.
   const app = await sdkFixture(true);
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     const running = app.registry.prompt(id, "hold A");
     await app.streams.waitFor("A");
+    const accepted = Promise.withResolvers<void>();
 
-    // No implicit steering/follow-up policy is invented for a second submission.
-    expect(expectError(await app.registry.prompt(id, "read")).code).toBe("SESSION_BUSY");
-    app.streams.gates.get("A")!.finish("original run completed");
-    await running;
+    // Pi queues B without aborting A or waiting for A's completion to acknowledge it.
+    expectOk(await app.registry.prompt(id, "hold B", accepted.resolve));
+    await accepted.promise;
+    expect(app.streams.gates.has("B")).toBe(false);
+    expect(app.registry.details(id)?.status).toBe("working");
+    expect(app.streams.gates.get("A")!.aborted).toBe(false);
+    app.streams.gates.get("A")!.finish("A complete");
+    await app.streams.waitFor("B");
+    expect(app.registry.details(id)?.status).toBe("working");
+    app.streams.gates.get("B")!.finish("B complete");
+    expectOk(await running);
 
-    // The original request remains the only request and completes normally.
-    expect(app.streams.gates.size).toBe(1);
+    // Both turns belong to the original SDK session and settle only after B.
+    expect(app.executors).toHaveLength(1);
+    expect(app.registry.details(id)?.output).toContain("B complete");
     expect(app.registry.details(id)?.status).toBe("complete");
+  } finally { await app.cleanup(); }
+});
+
+test("동시에 보낸 SDK 입력은 수락 경계를 직렬화하고 실제 대기열 순서를 보존한다", async () => {
+  // Startup includes asynchronous SDK preflight; no stream is active at invocation time.
+  const app = await sdkFixture();
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    const admissions = [Promise.withResolvers<void>(), Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+
+    // Concurrent callers must not create three overlapping initial runs.
+    const runs = ["A", "B", "C"].map((name, i) => app.registry.prompt(id, `hold ${name}`, admissions[i]!.resolve));
+    await Promise.all(admissions.map((item) => item.promise));
+    for (const result of await Promise.all(runs)) expectOk(result);
+
+    // Early steering may join the initial request; finalized user-message order is authoritative.
+    const messages = SessionManager.open(app.registry.sessionFile(id)!).getBranch().flatMap((entry) => {
+      if (entry.type !== "message" || entry.message.role !== "user") return [];
+      const content = entry.message.content;
+      return [typeof content === "string" ? content : content.filter((part) => part.type === "text").map((part) => part.text).join("")];
+    });
+    expect(messages).toEqual(["hold A", "hold B", "hold C"]);
+    expect(app.executors).toHaveLength(1);
   } finally { await app.cleanup(); }
 });
 

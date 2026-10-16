@@ -8,6 +8,8 @@ import { offlineRuntime } from "../testing/offline-runtime.ts";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { WorkspaceView } from "./workspace.ts";
 import { expectOk } from "../testing/results.ts";
+import { ok, type Result } from "../result.ts";
+import type { ExpectedError } from "../errors.ts";
 
 async function mount() {
   const fixture = await createWorktreeFixture();
@@ -15,12 +17,20 @@ async function mount() {
   const setup = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
   const selection = new WorkspaceSelection(registry.snapshot);
   const creation: Promise<string>[] = [];
-  const prompts: { id: string; text: string; done: Promise<void> }[] = [];
+  const prompts: { id: string; text: string; done: Promise<void>; accepted: Promise<Result<void, ExpectedError>> }[] = [];
   const closes: Promise<void>[] = [];
   const view = new WorkspaceView(setup.renderer, selection, {
     onNewSession: (id) => { creation.push(registry.create(id).then(expectOk)); },
     onCloseSession: (_tree, id) => { closes.push(registry.close(id).then(expectOk)); },
-    onPrompt: (id, text) => { prompts.push({ id, text, done: registry.prompt(id, text).then((result) => { if (!result.ok && result.error.code !== "CANCELLED") expectOk(result); }) }); },
+    onPrompt: (id, text) => {
+      const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
+      const run = registry.prompt(id, text, () => accepted.resolve(ok(undefined)));
+      prompts.push({ id, text, accepted: accepted.promise, done: run.then((result) => {
+        accepted.resolve(result);
+        if (!result.ok && result.error.code !== "CANCELLED") expectOk(result);
+      }) });
+      return accepted.promise;
+    },
     getSessionDetails: (id) => registry.details(id),
   });
   const unsubscribe = registry.subscribe(() => selection.replaceSnapshot(registry.snapshot));
@@ -128,20 +138,23 @@ test("실행 중 닫기는 즉시 빈 UI로 전환하고 마지막 세션을 자
   } finally { await app.closeApp(); }
 });
 
-test("추가 입력은 실행 중인 세션에서 보존되고 n/x/q도 프롬프트 문자로 처리한다", async () => {
+test("실행 중 추가 입력도 수락하고 n/x/q는 프롬프트 문자로 처리한다", async () => {
   // A slow scripted response creates a real active SDK run without a paid model request.
   const app = await mount();
   try {
     const id = await app.newSession();
     app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("slow"); app.mockInput.pressEnter();
 
-    // A second Enter does not invent a steering policy or drop the user's draft.
+    await app.prompts[0]!.accepted;
+    // A second Enter admits a steer without interrupting the current response.
     await app.mockInput.typeText("querynx"); app.mockInput.pressEnter(); await app.renderOnce();
 
-    // Text input neither invokes sidebar commands nor starts another provider request.
-    expect(app.prompts).toHaveLength(1);
-    expect(app.captureCharFrame()).toContain("querynx");
-    expect(app.captureCharFrame()).toContain("already running");
+    await app.prompts[1]!.accepted;
+    await app.renderOnce();
+    // Admission clears only accepted input and does not invoke sidebar actions.
+    expect(app.prompts).toHaveLength(2);
+    expect(app.prompts[1]!.text).toBe("querynx");
+    expect(app.captureCharFrame()).not.toContain("already running");
     expect(app.selection.sessionId).toBe(id);
     await app.registry.close(id);
     await app.prompts[0]!.done;

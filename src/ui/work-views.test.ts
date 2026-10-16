@@ -13,7 +13,7 @@ async function mount(actions: Partial<WorkspaceActions> = {}) {
   const selection = new WorkspaceSelection(demoWorkspace());
   const requests: string[] = [];
   const view = new WorkspaceView(app.renderer, selection, {
-    onNewSession: () => requests.push("create"), onCloseSession: () => requests.push("close"), onPrompt: () => requests.push("prompt"),
+    onNewSession: () => requests.push("create"), onCloseSession: () => requests.push("close"), onPrompt: () => { requests.push("prompt"); return ok(undefined); },
     getSessionDetails: () => ({ status: "complete", output: Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n"), error: null }), ...actions,
   });
   await app.renderOnce(); await app.renderOnce();
