@@ -1,4 +1,4 @@
-export const contexts = ["workspace", "search", "history", "session-tabs", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "none"] as const;
+export const contexts = ["workspace", "search", "history", "history-search", "session-tabs", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "none"] as const;
 export type KeyContext = typeof contexts[number];
 export type KeyScope = KeyContext | "global" | "app" | "pty";
 export type BindingInput = { keys: string; scope: KeyScope };
@@ -41,10 +41,15 @@ export const defaultBindings = {
   "workspace.next": [key("j", "workspace"), key("down", "workspace")],
   "workspace.first": [key("home", "workspace")],
   "workspace.last": [key("end", "workspace")],
-  "history.refresh": [key("r", "history")],
-  "history.open": [key("enter", "history")],
-  "history.previous": [key("k", "history"), key("up", "history")],
-  "history.next": [key("j", "history"), key("down", "history")],
+  "history.show": [key("<leader> h")],
+  "history.dismiss": [key("escape", "history"), key("escape", "history-search")],
+  "history.preview": [key("ctrl+o", "history"), key("ctrl+o", "history-search")],
+  "history.page-up": [key("pageup", "history"), key("pageup", "history-search")],
+  "history.page-down": [key("pagedown", "history"), key("pagedown", "history-search")],
+  "history.refresh": [key("r", "history"), key("ctrl+r", "history"), key("ctrl+r", "history-search")],
+  "history.open": [key("enter", "history"), key("enter", "history-search")],
+  "history.previous": [key("k", "history"), key("up", "history"), key("ctrl+p", "history"), key("up", "history-search"), key("ctrl+p", "history-search")],
+  "history.next": [key("j", "history"), key("down", "history"), key("ctrl+n", "history"), key("down", "history-search"), key("ctrl+n", "history-search")],
   "history.first": [key("home", "history")],
   "history.last": [key("end", "history")],
   "agent.send": [key("enter", "prompt")],

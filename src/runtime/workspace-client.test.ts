@@ -29,6 +29,7 @@ function peer(repository: Repository) {
     create: (tree) => call(`create:${tree}`, `${id}-new`), resume: (tree) => call(`resume:${tree}`, `${id}-resumed`),
     prompt: (session, text) => call(`prompt:${session}:${text}`, undefined), complete: (session) => call(`complete:${session}`, { items: [], truncated: false }),
     closeSession: (session) => call(`close:${session}`, undefined), listHistory: (tree) => call(`history:${tree}`, []),
+    previewHistory: (tree, savedId) => call(`preview:${tree}:${savedId}`, { id: savedId, worktreeId: tree, text: "Read-only preview", truncated: false }),
     openEditor: (tree) => call(`editor:${tree}`, `${id}-editor`), createTerminal: (tree) => call(`terminal:${tree}`, `${id}-terminal`),
     attachEditor: async (pty) => { calls.push(`attach-editor:${pty}`); return err(new InputError("Fixture has no native editor.")); },
     attachTerminal: async (pty) => { calls.push(`attach-terminal:${pty}`); return err(new InputError("Fixture has no native terminal.")); },
@@ -46,6 +47,21 @@ async function isolated(run: (directory: string) => Promise<void>): Promise<void
   try { await run(directory); }
   finally { await rm(directory, { recursive: true, force: true }); }
 }
+
+test("history 미리보기는 워크트리 소유 런타임으로만 전달하고 취소 시 실행하지 않는다", () => isolated(async (stateRoot) => {
+  // A workspace combines two already-connected peers without merging their saved-session identities.
+  const a = repo("a"), b = repo("b"), pa = peer(a), pb = peer(b);
+  const workspace = expectOk(await WorkspaceClient.open([a, b], b.worktrees[0]!.path, { stateRoot, offline: true }, async (repository) => ok(repository.id === a.id ? pa.client : pb.client)));
+  try {
+    expect(expectOk(await workspace.previewHistory("b", "saved-b")).worktreeId).toBe("b");
+    expect(pb.calls).toContain("preview:b:saved-b"); expect(pa.calls).not.toContain("preview:b:saved-b");
+    const abort = new AbortController(); abort.abort();
+    expect(expectError(await workspace.previewHistory("a", "saved-a", abort.signal)).code).toBe("CANCELLED");
+    expect(pa.calls.some((call) => call.startsWith("preview:"))).toBe(false);
+    expect(expectError(await workspace.previewHistory("unknown", "saved")).code).toBe("INVALID_INPUT");
+    expect([...pa.calls, ...pb.calls].some((call) => call.startsWith("create:") || call.startsWith("prompt:"))).toBe(false);
+  } finally { await workspace.disconnect(); }
+}));
 
 test("모든 레포를 표시하되 최초 선택과 동시 작업 요청은 소유 런타임 하나만 지연 시작한다", () => isolated(async (stateRoot) => {
   // 탐색된 레포들은 보이지만 아직 어떤 데몬도 실행되지 않았다.

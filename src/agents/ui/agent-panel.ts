@@ -18,6 +18,7 @@ import { SubagentSummary } from "./subagent-summary.ts";
 
 export type AgentActions = {
   onNewSession: (worktreeId: string) => void;
+  onHistory?: () => void;
   onSelectSession?: (worktreeId: string, sessionId: string) => void;
   onCloseSession?: (worktreeId: string, sessionId: string) => void;
   onPrompt?: (sessionId: string, text: string) => Result<void, ExpectedError> | Promise<Result<void, ExpectedError>>;
@@ -64,6 +65,7 @@ export class AgentPanel {
     this.sessions = new SessionTabs(renderer, { button, changed,
       select: (id) => { if (this.worktree) actions.onSelectSession?.(this.worktree.id, id); },
       create: () => { if (this.worktree) actions.onNewSession(this.worktree.id); },
+      ...(actions.onHistory ? { history: actions.onHistory } : {}),
       close: (id) => { if (this.worktree) actions.onCloseSession?.(this.worktree.id, id); },
       keyHint: (command, context) => transcriptOptions.keyHint?.(command, context) ?? "",
     });

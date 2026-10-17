@@ -176,15 +176,18 @@ test("복원할 Editor 프로세스가 없으면 자동 실행하지 않고 명�
   } finally { await app.close(); }
 });
 
-test("History를 보고 있는 Editor에서도 탈출 키가 표시 중인 사이드바로 이동한다", async () => {
+test("Editor 위 History 팝업은 Esc에서 같은 입력·연결로 복귀하고 PTY로 키를 보내지 않는다", async () => {
   const editor = editorFixture(), app = await mount({ editor: editor.actions });
   try {
-    await app.click("History"); await app.click("Editor"); await app.visible("Editor buffer");
-
-    app.mockInput.pressKey("]", { ctrl: true }); await app.renderOnce();
-
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("history-list");
-    expect(app.captureCharFrame()).toContain("Editor buffer");
+    await app.click("Editor"); await app.visible("Editor buffer");
+    const input = app.renderer.currentFocusedRenderable;
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("h"); await app.renderOnce();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("history-search");
+    await app.mockInput.typeText("hjkl"); app.mockInput.pressEscape(); await app.renderOnce();
+    expect(app.renderer.currentFocusedRenderable).toBe(input);
+    expect(app.captureCharFrame()).toContain("Editor buffer"); expect(editor.opens).toEqual([]);
+    expect(editor.detaches).toEqual([]); expect(editor.inputs).toEqual([]);
+    expect(app.view.workViewPreferences.active["demo:main"]).toBe("editor");
   } finally { await app.close(); }
 });
 

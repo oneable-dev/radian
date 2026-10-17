@@ -37,8 +37,8 @@ export class KeyRouter {
     const complete = candidates.find((binding) => binding.keys.length === pending.keys.length);
     if (complete) {
       this.clear();
-      const once = complete.keys.length > 1 || complete.command === "completion.accept" || complete.command === "completion.dismiss";
-      // A held accept/dismiss key must not turn into Send or Leave after the completion context closes.
+      const once = complete.keys.length > 1 || complete.command === "completion.accept" || complete.command === "completion.dismiss" || complete.command === "history.open" || complete.command === "history.dismiss";
+      // Held overlay accept/dismiss keys must not become Send/Leave actions after that context closes.
       for (const name of pending.held) this.consumed.set(name, once);
       // A configured command with an unavailable target is still an app command.
       // Never turn a disabled close/focus action into literal edits in Neovim/a shell.

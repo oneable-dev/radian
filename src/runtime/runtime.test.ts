@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { WorkspaceSelection } from "../app/workspace-selection.ts";
@@ -380,9 +380,31 @@ test("IPC history는 워크트리별 SDK 기록을 열고 이미 열린 saved ID
     const saved = expectOk(await client.listHistory(main))[0]!;
     const file = (await app.manifest()).records.find((record) => record.id === a)!.sessionFile!;
 
+    // Preview is a separate read-only, instance-fenced route and must preserve the active runtime/file.
+    let bytes = await readFile(file, "utf8"); const count = Object.keys(client.snapshot.details).length;
+    const preview = expectOk(await client.previewHistory(main, saved.id));
+    expect(preview.sections?.[0]).toMatchObject({ kind: "user", text: "read" });
+    expect(preview.sections!.length).toBeLessThanOrEqual(3); expect(preview.text).toContain("read");
+    expect(Object.keys(client.snapshot.details)).toHaveLength(count); expect(await readFile(file, "utf8")).toBe(bytes);
+    expect(expectError(await client.previewHistory(feature, saved.id)).code).toBe("HISTORY_UNAVAILABLE");
+    for (const instance of [undefined, "obsolete"]) {
+      const response = await fetch(`http://localhost/history/preview?${new URLSearchParams({ worktreeId: main, savedId: saved.id })}`, {
+        unix: app.paths.socket, ...(instance ? { headers: { "X-Radian-Instance": instance } } : {}),
+      });
+      expect(response.status).toBe(422); await response.body?.cancel();
+    }
+
     // Existing and closed histories both use the resume boundary, never SDK switch/fork.
     expect(expectOk(await client.resume(main, saved.id))).toBe(a);
     await client.closeSession(a); await observed(client, (state) => state.closingCount === 0 && !state.details[a]);
+    // Extend only this closed fixture-owned file; a large SDK custom entry must not disable IPC preview.
+    const leaf = JSON.parse(bytes.trimEnd().split("\n").at(-1)!).id;
+    await appendFile(file, JSON.stringify({ type: "custom", id: "large-history-preview", parentId: leaf, timestamp: new Date().toISOString(),
+      customType: "preview-size-fixture", data: "x".repeat(5 * 1024 * 1024) }) + "\n");
+    bytes = await readFile(file, "utf8");
+    const largePreview = expectOk(await client.previewHistory(main, saved.id));
+    expect(largePreview.text).toContain("read"); expect(largePreview.sections!.length).toBeLessThanOrEqual(3);
+    expect(client.snapshot.details[a]).toBeUndefined(); expect(await readFile(file, "utf8")).toBe(bytes);
     const reopened = expectOk(await client.resume(main, saved.id));
 
     // The same file/context appears as another open item, and cross-worktree IDs stay rejected.

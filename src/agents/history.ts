@@ -4,6 +4,8 @@ import type { Repository } from "../workspace/model.ts";
 import { validateHistory, type SessionRegistry } from "./session-registry.ts";
 import { capture, HistoryError, SessionError, StorageError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
+import { CancelledError } from "../errors.ts";
+import { readHistoryPreview, type HistoryPreview } from "./history-preview.ts";
 
 export type HistoryItem = {
   readonly id: string;
@@ -25,6 +27,15 @@ export class SessionHistory {
   async list(worktreeId: string): Promise<Result<readonly HistoryItem[], ExpectedError>> {
     const saved = await this.saved(worktreeId);
     return saved.ok ? ok(saved.value.map(({ path: _path, ...item }) => item)) : saved;
+  }
+
+  async preview(worktreeId: string, savedId: string, signal?: AbortSignal): Promise<Result<HistoryPreview, ExpectedError>> {
+    if (signal?.aborted) return err(new CancelledError());
+    const saved = await this.saved(worktreeId); if (!saved.ok) return saved;
+    if (signal?.aborted) return err(new CancelledError());
+    const item = saved.value.find((entry) => entry.id === savedId);
+    if (!item) return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved session is not available in this worktree. Refresh history."));
+    return readHistoryPreview(item.path, worktreeId, savedId, signal);
   }
 
   async resume(worktreeId: string, savedId: string): Promise<Result<string, ExpectedError>> {

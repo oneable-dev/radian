@@ -88,18 +88,16 @@ test("History 버튼·조회 중 목록·사용 가능한 기록에 따라 표�
   const pending = Promise.withResolvers<readonly HistoryItem[]>();
   const app = await mount(() => pending.promise);
   try {
-    await app.click("Workspace"); app.mockInput.pressTab(); app.mockInput.pressEnter(); await app.renderOnce();
-    expect(app.footerLine()).toContain("Enter/Space Open History");
-    app.mockInput.pressTab(); await app.renderOnce();
-    expect(app.footerLine()).toContain("Enter/Space Refresh history");
-    app.mockInput.pressTab(); await app.renderOnce();
-    expect(app.footerLine()).toContain("r Refresh");
+    await app.click("History");
+    expect(app.footerLine()).toContain("Ctrl+r Refresh");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("history-search");
     expect(app.footerLine()).not.toContain("Enter Open");
 
     pending.resolve([saved("Available saved"), saved("Busy saved", "Still closing")]); await app.visible("Available saved");
 
     expect(app.footerLine()).toContain("Enter Open");
-    expect(app.footerLine()).toContain("k/j Select");
+    app.mockInput.pressTab(); await app.renderOnce();
+    expect(app.footerLine()).toContain("k Previous");
     expect(app.footerLine()).not.toContain("New session");
     app.mockInput.pressArrow("down"); await app.renderOnce();
     expect(app.footerLine()).not.toContain("Enter Open");

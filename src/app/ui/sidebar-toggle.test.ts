@@ -80,51 +80,41 @@ test("숨긴 패널은 Tab 대상에서 빠지고 검색·사이드바 포커스
   } finally { await app.close(); }
 });
 
-test("History의 현재 목록과 스크롤은 접기 왕복만으로 재조회하거나 초기화하지 않는다", async () => {
+test("History 팝업이 열려 있으면 sidebar 토글이 목록·스크롤·선택을 바꾸지 않는다", async () => {
+  // Modal navigation is independent of the sidebar, including its global toggle command.
   let lookups = 0;
   const app = await mount({ onListHistory: async () => { lookups++; return ok(Array.from({ length: 30 }, (_, i) => ({ id: `saved-${i}`,
     title: `Saved-${i}`, worktreeId: "demo:main", modified: "2026-10-17T00:00:00Z", messageCount: 1, openSessionId: null, unavailableReason: null }))); } });
   try {
-    const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes("History"));
-    await app.mockMouse.click(lines[y]!.indexOf("History"), y); await app.render();
+    app.leader("h"); await app.render();
     const list = app.get("history-list") as ScrollBoxRenderable; list.scrollTo(20); await app.render();
     const top = list.scrollTop, row = app.get("history:saved-10");
-
     await app.toggle(); await app.toggle();
-
-    expect(lookups).toBe(1); expect(list.scrollTop).toBe(top); expect(app.get("history:saved-10")).toBe(row);
-    expect(app.captureCharFrame()).toContain("Saved-10"); expect(app.requests).toEqual([]);
+    expect(app.get("workspace-sidebar").visible).toBe(true); expect(lookups).toBe(1);
+    expect(list.scrollTop).toBe(top); expect(app.get("history:saved-10")).toBe(row); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("접힌 History는 연결 복구 갱신을 펼칠 때까지 미루고 숨은 스피너를 실행하지 않는다", async () => {
+test("닫힌 History는 sidebar 펼치기나 연결 복구만으로 조회하거나 스피너를 실행하지 않는다", async () => {
   let lookups = 0;
   const app = await mount({ onListHistory: async () => { lookups++; return ok([]); } });
   try {
-    const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes("History"));
-    await app.mockMouse.click(lines[y]!.indexOf("History"), y); await app.render();
-    await app.toggle();
-
+    app.leader("h"); await app.render(); app.mockInput.pressEscape(); await app.render(); await app.toggle();
     app.view.refreshHistory(); app.view.refreshHistory(); await app.render();
-
-    expect(lookups).toBe(1); expect(app.get("session-history").visible).toBe(false);
-    await app.toggle();
-    expect(lookups).toBe(2); expect(app.captureCharFrame()).toContain("No saved sessions");
+    expect(lookups).toBe(1); expect(app.get("session-history").visible).toBe(false); expect(app.get("history-loading").visible).toBe(false);
+    await app.toggle(); expect(lookups).toBe(1);
+    app.leader("h"); await app.render(); expect(lookups).toBe(2); expect(app.captureCharFrame()).toContain("No saved sessions");
   } finally { await app.close(); }
 });
 
-test("조회 중 History를 접으면 늦은 응답을 무시하고 다시 펼칠 때 조회를 재개한다", async () => {
+test("조회 중 History를 닫으면 늦은 응답을 무시하고 다시 열 때 조회를 재개한다", async () => {
   const pending = [Promise.withResolvers<ReturnType<typeof ok<never[]>>>(), Promise.withResolvers<ReturnType<typeof ok<never[]>>>()];
   let lookups = 0;
   const app = await mount({ onListHistory: () => pending[lookups++]!.promise });
   try {
-    const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes("History"));
-    await app.mockMouse.click(lines[y]!.indexOf("History"), y); await app.render();
-    expect(lookups).toBe(1);
-
-    await app.toggle(); pending[0]!.resolve(ok([])); await app.render();
-    await app.toggle();
-
+    app.leader("h"); await app.render(); expect(lookups).toBe(1);
+    app.mockInput.pressEscape(); await app.render(); pending[0]!.resolve(ok([])); await app.render();
+    app.leader("h"); await app.render();
     expect(lookups).toBe(2); pending[1]!.resolve(ok([])); await app.render();
     expect(app.captureCharFrame()).toContain("No saved sessions"); expect(app.requests).toEqual([]);
   } finally { for (const gate of pending) gate.resolve(ok([])); await app.close(); }

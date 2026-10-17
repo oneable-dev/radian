@@ -103,6 +103,10 @@ export type RuntimeManifest = Omit<Static<typeof manifestSchema>, "repositories"
 export const historySchema = Type.Array(Type.Object({ id, worktreeId: id, title: Type.String(), modified: Type.String(),
   messageCount: Type.Integer({ minimum: 0 }), openSessionId: Type.Union([id, Type.Null()]), unavailableReason: Type.Union([Type.String(), Type.Null()]),
 }));
+export const historyPreviewSchema = Type.Object({ id, worktreeId: id, text: Type.String({ maxLength: 65536 }), truncated: Type.Boolean(),
+  sections: Type.Optional(Type.Array(Type.Object({ ...transcriptSection.properties, text: Type.String({ maxLength: 8192 }) }), { maxItems: 6 })),
+});
+export const historyPreviewQuerySchema = Type.Object({ worktreeId: id, savedId: id }, { additionalProperties: false });
 const size = { cols: Type.Integer({ minimum: 2, maximum: 500 }), rows: Type.Integer({ minimum: 1, maximum: 200 }) };
 const inputBytes = Type.String({ maxLength: 131072, pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$" });
 export const commandSchema = Type.Union([

@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
@@ -45,6 +45,45 @@ test("SDK 저장 기록은 선택 워크트리로 한정하고 제목·활동 �
     expect(list[0]?.openSessionId).toBe(main);
     expect(Number.isNaN(Date.parse(list[0]!.modified))).toBe(false);
     expect(list[0]!.messageCount).toBeGreaterThan(0);
+  } finally { await app.cleanup(); }
+});
+
+test("미리보기는 열린·닫힌 기록을 읽기만 하고 다른 워크트리 ID는 거절한다", async () => {
+  // The offline SDK fixture owns all files; no preview may initialize an executor.
+  const app = await setup();
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
+    const saved = expectOk(await app.history.list(app.main.id))[0]!, file = app.registry.sessionFile(id)!;
+    const before = await readFile(file, "utf8"), records = app.registry.records;
+    expect(expectOk(await app.history.preview(app.main.id, saved.id)).text).toContain("read");
+    expect(app.registry.records).toEqual(records); expect(await readFile(file, "utf8")).toBe(before);
+    expect(expectError(await app.history.preview(app.feature.id, saved.id)).code).toBe("HISTORY_UNAVAILABLE");
+    expect(expectError(await app.history.preview(app.main.id, "unknown")).code).toBe("HISTORY_UNAVAILABLE");
+    expectOk(await app.registry.close(id));
+    expect(expectOk(await app.history.preview(app.main.id, saved.id)).text).toContain("read");
+    expect(app.registry.records).toEqual([]); expect(await readFile(file, "utf8")).toBe(before);
+  } finally { await app.cleanup(); }
+});
+
+test("실제 SDK 기록이 4MiB를 넘어도 닫힌 세션의 최신 세 섹션을 읽기만 한다", async () => {
+  // Close the fixture-owned writer before extending its JSONL, then use real SDK discovery.
+  const app = await setup();
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
+    const saved = expectOk(await app.history.list(app.main.id))[0]!, file = app.registry.sessionFile(id)!;
+    expectOk(await app.registry.close(id));
+    const entries = (await readFile(file, "utf8")).trimEnd().split("\n").map((line) => JSON.parse(line));
+    const parent = entries.at(-1)!.id;
+    const timestamp = new Date().toISOString();
+    await appendFile(file, [
+      { type: "custom", id: "large-old", parentId: parent, timestamp, customType: "old-fixture-data", data: "x".repeat(5 * 1024 * 1024) },
+      { type: "message", id: "recent-q", parentId: "large-old", timestamp, message: { role: "user", content: "LATEST QUESTION", timestamp: Date.now() } },
+      { type: "message", id: "recent-a", parentId: "recent-q", timestamp, message: { role: "assistant", content: [{ type: "thinking", thinking: "LATEST PLAN" }, { type: "text", text: "LATEST ANSWER" }] } },
+    ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+    const before = await readFile(file, "utf8");
+    const preview = expectOk(await app.history.preview(app.main.id, saved.id));
+    expect(preview.sections?.map((section) => section.text)).toEqual(["LATEST QUESTION", "LATEST PLAN", "LATEST ANSWER"]);
+    expect(app.registry.records).toEqual([]); expect(await readFile(file, "utf8")).toBe(before);
   } finally { await app.cleanup(); }
 });
 

@@ -126,15 +126,15 @@ test("빈 워크트리의 생성 버튼은 요청만 보내며 선택이나 열�
   } finally { await app.close(); }
 });
 
-test("History 탭은 후속 UI임을 표시하고 선택을 유지한다", async () => {
-  // Workspace A has a selected session before changing the sidebar tab.
+test("History 팝업은 지원 없는 preview를 설명하고 선택을 유지한다", async () => {
+  // Workspace A stays selected while the modal presents an unavailable history provider.
   const app = await mount();
   try {
-    // Switching the tab hides the tree without changing workspace state.
+    // Opening history overlays navigation without changing workspace state.
     await app.clickText("History");
 
     // No history or resume operation is implied by the placeholder.
-    expect(app.captureCharFrame()).toContain("Session history UI is deferred.");
+    expect(app.captureCharFrame()).toContain("Session history is unavailable in this preview.");
     expect(app.selection.sessionId).toBe("a1");
   } finally { await app.close(); }
 });
@@ -187,6 +187,7 @@ test("종류 아이콘은 왼쪽에 두고 부모·자식의 합산 상태는 �
     expect(app.treeFrame()).toContain(`${icons.branch} main`);
     expect(app.treeFrame()).not.toContain("UI review");
     expect(spinnerFrames.some((frame) => app.tabFrame("a1").includes(frame))).toBe(true);
+    await app.clickText("Session navigation");
     expect(app.tabFrame("a2")).toContain(workspaceIcons.complete);
     app.renderer.root.findDescendantById("agent-session-list")!.focus(); app.mockInput.pressKey("END");
     await app.renderOnce(); await app.renderOnce();
@@ -196,7 +197,7 @@ test("종류 아이콘은 왼쪽에 두고 부모·자식의 합산 상태는 �
   } finally { await app.close(); }
 });
 
-test("트리가 숨겨진 동안 주입한 실패 상태도 다시 표시할 때 선택과 무관하게 반영한다", async () => {
+test("History 팝업 뒤에서 바뀐 실패 상태도 닫은 뒤 선택과 무관하게 반영한다", async () => {
   // B is selected while A1's working child is tracked in the display snapshot.
   const app = await mount();
   try {
@@ -211,7 +212,7 @@ test("트리가 숨겨진 동안 주입한 실패 상태도 다시 표시할 때
         }),
       })),
     })));
-    await app.clickText("Workspace");
+    app.mockInput.pressEscape(); await app.renderOnce();
 
     // The aggregate changes without selecting A or changing repository/worktree types.
     expect(app.selection.sessionId).toBe("b1");

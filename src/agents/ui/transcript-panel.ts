@@ -26,6 +26,7 @@ export type TranscriptOptions = {
   changed(): void;
   focusPrompt(): void;
   initialScroll: Readonly<Record<string, number>>;
+  initialPosition?: "start" | "end";
   saveScroll(id: string, position: number): void;
   initialViews?: Readonly<Record<string, TranscriptViewState>>;
   saveView?(id: string, state: TranscriptViewState): void;
@@ -130,11 +131,11 @@ export class TranscriptPanel {
     this.legacy = sections === undefined;
     if (id && !this.views[id]) {
       this.views[id] = emptyTranscriptView();
-      if (Object.hasOwn(this.positions, id)) this.views[id]!.follow = false;
+      if (Object.hasOwn(this.positions, id) || this.options.initialPosition === "start") this.views[id]!.follow = false;
     }
     const state = this.state;
     let normalized = false;
-    if (switched || returning) this.pending = { position: id ? this.positions[id] ?? Infinity : 0 };
+    if (switched || returning) this.pending = { position: id ? this.positions[id] ?? (this.options.initialPosition === "start" ? 0 : Infinity) : 0 };
     if (switched) {
       this.syncing = true;
       try {
@@ -164,7 +165,8 @@ export class TranscriptPanel {
       this.order = next;
       if (state && !this.rows.has(state.selectedId ?? "")) {
         normalized = state.selectedId !== null;
-        state.selectedId = this.order[previousIndex < 0 ? this.order.length - 1 : Math.min(previousIndex, this.order.length - 1)] ?? null;
+        const initialIndex = this.options.initialPosition === "start" ? 0 : this.order.length - 1;
+        state.selectedId = this.order[previousIndex < 0 ? initialIndex : Math.min(previousIndex, this.order.length - 1)] ?? null;
         state.mode = "sections"; state.anchor = null; delete state.linewise;
       }
       if (state?.follow) {

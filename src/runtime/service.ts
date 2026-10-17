@@ -17,7 +17,7 @@ import { acquireRuntime, privateDirectory, RuntimeStore, runtimePaths } from "./
 import { EditorSessions } from "../editor/sessions.ts";
 import { TerminalSessions } from "../terminal/sessions.ts";
 import { snapshotEvents } from "./events.ts";
-import { emptyPreferences, errorStatus, maxFrameBytes, parseCommand, protocolVersion, wireError,
+import { emptyPreferences, errorStatus, historyPreviewQuerySchema, maxFrameBytes, parseCommand, protocolVersion, wireError,
   type RuntimeCommand, type RuntimeManifest, type RuntimePreferences, type RuntimeSnapshot } from "./protocol.ts";
 
 export async function runRuntime(cwd: string, offline: boolean, stateRoot?: string): Promise<void> {
@@ -107,7 +107,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "agent-telemetry", "provider-usage", "prompt-completion"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "agent-telemetry", "provider-usage", "prompt-completion"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || this.notice, editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
@@ -134,6 +134,14 @@ class WorkspaceRuntime {
         if (!Value.Check(completionQuerySchema, query)) return this.rejected(new InputError("Malformed completion query."));
         const result = await this.registry.complete(query.sessionId, query, request.signal);
         return result.ok ? Response.json(result.value) : this.rejected(result.error);
+      }
+      if (path === "/history/preview" && request.method === "GET") {
+        if (expectedInstance !== this.instance) return this.rejected(new ProtocolError("History preview requires the current runtime instance identity."));
+        if (this.stopped) return this.rejected(new SessionError("RUNTIME_STOPPING", "Runtime is stopping."));
+        const query = Object.fromEntries(new URL(request.url).searchParams);
+        if (!Value.Check(historyPreviewQuerySchema, query)) return this.rejected(new InputError("Malformed history preview query."));
+        const preview = await this.history.preview(query.worktreeId, query.savedId, request.signal);
+        return preview.ok ? Response.json(preview.value) : this.rejected(preview.error);
       }
       if (path === "/history" && request.method === "GET") {
         const worktreeId = new URL(request.url).searchParams.get("worktreeId");

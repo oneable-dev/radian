@@ -8,7 +8,7 @@ import { runtimePaths, RuntimeStore } from "./storage.ts";
 import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
 
 // Keep repo identity and instance fencing inside the existing clients, including PTY leases.
-export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "prompt" | "complete" | "closeSession" | "listHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect">;
+export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "prompt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect">;
 type Connector = (repository: Repository, cwd: string, options: ConnectOptions) => Promise<Result<RepositoryClient | null, ExpectedError>>;
 type Entry = { repository: Repository; preferences: RuntimePreferences; client?: RepositoryClient; unsubscribe?: () => void;
   pending?: Promise<Result<RepositoryClient, ExpectedError>>; saving?: Promise<Result<void, ExpectedError>>; error?: ExpectedError; warning?: string; sessions: Set<string>; editors: Set<string>; terminals: Set<string> };
@@ -130,9 +130,19 @@ export class WorkspaceClient {
     const client = await this.ensure(entry.value); if (!client.ok) return client;
     const result = await client.value.resume(worktreeId, savedId); if (result.ok) entry.value.sessions.add(result.value); return result;
   }
-  async listHistory(worktreeId: string): ReturnType<RuntimeClient["listHistory"]> {
+  async listHistory(worktreeId: string, signal?: AbortSignal): ReturnType<RuntimeClient["listHistory"]> {
+    if (signal?.aborted) return err(new CancelledError());
     const entry = this.worktreeOwner(worktreeId); if (!entry.ok) return entry;
-    const client = await this.ensure(entry.value); return client.ok ? client.value.listHistory(worktreeId) : client;
+    const client = await this.ensure(entry.value);
+    if (signal?.aborted) return err(new CancelledError());
+    return client.ok ? client.value.listHistory(worktreeId, signal) : client;
+  }
+  async previewHistory(worktreeId: string, savedId: string, signal?: AbortSignal): ReturnType<RuntimeClient["previewHistory"]> {
+    if (signal?.aborted) return err(new CancelledError());
+    const entry = this.worktreeOwner(worktreeId); if (!entry.ok) return entry;
+    const client = await this.ensure(entry.value); if (!client.ok) return client;
+    if (signal?.aborted) return err(new CancelledError());
+    return client.value.previewHistory(worktreeId, savedId, signal);
   }
   async prompt(...args: Parameters<RuntimeClient["prompt"]>): ReturnType<RuntimeClient["prompt"]> {
     const entry = this.sessionOwner(args[0]); return entry.ok ? entry.value.client!.prompt(...args) : entry;

@@ -12,6 +12,7 @@ import { sessionStatus } from "../../agents/status.ts";
 import { StatusIndicator } from "../../agents/ui/status-indicator.ts";
 import { AgentPanel, type AgentActions } from "../../agents/ui/agent-panel.ts";
 import type { HistoryItem } from "../../agents/history.ts";
+import type { HistoryPreview } from "../../agents/history-preview.ts";
 import { SessionHistoryPanel } from "../../agents/ui/history-panel.ts";
 import { Footer, type FooterShortcut } from "../../ui/footer.ts";
 import { Button } from "../../ui/button.ts";
@@ -32,7 +33,8 @@ import type { ThemeRole } from "../../ui/theme-config.ts";
 export type WorkbenchActions = AgentActions & {
   onCloseSession: (worktreeId: string, sessionId: string) => void;
   getRetainedSessionIds?: () => ReadonlySet<string>;
-  onListHistory?: (worktreeId: string) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
+  onListHistory?: (worktreeId: string, signal?: AbortSignal) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
+  onPreviewHistory?: (worktreeId: string, savedId: string, signal?: AbortSignal) => Promise<Result<HistoryPreview, ExpectedError>>;
   onResumeSession?: (worktreeId: string, savedId: string) => Promise<Result<string, ExpectedError>>;
   editor?: EditorActions;
   terminal?: TerminalActions;
@@ -73,11 +75,8 @@ export class Workbench {
   private readonly keymap: Keymap;
   private readonly router: KeyRouter;
   private readonly workspaceTab: Button;
-  private readonly historyTab: Button;
   private readonly rows = new Map<string, RowView>();
   private rowOrder: string[] = [];
-  private tab: "workspace" | "history" = "workspace";
-  private historyStale = false;
   private navigationKey: string | null = null;
   private lastScrolledKey: string | null = null;
   private navigationRevealPending = false;
@@ -107,10 +106,8 @@ export class Workbench {
       textColor: colors.text, backgroundColor: colors.panel, focusedBackgroundColor: colors.selected,
     });
     const tabs = this.sidebarTabs = new BoxRenderable(renderer, { height: 3, paddingY: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    this.workspaceTab = this.button("Workspace", () => this.setTab("workspace"), "Open Workspace");
-    this.historyTab = this.button("History", () => this.setTab("history"), "Open History");
+    this.workspaceTab = this.button("Workspace", () => this.focusNavigation(), "Open Workspace");
     tabs.add(this.workspaceTab);
-    tabs.add(this.historyTab);
     this.sidebar.add(tabs);
     this.searchBox.add(this.search); this.sidebar.add(this.searchBox);
     this.tree = new ScrollBoxRenderable(renderer, {
@@ -121,18 +118,18 @@ export class Workbench {
     this.history = new SessionHistoryPanel(renderer, {
       ...(actions.onListHistory ? { list: actions.onListHistory } : {}),
       ...(actions.onResumeSession ? { resume: actions.onResumeSession } : {}),
-      button: (label, activate) => this.button(label, activate, "Refresh history"),
+      ...(actions.onPreviewHistory ? { preview: actions.onPreviewHistory } : {}),
       onChange: () => this.updateFooter(),
-      keyHint: (command) => this.keymap.hint(command, "history"),
+      keyHint: (command, context) => this.keymap.hint(command, context),
       onError: (message) => this.setNotice(message),
+      onCloseFallback: () => this.focusNavigation(),
       onOpened: (worktreeId, sessionId) => {
         this.activateSession(worktreeId, sessionId);
-        this.setTab("workspace"); this.focusNavigation();
+        if (this.agent.active) this.agent.focusTranscript(); else this.agent.focusTargets[0]?.focus();
       },
     });
     this.sidebar.add(this.resultMessage);
     this.sidebar.add(this.tree);
-    this.sidebar.add(this.history.root);
     this.workPanel = new BoxRenderable(renderer, { id: "work-panel", flexGrow: 1, minWidth: 0, flexDirection: "column" });
     const workTabs = this.viewTabs = new BoxRenderable(renderer, { id: "work-view-tabs", height: 3, paddingY: 1, flexShrink: 0, flexDirection: "row", paddingX: 1 });
     this.workTabs = {
@@ -146,7 +143,7 @@ export class Workbench {
     this.workContext.flexGrow = 1; this.workContext.flexShrink = 1; this.workContext.minWidth = 0;
     this.workContext.textAlign = "right"; workTabs.add(this.workContext);
     this.workPanel.add(workTabs);
-    this.agent = new AgentPanel(renderer, { ...actions, onSelectSession: (tree, id) => this.activateSession(tree, id) }, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
+    this.agent = new AgentPanel(renderer, { ...actions, onHistory: () => this.history.show(this.selection.worktree), onSelectSession: (tree, id) => this.activateSession(tree, id) }, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
       (message) => this.setNotice(message), () => this.updateFooter(), () => this.focusNavigation(), this.workViews.agentScroll,
       (id, position) => { this.workViews.agentScroll[id] = position; this.saveWorkViews(); }, {
         ...(this.workViews.agentViews ? { initialViews: this.workViews.agentViews } : {}),
@@ -175,7 +172,7 @@ export class Workbench {
     panels.add(this.workPanel);
     this.root.add(panels);
     this.footer = new Footer(renderer, `Radian ${packageInfo.version}`);
-    this.root.add(this.footer.root);
+    this.root.add(this.footer.root); this.root.add(this.history.root);
     renderer.root.add(this.root);
     this.router = new KeyRouter(renderer, this.keymap, () => this.keyContext(), (command) => this.commandAvailable(command), (command) => this.command(command));
     renderer.on("resize", this.resize);
@@ -207,12 +204,6 @@ export class Workbench {
     if (this.disposed || this.root.isDestroyed || this.sidebar.visible === visible) return;
     const focused = this.sidebar.hasFocusedDescendant;
     this.sidebar.visible = visible;
-    if (this.tab === "history") {
-      if (visible) {
-        this.history.show(this.selection.worktree, { refresh: this.historyStale });
-        this.historyStale = false;
-      } else this.history.hide();
-    }
     this.paintRows(this.visibleRows());
     if (!visible && focused) this.workTabs[this.displayedWorkView].focus();
     this.updateFooter();
@@ -220,7 +211,6 @@ export class Workbench {
 
   private focusNavigation(): void {
     if (!this.sidebar.visible) this.workTabs[this.displayedWorkView].focus();
-    else if (this.tab === "history") this.history.list.focus();
     else this.tree.focus();
   }
 
@@ -248,8 +238,9 @@ export class Workbench {
     const context = this.keyContext();
     const hint = (command: CommandId, label: string): FooterShortcut => ({ key: this.keymap.hint(command, context), label });
     const pair = (a: CommandId, b: CommandId, label: string): FooterShortcut => ({ key: [this.keymap.hint(a, context), this.keymap.hint(b, context)].filter(Boolean).join("/"), label });
-    if (focused === this.search) shortcuts = [hint("focus.results", this.tab === "history" ? "History" : "Results"), hint("search.clear", "Clear")];
-    else if (focused === this.tree && this.tab === "workspace") shortcuts = [
+    if (this.history.visible) shortcuts = this.history.shortcuts;
+    else if (focused === this.search) shortcuts = [hint("focus.results", "Results"), hint("search.clear", "Clear")];
+    else if (focused === this.tree) shortcuts = [
       pair("workspace.previous", "workspace.next", "Navigate"),
       ...(this.visibleRows().some((row) => row.kind === "worktree" && row.key === this.navigationKey) ? [hint("workspace.open", "Open worktree")] : []),
       pair("workspace.first", "workspace.last", "First/last"),
@@ -271,7 +262,6 @@ export class Workbench {
         ]
         : [...(this.agent.canSubmit ? [hint("agent.send", this.agent.working ? "Queue" : "Run")] : []), hint("focus.transcript", "Transcript"), hint("focus.sidebar", "Workspace")];
     } else if (context === "git" || context === "git-prompt") shortcuts = this.git.shortcuts;
-    else if (focused === this.history.list && this.tab === "history") shortcuts = this.history.shortcuts;
     else if (focused) {
       const label = this.buttonHints.get(focused);
       if (focused.visible && label) shortcuts = [{ key: this.keymap.hints("button.activate", "button"), label }];
@@ -280,9 +270,8 @@ export class Workbench {
   };
 
   refreshHistory(): void {
-    if (this.disposed || this.root.isDestroyed || this.tab !== "history") return;
-    if (this.sidebar.visible) this.history.show(this.selection.worktree);
-    else this.historyStale = true;
+    if (this.disposed || this.root.isDestroyed) return;
+    this.history.refreshVisible();
   }
 
   private text(content: string, role: ThemeRole = "text"): TextRenderable {
@@ -295,13 +284,6 @@ export class Workbench {
     const button = new Button(this.renderer, label, activate);
     this.buttonHints.set(button, actionLabel); this.buttonActions.set(button, activate);
     return button;
-  }
-
-  private setTab(tab: "workspace" | "history"): void {
-    this.tab = tab;
-    if (tab === "workspace") this.history.hide();
-    else { this.history.show(this.selection.worktree); this.historyStale = false; }
-    this.render();
   }
 
   private activateRow(row: WorkspaceRow): void {
@@ -339,6 +321,7 @@ export class Workbench {
   }
 
   private keyContext(): KeyContext {
+    if (this.history?.visible) return this.history.context;
     const focused = this.renderer.currentFocusedRenderable;
     if (!focused) return "none";
     const gitContext = this.git?.keyContext(); if (gitContext) return gitContext;
@@ -349,11 +332,13 @@ export class Workbench {
     if (focused === this.search) return "search";
     if (this.agent.sessionTabsFocused) return "session-tabs";
     if (focused === this.agent.prompt) return this.agent.completionOpen ? "prompt-completion" : "prompt";
-    if (focused === this.history.list) return "history";
     if (focused === this.agent.transcriptScroll) return "transcript";
     return "button";
   }
   private commandAvailable(command: CommandId): boolean {
+    if (this.history.visible) return command.startsWith("history.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
+    if (command === "history.show") return Boolean(this.selection.worktree);
+    if (command.startsWith("history.")) return false;
     if (command.startsWith("completion.")) return this.agent.completionAvailable(command);
     if (command.startsWith("session.")) return this.agent.sessionAvailable(command);
     if (command.startsWith("git.")) return this.git.available(command);
@@ -372,6 +357,8 @@ export class Workbench {
     }
   }
   private command(command: CommandId): void {
+    if (command === "history.show") { this.history.show(this.selection.worktree); return; }
+    if (command.startsWith("history.")) { this.history.command(command); return; }
     if (command.startsWith("completion.")) { this.agent.completionCommand(command); return; }
     if (command.startsWith("session.")) { this.agent.sessionCommand(command); return; }
     if (command.startsWith("git.")) { this.git.command(command); return; }
@@ -405,17 +392,15 @@ export class Workbench {
       case "workspace.next": this.moveTree("down"); break;
       case "workspace.first": this.moveTree("home"); break;
       case "workspace.last": this.moveTree("end"); break;
-      case "history.refresh": this.history.command("refresh"); break;
-      case "history.open": this.history.command("open"); break;
-      case "history.previous": this.history.command("previous"); break;
-      case "history.next": this.history.command("next"); break;
-      case "history.first": this.history.command("first"); break;
-      case "history.last": this.history.command("last"); break;
       case "agent.send": void this.agent.submitPrompt().catch((error: unknown) => this.setNotice(reportUnexpected(error, "prompt submission"))); break;
       case "button.activate": { const focused = this.renderer.currentFocusedRenderable; if (focused) this.buttonActions.get(focused)?.(); break; }
     }
   }
   private moveFocus(direction: 1 | -1): void {
+    if (this.history.visible) {
+      const targets = this.history.focusTargets, index = targets.indexOf(this.renderer.currentFocusedRenderable!);
+      targets[(index + direction + targets.length) % targets.length]?.focus(); return;
+    }
     if (this.git.modal) {
       const targets = this.git.focusTargets;
       const index = targets.indexOf(this.renderer.currentFocusedRenderable!);
@@ -423,12 +408,7 @@ export class Workbench {
     }
     const targets: Renderable[] = [];
     if (this.sidebar.visible) {
-      targets.push(this.search, this.workspaceTab, this.historyTab);
-      if (this.tab === "workspace") targets.push(this.tree);
-      else {
-        if (this.history.refreshButton.visible) targets.push(this.history.refreshButton);
-        targets.push(this.history.list);
-      }
+      targets.push(this.search, this.workspaceTab, this.tree);
     }
     targets.push(...Object.values(this.workTabs));
     targets.push(...this.agent.focusTargets);
@@ -539,10 +519,8 @@ export class Workbench {
     if (workView === "editor") this.editor.show(worktree); else this.editor.hide();
     if (workView === "terminal") this.terminals.show(worktree, worktree ? this.workViews.terminalSelection?.[worktree.id] : undefined); else this.terminals.hide();
     this.resultMessage.content = this.search.value ? "No matching workspaces" : "No repositories";
-    this.resultMessage.visible = this.tab === "workspace" && rows.length === 0;
-    this.tree.visible = this.tab === "workspace";
-    this.history.root.visible = this.sidebar.visible && this.tab === "history";
-    if (this.sidebar.visible && this.tab === "history") this.history.updateScope(worktree);
+    this.resultMessage.visible = rows.length === 0;
+    this.history.updateScope(worktree);
     this.paintTabs();
     if (this.navigationKey && this.navigationKey !== this.lastScrolledKey) {
       this.tree.scrollChildIntoView(this.navigationKey); this.navigationRevealPending = true;
@@ -576,15 +554,14 @@ export class Workbench {
       if (row.kind === "worktree" && view.status) {
         const statuses = row.worktree.sessions.map(sessionStatus);
         const status = statuses.includes("failure") ? "failure" : statuses.includes("working") ? "working" : null;
-        view.status.update(status, this.sidebar.visible && this.tab === "workspace" && status !== null);
+        view.status.update(status, this.sidebar.visible && status !== null);
         view.status.root.visible = status !== null;
       }
     }
   }
   private paintTabs(): void {
     for (const [name, tab] of Object.entries(this.workTabs)) tab.active = name === this.displayedWorkView;
-    this.workspaceTab.active = this.tab === "workspace";
-    this.historyTab.active = this.tab === "history";
+    this.workspaceTab.active = true;
   }
 
   dispose(): void {

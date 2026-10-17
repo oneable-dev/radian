@@ -474,7 +474,7 @@ the TUI to apply edits; the runtime and its processes do not need restarting. Th
 
 Spaces separate sequential keys (`"space r"` is a two-key leader); `+` combines modifiers.
 Use explicit `shift+c` for uppercase C. A string binding is global; an object can specify `scope`:
-`global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `session-tabs`, `prompt`, `prompt-completion`, `button`,
+`global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `history-search`, `session-tabs`, `prompt`, `prompt-completion`, `button`,
 `transcript` (section navigation), `transcript-text`, `transcript-visual`, `editor`, `terminal`,
 `git`, `git-prompt`, or `none`. An override replaces that command's defaults;
 `[]` disables it. Command IDs/defaults are defined in `src/keybindings/commands.ts`.
@@ -670,25 +670,47 @@ technical layers; neither feature depends on the other's implementation.
 
 ### Saved session history
 
-Select a worktree, then open **History**. The list uses SDK-provided conversation names (falling back
-to the first prompt or `Untitled session`), last activity and message count, newest first. It is scoped
-to that worktree even when the offline session directory is shared. Viewing or refreshing history
-never starts a model run or creates an open item. `Refresh history` / `r` reloads the selected scope;
-empty, loading, discovery and resume failures have distinct messages. The heading's shared loading
-spinner stays animated for at least 500 ms, without delaying results or errors. Leaving the tab or
-destroying the view cancels it immediately; the same component/policy applies to other UI loaders.
+History is a searchable popup, not a sidebar tab. Use **History** beside the Agents session controls,
+or **Ctrl+Space → h** (`history.show`) from any work view. Its scope is the active worktree, not the
+sidebar navigation cursor. The list uses SDK conversation names (falling back to the first prompt or
+`Untitled session`), last activity and message count, newest first, including in shared offline directories.
 
-Click a row, or `Tab` into the list and use j/k (or arrows), Home/End and `Enter`, to open its saved context.
-The original SDK session ID/file is retained without copying/forking; the open item becomes selected
-in Workspace. Already-open records select their existing item rather than create a second writer.
-Closing records and active owned-child writers are unavailable until cleanup finishes. Completed
-SDK child conversations can also appear in SDK history; this initial list does not invent a history
-retention/deletion or main-only filtering policy. History has no deletion action or name search;
-the top search field remains the existing workspace-name projection.
+Type a fuzzy title query, including Unicode text. Arrows or Ctrl+N/P move the candidate cursor without
+changing the live session; normal letters, including hjkl and r, remain search text. `Tab`/`Shift+Tab`
+cycle within the popup. The list additionally supports j/k and Home/End. `Enter` opens the selected
+context in Agents, or selects its existing open tab, without copying/forking the SDK file or sending a
+prompt. Clicking a row only selects its preview. `Esc` closes the popup and restores its original
+focus without changing drafts, transcript scroll, work views, sidebar visibility or PTY attachments.
+Global view/sidebar/session commands are inactive while the popup owns focus. Closing a popup while
+Open is pending does not cancel or roll back an accepted request; a late result never changes selection.
 
-History lookup is a capability added to the existing service protocol. A service started before this
-feature keeps its running jobs and is **not** automatically restarted. The UI reports that it lacks
-history support; finish its jobs and explicitly stop/restart that service to enable the new capability.
+Wide screens show the list and read-only conversation preview side by side. Below 100 columns,
+Ctrl+O switches between them; PageUp/PageDown scroll the preview. Preview reuses the Agent transcript
+component, including section cards, status/error styling and initially folded Thinking/tool sections.
+It shows at most the three newest sections of the saved current branch, in chronological order.
+A new unanswered prompt is not filled with the previous turn's replies; explicit skills remain name-only. This does not open a writable SDK session, load extensions or execute tools. Selection changes debounce preview requests for 150 ms;
+superseded/hidden queries are cancelled and stale responses ignored. The reader verifies the session
+header, then scans JSONL record offsets backwards in 64 KiB chunks and follows the active branch's
+parent IDs. It stops once the recent window and required tool-call associations are available, rather
+than loading or size-rejecting the entire file. Older unneeded record bodies are not decoded or validated;
+opening a closed session still validates the complete history. Safety limits apply to individual records (16 MiB),
+the retained association working set (32 MiB), header size (64 KiB) and lookup time (5 seconds), not
+total file size. Each returned section body is capped at 8,192 UTF-16
+units with an explicit truncation notice; the compatibility text field remains capped at 65,536 units. The title query searches all returned metadata locally; at most 200
+matching rows render at once, with a prompt to refine larger result sets. Full-message search is not
+implemented. Ctrl+R refreshes metadata (`r` also works while the list has focus). Shared loading spinners
+remain visible for at least 500 ms without delaying results or errors, and cancel on close/disposal.
+Empty history, no matches, discovery failures, preview failures and Open failures remain distinct.
+
+Closing records and active owned-child writers cannot be opened until cleanup finishes. Completed
+SDK child conversations can appear in history; there is no new deletion, retention or main-only filter.
+The sidebar search remains exclusively the workspace-name projection. A worktree change closes an
+open popup rather than admitting an outdated selection into the new scope.
+
+The additive `history-preview` capability uses an instance-fenced read-only GET endpoint. Older
+services keep their running jobs and are **not** restarted automatically: title search and Open remain
+available when `history` is supported, while preview explains that an explicit service restart is
+needed after saving/finishing work. Services without `history` report that missing capability.
 
 ### Error contracts
 

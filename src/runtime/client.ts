@@ -4,9 +4,10 @@ import { resolve } from "node:path";
 import { Value } from "typebox/value";
 import type { Repository } from "../workspace/model.ts";
 import type { HistoryItem } from "../agents/history.ts";
+import type { HistoryPreview } from "../agents/history-preview.ts";
 import { CapabilityError, CancelledError, capture, ConnectionError, InputError, parseJson, ProtocolError, reportUnexpected, systemCode, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
-import { emptyPreferences, historySchema, maxFrameBytes, parseSnapshot, replySchema, type RuntimeCommand, type RuntimePreferences, type RuntimeSnapshot, type EditorFrame } from "./protocol.ts";
+import { emptyPreferences, historySchema, historyPreviewSchema, historyPreviewQuerySchema, maxFrameBytes, parseSnapshot, replySchema, type RuntimeCommand, type RuntimePreferences, type RuntimeSnapshot, type EditorFrame } from "./protocol.ts";
 import { privateDirectory, runtimePaths, type RuntimePaths } from "./storage.ts";
 import { connectionError, readJson, remoteError, transport } from "./transport.ts";
 import { PtyConnection } from "./pty/client.ts";
@@ -178,15 +179,39 @@ export class RuntimeClient {
     if (!response.value.ok) return Value.Check(replySchema, body.value) && !body.value.ok ? err(remoteError(body.value.error)) : err(new ProtocolError("Malformed completion failure response."));
     return Value.Check(completionResultSchema, body.value) ? ok(body.value) : err(new ProtocolError("Malformed completion response."));
   }
-  async listHistory(worktreeId: string): Promise<Result<readonly HistoryItem[], ExpectedError>> {
+  async listHistory(worktreeId: string, signal?: AbortSignal): Promise<Result<readonly HistoryItem[], ExpectedError>> {
     const capability = this.requireHistory(); if (!capability.ok) return capability;
-    const response = await transport(this.paths, `/history?worktreeId=${encodeURIComponent(worktreeId)}`, { signal: AbortSignal.timeout(15000) });
-    if (!response.ok) return response;
-    const body = await readJson(response.value); if (!body.ok) return body;
+    if (signal?.aborted) return err(new CancelledError());
+    const epoch = this.connectionEpoch, instance = this.state.instance;
+    const abort = AbortSignal.any([this.streamAbort.signal, AbortSignal.timeout(15000), ...(signal ? [signal] : [])]);
+    const attempted = await capture(() => transport(this.paths, `/history?worktreeId=${encodeURIComponent(worktreeId)}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
+    if (!attempted.ok) return attempted;
+    const response = attempted.value; if (!response.ok) return response;
+    const decoded = await capture(() => readJson(response.value)); if (!decoded.ok) return decoded;
+    const body = decoded.value; if (!body.ok) return body;
+    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance) return err(new CancelledError("History belongs to an outdated connection."));
     if (!response.value.ok) {
       return Value.Check(replySchema, body.value) && !body.value.ok ? err(remoteError(body.value.error)) : err(new ProtocolError("Malformed history failure response."));
     }
-    return Value.Check(historySchema, body.value) ? ok(body.value) : err(new ProtocolError("Malformed history response."));
+    return Value.Check(historySchema, body.value) && body.value.every((item) => item.worktreeId === worktreeId) ? ok(body.value) : err(new ProtocolError("Malformed or mismatched history response."));
+  }
+  async previewHistory(worktreeId: string, savedId: string, signal?: AbortSignal): Promise<Result<HistoryPreview, ExpectedError>> {
+    if (this.detaching || this.failure) return err(this.connectionClosed());
+    if (!this.state.capabilities?.includes("history-preview")) return err(new CapabilityError("Running service predates history preview. Save work and restart it explicitly when ready; no service was restarted. Search and Open remain available."));
+    if (signal?.aborted) return err(new CancelledError());
+    if (!Value.Check(historyPreviewQuerySchema, { worktreeId, savedId })) return err(new InputError("Invalid history preview identity."));
+    const instance = this.state.instance, epoch = this.connectionEpoch;
+    const abort = AbortSignal.any([this.streamAbort.signal, AbortSignal.timeout(8000), ...(signal ? [signal] : [])]);
+    const response = await capture(() => transport(this.paths, `/history/preview?${new URLSearchParams({ worktreeId, savedId })}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
+    if (!response.ok) return response;
+    if (!response.value.ok) return response.value;
+    const reply = response.value.value;
+    const decoded = await capture(() => readJson(reply)); if (!decoded.ok) return decoded;
+    if (!decoded.value.ok) return decoded.value;
+    if (epoch !== this.connectionEpoch || instance !== this.state.instance || signal?.aborted) return err(new CancelledError("History preview belongs to an outdated connection."));
+    const body = decoded.value.value;
+    if (!reply.ok) return Value.Check(replySchema, body) && !body.ok ? err(remoteError(body.error)) : err(new ProtocolError("Malformed history preview failure response."));
+    return Value.Check(historyPreviewSchema, body) && body.id === savedId && body.worktreeId === worktreeId ? ok(body) : err(new ProtocolError("Malformed or mismatched history preview response."));
   }
   async resume(worktreeId: string, savedId: string): Promise<Result<string, ExpectedError>> {
     const capability = this.requireHistory(); if (!capability.ok) return capability;
