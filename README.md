@@ -16,8 +16,10 @@ bun run start
 ```
 
 The app discovers the current Git repository's worktrees and shows an always-expanded
-workspace sidebar containing **repositories and worktrees only**. Worktree folders and branches
-share one row. Use `Tab`/`Shift+Tab` to move focus. `j/k`, arrows and Home/End move the tree cursor
+workspace sidebar containing **repositories and worktrees only**. Each worktree shows its folder
+name and branch on two lines, with the folder and branch icons aligned at the same horizontal level
+(no additional branch indentation or connector). Both lines form one selectable worktree item.
+Use `Tab`/`Shift+Tab` to move focus. `j/k`, arrows and Home/End move the tree cursor
 without changing the current workspace; **Enter** opens the highlighted worktree and restores its
 last work view/session. Mouse clicks open a worktree directly. Open sessions are tabs within Agents;
 focus that strip to use `h/l` (or left/right), Home/End, `n` for new and `x` for close.
@@ -57,6 +59,12 @@ tabs show their name and trailing aggregate status, with a close control and exp
 button. Session-tab selection and History resume open the chosen session in Agents. Restoring a
 selection, filtering and background snapshots never implicitly activate another work view.
 Session creation/closing retain their existing rules and never implicitly launch an editor.
+
+**Ctrl+Space, then b** toggles the entire left panel closed and open, without an extra toolbar button.
+The work pane takes the freed width without recreating Agent, Editor or Terminal instances.
+Selection, drafts, transcript positions and loaded History rows are retained. Focus/search
+commands reveal the panel when needed; hidden navigation controls are excluded from Tab traversal.
+This visibility state belongs to the current TUI, not the detached runtime or terminal configuration.
 
 Every worktree remembers its active tab. Agent retains its selected session, draft, transcript
 scroll position and section/cursor/folding state; Neovim retains its actual files, cursor, editing mode and unsaved buffers in the
@@ -390,7 +398,8 @@ and programs' explicit RGB colors or Neovim colorschemes remain unchanged.
 ### Keybindings
 
 The default leader is **Ctrl+Space**. Press and release it, then press `c` to detach radian,
-`1`/`2`/`3`/`4` to select Agents/Editor/Git/Terminal, `w` to focus the sidebar or `f` to focus search.
+`1`/`2`/`3`/`4` to select Agents/Editor/Git/Terminal, `b` to toggle the sidebar,
+`w` to reveal/focus the sidebar or `f` to reveal/focus search.
 `<leader> t` creates a terminal, `<leader> x` closes the selected terminal, and `<leader> [` / `]`
 select the previous/next terminal while the Terminal view is active.
 Ctrl+C is not intercepted by default: Neovim and shells receive it as native input.

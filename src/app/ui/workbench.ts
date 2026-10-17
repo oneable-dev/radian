@@ -7,6 +7,7 @@ import { workspaceRows, type WorkspaceRow } from "./workspace-rows.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { filterWorkspaces } from "../../workspace/filter-workspaces.ts";
 import { rowPresentation } from "./workspace-status.ts";
+import { icons } from "../../icons.ts";
 import { sessionStatus } from "../../agents/status.ts";
 import { StatusIndicator } from "../../agents/ui/status-indicator.ts";
 import { AgentPanel, type AgentActions } from "../../agents/ui/agent-panel.ts";
@@ -44,7 +45,7 @@ export type WorkbenchActions = AgentActions & {
   onDetach?: () => void;
 };
 
-type RowView = { box: BoxRenderable; text: TextRenderable; status?: StatusIndicator };
+type RowView = { box: BoxRenderable; text: TextRenderable; branch?: TextRenderable; status?: StatusIndicator };
 
 export class Workbench {
   readonly root: BoxRenderable;
@@ -74,6 +75,7 @@ export class Workbench {
   private readonly rows = new Map<string, RowView>();
   private rowOrder: string[] = [];
   private tab: "workspace" | "history" = "workspace";
+  private historyStale = false;
   private navigationKey: string | null = null;
   private lastScrolledKey: string | null = null;
   private activeWorktreeId: string | null = null;
@@ -117,7 +119,7 @@ export class Workbench {
       onError: (message) => this.setNotice(message),
       onOpened: (worktreeId, sessionId) => {
         this.activateSession(worktreeId, sessionId);
-        this.setTab("workspace"); this.tree.focus();
+        this.setTab("workspace"); this.focusNavigation();
       },
     });
     this.sidebar.add(this.resultMessage);
@@ -137,7 +139,7 @@ export class Workbench {
     this.workContext.textAlign = "right"; workTabs.add(this.workContext);
     this.workPanel.add(workTabs);
     this.agent = new AgentPanel(renderer, { ...actions, onSelectSession: (tree, id) => this.activateSession(tree, id) }, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
-      (message) => this.setNotice(message), () => this.updateFooter(), () => this.tree.focus(), this.workViews.agentScroll,
+      (message) => this.setNotice(message), () => this.updateFooter(), () => this.focusNavigation(), this.workViews.agentScroll,
       (id, position) => { this.workViews.agentScroll[id] = position; this.saveWorkViews(); }, {
         ...(this.workViews.agentViews ? { initialViews: this.workViews.agentViews } : {}),
         saveView: (id, state) => { (this.workViews.agentViews ??= {})[id] = state; this.saveWorkViews(); },
@@ -190,6 +192,27 @@ export class Workbench {
   }
 
   get workViewPreferences(): WorkViewPreferences { return structuredClone(this.workViews); }
+
+  private setSidebarVisible(visible: boolean): void {
+    if (this.disposed || this.root.isDestroyed || this.sidebar.visible === visible) return;
+    const focused = this.sidebar.hasFocusedDescendant;
+    this.sidebar.visible = visible;
+    if (this.tab === "history") {
+      if (visible) {
+        this.history.show(this.selection.worktree, { refresh: this.historyStale });
+        this.historyStale = false;
+      } else this.history.hide();
+    }
+    this.paintRows(this.visibleRows());
+    if (!visible && focused) this.workTabs[this.displayedWorkView].focus();
+    this.updateFooter();
+  }
+
+  private focusNavigation(): void {
+    if (!this.sidebar.visible) this.workTabs[this.displayedWorkView].focus();
+    else if (this.tab === "history") this.history.list.focus();
+    else this.tree.focus();
+  }
 
   private saveWorkViews(): void { this.actions.onWorkViewsChange?.(this.workViewPreferences); }
   private selectWorkView(view: WorkView, explicit = false): void {
@@ -247,7 +270,9 @@ export class Workbench {
   };
 
   refreshHistory(): void {
-    if (!this.disposed && !this.root.isDestroyed && this.tab === "history") this.history.show(this.selection.worktree);
+    if (this.disposed || this.root.isDestroyed || this.tab !== "history") return;
+    if (this.sidebar.visible) this.history.show(this.selection.worktree);
+    else this.historyStale = true;
   }
 
   private text(content: string, role: ThemeRole = "text"): TextRenderable {
@@ -265,7 +290,7 @@ export class Workbench {
   private setTab(tab: "workspace" | "history"): void {
     this.tab = tab;
     if (tab === "workspace") this.history.hide();
-    else this.history.show(this.selection.worktree);
+    else { this.history.show(this.selection.worktree); this.historyStale = false; }
     this.render();
   }
 
@@ -343,8 +368,9 @@ export class Workbench {
     if (command.startsWith("transcript.")) { this.agent.transcriptCommand(command); return; }
     switch (command) {
       case "app.detach": this.actions.onDetach?.(); break;
-      case "focus.sidebar": case "focus.results": if (this.tab === "history") this.history.list.focus(); else this.tree.focus(); break;
-      case "focus.search": this.search.focus(); break;
+      case "sidebar.toggle": this.setSidebarVisible(!this.sidebar.visible); break;
+      case "focus.sidebar": case "focus.results": this.setSidebarVisible(true); this.focusNavigation(); break;
+      case "focus.search": this.setSidebarVisible(true); this.search.focus(); break;
       case "focus.prompt": this.agent.prompt.focus(); break;
       case "focus.transcript": this.agent.focusTranscript(); break;
       case "focus.next": this.moveFocus(1); break;
@@ -385,11 +411,14 @@ export class Workbench {
       const index = targets.indexOf(this.renderer.currentFocusedRenderable!);
       targets[(index + direction + targets.length) % targets.length]?.focus(); return;
     }
-    const targets: Renderable[] = [this.search, this.workspaceTab, this.historyTab];
-    if (this.tab === "workspace") targets.push(this.tree);
-    else {
-      if (this.history.refreshButton.visible) targets.push(this.history.refreshButton);
-      targets.push(this.history.list);
+    const targets: Renderable[] = [];
+    if (this.sidebar.visible) {
+      targets.push(this.search, this.workspaceTab, this.historyTab);
+      if (this.tab === "workspace") targets.push(this.tree);
+      else {
+        if (this.history.refreshButton.visible) targets.push(this.history.refreshButton);
+        targets.push(this.history.list);
+      }
     }
     targets.push(...Object.values(this.workTabs));
     targets.push(...this.agent.focusTargets);
@@ -428,7 +457,8 @@ export class Workbench {
       this.rows.clear();
       for (const row of rows) {
         const box = new BoxRenderable(this.renderer, {
-          id: row.key, height: 1, flexShrink: 0, flexDirection: "row", paddingLeft: row.depth * 2,
+          id: row.key, height: row.kind === "worktree" ? 2 : 1, flexShrink: 0, minWidth: 0,
+          flexDirection: "column", paddingLeft: row.depth * 2,
           onMouseDown: (event) => {
             if (event.button !== 0 || row.kind !== "worktree") return;
             event.preventDefault();
@@ -436,18 +466,24 @@ export class Workbench {
             this.activateRow(row);
           },
         });
+        const heading = new BoxRenderable(this.renderer, { width: "100%", height: 1, flexShrink: 0, minWidth: 0, flexDirection: "row" });
         const text = new TextRenderable(this.renderer, { content: row.label, height: 1, wrapMode: "none", selectable: false });
         text.flexGrow = 1;
         text.flexShrink = 1;
         text.minWidth = 0;
-        box.add(text);
+        heading.add(text); box.add(heading);
         const status = row.kind === "worktree" ? new StatusIndicator(this.renderer) : undefined;
         if (status) {
           const slot = new BoxRenderable(this.renderer, { width: 2, height: 1, flexShrink: 0 });
-          slot.add(status.root); box.add(slot);
+          slot.add(status.root); heading.add(slot);
         }
+        // Both lines belong to one navigation/click target and use the same horizontal inset.
+        const branch = row.kind === "worktree" ? new TextRenderable(this.renderer, {
+          width: "100%", height: 1, flexShrink: 0, minWidth: 0, wrapMode: "none", selectable: false,
+        }) : undefined;
+        if (branch) box.add(branch);
         this.tree.add(box);
-        this.rows.set(row.key, { box, text, ...(status ? { status } : {}) });
+        this.rows.set(row.key, { box, text, ...(branch ? { branch } : {}), ...(status ? { status } : {}) });
       }
       this.rowOrder = order;
       this.lastScrolledKey = null;
@@ -470,8 +506,8 @@ export class Workbench {
     this.resultMessage.content = this.search.value ? "No matching workspaces" : "No repositories";
     this.resultMessage.visible = this.tab === "workspace" && rows.length === 0;
     this.tree.visible = this.tab === "workspace";
-    this.history.root.visible = this.tab === "history";
-    if (this.tab === "history") this.history.updateScope(worktree);
+    this.history.root.visible = this.sidebar.visible && this.tab === "history";
+    if (this.sidebar.visible && this.tab === "history") this.history.updateScope(worktree);
     this.paintTabs();
     if (this.navigationKey && this.navigationKey !== this.lastScrolledKey) this.tree.scrollChildIntoView(this.navigationKey);
     this.lastScrolledKey = this.navigationKey;
@@ -491,14 +527,19 @@ export class Workbench {
       if (!view) continue;
       const presentation = rowPresentation(row);
       view.text.content = `${presentation.icon} ${row.label}`;
-      const cursor = row.key === this.navigationKey && this.tree.focused;
+      const cursor = row.key === this.navigationKey && this.tree.focused, active = this.selected(row);
       view.text.fg = cursor ? colors.accent : colors[presentation.color];
-      view.text.attributes = this.selected(row) ? TextAttributes.BOLD : 0;
-      view.box.backgroundColor = cursor ? selected : this.selected(row) ? colors.surface : colors.panel;
+      view.text.attributes = active ? TextAttributes.BOLD : 0;
+      view.box.backgroundColor = cursor ? selected : active ? colors.surface : colors.panel;
+      if (row.kind === "worktree" && view.branch) {
+        view.branch.content = `${icons.branch} ${row.worktree.branch ?? "detached HEAD"}`;
+        view.branch.fg = cursor ? colors.accent : active ? colors.text : colors.muted;
+        view.branch.attributes = active ? TextAttributes.BOLD : 0;
+      }
       if (row.kind === "worktree" && view.status) {
         const statuses = row.worktree.sessions.map(sessionStatus);
         const status = statuses.includes("failure") ? "failure" : statuses.includes("working") ? "working" : null;
-        view.status.update(status, this.tab === "workspace" && status !== null);
+        view.status.update(status, this.sidebar.visible && this.tab === "workspace" && status !== null);
         view.status.root.visible = status !== null;
       }
     }

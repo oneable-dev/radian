@@ -4,6 +4,7 @@ import { parseKeypress, TextAttributes } from "@opentui/core";
 import { Workbench } from "../../app/ui/workbench.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
+import { icons } from "../../icons.ts";
 import { ok } from "../../result.ts";
 import type { TerminalInfo, WorkViewPreferences } from "../../runtime/protocol.ts";
 import type { TerminalActions } from "./panel.ts";
@@ -58,9 +59,9 @@ test("Terminal은 명시적으로 여러 쉘을 만들고 워크트리별 목록
     app.leader("t"); await app.visible("Shell shell-2");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
     await app.click("Terminal 1", true); await app.visible("Shell shell-1");
-    await app.click("radian-ui (feature"); await app.click("Terminal", true); await app.click("+ New", true); await app.visible("Shell shell-3");
+    await app.click(`${icons.folder} radian-ui`); await app.click("Terminal", true); await app.click("+ New", true); await app.visible("Shell shell-3");
 
-    await app.click("radian (main)"); await app.visible("Shell shell-1");
+    await app.click(`${icons.folder} radian`); await app.visible("Shell shell-1");
 
     expect(app.view.workViewPreferences.terminalSelection).toEqual({ "demo:main": "shell-1", "demo:feature": "shell-3" });
     expect(app.created).toEqual(["demo:main", "demo:main", "demo:feature"]);
@@ -144,7 +145,7 @@ test("늦은 터미널 생성 결과는 다른 워크트리의 Git 화면이나 
   app.actions.create = async (tree, size) => { await ready.promise; return create(tree, size); };
   try {
     app.leader("t"); await app.renderOnce();
-    await app.click("radian-ui (feature"); await app.click("Git", true);
+    await app.click(`${icons.folder} radian-ui`); await app.click("Git", true);
     ready.resolve(ok("ready")); await Bun.sleep(0); await app.renderOnce();
 
     expect(app.selection.worktree?.id).toBe("demo:feature"); expect(app.captureCharFrame()).toContain("Git preview");

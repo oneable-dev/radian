@@ -32,6 +32,7 @@ export class SessionHistoryPanel {
   private cursor = 0;
   private generation = 0;
   private resuming = false;
+  private loading = false;
   private disposed = false;
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: HistoryActions) {
@@ -61,9 +62,10 @@ export class SessionHistoryPanel {
     ].filter((shortcut) => shortcut.key);
   }
 
-  show(worktree: Worktree | null): void {
+  show(worktree: Worktree | null, options: { refresh?: boolean } = {}): void {
+    const changed = this.worktree?.id !== worktree?.id;
     this.worktree = worktree; this.root.visible = true;
-    void this.refresh();
+    if (options.refresh !== false || changed || this.loading) void this.refresh();
   }
   hide(): void { this.root.visible = false; this.generation++; this.spinner.cancel(); }
   updateScope(worktree: Worktree | null): void {
@@ -73,7 +75,7 @@ export class SessionHistoryPanel {
 
   private async refresh(): Promise<void> {
     const generation = ++this.generation;
-    this.spinner.cancel();
+    this.loading = false; this.spinner.cancel();
     const selected = this.items[this.cursor]?.id;
     const worktree = this.worktree;
     this.items = []; this.clearRows();
@@ -83,11 +85,11 @@ export class SessionHistoryPanel {
     if (!this.actions.list) { this.message.content = "Session history UI is deferred."; return; }
     if (!worktree) { this.message.content = "No worktree selected"; return; }
     this.message.content = "";
-    this.spinner.start();
+    this.loading = true; this.spinner.start();
     let result: Result<readonly HistoryItem[], ExpectedError>;
     try { result = await this.actions.list(worktree.id); }
     catch (error) { this.showFailure(reportUnexpected(error, "history lookup"), generation); return; }
-    finally { if (this.current(generation)) this.spinner.stop(); }
+    finally { if (this.current(generation)) { this.loading = false; this.spinner.stop(); } }
     if (!this.current(generation)) return;
     if (!result.ok) { this.showFailure(`History error: ${result.error.message}`, generation); return; }
     const items = result.value;

@@ -11,6 +11,7 @@ const tabContexts = contexts.filter((context) => context !== "editor" && context
 
 export const defaultBindings = {
   "app.detach": [key("<leader> c")],
+  "sidebar.toggle": [key("<leader> b")],
   "focus.sidebar": [key("ctrl+]", "pty"), key("escape", "prompt"), key("escape", "session-tabs"), key("<leader> w")],
   "focus.search": [key("ctrl+f", "app"), key("<leader> f")],
   "focus.prompt": [key("ctrl+e", "app"), key("<leader> p"), key("i", "transcript"), key("i", "transcript-text")],

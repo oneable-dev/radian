@@ -3,6 +3,7 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
+import { icons } from "../../icons.ts";
 import { err, ok } from "../../result.ts";
 import { EditorError } from "../../errors.ts";
 import type { EditorActions } from "../../editor/ui/panel.ts";
@@ -57,11 +58,11 @@ test("좌우 두 패널과 푸터를 표시하고 워크트리별 Editor·Git �
   try {
     expect(app.captureCharFrame()).toContain("Agents  Editor  Git");
     expect(app.captureCharFrame()).not.toContain("Inspector");
-    await app.click("Editor"); await app.click("radian-ui (feature"); await app.click("Git");
+    await app.click("Editor"); await app.click(`${icons.folder} radian-ui`); await app.click("Git");
 
-    await app.click("radian (main)");
+    await app.click(`${icons.folder} radian`);
     expect(app.captureCharFrame()).toContain("Editor preview");
-    await app.click("radian-ui (feature");
+    await app.click(`${icons.folder} radian-ui`);
     expect(app.captureCharFrame()).toContain("Git preview");
     expect(app.view.workViewPreferences.active).toEqual({ "demo:main": "editor", "demo:feature": "git" });
     expect(app.requests).toEqual([]);
@@ -76,7 +77,7 @@ test("세션 탭은 Agents 안에서만 선택하고 다른 워크트리의 마�
     // Session switching is local to Agents, rather than an incidental tree action.
     await app.click("Editor"); await app.click("Agents"); await app.click("Workspace layout");
     expect(app.captureCharFrame()).toContain("main draft");
-    await app.click("Editor"); await app.click("radian-ui (feature"); await app.click("Agents");
+    await app.click("Editor"); await app.click(`${icons.folder} radian-ui`); await app.click("Agents");
     await app.click("Sidebar prototype");
 
     expect(app.selection.sessionId).toBe("b1");
@@ -146,7 +147,7 @@ test("느린 Editor 열기 응답은 새로 선택한 Git 화면이나 포커스
   const editor = editorFixture(); editor.actions.info = () => undefined; editor.actions.open = () => ready.promise;
   const app = await mount({ editor: editor.actions });
   try {
-    await app.click("Editor"); await app.click("radian-ui (feature"); await app.click("Git");
+    await app.click("Editor"); await app.click(`${icons.folder} radian-ui`); await app.click("Git");
     const focus = app.renderer.currentFocusedRenderable;
 
     ready.resolve(ok("demo:main")); await Bun.sleep(0); await app.renderOnce();

@@ -4,6 +4,7 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
+import { icons } from "../../icons.ts";
 import { ok } from "../../result.ts";
 import { initialGitState, type GitSource } from "../../git/model.ts";
 
@@ -73,12 +74,12 @@ test("Agent 워크트리 전환은 첫 표시 프레임부터 저장된 대화 �
   try {
     await app.scroll("session-transcript", 17);
     const main = app.first(/MAIN-\d{3}/); expect(main).toBe("MAIN-017");
-    await app.click("radian-ui (feature"); await app.scroll("session-transcript", 43);
+    await app.click(`${icons.folder} radian-ui`); await app.scroll("session-transcript", 43);
     const feature = app.first(/FEATURE-\d{3}/); expect(feature).toBe("FEATURE-043");
     const record = app.capture(/(?:MAIN|FEATURE)-\d{3}/);
 
     // 실제로 표시된 모든 전환 프레임을 검사하고 최종 화면만 기다려 문제를 숨기지 않는다.
-    await app.click("radian (main)"); await app.click("radian-ui (feature"); record.stop();
+    await app.click(`${icons.folder} radian`); await app.click(`${icons.folder} radian-ui`); record.stop();
 
     expect(record.frames.length).toBeGreaterThan(0);
     expect(record.frames.filter((frame) => frame.tree === "demo:main").map((frame) => frame.first)).not.toContain(null);
@@ -94,7 +95,7 @@ test("짧은 대화에서 긴 세션을 복원할 때 이전 스크롤 범위로
   const record = app.capture(/(?:SHORT|LONG)-\d{3}/);
   try {
     app.resize(100, 20); await app.renderOnce(); await app.renderOnce();
-    await app.click("radian-ui (feature");
+    await app.click(`${icons.folder} radian-ui`);
 
     expect(new Set(record.frames.filter((frame) => frame.tree === "demo:feature").map((frame) => frame.first))).toEqual(new Set(["LONG-057"]));
     expect(app.view.workViewPreferences.agentScroll.b1).toBe(57);
@@ -115,7 +116,7 @@ test("긴 Git 목록의 초기 복원은 로딩 placeholder나 짧은 이전 목
   const record = app.capture(/GIT(?:MAIN|FEATURE)-\d{3}/);
   try {
     await app.click("Git", true); await app.waitForFrame((frame) => frame.includes("GITMAIN-000"));
-    await app.click("radian-ui (feature"); await app.click("Git", true);
+    await app.click(`${icons.folder} radian-ui`); await app.click("Git", true);
     await app.waitForFrame((frame) => frame.includes("GITFEATURE-"));
 
     const populated = record.frames.filter((frame) => frame.tree === "demo:feature" && frame.first !== null);
@@ -131,13 +132,13 @@ test("캐시된 Git 목록은 재조회 없이 첫 표시 프레임에 워크트
   try {
     await app.click("Git", true); await app.waitForFrame((frame) => frame.includes("GITMAIN-000"));
     await app.scroll("git-history", 24); const main = app.first(/GITMAIN-\d{3}/);
-    await app.click("radian-ui (feature"); await app.click("Git", true);
+    await app.click(`${icons.folder} radian-ui`); await app.click("Git", true);
     await app.waitForFrame((frame) => frame.includes("GITFEATURE-000"));
     await app.scroll("git-history", 48); const feature = app.first(/GITFEATURE-\d{3}/);
     expect(main).not.toBeNull(); expect(feature).not.toBeNull();
     const record = app.capture(/GIT(?:MAIN|FEATURE)-\d{3}/);
 
-    await app.click("radian (main)"); await app.click("radian-ui (feature"); record.stop();
+    await app.click(`${icons.folder} radian`); await app.click(`${icons.folder} radian-ui`); record.stop();
 
     expect(new Set(record.frames.filter((frame) => frame.tree === "demo:main").map((frame) => frame.first))).toEqual(new Set([main]));
     expect(new Set(record.frames.filter((frame) => frame.tree === "demo:feature").map((frame) => frame.first))).toEqual(new Set([feature]));
@@ -158,13 +159,13 @@ test("캐시된 Git diff는 첫 표시 프레임부터 저장 위치를 적용�
     await app.click("Git", true); await app.waitForFrame((frame) => frame.includes("probe.txt"));
     await app.click("probe.txt", true); await app.waitForFrame((frame) => frame.includes("DIFFMAIN-000"));
     await scroll(35); const main = app.first(/DIFFMAIN-\d{3}/); expect(main).toBe("DIFFMAIN-035");
-    await app.click("radian-ui (feature"); await app.click("Git", true);
+    await app.click(`${icons.folder} radian-ui`); await app.click("Git", true);
     await app.waitForFrame((frame) => frame.includes("probe.txt")); await app.click("probe.txt", true);
     await app.waitForFrame((frame) => frame.includes("DIFFFEATURE-000"));
     await scroll(7); const feature = app.first(/DIFFFEATURE-\d{3}/); expect(feature).toBe("DIFFFEATURE-007");
     const record = app.capture(/DIFF(?:MAIN|FEATURE)-\d{3}/);
 
-    await app.click("radian (main)"); await app.click("radian-ui (feature"); record.stop();
+    await app.click(`${icons.folder} radian`); await app.click(`${icons.folder} radian-ui`); record.stop();
 
     expect(new Set(record.frames.filter((frame) => frame.tree === "demo:main").map((frame) => frame.first))).toEqual(new Set([main]));
     expect(new Set(record.frames.filter((frame) => frame.tree === "demo:feature").map((frame) => frame.first))).toEqual(new Set([feature]));

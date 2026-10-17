@@ -92,7 +92,9 @@ test("Workspace 목록은 세션 데이터를 유지하면서 레포와 워크�
   // Workspace navigation deliberately excludes both deeper levels.
   const rows = workspaceRows(fixture);
 
-  expect(rows.find((row) => row.key === "worktree:demo:main")?.label).toBe("radian (main)");
+  const main = rows.find((row) => row.key === "worktree:demo:main");
+  expect(main?.label).toBe("radian");
+  expect(main?.kind === "worktree" ? main.worktree.branch : null).toBe("main");
   expect(rows.map((row) => row.depth)).toEqual([0, 1, 1, 1]);
   expect(rows).toHaveLength(4);
   expect(fixture[0]!.worktrees[0]!.sessions[0]!.subagents[0]!.name).toBe("UI review");

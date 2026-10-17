@@ -6,6 +6,7 @@ import { connectRuntime, fetchSnapshot } from "../../runtime/client.ts";
 import { restoreWorkViews, saveWorkViews } from "../../runtime/work-view-preferences.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
 import { Workbench } from "../../app/ui/workbench.ts";
+import { icons } from "../../icons.ts";
 import { expectOk } from "../../testing/results.ts";
 import { pidAlive } from "../../runtime/storage.ts";
 
@@ -86,7 +87,7 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
     await until(() => app!.editorFrame?.rows === 20); await app.visible("unsaved-native-editor");
     expect(app.editorFrame?.rows).toBe(20);
     expect(app.editorFrame?.cols).toBe(56);
-    await app.click("feature (feature/probe)"); await app.click("Editor"); await app.visible("[No Name]");
+    await app.click(`${icons.folder} feature`); await app.click("Editor"); await app.visible("[No Name]");
     await app.mockInput.typeText("iSECOND-WORKTREE-CACHE"); app.mockInput.pressEscape(); await app.visible("SECOND-WORKTREE-CACHE");
     expect(app.captureCharFrame()).not.toContain("unsaved-native-editor");
     await app.click("Git");
@@ -96,7 +97,7 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
     };
     app.renderer.on("frame", captureReturn);
     try {
-      await app.click("main (main)"); await app.visible("unsaved-native-editor");
+      await app.click(`${icons.folder} main`); await app.visible("unsaved-native-editor");
       expect(returns.length).toBeGreaterThan(0);
       expect(returns.every((frame) => frame.includes("unsaved-native-editor") && !frame.includes("SECOND-WORKTREE-CACHE"))).toBe(true);
     } finally { app.renderer.off("frame", captureReturn); }
@@ -108,11 +109,11 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
 
     expect(app.client.snapshot.editors![0]!.pid).toBe(pid);
     expect(app.view.workViewPreferences.active[fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!.id]).toBe("editor");
-    await app.click("feature (feature/probe)"); await app.visible("Git preview");
+    await app.click(`${icons.folder} feature`); await app.visible("Git preview");
     expect(app.captureCharFrame()).not.toContain("unsaved-native-editor");
 
     // Normal Neovim exit must not turn the focus-out notification into a stale-input error.
-    await app.click("main (main)"); await app.click("Editor"); await app.visible("unsaved-native-editor");
+    await app.click(`${icons.folder} main`); await app.click("Editor"); await app.visible("unsaved-native-editor");
     await app.mockInput.typeText(":qa!"); app.mockInput.pressEnter(); await app.visible("Neovim exited (0)");
     await app.renderOnce(); expect(app.captureCharFrame()).not.toContain("Editor unavailable");
     await app.click("Open / reconnect editor");

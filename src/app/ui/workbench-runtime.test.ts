@@ -7,6 +7,7 @@ import { piSessionFactory } from "../../agents/pi-session-adapter.ts";
 import { offlineRuntime } from "../../testing/offline-runtime.ts";
 import { createWorktreeFixture } from "../../testing/worktree-fixture.ts";
 import { Workbench } from "./workbench.ts";
+import { icons } from "../../icons.ts";
 import { expectOk } from "../../testing/results.ts";
 import { ok, type Result } from "../../result.ts";
 import type { ExpectedError } from "../../errors.ts";
@@ -62,7 +63,7 @@ test("실제 워크트리 UI에서 명시적으로 세션을 만들고 입력을
     await app.send("read");
     expect(app.captureCharFrame()).toContain("main-worktree-marker");
     app.mockInput.pressEscape();
-    await app.click("feature (feature/probe)");
+    await app.click(`${icons.folder} feature`);
     expect(app.captureCharFrame()).toContain("No open sessions");
     const feature = await app.newSession();
     await app.send("read");
@@ -81,11 +82,11 @@ test("워크트리별 입력 초안과 포커스는 비선택 SDK 갱신과 검�
     const main = await app.newSession();
     app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("main draft");
     app.mockInput.pressEscape();
-    await app.click("feature (feature/probe)");
+    await app.click(`${icons.folder} feature`);
     const feature = await app.newSession();
     app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("feature draft");
     app.mockInput.pressEscape();
-    await app.click("main (main)");
+    await app.click(`${icons.folder} main`);
     app.mockInput.pressKey("e", { ctrl: true });
     const input = app.renderer.currentFocusedRenderable;
 
@@ -103,7 +104,7 @@ test("워크트리별 입력 초안과 포커스는 비선택 SDK 갱신과 검�
     expect(app.captureCharFrame()).toContain("main draf");
     expect(app.prompts).toEqual([]);
     app.mockInput.pressEscape(); await app.renderOnce();
-    await app.click("feature (feature/probe)");
+    await app.click(`${icons.folder} feature`);
     expect(app.captureCharFrame()).toContain("feature draft");
   } finally { await app.closeApp(); }
 });

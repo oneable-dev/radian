@@ -5,6 +5,7 @@ import { createTestRenderer, MockTreeSitterClient } from "@opentui/core/testing"
 import { Workbench } from "../../app/ui/workbench.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
+import { icons } from "../../icons.ts";
 import type { GitActions } from "./panel.ts";
 import type { GitCommit, GitComparison, GitSnapshot, GitSource } from "../model.ts";
 import type { WorkViewPreferences } from "../../runtime/protocol.ts";
@@ -200,7 +201,7 @@ test("Git 상태는 worktree 왕복과 새 UI 복원 뒤에도 선택·diff·스
   try {
     await app.chooseCommit(); await app.click("M src/login.ts"); await app.waitForFrame((frame) => frame.includes("const line00"));
     app.get("git-diff").focus(); app.mockInput.pressKey("END"); await app.renderOnce();
-    await app.click("radian-ui (feature"); await app.click("radian (main)");
+    await app.click(`${icons.folder} radian-ui`); await app.click(`${icons.folder} radian`);
     expect(app.get("git-diff").visible).toBe(true);
     retained = app.view.workViewPreferences;
     expect(retained.gitViews?.["demo:main"]?.diffScroll).toBeGreaterThan(0);
@@ -279,7 +280,7 @@ test("숨기면서 중단한 상세 조회는 복귀할 때 다시 읽고 이전
     details: async (selected) => ++reads === 1 ? pending.promise : ok({ commit: selected, message: "Fresh detail", files: [] }),
   } });
   try {
-    await app.click("Update login"); await app.click("radian-ui (feature"); await app.click("radian (main)");
+    await app.click("Update login"); await app.click(`${icons.folder} radian-ui`); await app.click(`${icons.folder} radian`);
 
     await app.waitForFrame((frame) => frame.includes("Author: Ada"));
     pending.resolve(ok({ commit, message: "Stale detail", files: [] })); await app.renderOnce();
@@ -370,7 +371,7 @@ test("다른 worktree 선택 뒤 늦은 조회 응답은 현재 Git 화면을 �
     load: () => pending.promise, details: async () => err(new InputError("unused")), compare: async () => err(new InputError("unused")),
   } : { load: async () => ok(snapshot()), details: async () => err(new InputError("unused")), compare: async () => err(new InputError("unused")) } } });
   try {
-    await app.click("radian-ui (feature"); await app.click("Git"); await app.click("radian (main)");
+    await app.click(`${icons.folder} radian-ui`); await app.click("Git"); await app.click(`${icons.folder} radian`);
 
     const delayed = snapshot(); delayed.commits[0] = { ...commit, subject: "Stale result" }; pending.resolve(ok(delayed)); await app.renderOnce();
 

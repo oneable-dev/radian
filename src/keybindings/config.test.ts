@@ -11,6 +11,9 @@ test("기본 leader는 Ctrl+Space이며 Ctrl+C를 앱 종료에 할당하지 않
   expect(map.bindings.some((binding) => binding.command === "app.detach" && binding.keys.includes("ctrl+c"))).toBe(false);
   expect(map.hint("focus.search", "editor")).toBe("Ctrl+Space → f");
   expect(map.hint("focus.search", "search")).toBe("Ctrl+f");
+  expect(map.hint("sidebar.toggle", "workspace")).toBe("Ctrl+Space → b");
+  expect(map.hint("sidebar.toggle", "editor")).toBe("Ctrl+Space → b");
+  expect(map.bound("ctrl+b", "prompt")).toBe(false);
 });
 
 test("키 설정은 scoped 기본값을 바꾸거나 비활성화하고 실제 힌트에 반영한다", () => {
