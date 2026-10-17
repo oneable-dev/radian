@@ -8,8 +8,8 @@ import { icons } from "../../icons.ts";
 import { ok } from "../../result.ts";
 import { uiTheme } from "../../ui/theme.ts";
 
-async function mount(repositories = demoWorkspace()) {
-  const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
+async function mount(repositories = demoWorkspace(), size: { width?: number; height?: number } = {}) {
+  const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true, ...size });
   const selection = new WorkspaceSelection(repositories), requests: string[] = [];
   const view = new Workbench(app.renderer, selection, { onNewSession: () => requests.push("new"), onCloseSession: () => requests.push("close"),
     onPrompt: () => { requests.push("prompt"); return ok(undefined); },
@@ -28,7 +28,7 @@ test("Workspace는 폴더명과 브랜치 아이콘·이름을 들여쓰기 없�
     await app.renderOnce();
     const main = app.get("worktree:demo:main"), feature = app.get("worktree:demo:feature");
 
-    expect(main.height).toBe(2); expect(feature.y).toBe(main.y + 2);
+    expect(main.height).toBe(2); expect(feature.y).toBe(main.y + 3);
     expect(app.line("worktree:demo:main").trim()).toContain(`${icons.folder} radian`);
     expect(app.line("worktree:demo:main")).not.toContain("(main)");
     expect(app.line("worktree:demo:main")).toContain(icons.error);
@@ -109,5 +109,78 @@ test("브랜치 갱신과 detached HEAD·긴 이름도 두 줄 높이와 기존 
     expect(app.get("worktree:demo:feature")).toBe(feature); expect(feature.height).toBe(2);
     expect(empty.y).toBe(feature.y + 2); expect(app.line("worktree:demo:feature", 1)).toContain("feature/");
     expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+function groupedRepositories() {
+  const repository = demoWorkspace()[0]!;
+  return [{ ...repository, worktrees: repository.worktrees.slice(0, 2) }, { id: "tools", name: "tools", worktrees: repository.worktrees.slice(0, 2).map((tree, index) => ({
+    ...tree, id: `tools-${index}`, path: `/tools/${index}`, name: `tool-${index}`, sessions: [],
+  })) }];
+}
+
+test("레포 묶음과 워크트리 및 헤더 사이는 한 줄 간격으로 구분한다", async () => {
+  // 두 레포가 모두 보이는 화면에서 계층별 여백을 실제 셀 좌표로 확인한다.
+  const app = await mount(groupedRepositories(), { height: 36 });
+  try {
+    const repository = app.get("repository:demo:radian"), main = app.get("worktree:demo:main"), feature = app.get("worktree:demo:feature"), tools = app.get("repository:tools");
+
+    // 폴더와 브랜치는 붙이고 항목/그룹 사이에만 비선택 여백을 둔다.
+    expect(repository.marginTop).toBe(0);
+    expect(main.y - repository.y - repository.height).toBe(1);
+    expect(feature.y - main.y - main.height).toBe(1);
+    expect(tools.y - feature.y - feature.height).toBe(1);
+    expect(app.get("worktree:tools-0").y - tools.y - tools.height).toBe(1);
+    expect(main.height).toBe(2);
+    expect(app.cell(main.x, main.y - 1).bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
+    await app.mockMouse.click(main.x + 5, main.y + main.height); await app.renderOnce();
+    expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("좁고 낮은 화면에서는 항목 간격만 줄이고 레포 그룹 경계와 기존 초안을 유지한다", async () => {
+  const app = await mount(groupedRepositories(), { height: 36 });
+  try {
+    const main = app.get("worktree:demo:main"), feature = app.get("worktree:demo:feature");
+
+    // 같은 행 인스턴스에 밀도만 바꾸며 그룹 간 최소 한 줄은 남긴다.
+    app.resize(60, 12); await app.renderOnce(); await app.renderOnce();
+    expect(app.get("worktree:demo:main")).toBe(main);
+    expect(feature.y - main.y - main.height).toBe(0);
+    expect(app.get("repository:tools").y - feature.y - feature.height).toBe(1);
+    expect(app.view.promptDrafts.a1).toBe("main draft");
+
+    app.resize(120, 36); await app.renderOnce(); await app.renderOnce();
+    expect(feature.y - main.y - main.height).toBe(1);
+    expect(app.get("repository:tools").y - feature.y - feature.height).toBe(1);
+  } finally { await app.close(); }
+});
+
+test("검색 후 첫 레포에는 그룹 앞 여백이 남지 않고 폴더·브랜치 정렬을 유지한다", async () => {
+  const app = await mount(groupedRepositories(), { height: 36 });
+  try {
+    // 검색은 표시 대상만 줄이며 사라진 이전 레포의 그룹 여백을 물려받지 않는다.
+    app.mockInput.pressKey("f", { ctrl: true }); await app.mockInput.typeText("tools"); await app.renderOnce(); await app.renderOnce();
+
+    const repository = app.get("repository:tools"), first = app.get("worktree:tools-0");
+    expect(repository.marginTop).toBe(0);
+    expect(first.y - repository.y - repository.height).toBe(1);
+    expect(app.line("worktree:tools-0").indexOf(icons.folder)).toBe(app.line("worktree:tools-0", 1).indexOf(icons.branch));
+    expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("간격이 바뀌는 리사이즈도 탐색 중인 마지막 워크트리의 두 줄을 화면 안에 유지한다", async () => {
+  const repository = demoWorkspace()[0]!;
+  const app = await mount([{ ...repository, worktrees: Array.from({ length: 20 }, (_, index) => ({ ...repository.worktrees[0]!, id: `resize-${index}`, name: `item-${index}`, sessions: [] })) }], { width: 60, height: 12 });
+  try {
+    // 커서는 마지막 행으로 이동하지만 실제 워크스페이스는 아직 첫 항목이다.
+    app.mockInput.pressKey("END"); await app.renderOnce(); await app.renderOnce();
+    app.resize(120, 24); await app.renderOnce(); await app.renderOnce();
+
+    const last = app.get("worktree:resize-19"), tree = app.get("workspace-tree");
+    expect(last.y).toBeGreaterThanOrEqual(tree.y);
+    expect(last.y + last.height).toBeLessThanOrEqual(tree.y + tree.height);
+    expect(app.selection.worktree?.id).toBe("resize-0"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });

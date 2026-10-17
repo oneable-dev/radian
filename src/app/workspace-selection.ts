@@ -75,7 +75,7 @@ export class WorkspaceSelection {
 
   // The host supplies display snapshots, including optimistic removals. Removing
   // an item here never aborts an agent or deletes its persisted history.
-  replaceSnapshot(repositories: readonly Repository[]): void {
+  replaceSnapshot(repositories: readonly Repository[], restoredSessions: Readonly<Record<string, string>> = {}): void {
     for (const previous of this.repositories.flatMap((repo) => repo.worktrees)) {
       const next = repositories.flatMap((repo) => repo.worktrees).find((tree) => tree.id === previous.id);
       const selectedId = this.lastSessions.get(previous.id) ?? previous.sessions[0]?.id;
@@ -87,6 +87,11 @@ export class WorkspaceSelection {
       const fallback = following ?? preceding ?? next?.sessions[0];
       if (fallback) this.lastSessions.set(previous.id, fallback.id);
       else this.lastSessions.delete(previous.id);
+    }
+    // A lazily attached repository may have had no session rows when preferences were restored.
+    for (const tree of repositories.flatMap((repo) => repo.worktrees)) {
+      const saved = restoredSessions[tree.id];
+      if (saved && !tree.sessions.some((session) => session.id === this.lastSessions.get(tree.id)) && tree.sessions.some((session) => session.id === saved)) this.lastSessions.set(tree.id, saved);
     }
     this.repositories = repositories;
     if (!this.worktree) this.selectedWorktreeId = repositories.flatMap((repo) => repo.worktrees)[0]?.id ?? null;

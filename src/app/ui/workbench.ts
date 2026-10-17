@@ -31,6 +31,7 @@ import type { ThemeRole } from "../../ui/theme-config.ts";
 
 export type WorkbenchActions = AgentActions & {
   onCloseSession: (worktreeId: string, sessionId: string) => void;
+  getRetainedSessionIds?: () => ReadonlySet<string>;
   onListHistory?: (worktreeId: string) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
   onResumeSession?: (worktreeId: string, savedId: string) => Promise<Result<string, ExpectedError>>;
   editor?: EditorActions;
@@ -51,6 +52,7 @@ export class Workbench {
   readonly root: BoxRenderable;
   private readonly sidebar: BoxRenderable;
   private readonly search: InputRenderable;
+  private readonly searchBox: BoxRenderable;
   private readonly tree: ScrollBoxRenderable;
   private readonly resultMessage: TextRenderable;
   private readonly history: SessionHistoryPanel;
@@ -78,6 +80,7 @@ export class Workbench {
   private historyStale = false;
   private navigationKey: string | null = null;
   private lastScrolledKey: string | null = null;
+  private navigationRevealPending = false;
   private activeWorktreeId: string | null = null;
   private readonly unsubscribe: () => void;
   private disposed = false;
@@ -93,8 +96,13 @@ export class Workbench {
     // Put the separator on the cell edge so full-bleed surfaces meet it without a half-cell gap.
     this.sidebar = new BoxRenderable(renderer, { id: "workspace-sidebar", width: 34, flexShrink: 0, flexDirection: "column",
       border: ["right"], customBorderChars: { ...BorderChars.single, vertical: "▕" }, paddingX: 1 });
+    this.searchBox = new BoxRenderable(renderer, {
+      id: "workspace-search-box", width: "auto", height: 3, minWidth: 0, flexShrink: 0,
+      flexDirection: "column", backgroundColor: colors.surface,
+      onMouseDown: (event) => { if (event.button === 0 && !this.search.focused) this.search.focus(); },
+    });
     this.search = new InputRenderable(renderer, {
-      id: "workspace-search", width: "100%", flexShrink: 0,
+      id: "workspace-search", width: "auto", minWidth: 0, flexShrink: 0,
       placeholder: "Search repo/worktree/branch", placeholderColor: colors.muted,
       textColor: colors.text, backgroundColor: colors.panel, focusedBackgroundColor: colors.selected,
     });
@@ -104,7 +112,7 @@ export class Workbench {
     tabs.add(this.workspaceTab);
     tabs.add(this.historyTab);
     this.sidebar.add(tabs);
-    this.sidebar.add(this.search);
+    this.searchBox.add(this.search); this.sidebar.add(this.searchBox);
     this.tree = new ScrollBoxRenderable(renderer, {
       id: "workspace-tree", flexGrow: 1, minHeight: 0, marginTop: 1, scrollX: false,
       contentOptions: { flexDirection: "column" },
@@ -172,7 +180,9 @@ export class Workbench {
     this.router = new KeyRouter(renderer, this.keymap, () => this.keyContext(), (command) => this.commandAvailable(command), (command) => this.command(command));
     renderer.on("resize", this.resize);
     renderer.on("focused_renderable", this.updateFooter);
+    renderer.addPostProcessFn(this.revealNavigation);
     this.search.on(InputRenderableEvents.INPUT, this.handleSearchInput);
+    this.search.on("focused", this.repaintSearch); this.search.on("blurred", this.repaintSearch);
     this.unsubscribe = selection.subscribe(() => this.render());
     this.resize();
     this.render();
@@ -183,7 +193,7 @@ export class Workbench {
     this.tree.on("focused", this.repaintRows); this.tree.on("blurred", this.repaintRows);
     this.theme.bind(this.root, (colors) => {
       this.root.backgroundColor = colors.panel;
-      this.paintRows(this.visibleRows()); this.paintTabs();
+      this.repaintSearch(); this.paintRows(this.visibleRows()); this.paintTabs();
     });
   }
 
@@ -440,10 +450,35 @@ export class Workbench {
     this.sidebarTabs.height = 1 + vertical * 2; this.sidebarTabs.paddingY = vertical;
     this.viewTabs.height = 1 + vertical * 2; this.viewTabs.paddingTop = vertical; this.viewTabs.paddingBottom = vertical;
     this.viewTabs.paddingX = horizontal;
-    this.search.marginBottom = vertical;
+    this.searchBox.height = 1 + vertical * 2; this.searchBox.paddingY = vertical;
+    this.searchBox.marginX = -horizontal; this.searchBox.paddingX = horizontal;
+    this.search.placeholder = this.renderer.width < 80 ? "Search workspaces" : "Search repo/worktree/branch";
     this.tree.marginTop = vertical;
+    this.spaceRows(this.visibleRows());
+    this.navigationRevealPending = true;
     this.workContext.visible = this.renderer.width >= 100;
     this.workPanel.minWidth = 0;
+  };
+
+  private repaintSearch = (): void => {
+    if (this.disposed || this.searchBox.isDestroyed) return;
+    this.searchBox.backgroundColor = this.search.focused ? this.theme.colors.selected : this.theme.colors.surface;
+  };
+
+  private spaceRows(rows: readonly WorkspaceRow[]): void {
+    const { vertical } = panelSpacing(this.renderer);
+    rows.forEach((row, index) => {
+      const view = this.rows.get(row.key);
+      // Group separation remains visible in compact terminals; item spacing collapses.
+      if (view) view.box.marginTop = index === 0 ? 0 : row.kind === "repository" ? 1 : vertical;
+    });
+  }
+
+  private revealNavigation = (): void => {
+    if (!this.navigationRevealPending || this.disposed) return;
+    this.navigationRevealPending = false;
+    // Native row positions settle after layout, not in the renderer's resize callback.
+    if (this.sidebar.visible && this.tree.focused && this.navigationKey) this.tree.scrollChildIntoView(this.navigationKey);
   };
 
   private render(): void {
@@ -488,6 +523,7 @@ export class Workbench {
       this.lastScrolledKey = null;
       if (focusedRow) this.tree.focus();
     }
+    this.spaceRows(rows);
     const selectedKey = rows.find((row) => this.selected(row))?.key ?? null;
     const activeId = this.selection.worktree?.id ?? null;
     if (activeId !== this.activeWorktreeId) { this.activeWorktreeId = activeId; this.navigationKey = selectedKey; }
@@ -497,7 +533,7 @@ export class Workbench {
     this.workContext.content = worktree ? `${worktree.name} · ${worktree.branch ?? "detached"}` : "";
     const workView = worktree ? this.workViews.active[worktree.id] ?? "agent" : "agent";
     this.displayedWorkView = workView;
-    const openIds = new Set(this.selection.snapshot.flatMap((repo) => repo.worktrees.flatMap((tree) => tree.sessions.map((item) => item.id))));
+    const openIds = new Set([...this.selection.snapshot.flatMap((repo) => repo.worktrees.flatMap((tree) => tree.sessions.map((item) => item.id))), ...(this.actions.getRetainedSessionIds?.() ?? [])]);
     this.agent.update(worktree, this.selection.sessionId, openIds, workView === "agent");
     if (workView === "git") this.git.show(worktree, this.selection.sessionId); else this.git.hide();
     if (workView === "editor") this.editor.show(worktree); else this.editor.hide();
@@ -508,7 +544,9 @@ export class Workbench {
     this.history.root.visible = this.sidebar.visible && this.tab === "history";
     if (this.sidebar.visible && this.tab === "history") this.history.updateScope(worktree);
     this.paintTabs();
-    if (this.navigationKey && this.navigationKey !== this.lastScrolledKey) this.tree.scrollChildIntoView(this.navigationKey);
+    if (this.navigationKey && this.navigationKey !== this.lastScrolledKey) {
+      this.tree.scrollChildIntoView(this.navigationKey); this.navigationRevealPending = true;
+    }
     this.lastScrolledKey = this.navigationKey;
     this.updateFooter();
   }
@@ -557,9 +595,11 @@ export class Workbench {
     this.agent.dispose(); this.history.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
     for (const row of this.rows.values()) row.status?.dispose();
     this.search.off(InputRenderableEvents.INPUT, this.handleSearchInput);
+    this.search.off("focused", this.repaintSearch); this.search.off("blurred", this.repaintSearch);
     this.router.dispose();
     this.renderer.off("resize", this.resize);
     this.renderer.off("focused_renderable", this.updateFooter);
+    this.renderer.removePostProcessFn(this.revealNavigation);
     this.root.destroyRecursively();
   }
 }

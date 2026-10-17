@@ -112,3 +112,19 @@ test("없는 선택 ID는 현재 선택을 변경하지 않는다", () => {
   expect(selection.worktree?.id).toBe("demo:main");
   expect(selection.sessionId).toBe("a1");
 });
+
+test("지연 연결된 레포의 저장된 세션 선택은 현재 워크트리를 바꾸지 않고 복원한다", () => {
+  // 비활성 레포는 아직 런타임 연결이 없어 세션 행이 비어 있다.
+  const full = demoWorkspace();
+  const cold = full.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id === "demo:main" ? { ...tree, sessions: [] } : tree) }));
+  const selection = new WorkspaceSelection(cold);
+  selection.selectWorktree("demo:feature");
+
+  // 뒤늦은 연결은 현재 선택을 유지하면서 과거에 선택한 A2를 기억한다.
+  selection.replaceSnapshot(full, { "demo:main": "a2" });
+  expect(selection.worktree?.id).toBe("demo:feature");
+  selection.selectWorktree("demo:main");
+
+  // 다른 레포를 열었다는 이유로 첫 세션 A1로 되돌아가지 않는다.
+  expect(selection.sessionId).toBe("a2");
+});

@@ -15,10 +15,16 @@ bun install --frozen-lockfile
 bun run start
 ```
 
-The app discovers the current Git repository's worktrees and shows an always-expanded
-workspace sidebar containing **repositories and worktrees only**. Each worktree shows its folder
-name and branch on two lines, with the folder and branch icons aligned at the same horizontal level
+The app discovers Git repositories under the configured workspace roots (by default `~/projects`
+and `~/.dotfiles`) and shows a workspace sidebar containing **repositories and worktrees only**.
+Each worktree shows its folder name and branch on two lines, with the folder and branch icons aligned at the same horizontal level
 (no additional branch indentation or connector). Both lines form one selectable worktree item.
+Repository groups, headers and worktree items have one blank row between them,
+while folder/branch lines stay together. Below 18 terminal rows, item gaps collapse
+and repository groups retain one blank row.
+The workspace search surface spans the sidebar width with three rows and centered single-line
+input. Below 18 terminal rows it collapses to one row; narrow terminals use a shorter placeholder.
+The padded search area is clickable and preserves its query and cursor across resize/collapse.
 Use `Tab`/`Shift+Tab` to move focus. `j/k`, arrows and Home/End move the tree cursor
 without changing the current workspace; **Enter** opens the highlighted worktree and restores its
 last work view/session. Mouse clicks open a worktree directly. Open sessions are tabs within Agents;
@@ -48,6 +54,39 @@ request. It does not invoke Pi, access credentials, or create stored sessions.
 The History tab lists saved SDK conversations for the selected worktree and opens them explicitly.
 The Agent view provides a keyboard-first, read-only transcript and prompt, not a conversation-content editor.
 The Editor view embeds Neovim; Git provides a native, read-only history and whole-file diff UI.
+
+### Workspace roots
+
+Normal mode scans `~/projects` and `~/.dotfiles`, including a root that is itself a repository.
+Customize `${XDG_CONFIG_HOME:-~/.config}/radian/workspace.json`, or select another file with
+`--workspace-config PATH`:
+
+```json
+{
+  "roots": ["~/projects", "~/.dotfiles"],
+  "maxDepth": 4
+}
+```
+
+`~` expands to the user's home directory; relative roots resolve against the config file's directory.
+Depth starts at zero for each root and is configurable from 0 to 10. An explicit empty `roots` list
+uses only the Git repository containing the launching directory. `--test-runtime` always uses that
+single-repository scope, and `--demo` never scans user directories.
+
+Discovery stops at repository boundaries, ignores hidden child directories and dependency/build
+folders (`node_modules`, `vendor`, `dist`, `build`, `target`, `coverage`, `__pycache__`), and never
+follows child symlinks. Explicit symlink roots are supported. Overlapping roots and linked worktrees
+are deduplicated using the canonical Git common directory. Each discovered repository includes **all**
+its registered worktrees, even ones outside the scan roots. Missing/inaccessible roots and broken
+Git metadata produce notices without hiding other repositories. Scans are capped at 10,000
+directories and run on TUI launch; reopen the TUI to discover newly added repositories.
+
+The TUI attaches to already-running repository services without restarting them. A cold repository's
+service starts only when that repository is selected or explicitly used, not once per scan result.
+The launching repository is preferred initially when present, otherwise the first discovered repo.
+Prompts, History, editors, terminals and preference writes route to their owning repository service.
+Drafts, selected sessions and view state survive lazy attachment; detaching releases this TUI's
+connections, not the underlying agents or native processes.
 
 ### Work views
 
@@ -543,8 +582,9 @@ bun run start --test-runtime --runtime-status    # Inspect the separate offline 
 bun run start --test-runtime --stop-runtime      # Stop the separate offline service
 ```
 
-These administrative commands do not start a missing service. `--stop-runtime` retains open-session
-intent and saved history; it is different from closing a session, which removes that open item.
+These administrative commands target only the repository containing the launching directory,
+regardless of configured workspace roots, and do not start a missing service. `--stop-runtime` retains
+open-session intent and saved history; it is different from closing a session, which removes that open item.
 
 Event subscriptions send the current snapshot every 5 s while idle, keeping `GET /events` alive
 without disabling ordinary request timeouts. These heartbeat snapshots use the existing protocol and

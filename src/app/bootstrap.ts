@@ -1,20 +1,23 @@
 import { discoverRepository } from "../workspace/discovery.ts";
+import { discoverWorkspace } from "../workspace/roots.ts";
+import { loadWorkspaceConfig } from "../workspace/config.ts";
+import { WorkspaceClient } from "../runtime/workspace-client.ts";
 import { demoWorkspace } from "../workspace/demo.ts";
 import { WorkspaceSelection } from "./workspace-selection.ts";
 import type { Repository } from "../workspace/model.ts";
-import { connectRuntime, defaultPreferences, fetchSnapshot, type RuntimeClient } from "../runtime/client.ts";
+import { connectRuntime, defaultPreferences, fetchSnapshot } from "../runtime/client.ts";
 import type { RuntimePreferences, WorkViewPreferences } from "../runtime/protocol.ts";
 import { restoreWorkViews, saveWorkViews } from "../runtime/work-view-preferences.ts";
 import { capture, ConnectionError, InputError, reportUnexpected, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
-import { defaultKeymap, loadKeymap, type Keymap } from "../keybindings/config.ts";
+import { loadKeymap, type Keymap } from "../keybindings/config.ts";
 import { loadTheme, type ThemeOverrides } from "../ui/theme-config.ts";
 import { readTerminalProcessTitles } from "../terminal/process-titles.ts";
 
-type Options = { demo: boolean; offline: boolean; service: boolean; status: boolean; stop: boolean; cwd: string; stateRoot: string | undefined; keybindings: string | undefined; theme: string | undefined };
+type Options = { demo: boolean; offline: boolean; service: boolean; status: boolean; stop: boolean; cwd: string; stateRoot: string | undefined; keybindings: string | undefined; theme: string | undefined; workspaceConfig: string | undefined };
 function parseOptions(args: string[]): Result<Options, InputError> {
   const values = new Map<string, string>();
-  for (const name of ["--state-dir", "--runtime-cwd", "--keybindings", "--theme"]) {
+  for (const name of ["--state-dir", "--runtime-cwd", "--keybindings", "--theme", "--workspace-config"]) {
     const index = args.indexOf(name); if (index < 0) continue;
     const value = args[index + 1];
     if (!value || value.startsWith("--")) return err(new InputError(`Missing value for ${name}`));
@@ -23,7 +26,7 @@ function parseOptions(args: string[]): Result<Options, InputError> {
   const demo = args.includes("--demo"), offline = args.includes("--test-runtime");
   if (demo && offline) return err(new InputError("Choose --demo or --test-runtime, not both."));
   return ok({ demo, offline, service: args.includes("--runtime-service"), status: args.includes("--runtime-status"), stop: args.includes("--stop-runtime"),
-    cwd: values.get("--runtime-cwd") ?? process.cwd(), stateRoot: values.get("--state-dir"), keybindings: values.get("--keybindings"), theme: values.get("--theme") });
+    cwd: values.get("--runtime-cwd") ?? process.cwd(), stateRoot: values.get("--state-dir"), keybindings: values.get("--keybindings"), theme: values.get("--theme"), workspaceConfig: values.get("--workspace-config") });
 }
 export async function main(): Promise<Result<void, ExpectedError>> {
   const parsed = parseOptions(process.argv.slice(2)); if (!parsed.ok) return parsed;
@@ -33,45 +36,70 @@ export async function main(): Promise<Result<void, ExpectedError>> {
     return capture(() => runRuntime(options.cwd, options.offline, options.stateRoot));
   }
   const administrative = options.stop || options.status;
-  const keymap = administrative ? ok(defaultKeymap()) : await loadKeymap(options.keybindings);
+  if (administrative) return runAdministrative(options);
+  const keymap = await loadKeymap(options.keybindings);
   if (!keymap.ok) return keymap;
-  const theme = administrative ? ok({}) : await loadTheme(options.theme);
+  const theme = await loadTheme(options.theme);
   if (!theme.ok) return theme;
   let repositories: readonly Repository[] = [];
   let discoveryError: string | null = null;
   if (options.demo) repositories = demoWorkspace();
   else {
-    const discovered = await discoverRepository(options.cwd);
-    if (discovered.ok) repositories = [discovered.value];
-    else discoveryError = discovered.error.message;
+    const config = options.offline ? ok({ roots: [], maxDepth: 0 }) : await loadWorkspaceConfig(options.workspaceConfig);
+    if (!config.ok) return config;
+    if (!config.value.roots.length) {
+      const discovered = await discoverRepository(options.cwd);
+      if (discovered.ok) repositories = [discovered.value];
+      else discoveryError = discovered.error.message;
+    } else {
+      const discovered = await discoverWorkspace(config.value); if (!discovered.ok) return discovered;
+      repositories = discovered.value.repositories;
+      discoveryError = discovered.value.warnings.map(({ path, error }) => `${path}: [${error.code}] ${error.message}`).join(" · ") || (repositories.length ? null : "No Git repositories found in workspace roots.");
+    }
   }
-  if (administrative && !repositories[0]) return err(new InputError(discoveryError ?? "No repository available."));
-  const connected = !options.demo && repositories[0] ? await connectRuntime(repositories[0], options.cwd, {
-    offline: options.offline, ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}), start: !administrative,
+  const connected = !options.demo && repositories.length ? await WorkspaceClient.open(repositories, options.cwd, {
+    offline: options.offline, ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
   }) : ok(null);
   if (!connected.ok) return connected;
   const client = connected.value;
   try {
-    if (administrative) {
-      if (!client) { console.log("No running workspace service."); return ok(undefined); }
-      if (options.status) { console.log(JSON.stringify(client.snapshot, null, 2)); return ok(undefined); }
-      if (client.snapshot.editors?.some((editor) => !editor.exited)) console.error("Stopping the runtime also closes Neovim. Unsaved editor buffers are not restored after restart; save them before using --stop-runtime.");
-      if (client.snapshot.terminals?.length) console.error("Stopping the runtime also closes all terminal shells and their owned jobs.");
-      const stopped = await client.stopRuntime(); if (!stopped.ok) return stopped;
-      const deadline = Date.now() + 15000;
-      while (true) {
-        const snapshot = await fetchSnapshot(client.paths); if (!snapshot.ok) return snapshot;
-        if (!snapshot.value) break;
-        if (Date.now() > deadline) return err(new ConnectionError("CONNECTION_TIMEOUT", "Runtime shutdown has not completed; its outcome is not confirmed."));
-        await new Promise<void>((resolve) => setTimeout(resolve, 40));
-      }
-      console.log("Workspace service stopped. Open-session state and saved history were retained.");
-    } else await runUI(repositories, client, options, discoveryError, keymap.value, theme.value);
+    const selected = client?.snapshot.preferences.selection.worktreeId;
+    if (client && selected) {
+      const activated = await client.activate(selected);
+      if (!activated.ok) discoveryError = [discoveryError, activated.error.message].filter(Boolean).join(" · ");
+    }
+    await runUI(repositories, client, options, discoveryError, keymap.value, theme.value);
     return ok(undefined);
   } finally { await client?.disconnect(); }
 }
 
-async function runUI(repositories: readonly Repository[], client: RuntimeClient | null, options: Options, discoveryError: string | null, keymap: Keymap, theme: ThemeOverrides): Promise<void> {
+// Administrative commands remain scoped to the launching repository, never every scan root.
+async function runAdministrative(options: Options): Promise<Result<void, ExpectedError>> {
+  const discovered = await discoverRepository(options.cwd);
+  if (!discovered.ok) return err(new InputError(discovered.error.message, { cause: discovered.error }));
+  const connected = await connectRuntime(discovered.value, options.cwd, { offline: options.offline,
+    ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}), start: false });
+  if (!connected.ok) return connected;
+  const client = connected.value;
+  try {
+    if (!client) { console.log("No running workspace service."); return ok(undefined); }
+    if (options.status) { console.log(JSON.stringify(client.snapshot, null, 2)); return ok(undefined); }
+    if (client.snapshot.editors?.some((editor) => !editor.exited)) console.error("Stopping the runtime also closes Neovim. Unsaved editor buffers are not restored after restart; save them before using --stop-runtime.");
+    if (client.snapshot.terminals?.length) console.error("Stopping the runtime also closes all terminal shells and their owned jobs.");
+    const stopped = await client.stopRuntime(); if (!stopped.ok) return stopped;
+    const deadline = Date.now() + 15000;
+    while (true) {
+      const snapshot = await fetchSnapshot(client.paths); if (!snapshot.ok) return snapshot;
+      if (!snapshot.value) break;
+      if (Date.now() > deadline) return err(new ConnectionError("CONNECTION_TIMEOUT", "Runtime shutdown has not completed; its outcome is not confirmed."));
+      await new Promise<void>((resolve) => setTimeout(resolve, 40));
+    }
+    console.log("Workspace service stopped. Open-session state and saved history were retained.");
+    return ok(undefined);
+  } finally { await client?.disconnect(); }
+}
+
+async function runUI(repositories: readonly Repository[], client: WorkspaceClient | null, options: Options, discoveryError: string | null, keymap: Keymap, theme: ThemeOverrides): Promise<void> {
   const { createCliRenderer, destroyTreeSitterClient } = await import("@opentui/core");
   const { Workbench } = await import("./ui/workbench.ts");
   const { GitRepository } = await import("../git/repository.ts");
@@ -98,8 +126,18 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
   };
   let pendingPreferences: Promise<Result<void, ExpectedError>> = Promise.resolve(ok(undefined));
   let lastPreferences = JSON.stringify(preferences);
+  let activatedWorktree = selection.worktree?.id ?? null;
   const persist = (): void => {
-    preferences.selection = { worktreeId: selection.state.worktreeId, sessions: { ...selection.state.sessions } };
+    const current = selection.state;
+    const sessions = { ...preferences.selection.sessions, ...current.sessions };
+    for (const tree of selection.snapshot.flatMap((repo) => repo.worktrees)) {
+      if (client?.hasSnapshot(tree.id) && !current.sessions[tree.id]) delete sessions[tree.id];
+    }
+    preferences.selection = { worktreeId: current.worktreeId, sessions };
+    if (client && current.worktreeId !== activatedWorktree) {
+      activatedWorktree = current.worktreeId;
+      if (activatedWorktree) observe(client.activate(activatedWorktree));
+    }
     const key = JSON.stringify(preferences);
     if (!client || key === lastPreferences) return;
     lastPreferences = key;
@@ -108,12 +146,12 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
     observe(pendingPreferences);
   };
   const unsubscribeSelection = selection.subscribe(persist);
-  let wasConnected = client?.connected ?? false;
+  let recovery = client?.recoveryVersion ?? 0;
   const unsubscribe = client?.subscribe(() => {
-    const restored = !wasConnected && client.connected;
-    wasConnected = client.connected;
+    const restored = recovery !== client.recoveryVersion;
+    recovery = client.recoveryVersion;
     if (restored) message = defaultMessage;
-    selection.replaceSnapshot(client.snapshot.repositories);
+    selection.replaceSnapshot(client.snapshot.repositories, preferences.selection.sessions);
     if (restored) view?.refreshHistory();
     updateNotice();
   });
@@ -151,16 +189,17 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
         onListHistory: (worktreeId: string) => client.listHistory(worktreeId),
         onResumeSession: (worktreeId: string, savedId: string) => client.resume(worktreeId, savedId),
         initialDrafts: preferences.drafts,
+        getRetainedSessionIds: () => client.retainedSessionIds,
         onDraftChange: (drafts: Record<string, string>) => { preferences.drafts = drafts; persist(); },
         initialWorkViews: restoreWorkViews(preferences),
         onWorkViewsChange: (workViews: WorkViewPreferences) => { saveWorkViews(preferences, workViews); persist(); },
-        ...(client.supportsTerminals ? { terminal: {
+        terminal: {
           list: () => client.snapshot.terminals ?? [],
           titles: readTerminalProcessTitles,
           create: (worktreeId, size) => client.createTerminal(worktreeId, size),
           attach: (id, frame, failed) => client.attachTerminal(id, frame, failed),
           close: (id) => client.closeTerminal(id),
-        } } : { terminalUnavailable: "Running service predates terminal tabs. Save work and restart the service explicitly when ready." }),
+        },
         editor: {
           info: (worktreeId: string) => client.snapshot.editors?.find((editor) => editor.worktreeId === worktreeId),
           open: (worktreeId: string, size) => client.openEditor(worktreeId, size),
