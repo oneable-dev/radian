@@ -12,6 +12,7 @@ import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
 import { SessionStatus } from "./session-status.ts";
+import { RequestHeading } from "./request-heading.ts";
 import { CompletionMenu, type CompletionProvider } from "./completion-menu.ts";
 import { SessionTabs } from "./session-tabs.ts";
 import { SubagentSummary } from "./subagent-summary.ts";
@@ -46,6 +47,7 @@ export class AgentPanel {
   private readonly sessionStatus: SessionStatus;
   private readonly completion: CompletionMenu;
   private readonly transcript: TranscriptPanel;
+  private readonly requestHeading: RequestHeading;
   private readonly drafts = new Map<string, string>();
   private readonly submitting = new Set<string>();
   private worktree: Worktree | null = null;
@@ -77,6 +79,9 @@ export class AgentPanel {
     this.transcript = new TranscriptPanel(renderer, { notice, changed, focusPrompt: () => this.prompt.focus(), initialScroll, saveScroll,
       ...transcriptOptions, ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}) });
     this.transcriptScroll = this.transcript.scroll;
+    this.requestHeading = new RequestHeading(renderer);
+    const transcriptArea = new BoxRenderable(renderer, { id: "agent-transcript-area", width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "column" });
+    transcriptArea.add(this.requestHeading.root); transcriptArea.add(this.transcriptScroll);
     this.prompt = new InputRenderable(renderer, { id: "session-prompt", width: "auto", flexGrow: 1, minWidth: 0, flexShrink: 0 });
     for (const [id, draft] of Object.entries(actions.initialDrafts ?? {})) this.drafts.set(id, draft);
     this.prompt.on(InputRenderableEvents.INPUT, this.handleDraftInput);
@@ -90,7 +95,7 @@ export class AgentPanel {
     this.children = new SubagentSummary(renderer);
     statusRow.add(this.transcript.status); statusRow.add(this.children.root);
     this.root.on("resize", () => this.children.resize(this.root.width));
-    this.runtimePanel.add(this.transcriptScroll); this.runtimePanel.add(statusRow);
+    this.runtimePanel.add(transcriptArea); this.runtimePanel.add(statusRow);
     this.runtimePanel.add(this.sessionStatus.root); this.runtimePanel.add(composer); this.runtimePanel.add(this.completion.root); this.root.add(this.runtimePanel);
     theme.input(this.prompt); theme.scrollbars(this.transcriptScroll); theme.focusBorder(composer);
     theme.bind(this.root, (colors) => {
@@ -147,6 +152,7 @@ export class AgentPanel {
     }
     for (const id of this.drafts.keys()) if (!openIds.has(id)) this.drafts.delete(id);
     this.runtimePanel.visible = Boolean(visible && session && this.actions.onPrompt);
+    this.requestHeading.update(details?.sections, this.active);
     this.sessionStatus.update(details?.telemetry, this.active);
     this.emptyPanel.visible = visible && !this.active;
     this.children.update(session?.subagents ?? [], this.active);

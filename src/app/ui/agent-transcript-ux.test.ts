@@ -177,7 +177,8 @@ test("섹션 종류별 배경과 내부·외부 간격은 밝은 테마와 작�
     { ...section("AGENT_BODY"), id: "agent" },
   ]);
   const span = (text: string) => {
-    const found = app.captureSpans().lines.flatMap((line) => line.spans).find((item) => item.text.includes(text));
+    const scroll = app.renderer.root.findDescendantById("session-transcript")!;
+    const found = app.captureSpans().lines.slice(scroll.y, scroll.y + scroll.height).flatMap((line) => line.spans).find((item) => item.text.includes(text));
     if (!found) throw new Error(`Missing colored text ${text}\n${app.captureCharFrame()}`);
     return found;
   };
@@ -194,7 +195,8 @@ test("섹션 종류별 배경과 내부·외부 간격은 밝은 테마와 작�
     const texts = ["USER_BODY", "THINK_BODY", "TOOL_BODY", "AGENT_BODY"];
     const dark = texts.map((text) => span(text).bg.toInts().join(","));
     expect(new Set(dark).size).toBe(4);
-    const rows = app.captureCharFrame().split("\n"), bodyY = rows.findIndex((line) => line.includes("USER_BODY"));
+    const scroll = app.renderer.root.findDescendantById("session-transcript")!;
+    const rows = app.captureCharFrame().split("\n"), bodyY = rows.findIndex((line, index) => index >= scroll.y && index < scroll.y + scroll.height && line.includes("USER_BODY"));
     const bodyX = rows[bodyY]!.indexOf("USER_BODY");
     expect(cell(bodyX - 1, bodyY).bg.equals(span("USER_BODY").bg)).toBe(true);
     expect(cell(bodyX, bodyY - 1).bg.equals(span("USER_BODY").bg)).toBe(true);
@@ -225,8 +227,9 @@ test("스킬은 이름만 한 줄로 표시하고 개별·전체 접기에서 �
     app.mockInput.pressKey("z"); app.mockInput.pressKey("a");
     app.mockInput.pressKey("z"); app.mockInput.pressKey("m"); await app.render();
 
-    const frame = app.captureCharFrame();
-    expect(frame.split("\n").filter((line) => line.includes(name))).toHaveLength(1);
+    const frame = app.captureCharFrame(), scroll = app.renderer.root.findDescendantById("session-transcript")!;
+    const transcriptRows = frame.split("\n").slice(scroll.y, scroll.y + scroll.height);
+    expect(transcriptRows.filter((line) => line.includes(name))).toHaveLength(1);
     expect(frame).not.toContain(`${name} · complete`); expect(frame).not.toContain("OTHER_BODY");
     expect(app.state()?.folded.skill).toBeUndefined(); expect(app.state()?.folded.other).toBe(true);
     await app.copy(); expect(app.copies).toEqual([name]);

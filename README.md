@@ -174,6 +174,13 @@ Thinking and tool details start folded; user/Agent text starts expanded. Any non
 be folded manually. Error summaries stay visible outside the folded body, and folding never deletes text.
 Image attachments have a text placeholder; image rendering is not part of this reader.
 
+A passive **Request** row stays above the scrolling transcript and shows the latest user request
+already present in that session's conversation. Whitespace collapses to spaces, and overflowing text
+ends with `...` without splitting Unicode graphemes. It consumes only one row, remains after a run
+finishes, and restores from the selected session's transcript. Drafts, rejected input and handled
+settings commands do not replace it. Sessions without request metadata reserve no row; no request
+is inferred from legacy output or session names. This display does not change steer or queue behavior.
+
 Sections have subtle, distinct host-palette backgrounds for user text, Agent replies, Thinking,
 tools and notices. A left accent and heading highlight identify the selected section without hiding
 its kind color. Expanded cards separate headings from body text and leave two rows between sections;
