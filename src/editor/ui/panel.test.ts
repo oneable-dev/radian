@@ -29,7 +29,7 @@ async function mount() {
   const panel = new EditorPanel(app.renderer, actions, (label, activate) => {
     const button = new BoxRenderable(app.renderer, { height: 1, focusable: true, onMouseDown: activate });
     button.add(new TextRenderable(app.renderer, { content: label })); return button;
-  }, (message) => notices.push(message), () => {}, "Ctrl+]");
+  }, (message) => notices.push(message), () => {});
   app.renderer.root.add(panel.root);
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
   panel.show(tree, true); await render(); await render();

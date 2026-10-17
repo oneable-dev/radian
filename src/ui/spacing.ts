@@ -6,12 +6,13 @@ export function panelSpacing(renderer: Pick<CliRenderer, "width" | "height">) {
   return { horizontal: horizontalInset(renderer.width), vertical: renderer.height < 18 ? 0 : 1 };
 }
 
-// Keep feature content aligned without adding padding inside the embedded program's own screen.
+// Work surfaces start directly below their tabs and end at the sidebar divider's bottom.
+// Keep side insets outside embedded programs rather than padding inside their screen.
 export function bindPanelSpacing(renderer: CliRenderer, panel: BoxRenderable): void {
   const resize = () => {
     if (panel.isDestroyed) return;
-    const { horizontal, vertical } = panelSpacing(renderer);
-    panel.paddingX = horizontal; panel.paddingY = vertical;
+    const { horizontal } = panelSpacing(renderer);
+    panel.paddingX = horizontal; panel.paddingTop = 0; panel.paddingBottom = 0;
   };
   renderer.on("resize", resize);
   panel.once(RenderableEvents.DESTROYED, () => renderer.off("resize", resize));

@@ -79,14 +79,22 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
         expect(app.client.snapshot.editors![0]!.pid).toBe(pid);
       } finally { app.renderer.off("frame", capture); }
     }
-    // The editor viewport excludes the text row and the footer's thin partial-block cap.
-    expect(app.editorFrame?.rows).toBe(16);
-    expect(app.editorFrame?.cols).toBe(76);
+    // A single tab-bar gap remains, with no routine caption or additional panel inset.
+    const aligned = () => {
+      const sidebar = app!.renderer.root.findDescendantById("workspace-sidebar")!;
+      const tabs = app!.renderer.root.findDescendantById("work-view-tabs")!;
+      expect(originalSurface!.y).toBe(tabs.y + tabs.height);
+      expect(originalSurface!.y + originalSurface!.height).toBe(sidebar.y + sidebar.height);
+      expect(app!.editorFrame?.rows).toBe(originalSurface!.height);
+    };
+    expect(app.editorFrame?.rows).toBe(19);
+    expect(app.editorFrame?.cols).toBe(76); aligned();
+    expect(app.captureCharFrame()).not.toContain("Neovim ·");
     expect(app.captureCharFrame().split("\n")[23]).toContain("Radian 0.0.0");
     app.resize(100, 28); await app.renderOnce();
-    await until(() => app!.editorFrame?.rows === 20); await app.visible("unsaved-native-editor");
-    expect(app.editorFrame?.rows).toBe(20);
-    expect(app.editorFrame?.cols).toBe(56);
+    await until(() => app!.editorFrame?.rows === 23); await app.visible("unsaved-native-editor");
+    expect(app.editorFrame?.rows).toBe(23);
+    expect(app.editorFrame?.cols).toBe(56); aligned();
     await app.click(`${icons.folder} feature`); await app.click("Editor"); await app.visible("[No Name]");
     await app.mockInput.typeText("iSECOND-WORKTREE-CACHE"); app.mockInput.pressEscape(); await app.visible("SECOND-WORKTREE-CACHE");
     expect(app.captureCharFrame()).not.toContain("unsaved-native-editor");

@@ -31,7 +31,7 @@ export class EditorPanel {
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: EditorActions | undefined,
     button: (label: string, activate: () => void) => BoxRenderable, private readonly notice: (message: string) => void,
-    private readonly changed: () => void, private readonly sidebarHint: string, private readonly terminalTheme?: TerminalTheme) {
+    private readonly changed: () => void, private readonly terminalTheme?: TerminalTheme) {
     this.root = new BoxRenderable(renderer, { id: "editor-view", width: "100%", flexGrow: 1, minHeight: 0, flexDirection: "column", visible: false });
     this.message = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     uiTheme(renderer).bind(this.message, (colors) => { this.message.fg = colors.muted; });
@@ -57,7 +57,9 @@ export class EditorPanel {
     const generation = ++this.generation;
     this.cancelLayout?.();
     this.message.content = !worktree ? "Select a workspace to use Editor." : !this.actions
-      ? "Editor preview · Neovim is not started in demo mode." : this.heading(worktree);
+      ? "Editor preview · Neovim is not started in demo mode." : exited
+        ? `Neovim exited (${info?.exitCode ?? "signal"}) · open again explicitly` : "";
+    this.message.visible = !worktree || !this.actions || Boolean(exited);
     this.openButton.visible = Boolean(worktree && this.actions && (!info || exited));
     if (previous && previous.id === info?.id && !exited) {
       this.selected = previous;
@@ -70,19 +72,19 @@ export class EditorPanel {
       if (!this.current(generation) || !worktree || !this.actions) return;
       let id = info?.id;
       if (explicit && (!info || exited)) {
-        this.message.content = `Opening Neovim · ${worktree.name}`; this.openButton.visible = false;
+        this.message.content = `Opening Neovim · ${worktree.name}`; this.message.visible = true; this.openButton.visible = false;
         await this.laidOut();
         if (!this.current(generation)) return;
-        const { horizontal, vertical } = panelSpacing(this.renderer);
+        const { horizontal } = panelSpacing(this.renderer);
         const opened = await this.actions.open(worktree.id, {
           cols: Math.max(2, Math.min(500, this.root.width - horizontal * 2)),
-          rows: Math.max(1, Math.min(200, this.root.height - vertical * 2 - 1)),
+          rows: Math.max(1, Math.min(200, this.root.height)),
         });
         if (!this.current(generation)) return;
         if (!opened.ok) { this.failed(opened.error); return; }
         id = opened.value;
       }
-      if (!id) { this.message.content = "Editor is not running · open explicitly to start Neovim."; return; }
+      if (!id) { this.message.content = "Editor is not running · open explicitly to start Neovim."; this.message.visible = true; return; }
       let cached = this.cached.get(worktree.id);
       if (cached?.id !== id) {
         cached?.surface.dispose();
@@ -96,7 +98,8 @@ export class EditorPanel {
       const attached = await this.actions.attach(id, (frame) => {
         if (!this.current(generation) || editor.surface.root.isDestroyed) return;
         editor.frame = frame; editor.surface.display(frame);
-        this.message.content = frame.exited ? `Neovim exited (${frame.exitCode ?? "signal"}) · open again explicitly` : this.heading(worktree);
+        this.message.content = frame.exited ? `Neovim exited (${frame.exitCode ?? "signal"}) · open again explicitly` : "";
+        this.message.visible = frame.exited;
         this.openButton.visible = frame.exited;
         if (frame.exited && editor.surface.root.focused) this.openButton.focus();
         editor.surface.acceptsInput = Boolean(this.connection && !frame.exited);
@@ -111,14 +114,11 @@ export class EditorPanel {
       this.changed();
     }).catch((error: unknown) => { if (this.current(generation)) this.failed(error); else reportUnexpected(error, "editor cleanup"); });
   }
-  private heading(worktree: Worktree): string {
-    return `Neovim · ${worktree.name}${this.sidebarHint ? ` · ${this.sidebarHint} sidebar` : ""}`;
-  }
   private current(generation: number): boolean { return !this.disposed && !this.root.isDestroyed && this.root.visible && generation === this.generation; }
   private failed(error: unknown): void {
     const text = error instanceof ExpectedError ? `[${error.code}] ${error.message}` : reportUnexpected(error, "editor view");
     this.generation++; // A failed attachment may still be finishing its admission promise.
-    this.message.content = "Editor unavailable · open / reconnect explicitly";
+    this.message.content = "Editor unavailable · open / reconnect explicitly"; this.message.visible = true;
     this.openButton.visible = true;
     if (this.selected?.surface.root.focused) this.openButton.focus();
     this.selected?.surface.suspend(); this.notice(text); this.changed();

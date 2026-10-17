@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { CodeRenderable, DiffRenderable, InputRenderable, TextAttributes, type Renderable, type TerminalColors } from "@opentui/core";
 import { uiTheme } from "../../ui/theme.ts";
-import { createTestRenderer, MockTreeSitterClient } from "@opentui/core/testing";
+import { createTestRenderer, ManualClock, MockTreeSitterClient } from "@opentui/core/testing";
 import { Workbench } from "../../app/ui/workbench.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -26,8 +26,8 @@ const comparison = (): GitComparison => {
   return { before, after: before.replace("line30 = 30", "line30 = 300"), beforeLabel: "HEAD:src/login.ts", afterLabel: "worktree:src/login.ts" };
 };
 
-async function mount(options: { actions?: Partial<GitActions>; initial?: WorkViewPreferences; source?: GitSource } = {}) {
-  const app = await createTestRenderer({ width: 160, height: 32, kittyKeyboard: true });
+async function mount(options: { actions?: Partial<GitActions>; initial?: WorkViewPreferences; source?: GitSource; clock?: ManualClock } = {}) {
+  const app = await createTestRenderer({ width: 160, height: 32, kittyKeyboard: true, ...(options.clock ? { clock: options.clock } : {}) });
   const selection = new WorkspaceSelection(demoWorkspace());
   const copies: string[] = [], requests: { id: string; text: string }[] = [], loads: string[] = [], creations: string[] = [];
   const highlighter = new MockTreeSitterClient({ autoResolveTimeout: 0 });
@@ -73,6 +73,87 @@ async function mount(options: { actions?: Partial<GitActions>; initial?: WorkVie
     async close() { view.dispose(); await app.dispose(); await highlighter.destroy(); },
   };
 }
+
+test("Refresh 버튼 없이 r로 새로고침하고 spinner는 탭과 같은 행에서 최소 500ms 표시한다", async () => {
+  // Keep refresh pending at the query boundary and drive animation with the renderer clock.
+  const clock = new ManualClock(); let reads = 0;
+  const pending = Promise.withResolvers<Result<GitSnapshot, ExpectedError>>();
+  const app = await mount({ clock, source: {
+    load: async () => ++reads === 1 ? ok(snapshot()) : pending.promise,
+    details: async (commit) => ok({ commit, message: commit.subject, files: [] }), compare: async () => ok(comparison()),
+  } });
+  try {
+    clock.advance(500); await app.renderOnce();
+    const toolbar = app.get("git-toolbar"), spinner = app.get("git-loading"), tab = toolbar.getChildren()[0]!;
+    const toolbarText = () => app.captureCharFrame().split("\n")[toolbar.y]!.slice(toolbar.x, toolbar.x + toolbar.width);
+    expect(toolbarText()).not.toContain("Refresh");
+    expect(spinner.visible).toBe(false);
+    const position = [spinner.x, spinner.y, toolbar.height];
+
+    // The scoped key still performs a real source reload, not just a visual animation.
+    app.get("git-history").focus(); app.mockInput.pressKey("r"); await app.renderOnce();
+    expect(reads).toBe(2); expect(spinner.visible).toBe(true);
+    expect([spinner.y, spinner.height]).toEqual([tab.y, tab.height]);
+    expect(toolbarText()).toContain("⠋");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("r Refresh");
+    clock.advance(80); await app.renderOnce();
+    expect(toolbarText()).toContain("⠙");
+    pending.resolve(ok(snapshot())); await app.renderOnce(); await app.renderOnce();
+    clock.advance(419); await app.renderOnce(); expect(spinner.visible).toBe(true);
+    clock.advance(1); await app.renderOnce(); expect(spinner.visible).toBe(false);
+    expect([spinner.x, spinner.y, toolbar.height]).toEqual(position);
+    expect(app.requests).toEqual([]);
+  } finally { pending.resolve(ok(snapshot())); await app.close(); }
+});
+
+test("Refresh 버튼을 제거해도 More는 300개씩 추가 조회하고 소진되면 숨긴다", async () => {
+  // Pagination must not accidentally target the Back button after toolbar indices change.
+  const limits: number[] = [];
+  const app = await mount({ source: {
+    load: async (_reference, limit) => {
+      limits.push(limit); const data = snapshot();
+      data.commits = limits.length === 1 ? Array.from({ length: 300 }, (_, index) => ({ ...commit,
+        oid: (index + 1).toString(16).padStart(40, "0"), subject: `Commit ${index}` })) : [commit];
+      return ok(data);
+    },
+    details: async (commit) => ok({ commit, message: commit.subject, files: [] }), compare: async () => ok(comparison()),
+  } });
+  try {
+    await app.waitForFrame((frame) => frame.includes("+ More"));
+    await app.click("+ More"); await app.waitFor(() => limits.length === 2); await app.renderOnce();
+    expect(limits).toEqual([300, 600]);
+    expect(app.captureCharFrame()).not.toContain("+ More");
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Git 목록과 diff는 일반·좁은 화면 모두 사이드바 구분선 하단에 맞춘다", async () => {
+  // Repository reads are controlled; list, diff and responsive native layout are real.
+  const app = await mount();
+  const aligned = (id: string) => {
+    const sidebar = app.get("workspace-sidebar"), content = app.get(id);
+    expect(content.y + content.height).toBe(sidebar.y + sidebar.height);
+  };
+  try {
+    for (const [width, height] of [[160, 32], [60, 12], [79, 18], [80, 17], [160, 32]] as const) {
+      app.resize(width, height); await app.renderOnce(); await app.renderOnce();
+      aligned("git-history");
+      const tabs = app.get("work-view-tabs"), panel = app.get("git-view");
+      expect(panel.y).toBe(tabs.y + tabs.height);
+      expect(app.get("git-history").y).toBe(panel.y + 1); // Only Commits/Reflog controls remain.
+      expect(app.captureCharFrame()).not.toContain("Git ·");
+      if (app.get("git-right").visible) aligned("git-right");
+    }
+    await app.click("Reflog"); aligned("git-history");
+    await app.click("Commits"); await app.click("src/login.ts");
+    await app.waitForFrame((frame) => frame.includes("const line00"));
+    for (const [width, height] of [[160, 32], [60, 12], [79, 18], [80, 17], [160, 32]] as const) {
+      app.resize(width, height); await app.renderOnce(); await app.renderOnce();
+      aligned("git-diff"); aligned("git-file-diff");
+    }
+    expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
+  } finally { await app.close(); }
+});
 
 test("Git은 Commits/Reflog와 오른쪽 Commit/Refs를 표시하고 Reflog에서는 오른쪽을 숨긴다", async () => {
   // No model, OS clipboard, or actual repository mutation is needed for layout interaction.

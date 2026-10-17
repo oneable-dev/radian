@@ -304,7 +304,8 @@ confirmed clipboard contents; unsupported/failed delivery is reported explicitly
 acceptance depends on the terminal/multiplexer configuration and is not assumed from dispatch alone.
 
 Arrows/j/k navigate, Enter selects, r refreshes, + loads another 300 commits, Home/End jump, and
-PgUp/PgDn scroll. Diff j/k scrolls both columns vertically, and h/l or left/right arrows scroll them horizontally. History is bounded to
+PgUp/PgDn scroll. Refresh is keyboard-only; its shared spinner stays vertically centered beside
+the tabs in a reserved cell, with the same minimum-visible policy and no toolbar layout shift. Diff j/k scrolls both columns vertically, and h/l or left/right arrows scroll them horizontally. History is bounded to
 3,000 commits per ref filter. Text preview is bounded to 1 MiB per version and 20,000 combined lines;
 Git command output is bounded to 4 MiB with a 10-second query timeout. Exceeding a preview/computation
 limit, binary content, gitlinks and unmerged files produce an explicit notice rather than a partial
@@ -322,6 +323,13 @@ Select **Terminal**, then **+ New** (or the configured new-terminal command). Me
 empty Terminal view never launches a shell. Each worktree has an independent list of shells;
 creating one selects it unless a later navigation action supersedes that request. **Close** removes
 the selected tab and selects its next/previous neighbor, or leaves an explicit empty state.
+Tab labels show the foreground executable (for example `zsh`, `nvim` or `bun`), not `Terminal N`.
+The TUI reads a bounded local process snapshot while Terminal is visible, checks each shell's
+supervisor parent, and selects its actual terminal foreground group rather than a background job.
+Only executable names are read, never command arguments. Queries are cancelled when hidden;
+renaming keeps existing tab/terminal instances and focus. Existing runtime PID metadata is enough,
+so this needs no service restart. If inspection fails, a notice explains that terminal input is
+unaffected and the known shell/last process label remains available.
 
 The default shell is the runtime's `SHELL`, falling back to `/bin/sh`, started interactively in the
 selected worktree. Normal mode uses its ordinary user configuration. Test runtime uses a clean
@@ -366,10 +374,14 @@ focus or Git navigation/scroll positions. Each attached TUI has its own theme.
 
 Navigation uses understated separators and underlined active tabs rather than boxed controls.
 Sidebar, work-view content and footer text use two-cell horizontal insets, reduced to one on terminals
-narrower than 80 columns. Work-view content has one blank row above and below; screens shorter than
-18 rows drop that vertical padding. The sidebar widens to retain room for its tree. Embedded programs
-receive the measured inner viewport rather than rendering beneath the padding. The footer remains
-one row, with its gradient extending through the product text's inset to the screen's left edge.
+narrower than 80 columns. Main work tabs leave a single blank row before their content; screens
+shorter than 18 rows omit that gap. Work surfaces have no additional top or bottom panel inset. Routine Neovim/worktree captions, the `Git · … · All refs` line and the terminal
+`… · running` line are omitted; empty, error, exit and reconnect messages remain meaningful.
+Agent input, Editor, Git lists/diffs and Terminal end at the same bottom edge as the sidebar
+divider, without an unused row below them. The sidebar widens to retain
+room for its tree. Embedded programs receive the measured inner viewport rather than rendering
+beneath the padding. The footer text remains one row, with its gradient extending through the
+product text's inset to the screen's left edge.
 Keyboard focus is separate from selection: the focused sidebar or input border uses the terminal's
 accent, while an unfocused selection stays softly highlighted. Agent input has a dedicated surface.
 These are presentation changes only; keybindings and embedded program input ownership are unchanged.

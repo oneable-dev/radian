@@ -151,21 +151,27 @@ test("패널이 숨겨지는 좁은 화면에서도 푸터와 알림은 하단�
   } finally { await app.close(); }
 });
 
-test("사이드바 구분선은 셀 오른쪽 끝에 붙어 프롬프트 배경과 반 셀 틈을 남기지 않는다", async () => {
+test("사이드바 구분선과 프롬프트 배경은 가로 경계와 아래쪽 끝을 맞춘다", async () => {
   // A centered box-drawing line leaves half of its reserved cell outside the Agent pane.
   const app = await mount();
   try {
     // The edge-aligned divider must keep its cell and the prompt's text alignment on resize.
-    for (const [width, height, inset] of [[120, 24, 2], [60, 12, 1], [120, 24, 2]] as const) {
+    for (const [width, height, inset] of [[120, 24, 2], [60, 12, 1], [79, 18, 1], [80, 17, 2], [120, 24, 2]] as const) {
       app.resize(width, height); await app.renderOnce();
       const sidebar = app.renderer.root.findDescendantById("workspace-sidebar")!;
       const composer = app.renderer.root.findDescendantById("agent-composer")!;
       const prompt = app.renderer.root.findDescendantById("session-prompt")!;
       const column = sidebar.x + sidebar.width - 1;
+      const tabs = app.renderer.root.findDescendantById("work-view-tabs")!;
+      const tab = tabs.getChildren()[0]!;
+      expect(tabs.y + tabs.height - tab.y - tab.height).toBe(height < 18 ? 0 : 1);
 
       // The right-edge block touches the next cell instead of drawing at the center like │.
       expect(app.captureCharFrame().split("\n")[composer.y]!.slice(column, column + 1)).toBe("▕");
       expect(composer.x).toBe(column + 1); expect(prompt.x).toBe(composer.x + inset);
+      // The prompt surface reaches the same final content row as the sidebar divider.
+      expect(composer.y + composer.height).toBe(sidebar.y + sidebar.height);
+      expect(app.captureCharFrame().split("\n")[composer.y + composer.height - 1]!.slice(column, column + 1)).toBe("▕");
       expect(app.calls).toEqual([]);
     }
   } finally { await app.close(); }

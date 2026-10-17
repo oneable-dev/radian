@@ -27,6 +27,8 @@ export class Button extends BoxRenderable {
     theme.bind(this, this.paint); this.on("focused", this.paint); this.on("blurred", this.paint);
   }
 
+  setLabel(value: string): void { this.label.content = value; }
+
   set active(value: boolean) {
     this.selected = value;
     this.paint();

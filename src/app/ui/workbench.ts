@@ -126,7 +126,7 @@ export class Workbench {
     this.sidebar.add(this.tree);
     this.sidebar.add(this.history.root);
     this.workPanel = new BoxRenderable(renderer, { id: "work-panel", flexGrow: 1, minWidth: 0, flexDirection: "column" });
-    const workTabs = this.viewTabs = new BoxRenderable(renderer, { height: 3, paddingY: 1, flexShrink: 0, flexDirection: "row", paddingX: 1 });
+    const workTabs = this.viewTabs = new BoxRenderable(renderer, { id: "work-view-tabs", height: 3, paddingY: 1, flexShrink: 0, flexDirection: "row", paddingX: 1 });
     this.workTabs = {
       agent: this.button("Agents", () => this.selectWorkView("agent"), "Show Agents"),
       editor: this.button("Editor", () => this.selectWorkView("editor", true), "Show Editor"),
@@ -146,7 +146,7 @@ export class Workbench {
         keyHint: (command, context) => this.keymap.hint(command, context),
       });
     this.editor = new EditorPanel(renderer, actions.editor, (label, activate) => this.button(label, activate, "Open editor"),
-      (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); }, () => this.updateFooter(), this.keymap.hint("focus.sidebar", "editor"), actions.terminalTheme);
+      (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); }, () => this.updateFooter(), actions.terminalTheme);
     this.terminals = new TerminalPanel(renderer, actions.terminal, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
       (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); },
       (worktreeId, id) => {
@@ -437,9 +437,8 @@ export class Workbench {
     const { horizontal, vertical } = panelSpacing(this.renderer);
     this.sidebar.width = this.renderer.width < 80 ? 26 : 40;
     this.sidebar.paddingX = horizontal; this.sidebar.paddingBottom = vertical;
-    for (const tabs of [this.sidebarTabs, this.viewTabs]) {
-      tabs.height = 1 + vertical * 2; tabs.paddingY = vertical;
-    }
+    this.sidebarTabs.height = 1 + vertical * 2; this.sidebarTabs.paddingY = vertical;
+    this.viewTabs.height = 1 + vertical * 2; this.viewTabs.paddingTop = vertical; this.viewTabs.paddingBottom = vertical;
     this.viewTabs.paddingX = horizontal;
     this.search.marginBottom = vertical;
     this.tree.marginTop = vertical;

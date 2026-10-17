@@ -9,6 +9,7 @@ import { capture, ConnectionError, InputError, reportUnexpected, type ExpectedEr
 import { err, ok, type Result } from "../result.ts";
 import { defaultKeymap, loadKeymap, type Keymap } from "../keybindings/config.ts";
 import { loadTheme, type ThemeOverrides } from "../ui/theme-config.ts";
+import { readTerminalProcessTitles } from "../terminal/process-titles.ts";
 
 type Options = { demo: boolean; offline: boolean; service: boolean; status: boolean; stop: boolean; cwd: string; stateRoot: string | undefined; keybindings: string | undefined; theme: string | undefined };
 function parseOptions(args: string[]): Result<Options, InputError> {
@@ -155,6 +156,7 @@ async function runUI(repositories: readonly Repository[], client: RuntimeClient 
         onWorkViewsChange: (workViews: WorkViewPreferences) => { saveWorkViews(preferences, workViews); persist(); },
         ...(client.supportsTerminals ? { terminal: {
           list: () => client.snapshot.terminals ?? [],
+          titles: readTerminalProcessTitles,
           create: (worktreeId, size) => client.createTerminal(worktreeId, size),
           attach: (id, frame, failed) => client.attachTerminal(id, frame, failed),
           close: (id) => client.closeTerminal(id),

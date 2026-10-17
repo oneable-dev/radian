@@ -38,8 +38,8 @@ const within = (target: Renderable | null, parent: Renderable): boolean => {
 export class GitPanel {
   readonly root: BoxRenderable;
   private readonly toolbar: BoxRenderable;
-  private readonly title: TextRenderable;
   private readonly spinner: LoadingSpinner;
+  private readonly moreButton: Button;
   private readonly status: TextRenderable;
   private readonly body: BoxRenderable;
   private readonly main: BoxRenderable;
@@ -94,17 +94,19 @@ export class GitPanel {
       renderBefore: this.restoreScroll,
       onMouseDown: (event) => { if (event.button === 0) this.pointer = { x: event.x, y: event.y, moved: false }; },
       onMouseDrag: (event) => { if (this.pointer && (this.pointer.x !== event.x || this.pointer.y !== event.y)) this.pointer.moved = true; } });
-    this.toolbar = this.row(); this.toolbar.marginBottom = 1;
+    this.toolbar = this.row(); this.toolbar.id = "git-toolbar"; this.toolbar.alignItems = "center";
     for (const [index, label] of ["Commits", "Reflog"].entries()) {
       const control = button(label, () => this.setTab(index === 0 ? "commits" : "reflog"));
       this.topButtons.push(control); this.toolbar.add(control);
     }
-    const refresh = button("Refresh", () => this.refresh(), "Refresh Git");
-    const more = button("+ More", () => this.more(), "Load more commits");
-    this.toolbar.add(refresh); this.toolbar.add(more); this.topButtons.push(refresh, more);
-    this.spinner = new LoadingSpinner(renderer, { id: "git-loading", fg: gitColors.accent }); this.toolbar.add(this.spinner.root);
+    this.moreButton = button("+ More", () => this.more(), "Load more commits");
+    this.moreButton.visible = false;
+    this.toolbar.add(this.moreButton); this.topButtons.push(this.moreButton);
+    const activity = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0,
+      flexDirection: "row", alignItems: "center", justifyContent: "center" });
+    this.spinner = new LoadingSpinner(renderer, { id: "git-loading", fg: gitColors.accent });
+    activity.add(this.spinner.root); this.toolbar.add(activity);
     this.root.add(this.toolbar);
-    this.title = this.text("Git", "muted"); this.root.add(this.title);
     this.status = new TextRenderable(renderer, { id: "git-status", content: "", fg: gitColors.muted, height: 1, flexShrink: 0, selectable: false, wrapMode: "none" });
     this.root.add(this.status);
     this.body = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "row" });
@@ -344,14 +346,13 @@ export class GitPanel {
   private render(): void {
     if (this.disposed || this.root.isDestroyed) return;
     const cache = this.cache, data = cache?.data, state = cache?.state;
-    this.title.content = this.worktree ? `Git · ${this.worktree.name}${state?.reference ? ` · ${display(state.reference)}` : " · All refs"}` : "Git · No workspace";
-    this.status.content = !this.actions ? "Git preview · open a real repository to load Git data." : cache?.error ?? (!data ? "Loading Git data…"
+    const status = !this.actions ? "Git preview · open a real repository to load Git data." : cache?.error ?? (!data ? ""
       : state?.limit === 3000 && data.commits.length === 3000 ? "Showing 3,000 commits · narrow the ref filter to browse more history." : "");
-    this.status.visible = !!this.status.content;
+    this.status.content = status; this.status.visible = Boolean(status);
     this.body.visible = !!cache;
     if (!cache || !state) return;
     this.paintTabs();
-    this.topButtons[3]!.visible = state.tab === "commits" && !!data && data.commits.length === state.limit && state.limit < 3000;
+    this.moreButton.visible = state.tab === "commits" && !!data && data.commits.length === state.limit && state.limit < 3000;
     this.right.visible = state.tab === "commits";
     const { horizontal } = panelSpacing(this.renderer);
     this.right.paddingLeft = horizontal; this.dialog.paddingX = horizontal;
