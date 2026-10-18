@@ -313,7 +313,7 @@ export class TranscriptPanel {
     row.box.visible = !this.help.visible;
     const colors = this.theme.colors, section = row.section;
     const selected = this.state?.selectedId === section.id, skill = section.skillName !== undefined;
-    const folded = this.folded(row), spacing = transcriptSpacing(this.renderer.height);
+    const folded = this.folded(row), spacing = transcriptSpacing();
     const plain = this.legacy || section.kind === "assistant" || section.kind === "thinking";
     const background = this.legacy ? colors.panel : transcriptBackground(section.kind, colors);
     row.box.backgroundColor = background; row.box.border = false;
@@ -668,6 +668,10 @@ export class TranscriptPanel {
       }
     } finally { this.syncing = false; }
   };
+  prepareLayoutChange(): void {
+    if (!this.visible || this.disposed || this.scroll.isDestroyed) return;
+    this.pending ??= this.state?.follow ? { position: Infinity } : this.viewportAnchor();
+  }
   private finishLayout = (): void => {
     this.reconcileSelection();
     if (this.positionIntent) {

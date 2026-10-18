@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { CancelledError, collectCleanup, InputError, ProtocolError, SessionError, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { SessionRegistry, type SessionRecord } from "../agents/session-registry.ts";
+import { expandPromptDraft } from "../agents/prompt-input.ts";
 import { piSessionFactory } from "../agents/pi-session-adapter.ts";
 import { SessionHistory } from "../agents/history.ts";
 import { offlineRuntime } from "../testing/offline-runtime.ts";
@@ -107,7 +108,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || this.notice, editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
@@ -193,10 +194,14 @@ class WorkspaceRuntime {
         if (!state) return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
         if (!command.text.trim()) return err(new InputError("A prompt must not be empty."));
         const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
-        const run = this.registry.prompt(command.sessionId, command.text, () => accepted.resolve(ok(undefined)));
-        // Observe execution separately; an accepted request can still fail later.
-        this.observe(run);
-        void run.then(accepted.resolve, accepted.reject);
+        let admitted = false;
+        const run = this.registry.prompt(command.sessionId, command.text, () => { admitted = true; accepted.resolve(ok(undefined)); }, command.images);
+        // Rejection before admission belongs to the caller. Accepted model/tool
+        // failures already belong to the session transcript, not the global footer.
+        void run.then((result) => { if (!admitted) accepted.resolve(result); }, (error: unknown) => {
+          if (!admitted) accepted.reject(error);
+          else { this.notice = reportUnexpected(error, "agent execution"); this.changed(); }
+        });
         const result = await accepted.promise;
         return result.ok ? ok(null) : result;
       }
@@ -205,7 +210,13 @@ class WorkspaceRuntime {
         const terminalViews = command.preferences.terminalViews ?? this.preferences.terminalViews;
         const gitViews = command.preferences.gitViews ?? this.preferences.gitViews;
         const agentViews = command.preferences.agentViews ?? this.preferences.agentViews;
-        this.preferences = { ...command.preferences, ...(workViews ? { workViews } : {}), ...(terminalViews ? { terminalViews } : {}), ...(gitViews ? { gitViews } : {}), ...(agentViews ? { agentViews } : {}) };
+        // Old clients cannot edit rich metadata. Retain it only while their legacy
+        // text still describes the same draft; never resurrect a replaced attachment.
+        const inputDrafts = command.preferences.inputDrafts ?? (this.preferences.inputDrafts ? Object.fromEntries(Object.entries(this.preferences.inputDrafts)
+          .filter(([id, draft]) => command.preferences.drafts[id] === expandPromptDraft(draft, false).text)) : undefined);
+        const drafts = { ...command.preferences.drafts };
+        for (const [id, draft] of Object.entries(inputDrafts ?? {})) drafts[id] = expandPromptDraft(draft, false).text;
+        this.preferences = { ...command.preferences, drafts, ...(inputDrafts ? { inputDrafts } : {}), ...(workViews ? { workViews } : {}), ...(terminalViews ? { terminalViews } : {}), ...(gitViews ? { gitViews } : {}), ...(agentViews ? { agentViews } : {}) };
         return ok(null);
       }
       case "terminal-create": return this.terminals.create(command.worktreeId, command);

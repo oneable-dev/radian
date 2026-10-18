@@ -19,7 +19,6 @@ export function transcriptThinkingColor(colors: UiColors): RGBA {
   return RGBA.fromValues(gray, gray, gray);
 }
 
-export function transcriptSpacing(height: number) {
-  const compact = height < 18;
-  return { sectionGap: compact ? 1 : 2, bodyGap: compact ? 0 : 1, bottomInset: compact ? 0 : 1 };
+export function transcriptSpacing() {
+  return { sectionGap: 2, bodyGap: 1, bottomInset: 1 };
 }

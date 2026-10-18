@@ -1,7 +1,8 @@
 import { expect, spyOn, test } from "bun:test";
-import { BoxRenderable, InputRenderable, NativeSession, type RGBA, type TerminalColors } from "@opentui/core";
+import { BoxRenderable, NativeSession, type RGBA, type TerminalColors } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench } from "../app/ui/workbench.ts";
+import { PromptInput } from "../agents/ui/prompt-input.ts";
 import { blendColors, uiTheme } from "./theme.ts";
 import { WorkspaceSelection } from "../app/workspace-selection.ts";
 import { demoWorkspace } from "../workspace/demo.ts";
@@ -49,7 +50,7 @@ test("화면 전체가 터미널 기본색과 ANSI 팔레트를 사용하고 밝
     expect(rgb(app.span("+ New session").fg)).toEqual([17, 119, 153]);
     expect(rgb(app.identitySpan().fg)).toEqual([236, 236, 236]);
     const prompt = app.renderer.root.findDescendantById("session-prompt");
-    if (!(prompt instanceof InputRenderable)) throw new Error("Missing Agent input");
+    if (!(prompt instanceof PromptInput)) throw new Error("Missing Agent input");
     prompt.focus(); await app.mockInput.typeText(" draft"); await app.renderOnce();
     const before = app.captureCharFrame(), selected = app.selection.sessionId;
 

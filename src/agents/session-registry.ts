@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { Repository, Worktree } from "../workspace/model.ts";
 import type { AgentStatus, Subagent } from "./model.ts";
 import { AgentRunError, CancelledError, capture, CleanupError, collectCleanup, HistoryError, InputError, parseJson, SessionError, CapabilityError, type ExpectedError } from "../errors.ts";
@@ -16,9 +16,10 @@ export type SessionExecutor = {
   readonly sessionFile: string | undefined;
   readonly state: ExecutionState;
   commands?(): readonly CompletionItem[];
+  readonly acceptsImages?: boolean;
   subscribe(listener: () => void): () => void;
   // Resolves on run completion; the optional callback marks SDK input acceptance.
-  prompt(text: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>>;
+  prompt(text: string, onAccepted?: () => void, imagePaths?: readonly string[]): Promise<Result<void, ExpectedError>>;
   close(): Promise<Result<void, ExpectedError>>;
 };
 export type SessionContext = {
@@ -183,12 +184,23 @@ export class SessionRegistry {
       : err(new CapabilityError("This executor does not provide command discovery."));
   }
 
-  async prompt(id: string, text: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>> {
+  async prompt(id: string, text: string, onAccepted?: () => void, imagePaths: readonly string[] = []): Promise<Result<void, ExpectedError>> {
     const selected = this.requireOpen(id);
     if (!selected.ok) return selected;
     if (!text.trim()) return err(new InputError("A prompt must not be empty."));
-    delete selected.value.recoveredState;
-    return selected.value.executor!.prompt(text, onAccepted);
+    if (imagePaths.length && !selected.value.executor?.acceptsImages) return err(new CapabilityError("The selected model does not accept image input. Switch models or remove the image; input was retained."));
+    const entry = selected.value;
+    let accepted = false;
+    const accept = () => {
+      if (accepted) return;
+      accepted = true;
+      if (entry.recoveredState) { delete entry.recoveredState; this.emit(); }
+      onAccepted?.();
+    };
+    const result = await entry.executor!.prompt(text, accept, imagePaths.map((path) => resolve(entry.worktree.path, path)));
+    // Executors without an admission callback can prove acceptance only on success.
+    if (result.ok && !accepted) accept();
+    return result;
   }
   close(id: string): Promise<Result<void, ExpectedError>> {
     const entry = this.entries.get(id);

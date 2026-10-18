@@ -6,6 +6,7 @@ import type { GitViewState } from "../git/model.ts";
 import { gitViewsSchema } from "../git/preferences.ts";
 import { agentViewsSchema, type TranscriptViewState } from "../agents/transcript-preferences.ts";
 import { runCompletionSchema } from "../agents/run-completion.ts";
+import { promptDraftSchema, validatePromptDraft } from "../agents/prompt-input.ts";
 import { errorCodes, usageErrorCodes, AgentRunError, ExpectedError, InputError, parseJson, ProtocolError, type ErrorCode, type UsageErrorCode } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 
@@ -71,7 +72,8 @@ export const editorFrameSchema = ptyFrameSchema;
 export type EditorFrame = PtyFrame;
 export const preferencesSchema = Type.Object({
   selection: Type.Object({ worktreeId: Type.Union([id, Type.Null()]), sessions: Type.Record(Type.String(), Type.String()) }),
-  drafts: Type.Record(Type.String(), Type.String({ maxLength: 1000000 })),
+  drafts: Type.Record(Type.String(), Type.String()),
+  inputDrafts: Type.Optional(Type.Record(Type.String(), promptDraftSchema)),
   workViews: Type.Optional(workViewsSchema),
   gitViews: Type.Optional(gitViewsSchema),
   agentViews: Type.Optional(agentViewsSchema),
@@ -121,7 +123,7 @@ export const commandSchema = Type.Union([
   Type.Object({ type: Type.Literal("create"), worktreeId: id }),
   Type.Object({ type: Type.Literal("resume"), worktreeId: id, savedId: id }),
   Type.Object({ type: Type.Literal("close"), sessionId: id }),
-  Type.Object({ type: Type.Literal("prompt"), sessionId: id, text: Type.String({ minLength: 1, maxLength: 1000000 }) }),
+  Type.Object({ type: Type.Literal("prompt"), sessionId: id, text: Type.String({ minLength: 1 }), images: Type.Optional(Type.Array(id)) }),
   Type.Object({ type: Type.Literal("preferences"), preferences: preferencesSchema }),
   Type.Object({ type: Type.Literal("stop") }),
   Type.Object({ type: Type.Literal("editor-open"), worktreeId: id,
@@ -157,8 +159,17 @@ export function errorStatus(error: ExpectedError): number {
 }
 export function parseCommand(text: string): Result<RuntimeCommand, InputError> {
   const parsed = parseJson(text, "command"); if (!parsed.ok) return parsed;
-  return Value.Check(commandSchema, parsed.value) ? ok(parsed.value) : err(new InputError("Malformed runtime command."));
+  if (!Value.Check(commandSchema, parsed.value)) return err(new InputError("Malformed runtime command."));
+  if (parsed.value.type === "prompt" && parsed.value.images?.some((path) => path.includes("\0"))) return err(new InputError("Image paths must not contain NUL bytes."));
+  if (parsed.value.type === "preferences" && parsed.value.preferences.inputDrafts) {
+    for (const draft of Object.values(parsed.value.preferences.inputDrafts)) { const valid = validatePromptDraft(draft); if (!valid.ok) return valid; }
+  }
+  return ok(parsed.value);
 }
 export function parseSnapshot(value: unknown): Result<RuntimeSnapshot, ProtocolError> {
-  return Value.Check(snapshotSchema, value) ? ok(value) : err(new ProtocolError("Incompatible or malformed runtime snapshot."));
+  if (!Value.Check(snapshotSchema, value)) return err(new ProtocolError("Incompatible or malformed runtime snapshot."));
+  for (const draft of Object.values(value.preferences.inputDrafts ?? {})) {
+    const valid = validatePromptDraft(draft); if (!valid.ok) return err(new ProtocolError(valid.error.message, { cause: valid.error }));
+  }
+  return ok(value);
 }

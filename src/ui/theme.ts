@@ -1,4 +1,4 @@
-import { RGBA, Renderable, RenderableEvents, type BoxRenderable, type CliRenderer, type InputRenderable, type ScrollBoxRenderable, type TerminalColors } from "@opentui/core";
+import { RGBA, Renderable, RenderableEvents, type BoxRenderable, type CliRenderer, type InputRenderable, type TextareaRenderable, type ScrollBoxRenderable, type TerminalColors } from "@opentui/core";
 import { isThemeColor, themeRoles, type ThemeOverrides, type ThemeRole } from "./theme-config.ts";
 import { reportUnexpected } from "../errors.ts";
 
@@ -36,6 +36,7 @@ export class UiTheme {
   private readonly bindings = new Map<() => void, () => void>();
   private value: UiColors;
   private disposed = false;
+  private colorless = false;
   private hostChange = false;
   private sawForeground = false;
   private sawBackground = false;
@@ -47,6 +48,13 @@ export class UiTheme {
     renderer.once("destroy", this.dispose);
   }
   get colors(): UiColors { return this.value; }
+  get monochrome(): boolean { return this.colorless; }
+  setMonochrome(value: boolean): void {
+    if (value === this.colorless) return;
+    this.colorless = value;
+    for (const update of [...this.bindings.keys()]) update();
+    this.renderer.requestRender();
+  }
   configure(palette: TerminalColors, overrides: ThemeOverrides = {}): void {
     this.overrides = { ...overrides }; this.updatePalette(palette);
   }
@@ -56,7 +64,7 @@ export class UiTheme {
     const cleanup = () => { this.bindings.delete(update); owner.off(RenderableEvents.DESTROYED, cleanup); };
     this.bindings.set(update, cleanup); owner.once(RenderableEvents.DESTROYED, cleanup); update();
   }
-  input(input: InputRenderable): void {
+  input(input: InputRenderable | TextareaRenderable): void {
     this.bind(input, (colors) => {
       input.textColor = colors.text; input.focusedTextColor = colors.text;
       input.backgroundColor = colors.surface; input.focusedBackgroundColor = colors.selected;
@@ -78,6 +86,9 @@ export class UiTheme {
     panel.once(RenderableEvents.DESTROYED, () => this.renderer.off("focused_renderable", paint));
   }
   scrollbars(scroll: ScrollBoxRenderable): void {
+    // Constructor visibility is auto-managed by OpenTUI; this setter establishes
+    // explicit ownership without disabling horizontal navigation or changing content.
+    scroll.horizontalScrollBar.visible = false;
     this.bind(scroll, (colors) => {
       for (const bar of [scroll.verticalScrollBar, scroll.horizontalScrollBar]) {
         bar.trackOptions = { foregroundColor: colors.muted, backgroundColor: colors.panel };

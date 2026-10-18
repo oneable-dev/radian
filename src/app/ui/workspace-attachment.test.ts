@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { InputRenderable } from "@opentui/core";
+import { PromptInput } from "../../agents/ui/prompt-input.ts";
 import { createTestRenderer } from "@opentui/core/testing";
 import { icons } from "../../icons.ts";
 import { ok } from "../../result.ts";
@@ -30,7 +30,7 @@ test("연결 전 다른 레포의 초안을 지우지 않고 연결 뒤 저장�
 
     // 첫 세션 b1이 아니라 저장된 b2와 그 입력을 보여 주며 A의 초안도 남는다.
     const prompt = setup.renderer.root.findDescendantById("session-prompt");
-    if (!(prompt instanceof InputRenderable)) throw new Error("Missing session prompt.");
+    if (!(prompt instanceof PromptInput)) throw new Error("Missing session prompt.");
     expect(selection.sessionId).toBe("b2");
     expect(prompt.value).toBe("retained draft B");
     expect(view.promptDrafts.a1).toBe("draft A");

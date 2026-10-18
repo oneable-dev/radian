@@ -1,10 +1,11 @@
-import { BoxRenderable, InputRenderable, RenderableEvents, TextRenderable, type CliRenderer } from "@opentui/core";
+import { BoxRenderable, RenderableEvents, TextRenderable, type CliRenderer } from "@opentui/core";
 import type { CommandId } from "../../keybindings/commands.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { completionTarget, insertCompletion, type CompletionQuery, type CompletionResult, type CompletionTarget } from "../completion.ts";
+import type { PromptInput } from "./prompt-input.ts";
 
 export type CompletionProvider = (sessionId: string, query: CompletionQuery, signal: AbortSignal) => Promise<Result<CompletionResult, ExpectedError>>;
 type LookupContext = { sessionId: string; target: CompletionTarget; lookup: string; scope: string };
@@ -33,15 +34,17 @@ export class CompletionMenu {
   private queued = false;
   private disposed = false;
 
-  constructor(private readonly renderer: CliRenderer, private readonly input: InputRenderable,
+  constructor(private readonly renderer: CliRenderer, private readonly input: PromptInput,
     private readonly sessionId: () => string | null, private readonly provider: CompletionProvider | undefined,
-    private readonly changed: () => void) {
+    private readonly changed: () => void, private readonly availableRows: () => number = () => 5) {
     this.root = new BoxRenderable(renderer, { id: "prompt-completions", width: "100%", height: 1, flexShrink: 0, visible: false, flexDirection: "column", paddingX: 1 });
     this.heading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.spinner = new LoadingSpinner(renderer);
     this.header = new TextRenderable(renderer, { height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });
     const indicator = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0 });
-    indicator.add(this.spinner.root);
+    // Anchor activity to the menu, not the optional header: a one-row menu can
+    // show its result immediately while the shared spinner finishes its 500ms tail.
+    this.spinner.root.position = "absolute"; this.spinner.root.left = 1; this.spinner.root.top = 0; this.spinner.root.zIndex = 1;
     this.heading.add(indicator); this.heading.add(this.header); this.root.add(this.heading);
     for (let index = 0; index < 5; index++) {
       const row = new TextRenderable(renderer, { id: `completion-option-${index}`, width: "100%", height: 1, flexShrink: 0, wrapMode: "none", selectable: false,
@@ -53,11 +56,12 @@ export class CompletionMenu {
         } });
       this.rows.push(row); this.root.add(row);
     }
+    this.root.add(this.spinner.root);
     uiTheme(renderer).bind(this.root, (colors) => {
       this.root.backgroundColor = colors.surface; this.header.fg = colors.muted; this.spinner.root.fg = colors.accent; this.paint();
     });
     input.on("focused", this.refresh); input.on("blurred", this.blur);
-    input.onCursorChange = this.refresh;
+    input.onCursorChange = () => { this.refresh(); this.changed(); };
     renderer.on("resize", this.paint);
     this.root.once(RenderableEvents.DESTROYED, () => this.dispose());
   }
@@ -133,21 +137,27 @@ export class CompletionMenu {
   private accept(): void {
     const context = this.context(), item = this.result.items[this.selected];
     if (!context || !this.fresh(context) || !item) return;
-    const inserted = insertCompletion(this.input.value, context.target, item);
-    this.input.value = inserted.text;
-    this.input.cursorOffset = this.input.editBuffer.measureText(inserted.text.slice(0, inserted.cursor));
+    if (item.kind === "file") {
+      const trailing = context.target.end === this.input.value.length;
+      if (!this.input.attachFile(item.value, context.target.start, context.target.end)) return;
+      if (trailing) this.input.insertText(" ");
+    } else {
+      const inserted = insertCompletion(this.input.value, context.target, item);
+      const replacement = inserted.text.slice(context.target.start, inserted.cursor);
+      this.input.replaceRange(context.target.start, context.target.end, replacement);
+    }
     this.dismissed = this.signature(); this.hide();
   }
   private paint = (): void => {
     if (this.disposed || this.root.isDestroyed || !this.open) return;
-    const budget = Math.max(1, Math.min(5, Math.floor(this.renderer.height / 6)));
+    const budget = Math.max(1, Math.min(5, Math.floor(this.renderer.height / 6), this.availableRows()));
     const showHeader = budget > 1 || !this.result.items.length;
     this.heading.visible = showHeader;
     const count = Math.min(this.result.items.length, budget - Number(showHeader));
     this.first = Math.min(this.first, this.selected);
     if (count > 0 && this.selected >= this.first + count) this.first = Math.max(0, this.selected - count + 1);
     // Reserve the same bounded area from opening until dismissal, even for loading, errors or no matches.
-    this.root.height = budget;
+    if (this.root.height !== budget) this.root.height = budget;
     this.header.content = (this.message || `${this.target?.kind === "file" ? "Files" : "Commands · SDK resources"} · ${this.selected + 1}/${this.result.items.length}${this.result.truncated ? "+ · refine search" : ""}${this.pending ? " · Updating…" : ""}`).replace(/[\x00-\x1f\x7f]/gu, " ");
     const colors = uiTheme(this.renderer).colors;
     for (const [index, row] of this.rows.entries()) {
@@ -158,6 +168,7 @@ export class CompletionMenu {
       row.fg = colors.text; row.bg = this.first + index === this.selected ? colors.selected : colors.surface;
     }
   };
+  reflow(): void { this.paint(); }
   private cancelRequest(): void {
     if (this.timer !== undefined) this.renderer.clock.clearTimeout(this.timer);
     this.timer = undefined; this.abort?.abort(); this.abort = undefined;

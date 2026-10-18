@@ -3,7 +3,7 @@ import { RenderableEvents, type BoxRenderable, type CliRenderer } from "@opentui
 export const horizontalInset = (width: number): number => width < 80 ? 1 : 2;
 
 export function panelSpacing(renderer: Pick<CliRenderer, "width" | "height">) {
-  return { horizontal: horizontalInset(renderer.width), vertical: renderer.height < 18 ? 0 : 1 };
+  return { horizontal: horizontalInset(renderer.width), vertical: 1 };
 }
 
 // Work surfaces start directly below their tabs and end at the sidebar divider's bottom.

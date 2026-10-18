@@ -11,6 +11,8 @@ import { SessionRegistry, type SessionExecutor } from "./session-registry.ts";
 import { piSessionFactory, type PiSessionOptions } from "./pi-session-adapter.ts";
 import { runCompletionEntryType } from "./run-completion.ts";
 import { expectOk, expectError } from "../testing/results.ts";
+import { tinyPng } from "../testing/image.ts";
+import { ok } from "../result.ts";
 
 function controlledStreams(options: PiSessionOptions) {
   const gates = new Map<string, { aborted: boolean; abortReceived: Promise<void>; finish(text: string): void }>();
@@ -79,6 +81,106 @@ async function commandExtension(directory: string) {
     pi.registerCommand("fixture-wait", { handler: async (_args, ctx) => { await ctx.waitForIdle(); } });
   }`);
 }
+
+test("실제 SDK는 경로 라벨이 아닌 이미지 바이트를 사용자 메시지에 전달하고 저장한다", async () => {
+  const observed: string[] = [];
+  const app = await sdkFixture(false, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] },
+    streamFn: (model, context, request) => {
+      const user = context.messages.findLast((message) => message.role === "user");
+      if (user?.role === "user" && typeof user.content !== "string") observed.push(...user.content.flatMap((part) => part.type === "image" ? [part.data] : []));
+      return options.streamFn!(model, context, request);
+    } }));
+  try {
+    const path = join(app.directory, "image.png"); await writeFile(path, tinyPng());
+    const id = expectOk(await app.registry.create(app.main.id));
+    expectOk(await app.registry.prompt(id, "Inspect [Image #1]", undefined, [path]));
+
+    expect(observed).toHaveLength(1); expect(Buffer.from(observed[0]!, "base64")).toEqual(tinyPng());
+    const file = app.registry.sessionFile(id)!;
+    const saved = await readFile(file, "utf8"); expect(saved).toContain('"type":"image"'); expect(saved).not.toContain(path);
+    expect(app.registry.details(id)?.status).toBe("complete");
+    expectOk(await app.registry.close(id)); const restored = expectOk(await app.registry.create(app.main.id, file));
+    expect(app.registry.details(restored)?.sections?.some(section => section.kind === "user")).toBe(true);
+    expect(observed).toHaveLength(1);
+  } finally { await app.cleanup(); }
+});
+
+test("느린 이미지 준비 중에도 나중에 보낸 텍스트가 먼저 수락되거나 대화 순서를 바꾸지 않는다", async () => {
+  const preparing = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const admissions: string[] = [], contexts: string[][] = [];
+  const app = await sdkFixture(false, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] },
+    imageLoader: async () => { preparing.resolve(); await release.promise; return ok([{ type: "image" as const, data: tinyPng().toString("base64"), mimeType: "image/png" }]); },
+    streamFn: (model, context, request) => {
+      contexts.push(context.messages.flatMap(message => message.role === "user" ? [typeof message.content === "string" ? message.content : message.content.filter(part => part.type === "text").map(part => part.text).join("")] : []));
+      return options.streamFn!(model, context, request);
+    } }));
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    const first = app.registry.prompt(id, "first image input", () => admissions.push("first"), ["/fixture/image.png"]); await preparing.promise;
+    const second = app.registry.prompt(id, "later text input", () => admissions.push("second"));
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(contexts).toEqual([]); expect(admissions).toEqual([]);
+    release.resolve(); expectOk(await first); expectOk(await second);
+
+    // SDK는 첫 모델 호출 전에 받은 steer를 함께 반영할 수 있다. 호출 횟수를
+    // 강제하지 않고 수락과 실제 사용자 메시지의 순서가 보존되는지 확인한다.
+    expect(admissions).toEqual(["first", "second"]);
+    expect(app.registry.details(id)?.sections?.filter(section => section.kind === "user").map(section => section.text)).toEqual(["first image input[Image: image/png]", "later text input"]);
+    expect(contexts.at(-1)).toEqual(["first image input", "later text input"]);
+  } finally { release.resolve(); await app.cleanup(); }
+});
+
+test("이미지 steer도 현재 도구·응답을 중단하지 않고 같은 SDK 세션의 다음 입력으로 반영한다", async () => {
+  const observed: string[] = [];
+  const app = await sdkFixture(true, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] },
+    streamFn: (model, context, request) => {
+      const user = context.messages.findLast((message) => message.role === "user");
+      if (user?.role === "user" && typeof user.content !== "string") observed.push(...user.content.flatMap((part) => part.type === "image" ? [part.data] : []));
+      return options.streamFn!(model, context, request);
+    } }));
+  try {
+    const path = join(app.directory, "queued.png"); await writeFile(path, tinyPng());
+    const id = expectOk(await app.registry.create(app.main.id));
+    const first = app.registry.prompt(id, "hold A"); await app.streams.waitFor("A");
+    const accepted = Promise.withResolvers<void>();
+    const second = app.registry.prompt(id, "hold B", accepted.resolve, [path]); await accepted.promise;
+    expect(app.streams.gates.get("A")!.aborted).toBe(false); expect(app.streams.gates.has("B")).toBe(false);
+    app.streams.gates.get("A")!.finish("A finished"); await app.streams.waitFor("B");
+    expect(observed).toHaveLength(1); expect(app.executors).toHaveLength(1);
+    app.streams.gates.get("B")!.finish("B finished"); expectOk(await first); expectOk(await second);
+    expect(app.registry.details(id)?.status).toBe("complete");
+  } finally { await app.cleanup(); }
+});
+
+test("복원한 세션의 이미지 준비가 거절되면 기존 복구 경고와 저장된 출력은 사라지지 않는다", async () => {
+  const app = await sdkFixture(false, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] } }));
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
+    const record = app.registry.records.find(item => item.id === id)!;
+    expectOk(await app.registry.close(id));
+    expectOk(await app.registry.restore({ ...record, state: { ...record.state, status: "working", output: record.state.output + "\nRetained host recovery output" } }));
+    const before = app.registry.details(id); let accepted = 0;
+    expect(expectError(await app.registry.prompt(id, "Inspect image", () => accepted++, [join(app.directory, "missing.png")])).code).toBe("STORAGE_FAILED");
+    expect(accepted).toBe(0); expect(app.registry.details(id)?.error).toBe(before?.error);
+    expect(app.registry.details(id)?.output).toBe(before?.output); expect(before?.output).toContain("Retained host recovery output");
+  } finally { await app.cleanup(); }
+});
+
+test("이미지 미지원 모델과 첨부를 받지 않는 설정 명령은 수락 전에 거절하고 실행을 시작하지 않는다", async () => {
+  const plain = await sdkFixture();
+  try {
+    const id = expectOk(await plain.registry.create(plain.main.id)); let accepted = 0;
+    expect(expectError(await plain.registry.prompt(id, "Inspect image", () => accepted++, [join(plain.directory, "missing.png")])).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(accepted).toBe(0); expect(plain.registry.details(id)?.output).toBe("");
+  } finally { await plain.cleanup(); }
+  const app = await sdkFixture(false, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] } }));
+  try {
+    await commandExtension(app.directory); const path = join(app.directory, "image.png"); await writeFile(path, tinyPng());
+    const id = expectOk(await app.registry.create(app.main.id)); let accepted = 0;
+    expect(expectError(await app.registry.prompt(id, "/fixture-command", () => accepted++, [path])).code).toBe("INVALID_INPUT");
+    expect(accepted).toBe(0); expect(app.registry.details(id)?.output).toBe(""); expect(app.registry.details(id)?.status).toBeNull();
+  } finally { await app.cleanup(); }
+});
 
 test("SDK 명령 목록 조회와 실행은 모델을 호출하지 않고 이전 실행 상태를 보존한다", async () => {
   const app = await sdkFixture();

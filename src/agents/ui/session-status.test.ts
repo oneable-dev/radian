@@ -39,7 +39,7 @@ test("프롬프트 위에 남은 context와 제공자 아이콘·사용한 usage
     app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("keep this draft"); await app.renderOnce();
 
     const prompt = app.renderer.root.findDescendantById("session-prompt")!, composer = app.renderer.root.findDescendantById("agent-composer")!;
-    expect(app.root.y + app.root.height + 1).toBe(composer.y);
+    expect(app.root.y + app.root.height).toBe(composer.y);
     const panel = app.renderer.root.findDescendantById("agent-view")!;
     expect(composer.x).toBe(panel.x); expect(composer.width).toBe(panel.width);
     expect(prompt.x).toBe(app.root.x); expect(prompt.x + prompt.width).toBe(app.root.x + app.root.width);
@@ -66,8 +66,8 @@ test("입력 배경은 패널 양끝을 채우고 입력 내용은 TRANSCRIPT·�
   const app = await mount({ ...sample(), model: "gpt-6.1-sol", effort: "xhigh", fast: null,
     context: { usedTokens: 6000, maxTokens: 200000 }, usage: unavailable() });
   try {
-    // Crossing the 80-column and 18-row thresholds must not leave stale margins or padding.
-    for (const [width, height, inset, gap] of [[120, 24, 2, 1], [79, 18, 1, 1], [80, 18, 2, 1], [60, 12, 1, 0], [120, 24, 2, 1]] as const) {
+    // Width changes adapt text insets; height changes keep the same vertical treatment.
+    for (const [width, height, inset, gap] of [[120, 24, 2, 0], [79, 18, 1, 0], [80, 18, 2, 0], [60, 12, 1, 0], [120, 24, 2, 0]] as const) {
       app.resize(width, height); await app.renderOnce();
       const frame = app.captureCharFrame().split("\n"), modeY = frame.findIndex((line) => line.includes("TRANSCRIPT ·"));
       const composer = app.renderer.root.findDescendantById("agent-composer")!;
@@ -81,10 +81,6 @@ test("입력 배경은 패널 양끝을 채우고 입력 내용은 TRANSCRIPT·�
       expect(modeColumn).toBe(prompt.x); expect(app.root.x).toBe(prompt.x);
       expect(app.root.x + app.root.width).toBe(prompt.x + prompt.width);
       expect(app.root.y - modeY - 1).toBe(gap); expect(composer.y - app.root.y - app.root.height).toBe(gap);
-      if (gap) {
-        expect(frame[app.root.y - 1]!.slice(composer.x, composer.x + composer.width).trim()).toBe("");
-        expect(frame[app.root.y + app.root.height]!.slice(composer.x, composer.x + composer.width).trim()).toBe("");
-      }
     }
   } finally { await app.close(); }
 });
@@ -175,7 +171,7 @@ test("좁은 화면은 바·설정·시간을 축약해 두 비율과 초안을 
   const app = await mount();
   try {
     app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("resize draft");
-    for (const [width, height, gap] of [[100, 20, 1], [60, 12, 0], [120, 24, 1]] as const) {
+    for (const [width, height, gap] of [[100, 20, 0], [60, 12, 0], [120, 24, 0]] as const) {
       app.resize(width, height); await app.renderOnce();
 
       expect(app.line()).toContain("context"); expect(app.line()).toContain("64%"); expect(app.line()).toContain("18% used");

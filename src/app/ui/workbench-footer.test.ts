@@ -164,7 +164,7 @@ test("사이드바 구분선과 프롬프트 배경은 가로 경계와 아래�
       const column = sidebar.x + sidebar.width - 1;
       const tabs = app.renderer.root.findDescendantById("work-view-tabs")!;
       const tab = tabs.getChildren()[0]!;
-      expect(tabs.y + tabs.height - tab.y - tab.height).toBe(height < 18 ? 0 : 1);
+      expect(tabs.y + tabs.height - tab.y - tab.height).toBe(1);
 
       // The right-edge block touches the next cell instead of drawing at the center like │.
       expect(app.captureCharFrame().split("\n")[composer.y]!.slice(column, column + 1)).toBe("▕");
@@ -217,7 +217,7 @@ test("일반 화면의 넉넉한 여백은 좁은 화면에서 줄어들고 복�
 });
 
 test("낮은 터미널에서도 Agent 상태와 입력창은 한 줄 푸터를 침범하지 않는다", async () => {
-  // A short screen must surrender decorative spacing before hiding usable input or footer rows.
+  // Height changes retain the same composer treatment and keep usable input above the footer.
   const app = await mount();
   try {
     app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("compact draft");
@@ -228,7 +228,7 @@ test("낮은 터미널에서도 Agent 상태와 입력창은 한 줄 푸터를 �
     const prompt = app.renderer.root.findDescendantById("session-prompt")!;
     const footer = app.renderer.root.findDescendantById("footer-bar")!;
 
-    expect(composer.height).toBe(1);
+    expect(composer.height).toBe(3);
     const status = app.renderer.root.findDescendantById("session-status")!;
     expect(status.y + status.height).toBe(composer.y);
     expect(status.y + status.height).toBeLessThanOrEqual(footer.y);
@@ -241,7 +241,7 @@ test("낮은 터미널에서도 Agent 상태와 입력창은 한 줄 푸터를 �
     expect(app.selection.sessionId).toBe("a1");
     expect(app.renderer.currentFocusedRenderable).toBe(prompt);
 
-    // Returning to a normal screen restores the padded input without losing its state.
+    // Increasing the height keeps the same input treatment without losing its state.
     app.resize(120, 24); await app.renderOnce();
     expect(composer.height).toBe(3);
     expect(app.view.promptDrafts.a1).toBe("compact draft");
@@ -254,7 +254,8 @@ test("포커스를 해제하거나 화면을 제거하면 오래된 단축키와
   const app = await mount();
   try {
     app.renderer.currentFocusedRenderable?.blur(); await app.renderOnce();
-    expect(app.footerLine().trim()).toBe("Radian 0.0.0");
+    expect(app.footerLine()).toContain("Radian 0.0.0");
+    expect(app.footerLine()).toContain("Help"); expect(app.footerLine()).not.toContain("Open worktree");
     app.view.dispose();
 
     expect(app.renderer.listenerCount("focused_renderable")).toBe(app.initialFocusListeners);

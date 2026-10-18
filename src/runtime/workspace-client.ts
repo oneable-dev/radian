@@ -61,7 +61,7 @@ export class WorkspaceClient {
 
   get recoveryVersion(): number { return this.recovery; }
   get retainedSessionIds(): ReadonlySet<string> {
-    return new Set(this.entries.filter((entry) => !entry.client).flatMap((entry) => Object.keys(entry.preferences.drafts)));
+    return new Set(this.entries.filter((entry) => !entry.client).flatMap((entry) => [...Object.keys(entry.preferences.drafts), ...Object.keys(entry.preferences.inputDrafts ?? {})]));
   }
   hasSnapshot(worktreeId: string): boolean {
     return this.entries.some((entry) => entry.client?.snapshot.repositories.some((repo) => repo.worktrees.some((tree) => tree.id === worktreeId)));

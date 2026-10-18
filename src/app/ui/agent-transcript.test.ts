@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { EditBufferRenderable } from "@opentui/core";
+import { EditBufferRenderable, ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
@@ -264,6 +264,7 @@ test("좁은 화면의 도움말은 스크롤 가능하고 닫으면 기존 본�
     expect(app.captureCharFrame()).toContain("Sections:");
     expect(app.captureCharFrame().split("\n")[11]).toContain("Radian");
     app.mockInput.pressKey("END"); await app.render();
+    app.mockInput.pressArrow("up"); await app.render();
     const area = app.renderer.root.findDescendantById("session-transcript")!;
     const helpText = app.captureCharFrame().split("\n").slice(area.y, area.y + area.height)
       .map((line) => line.slice(area.x, area.x + area.width).trim()).join(" ");
@@ -323,14 +324,16 @@ test("단어·줄·섹션 경계 이동으로 원문 전체를 선택하며 달�
 test("따라가기 상태에서는 새 섹션을 선택하고 실제로 위로 스크롤하면 선택을 고정한다", async () => {
   const app = await mount();
   try {
-    await app.update([...sections(), { id: "latest", kind: "assistant", title: "Agent", text: "LATEST SECTION", status: "streaming" }]);
+    await app.update([...sections(), { id: "latest", kind: "assistant", title: "Agent", text: "LATEST SECTION\n\n".repeat(20), status: "streaming" }]);
     expect(app.state()?.selectedId).toBe("latest");
     expect(app.state()?.follow).toBe(true);
 
     app.mockInput.pressKey("t", { ctrl: true }); await app.render();
-    const area = app.renderer.root.findDescendantById("session-transcript")!;
+    const area = app.renderer.root.findDescendantById("session-transcript")! as ScrollBoxRenderable;
+    const previous = area.scrollTop; expect(previous).toBeGreaterThan(0);
     await app.mockMouse.scroll(area.x + 2, area.y + 2, "up"); await app.render();
-    await app.update([...sections(), { id: "latest", kind: "assistant", title: "Agent", text: "LATEST SECTION more", status: "complete" },
+    expect(area.scrollTop).toBeLessThan(previous);
+    await app.update([...sections(), { id: "latest", kind: "assistant", title: "Agent", text: "LATEST SECTION\n\n".repeat(20) + "more", status: "complete" },
       { id: "newer", kind: "assistant", title: "Agent", text: "newer section", status: "streaming" }]);
 
     expect(app.state()?.selectedId).toBe("latest");

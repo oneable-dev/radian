@@ -28,6 +28,7 @@ export async function offlineRuntime(directory: string): Promise<PiSessionOption
       if (timer) clearTimeout(timer);
       if (aborted) message.stopReason = "aborted";
       if (message.stopReason === "aborted") stream.push({ type: "error", reason: "aborted", error: message });
+      else if (message.stopReason === "error") stream.push({ type: "error", reason: "error", error: message });
       else stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
       stream.end();
     };
@@ -36,7 +37,8 @@ export async function offlineRuntime(directory: string): Promise<PiSessionOption
     stream.push({ type: "start", partial: message });
     if (options?.signal?.aborted) { finish(true); return stream; }
     options?.signal?.addEventListener("abort", cancel, { once: true });
-    if (input === "slow") {
+    if (input === "fail") { message.stopReason = "error"; message.errorMessage = "Offline model failure fixture"; finish(); }
+    else if (input === "slow") {
       const text = { type: "text" as const, text: "" };
       message.content.push(text);
       stream.push({ type: "text_start", contentIndex: 0, partial: message });

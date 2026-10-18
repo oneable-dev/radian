@@ -9,6 +9,7 @@ export function mergeWorkspacePreferences(all: readonly RuntimePreferences[], se
   for (const preferences of all) {
     Object.assign(result.selection.sessions, preferences.selection.sessions);
     Object.assign(result.drafts, preferences.drafts);
+    if (preferences.inputDrafts) Object.assign(result.inputDrafts ??= {}, preferences.inputDrafts);
     Object.assign(result.workViews.active, preferences.workViews?.active);
     Object.assign(result.workViews.agentScroll, preferences.workViews?.agentScroll);
     Object.assign(result.gitViews, preferences.gitViews);
@@ -24,12 +25,13 @@ export function mergeWorkspacePreferences(all: readonly RuntimePreferences[], se
 export function repositoryPreferences(preferences: RuntimePreferences, repository: Repository, previous: RuntimePreferences, knownSessions: readonly string[] = []): RuntimePreferences {
   const worktrees = new Set(repository.worktrees.map((tree) => tree.id));
   const sessions = new Set([...knownSessions, ...repository.worktrees.flatMap((tree) => tree.sessions.map((session) => session.id)),
-    ...Object.values(previous.selection.sessions), ...Object.keys(previous.drafts), ...Object.keys(previous.workViews?.agentScroll ?? {}), ...Object.keys(previous.agentViews ?? {})]);
+    ...Object.values(previous.selection.sessions), ...Object.keys(previous.drafts), ...Object.keys(previous.inputDrafts ?? {}), ...Object.keys(previous.workViews?.agentScroll ?? {}), ...Object.keys(previous.agentViews ?? {})]);
   const select = <T>(record: Readonly<Record<string, T>>, ids: ReadonlySet<string>): Record<string, T> => Object.fromEntries(Object.entries(record).filter(([id]) => ids.has(id)));
   return structuredClone({
     selection: { worktreeId: preferences.selection.worktreeId && worktrees.has(preferences.selection.worktreeId) ? preferences.selection.worktreeId : previous.selection.worktreeId,
       sessions: select(preferences.selection.sessions, worktrees) },
     drafts: select(preferences.drafts, sessions),
+    ...(preferences.inputDrafts ? { inputDrafts: select(preferences.inputDrafts, sessions) } : {}),
     ...(preferences.workViews ? { workViews: { active: select(preferences.workViews.active, worktrees), agentScroll: select(preferences.workViews.agentScroll, sessions) } } : {}),
     ...(preferences.gitViews ? { gitViews: select(preferences.gitViews, worktrees) } : {}),
     ...(preferences.agentViews ? { agentViews: select(preferences.agentViews, sessions) } : {}),

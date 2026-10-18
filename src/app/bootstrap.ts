@@ -13,24 +13,9 @@ import { err, ok, type Result } from "../result.ts";
 import { loadKeymap, type Keymap } from "../keybindings/config.ts";
 import { loadTheme, type ThemeOverrides } from "../ui/theme-config.ts";
 import { readTerminalProcessTitles } from "../terminal/process-titles.ts";
+import type { CliOptions as Options } from "./cli.ts";
 
-type Options = { demo: boolean; offline: boolean; service: boolean; status: boolean; stop: boolean; cwd: string; stateRoot: string | undefined; keybindings: string | undefined; theme: string | undefined; workspaceConfig: string | undefined };
-function parseOptions(args: string[]): Result<Options, InputError> {
-  const values = new Map<string, string>();
-  for (const name of ["--state-dir", "--runtime-cwd", "--keybindings", "--theme", "--workspace-config"]) {
-    const index = args.indexOf(name); if (index < 0) continue;
-    const value = args[index + 1];
-    if (!value || value.startsWith("--")) return err(new InputError(`Missing value for ${name}`));
-    values.set(name, value);
-  }
-  const demo = args.includes("--demo"), offline = args.includes("--test-runtime");
-  if (demo && offline) return err(new InputError("Choose --demo or --test-runtime, not both."));
-  return ok({ demo, offline, service: args.includes("--runtime-service"), status: args.includes("--runtime-status"), stop: args.includes("--stop-runtime"),
-    cwd: values.get("--runtime-cwd") ?? process.cwd(), stateRoot: values.get("--state-dir"), keybindings: values.get("--keybindings"), theme: values.get("--theme"), workspaceConfig: values.get("--workspace-config") });
-}
-export async function main(): Promise<Result<void, ExpectedError>> {
-  const parsed = parseOptions(process.argv.slice(2)); if (!parsed.ok) return parsed;
-  const options = parsed.value;
+export async function main(options: Options): Promise<Result<void, ExpectedError>> {
   if (options.service) {
     const { runRuntime } = await import("../runtime/service.ts");
     return capture(() => runRuntime(options.cwd, options.offline, options.stateRoot));
@@ -105,10 +90,14 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
   const { GitRepository } = await import("../git/repository.ts");
   const { TerminalTheme } = await import("../ui/embedded-terminal/theme.ts");
   const { uiTheme } = await import("../ui/theme.ts");
+  const { monochromeFrame } = await import("../ui/monochrome.ts");
+  let attachedTheme: ReturnType<typeof uiTheme> | undefined;
   const selection = new WorkspaceSelection(client?.snapshot.repositories ?? repositories);
   const preferences: RuntimePreferences = client ? structuredClone(client.snapshot.preferences) : defaultPreferences();
   if (client) selection.restore(preferences.selection);
-  const renderer = await createCliRenderer({ exitOnCtrlC: false });
+  const renderer = await createCliRenderer({ exitOnCtrlC: false,
+    ...(options.noColor ? { postProcessFns: [(buffer) => monochromeFrame(buffer, attachedTheme?.colors)] } : {}) });
+  attachedTheme = uiTheme(renderer); attachedTheme.setMonochrome(options.noColor);
   let view: InstanceType<typeof Workbench> | undefined;
   const detachHint = keymap.hint("app.detach", "none") || "No detach binding";
   const defaultMessage = discoveryError ?? (options.demo ? `DEMO · display fixtures only · ${detachHint} detaches` : options.offline
@@ -157,6 +146,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
   });
   const detach = (): void => {
     unsubscribe?.(); unsubscribeSelection();
+    if (view) { preferences.drafts = view.promptDrafts; preferences.inputDrafts = view.promptInputDrafts; persist(); }
     const mounted = view; view = undefined; mounted?.dispose(); client?.beginDetach(); renderer.destroy();
   };
   try {
@@ -179,20 +169,21 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
         message = "Demo item removed · no runtime or saved history was modified"; updateNotice();
       },
       ...(client ? {
-        onPrompt: (id: string, text: string) => client.prompt(id, text),
+        onPrompt: (id: string, text: string, images?: readonly string[]) => client.prompt(id, text, images),
         onComplete: (id, query, signal) => client.complete(id, query, signal),
         git: {
           source: (worktree) => new GitRepository(worktree.path),
           createSession: (worktreeId) => client.create(worktreeId),
-          prompt: (sessionId, text) => client.prompt(sessionId, text),
+          prompt: (sessionId, text, images) => client.prompt(sessionId, text, images),
         },
         getSessionDetails: (id: string) => client.snapshot.details[id] ?? null,
         onListHistory: (worktreeId, signal) => client.listHistory(worktreeId, signal),
         onPreviewHistory: (worktreeId, savedId, signal) => client.previewHistory(worktreeId, savedId, signal),
         onResumeSession: (worktreeId: string, savedId: string) => client.resume(worktreeId, savedId),
         initialDrafts: preferences.drafts,
+        ...(preferences.inputDrafts ? { initialInputDrafts: preferences.inputDrafts } : {}),
         getRetainedSessionIds: () => client.retainedSessionIds,
-        onDraftChange: (drafts: Record<string, string>) => { preferences.drafts = drafts; persist(); },
+        onDraftChange: (drafts, inputs) => { preferences.drafts = drafts; preferences.inputDrafts = inputs; persist(); },
         initialWorkViews: restoreWorkViews(preferences),
         onWorkViewsChange: (workViews: WorkViewPreferences) => { saveWorkViews(preferences, workViews); persist(); },
         terminal: {
@@ -212,7 +203,9 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
     updateNotice(); await renderer.closed;
   } finally {
     unsubscribe?.(); unsubscribeSelection();
-    preferences.drafts = view?.promptDrafts ?? preferences.drafts; persist();
+    preferences.drafts = view?.promptDrafts ?? preferences.drafts;
+    if (view) preferences.inputDrafts = view.promptInputDrafts;
+    persist();
     const mounted = view; view = undefined; mounted?.dispose(); client?.beginDetach(); renderer.destroy(); await renderer.closed;
     await destroyTreeSitterClient();
     const saved = await pendingPreferences;

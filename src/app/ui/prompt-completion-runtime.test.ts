@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { InputRenderable } from "@opentui/core";
+import { PromptInput } from "../../agents/ui/prompt-input.ts";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
@@ -39,10 +39,12 @@ test("실제 UI·Unix IPC·SDK 자동완성은 첫 Enter에서 삽입만 하고 
   try {
     await until(() => selection.snapshot[0]?.worktrees.some((tree) => tree.sessions.some((session) => session.id === id)) ?? false);
     selection.selectSession(main.id, id); await app.renderOnce(); app.mockInput.pressKey("e", { ctrl: true });
-    const input = app.renderer.root.findDescendantById("session-prompt") as InputRenderable;
+    const input = app.renderer.root.findDescendantById("session-prompt") as PromptInput;
     await app.mockInput.typeText("@work"); await visible("workspace.txt");
     app.mockInput.pressEnter(); await app.renderOnce();
-    expect(input.value).toBe("@workspace.txt "); expect(client.snapshot.details[id]?.output).toBe("");
+    expect(input.value).toBe("[File #1] ");
+    expect(input.submission.text).toBe(`@${JSON.stringify(join(fixture.main, "workspace.txt"))} `);
+    expect(client.snapshot.details[id]?.output).toBe("");
 
     input.value = ""; await app.mockInput.typeText("/completion-pro"); await visible("Runtime completion marker");
     app.mockInput.pressEnter(); await app.renderOnce();

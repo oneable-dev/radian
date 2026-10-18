@@ -2,6 +2,7 @@ import { EmbeddedTerminalRenderable, KeyEvent, type CliRenderer, type Renderable
 import { inScope, type CommandId, type KeyContext } from "./commands.ts";
 import { keyToken, type Binding, type Keymap } from "./config.ts";
 
+const oneShot = new Set<CommandId>(["completion.accept", "completion.dismiss", "history.open", "history.dismiss", "dialog.dismiss", "dialog.activate", "dialog.copy", "app.help", "agent.inspect", "git.inspect"]);
 type Pending = { owner: Renderable | null; events: KeyEvent[]; keys: string[]; held: Set<string>; candidates: readonly Binding[] };
 export class KeyRouter {
   private pending: Pending | undefined;
@@ -37,7 +38,7 @@ export class KeyRouter {
     const complete = candidates.find((binding) => binding.keys.length === pending.keys.length);
     if (complete) {
       this.clear();
-      const once = complete.keys.length > 1 || complete.command === "completion.accept" || complete.command === "completion.dismiss" || complete.command === "history.open" || complete.command === "history.dismiss";
+      const once = complete.keys.length > 1 || oneShot.has(complete.command);
       // Held overlay accept/dismiss keys must not become Send/Leave actions after that context closes.
       for (const name of pending.held) this.consumed.set(name, once);
       // A configured command with an unavailable target is still an app command.

@@ -1,4 +1,4 @@
-export const contexts = ["workspace", "search", "history", "history-search", "session-tabs", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "none"] as const;
+export const contexts = ["workspace", "search", "history", "history-search", "session-tabs", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "dialog", "none"] as const;
 export type KeyContext = typeof contexts[number];
 export type KeyScope = KeyContext | "global" | "app" | "pty";
 export type BindingInput = { keys: string; scope: KeyScope };
@@ -11,6 +11,17 @@ const tabContexts = contexts.filter((context) => context !== "editor" && context
 
 export const defaultBindings = {
   "app.detach": [key("<leader> c")],
+  "app.help": [key("<leader> ?"), key("<leader> shift+?"), key("<leader> shift+/"), ...contexts.filter((context) => !["editor", "terminal", "transcript", "transcript-text", "transcript-visual", "dialog"].includes(context)).map((context) => key("f1", context))],
+  "notice.details": [key("<leader> !"), key("<leader> shift+!"), key("<leader> shift+1")],
+  "dialog.dismiss": [key("escape", "dialog")],
+  "dialog.copy": [key("y", "dialog")],
+  "dialog.activate": [key("enter", "dialog")],
+  "dialog.previous": [key("k", "dialog"), key("up", "dialog")],
+  "dialog.next": [key("j", "dialog"), key("down", "dialog")],
+  "dialog.first": [key("home", "dialog")],
+  "dialog.last": [key("end", "dialog")],
+  "dialog.page-up": [key("pageup", "dialog")],
+  "dialog.page-down": [key("pagedown", "dialog")],
   "sidebar.toggle": [key("<leader> b")],
   "focus.sidebar": [key("ctrl+]", "pty"), key("escape", "prompt"), key("escape", "session-tabs"), key("<leader> w")],
   "focus.search": [key("ctrl+f", "app"), key("<leader> f")],
@@ -53,6 +64,9 @@ export const defaultBindings = {
   "history.first": [key("home", "history")],
   "history.last": [key("end", "history")],
   "agent.send": [key("enter", "prompt")],
+  "agent.newline": [key("shift+enter", "prompt"), key("alt+enter", "prompt"), key("shift+enter", "prompt-completion"), key("alt+enter", "prompt-completion")],
+  "agent.paste": [key("ctrl+v", "prompt")],
+  "agent.inspect": [key("ctrl+o", "prompt")],
   "completion.next": [key("ctrl+n", "prompt-completion")],
   "completion.previous": [key("ctrl+p", "prompt-completion")],
   "completion.accept": [key("tab", "prompt-completion"), key("enter", "prompt-completion")],
@@ -89,6 +103,9 @@ export const defaultBindings = {
   "git.ask": [key("a", "git")],
   "git.copy": [key("y", "git")],
   "git.submit": [key("enter", "git-prompt")],
+  "git.newline": [key("shift+enter", "git-prompt"), key("alt+enter", "git-prompt")],
+  "git.paste": [key("ctrl+v", "git-prompt")],
+  "git.inspect": [key("ctrl+o", "git-prompt")],
   "git.cancel": [key("escape", "git-prompt")],
   "git.open": [key("enter", "git")],
   "git.back": [key("escape", "git")],

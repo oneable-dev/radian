@@ -15,6 +15,8 @@ import type { HistoryItem } from "../../agents/history.ts";
 import type { HistoryPreview } from "../../agents/history-preview.ts";
 import { SessionHistoryPanel } from "../../agents/ui/history-panel.ts";
 import { Footer, type FooterShortcut } from "../../ui/footer.ts";
+import { TextDialog } from "../../ui/text-dialog.ts";
+import { keymapHelp } from "../../keybindings/help.ts";
 import { Button } from "../../ui/button.ts";
 import { panelSpacing } from "../../ui/spacing.ts";
 import type { Result } from "../../result.ts";
@@ -23,9 +25,9 @@ import { EditorPanel, type EditorActions } from "../../editor/ui/panel.ts";
 import { TerminalPanel, type TerminalActions } from "../../terminal/ui/panel.ts";
 import { GitPanel, type GitActions } from "../../git/ui/panel.ts";
 import type { WorkView, WorkViewPreferences } from "../../runtime/protocol.ts";
-import { defaultKeymap, type Keymap } from "../../keybindings/config.ts";
+import { defaultKeymap, formatKeys, type Keymap } from "../../keybindings/config.ts";
 import { KeyRouter } from "../../keybindings/router.ts";
-import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
+import { inScope, type CommandId, type KeyContext } from "../../keybindings/commands.ts";
 import type { TerminalTheme } from "../../ui/embedded-terminal/theme.ts";
 import { uiTheme, type UiTheme } from "../../ui/theme.ts";
 import type { ThemeRole } from "../../ui/theme-config.ts";
@@ -70,6 +72,7 @@ export class Workbench {
   private readonly workViews: WorkViewPreferences;
   private displayedWorkView: WorkView = "agent";
   private readonly footer: Footer;
+  private readonly dialog: TextDialog;
   private readonly buttonHints = new WeakMap<Renderable, string>();
   private readonly buttonActions = new WeakMap<Renderable, () => void>();
   private readonly keymap: Keymap;
@@ -128,6 +131,7 @@ export class Workbench {
         if (this.agent.active) this.agent.focusTranscript(); else this.agent.focusTargets[0]?.focus();
       },
     });
+    this.dialog = new TextDialog(renderer, () => this.updateFooter(), () => this.focusNavigation(), actions.onCopyTranscript);
     this.sidebar.add(this.resultMessage);
     this.sidebar.add(this.tree);
     this.workPanel = new BoxRenderable(renderer, { id: "work-panel", flexGrow: 1, minWidth: 0, flexDirection: "column" });
@@ -143,7 +147,7 @@ export class Workbench {
     this.workContext.flexGrow = 1; this.workContext.flexShrink = 1; this.workContext.minWidth = 0;
     this.workContext.textAlign = "right"; workTabs.add(this.workContext);
     this.workPanel.add(workTabs);
-    this.agent = new AgentPanel(renderer, { ...actions, onHistory: () => this.history.show(this.selection.worktree), onSelectSession: (tree, id) => this.activateSession(tree, id) }, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
+    this.agent = new AgentPanel(renderer, { ...actions, onHistory: () => this.history.show(this.selection.worktree), onInspectInput: (content) => this.dialog.show(content), onSelectSession: (tree, id) => this.activateSession(tree, id) }, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
       (message) => this.setNotice(message), () => this.updateFooter(), () => this.focusNavigation(), this.workViews.agentScroll,
       (id, position) => { this.workViews.agentScroll[id] = position; this.saveWorkViews(); }, {
         ...(this.workViews.agentViews ? { initialViews: this.workViews.agentViews } : {}),
@@ -166,13 +170,18 @@ export class Workbench {
         const views = this.workViews.gitViews ??= {};
         if (JSON.stringify(views[id]) === JSON.stringify(state)) return;
         views[id] = state; this.saveWorkViews();
-      }, this.workViews.gitViews ?? {}, (command, context) => this.keymap.hint(command, context));
+      }, this.workViews.gitViews ?? {}, (command, context) => this.keymap.hint(command, context), (content) => this.dialog.show(content));
     this.workPanel.add(this.agent.root); this.workPanel.add(this.editor.root); this.workPanel.add(this.git.root); this.workPanel.add(this.terminals.root);
     panels.add(this.sidebar);
     panels.add(this.workPanel);
     this.root.add(panels);
-    this.footer = new Footer(renderer, `Radian ${packageInfo.version}`);
-    this.root.add(this.footer.root); this.root.add(this.history.root);
+    const help = this.button("Help", () => this.showHelp(), "Open help");
+    const details = this.button("Details", () => this.showNotice(), "Read notification");
+    // Opening a pointer-triggered popup restores the original editor/PTY focus on close.
+    help.onMouseDown = (event) => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.showHelp(); } };
+    details.onMouseDown = (event) => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.showNotice(); } };
+    this.footer = new Footer(renderer, `Radian ${packageInfo.version}`, { help, details });
+    this.root.add(this.footer.root); this.root.add(this.history.root); this.root.add(this.dialog.root);
     renderer.root.add(this.root);
     this.router = new KeyRouter(renderer, this.keymap, () => this.keyContext(), (command) => this.commandAvailable(command), (command) => this.command(command));
     renderer.on("resize", this.resize);
@@ -197,6 +206,8 @@ export class Workbench {
   get promptDrafts(): Record<string, string> {
     return this.agent.promptDrafts;
   }
+
+  get promptInputDrafts() { return this.agent.promptInputDrafts; }
 
   get workViewPreferences(): WorkViewPreferences { return structuredClone(this.workViews); }
 
@@ -238,7 +249,10 @@ export class Workbench {
     const context = this.keyContext();
     const hint = (command: CommandId, label: string): FooterShortcut => ({ key: this.keymap.hint(command, context), label });
     const pair = (a: CommandId, b: CommandId, label: string): FooterShortcut => ({ key: [this.keymap.hint(a, context), this.keymap.hint(b, context)].filter(Boolean).join("/"), label });
-    if (this.history.visible) shortcuts = this.history.shortcuts;
+    const help = this.keymap.bindings.find((binding) => binding.command === "app.help" && binding.keys.length === 1 && inScope(binding.scope, context));
+    this.footer.setHelpHint(help ? formatKeys(help.keys) : this.keymap.hint("app.help", context));
+    if (this.dialog.visible) shortcuts = [hint("dialog.copy", "Copy"), hint("dialog.page-down", "Page"), hint("dialog.dismiss", "Close")];
+    else if (this.history.visible) shortcuts = this.history.shortcuts;
     else if (focused === this.search) shortcuts = [hint("focus.results", "Results"), hint("search.clear", "Clear")];
     else if (focused === this.tree) shortcuts = [
       pair("workspace.previous", "workspace.next", "Navigate"),
@@ -260,7 +274,9 @@ export class Workbench {
           { key: this.keymap.hints("completion.accept", context), label: "Insert", disabled: !this.agent.completionAvailable("completion.accept") },
           hint("completion.dismiss", "Dismiss"),
         ]
-        : [...(this.agent.canSubmit ? [hint("agent.send", this.agent.working ? "Queue" : "Run")] : []), hint("focus.transcript", "Transcript"), hint("focus.sidebar", "Workspace")];
+        : [...(this.agent.canSubmit ? [hint("agent.send", this.agent.working ? "Queue" : "Run")] : []),
+          hint("agent.newline", "New line"), ...(this.agent.prompt.canInspect ? [hint("agent.inspect", "Inspect")] : []),
+          hint("focus.transcript", "Transcript"), hint("focus.sidebar", "Workspace")];
     } else if (context === "git" || context === "git-prompt") shortcuts = this.git.shortcuts;
     else if (focused) {
       const label = this.buttonHints.get(focused);
@@ -268,6 +284,14 @@ export class Workbench {
     }
     this.footer.setShortcuts(shortcuts.filter((shortcut) => shortcut.key));
   };
+
+  private showHelp(): void {
+    const context = this.keyContext();
+    this.dialog.show({ title: "Keyboard help", text: keymapHelp(this.keymap, context, (command) => this.commandAvailable(command)) });
+  }
+  private showNotice(): void {
+    if (this.footer.noticeText.trim()) this.dialog.show({ title: "Notification details", text: this.footer.noticeText });
+  }
 
   refreshHistory(): void {
     if (this.disposed || this.root.isDestroyed) return;
@@ -321,6 +345,7 @@ export class Workbench {
   }
 
   private keyContext(): KeyContext {
+    if (this.dialog?.visible) return "dialog";
     if (this.history?.visible) return this.history.context;
     const focused = this.renderer.currentFocusedRenderable;
     if (!focused) return "none";
@@ -336,6 +361,10 @@ export class Workbench {
     return "button";
   }
   private commandAvailable(command: CommandId): boolean {
+    if (this.dialog.visible) return command.startsWith("dialog.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
+    if (command.startsWith("dialog.")) return false;
+    if (command === "app.help") return true;
+    if (command === "notice.details") return Boolean(this.footer.noticeText.trim());
     if (this.history.visible) return command.startsWith("history.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
     if (command === "history.show") return Boolean(this.selection.worktree);
     if (command.startsWith("history.")) return false;
@@ -352,11 +381,16 @@ export class Workbench {
       case "terminal.scroll-up": case "terminal.scroll-down": return this.terminals.root.visible && this.terminals.canScroll;
       case "focus.prompt": case "focus.transcript": return this.agent.active;
       case "agent.send": return this.agent.active && Boolean(this.agent.sessionId);
+      case "agent.paste": case "agent.newline": return this.agent.active;
+      case "agent.inspect": return this.agent.active && this.agent.prompt.canInspect;
       case "button.activate": return !!this.renderer.currentFocusedRenderable && this.buttonActions.has(this.renderer.currentFocusedRenderable);
       default: return true;
     }
   }
   private command(command: CommandId): void {
+    if (command === "app.help") { this.showHelp(); return; }
+    if (command === "notice.details") { this.showNotice(); return; }
+    if (command.startsWith("dialog.")) { this.dialog.command(command); return; }
     if (command === "history.show") { this.history.show(this.selection.worktree); return; }
     if (command.startsWith("history.")) { this.history.command(command); return; }
     if (command.startsWith("completion.")) { this.agent.completionCommand(command); return; }
@@ -392,11 +426,15 @@ export class Workbench {
       case "workspace.next": this.moveTree("down"); break;
       case "workspace.first": this.moveTree("home"); break;
       case "workspace.last": this.moveTree("end"); break;
+      case "agent.newline": this.agent.prompt.newLine(); break;
+      case "agent.inspect": this.agent.prompt.inspectAtCursor(); break;
+      case "agent.paste": void this.agent.prompt.pasteClipboard().catch((error: unknown) => this.setNotice(reportUnexpected(error, "clipboard read"))); break;
       case "agent.send": void this.agent.submitPrompt().catch((error: unknown) => this.setNotice(reportUnexpected(error, "prompt submission"))); break;
       case "button.activate": { const focused = this.renderer.currentFocusedRenderable; if (focused) this.buttonActions.get(focused)?.(); break; }
     }
   }
   private moveFocus(direction: 1 | -1): void {
+    if (this.dialog.visible) { this.dialog.moveFocus(direction); return; }
     if (this.history.visible) {
       const targets = this.history.focusTargets, index = targets.indexOf(this.renderer.currentFocusedRenderable!);
       targets[(index + direction + targets.length) % targets.length]?.focus(); return;
@@ -418,6 +456,7 @@ export class Workbench {
     }
     if (this.terminals.root.visible) targets.push(...this.terminals.focusTargets);
     if (this.git.root.visible) targets.push(...this.git.focusTargets);
+    targets.push(...this.footer.focusTargets);
     const index = targets.findIndex((target) => target === this.renderer.currentFocusedRenderable);
     const next = (index + direction + targets.length) % targets.length;
     targets[next]?.focus();
@@ -427,8 +466,8 @@ export class Workbench {
     const { horizontal, vertical } = panelSpacing(this.renderer);
     this.sidebar.width = this.renderer.width < 80 ? 26 : 40;
     this.sidebar.paddingX = horizontal; this.sidebar.paddingBottom = vertical;
-    this.sidebarTabs.height = 1 + vertical * 2; this.sidebarTabs.paddingY = vertical;
-    this.viewTabs.height = 1 + vertical * 2; this.viewTabs.paddingTop = vertical; this.viewTabs.paddingBottom = vertical;
+    this.sidebarTabs.height = 1 + vertical; this.sidebarTabs.paddingTop = 0; this.sidebarTabs.paddingBottom = vertical;
+    this.viewTabs.height = 1 + vertical; this.viewTabs.paddingTop = 0; this.viewTabs.paddingBottom = vertical;
     this.viewTabs.paddingX = horizontal;
     this.searchBox.height = 1 + vertical * 2; this.searchBox.paddingY = vertical;
     this.searchBox.marginX = -horizontal; this.searchBox.paddingX = horizontal;
@@ -569,7 +608,7 @@ export class Workbench {
     this.agent.rememberScroll();
     this.disposed = true;
     this.unsubscribe();
-    this.agent.dispose(); this.history.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
+    this.agent.dispose(); this.history.dispose(); this.dialog.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
     for (const row of this.rows.values()) row.status?.dispose();
     this.search.off(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.search.off("focused", this.repaintSearch); this.search.off("blurred", this.repaintSearch);

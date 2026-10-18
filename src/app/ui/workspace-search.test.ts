@@ -66,7 +66,7 @@ test.each([false, true])("밝기 %j에서도 검색 여백 클릭으로 포커�
   } finally { await app.close(); }
 });
 
-test("리사이즈는 검색어·커서·초안을 보존하고 낮은 화면에서만 검색 높이를 줄인다", async () => {
+test("리사이즈는 검색어·커서·초안과 일관된 검색 높이를 보존한다", async () => {
   const app = await mount();
   try {
     // 긴 입력은 가로로 스크롤하고 리사이즈로 검색 객체를 다시 만들지 않는다.
@@ -79,7 +79,7 @@ test("리사이즈는 검색어·커서·초안을 보존하고 낮은 화면에
     expect(field.height).toBe(3); expect(field.width).toBe(25);
     expect(app.input.x - app.get("workspace-sidebar").x).toBe(1);
     app.resize(60, 12); await app.render();
-    expect(field.height).toBe(1); expect(app.input.y).toBe(field.y);
+    expect(field.height).toBe(3); expect(app.input.y).toBe(field.y + 1);
     expect(app.get("workspace-tree").height).toBeGreaterThan(0);
     expect(app.input.value).toBe(value); expect(app.input.cursorOffset).toBe(cursor);
     expect(app.renderer.currentFocusedRenderable).toBe(app.input);

@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import { InputRenderable, parseKeypress } from "@opentui/core";
+import { parseKeypress } from "@opentui/core";
+import { resolve } from "node:path";
+import { PromptInput } from "../../agents/ui/prompt-input.ts";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Workbench } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
@@ -23,7 +25,7 @@ async function mount(provider: CompletionProvider = async (_id, query) => ok(fil
   });
   const render = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); await app.renderOnce(); await app.renderOnce(); };
   await render(); app.mockInput.pressKey("e", { ctrl: true }); await render();
-  const input = app.renderer.root.findDescendantById("session-prompt") as InputRenderable;
+  const input = app.renderer.root.findDescendantById("session-prompt") as PromptInput;
   const complete = async () => { await render(); clock.advance(150); await render(); };
   return { ...app, clock, selection, view, input, sent, render, complete,
     menu: () => app.renderer.root.findDescendantById("prompt-completions")!,
@@ -69,7 +71,8 @@ test("재조회 중 후보와 선택·높이·푸터를 유지하고 이전 검�
     app.mockInput.pressKey("n", { ctrl: true }); await app.render();
     app.clock.advance(150); await app.render(); pending[1]!.resolve(ok({ items, truncated: false })); await app.render();
     expect(geometry()).toEqual(filledGeometry); expect(footer()).toBe(filledFooter);
-    app.mockInput.pressTab(); await app.render(); expect(app.input.value).toBe("@abcdef-2.ts ");
+    app.mockInput.pressTab(); await app.render(); expect(app.input.value).toBe("[File #1] ");
+    expect(app.input.submission.text).toBe(`@${JSON.stringify(resolve(app.selection.worktree!.path, "abcdef-2.ts"))} `);
   } finally { await app.close(); }
 });
 
@@ -191,10 +194,11 @@ test("한글·이모지 뒤의 토큰 중간에서도 전체 경로만 바꾸고
     app.input.cursorOffset = app.input.editBuffer.measureText(text.slice(0, text.indexOf("old"))); await app.complete();
     app.mockInput.pressKey("n", { ctrl: true }); await app.render(); app.mockInput.pressTab(); await app.render();
 
-    const prefix = '한글 👩‍💻 @"src/문서 file.ts"';
+    const prefix = "한글 👩‍💻 [File #1]";
     expect(app.input.value).toBe(prefix + " 뒤의 요청");
     expect(app.input.cursorOffset).toBe(app.input.editBuffer.measureText(prefix));
-    expect(app.view.promptDrafts.a1).toBe(app.input.value); expect(app.sent).toEqual([]);
+    expect(app.view.promptDrafts.a1).toBe(`한글 👩‍💻 @${JSON.stringify(resolve(app.selection.worktree!.path, "src/문서 file.ts"))} 뒤의 요청`);
+    expect(app.input.draft.tokens).toHaveLength(1); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
 

@@ -55,7 +55,7 @@ export class ProviderIcon extends Renderable {
     buffer.fillRect(x, y, 2, 1, this.colors.panel);
     const resolution = this.renderer.resolution;
     const protocol = resolveImageRenderProtocol("auto", this.renderer.capabilities, resolution !== null);
-    if (!this.failed && resolution && (protocol === "kitty" || protocol === "sixel")) {
+    if (!uiTheme(this.renderer).monochrome && !this.failed && resolution && (protocol === "kitty" || protocol === "sixel")) {
       const pixelWidth = Math.round(2 * resolution.width / this.renderer.terminalWidth);
       const pixelHeight = Math.round(resolution.height / this.renderer.terminalHeight);
       if (Number.isFinite(pixelWidth) && Number.isFinite(pixelHeight) && pixelWidth > 0 && pixelHeight >= pixelWidth * 0.75) {

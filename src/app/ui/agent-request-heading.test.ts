@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { InputRenderable, ScrollBoxRenderable } from "@opentui/core";
+import { ScrollBoxRenderable } from "@opentui/core";
+import { PromptInput } from "../../agents/ui/prompt-input.ts";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
@@ -34,7 +35,7 @@ test("상단 요청은 스크롤 밖에 고정되고 스트리밍 갱신에도 �
   const app = await mount();
   try {
     const header = app.get("agent-request"), scroll = app.get("session-transcript"), prompt = app.get("session-prompt");
-    if (!(scroll instanceof ScrollBoxRenderable) || !(prompt instanceof InputRenderable)) throw new Error("Missing native controls.");
+    if (!(scroll instanceof ScrollBoxRenderable) || !(prompt instanceof PromptInput)) throw new Error("Missing native controls.");
     const y = header.y, draft = prompt.value, cursor = prompt.cursorOffset;
     expect(app.heading()).toBe("Request Implement workspace search");
     expect(scroll.y).toBe(header.y + 1);
@@ -76,7 +77,7 @@ test("초안·거절·설정 명령 수락은 요청을 덮지 않고 실제 대
   const sent: string[] = [];
   const app = await mount({ onPrompt: (_id, text) => { sent.push(text); return response; } });
   try {
-    const prompt = app.get("session-prompt"); if (!(prompt instanceof InputRenderable)) throw new Error("Missing prompt.");
+    const prompt = app.get("session-prompt"); if (!(prompt instanceof PromptInput)) throw new Error("Missing prompt.");
     app.mockInput.pressKey("e", { ctrl: true }); prompt.value = "";
     await app.mockInput.typeText("/fast status"); app.mockInput.pressEnter(); await app.render();
     expect(app.heading()).toBe("Request Implement workspace search");

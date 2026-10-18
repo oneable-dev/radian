@@ -1,5 +1,5 @@
 import {
-  BoxRenderable, CodeRenderable, DiffRenderable, InputRenderable, ScrollBoxRenderable, SyntaxStyle, TextRenderable,
+  BoxRenderable, CodeRenderable, DiffRenderable, InputRenderableEvents, ScrollBoxRenderable, SyntaxStyle, TextRenderable,
   Renderable, type CliRenderer, type Selection, type TreeSitterClient,
 } from "@opentui/core";
 import { CancelledError, InputError, reportUnexpected, type ExpectedError } from "../../errors.ts";
@@ -18,11 +18,13 @@ import { GitClipboard } from "./clipboard.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import type { Button, ButtonFactory } from "../../ui/button.ts";
 import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
+import { PromptInput } from "../../agents/ui/prompt-input.ts";
+import type { DialogContent } from "../../ui/text-dialog.ts";
 
 export type GitActions = {
   source(worktree: Worktree): GitSource;
   createSession(worktreeId: string): Promise<Result<string, ExpectedError>>;
-  prompt(sessionId: string, text: string): Result<void, ExpectedError> | Promise<Result<void, ExpectedError>>;
+  prompt(sessionId: string, text: string, images?: readonly string[]): Result<void, ExpectedError> | Promise<Result<void, ExpectedError>>;
   copy?(text: string): Promise<Result<string, ExpectedError>>;
   treeSitterClient?: TreeSitterClient;
 };
@@ -60,7 +62,7 @@ export class GitPanel {
   private readonly dialogContext: TextRenderable;
   private readonly targetText: TextRenderable;
   private readonly targetButton: BoxRenderable;
-  private readonly prompt: InputRenderable;
+  private readonly prompt: PromptInput;
   private readonly topButtons: Button[] = [];
   private readonly rightButtons: Button[] = [];
   private readonly refButtons: Button[] = [];
@@ -86,12 +88,12 @@ export class GitPanel {
   constructor(private readonly renderer: CliRenderer, private readonly actions: GitActions | undefined, button: ButtonFactory,
     private readonly notice: (message: string) => void, private readonly changed: () => void,
     private readonly saved: (id: string, state: GitViewState) => void, private readonly initial: Readonly<Record<string, GitViewState>>,
-    private readonly hint: (command: CommandId, context: KeyContext) => string) {
+    private readonly hint: (command: CommandId, context: KeyContext) => string, private readonly inspect?: (content: DialogContent) => void) {
     const gitColors = uiTheme(renderer).colors;
     this.clipboard = new GitClipboard(renderer);
     this.root = new BoxRenderable(renderer, { id: "git-view", flexGrow: 1, minHeight: 0, minWidth: 0, paddingX: 1, flexDirection: "column", visible: false,
       // Restore against measured list/diff geometry before any viewport is presented.
-      renderBefore: this.restoreScroll,
+      renderBefore: this.restoreScroll, onSizeChange: () => this.resizeAsk(),
       onMouseDown: (event) => { if (event.button === 0) this.pointer = { x: event.x, y: event.y, moved: false }; },
       onMouseDrag: (event) => { if (this.pointer && (this.pointer.x !== event.x || this.pointer.y !== event.y)) this.pointer.moved = true; } });
     this.toolbar = this.row(); this.toolbar.id = "git-toolbar"; this.toolbar.alignItems = "center";
@@ -157,12 +159,13 @@ export class GitPanel {
     const targetRow = this.row();
     this.targetText = this.text("Session: "); targetRow.add(this.targetText);
     this.targetButton = button("Change session", () => this.cycleSession(), "Choose session"); targetRow.add(this.targetButton); this.dialog.add(targetRow);
-    this.prompt = new InputRenderable(renderer, { id: "git-prompt", width: "100%", placeholder: "Prompt · Enter to send", textColor: gitColors.text,
-      backgroundColor: gitColors.panel, focusedBackgroundColor: gitColors.selected }); this.dialog.add(this.prompt);
+    this.prompt = new PromptInput(renderer, notice, (content) => inspect?.(content)); this.prompt.id = "git-prompt";
+    this.prompt.width = "100%"; this.prompt.placeholder = "Prompt · Enter to send"; this.dialog.add(this.prompt);
+    this.prompt.on(InputRenderableEvents.INPUT, this.resizeAsk); this.prompt.on("resize", this.resizeAsk);
     const dialogControls = this.row();
     const send = button("Send", () => this.launch(() => this.submit()), "Send Git context");
     const cancel = button("Cancel", () => this.closeAsk(), "Cancel request");
-    this.dialogButtons.push(this.targetButton, this.prompt, send, cancel); dialogControls.add(send); dialogControls.add(cancel);
+    this.dialogButtons.push(this.targetButton, this.prompt, send, cancel); dialogControls.add(send); dialogControls.add(cancel); dialogControls.add(this.prompt.activity.root);
     this.dialog.add(dialogControls); this.root.add(this.dialog);
     bindPanelSpacing(renderer, this.root);
     renderer.on("selection", this.selectionFinished);
@@ -238,7 +241,7 @@ export class GitPanel {
   get shortcuts(): FooterShortcut[] {
     const context = this.keyContext() ?? "git";
     const hint = (command: CommandId, label: string) => ({ key: this.hint(command, context), label });
-    if (context === "git-prompt") return [hint("git.submit", "Send"), hint("git.cancel", "Cancel")];
+    if (context === "git-prompt") return [hint("git.submit", "Send"), hint("git.newline", "New line"), ...(this.prompt.canInspect ? [hint("git.inspect", "Inspect")] : []), hint("git.cancel", "Cancel")];
     const target = this.context;
     return [...(target ? [hint("git.ask", `Ask ${target.label.split(" ")[0]!.toLowerCase()}`), hint("git.copy", target.label.startsWith("File") ? "Copy path" : target.label.startsWith("Branch") || target.label.startsWith("Tag") ? "Copy name" : "Copy hash")] : []),
       hint("git.open", "Select"), hint("git.refresh", "Refresh"), ...(this.cache?.state.tab === "commits" && this.cache.state.diff ? [hint("git.back", "Commits")] : [])];
@@ -465,6 +468,9 @@ export class GitPanel {
       case "git.ask": this.openAsk(); return;
       case "git.copy": { const context = this.context; if (context) this.copy(context.copy); return; }
       case "git.submit": this.launch(() => this.submit()); return;
+      case "git.newline": this.prompt.newLine(); return;
+      case "git.paste": this.launch(() => this.prompt.pasteClipboard()); return;
+      case "git.inspect": this.prompt.inspectAtCursor(); return;
       case "git.cancel": this.closeAsk(); return;
       case "git.refresh": this.refresh(); return;
       case "git.more": this.more(); return;
@@ -494,7 +500,9 @@ export class GitPanel {
   available(command: CommandId): boolean {
     if (command === "git.left" || command === "git.right") return within(this.renderer.currentFocusedRenderable, this.diffFocus);
     if (command === "git.ask" || command === "git.copy") return !!this.context;
-    if (command === "git.submit") return !!this.ask && !this.ask.sending && !!this.prompt.value.trim();
+    if (command === "git.submit") return !!this.ask && !this.ask.sending && !this.prompt.pending && !!this.prompt.value.trim();
+    if (command === "git.newline" || command === "git.paste") return !!this.ask;
+    if (command === "git.inspect") return !!this.ask && !!this.inspect && this.prompt.canInspect;
     if (command === "git.cancel") return !!this.ask;
     return !!this.cache;
   }
@@ -504,7 +512,7 @@ export class GitPanel {
     this.ask = { context: structuredClone(context), worktree: this.worktree, session: this.worktree.sessions.some((session) => session.id === this.sessionId) ? this.sessionId : null,
       owner: this.renderer.currentFocusedRenderable, sending: false };
     this.dialogContext.content = context.label;
-    this.prompt.value = ""; this.updateTarget(); this.dialog.visible = true; this.prompt.focus(); this.changed();
+    this.prompt.setWorkingDirectory(this.worktree.path); this.prompt.value = ""; this.updateTarget(); this.dialog.visible = true; this.resizeAsk(); this.prompt.focus(); this.changed();
   }
   private cycleSession(): void {
     if (!this.ask || this.ask.sending) return;
@@ -517,14 +525,15 @@ export class GitPanel {
     this.targetText.content = `Session: ${session ? display(session.name) : this.ask.session ? this.ask.session : "New session (create on Send)"}`;
   }
   private closeAsk(restoreFocus = true): void {
-    const ask = this.ask; this.ask = undefined; this.dialog.visible = false;
+    const ask = this.ask; this.ask = undefined; this.dialog.visible = false; this.prompt.cancelPaste();
     if (restoreFocus && ask?.owner && !ask.owner.isDestroyed) ask.owner.focus(); this.changed();
   }
   private async submit(): Promise<void> {
     const ask = this.ask, actions = this.actions;
-    if (!ask || !actions || ask.sending || !this.prompt.value.trim()) return;
-    const input = this.prompt.value;
-    const text = gitPrompt(input, ask.context); ask.sending = true;
+    if (!ask || !actions || ask.sending || this.prompt.pending || !this.prompt.value.trim()) return;
+    const fingerprint = () => { const draft = this.prompt.draft; return JSON.stringify([draft.value, draft.tokens]); };
+    const input = fingerprint(), submission = this.prompt.submission;
+    const text = gitPrompt(submission.text, ask.context); ask.sending = true;
     try {
       if (!ask.session) {
         const created = await actions.createSession(ask.worktree.id);
@@ -533,14 +542,23 @@ export class GitPanel {
       } else if (ask.session !== ask.createdSession && !(this.worktree?.id === ask.worktree.id ? this.worktree : ask.worktree).sessions.some((session) => session.id === ask.session)) {
         this.failure(new InputError("The selected session is not in this worktree.")); return;
       }
-      const result = await actions.prompt(ask.session, text);
+      const result = submission.images.length ? await actions.prompt(ask.session, text, submission.images) : await actions.prompt(ask.session, text);
       if (!result.ok) { this.failure(result.error); return; }
       if (this.ask === ask && !this.disposed) {
-        if (this.prompt.value === input) this.closeAsk();
+        if (fingerprint() === input) this.closeAsk();
         else this.notice("Request accepted · newer input retained");
       }
     } finally { ask.sending = false; if (this.ask === ask && !this.disposed) this.updateTarget(); }
   }
+  private resizeAsk = (): void => {
+    if (this.disposed || !this.dialog?.visible || this.prompt.isDestroyed) return;
+    const requested = Math.max(this.prompt.lineCount, this.prompt.editorView.getTotalVirtualLineCount());
+    const rows = Math.max(1, Math.min(6, this.root.height - 9, requested));
+    if (this.prompt.height !== rows) this.prompt.height = rows;
+    const height = Math.min(this.root.height, 9 + rows);
+    if (this.dialog.height !== height) this.dialog.height = height;
+    this.changed();
+  };
   private copy(text: string): void {
     this.launch(async () => { const result = await (this.actions?.copy ? this.actions.copy(text) : this.clipboard.copy(text)); if (result.ok) this.notice(result.value); else this.failure(result.error); });
   }
@@ -568,6 +586,7 @@ export class GitPanel {
     if (this.disposed) return;
     this.hide(); this.disposed = true;
     this.renderer.off("selection", this.selectionFinished);
+    this.prompt.off(InputRenderableEvents.INPUT, this.resizeAsk); this.prompt.off("resize", this.resizeAsk); this.prompt.dispose();
     for (const box of [this.history.root, this.files.root, this.refs.root, this.details]) {
       box.content.off("resize", this.applyScroll); box.viewport.off("resize", this.applyScroll);
     }

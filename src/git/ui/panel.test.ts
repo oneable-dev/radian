@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
-import { CodeRenderable, DiffRenderable, InputRenderable, TextAttributes, type Renderable, type TerminalColors } from "@opentui/core";
+import { CodeRenderable, DiffRenderable, TextAttributes, type Renderable, type TerminalColors } from "@opentui/core";
 import { uiTheme } from "../../ui/theme.ts";
+import { PromptInput } from "../../agents/ui/prompt-input.ts";
 import { createTestRenderer, ManualClock, MockTreeSitterClient } from "@opentui/core/testing";
 import { Workbench } from "../../app/ui/workbench.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
@@ -73,6 +74,22 @@ async function mount(options: { actions?: Partial<GitActions>; initial?: WorkVie
     async close() { view.dispose(); await app.dispose(); await highlighter.destroy(); },
   };
 }
+
+test("Git의 Agent 요청도 여러 줄·접힌 원문·이미지 참조를 같은 입력 규칙으로 전달한다", async () => {
+  const sent: {text:string;images:readonly string[]}[]=[];
+  const app=await mount({actions:{prompt:(_id,text,images)=>{sent.push({text,images:images??[]});return ok(undefined);}}});
+  try {
+    await app.chooseCommit();app.mockInput.pressKey("a");await app.renderOnce();
+    const input=app.get("git-prompt");if(!(input instanceof PromptInput))throw new Error("Missing Git prompt");
+    const original="Long Git request\n".repeat(100);
+    await app.mockInput.pasteBracketedText(original);app.mockInput.pressEnter({shift:true});await app.mockInput.pasteBracketedText("/tmp/image.png /tmp/context.txt");await app.renderOnce();
+    expect(input.value).toContain("[Pasted Content");expect(input.value).toContain("[Image #1]");expect(sent).toEqual([]);
+    app.mockInput.pressEnter();await app.waitFor(()=>sent.length>0);
+
+    expect(sent[0]!.text).toContain(original);expect(sent[0]!.text).toContain('@"/tmp/context.txt"');expect(sent[0]!.text).toContain(commit.oid);
+    expect(sent[0]!.images).toEqual(["/tmp/image.png"]);expect(app.view.promptDrafts.a1).toBe("existing Agent draft");
+  }finally{await app.close();}
+});
 
 test("Refresh 버튼 없이 r로 새로고침하고 spinner는 탭과 같은 행에서 최소 500ms 표시한다", async () => {
   // Keep refresh pending at the query boundary and drive animation with the renderer clock.
@@ -403,7 +420,7 @@ test("Git diff의 테마 변경은 밝은 배경·구문색을 반영하고 스�
     await app.renderOnce(); await app.renderOnce();
 
     const diff = app.get("git-file-diff");
-    if (!(diff instanceof DiffRenderable) || !(prompt instanceof InputRenderable)) throw new Error("Missing themed controls");
+    if (!(diff instanceof DiffRenderable) || !(prompt instanceof PromptInput)) throw new Error("Missing themed controls");
     expect(diff.contextBg.toInts().slice(0, 3)).toEqual([250, 250, 250]);
     expect(diff.lineNumberFg.toInts()[0]).toBeLessThan(160);
     expect(diff.addedBg.toInts()[0]).toBeGreaterThan(210);

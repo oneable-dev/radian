@@ -2,7 +2,7 @@ import {
   createAgentSession, DefaultResourceLoader, defineTool, getAgentDir, ModelRuntime,
   SessionManager, SettingsManager, type AgentSession, type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "@earendil-works/pi-ai";
+import { Type, type ImageContent } from "@earendil-works/pi-ai";
 import { mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExecutionState, SessionContext, SessionExecutor, SessionFactory } from "./session-registry.ts";
@@ -14,6 +14,7 @@ import { PiSessionTelemetry } from "./pi-session-telemetry.ts";
 import { CommandDiagnostics, sessionCommands } from "./session-commands.ts";
 import { FastMode } from "./fast-mode.ts";
 import type { UsageMonitor } from "../usage/monitor.ts";
+import { loadPromptImages } from "./prompt-attachments.ts";
 
 export type PiSessionOptions = {
   agentDir?: string;
@@ -23,6 +24,7 @@ export type PiSessionOptions = {
   streamFn?: AgentSession["agent"]["streamFunction"];
   settings?: Partial<ReturnType<SettingsManager["getSettings"]>>;
   usageMonitor?: UsageMonitor;
+  imageLoader?: (paths: readonly string[]) => Promise<Result<ImageContent[], ExpectedError>>;
 };
 
 export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory {
@@ -64,7 +66,7 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         waitForIdle: () => session.waitForIdle(), newSession: unsupportedSessionAction, fork: unsupportedSessionAction,
         switchSession: unsupportedSessionAction, navigateTree: unsupportedSessionAction, reload: unsupportedSessionAction,
       } });
-      const executor = new PiSessionExecutor(session, options.usageMonitor, diagnostics, fast);
+      const executor = new PiSessionExecutor(session, options.usageMonitor, diagnostics, fast, options.imageLoader);
       adopted = true;
       return executor;
     }, async () => { if (!adopted) session.dispose(); });
@@ -104,7 +106,7 @@ export class PiSessionExecutor implements SessionExecutor {
   private closing = false;
   private disposed = false;
 
-  constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode) {
+  constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode, private readonly imageLoader = loadPromptImages) {
     this.status = this.finalStatus(false);
     this.transcript = new SessionTranscript(session.sessionManager.getBranch());
     this.telemetry = new PiSessionTelemetry(session, () => this.emit(), usage, fast);
@@ -112,6 +114,7 @@ export class PiSessionExecutor implements SessionExecutor {
   }
 
   commands() { return sessionCommands(this.session); }
+  get acceptsImages(): boolean { return this.session.model?.input.includes("image") ?? false; }
   get savedSessionId(): string { return this.session.sessionId; }
   get sessionFile(): string | undefined { return this.session.sessionFile; }
   get state(): ExecutionState {
@@ -135,7 +138,7 @@ export class PiSessionExecutor implements SessionExecutor {
     return () => this.listeners.delete(listener);
   }
 
-  prompt(text: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>> {
+  prompt(text: string, onAccepted?: () => void, imagePaths: readonly string[] = []): Promise<Result<void, ExpectedError>> {
     if (this.closing || this.disposed) return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
     const admitted = Promise.withResolvers<void>();
     const previous = this.admission;
@@ -143,14 +146,25 @@ export class PiSessionExecutor implements SessionExecutor {
     const task = previous.then(async (): Promise<Result<void, ExpectedError>> => {
       if (this.closing || this.disposed) return err(new SessionError("SESSION_NOT_OPEN", "Session is closing."));
       if (this.session.isCompacting && !this.session.isStreaming) return err(new SessionError("SESSION_BUSY", "Session is compacting; retry after it finishes."));
+      // Preparation is part of admission: a later text request must not overtake
+      // an earlier image request while its bytes are being read or normalized.
+      const loaded = imagePaths.length ? await this.imageLoader(imagePaths) : ok([]);
+      if (!loaded.ok) return loaded;
+      if (this.closing || this.disposed) return err(new SessionError("SESSION_NOT_OPEN", "Session closed while preparing image input."));
+      if (this.session.isCompacting && !this.session.isStreaming) return err(new SessionError("SESSION_BUSY", "Session is compacting; retry after it finishes."));
+      if (imagePaths.length && !this.acceptsImages) return err(new CapabilityError("The selected model no longer accepts image input. Input was retained."));
+      const images = loaded.value;
       const before = { status: this.status, error: this.error, aborted: this.aborted };
       const revision = this.runRevision;
       const name = text.startsWith("/") ? text.slice(1).split(" ", 1)[0]! : "";
-      const command = name && this.session.extensionRunner.getCommand(name) ? this.diagnostics.begin(name) : undefined;
+      const registered = name ? this.session.extensionRunner.getCommand(name) : undefined;
+      if (images.length && registered) return err(new InputError(`/${name} does not accept image attachments. Send the images in an ordinary prompt instead.`));
+      const command = registered ? this.diagnostics.begin(name) : undefined;
       let handled = false;
       if (this.session.isIdle) { this.status = "working"; this.error = null; this.aborted = false; }
       const result = await withCleanup(() => capture(() => this.session.prompt(text, {
         streamingBehavior: "steer",
+        ...(images.length ? { images: [...images] } : {}),
         // Handled input may never start a model run; restore its previous display state.
         preflightResult: (disposition) => {
           handled = disposition === "handled";

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { TextAttributes } from "@opentui/core";
+import { ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
@@ -107,7 +107,9 @@ test("브랜치 갱신과 detached HEAD·긴 이름도 두 줄 높이와 기존 
     update("feature/a-very-long-branch-that-must-not-wrap"); app.resize(60, 12); await app.renderOnce();
 
     expect(app.get("worktree:demo:feature")).toBe(feature); expect(feature.height).toBe(2);
-    expect(empty.y).toBe(feature.y + 2); expect(app.line("worktree:demo:feature", 1)).toContain("feature/");
+    expect(empty.y).toBe(feature.y + 3);
+    (app.get("workspace-tree") as ScrollBoxRenderable).scrollChildIntoView(feature.id); await app.renderOnce();
+    expect(app.line("worktree:demo:feature", 1)).toContain("feature/");
     expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
@@ -138,15 +140,15 @@ test("레포 묶음과 워크트리 및 헤더 사이는 한 줄 간격으로 �
   } finally { await app.close(); }
 });
 
-test("좁고 낮은 화면에서는 항목 간격만 줄이고 레포 그룹 경계와 기존 초안을 유지한다", async () => {
+test("좁고 낮은 화면에서도 항목·레포 간격과 기존 초안을 유지한다", async () => {
   const app = await mount(groupedRepositories(), { height: 36 });
   try {
     const main = app.get("worktree:demo:main"), feature = app.get("worktree:demo:feature");
 
-    // 같은 행 인스턴스에 밀도만 바꾸며 그룹 간 최소 한 줄은 남긴다.
+    // 높이에 따라 별도 모드로 전환하지 않고 같은 행과 간격을 유지한다.
     app.resize(60, 12); await app.renderOnce(); await app.renderOnce();
     expect(app.get("worktree:demo:main")).toBe(main);
-    expect(feature.y - main.y - main.height).toBe(0);
+    expect(feature.y - main.y - main.height).toBe(1);
     expect(app.get("repository:tools").y - feature.y - feature.height).toBe(1);
     expect(app.view.promptDrafts.a1).toBe("main draft");
 

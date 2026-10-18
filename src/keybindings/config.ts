@@ -32,7 +32,7 @@ export function keyToken(key: { name: string; ctrl: boolean; meta: boolean; opti
   return [key.ctrl && "ctrl", (key.meta || key.option) && "alt", key.shift && "shift", key.super && "super", name].filter(Boolean).join("+");
 }
 const labels: Record<string, string> = { ctrl: "Ctrl", alt: "Alt", shift: "Shift", super: "Super", space: "Space", plus: "+", return: "Enter", escape: "Esc", tab: "Tab", up: "↑", down: "↓", left: "←", right: "→", home: "Home", end: "End", pageup: "PgUp", pagedown: "PgDn", backspace: "Backspace", delete: "Delete", insert: "Insert" };
-export function formatKeys(keys: readonly string[]): string { return keys.map((key) => key.split("+").map((part) => labels[part] ?? part).join("+")).join(" → "); }
+export function formatKeys(keys: readonly string[]): string { return keys.map((key) => key.split("+").map((part) => labels[part] ?? (/^f\d+$/u.test(part) ? part.toUpperCase() : part)).join("+")).join(" → "); }
 
 export class Keymap {
   constructor(readonly bindings: readonly Binding[], readonly leader: readonly string[], readonly timeoutMs: number) {}

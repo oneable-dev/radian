@@ -35,6 +35,29 @@ function events(value: unknown, signal?: AbortSignal | null) {
   };
 }
 
+test("이전 런타임의 이미지와 큰 입력은 전송·자동 재시작 없이 보존 가능한 실패로 거부한다", async () => {
+  const fetchMock = stubFetch(async () => { throw new Error("Must not send unsupported input"); });
+  const client = new RuntimeClient(paths, snapshot());
+  try {
+    expect(expectError(await client.prompt("session", "[Image #1]", ["/tmp/image.png"])).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(expectError(await client.prompt("session", "x".repeat(1000001))).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(fetchMock).not.toHaveBeenCalled();
+  } finally {await client.disconnect(); fetchMock.mockRestore();}
+});
+
+test("이미지 지원 런타임에는 같은 prompt 명령에 이미지 참조를 명시적으로 전송한다", async () => {
+  const state = snapshot(); state.capabilities = ["prompt-images"];
+  const sent: unknown[] = [];
+  const fetchMock = stubFetch(async (_input, options) => {
+    sent.push(JSON.parse(String(options?.body))); return Response.json({ok:true,value:null});
+  });
+  const client = new RuntimeClient(paths, state);
+  try {
+    expectOk(await client.prompt("session", "Inspect [Image #1]", ["/tmp/image.png"]));
+    expect(sent).toEqual([{type:"prompt",sessionId:"session",text:"Inspect [Image #1]",images:["/tmp/image.png"]}]);
+  } finally {await client.disconnect(); fetchMock.mockRestore();}
+});
+
 test("이전 런타임의 /fast는 일반 모델 프롬프트로 보내지 않고 명시적으로 거부한다", async () => {
   const fetchMock = stubFetch(async () => { throw new Error("Settings must not become model input"); });
   const client = new RuntimeClient(paths, snapshot());

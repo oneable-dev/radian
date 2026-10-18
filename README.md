@@ -20,16 +20,17 @@ and `~/.dotfiles`) and shows a workspace sidebar containing **repositories and w
 Each worktree shows its folder name and branch on two lines, with the folder and branch icons aligned at the same horizontal level
 (no additional branch indentation or connector). Both lines form one selectable worktree item.
 Repository groups, headers and worktree items have one blank row between them,
-while folder/branch lines stay together. Below 18 terminal rows, item gaps collapse
-and repository groups retain one blank row.
+while folder/branch lines stay together. These vertical gaps do not change with terminal height;
+there is no compact-layout mode.
 The workspace search surface spans the sidebar width with three rows and centered single-line
-input. Below 18 terminal rows it collapses to one row; narrow terminals use a shorter placeholder.
+input at every terminal height; narrow terminals use a shorter placeholder.
 The padded search area is clickable and preserves its query and cursor across resize/collapse.
 Use `Tab`/`Shift+Tab` to move focus. `j/k`, arrows and Home/End move the tree cursor
 without changing the current workspace; **Enter** opens the highlighted worktree and restores its
 last work view/session. Mouse clicks open a worktree directly. Open sessions are tabs within Agents;
 focus that strip to use `h/l` (or left/right), Home/End, `n` for new and `x` for close.
-`Ctrl+e` focuses the minimal session prompt; `Enter` submits and `Esc` returns to the tree.
+`Ctrl+e` focuses the session prompt; `Enter` submits, `Shift+Enter` or `Alt+Enter` inserts a newline,
+and `Esc` returns to the tree.
 `Ctrl+Space`, then `c`, **detaches the TUI only**. Agents and subagents keep running in a separate local service.
 These are default application bindings; see [Keybindings](#keybindings) to customize them.
 
@@ -51,9 +52,38 @@ not automatically replay a prompt. No separate queue-management or follow-up mod
 
 `--demo` remains display-only: closing removes fixture metadata and creation only reports a
 request. It does not invoke Pi, access credentials, or create stored sessions.
-The History tab lists saved SDK conversations for the selected worktree and opens them explicitly.
+The History popup lists saved SDK conversations for the selected worktree and opens them explicitly.
 The Agent view provides a keyboard-first, read-only transcript and prompt, not a conversation-content editor.
 The Editor view embeds Neovim; Git provides a native, read-only history and whole-file diff UI.
+
+### Command-line interface
+
+Commander handles options, help, version and repository-scoped runtime commands:
+
+```sh
+bun run start --help
+bun run start --version
+bun run start --demo
+bun run start --no-color
+bun run start runtime status
+bun run start runtime stop
+```
+
+Help/version and invalid arguments are handled before SDK/resource initialization, configuration
+reads, workspace discovery or service activation. Interactive mode requires TTY stdin/stdout and a
+cursor-addressable UTF-8 terminal; pipes and `TERM=dumb` receive plain guidance instead of fullscreen
+escape sequences. Runtime commands remain usable without a TTY and ignore workspace-root discovery.
+`runtime stop` is explicit and closes the selected repository service's owned agents, editors and shells;
+save work first. The existing `--runtime-status` and `--stop-runtime` aliases remain accepted.
+Internal service flags and isolated `--test-runtime` startup remain compatible.
+
+`--no-color` or a nonempty `NO_COLOR` uses terminal-default foreground/background with existing
+bold/underline and reverse selection emphasis. It does not merely replace colors with gray RGB
+escapes. Provider icons use the text fallback and branding omits its color fade. Embedded programs'
+configuration remains untouched; only the attached UI's final frame is rendered without color.
+The normal colored UI continues to follow the host palette. `--runtime-cwd` chooses the repository
+for administrative commands; a relative `--state-dir` is resolved once against the launching directory.
+`--workspace-config`, `--keybindings` and `--theme` continue selecting explicit configuration files.
 
 ### Workspace roots
 
@@ -130,6 +160,40 @@ Use the configured detach sequence (default **Ctrl+Space, then c**). The footer 
 focused control and effective keymap. Opening, switching and resizing do not
 send a prompt to an agent or run a Git mutation. Entering Git may perform read-only queries.
 
+### Multiline input and attachments
+
+Agent input has no 1,000-character editor limit. **Enter** sends; **Shift+Enter** inserts a newline.
+**Alt+Enter** is an alternative for terminals that cannot distinguish Shift+Enter. Editing grows the
+input to at most six visible rows, bounded by available screen space, then scrolls inside the editor.
+Pasting never sends automatically and preserves original newlines.
+
+Long pasted text (at least 1,024 UTF-16 units or nine lines) appears as
+`[Pasted Content 6324 chars]`. Control-containing text also collapses rather than painting control
+sequences; its original data is retained. Images appear as `[Image #1]`, files as `[File #1]`.
+These are atomic editor items, not text sent in place of the source. Arrow movement, deletion,
+undo/redo, session switching and saved drafts preserve their source data. Literal typed labels
+without attachment metadata remain ordinary text. **Ctrl+O** at an item opens read-only source
+information, with Copy and Remove actions. Pasted text shows its original contents; image/file
+items show their source references, not rendered image thumbnails.
+
+Paste absolute/`~/`/`./`/`../` paths, quoted or escaped file drops, or local `file://` URLs to attach
+files. File completion inserts the same numbered items. File parts become explicit absolute path
+references for the SDK's tools; Radian does not silently upload arbitrary file contents.
+**Ctrl+V** reads supported images, file URLs or text from the host clipboard. Remote host clipboard
+reads are rejected explicitly; terminal paste remains available for text and paths.
+Clipboard images are stored under `${XDG_CACHE_HOME:-~/.cache}/radian/attachments` using private
+directories and files, so saved drafts can retain them. These owned cache files are not automatically
+pruned while other clients or undo history may still reference them.
+
+Image bytes are decoded/normalized with the installed Pi SDK and sent as real image content blocks.
+Unsupported models, invalid images and older services reject before admission and retain the input;
+no service is automatically restarted. The additive `prompt-images` capability gates this transport.
+The runtime limits aggregate source image bytes to 16 MiB and wire payloads to 8 MiB for resource
+safety. Exceeding a boundary rejects the whole operation; it never silently truncates input.
+Rich input drafts are additive preference metadata, alongside compatible original-text/path drafts.
+A legacy client's replacement text invalidates stale attachment metadata instead of resurrecting it.
+Git's Ask Agent input uses the same multiline, paste and attachment rules.
+
 ### Prompt completion
 
 The Agent prompt shows a read-only completion menu directly below the input. `/` opens command
@@ -146,8 +210,8 @@ and unavailable actions use muted keys instead of disappearing.
 - **Tab / Enter** inserts the selected candidate without sending the prompt or executing a command.
   Press Enter again after insertion to submit. **Esc** dismisses only the menu and preserves focus/text.
 - Selection replaces only the current token, preserving the surrounding text and native Unicode cursor.
-  Paths containing spaces, quotes or backslashes use `@"quoted paths"`. File references insert paths,
-  not file contents or attachments.
+  Selected files appear as numbered file/image items rather than exposing long paths in the editor.
+  Ordinary file references retain their absolute paths for tool access; images use the image transport.
 
 Command candidates come from the selected SDK session's registered extension commands, prompt
 templates and enabled Skill commands. Pi CLI-only commands such as `/model` and `/settings` are not
@@ -188,7 +252,7 @@ folded items show an inline `(Ctrl+o to expand)` hint using the actual configure
 and Thinking have no tinted background, border or added indentation. Thinking uses italic text in
 a theme-adaptive neutral gray, independent of accent hues or colored `muted` overrides.
 User, tool and notice blocks retain subtle host-palette tints. Sections leave two blank rows between
-blocks; screens shorter than 18 rows use one-row gaps and remove internal vertical spacing.
+blocks, with the same internal spacing at every terminal height.
 
 Agent answers and Thinking use OpenTUI's `MarkdownRenderable` for headings, emphasis, links,
 lists, fenced code and tables. Tool commands/results, user messages and explicit skill names remain
@@ -314,8 +378,7 @@ The prompt surface reaches both edges of the Agent pane; its internal padding al
 text with the transcript mode and telemetry rows. The sidebar divider sits at the right edge of its
 character cell, avoiding a half-cell gap beside the prompt surface. The empty prompt has no marker or placeholder,
 and focusing it keeps the same surface background; the caret and left border indicate focus.
-Normal screens leave one blank row between the mode, telemetry and prompt rows. Screens shorter
-than 18 rows remove both gaps together. Narrow panels shorten bars and omit settings or the
+The mode, telemetry and prompt rows form one stable input/status group without interleaved blank rows. Narrow panels shorten bars and omit settings or the
 countdown before dropping either resource percentage. Theme changes preserve the current draft and focus.
 
 Provider logos reserve two columns. On terminals reporting Kitty/Sixel graphics and pixel resolution,
@@ -476,8 +539,8 @@ focus or Git navigation/scroll positions. Each attached TUI has its own theme.
 
 Navigation uses understated separators and underlined active tabs rather than boxed controls.
 Sidebar, work-view content and footer text use two-cell horizontal insets, reduced to one on terminals
-narrower than 80 columns. Main work tabs leave a single blank row before their content; screens
-shorter than 18 rows omit that gap. Work surfaces have no additional top or bottom panel inset. Routine Neovim/worktree captions, the `Git · … · All refs` line and the terminal
+narrower than 80 columns. Main work tabs leave a single blank row before their content at every
+terminal height. Tabs, search surfaces, item gaps and composer padding no longer switch height modes. Work surfaces have no additional top or bottom panel inset. Routine Neovim/worktree captions, the `Git · … · All refs` line and the terminal
 `… · running` line are omitted; empty, error, exit and reconnect messages remain meaningful.
 Agent input, Editor, Git lists/diffs and Terminal end at the same bottom edge as the sidebar
 divider, without an unused row below them. The sidebar widens to retain
@@ -539,7 +602,7 @@ Spaces separate sequential keys (`"space r"` is a two-key leader); `+` combines 
 Use explicit `shift+c` for uppercase C. A string binding is global; an object can specify `scope`:
 `global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `history-search`, `session-tabs`, `prompt`, `prompt-completion`, `button`,
 `transcript` (section navigation), `transcript-text`, `transcript-visual`, `editor`, `terminal`,
-`git`, `git-prompt`, or `none`. An override replaces that command's defaults;
+`git`, `git-prompt`, `dialog`, or `none`. An override replaces that command's defaults;
 `[]` disables it. Command IDs/defaults are defined in `src/keybindings/commands.ts`.
 Unknown commands, invalid keys and overlapping/prefix bindings are errors rather than silent fallbacks.
 For example, a printable Space leader conflicts with the default button Space activation unless that
@@ -566,18 +629,33 @@ the configured leader detach command works in every input context. See the input
 The status-icon legend and routine live-service banner are not shown. Errors and service notices
 appear in a separate row immediately above the footer only when nonempty, so they never replace
 shortcut hints. Clearing a notice returns its row to the work panels.
-The footer itself is read-only: clicking it neither runs an action nor takes input focus.
+Identity and shortcut text remain read-only. A dedicated Help entry opens a centered popup without
+changing the original draft or selection; closing it restores focus. **F1** opens application help
+in app controls; the conversation retains its existing F1 reader help. **Leader, then ?** opens the
+application popup from any work view, including embedded PTYs, without intercepting their native F1.
+The popup lists the current context first, then common application bindings, including user overrides.
+It traps Tab traversal and supports arrows/j/k, PgUp/PgDn and Esc.
+
+A nonempty notification reserves exactly one row above the footer, showing its first nonempty line
+with width-aware ellipsis and a **Details** action. **Leader, then !** also opens the full original
+message in a scrollable, copyable popup. Notifications never open this popup automatically. Accepted
+model/tool failures stay in their conversation instead of duplicating into the global footer.
+Clearing the owner's notification removes the row; no permanent blank notification space is reserved.
 
 The footer text stays one line on narrow terminals. Identity stays on the left; complete shortcut/label
 pairs fit in the owner's supplied order and trailing pairs are omitted with an ellipsis. Resize
-restores them when space permits. The footer does not invent Help actions or priority categories;
-a control may supply its own contextual help shortcut. Active completion uses the configurable
+restores them when space permits. The help entry remains discoverable even when trailing context
+hints do not fit (shown as F1 or ? at narrow widths). Active completion uses the configurable
 `completion.next`, `completion.previous`, `completion.accept` and `completion.dismiss` commands.
 Default Tab focus traversal excludes `prompt-completion`; overriding Tab globally requires rebinding
 or disabling the conflicting completion acceptance binding. Input editing, Ctrl+F/E focus shortcuts,
 and Neovim/shell input ownership are otherwise unchanged.
 `src/ui/footer.ts` is a reusable presentation component; it does not own keyboard handlers,
 workspace selection, or agent execution.
+
+All Radian-owned horizontal scrollbars stay hidden, including overflowing Agent and Terminal tab
+strips and read-only dialogs. Horizontal navigation/reveal remains enabled where needed; vertical
+scrollbars, Git diff movement and embedded programs' own UI/configuration are unchanged.
 
 ### Runtime ownership and closing
 

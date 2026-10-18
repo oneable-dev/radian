@@ -248,7 +248,11 @@ export class RuntimeClient {
       throw error;
     });
   }
-  async prompt(sessionId: string, text: string): Promise<Result<void, ExpectedError>> {
+  async prompt(sessionId: string, text: string, images: readonly string[] = []): Promise<Result<void, ExpectedError>> {
+    if (images.length && !this.state.capabilities?.includes("prompt-images")) return err(new CapabilityError("Running service predates image input. Input was retained; finish work and restart the service explicitly when ready. No prompt was sent."));
+    // The old wire schema capped text at 1,000,000 UTF-16 units. Do not submit a
+    // new large draft to a service that cannot accept it, or restart live work.
+    if (text.length > 1000000 && !this.state.capabilities?.includes("prompt-images")) return err(new CapabilityError("Running service predates large input. Input was retained; restart the service explicitly after finishing work. No prompt was sent."));
     if (/^\/fast(?:\s|$)/.test(text)) {
       // An older SDK treats unknown slash commands as model input. Never turn a settings command into a paid prompt.
       const unsupported = () => err(new CapabilityError("Running service has no /fast control. Finish jobs and restart it explicitly. No prompt was sent."));
@@ -257,7 +261,7 @@ export class RuntimeClient {
       if (!commands.ok) return commands;
       if (!commands.value.items.some((command) => command.kind === "command" && command.value === "fast")) return unsupported();
     }
-    const result = await this.command({ type: "prompt", sessionId, text });
+    const result = await this.command({ type: "prompt", sessionId, text, ...(images.length ? { images: [...images] } : {}) });
     return result.ok ? ok(undefined) : result;
   }
   async savePreferences(preferences: RuntimePreferences): Promise<Result<void, ExpectedError>> { const result = await this.command({ type: "preferences", preferences }); return result.ok ? ok(undefined) : result; }
@@ -365,7 +369,9 @@ export class RuntimeClient {
     if (this.disconnected || this.failure || this.detaching && !binding && command.type !== "preferences") return err(this.connectionClosed());
     if (binding && (binding.instance !== this.state.instance || binding.epoch !== this.connectionEpoch)) return err(this.connectionClosed());
     const instance = binding?.instance ?? this.state.instance;
-    const response = await transport(this.paths, "/command", { method: "POST", body: JSON.stringify(command),
+    const payload = JSON.stringify(command);
+    if (Buffer.byteLength(payload) > maxFrameBytes) return err(new InputError("Runtime payload exceeds the 8 MiB safety limit. Nothing was sent; input was retained."));
+    const response = await transport(this.paths, "/command", { method: "POST", body: payload,
       headers: { "Content-Type": "application/json", "X-Radian-Instance": instance }, signal: AbortSignal.timeout(15000) });
     if (!response.ok) return err(new ConnectionError(response.error.code, `${response.error.message} Action outcome is unknown; reconnect before retrying.`, { cause: response.error }));
     const body = await readJson(response.value); if (!body.ok) return body;

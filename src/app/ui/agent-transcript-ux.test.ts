@@ -468,7 +468,7 @@ test.each([false, true])("Ctrl+O는 문자·줄 선택 중에도 안전하게 �
   } finally { await app.close(); }
 });
 
-test("접기 재할당은 안내에도 반영되고 기본 Ctrl+O는 프롬프트와 PTY를 침범하지 않는다", async () => {
+test("접기 재할당은 안내에도 반영되고 Ctrl+O는 입력 첨부 확인과 PTY 소유권을 구분한다", async () => {
   const keymap = expectOk(parseKeymap({ bindings: { "transcript.fold": [{ keys: "alt+x", scope: "transcript" }] } }));
   const app = await mount([{ ...section("CUSTOM_FOLD_DETAIL"), kind: "tool", title: "read" }], { keymap });
   try {
@@ -485,7 +485,8 @@ test("접기 재할당은 안내에도 반영되고 기본 Ctrl+O는 프롬프�
     expect(app.captureCharFrame()).toContain("CUSTOM_FOLD_DETAIL");
     const defaults = defaultKeymap();
     for (const context of ["transcript", "transcript-text", "transcript-visual"] as const) expect(defaults.hint("transcript.fold", context)).toBe("Ctrl+o");
-    for (const context of ["prompt", "editor", "terminal"] as const) expect(defaults.bound("ctrl+o", context)).toBe(false);
+    expect(defaults.hint("agent.inspect", "prompt")).toBe("Ctrl+o");
+    for (const context of ["editor", "terminal"] as const) expect(defaults.bound("ctrl+o", context)).toBe(false);
     expect(app.prompts).toEqual([]);
   } finally { await app.close(); }
 });
