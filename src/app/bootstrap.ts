@@ -160,6 +160,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
     const mounted = view; view = undefined; mounted?.dispose(); client?.beginDetach(); renderer.destroy();
   };
   try {
+    renderer.setTerminalTitle("radian");
     const palette = await renderer.getPalette({ size: 256, timeout: 200 });
     uiTheme(renderer).configure(palette, theme);
     const terminalTheme = new TerminalTheme(renderer, palette);
