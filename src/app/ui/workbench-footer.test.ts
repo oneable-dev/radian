@@ -51,8 +51,10 @@ test("기본 화면은 고정 범례나 안내 행 없이 푸터 바로 위까�
     const footer = app.renderer.root.findDescendantById("app-footer")!;
     const panel = app.renderer.root.findDescendantById("work-panel")!;
 
-    // The footer reserves one text row and a partial-block cap, without routine notice rows.
-    expect(footer.height).toBe(2);
+    // The normal footer reserves only its text row, returning the former decoration row to work.
+    expect(footer.height).toBe(1);
+    expect(footer.y).toBe(23);
+    expect(app.captureCharFrame()).not.toContain("▂");
     expect(app.renderer.root.findDescendantById("footer-notice")?.visible).toBe(false);
     expect(panel.y + panel.height).toBe(footer.y);
     expect(app.captureCharFrame()).not.toContain("Status not supplied");

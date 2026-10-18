@@ -1,6 +1,6 @@
-import { BoxRenderable, RenderableEvents, StyledText, TextRenderable, fg, type CliRenderer, type TextChunk } from "@opentui/core";
+import { BoxRenderable, RenderableEvents, StyledText, TextRenderable, fg, type CliRenderer } from "@opentui/core";
 import { blendColors, uiTheme, type UiTheme } from "./theme.ts";
-import { horizontalInset, panelSpacing } from "./spacing.ts";
+import { horizontalInset } from "./spacing.ts";
 
 export type FooterShortcut = { readonly key: string; readonly label: string; readonly disabled?: boolean };
 
@@ -9,20 +9,17 @@ export class Footer {
   readonly root: BoxRenderable;
   readonly bar: BoxRenderable;
   readonly notice: TextRenderable;
-  private readonly edge: TextRenderable;
   private readonly identity: TextRenderable;
   private readonly hints: TextRenderable;
   private shortcuts: readonly FooterShortcut[] = [];
   private lastLayout = "";
   private readonly theme: UiTheme;
 
-  constructor(private readonly renderer: CliRenderer, private readonly appIdentity: string) {
+  constructor(renderer: CliRenderer, private readonly appIdentity: string) {
     this.theme = uiTheme(renderer);
     this.root = new BoxRenderable(renderer, { id: "app-footer", width: "100%", height: 1, flexShrink: 0, flexDirection: "column" });
     this.notice = new TextRenderable(renderer, { id: "footer-notice", width: "100%", height: 1, flexShrink: 0,
       content: "", visible: false, wrapMode: "none", selectable: false });
-    this.edge = new TextRenderable(renderer, { id: "footer-edge", width: "100%", height: 1, flexShrink: 0,
-      wrapMode: "none", selectable: false });
     this.bar = new BoxRenderable(renderer, { id: "footer-bar", width: "100%", height: 1, flexShrink: 0,
       flexDirection: "row", alignItems: "center", paddingRight: 1, gap: 2, onSizeChange: () => this.renderShortcuts() });
     this.identity = new TextRenderable(renderer, { id: "footer-identity", content: appIdentity, height: 1, flexShrink: 0,
@@ -30,7 +27,7 @@ export class Footer {
     this.hints = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0,
       textAlign: "right", wrapMode: "none", selectable: false });
     this.bar.add(this.identity); this.bar.add(this.hints);
-    this.root.add(this.notice); this.root.add(this.edge); this.root.add(this.bar);
+    this.root.add(this.notice); this.root.add(this.bar);
     const resize = () => this.renderShortcuts();
     renderer.on("resize", resize);
     this.root.once(RenderableEvents.DESTROYED, () => renderer.off("resize", resize));
@@ -56,16 +53,14 @@ export class Footer {
 
   private renderShortcuts(): void {
     if (this.root.isDestroyed) return;
-    const edgeHeight = panelSpacing(this.renderer).vertical;
-    this.root.height = 1 + edgeHeight + Number(this.notice.visible);
-    this.edge.visible = Boolean(edgeHeight);
+    this.root.height = 1 + Number(this.notice.visible);
     const inset = horizontalInset(this.bar.width);
     const width = Math.max(0, this.bar.width - inset);
     const textWidth = Bun.stringWidth(this.appIdentity) + inset;
     // Let the fade breathe on wide screens, but give shortcuts their space back on small terminals.
     const identityWidth = Math.min(textWidth + Math.min(8, Math.max(0, width - 60)), width);
     const available = Math.max(0, width - identityWidth - 2);
-    const signature = JSON.stringify([width, edgeHeight, this.shortcuts]);
+    const signature = JSON.stringify([width, this.shortcuts]);
     if (signature === this.lastLayout) return;
     this.lastLayout = signature;
     this.bar.paddingRight = inset;
@@ -104,9 +99,5 @@ export class Footer {
       const bg = background(cell); cell += Bun.stringWidth(text);
       return { __isChunk: true, text, fg: colors.text, bg };
     }));
-    // A lower-quarter block adds only a thin visible cap, not a full row of colored padding.
-    this.edge.content = new StyledText(Array.from({ length: this.bar.width }, (_, cell): TextChunk => ({
-      __isChunk: true, text: "▂", fg: background(cell), bg: colors.panel,
-    })));
   }
 }

@@ -43,40 +43,41 @@ test("공통 푸터는 화면 마지막 한 줄에 있고 별도 알림은 바�
   } finally { await app.dispose(); }
 });
 
-test("일반 화면의 푸터는 한 줄 텍스트 위에 1/4셀 두께의 배경만 덧댄다", async () => {
-  // A partial block adds a thin cap without the oversized three-row colored surface.
+test("일반 화면도 푸터는 마지막 한 줄만 사용하고 나머지 행을 본문에 돌려준다", async () => {
+  // Branding must not reserve an additional terminal row above the shortcut text.
   const app = await mount(100, 24);
   try {
     await app.renderOnce();
     const lines = app.captureCharFrame().split("\n");
 
-    expect(app.footer.root.height).toBe(2); expect(app.footer.bar.height).toBe(1);
-    expect(app.footer.bar.y).toBe(23); expect(lines[22]).toBe("▂".repeat(100));
+    expect(app.footer.root.height).toBe(1); expect(app.footer.bar.height).toBe(1);
+    expect(app.footer.bar.y).toBe(23); expect(app.body.height).toBe(23);
+    expect(app.captureCharFrame()).not.toContain("▂");
     expect(lines[23]).toContain("Radian 0.0.0"); expect(lines[23]).toContain("Enter Run  Esc Workspace");
-    expect(app.body.y + app.body.height).toBe(app.footer.root.y);
+    expect(app.body.y + app.body.height).toBe(app.footer.bar.y);
     expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.input.value).toBe("draft");
   } finally { await app.dispose(); }
 });
 
-test("세로 리사이즈는 알림을 보존하며 얇은 푸터 덧댐을 낮은 화면에서만 숨긴다", async () => {
+test("세로 리사이즈 후에도 푸터는 한 줄이며 실제 알림만 바로 위 한 줄을 사용한다", async () => {
   // Width stays fixed so height-only changes cannot rely on a bar-width resize callback.
   const app = await mount(100, 24);
   try {
     app.footer.setNotice("Runtime reconnecting");
-    for (const [height, footerHeight] of [[24, 2], [17, 1], [18, 2], [12, 1], [24, 2]] as const) {
+    for (const height of [24, 17, 18, 12, 24]) {
       app.resize(100, height); await app.renderOnce();
       const lines = app.captureCharFrame().split("\n");
 
-      // Only decorative padding collapses; notices, input focus and the draft remain intact.
-      expect(app.footer.bar.height).toBe(1); expect(app.footer.root.height).toBe(footerHeight + 1);
+      // Real notices retain their own row at every height without adding decorative padding.
+      expect(app.footer.bar.height).toBe(1); expect(app.footer.root.height).toBe(2);
       expect(lines[height - 1]).toContain("Radian 0.0.0"); expect(lines[height - 1]).toContain("Esc Workspace");
       expect(app.footer.bar.y + app.footer.bar.height).toBe(height);
-      expect(lines[height - footerHeight - 1]).toContain("Runtime reconnecting");
+      expect(lines[height - 2]).toContain("Runtime reconnecting");
       expect(app.body.y + app.body.height).toBe(app.footer.notice.y);
       expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.input.value).toBe("draft");
     }
     app.footer.setNotice(""); await app.renderOnce();
-    expect(app.footer.root.height).toBe(2); expect(app.footerLine()).toContain("Esc Workspace");
+    expect(app.footer.root.height).toBe(1); expect(app.footerLine()).toContain("Esc Workspace");
   } finally { await app.dispose(); }
 });
 
@@ -177,12 +178,6 @@ test("좌측 Radian 제품명에서 오른쪽으로 흐려지는 그라데이션
     expect(right.bg.equals(colors.surface)).toBe(true);
     expect(left.fg.equals(colors.text)).toBe(true);
     expect(spanAt(app.footerLine().indexOf("Enter")).bg.equals(colors.surface)).toBe(true);
-    const edge = app.renderer.root.findDescendantById("footer-edge")!;
-    if (edge.visible) {
-      expect(spanAt(app.footer.bar.x, edge.y).fg.toInts()).toEqual(left.bg.toInts());
-      expect(spanAt(app.footer.bar.x, edge.y).bg.toInts()).toEqual(colors.panel.toInts());
-      expect(spanAt(app.footerLine().indexOf("Enter"), edge.y).fg.toInts()).toEqual(colors.surface.toInts());
-    }
     return left.bg.toInts();
   };
   try {
@@ -190,7 +185,7 @@ test("좌측 Radian 제품명에서 오른쪽으로 흐려지는 그라데이션
     app.renderer.emit("palette", palette(false)); await app.renderOnce();
     const dark = verifyBrand();
 
-    // Repainting the existing footer must preserve its text and thin cap.
+    // Repainting the existing footer must preserve its text and single-row layout.
     app.renderer.emit("palette", palette(true)); await app.renderOnce();
     expect(verifyBrand()).not.toEqual(dark);
     app.resize(30, 8); await app.renderOnce();

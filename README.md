@@ -555,11 +555,9 @@ currently unavailable commands are consumed without executing, never replayed as
 
 The left navigation and right work panel share one full-width footer. Its single text row places
 `Radian` and its version on the left and shortcuts for the **currently focused control** on the right.
-On screens at least 18 rows tall, the preceding row paints only its bottom quarter (`▂`) in the
-footer colors, giving a thin cap rather than full rows of colored padding. This reserves two grid
-rows but colors approximately 1.25 rows; shorter screens omit the cap. Errors and notices remain
-separate above it. A subtle
-background gradient starts at the screen's left edge, including the product text's inset, and fades
+The footer occupies exactly one terminal row at every screen height, with no decorative row above it.
+Errors and notices remain separate above it. A subtle background gradient starts at the screen's left
+edge, including the product text's inset, and fades
 the terminal's accent into the footer surface toward the right. It follows palette changes and optional theme overrides. Keys are highlighted separately
 from their descriptions. Tree, search, History, buttons and prompt contexts update on actual focus/state changes; unrelated/global shortcuts are not appended.
 Application bindings such as `Ctrl+f`, `Ctrl+e` and `Tab` still work outside Neovim input focus;
