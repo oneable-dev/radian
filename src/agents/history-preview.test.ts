@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { readHistoryPreview, historyPreviewLimit, historyPreviewSectionLimit } from "./history-preview.ts";
+import { runCompletionEntryType } from "./run-completion.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 
 const header = { type: "session", version: 3, id: "saved", cwd: "/fixture", timestamp: "2026-10-14T00:00:00Z" };
@@ -47,6 +48,42 @@ test("최신 3개 섹션만 Agent와 같은 도구·오류·redaction 표현으�
     expect(preview.sections?.[1]?.text).toContain("Read failed"); expect(preview.truncated).toBe(false);
     expect(JSON.stringify(preview)).not.toMatch(/OLD QUESTION|OLD ANSWER|Step 1|Step 2|Step 3|Step 4|HIDDEN THOUGHT|SECRET SIGNATURE/);
   } finally { await app.close(); }
+});
+
+test("저장 미리보기에도 Bash 명령·timeout을 보존하며 기존 요약 길이로 명령을 자르지 않는다", async () => {
+  // 미리보기의 512자 요약 제한과 별개로 구조화한 실행 명령을 보존한다.
+  const command = "printf '한글'\n" + "printf done; ".repeat(60);
+  const app = await fixture([header, message("q", null, "user", "Show command"),
+    message("call", "q", "assistant", [{ type: "toolCall", id: "shell", name: "bash", arguments: { command, timeout: 120 } }])]);
+  try {
+    const before = await readFile(app.path, "utf8");
+    const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
+    // 제한 시간이나 명령 복원 때문에 writer를 열거나 저장 기록을 바꾸지 않는다.
+    expect(preview.sections?.at(-1)).toMatchObject({ kind: "tool", command, timeoutSeconds: 120 });
+    expect(await readFile(app.path, "utf8")).toBe(before);
+  } finally { await app.close(); }
+});
+
+test("최신 3개 미리보기는 완료 메타데이터를 유지하지만 새 미응답 요청에는 옛 완료를 붙이지 않는다", async () => {
+  const completion = { startedAt: 1000000, completedAt: 1090000, durationMs: 90000, outcome: "complete" as const };
+  const app = await fixture([header, message("q", null, "user", "Question"), message("a", "q", "assistant", [{ type: "text", text: "Answer" }]),
+    { type: "custom", id: "completed", parentId: "a", timestamp: header.timestamp, customType: runCompletionEntryType, data: completion }]);
+  try {
+    const before = await readFile(app.path, "utf8");
+    const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
+    expect(preview.sections).toHaveLength(2); expect(preview.sections?.at(-1)?.completion).toEqual(completion);
+    expect(await readFile(app.path, "utf8")).toBe(before);
+    await writeFile(app.path, before + JSON.stringify(message("next", "completed", "user", "Unanswered")) + "\n");
+    const next = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
+    expect(next.sections).toHaveLength(1); expect(next.sections?.[0]?.completion).toBeUndefined();
+  } finally { await app.close(); }
+});
+
+test("선택한 분기의 손상된 완료 메타데이터는 실패 Result로 명시한다", async () => {
+  const app = await fixture([header, message("q", null, "user", "Question"),
+    { type: "custom", id: "bad", parentId: "q", timestamp: header.timestamp, customType: runCompletionEntryType, data: { durationMs: -1 } }]);
+  try { expect(expectError(await readHistoryPreview(app.path, "tree", "saved")).code).toBe("HISTORY_CORRUPT"); }
+  finally { await app.close(); }
 });
 
 test("새 프롬프트만 저장됐으면 이전 답변을 섞지 않고 스킬은 이름만 표시한다", async () => {

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { EditBufferRenderable, ScrollBoxRenderable, type TerminalColors } from "@opentui/core";
+import { EditBufferRenderable, ScrollBoxRenderable, TextAttributes, type TerminalColors } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
@@ -169,7 +169,139 @@ function palette(light: boolean): TerminalColors {
     highlightForeground: null, highlightBackground: null };
 }
 
-test("섹션 종류별 배경과 내부·외부 간격은 밝은 테마와 작은 화면에서도 구분된다", async () => {
+test("Thinking은 저장된 접힘 설정이 있어도 본문을 표시하고 모든 접기 명령에서 제외한다", async () => {
+  // 구버전에서 저장한 접힘 때문에 생각 본문이 다시 사라지면 안 된다.
+  const app = await mount([
+    { ...section("THINK_ALWAYS_VISIBLE"), kind: "thinking", title: "Thinking" },
+    { ...section("TOOL_HIDDEN"), id: "tool", kind: "tool", title: "read" },
+  ], { initialWorkViews: { active: {}, agentScroll: {}, agentViews: { a1: {
+    selectedId: "message", folded: { message: true }, cursors: {}, mode: "sections", anchor: null, follow: false,
+  } } } });
+  try {
+    await app.enter(); app.mockInput.pressEscape();
+    app.mockInput.pressKey("o", { ctrl: true }); app.mockInput.pressKey("z"); app.mockInput.pressKey("a");
+    app.mockInput.pressKey("z"); app.mockInput.pressKey("m"); await app.render();
+    // 도구 접기는 유지하지만 Thinking에는 레이블·안내·접힘 설정을 남기지 않는다.
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("THINK_ALWAYS_VISIBLE"); expect(frame).not.toContain("[thinking]");
+    expect(frame.split("\n")[app.renderer.height - 1]).not.toContain(" Fold");
+    expect(app.state()?.folded.message).toBeUndefined(); expect(app.state()?.folded.tool).toBe(true);
+    expect(frame).not.toContain("TOOL_HIDDEN");
+    app.mockInput.pressEnter(); expect(app.body().plainText).toBe("THINK_ALWAYS_VISIBLE");
+    await app.copy(); expect(app.copies).toEqual(["THINK_ALWAYS_VISIBLE"]);
+  } finally { await app.close(); }
+});
+
+test("구버전 Thinking 헤더 선택은 해제하되 별도로 저장한 본문 커서는 복원한다", async () => {
+  // 사라진 헤더의 선택 좌표를 Thinking 본문에 잘못 적용해서는 안 된다.
+  const app = await mount([{ ...section("THINK_RESTORED_BODY"), kind: "thinking", title: "Thinking" }], {
+    initialWorkViews: { active: {}, agentScroll: {}, agentViews: { a1: {
+      selectedId: "message", folded: { message: true }, cursors: { message: 4 }, headingCursors: { message: 2 },
+      mode: "visual", anchor: 0, linewise: true, follow: false,
+    } } },
+  });
+  try {
+    app.mockInput.pressKey("t", { ctrl: true }); await app.render();
+    // 읽던 본문 위치는 보존하고 이전 헤더의 시각 선택만 정리한다.
+    expect(app.body().plainText).toBe("THINK_RESTORED_BODY"); expect(app.body().cursorOffset).toBe(4);
+    expect(app.state()?.mode).toBe("text"); expect(app.state()?.anchor).toBeNull();
+    expect(app.state()?.linewise).toBeUndefined(); expect(app.body().hasSelection()).toBe(false);
+    expect(app.state()?.folded.message).toBeUndefined();
+  } finally { await app.close(); }
+});
+
+test.each([false, true])("Thinking 본문은 대화와 같은 배경·정렬에 이탤릭과 중립 회색만 적용한다: %j", async (light) => {
+  // 색이 약간 섞인 터미널 배경과 muted override에서도 Thinking 자체는 무채색이어야 한다.
+  const app = await mount([{ ...section("THINK_VISIBLE"), kind: "thinking", title: "Thinking" }, { ...section("ANSWER_VISIBLE"), id: "answer" }]);
+  try {
+    uiTheme(app.renderer).configure(palette(light), { muted: "#CC2288" }); await app.render();
+    const lines = app.captureSpans().lines, spans = lines.flatMap((line) => line.spans);
+    const thinking = spans.find((span) => span.text.includes("THINK_VISIBLE"));
+    const answer = spans.find((span) => span.text.includes("ANSWER_VISIBLE"));
+    if (!thinking || !answer) throw new Error(`Missing prose\n${app.captureCharFrame()}`);
+    // 헤더를 펼칠 필요 없이 본문이 보이고, 선택 표시와 무관하게 회색 이탤릭을 유지한다.
+    const [r, g, b] = thinking.fg.toInts(); expect(r).toBe(g); expect(g).toBe(b);
+    expect(thinking.fg.equals(answer.fg)).toBe(false);
+    expect(thinking.attributes & TextAttributes.ITALIC).toBe(TextAttributes.ITALIC);
+    expect(answer.attributes & TextAttributes.ITALIC).toBe(0);
+    expect(thinking.bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
+    const rows = app.captureCharFrame().split("\n");
+    for (const text of ["THINK_VISIBLE", "ANSWER_VISIBLE"]) expect(rows.find((line) => line.includes(text))!.indexOf(text)).toBe(app.scroll.content.x);
+    expect(app.captureCharFrame()).not.toContain("[thinking]"); expect(app.captureCharFrame()).not.toContain("to expand");
+  } finally { await app.close(); }
+});
+
+test("Thinking 스트리밍·선택·resize 중에도 본문은 보이고 접기 키는 선택을 해제하지 않는다", async () => {
+  // 이미 표시 중인 Thinking을 선택한 상태에서 토큰이 늘어나는 경우를 보호한다.
+  const app = await mount([{ ...section("THINK_STREAM"), kind: "thinking", title: "Thinking", status: "streaming" }]);
+  try {
+    await app.enter(); app.mockInput.pressKey("v"); app.mockInput.pressKey("l");
+    app.mockInput.pressKey("o", { ctrl: true });
+    await app.update([{ ...section("THINK_STREAM plus more"), kind: "thinking", title: "Thinking", status: "streaming" }]);
+    app.resize(60, 12); await app.render();
+    // 생각 본문은 숨기거나 태그로 교체하지 않으며 원문 선택·초안도 보존한다.
+    expect(app.state()?.mode).toBe("visual"); expect(app.body().getSelectedText()).toBe("TH");
+    expect(app.captureCharFrame()).toContain("THINK_STREAM plus more");
+    expect(app.captureCharFrame()).not.toContain("[thinking]");
+    await app.copy(); expect(app.copies).toEqual(["TH"]); expect(app.prompts).toEqual([]);
+    expect(app.view.promptDrafts.a1).toBe("unsent draft");
+  } finally { await app.close(); }
+});
+
+test("모든 섹션에서 화살표·역할·상태 제목을 빼고 도구와 스킬은 인라인으로 표시한다", async () => {
+  // 역할 제목 대신 실제 내용과 실행 대상을 읽을 수 있는 섹션들을 준비한다.
+  const app = await mount([
+    { ...section("USER_CONTENT"), id: "user", kind: "user", title: "You" },
+    { ...section("THINK_CONTENT"), id: "thinking", kind: "thinking", title: "Thinking" },
+    { ...section("TOOL_CONTENT"), id: "tool", kind: "tool", title: "read", summary: "/tmp/example.ts:7" },
+    { id: "skill", kind: "notice", title: "commit-changes", skillName: "commit-changes", text: "commit-changes", status: "complete" },
+    { ...section("ANSWER_CONTENT"), id: "answer" },
+  ]);
+  try {
+    app.resize(140, 60);
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
+    // 제목 전용 행 없이 접힌 도구에는 실행 대상과 실제 키맵 안내가 함께 보인다.
+    const frame = app.captureCharFrame().split("\n").slice(app.scroll.y, app.scroll.y + app.scroll.height).join("\n");
+    expect(frame).toContain("USER_CONTENT"); expect(frame).toContain("ANSWER_CONTENT");
+    expect(frame).toContain("[read] /tmp/example.ts:7 (Ctrl+o to expand)");
+    expect(frame).toContain("[skill] commit-changes");
+    expect(frame).not.toMatch(/[▾▸›]|You ·|Agent ·|Thinking ·| · complete/);
+    expect(frame).not.toContain("TOOL_CONTENT"); expect(frame).toContain("THINK_CONTENT");
+  } finally { await app.close(); }
+});
+
+test("bash 명령 끝에는 경과 시간이 아닌 지정한 timeout을 표시한다", async () => {
+  // 여러 줄 명령과 timeout을 가진 도구도 별도의 역할·상태 제목을 만들지 않는다.
+  const app = await mount([{ ...section("Arguments:\n{}\n\nResult:\nCOMMAND_RESULT"), kind: "tool", title: "bash", command: "printf '한글'\nprintf done", timeoutSeconds: 120 }]);
+  try {
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME");
+    app.mockInput.pressKey("o", { ctrl: true }); await app.render();
+    // 펼친 명령의 마지막 줄에 설정된 제한을 붙이며 출력과 원문 복사도 보존한다.
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("$ printf '한글'"); expect(frame).toContain("printf done (timeout 120s)");
+    expect(frame).not.toContain("bash · complete"); expect(frame).toContain("COMMAND_RESULT");
+    await app.copy(); expect(app.copies).toEqual(["Arguments:\n{}\n\nResult:\nCOMMAND_RESULT"]);
+  } finally { await app.close(); }
+});
+
+test("도구의 timeout만 바뀌어도 인라인 요약을 갱신하고 안내·제한은 muted 색으로 구분한다", async () => {
+  // 다중 바이트 경로 뒤의 보조 정보도 표시 셀 단위로 색상을 적용해야 한다.
+  const data: TranscriptSection = { ...section("RAW_DETAILS"), kind: "tool", title: "bash", command: "printf '한글 👨‍👩‍👧‍👦'", timeoutSeconds: 120 };
+  const app = await mount([data]);
+  try {
+    uiTheme(app.renderer).configure(palette(false));
+    await app.update([{ ...data, timeoutSeconds: 30 }]);
+    // 본문이나 상태가 그대로여도 제한 변경을 누락하지 않는다.
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("(timeout 30s) (Ctrl+o to expand)"); expect(frame).not.toContain("timeout 120s");
+    const spans = app.captureSpans().lines.flatMap((line) => line.spans);
+    const hint = spans.find((item) => item.text.includes("timeout 30s"));
+    expect(hint?.fg.toInts()).toEqual(uiTheme(app.renderer).colors.muted.toInts());
+    expect(frame).not.toContain("RAW_DETAILS");
+  } finally { await app.close(); }
+});
+
+test("Agent와 Thinking은 제목·배경·들여쓰기 없이 표시하고 나머지 블록은 테마에 맞춰 구분한다", async () => {
   const app = await mount([
     { ...section("USER_BODY"), id: "user", kind: "user", title: "You" },
     { ...section("THINK_BODY"), id: "thinking", kind: "thinking", title: "Thinking" },
@@ -194,18 +326,32 @@ test("섹션 종류별 배경과 내부·외부 간격은 밝은 테마와 작�
     app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); app.mockInput.pressKey("z"); app.mockInput.pressKey("r"); await app.render();
     const texts = ["USER_BODY", "THINK_BODY", "TOOL_BODY", "AGENT_BODY"];
     const dark = texts.map((text) => span(text).bg.toInts().join(","));
-    expect(new Set(dark).size).toBe(4);
+    expect(new Set(dark).size).toBe(3);
+    expect(span("THINK_BODY").bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
+    expect(span("AGENT_BODY").bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
     const scroll = app.renderer.root.findDescendantById("session-transcript")!;
     const rows = app.captureCharFrame().split("\n"), bodyY = rows.findIndex((line, index) => index >= scroll.y && index < scroll.y + scroll.height && line.includes("USER_BODY"));
     const bodyX = rows[bodyY]!.indexOf("USER_BODY");
     expect(cell(bodyX - 1, bodyY).bg.equals(span("USER_BODY").bg)).toBe(true);
-    expect(cell(bodyX, bodyY - 1).bg.equals(span("USER_BODY").bg)).toBe(true);
+    // Plain prose/reasoning start at the viewport edge; user blocks retain one padding cell.
+    for (const text of ["THINK_BODY", "AGENT_BODY"]) {
+      const line = rows.find((line, index) => index >= scroll.y && index < scroll.y + scroll.height && line.includes(text))!;
+      expect(line.indexOf(text)).toBe(app.scroll.content.x);
+    }
+    expect(bodyX).toBe(app.scroll.content.x + 1);
     expect(cell(bodyX, bodyY + 2).bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
     expect(cell(bodyX, bodyY + 3).bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
 
     app.renderer.emit("palette", palette(true)); await app.render();
     const light = texts.map((text) => span(text).bg.toInts().join(","));
-    expect(new Set(light).size).toBe(4); expect(light).not.toEqual(dark);
+    expect(new Set(light).size).toBe(3); expect(light).not.toEqual(dark);
+    expect(span("THINK_BODY").bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
+    expect(span("AGENT_BODY").bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
+    app.mockInput.pressKey("END"); await app.render();
+    expect(span("AGENT_BODY").bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
+    app.mockInput.pressKey("k"); app.mockInput.pressKey("k"); await app.render();
+    expect(span("THINK_BODY").bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
+    app.mockInput.pressKey("HOME");
     app.resize(60, 12); await app.render();
     app.mockInput.pressEnter(); app.mockInput.pressKey("v", { shift: true }); await app.copy();
 
@@ -281,7 +427,7 @@ test.each([false, true])("문자 선택도 혼합된 LF·CRLF 원문을 정방�
 
 test("접힌 섹션 Enter는 요약 커서를 표시하고 Ctrl+O만 접힘 상태를 전환한다", async () => {
   const text = "FOLDED_DETAIL\nsecond line";
-  const app = await mount([{ ...section(text), kind: "thinking", title: "Thinking" }]);
+  const app = await mount([{ ...section(text), kind: "tool", title: "read" }]);
   try {
     // Enter must focus the visible heading, not reveal or navigate the hidden body.
     app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
@@ -289,13 +435,13 @@ test("접힌 섹션 Enter는 요약 커서를 표시하고 Ctrl+O만 접힘 상�
     app.mockInput.pressEnter(); await app.render();
     expect(app.state()?.mode).toBe("text"); expect(app.captureCharFrame()).not.toContain("FOLDED_DETAIL");
     const heading = app.body(), cursor = app.renderer.getCursorState();
-    expect(heading.plainText).toBe("Thinking · complete");
+    expect(heading.plainText).toBe("[read] (Ctrl+o to expand)");
     expect(cursor.visible).toBe(true);
     // Terminal cursor coordinates are one-based; renderable bounds are zero-based.
     expect(cursor.x).toBe(heading.x + heading.visualCursor.visualCol + 1);
     expect(cursor.y).toBe(heading.y + heading.visualCursor.visualRow + 1);
     app.mockInput.pressKey("v"); app.mockInput.pressKey("l"); await app.copy();
-    expect(app.copies).toEqual(["Th"]);
+    expect(app.copies).toEqual(["[r"]);
 
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
     expect(app.state()?.folded.message).toBe(false); expect(app.captureCharFrame()).toContain("FOLDED_DETAIL");
@@ -324,13 +470,13 @@ test.each([false, true])("Ctrl+O는 문자·줄 선택 중에도 안전하게 �
 
 test("접기 재할당은 안내에도 반영되고 기본 Ctrl+O는 프롬프트와 PTY를 침범하지 않는다", async () => {
   const keymap = expectOk(parseKeymap({ bindings: { "transcript.fold": [{ keys: "alt+x", scope: "transcript" }] } }));
-  const app = await mount([{ ...section("CUSTOM_FOLD_DETAIL"), kind: "thinking", title: "Thinking" }], { keymap });
+  const app = await mount([{ ...section("CUSTOM_FOLD_DETAIL"), kind: "tool", title: "read" }], { keymap });
   try {
     app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME");
     app.mockInput.pressKey("o", { ctrl: true }); app.mockInput.pressEnter(); await app.render();
     expect(app.captureCharFrame()).not.toContain("CUSTOM_FOLD_DETAIL");
     expect(app.state()?.mode).toBe("text");
-    expect(app.body().plainText).toBe("Thinking · complete");
+    expect(app.body().plainText).toBe("[read] (Alt+x to expand)");
     app.mockInput.pressEscape(); await app.render();
     expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("Alt+x");
 
@@ -346,7 +492,7 @@ test("접기 재할당은 안내에도 반영되고 기본 Ctrl+O는 프롬프�
 
 test("접힌 요약과 펼친 본문의 커서는 독립적으로 유지되고 새 UI에서도 요약 커서를 복원한다", async () => {
   const text = "HIDDEN_BODY\nmore details";
-  const data: TranscriptSection[] = [{ ...section(text), kind: "thinking", title: "Thinking" }];
+  const data: TranscriptSection[] = [{ ...section(text), kind: "tool", title: "read" }];
   let preferences: WorkViewPreferences | undefined;
   const app = await mount(data, { onWorkViewsChange: (state) => { preferences = state; } });
   try {
@@ -358,16 +504,16 @@ test("접힌 요약과 펼친 본문의 커서는 독립적으로 유지되고 �
 
     app.mockInput.pressKey("o", { ctrl: true }); app.mockInput.pressEnter(); await app.render();
 
-    expect(app.body().plainText).toBe("Thinking · complete"); expect(app.body().cursorOffset).toBe(2);
+    expect(app.body().plainText).toBe("[read] (Ctrl+o to expand)"); expect(app.body().cursorOffset).toBe(2);
     expect(app.state()?.cursors.message).toBe(4); expect(app.captureCharFrame()).not.toContain("HIDDEN_BODY");
-    await app.copy(); expect(app.copies).toEqual(["Thinking · complete"]);
+    await app.copy(); expect(app.copies).toEqual(["[read] (Ctrl+o to expand)"]);
     app.mockInput.pressKey("y", { shift: true }); await app.render(); expect(app.copies.at(-1)).toBe(text);
   } finally { await app.close(); }
   const next = await mount(data, { initialWorkViews: preferences! });
   try {
     next.mockInput.pressKey("t", { ctrl: true }); await next.render();
 
-    expect(next.body().plainText).toBe("Thinking · complete"); expect(next.body().cursorOffset).toBe(2);
+    expect(next.body().plainText).toBe("[read] (Ctrl+o to expand)"); expect(next.body().cursorOffset).toBe(2);
     expect(next.renderer.getCursorState().visible).toBe(true); expect(next.captureCharFrame()).not.toContain("HIDDEN_BODY");
     next.mockInput.pressKey("o", { ctrl: true }); next.mockInput.pressEnter(); await next.render();
     expect(next.body().plainText).toBe(text); expect(next.body().cursorOffset).toBe(4);
@@ -379,12 +525,12 @@ test("접힌 오류 요약도 커서와 줄 선택으로 복사할 수 있지만
   const app = await mount([{ ...section(text), kind: "tool", title: "read", status: "error", error: "Permission denied" }]);
   try {
     await app.enter();
-    expect(app.body().plainText).toBe("read · error\nPermission denied");
+    expect(app.body().plainText).toBe("[read] (Ctrl+o to expand)\nPermission denied");
     expect(app.captureCharFrame()).not.toContain("HIDDEN_STACK_TRACE");
 
     app.mockInput.pressKey("v", { shift: true }); app.mockInput.pressKey("j"); await app.copy();
 
-    expect(app.copies).toEqual(["read · error\nPermission denied"]);
+    expect(app.copies).toEqual(["[read] (Ctrl+o to expand)\nPermission denied"]);
     expect(app.captureCharFrame()).not.toContain("HIDDEN_STACK_TRACE");
     app.mockInput.pressKey("y", { shift: true }); await app.render(); expect(app.copies.at(-1)).toBe(text);
     expect(app.prompts).toEqual([]);
@@ -400,24 +546,24 @@ test("접힌 헤더의 선택은 도구 진행·resize·도움말 왕복에서�
     app.resize(60, 12); app.renderer.emit("palette", palette(true)); await app.render();
     app.mockInput.pressKey("F1"); await app.render(); app.mockInput.pressEscape(); await app.render();
 
-    expect(app.state()?.mode).toBe("visual"); expect(app.body().getSelectedText()).toBe("re");
+    expect(app.state()?.mode).toBe("visual"); expect(app.body().getSelectedText()).toBe("[r");
     expect(app.renderer.getCursorState().visible).toBe(true);
     expect(app.captureCharFrame()).not.toContain("HIDDEN_PROGRESS");
-    await app.copy(); expect(app.copies).toEqual(["re"]);
+    await app.copy(); expect(app.copies).toEqual(["[r"]);
     expect(app.state()?.cursors.message).toBeUndefined(); expect(app.state()?.headingCursors?.message).toBe(1);
   } finally { await app.close(); }
 });
 
-test("헤더 표시자를 클릭해 선택한 접힌 섹션도 Enter로 요약 커서에 진입한다", async () => {
-  const app = await mount([section("first"), { ...section("HIDDEN_CLICK_BODY"), id: "folded", kind: "thinking", title: "Thinking" }]);
+test("화살표 없이 인라인 요약을 클릭해 선택한 섹션도 Enter로 커서에 진입한다", async () => {
+  const app = await mount([section("first"), { ...section("HIDDEN_CLICK_BODY"), id: "folded", kind: "tool", title: "read" }]);
   try {
     app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
-    const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes("Thinking · complete"));
-    const x = lines[y]!.indexOf("▸");
+    const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes("[read] (Ctrl+o to expand)"));
+    const x = lines[y]!.indexOf("[read]");
 
     await app.mockMouse.click(x, y); await app.render(); app.mockInput.pressEnter(); await app.render();
 
-    expect(app.state()?.selectedId).toBe("folded"); expect(app.body().plainText).toBe("Thinking · complete");
+    expect(app.state()?.selectedId).toBe("folded"); expect(app.body().plainText).toBe("[read] (Ctrl+o to expand)");
     expect(app.renderer.getCursorState().visible).toBe(true); expect(app.captureCharFrame()).not.toContain("HIDDEN_CLICK_BODY");
   } finally { await app.close(); }
 });

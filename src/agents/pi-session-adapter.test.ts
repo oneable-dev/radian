@@ -9,6 +9,7 @@ import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { WorkspaceSelection } from "../app/workspace-selection.ts";
 import { SessionRegistry, type SessionExecutor } from "./session-registry.ts";
 import { piSessionFactory, type PiSessionOptions } from "./pi-session-adapter.ts";
+import { runCompletionEntryType } from "./run-completion.ts";
 import { expectOk, expectError } from "../testing/results.ts";
 
 function controlledStreams(options: PiSessionOptions) {
@@ -89,10 +90,37 @@ test("SDK 명령 목록 조회와 실행은 모델을 호출하지 않고 이전
     let accepted = 0;
     expectOk(await app.registry.prompt(id, "/fixture-command argument", () => accepted++));
     expect(app.registry.details(id)?.status).toBeNull(); expect(app.registry.details(id)?.output).toBe(""); expect(accepted).toBe(1);
+    expect(app.registry.details(id)?.sections?.some((section) => section.completion)).toBe(false);
     expectOk(await app.registry.prompt(id, "read"));
+    const completed = app.registry.details(id)?.sections?.at(-1)?.completion;
     expectOk(await app.registry.prompt(id, "/fixture-command"));
     expect(app.registry.details(id)?.status).toBe("complete");
+    expect(app.registry.details(id)?.sections?.at(-1)?.completion).toEqual(completed);
+    expect(app.registry.details(id)?.sections?.filter((section) => section.completion)).toHaveLength(1);
   } finally { await app.cleanup(); }
+});
+
+test.each([true, false])("부가 완료 기록 저장 실패는 완료된 요청을 거절로 바꾸지 않고 경고로 구분한다: %j", async (expected) => {
+  // 실제 모델·도구 처리가 끝난 뒤 부가 메타데이터의 저장 경계만 실패시킨다.
+  const app = await sdkFixture();
+  const original = SessionManager.prototype.appendCustomEntry;
+  const failure = Object.assign(new Error("Timing persistence fixture"), expected ? { code: "EIO" } : {});
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  const append = spyOn(SessionManager.prototype, "appendCustomEntry").mockImplementation(function (this: SessionManager, type, data) {
+    if (type === runCompletionEntryType) throw failure;
+    return original.call(this, type, data);
+  });
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    expectOk(await app.registry.prompt(id, "read"));
+    // 완료와 저장 경고를 분리하고 예상 밖 버그는 원래 오류 객체와 스택으로 기록한다.
+    expect(app.registry.details(id)?.status).toBe("complete"); expect(app.registry.details(id)?.error).toBeNull();
+    const completion = app.registry.details(id)?.sections?.at(-1)?.completion;
+    expect(completion?.outcome).toBe("complete");
+    expect(completion?.warning).toContain(expected ? "STORAGE_FAILED" : "Unexpected run timing persistence");
+    if (expected) expect(log).not.toHaveBeenCalled();
+    else expect(log.mock.calls.some((call) => call.includes(failure))).toBe(true);
+  } finally { append.mockRestore(); log.mockRestore(); await app.cleanup(); }
 });
 
 test("SDK가 알림으로 보고한 명령 실패는 성공 수락으로 숨기지 않고 Result로 반환한다", async () => {
@@ -296,7 +324,11 @@ test("닫은 SDK 세션을 다시 열면 동일 저장 ID와 대화 기록을 �
     const original = expectOk(await app.registry.create(app.main.id));
     await app.registry.prompt(original, "read");
     const file = app.registry.sessionFile(original)!;
-    const savedId = SessionManager.open(file).getSessionId();
+    const completion = app.registry.details(original)?.sections?.at(-1)?.completion;
+    expect(completion?.outcome).toBe("complete"); expect(completion?.durationMs).toBeGreaterThanOrEqual(0);
+    const saved = SessionManager.open(file), savedId = saved.getSessionId();
+    expect(saved.getBranch().findLast((entry) => entry.type === "custom" && entry.customType === runCompletionEntryType)).toMatchObject({ data: completion });
+    expect(JSON.stringify(saved.buildSessionContext().messages)).not.toContain(runCompletionEntryType);
 
     // Close and reopen use a new display ID but the original persisted session file.
     await app.registry.close(original);
@@ -307,6 +339,7 @@ test("닫은 SDK 세션을 다시 열면 동일 저장 ID와 대화 기록을 �
     expect(app.registry.sessionFile(reopened)).toBe(file);
     expect(app.executors.at(-1)!.savedSessionId).toBe(savedId);
     expect(app.registry.details(reopened)?.output).toContain("main-worktree-marker");
+    expect(app.registry.details(reopened)?.sections?.at(-1)?.completion).toEqual(completion);
     expect(app.registry.details(reopened)?.sections?.find((section) => section.kind === "tool")?.text).toContain("main-worktree-marker");
     expect((await readFile(file, "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((entry) => entry.type === "session")).toHaveLength(1);
   } finally { await app.cleanup(); }
@@ -330,6 +363,7 @@ test("실행 중 SDK 입력은 현재 응답 뒤에 대기하고 세션을 교�
     app.streams.gates.get("A")!.finish("A complete");
     await app.streams.waitFor("B");
     expect(app.registry.details(id)?.status).toBe("working");
+    expect(app.registry.details(id)?.sections?.some((section) => section.completion)).toBe(false);
     app.streams.gates.get("B")!.finish("B complete");
     expectOk(await running);
 
@@ -337,6 +371,7 @@ test("실행 중 SDK 입력은 현재 응답 뒤에 대기하고 세션을 교�
     expect(app.executors).toHaveLength(1);
     expect(app.registry.details(id)?.output).toContain("B complete");
     expect(app.registry.details(id)?.status).toBe("complete");
+    expect(app.registry.details(id)?.sections?.filter((section) => section.completion)).toHaveLength(1);
   } finally { await app.cleanup(); }
 });
 
@@ -388,12 +423,14 @@ test("SDK 자동 재시도 사이의 agent_end는 완료로 표시하지 않고 
     expect(requests).toBe(2);
     expect(observed).not.toContain("complete");
     expect(app.registry.details(id)?.status).toBe("working");
+    expect(app.registry.details(id)?.sections?.some((section) => section.completion)).toBe(false);
     app.streams.gates.get("Retry")!.finish("retry succeeded");
     await running; unsubscribe();
 
     // Completion appears only once Pi settles the successful recovery.
     expect(app.registry.details(id)?.status).toBe("complete");
     expect(app.registry.details(id)?.error).toBeNull();
+    expect(app.registry.details(id)?.sections?.filter((section) => section.completion)).toHaveLength(1);
   } finally { await app.cleanup(); }
 });
 

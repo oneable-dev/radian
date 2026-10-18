@@ -4,6 +4,7 @@ import { CancelledError, capture, HistoryError, parseJson, withCleanup, type Exp
 import { err, ok, type Result } from "../result.ts";
 
 import { SessionTranscript, type TranscriptSection } from "./transcript.ts";
+import { parseRunCompletion, runCompletionEntryType } from "./run-completion.ts";
 import { historyReadChunk, historyReadFailure, readHistoryBytes, reverseHistoryLines } from "./history-lines.ts";
 
 export type HistoryPreview = { readonly id: string; readonly worktreeId: string; readonly text: string; readonly truncated: boolean;
@@ -27,6 +28,9 @@ function validateContent(content: unknown): Result<void, HistoryError> {
 }
 
 function validateEntry(entry: SessionEntry): Result<void, HistoryError> {
+  if (entry.type === "custom" && entry.customType === runCompletionEntryType) {
+    const completion = parseRunCompletion(entry.data); return completion.ok ? ok(undefined) : completion;
+  }
   if (entry.type === "compaction" || entry.type === "branch_summary") return typeof entry.summary === "string" ? ok(undefined) : corrupt("Invalid saved summary.");
   if (entry.type === "custom_message") {
     if (typeof entry.customType !== "string") return corrupt("Invalid saved custom message.");
@@ -170,7 +174,7 @@ export async function readHistoryPreview(path: string, worktreeId: string, id: s
           if (line.value.start === headerEnd && entry.parentId !== null) return corrupt("Saved conversation branch is incomplete.");
           seen.add(entry.id); parent = entry.parentId;
         }
-        if (["message", "custom_message", "compaction", "branch_summary"].includes(entry.type)) {
+        if (["message", "custom_message", "compaction", "branch_summary"].includes(entry.type) || entry.type === "custom" && entry.customType === runCompletionEntryType) {
           const valid = validateEntry(entry); if (!valid.ok) return valid;
           retainedBytes += length;
           if (retainedBytes > retainedLimit) return err(new HistoryError("HISTORY_UNAVAILABLE", "Recent tool association exceeds the 32 MiB working-set safety limit."));

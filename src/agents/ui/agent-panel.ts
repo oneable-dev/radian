@@ -190,7 +190,7 @@ export class AgentPanel {
     const id = this.promptSessionId;
     if (!id || !this.prompt.value.trim() || !this.actions.onPrompt || this.submitting.has(id)) return;
     const text = this.prompt.value;
-    this.submitting.add(id); this.changed();
+    this.submitting.add(id); this.transcript.followLatest(); this.changed();
     try {
       const result = await this.actions.onPrompt(id, text);
       if (!result.ok) { this.notice(`[${result.error.code}] ${result.error.message} · prompt retained`); return; }

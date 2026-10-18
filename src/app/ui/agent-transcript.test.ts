@@ -63,13 +63,13 @@ test("키보드만으로 섹션·본문·선택·복사를 오가도 초안을 �
   } finally { await app.close(); }
 });
 
-test("접힌 Thinking과 알 수 없는 도구도 원문 전체를 복사하고 오류 요약은 유지한다", async () => {
-  // Thinking and generic tool details start folded, not removed from the data model.
+test("항상 보이는 Thinking과 접힌 도구도 원문 전체를 복사하고 오류 요약은 유지한다", async () => {
+  // Thinking remains prose; only the generic tool details start folded.
   const app = await mount();
   try {
     await app.transcript(); app.mockInput.pressKey("j"); await app.copy();
     expect(app.copied.at(-1)).toBe(sections()[1]!.text);
-    expect(app.captureCharFrame()).not.toContain("Private display reasoning");
+    expect(app.captureCharFrame()).toContain("Private display reasoning");
     app.mockInput.pressKey("z"); app.mockInput.pressKey("a"); await app.render();
     expect(app.captureCharFrame()).toContain("Private display reasoning");
 
@@ -87,7 +87,7 @@ test.each([0, 1, 2, 3])("모든 텍스트 종류에서 본문 커서와 줄 복�
   const app = await mount();
   try {
     await app.transcript(); for (let i = 0; i < index; i++) app.mockInput.pressKey("j");
-    if (["thinking", "tool"].includes(sections()[index]!.kind)) app.mockInput.pressKey("o", { ctrl: true });
+    if (sections()[index]!.kind === "tool") app.mockInput.pressKey("o", { ctrl: true });
     app.mockInput.pressEnter(); app.mockInput.pressKey("HOME"); await app.copy();
 
     expect(app.copied).toEqual([sections()[index]!.text.split("\n")[0]!]);
@@ -163,19 +163,20 @@ test("직렬화한 탐색 설정으로 새 UI에서도 접힘·선택·커서를
   let preferences: WorkViewPreferences | undefined;
   const app = await mount(undefined, { onWorkViewsChange: (next) => { preferences = next; } });
   try {
-    await app.transcript(); app.mockInput.pressKey("j"); app.mockInput.pressKey("o", { ctrl: true });
+    await app.transcript(); app.mockInput.pressKey("j"); app.mockInput.pressKey("j"); app.mockInput.pressKey("o", { ctrl: true });
     app.mockInput.pressEnter(); app.mockInput.pressKey("l"); await app.render();
-    expect(preferences?.agentViews?.a1?.selectedId).toBe("thinking");
-    expect(preferences?.agentViews?.a1?.folded.thinking).toBe(false);
+    expect(preferences?.agentViews?.a1?.selectedId).toBe("tool");
+    expect(preferences?.agentViews?.a1?.folded.tool).toBe(false);
   } finally { await app.close(); }
   const next = await mount(undefined, { initialWorkViews: preferences! });
   try {
     next.mockInput.pressKey("t", { ctrl: true }); await next.render();
 
-    expect(next.state()?.selectedId).toBe("thinking");
+    expect(next.state()?.selectedId).toBe("tool");
     expect(next.state()?.mode).toBe("text");
     expect((next.renderer.currentFocusedRenderable as EditBufferRenderable).cursorOffset).toBe(1);
-    expect(next.captureCharFrame()).toContain("Private display reasoning");
+    expect(next.captureCharFrame()).toContain("Arguments:");
+    expect((next.renderer.currentFocusedRenderable as EditBufferRenderable).plainText).toBe(sections()[2]!.text);
   } finally { await next.close(); }
 });
 
@@ -263,7 +264,10 @@ test("좁은 화면의 도움말은 스크롤 가능하고 닫으면 기존 본�
     expect(app.captureCharFrame()).toContain("Sections:");
     expect(app.captureCharFrame().split("\n")[11]).toContain("Radian");
     app.mockInput.pressKey("END"); await app.render();
-    expect(app.captureCharFrame()).toContain("close help");
+    const area = app.renderer.root.findDescendantById("session-transcript")!;
+    const helpText = app.captureCharFrame().split("\n").slice(area.y, area.y + area.height)
+      .map((line) => line.slice(area.x, area.x + area.width).trim()).join(" ");
+    expect(helpText).toContain("close help");
 
     app.mockInput.pressEscape(); await app.render();
 
@@ -316,14 +320,16 @@ test("단어·줄·섹션 경계 이동으로 원문 전체를 선택하며 달�
   } finally { await app.close(); }
 });
 
-test("따라가기 상태에서는 새 섹션을 선택하고 탐색 진입 뒤에는 선택을 고정한다", async () => {
+test("따라가기 상태에서는 새 섹션을 선택하고 실제로 위로 스크롤하면 선택을 고정한다", async () => {
   const app = await mount();
   try {
     await app.update([...sections(), { id: "latest", kind: "assistant", title: "Agent", text: "LATEST SECTION", status: "streaming" }]);
     expect(app.state()?.selectedId).toBe("latest");
     expect(app.state()?.follow).toBe(true);
 
-    app.mockInput.pressKey("t", { ctrl: true });
+    app.mockInput.pressKey("t", { ctrl: true }); await app.render();
+    const area = app.renderer.root.findDescendantById("session-transcript")!;
+    await app.mockMouse.scroll(area.x + 2, area.y + 2, "up"); await app.render();
     await app.update([...sections(), { id: "latest", kind: "assistant", title: "Agent", text: "LATEST SECTION more", status: "complete" },
       { id: "newer", kind: "assistant", title: "Agent", text: "newer section", status: "streaming" }]);
 
@@ -338,7 +344,7 @@ test("구형 runtime의 미리보기도 접힌 뒤 식별하고 원문을 복사
   try {
     await app.transcript(); app.mockInput.pressKey("z"); app.mockInput.pressKey("a"); await app.copy();
 
-    expect(app.captureCharFrame()).toContain("Transcript · complete");
+    expect(app.captureCharFrame()).toContain("[Transcript] (Ctrl+o to expand)");
     expect(app.captureCharFrame()).toContain("legacy preview");
     expect(app.captureCharFrame()).not.toContain("legacy first");
     expect(app.copied).toEqual([text]);

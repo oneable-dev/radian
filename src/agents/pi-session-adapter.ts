@@ -6,9 +6,10 @@ import { Type } from "@earendil-works/pi-ai";
 import { mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExecutionState, SessionContext, SessionExecutor, SessionFactory } from "./session-registry.ts";
-import { AgentRunError, CancelledError, CapabilityError, capture, InputError, SessionError, withCleanup, type ExpectedError } from "../errors.ts";
+import { AgentRunError, CancelledError, CapabilityError, capture, InputError, knownError, reportUnexpected, SessionError, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { SessionTranscript } from "./transcript.ts";
+import { runCompletionEntryType, type RunCompletion } from "./run-completion.ts";
 import { PiSessionTelemetry } from "./pi-session-telemetry.ts";
 import { CommandDiagnostics, sessionCommands } from "./session-commands.ts";
 import { FastMode } from "./fast-mode.ts";
@@ -194,7 +195,7 @@ export class PiSessionExecutor implements SessionExecutor {
   }
 
   private handleEvent(event: AgentSessionEvent): void {
-    this.transcript.handle(event);
+    const completion = this.transcript.handle(event);
     switch (event.type) {
       case "agent_start": this.runRevision++; this.status = "working"; break;
       case "auto_retry_start": case "compaction_start":
@@ -212,6 +213,13 @@ export class PiSessionExecutor implements SessionExecutor {
         this.telemetry.refreshUsage(); break;
       // agent_end may precede retry/compaction/follow-up; never mark it complete.
     }
+    if (completion) {
+      // Optional display persistence cannot turn an accepted, settled action into a rejected run.
+      try {
+        const saved = saveRunCompletion(this.session.sessionManager, completion);
+        if (!saved.ok) this.transcript.warnCompletion(completion, `[${saved.error.code}] Run finished, but saving its timing could not be confirmed.`);
+      } catch (error) { this.transcript.warnCompletion(completion, reportUnexpected(error, "run timing persistence")); }
+    }
     this.emit();
   }
 
@@ -223,6 +231,11 @@ export class PiSessionExecutor implements SessionExecutor {
   }
 
   private emit(): void { for (const listener of this.listeners) listener(); }
+}
+
+function saveRunCompletion(manager: SessionManager, completion: RunCompletion): Result<void, ExpectedError> {
+  try { manager.appendCustomEntry(runCompletionEntryType, completion); return ok(undefined); }
+  catch (error) { const expected = knownError(error); if (expected) return err(expected); throw error; }
 }
 
 function toolText(result: unknown): string {

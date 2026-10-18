@@ -1,12 +1,14 @@
 import {
-  BoxRenderable, EditBufferRenderable, ScrollBoxRenderable, TextAttributes, TextRenderable,
+  BoxRenderable, EditBufferRenderable, ScrollBoxRenderable, SyntaxStyle, TextAttributes, TextRenderable,
   type CliRenderer, type KeyEvent, type PasteEvent, type Renderable,
 } from "@opentui/core";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { Clipboard } from "../../ui/clipboard.ts";
 import { blendColors, uiTheme } from "../../ui/theme.ts";
-import { transcriptBackground, transcriptSpacing } from "./transcript-style.ts";
+import { transcriptBackground, transcriptSpacing, transcriptThinkingColor } from "./transcript-style.ts";
+import { TranscriptMarkdown, updateTranscriptMarkdownStyles } from "./transcript-markdown.ts";
+import { formatRunCompletion, sameRunCompletion } from "./run-completion.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
 import type { TranscriptSection } from "../transcript.ts";
@@ -18,8 +20,9 @@ class TranscriptBody extends EditBufferRenderable {
   handleKeyPress(_key: KeyEvent): boolean { return true; }
   handlePaste(_event: PasteEvent): void {}
 }
-type Row = { section: TranscriptSection; box: BoxRenderable; heading: BoxRenderable; marker: TextRenderable;
-  header: TranscriptBody; error: TextRenderable; body: TranscriptBody };
+type Row = { section: TranscriptSection; box: BoxRenderable; heading: BoxRenderable;
+  header: TranscriptBody; error: TextRenderable; bodyRow: BoxRenderable; skillTag: TextRenderable; body: TranscriptBody;
+  markdown: TranscriptMarkdown | undefined; markdownKind: "assistant" | "thinking" | undefined; completion: TextRenderable };
 type Target = { position: number } | { id: string; offset: number } | { reveal: true };
 export type TranscriptOptions = {
   notice(message: string): void;
@@ -40,6 +43,7 @@ export class TranscriptPanel {
   private readonly help: TextRenderable;
   private readonly empty: TextRenderable;
   private helpPosition = 0;
+  private helpFollow = false;
   private readonly rows = new Map<string, Row>();
   private readonly readers = new WeakSet<Renderable>();
   private order: string[] = [];
@@ -52,16 +56,31 @@ export class TranscriptPanel {
   private syncing = false;
   private disposed = false;
   private pending: Target | null = null;
+  private positionIntent = false;
+  private selectionHeldFor: string | null = null;
+  private geometry: { id: string | null; content: number; viewport: number } | undefined;
   private lastSavedView = "";
   private readonly theme;
+  private readonly headerSyntax: SyntaxStyle;
+  private readonly proseSyntax: SyntaxStyle;
+  private readonly thinkingSyntax: SyntaxStyle;
 
   constructor(private readonly renderer: CliRenderer, private readonly options: TranscriptOptions) {
     this.views = structuredClone(options.initialViews ?? {});
     this.positions = { ...options.initialScroll };
     this.clipboard = new Clipboard(renderer);
     this.theme = uiTheme(renderer);
+    this.headerSyntax = SyntaxStyle.create(renderer.nativeScene!);
+    this.proseSyntax = SyntaxStyle.create(renderer.nativeScene!); this.thinkingSyntax = SyntaxStyle.create(renderer.nativeScene!);
     this.scroll = new ScrollBoxRenderable(renderer, { id: "session-transcript", flexGrow: 1, minHeight: 0, scrollX: false,
-      contentOptions: { flexDirection: "column" }, renderBefore: this.finishLayout });
+      contentOptions: { flexDirection: "column" }, renderBefore: this.finishLayout,
+      onMouseScroll: (event) => {
+        if (event.modifiers.shift || this.help.visible) return;
+        if (event.scroll?.direction === "down" && this.atBottom()) this.syncFollowingFromPosition();
+        else if (event.scroll?.direction === "down" || event.scroll?.direction === "up" && this.scroll.scrollTop > 0) this.scrollIntent();
+      },
+      verticalScrollbarOptions: { onMouseDown: (event) => { if (event.button === 0) this.scrollIntent(); } },
+    });
     this.status = new TextRenderable(renderer, { height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.help = new TextRenderable(renderer, { width: "100%", flexShrink: 0, wrapMode: "word", selectable: false, visible: false });
     this.empty = new TextRenderable(renderer, { width: "100%", flexShrink: 0, wrapMode: "word", selectable: false,
@@ -72,11 +91,14 @@ export class TranscriptPanel {
     this.scroll.viewport.on("resize", this.applyTarget);
     renderer.on("focused_renderable", this.focusChanged);
     renderer.on("resize", this.resize);
-    this.scroll.on("focused", () => {
-      if (this.visible && this.state && !this.syncing) { this.state.follow = false; this.save(); this.options.changed(); }
-    });
     this.theme.scrollbars(this.scroll);
-    this.theme.bind(this.scroll, () => this.paint());
+    this.theme.bind(this.scroll, (colors) => {
+      this.headerSyntax.registerStyle("tag", { fg: colors.keyword, bold: true });
+      this.headerSyntax.registerStyle("hint", { fg: colors.muted });
+      this.headerSyntax.registerStyle("error", { fg: colors.error });
+      updateTranscriptMarkdownStyles(this.proseSyntax, colors, false); updateTranscriptMarkdownStyles(this.thinkingSyntax, colors, true);
+      this.paint();
+    });
     this.theme.bind(this.status, (colors) => { this.status.fg = colors.accent; this.help.fg = colors.muted; this.empty.fg = colors.muted; });
   }
 
@@ -105,8 +127,8 @@ export class TranscriptPanel {
     const hint = (command: CommandId, label: string): FooterShortcut => ({ key: this.hint(command, context), label });
     if (this.help.visible) return [hint("transcript.next", "Scroll help"), hint("transcript.page-down", "Page"), hint("transcript.back", "Close help")];
     return context === "transcript" ? [hint("transcript.next", "Section"),
-      hint("transcript.enter", "Text"),
-      ...(this.selected?.section.skillName === undefined ? [hint("transcript.fold", "Fold")] : []),
+      hint("transcript.enter", this.selected?.markdown && !this.folded(this.selected) ? "Source" : "Text"),
+      ...(this.foldable(this.selected) ? [hint("transcript.fold", "Fold")] : []),
       hint("transcript.copy", "Copy section"), hint("transcript.half-page-down", "½ page"), hint("transcript.help", "Help"), hint("transcript.back", "Input")]
       : [hint("transcript.right", "Cursor"), hint("transcript.visual", "Select"), hint("transcript.visual-line", "Lines"),
         hint("transcript.copy", context === "transcript-visual" ? this.state?.linewise ? "Copy lines" : "Copy selection" : "Copy line"),
@@ -115,8 +137,9 @@ export class TranscriptPanel {
 
   update(id: string | null, sections: readonly TranscriptSection[] | undefined, output: string, visible: boolean): void {
     if (this.disposed || this.scroll.isDestroyed) return;
-    this.rememberScroll();
+    this.reconcileSelection(); this.rememberScroll();
     const switched = id !== this.sessionId, returning = visible && !this.visible;
+    if (switched) { this.positionIntent = false; this.selectionHeldFor = null; this.geometry = undefined; }
     const hadFocus = this.focused;
     const previousIndex = this.order.indexOf(this.state?.selectedId ?? "");
     const incoming = sections ?? [{ id: "legacy-output", kind: "notice", title: "Transcript", text: output, status: "complete" }];
@@ -124,7 +147,7 @@ export class TranscriptPanel {
       const previous = this.rows.get(this.order[index] ?? "")?.section;
       return !previous || section.id !== previous.id || section.text !== previous.text || section.title !== previous.title
         || section.status !== previous.status || section.error !== previous.error || section.summary !== previous.summary
-        || section.kind !== previous.kind || section.skillName !== previous.skillName;
+        || section.kind !== previous.kind || section.skillName !== previous.skillName || section.command !== previous.command || section.timeoutSeconds !== previous.timeoutSeconds || !sameRunCompletion(section.completion, previous.completion);
     });
     if (!switched && changed && !this.help.visible && !this.state?.follow && this.pending === null) this.pending = this.viewportAnchor();
     this.sessionId = id; this.visible = visible;
@@ -156,6 +179,17 @@ export class TranscriptPanel {
         const previousText = row.section.text;
         row.section = section;
         if (previousText !== section.text) this.replaceBody(row, section.text);
+        if (state && section.kind === "thinking" && Object.hasOwn(state.folded, section.id)) {
+          // Old heading selections cannot be applied to the now always-visible body.
+          if (state.folded[section.id] && state.selectedId === section.id && state.mode === "visual") {
+            state.mode = "text"; state.anchor = null; delete state.linewise;
+          }
+          if (state.selectedId === section.id && state.mode !== "sections") {
+            row.body.cursorOffset = state.cursors[section.id] ?? 0;
+            this.applySelection(row);
+          }
+          delete state.folded[section.id]; normalized = true;
+        }
       }
       // Append-only streaming normally preserves every native renderable and focus.
       const next = incoming.map((section) => section.id);
@@ -169,10 +203,12 @@ export class TranscriptPanel {
         state.selectedId = this.order[previousIndex < 0 ? initialIndex : Math.min(previousIndex, this.order.length - 1)] ?? null;
         state.mode = "sections"; state.anchor = null; delete state.linewise;
       }
-      if (state?.follow) {
-        const latest = this.order.at(-1) ?? null;
-        normalized ||= state.selectedId !== latest;
-        state.selectedId = latest;
+      if (state?.follow && !this.help.visible && !this.positionIntent) {
+        // Viewport following must not replace the section/source cursor being read.
+        if (state.mode === "sections") {
+          const latest = this.order.at(-1) ?? null;
+          normalized ||= state.selectedId !== latest; state.selectedId = latest;
+        }
         if (!switched && !returning) this.pending = { position: Infinity };
       }
     }
@@ -191,22 +227,24 @@ export class TranscriptPanel {
         if (event.button !== 0) return;
         event.preventDefault(); event.stopPropagation(); this.select(section.id); this.scroll.focus(); this.options.changed();
       } });
-    const marker = new TextRenderable(this.renderer, { width: 4, height: 1, flexShrink: 0, wrapMode: "none", selectable: false, attributes: TextAttributes.BOLD });
-    const header = new TranscriptBody(this.renderer, { width: "auto", height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", attributes: TextAttributes.BOLD,
+    const header = new TranscriptBody(this.renderer, { width: "auto", height: "auto", flexGrow: 1, minWidth: 0, wrapMode: "word",
       cursorStyle: { style: "block", blinking: false }, scrollMargin: 0 });
-    heading.add(marker); heading.add(header);
+    header.syntaxStyle = this.headerSyntax; heading.add(header);
     const error = new TextRenderable(this.renderer, { width: "100%", flexShrink: 0, wrapMode: "word", selectable: false, visible: false });
-    const body = new TranscriptBody(this.renderer, { width: "100%", height: "auto", minHeight: 1, flexShrink: 0,
+    const bodyRow = new BoxRenderable(this.renderer, { width: "100%", minWidth: 0, flexShrink: 0, flexDirection: "row" });
+    const skillTag = new TextRenderable(this.renderer, { width: 8, height: 1, flexShrink: 0, wrapMode: "none", selectable: false, content: "[skill] ", attributes: TextAttributes.BOLD });
+    const body = new TranscriptBody(this.renderer, { width: "auto", height: "auto", minWidth: 0, minHeight: 1, flexGrow: 1, flexShrink: 0,
       wrapMode: "word", cursorStyle: { style: "block", blinking: false }, scrollMargin: 0 });
-    body.setText(section.text);
-    const row: Row = { section, box, heading, marker, header, error, body };
-    box.add(heading); box.add(error); box.add(body); this.scroll.add(box); this.rows.set(section.id, row);
+    body.setText(section.text); bodyRow.add(skillTag); bodyRow.add(body);
+    const completion = new TextRenderable(this.renderer, { width: "100%", flexShrink: 0, wrapMode: "word", selectable: false, visible: false, marginTop: 1 });
+    const row: Row = { section, box, heading, header, error, bodyRow, skillTag, body, markdown: undefined, markdownKind: undefined, completion };
+    box.add(heading); box.add(error); box.add(bodyRow); box.add(completion); this.scroll.add(box); this.rows.set(section.id, row);
     for (const reader of [header, body]) {
       this.readers.add(reader);
       reader.on("focused", () => {
         const state = this.state;
         if (!state || this.disposed || !this.rows.has(section.id)) return;
-        state.selectedId = section.id; state.follow = false;
+        state.selectedId = section.id;
         if (state.mode === "sections") state.mode = "text";
         this.save(); this.paint(); this.options.changed();
       });
@@ -236,36 +274,75 @@ export class TranscriptPanel {
     // include real newlines without selecting the next line's first grapheme.
     body.setSelection(start, end);
   }
+  private foldable(row: Row | undefined): boolean {
+    return !!row && row.section.skillName === undefined && row.section.kind !== "thinking";
+  }
   private folded(row: Row): boolean {
-    if (row.section.skillName !== undefined) return false;
-    return this.state?.folded[row.section.id] ?? (!this.legacy && (row.section.kind === "tool" || row.section.kind === "thinking"));
+    if (!this.foldable(row)) return false;
+    return this.state?.folded[row.section.id] ?? (!this.legacy && row.section.kind === "tool");
+  }
+  private headingText(section: TranscriptSection, folded: boolean): string {
+    let label: string;
+    switch (section.kind) {
+      case "tool": label = section.command !== undefined ? `$ ${section.command}` : `[${section.title}]${section.summary ? ` ${section.summary}` : ""}`; break;
+      case "thinking": return "";
+      case "notice": label = `[${section.title}]`; break;
+      case "user": case "assistant": label = "[message]"; break;
+    }
+    const timeout = section.timeoutSeconds !== undefined ? ` (timeout ${section.timeoutSeconds}s)` : "";
+    const key = this.hint("transcript.fold", "transcript");
+    return label + timeout + (folded && key ? ` (${key} to expand)` : "") + (folded && section.error ? `\n${section.error}` : "");
+  }
+  private highlightHeader(row: Row): void {
+    row.header.clearAllHighlights();
+    const width = (text: string) => row.header.editBuffer.measureText(text);
+    const lines = row.header.plainText.split("\n");
+    const errorStart = this.folded(row) && row.section.error ? lines.length - row.section.error.split("\n").length : Infinity;
+    for (const [lineIndex, line] of lines.entries()) {
+      const mark = (start: number, end: number, style: string) => row.header.addHighlight(lineIndex, {
+        start: width(line.slice(0, start)), end: width(line.slice(0, end)), styleId: this.headerSyntax.getStyleId(style)!,
+      });
+      const tag = lineIndex === 0 ? /^\[[^\]\n]+\]/.exec(line) : null;
+      if (tag) mark(0, tag[0].length, "tag");
+      for (const hint of line.matchAll(/\((?:timeout [\d.]+s|[^()]+ to expand)\)/g)) mark(hint.index, hint.index + hint[0].length, "hint");
+      if (lineIndex >= errorStart) mark(0, line.length, "error");
+    }
   }
   private paintRow(row: Row): void {
-    if (row.box.isDestroyed) return;
+    if (this.disposed || row.box.isDestroyed) return;
     row.box.visible = !this.help.visible;
     const colors = this.theme.colors, section = row.section;
-    const selected = this.state?.selectedId === section.id;
-    const skill = section.skillName !== undefined;
+    const selected = this.state?.selectedId === section.id, skill = section.skillName !== undefined;
     const folded = this.folded(row), spacing = transcriptSpacing(this.renderer.height);
+    const plain = this.legacy || section.kind === "assistant" || section.kind === "thinking";
     const background = this.legacy ? colors.panel : transcriptBackground(section.kind, colors);
-    row.box.backgroundColor = background;
-    row.box.border = this.legacy ? false : ["left"];
-    // Setting a border color enables a default border in OpenTUI; legacy output stays borderless.
-    if (!this.legacy) row.box.borderColor = selected && this.focused ? colors.accent : blendColors(background, colors.text, 0.15);
-    row.box.paddingX = this.legacy ? 0 : 1;
-    row.box.paddingBottom = this.legacy || folded || skill ? 0 : spacing.bottomInset;
-    row.heading.visible = !skill && (!this.legacy || folded);
-    row.header.height = folded ? "auto" : 1;
-    row.header.wrapMode = folded ? "word" : "none";
+    row.box.backgroundColor = background; row.box.border = false;
+    row.box.paddingX = plain ? 0 : 1;
+    row.box.paddingBottom = plain || folded || skill ? 0 : spacing.bottomInset;
+    row.heading.visible = !skill && (folded || !this.legacy && (section.kind === "tool" || section.kind === "notice"));
     row.box.marginBottom = this.legacy ? 0 : spacing.sectionGap;
-    row.body.visible = !folded;
-    row.body.height = skill ? 1 : "auto";
-    row.body.wrapMode = skill ? "none" : "word";
-    row.body.marginTop = this.legacy || folded || skill ? 0 : spacing.bodyGap;
+    const markdownKind = !this.legacy && !skill && (section.kind === "assistant" || section.kind === "thinking") ? section.kind : undefined;
+    if (row.markdownKind !== markdownKind) {
+      row.markdown?.root.destroyRecursively(); row.markdown = undefined; row.markdownKind = markdownKind;
+      if (markdownKind) {
+        row.markdown = new TranscriptMarkdown(this.renderer, markdownKind === "thinking" ? this.thinkingSyntax : this.proseSyntax, markdownKind === "thinking", this.markdownChanging, (message) => this.options.notice(message));
+        row.box.remove(row.completion); row.box.add(row.markdown.root); row.box.add(row.completion);
+        row.markdown.root.on("resize", () => {
+          if (this.visible && !this.help.visible && this.state?.follow && !this.positionIntent && !this.hasSelection()) { this.pending = { position: Infinity }; this.applyTarget(); }
+        });
+      }
+    }
+    const source = selected && this.state?.mode !== "sections";
+    if (row.markdown) {
+      row.markdown.update(section.text, section.status === "streaming");
+      row.markdown.root.visible = !folded && !source;
+    }
+    row.bodyRow.visible = row.body.visible = !folded && (!row.markdown || source);
+    row.bodyRow.marginTop = row.heading.visible && !folded ? spacing.bodyGap : 0;
+    row.body.height = skill ? 1 : "auto"; row.body.wrapMode = skill ? "none" : "word";
+    row.skillTag.visible = skill;
     row.error.marginTop = this.legacy ? 0 : spacing.bodyGap;
-    row.marker.content = `${selected ? "›" : " "} ${folded ? "▸" : "▾"} `;
-    const headingText = `${section.title} · ${section.status}${section.summary && !section.error ? ` · ${section.summary}` : ""}`
-      + (folded && section.error ? `\n${section.error}` : "");
+    const headingText = this.headingText(section, folded);
     if (row.header.plainText !== headingText) {
       const cursor = row.header.cursorOffset;
       row.header.setText(headingText); row.header.cursorOffset = cursor;
@@ -273,20 +350,29 @@ export class TranscriptPanel {
     }
     row.error.visible = !skill && !folded && !!section.error;
     row.error.content = section.error ?? ""; row.error.fg = colors.error; row.error.bg = background;
-    let headingBackground = background;
-    if (selected) headingBackground = this.legacy ? this.focused ? colors.selected : colors.surface
-      : blendColors(background, colors.selected, this.focused ? 0.7 : 0.35);
-    row.heading.backgroundColor = headingBackground;
-    row.marker.bg = headingBackground; row.header.backgroundColor = headingBackground;
-    row.marker.fg = section.status === "error" ? colors.error : section.status === "cancelled" ? colors.warning : colors.accent;
-    row.header.textColor = row.marker.fg;
+    const headingBackground = selected && !plain ? blendColors(background, colors.selected, this.focused ? 0.7 : 0.35) : background;
+    row.heading.backgroundColor = row.header.backgroundColor = headingBackground;
+    row.header.textColor = section.kind === "thinking" ? colors.muted : section.kind === "tool" && (section.title === "bash" || section.title === "Shell") ? colors.info : colors.text;
     row.header.cursorColor = colors.accent;
     row.header.selectionBg = blendColors(background, colors.accent, 0.38); row.header.selectionFg = colors.text;
-    row.body.textColor = section.kind === "thinking" ? colors.muted : colors.text;
-    row.body.backgroundColor = skill ? headingBackground : background; row.body.cursorColor = colors.accent;
+    this.highlightHeader(row);
+    row.body.textColor = section.kind === "thinking" ? transcriptThinkingColor(colors) : colors.text;
+    row.body.attributes = section.kind === "thinking" ? TextAttributes.ITALIC : TextAttributes.NONE;
+    row.bodyRow.backgroundColor = row.body.backgroundColor = skill ? headingBackground : background;
+    row.skillTag.bg = row.body.backgroundColor; row.skillTag.fg = colors.keyword;
+    row.body.cursorColor = colors.accent;
     row.body.selectionBg = this.legacy ? colors.selected : blendColors(background, colors.accent, 0.38);
     row.body.selectionFg = colors.text;
+    row.completion.visible = !!section.completion;
+    row.completion.content = section.completion ? formatRunCompletion(section.completion) + (section.completion.warning ? `\n${section.completion.warning}` : "") : "";
+    row.completion.fg = section.completion?.warning ? colors.warning : transcriptThinkingColor(colors);
+    row.completion.bg = colors.panel;
   }
+  private markdownChanging = (): void => {
+    if (!this.visible || this.disposed || this.help.visible || this.pending) return;
+    this.reconcileSelection();
+    this.pending = this.state?.follow && !this.positionIntent ? { position: Infinity } : this.viewportAnchor();
+  };
   private paint(): void {
     this.empty.visible = !this.order.length && !this.help.visible;
     for (const row of this.rows.values()) this.paintRow(row);
@@ -303,6 +389,7 @@ export class TranscriptPanel {
     const index = this.order.indexOf(this.state?.selectedId ?? "");
     let content = `${mode} · ${Math.max(0, index + 1)}/${this.order.length}${this.state?.follow ? " · following" : " · paused"}${this.legacy ? " · legacy preview" : ""}`;
     const selected = this.selected;
+    if (!this.help.visible && selected?.markdown && !this.folded(selected) && this.state?.mode !== "sections") content += " · Markdown source";
     if (!this.help.visible && this.focused && selected && this.state?.mode !== "sections") {
       const cursor = this.reader(selected).logicalCursor;
       content += `${this.folded(selected) ? " · summary" : ""} · ${cursor.row + 1}:${cursor.col + 1}`;
@@ -318,15 +405,69 @@ export class TranscriptPanel {
   private save(): void {
     const state = this.state; if (!state || !this.sessionId || this.disposed) return;
     const row = this.selected;
-    if (row && state.mode !== "sections") this.rememberCursor(row);
+    if (row && state.mode !== "sections" && this.reader(row).focused) this.rememberCursor(row);
     const key = JSON.stringify(state);
     if (key !== this.lastSavedView) { this.lastSavedView = key; this.options.saveView?.(this.sessionId, structuredClone(state)); }
     this.refreshStatus();
   }
 
+  private atBottom(): boolean {
+    return this.scroll.scrollTop >= Math.max(0, this.scroll.scrollHeight - this.scroll.viewport.height) - 0.01;
+  }
+  private hasSelection(): boolean {
+    if (this.state?.mode === "visual") return true;
+    const selection = this.renderer.getSelection();
+    if (!selection?.isActive) return false;
+    return selection.selectedRenderables.some((selected) => {
+      for (let node: Renderable | null = selected; node; node = node.parent) if (node === this.scroll) return true;
+      return false;
+    }) || selection.isDragging && selection.anchor.x >= this.scroll.viewport.x && selection.anchor.x < this.scroll.viewport.x + this.scroll.viewport.width
+      && selection.anchor.y >= this.scroll.viewport.y && selection.anchor.y < this.scroll.viewport.y + this.scroll.viewport.height;
+  }
+  private setFollowing(follow: boolean): void {
+    const state = this.state; if (!state || state.follow === follow) return;
+    state.follow = follow; this.save(); this.options.changed();
+  }
+  private syncFollowingFromPosition(): void {
+    if (!this.visible || this.disposed || this.help.visible || this.options.initialPosition === "start") return;
+    this.setFollowing(this.atBottom() && !this.hasSelection());
+  }
+  private reconcileSelection(): void {
+    if (!this.visible || this.disposed || this.help.visible || !this.state) return;
+    if (this.hasSelection()) {
+      this.selectionHeldFor = this.sessionId; this.setFollowing(false);
+      if (this.pending && "position" in this.pending && this.pending.position === Infinity) this.pending = null;
+    } else if (this.selectionHeldFor === this.sessionId && this.selectionHeldFor !== null) {
+      this.selectionHeldFor = null; this.syncFollowingFromPosition();
+    }
+  }
+  private scrollIntent = (): void => {
+    if (!this.visible || this.disposed || this.help.visible) return;
+    // Cancel the old automatic target, then derive follow from where the user's movement lands.
+    this.pending = null; this.positionIntent = true;
+  };
+
+  followLatest(): void {
+    const state = this.state; if (!state || this.disposed) return;
+    if (this.selected && state.mode !== "sections") this.rememberCursor(this.selected);
+    state.mode = "sections"; state.anchor = null; delete state.linewise;
+    state.selectedId = this.order.at(-1) ?? null; state.follow = true; this.help.visible = false;
+    this.positionIntent = false; this.selectionHeldFor = null;
+    for (const row of this.rows.values()) { row.header.clearSelection(); row.body.clearSelection(); }
+    // Submitting from Input must not steal focus. A hidden source cursor, if any,
+    // returns to section focus without triggering the normal user-navigation pause.
+    this.syncing = true;
+    try { if (this.focused) this.scroll.focus(); }
+    finally { this.syncing = false; }
+    this.pending = { position: Infinity }; this.paint(); this.applyTarget(); this.save(); this.options.changed();
+  }
+
   focus(): void {
     if (!this.visible || !this.state) return;
-    this.state.follow = false; this.restoreFocus(); this.pending = { reveal: true }; this.applyTarget(); this.save(); this.options.changed();
+    const reveal = !this.state.follow || this.state.mode !== "sections";
+    this.restoreFocus();
+    if (reveal) { this.positionIntent = true; this.pending = { reveal: true }; this.applyTarget(); }
+    this.save(); this.options.changed();
   }
   private restoreFocus(): void {
     if (!this.help.visible && this.state?.mode !== "sections" && this.selected) {
@@ -339,8 +480,8 @@ export class TranscriptPanel {
   private select(id: string): void {
     if (!this.state || !this.rows.has(id)) return;
     if (this.selected) this.reader(this.selected).clearSelection();
-    this.state.selectedId = id; this.state.mode = "sections"; this.state.anchor = null; delete this.state.linewise; this.state.follow = false;
-    this.pending = { reveal: true }; this.paint(); this.applyTarget(); this.save();
+    this.state.selectedId = id; this.state.mode = "sections"; this.state.anchor = null; delete this.state.linewise;
+    this.positionIntent = true; this.pending = { reveal: true }; this.paint(); this.applyTarget(); this.save();
   }
   private toggleVisual(row: Row, linewise: boolean): void {
     const state = this.state; if (!state) return;
@@ -355,7 +496,7 @@ export class TranscriptPanel {
   }
   available(command: CommandId): boolean {
     if (!this.visible || !this.sessionId) return false;
-    if (command === "transcript.fold" && this.selected?.section.skillName !== undefined) return false;
+    if (command === "transcript.fold" && !this.foldable(this.selected)) return false;
     return this.help.visible || command === "transcript.help" || command === "transcript.back" || !!this.selected;
   }
   command(command: CommandId): void {
@@ -377,7 +518,6 @@ export class TranscriptPanel {
       this.options.changed(); return;
     }
     const row = this.selected;
-    if (command !== "transcript.latest" && command !== "transcript.help") state.follow = false;
     const index = this.order.indexOf(state.selectedId ?? "");
     switch (command) {
       case "transcript.previous": case "transcript.next": case "transcript.first": case "transcript.last": {
@@ -386,44 +526,41 @@ export class TranscriptPanel {
         break;
       }
       case "transcript.enter":
-        if (row) { state.mode = "text"; this.paint(); this.restoreFocus(); this.pending = { reveal: true }; }
+        if (row) { state.mode = "text"; this.positionIntent = true; this.paint(); this.restoreFocus(); this.pending = { reveal: true }; }
         break;
       case "transcript.back":
         if (state.mode === "visual") { state.mode = "text"; state.anchor = null; delete state.linewise; if (row) this.reader(row).clearSelection(); }
-        else if (state.mode === "text") { state.mode = "sections"; this.scroll.focus(); this.pending = { reveal: true }; }
+        else if (state.mode === "text") { state.mode = "sections"; this.positionIntent = true; this.scroll.focus(); this.pending = { reveal: true }; }
         else { this.help.visible = false; this.options.focusPrompt(); }
         break;
       case "transcript.fold": case "transcript.fold-all": case "transcript.unfold-all": {
         const targets = command === "transcript.fold" ? row ? [row] : [] : [...this.rows.values()];
         const previouslyFolded = row ? this.folded(row) : false;
         if (row && state.mode !== "sections") this.rememberCursor(row);
-        for (const target of targets) if (target.section.skillName === undefined && target.section.text) state.folded[target.section.id] = command === "transcript.fold" ? !this.folded(target) : command === "transcript.fold-all";
+        for (const target of targets) if (this.foldable(target) && target.section.text) state.folded[target.section.id] = command === "transcript.fold" ? !this.folded(target) : command === "transcript.fold-all";
         if (row && previouslyFolded !== this.folded(row)) {
           state.mode = "sections"; state.anchor = null; delete state.linewise;
           row.header.clearSelection(); row.body.clearSelection(); this.scroll.focus();
         }
-        this.pending = { reveal: true }; break;
+        this.positionIntent = true; this.pending = { reveal: true }; break;
       }
       case "transcript.visual": case "transcript.visual-line":
         if (row) this.toggleVisual(row, command === "transcript.visual-line");
         break;
       case "transcript.copy": case "transcript.copy-section": this.copy(command === "transcript.copy-section"); break;
-      case "transcript.latest":
-        state.mode = "sections"; state.anchor = null; delete state.linewise; state.selectedId = this.order.at(-1) ?? null;
-        for (const item of this.rows.values()) { item.header.clearSelection(); item.body.clearSelection(); }
-        this.scroll.focus(); state.follow = true; this.pending = { position: Infinity }; break;
+      case "transcript.latest": this.followLatest(); return;
       case "transcript.help": this.toggleHelp(); break;
       case "transcript.page-up": case "transcript.page-down": case "transcript.half-page-up": case "transcript.half-page-down": {
         const half = command === "transcript.half-page-up" || command === "transcript.half-page-down";
         const direction = command === "transcript.page-up" || command === "transcript.half-page-up" ? -1 : 1;
         const distance = Math.max(1, half ? Math.floor(this.scroll.viewport.height / 2) : this.scroll.viewport.height - 1);
-        if (state.mode === "sections") { this.pending = null; this.scroll.scrollBy(direction * distance); }
+        if (state.mode === "sections") { this.scrollIntent(); this.scroll.scrollBy(direction * distance); }
         else if (row) for (let i = 0; i < distance; i++) this.move(row, direction < 0 ? "transcript.up" : "transcript.down", true);
         break;
       }
       default: if (row) this.move(row, command);
     }
-    this.paint(); this.applyTarget(); this.save(); this.options.changed();
+    this.reconcileSelection(); this.paint(); this.applyTarget(); this.save(); this.options.changed();
   }
   private move(row: Row, command: CommandId, visualRows = false): void {
     const body = this.reader(row);
@@ -449,7 +586,7 @@ export class TranscriptPanel {
       default: return;
     }
     this.applySelection(row);
-    this.pending = { reveal: true };
+    this.positionIntent = true; this.pending = { reveal: true };
   }
   private selectedText(row: Row): string {
     const reader = this.reader(row), source = this.readerText(row);
@@ -477,21 +614,27 @@ export class TranscriptPanel {
       if (this.sessionId === sessionId && this.state === state && this.selected === row && !reader.isDestroyed && this.reader(row) === reader
         && state.selectedId === selectedId && state.anchor === anchor && state.mode === "visual" && reader.cursorOffset === cursor
         && state.linewise === linewise && row.section.text === source && this.readerText(row) === visibleText) {
-        state.mode = "text"; state.anchor = null; delete state.linewise; reader.clearSelection(); this.save(); this.options.changed();
+        state.mode = "text"; state.anchor = null; delete state.linewise; reader.clearSelection(); this.reconcileSelection(); this.save(); this.options.changed();
       }
     }).catch((error: unknown) => { const message = reportUnexpected(error, "transcript copy"); if (!this.disposed) this.options.notice(message); });
   }
   private toggleHelp(): void {
     if (this.help.visible) {
-      this.help.visible = false; this.paint(); this.pending = { position: this.helpPosition }; this.restoreFocus(); this.applyTarget(); return;
+      this.help.visible = false; this.paint();
+      this.positionIntent = !this.helpFollow; this.setFollowing(this.helpFollow && !this.hasSelection());
+      this.pending = { position: this.state?.follow ? Infinity : this.helpPosition }; this.restoreFocus(); this.applyTarget(); return;
     }
-    this.helpPosition = this.scroll.scrollTop;
+    this.helpPosition = this.scroll.scrollTop; this.helpFollow = this.state?.follow ?? false;
+    this.setFollowing(false); this.positionIntent = false;
     this.help.visible = true;
-    this.help.content = `Sections: ${this.hint("transcript.previous", "transcript")}/${this.hint("transcript.next", "transcript")} move · ${this.hint("transcript.enter", "transcript")} cursor in visible text · ${this.hint("transcript.fold", "transcript")} fold/unfold\n`
+    this.help.content = `Sections: ${this.hint("transcript.previous", "transcript")}/${this.hint("transcript.next", "transcript")} move · ${this.hint("transcript.enter", "transcript")} cursor in Markdown source / visible text · ${this.hint("transcript.fold", "transcript")} fold/unfold\n`
       + `Text/visual: ${this.hint("transcript.left", "transcript-text")}/${this.hint("transcript.right", "transcript-text")} characters · ${this.hint("transcript.word-next", "transcript-text")}/${this.hint("transcript.word-previous", "transcript-text")} words · ${this.hint("transcript.line-start", "transcript-text")}/${this.hint("transcript.line-end", "transcript-text")} line · ${this.hint("transcript.buffer-start", "transcript-text")}/${this.hint("transcript.buffer-end", "transcript-text")} section\n`
       + `${this.hint("transcript.visual", "transcript-text")} select (inclusive) · ${this.hint("transcript.visual-line", "transcript-text")} select logical lines · ${this.hint("transcript.copy", "transcript")} copy section/line/selection by mode · ${this.hint("transcript.copy-section", "transcript")} whole section\n`
       + `${this.hint("transcript.half-page-down", "transcript")}/${this.hint("transcript.half-page-up", "transcript")} half page · linewise selection follows logical lines, not soft wraps\n`
-      + `Skills show their names only and never fold.\n`
+      + `Following resumes at the viewport bottom and pauses above it; selections protect the view.\n`
+      + `Markdown: sections show formatted prose; Enter reads the original source, Esc returns to formatting.\n`
+      + `Thinking is always visible as gray italic text and never folds.\n`
+      + `Skills show [skill] name only and never fold; copying excludes the decorative tag.\n`
       + `${this.hint("transcript.fold-all", "transcript")}/${this.hint("transcript.unfold-all", "transcript")} fold/unfold all · ${this.hint("transcript.latest", "transcript")} follow latest · ${this.hint("transcript.back", "transcript")} back · ${this.hint("focus.prompt", "transcript")} input · ${this.hint("transcript.help", "transcript")} close help`;
     this.paint(); this.scroll.focus(); this.pending = { position: 0 }; this.applyTarget();
   }
@@ -526,14 +669,26 @@ export class TranscriptPanel {
     } finally { this.syncing = false; }
   };
   private finishLayout = (): void => {
-    this.applyTarget(); this.pending = null; this.rememberScroll();
+    this.reconcileSelection();
+    if (this.positionIntent) {
+      this.applyTarget(); this.pending = null; this.positionIntent = false; this.syncFollowingFromPosition();
+    } else {
+      // New content increases the bottom: preserve the pre-growth follow intent instead of
+      // mistaking that geometry change for the user scrolling away from the bottom.
+      if (this.visible && !this.help.visible && this.state?.follow && !this.hasSelection()) this.pending = { position: Infinity };
+      this.applyTarget(); this.pending = null;
+      if (this.atBottom()) this.syncFollowingFromPosition();
+    }
+    this.rememberScroll();
+    this.geometry = { id: this.sessionId, content: this.scroll.scrollHeight, viewport: this.scroll.viewport.height };
   };
   rememberScroll = (): void => {
     if (this.disposed || this.scroll.isDestroyed || this.syncing || this.pending || this.help.visible || !this.sessionId || !this.visible) return;
     const position = Math.max(0, Math.round(this.scroll.scrollTop));
     if (this.positions[this.sessionId] === position) return;
     this.positions[this.sessionId] = position; this.options.saveScroll(this.sessionId, position);
-    if (position < this.scroll.scrollHeight - this.scroll.viewport.height - 1 && this.state?.follow) { this.state.follow = false; this.save(); }
+    const sameGeometry = this.geometry?.id === this.sessionId && this.geometry.content === this.scroll.scrollHeight && this.geometry.viewport === this.scroll.viewport.height;
+    if (sameGeometry || this.positionIntent) { this.syncFollowingFromPosition(); this.positionIntent = false; }
   };
   dispose(): void {
     if (this.disposed) return;
@@ -542,6 +697,11 @@ export class TranscriptPanel {
     this.renderer.off("resize", this.resize);
     this.scroll.verticalScrollBar.off("change", this.rememberScroll);
     this.scroll.content.off("resize", this.applyTarget); this.scroll.viewport.off("resize", this.applyTarget);
+    for (const row of this.rows.values()) {
+      if (!row.header.isDestroyed) row.header.syntaxStyle = null;
+      if (row.markdown && !row.markdown.root.isDestroyed) row.markdown.root.destroyRecursively();
+    }
+    this.headerSyntax.destroy(); this.proseSyntax.destroy(); this.thinkingSyntax.destroy();
     void this.clipboard.dispose().catch((error: unknown) => reportUnexpected(error, "transcript clipboard cleanup"));
   }
 }

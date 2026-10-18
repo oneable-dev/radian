@@ -5,6 +5,7 @@ import type { ExecutionState, SessionRecord } from "../agents/session-registry.t
 import type { GitViewState } from "../git/model.ts";
 import { gitViewsSchema } from "../git/preferences.ts";
 import { agentViewsSchema, type TranscriptViewState } from "../agents/transcript-preferences.ts";
+import { runCompletionSchema } from "../agents/run-completion.ts";
 import { errorCodes, usageErrorCodes, AgentRunError, ExpectedError, InputError, parseJson, ProtocolError, type ErrorCode, type UsageErrorCode } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 
@@ -21,7 +22,8 @@ const transcriptSection = Type.Object({
   title: Type.String(), text: Type.String(),
   status: Type.Union([Type.Literal("complete"), Type.Literal("streaming"), Type.Literal("pending"), Type.Literal("running"), Type.Literal("error"), Type.Literal("cancelled"), Type.Literal("unfinished")]),
   summary: Type.Optional(Type.String()), error: Type.Optional(Type.String()), toolCallId: Type.Optional(Type.String()),
-  skillName: Type.Optional(Type.String({ minLength: 1 })),
+  completion: Type.Optional(runCompletionSchema),
+  skillName: Type.Optional(Type.String({ minLength: 1 })), command: Type.Optional(Type.String({ maxLength: 4096 })), timeoutSeconds: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
 });
 const nullableText = Type.Union([Type.String(), Type.Null()]);
 const usage = Type.Object({

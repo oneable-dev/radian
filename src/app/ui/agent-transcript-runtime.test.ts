@@ -99,7 +99,7 @@ test("실제 SDK·IPC 섹션의 접힘·선택·커서는 TUI 재접속 후 같�
     app = await mount(); app.mockInput.pressKey("t", { ctrl: true }); await app.render();
 
     const heading = app.renderer.currentFocusedRenderable as EditBufferRenderable;
-    expect(heading.plainText.startsWith("read · complete")).toBe(true); expect(heading.cursorOffset).toBe(1);
+    expect(heading.plainText.startsWith("[read] ")).toBe(true); expect(heading.plainText).not.toContain(" · complete"); expect(heading.cursorOffset).toBe(1);
     expect(app.view.workViewPreferences.agentViews?.[id]?.cursors[sections[toolIndex]!.id]).toBe(2);
     expect(app.renderer.getCursorState().visible).toBe(true); expect(app.client.snapshot.pid).toBe(pid);
     expect(await Bun.file(file).text()).toBe(originalHistory);

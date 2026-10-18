@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import { BoxRenderable, EditBufferRenderable, InputRenderable, ScrollBoxRenderable, parseKeypress, type Renderable } from "@opentui/core";
+import { BoxRenderable, CodeRenderable, EditBufferRenderable, InputRenderable, MarkdownRenderable, ScrollBoxRenderable, parseKeypress, type Renderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { demoWorkspace } from "../../workspace/demo.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
@@ -76,7 +76,7 @@ test("미리보기는 Agent와 같은 섹션 카드·접힘·오류 UI를 쓰며
   // Live and preview surfaces receive identical structured data, but must not share view state.
   const sections: TranscriptSection[] = [
     { id: "latest-q", kind: "user", title: "You", text: "Newest prompt", status: "complete" },
-    { id: "thought", kind: "thinking", title: "Thinking", text: "Folded reasoning", status: "complete" },
+    { id: "thought", kind: "thinking", title: "Thinking", text: "Visible reasoning", status: "complete" },
     { id: "tool", kind: "tool", title: "read", text: "Arguments:\n{}\n\nResult:\nRead failed", status: "error", error: "Read failed" },
     { id: "answer", kind: "assistant", title: "Agent", text: "Latest reply", status: "complete" },
   ];
@@ -98,12 +98,38 @@ test("미리보기는 Agent와 같은 섹션 카드·접힘·오류 UI를 쓰며
     }
     // A fresh preview starts at its latest prompt, not at the old conversation's beginning or the last card.
     expect(preview.scrollTop).toBe(0); expect(app.captureCharFrame()).toContain("Newest prompt");
-    expect(app.captureCharFrame()).not.toContain("Folded reasoning"); expect(app.captureCharFrame()).not.toContain("DO NOT RENDER THE LEGACY STRING");
+    expect(app.captureCharFrame()).toContain("Visible reasoning"); expect(app.captureCharFrame()).not.toContain("[thinking]"); expect(app.captureCharFrame()).not.toContain("DO NOT RENDER THE LEGACY STRING");
     const prompt = body(preview, "Newest prompt")!; prompt.focus();
     await app.mockInput.pasteBracketedText("must not edit"); app.mockInput.pressBackspace(); await app.render();
     expect(prompt.plainText).toBe("Newest prompt"); expect(app.view.workViewPreferences.agentViews).toEqual(state);
     expect(app.selection.sessionId).toBe("a1"); expect(app.resumed).toEqual([]); expect(app.runs).toEqual([]);
     app.mockInput.pressEscape(); await app.render(); expect(app.get("session-history").visible).toBe(false);
+  } finally { await app.close(); }
+});
+
+test("History의 답변·Thinking도 동일한 Markdown을 표시하되 검색·원래 세션은 바꾸지 않는다", async () => {
+  // 미리보기는 별도 텍스트 변환기가 아니라 실시간 transcript와 같은 Markdown 렌더러를 쓴다.
+  const sections: TranscriptSection[] = [
+    { id: "q", kind: "user", title: "You", text: "Saved question", status: "complete" },
+    { id: "a", kind: "assistant", title: "Agent", text: "### Preview title\n\n**Saved answer**", status: "complete" },
+    { id: "t", kind: "thinking", title: "Thinking", text: "**Saved thought**", status: "complete" },
+  ];
+  const app = await mount({ preview: async (worktreeId, id) => ok({ id, worktreeId, text: "", sections, truncated: false }) });
+  const children = (node: Renderable): Renderable[] => node.getChildren().flatMap((child) => [child, ...children(child)]);
+  try {
+    await app.open(); app.clock.advance(150); await app.render();
+    const preview = app.get("history-preview");
+    for (let pass = 0; pass < 3; pass++) {
+      await Promise.all(children(preview).filter((node): node is CodeRenderable => node instanceof CodeRenderable).map((node) => node.highlightingDone));
+      await app.render();
+    }
+    // 표시 문법을 숨겨도 선택된 실시간 세션·초안·읽기 전용 계약을 보존한다.
+    const frame = app.captureCharFrame();
+    expect(children(preview).filter((node) => node instanceof MarkdownRenderable)).toHaveLength(2);
+    expect(frame).toContain("Preview title"); expect(frame).toContain("Saved answer"); expect(frame).toContain("Saved thought");
+    expect(frame).not.toContain("### Preview title"); expect(frame).not.toContain("**Saved answer**"); expect(frame).not.toContain("[thinking]");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("history-search");
+    expect(app.selection.sessionId).toBe("a1"); expect(app.view.promptDrafts.a1).toBe("untouched draft"); expect(app.runs).toEqual([]);
   } finally { await app.close(); }
 });
 

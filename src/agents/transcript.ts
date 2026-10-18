@@ -1,4 +1,5 @@
 import { parseSkillBlock, type AgentSession, type AgentSessionEvent, type SessionEntry } from "@earendil-works/pi-coding-agent";
+import { parseRunCompletion, runCompletionEntryType, systemRunClock, type RunClock, type RunCompletion } from "./run-completion.ts";
 
 type AgentMessage = AgentSession["messages"][number];
 
@@ -14,6 +15,9 @@ export type TranscriptSection = {
   readonly error?: string;
   readonly toolCallId?: string;
   readonly skillName?: string;
+  readonly command?: string;
+  readonly timeoutSeconds?: number;
+  readonly completion?: RunCompletion;
 };
 type Message = { id: string; message: AgentMessage; streaming: boolean };
 type Tool = { name: string; arguments: unknown; text: string; status: TranscriptStatus; error?: string };
@@ -32,11 +36,21 @@ export function toolResultText(result: unknown): string {
   }).join("");
 }
 function summary(text: string): string { return text.replace(/\s+/g, " ").slice(0, 160); }
+function invocation(text: string): string {
+  return text.length <= 4096 ? text : text.slice(0, 4095).replace(/[\uD800-\uDBFF]$/, "") + "…";
+}
 function toolSection(id: string, callId: string, tool: Tool): TranscriptSection {
   const args = JSON.stringify(tool.arguments ?? {}, null, 2);
+  const input = tool.arguments && typeof tool.arguments === "object" && !Array.isArray(tool.arguments) ? tool.arguments : undefined;
+  const command = tool.name === "bash" && input && "command" in input && typeof input.command === "string" ? input.command : undefined;
+  const path = ["read", "write", "edit"].includes(tool.name) && input && "path" in input && typeof input.path === "string" ? input.path : undefined;
+  const offset = input && "offset" in input && typeof input.offset === "number" && Number.isInteger(input.offset) && input.offset > 0 ? input.offset : undefined;
+  // Only the built-in Bash contract defines timeout in seconds. Do not guess extension units or a default.
+  const timeout = tool.name === "bash" && input && "timeout" in input && typeof input.timeout === "number" && Number.isFinite(input.timeout) && input.timeout > 0 ? input.timeout : undefined;
   const error = tool.error && !tool.text.includes(tool.error) ? `\n\nError:\n${tool.error}` : "";
   return { id, kind: "tool", title: tool.name, text: `Arguments:\n${args}\n\nResult:\n${tool.text}${error}`,
-    summary: summary(JSON.stringify(tool.arguments ?? {})), status: tool.status, toolCallId: callId,
+    summary: path !== undefined ? invocation(tool.name === "read" ? `${path}:${offset ?? 1}` : path) : summary(JSON.stringify(tool.arguments ?? {})),
+    status: tool.status, toolCallId: callId, ...(command !== undefined ? { command: invocation(command) } : {}), ...(timeout !== undefined ? { timeoutSeconds: timeout } : {}),
     ...(tool.error ? { error: summary(tool.error) } : {}) };
 }
 
@@ -47,10 +61,18 @@ export class SessionTranscript {
   private readonly tools = new Map<string, Tool>();
   private current: Message | undefined;
   private cached: readonly TranscriptSection[] | undefined;
+  private readonly completions = new Map<string, RunCompletion>();
+  private run: { startedAt: number; monotonic: number; messageIndex: number; sectionCount: number } | undefined;
 
-  constructor(entries: readonly SessionEntry[]) {
+  constructor(entries: readonly SessionEntry[], private readonly clock: RunClock = systemRunClock) {
     for (const entry of entries) {
       if (entry.type === "message") this.messages.push({ id: entry.id, message: entry.message, streaming: false });
+      else if (entry.type === "custom" && entry.customType === runCompletionEntryType) {
+        const parsed = parseRunCompletion(entry.data), previous = this.messages.at(-1);
+        if (parsed.ok) { if (previous) this.completions.set(previous.id, parsed.value); }
+        else this.messages.push({ id: entry.id, streaming: false, message: { role: "custom", customType: "Run timing unavailable",
+          content: `[${parsed.error.code}] ${parsed.error.message}`, display: true, timestamp: Date.parse(entry.timestamp) } });
+      }
       else if (entry.type === "custom_message") this.messages.push({ id: entry.id, streaming: false, message: {
         role: "custom", customType: entry.customType, content: entry.content, display: entry.display, timestamp: Date.parse(entry.timestamp),
       } });
@@ -61,8 +83,13 @@ export class SessionTranscript {
     }
   }
 
-  handle(event: AgentSessionEvent): void {
+  handle(event: AgentSessionEvent): RunCompletion | undefined {
+    let completion: RunCompletion | undefined;
     switch (event.type) {
+      case "agent_start":
+        // Retries and queued follow-ups can start another low-level loop before the same settlement.
+        this.run ??= { startedAt: this.clock.wallTime(), monotonic: this.clock.monotonicTime(), messageIndex: this.messages.length, sectionCount: this.sections.length };
+        break;
       case "message_start": {
         this.current = { id: `live:${crypto.randomUUID()}`, message: event.message, streaming: true };
         this.messages.push(this.current); break;
@@ -91,11 +118,26 @@ export class SessionTranscript {
         this.tools.set(event.toolCallId, { name: event.toolName, arguments: previous?.arguments ?? {}, text,
           status: event.isError ? "error" : "complete", ...(event.isError ? { error: text || "Tool failed" } : {}) }); break;
       }
-      case "agent_settled":
+      case "agent_settled": {
         for (const tool of this.tools.values()) if (tool.status === "running" || tool.status === "pending") tool.status = event.aborted ? "cancelled" : "unfinished";
+        const run = this.run; this.run = undefined; this.cached = undefined;
+        if (run && this.sections.length > run.sectionCount) {
+          const last = this.messages.slice(run.messageIndex).findLast(({ message }) => message.role === "assistant")?.message;
+          const reason = last?.role === "assistant" ? last.stopReason : undefined;
+          completion = { startedAt: run.startedAt, completedAt: this.clock.wallTime(), durationMs: Math.max(0, Math.round(this.clock.monotonicTime() - run.monotonic)),
+            outcome: event.aborted || reason === "aborted" ? "cancelled" : reason === "error" ? "error" : reason === "stop" || reason === "length" ? "complete" : "unfinished" };
+          this.completions.set(this.messages.at(-1)!.id, completion);
+        }
         break;
+      }
       default: return;
     }
+    this.cached = undefined;
+    return completion;
+  }
+
+  warnCompletion(completion: RunCompletion, warning: string): void {
+    for (const [id, value] of this.completions) if (value === completion) this.completions.set(id, { ...value, warning: warning.slice(0, 512) });
     this.cached = undefined;
   }
 
@@ -150,13 +192,15 @@ export class SessionTranscript {
           }
           break;
         case "bashExecution": sections.push({ id, kind: "tool", title: "Shell", text: `$ ${message.command}\n\n${message.output}`,
-          summary: summary(message.command), status: message.cancelled ? "cancelled" : message.exitCode === 0 ? "complete" : "error" }); break;
+          summary: summary(message.command), command: invocation(message.command), status: message.cancelled ? "cancelled" : message.exitCode === 0 ? "complete" : "error" }); break;
         case "custom":
           if (message.display) sections.push({ id, kind: "notice", title: message.customType, text: contentText(message.content), status: "complete" });
           break;
         case "compactionSummary": case "branchSummary": sections.push({ id, kind: "notice", title: "Context summary", text: message.summary, status: "complete" }); break;
         case "system": break;
       }
+      const completion = this.completions.get(id), last = sections.at(-1);
+      if (completion && last) sections[sections.length - 1] = { ...last, completion };
     }
     this.cached = sections;
     return sections;

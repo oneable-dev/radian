@@ -93,6 +93,46 @@ test("SDK 스킬 호출은 이름만 남기고 뒤따르는 사용자 요청을 
   expect(JSON.stringify(transcript.sections)).not.toContain("/private/");
 });
 
+test.each([120, 0.5, undefined, 0, -1, Infinity, "120"])("bash timeout은 명시한 유효 초 단위 값만 표시 데이터에 보존한다: %j", (timeout) => {
+  // timeout이 없는 명령이나 유효하지 않은 값에 임의 제한을 만들어 붙이지 않는다.
+  const manager = SessionManager.inMemory("/fixture"), assistant = fixtureMessage("openai-responses", "openai", "fixture");
+  assistant.content = [{ type: "toolCall", id: "shell", name: "bash", arguments: { command: "printf '한글'\nprintf done", ...(timeout !== undefined ? { timeout } : {}) } }];
+  manager.appendMessage(assistant);
+  // 저장 기록과 실시간 이벤트가 동일한 명령 요약과 제한 값을 투영한다.
+  const live = new SessionTranscript([]); complete(live, assistant);
+  const restored = new SessionTranscript(manager.getBranch());
+  for (const section of [live.sections[0]!, restored.sections[0]!]) {
+    expect(section.command).toBe("printf '한글'\nprintf done");
+    expect(section.timeoutSeconds).toBe(typeof timeout === "number" && Number.isFinite(timeout) && timeout > 0 ? timeout : undefined);
+    expect(section.text).toContain('"command":');
+  }
+});
+
+test("긴 명령 미리보기는 Unicode를 깨뜨리지 않고 자르되 timeout과 원문을 보존한다", () => {
+  // UTF-16 제한 경계에 이모지가 걸려도 고립된 surrogate를 만들지 않는다.
+  const assistant = fixtureMessage("openai-responses", "openai", "fixture"), transcript = new SessionTranscript([]);
+  const command = "a".repeat(4094) + "😀 tail";
+  assistant.content = [{ type: "toolCall", id: "long-shell", name: "bash", arguments: { command, timeout: 120 } }];
+  complete(transcript, assistant);
+  // 미리보기 제한과 실행 인수는 별도 계약이므로 원문이나 시간 제한을 잘라 버리지 않는다.
+  expect(transcript.sections[0]?.command).toBe("a".repeat(4094) + "…");
+  expect(transcript.sections[0]?.timeoutSeconds).toBe(120); expect(transcript.sections[0]?.text).toContain(command);
+});
+
+test("일반 도구는 timeout 단위를 추측하지 않고 read 대상과 시작 줄을 간결하게 보존한다", () => {
+  // 확장 도구의 timeout 필드가 밀리초인지 초인지 알 수 없으므로 Bash 계약과 혼동하지 않는다.
+  const assistant = fixtureMessage("openai-responses", "openai", "fixture"), transcript = new SessionTranscript([]);
+  assistant.content = [
+    { type: "toolCall", id: "read", name: "read", arguments: { path: "/fixture/SKILL.md", offset: 7 } },
+    { type: "toolCall", id: "extension", name: "custom_bridge", arguments: { timeout: 120 } },
+  ];
+  complete(transcript, assistant);
+  // 일반 파일 읽기는 스킬 호출로 바꾸지 않으며 확장 인수 원문은 계속 남긴다.
+  expect(transcript.sections[0]?.summary).toBe("/fixture/SKILL.md:7");
+  expect(transcript.sections[0]?.skillName).toBeUndefined();
+  expect(transcript.sections[1]?.timeoutSeconds).toBeUndefined(); expect(transcript.sections[1]?.summary).toContain('"timeout":120');
+});
+
 test("일반 SKILL.md 읽기를 스킬 호출로 추측하지 않고 도구 실행으로 유지한다", () => {
   const transcript = new SessionTranscript([]);
   const assistant = fixtureMessage("openai-responses", "openai", "fixture");

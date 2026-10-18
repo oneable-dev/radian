@@ -1,0 +1,245 @@
+import { expect, test } from "bun:test";
+import { CodeRenderable, EditBufferRenderable, ScrollBoxRenderable, type Renderable } from "@opentui/core";
+import { createTestRenderer } from "@opentui/core/testing";
+import { Workbench } from "./workbench.ts";
+import { WorkspaceSelection } from "../workspace-selection.ts";
+import { demoWorkspace } from "../../workspace/demo.ts";
+import type { TranscriptSection } from "../../agents/transcript.ts";
+import type { ExpectedError } from "../../errors.ts";
+import { ok, type Result } from "../../result.ts";
+import { defaultKeymap } from "../../keybindings/config.ts";
+
+const section = (id: string, text: string, kind: TranscriptSection["kind"] = "assistant"): TranscriptSection => ({ id, kind, title: kind, text, status: "complete" });
+const history = [section("history", Array.from({ length: 70 }, (_, i) => `OLD-LINE-${i}`).join("\n"))];
+function children(node: Renderable): Renderable[] { return node.getChildren().flatMap((child) => [child, ...children(child)]); }
+async function mount(options: { paused?: boolean; onPrompt?: (id: string, text: string) => Result<void, ExpectedError> | Promise<Result<void, ExpectedError>> } = {}) {
+  const app = await createTestRenderer({ width: 120, height: 26, kittyKeyboard: true });
+  const selection = new WorkspaceSelection(demoWorkspace()), sent: string[] = [];
+  const data: Record<string, readonly TranscriptSection[]> = { a1: history, b1: [section("other", "OTHER_SESSION\n".repeat(60))] };
+  const view = new Workbench(app.renderer, selection, { onNewSession: () => {}, onCloseSession: () => {},
+    initialWorkViews: { active: {}, agentScroll: options.paused ? { a1: 0 } : {}, agentViews: { a1: { selectedId: "history", folded: { tool: false }, cursors: {}, mode: "sections", anchor: null, follow: !options.paused } } },
+    onPrompt: (id, text) => {
+      sent.push(`${id}:${text}`);
+      if (options.onPrompt) return options.onPrompt(id, text);
+      data[id] = [...data[id] ?? [], section(`prompt-${sent.length}`, text, "user")]; selection.replaceSnapshot(demoWorkspace());
+      return ok(undefined);
+    }, getSessionDetails: (id) => ({ status: "working", error: null, output: "", sections: data[id] ?? [] }),
+  });
+  const render = async () => { await app.renderOnce(); await app.renderOnce(); };
+  const settled = async () => { await render(); for (let i = 0; i < 3; i++) { await Promise.all(children(app.renderer.root).filter((node): node is CodeRenderable => node instanceof CodeRenderable).map((node) => node.highlightingDone)); await render(); } };
+  await settled();
+  const scroll = app.renderer.root.findDescendantById("session-transcript"); if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript");
+  return { ...app, view, selection, scroll, sent, render, settled,
+    state(id = selection.sessionId ?? "a1") { return view.workViewPreferences.agentViews?.[id]; },
+    async prompt(text: string) { app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText(text); app.mockInput.pressEnter(); await settled(); },
+    async update(next: readonly TranscriptSection[], id = selection.sessionId ?? "a1") { data[id] = next; selection.replaceSnapshot(demoWorkspace()); await settled(); },
+    async close() { view.dispose(); await app.dispose(); },
+  };
+}
+const bottom = (scroll: ScrollBoxRenderable) => Math.max(0, scroll.scrollHeight - scroll.viewport.height);
+
+test("맨 아래에서는 대화 영역에 포커스를 옮겨도 자동 추적을 유지한다", async () => {
+  const app = await mount();
+  try {
+    app.mockInput.pressKey("t", { ctrl: true }); await app.settled();
+    expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
+    await app.update([...history, section("new", "FOCUSED_BOTTOM_TAIL")]);
+    expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.captureCharFrame()).toContain("FOCUSED_BOTTOM_TAIL");
+  } finally { await app.close(); }
+});
+
+test("휠로 위로 읽다가 다시 맨 아래로 내리면 별도 키 없이 자동 추적을 재개한다", async () => {
+  const app = await mount();
+  try {
+    await app.mockMouse.scroll(app.scroll.x + 3, app.scroll.y + 3, "up"); await app.settled();
+    expect(app.state()?.follow).toBe(false);
+    await app.mockMouse.scroll(app.scroll.x + 3, app.scroll.y + 3, "down"); await app.settled();
+    expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.state()?.follow).toBe(true);
+    await app.update([...history, section("new", "WHEEL_RESUMED_TAIL")]);
+    expect(app.captureCharFrame()).toContain("WHEEL_RESUMED_TAIL"); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
+  } finally { await app.close(); }
+});
+
+test("스크롤바 위치로 맨 아래에 도달해도 자동 추적을 재개한다", async () => {
+  const app = await mount();
+  try {
+    app.scroll.verticalScrollBar.scrollPosition = 0; await app.settled(); expect(app.state()?.follow).toBe(false);
+    app.scroll.verticalScrollBar.scrollPosition = bottom(app.scroll); await app.settled();
+    expect(app.state()?.follow).toBe(true);
+    await app.update([...history, section("new", "BAR_RESUMED_TAIL")]);
+    expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.captureCharFrame()).toContain("BAR_RESUMED_TAIL");
+  } finally { await app.close(); }
+});
+
+test("섹션 모드 Ctrl+End는 긴 마지막 섹션의 실제 끝으로 가되 프롬프트·PTY 키는 건드리지 않는다", async () => {
+  const app = await mount({ paused: true });
+  try {
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("END", { ctrl: true }); await app.settled();
+    expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.state()?.follow).toBe(true);
+    expect(app.captureCharFrame()).toContain("OLD-LINE-69");
+    const keymap = defaultKeymap();
+    for (const context of ["prompt", "editor", "terminal"] as const) expect(keymap.bound("ctrl+end", context)).toBe(false);
+    expect(keymap.bindings.some((binding) => binding.command === "transcript.buffer-end" && binding.scope === "transcript-text" && binding.keys.join(" ") === "ctrl+end")).toBe(true);
+  } finally { await app.close(); }
+});
+
+test("맨 아래 원문 선택 중에는 추적을 멈추고 선택을 해제하면 커서·섹션을 유지하며 재개한다", async () => {
+  const app = await mount();
+  try {
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressEnter();
+    app.mockInput.pressKey("END", { ctrl: true }); await app.settled();
+    // Source Ctrl+End is the section end; scroll the remaining section spacing to the viewport bottom.
+    app.scroll.scrollTo(bottom(app.scroll)); await app.settled();
+    expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.state()?.follow).toBe(true);
+    const body = app.renderer.currentFocusedRenderable;
+    if (!(body instanceof EditBufferRenderable)) throw new Error("Missing source reader");
+    const cursor = body.cursorOffset;
+    app.mockInput.pressKey("v"); await app.settled(); expect(app.state()?.follow).toBe(false);
+    app.mockInput.pressKey("v"); await app.settled(); expect(app.state()?.follow).toBe(true);
+    expect(body.cursorOffset).toBe(cursor); expect(app.state()?.selectedId).toBe("history"); expect(app.state()?.mode).toBe("text");
+    await app.update([...history, section("tail", "SOURCE_CURSOR_PRESERVED")]);
+    expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.state()?.selectedId).toBe("history"); expect(body.cursorOffset).toBe(cursor);
+  } finally { await app.close(); }
+});
+
+test("선택 중 새 내용이 쌓이면 선택 해제만으로 점프하지 않고 다시 하단에 도달해야 재개한다", async () => {
+  const app = await mount();
+  try {
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressEnter(); app.mockInput.pressKey("END", { ctrl: true }); await app.settled();
+    app.scroll.scrollTo(bottom(app.scroll)); await app.settled(); expect(app.state()?.follow).toBe(true);
+    app.mockInput.pressKey("v", { shift: true }); await app.settled();
+    const position = app.scroll.scrollTop;
+    await app.update([...history, section("tail", "WAITING_OUTPUT\n".repeat(30))]);
+    expect(app.state()?.follow).toBe(false); expect(app.scroll.scrollTop).toBe(position);
+    app.mockInput.pressEscape(); await app.settled(); expect(app.state()?.follow).toBe(false);
+    app.scroll.scrollTo(bottom(app.scroll)); await app.settled(); expect(app.state()?.follow).toBe(true);
+    expect(app.state()?.selectedId).toBe("history"); expect(app.state()?.mode).toBe("text");
+  } finally { await app.close(); }
+});
+
+test("렌더링된 Markdown의 마우스 선택도 보호하고 선택을 지우면 하단 기준으로 재개한다", async () => {
+  const app = await mount();
+  try {
+    const rows = app.captureCharFrame().split("\n"), y = rows.findIndex((line) => line.includes("OLD-LINE-69"));
+    const x = rows[y]!.indexOf("OLD-LINE-69");
+    await app.mockMouse.drag(x, y, x + 4, y); await app.settled();
+    expect(app.renderer.getSelection()?.getSelectedText()).toContain("OLD");
+    expect(app.state()?.follow).toBe(false); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
+    app.renderer.clearSelection(); await app.settled();
+    expect(app.state()?.follow).toBe(true);
+    await app.update([...history, section("new", "MOUSE_SELECTION_RELEASED_TAIL")]);
+    expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.captureCharFrame()).toContain("MOUSE_SELECTION_RELEASED_TAIL");
+  } finally { await app.close(); }
+});
+
+test("일시정지한 과거 대화에서 새 프롬프트를 보내면 포커스를 빼앗지 않고 최신 요청부터 따라간다", async () => {
+  const app = await mount({ paused: true });
+  try {
+    expect(app.state()?.follow).toBe(false);
+    await app.prompt("NEW_REQUEST_TAIL");
+    expect(app.sent).toEqual(["a1:NEW_REQUEST_TAIL"]); expect(app.state()?.follow).toBe(true);
+    expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.captureCharFrame()).toContain("NEW_REQUEST_TAIL");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
+  } finally { await app.close(); }
+});
+
+test("Markdown 응답·펼친 도구 결과·완료 행이 늘어날 때마다 최신 출력이 화면 아래에 남는다", async () => {
+  const app = await mount();
+  try {
+    expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
+    const growing = section("stream", "### Response\n\n" + "Streamed line\n".repeat(45) + "MARKDOWN_TAIL");
+    await app.update([...history, growing]);
+    expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.captureCharFrame()).toContain("MARKDOWN_TAIL");
+    const tool = { ...section("tool", "Arguments:\n{}\n\nResult:\n" + "Tool progress\n".repeat(50) + "TOOL_RESULT_TAIL", "tool"), title: "read", status: "running" as const };
+    await app.update([...history, growing, tool]);
+    expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.captureCharFrame()).toContain("TOOL_RESULT_TAIL");
+    await app.update([...history, growing, { ...tool, status: "complete", completion: { startedAt: 1000000, completedAt: 1090000, durationMs: 90000, outcome: "complete" } }]);
+    expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.captureCharFrame()).toContain("Worked for 1m 30s");
+  } finally { await app.close(); }
+});
+
+test("자동 따라가기 중 resize나 Markdown 비동기 레이아웃 변화는 수동 탐색으로 오해하지 않는다", async () => {
+  const app = await mount();
+  try {
+    app.resize(80, 18); await app.settled();
+    expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
+    await app.update([...history, section("table", "| Key | Value |\n|---|---|\n" + "| 한글 | 긴 결과가 여러 줄로 표시됩니다 |\n".repeat(20) + "\nTABLE_TAIL")]);
+    expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.captureCharFrame()).toContain("TABLE_TAIL");
+  } finally { await app.close(); }
+});
+
+test("사용자가 휠로 과거를 읽으면 스트리밍은 그 위치를 보존하고 새 전송도 따라가기를 재개한다", async () => {
+  const app = await mount();
+  try {
+    await app.mockMouse.scroll(app.scroll.x + 3, app.scroll.y + 3, "up"); await app.settled();
+    expect(app.state()?.follow).toBe(false);
+    const position = app.scroll.scrollTop;
+    await app.update([...history, section("background", "BACKGROUND_TAIL\n".repeat(30))]);
+    expect(app.state()?.follow).toBe(false); expect(app.scroll.scrollTop).toBe(position);
+    await app.prompt("RESUME_FROM_INPUT");
+    expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
+  } finally { await app.close(); }
+});
+
+test("스크롤바로 과거 위치를 선택하면 대기 중인 자동 이동보다 사용자 위치를 우선한다", async () => {
+  const app = await mount();
+  try {
+    const bar = app.scroll.verticalScrollBar;
+    await app.mockMouse.click(bar.x, bar.y + Math.floor(bar.height / 3)); await app.settled();
+    expect(app.state()?.follow).toBe(false); expect(app.scroll.scrollTop).toBeLessThan(bottom(app.scroll));
+    const position = app.scroll.scrollTop;
+    await app.update([...history, section("late", "LATE_TOOL_RESULTS\n".repeat(30))]);
+    expect(app.scroll.scrollTop).toBe(position); expect(app.state()?.follow).toBe(false);
+  } finally { await app.close(); }
+});
+
+test("Markdown 없는 도구 화면도 resize와 화면 왕복 후 추가 이벤트 없이 최신 결과를 표시한다", async () => {
+  const app = await mount();
+  try {
+    const tool = section("tool", "Arguments:\n{}\n\nResult:\n" + "Tool line\n".repeat(100) + "RETURN_TOOL_TAIL", "tool");
+    await app.update([tool]); app.resize(100, 22); await app.settled();
+    expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("2"); await app.settled();
+    await app.update([{ ...tool, text: tool.text + "\nMore background results\n".repeat(30) + "HIDDEN_VIEW_TAIL" }]);
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("1"); await app.settled();
+    expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
+    expect(app.captureCharFrame()).toContain("HIDDEN_VIEW_TAIL");
+  } finally { await app.close(); }
+});
+
+test("프롬프트 초안만 작성하는 동안에는 과거 읽기 위치와 선택 모드를 바꾸지 않는다", async () => {
+  const app = await mount({ paused: true });
+  try {
+    const position = app.scroll.scrollTop;
+    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("Unsent draft"); await app.settled();
+    expect(app.sent).toEqual([]); expect(app.state()?.follow).toBe(false); expect(app.scroll.scrollTop).toBe(position);
+    expect(app.view.promptDrafts.a1).toBe("Unsent draft");
+  } finally { await app.close(); }
+});
+
+test("다른 세션으로 이동한 뒤 이전 전송이 수락돼도 현재 세션의 스크롤과 포커스를 바꾸지 않는다", async () => {
+  const gate = Promise.withResolvers<Result<void, ExpectedError>>();
+  const app = await mount({ onPrompt: () => gate.promise });
+  try {
+    await app.prompt("Request in A");
+    app.selection.selectSession("demo:feature", "b1"); await app.settled();
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.settled();
+    const position = app.scroll.scrollTop;
+    gate.resolve(ok(undefined)); await app.settled();
+    expect(app.selection.sessionId).toBe("b1"); expect(app.state()?.follow).toBe(false); expect(app.scroll.scrollTop).toBe(position);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-transcript");
+  } finally { gate.resolve(ok(undefined)); await app.close(); }
+});
+
+test("전송 후 다시 과거를 읽기 시작했다면 늦은 수락이나 출력이 따라가기를 재개하지 않는다", async () => {
+  const gate = Promise.withResolvers<Result<void, ExpectedError>>();
+  const app = await mount({ paused: true, onPrompt: () => gate.promise });
+  try {
+    await app.prompt("Pending request"); expect(app.state()?.follow).toBe(true);
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.settled();
+    const position = app.scroll.scrollTop;
+    gate.resolve(ok(undefined)); await app.update([...history, section("late", "LATE_RESPONSE\n".repeat(40))]);
+    expect(app.state()?.follow).toBe(false); expect(app.scroll.scrollTop).toBe(position);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-transcript");
+  } finally { gate.resolve(ok(undefined)); await app.close(); }
+});

@@ -385,6 +385,9 @@ test("IPC history는 워크트리별 SDK 기록을 열고 이미 열린 saved ID
     const preview = expectOk(await client.previewHistory(main, saved.id));
     expect(preview.sections?.[0]).toMatchObject({ kind: "user", text: "read" });
     expect(preview.sections!.length).toBeLessThanOrEqual(3); expect(preview.text).toContain("read");
+    expect(client.snapshot.capabilities).toContain("run-completion");
+    expect(preview.sections?.at(-1)?.completion).toEqual(client.snapshot.details[a]?.sections?.at(-1)?.completion);
+    expect(preview.sections?.at(-1)?.completion?.outcome).toBe("complete");
     expect(Object.keys(client.snapshot.details)).toHaveLength(count); expect(await readFile(file, "utf8")).toBe(bytes);
     expect(expectError(await client.previewHistory(feature, saved.id)).code).toBe("HISTORY_UNAVAILABLE");
     for (const instance of [undefined, "obsolete"]) {
@@ -404,6 +407,7 @@ test("IPC history는 워크트리별 SDK 기록을 열고 이미 열린 saved ID
     bytes = await readFile(file, "utf8");
     const largePreview = expectOk(await client.previewHistory(main, saved.id));
     expect(largePreview.text).toContain("read"); expect(largePreview.sections!.length).toBeLessThanOrEqual(3);
+    expect(largePreview.sections?.at(-1)?.completion).toEqual(preview.sections?.at(-1)?.completion);
     expect(client.snapshot.details[a]).toBeUndefined(); expect(await readFile(file, "utf8")).toBe(bytes);
     const reopened = expectOk(await client.resume(main, saved.id));
 

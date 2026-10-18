@@ -170,8 +170,9 @@ gets an explicit upgrade notice and is never automatically restarted.
 An upgraded runtime supplies separate **You**, **Agent**, **Thinking** and **tool execution** sections.
 Tool calls and results are joined by call ID, not tool name; unknown tools and MCP bridges use the
 same generic interactions. MCP-specific transcript actions are not included.
-Thinking and tool details start folded; user/Agent text starts expanded. Any nonempty section can
-be folded manually. Error summaries stay visible outside the folded body, and folding never deletes text.
+Tool details start folded; user/Agent text starts expanded. Thinking is always visible prose with
+no label or fold controls; old Thinking fold preferences are ignored and cleared. Other nonempty
+sections can be folded manually. Error summaries stay visible outside the folded body, and folding never deletes text.
 Image attachments have a text placeholder; image rendering is not part of this reader.
 
 A passive **Request** row stays above the scrolling transcript and shows the latest user request
@@ -181,14 +182,36 @@ finishes, and restores from the selected session's transcript. Drafts, rejected 
 settings commands do not replace it. Sessions without request metadata reserve no row; no request
 is inferred from legacy output or session names. This display does not change steer or queue behavior.
 
-Sections have subtle, distinct host-palette backgrounds for user text, Agent replies, Thinking,
-tools and notices. A left accent and heading highlight identify the selected section without hiding
-its kind color. Expanded cards separate headings from body text and leave two rows between sections;
-screens shorter than 18 rows use one-row section gaps and remove internal vertical spacing.
+Sections have no disclosure arrows or separate role/status heading rows. Expanded user/Agent text
+starts directly with its content. Tools use inline invocations such as `[read] path:line` or `$ command`;
+folded items show an inline `(Ctrl+o to expand)` hint using the actual configured key. Agent replies
+and Thinking have no tinted background, border or added indentation. Thinking uses italic text in
+a theme-adaptive neutral gray, independent of accent hues or colored `muted` overrides.
+User, tool and notice blocks retain subtle host-palette tints. Sections leave two blank rows between
+blocks; screens shorter than 18 rows use one-row gaps and remove internal vertical spacing.
 
-Explicit SDK skill invocation blocks appear as **one-line skill names only**, with no disclosure
-control or expandable instructions. They are excluded from individual and all-section folding, but
-the name remains navigable/selectable/copyable. Arguments following the invocation remain a separate
+Agent answers and Thinking use OpenTUI's `MarkdownRenderable` for headings, emphasis, links,
+lists, fenced code and tables. Tool commands/results, user messages and explicit skill names remain
+literal text. Thinking keeps its neutral-gray italic style, including Markdown/code/table content.
+Incomplete streaming Markdown updates incrementally; completed messages finalize after native
+highlighting, without hiding their initial prose or code while the bundled grammars initialize.
+
+`Enter` on formatted prose opens its **read-only Markdown source** for the existing Vim cursor and
+character/logical-line selection commands; the status row identifies `Markdown source`. `Esc` back
+to Sections restores formatting. Source offsets and LF/CRLF copying stay exact rather than guessing
+positions through hidden Markdown syntax. Section-mode `y` and whole-section `Y` always copy the
+original source. The same formatted view is used by read-only History previews.
+
+Built-in Bash invocations append `(timeout 120s)` when that positive timeout was explicitly supplied.
+This is the configured execution limit, not elapsed time, a countdown or evidence of cancellation.
+No default is invented, and extension-tool timeout units are not guessed. Command previews preserve
+newlines, are bounded at 4,096 UTF-16 units and end in an ellipsis when clipped; raw arguments/results
+remain available in the expanded body and whole-section copy. Older runtimes without structured
+command metadata retain their generic `[bash]` argument summary until explicitly upgraded.
+
+Explicit SDK skill invocation blocks appear as **one-line `[skill] name` items**, with no disclosure
+control or expandable instructions. The tag is decorative; copying still copies the name only.
+They are excluded from individual and all-section folding, but the name remains navigable/selectable/copyable. Arguments following the invocation remain a separate
 user message. A generic `read` of `SKILL.md` stays a tool call; filenames alone do not identify a skill.
 
 Outside an embedded PTY, **Ctrl+T** (or **leader, then o**) enters the transcript. **Ctrl+E** returns
@@ -197,7 +220,7 @@ to the input without sending it. All commands are configurable in the existing k
 | Mode | Default keys | Action |
 | --- | --- | --- |
 | Sections | j/k or arrows; Home/End or gg/G | Previous/next or first/last section |
-| Sections | Enter | Put the cursor in visible text: folded heading/summary or expanded body |
+| Sections | Enter | Read Markdown source, folded heading/summary, or literal body with the cursor |
 | Sections/Text/Visual | Ctrl+O (also za); zm/zr | Toggle the selected section; fold/unfold all |
 | Text/Visual | h/j/k/l or arrows | Grapheme/visual-line cursor movement |
 | Text/Visual | w/b; 0/$ or Home/End; gg/G or Ctrl+Home/End | Word, logical-line and section boundaries |
@@ -206,15 +229,16 @@ to the input without sending it. All commands are configurable in the existing k
 | Sections/Text/Visual | Ctrl+D / Ctrl+U | Move down/up half the transcript viewport |
 | Sections/Text/Visual | y | Copy the section, current logical line, or selected range, respectively |
 | Sections/Text/Visual | Y | Copy the whole raw section, including folded details |
+| Sections | Ctrl+End | Jump to the actual bottom of the whole transcript and resume following |
 | Sections/Text/Visual | ge | Jump to the latest output and resume following |
 | Sections/Text/Visual | PgUp/PgDn; F1 | Page; open/close scrollable keyboard help |
 | Visual/Text/Sections | Esc | Return to Text, Sections, then Input |
 | Sections/Text | i | Return to input |
 
-**Enter never changes folding**. It always enters text navigation: a folded section exposes its
-visible heading/summary, while an expanded section exposes its body. Disclosure markers are not part
-of selectable text. `y` copies the current visible line/selection; `Y` still copies the complete raw
-section, even when folded. Heading and body cursor positions are retained independently.
+**Enter never changes folding**. It enters text navigation: a folded section exposes its visible
+heading/summary, formatted prose exposes its read-only Markdown source, and other expanded sections
+expose their literal body. The decorative skill tag is not part of selectable text. `y` copies the
+current source/visible line or selection; `Y` still copies the complete raw section, even when folded. Heading and body cursor positions are retained independently.
 Shared Visual bindings also apply to **Visual Line**. `V` selects whole logical lines of the active text surface,
 including their original LF/CRLF endings when present, never soft-wrap breaks or an invented EOF
 newline. `v`/`V` can switch selection kind while retaining the anchor. Both kinds survive streaming,
@@ -222,12 +246,44 @@ resize and warm reconnect. `Ctrl+D/U` scrolls the viewport in Sections and moves
 or Visual; it does not select another section. To jump between sections while reading, press `Esc`
 to return to Sections, then j/k (or gg/G). A selection first needs `Esc` to return to Text.
 
-The status row shows the mode, selected section and whether output following is paused. Entering
-transcript navigation pauses following; new output does not pull a reader back to the bottom.
+The status row shows the mode, selected section and whether output following is paused. Following
+is based on the viewport: at the bottom it follows new output; moving above the bottom pauses it;
+returning to the bottom by wheel, scrollbar or paging resumes it automatically. Merely focusing the
+transcript does not pause it. Content growth and asynchronous Markdown layout preserve the pre-growth
+bottom intent rather than treating the increased scroll range as user navigation. Following also
+keeps the bottom on resize and when returning from another work view.
+
+Character/line selections and native mouse selections temporarily protect their viewport. Once
+selection is cleared, following resumes only if the viewport is still at the bottom. Auto-following
+does not replace a source-mode section, cursor or selection. Help and the read-only History preview
+remain independent of live transcript following. `Ctrl+End` in Sections and `ge` explicitly jump to
+the whole transcript bottom; `End`/`Shift+G` in Sections still select the last section, and source-mode
+`Ctrl+End` still moves to the end of the current section.
+
+A new prompt submission explicitly moves to the bottom without stealing Input focus. Merely editing
+an unsent draft or inserting completion text does not discard a reading position above the bottom.
+Submission changes follow intent before admission, never from a late acceptance callback: scrolling
+away again or switching sessions while admission is pending cannot be overridden by the old result.
 Streaming preserves section identity, explicit folding choices, cursor/selection and the viewport
 anchor where scrolling permits. Copying preserves raw text, including original line breaks, rather
 than inserting display-wrap breaks. Unbound keys, timed-out prefixes and paste cannot edit transcript
 content. Help uses the same scroll viewport and returns to the prior position/mode when closed.
+
+After a run actually settles, its final displayed section has a gray footer such as
+`Worked for 1m 30s • Sep 19 at 10:55 AM`. Runtime monotonic time measures processing from the first
+`agent_start` through final `agent_settled`, including tools, retries, compaction and coalesced queued
+follow-ups; intermediate model/tool endings do not finalize it. Queued input joined into one SDK run
+shares one footer, rather than inventing separate per-prompt durations. Idle time between runs is excluded.
+The completion timestamp is formatted in the attached UI's local timezone. Failure, cancellation and
+unconfirmed outcomes use `Failed after`, `Cancelled after` and `Stopped after`, never `Worked for`.
+The footer is decorative and is not included in source selection or raw answer copying.
+
+The existing SDK writer saves versioned completion metadata as a context-neutral custom entry, so
+reopening, reconnecting and read-only History retain it without changing model messages. Older records
+without metadata show no invented duration/date. An optional timing-save failure keeps the accepted run
+outcome and adds an explicit persistence warning, not a rollback or failed prompt. The additive
+`run-completion` capability requires an upgraded service for new timings; no running service is
+restarted automatically.
 
 The shared OpenTUI clipboard service uses best-available host/terminal delivery. A host write is
 reported as copied; OSC52 is reported only as a request sent to the terminal. Unsupported delivery
@@ -693,7 +749,8 @@ Open is pending does not cancel or roll back an accepted request; a late result 
 
 Wide screens show the list and read-only conversation preview side by side. Below 100 columns,
 Ctrl+O switches between them; PageUp/PageDown scroll the preview. Preview reuses the Agent transcript
-component, including section cards, status/error styling and initially folded Thinking/tool sections.
+component, including compact inline invocations, Markdown prose, error styling and initially folded
+tool sections; Thinking remains visible just as in the live transcript.
 It shows at most the three newest sections of the saved current branch, in chronological order.
 A new unanswered prompt is not filled with the previous turn's replies; explicit skills remain name-only. This does not open a writable SDK session, load extensions or execute tools. Selection changes debounce preview requests for 150 ms;
 superseded/hidden queries are cancelled and stale responses ignored. The reader verifies the session
