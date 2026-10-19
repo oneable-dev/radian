@@ -41,7 +41,7 @@ export class EditorSessions {
     const executable = Bun.which(this.options.executable ?? "nvim");
     if (!executable) return err(new EditorError("EDITOR_UNAVAILABLE", "Neovim is not installed or is not on the runtime PATH. Install nvim, then open Editor again."));
     try {
-      const session = new PtySession(worktreeId, { cwd: worktree.path, size,
+      const session = new PtySession(worktreeId, { cwd: worktree.path, size, waitForResizeOutput: true,
         argv: [executable, ...(this.options.clean ? ["--clean", "-i", "NONE", "-n"] : [])] }, this.changed);
       this.sessions.set(worktreeId, session); this.changed(); return ok(session.id);
     } catch (error) {

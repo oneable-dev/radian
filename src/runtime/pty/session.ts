@@ -12,6 +12,7 @@ export type PtyLaunch = {
   env?: Record<string, string | undefined>;
   detached?: boolean;
   scrollback?: number;
+  waitForResizeOutput?: boolean;
   ipc?: (message: unknown) => void;
 };
 
@@ -28,6 +29,8 @@ export class PtySession {
   private cursorStyle = 0;
   private revision = 0;
   private cached: PtyFrame | undefined;
+  private resizeFrame: PtyFrame | undefined;
+  private readonly waitForResizeOutput: boolean;
   private notifyTimer: ReturnType<typeof setTimeout> | undefined;
   private exited = false;
   private exitCode: number | null = null;
@@ -36,6 +39,7 @@ export class PtySession {
 
   constructor(readonly worktreeId: string, launch: PtyLaunch, private readonly changed: () => void) {
     this.screen = new Screen({ ...launch.size, scrollback: launch.scrollback ?? 0, allowProposedApi: true });
+    this.waitForResizeOutput = launch.waitForResizeOutput ?? false;
     for (const final of ["h", "l"]) this.screen.parser.registerCsiHandler({ prefix: "?", final }, (params) => {
       for (const mode of params) if (typeof mode === "number" && [25, 1005, 1006, 1015, 1016].includes(mode)) this.modes.set(mode, final === "h");
       return false;
@@ -51,7 +55,9 @@ export class PtySession {
       // separately allocated Bun.Terminal can leave shell job control unavailable.
       child = Bun.spawn([...launch.argv], {
         cwd: launch.cwd, env: { ...process.env, ...launch.env, TERM: "xterm-256color" },
-        terminal: { ...launch.size, name: "xterm-256color", data: (_terminal, bytes) => this.screen.write(new Uint8Array(bytes), () => this.invalidate()) },
+        terminal: { ...launch.size, name: "xterm-256color", data: (_terminal, bytes) => this.screen.write(new Uint8Array(bytes), () => {
+          this.resizeFrame = undefined; this.invalidate();
+        }) },
         ...(launch.detached ? { detached: true } : {}),
         ...(launch.ipc ? { ipc: (message: unknown) => launch.ipc?.(message) } : {}),
       });
@@ -69,10 +75,11 @@ export class PtySession {
   }
   finish(code: number): void {
     if (this.exited) return;
-    this.exited = true; this.exitCode = code; this.invalidate(); this.changed();
+    this.exited = true; this.exitCode = code; this.resizeFrame = undefined; this.invalidate(); this.changed();
   }
   get info(): PtyInfo { return { id: this.id, worktreeId: this.worktreeId, pid: this.process.pid, exited: this.exited, exitCode: this.exitCode }; }
   frame(): PtyFrame {
+    if (this.resizeFrame) return this.resizeFrame;
     if (!this.cached) {
       const modes = [...this.modes].map(([mode, enabled]) => `\x1b[?${mode}${enabled ? "h" : "l"}`).join("");
       const buffer = this.screen.buffer.active, offset = buffer.baseY - buffer.viewportY;
@@ -114,11 +121,15 @@ export class PtySession {
     await new Promise<void>((resolve) => this.screen.write("", resolve));
     if (this.lease !== lease) throw new PtyError("PTY_BUSY", "Terminal attachment changed before resize.");
     if (cols === this.screen.cols && rows === this.screen.rows) return;
+    // Resizing the emulator is not an application redraw. Editors retain the last
+    // complete snapshot until new process output has passed through the VT parser.
+    if (this.waitForResizeOutput && !this.exited) this.resizeFrame ??= this.frame();
     this.screen.resize(cols, rows);
     if (this.exited) { this.invalidate(); return; }
     this.terminal.resize(cols, rows);
     // Bun 1.4.3 can update PTY dimensions without notifying the attached process.
-    this.process.kill("SIGWINCH"); this.invalidate();
+    this.process.kill("SIGWINCH");
+    if (!this.resizeFrame) this.invalidate();
   }
   async dispose(): Promise<Result<void, ExpectedError>> {
     const result = await capture(async () => {

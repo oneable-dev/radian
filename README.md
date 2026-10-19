@@ -131,8 +131,14 @@ Session creation/closing retain their existing rules and never implicitly launch
 
 **Ctrl+Space, then b** toggles the entire left panel closed and open, without an extra toolbar button.
 The work pane takes the freed width without recreating Agent, Editor or Terminal instances.
-Selection, drafts, transcript positions and loaded History rows are retained. Focus/search
-commands reveal the panel when needed; hidden navigation controls are excluded from Tab traversal.
+Selection, drafts, transcript positions and loaded History rows are retained. In a connected Editor,
+a sidebar toggle prepares the target PTY size while retaining the existing layout, then presents the
+new layout and matching newer VT snapshot together. Rapid toggles retain the latest intent without
+restarting Neovim; stale sizes cannot overwrite the visible VT. Focus/search commands still reveal
+the panel immediately so subsequent typing reaches the requested control; hidden navigation controls
+are excluded from Tab traversal. Editor PTYs retain the previous snapshot until new process output
+arrives rather than publishing emulator-only resize state. That runtime-side safeguard requires an
+updated service; existing services are never restarted automatically.
 This visibility state belongs to the current TUI, not the detached runtime or terminal configuration.
 
 Every worktree remembers its active tab. Agent retains its selected session, draft, transcript

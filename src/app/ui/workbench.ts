@@ -84,6 +84,7 @@ export class Workbench {
   private lastScrolledKey: string | null = null;
   private navigationRevealPending = false;
   private activeWorktreeId: string | null = null;
+  private sidebarTransition: { visible: boolean; worktreeId: string | null } | undefined;
   private readonly unsubscribe: () => void;
   private disposed = false;
   private readonly theme: UiTheme;
@@ -211,8 +212,27 @@ export class Workbench {
 
   get workViewPreferences(): WorkViewPreferences { return structuredClone(this.workViews); }
 
+  private toggleSidebar(): void {
+    if (this.disposed || this.root.isDestroyed) return;
+    const visible = !(this.sidebarTransition?.visible ?? this.sidebar.visible);
+    this.sidebarTransition = undefined; this.editor.cancelResize();
+    if (this.sidebar.visible === visible) return;
+    const transition = { visible, worktreeId: this.selection.worktree?.id ?? null };
+    this.sidebarTransition = transition;
+    const commit = () => { if (this.sidebarTransition === transition) this.finishSidebarTransition(); };
+    const width = this.renderer.width - (visible ? this.sidebar.width : 0);
+    const { horizontal } = panelSpacing(this.renderer);
+    const cols = Math.min(500, width - horizontal * 2), rows = this.editor.input?.height ?? 0;
+    if (cols < 2 || rows < 1 || !this.editor.prepareResize(cols, rows, commit)) commit();
+  }
+  private finishSidebarTransition(): void {
+    const transition = this.sidebarTransition;
+    if (transition) this.setSidebarVisible(transition.visible);
+  }
   private setSidebarVisible(visible: boolean): void {
-    if (this.disposed || this.root.isDestroyed || this.sidebar.visible === visible) return;
+    if (this.disposed || this.root.isDestroyed) return;
+    this.sidebarTransition = undefined; this.editor.cancelResize();
+    if (this.sidebar.visible === visible) return;
     const focused = this.sidebar.hasFocusedDescendant;
     this.sidebar.visible = visible;
     this.paintRows(this.visibleRows());
@@ -244,6 +264,7 @@ export class Workbench {
 
   private updateFooter = (): void => {
     if (this.disposed || !this.footer || this.root.isDestroyed) return;
+    if (this.sidebarTransition && !this.editor.input) this.finishSidebarTransition();
     const focused = this.renderer.currentFocusedRenderable;
     let shortcuts: readonly FooterShortcut[] = [];
     const context = this.keyContext();
@@ -399,7 +420,7 @@ export class Workbench {
     if (command.startsWith("transcript.")) { this.agent.transcriptCommand(command); return; }
     switch (command) {
       case "app.detach": this.actions.onDetach?.(); break;
-      case "sidebar.toggle": this.setSidebarVisible(!this.sidebar.visible); break;
+      case "sidebar.toggle": this.toggleSidebar(); break;
       case "focus.sidebar": case "focus.results": this.setSidebarVisible(true); this.focusNavigation(); break;
       case "focus.search": this.setSidebarVisible(true); this.search.focus(); break;
       case "focus.prompt": this.agent.prompt.focus(); break;
@@ -463,6 +484,8 @@ export class Workbench {
   }
 
   private resize = (): void => {
+    // A physical terminal resize supersedes the geometry of an in-flight sidebar transition.
+    this.finishSidebarTransition();
     const { horizontal, vertical } = panelSpacing(this.renderer);
     this.sidebar.width = this.renderer.width < 80 ? 26 : 40;
     this.sidebar.paddingX = horizontal; this.sidebar.paddingBottom = vertical;
@@ -551,6 +574,7 @@ export class Workbench {
     const worktree = this.selection.worktree;
     this.workContext.content = worktree ? `${worktree.name} · ${worktree.branch ?? "detached"}` : "";
     const workView = worktree ? this.workViews.active[worktree.id] ?? "agent" : "agent";
+    if (this.sidebarTransition && (workView !== "editor" || this.sidebarTransition.worktreeId !== worktree?.id)) this.finishSidebarTransition();
     this.displayedWorkView = workView;
     const openIds = new Set([...this.selection.snapshot.flatMap((repo) => repo.worktrees.flatMap((tree) => tree.sessions.map((item) => item.id))), ...(this.actions.getRetainedSessionIds?.() ?? [])]);
     this.agent.update(worktree, this.selection.sessionId, openIds, workView === "agent");
@@ -606,7 +630,7 @@ export class Workbench {
   dispose(): void {
     if (this.disposed) return;
     this.agent.rememberScroll();
-    this.disposed = true;
+    this.sidebarTransition = undefined; this.disposed = true;
     this.unsubscribe();
     this.agent.dispose(); this.history.dispose(); this.dialog.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
     for (const row of this.rows.values()) row.status?.dispose();

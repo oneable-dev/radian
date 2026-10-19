@@ -10,6 +10,24 @@ function colors(background: string): TerminalColors {
     highlightForeground: null, highlightBackground: null };
 }
 
+test("도착한 VT 스냅샷은 다음 프레임의 표시 전에 반영하고 화면 전체 reset을 반복하지 않는다", async () => {
+  // 첫 표시 프레임이 빈 VT이거나 직전 스냅샷이면 사용자에게 깜빡임이 노출된다.
+  const app = await createTestRenderer({ width: 20, height: 2 });
+  const surface = new TerminalSurface(app.renderer, "first-paint"); app.renderer.root.add(surface.root);
+  try {
+    surface.display({ id: "test", worktreeId: "tree", pid: 2, cols: 20, rows: 2, revision: 1,
+      exited: false, exitCode: null, ansi: "\x1bcFIRST-SNAPSHOT" });
+    await app.renderOnce();
+    expect(app.captureCharFrame()).toContain("FIRST-SNAPSHOT");
+
+    // 스냅샷이 없으면 같은 화면을 유지하고, 새 스냅샷도 한 프레임 뒤로 미루지 않는다.
+    await app.renderOnce(); expect(app.captureCharFrame()).toContain("FIRST-SNAPSHOT");
+    surface.display({ id: "test", worktreeId: "tree", pid: 2, cols: 20, rows: 2, revision: 2,
+      exited: false, exitCode: null, ansi: "\x1bcSECOND-SNAPSHOT" });
+    await app.renderOnce(); expect(app.captureCharFrame()).toContain("SECOND-SNAPSHOT");
+  } finally { surface.dispose(); await app.dispose(); }
+});
+
 test("내장 터미널의 기본색과 ANSI 팔레트는 외부 테마를 따르고 명시적 RGB 배경은 보존한다", async () => {
   // 앱 패널과 다른 외부 배경색을 사용해 불투명 검정 기본값 회귀를 구분한다.
   const app = await createTestRenderer({ width: 20, height: 2 });

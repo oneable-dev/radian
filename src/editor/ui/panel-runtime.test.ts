@@ -79,6 +79,40 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
         expect(app.client.snapshot.editors![0]!.pid).toBe(pid);
       } finally { app.renderer.off("frame", capture); }
     }
+    // Sidebar changes and the new PTY image must be presented together, not converge later.
+    const sidebar = app.renderer.root.findDescendantById("workspace-sidebar")!;
+    const rulerColumn = () => app!.captureCharFrame().split("\n").find((line) => line.includes("[No Name]"))?.indexOf("All") ?? -1;
+    const expectedRuler = rulerColumn(); expect(expectedRuler).toBeGreaterThan(0);
+    const transitions: { marker: boolean; ruler: number; width: number; remote: number | undefined }[] = [];
+    const captureSidebar = () => transitions.push({ marker: app!.captureCharFrame().includes("unsaved-native-editor"),
+      ruler: rulerColumn(), width: originalSurface!.width, remote: app!.editorFrame?.cols });
+    app.renderer.on("frame", captureSidebar);
+    try {
+      for (const visible of [false, true, false, true]) {
+        app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("b");
+        await until(async () => { await app!.renderOnce(); return sidebar.visible === visible; });
+      }
+      expect(transitions.length).toBeGreaterThan(0);
+      expect(transitions.every((frame) => frame.marker && frame.ruler === expectedRuler && frame.width === frame.remote)).toBe(true);
+      // Superseded resize responses may still arrive; none may replace the current visible VT.
+      for (const [count, visible] of [[3, false], [2, false], [1, true]] as const) {
+        for (let i = 0; i < count; i++) { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("b"); }
+        await until(async () => { await app!.renderOnce(); return sidebar.visible === visible; });
+      }
+      // A stopped application cannot redraw: emulator dimensions alone must not commit the toggle.
+      process.kill(pid, "SIGSTOP");
+      try {
+        app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("b");
+        for (let i = 0; i < 8; i++) { await app.renderOnce(); await Bun.sleep(10); }
+        expect(sidebar.visible).toBe(true); expect(rulerColumn()).toBe(expectedRuler);
+      } finally { process.kill(pid, "SIGCONT"); }
+      await until(async () => { await app!.renderOnce(); return !sidebar.visible; });
+      app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("b");
+      await until(async () => { await app!.renderOnce(); return sidebar.visible; });
+      expect(transitions.every((frame) => frame.marker && frame.ruler === expectedRuler)).toBe(true);
+      expect(app.renderer.currentFocusedRenderable).toBe(originalSurface);
+      expect(app.client.snapshot.editors![0]!.pid).toBe(pid);
+    } finally { app.renderer.off("frame", captureSidebar); }
     // A single tab-bar gap remains, with no routine caption or additional panel inset.
     const aligned = () => {
       const sidebar = app!.renderer.root.findDescendantById("workspace-sidebar")!;

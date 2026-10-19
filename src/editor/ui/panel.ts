@@ -43,6 +43,10 @@ export class EditorPanel {
     return this.root.visible && this.connection && this.selected?.surface.acceptsInput && this.selected.surface.root.visible
       ? this.selected.surface.root : undefined;
   }
+  prepareResize(cols: number, rows: number, commit: () => void): boolean {
+    return Boolean(this.input && this.selected?.surface.prepareResize(cols, rows, commit));
+  }
+  cancelResize(): void { this.selected?.surface.cancelResize(); }
   show(worktree: Worktree | null, explicit = false): void {
     if (this.disposed || this.root.isDestroyed) return;
     const info = worktree ? this.actions?.info(worktree.id) : undefined;
