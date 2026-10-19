@@ -1,6 +1,6 @@
 import { expect, jest, spyOn, test } from "bun:test";
 import { RuntimeClient } from "./client.ts";
-import { emptyPreferences, protocolVersion, type RuntimeSnapshot, type PtyFrame } from "./protocol.ts";
+import { emptyPreferences, maxFrameBytes, protocolVersion, type RuntimeSnapshot, type PtyFrame } from "./protocol.ts";
 import { runtimePaths } from "./storage.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 
@@ -14,26 +14,52 @@ function stubFetch(implementation: (input: Parameters<typeof fetch>[0], options?
 async function settle(): Promise<void> { for (let i = 0; i < 40; i++) await Promise.resolve(); }
 async function advance(milliseconds: number): Promise<void> { jest.advanceTimersByTime(milliseconds); await settle(); }
 
-function events(value: unknown, signal?: AbortSignal | null) {
+function events(value: unknown, signal?: AbortSignal | null, chunkBytes = Number.MAX_SAFE_INTEGER) {
   let controller: ReadableStreamDefaultController<Uint8Array>;
   let open = true;
   const remove = () => { open = false; signal?.removeEventListener("abort", aborted); };
   const aborted = () => { if (open) { remove(); controller.error(signal?.reason); } };
+  const enqueue = (value: unknown) => {
+    const bytes = encoder.encode(JSON.stringify(value) + "\n");
+    for (let offset = 0; offset < bytes.length; offset += chunkBytes) controller.enqueue(bytes.subarray(offset, offset + chunkBytes));
+  };
   const response = new Response(new ReadableStream<Uint8Array>({
     start(stream) {
       controller = stream;
       signal?.addEventListener("abort", aborted, { once: true });
       if (signal?.aborted) aborted();
-      else if (value !== undefined) stream.enqueue(encoder.encode(JSON.stringify(value) + "\n"));
+      else if (value !== undefined) enqueue(value);
     },
     cancel: remove,
   }));
   return { response,
-    frame(value: unknown) { if (open) controller.enqueue(encoder.encode(JSON.stringify(value) + "\n")); },
+    frame(value: unknown) { if (open) enqueue(value); },
     end() { if (open) { remove(); controller.close(); } },
     fail(error: unknown) { if (open) { remove(); controller.error(error); } },
   };
 }
+
+test("여러 세션의 큰 상태가 8MiB를 넘어도 대화·초안·History 연결을 손상시키지 않는다", async () => {
+  // 실제 장애처럼 각각은 작은 섹션들이 합쳐진 9MiB 이상의 상태를 조각내 전송한다.
+  const large: RuntimeSnapshot = { ...snapshot(), preferences: { ...structuredClone(emptyPreferences), drafts: { unsent: "keep this draft" } },
+    details: { conversation: { status: "working", output: "", error: null,
+      sections: Array.from({ length: 2200 }, (_, index) => ({ id: `section-${index}`, kind: "assistant", title: "Agent", text: `${index}:한글👩🏽‍💻 ${"x".repeat(4096)}`, status: "complete" })) } } };
+  expect(Buffer.byteLength(JSON.stringify(large))).toBeGreaterThan(maxFrameBytes);
+  const requests: string[] = [];
+  const fetchMock = stubFetch(async (input, options) => {
+    const path = new URL(String(input)).pathname; requests.push(path);
+    return path === "/events" ? events(large, options?.signal, 65533).response : Response.json([]);
+  });
+  const client = new RuntimeClient(paths, snapshot());
+  try {
+    expectOk(await client.attach());
+    expect(client.snapshot.details.conversation?.sections).toHaveLength(2200);
+    expect(client.snapshot.details.conversation?.sections?.at(-1)?.text).toBe(large.details.conversation!.sections!.at(-1)!.text);
+    expect(client.snapshot.preferences.drafts).toEqual({ unsent: "keep this draft" });
+    expect(expectOk(await client.listHistory("worktree"))).toEqual([]); expect(client.connected).toBe(true);
+    expect(client.snapshot.notice).toBe(""); expect(requests).toEqual(["/events", "/history"]);
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
 
 test("이전 런타임의 이미지와 큰 입력은 전송·자동 재시작 없이 보존 가능한 실패로 거부한다", async () => {
   const fetchMock = stubFetch(async () => { throw new Error("Must not send unsupported input"); });

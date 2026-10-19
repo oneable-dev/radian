@@ -7,12 +7,13 @@ import type { HistoryItem } from "../agents/history.ts";
 import type { HistoryPreview } from "../agents/history-preview.ts";
 import { CapabilityError, CancelledError, capture, ConnectionError, InputError, parseJson, ProtocolError, reportUnexpected, systemCode, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
-import { emptyPreferences, historySchema, historyPreviewSchema, historyPreviewQuerySchema, maxFrameBytes, parseSnapshot, replySchema, type RuntimeCommand, type RuntimePreferences, type RuntimeSnapshot, type EditorFrame } from "./protocol.ts";
+import { emptyPreferences, historySchema, historyPreviewSchema, historyPreviewQuerySchema, maxFrameBytes, maxSnapshotBytes, parseSnapshot, replySchema, type RuntimeCommand, type RuntimePreferences, type RuntimeSnapshot, type EditorFrame } from "./protocol.ts";
 import { privateDirectory, runtimePaths, type RuntimePaths } from "./storage.ts";
 import { connectionError, readJson, remoteError, transport } from "./transport.ts";
 import { PtyConnection } from "./pty/client.ts";
 import { completionQuerySchema, completionResultSchema } from "./completion-protocol.ts";
 import type { CompletionQuery, CompletionResult } from "../agents/completion.ts";
+import { NdjsonDecoder } from "./frames.ts";
 
 const reconnectDelays = [250, 500, 1000, 2000] as const;
 const streamHandshakeMs = 2000;
@@ -386,7 +387,7 @@ export class RuntimeClient {
     return ok(body.value.value);
   }
   private async consume(body: ReadableStream<Uint8Array>, onReady: () => void): Promise<Result<void, ExpectedError>> {
-    const reader = body.getReader(); const decoder = new TextDecoder(); let buffer = "";
+    const reader = body.getReader(); const frames = new NdjsonDecoder(maxSnapshotBytes, "Runtime snapshot");
     let firstFrame = true;
     try {
       while (!this.detaching) {
@@ -395,12 +396,9 @@ export class RuntimeClient {
         catch (error) { if (this.detaching) return ok(undefined); const known = connectionError(error); if (known) return err(known); throw error; }
         if (this.detaching) return ok(undefined);
         if (chunk.done) return err(this.connectionClosed());
-        buffer += decoder.decode(chunk.value, { stream: true });
-        let newline: number;
-        while ((newline = buffer.indexOf("\n")) >= 0) {
-          const frame = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
-          if (Buffer.byteLength(frame) > maxFrameBytes) return err(new ProtocolError("Runtime frame is too large."));
-          const json = parseJson(frame, "runtime event"); if (!json.ok) return err(new ProtocolError(json.error.message, { cause: json.error }));
+        for (const frame of frames.push(chunk.value)) {
+          if (!frame.ok) return frame;
+          const json = parseJson(frame.value, "runtime event"); if (!json.ok) return err(new ProtocolError(json.error.message, { cause: json.error }));
           const parsed = parseSnapshot(json.value); if (!parsed.ok) return parsed;
           if (parsed.value.repositoryId !== this.state.repositoryId || parsed.value.mode !== this.state.mode) return err(new ProtocolError("Runtime identity does not match this workspace."));
           if (parsed.value.instance !== this.state.instance) {
@@ -417,7 +415,6 @@ export class RuntimeClient {
           if (firstFrame) { firstFrame = false; onReady(); }
           this.emit();
         }
-        if (Buffer.byteLength(buffer) > maxFrameBytes) return err(new ProtocolError("Runtime frame is too large."));
       }
       return ok(undefined);
     } finally {
@@ -434,6 +431,6 @@ export async function fetchSnapshot(paths: RuntimePaths): Promise<Result<Runtime
   const response = await transport(paths, "/snapshot", { signal: AbortSignal.timeout(500) });
   if (!response.ok) return response.error.code === "RUNTIME_ABSENT" ? ok(null) : response;
   if (!response.value.ok) return err(new ProtocolError(`Runtime snapshot failed: ${response.value.status}`));
-  const body = await readJson(response.value); return body.ok ? parseSnapshot(body.value) : body;
+  const body = await readJson(response.value, { maximumBytes: maxSnapshotBytes, label: "Runtime snapshot" }); return body.ok ? parseSnapshot(body.value) : body;
 }
 export function defaultPreferences(): RuntimePreferences { return structuredClone(emptyPreferences); }

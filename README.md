@@ -188,8 +188,9 @@ pruned while other clients or undo history may still reference them.
 Image bytes are decoded/normalized with the installed Pi SDK and sent as real image content blocks.
 Unsupported models, invalid images and older services reject before admission and retain the input;
 no service is automatically restarted. The additive `prompt-images` capability gates this transport.
-The runtime limits aggregate source image bytes to 16 MiB and wire payloads to 8 MiB for resource
-safety. Exceeding a boundary rejects the whole operation; it never silently truncates input.
+The runtime limits aggregate source image bytes to 16 MiB and command payloads to 8 MiB for resource
+safety. Aggregate workspace state has a separate receive budget described below. Exceeding a boundary
+rejects the whole operation; it never silently truncates input.
 Rich input drafts are additive preference metadata, alongside compatible original-text/path drafts.
 A legacy client's replacement text invalidates stale attachment metadata instead of resurrecting it.
 Git's Ask Agent input uses the same multiline, paste and attachment rules.
@@ -357,9 +358,9 @@ is not inferred from dispatch. Reading/copying does not send prompts or change s
 Only navigation state is stored in the additive `agentViews` preference; it survives switching
 sessions/views and reconnecting to the same live runtime. Stable live section IDs do not promise
 restoration of temporary selections after a service restart. Full transcript text is not limited to
-the legacy 12-message/12,000-character preview; the existing **8 MiB IPC frame limit** still applies,
-and transcript paging is not implemented. Older services remain usable with a clearly marked legacy
-preview. Finish their jobs and explicitly stop/restart them to load the new capability; no service
+the legacy 12-message/12,000-character preview. Aggregate workspace snapshots have a **64 MiB receive
+limit**, separate from the 8 MiB command/PTY limits; transcript paging is not implemented. Older
+services remain usable with a clearly marked legacy preview. Finish their jobs and explicitly stop/restart them to load the new capability; no service
 is automatically restarted.
 
 ### Agent input status
@@ -729,6 +730,15 @@ Event subscriptions send the current snapshot every 5 s while idle, keeping `GET
 without disabling ordinary request timeouts. These heartbeat snapshots use the existing protocol and
 do not run agents or write checkpoints. A heartbeat is used because the installed Bun 1.4.3 can still
 time out streaming Unix requests after `server.timeout(request, 0)`.
+
+A workspace snapshot includes every retained session, not one prompt or one terminal viewport.
+Both its initial HTTP response and streamed logical frames therefore use a separate **64 MiB**
+receive budget. Commands, ordinary replies and PTY frames retain their **8 MiB** limits. Snapshot
+receivers count actual UTF-8 bytes incrementally, validate text only after complete frames arrive, and bound
+allocation independently of network fragmentation. Multiple complete frames in one HTTP chunk are
+not mistaken for a single oversized frame. Data is never silently clipped to fit. These client-side
+receive changes work with already-running services; reopen only the TUI to load them.
+
 On an unexpected disconnect, the TUI makes at most four read-only resubscription attempts after
 250 ms, 500 ms, 1 s, and 2 s. Each attempt must receive headers and a valid first snapshot within 2 s.
 A connection must remain healthy for 10 s before a later disconnect receives a fresh retry budget;

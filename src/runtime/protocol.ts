@@ -11,7 +11,10 @@ import { errorCodes, usageErrorCodes, AgentRunError, ExpectedError, InputError, 
 import { err, ok, type Result } from "../result.ts";
 
 export const protocolVersion = 1;
+// Commands and PTY frames describe one operation/viewport. A workspace snapshot
+// aggregates every retained session and must not inherit that per-operation limit.
 export const maxFrameBytes = 8 * 1024 * 1024;
+export const maxSnapshotBytes = 64 * 1024 * 1024;
 const id = Type.String({ minLength: 1, maxLength: 4096 });
 const status = Type.Union([Type.Literal("working"), Type.Literal("complete"), Type.Literal("failure"), Type.Null()]);
 const agent = Type.Object({ id, name: Type.String(), status });

@@ -1,6 +1,7 @@
-import { ConnectionError, parseJson, ProtocolError, RemoteError, systemCode, type ExpectedError } from "../errors.ts";
+import { ConnectionError, parseJson, ProtocolError, RemoteError, reportUnexpected, systemCode, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
-import type { WireError } from "./protocol.ts";
+import { maxFrameBytes, type WireError } from "./protocol.ts";
+import { BoundedBytes } from "./frames.ts";
 import type { RuntimePaths } from "./storage.ts";
 
 export async function transport(paths: RuntimePaths, path: string, options: RequestInit): Promise<Result<Response, ConnectionError>> {
@@ -14,11 +15,29 @@ export function connectionError(error: unknown): ConnectionError | null {
   if (["EACCES", "EPERM", "ECONNRESET", "EPIPE", "EIO"].includes(code ?? "")) return new ConnectionError("CONNECTION_FAILED", `Runtime connection failed (${code}).`, { cause: error });
   return null;
 }
-export async function readJson(response: Response): Promise<Result<unknown, ExpectedError>> {
-  let text: string;
-  try { text = await response.text(); }
-  catch (error) { const known = connectionError(error); if (known) return err(known); throw error; }
-  const json = parseJson(text, "runtime response"); return json.ok ? json : err(new ProtocolError(json.error.message, { cause: json.error }));
+export async function readJson(response: Response, options: { maximumBytes?: number; label?: string } = {}): Promise<Result<unknown, ExpectedError>> {
+  if (!response.body) return err(new ProtocolError("Runtime response is empty."));
+  const maximum = options.maximumBytes ?? maxFrameBytes, label = options.label ?? "Runtime response";
+  const bytes = new BoundedBytes(maximum, label), reader = response.body.getReader();
+  let ended = false;
+  try {
+    if (Number(response.headers.get("Content-Length")) > maximum) return err(new ProtocolError(`${label} exceeds the ${maximum} byte receive limit.`));
+    while (true) {
+      let chunk: Awaited<ReturnType<typeof reader.read>>;
+      try { chunk = await reader.read(); }
+      catch (error) { ended = true; const known = connectionError(error); if (known) return err(known); throw error; }
+      if (chunk.done) { ended = true; break; }
+      const added = bytes.append(chunk.value); if (!added.ok) return added;
+    }
+    const text = bytes.text(); if (!text.ok) return text;
+    const json = parseJson(text.value, "runtime response"); return json.ok ? json : err(new ProtocolError(json.error.message, { cause: json.error }));
+  } finally {
+    if (!ended) {
+      try { await reader.cancel(); }
+      catch (error) { if (!connectionError(error) && !(error instanceof Error && error.name === "AbortError")) reportUnexpected(error, "response cleanup"); }
+    }
+    reader.releaseLock();
+  }
 }
 export function remoteError(error: string | WireError): RemoteError {
   return typeof error === "string" ? new RemoteError("LEGACY_REMOTE_ERROR", error, "unknown") : new RemoteError(error.code, error.message, error.outcome);
