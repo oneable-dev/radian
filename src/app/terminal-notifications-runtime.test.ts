@@ -31,7 +31,8 @@ test("실제 서비스의 완료가 연결된 CLI를 통해 터미널 알림으�
         cwd: fixture.main, env: { ...process.env, TERM: "xterm-ghostty", TERM_PROGRAM: "ghostty", XDG_CONFIG_HOME: join(fixture.directory, "config") },
         terminal: { cols: 120, rows: 24, name: "xterm-ghostty", data: (_terminal, bytes) => {
           raw += decoder.decode(bytes, { stream: true });
-          if (raw.includes("Workspace")) ready.resolve();
+          // The sidebar has no Workspace tab; wait for its actual search control and work tabs.
+          if (raw.includes("Search repo/worktree/branch") && raw.includes("Agents")) ready.resolve();
           if (raw.includes("\x1b]777;notify;Radian · Task completed;")) notified.resolve();
         } },
       });
