@@ -121,6 +121,25 @@ test("숨긴 취소 경계 뒤의 독립 실행은 취소된 요청 문구를 �
   } finally { await app.close(); }
 });
 
+test("숨긴 취소 경계에 완료 정보만 추가돼도 뒤따르는 답변의 요청 푸터를 갱신한다", async () => {
+  // 표시되는 섹션이 모두 같아도 숨긴 경계가 실행 소유권을 바꿀 수 있다.
+  const request: TranscriptSection = { id: "request", kind: "user", title: "You", text: "Earlier request", status: "complete" };
+  const marker: TranscriptSection = { id: "boundary", kind: "notice", title: "Cancelled", text: "", status: "cancelled" };
+  const app = await mount([request, marker, answer(completion)]);
+  const footer = () => descendants(app.renderer.root).find((node): node is TextRenderable => node instanceof TextRenderable && node.plainText.startsWith("Worked for"))!;
+  try {
+    expect(footer().plainText).toContain("Earlier request");
+
+    // 취소 정착 정보만 도착하고 사용자 본문과 최종 답변은 변경되지 않는다.
+    await app.update([request, { ...marker, completion: { ...completion, outcome: "cancelled" } }, answer(completion)]);
+
+    // 새 실행의 푸터가 취소된 요청을 빌려 쓰지 않도록 파생 표시만 다시 계산한다.
+    expect(footer().plainText).toContain("Worked for");
+    expect(footer().plainText).not.toContain("Earlier request");
+    expect(app.captureCharFrame()).not.toContain("[Cancelled]");
+  } finally { await app.close(); }
+});
+
 test("완료 요청의 말줄임은 resize에 맞춰 갱신하고 시간·원문·초안은 보존한다", async () => {
   const text = "Review 👩‍💻 한글 e\u0301 tab layout and keep all original details. ".repeat(12);
   const request: TranscriptSection = { id: "long-request", kind: "user", title: "You", text, status: "complete" };

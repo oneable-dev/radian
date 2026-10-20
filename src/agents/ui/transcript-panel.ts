@@ -29,7 +29,20 @@ class TranscriptBody extends EditBufferRenderable {
 type Row = { section: TranscriptSection; request: RequestSummary | undefined; box: BoxRenderable; heading: BoxRenderable;
   header: TranscriptBody; error: TextRenderable; bodyRow: BoxRenderable; skillTag: TextRenderable; body: TranscriptBody;
   markdown: TranscriptMarkdown | undefined; markdownKind: "assistant" | "thinking" | undefined; completion: TextRenderable; completionWidth: number; preview?: TranscriptImagePreview };
+type CachedTranscript = { rows: Map<string, Row>; order: string[]; source: readonly TranscriptSection[]; legacy: boolean; bytes: number };
+// Bound detached native trees as well as source text, not just the number of sessions.
+const maximumCachedSessions = 2;
+const maximumCachedSections = 600;
+const maximumCachedTextBytes = 2 * 1024 * 1024;
+
 type Target = { position: number } | { id: string; offset: number } | { reveal: true };
+function sameSection(a: TranscriptSection, b: TranscriptSection): boolean {
+  return a === b || a.id === b.id && a.text === b.text && a.title === b.title && a.kind === b.kind
+    && a.status === b.status && a.error === b.error && a.summary === b.summary && a.skillName === b.skillName
+    && a.command === b.command && a.timeoutSeconds === b.timeoutSeconds
+    && sameRunCompletion(a.completion, b.completion) && sameRequestSummary(a.request, b.request)
+    && a.image?.id === b.image?.id && a.image?.name === b.image?.name && a.image?.byteLength === b.image?.byteLength;
+}
 function compactionNotice(section: TranscriptSection): boolean {
   return section.kind === "notice" && section.skillName === undefined && section.title === "Context compacted";
 }
@@ -53,6 +66,7 @@ export type TranscriptOptions = {
   keyHint?(command: CommandId, context: KeyContext): string;
   copy?(text: string): Promise<Result<string, ExpectedError>>;
   image?: TranscriptImageProvider;
+  cacheSessions?: boolean;
 };
 
 export class TranscriptPanel {
@@ -61,7 +75,9 @@ export class TranscriptPanel {
   private readonly empty: RadianLogo;
   private helpPosition = 0;
   private helpFollow = false;
-  private readonly rows = new Map<string, Row>();
+  private rows = new Map<string, Row>();
+  private readonly cached = new Map<string, CachedTranscript>();
+  private source: readonly TranscriptSection[] = [];
   private readonly imagePreviews = new Set<Row>();
   private readonly readers = new WeakSet<Renderable>();
   private order: string[] = [];
@@ -168,54 +184,48 @@ export class TranscriptPanel {
       this.options.saveScroll(id, 0); this.options.saveView?.(id, structuredClone(this.views[id]!));
     }
     const switched = id !== this.sessionId || replaced, returning = visible && !this.visible;
-    if (switched) { this.positionIntent = false; this.selectionHeldFor = null; this.geometry = undefined; }
-    const hadFocus = this.focused;
-    const previousIndex = this.order.indexOf(this.state?.selectedId ?? "");
+    const visibilityChanged = visible !== this.visible, hadFocus = this.focused;
+    if (switched) {
+      this.positionIntent = false; this.selectionHeldFor = null; this.geometry = undefined;
+      this.switchRows(id, replaced, hadFocus);
+    }
+    const legacyChanged = this.legacy !== (sections === undefined);
     const source: readonly TranscriptSection[] = sections ?? (output
       ? [{ id: "legacy-output", kind: "notice", title: "Transcript", text: output, status: "complete" }] : []);
-    const incoming = source.filter(section => !hiddenCancellation(section));
-    const changed = switched || incoming.length !== this.order.length || incoming.some((section, index) => {
-      const previous = this.rows.get(this.order[index] ?? "")?.section;
-      return !previous || section.id !== previous.id || section.text !== previous.text || section.title !== previous.title
-        || section.status !== previous.status || section.error !== previous.error || section.summary !== previous.summary
-        || section.kind !== previous.kind || section.skillName !== previous.skillName || section.command !== previous.command || section.timeoutSeconds !== previous.timeoutSeconds || !sameRunCompletion(section.completion, previous.completion) || !sameRequestSummary(section.request, previous.request)
-        || section.image?.id !== previous.image?.id || section.image?.name !== previous.image?.name || section.image?.byteLength !== previous.image?.byteLength;
-    });
+    // Compare values, not references: every IPC snapshot reconstructs its section objects.
+    // Include hidden outcomes because they can change a later completion's request caption.
+    const changed = switched || legacyChanged || source.length !== this.source.length
+      || source.some((section, index) => !sameSection(section, this.source[index]!));
     if (!switched && changed && !this.help.visible && !this.state?.follow && this.pending === null) this.pending = this.viewportAnchor();
-    this.sessionId = id; this.visible = visible;
-    this.legacy = sections === undefined;
+    this.sessionId = id; this.visible = visible; this.legacy = sections === undefined;
+    if (!visible) this.help.visible = false;
     if (id && !this.views[id]) {
       this.views[id] = emptyTranscriptView();
       if (Object.hasOwn(this.positions, id) || this.options.initialPosition === "start") this.views[id]!.follow = false;
     }
-    const state = this.state;
+    const state = this.state, previousSelected = state?.selectedId;
+    const previousIndex = this.order.indexOf(previousSelected ?? "");
+    const dirty = new Set<Row>();
     let normalized = false;
     if (switched || returning) this.pending = { position: id ? this.positions[id] ?? (this.options.initialPosition === "start" ? 0 : Infinity) : 0 };
-    if (switched) {
-      this.syncing = true;
-      try {
-        if (hadFocus) this.scroll.focus();
-        for (const row of this.rows.values()) row.box.destroyRecursively();
-      } finally { this.syncing = false; }
-      this.help.visible = false;
-      this.rows.clear(); this.imagePreviews.clear(); this.order = []; this.lastSavedView = "";
-    }
     if (changed) {
-      const ids = new Set(incoming.map((section) => section.id));
+      const incoming = source.filter(section => !hiddenCancellation(section));
+      const ids = new Set(incoming.map(section => section.id));
       for (const [key, row] of this.rows) if (!ids.has(key)) {
         if (row.body.focused || row.header.focused) this.scroll.focus();
-        row.box.destroyRecursively(); this.imagePreviews.delete(row); this.rows.delete(key);
+        row.preview?.dispose(); row.box.destroyRecursively(); this.imagePreviews.delete(row); this.rows.delete(key);
       }
       let request: RequestSummary | undefined;
       for (const section of source) {
-        // Hidden outcomes still delimit runs, so later work cannot borrow an old request caption.
         if (hiddenCancellation(section)) { if (section.completion) request = undefined; continue; }
         const delivered = requestForSection(section);
         if (delivered) request = delivered;
-        const row = this.rows.get(section.id) ?? this.createRow(section);
+        const existing = this.rows.get(section.id);
+        const row = existing ?? this.createRow(section);
+        if (!existing || !sameSection(row.section, section) || !sameRequestSummary(row.request, request)) dirty.add(row);
         const previousText = row.section.text;
         row.section = section; row.request = request;
-        if (section.completion) request = undefined; // A later run without a delivered request must not borrow this one.
+        if (section.completion) request = undefined;
         if (previousText !== section.text) this.replaceBody(row, section.text);
         if (state && section.kind === "thinking" && Object.hasOwn(state.folded, section.id)) {
           // Old heading selections cannot be applied to the now always-visible body.
@@ -226,15 +236,14 @@ export class TranscriptPanel {
             row.body.cursorOffset = state.cursors[section.id] ?? 0;
             this.applySelection(row);
           }
-          delete state.folded[section.id]; normalized = true;
+          delete state.folded[section.id]; normalized = true; dirty.add(row);
         }
       }
-      // Append-only streaming normally preserves every native renderable and focus.
-      const next = incoming.map((section) => section.id);
+      const next = incoming.map(section => section.id);
       if (next.some((key, index) => this.order[index] !== key)) {
         for (const key of next) this.scroll.add(this.rows.get(key)!.box);
       }
-      this.order = next;
+      this.order = next; this.source = source;
       if (state && !this.rows.has(state.selectedId ?? "")) {
         normalized = state.selectedId !== null;
         const initialIndex = this.options.initialPosition === "start" ? 0 : this.order.length - 1;
@@ -251,21 +260,86 @@ export class TranscriptPanel {
       }
     }
     if (state && !state.selectedId) state.selectedId = this.order.at(-1) ?? null;
-    this.paint(); this.applyTarget();
+    if (previousSelected !== state?.selectedId) {
+      const previous = previousSelected ? this.rows.get(previousSelected) : undefined;
+      if (previous) dirty.add(previous);
+      if (this.selected) dirty.add(this.selected);
+    }
+    if (switched || visibilityChanged || legacyChanged) this.paint();
+    else if (changed || normalized) {
+      this.paintLayout();
+      for (const row of dirty) this.paintRow(row);
+    }
+    this.applyTarget();
     if (normalized) this.save();
     if (switched && hadFocus && visible) this.restoreFocus();
-    if (!visible) this.help.visible = false;
     this.refreshStatus();
   }
+
+  // Closed tabs must release detached native trees, not wait for the LRU limit.
+  retainSessions(openIds: ReadonlySet<string>): void {
+    for (const [id, cached] of this.cached) if (!openIds.has(id)) {
+      this.cached.delete(id); this.destroyRows(cached.rows);
+    }
+  }
+
+  private switchRows(id: string | null, replaced: boolean, hadFocus: boolean): void {
+    this.syncing = true;
+    try {
+      if (hadFocus) this.scroll.focus();
+      if (this.hasSelection()) this.renderer.clearSelection();
+      this.releasePreviews();
+      const bytes = this.source.reduce((total, section) => total + Buffer.byteLength(section.text), 0);
+      if (this.options.cacheSessions && this.sessionId && (id !== this.sessionId || !replaced)
+        && this.source.length <= maximumCachedSections && bytes <= maximumCachedTextBytes) {
+        for (const row of this.rows.values()) this.scroll.remove(row.box);
+        this.cached.set(this.sessionId, { rows: this.rows, order: this.order, source: this.source, legacy: this.legacy, bytes });
+      } else this.destroyRows(this.rows);
+      this.rows = new Map(); this.order = []; this.source = [];
+      const cached = id ? this.cached.get(id) : undefined;
+      if (cached && id) {
+        this.cached.delete(id);
+        if (replaced) this.destroyRows(cached.rows);
+        else {
+          this.rows = cached.rows; this.order = cached.order; this.source = cached.source; this.legacy = cached.legacy;
+          for (const key of this.order) this.scroll.add(this.rows.get(key)!.box);
+        }
+      }
+      let sections = 0, textBytes = 0;
+      for (const entry of this.cached.values()) { sections += entry.source.length; textBytes += entry.bytes; }
+      for (const [key, entry] of this.cached) {
+        if (this.cached.size <= maximumCachedSessions && sections <= maximumCachedSections && textBytes <= maximumCachedTextBytes) break;
+        this.cached.delete(key); sections -= entry.source.length; textBytes -= entry.bytes; this.destroyRows(entry.rows);
+      }
+    } finally { this.syncing = false; }
+    this.help.visible = false; this.lastSavedView = "";
+  }
+
+  private releasePreviews(): void {
+    // Cache text buffers, never image requests/pixels (including unsupported previews).
+    for (const row of this.rows.values()) if (row.preview) {
+      row.preview.dispose(); row.preview.root.destroyRecursively(); delete row.preview;
+    }
+    this.imagePreviews.clear();
+  }
+  private destroyRows(rows: Map<string, Row>): void {
+    for (const row of rows.values()) {
+      row.preview?.dispose();
+      if (!row.header.isDestroyed) row.header.syntaxStyle = null;
+      row.box.destroyRecursively();
+    }
+    rows.clear();
+  }
+  private isCurrentRow(row: Row): boolean { return this.rows.get(row.section.id) === row; }
 
   private createRow(section: TranscriptSection): Row {
     const box = new BoxRenderable(this.renderer, { width: "100%", flexShrink: 0, flexDirection: "column" });
     const heading = new BoxRenderable(this.renderer, { width: "100%", flexShrink: 0, minWidth: 0, minHeight: 1, flexDirection: "row", alignItems: "flex-start",
       onMouseDown: (event) => {
         if (event.button !== 0) return;
+        if (!this.isCurrentRow(row)) return;
         event.preventDefault(); event.stopPropagation(); this.select(section.id); this.scroll.focus();
-        const row = this.rows.get(section.id);
-        if (row && (compactionNotice(row.section) || row.section.image)) this.command("transcript.fold");
+        if (compactionNotice(row.section) || row.section.image) this.command("transcript.fold");
         else this.options.changed();
       } });
     const header = new TranscriptBody(this.renderer, { width: "auto", height: "auto", flexGrow: 1, minWidth: 0, wrapMode: "word",
@@ -284,13 +358,13 @@ export class TranscriptPanel {
       this.readers.add(reader);
       reader.on("focused", () => {
         const state = this.state;
-        if (!state || this.disposed || !this.rows.has(section.id)) return;
+        if (!state || this.disposed || !this.isCurrentRow(row)) return;
         state.selectedId = section.id;
         if (state.mode === "sections") state.mode = "text";
         this.save(); this.paint(); this.options.changed();
       });
       reader.on("resize", () => {
-        if (reader.focused && this.pending === null) { this.pending = { reveal: true }; this.applyTarget(); }
+        if (this.isCurrentRow(row) && reader.focused && this.pending === null) { this.pending = { reveal: true }; this.applyTarget(); }
       });
     }
     this.theme.bind(box, () => this.paintRow(row));
@@ -355,7 +429,7 @@ export class TranscriptPanel {
     }
   }
   private paintRow(row: Row): void {
-    if (this.disposed || row.box.isDestroyed) return;
+    if (this.disposed || row.box.isDestroyed || !this.isCurrentRow(row)) return;
     row.box.visible = !this.help.visible;
     const colors = this.theme.colors, styles = this.theme.styles, section = row.section;
     const selected = this.state?.selectedId === section.id, skill = section.skillName !== undefined;
@@ -371,10 +445,12 @@ export class TranscriptPanel {
     if (row.markdownKind !== markdownKind) {
       row.markdown?.root.destroyRecursively(); row.markdown = undefined; row.markdownKind = markdownKind;
       if (markdownKind) {
-        row.markdown = new TranscriptMarkdown(this.renderer, markdownKind === "thinking" ? this.thinkingSyntax : this.proseSyntax, markdownKind === "thinking", this.markdownChanging, (message) => this.options.notice(message));
+        row.markdown = new TranscriptMarkdown(this.renderer, markdownKind === "thinking" ? this.thinkingSyntax : this.proseSyntax, markdownKind === "thinking",
+          () => { if (this.isCurrentRow(row)) this.markdownChanging(); },
+          (message) => { if (this.isCurrentRow(row)) this.options.notice(message); });
         row.box.remove(row.completion); row.box.add(row.markdown.root); row.box.add(row.completion);
         row.markdown.root.on("resize", () => {
-          if (this.visible && !this.help.visible && this.state?.follow && !this.positionIntent && !this.hasSelection()) { this.pending = { position: Infinity }; this.applyTarget(); }
+          if (this.isCurrentRow(row) && this.visible && !this.help.visible && this.state?.follow && !this.positionIntent && !this.hasSelection()) { this.pending = { position: Infinity }; this.applyTarget(); }
         });
       }
     }
@@ -438,7 +514,7 @@ export class TranscriptPanel {
   }
   // Native widths settle after size callbacks; repaint only completion rows whose measured width changed.
   private reflowCompletions = (): void => {
-    if (this.disposed || this.scroll.isDestroyed) return;
+    if (this.disposed || this.scroll.isDestroyed || !this.visible) return;
     for (const row of this.rows.values()) {
       this.updatePreview(row);
       if (row.section.completion && row.completion.width !== row.completionWidth) { this.prepareLayoutChange(); this.paintCompletion(row); }
@@ -462,13 +538,16 @@ export class TranscriptPanel {
     this.pending = this.state?.follow && !this.positionIntent ? { position: Infinity } : this.viewportAnchor();
   };
   private paint(): void {
+    this.paintLayout();
+    for (const row of this.rows.values()) this.paintRow(row);
+  }
+  private paintLayout(): void {
     this.empty.visible = !this.order.length && !this.help.visible;
     // Only tinted cards keep internal padding; plain prose uses the column's separation.
     const spacing = transcriptSpacing();
     this.scroll.content.gap = this.legacy ? 0 : spacing.sectionGap;
     // AgentPanel owns the bottom boundary to status/input; it must not be padded again here.
     this.scroll.content.paddingTop = !this.legacy && !this.help.visible && this.order.length && this.scroll.viewport.height > 1 ? spacing.sectionGap : 0;
-    for (const row of this.rows.values()) this.paintRow(row);
   }
   get canFollowLatest(): boolean {
     return !this.disposed && !this.scroll.isDestroyed && this.visible && this.scroll.visible && !this.help.visible
@@ -493,7 +572,10 @@ export class TranscriptPanel {
     if (status === this.lastStatus) return;
     this.lastStatus = status; this.options.changed();
   }
-  private focusChanged = (): void => { this.paint(); this.refreshStatus(); };
+  private focusChanged = (): void => {
+    if (this.disposed || this.syncing || !this.visible) return;
+    this.paint(); this.refreshStatus();
+  };
   private resize = (): void => {
     if (this.disposed || this.scroll.isDestroyed) return;
     this.pending ??= this.focused && this.state?.mode !== "sections" ? { reveal: true } : this.viewportAnchor();
@@ -802,11 +884,9 @@ export class TranscriptPanel {
     this.renderer.removePostProcessFn(this.reflowCompletions);
     this.scroll.verticalScrollBar.off("change", this.rememberScroll);
     this.scroll.content.off("resize", this.applyTarget); this.scroll.viewport.off("resize", this.resize);
-    for (const row of this.rows.values()) {
-      row.preview?.dispose();
-      if (!row.header.isDestroyed) row.header.syntaxStyle = null;
-      if (row.markdown && !row.markdown.root.isDestroyed) row.markdown.root.destroyRecursively();
-    }
+    this.destroyRows(this.rows);
+    for (const cached of this.cached.values()) this.destroyRows(cached.rows);
+    this.cached.clear(); this.imagePreviews.clear(); this.source = [];
     this.headerSyntax.destroy(); this.proseSyntax.destroy(); this.thinkingSyntax.destroy();
     void this.clipboard.dispose().catch((error: unknown) => reportUnexpected(error, "transcript clipboard cleanup"));
   }

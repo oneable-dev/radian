@@ -97,6 +97,36 @@ test("다른 세션으로 이동하면 이미지 조회를 취소하고 늦은 �
   } finally { pending.resolve(ok(tinyPng())); await app.close(); }
 });
 
+test("세션 왕복은 대화 버퍼만 재사용하고 이미지는 새 요청으로 복원해 이전 응답을 무시한다", async () => {
+  // A를 다시 열었을 때 이전 이미지 요청의 늦은 응답이 새 미리보기를 차지하지 않아야 한다.
+  const first = Promise.withResolvers<ReturnType<typeof ok<Uint8Array>>>();
+  const second = Promise.withResolvers<ReturnType<typeof ok<Uint8Array>>>();
+  const signals: AbortSignal[] = [];
+  const app = await mount(async (_session, _id, signal) => { signals.push(signal); return signals.length === 1 ? first.promise : second.promise; });
+  try {
+    await app.clickHeader();
+    const header = app.header();
+    app.selection.selectSession("demo:main", "a2"); await app.render();
+    expect(signals[0]?.aborted).toBe(true);
+
+    // 보관된 A에 돌아와 새 조회를 시작한 다음 취소된 조회의 응답을 먼저 전달한다.
+    app.selection.selectSession("demo:main", "a1"); await app.render();
+    first.resolve(ok(tinyPng())); await app.render();
+
+    // 헤더 버퍼는 재사용하지만 픽셀과 요청은 재사용하지 않으며 오래된 응답은 표시하지 않는다.
+    expect(app.header() === header).toBe(true);
+    expect(signals).toHaveLength(2);
+    expect(signals[1]?.aborted).toBe(false);
+    expect(app.bitmap()).toBeUndefined();
+    second.resolve(ok(tinyPng())); await app.render();
+    const bitmap = app.bitmap();
+    if (!(bitmap instanceof ImageRenderable)) throw new Error("Missing restored image preview");
+    await bitmap.loadPromise; await app.render();
+    expect(bitmap.image?.width).toBe(1);
+    expect(app.view.promptDrafts.a1).toBe("keep this draft");
+  } finally { first.resolve(ok(tinyPng())); second.resolve(ok(tinyPng())); await app.close(); }
+});
+
 test("전체 펼치기는 동시 이미지 수를 제한하고 접으면 대기하던 이미지를 활성화한다", async () => {
   let calls = 0, active = 0, maximum = 0;
   const app = await mount(async (_session, _id, signal) => {

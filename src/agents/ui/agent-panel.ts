@@ -100,7 +100,7 @@ export class AgentPanel {
     this.emptyPanel.add(this.title); this.emptyPanel.add(this.details);
     this.root.add(this.sessions.root); this.root.add(this.emptyPanel);
     this.runtimePanel = new BoxRenderable(renderer, { width: "100%", flexGrow: 1, minHeight: 0, flexDirection: "column", gap: 0 });
-    this.transcript = new TranscriptPanel(renderer, { notice, changed, focusPrompt: () => this.prompt.focus(), initialScroll, saveScroll,
+    this.transcript = new TranscriptPanel(renderer, { notice, changed, focusPrompt: () => this.prompt.focus(), initialScroll, saveScroll, cacheSessions: true,
       ...transcriptOptions, ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}), ...(actions.onImage ? { image: actions.onImage } : {}) });
     this.transcriptScroll = this.transcript.scroll;
     // Hide only the live-session scroll thumb; wheel, keys and the shared scroll model stay active.
@@ -229,6 +229,7 @@ export class AgentPanel {
     const output = details?.output ?? "";
     const transcriptFocused = this.transcript.focused;
     this.transcript.update(sessionId, details?.sections, output, this.active, details?.conversationId);
+    this.transcript.retainSessions(openIds);
     if (replaced && this.active && transcriptFocused) this.prompt.focus();
     if ((!this.active && (this.prompt.focused || transcriptFocused)) || (!this.sessions.root.visible && tabsFocused)) this.focusSidebar();
     if (!this.active) { this.completion.hide(); this.prompt.cancelPaste(); } else this.completion.refresh();
