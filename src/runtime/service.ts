@@ -15,6 +15,8 @@ import { SessionHistory } from "../agents/history.ts";
 import { offlineRuntime } from "../testing/offline-runtime.ts";
 import { discoverRepository } from "../workspace/discovery.ts";
 import type { Repository } from "../workspace/model.ts";
+import { RepositoryCatalog } from "../workspace/catalog.ts";
+import { RepositoryWatcher } from "../workspace/repository-watcher.ts";
 import { acquireRuntime, privateDirectory, RuntimeStore, runtimePaths } from "./storage.ts";
 import { EditorSessions } from "../editor/sessions.ts";
 import { TerminalSessions } from "../terminal/sessions.ts";
@@ -36,14 +38,15 @@ export async function runRuntime(cwd: string, offline: boolean, stateRoot?: stri
     const loaded = await store.load(repository.id);
     if (!loaded.ok) throw loaded.error; // CLI startup boundary, not a domain API.
     const manifest = loaded.value;
-    const repositories = mergeRepositories(repository, manifest);
+    const catalog = new RepositoryCatalog(mergeRepositories(repository, manifest));
     const options = offline ? await offlineRuntime(join(paths.directory, "offline-agent")) : undefined;
     const modelRuntime = options?.modelRuntime ?? await ModelRuntime.create();
     const usage = offline ? undefined : new UsageMonitor(openAiUsageResolver(modelRuntime));
-    const registry = new SessionRegistry(repositories, piSessionFactory({ ...options, modelRuntime, ...(usage ? { usageMonitor: usage } : {}) }));
-    runtime = new WorkspaceRuntime(registry, repository.id, offline, store, manifest?.preferences ?? emptyPreferences,
-      new SessionHistory(repositories, registry, options?.sessionDir), paths.directory, usage);
+    const registry = new SessionRegistry(catalog, piSessionFactory({ ...options, modelRuntime, ...(usage ? { usageMonitor: usage } : {}) }));
+    runtime = new WorkspaceRuntime(registry, catalog, repository, offline, store, manifest?.preferences ?? emptyPreferences,
+      new SessionHistory(catalog, registry, options?.sessionDir), paths.directory, usage);
     await runtime.restore(manifest?.records ?? []);
+    await runtime.watchRepository();
     server = Bun.serve({ unix: paths.socket,
       fetch: (request) => runtime!.fetch(request),
     });
@@ -77,14 +80,39 @@ class WorkspaceRuntime {
   private persistenceError = "";
   private checkpointTimer: ReturnType<typeof setTimeout> | undefined;
   private initializing = true;
+  private watcher: RepositoryWatcher | undefined;
+  private discoveryWarning = "";
+  private get repositoryId(): string { return this.repository.id; }
 
-  constructor(private readonly registry: SessionRegistry, private readonly repositoryId: string,
+  constructor(private readonly registry: SessionRegistry, private readonly catalog: RepositoryCatalog, private repository: Repository,
     private readonly offline: boolean, private readonly store: RuntimeStore, preferences: RuntimePreferences, private readonly history: SessionHistory,
     supervisorDirectory: string, private readonly usage?: UsageMonitor) {
     this.preferences = preferences;
-    this.editors = new EditorSessions(registry.snapshot, () => this.changed(), { clean: offline });
-    this.terminals = new TerminalSessions(registry.snapshot, () => this.changed(), supervisorDirectory, offline, (task) => this.observe(task));
+    this.editors = new EditorSessions(catalog, () => this.changed(), { clean: offline });
+    this.terminals = new TerminalSessions(catalog, () => this.changed(), supervisorDirectory, offline, (task) => this.observe(task));
     this.unsubscribe = registry.subscribe(() => this.changed());
+  }
+
+  async watchRepository(): Promise<void> {
+    this.watcher = new RepositoryWatcher(this.repository, (result) => {
+      if (this.stopped) return;
+      if (result.ok) { this.repository = result.value; this.discoveryWarning = ""; }
+      else this.discoveryWarning = `Worktree discovery failed [${result.error.code}]: ${result.error.message}. Previous entries were retained.`;
+      this.changed();
+    }, (error) => {
+      this.discoveryWarning = reportUnexpected(error, "worktree discovery"); this.changed();
+    });
+    const started = await this.watcher.start();
+    if (!started.ok) {
+      this.discoveryWarning = `Worktree watching failed [${started.error.code}]: ${started.error.message}`;
+      this.changed();
+    }
+  }
+
+  private reconcileCatalog(): void {
+    const retained = new Set([...this.registry.retainedWorktreeIds, ...this.editors.retainedWorktreeIds,
+      ...this.terminals.retainedWorktreeIds, ...[...this.failedRecovery.values()].map((record) => record.worktreeId)]);
+    this.catalog.replace([this.repository], retained);
   }
 
   async restore(records: readonly SessionRecord[]): Promise<void> {
@@ -98,6 +126,7 @@ class WorkspaceRuntime {
       }
     }
     this.initializing = false;
+    this.reconcileCatalog();
     const saved = await this.checkpoint(); if (!saved.ok) throw saved.error;
   }
 
@@ -111,7 +140,7 @@ class WorkspaceRuntime {
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
     return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "session-controls"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
-      preferences: this.preferences, notice: this.persistenceError || this.notice, editors: this.editors.infos,
+      preferences: this.preferences, notice: this.persistenceError || [this.discoveryWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
   }
 
@@ -293,6 +322,7 @@ class WorkspaceRuntime {
   }
 
   private changed(): void {
+    if (!this.initializing && !this.stopped) this.reconcileCatalog();
     for (const subscriber of this.subscribers) subscriber();
     if (this.initializing || this.stopped || this.checkpointTimer) return;
     this.checkpointTimer = setTimeout(() => {
@@ -329,7 +359,8 @@ class WorkspaceRuntime {
     // Stopping the service is NOT explicit session close. Freeze open intent before teardown emits removals.
     const manifest: RuntimeManifest = { version: protocolVersion, repositoryId: this.repositoryId,
       repositories: this.registry.snapshot, records: [...this.registry.records, ...this.failedRecovery.values()], preferences: this.preferences };
-    return collectCleanup([this.checkpoint(manifest), this.registry.shutdown(), this.editors.stop(), this.terminals.stop(),
+    return collectCleanup([this.watcher ? this.watcher.stop().then(() => ok(undefined)) : Promise.resolve(ok(undefined)),
+      this.checkpoint(manifest), this.registry.shutdown(), this.editors.stop(), this.terminals.stop(),
       this.usage ? this.usage.stop().then(() => ok(undefined)) : Promise.resolve(ok(undefined))], "Checkpoint or runtime shutdown failed.");
   }
 }

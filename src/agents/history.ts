@@ -1,6 +1,6 @@
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { realpath } from "node:fs/promises";
-import type { Repository } from "../workspace/model.ts";
+import { repositorySnapshot, type RepositorySource } from "../workspace/catalog.ts";
 import { validateHistory, type SessionRegistry } from "./session-registry.ts";
 import { capture, HistoryError, SessionError, StorageError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
@@ -21,7 +21,7 @@ type SavedHistory = HistoryItem & { readonly path: string };
 
 // SDK owns history discovery and context reconstruction. The UI never accepts arbitrary file paths.
 export class SessionHistory {
-  constructor(private readonly repositories: readonly Repository[], private readonly registry: SessionRegistry,
+  constructor(private readonly repositories: RepositorySource, private readonly registry: SessionRegistry,
     private readonly sessionDir?: string) {}
 
   async list(worktreeId: string): Promise<Result<readonly HistoryItem[], ExpectedError>> {
@@ -49,7 +49,7 @@ export class SessionHistory {
   }
 
   private async saved(worktreeId: string): Promise<Result<SavedHistory[], ExpectedError>> {
-    const tree = this.repositories.flatMap((repo) => repo.worktrees).find((entry) => entry.id === worktreeId);
+    const tree = repositorySnapshot(this.repositories).flatMap((repo) => repo.worktrees).find((entry) => entry.id === worktreeId);
     if (!tree) return err(new HistoryError("HISTORY_UNAVAILABLE", "No worktree is available for history."));
     const cwd = await capture(() => realpath(tree.path)); if (!cwd.ok) return cwd;
     const sessions = await capture(() => SessionManager.list(tree.path, this.sessionDir)); if (!sessions.ok) return sessions;

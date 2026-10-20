@@ -116,6 +116,17 @@ its registered worktrees, even ones outside the scan roots. Missing/inaccessible
 Git metadata produce notices without hiding other repositories. Scans are capped at 10,000
 directories and run on TUI launch; reopen the TUI to discover newly added repositories.
 
+Worktrees within discovered repositories update automatically. Native filesystem watches observe
+Git's canonical common directory and linked-worktree registration metadata, including the first
+creation or replacement of the `worktrees` directory. Events are debounced for 250 ms, then Git's
+worktree list is reread; there is no periodic workspace scan or polling loop. Repository services
+own their watches, while the TUI watches cold repositories without starting their services and
+hands ownership over on activation. Agent sessions, History, Editor and Terminal share the updated
+catalog. Existing sessions, drafts and selection survive refresh; removed worktrees with open
+resources remain listed until those resources are released. Failed scans retain the last valid
+list and expose a notice. Services that were started before this feature was installed need a
+one-time restart to load it; reopening only the TUI does not replace an existing service.
+
 The TUI attaches to already-running repository services without restarting them. A cold repository's
 service starts only when that repository is selected or explicitly used, not once per scan result.
 The launching repository is preferred initially when present, otherwise the first discovered repo.

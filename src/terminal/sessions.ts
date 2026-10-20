@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import { capture, collectCleanup, InputError, knownError, PtyError, reportUnexpected, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
-import type { Repository } from "../workspace/model.ts";
+import { repositorySnapshot, type RepositorySource } from "../workspace/catalog.ts";
 import type { TerminalInfo } from "../runtime/protocol.ts";
 import { OwnedProcesses } from "./owned-processes.ts";
 import { PtySession } from "../runtime/pty/session.ts";
@@ -16,7 +16,7 @@ export class TerminalSessions {
   private readonly records = new Map<string, TerminalRecord>();
   private readonly numbers = new Map<string, number>();
   private stopping = false;
-  constructor(private readonly repositories: readonly Repository[], private readonly changed: () => void,
+  constructor(private readonly repositories: RepositorySource, private readonly changed: () => void,
     private readonly supervisorDirectory: string, private readonly clean = false,
     private readonly observe: (task: Promise<Result<void, ExpectedError>>) => void = reportCleanup) {}
   get infos(): TerminalInfo[] {
@@ -25,9 +25,10 @@ export class TerminalSessions {
     }));
   }
   get closingCount(): number { return [...this.records.values()].filter((record) => record.phase === "closing").length; }
+  get retainedWorktreeIds(): ReadonlySet<string> { return new Set([...this.records.values()].map((record) => record.session.info.worktreeId)); }
   async create(worktreeId: string, size: { cols: number; rows: number }): Promise<Result<string, ExpectedError>> {
     if (this.stopping) return err(new PtyError("PTY_UNAVAILABLE", "Terminal runtime is stopping."));
-    const worktree = this.repositories.flatMap((repo) => repo.worktrees).find((tree) => tree.id === worktreeId);
+    const worktree = repositorySnapshot(this.repositories).flatMap((repo) => repo.worktrees).find((tree) => tree.id === worktreeId);
     if (!worktree) return err(new InputError("Unknown terminal worktree."));
     const shell = Bun.which(this.clean ? "/bin/sh" : process.env.SHELL || "/bin/sh");
     if (!shell) return err(new PtyError("PTY_UNAVAILABLE", "The configured SHELL executable is unavailable."));

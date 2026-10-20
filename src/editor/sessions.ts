@@ -1,6 +1,6 @@
 import { capture, collectCleanup, EditorError, InputError, knownError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
-import type { Repository } from "../workspace/model.ts";
+import { repositorySnapshot, type RepositorySource } from "../workspace/catalog.ts";
 import type { EditorInfo } from "../runtime/protocol.ts";
 import { PtySession } from "../runtime/pty/session.ts";
 
@@ -17,9 +17,10 @@ export class EditorSessions {
   private readonly sessions = new Map<string, PtySession>();
   private stopping = false;
   private readonly opening = new Map<string, Promise<Result<string, ExpectedError>>>();
-  constructor(private readonly repositories: readonly Repository[], private readonly changed: () => void,
+  constructor(private readonly repositories: RepositorySource, private readonly changed: () => void,
     private readonly options: { clean?: boolean; executable?: string } = {}) {}
   get infos(): EditorInfo[] { return [...this.sessions.values()].map((session) => session.info); }
+  get retainedWorktreeIds(): ReadonlySet<string> { return new Set([...this.sessions.keys(), ...this.opening.keys()]); }
 
   open(worktreeId: string, size = { cols: 80, rows: 24 }): Promise<Result<string, ExpectedError>> {
     const pending = this.opening.get(worktreeId); if (pending) return pending;
@@ -28,7 +29,7 @@ export class EditorSessions {
   }
   private async openOnce(worktreeId: string, size: { cols: number; rows: number }): Promise<Result<string, ExpectedError>> {
     if (this.stopping) return err(new EditorError("EDITOR_UNAVAILABLE", "Editor runtime is stopping."));
-    const worktree = this.repositories.flatMap((repo) => repo.worktrees).find((tree) => tree.id === worktreeId);
+    const worktree = repositorySnapshot(this.repositories).flatMap((repo) => repo.worktrees).find((tree) => tree.id === worktreeId);
     if (!worktree) return err(new InputError("Unknown editor worktree."));
     const existing = this.sessions.get(worktreeId);
     if (existing && !existing.info.exited) return ok(existing.id);

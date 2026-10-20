@@ -1,6 +1,7 @@
 import { resolve, sep } from "node:path";
 import type { Repository } from "../workspace/model.ts";
-import { CancelledError, collectCleanup, ConnectionError, InputError, SessionError, withCleanup, type ExpectedError } from "../errors.ts";
+import { RepositoryWatcher } from "../workspace/repository-watcher.ts";
+import { CancelledError, collectCleanup, ConnectionError, InputError, SessionError, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { connectRuntime, defaultPreferences, type ConnectOptions, type RuntimeClient } from "./client.ts";
 import type { RuntimePreferences, RuntimeSnapshot } from "./protocol.ts";
@@ -11,6 +12,7 @@ import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-pr
 export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "prompt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect">;
 type Connector = (repository: Repository, cwd: string, options: ConnectOptions) => Promise<Result<RepositoryClient | null, ExpectedError>>;
 type Entry = { repository: Repository; preferences: RuntimePreferences; client?: RepositoryClient; unsubscribe?: () => void;
+  watcher?: RepositoryWatcher; discoveryWarning?: string;
   pending?: Promise<Result<RepositoryClient, ExpectedError>>; saving?: Promise<Result<void, ExpectedError>>; error?: ExpectedError; warning?: string; sessions: Set<string>; editors: Set<string>; terminals: Set<string> };
 export type WorkspaceSnapshot = Pick<RuntimeSnapshot, "repositories" | "details" | "preferences" | "closingCount" | "terminalClosingCount" | "notice" | "editors" | "terminals">;
 
@@ -57,6 +59,18 @@ export class WorkspaceClient {
     const connected = await this.connect(entry.repository, this.cwd(entry), { ...this.options, start: false });
     if (!connected.ok) entry.error = connected.error;
     else if (connected.value) this.bind(entry, connected.value);
+    if (!entry.client) {
+      entry.watcher = new RepositoryWatcher(entry.repository, (result) => {
+        if (this.detaching || entry.client) return;
+        if (result.ok) { entry.repository = result.value; delete entry.discoveryWarning; }
+        else entry.discoveryWarning = `Worktree discovery failed [${result.error.code}]: ${result.error.message}. Previous entries were retained.`;
+        this.emit();
+      }, (error) => {
+        entry.discoveryWarning = reportUnexpected(error, "workspace worktree discovery"); this.emit();
+      });
+      const watched = await entry.watcher.start();
+      if (!watched.ok) entry.discoveryWarning = `Worktree watching failed [${watched.error.code}]: ${watched.error.message}`;
+    }
   }
 
   get recoveryVersion(): number { return this.recovery; }
@@ -74,14 +88,15 @@ export class WorkspaceClient {
       closingCount: snapshots.reduce((count, snapshot) => count + snapshot.closingCount, 0),
       terminalClosingCount: snapshots.reduce((count, snapshot) => count + (snapshot.terminalClosingCount ?? 0), 0),
       editors: snapshots.flatMap((snapshot) => snapshot.editors ?? []), terminals: snapshots.flatMap((snapshot) => snapshot.terminals ?? []),
-      notice: this.entries.flatMap((entry) => { const notice = entry.error?.message || entry.warning || entry.client?.snapshot.notice; return notice ? [`${entry.repository.name}: ${notice}`] : []; }).join(" · "),
+      notice: this.entries.flatMap((entry) => { const notice = entry.error?.message || entry.warning || entry.discoveryWarning || entry.client?.snapshot.notice; return notice ? [`${entry.repository.name}: ${notice}`] : []; }).join(" · "),
     };
   }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   private emit(): void { if (!this.detaching) for (const listener of this.listeners) listener(); }
   private cwd(entry: Entry): string { return entry.repository.worktrees[0]?.path ?? resolve(entry.repository.id, ".."); }
   private bind(entry: Entry, client: RepositoryClient): void {
-    entry.client = client; delete entry.error; delete entry.warning; entry.preferences = client.snapshot.preferences;
+    entry.watcher?.close();
+    entry.client = client; delete entry.error; delete entry.warning; delete entry.discoveryWarning; entry.preferences = client.snapshot.preferences;
     let wasConnected = client.connected;
     entry.unsubscribe = client.subscribe(() => {
       if (!wasConnected && client.connected) this.recovery++;
@@ -195,7 +210,7 @@ export class WorkspaceClient {
   beginDetach(): void {
     if (this.detaching) return;
     this.detaching = true;
-    for (const entry of this.entries) { entry.unsubscribe?.(); entry.client?.beginDetach(); }
+    for (const entry of this.entries) { entry.watcher?.close(); entry.unsubscribe?.(); entry.client?.beginDetach(); }
     this.listeners.clear();
   }
   disconnect(): Promise<void> { this.beginDetach(); this.disconnection ??= this.finishDisconnect(); return this.disconnection; }
@@ -203,7 +218,8 @@ export class WorkspaceClient {
     const pending = await Promise.allSettled(this.entries.flatMap((entry) => entry.pending ? [entry.pending] : []));
     const writes = await Promise.allSettled(this.entries.flatMap((entry) => entry.saving ? [entry.saving] : []));
     const detached = await Promise.allSettled(this.entries.flatMap((entry) => entry.client ? [entry.client.disconnect()] : []));
-    const errors = [...pending, ...writes, ...detached].flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+    const watchers = await Promise.allSettled(this.entries.flatMap((entry) => entry.watcher ? [entry.watcher.stop()] : []));
+    const errors = [...pending, ...writes, ...detached, ...watchers].flatMap((result) => result.status === "rejected" ? [result.reason] : []);
     if (errors.length) throw new AggregateError(errors, "Workspace detach failed.");
   }
 }

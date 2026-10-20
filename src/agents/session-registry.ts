@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Repository, Worktree } from "../workspace/model.ts";
+import { repositorySnapshot, type RepositorySource } from "../workspace/catalog.ts";
 import type { AgentStatus, Subagent } from "./model.ts";
 import { AgentRunError, CancelledError, capture, CleanupError, collectCleanup, HistoryError, InputError, parseJson, SessionError, CapabilityError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
@@ -58,10 +59,12 @@ export class SessionRegistry {
   private readonly fileOwners = new Map<string, string>();
   private shuttingDown = false;
   private readonly replacements = new Set<Promise<Result<void, ExpectedError>>>();
-  constructor(private readonly repositories: readonly Repository[], private readonly factory: SessionFactory) {}
+  constructor(private readonly repositories: RepositorySource, private readonly factory: SessionFactory) {}
+
+  get retainedWorktreeIds(): ReadonlySet<string> { return new Set([...this.entries.values()].map((entry) => entry.worktree.id)); }
 
   get snapshot(): readonly Repository[] {
-    return this.repositories.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((worktree) => ({ ...worktree,
+    return repositorySnapshot(this.repositories).map((repo) => ({ ...repo, worktrees: repo.worktrees.map((worktree) => ({ ...worktree,
       sessions: [...this.entries.values()].filter((entry) => entry.phase === "open" && entry.worktree.id === worktree.id).map((entry) => ({
         id: entry.id, name: entry.name, status: entry.replacing ? "working" : entry.recoveredState ? entry.recoveredState.status : entry.executor?.state.status ?? null,
         subagents: this.children(entry),
@@ -129,7 +132,7 @@ export class SessionRegistry {
 
   async create(worktreeId: string, sessionFile?: string, identity?: { readonly id: string; readonly name: string }): Promise<Result<string, ExpectedError>> {
     if (this.shuttingDown) return err(this.stopping());
-    const worktree = this.repositories.flatMap((repo) => repo.worktrees).find((tree) => tree.id === worktreeId);
+    const worktree = repositorySnapshot(this.repositories).flatMap((repo) => repo.worktrees).find((tree) => tree.id === worktreeId);
     if (!worktree) return err(new InputError(`Unknown worktree: ${worktreeId}`));
     const canonical = sessionFile ? await capture(() => realpath(sessionFile)) : ok(undefined);
     if (!canonical.ok) return canonical;
