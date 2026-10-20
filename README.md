@@ -725,6 +725,27 @@ All Radian-owned horizontal scrollbars stay hidden, including overflowing Agent 
 strips and read-only dialogs. Horizontal navigation/reveal remains enabled where needed; vertical
 scrollbars, Git diff movement and embedded programs' own UI/configuration are unchanged.
 
+### Terminal notifications
+
+An attached TUI requests a terminal desktop notification once for each newly settled main-agent
+run that completes or fails. The title is `Radian · Task completed` or `Radian · Task failed`;
+the body contains the repository, worktree, session name and elapsed run time. Prompt/response
+content, raw provider errors and full paths are not included. Names are sanitized and the body
+is limited to 240 terminal cells.
+
+OpenTUI terminal `focus` events suppress notifications; `blur` enables them. Before a focus event
+is received, the state is unknown and notifications are attempted. Focus reporting depends on the
+terminal and any intervening multiplexer. Focused results are consumed, not replayed on blur.
+Retries, individual messages/tools, subagent status changes, cancellation and unfinished runs do
+not generate separate alerts. Initial attachment, resumed history and reconnection establish a
+new baseline instead of replaying old completions.
+
+Delivery uses OpenTUI's native terminal notification API, not a macOS helper or direct stdout
+writes. The terminal application (for example Ghostty) remains the sender and controls permissions,
+OS presentation and click behavior. Unsupported/rejected requests are not retried, and acceptance
+by the terminal API does not confirm an OS banner. Each TUI owns its notification lifecycle;
+detaching stops delivery, while agents continue running in the service.
+
 ### Runtime ownership and closing
 
 A detached Bun service owns the registry and an independent SDK instance for each open item,

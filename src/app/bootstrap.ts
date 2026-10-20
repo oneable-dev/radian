@@ -89,6 +89,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
   const { Workbench } = await import("./ui/workbench.ts");
   const { GitRepository } = await import("../git/repository.ts");
   const { TerminalTheme } = await import("../ui/embedded-terminal/theme.ts");
+  const { TerminalNotifications } = await import("./terminal-notifications.ts");
   const { uiTheme } = await import("../ui/theme.ts");
   const { monochromeFrame } = await import("../ui/monochrome.ts");
   let attachedTheme: ReturnType<typeof uiTheme> | undefined;
@@ -110,6 +111,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
   };
   const showFailure = (error: ExpectedError): void => { message = `[${error.code}] ${error.message}`; updateNotice(); };
   const unexpected = (error: unknown): void => { message = reportUnexpected(error, "UI action"); updateNotice(); };
+  const notifications = client ? new TerminalNotifications(renderer, client, unexpected) : undefined;
   const observe = <T>(task: Promise<Result<T, ExpectedError>>): void => {
     void task.then((result) => { if (!result.ok) showFailure(result.error); }).catch(unexpected);
   };
@@ -145,7 +147,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
     updateNotice();
   });
   const detach = (): void => {
-    unsubscribe?.(); unsubscribeSelection();
+    notifications?.dispose(); unsubscribe?.(); unsubscribeSelection();
     if (view) { preferences.drafts = view.promptDrafts; preferences.inputDrafts = view.promptInputDrafts; persist(); }
     const mounted = view; view = undefined; mounted?.dispose(); client?.beginDetach(); renderer.destroy();
   };
@@ -202,7 +204,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
     });
     updateNotice(); await renderer.closed;
   } finally {
-    unsubscribe?.(); unsubscribeSelection();
+    notifications?.dispose(); unsubscribe?.(); unsubscribeSelection();
     preferences.drafts = view?.promptDrafts ?? preferences.drafts;
     if (view) preferences.inputDrafts = view.promptInputDrafts;
     persist();
