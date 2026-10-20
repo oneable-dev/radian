@@ -231,7 +231,12 @@ export class Workbench {
     const focused = this.sidebar.hasFocusedDescendant;
     this.sidebar.visible = visible;
     this.paintRows(this.visibleRows());
-    if (!visible && focused) this.workTabs[this.displayedWorkView].focus();
+    if (visible) this.focusNavigation();
+    else if (focused) {
+      if (this.agent.active) this.agent.prompt.focus();
+      else if (this.editor.input && this.displayedWorkView === "editor") this.editor.input.focus();
+      else this.workTabs[this.displayedWorkView].focus();
+    }
     this.updateFooter();
   }
 
@@ -293,7 +298,9 @@ export class Workbench {
         ]
         : [...(this.agent.canSubmit ? [hint("agent.send", this.agent.working ? "Queue" : "Run")] : []),
           hint("agent.newline", "New line"), ...(this.agent.prompt.canInspect ? [hint("agent.inspect", "Inspect")] : []),
-          hint("focus.transcript", "Transcript"), hint("focus.sidebar", "Workspace")];
+          ...(this.agent.canInterrupt ? [hint("agent.interrupt", "Interrupt")] : []),
+          ...(this.agent.prompt.value ? [hint("agent.clear", "Clear")] : []),
+          hint("focus.transcript", "Transcript"), hint("sidebar.toggle", "Workspace")];
     } else if (context === "git" || context === "git-prompt" || this.git.available("git.back")) shortcuts = this.git.shortcuts;
     else if (focused) {
       const label = this.buttonHints.get(focused);
@@ -410,7 +417,8 @@ export class Workbench {
       case "terminal.scroll-up": case "terminal.scroll-down": return this.terminals.root.visible && this.terminals.canScroll;
       case "focus.prompt": case "focus.transcript": return this.agent.active;
       case "agent.send": return this.agent.active && Boolean(this.agent.sessionId);
-      case "agent.paste": case "agent.newline": return this.agent.active;
+      case "agent.paste": case "agent.newline": case "agent.clear": return this.agent.active;
+      case "agent.interrupt": return this.agent.canInterrupt;
       case "agent.inspect": return this.agent.active && this.agent.prompt.canInspect;
       case "button.activate": return !!this.renderer.currentFocusedRenderable && this.buttonActions.has(this.renderer.currentFocusedRenderable);
       default: return true;
@@ -455,6 +463,8 @@ export class Workbench {
       case "workspace.next": this.moveTree("down"); break;
       case "workspace.first": this.moveTree("home"); break;
       case "workspace.last": this.moveTree("end"); break;
+      case "agent.clear": this.agent.clearPrompt(); break;
+      case "agent.interrupt": void this.agent.interrupt().catch((error: unknown) => this.setNotice(reportUnexpected(error, "agent interruption"))); break;
       case "agent.newline": this.agent.prompt.newLine(); break;
       case "agent.inspect": this.agent.prompt.inspectAtCursor(); break;
       case "agent.paste": void this.agent.prompt.pasteClipboard().catch((error: unknown) => this.setNotice(reportUnexpected(error, "clipboard read"))); break;

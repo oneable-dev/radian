@@ -38,7 +38,7 @@ test("프롬프트 위에 실제 요청과 실행 스피너를 표시하고 상�
     const row = app.get("agent-run-status"), scroll = app.get("session-transcript"), prompt = app.get("session-prompt");
     if (!(scroll instanceof ScrollBoxRenderable) || !(prompt instanceof PromptInput)) throw new Error("Missing native controls.");
     const y = row.y, draft = prompt.value, cursor = prompt.cursorOffset;
-    expect(app.status()).toBe("Working on “Implement workspace search”");
+    expect(app.status()).toBe("Working (0s · esc to interrupt) “Implement…");
     expect(app.get("agent-run-loading").visible).toBe(true);
     expect(app.renderer.root.findDescendantById("agent-request")).toBeUndefined();
     expect(scroll.y).toBe(app.get("agent-transcript-area").y);
@@ -56,14 +56,14 @@ test("프롬프트 위에 실제 요청과 실행 스피너를 표시하고 상�
     app.states.a1 = { ...app.states.a1!, sections: [sections[0]!, answer(`${sections[1]!.text}\nNEW STREAM OUTPUT`)] };
     await app.update();
 
-    expect(row.y).toBe(y); expect(row.height).toBe(1); expect(app.status()).toBe("Working on “Implement workspace search”");
+    expect(row.y).toBe(y); expect(row.height).toBe(1); expect(app.status()).toBe("Working (0s · esc to interrupt) “Implement…");
     expect(scroll.scrollTop).toBe(top); expect(app.renderer.currentFocusedRenderable).toBe(focus);
     expect(prompt.value).toBe(draft); expect(prompt.cursorOffset).toBe(cursor); expect(app.sent).toEqual([]);
     const frame = app.captureCharFrame().split("\n");
     expect(frame[row.y]).not.toContain("Paused"); expect(frame[app.get("footer-bar").y]).toContain("Paused");
     app.mockInput.pressKey("END", { ctrl: true }); await app.render();
     expect(app.captureCharFrame().split("\n")[app.get("footer-bar").y]).not.toContain("Paused");
-    expect(app.status()).toBe("Working on “Implement workspace search”");
+    expect(app.status()).toBe("Working (0s · esc to interrupt) “Implement…");
   } finally { await app.close(); }
 });
 
@@ -116,13 +116,13 @@ test("초안·거절·설정 명령은 작업 요청을 바꾸지 않고 실제 
     const prompt = app.get("session-prompt"); if (!(prompt instanceof PromptInput)) throw new Error("Missing prompt.");
     app.mockInput.pressKey("e", { ctrl: true }); prompt.value = "";
     await app.mockInput.typeText("/fast status"); app.mockInput.pressEnter(); await app.render();
-    expect(app.status()).toBe("Working on “Implement workspace search”");
+    expect(app.status()).toBe("Working (0s · esc to interrupt) “Implement…");
     response = err(new InputError("Request rejected"));
     await app.mockInput.typeText("rejected input"); app.mockInput.pressEnter(); await app.render();
-    expect(prompt.value).toBe("rejected input"); expect(app.status()).toBe("Working on “Implement workspace search”");
+    expect(prompt.value).toBe("rejected input"); expect(app.status()).toBe("Working (0s · esc to interrupt) “Implement…");
 
     app.states.a1 = { ...app.states.a1!, sections: [...app.states.a1!.sections!, request("delivered", "Run the tests first")] }; await app.update();
-    expect(app.status()).toBe("Working on “Run the tests first”");
+    expect(app.status()).toBe("Working (0s · esc to interrupt) “Run the te…");
     expect(prompt.value).toBe("rejected input"); expect(sent).toEqual(["/fast status", "rejected input"]);
   } finally { await app.close(); }
 });
@@ -131,7 +131,7 @@ test("요청 없는 실행은 내용을 추측하지 않고 긴 요청도 작은
   const app = await mount();
   try {
     app.states.a1 = { status: "working", output: "Legacy output without request metadata", error: null }; await app.update();
-    expect(app.status()).toBe("Working…");
+    expect(app.status()).toBe("Working (0s · esc to interrupt)");
     app.states.a1 = { status: "working", output: "", error: null, sections: [request("restored", "A long request that should stay on one line while the screen becomes narrow")] }; await app.update();
     app.resize(60, 12); await app.render();
     expect(app.get("agent-run-status").height).toBe(1); expect(app.status().endsWith("…")).toBe(true);

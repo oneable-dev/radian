@@ -49,7 +49,9 @@ const telemetry = Type.Object({
     observedAt: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }) }), Type.Null()]),
 });
 const execution = Type.Object({ conversationId: Type.Optional(id), status, activity: Type.Optional(Type.Literal("compacting")), output: Type.String(), error: Type.Union([Type.String(), Type.Null()]),
-  sections: Type.Optional(Type.Array(transcriptSection)), telemetry: Type.Optional(telemetry) });
+  sections: Type.Optional(Type.Array(transcriptSection)), telemetry: Type.Optional(telemetry),
+  pendingMessages: Type.Optional(Type.Array(requestSummarySchema)),
+  runTiming: Type.Optional(Type.Object({ startedAt: Type.Integer({ minimum: 0 }), elapsedMs: Type.Number({ minimum: 0 }) })) });
 export const workViewSchema = Type.Union([Type.Literal("agent"), Type.Literal("editor"), Type.Literal("git"), Type.Literal("terminal")]);
 export type WorkView = Static<typeof workViewSchema>;
 // Preserve the original three-view wire enum for existing clients/manifests.
@@ -127,6 +129,7 @@ export const commandSchema = Type.Union([
   Type.Object({ type: Type.Literal("create"), worktreeId: id }),
   Type.Object({ type: Type.Literal("resume"), worktreeId: id, savedId: id }),
   Type.Object({ type: Type.Literal("close"), sessionId: id }),
+  Type.Object({ type: Type.Literal("interrupt"), sessionId: id, conversationId: id }),
   Type.Object({ type: Type.Literal("prompt"), sessionId: id, text: Type.String({ minLength: 1 }), images: Type.Optional(Type.Array(id)), conversationId: Type.Optional(id) }),
   Type.Object({ type: Type.Literal("session-control"), sessionId: id, conversationId: id,
     action: Type.Union([Type.Literal("new"), Type.Literal("compact")]), instructions: Type.Optional(Type.String()) }),

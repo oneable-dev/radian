@@ -138,7 +138,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "session-controls"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "session-controls", "agent-interrupt"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || [this.discoveryWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
@@ -217,6 +217,23 @@ class WorkspaceRuntime {
         if (this.failedRecovery.delete(command.sessionId)) this.changed();
         else this.observe(this.registry.close(command.sessionId));
         return ok(null);
+      }
+      case "interrupt": {
+        const state = this.registry.details(command.sessionId);
+        if (!state) return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
+        if (state.conversationId !== command.conversationId) return err(new SessionError("SESSION_CONFLICT", "This tab changed conversations. No interrupt was accepted."));
+        const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
+        let admitted = false;
+        const run = this.registry.interrupt(command.sessionId, () => { admitted = true; accepted.resolve(ok(undefined)); });
+        void run.then((result) => {
+          if (!admitted) accepted.resolve(result);
+          else if (!result.ok) { this.notice = `[${result.error.code}] Interrupt did not finish: ${result.error.message}`; this.changed(); }
+        }, (error: unknown) => {
+          if (!admitted) accepted.reject(error);
+          else { this.notice = reportUnexpected(error, "agent interruption"); this.changed(); }
+        });
+        const result = await accepted.promise;
+        return result.ok ? ok(null) : result;
       }
       case "session-control": {
         if (command.action === "new" && command.instructions?.trim()) return err(new InputError("Usage: /new (no arguments)."));

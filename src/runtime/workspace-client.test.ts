@@ -28,6 +28,7 @@ function peer(repository: Repository) {
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     create: (tree) => call(`create:${tree}`, `${id}-new`), resume: (tree) => call(`resume:${tree}`, `${id}-resumed`),
     prompt: (session, text) => call(`prompt:${session}:${text}`, undefined), complete: (session) => call(`complete:${session}`, { items: [], truncated: false }),
+    interrupt: (session) => call(`interrupt:${session}`, undefined),
     closeSession: (session) => call(`close:${session}`, undefined), listHistory: (tree) => call(`history:${tree}`, []),
     previewHistory: (tree, savedId) => call(`preview:${tree}:${savedId}`, { id: savedId, worktreeId: tree, text: "Read-only preview", truncated: false }),
     openEditor: (tree) => call(`editor:${tree}`, `${id}-editor`), createTerminal: (tree) => call(`terminal:${tree}`, `${id}-terminal`),

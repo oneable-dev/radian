@@ -41,11 +41,12 @@ test("접기 아이콘 없이 같은 단축키로 좌측 패널을 접고 다시
     expect(app.captureCharFrame()).toContain("main draft"); expect(app.selection.sessionId).toBe(selected);
     await app.toggle();
     expect(sidebar.visible).toBe(true); expect(pane.width).toBe(width); expect(app.get("workspace-tree")).toBe(tree);
+    expect(app.renderer.currentFocusedRenderable).toBe(tree);
     expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("leader b 왕복은 프롬프트 포커스·커서·초안과 대화 스크롤을 유지한다", async () => {
+test("leader b는 펼칠 때 사이드바에 포커스하고 커서·초안과 대화 스크롤을 유지한다", async () => {
   const app = await mount();
   try {
     const prompt = app.get("session-prompt") as InputRenderable, scroll = app.get("session-transcript") as ScrollBoxRenderable;
@@ -55,7 +56,7 @@ test("leader b 왕복은 프롬프트 포커스·커서·초안과 대화 스크
     expect(app.get("workspace-sidebar").visible).toBe(false);
     app.leader("b"); await app.render();
 
-    expect(app.get("workspace-sidebar").visible).toBe(true); expect(app.renderer.currentFocusedRenderable).toBe(prompt);
+    expect(app.get("workspace-sidebar").visible).toBe(true); expect(app.renderer.currentFocusedRenderable).toBe(app.get("workspace-tree"));
     expect(prompt.cursorOffset).toBe(cursor); expect(app.view.promptDrafts.a1).toBe("main draft"); expect(scroll.scrollTop).toBe(top);
     expect(app.requests).toEqual([]);
   } finally { await app.close(); }
@@ -67,7 +68,7 @@ test("숨긴 패널은 Tab 대상에서 빠지고 검색·사이드바 포커스
   try {
     const sidebar = app.get("workspace-sidebar");
     app.leader("b"); await app.render();
-    expect(app.renderer.currentFocusedRenderable?.parent?.parent).toBe(app.get("work-panel"));
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
     for (let index = 0; index < 8; index++) {
       app.mockInput.pressTab(); await app.render();
       for (let node = app.renderer.currentFocusedRenderable; node; node = node.parent as typeof node) expect(node).not.toBe(sidebar);
@@ -149,7 +150,7 @@ test("Editor 입력 중 토글은 같은 surface·연결을 유지하고 변경�
     expect(surface!.width).toBeGreaterThan(width);
     app.leader("b"); await app.render();
 
-    expect(surface!.width).toBe(width); expect(attaches).toBe(1); expect(opens).toBe(0); expect(inputs).toEqual([]);
+    expect(surface!.width).toBe(width); expect(app.renderer.currentFocusedRenderable).toBe(app.get("workspace-tree")); expect(attaches).toBe(1); expect(opens).toBe(0); expect(inputs).toEqual([]);
     expect(sizes.length).toBeGreaterThan(1); expect(app.view.promptDrafts.a1).toBe("main draft");
   } finally { await app.close(); }
 });

@@ -172,6 +172,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
       },
       ...(client ? {
         onPrompt: (id: string, text: string, images?: readonly string[]) => client.prompt(id, text, images),
+        onInterrupt: (id: string) => client.interrupt(id),
         onComplete: (id, query, signal) => client.complete(id, query, signal),
         git: {
           source: (worktree) => new GitRepository(worktree.path),

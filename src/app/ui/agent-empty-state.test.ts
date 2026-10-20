@@ -151,7 +151,7 @@ test("메시지가 없는 실행·실패도 실제 상태를 숨기지 않는다
   try {
     // Request-less work and its failure still cross the normal status boundary.
     await app.update({ ...empty(), status: "working" });
-    expect(app.captureCharFrame()).toContain("Working…"); expect(app.get("agent-run-loading").visible).toBe(true);
+    expect(app.captureCharFrame()).toContain("Working (0s"); expect(app.get("agent-run-loading").visible).toBe(true);
     await app.update({ ...empty(), status: "failure", error: "Fixture failure" });
 
     // An actionable error keeps the status row visible instead of disappearing as idle decoration.

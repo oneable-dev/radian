@@ -109,7 +109,7 @@ test("프롬프트의 실행 가능 여부와 별도 오류 알림은 단축키 
   const app = await mount();
   try {
     app.mockInput.pressKey("e", { ctrl: true }); await app.renderOnce();
-    expect(app.footerLine()).toContain("Esc Workspace");
+    expect(app.footerLine()).toContain("Ctrl+Space → b Workspace");
     expect(app.footerLine()).not.toContain("Enter Run");
     await app.mockInput.typeText("hello"); await app.renderOnce();
     expect(app.footerLine()).toContain("Enter Run");
@@ -119,7 +119,7 @@ test("프롬프트의 실행 가능 여부와 별도 오류 알림은 단축키 
     app.mockInput.pressEnter(); await app.renderOnce();
 
     expect(app.calls).toEqual(["prompt:hello"]);
-    expect(app.footerLine()).toContain("Esc Workspace");
+    expect(app.footerLine()).toContain("Ctrl+Space → b Workspace");
     expect(app.view.promptDrafts.a1).toBeUndefined();
     expect(app.selection.sessionId).toBe("a1");
     expect(app.footerLine()).not.toContain("Enter Run");

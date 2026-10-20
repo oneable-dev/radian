@@ -242,7 +242,7 @@ test("Esc는 후보 목록만 닫고 hjkl은 입력 문자로 남으며 기존 �
     expect(app.input.value).toBe("/hjkl"); expect(app.view.promptDrafts.a1).toBe("/hjkl");
     expect(app.sent).toEqual([]);
     app.mockInput.pressEscape(); await app.render(); app.mockInput.pressEscape(); await app.render();
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree");
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
   } finally { await app.close(); }
 });
 

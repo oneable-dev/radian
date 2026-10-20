@@ -250,6 +250,13 @@ export class RuntimeClient {
       throw error;
     });
   }
+  async interrupt(sessionId: string): Promise<Result<void, ExpectedError>> {
+    if (!this.state.capabilities?.includes("agent-interrupt")) return err(new CapabilityError("Running service predates agent interruption. Finish work and explicitly restart it when ready. No interrupt was sent."));
+    const conversationId = this.state.details[sessionId]?.conversationId;
+    if (!conversationId) return err(new ProtocolError("Current conversation identity is unavailable. No interrupt was sent."));
+    const result = await this.command({ type: "interrupt", sessionId, conversationId });
+    return result.ok ? ok(undefined) : result;
+  }
   async prompt(sessionId: string, text: string, images: readonly string[] = []): Promise<Result<void, ExpectedError>> {
     const control = parseSessionControl(text); if (!control.ok) return control;
     const conversationId = this.state.details[sessionId]?.conversationId;

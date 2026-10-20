@@ -55,6 +55,34 @@ async function setup() {
   };
 }
 
+test("중단 IPC는 대기 입력 전체를 한 메시지로 전달하고 세션·초안과 다른 실행을 유지한다", async () => {
+  // This test owns an isolated daemon; interruption never targets a user runtime.
+  const app = await setup();
+  try {
+    const client = await app.connect(), tree = app.repository.worktrees.find((item) => item.path === app.main)!;
+    const id = expectOk(await client.create(tree.id)), other = expectOk(await client.create(tree.id));
+    expect(client.snapshot.capabilities).toContain("agent-interrupt");
+    expectOk(await client.prompt(id, "slow")); expectOk(await client.prompt(other, "slow"));
+    expectOk(await client.prompt(id, "Add tests")); expectOk(await client.prompt(id, "Do not edit README"));
+    await observed(client, (state) => state.details[id]?.pendingMessages?.length === 2 && state.details[other]?.status === "working");
+    const conversation = client.snapshot.details[id]!.conversationId;
+    expectOk(await client.savePreferences({ ...client.snapshot.preferences, drafts: { [id]: "Unsent draft" } }));
+
+    // A delayed key intended for a replaced conversation must not interrupt the current one.
+    const stale = await fetch("http://localhost/command", { unix: app.paths.socket, method: "POST", headers: { "Content-Type": "application/json", "X-Radian-Instance": client.snapshot.instance! },
+      body: JSON.stringify({ type: "interrupt", sessionId: id, conversationId: "old-conversation" }) });
+    expect(stale.status).toBe(409);
+    expectOk(await client.interrupt(id));
+    await observed(client, (state) => state.details[id]?.status === "complete" && !state.details[id]?.pendingMessages?.length);
+
+    expect(client.snapshot.details[id]?.sections?.filter((section) => section.kind === "user").map((section) => section.text)).toEqual(["slow", "Add tests\nDo not edit README"]);
+    expect(client.snapshot.details[id]?.conversationId).toBe(conversation);
+    expect(client.snapshot.details[other]?.status).toBe("working");
+    expect(client.snapshot.preferences.drafts[id]).toBe("Unsent draft");
+    expect(client.snapshot.repositories.flatMap((repo) => repo.worktrees.flatMap((worktree) => worktree.sessions))).toHaveLength(2);
+  } finally { await app.cleanup(); }
+});
+
 test("자동완성 IPC는 선택 세션의 SDK 명령과 워크트리 파일만 읽고 모델을 실행하지 않는다", async () => {
   const app = await setup();
   try {

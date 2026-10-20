@@ -177,7 +177,7 @@ test("작은 창의 여러 줄 입력·실행 상태·알림·완성 후보가 �
     const row=status.getChildren()[0]!,frame=app.captureCharFrame().split("\n");
     // A zero-row conversation viewport must not leak its source text onto the mode line.
     const run=app.get("agent-run-status-text");
-    expect(frame[run.y]!.slice(run.x,run.x+run.width)).toStartWith("Working on “");
+    expect(frame[run.y]!.slice(run.x,run.x+run.width)).toStartWith("Working (0s");
     expect(app.get("session-transcript").visible).toBe(false);
     expect(row.y-status.y).toBe(1);expect(status.y+status.height-row.y-row.height).toBe(1);
     for(const y of [row.y-1,row.y+1])expect(frame[y]!.slice(status.x,status.x+status.width).trim()).toBe("");

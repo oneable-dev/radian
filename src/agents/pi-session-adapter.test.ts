@@ -10,6 +10,7 @@ import { WorkspaceSelection } from "../app/workspace-selection.ts";
 import { SessionRegistry, type SessionExecutor } from "./session-registry.ts";
 import { piSessionFactory, type PiSessionOptions } from "./pi-session-adapter.ts";
 import { runCompletionEntryType } from "./run-completion.ts";
+import { summarizeRequest } from "./request-summary.ts";
 import { expectOk, expectError } from "../testing/results.ts";
 import { tinyPng } from "../testing/image.ts";
 import { ok } from "../result.ts";
@@ -477,6 +478,144 @@ test("실행 중 SDK 입력은 현재 응답 뒤에 대기하고 세션을 교�
   } finally { await app.cleanup(); }
 });
 
+test("중단은 세션을 유지하고 대기 입력 전체를 줄바꿈으로 합쳐 한 번만 전달한다", async () => {
+  // Hold A so neither queued message can be delivered before the interrupt.
+  const app = await sdkFixture(true);
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    const running = app.registry.prompt(id, "hold A"); await app.streams.waitFor("A");
+    expectOk(await app.registry.prompt(id, "second")); expectOk(await app.registry.prompt(id, "third"));
+    expect(app.registry.details(id)?.pendingMessages?.map((message) => message.text)).toEqual(["second", "third"]);
+    expect(app.registry.details(id)?.runTiming?.elapsedMs).toBeGreaterThanOrEqual(0);
+
+    // Repeated Esc coalesces while the provider is still acknowledging cancellation.
+    const settled = Promise.withResolvers<void>();
+    const unsubscribe = app.registry.subscribe(() => { if (app.registry.details(id)?.status === "complete") settled.resolve(); });
+    const interrupt = app.registry.interrupt(id), repeated = app.registry.interrupt(id);
+    await app.streams.gates.get("A")!.abortReceived;
+    expect(app.registry.details(id)?.pendingMessages?.map((message) => message.text)).toEqual(["second", "third"]);
+    app.streams.gates.get("A")!.finish("interrupted");
+    expectOk(await interrupt); expectOk(await repeated); expect(expectError(await running).code).toBe("CANCELLED");
+    await settled.promise; unsubscribe();
+
+    // Only delivered input is persisted; the two queue entries become one user message.
+    const messages = SessionManager.open(app.registry.sessionFile(id)!).getBranch().flatMap((entry) => entry.type === "message" && entry.message.role === "user"
+      ? [typeof entry.message.content === "string" ? entry.message.content : entry.message.content.filter((part) => part.type === "text").map((part) => part.text).join("")] : []);
+    expect(messages).toEqual(["hold A", "second\nthird"]);
+    expect(app.executors).toHaveLength(1); expect(app.registry.details(id)?.pendingMessages).toEqual([]);
+    expectOk(await app.registry.prompt(id, "continue in the same conversation"));
+  } finally { await app.cleanup(); }
+});
+
+test("대기 입력을 합쳐 재전달해도 이미지 바이트와 중복 입력 순서를 보존한다", async () => {
+  // Two equal texts still represent two accepted messages, each with its own image.
+  const app = await sdkFixture(true, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] } }));
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)), path = join(app.directory, "queued.png");
+    await writeFile(path, tinyPng());
+    const running = app.registry.prompt(id, "hold A"); await app.streams.waitFor("A");
+    expectOk(await app.registry.prompt(id, "same", undefined, [path])); expectOk(await app.registry.prompt(id, "same", undefined, [path]));
+    expect(app.registry.details(id)?.pendingMessages).toEqual([summarizeRequest("same", 1), summarizeRequest("same", 1)]);
+    const settled = Promise.withResolvers<void>();
+    const unsubscribe = app.registry.subscribe(() => { if (app.registry.details(id)?.status === "complete") settled.resolve(); });
+
+    const interrupted = app.registry.interrupt(id); await app.streams.gates.get("A")!.abortReceived;
+    app.streams.gates.get("A")!.finish("cancelled"); expectOk(await interrupted); await running; await settled.promise; unsubscribe();
+
+    const users = SessionManager.open(app.registry.sessionFile(id)!).getBranch().flatMap((entry) => entry.type === "message" && entry.message.role === "user" ? [entry.message] : []);
+    const last = users.at(-1)!;
+    expect(users).toHaveLength(2);
+    expect(typeof last.content === "string" ? last.content : last.content.filter((part) => part.type === "text").map((part) => part.text).join("")).toBe("same\nsame");
+    expect(typeof last.content === "string" ? [] : last.content.filter((part) => part.type === "image").map((part) => part.data)).toEqual([tinyPng().toString("base64"), tinyPng().toString("base64")]);
+  } finally { await app.cleanup(); }
+});
+
+test("중단은 수동 compact도 취소하고 기존 대화와 세션을 보존한다", async () => {
+  // Only the summary request waits; ordinary conversation uses the real offline SDK path.
+  let summarizing = false;
+  const started = Promise.withResolvers<void>();
+  const app = await sdkFixture(false, (options) => ({ ...options,
+    settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
+    streamFn: (model, context, request) => {
+      if (!summarizing) return options.streamFn!(model, context, request);
+      const stream = createAssistantMessageEventStream(), message = fixtureMessage(model.api, model.provider, model.id);
+      const cancel = () => { message.stopReason = "aborted"; stream.push({ type: "error", reason: "aborted", error: message }); stream.end(); };
+      if (request?.signal?.aborted) cancel();
+      else request?.signal?.addEventListener("abort", cancel, { once: true });
+      started.resolve();
+      return stream;
+    },
+  }));
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    expectOk(await app.registry.prompt(id, "first")); expectOk(await app.registry.prompt(id, "second"));
+    const before = app.registry.details(id)!; summarizing = true;
+    const compact = app.registry.compact(id); await started.promise;
+
+    expectOk(await app.registry.interrupt(id));
+
+    expect(expectError(await compact).code).toBe("CANCELLED");
+    expect(app.registry.details(id)?.sections?.at(-1)).toMatchObject({ title: "Compaction cancelled", status: "cancelled" });
+    expect(app.registry.details(id)?.conversationId).toBe(before.conversationId); expect(app.registry.details(id)?.runTiming).toBeUndefined();
+    expect(app.registry.details(id)?.sections?.slice(0, before.sections!.length)).toEqual([...before.sections!]);
+    summarizing = false; expectOk(await app.registry.prompt(id, "continue"));
+  } finally { await app.cleanup(); }
+});
+
+test("중단 전에 준비 중이던 미수락 이미지 입력은 뒤늦게 실행하지 않는다", async () => {
+  // Image decoding is an SDK/OS boundary that can finish after the user presses Esc.
+  const loading = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const app = await sdkFixture(true, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] },
+    imageLoader: async () => { loading.resolve(); await release.promise; return ok([]); },
+  }));
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    const running = app.registry.prompt(id, "hold A"); await app.streams.waitFor("A");
+    let accepted = false;
+    const preparing = app.registry.prompt(id, "Late image input", () => { accepted = true; }, ["/fixture/image.png"]);
+    await loading.promise;
+
+    const interrupted = app.registry.interrupt(id); await app.streams.gates.get("A")!.abortReceived;
+    release.resolve(); app.streams.gates.get("A")!.finish("cancelled"); expectOk(await interrupted);
+
+    expect(expectError(await preparing).code).toBe("CANCELLED"); expect(accepted).toBe(false); await running;
+    expect(app.registry.details(id)?.pendingMessages).toEqual([]); expect(app.registry.details(id)?.output).not.toContain("Late image input");
+  } finally { release.resolve(); await app.cleanup(); }
+});
+
+test("중단은 소유한 서브에이전트의 취소 확인도 기다리고 부모 세션은 닫지 않는다", async () => {
+  const app = await sdkFixture(true);
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    const running = app.registry.prompt(id, "delegate"); await app.streams.waitFor("child");
+
+    const interrupted = app.registry.interrupt(id); await app.streams.gates.get("child")!.abortReceived;
+    app.streams.gates.get("child")!.finish("cancelled child"); expectOk(await interrupted);
+
+    expect(expectError(await running).code).toBe("CANCELLED");
+    expect(app.registry.details(id)).not.toBeNull(); expect(app.registry.closingCount).toBe(0);
+    expectOk(await app.registry.prompt(id, "Continue after cancellation"));
+  } finally { await app.cleanup(); }
+});
+
+test("대기 입력 없는 중단은 선택한 실행만 취소하고 다른 탭은 유지한다", async () => {
+  // Two independent sessions prove this is not runtime shutdown or session close.
+  const app = await sdkFixture(true);
+  try {
+    const a = expectOk(await app.registry.create(app.main.id)), b = expectOk(await app.registry.create(app.main.id));
+    const first = app.registry.prompt(a, "hold A"), second = app.registry.prompt(b, "hold B");
+    await Promise.all([app.streams.waitFor("A"), app.streams.waitFor("B")]);
+
+    const interrupt = app.registry.interrupt(a); await app.streams.gates.get("A")!.abortReceived;
+    app.streams.gates.get("A")!.finish("cancelled"); expectOk(await interrupt);
+
+    expect(expectError(await first).code).toBe("CANCELLED"); expect(app.streams.gates.get("B")!.aborted).toBe(false);
+    expect(app.registry.snapshot[0]?.worktrees.find((tree) => tree.id === app.main.id)?.sessions).toHaveLength(2);
+    expect(app.registry.details(a)?.runTiming).toBeUndefined();
+    app.streams.gates.get("B")!.finish("finished"); expectOk(await second);
+  } finally { await app.cleanup(); }
+});
+
 test("동시에 보낸 SDK 입력은 수락 경계를 직렬화하고 실제 대기열 순서를 보존한다", async () => {
   // Startup includes asynchronous SDK preflight; no stream is active at invocation time.
   const app = await sdkFixture();
@@ -536,7 +675,7 @@ test("SDK 자동 재시도 사이의 agent_end는 완료로 표시하지 않고 
   } finally { await app.cleanup(); }
 });
 
-test("실제 SDK bash 작업은 닫기 시 취소되고 소속 shell 프로세스가 남지 않는다", async () => {
+test.each(["close", "interrupt"] as const)("실제 SDK bash 작업은 %s 시 취소되고 소속 shell 프로세스가 남지 않는다", async (operation) => {
   // The only spawned shell and filesystem changes belong to an isolated test worktree.
   const app = await sdkFixture(false, (options) => ({
     ...options, streamFn: (model, context, request) => {
@@ -563,11 +702,12 @@ test("실제 SDK bash 작업은 닫기 시 취소되고 소속 shell 프로세�
     await started.promise; unsubscribe();
     const pid = Number.parseInt(await readFile(join(app.main.path, ".bash-probe.pid"), "utf8"), 10);
     expect(process.kill(pid, 0)).toBe(true);
-    await Promise.all([app.registry.close(id), running]);
+    const [stopped] = await Promise.all([app.registry[operation](id), running]); expectOk(stopped);
 
-    // Abort propagation and tool completion include process cleanup before close resolves.
+    // Abort propagation and tool completion include process cleanup before control resolves.
     expect(() => process.kill(pid, 0)).toThrow();
     expect(app.registry.closingCount).toBe(0);
+    if (operation === "interrupt") expect(app.registry.details(id)).not.toBeNull();
   } finally { await app.cleanup(); }
 });
 

@@ -73,6 +73,24 @@ test("구버전의 new와 compact는 모델 프롬프트나 자동 재시작으�
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
+test("중단은 capability와 현재 대화 ID를 확인하고 정확한 세션에만 전송한다", async () => {
+  // An older service must not receive an unknown command or be restarted automatically.
+  const details: Record<string, RuntimeSnapshot["details"][string]> = {};
+  const state = { ...snapshot(), details }, sent: unknown[] = [];
+  const fetchMock = stubFetch(async (_input, options) => { sent.push(JSON.parse(String(options?.body))); return Response.json({ ok: true, value: null }); });
+  const client = new RuntimeClient(paths, state);
+  try {
+    expect(expectError(await client.interrupt("session")).code).toBe("UNSUPPORTED_CAPABILITY");
+    state.capabilities = ["agent-interrupt"];
+    expect(expectError(await client.interrupt("session")).code).toBe("PROTOCOL_ERROR");
+    details.session = { conversationId: "conversation", status: "working", output: "", error: null };
+
+    expectOk(await client.interrupt("session"));
+
+    expect(sent).toEqual([{ type: "interrupt", sessionId: "session", conversationId: "conversation" }]);
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
+
 test("세션 명령과 일반 입력은 현재 대화 ID를 지정하고 첨부·잘못된 new는 전송하지 않는다", async () => {
   // A stable tab ID alone cannot fence an operation after /new replaces its conversation.
   const state: RuntimeSnapshot = { ...snapshot(), capabilities: ["session-controls", "prompt-images"],

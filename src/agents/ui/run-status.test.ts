@@ -25,10 +25,10 @@ test("실제 최근 요청만 한 줄로 표시하고 도구 출력·응답으�
     const latest = user("  Implement\nthe search\t carefully.  ", "latest");
     const state = working([user("Old request", "old"), latest, { id: "tool", kind: "tool", title: "bash", text: "DO NOT USE TOOL OUTPUT", status: "running" }]);
     app.status.update("a", state, true); await app.render();
-    expect(app.text()).toBe("Working on “Implement the search carefully.”"); expect(app.spinner().visible).toBe(true);
+    expect(app.text()).toBe("Working (0s · esc to interrupt) “Implement the search carefully.”"); expect(app.spinner().visible).toBe(true);
 
     app.status.update("a", { ...state, sections: [...state.sections!, settled("complete")] }, true); await app.render();
-    expect(app.text()).toBe("Working on “Implement the search carefully.”");
+    expect(app.text()).toBe("Working (0s · esc to interrupt) “Implement the search carefully.”");
     expect(latest.text).toBe("  Implement\nthe search\t carefully.  ");
   } finally { await app.close(); }
 });
@@ -43,12 +43,12 @@ test("압축 중에는 이전 요청 대신 전용 문구와 움직이는 스피
 
     // 압축이 진행되는 동안에도 공통 스피너의 프레임은 계속 바뀐다.
     app.clock.advance(80); app.status.update("a", compacting, true); await app.render();
-    expect(app.text()).toBe("Compacting context…"); expect(app.spinner().visible).toBe(true);
+    expect(app.text()).toBe("Compacting context (0s · esc to interrupt)"); expect(app.spinner().visible).toBe(true);
     expect(app.captureCharFrame()).not.toBe(first); expect(app.text()).not.toContain("Previous delivered request");
 
     // 압축 이후 일반 실행으로 돌아오면 같은 요청과 스피너를 이어서 표시한다.
     app.status.update("a", state, true); await app.render();
-    expect(app.text()).toBe("Working on “Previous delivered request”"); expect(app.spinner().visible).toBe(true);
+    expect(app.text()).toBe("Working (0s · esc to interrupt) “Previous delivered request”"); expect(app.spinner().visible).toBe(true);
   } finally { await app.close(); }
 });
 
@@ -66,12 +66,12 @@ test("빠른 압축 완료는 이전 요청을 다시 표시하지 않고 스피
   } finally { await app.close(); }
 });
 
-test("Working on 요청도 한 줄 말줄임하며 실제 첨부 배지 공간은 먼저 확보한다", async () => {
+test("Working 요청도 한 줄 말줄임하며 실제 첨부 배지 공간은 먼저 확보한다", async () => {
   const app = await mount(50);
   try {
     const request = { ...user("Original full prompt"), request: { text: "A long original prompt ".repeat(20), images: 2, files: 3 } };
     app.status.update("a", working([request]), true); await app.render();
-    expect(app.text()).toStartWith("Working on"); expect(app.text()).toContain("…  [2 images] [3 files]");
+    expect(app.text()).toStartWith("Working (0s)"); expect(app.text()).toContain("…  [2 images] [3 files]");
     expect(Bun.stringWidth(app.text())).toBeLessThanOrEqual(48);
     expect(app.captureCharFrame().split("\n")[1]?.trim()).toBe(""); expect(request.text).toBe("Original full prompt");
   } finally { await app.close(); }
@@ -115,7 +115,7 @@ test("한글·결합 문자·emoji는 grapheme 경계와 셀 너비로 자르고
     expect(app.text()).not.toContain("\uFFFD"); expect(Bun.stringWidth(app.text())).toBeLessThanOrEqual(32);
     expect(app.captureCharFrame().split("\n")[1]!.trim()).toBe("");
     app.resize(6, 4); await app.render(); expect(Bun.stringWidth(app.text())).toBeLessThanOrEqual(4);
-    app.resize(70, 4); await app.render(); expect(app.text()).toBe(`Working on “${request.text}”`);
+    app.resize(70, 4); await app.render(); expect(app.text()).toBe(`Working (0s · esc to interrupt) “${request.text}”`);
   } finally { await app.close(); }
 });
 
@@ -123,9 +123,29 @@ test("스킬 호출은 내부 지침을 노출하지 않고 요청 없는 실행
   const app = await mount();
   try {
     app.status.update("a", working([{ id: "skill", kind: "notice", title: "write-good-code", skillName: "write-good-code", text: "PRIVATE INTERNAL INSTRUCTIONS", status: "complete" }]), true); await app.render();
-    expect(app.text()).toBe("Working on “/skill:write-good-code”"); expect(app.captureCharFrame()).not.toContain("PRIVATE INTERNAL INSTRUCTIONS");
-    app.status.update("a", { status: "working", output: "Legacy output", error: null }, true); await app.render(); expect(app.text()).toBe("Working…");
+    expect(app.text()).toBe("Working (0s · esc to interrupt) “/skill:write-good-code”"); expect(app.captureCharFrame()).not.toContain("PRIVATE INTERNAL INSTRUCTIONS");
+    app.status.update("a", { status: "working", output: "Legacy output", error: null }, true); await app.render(); expect(app.text()).toBe("Working (0s · esc to interrupt)");
     app.status.update("a", { status: null, output: "Legacy output", error: null }, true); await app.render(); expect(app.text()).toBe("Ready");
+  } finally { await app.close(); }
+});
+
+test("실행 시간은 런타임 관측값에서 이어지고 반복 스냅샷·숨김·재연결에도 초기화되지 않는다", async () => {
+  // A reattached UI has already missed twelve seconds of this runtime-owned run.
+  const app = await mount();
+  const state = { ...working([user("Long job")]), runTiming: { startedAt: 1000, elapsedMs: 12000 } };
+  try {
+    app.status.update("a", state, true); await app.render();
+    expect(app.text()).toContain("Working (12s · esc to interrupt)");
+
+    // Equal snapshots must not restart the locally interpolated timer.
+    app.clock.advance(2000); app.status.update("a", state, true); await app.render();
+    expect(app.text()).toContain("Working (14s · esc to interrupt)");
+    app.status.update("a", state, false); app.clock.advance(2000);
+    app.status.update("a", { ...state, runTiming: { startedAt: 1000, elapsedMs: 16000 } }, true); await app.render();
+
+    expect(app.text()).toContain("Working (16s · esc to interrupt)");
+    app.status.update("a", { ...state, status: "complete" }, true); app.clock.advance(1000); await app.render();
+    expect(app.text()).toBe("");
   } finally { await app.close(); }
 });
 
@@ -140,6 +160,29 @@ test("화면 숨김·대화 교체·제거는 이전 스피너를 즉시 정리�
     expect(app.text()).toBe(""); expect(app.spinner().visible).toBe(false); expect(app.status.hasContent).toBe(false);
     app.status.update("a", state, true); app.status.root.destroyRecursively(); app.clock.advance(5000);
     expect(() => app.status.update("a", state, true)).not.toThrow();
+  } finally { await app.close(); }
+});
+
+test.each([70, 28])("경과 시간은 화면 너비 %i에서도 회색으로 표시하고 Working·요청의 색은 유지한다", async (width) => {
+  // Both full interrupt hints and compact labels keep elapsed time visually secondary.
+  const app = await mount(width), theme = uiTheme(app.renderer);
+  try {
+    app.status.update("a", working([user("Task")]), true);
+    for (const [advance, elapsed] of [[36000, "36s"], [60000, "1m 36s"]] as const) {
+      app.clock.advance(advance);
+      // Time ticks and terminal palette changes must not restore the timer's accent color.
+      for (const light of [false, true]) {
+        const palette: TerminalColors = { palette: [], defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
+          cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null };
+        theme.configure(palette); await app.render();
+
+        const spans = app.captureSpans().lines[app.node().y]!.spans;
+        expect(app.text()).toContain(`Working (${elapsed}`);
+        expect(spans.find((span) => span.text.includes(elapsed))!.fg.toInts()).toEqual(theme.colors.muted.toInts());
+        expect(spans.find((span) => span.text.includes("Working"))!.fg.toInts()).toEqual(theme.colors.accent.toInts());
+        expect(spans.find((span) => span.text.includes("Task"))!.fg.toInts()).toEqual(theme.colors.text.toInts());
+      }
+    }
   } finally { await app.close(); }
 });
 

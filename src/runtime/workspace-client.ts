@@ -9,7 +9,7 @@ import { runtimePaths, RuntimeStore } from "./storage.ts";
 import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
 
 // Keep repo identity and instance fencing inside the existing clients, including PTY leases.
-export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "prompt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect">;
+export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect">;
 type Connector = (repository: Repository, cwd: string, options: ConnectOptions) => Promise<Result<RepositoryClient | null, ExpectedError>>;
 type Entry = { repository: Repository; preferences: RuntimePreferences; client?: RepositoryClient; unsubscribe?: () => void;
   watcher?: RepositoryWatcher; discoveryWarning?: string;
@@ -158,6 +158,9 @@ export class WorkspaceClient {
     const client = await this.ensure(entry.value); if (!client.ok) return client;
     if (signal?.aborted) return err(new CancelledError());
     return client.value.previewHistory(worktreeId, savedId, signal);
+  }
+  async interrupt(...args: Parameters<RuntimeClient["interrupt"]>): ReturnType<RuntimeClient["interrupt"]> {
+    const entry = this.sessionOwner(args[0]); return entry.ok ? entry.value.client!.interrupt(...args) : entry;
   }
   async prompt(...args: Parameters<RuntimeClient["prompt"]>): ReturnType<RuntimeClient["prompt"]> {
     const entry = this.sessionOwner(args[0]); return entry.ok ? entry.value.client!.prompt(...args) : entry;

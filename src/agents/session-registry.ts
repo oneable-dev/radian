@@ -10,9 +10,11 @@ import type { SessionTelemetry } from "./telemetry.ts";
 import { filterCompletions, type CompletionItem, type CompletionQuery, type CompletionResult } from "./completion.ts";
 import { completeFiles } from "./completion-files.ts";
 import { sessionControlCommands } from "./session-controls.ts";
+import type { RequestSummary } from "./request-summary.ts";
 
 export type ExecutionState = { readonly conversationId?: string; readonly status: AgentStatus | null; readonly activity?: "compacting"; readonly output: string; readonly error: string | null;
-  readonly sections?: readonly TranscriptSection[]; readonly telemetry?: SessionTelemetry };
+  readonly sections?: readonly TranscriptSection[]; readonly telemetry?: SessionTelemetry;
+  readonly pendingMessages?: readonly RequestSummary[]; readonly runTiming?: { readonly startedAt: number; readonly elapsedMs: number } };
 export type SessionExecutor = {
   readonly savedSessionId: string;
   readonly sessionFile: string | undefined;
@@ -21,6 +23,7 @@ export type SessionExecutor = {
   readonly acceptsImages?: boolean;
   readonly busy?: boolean;
   compact?(instructions?: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>>;
+  interrupt?(onAccepted?: () => void): Promise<Result<void, ExpectedError>>;
   subscribe(listener: () => void): () => void;
   // Resolves on run completion; the optional callback marks SDK input acceptance.
   prompt(text: string, onAccepted?: () => void, imagePaths?: readonly string[]): Promise<Result<void, ExpectedError>>;
@@ -224,6 +227,14 @@ export class SessionRegistry {
     if ([...entry.children.values()].some((child) => child.executor?.busy || child.executor?.state.status === "working" || child.ready && !child.executor)) return Promise.resolve(err(new SessionError("SESSION_BUSY", "Wait for this session's owned work to finish before compacting.")));
     if (!entry.executor?.compact) return Promise.resolve(err(new CapabilityError("This executor does not support manual compaction.")));
     return entry.executor.compact(instructions, () => { delete entry.recoveredState; onAccepted?.(); });
+  }
+
+  interrupt(id: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>> {
+    const selected = this.requireOpen(id); if (!selected.ok) return Promise.resolve(selected);
+    const entry = selected.value;
+    if (entry.replacing) return Promise.resolve(err(new SessionError("SESSION_BUSY", "This tab is changing sessions. No interrupt was accepted.")));
+    if (!entry.executor?.interrupt) return Promise.resolve(err(new CapabilityError("This executor does not support interruption.")));
+    return entry.executor.interrupt(onAccepted);
   }
 
   newSession(id: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>> {

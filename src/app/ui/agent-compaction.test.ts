@@ -49,7 +49,7 @@ test("압축 중 스피너와 전용 상태를 보이고 완료 시 접힌 요�
     const status = app.get("agent-run-status-text"), prompt = app.get("session-prompt");
     app.mockInput.pressKey("e", { ctrl: true }); await app.render();
     const label = () => app.captureCharFrame().split("\n")[status.y]!.slice(status.x, status.x + status.width).trimEnd();
-    expect(label()).toBe("Compacting context…"); expect(app.get("agent-run-loading").visible).toBe(true);
+    expect(label()).toBe("Compacting context (0s · esc to interrupt)"); expect(app.get("agent-run-loading").visible).toBe(true);
     const first = app.captureCharFrame(); app.clock.advance(80); await app.render();
     expect(app.captureCharFrame()).not.toBe(first); expect(label()).not.toContain("Previous delivered request");
 

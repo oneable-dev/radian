@@ -40,7 +40,8 @@ without changing the current workspace; **Enter** opens the highlighted worktree
 last work view/session. Mouse clicks open a worktree directly. Open sessions are tabs within Agents;
 focus that strip to use `h/l` (or left/right), Home/End, `n` for new and `x` for close.
 `Ctrl+e` focuses the session prompt; `Enter` submits, `Shift+Enter` or `Alt+Enter` inserts a newline,
-and `Esc` returns to the tree.
+and `Ctrl+C` clears the draft without interrupting work. `Esc` interrupts the selected Agent;
+when messages are waiting, it interrupts and submits them together immediately.
 `Ctrl+Space`, then `c`, **detaches the TUI only**. Agents and subagents keep running in a separate local service.
 These are default application bindings; see [Keybindings](#keybindings) to customize them.
 
@@ -58,7 +59,18 @@ the message enters after the current assistant turn and its tools, before the ne
 not follow-up-after-task behavior and does not interrupt or replace the running session. Both Agent
 and Git callers use the same runtime prompt path. The runtime acknowledges SDK acceptance separately
 from run completion; input is retained until acceptance, and rejection/unknown timeout outcomes do
-not automatically replay a prompt. No separate queue-management or follow-up mode UI is added.
+not automatically replay a prompt. Pending messages appear between the work-status row and prompt,
+with no queue count. They are removed only when actually delivered. The hint reads
+`Messages will be sent after the current response and tools finish` and
+`(press esc to interrupt and send immediately)`, with only the key in bold.
+Pressing **esc** interrupts the selected session, waits for its active operation and tools to settle,
+then joins all pending messages with newlines and sends them as one message, retaining image blocks.
+Unsent drafts are never included. Without pending messages, **esc** only stops the current operation,
+including manual compaction; it does not close the session, affect other tabs, or roll back file changes.
+An open completion menu consumes the first Esc to dismiss itself. Ctrl+C clears only the current
+prompt draft and its attachments. No separate follow-up mode UI is added.
+These controls require the additive `agent-interrupt` service capability. An older service rejects
+interruption explicitly and is never automatically restarted.
 
 `--demo` remains display-only: closing removes fixture metadata and creation only reports a
 request. It does not invoke Pi, access credentials, or create stored sessions.
@@ -156,6 +168,8 @@ selection, filtering and background snapshots never implicitly activate another 
 Session creation/closing retain their existing rules and never implicitly launch an editor.
 
 **Ctrl+Space, then b** toggles the entire left panel closed and open, without an extra toolbar button.
+Opening also focuses the workspace tree; closing returns sidebar focus to the work area.
+Esc in the Agent prompt no longer moves focus to the sidebar.
 The work pane takes the freed width without recreating Agent, Editor or Terminal instances.
 Selection, drafts, transcript positions and loaded History rows are retained. In a connected Editor,
 a sidebar toggle prepares the target PTY size while retaining the existing layout, then presents the
@@ -282,11 +296,15 @@ The temporary artwork is isolated in `src/ui/radian-logo.ts` so the finalized lo
 without changing transcript behavior. Short viewports use a compact mark; the first message replaces it.
 
 The former pinned **Request** row is removed; the original user message remains in the transcript.
-A passive work-status row above the prompt shows a shared spinner and `Working on “request”` using
+A passive work-status row above the prompt shows a shared spinner and
+`Working (12s · esc to interrupt) “request”`, with only `esc` in bold, using
 the latest request actually present in the selected conversation. Whitespace collapses and long
 text is clipped on grapheme/cell boundaries. Drafts, rejected input and handled commands never
-replace that request. Without request metadata it shows `Working…`, not a guessed title.
-Manual and automatic context compaction instead show `Compacting context…` with the same animated
+replace that request. Without request metadata it shows `Working (12s · esc to interrupt)`, not a guessed title.
+Elapsed time starts at zero, uses runtime-owned timing across reconnects and advances locally while
+visible. Compacting uses `Compacting context` with the same timing and interruption hint.
+Narrow rows retain elapsed time, shortening the caption or omitting the hint as needed.
+Manual and automatic context compaction show `Compacting context` with the same animated
 spinner and no previous-request caption. Automatic work resuming after compaction restores its
 current request. Compaction-specific progress requires an updated service; older services omit this
 optional activity metadata.
@@ -389,7 +407,7 @@ content. Help uses the same scroll viewport and returns to the prior position/mo
 
 After a run actually settles, its final displayed section has a gray footer such as
 `Worked for 1m 30s • Sep 19 at 10:55 AM`, followed by a separate request line such as `“Review tab icons”`.
-Request text uses the same quotation marks as `Working on`; attachment badges stay outside them.
+Request text uses the same quotation marks as `Working`; attachment badges stay outside them.
 The excerpt comes from the actual preceding user/skill request, never a draft or assistant output.
 Duration, completion date and time keep their existing format on the first line. The request caption
 uses its own one-line width below it; only the caption is shortened, not the original message.
@@ -688,7 +706,7 @@ The default leader is **Ctrl+Space**. Press and release it, then press `c` to de
 `w` to reveal/focus the sidebar or `f` to reveal/focus search.
 `<leader> t` creates a terminal, `<leader> x` closes the selected terminal, and `<leader> [` / `]`
 select the previous/next terminal while the Terminal view is active.
-Ctrl+C is not intercepted by default: Neovim and shells receive it as native input.
+Ctrl+C clears drafts in Agent input; in Editor and Terminal, Neovim and shells still receive it as native input.
 If macOS reserves Ctrl+Space for input-source switching, change that system shortcut or radian's leader.
 
 Settings are read when the TUI starts from `$XDG_CONFIG_HOME/radian/keybindings.json`, falling back

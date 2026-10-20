@@ -1,5 +1,5 @@
 import {
-  createAgentSession, DefaultResourceLoader, defineTool, getAgentDir, ModelRuntime,
+  createAgentSession, DefaultResourceLoader, defineTool, getAgentDir, ModelRuntime, parseSkillBlock,
   SessionManager, SettingsManager, type AgentSession, type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
 import { Type, type ImageContent } from "@earendil-works/pi-ai";
@@ -16,6 +16,9 @@ import { FastMode } from "./fast-mode.ts";
 import type { UsageMonitor } from "../usage/monitor.ts";
 import { loadPromptImages } from "./prompt-attachments.ts";
 import { ManualCompaction } from "./manual-compaction.ts";
+import { summarizeRequest } from "./request-summary.ts";
+
+type QueuedUserMessage = Extract<ReturnType<AgentSession["agent"]["peekQueuedMessages"]>[number], { role: "user" }>;
 
 export type PiSessionOptions = {
   agentDir?: string;
@@ -110,6 +113,12 @@ export class PiSessionExecutor implements SessionExecutor {
   private disposed = false;
   private controlling = false;
   private compacting = false;
+  private inputRevision = 0;
+  private interrupting = false;
+  private interruptTask: Promise<Result<void, ExpectedError>> | undefined;
+  // Own undelivered messages only while interrupting; the SDK owns the live queue.
+  private interruptedMessages: QueuedUserMessage[] = [];
+  private started: { wall: number; monotonic: number } | undefined;
 
   constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode, private readonly imageLoader = loadPromptImages, private readonly compaction = new ManualCompaction()) {
     this.status = this.finalStatus(false);
@@ -119,7 +128,7 @@ export class PiSessionExecutor implements SessionExecutor {
   }
 
   commands() { return sessionCommands(this.session); }
-  get busy(): boolean { return this.controlling || this.runs.size > 0 || !this.session.isIdle || this.session.pendingMessageCount > 0; }
+  get busy(): boolean { return this.controlling || this.interrupting || !!this.interruptTask || this.interruptedMessages.length > 0 || this.runs.size > 0 || !this.session.isIdle || this.session.pendingMessageCount > 0; }
   get acceptsImages(): boolean { return this.session.model?.input.includes("image") ?? false; }
   get savedSessionId(): string { return this.session.sessionId; }
   get sessionFile(): string | undefined { return this.session.sessionFile; }
@@ -137,7 +146,14 @@ export class PiSessionExecutor implements SessionExecutor {
     messages.push(...this.activeTools.values());
     return { conversationId: this.savedSessionId, status: this.status, output: messages.join("\n\n").slice(-12000), error: this.error,
       ...(this.status === "working" && this.compacting ? { activity: "compacting" as const } : {}),
-      sections: this.transcript.sections, telemetry: this.telemetry.read() };
+      sections: this.transcript.sections, telemetry: this.telemetry.read(),
+      pendingMessages: this.queuedMessages().map((message) => {
+        const text = typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+        const skill = parseSkillBlock(text);
+        return summarizeRequest(skill ? skill.userMessage || `/skill:${skill.name}` : text,
+          typeof message.content === "string" ? 0 : message.content.filter((part) => part.type === "image").length);
+      }),
+      ...(this.started ? { runTiming: { startedAt: this.started.wall, elapsedMs: Math.max(0, performance.now() - this.started.monotonic) } } : {}) };
   }
 
   subscribe(listener: () => void): () => void {
@@ -155,7 +171,8 @@ export class PiSessionExecutor implements SessionExecutor {
       accepted = true; this.status = "working"; this.error = null; this.emit(); onAccepted?.();
     }).then((result): Result<void, ExpectedError> => {
       if (result.ok) this.transcript.notice("Context compacted", result.value.summary);
-      else if (accepted) this.transcript.notice("Compaction failed", `[${result.error.code}] ${result.error.message}`, "error");
+      else if (accepted) this.transcript.notice(result.error instanceof CancelledError ? "Compaction cancelled" : "Compaction failed",
+        `[${result.error.code}] ${result.error.message}`, result.error instanceof CancelledError ? "cancelled" : "error");
       this.status = before.status; this.error = before.error;
       this.telemetry.refreshUsage();
       return result.ok ? ok(undefined) : result;
@@ -163,26 +180,34 @@ export class PiSessionExecutor implements SessionExecutor {
       this.status = "failure"; this.error = "Unexpected compaction failure. Inspect runtime.log.";
       if (accepted) this.transcript.notice("Compaction failed", this.error, "error");
       throw error;
-    }).finally(() => { this.compacting = false; this.controlling = false; this.runs.delete(task); this.emit(); });
+    }).finally(() => { this.compacting = false; this.controlling = false; this.started = undefined; this.runs.delete(task); this.emit(); });
     this.runs.add(task); return task;
   }
 
   prompt(text: string, onAccepted?: () => void, imagePaths: readonly string[] = []): Promise<Result<void, ExpectedError>> {
+    return this.promptInput(text, onAccepted, imagePaths);
+  }
+
+  private promptInput(text: string, onAccepted?: () => void, imagePaths: readonly string[] = [], replayImages?: ImageContent[]): Promise<Result<void, ExpectedError>> {
+    if (this.interrupting) return Promise.resolve(err(new SessionError("SESSION_BUSY", "Interruption is in progress. Input was retained.")));
     if (this.controlling) return Promise.resolve(err(new SessionError("SESSION_BUSY", "Context compaction is in progress. Input was retained.")));
     if (this.closing || this.disposed) return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
+    const revisionAtSubmission = this.inputRevision;
     const admitted = Promise.withResolvers<void>();
     const previous = this.admission;
     this.admission = admitted.promise;
     const task = previous.then(async (): Promise<Result<void, ExpectedError>> => {
       if (this.closing || this.disposed) return err(new SessionError("SESSION_NOT_OPEN", "Session is closing."));
+      if (revisionAtSubmission !== this.inputRevision) return err(new CancelledError("Pending input was cancelled by interruption."));
       if (this.session.isCompacting && !this.session.isStreaming) return err(new SessionError("SESSION_BUSY", "Session is compacting; retry after it finishes."));
       // Preparation is part of admission: a later text request must not overtake
       // an earlier image request while its bytes are being read or normalized.
-      const loaded = imagePaths.length ? await this.imageLoader(imagePaths) : ok([]);
+      const loaded = replayImages ? ok(replayImages) : imagePaths.length ? await this.imageLoader(imagePaths) : ok([]);
       if (!loaded.ok) return loaded;
+      if (revisionAtSubmission !== this.inputRevision) return err(new CancelledError("Pending input was cancelled by interruption."));
       if (this.closing || this.disposed) return err(new SessionError("SESSION_NOT_OPEN", "Session closed while preparing image input."));
       if (this.session.isCompacting && !this.session.isStreaming) return err(new SessionError("SESSION_BUSY", "Session is compacting; retry after it finishes."));
-      if (imagePaths.length && !this.acceptsImages) return err(new CapabilityError("The selected model no longer accepts image input. Input was retained."));
+      if ((imagePaths.length || replayImages?.length) && !this.acceptsImages) return err(new CapabilityError("The selected model no longer accepts image input. Input was retained."));
       const images = loaded.value;
       const before = { status: this.status, error: this.error, aborted: this.aborted };
       const revision = this.runRevision;
@@ -194,6 +219,7 @@ export class PiSessionExecutor implements SessionExecutor {
       if (this.session.isIdle) { this.status = "working"; this.error = null; this.aborted = false; }
       const result = await withCleanup(() => capture(() => this.session.prompt(text, {
         streamingBehavior: "steer",
+        ...(replayImages ? { expandPromptTemplates: false } : {}),
         ...(images.length ? { images: [...images] } : {}),
         // Handled input may never start a model run; restore its previous display state.
         preflightResult: (disposition) => {
@@ -218,6 +244,56 @@ export class PiSessionExecutor implements SessionExecutor {
     this.runs.add(task); this.emit(); return task;
   }
 
+  private queuedMessages(): QueuedUserMessage[] {
+    const agent = this.session.agent, steering = agent.steeringMode, followUp = agent.followUpMode;
+    // SDK peek follows delivery mode and otherwise exposes only the first item.
+    // This synchronous snapshot must include all messages and their image blocks,
+    // without changing the user's actual delivery policy or persisted settings.
+    try {
+      agent.steeringMode = "all"; agent.followUpMode = "all";
+      return [...this.interruptedMessages, ...agent.peekQueuedMessages().filter((message): message is QueuedUserMessage => message.role === "user")];
+    } finally { agent.steeringMode = steering; agent.followUpMode = followUp; }
+  }
+
+  interrupt(onAccepted?: () => void): Promise<Result<void, ExpectedError>> {
+    if (this.closing || this.disposed) return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
+    if (this.interruptTask) { onAccepted?.(); return this.interruptTask; }
+    this.interrupting = true; this.inputRevision++;
+    const admission = this.admission, runs = [...this.runs];
+    this.interruptedMessages = this.queuedMessages();
+    this.session.clearQueue(); this.session.abortBash();
+    const abort = this.session.abort();
+    const task = (async (): Promise<Result<void, ExpectedError>> => {
+      onAccepted?.();
+      const stopped = await capture(async () => {
+        // Abort first: an extension command may itself be waiting for SDK idle.
+        await admission;
+        // Preflight already in flight can have queued input after the first clear.
+        this.interruptedMessages = this.queuedMessages(); this.session.clearQueue();
+        await Promise.all([abort, this.session.abort()]);
+        await Promise.all(runs);
+      });
+      if (!stopped.ok) return stopped;
+      if (this.closing || this.disposed || !this.interruptedMessages.length) return ok(undefined);
+      const messages = this.interruptedMessages;
+      const text = messages.map((message) => typeof message.content === "string" ? message.content
+        : message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n")).join("\n");
+      const images = messages.flatMap((message) => typeof message.content === "string" ? [] : message.content.filter((part) => part.type === "image"));
+      const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
+      let admitted = false;
+      this.interrupting = false;
+      const run = this.promptInput(text, () => {
+        admitted = true; this.interruptedMessages = []; this.emit(); accepted.resolve(ok(undefined));
+      }, [], images);
+      void run.then((result) => { if (!admitted) accepted.resolve(result); }, (error: unknown) => {
+        if (!admitted) accepted.reject(error);
+        else reportUnexpected(error, "resumed agent execution");
+      });
+      return accepted.promise;
+    })().finally(() => { this.interrupting = false; this.interruptTask = undefined; this.emit(); });
+    this.interruptTask = task; this.emit(); return task;
+  }
+
   async beforeNewSession(): Promise<Result<void, ExpectedError>> {
     if (this.disposed) return ok(undefined);
     const result = await this.session.extensionRunner.emit({ type: "session_before_switch", reason: "new" });
@@ -236,6 +312,7 @@ export class PiSessionExecutor implements SessionExecutor {
       await withCleanup(async () => {
         // Run failure/cancellation is not cleanup failure, but unexpected rejections still propagate.
         await Promise.all(this.runs);
+        if (this.interruptTask) await this.interruptTask;
         await this.session.extensionRunner.emit({ type: "session_shutdown", reason });
       }, async () => {
         this.telemetry.dispose(); this.session.dispose(); this.unsubscribe(); this.listeners.clear(); this.disposed = true;
@@ -247,9 +324,13 @@ export class PiSessionExecutor implements SessionExecutor {
   private handleEvent(event: AgentSessionEvent): void {
     const completion = this.transcript.handle(event);
     switch (event.type) {
-      case "agent_start": this.runRevision++; this.status = "working"; break;
+      case "agent_start":
+        this.started ??= { wall: Date.now(), monotonic: performance.now() };
+        this.runRevision++; this.status = "working"; break;
       case "auto_retry_start": this.status = "working"; break;
-      case "compaction_start": this.compacting = true; this.status = "working"; break;
+      case "compaction_start":
+        this.started ??= { wall: Date.now(), monotonic: performance.now() };
+        this.compacting = true; this.status = "working"; break;
       case "compaction_end":
         // Manual control restores its settled status in compact() before clearing
         // this activity; otherwise an end-event snapshot flashes the old request.
@@ -263,6 +344,7 @@ export class PiSessionExecutor implements SessionExecutor {
       case "tool_execution_update": this.activeTools.set(event.toolCallId, `Running ${event.toolName}: ${toolText(event.partialResult)}`); break;
       case "tool_execution_end": this.activeTools.delete(event.toolCallId); break;
       case "agent_settled":
+        this.started = undefined;
         this.runRevision++; this.aborted = event.aborted; this.status = this.finalStatus(event.aborted);
         this.telemetry.refreshUsage(); break;
       // agent_end may precede retry/compaction/follow-up; never mark it complete.
