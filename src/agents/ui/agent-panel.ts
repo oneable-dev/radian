@@ -53,9 +53,11 @@ export class AgentPanel {
   private readonly sessions: SessionTabs;
   private readonly children: SubagentSummary;
   private readonly runtimePanel: BoxRenderable;
+  private readonly transcriptArea: BoxRenderable;
   private readonly composer: BoxRenderable;
   private readonly statusRow: BoxRenderable;
-  private statusRows = 3;
+  private statusRows = 0;
+  private layoutGap = 0;
   private readonly sessionStatus: SessionStatus;
   private readonly completion: CompletionMenu;
   private readonly transcript: TranscriptPanel;
@@ -93,7 +95,7 @@ export class AgentPanel {
       flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
     this.emptyPanel.add(this.title); this.emptyPanel.add(this.details);
     this.root.add(this.sessions.root); this.root.add(this.emptyPanel);
-    this.runtimePanel = new BoxRenderable(renderer, { width: "100%", flexGrow: 1, minHeight: 0, marginTop: 1, flexDirection: "column", gap: 1 });
+    this.runtimePanel = new BoxRenderable(renderer, { width: "100%", flexGrow: 1, minHeight: 0, flexDirection: "column", gap: 0 });
     this.transcript = new TranscriptPanel(renderer, { notice, changed, focusPrompt: () => this.prompt.focus(), initialScroll, saveScroll,
       ...transcriptOptions, ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}), ...(actions.onImage ? { image: actions.onImage } : {}) });
     this.transcriptScroll = this.transcript.scroll;
@@ -102,7 +104,7 @@ export class AgentPanel {
     const interruptKey = () => transcriptOptions.keyHint?.("agent.interrupt", "prompt") ?? "esc";
     this.runStatus = new RunStatus(renderer, interruptKey);
     this.pendingMessages = new PendingMessages(renderer, interruptKey);
-    const transcriptArea = new BoxRenderable(renderer, { id: "agent-transcript-area", width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "column", overflow: "hidden" });
+    const transcriptArea = this.transcriptArea = new BoxRenderable(renderer, { id: "agent-transcript-area", width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "column", overflow: "hidden" });
     transcriptArea.add(this.transcriptScroll);
     this.prompt = new PromptInput(renderer, notice, (content) => actions.onInspectInput?.(content));
     for (const [id, draft] of Object.entries(actions.initialDrafts ?? {})) this.drafts.set(id, draft);
@@ -118,12 +120,14 @@ export class AgentPanel {
     this.sessionStatus = new SessionStatus(renderer);
     this.completion = new CompletionMenu(renderer, this.prompt, () => this.active ? this.promptSessionId : null, actions.onComplete,
       () => { this.resizeComposer(); changed(); }, () => this.completionRows());
-    const statusRow = this.statusRow = new BoxRenderable(renderer, { id: "transcript-status-row", width: "100%", height: 3, paddingY: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
+    const statusRow = this.statusRow = new BoxRenderable(renderer, { id: "transcript-status-row", width: "100%", height: 1, visible: false, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.children = new SubagentSummary(renderer);
     statusRow.add(this.runStatus.root); statusRow.add(this.children.root);
     this.root.on("resize", () => this.children.resize(this.root.width));
-    this.runtimePanel.add(transcriptArea); this.runtimePanel.add(statusRow);
-    this.runtimePanel.add(this.pendingMessages.root); this.runtimePanel.add(composer); this.runtimePanel.add(this.completion.root); this.runtimePanel.add(this.sessionStatus.root); this.root.add(this.runtimePanel);
+    // Keep completion and telemetry attached to the composer; only the three outer regions use gap.
+    const inputArea = new BoxRenderable(renderer, { id: "agent-input-area", width: "100%", minWidth: 0, minHeight: 0, flexShrink: 0, flexDirection: "column" });
+    inputArea.add(this.pendingMessages.root); inputArea.add(composer); inputArea.add(this.completion.root); inputArea.add(this.sessionStatus.root);
+    this.runtimePanel.add(transcriptArea); this.runtimePanel.add(statusRow); this.runtimePanel.add(inputArea); this.root.add(this.runtimePanel);
     theme.input(this.prompt); theme.scrollbars(this.transcriptScroll); theme.focusBorder(composer);
     theme.bind(this.root, (colors) => {
       this.title.fg = colors.text; this.details.fg = colors.muted;
@@ -229,7 +233,6 @@ export class AgentPanel {
     if (this.disposed || this.root.isDestroyed) return;
     const { horizontal } = panelSpacing(this.renderer);
     this.runtimePanel.marginTop = 0;
-    this.runtimePanel.gap = 0;
     // Bleed the surface through the pane inset, keeping its text aligned with the other rows.
     this.resizeComposer();
     this.composer.marginX = -horizontal;
@@ -245,19 +248,21 @@ export class AgentPanel {
     const controls = (this.sessions.root.visible ? 1 : 0) + this.sessionStatus.root.height + (showStatus ? 1 : 0) + 1 + menuRowsBeforeLayout;
     this.pendingMessages.update(this.pending ?? [], this.active, Math.min(Math.floor(this.root.height / 3), Math.max(0, this.root.height - controls)));
     const signature = JSON.stringify([this.pendingMessages.rows, this.root.height, this.prompt.width, this.prompt.height, this.composer.height, this.sessions.root.visible,
-      this.statusRows, showStatus, this.sessionStatus.root.height, requested, this.completion?.open, this.completion?.root.height]);
+      this.statusRows, this.layoutGap, this.transcriptArea.visible, showStatus, this.sessionStatus.root.height, requested, this.completion?.open, this.completion?.root.height]);
     if (signature === this.composerLayout) return;
     this.composerLayout = signature;
     const menuRows = this.completion?.open ? this.completion.root.height : 0;
     const fixedRows = (this.sessions.root.visible ? 1 : 0) + this.sessionStatus.root.height + menuRows + this.pendingMessages.rows;
-    // Tiny windows keep controls usable; normal layouts give work status a blank row on both sides.
-    const statusRows = showStatus ? this.root.height >= fixedRows + 5 ? 3 : 1 : 0;
-    if (this.statusRows !== statusRows) {
+    const statusRows = showStatus ? 1 : 0;
+    // Reserve one prompt row and one conversation row before decorating their boundaries.
+    const boundaries = 1 + statusRows;
+    const gap = this.root.height >= fixedRows + statusRows + boundaries + 2 ? 1 : 0;
+    if (this.statusRows !== statusRows || this.layoutGap !== gap) {
       this.transcript.prepareLayoutChange();
       this.statusRows = statusRows; this.statusRow.visible = showStatus;
-      this.statusRow.height = statusRows; this.statusRow.paddingY = statusRows === 3 ? 1 : 0;
+      this.layoutGap = gap; this.runtimePanel.gap = gap;
     }
-    const reserved = this.reservedRows() + menuRows;
+    const reserved = this.reservedRows(true) + menuRows;
     // Prefer one conversation row over prompt padding while retaining the telemetry gutters.
     const paddingRows = Math.max(0, Math.min(2, this.root.height - reserved - 2));
     // Preserve a conversation row when possible; temporary menus may use the last one.
@@ -265,8 +270,8 @@ export class AgentPanel {
     const lines = Math.max(1, Math.min(6, capacity, requested));
     const height = lines + paddingRows;
     const showTranscript = this.root.height > reserved + height;
-    if (this.transcriptScroll.visible !== showTranscript) {
-      this.transcript.prepareLayoutChange(); this.transcriptScroll.visible = showTranscript;
+    if (this.transcriptScroll.visible !== showTranscript || this.transcriptArea.visible !== showTranscript) {
+      this.transcript.prepareLayoutChange(); this.transcriptScroll.visible = this.transcriptArea.visible = showTranscript;
     }
     if (this.composer.height !== height || this.prompt.height !== lines) {
       this.transcript.prepareLayoutChange();
@@ -287,8 +292,9 @@ export class AgentPanel {
     const hint = this.transcriptOptions.keyHint?.("transcript.latest", this.transcript.keyContext() ?? "transcript") ?? "";
     this.bottomButton.update(this.active && this.transcript.canFollowLatest, hint, space);
   };
-  private reservedRows(): number {
-    return (this.sessions.root.visible ? 1 : 0) + this.statusRows + this.sessionStatus.root.height + this.pendingMessages.rows;
+  private reservedRows(transcript = this.transcriptArea.visible): number {
+    const boundaries = (transcript ? 1 : 0) + (this.statusRows ? 1 : 0);
+    return (this.sessions.root.visible ? 1 : 0) + this.statusRows + this.sessionStatus.root.height + this.pendingMessages.rows + this.layoutGap * boundaries;
   }
   private completionRows(): number {
     return Math.max(1, this.root.height - this.reservedRows() - this.composer.height);

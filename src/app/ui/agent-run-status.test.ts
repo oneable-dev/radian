@@ -43,10 +43,11 @@ test("프롬프트 위에 실제 요청과 실행 스피너를 표시하고 상�
     expect(app.renderer.root.findDescendantById("agent-request")).toBeUndefined();
     expect(scroll.y).toBe(app.get("agent-transcript-area").y);
     const group = app.get("transcript-status-row");
-    expect(group.height).toBe(3); expect(row.y).toBe(group.y + 1);
+    expect(group.height).toBe(1); expect(row.y).toBe(group.y);
+    expect(group.y).toBe(scroll.viewport.y + scroll.viewport.height + 1);
     expect(app.get("agent-composer").y).toBe(row.y + row.height + 1);
     const initialFrame = app.captureCharFrame().split("\n");
-    for (const gutter of [group.y, group.y + group.height - 1]) expect(initialFrame[gutter]!.slice(group.x, group.x + group.width).trim()).toBe("");
+    for (const gutter of [group.y - 1, group.y + group.height]) expect(initialFrame[gutter]!.slice(group.x, group.x + group.width).trim()).toBe("");
     expect(app.captureCharFrame()).not.toMatch(/(?:INPUT|TRANSCRIPT) · \d+\/\d+|Request Implement/);
 
     // Reading old output must not move the running-request anchor or overwrite the draft.

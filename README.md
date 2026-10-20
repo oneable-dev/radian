@@ -346,9 +346,10 @@ a theme-adaptive neutral gray, independent of accent hues or colored `muted` ove
 User, tool and notice blocks retain subtle host-palette tints and one row of internal padding above
 and below their content, including folded tools and single-line skill labels. Plain Agent replies
 and Thinking have no internal vertical padding. The transcript's parent column owns the one-row gap
-between visible section surfaces and one-row top/bottom edge gutters, including below the final
-Context compacted card. These gutters remain on resize; legacy unstructured output keeps its
-existing spacing.
+between visible section surfaces and the leading gutter, but adds no bottom padding. The Agent
+view owns the one-row boundary gaps between the transcript, optional work-status row and input
+group, including below the final Context compacted card. Legacy unstructured output keeps its
+internal spacing.
 
 Agent answers and Thinking use OpenTUI's `MarkdownRenderable` for headings, emphasis, links,
 lists, fenced code and tables. Tool commands/results, user messages and explicit skill names remain
@@ -531,10 +532,11 @@ The prompt surface reaches both edges of the Agent pane; its internal padding al
 text with the work-status and telemetry rows. The sidebar divider sits at the right edge of its
 character cell, avoiding a half-cell gap beside the prompt surface. The empty prompt has no marker or placeholder,
 and focusing it keeps the same surface background; the caret and left border indicate focus.
-The work-status row above the prompt also has one blank row above and below its content. Completion
-candidates appear below the prompt and before the padded telemetry row. Constrained windows first
-reduce the prompt's internal padding; if necessary, the work-status gutters collapse to retain
-usable input and conversation space. The lower telemetry keeps its one-row gutters. A temporary
+The transcript, optional single-line work-status row and input group use a one-row parent gap;
+neither the transcript end nor work-status row adds its own boundary padding. Pending messages,
+the composer, completion candidates and padded telemetry remain adjacent inside the input group.
+Constrained windows retain usable input and conversation space before adding boundary gaps or
+prompt padding. The lower telemetry keeps its one-row gutters. A temporary
 zero-height conversation viewport is hidden rather than painting over adjacent controls, and
 closing completion restores its position. Narrow panels shorten bars and omit settings or the
 countdown before dropping either resource percentage. Theme changes preserve the current draft and focus.

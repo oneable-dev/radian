@@ -107,7 +107,7 @@ export class TranscriptPanel {
     this.scroll.viewport.add(this.empty);
     this.scroll.verticalScrollBar.on("change", this.rememberScroll);
     this.scroll.content.on("resize", this.applyTarget);
-    this.scroll.viewport.on("resize", this.applyTarget);
+    this.scroll.viewport.on("resize", this.resize);
     renderer.on("focused_renderable", this.focusChanged);
     renderer.on("resize", this.resize);
     renderer.addPostProcessFn(this.reflowCompletions);
@@ -463,7 +463,8 @@ export class TranscriptPanel {
     // Only tinted cards keep internal padding; plain prose uses the column's separation.
     const spacing = transcriptSpacing();
     this.scroll.content.gap = this.legacy ? 0 : spacing.sectionGap;
-    this.scroll.content.paddingY = !this.legacy && !this.help.visible && this.order.length ? spacing.sectionGap : 0;
+    // AgentPanel owns the bottom boundary to status/input; it must not be padded again here.
+    this.scroll.content.paddingTop = !this.legacy && !this.help.visible && this.order.length && this.scroll.viewport.height > 1 ? spacing.sectionGap : 0;
     for (const row of this.rows.values()) this.paintRow(row);
   }
   get canFollowLatest(): boolean {
@@ -758,8 +759,7 @@ export class TranscriptPanel {
         const y = reading ? reader.y + reader.visualCursor.visualRow : row.box.y;
         const top = this.scroll.viewport.y;
         const bottom = top + this.scroll.viewport.height - 1;
-        const gutter = row.section.id === this.order.at(-1) && !this.legacy ? transcriptSpacing().sectionGap : 0;
-        const end = !reading && row.box.height + gutter <= bottom - top + 1 ? row.box.y + row.box.height - 1 + gutter : y;
+        const end = !reading && row.box.height <= bottom - top + 1 ? row.box.y + row.box.height - 1 : y;
         if (y < top) this.scroll.scrollBy(y - top);
         else if (end > bottom) this.scroll.scrollBy(end - bottom);
       }
@@ -798,7 +798,7 @@ export class TranscriptPanel {
     this.renderer.off("resize", this.resize);
     this.renderer.removePostProcessFn(this.reflowCompletions);
     this.scroll.verticalScrollBar.off("change", this.rememberScroll);
-    this.scroll.content.off("resize", this.applyTarget); this.scroll.viewport.off("resize", this.applyTarget);
+    this.scroll.content.off("resize", this.applyTarget); this.scroll.viewport.off("resize", this.resize);
     for (const row of this.rows.values()) {
       row.preview?.dispose();
       if (!row.header.isDestroyed) row.header.syntaxStyle = null;

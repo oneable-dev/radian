@@ -86,7 +86,7 @@ test.each([120, 60])("너비 %i에서 도구·답변·압축 안내·프롬프�
   } finally { await app.close(); }
 });
 
-test.each([120, 60])("너비 %i에서 부모는 섹션 사이와 목록 위아래에 한 줄 간격을 유지한다", async (width) => {
+test.each([120, 60])("너비 %i에서 Transcript는 섹션 사이와 상단만 띄우고 하단 구역 여백은 중복하지 않는다", async (width) => {
   // Different section types share one spacing owner, including initially folded images and tools.
   const mixed: readonly TranscriptSection[] = [...sections, { id: "image", kind: "notice", title: "read", text: "clipboard-1.png", status: "complete",
     image: { id: "a".repeat(64), name: "clipboard-1.png", mimeType: "image/png", byteLength: 80 } }];
@@ -101,7 +101,7 @@ test.each([120, 60])("너비 %i에서 부모는 섹션 사이와 목록 위아�
       const next = cards[index + 1]; if (next) expect(next.y - card.y - card.height).toBe(1);
     }
     const last = cards.at(-1)!;
-    expect(app.scroll.scrollHeight - (last.y + last.height - app.scroll.content.y)).toBe(1);
+    expect(app.scroll.scrollHeight - (last.y + last.height - app.scroll.content.y)).toBe(0);
   };
   try {
     app.resize(width, 30); await app.render(); expectGaps();
@@ -146,7 +146,8 @@ test.each(sections)("$kind 섹션은 작은 화면에서도 색상 카드와 평
       // Resize may scroll the card, but must not double the prose gutters or overlap the footer.
       expectVerticalInsets(app.card, inset);
       expect(app.card.height).toBe(inset ? section.id === "notice" ? 5 : 3 : 1);
-      expect(app.card.y - app.scroll.content.y).toBe(1);
+      expect(app.card.y - app.scroll.content.y).toBe(app.scroll.viewport.height > 1 ? 1 : 0);
+      if (!inset) expect(app.captureCharFrame()).toContain(section.text);
       expect(app.captureCharFrame().split("\n")[height - 1]).toContain("Radian");
       expect(app.view.promptDrafts.a1).toBe("Keep my draft");
     }
