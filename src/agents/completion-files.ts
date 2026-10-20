@@ -70,3 +70,4 @@ export async function completeFiles(cwd: string, query: string, signal?: AbortSi
   for (const candidate of checked) { if (!candidate.ok) return candidate; if (candidate.value) items.push(candidate.value); }
   return ok({ items, truncated: result.truncated });
 }
+
