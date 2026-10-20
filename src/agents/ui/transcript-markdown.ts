@@ -1,27 +1,28 @@
-import { CodeRenderable, MarkdownRenderable, RenderableEvents, SyntaxStyle, TextAttributes, TextBufferRenderable, type CliRenderer, type Renderable, type StyleDefinitionInput } from "@opentui/core";
+import { CodeRenderable, MarkdownRenderable, RenderableEvents, SyntaxStyle, TextBufferRenderable, type CliRenderer, type Renderable, type StyleDefinitionInput } from "@opentui/core";
 import { reportUnexpected } from "../../errors.ts";
-import { uiTheme, type UiColors } from "../../ui/theme.ts";
-import { transcriptThinkingColor } from "./transcript-style.ts";
+import { uiTheme } from "../../ui/theme.ts";
+import { codeStyles, syntaxDefinition, type UiStyles } from "../../ui/theme-styles.ts";
 
 function descendants(root: Renderable): Renderable[] {
   return root.getChildren().flatMap((child) => [child, ...descendants(child)]);
 }
 
 // One pair of styles belongs to the panel, not to every message in a long transcript.
-export function updateTranscriptMarkdownStyles(syntax: SyntaxStyle, colors: UiColors, thinking: boolean): void {
-  const fg = thinking ? transcriptThinkingColor(colors) : colors.text;
-  const base = { fg, italic: thinking };
-  const register = (name: string, style: StyleDefinitionInput = {}) => syntax.registerStyle(name, { ...base, ...style });
-  register("default"); register("markup"); register("conceal", { fg: thinking ? fg : colors.muted });
-  register("markup.heading", { bold: true });
-  for (let depth = 1; depth <= 6; depth++) register(`markup.heading.${depth}`, { bold: true });
-  register("markup.strong", { bold: true }); register("markup.italic", { italic: true });
-  for (const name of ["markup.raw", "markup.raw.block", "markup.link", "markup.link.url", "markup.link.label"]) {
-    register(name, { fg: thinking ? fg : colors.info, ...(name.startsWith("markup.link") ? { underline: true } : {}) });
-  }
-  for (const [name, color] of [["keyword", colors.keyword], ["string", colors.success], ["number", colors.number], ["comment", colors.muted]] as const) {
-    register(name, { fg: thinking ? fg : color });
-  }
+export function updateTranscriptMarkdownStyles(syntax: SyntaxStyle, styles: UiStyles, thinking: boolean): void {
+  const thought = syntaxDefinition(styles["transcript.thinking"]);
+  // Token backgrounds inherit the owner surface; baking terminal-default snapshots into
+  // syntax runs would keep an old background after a palette change.
+  const register = (name: string, value: StyleDefinitionInput) => syntax.registerStyle(name,
+    thinking ? { fg: styles["transcript.thinking"].fg, bold: value.bold ?? false, underline: value.underline ?? false,
+      italic: thought.italic ?? false, dim: value.dim ?? false } : value);
+  for (const [name, value] of Object.entries(codeStyles(styles))) register(name, value);
+  register("markup", syntaxDefinition(styles["syntax.text"]));
+  register("conceal", syntaxDefinition(styles["markup.tableBorder"]));
+  register("markup.heading", syntaxDefinition(styles["markup.heading"]));
+  for (const depth of [1, 2, 3, 4, 5, 6] as const) register(`markup.heading.${depth}`, syntaxDefinition(styles[`markup.heading.${depth}`]));
+  register("markup.strong", syntaxDefinition(styles["markup.strong"])); register("markup.italic", syntaxDefinition(styles["markup.italic"]));
+  for (const name of ["markup.raw", "markup.raw.block"]) register(name, syntaxDefinition(styles["markup.inlineCode"]));
+  for (const name of ["markup.link", "markup.link.url", "markup.link.label"]) register(name, syntaxDefinition(styles["markup.link"]));
 }
 
 // Markdown owns the display only. The panel retains a separate read-only source
@@ -32,20 +33,22 @@ export class TranscriptMarkdown {
   private settling: number | undefined;
   private source = "";
   private streaming = true;
-  private colors: UiColors;
+  private styles: UiStyles;
 
   constructor(renderer: CliRenderer, syntax: SyntaxStyle, private readonly thinking: boolean, private readonly changing: () => void, private readonly notice: (message: string) => void) {
-    const theme = uiTheme(renderer); this.colors = theme.colors;
+    const theme = uiTheme(renderer); this.styles = theme.styles;
     this.root = new MarkdownRenderable(renderer, { width: "100%", minWidth: 0, minHeight: 1, flexShrink: 0,
       syntaxStyle: syntax, streaming: true, conceal: true, concealCode: false, internalBlockMode: "top-level",
       tableOptions: { style: "grid", widthMode: "content", wrapMode: "word", cellPaddingX: 1, cellPaddingY: 0 },
-      renderBefore: () => this.paintLeaves(theme.colors), renderAfter: () => this.settle(),
+      renderBefore: () => this.paintLeaves(theme.styles), renderAfter: () => this.settle(),
     });
     this.root.once(RenderableEvents.DESTROYED, () => { this.revision++; });
-    theme.bind(this.root, (colors) => {
-      this.changing(); this.colors = colors;
-      this.root.fg = this.thinking ? transcriptThinkingColor(colors) : colors.text;
-      this.root.bg = colors.panel; this.root.refreshStyles();
+    theme.bindStyles(this.root, (styles) => {
+      this.changing(); this.styles = styles;
+      const value = styles[this.thinking ? "transcript.thinking" : "ui.text"];
+      this.root.fg = value.fg; this.root.bg = value.bg;
+      this.root.tableOptions = { ...this.root.tableOptions, borderColor: styles[this.thinking ? "transcript.thinking" : "markup.tableBorder"].fg };
+      this.root.refreshStyles();
     });
   }
 
@@ -54,13 +57,13 @@ export class TranscriptMarkdown {
     this.changing(); this.source = source; this.streaming = streaming; this.revision++; this.settling = undefined;
     // Native incremental inline styling paints immediately while bundled grammar
     // highlighting warms up; completed messages must not start as blank blocks.
-    this.root.streaming = true; this.root.content = source; this.paintLeaves(this.colors);
+    this.root.streaming = true; this.root.content = source; this.paintLeaves(this.styles);
   }
 
-  private paintLeaves(colors: UiColors): void {
+  private paintLeaves(styles: UiStyles): void {
     for (const child of descendants(this.root)) if (child instanceof TextBufferRenderable) {
-      child.attributes = this.thinking ? TextAttributes.ITALIC : TextAttributes.NONE;
-      if (this.thinking) child.fg = transcriptThinkingColor(colors);
+      child.attributes = this.thinking ? styles["transcript.thinking"].attributes : styles["ui.text"].attributes;
+      if (this.thinking) child.fg = styles["transcript.thinking"].fg;
       if (child instanceof CodeRenderable) {
         child.wrapMode = "word";
         // Fenced contents are already plain code, so paint them before syntax highlighting settles.

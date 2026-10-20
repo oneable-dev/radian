@@ -3,6 +3,7 @@ import { maximumPreviewImageBytes, type TranscriptImage, type TranscriptImagePro
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { reportUnexpected } from "../../errors.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { paintText } from "../../ui/theme-styles.ts";
 
 const expectedImageErrors = new Set<ImageError["code"]>(["unsupported-format", "unsupported-color-space", "malformed-data", "dimension-limit", "memory-limit", "out-of-memory", "unsupported-feature", "busy"]);
 
@@ -23,7 +24,7 @@ export class TranscriptImagePreview {
     this.spinner = new LoadingSpinner(renderer, { id: `${id}:loading` });
     this.spinner.root.position = "absolute"; this.spinner.root.top = 0; this.spinner.root.left = 0; this.spinner.root.zIndex = 1;
     this.root.add(this.message); this.root.add(this.spinner.root);
-    uiTheme(renderer).bind(this.root, (colors) => { this.message.fg = colors.muted; this.spinner.root.fg = colors.accent; });
+    uiTheme(renderer).bindStyles(this.root, (styles) => { paintText(this.message, styles["ui.muted"]); paintText(this.spinner.root, styles["status.working"]); });
     this.root.once(RenderableEvents.DESTROYED, () => this.dispose());
   }
 

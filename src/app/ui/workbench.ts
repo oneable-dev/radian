@@ -31,7 +31,7 @@ import { KeyRouter } from "../../keybindings/router.ts";
 import { inScope, type CommandId, type KeyContext } from "../../keybindings/commands.ts";
 import type { TerminalTheme } from "../../ui/embedded-terminal/theme.ts";
 import { uiTheme, type UiTheme } from "../../ui/theme.ts";
-import type { ThemeRole } from "../../ui/theme-config.ts";
+import { paintText, styleChunk, type StyleGroup } from "../../ui/theme-styles.ts";
 
 export type WorkbenchActions = AgentActions & {
   onCloseSession: (worktreeId: string, sessionId: string) => void;
@@ -97,30 +97,28 @@ export class Workbench {
 
   constructor(private readonly renderer: CliRenderer, private readonly selection: WorkspaceSelection, private readonly actions: WorkbenchActions) {
     this.theme = uiTheme(renderer);
-    const colors = this.theme.colors;
     this.keymap = actions.keymap ?? defaultKeymap();
     this.workViews = structuredClone(actions.initialWorkViews ?? { active: {}, agentScroll: {} });
-    this.root = new BoxRenderable(renderer, { id: "workspace-screen", width: "100%", height: "100%", flexDirection: "column", backgroundColor: colors.panel });
+    this.root = new BoxRenderable(renderer, { id: "workspace-screen", width: "100%", height: "100%", flexDirection: "column" });
     const panels = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, flexDirection: "row" });
     // Put the separator on the cell edge so full-bleed surfaces meet it without a half-cell gap.
     this.sidebar = new BoxRenderable(renderer, { id: "workspace-sidebar", width: 34, flexShrink: 0, flexDirection: "column",
       border: ["right"], customBorderChars: { ...BorderChars.single, vertical: "▕" }, paddingX: 1 });
     this.searchBox = new BoxRenderable(renderer, {
       id: "workspace-search-box", width: "auto", height: 3, minWidth: 0, flexShrink: 0,
-      flexDirection: "column", backgroundColor: colors.surface,
+      flexDirection: "column",
       onMouseDown: (event) => { if (event.button === 0 && !this.search.focused) this.search.focus(); },
     });
     this.search = new InputRenderable(renderer, {
       id: "workspace-search", width: "auto", minWidth: 0, flexShrink: 0,
-      placeholder: "Search repo/worktree/branch", placeholderColor: colors.muted,
-      textColor: colors.text, backgroundColor: colors.panel, focusedBackgroundColor: colors.selected,
+      placeholder: "Search repo/worktree/branch",
     });
     this.searchBox.add(this.search); this.sidebar.add(this.searchBox);
     this.tree = new ScrollBoxRenderable(renderer, {
       id: "workspace-tree", flexGrow: 1, minHeight: 0, marginTop: 1, scrollX: false,
       contentOptions: { flexDirection: "column" },
     });
-    this.resultMessage = this.text("", "muted");
+    this.resultMessage = this.text("", "ui.muted");
     this.history = new SessionHistoryPanel(renderer, {
       ...(actions.onListHistory ? { list: actions.onListHistory } : {}),
       ...(actions.onResumeSession ? { resume: actions.onResumeSession } : {}),
@@ -200,8 +198,8 @@ export class Workbench {
     this.theme.scrollbars(this.tree);
     this.theme.focusBorder(this.sidebar);
     this.tree.on("focused", this.repaintRows); this.tree.on("blurred", this.repaintRows);
-    this.theme.bind(this.root, (colors) => {
-      this.root.backgroundColor = colors.panel;
+    this.theme.bindStyles(this.root, (styles) => {
+      this.root.backgroundColor = styles["ui.text"].bg;
       this.repaintSearch(); this.paintRows(this.visibleRows()); this.paintTabs();
     });
   }
@@ -339,9 +337,9 @@ export class Workbench {
     this.history.refreshVisible();
   }
 
-  private text(content: string, role: ThemeRole = "text"): TextRenderable {
+  private text(content: string, role: StyleGroup = "ui.label"): TextRenderable {
     const text = new TextRenderable(this.renderer, { content, selectable: false, wrapMode: "none", height: 1, flexShrink: 0 });
-    this.theme.bind(text, (colors) => { text.fg = colors[role]; });
+    this.theme.bindStyles(text, (styles) => paintText(text, styles[role]));
     return text;
   }
 
@@ -546,7 +544,7 @@ export class Workbench {
 
   private repaintSearch = (): void => {
     if (this.disposed || this.searchBox.isDestroyed) return;
-    this.searchBox.backgroundColor = this.search.focused ? this.theme.colors.selected : this.theme.colors.surface;
+    this.searchBox.backgroundColor = this.theme.styles[this.search.focused ? "ui.inputFocused" : "ui.input"].bg;
   };
 
   private spaceRows(rows: readonly WorkspaceRow[]): void {
@@ -659,7 +657,7 @@ export class Workbench {
   };
 
   private paintRows(rows: readonly WorkspaceRow[]): void {
-    const colors = this.theme.colors;
+    const styles = this.theme.styles;
     for (const row of rows) {
       const view = this.rows.get(row.key);
       if (!view) continue;
@@ -667,22 +665,23 @@ export class Workbench {
       const cursor = row.key === this.navigationKey && this.tree.focused, active = this.selected(row);
       const highlighted = this.tree.focused ? cursor : active;
       const label = `${presentation.icon} ${singleLine(row.label)}`;
+      const itemStyle = styles[highlighted ? "sidebar.selected" : "sidebar.item"];
+      paintText(view.text, itemStyle);
       view.text.content = row.kind === "worktree" ? new StyledText([
-        { __isChunk: true, text: `${label}\n`, fg: highlighted ? colors.accent : colors[presentation.color] },
-        { __isChunk: true, text: `${icons.branch} ${singleLine(row.worktree.branch ?? "detached HEAD")}`, fg: highlighted ? colors.accent : active ? colors.text : colors.muted },
+        styleChunk(`${label}\n`, itemStyle),
+        styleChunk(`${icons.branch} ${singleLine(row.worktree.branch ?? "detached HEAD")}`, styles[highlighted ? "sidebar.selected" : active ? "sidebar.item" : "sidebar.branch"]),
       ]) : label;
-      view.text.fg = highlighted ? colors.accent : colors[presentation.color];
-      view.text.attributes = active ? TextAttributes.BOLD : 0;
-      view.box.backgroundColor = colors.panel;
-      view.body.backgroundColor = colors.panel;
+      view.text.attributes = itemStyle.attributes | (active ? TextAttributes.BOLD : 0);
+      view.box.backgroundColor = styles["ui.text"].bg;
+      view.body.backgroundColor = styles["ui.text"].bg;
       if (row.kind === "worktree") {
         view.box.customBorderChars = highlighted ? BorderChars.single : hiddenWorkspaceBorder;
-        view.box.borderColor = colors.accent;
+        view.box.borderColor = styles["ui.focusBorder"].fg;
         // Later siblings must not erase the selected item's shared border row.
         view.box.zIndex = highlighted ? 2 : active ? 1 : 0;
         if (view.status) {
           view.status.visible = row.worktree.sessions.some((session) => sessionStatus(session) === "failure");
-          view.status.fg = colors.error;
+          paintText(view.status, styles["status.error"]);
         }
       }
     }

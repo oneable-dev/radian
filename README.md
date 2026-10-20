@@ -774,6 +774,42 @@ Available roles: `text`, `panel`, `surface`, `muted`, `selected`, `accent`, `suc
 terminal; derived roles use the overridden base colors. Missing optional files use the terminal
 theme; invalid files or missing explicit paths are errors. Restart only the TUI after editing a file.
 
+Components use purpose-specific style groups on top of these shared color defaults. For example,
+`status.success`, `syntax.string` and `git.graph.1` may start with the same green, but overriding
+one group does not change the others. Agent code blocks and Git diffs share the same syntax groups.
+Inline Markdown code defaults to the string/green color, independently of links and status messages.
+
+Add an optional `styles` object to the same file:
+
+```json
+{
+  "accent": "#7DD3FC",
+  "styles": {
+    "status.success": { "fg": "#98C379", "bold": true },
+    "syntax.string": { "fg": "#A8DCA0" },
+    "footer.key": { "fg": "#C678DD", "underline": true },
+    "completion.selected": { "fg": "#7DD3FC", "bg": null },
+    "markup.tableBorder": { "fg": "#5C6370" }
+  }
+}
+```
+
+Style fields are `fg`, `bg` (`#RRGGBB`), and boolean `bold`, `italic`, `underline`. Omitted fields
+keep their defaults; `bg: null` removes an explicit background, and `false` removes an emphasis
+attribute. Shared color overrides are applied first, then group overrides. `markup.heading` is
+the default for `markup.heading.1` through `.6`; a level-specific setting takes precedence.
+Unknown group names, attributes and invalid values are errors; arbitrary links and wildcards are
+not supported. See [the complete group list](src/ui/theme-style-config.ts) for exact names.
+
+Groups cover common UI (`ui.*`), completion, footer shortcuts, status, model/effort metadata,
+syntax, Markdown, transcript cards, sidebar, prompt, branding, diff and Git graph lanes.
+Borders use foreground colors; containers use backgrounds; text/syntax use the attributes their
+native renderers support. Default tab underlines, background-free completion selection, neutral
+Thinking, spacing and input ownership remain unchanged. Explicit `transcript.thinking` overrides
+can customize reasoning independently of ordinary syntax and muted text. Palette or style changes
+repaint existing owners without replacing their drafts, selections or navigation state. `--no-color`
+continues to strip colors while preserving selection emphasis, including custom selection backgrounds.
+
 If color queries are unsupported, native default/ANSI color intent is retained. Derived colors use
 fallback snapshots (light when the terminal reports light mode, dark otherwise); explicit overrides
 can correct them. Overrides affect Radian's UI only: embedded shells still follow the host terminal,

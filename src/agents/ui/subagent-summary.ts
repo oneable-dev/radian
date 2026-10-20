@@ -1,8 +1,9 @@
-import { BoxRenderable, StyledText, TextRenderable, fg, type CliRenderer } from "@opentui/core";
+import { BoxRenderable, StyledText, TextRenderable, type CliRenderer } from "@opentui/core";
 import type { Subagent } from "../model.ts";
 import { icons } from "../../icons.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { paintText, styleChunk } from "../../ui/theme-styles.ts";
 
 const count = (value: number) => (value > 99 ? "99+" : String(value)).padStart(3);
 
@@ -23,8 +24,8 @@ export class SubagentSummary {
     const slot = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0 });
     this.spinner = new LoadingSpinner(renderer); slot.add(this.spinner.root);
     this.root.add(this.label); this.root.add(slot); this.root.add(this.counts);
-    uiTheme(renderer).bind(this.root, (colors) => {
-      this.label.fg = colors.muted; this.counts.fg = colors.text; this.spinner.root.fg = colors.accent;
+    uiTheme(renderer).bindStyles(this.root, (styles) => {
+      paintText(this.label, styles["ui.muted"]); paintText(this.counts, styles["ui.label"]); paintText(this.spinner.root, styles["status.working"]);
       this.paint();
     });
   }
@@ -51,12 +52,12 @@ export class SubagentSummary {
     this.label.content = full ? "Subagents " : medium ? "Sub " : "";
     const text = `${count(working)} ${icons.error}${count(failure)}`
       + (medium ? ` ${icons.pass}${count(complete)}` : "") + (full ? ` ${icons.unknown}${count(unknown)}` : "");
-    const colors = uiTheme(this.renderer).colors;
+    const styles = uiTheme(this.renderer).styles;
     this.counts.content = new StyledText([
-      fg(working ? colors.accent : colors.muted)(count(working)),
-      fg(failure ? colors.error : colors.muted)(` ${icons.error}${count(failure)}`),
-      ...(medium ? [fg(complete ? colors.success : colors.muted)(` ${icons.pass}${count(complete)}`)] : []),
-      ...(full ? [fg(colors.muted)(` ${icons.unknown}${count(unknown)}`)] : []),
+      styleChunk(count(working), styles[working ? "status.working" : "status.unknown"]),
+      styleChunk(` ${icons.error}${count(failure)}`, styles[failure ? "status.error" : "status.unknown"]),
+      ...(medium ? [styleChunk(` ${icons.pass}${count(complete)}`, styles[complete ? "status.success" : "status.unknown"])] : []),
+      ...(full ? [styleChunk(` ${icons.unknown}${count(unknown)}`, styles["status.unknown"])] : []),
     ]);
     this.root.width = (full ? 10 : medium ? 4 : 0) + 1 + text.length;
   }

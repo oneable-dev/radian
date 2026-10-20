@@ -1,11 +1,11 @@
 import { BoxRenderable, ScrollBoxRenderable, StyledText, TextRenderable, type CliRenderer } from "@opentui/core";
 import type { GraphCell } from "./graph.ts";
-import { uiTheme, type UiColors } from "../../ui/theme.ts";
-import type { ThemeRole } from "../../ui/theme-config.ts";
+import { uiTheme } from "../../ui/theme.ts";
+import { paintText, styleChunk, type StyleGroup, type UiStyles } from "../../ui/theme-styles.ts";
 
-type GitListSpan = { text: string; color?: ThemeRole };
-export type GitListItem = { key: string; label: string | readonly GitListSpan[]; graph?: GraphCell[]; connector?: GraphCell[]; color?: ThemeRole; disabled?: boolean; gapBefore?: boolean };
-const styledText = (spans: readonly GitListSpan[], colors: UiColors) => new StyledText(spans.map((span) => ({ __isChunk: true as const, text: span.text, fg: colors[span.color ?? "text"] })));
+type GitListSpan = { text: string; color?: StyleGroup };
+export type GitListItem = { key: string; label: string | readonly GitListSpan[]; graph?: GraphCell[]; connector?: GraphCell[]; color?: StyleGroup; disabled?: boolean; gapBefore?: boolean };
+const styledText = (spans: readonly GitListSpan[], styles: UiStyles) => new StyledText(spans.map((span) => styleChunk(span.text, styles[span.color ?? "ui.label"])));
 
 export class GitList {
   readonly root: ScrollBoxRenderable;
@@ -41,11 +41,12 @@ export class GitList {
         if (item.graph) line.add(this.graph(item.graph, item.graph.length));
         const label = new TextRenderable(this.renderer, { height: 1, flexGrow: 1,
           minWidth: 0, wrapMode: "none", selectable: !item.disabled });
-        uiTheme(this.renderer).bind(label, (colors) => {
-          label.content = typeof item.label === "string" ? item.label : styledText(item.label, colors);
-          label.fg = colors[item.color ?? "text"]; label.selectionBg = colors.selected; label.selectionFg = colors.text;
+        uiTheme(this.renderer).bindStyles(label, (styles) => {
+          paintText(label, styles[item.color ?? "ui.label"]);
+          label.content = typeof item.label === "string" ? item.label : styledText(item.label, styles);
+          label.selectionBg = styles["ui.selection"].bg; label.selectionFg = styles["ui.selection"].fg;
         });
-        uiTheme(this.renderer).bind(row, (colors) => { row.backgroundColor = item.key === this.selected ? this.selectionColor : colors.panel; });
+        uiTheme(this.renderer).bindStyles(row, (styles) => { row.backgroundColor = item.key === this.selected ? this.selectionColor : styles["ui.text"].bg; });
         line.add(label); row.add(line);
         if (item.connector) row.add(this.graph(item.connector));
         this.root.add(row); this.rows.set(item.key, row);
@@ -55,16 +56,16 @@ export class GitList {
   }
   private graph(cells: GraphCell[], width?: number): TextRenderable {
     const text = new TextRenderable(this.renderer, { ...(width ? { width } : {}), height: 1, selectable: false, flexShrink: 0 });
-    uiTheme(this.renderer).bind(text, (colors) => { text.content = styledText(cells, colors); });
+    uiTheme(this.renderer).bindStyles(text, (styles) => { text.content = styledText(cells, styles); });
     return text;
   }
   private get selectionColor() {
-    const colors = uiTheme(this.renderer).colors;
-    return this.root.focused ? colors.selected : colors.surface;
+    const styles = uiTheme(this.renderer).styles;
+    return styles[this.root.focused ? "ui.selection" : "ui.selectionInactive"].bg;
   }
   private highlight(): void {
-    const colors = uiTheme(this.renderer).colors;
-    for (const [key, row] of this.rows) row.backgroundColor = key === this.selected ? this.selectionColor : colors.panel;
+    const styles = uiTheme(this.renderer).styles;
+    for (const [key, row] of this.rows) row.backgroundColor = key === this.selected ? this.selectionColor : styles["ui.text"].bg;
   }
   select(key: string): void {
     if (this.items.find((item) => item.key === key)?.disabled) return;

@@ -2,6 +2,7 @@ import { BoxRenderable, ScrollBoxRenderable, StyledText, TextAttributes, TextRen
 import type { RequestSummary } from "../request-summary.ts";
 import { formatRequestCaption } from "./request-caption.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { styleChunk } from "../../ui/theme-styles.ts";
 import { truncateCells } from "../../ui/text.ts";
 
 // This is a projection of the runtime queue, never a second queue owned by the TUI.
@@ -46,7 +47,7 @@ export class PendingMessages {
 
   private paint(): void {
     if (this.root.isDestroyed || !this.heading || !this.scroll) return;
-    const colors = uiTheme(this.renderer).colors, width = this.root.width;
+    const styles = uiTheme(this.renderer).styles, width = this.root.width;
     const key = this.interruptKey().toLowerCase();
     let title = "Messages will be sent after the current response and tools finish";
     let beforeKey = " (press ", afterKey = " to interrupt and send immediately)";
@@ -55,19 +56,19 @@ export class PendingMessages {
     if (!fits()) { title = "Messages waiting"; beforeKey = " ("; afterKey = ": interrupt & send)"; }
     const showHint = !!key && fits();
     this.heading.content = new StyledText([
-      { __isChunk: true, text: truncateCells("• ", width), fg: colors.muted },
-      { __isChunk: true, text: truncateCells(title, Math.max(0, width - 2)), fg: colors.text },
+      styleChunk(truncateCells("• ", width), styles["ui.muted"]),
+      styleChunk(truncateCells(title, Math.max(0, width - 2)), styles["ui.label"]),
       ...(showHint ? [
-        { __isChunk: true as const, text: beforeKey, fg: colors.muted },
-        { __isChunk: true as const, text: key, fg: colors.text, attributes: TextAttributes.BOLD },
-        { __isChunk: true as const, text: afterKey, fg: colors.muted },
+        styleChunk(beforeKey, styles["ui.muted"]),
+        { ...styleChunk(key, styles["ui.label"]), attributes: styles["ui.label"].attributes | TextAttributes.BOLD },
+        styleChunk(afterKey, styles["ui.muted"]),
       ] : []),
     ]);
     const itemWidth = this.scroll.viewport.width;
     this.items.forEach((item, index) => {
       item.content = new StyledText([
-        { __isChunk: true, text: truncateCells("  ↳ ", itemWidth), fg: colors.muted },
-        { __isChunk: true, text: formatRequestCaption(this.messages[index]!, Math.max(0, itemWidth - 4)), fg: colors.text },
+        styleChunk(truncateCells("  ↳ ", itemWidth), styles["ui.muted"]),
+        styleChunk(formatRequestCaption(this.messages[index]!, Math.max(0, itemWidth - 4)), styles["ui.label"]),
       ]);
     });
   }

@@ -1,5 +1,6 @@
 import { BoxRenderable, TextRenderable, type CliRenderer } from "@opentui/core";
-import { blendColors, uiTheme } from "./theme.ts";
+import { uiTheme } from "./theme.ts";
+import { paintText } from "./theme-styles.ts";
 
 // Temporary artwork. Replace this component when the Radian logo is finalized;
 // transcript visibility and layout do not depend on its shape or rendering format.
@@ -22,7 +23,7 @@ export class RadianLogo extends BoxRenderable {
     this.mark = new TextRenderable(renderer, { id: "radian-logo-mark", width, height: placeholder.length, flexShrink: 0,
       content: placeholder.join("\n"), wrapMode: "none", selectable: false });
     this.add(this.mark);
-    uiTheme(renderer).bind(this, (colors) => { this.mark.fg = blendColors(colors.panel, colors.muted, 0.4); });
+    uiTheme(renderer).bindStyles(this, (styles) => paintText(this.mark, styles["branding.logo"]));
   }
 
   private resizeMark(): void {

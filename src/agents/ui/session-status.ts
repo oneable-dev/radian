@@ -1,6 +1,7 @@
 import { BoxRenderable, RenderableEvents, StyledText, TextRenderable, type CliRenderer, type TextChunk } from "@opentui/core";
 import type { SessionTelemetry } from "../telemetry.ts";
 import { blendColors, uiTheme, type UiColors } from "../../ui/theme.ts";
+import { paintText, styleChunk, type StyleGroup, type UiStyles } from "../../ui/theme-styles.ts";
 import { ProviderIcon } from "../../ui/provider-icon.ts";
 import type { UsageWindow } from "../../usage/model.ts";
 import type { Worktree } from "../../workspace/model.ts";
@@ -44,20 +45,20 @@ function usageWindow(telemetry: SessionTelemetry | null, now: number): UsageWind
     periodMs: 7 * 24 * 60 * 60000, resetsAt: weekly.resetsAt } : null;
 }
 
-function meterChunks(meter: Meter, width: number, colors: UiColors): TextChunk[] {
-  const chunks: TextChunk[] = [{ __isChunk: true, text: `${meter.label} `, fg: colors.text }];
+function meterChunks(meter: Meter, width: number, colors: UiColors, styles: UiStyles): TextChunk[] {
+  const chunks: TextChunk[] = [styleChunk(`${meter.label} `, styles["ui.label"])];
   if (width && meter.percent !== null) {
     const filled = meter.percent * width / 100;
     const partials = ["░", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
     for (let cell = 0; cell < width; cell++) {
       const part = Math.floor(Math.max(0, Math.min(1, filled - cell)) * 8);
-      chunks.push({ __isChunk: true, text: partials[part]!,
-        fg: part > 0 ? blendColors(colors.panel, colors.accent, 1 - 0.45 * cell / Math.max(1, width - 1))
-          : blendColors(colors.panel, colors.text, 0.2) });
+      chunks.push({ ...styleChunk(partials[part]!, styles["metadata.meter"]),
+        fg: part > 0 ? blendColors(colors.panel, styles["metadata.meter"].fg, 1 - 0.45 * cell / Math.max(1, width - 1))
+          : blendColors(colors.panel, styles["ui.label"].fg, 0.2) });
     }
-    chunks.push({ __isChunk: true, text: " ", fg: colors.muted });
+    chunks.push(styleChunk(" ", styles["ui.muted"]));
   }
-  chunks.push({ __isChunk: true, text: meter.value, fg: meter.percent === null ? colors.muted : colors.text });
+  chunks.push(styleChunk(meter.value, styles[meter.percent === null ? "ui.muted" : "ui.label"]));
   return chunks;
 }
 
@@ -101,8 +102,8 @@ export class SessionStatus {
 
   private paint(): void {
     if (this.disposed || !this.visible || !this.root || this.root.isDestroyed) return;
-    const colors = uiTheme(this.renderer).colors;
-    this.root.backgroundColor = colors.panel; this.text.bg = colors.panel;
+    const theme = uiTheme(this.renderer), colors = theme.colors, styles = theme.styles;
+    this.root.backgroundColor = styles["ui.text"].bg; this.text.bg = styles["ui.text"].bg;
     const totalWidth = Math.max(0, this.root.width), now = Date.now();
     const telemetry = this.telemetry;
     const context = telemetry?.context;
@@ -122,18 +123,18 @@ export class SessionStatus {
     const minimumMeters = cellWidth(`${contextMeter.label} ${contextMeter.value}`) + cellWidth(`${usage.label} ${usage.value}`) + 2;
     const scopeWidth = Math.max(0, Math.min(Math.floor(totalWidth / 3), totalWidth - minimumMeters - 2));
     const scope = this.worktree && scopeWidth >= 3 ? scopeLabel(this.worktree, scopeWidth) : "";
-    this.scopeText.visible = scope.length > 0; this.scopeText.content = scope; this.scopeText.width = cellWidth(scope); this.scopeText.fg = colors.muted;
+    this.scopeText.visible = scope.length > 0; this.scopeText.content = scope; this.scopeText.width = cellWidth(scope); paintText(this.scopeText, styles["ui.muted"]);
     const scopePrefix = scope ? cellWidth(scope) + 2 : 0, width = totalWidth - scopePrefix;
     const details = window && countdown ? [`${usage.value} ${countdown}`, `${usage.value} ${countdown.replaceAll(" ", "")}`, usage.value] : [usage.value];
     const model = telemetry?.model ?? "model —", effort = telemetry?.effort ?? "—";
     const fast = telemetry?.fast === true ? "on" : telemetry?.fast === false ? "off" : "—";
-    const chunk = (text: string, fg: UiColors["text"]): TextChunk => ({ __isChunk: true, text, fg });
-    const modelChunk = chunk(model, telemetry?.model ? colors.number : colors.muted);
-    const effortChunk = chunk(effort, telemetry?.effort ? colors.keyword : colors.muted);
-    const fastColor = telemetry?.fast === true ? colors.success : telemetry?.fast === false ? colors.info : colors.muted;
+    const chunk = (text: string, group: StyleGroup): TextChunk => styleChunk(text, styles[group]);
+    const modelChunk = chunk(model, telemetry?.model ? "metadata.model" : "ui.muted");
+    const effortChunk = chunk(effort, telemetry?.effort ? "metadata.effort" : "ui.muted");
+    const fastStyle = telemetry?.fast === true ? "metadata.fastOn" : telemetry?.fast === false ? "metadata.fastOff" : "ui.muted";
     const identities = [
-      [modelChunk, chunk(" · ", colors.muted), effortChunk, chunk(" · ", colors.muted), chunk(`fast ${fast}`, fastColor)],
-      [modelChunk, chunk(" ", colors.muted), effortChunk, chunk(" ", colors.muted), chunk(`f${fast === "on" ? "+" : fast === "off" ? "−" : "?"}`, fastColor)],
+      [modelChunk, chunk(" · ", "ui.muted"), effortChunk, chunk(" · ", "ui.muted"), chunk(`fast ${fast}`, fastStyle)],
+      [modelChunk, chunk(" ", "ui.muted"), effortChunk, chunk(" ", "ui.muted"), chunk(`f${fast === "on" ? "+" : fast === "off" ? "−" : "?"}`, fastStyle)],
       [modelChunk], [],
     ].map((chunks) => ({ chunks, text: chunks.map((part) => part.text).join("") }));
     for (const detail of new Set(details)) {
@@ -144,9 +145,9 @@ export class SessionStatus {
           const meterWidth = base + meters.reduce((size, meter) => size + (barWidth && meter.percent !== null ? barWidth + 1 : 0), 0);
           const identityWidth = identity.text ? cellWidth(identity.text) + 2 : 0;
           if (meterWidth + identityWidth > width) continue;
-          const chunks: TextChunk[] = identity.text ? [...identity.chunks, chunk(" ".repeat(width - meterWidth - cellWidth(identity.text)), colors.muted)] : [];
+          const chunks: TextChunk[] = identity.text ? [...identity.chunks, chunk(" ".repeat(width - meterWidth - cellWidth(identity.text)), "ui.muted")] : [];
           const separation = identity.text ? 2 : 2 + width - meterWidth;
-          chunks.push(...meterChunks(meters[0]!, barWidth, colors), { __isChunk: true, text: " ".repeat(separation), fg: colors.muted }, ...meterChunks(meters[1]!, barWidth, colors));
+          chunks.push(...meterChunks(meters[0]!, barWidth, colors, styles), chunk(" ".repeat(separation), "ui.muted"), ...meterChunks(meters[1]!, barWidth, colors, styles));
           this.text.content = new StyledText(chunks);
           const usageWidth = cellWidth(`${meters[1]!.label} ${meters[1]!.value}`)
             + (barWidth && meters[1]!.percent !== null ? barWidth + 1 : 0);
@@ -160,7 +161,7 @@ export class SessionStatus {
     this.text.content = showCompact ? compact : width >= 9 ? "context -" : "-";
     this.providerIcon.left = scopePrefix + cellWidth(`context ${contextMeter.value} `);
     this.providerIcon.visible = hasIcon && showCompact;
-    this.text.fg = colors.muted;
+    paintText(this.text, styles["ui.muted"]);
   }
 
   private cancelExpiry(): void { if (this.expiry !== undefined) clearTimeout(this.expiry); this.expiry = undefined; }

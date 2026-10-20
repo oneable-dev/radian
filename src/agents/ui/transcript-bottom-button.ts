@@ -1,5 +1,6 @@
 import { BoxRenderable, TextRenderable, type CliRenderer } from "@opentui/core";
 import { uiTheme } from "../../ui/theme.ts";
+import { paintText } from "../../ui/theme-styles.ts";
 import { truncateCells } from "../../ui/text.ts";
 
 // Reuse an existing blank row outside the viewport; never mask transcript content or add a gutter.
@@ -15,7 +16,7 @@ export class TranscriptBottomButton extends BoxRenderable {
     // Keyboard activation belongs to transcript.latest; pointer activation must not steal prompt focus.
     this.label = new TextRenderable(renderer, { height: 1, wrapMode: "none", selectable: false });
     this.add(this.label);
-    uiTheme(renderer).bind(this, (colors) => { this.backgroundColor = colors.selected; this.label.fg = colors.accent; });
+    uiTheme(renderer).bindStyles(this, (styles) => { this.backgroundColor = styles["ui.selection"].bg; paintText(this.label, styles["ui.button"]); });
   }
 
   update(visible: boolean, hint: string, space: { left: number; top: number; width: number } | null): void {

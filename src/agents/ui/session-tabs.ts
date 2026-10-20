@@ -1,9 +1,10 @@
-import { BoxRenderable, ScrollBoxRenderable, TextAttributes, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
+import { BoxRenderable, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
 import type { OpenSession } from "../model.ts";
 import { sessionStatus } from "../status.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { paintText } from "../../ui/theme-styles.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
 import { StatusIndicator } from "./status-indicator.ts";
 
@@ -119,11 +120,11 @@ export class SessionTabs {
     }
   }
   private paint(): void {
-    const colors = uiTheme(this.renderer).colors;
+    const styles = uiTheme(this.renderer).styles;
     for (const [id, tab] of this.tabs) {
-      tab.root.backgroundColor = id === this.selected ? this.focused ? colors.selected : colors.surface : colors.panel;
-      tab.title.fg = id === this.selected ? colors.text : colors.muted;
-      tab.title.attributes = id === this.selected ? TextAttributes.BOLD : 0;
+      const active = id === this.selected;
+      tab.root.backgroundColor = styles[active ? this.focused ? "ui.selection" : "ui.selectionInactive" : "ui.text"].bg;
+      paintText(tab.title, styles[active ? "ui.tabActive" : "ui.tab"]);
     }
   }
   private revealSelected = (): void => {

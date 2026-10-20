@@ -186,6 +186,47 @@ test("하이라이터 처리 중 화면을 제거해도 늦은 완료가 파괴�
   expect(markdown.isDestroyed).toBe(true); expect(app.sent).toEqual([]);
 });
 
+test("상태·문법·Markdown 스타일은 실제 코드·인라인 코드·제목·표에서 독립적으로 적용된다", async () => {
+  // 같은 초록색 기본값을 쓰는 문자열과 성공 상태를 서로 다르게 재정의한다.
+  const app = await mount([prose("## Semantic title\n\n```typescript\nconst literal = \"semantic_string\";\n```\n\n`semantic_inline`\n\n| Head | Tail |\n|---|---|\n| value | done |")]);
+  try {
+    uiTheme(app.renderer).configure(palette(false), { styles: {
+      "status.success": { fg: "#FF00FF" }, "syntax.string": { fg: "#12AB34" },
+      "markup.inlineCode": { fg: "#2299CC", italic: true }, "markup.heading": { fg: "#CC7722", underline: true },
+      "markup.tableBorder": { fg: "#5566AA" },
+    } });
+
+    // 완성된 네이티브 문법 강조와 표를 실제 화면으로 확인한다.
+    await app.settled();
+    const spans = app.captureSpans().lines.flatMap(line => line.spans);
+    const span = (text: string) => {
+      const value = spans.find(span => span.text.includes(text));
+      if (!value) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+      return value;
+    };
+    expect(span("semantic_string").fg.toInts().slice(0, 3)).toEqual([18, 171, 52]);
+    expect(span("semantic_inline").fg.toInts().slice(0, 3)).toEqual([34, 153, 204]);
+    expect(span("semantic_inline").attributes & TextAttributes.ITALIC).not.toBe(0);
+    expect(span("Semantic title").fg.toInts().slice(0, 3)).toEqual([204, 119, 34]);
+    expect(span("Semantic title").attributes & TextAttributes.UNDERLINE).not.toBe(0);
+    expect(span("┬").fg.toInts().slice(0, 3)).toEqual([85, 102, 170]);
+    expect(app.view.promptDrafts.a1).toBe("Keep this draft"); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("카드 배경을 해제하면 재정의된 본문 배경을 상속한다", async () => {
+  // 카드의 틴트를 제거할 때 터미널 기본색을 새 배경 위에 덧칠하면 안 된다.
+  const app = await mount([{ ...prose("CARD_SURFACE"), kind: "user" }]);
+  try {
+    uiTheme(app.renderer).configure(palette(false), { styles: { "ui.text": { bg: "#112233" }, "transcript.user": { bg: null } } });
+    await app.settled();
+
+    const span = app.captureSpans().lines.flatMap(line => line.spans).find(span => span.text.includes("CARD_SURFACE"))!;
+    expect(span.bg.toInts().slice(0, 3)).toEqual([17, 34, 51]);
+    expect(app.view.promptDrafts.a1).toBe("Keep this draft"); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("도구 명령·결과와 사용자 메시지는 Markdown으로 해석하지 않는다", async () => {
   const literal = "**LITERAL**\n### NOT_A_HEADING\n```text";
   const app = await mount([{ ...prose(literal), kind: "tool", title: "bash", command: "printf '**raw**'" }, { ...prose(literal), id: "user", kind: "user", title: "You" }]);

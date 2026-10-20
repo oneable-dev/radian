@@ -98,7 +98,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
   const preferences: RuntimePreferences = client ? structuredClone(client.snapshot.preferences) : defaultPreferences();
   if (client) selection.restore(preferences.selection);
   const renderer = await createCliRenderer({ exitOnCtrlC: false,
-    ...(options.noColor ? { postProcessFns: [(buffer) => monochromeFrame(buffer, attachedTheme?.colors)] } : {}) });
+    ...(options.noColor ? { postProcessFns: [(buffer) => monochromeFrame(buffer, attachedTheme?.colors, attachedTheme?.styles)] } : {}) });
   attachedTheme = uiTheme(renderer); attachedTheme.setMonochrome(options.noColor);
   let view: InstanceType<typeof Workbench> | undefined;
   const detachHint = keymap.hint("app.detach", "none") || "No detach binding";

@@ -6,6 +6,7 @@ import type { Result } from "../../result.ts";
 import { Clipboard } from "../../ui/clipboard.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { paintText, syntaxDefinition } from "../../ui/theme-styles.ts";
 import { maxFrameBytes } from "../../runtime/protocol.ts";
 import { cacheClipboardImage, fileInput, pastedFiles } from "../prompt-attachments.ts";
 import { collapsedPaste, expandPromptDraft, promptPartLabel, promptPartSchema, validatePromptDraft, type PromptDraft, type PromptPart, type PromptSubmission } from "../prompt-input.ts";
@@ -39,8 +40,9 @@ export class PromptInput extends TextareaRenderable {
     this.styleId = this.style.registerStyle("attachment", {});
     this.marks = createExtmarksController(this.editBuffer, this.editorView);
     this.tokenType = this.marks.registerType("radian-prompt-attachment");
-    uiTheme(renderer).bind(this, (colors) => {
-      this.style.registerStyle("attachment", { fg: colors.accent, bg: colors.selected }); this.activity.root.fg = colors.accent;
+    uiTheme(renderer).bindStyles(this, (styles) => {
+      this.style.registerStyle("attachment", syntaxDefinition(styles["prompt.attachment"]));
+      paintText(this.activity.root, styles["status.working"]);
     });
     this.onContentChange = () => { if (!this.updating) this.changed(); };
     this.on(RenderableEvents.DESTROYED, () => this.dispose());

@@ -1,7 +1,7 @@
 import type { GitCommit } from "../model.ts";
 
 // Port of the user's nvim/lua/git/graph.lua lane routing, independent of Neovim.
-export const graphPalette = ["success", "info", "warning", "error", "accent", "keyword", "number", "text"] as const;
+export const graphPalette = ["git.graph.1", "git.graph.2", "git.graph.3", "git.graph.4", "git.graph.5", "git.graph.6", "git.graph.7", "git.graph.8"] as const;
 type GraphColor = typeof graphPalette[number];
 type Lane = { target: string | null; color: GraphColor; dotted?: boolean };
 type Edge = { from: number; to: number; color: GraphColor; dotted: boolean; kind: "lane" | "parent" };

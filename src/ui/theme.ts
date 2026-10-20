@@ -1,15 +1,13 @@
 import { RGBA, Renderable, RenderableEvents, type BoxRenderable, type CliRenderer, type InputRenderable, type TextareaRenderable, type ScrollBoxRenderable, type TerminalColors } from "@opentui/core";
 import { isThemeColor, themeRoles, type ThemeOverrides, type ThemeRole } from "./theme-config.ts";
 import { reportUnexpected } from "../errors.ts";
+import { blendColors } from "./color.ts";
+import { resolveStyles, sameStyles, styleBackground, type StyleGroup, type UiStyles } from "./theme-styles.ts";
+export { blendColors } from "./color.ts";
 
 export type UiColors = Readonly<Record<ThemeRole, RGBA>>;
 const themes = new WeakMap<CliRenderer, UiTheme>();
 const fallbackAnsi = ["#000000", "#CD3131", "#0DBC79", "#E5C07B", "#2472C8", "#BC3FBC", "#11A8CD", "#E5E5E5"];
-export const blendColors = (background: RGBA, foreground: RGBA, amount: number): RGBA => RGBA.fromValues(
-  background.r + (foreground.r - background.r) * amount,
-  background.g + (foreground.g - background.g) * amount,
-  background.b + (foreground.b - background.b) * amount,
-);
 
 function resolveColors(palette: TerminalColors | undefined, overrides: ThemeOverrides, light: boolean): UiColors {
   const override = (role: ThemeRole, fallback: RGBA) => overrides[role] ? RGBA.fromHex(overrides[role]) : fallback;
@@ -35,6 +33,7 @@ export class UiTheme {
   private overrides: ThemeOverrides = {};
   private readonly bindings = new Map<() => void, () => void>();
   private value: UiColors;
+  private styleValue: UiStyles;
   private disposed = false;
   private colorless = false;
   private hostChange = false;
@@ -43,11 +42,16 @@ export class UiTheme {
 
   constructor(private readonly renderer: CliRenderer) {
     this.value = resolveColors(undefined, {}, renderer.themeMode === "light");
+    this.styleValue = resolveStyles(this.value);
     renderer.on("palette", this.updatePalette); renderer.on("theme_mode", this.refresh);
     renderer.prependInputHandler(this.hostThemeSequence);
     renderer.once("destroy", this.dispose);
   }
   get colors(): UiColors { return this.value; }
+  get styles(): UiStyles { return this.styleValue; }
+  bindStyles(owner: Renderable, paint: (styles: UiStyles) => void): void {
+    this.bind(owner, () => paint(this.styles));
+  }
   get monochrome(): boolean { return this.colorless; }
   setMonochrome(value: boolean): void {
     if (value === this.colorless) return;
@@ -56,7 +60,7 @@ export class UiTheme {
     this.renderer.requestRender();
   }
   configure(palette: TerminalColors, overrides: ThemeOverrides = {}): void {
-    this.overrides = { ...overrides }; this.updatePalette(palette);
+    this.overrides = structuredClone(overrides); this.updatePalette(palette);
   }
   bind(owner: Renderable, paint: (colors: UiColors) => void): void {
     if (owner.isDestroyed) return;
@@ -64,12 +68,17 @@ export class UiTheme {
     const cleanup = () => { this.bindings.delete(update); owner.off(RenderableEvents.DESTROYED, cleanup); };
     this.bindings.set(update, cleanup); owner.once(RenderableEvents.DESTROYED, cleanup); update();
   }
-  input(input: InputRenderable | TextareaRenderable): void {
-    this.bind(input, (colors) => {
-      input.textColor = colors.text; input.focusedTextColor = colors.text;
-      input.backgroundColor = colors.surface; input.focusedBackgroundColor = colors.selected;
-      input.placeholderColor = colors.muted; input.selectionBg = colors.selected; input.selectionFg = colors.text;
-    });
+  input(input: InputRenderable | TextareaRenderable, normal: StyleGroup = "ui.input", focused: StyleGroup = "ui.inputFocused"): void {
+    const paint = () => {
+      const styles = this.styles;
+      input.textColor = styles[normal].fg; input.focusedTextColor = styles[focused].fg;
+      input.backgroundColor = styles[normal].bg; input.focusedBackgroundColor = styleBackground(styles[focused]);
+      input.attributes = styles[input.focused ? focused : normal].attributes;
+      input.placeholderColor = styles["ui.placeholder"].fg;
+      input.selectionBg = styles["ui.selection"].bg; input.selectionFg = styles["ui.selection"].fg;
+    };
+    this.bind(input, paint); input.on("focused", paint); input.on("blurred", paint);
+    input.once(RenderableEvents.DESTROYED, () => { input.off("focused", paint); input.off("blurred", paint); });
   }
   focusBorder(panel: BoxRenderable): void {
     const paint = () => {
@@ -79,7 +88,7 @@ export class UiTheme {
       for (let node = this.renderer.currentFocusedRenderable; node; node = node.parent instanceof Renderable ? node.parent : null) {
         if (node === panel) { focused = true; break; }
       }
-      panel.borderColor = focused ? this.colors.accent : blendColors(this.colors.panel, this.colors.text, 0.22);
+      panel.borderColor = this.styles[focused ? "ui.focusBorder" : "ui.border"].fg;
     };
     this.bind(panel, paint);
     this.renderer.on("focused_renderable", paint);
@@ -89,10 +98,11 @@ export class UiTheme {
     // Constructor visibility is auto-managed by OpenTUI; this setter establishes
     // explicit ownership without disabling horizontal navigation or changing content.
     scroll.horizontalScrollBar.visible = false;
-    this.bind(scroll, (colors) => {
+    this.bind(scroll, () => {
       for (const bar of [scroll.verticalScrollBar, scroll.horizontalScrollBar]) {
-        bar.trackOptions = { foregroundColor: colors.muted, backgroundColor: colors.panel };
-        bar.arrowOptions = { foregroundColor: colors.muted, backgroundColor: colors.panel };
+        const style = this.styles["ui.scrollbar"];
+        bar.trackOptions = { foregroundColor: style.fg, backgroundColor: styleBackground(style) };
+        bar.arrowOptions = { foregroundColor: style.fg, backgroundColor: styleBackground(style) };
       }
     });
   }
@@ -119,9 +129,10 @@ export class UiTheme {
   private updatePalette = (palette: TerminalColors): void => { this.palette = palette; this.refresh(); };
   private refresh = (): void => {
     const next = resolveColors(this.palette, this.overrides, this.renderer.themeMode === "light");
-    this.renderer.setBackgroundColor(next.panel);
-    if (themeRoles.every((role) => next[role].equals(this.value[role]))) return;
-    this.value = next;
+    const styles = resolveStyles(next, this.overrides.styles);
+    this.renderer.setBackgroundColor(styles["ui.text"].bg ?? next.panel);
+    if (themeRoles.every((role) => next[role].equals(this.value[role])) && sameStyles(styles, this.styleValue)) return;
+    this.value = next; this.styleValue = styles;
     for (const update of [...this.bindings.keys()]) update();
     this.renderer.requestRender();
   };

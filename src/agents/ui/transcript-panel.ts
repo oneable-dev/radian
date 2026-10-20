@@ -6,8 +6,9 @@ import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { Clipboard } from "../../ui/clipboard.ts";
 import { blendColors, uiTheme } from "../../ui/theme.ts";
-import { transcriptBackground, transcriptSpacing, transcriptThinkingColor } from "./transcript-style.ts";
+import { transcriptBackground, transcriptSpacing } from "./transcript-style.ts";
 import { TranscriptMarkdown, updateTranscriptMarkdownStyles } from "./transcript-markdown.ts";
+import { paintText, syntaxDefinition } from "../../ui/theme-styles.ts";
 import { formatRunCompletion, sameRunCompletion } from "./run-completion.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
@@ -112,12 +113,13 @@ export class TranscriptPanel {
     renderer.on("resize", this.resize);
     renderer.addPostProcessFn(this.reflowCompletions);
     this.theme.scrollbars(this.scroll);
-    this.theme.bind(this.scroll, (colors) => {
-      this.headerSyntax.registerStyle("tag", { fg: colors.keyword, bold: true });
-      this.headerSyntax.registerStyle("hint", { fg: colors.muted });
-      this.headerSyntax.registerStyle("error", { fg: colors.error });
-      updateTranscriptMarkdownStyles(this.proseSyntax, colors, false); updateTranscriptMarkdownStyles(this.thinkingSyntax, colors, true);
-      this.help.fg = colors.muted;
+    this.theme.bind(this.scroll, () => {
+      const styles = this.theme.styles;
+      this.headerSyntax.registerStyle("tag", syntaxDefinition(styles["transcript.skill"]));
+      this.headerSyntax.registerStyle("hint", syntaxDefinition(styles["ui.muted"]));
+      this.headerSyntax.registerStyle("error", syntaxDefinition(styles["status.error"]));
+      updateTranscriptMarkdownStyles(this.proseSyntax, styles, false); updateTranscriptMarkdownStyles(this.thinkingSyntax, styles, true);
+      paintText(this.help, styles["ui.muted"]);
       this.paint();
     });
   }
@@ -355,12 +357,12 @@ export class TranscriptPanel {
   private paintRow(row: Row): void {
     if (this.disposed || row.box.isDestroyed) return;
     row.box.visible = !this.help.visible;
-    const colors = this.theme.colors, section = row.section;
+    const colors = this.theme.colors, styles = this.theme.styles, section = row.section;
     const selected = this.state?.selectedId === section.id, skill = section.skillName !== undefined;
     const cancelled = cancellationNotice(section);
     const folded = this.folded(row), spacing = transcriptSpacing();
     const plain = this.legacy || section.kind === "assistant" || section.kind === "thinking";
-    const background = this.legacy ? colors.panel : transcriptBackground(section.image ? "tool" : section.kind, colors);
+    const background = this.legacy ? styles["ui.text"].bg ?? colors.panel : transcriptBackground(section.image ? "tool" : section.kind, styles, colors.panel);
     row.box.backgroundColor = background; row.box.border = false;
     row.box.paddingX = plain ? 0 : 1;
     row.box.paddingY = plain ? 0 : spacing.verticalInset;
@@ -403,25 +405,25 @@ export class TranscriptPanel {
       if (selected && folded) this.applySelection(row);
     }
     row.error.visible = !cancelled && !skill && !folded && !!section.error;
-    row.error.content = section.error ?? ""; row.error.fg = colors.error; row.error.bg = background;
-    const headingBackground = selected && !plain ? blendColors(background, colors.selected, this.focused ? 0.7 : 0.35) : background;
+    row.error.content = section.error ?? ""; row.error.fg = styles["status.error"].fg; row.error.attributes = styles["status.error"].attributes; row.error.bg = background;
+    const headingBackground = selected && !plain ? blendColors(background, styles["ui.selection"].bg ?? background, this.focused ? 0.7 : 0.35) : background;
     row.heading.backgroundColor = row.header.backgroundColor = headingBackground;
-    row.header.textColor = section.kind === "thinking" ? colors.muted : section.kind === "tool" && (section.title === "bash" || section.title === "Shell") ? colors.info : colors.text;
-    row.header.cursorColor = colors.accent;
-    row.header.selectionBg = blendColors(background, colors.accent, 0.38); row.header.selectionFg = colors.text;
+    row.header.textColor = styles[section.kind === "thinking" ? "ui.muted" : section.kind === "tool" && (section.title === "bash" || section.title === "Shell") ? "transcript.toolHeader" : "ui.text"].fg;
+    row.header.cursorColor = styles["ui.focusBorder"].fg;
+    row.header.selectionBg = styles["transcript.selection"].bg; row.header.selectionFg = styles["transcript.selection"].fg;
     this.highlightHeader(row);
-    row.body.textColor = section.kind === "thinking" ? transcriptThinkingColor(colors) : colors.text;
-    row.body.attributes = section.kind === "thinking" ? TextAttributes.ITALIC : TextAttributes.NONE;
+    const bodyStyle = styles[section.kind === "thinking" ? "transcript.thinking" : "ui.text"];
+    row.body.textColor = bodyStyle.fg; row.body.attributes = bodyStyle.attributes;
     row.bodyRow.backgroundColor = row.body.backgroundColor = skill ? headingBackground : background;
-    row.skillTag.bg = row.body.backgroundColor; row.skillTag.fg = colors.keyword;
-    row.body.cursorColor = colors.accent;
-    row.body.selectionBg = this.legacy ? colors.selected : blendColors(background, colors.accent, 0.38);
-    row.body.selectionFg = colors.text;
+    row.skillTag.bg = row.body.backgroundColor; row.skillTag.fg = styles["transcript.skill"].fg; row.skillTag.attributes = styles["transcript.skill"].attributes;
+    row.body.cursorColor = styles["ui.focusBorder"].fg;
+    const selectionStyle = styles[this.legacy ? "ui.selection" : "transcript.selection"];
+    row.body.selectionBg = selectionStyle.bg; row.body.selectionFg = selectionStyle.fg;
     this.paintCompletion(row);
   }
   private paintCompletion(row: Row): void {
     if (this.disposed || row.box.isDestroyed) return;
-    const completion = row.section.completion, colors = this.theme.colors;
+    const completion = row.section.completion;
     row.completionWidth = row.completion.width;
     const request = row.request;
     const caption = request ? formatRequestCaption({ ...request, text: request.text ? `“${request.text}”` : "" }, row.completion.width) : "";
@@ -430,8 +432,9 @@ export class TranscriptPanel {
     const text = [timing, completion?.warning].filter(Boolean).join("\n");
     row.completion.visible = !!text;
     if (row.completion.plainText !== text) row.completion.content = text;
-    row.completion.fg = completion?.warning ? colors.warning : transcriptThinkingColor(colors);
-    row.completion.bg = colors.panel;
+    const style = this.theme.styles[completion?.warning ? "status.warning" : "transcript.elapsed"];
+    row.completion.fg = style.fg; row.completion.attributes = style.attributes;
+    row.completion.bg = style.bg ?? this.theme.styles["ui.text"].bg;
   }
   // Native widths settle after size callbacks; repaint only completion rows whose measured width changed.
   private reflowCompletions = (): void => {

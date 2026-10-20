@@ -1,5 +1,6 @@
-import { BoxRenderable, TextAttributes, TextRenderable, type CliRenderer } from "@opentui/core";
+import { BoxRenderable, TextRenderable, type CliRenderer } from "@opentui/core";
 import { uiTheme } from "./theme.ts";
+import { paintText } from "./theme-styles.ts";
 
 export type ButtonVariant = "default" | "work-tab" | "session-tab";
 
@@ -21,12 +22,14 @@ export class Button extends BoxRenderable {
     this.add(this.label);
     const theme = uiTheme(renderer);
     this.paint = () => {
-      const colors = theme.colors;
-      this.backgroundColor = this.variant === "work-tab" ? undefined : this.focused ? colors.selected
-        : this.variant === "session-tab" && this.selected ? colors.surface : undefined;
-      this.label.fg = this.selected === undefined ? colors.accent : this.selected ? colors.text : colors.muted;
-      const underline = this.variant !== "session-tab" && (this.selected || this.variant === "work-tab" && this.focused);
-      this.label.attributes = (this.selected ? TextAttributes.BOLD : 0) | (underline ? TextAttributes.UNDERLINE : 0);
+      const styles = theme.styles;
+      const group = this.selected === undefined ? this.focused ? "ui.buttonFocused" : "ui.button"
+        : this.variant === "default" ? this.selected ? "ui.buttonActive" : "ui.buttonInactive"
+        : this.selected ? this.variant === "session-tab" ? "ui.tabActive" : "ui.workTabActive"
+        : this.variant === "work-tab" && this.focused ? "ui.workTabFocused" : "ui.tab";
+      const value = styles[group]; paintText(this.label, value);
+      this.backgroundColor = this.variant === "work-tab" ? value.bg : this.focused ? value.bg ?? styles["ui.selection"].bg
+        : this.variant === "session-tab" && this.selected ? value.bg ?? styles["ui.selectionInactive"].bg : value.bg;
     };
     theme.bind(this, this.paint); this.on("focused", this.paint); this.on("blurred", this.paint);
   }

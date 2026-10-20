@@ -1,10 +1,11 @@
 import {
-  ImageError, NativeImage, Renderable, TextAttributes, resolveImageRenderProtocol,
+  ImageError, NativeImage, Renderable, resolveImageRenderProtocol,
   type CliRenderer, type OptimizedBuffer,
 } from "@opentui/core";
 import { icons } from "../icons.ts";
 import { err, ok, type Result } from "../result.ts";
-import { uiTheme, type UiColors } from "./theme.ts";
+import { uiTheme } from "./theme.ts";
+import { styleBackground, type UiStyle } from "./theme-styles.ts";
 import { providerIconMask, providerIconSize, type ProviderIconName } from "./provider-icon-data.ts";
 
 const recoverable = new Set<ImageError["code"]>(["unsupported-feature", "unsupported-format", "unsupported-color-space", "memory-limit", "out-of-memory", "busy"]);
@@ -17,7 +18,7 @@ function imageOperation<T>(operation: () => T): Result<T, ImageError> {
 export class ProviderIcon extends Renderable {
   private name: ProviderIconName | null = null;
   private glyph = "";
-  private colors: UiColors;
+  private style: UiStyle;
   private image: NativeImage | null = null;
   private imageSignature = "";
   private failed = false;
@@ -26,8 +27,8 @@ export class ProviderIcon extends Renderable {
   constructor(private readonly renderer: CliRenderer) {
     super(renderer, { id: "usage-provider-icon", position: "absolute", left: 0, top: 0, width: 2, height: 1, visible: false });
     this.selectable = false;
-    this.colors = uiTheme(renderer).colors;
-    uiTheme(renderer).bind(this, (colors) => { this.colors = colors; this.requestRender(); });
+    this.style = uiTheme(renderer).styles["branding.provider"];
+    uiTheme(renderer).bindStyles(this, (styles) => { this.style = styles["branding.provider"]; this.requestRender(); });
     renderer.on("capabilities", this.retryGraphics); renderer.on("resize", this.retryGraphics);
     renderer.on("frame", this.checkResolution);
   }
@@ -52,7 +53,7 @@ export class ProviderIcon extends Renderable {
   protected override renderSelf(buffer: OptimizedBuffer): void {
     if (this.isDestroyed || !this.name || this.width < 2 || this.height < 1) return;
     const x = this.screenX, y = this.screenY;
-    buffer.fillRect(x, y, 2, 1, this.colors.panel);
+    buffer.fillRect(x, y, 2, 1, styleBackground(this.style));
     const resolution = this.renderer.resolution;
     const protocol = resolveImageRenderProtocol("auto", this.renderer.capabilities, resolution !== null);
     if (!uiTheme(this.renderer).monochrome && !this.failed && resolution && (protocol === "kitty" || protocol === "sixel")) {
@@ -71,11 +72,11 @@ export class ProviderIcon extends Renderable {
       }
     }
     // Plain terminals retain an aligned, readable logo without unsupported escape sequences.
-    buffer.drawText(this.glyph, x, y, this.colors.text, this.colors.panel, TextAttributes.BOLD);
+    buffer.drawText(this.glyph, x, y, this.style.fg, styleBackground(this.style), this.style.attributes);
   }
 
   private getImage(height: number): Result<NativeImage, ImageError> {
-    const color = this.colors.text.toInts();
+    const color = this.style.fg.toInts();
     const signature = `${this.name}/${height}/${color.join(",")}`;
     if (this.image && signature === this.imageSignature) return ok(this.image);
     const size = providerIconSize, mask = providerIconMask(this.name!);

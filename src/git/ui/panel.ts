@@ -14,7 +14,7 @@ import type { FooterShortcut } from "../../ui/footer.ts";
 import { GitList, type GitListItem } from "./list.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { icons } from "../../icons.ts";
-import type { ThemeRole } from "../../ui/theme-config.ts";
+import { codeStyles, paintText, styleBackground, type StyleGroup } from "../../ui/theme-styles.ts";
 import { GitClipboard } from "./clipboard.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import type { Button, ButtonFactory } from "../../ui/button.ts";
@@ -131,7 +131,7 @@ export class GitPanel {
     this.details.add(this.detailText); this.commitPanel.add(this.details);
     // A fixed box prevents text-node rounding after the percentage-height details from allocating an extra row.
     this.filesHeader = new BoxRenderable(renderer, { height: 1, flexShrink: 0, marginBottom: 1 });
-    this.filesTitle = this.text("Changed files", "muted"); this.filesHeader.add(this.filesTitle); this.commitPanel.add(this.filesHeader);
+    this.filesTitle = this.text("Changed files", "ui.muted"); this.filesHeader.add(this.filesTitle); this.commitPanel.add(this.filesHeader);
     this.files = new GitList(renderer, "git-files", (key) => {
       if (this.cache) { this.cache.state.file = key; this.persist(); this.changed(); if (this.cache.state.diff) this.openDiff(false); }
     }, () => { if (!this.cache?.state.diff) this.openDiff(false); });
@@ -152,7 +152,7 @@ export class GitPanel {
     this.body.add(this.main); this.body.add(this.right); this.root.add(this.body);
     this.dialog = new BoxRenderable(renderer, { id: "git-ask", position: "absolute", left: 0, right: 0, bottom: 0, height: 10,
       zIndex: 100, border: true, borderColor: gitColors.accent, backgroundColor: gitColors.panel, paddingX: 1, flexDirection: "column", visible: false });
-    this.dialog.add(this.text("Ask Agent · selected Git context", "accent"));
+    this.dialog.add(this.text("Ask Agent · selected Git context", "ui.popupTitle"));
     this.dialogContext = new TextRenderable(renderer, { content: "", height: 2, wrapMode: "word", fg: gitColors.text, selectable: false }); this.dialog.add(this.dialogContext);
     const targetRow = this.row();
     this.targetText = this.text("Session: "); targetRow.add(this.targetText);
@@ -173,11 +173,12 @@ export class GitPanel {
     }
     const theme = uiTheme(renderer);
     theme.input(this.prompt); theme.scrollbars(this.details); theme.focusBorder(this.right);
-    theme.bind(this.root, (colors) => {
-      this.spinner.root.fg = colors.accent; this.status.fg = colors.muted; this.diffNotice.fg = colors.muted;
-      this.dialog.borderColor = colors.accent; this.dialog.backgroundColor = colors.panel;
-      this.detailText.fg = colors.text; this.detailText.selectionBg = colors.selected; this.detailText.selectionFg = colors.text;
-      this.dialogContext.fg = colors.text; this.paintTabs();
+    theme.bindStyles(this.root, (styles) => {
+      paintText(this.spinner.root, styles["status.working"]); paintText(this.status, styles["ui.muted"]); paintText(this.diffNotice, styles["ui.muted"]);
+      this.dialog.borderColor = styles["ui.popupBorder"].fg; this.dialog.backgroundColor = styles["ui.popup"].bg;
+      paintText(this.detailText, styles["ui.label"]);
+      this.detailText.selectionBg = styles["ui.selection"].bg; this.detailText.selectionFg = styles["ui.selection"].fg;
+      paintText(this.dialogContext, styles["ui.label"]); this.paintTabs();
       // Rebuild once with all diff colors, rather than invoking a full native rebuild for every color setter.
       if (this.diff) {
         this.remember(); this.diff.destroyRecursively(); this.diff = undefined;
@@ -189,9 +190,9 @@ export class GitPanel {
   }
 
   private row(): BoxRenderable { return new BoxRenderable(this.renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1, minWidth: 0 }); }
-  private text(content: string, role: ThemeRole = "text"): TextRenderable {
+  private text(content: string, role: StyleGroup = "ui.label"): TextRenderable {
     const text = new TextRenderable(this.renderer, { content, height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
-    uiTheme(this.renderer).bind(text, (colors) => { text.fg = colors[role]; });
+    uiTheme(this.renderer).bindStyles(text, (styles) => paintText(text, styles[role]));
     return text;
   }
   private paintTabs(): void {
@@ -379,7 +380,7 @@ export class GitPanel {
     let history: GitListItem[] = [];
     if (state.tab === "reflog") {
       history = (data?.reflog ?? []).map((event): GitListItem => ({ key: event.selector, label: [
-        { text: display(`${event.selector}  `) }, { text: event.oid.slice(0, 7), color: "warning" }, { text: display(`  ${event.subject}`) },
+        { text: display(`${event.selector}  `) }, { text: event.oid.slice(0, 7), color: "git.hash" }, { text: display(`  ${event.subject}`) },
       ] }));
       state.reflogSelected ??= data?.reflog[0]?.selector ?? null;
     } else if (data) {
@@ -409,15 +410,15 @@ export class GitPanel {
       const group = files.filter((file) => file.kind === kind);
       if (group.length && kind !== "commit") fileRows.push({ key: `heading:${kind}`, label: kind.toUpperCase(), disabled: true, gapBefore: fileRows.length > 0 });
       for (const file of group) fileRows.push({ key: fileKey(file),
-        label: file.status === "M" ? [{ text: "M", color: "warning" }, { text: display(` ${file.path}`) }] : display(`${file.status} ${file.path}`),
-        color: file.status === "D" ? "error" : file.status === "A" || file.status === "?" ? "success" : "text" });
+        label: file.status === "M" ? [{ text: "M", color: "git.modified" }, { text: display(` ${file.path}`) }] : display(`${file.status} ${file.path}`),
+        color: file.status === "D" ? "git.removed" : file.status === "A" || file.status === "?" ? "git.added" : "ui.label" });
     }
     this.files.update(fileRows.length ? fileRows : [{ key: "empty", label: state.selected && !cache.details ? cache.error ?? "Loading files…" : "No changed files", disabled: true }], state.file);
     const references = data?.refs.filter((ref) => ref.kind === state.refs) ?? [];
     if (!references.some((ref) => ref.ref === state.refSelected)) state.refSelected = references[0]?.ref ?? null;
     this.refs.update(references.length ? references.map((ref): GitListItem => ({ key: ref.ref,
       label: display(`${ref.kind === "tag" ? icons.tag : icons.branch} ${ref.name}`),
-      color: ref.kind === "local" && ref.name === data?.head ? "accent" : "text",
+      color: ref.kind === "local" && ref.name === data?.head ? "git.currentRef" : "ui.label",
     })) : [{ key: "empty", label: "No refs", disabled: true }], state.refSelected);
     this.history.root.visible = state.tab === "reflog" || !state.diff;
     this.diffFocus.visible = state.tab === "commits" && state.diff;
@@ -433,18 +434,17 @@ export class GitPanel {
     const patch = fullFilePatch(comparison);
     if (!patch.ok) { this.diffNotice.content = patch.error.message; return; }
     if (!patch.value) { this.diffNotice.content = "Both file versions are empty (no text lines)."; return; }
-    const colors = uiTheme(this.renderer).colors;
-    this.syntax ??= SyntaxStyle.fromStyles({ default: { fg: colors.text }, keyword: { fg: colors.keyword },
-      string: { fg: colors.success }, number: { fg: colors.number }, comment: { fg: colors.muted } }, this.renderer.nativeScene!);
+    const styles = uiTheme(this.renderer).styles;
+    this.syntax ??= SyntaxStyle.fromStyles(codeStyles(styles), this.renderer.nativeScene!);
     const extension = this.selectedFile?.path.split(".").at(-1)?.toLowerCase();
     const language = extension === "ts" ? "typescript" : extension === "tsx" ? "typescriptreact" : extension === "js" || extension === "jsx" ? "javascript" : extension === "md" ? "markdown" : extension === "zig" ? "zig" : undefined;
     this.diff = new DiffRenderable(this.renderer, { id: "git-file-diff", width: "100%", flexGrow: 1, minHeight: 0, diff: patch.value,
       view: "split", syncScroll: true, wrapMode: "none", showLineNumbers: true, syntaxStyle: this.syntax,
-      fg: colors.text, contextBg: colors.panel, contextContentBg: colors.panel,
-      lineNumberFg: colors.muted, lineNumberBg: colors.surface,
-      addedBg: colors.added, addedContentBg: colors.added, addedLineNumberBg: colors.added, addedSignColor: colors.success,
-      removedBg: colors.removed, removedContentBg: colors.removed, removedLineNumberBg: colors.removed, removedSignColor: colors.error,
-      selectionBg: colors.selected, selectionFg: colors.text,
+      fg: styles["syntax.text"].fg, contextBg: styleBackground(styles["ui.text"]), contextContentBg: styleBackground(styles["ui.text"]),
+      lineNumberFg: styles["diff.lineNumber"].fg, lineNumberBg: styleBackground(styles["diff.lineNumber"]),
+      addedBg: styleBackground(styles["diff.added"]), addedContentBg: styleBackground(styles["diff.added"]), addedLineNumberBg: styleBackground(styles["diff.added"]), addedSignColor: styles["diff.added"].fg,
+      removedBg: styleBackground(styles["diff.removed"]), removedContentBg: styleBackground(styles["diff.removed"]), removedLineNumberBg: styleBackground(styles["diff.removed"]), removedSignColor: styles["diff.removed"].fg,
+      selectionBg: styleBackground(styles["ui.selection"]), selectionFg: styles["ui.selection"].fg,
       ...(language ? { filetype: language } : {}), ...(this.actions?.treeSitterClient ? { treeSitterClient: this.actions.treeSitterClient } : {}) });
     this.diffBody.add(this.diff); this.diffNotice.visible = false; this.renderedComparison = comparison;
   }

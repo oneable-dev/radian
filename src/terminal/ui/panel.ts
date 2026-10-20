@@ -7,6 +7,7 @@ import { TerminalSurface, type PtyAttachment } from "../../ui/embedded-terminal/
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import type { TerminalTheme } from "../../ui/embedded-terminal/theme.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { paintText } from "../../ui/theme-styles.ts";
 import type { Button, ButtonFactory } from "../../ui/button.ts";
 import { bindPanelSpacing } from "../../ui/spacing.ts";
 import type { TerminalTitles } from "../process-titles.ts";
@@ -64,8 +65,8 @@ export class TerminalPanel {
     const status = this.messageRow = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", visible: false });
     this.message = new TextRenderable(renderer, { content: "", flexGrow: 1, minWidth: 0, height: 1, wrapMode: "none", selectable: false });
     this.spinner = new LoadingSpinner(renderer, { id: "terminal-spinner" });
-    uiTheme(renderer).bind(this.message, (colors) => { this.message.fg = colors.muted; });
-    uiTheme(renderer).bind(this.spinner.root, (colors) => { this.spinner.root.fg = colors.accent; });
+    uiTheme(renderer).bindStyles(this.message, (styles) => paintText(this.message, styles["ui.muted"]));
+    uiTheme(renderer).bindStyles(this.spinner.root, (styles) => paintText(this.spinner.root, styles["status.working"]));
     uiTheme(renderer).scrollbars(this.tabs);
     const activity = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0 });
     activity.add(this.spinner.root); toolbar.add(activity);

@@ -1,4 +1,4 @@
-import { BoxRenderable, InputRenderable, InputRenderableEvents, RGBA, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
+import { BoxRenderable, InputRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
 import type { ModelCatalog, ModelEffort, ModelIdentity } from "../model-selection.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
@@ -7,6 +7,7 @@ import type { FooterShortcut } from "../../ui/footer.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { singleLine } from "../../ui/text.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { paintText } from "../../ui/theme-styles.ts";
 import { Button } from "../../ui/button.ts";
 
 type Scope = { sessionId: string; conversationId: string };
@@ -51,7 +52,7 @@ export class ModelPicker {
   constructor(private readonly renderer: CliRenderer, private readonly actions: ModelPickerActions) {
     const theme = uiTheme(renderer);
     this.root = new BoxRenderable(renderer, { id: "model-picker", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 5500,
-      visible: false, backgroundColor: RGBA.fromValues(0, 0, 0, 0.45),
+      visible: false,
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
     this.panel = new BoxRenderable(renderer, { id: "model-dialog", position: "absolute", border: true, paddingX: 1,
       flexDirection: "column", minWidth: 0, minHeight: 0 });
@@ -76,9 +77,10 @@ export class ModelPicker {
     controls.add(this.apply); controls.add(cancel);
     this.panel.add(heading); this.panel.add(this.search); this.panel.add(this.message); this.panel.add(this.list); this.panel.add(this.effort); this.panel.add(controls); this.root.add(this.panel);
     theme.input(this.search); theme.scrollbars(this.list);
-    theme.bind(this.root, colors => {
-      this.panel.backgroundColor = colors.panel; this.panel.borderColor = colors.accent;
-      title.fg = colors.accent; close.fg = colors.muted; this.message.fg = colors.muted; this.spinner.root.fg = colors.accent;
+    theme.bindStyles(this.root, styles => {
+      this.root.backgroundColor = styles["ui.backdrop"].bg;
+      this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
+      paintText(title, styles["ui.popupTitle"]); paintText(close, styles["ui.muted"]); paintText(this.message, styles["ui.muted"]); paintText(this.spinner.root, styles["status.working"]);
       this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);
@@ -163,7 +165,7 @@ export class ModelPicker {
         onMouseDown: event => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.cursor = index; this.list.focus(); this.paint(); } } });
       const label = new TextRenderable(this.renderer, { content: `${singleLine(model.name)}${sameModel(this.catalog?.current, model) ? " [Current]" : ""}`, height: 1, wrapMode: "none", selectable: false });
       const metadata = new TextRenderable(this.renderer, { content: singleLine(`${model.provider}/${model.id} · ${model.contextWindow.toLocaleString("en-US")} context${model.images ? " · images" : ""}`), height: 1, wrapMode: "none", selectable: false });
-      uiTheme(this.renderer).bind(row, colors => { label.fg = colors.text; metadata.fg = colors.muted; });
+      uiTheme(this.renderer).bindStyles(row, styles => { paintText(label, styles["ui.label"]); paintText(metadata, styles["ui.muted"]); });
       row.add(label); row.add(metadata); this.rows.push(row); this.list.add(row);
     });
     this.message.content = this.loadError ?? (this.loading ? "Loading available models…" : !this.catalog ? "" : !this.catalog.models.length ? "No available models. Configure provider authentication in Pi first."
@@ -172,8 +174,8 @@ export class ModelPicker {
   };
   private paint(): void {
     if (!this.rows) return;
-    const colors = uiTheme(this.renderer).colors;
-    this.rows.forEach((row, index) => { row.backgroundColor = index === this.cursor ? colors.selected : colors.panel; });
+    const styles = uiTheme(this.renderer).styles;
+    this.rows.forEach((row, index) => { row.backgroundColor = styles[index === this.cursor ? "ui.selection" : "ui.popup"].bg; });
     const row = this.rows[this.cursor]; if (row) this.list.scrollChildIntoView(row.id);
     this.paintEffort(); this.actions.changed();
   }
@@ -185,7 +187,7 @@ export class ModelPicker {
     const keys = [this.actions.keyHint("model.effort-less", "model-effort"), this.actions.keyHint("model.effort-more", "model-effort")].filter(Boolean).join("/");
     this.effortLabel.content = !model || selected === undefined ? "Effort unavailable" : !model.reasoning ? "Effort · not supported (off)"
       : levels.length === 1 ? `Effort · ${selected} (fixed)` : `Effort${keys ? ` · ${keys}` : ""}`;
-    this.effortLabel.fg = uiTheme(this.renderer).colors.muted;
+    paintText(this.effortLabel, uiTheme(this.renderer).styles["ui.muted"]);
     const signature = editable || levels.length > 1 ? levels.join(",") : "";
     if (signature !== this.effortSignature) {
       const focused = this.effort.hasFocusedDescendant;
@@ -199,8 +201,8 @@ export class ModelPicker {
     }
     this.effortOptions.visible = this.effortButtons.size > 0;
     for (const [level, button] of this.effortButtons) { button.active = level === selected; button.setLabel(level === selected ? `[${level}]` : level); }
-    const colors = uiTheme(this.renderer).colors;
-    this.effort.backgroundColor = this.effort.focused || this.effort.hasFocusedDescendant ? colors.surface : colors.panel;
+    const styles = uiTheme(this.renderer).styles;
+    this.effort.backgroundColor = styles[this.effort.focused || this.effort.hasFocusedDescendant ? "ui.selectionInactive" : "ui.popup"].bg;
     this.apply.active = !this.loading && !this.applying && selected !== undefined;
     if (!editable && (this.effort.focused || this.effort.hasFocusedDescendant)) this.list.focus();
   }

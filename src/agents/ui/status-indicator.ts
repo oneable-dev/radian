@@ -3,6 +3,7 @@ import type { AgentStatus } from "../model.ts";
 import { icons } from "../../icons.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { paintText } from "../../ui/theme-styles.ts";
 
 // Keep the primary status in the leading cell. A settled outcome uses the same
 // position immediately, with the spinner's minimum-visible tail in the second cell.
@@ -20,10 +21,10 @@ export class StatusIndicator {
     this.spinner = new LoadingSpinner(renderer);
     this.outcome = new TextRenderable(renderer, { width: 1, height: 1, wrapMode: "none", selectable: false });
     animation.add(this.spinner.root); this.root.add(animation); this.root.add(this.outcome);
-    uiTheme(renderer).bind(this.outcome, (colors) => {
-      this.outcome.fg = this.status === "failure" ? colors.error : this.status === "complete" ? colors.success : colors.muted;
+    uiTheme(renderer).bindStyles(this.outcome, (styles) => {
+      paintText(this.outcome, styles[this.status === "failure" ? "status.error" : this.status === "complete" ? "status.success" : "status.unknown"]);
     });
-    uiTheme(renderer).bind(this.spinner.root, (colors) => { this.spinner.root.fg = colors.accent; });
+    uiTheme(renderer).bindStyles(this.spinner.root, (styles) => paintText(this.spinner.root, styles["status.working"]));
   }
 
   update(status: AgentStatus | null, visible: boolean): void {
@@ -35,8 +36,8 @@ export class StatusIndicator {
     else if (changed && status === "working") this.spinner.start();
     else if (status !== "working") this.spinner.stop();
     this.outcome.content = status === "complete" ? icons.pass : status === "failure" ? icons.error : "";
-    const colors = uiTheme(this.renderer).colors;
-    this.outcome.fg = status === "failure" ? colors.error : status === "complete" ? colors.success : colors.muted;
+    const styles = uiTheme(this.renderer).styles;
+    paintText(this.outcome, styles[status === "failure" ? "status.error" : status === "complete" ? "status.success" : "status.unknown"]);
     this.syncVisibility();
   }
 

@@ -1,4 +1,4 @@
-import { BoxRenderable, InputRenderable, InputRenderableEvents, RGBA, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
+import { BoxRenderable, InputRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
 import type { HistoryItem } from "../history.ts";
 import type { HistoryPreview } from "../history-preview.ts";
 import type { Worktree } from "../../workspace/model.ts";
@@ -8,6 +8,7 @@ import type { FooterShortcut } from "../../ui/footer.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { paintText } from "../../ui/theme-styles.ts";
 import { TranscriptPanel } from "./transcript-panel.ts";
 import type { TranscriptSection } from "../transcript.ts";
 
@@ -67,15 +68,15 @@ export class SessionHistoryPanel {
     // Two native scroll areas add renderer subscriptions; budget these owned listeners, not an unlimited exemption.
     this.listenerBudget = renderer.getMaxListeners() === 0 ? 0 : 4;
     if (this.listenerBudget) renderer.setMaxListeners(renderer.getMaxListeners() + this.listenerBudget);
-    const theme = uiTheme(renderer), colors = theme.colors;
+    const theme = uiTheme(renderer);
     this.root = new BoxRenderable(renderer, { id: "session-history", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 5000,
-      backgroundColor: RGBA.fromValues(0, 0, 0, 0.45), visible: false,
+      visible: false,
       onMouseDown: (event) => { event.stopPropagation(); }, onMouseScroll: (event) => event.stopPropagation() });
-    this.panel = new BoxRenderable(renderer, { id: "history-dialog", position: "absolute", border: true, borderColor: colors.accent,
-      backgroundColor: colors.panel, paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
+    this.panel = new BoxRenderable(renderer, { id: "history-dialog", position: "absolute", border: true,
+      paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
     const heading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.title = new TextRenderable(renderer, { height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0, wrapMode: "none", selectable: false });
-    this.spinner = new LoadingSpinner(renderer, { id: "history-loading", fg: colors.accent });
+    this.spinner = new LoadingSpinner(renderer, { id: "history-loading" });
     heading.add(this.title);
     const activity = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0 }); activity.add(this.spinner.root); heading.add(activity);
     const close = new TextRenderable(renderer, { content: "×", width: 1, height: 1, selectable: false,
@@ -88,7 +89,7 @@ export class SessionHistoryPanel {
     this.previewPane = new BoxRenderable(renderer, { id: "history-preview-pane", width: "58%", minWidth: 0, minHeight: 0, flexDirection: "column", border: ["left"], paddingLeft: 1 });
     const previewHeading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     const label = new TextRenderable(renderer, { content: "Preview · read only", height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0, selectable: false, wrapMode: "none" });
-    this.previewSpinner = new LoadingSpinner(renderer, { id: "history-preview-loading", fg: colors.accent });
+    this.previewSpinner = new LoadingSpinner(renderer, { id: "history-preview-loading" });
     previewHeading.add(label); previewHeading.add(this.previewSpinner.root);
     this.transcript = new TranscriptPanel(renderer, { initialScroll: {}, initialPosition: "start", saveScroll: () => {},
       focusPrompt: () => this.search.focus(), notice: actions.onError, changed: () => actions.onChange?.() });
@@ -97,10 +98,13 @@ export class SessionHistoryPanel {
     body.add(this.list); body.add(this.previewPane);
     this.panel.add(heading); this.panel.add(this.search); this.panel.add(this.message); this.panel.add(body); this.root.add(this.panel);
     theme.input(this.search); theme.scrollbars(this.list); theme.scrollbars(this.preview);
-    theme.bind(this.root, (colors) => {
-      this.panel.backgroundColor = colors.panel; this.panel.borderColor = colors.accent; this.title.fg = colors.accent;
-      this.message.fg = colors.muted; label.fg = colors.muted; close.fg = colors.muted;
-      this.previewPane.borderColor = colors.muted; this.spinner.root.fg = colors.accent; this.previewSpinner.root.fg = colors.accent; this.paint();
+    theme.bindStyles(this.root, (styles) => {
+      this.root.backgroundColor = styles["ui.backdrop"].bg;
+      this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg; paintText(this.title, styles["ui.popupTitle"]);
+      for (const text of [this.message, label, close]) paintText(text, styles["ui.muted"]);
+      this.previewPane.borderColor = styles["ui.border"].fg;
+      for (const spinner of [this.spinner, this.previewSpinner]) paintText(spinner.root, styles["status.working"]);
+      this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);
     renderer.on("resize", this.resize); this.resize();
@@ -190,7 +194,7 @@ export class SessionHistoryPanel {
         onMouseDown: (event) => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); this.list.focus(); this.cursor = index; this.paint(); this.schedulePreview(); } });
       const title = new TextRenderable(this.renderer, { content: `${item.unavailableReason ? "[Busy] " : item.openSessionId ? "[Open] " : ""}${item.title}`, height: 1, wrapMode: "none", selectable: false });
       const metadata = new TextRenderable(this.renderer, { content: `${item.modified.slice(0, 16).replace("T", " ")} · ${item.messageCount} messages`, height: 1, wrapMode: "none", selectable: false });
-      uiTheme(this.renderer).bind(row, (colors) => { title.fg = colors.text; metadata.fg = colors.muted; row.backgroundColor = index === this.cursor ? colors.selected : colors.panel; });
+      uiTheme(this.renderer).bindStyles(row, (styles) => { paintText(title, styles["ui.label"]); paintText(metadata, styles["ui.muted"]); row.backgroundColor = styles[index === this.cursor ? "ui.selection" : "ui.popup"].bg; });
       row.add(title); row.add(metadata); this.list.add(row); this.rows.push(row);
     }
     this.list.scrollTo(0);
@@ -200,8 +204,8 @@ export class SessionHistoryPanel {
   };
   private paint(): void {
     if (!this.rows) return;
-    const colors = uiTheme(this.renderer).colors;
-    this.rows.forEach((row, index) => { row.backgroundColor = index === this.cursor ? colors.selected : colors.panel; });
+    const styles = uiTheme(this.renderer).styles;
+    this.rows.forEach((row, index) => { row.backgroundColor = styles[index === this.cursor ? "ui.selection" : "ui.popup"].bg; });
     const row = this.rows[this.cursor]; if (row) this.list.scrollChildIntoView(row.id);
     this.actions.onChange?.();
   }

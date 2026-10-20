@@ -2,33 +2,34 @@ import { BoxRenderable, RenderableEvents, StyledText, TextAttributes, TextRender
 import type { ExecutionState } from "../session-registry.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
-import { uiTheme, type UiColors } from "../../ui/theme.ts";
+import { uiTheme } from "../../ui/theme.ts";
+import { paintText, styleChunk, type StyleGroup } from "../../ui/theme-styles.ts";
 import type { RequestSummary } from "../request-summary.ts";
 import { formatRequestCaption, requestForSection } from "./request-caption.ts";
 import { formatRunDuration } from "./run-completion.ts";
 
-type Display = { label: string; detail: string; color: "accent" | "error" | "warning" | "muted"; request?: RequestSummary; durationMs?: number };
+type Display = { label: string; detail: string; color: StyleGroup; request?: RequestSummary; durationMs?: number };
 
 function display(state: ExecutionState | null | undefined): Display {
-  if (state?.status === "working" && state.activity === "compacting") return { label: "Compacting context", detail: "", color: "accent" };
+  if (state?.status === "working" && state.activity === "compacting") return { label: "Compacting context", detail: "", color: "status.working" };
   const sections = state?.sections ?? [];
   const index = sections.findLastIndex((section) => requestForSection(section) !== undefined);
   const section = index >= 0 ? sections[index] : undefined;
   const summary = requestForSection(section), request = summary?.text ?? "";
   const detail = request ? ` “${request}”` : "";
-  if (state?.status === "working") return { label: "Working", detail, color: "accent", ...(summary ? { request: summary } : {}) };
-  if (state?.status === "failure") return { label: "Failed", detail: state.error ? `: ${singleLine(state.error)}` : detail, color: "error" };
+  if (state?.status === "working") return { label: "Working", detail, color: "status.working", ...(summary ? { request: summary } : {}) };
+  if (state?.status === "failure") return { label: "Failed", detail: state.error ? `: ${singleLine(state.error)}` : detail, color: "status.error" };
   // Timing/status metadata must belong to this request, not an earlier completed turn.
   const turn = sections.slice(Math.max(0, index));
   const completion = turn.findLast((item) => item.completion)?.completion;
   const outcome = completion?.outcome;
   const assistant = turn.findLast((item) => item.kind === "assistant" || item.kind === "notice" && item.status === "cancelled"
     && (item.title === "Agent error" || !item.text));
-  if (outcome === "cancelled" || !outcome && assistant?.status === "cancelled") return { label: "Cancelled", detail, color: "warning",
+  if (outcome === "cancelled" || !outcome && assistant?.status === "cancelled") return { label: "Cancelled", detail, color: "status.warning",
     ...(summary ? { request: summary } : {}), ...(completion ? { durationMs: completion.durationMs } : {}) };
-  if (outcome === "unfinished" || !outcome && assistant?.status === "unfinished") return { label: "Stopped", detail, color: "warning" };
-  if (outcome === "error" || state?.error) return { label: "Failed", detail: state?.error ? `: ${singleLine(state.error)}` : detail, color: "error" };
-  return { label: "", detail: "", color: "muted" };
+  if (outcome === "unfinished" || !outcome && assistant?.status === "unfinished") return { label: "Stopped", detail, color: "status.warning" };
+  if (outcome === "error" || state?.error) return { label: "Failed", detail: state?.error ? `: ${singleLine(state.error)}` : detail, color: "status.error" };
+  return { label: "", detail: "", color: "status.unknown" };
 }
 
 // Only runtime transcript requests can label the work; drafts, admissions and lookup results cannot.
@@ -78,8 +79,8 @@ export class RunStatus {
 
   private paint(): void {
     if (!this.root || this.root.isDestroyed || !this.text || this.disposed) return;
-    const colors: UiColors = uiTheme(this.renderer).colors;
-    this.spinner.root.fg = colors.accent;
+    const styles = uiTheme(this.renderer).styles;
+    paintText(this.spinner.root, styles["status.working"]);
     this.text.visible = !!this.current.label;
     const width = Math.max(0, this.root.width - (this.spinner.root.visible ? 2 : 0));
     const seconds = Math.floor((this.elapsed + Math.max(0, this.renderer.clock.now() - this.sampledAt)) / 1000);
@@ -96,14 +97,14 @@ export class RunStatus {
     const statusLabel = label.slice(0, this.current.label.length);
     const elapsedLabel = label.slice(this.current.label.length);
     this.text.content = new StyledText([
-      { __isChunk: true, text: statusLabel, fg: colors[this.current.color] },
-      ...(elapsedLabel ? [{ __isChunk: true as const, text: elapsedLabel, fg: colors.muted }] : []),
+      styleChunk(statusLabel, styles[this.current.color]),
+      ...(elapsedLabel ? [styleChunk(elapsedLabel, styles["status.elapsed"])] : []),
       ...(showHint ? [
-        { __isChunk: true as const, text: " · ", fg: colors.muted },
-        { __isChunk: true as const, text: key, fg: colors.text, attributes: TextAttributes.BOLD },
-        { __isChunk: true as const, text: " to interrupt)", fg: colors.muted },
+        styleChunk(" · ", styles["status.elapsed"]),
+        { ...styleChunk(key, styles["ui.label"]), attributes: styles["ui.label"].attributes | TextAttributes.BOLD },
+        styleChunk(" to interrupt)", styles["status.elapsed"]),
       ] : []),
-      { __isChunk: true, text: request ? caption ? ` ${caption}` : "" : truncateCells(this.current.detail, remaining), fg: colors.text },
+      styleChunk(request ? caption ? ` ${caption}` : "" : truncateCells(this.current.detail, remaining), styles["ui.label"]),
     ]);
   }
 

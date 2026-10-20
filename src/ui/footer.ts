@@ -1,5 +1,6 @@
-import { BoxRenderable, RenderableEvents, StyledText, TextRenderable, fg, type CliRenderer } from "@opentui/core";
+import { BoxRenderable, RenderableEvents, StyledText, TextRenderable, type CliRenderer } from "@opentui/core";
 import { blendColors, uiTheme, type UiTheme } from "./theme.ts";
+import { paintText, styleChunk } from "./theme-styles.ts";
 import { horizontalInset } from "./spacing.ts";
 import type { Button } from "./button.ts";
 import { singleLine, truncateCells } from "./text.ts";
@@ -45,8 +46,9 @@ export class Footer {
     const resize = () => this.renderShortcuts();
     renderer.on("resize", resize);
     this.root.once(RenderableEvents.DESTROYED, () => renderer.off("resize", resize));
-    this.theme.bind(this.root, (colors) => {
-      this.notice.fg = colors.muted; this.identity.fg = colors.text; this.context.fg = colors.accent; this.bar.backgroundColor = colors.surface;
+    this.theme.bindStyles(this.root, (styles) => {
+      paintText(this.notice, styles["footer.description"]); paintText(this.identity, styles["footer.identity"]);
+      paintText(this.context, styles["footer.accent"]); this.bar.backgroundColor = styles["footer.identity"].bg;
       this.lastLayout = ""; this.renderShortcuts();
     });
   }
@@ -113,22 +115,24 @@ export class Footer {
       if (used + size > budget) break;
       visible.push(shortcut); used += size;
     }
-    const colors = this.theme.colors;
+    const styles = this.theme.styles;
     const chunks = visible.flatMap(({ key, label, disabled }, index) => [
-      fg(disabled ? colors.muted : colors.keyword)(`${" ".repeat(index ? gap : 0)}${key}`), fg(colors.muted)(` ${label}`),
+      styleChunk(`${" ".repeat(index ? gap : 0)}${key}`, styles[disabled ? "footer.description" : "footer.key"]),
+      styleChunk(` ${label}`, styles["footer.description"]),
     ]);
-    if (truncated && available > 0) chunks.push(fg(colors.muted)(`${" ".repeat(visible.length ? gap : 0)}…`));
+    if (truncated && available > 0) chunks.push(styleChunk(`${" ".repeat(visible.length ? gap : 0)}…`, styles["footer.description"]));
     this.hints.content = new StyledText(chunks);
   }
   private paintIdentity(width: number, inset: number): void {
-    const colors = this.theme.colors;
+    const colors = this.theme.colors, styles = this.theme.styles;
+    const surface = styles["footer.identity"].bg ?? colors.surface;
     const background = (cell: number) => this.theme.monochrome ? colors.panel : cell < width
-      ? blendColors(colors.surface, colors.accent, 0.28 * (1 - cell / Math.max(1, width - 1))) : colors.surface;
+      ? blendColors(surface, styles["footer.accent"].fg, 0.28 * (1 - cell / Math.max(1, width - 1))) : surface;
     const label = " ".repeat(inset) + this.appIdentity;
     let cell = 0;
     this.identity.content = new StyledText(Array.from(label + " ".repeat(Math.max(0, width - Bun.stringWidth(label))), (text) => {
       const bg = background(cell); cell += Bun.stringWidth(text);
-      return { __isChunk: true, text, fg: colors.text, bg };
+      return { ...styleChunk(text, styles["footer.identity"]), bg };
     }));
   }
 }

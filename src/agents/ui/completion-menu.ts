@@ -1,9 +1,10 @@
-import { BoxRenderable, RenderableEvents, TextRenderable, type CliRenderer } from "@opentui/core";
+import { BoxRenderable, RenderableEvents, StyledText, TextRenderable, type CliRenderer } from "@opentui/core";
 import type { CommandId } from "../../keybindings/commands.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { paintText, styleChunk } from "../../ui/theme-styles.ts";
 import { completionTarget, insertCompletion, type CompletionQuery, type CompletionResult, type CompletionTarget } from "../completion.ts";
 import type { PromptInput } from "./prompt-input.ts";
 
@@ -58,8 +59,9 @@ export class CompletionMenu {
       this.rows.push(row); this.root.add(row);
     }
     this.root.add(this.spinner.root);
-    uiTheme(renderer).bind(this.root, (colors) => {
-      this.root.backgroundColor = colors.surface; this.header.fg = colors.muted; this.spinner.root.fg = colors.accent; this.paint();
+    uiTheme(renderer).bindStyles(this.root, (styles) => {
+      this.root.backgroundColor = styles["completion.item"].bg;
+      paintText(this.header, styles["completion.description"]); paintText(this.spinner.root, styles["status.working"]); this.paint();
     });
     input.on("focused", this.refresh); input.on("blurred", this.blur);
     input.onCursorChange = () => { this.refresh(); this.changed(); };
@@ -182,13 +184,17 @@ export class CompletionMenu {
     // Reserve the same bounded area from opening until dismissal, even for loading, errors or no matches.
     if (this.root.height !== budget) this.root.height = budget;
     this.header.content = (this.message || `${this.target?.kind === "file" ? "Files" : "Commands · SDK resources"} · ${this.selected + 1}/${this.result.items.length}${this.result.truncated ? "+ · refine search" : ""}${this.pending ? " · Updating…" : ""}`).replace(/[\x00-\x1f\x7f]/gu, " ");
-    const colors = uiTheme(this.renderer).colors;
+    const styles = uiTheme(this.renderer).styles;
     for (const [index, row] of this.rows.entries()) {
       const item = this.result.items[this.first + index]; row.visible = index < count && !!item;
       if (!row.visible || !item) continue;
       const label = item.kind === "file" ? JSON.stringify(item.value).slice(1, -1) : `/${item.value}`;
-      row.content = `${this.first + index === this.selected ? "› " : "  "}${label} · ${item.description}`.replace(/[\x00-\x1f\x7f]/gu, " ");
-      row.fg = colors.text; row.bg = this.first + index === this.selected ? colors.selected : colors.surface;
+      const selected = this.first + index === this.selected;
+      row.content = new StyledText([
+        styleChunk(`${selected ? "› " : "  "}${label}`.replace(/[\x00-\x1f\x7f]/gu, " "), styles[selected ? "completion.selected" : "completion.item"]),
+        styleChunk(` · ${item.description}`.replace(/[\x00-\x1f\x7f]/gu, " "), styles[selected ? "completion.selected" : "completion.description"]),
+      ]);
+      row.bg = styles[selected ? "completion.selected" : "completion.item"].bg;
     }
   };
   reflow(): void { this.paint(); }

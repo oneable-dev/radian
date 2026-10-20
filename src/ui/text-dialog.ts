@@ -1,10 +1,11 @@
-import { BoxRenderable, RenderableEvents, ScrollBoxRenderable, TextRenderable, RGBA, type CliRenderer, type Renderable } from "@opentui/core";
+import { BoxRenderable, RenderableEvents, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
 import type { CommandId } from "../keybindings/commands.ts";
 import { reportUnexpected, type ExpectedError } from "../errors.ts";
 import type { Result } from "../result.ts";
 import { Button } from "./button.ts";
 import { Clipboard } from "./clipboard.ts";
 import { uiTheme } from "./theme.ts";
+import { paintText } from "./theme-styles.ts";
 
 export type DialogContent = { title: string; text: string; copy?: boolean; remove?: () => void };
 
@@ -30,7 +31,7 @@ export class TextDialog {
     const theme = uiTheme(renderer);
     this.clipboard = new Clipboard(renderer);
     this.root = new BoxRenderable(renderer, { id: "text-dialog", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 6000,
-      visible: false, backgroundColor: RGBA.fromValues(0, 0, 0, 0.45),
+      visible: false,
       onMouseDown: (event) => event.stopPropagation(), onMouseScroll: (event) => event.stopPropagation() });
     this.panel = new BoxRenderable(renderer, { id: "text-dialog-panel", position: "absolute", border: true, paddingX: 1,
       flexDirection: "column", minWidth: 0, minHeight: 0 });
@@ -47,9 +48,10 @@ export class TextDialog {
     controls.add(this.copyButton); controls.add(this.removeButton); controls.add(this.closeButton);
     this.panel.add(this.title); this.panel.add(this.scroll); this.panel.add(this.status); this.panel.add(controls); this.root.add(this.panel);
     theme.scrollbars(this.scroll);
-    theme.bind(this.root, (colors) => {
-      this.panel.backgroundColor = colors.panel; this.panel.borderColor = colors.accent;
-      this.title.fg = colors.accent; this.body.fg = colors.text; this.status.fg = colors.muted;
+    theme.bindStyles(this.root, (styles) => {
+      this.root.backgroundColor = styles["ui.backdrop"].bg;
+      this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
+      paintText(this.title, styles["ui.popupTitle"]); paintText(this.body, styles["ui.label"]); paintText(this.status, styles["ui.muted"]);
     });
     renderer.on("resize", this.resize); renderer.on("focused_renderable", this.keepFocus); this.resize();
     this.root.once(RenderableEvents.DESTROYED, () => this.dispose());

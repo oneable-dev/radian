@@ -7,6 +7,7 @@ import type { Worktree } from "../../workspace/model.ts";
 import { CapabilityError, InputError, type ExpectedError } from "../../errors.ts";
 import { err, type Result } from "../../result.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { paintText } from "../../ui/theme-styles.ts";
 import { TranscriptPanel, type TranscriptOptions } from "./transcript-panel.ts";
 import { TranscriptBottomButton } from "./transcript-bottom-button.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
@@ -131,11 +132,11 @@ export class AgentPanel {
     const inputArea = new BoxRenderable(renderer, { id: "agent-input-area", width: "100%", minWidth: 0, minHeight: 0, flexShrink: 0, flexDirection: "column" });
     inputArea.add(this.pendingMessages.root); inputArea.add(composer); inputArea.add(this.completion.root); inputArea.add(this.sessionStatus.root);
     this.runtimePanel.add(transcriptArea); this.runtimePanel.add(statusRow); this.runtimePanel.add(inputArea); this.root.add(this.runtimePanel);
-    theme.input(this.prompt); theme.scrollbars(this.transcriptScroll); theme.focusBorder(composer);
-    theme.bind(this.root, (colors) => {
-      this.title.fg = colors.text; this.details.fg = colors.muted;
-      composer.backgroundColor = colors.surface;
-      this.prompt.focusedBackgroundColor = colors.surface;
+    theme.input(this.prompt, "prompt.input", "prompt.input"); theme.scrollbars(this.transcriptScroll); theme.focusBorder(composer);
+    theme.bindStyles(this.root, (styles) => {
+      paintText(this.title, { ...styles["ui.label"], attributes: styles["ui.label"].attributes | TextAttributes.BOLD });
+      paintText(this.details, styles["ui.muted"]);
+      composer.backgroundColor = styles["prompt.input"].bg;
     });
     bindPanelSpacing(renderer, this.root);
     this.prompt.on("resize", this.resizeComposer); this.prompt.on("line-info-change", this.resizeComposer);
