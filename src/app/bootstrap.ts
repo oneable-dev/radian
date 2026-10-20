@@ -176,7 +176,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
         onInterrupt: (id: string) => client.interrupt(id),
         onComplete: (id, query, signal) => client.complete(id, query, signal),
         onListModels: (id, conversationId, signal) => client.models(id, conversationId, signal),
-        onSelectModel: (id, conversationId, model) => client.selectModel(id, conversationId, model),
+        onSelectModel: (id, conversationId, model, effort) => client.selectModel(id, conversationId, model, effort),
         onImage: (id, imageId, signal) => client.image(id, imageId, signal),
         git: {
           source: (worktree) => new GitRepository(worktree.path),

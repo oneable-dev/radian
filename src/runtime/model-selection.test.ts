@@ -7,11 +7,11 @@ import type { ModelCatalog } from "../agents/model-selection.ts";
 
 const state = (): RuntimeSnapshot => ({ version: protocolVersion, pid: process.pid, instance: "instance", repositoryId: "repo", mode: "offline",
   repositories: [], details: { session: { conversationId: "conversation", status: null, output: "", error: null } },
-  closingCount: 0, preferences: structuredClone(emptyPreferences), notice: "", capabilities: ["model-selection"] });
+  closingCount: 0, preferences: structuredClone(emptyPreferences), notice: "", capabilities: ["model-selection", "model-effort"] });
 const paths = runtimePaths("model-client-fixture", true, "/tmp/radian-model-client-test");
-const catalog: ModelCatalog = { conversationId: "conversation", current: { provider: "first", id: "same-id" }, models: [
-  { provider: "first", id: "same-id", name: "First", contextWindow: 200000, reasoning: true, images: true },
-  { provider: "second", id: "same-id", name: "Second", contextWindow: 64000, reasoning: false, images: false },
+const catalog: ModelCatalog = { conversationId: "conversation", current: { provider: "first", id: "same-id" }, effort: "high", models: [
+  { provider: "first", id: "same-id", name: "First", contextWindow: 200000, reasoning: true, images: true, efforts: ["low", "high"], effort: "high" },
+  { provider: "second", id: "same-id", name: "Second", contextWindow: 64000, reasoning: false, images: false, efforts: ["off"], effort: "off" },
 ] };
 
 test("모델 목록과 변경 IPC는 세션·대화·런타임 식별자를 보내고 모델을 provider와 ID로 구분한다", async () => {
@@ -25,11 +25,11 @@ test("모델 목록과 변경 IPC는 세션·대화·런타임 식별자를 보�
   const client = new RuntimeClient(paths, state());
   try {
     expect(expectOk(await client.models("session", "conversation"))).toEqual(catalog);
-    expectOk(await client.selectModel("session", "conversation", { provider: "second", id: "same-id" }));
+    expectOk(await client.selectModel("session", "conversation", { provider: "second", id: "same-id" }, "off"));
 
     expect(requests[0]!.path).toBe("/models?sessionId=session&conversationId=conversation");
     expect(requests[0]!.headers.get("X-Radian-Instance")).toBe("instance");
-    expect(requests[1]!.body).toEqual({ type: "model-select", sessionId: "session", conversationId: "conversation", model: { provider: "second", id: "same-id" } });
+    expect(requests[1]!.body).toEqual({ type: "model-select", sessionId: "session", conversationId: "conversation", model: { provider: "second", id: "same-id" }, effort: "off" });
   } finally { await client.disconnect(); mocked.mockRestore(); }
 });
 
@@ -42,6 +42,17 @@ test("구버전 서비스나 raw model 명령은 유료 프롬프트·자동 재
     expect(expectError(await client.selectModel("session", "conversation", { provider: "second", id: "same-id" })).code).toBe("UNSUPPORTED_CAPABILITY");
     expect(expectError(await client.prompt("session", "/model")).code).toBe("UNSUPPORTED_CAPABILITY");
     expect(expectError(await client.prompt("session", "/model second/same-id")).code).toBe("INVALID_INPUT");
+    expect(mocked).not.toHaveBeenCalled();
+  } finally { await client.disconnect(); mocked.mockRestore(); }
+});
+
+test("모델 변경만 지원하는 이전 서비스에는 effort를 무시할 수 있는 요청을 보내지 않는다", async () => {
+  const snapshot = state(); snapshot.capabilities = ["model-selection"];
+  const mocked = spyOn(globalThis, "fetch").mockImplementation(Object.assign(() => { throw new Error("Legacy service must not receive effort changes"); }, { preconnect: fetch.preconnect }));
+  const client = new RuntimeClient(paths, snapshot);
+  try {
+    expect(expectError(await client.models("session", "conversation")).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(expectError(await client.selectModel("session", "conversation", { provider: "first", id: "same-id" }, "high")).code).toBe("UNSUPPORTED_CAPABILITY");
     expect(mocked).not.toHaveBeenCalled();
   } finally { await client.disconnect(); mocked.mockRestore(); }
 });

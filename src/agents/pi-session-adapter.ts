@@ -2,7 +2,7 @@ import {
   createAgentSession, DefaultResourceLoader, defineTool, getAgentDir, ModelRuntime, parseSkillBlock,
   SessionManager, SettingsManager, type AgentSession, type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
-import { ModelsError, Type, type ImageContent } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, getSupportedThinkingLevels, modelsAreEqual, ModelsError, Type, type ImageContent } from "@earendil-works/pi-ai";
 import { mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExecutionState, SessionContext, SessionExecutor, SessionFactory } from "./session-registry.ts";
@@ -18,7 +18,7 @@ import { loadPromptImages } from "./prompt-attachments.ts";
 import { ManualCompaction } from "./manual-compaction.ts";
 import { summarizeRequest } from "./request-summary.ts";
 import { imageNamesEntryType } from "./transcript-images.ts";
-import { parseModelCommand, type ModelCatalog, type ModelIdentity } from "./model-selection.ts";
+import { parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "./model-selection.ts";
 
 type QueuedUserMessage = Extract<ReturnType<AgentSession["agent"]["peekQueuedMessages"]>[number], { role: "user" }>;
 
@@ -114,6 +114,7 @@ export class PiSessionExecutor implements SessionExecutor {
   private closing = false;
   private disposed = false;
   private controlling = false;
+  private modelSelectionSnapshot: { current: ModelCatalog["current"]; effort: ModelEffort; telemetry: NonNullable<ExecutionState["telemetry"]> } | undefined;
   private compacting = false;
   private inputRevision = 0;
   private interrupting = false;
@@ -139,32 +140,53 @@ export class PiSessionExecutor implements SessionExecutor {
     if (!loaded.ok) return loaded;
     if (signal?.aborted) return err(new CancelledError());
     if (this.closing || this.disposed) return err(new SessionError("SESSION_NOT_OPEN", "Session closed while loading models."));
-    const current = this.session.model;
-    return ok({ conversationId: this.savedSessionId, current: current ? { provider: current.provider, id: current.id } : null,
+    const model = this.session.model;
+    const current = this.modelSelectionSnapshot ? this.modelSelectionSnapshot.current : model ? { provider: model.provider, id: model.id } : null;
+    const effort = this.modelSelectionSnapshot?.effort ?? this.session.thinkingLevel;
+    return ok({ conversationId: this.savedSessionId, current, effort,
       models: loaded.value.map(model => ({ provider: model.provider, id: model.id, name: model.name,
-        contextWindow: model.contextWindow, reasoning: model.reasoning, images: model.input.includes("image") })) });
+        contextWindow: model.contextWindow, reasoning: model.reasoning, images: model.input.includes("image"),
+        efforts: getSupportedThinkingLevels(model), effort: clampThinkingLevel(model, effort) })) });
   }
 
-  selectModel(identity: ModelIdentity): Promise<Result<string | null, ExpectedError>> {
+  selectModel(identity: ModelIdentity, effort?: ModelEffort): Promise<Result<string | null, ExpectedError>> {
     if (this.closing || this.disposed) return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
     if (this.busy) return Promise.resolve(err(new SessionError("SESSION_BUSY", "Wait for this session's current work to finish before switching models. No work was interrupted.")));
+    const current = this.session.model;
+    this.modelSelectionSnapshot = { current: current ? { provider: current.provider, id: current.id } : null,
+      effort: this.session.thinkingLevel, telemetry: this.telemetry.read() };
     this.controlling = true;
     const task = (async (): Promise<Result<string | null, ExpectedError>> => {
       const available = await this.models(); if (!available.ok) return available;
       const allowed = available.value.models.some(model => model.provider === identity.provider && model.id === identity.id);
       const model = allowed ? this.session.modelRuntime.getModel(identity.provider, identity.id) : undefined;
       if (!model) return err(new ModelSelectionError("This model is no longer available with the current provider credentials. Refresh the list and choose another model."));
+      if (effort !== undefined && !getSupportedThinkingLevels(model).includes(effort)) return err(new InputError("This model does not support the selected effort. Refresh the list before applying. No settings were changed."));
       if (this.closing || this.disposed) return err(new SessionError("SESSION_NOT_OPEN", "Session closed before the model could be changed."));
-      const previous = this.session.model;
-      const changed = await modelOperation(() => this.session.setModel(model, { persist: false }));
-      this.telemetry.refreshUsage();
+      let warning: string | null = null;
+      const persistenceWarning = (code: string) => `[${code}] ${effort === undefined ? "Model" : "Model and effort"} applied, but saving the selection could not be confirmed. Reconnect before retrying.`;
+      const changed = await modelOperation(async () => {
+        const current = this.session.model;
+        const capabilitiesChanged = current && getSupportedThinkingLevels(current).join() !== getSupportedThinkingLevels(model).join();
+        if (!modelsAreEqual(current, model) || capabilitiesChanged) await this.session.setModel(model, { persist: false });
+      });
       if (!changed.ok) {
-        // The SDK mutates its live model before saving history. A failed save is not a rollback.
-        if (previous !== model && this.session.model === model && changed.error.code === "STORAGE_FAILED") return ok(`[${changed.error.code}] Model changed, but saving the selection could not be confirmed. Reconnect before retrying.`);
-        return changed;
+        // The SDK applies live values before saving. Preserve accepted values and still finish the pair.
+        if (this.session.model !== model || changed.error.code !== "STORAGE_FAILED") return changed;
+        warning = persistenceWarning(changed.error.code);
       }
-      return ok(null);
-    })().finally(() => { this.controlling = false; this.runs.delete(tracked); this.emit(); });
+      if (!modelsAreEqual(this.session.model, model)) return err(new AgentRunError("An extension changed the selected model while applying settings. Reopen /model to inspect the current model and effort."));
+      if (effort !== undefined) {
+        const thinking = await modelOperation(async () => { this.session.setThinkingLevel(effort, { persist: false }); });
+        if (!thinking.ok) {
+          if (this.session.thinkingLevel !== effort || thinking.error.code !== "STORAGE_FAILED") return thinking;
+          warning = persistenceWarning(thinking.error.code);
+        }
+        if (this.session.thinkingLevel !== effort) return err(new AgentRunError("The selected effort changed while applying settings. Reopen /model to inspect the current model and effort."));
+      }
+      this.telemetry.refreshUsage();
+      return ok(warning);
+    })().finally(() => { this.controlling = false; this.modelSelectionSnapshot = undefined; this.runs.delete(tracked); this.emit(); });
     const tracked = task.then(result => result.ok ? ok(undefined) : result);
     this.runs.add(tracked);
     // Cleanup waits for this operation too, without converting unexpected exceptions into input errors.
@@ -190,7 +212,7 @@ export class PiSessionExecutor implements SessionExecutor {
     messages.push(...this.activeTools.values());
     return { conversationId: this.savedSessionId, status: this.status, output: messages.join("\n\n").slice(-12000), error: this.error,
       ...(this.status === "working" && this.compacting ? { activity: "compacting" as const } : {}),
-      sections: this.transcript.sections, telemetry: this.telemetry.read(),
+      sections: this.transcript.sections, telemetry: this.modelSelectionSnapshot?.telemetry ?? this.telemetry.read(),
       pendingMessages: this.queuedMessages().map((message) => {
         const text = typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
         const skill = parseSkillBlock(text);
@@ -418,7 +440,10 @@ export class PiSessionExecutor implements SessionExecutor {
     return last.stopReason === "stop" || last.stopReason === "length" ? "complete" : null;
   }
 
-  private emit(): void { for (const listener of this.listeners) listener(); }
+  private emit(): void {
+    // SDK model switching can emit an intermediate automatic effort before the explicit choice.
+    if (!this.modelSelectionSnapshot) for (const listener of this.listeners) listener();
+  }
 }
 
 async function modelOperation<T>(operation: () => Promise<T>): Promise<Result<T, ExpectedError>> {

@@ -2,7 +2,7 @@ import { EmbeddedTerminalRenderable, KeyEvent, type CliRenderer, type Renderable
 import { inScope, type CommandId, type KeyContext } from "./commands.ts";
 import { keyToken, type Binding, type Keymap } from "./config.ts";
 
-const oneShot = new Set<CommandId>(["agent.send", "completion.accept", "completion.dismiss", "history.open", "history.dismiss", "model.select", "model.dismiss", "dialog.dismiss", "dialog.activate", "dialog.copy", "app.help", "agent.inspect", "git.inspect"]);
+const oneShot = new Set<CommandId>(["agent.send", "completion.accept", "completion.dismiss", "history.open", "history.dismiss", "model.select", "model.dismiss", "model.search", "dialog.dismiss", "dialog.activate", "dialog.copy", "app.help", "agent.inspect", "git.inspect"]);
 type Pending = { owner: Renderable | null; events: KeyEvent[]; keys: string[]; held: Set<string>; candidates: readonly Binding[] };
 export class KeyRouter {
   private pending: Pending | undefined;

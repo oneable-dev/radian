@@ -15,7 +15,7 @@ import { completionQuerySchema, completionResultSchema } from "./completion-prot
 import type { CompletionQuery, CompletionResult } from "../agents/completion.ts";
 import { NdjsonDecoder } from "./frames.ts";
 import { parseSessionControl } from "../agents/session-controls.ts";
-import { modelCatalogQuerySchema, modelCatalogSchema, modelIdentitySchema, parseModelCommand, type ModelCatalog, type ModelIdentity } from "../agents/model-selection.ts";
+import { modelCatalogQuerySchema, modelCatalogSchema, modelEffortSchema, modelIdentitySchema, parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "../agents/model-selection.ts";
 
 import { maximumPreviewImageBytes, transcriptImageQuerySchema } from "../agents/transcript-images.ts";
 
@@ -170,6 +170,7 @@ export class RuntimeClient {
   async models(sessionId: string, conversationId: string, signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>> {
     if (this.detaching || this.failure) return err(this.connectionClosed());
     if (!this.state.capabilities?.includes("model-selection")) return err(new CapabilityError("Running service predates model selection. Finish work and explicitly restart it when ready; no service was restarted."));
+    if (!this.state.capabilities?.includes("model-effort")) return err(new CapabilityError("Running service predates model effort selection. Finish work and explicitly restart it when ready; no service was restarted."));
     if (signal?.aborted) return err(new CancelledError());
     if (!Value.Check(modelCatalogQuerySchema, { sessionId, conversationId })) return err(new InputError("Invalid model selection conversation identity."));
     const instance = this.state.instance, epoch = this.connectionEpoch;
@@ -186,10 +187,12 @@ export class RuntimeClient {
     return Value.Check(modelCatalogSchema, body) && body.conversationId === conversationId ? ok(body) : err(new ProtocolError("Malformed or mismatched model catalog."));
   }
 
-  async selectModel(sessionId: string, conversationId: string, model: ModelIdentity): Promise<Result<string | null, ExpectedError>> {
+  async selectModel(sessionId: string, conversationId: string, model: ModelIdentity, effort?: ModelEffort): Promise<Result<string | null, ExpectedError>> {
     if (!this.state.capabilities?.includes("model-selection")) return err(new CapabilityError("Running service predates model selection. Finish work and explicitly restart it when ready. No model was changed."));
     if (!Value.Check(modelIdentitySchema, model)) return err(new InputError("Invalid model identity."));
-    return this.command({ type: "model-select", sessionId, conversationId, model }, { instance: this.state.instance, epoch: this.connectionEpoch });
+    if (effort !== undefined && !Value.Check(modelEffortSchema, effort)) return err(new InputError("Invalid model effort."));
+    if (effort !== undefined && !this.state.capabilities?.includes("model-effort")) return err(new CapabilityError("Running service predates model effort selection. No settings were changed. Finish work and explicitly restart it when ready."));
+    return this.command({ type: "model-select", sessionId, conversationId, model, ...(effort !== undefined ? { effort } : {}) }, { instance: this.state.instance, epoch: this.connectionEpoch });
   }
 
   async complete(sessionId: string, query: CompletionQuery, signal?: AbortSignal): Promise<Result<CompletionResult, ExpectedError>> {

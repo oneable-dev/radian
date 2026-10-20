@@ -140,7 +140,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "agent-interrupt", "model-selection"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "agent-interrupt", "model-selection", "model-effort"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || [this.discoveryWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
@@ -254,7 +254,7 @@ class WorkspaceRuntime {
         const result = await accepted.promise;
         return result.ok ? ok(null) : result;
       }
-      case "model-select": return this.registry.selectModel(command.sessionId, command.conversationId, command.model);
+      case "model-select": return this.registry.selectModel(command.sessionId, command.conversationId, command.model, command.effort);
       case "session-control": {
         // Old clients used wire "new" for in-place replacement. Never silently change that contract.
         const action = command.action === "new" ? "clear" : command.action;

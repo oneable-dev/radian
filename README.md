@@ -494,15 +494,21 @@ is automatically restarted.
 
 The Agent prompt completes and executes these host commands instead of sending them to the model:
 
-- **`/model`** opens a searchable model popup for the **current session**. Models come from Pi's
-  authenticated chat-model catalog, including configured and extension-provided models. Search by
-  model name, ID or provider; use arrows or Ctrl+N/P to move, Enter or a model click to apply, and Esc
-  to close without changing the model. The current model is marked. Changes preserve the conversation,
-  update the input telemetry and use Pi's SDK model/thinking-level lifecycle. The selection is saved
-  in that conversation for resume, never as the global default or another tab's model. No model prompt
-  is sent by lookup or selection. Busy sessions reject switching without interrupting running work.
-  The additive `model-selection` service capability is required; older services report an explicit
-  upgrade notice and are never automatically restarted. The command takes no arguments or images.
+- **`/model`** opens a model-and-effort popup for the **current session**. Models come from Pi's
+  authenticated chat-model catalog, including configured and extension-provided models. The list starts
+  focused: use **j/k** to move, **h/l** to change effort, and **Tab/Shift+Tab** to move between the list
+  and editable effort controls. Arrow keys remain available. Press **/** to search by model name, ID
+  or provider; while searching, hjkl are literal input and **Ctrl+N/P** navigate matches.
+  Model and effort clicks only stage choices. **Enter** or **Apply** commits the pair in one operation;
+  **Esc** or **Cancel** discards unsubmitted choices. The current model is marked and only SDK-supported
+  effort levels are offered, using Pi's clamped preview of the session's current effort. Models without
+  reasoning show a read-only `off` effort. The current model can stay selected while changing effort only.
+  Changes preserve the conversation, update input telemetry together and use Pi's SDK lifecycle. Both
+  settings are saved in that conversation for resume, never as global defaults or another tab's settings.
+  No model prompt is sent by lookup or selection. Busy sessions reject changes without interrupting work.
+  The additive `model-selection` and `model-effort` service capabilities are required; older services
+  report an explicit upgrade notice and are never automatically restarted. The command takes no
+  arguments or images.
 - **`/new`** creates a fresh session in a **new tab in the same worktree**, using the same creation
   path as the session strip's `+` / `session.new` action. Existing tabs, conversations, running Agents,
   owned subagents, queued input and saved history remain intact. The Agents UI selects the new tab

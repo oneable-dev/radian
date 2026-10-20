@@ -12,7 +12,7 @@ import { completeFiles } from "./completion-files.ts";
 import { sessionControlCommands } from "./session-controls.ts";
 import type { RequestSummary } from "./request-summary.ts";
 import type { TranscriptImageData } from "./transcript-images.ts";
-import { modelCommand, parseModelCommand, type ModelCatalog, type ModelIdentity } from "./model-selection.ts";
+import { modelCommand, parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "./model-selection.ts";
 
 export type ExecutionState = { readonly conversationId?: string; readonly status: AgentStatus | null; readonly activity?: "compacting"; readonly output: string; readonly error: string | null;
   readonly sections?: readonly TranscriptSection[]; readonly telemetry?: SessionTelemetry;
@@ -23,7 +23,7 @@ export type SessionExecutor = {
   readonly state: ExecutionState;
   commands?(): readonly CompletionItem[];
   models?(signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>>;
-  selectModel?(model: ModelIdentity): Promise<Result<string | null, ExpectedError>>;
+  selectModel?(model: ModelIdentity, effort?: ModelEffort): Promise<Result<string | null, ExpectedError>>;
   imageData?(id: string): Result<TranscriptImageData, ExpectedError>;
   readonly acceptsImages?: boolean;
   readonly busy?: boolean;
@@ -222,11 +222,11 @@ export class SessionRegistry {
     return signal?.aborted ? err(new CancelledError()) : result;
   }
 
-  async selectModel(id: string, conversationId: string, model: ModelIdentity): Promise<Result<string | null, ExpectedError>> {
+  async selectModel(id: string, conversationId: string, model: ModelIdentity, effort?: ModelEffort): Promise<Result<string | null, ExpectedError>> {
     const selected = this.modelOwner(id, conversationId); if (!selected.ok) return selected;
     const executor = selected.value.executor;
     if (!executor?.selectModel) return err(new CapabilityError("This executor does not support model selection."));
-    return executor.selectModel(model);
+    return executor.selectModel(model, effort);
   }
 
   private modelOwner(id: string, conversationId: string): Result<OpenExecution, ExpectedError> {

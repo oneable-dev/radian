@@ -24,11 +24,14 @@ test("실제 모델 선택 IPC는 대화와 인증 런타임을 지키며 명령
       });
     });
     const conversation = connected.snapshot.details[session]!.conversationId!;
-    expect(connected.snapshot.capabilities).toContain("model-selection");
+    expect(connected.snapshot.capabilities).toContain("model-selection"); expect(connected.snapshot.capabilities).toContain("model-effort");
     const catalog = expectOk(await connected.models(session, conversation));
     expect(catalog.current).toEqual({ provider: "radian-offline", id: "fixture" });
     expect(catalog.models.some(model => model.provider === "radian-offline" && model.id === "fixture")).toBe(true);
-    expectOk(await connected.selectModel(session, conversation, { provider: "radian-offline", id: "fixture" }));
+    expect(catalog.effort).toBe("off");
+    expect(catalog.models.find(model => model.provider === "radian-offline" && model.id === "fixture")!.efforts).toEqual(["off"]);
+    expectOk(await connected.selectModel(session, conversation, { provider: "radian-offline", id: "fixture" }, "off"));
+    expect(expectError(await connected.selectModel(session, conversation, { provider: "radian-offline", id: "fixture" }, "high")).code).toBe("INVALID_INPUT");
     expect(expectError(await connected.selectModel(session, "old-conversation", { provider: "radian-offline", id: "fixture" })).code).toBe("SESSION_CONFLICT");
     expect(expectError(await connected.selectModel(session, conversation, { provider: "missing", id: "fixture" })).code).toBe("MODEL_UNAVAILABLE");
     expect(expectError(await connected.prompt(session, "/model")).code).toBe("UNSUPPORTED_CAPABILITY");

@@ -1,5 +1,5 @@
 import { BoxRenderable, InputRenderable, InputRenderableEvents, RGBA, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
-import type { ModelCatalog, ModelIdentity } from "../model-selection.ts";
+import type { ModelCatalog, ModelEffort, ModelIdentity } from "../model-selection.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
@@ -7,11 +7,12 @@ import type { FooterShortcut } from "../../ui/footer.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { singleLine } from "../../ui/text.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { Button } from "../../ui/button.ts";
 
 type Scope = { sessionId: string; conversationId: string };
 export type ModelPickerActions = {
   list?: (sessionId: string, conversationId: string, signal?: AbortSignal) => Promise<Result<ModelCatalog, ExpectedError>>;
-  select?: (sessionId: string, conversationId: string, model: ModelIdentity) => Promise<Result<string | null, ExpectedError>>;
+  select?: (sessionId: string, conversationId: string, model: ModelIdentity, effort?: ModelEffort) => Promise<Result<string | null, ExpectedError>>;
   notice: (message: string) => void;
   changed: () => void;
   fallback: () => void;
@@ -24,6 +25,13 @@ export class ModelPicker {
   readonly root: BoxRenderable;
   readonly search: InputRenderable;
   readonly list: ScrollBoxRenderable;
+  readonly effort: BoxRenderable;
+  private readonly effortLabel: TextRenderable;
+  private readonly effortOptions: BoxRenderable;
+  private readonly effortButtons = new Map<ModelEffort, Button>();
+  private readonly effortDrafts = new Map<string, ModelEffort>();
+  private effortSignature = "";
+  private readonly apply: Button;
   private readonly panel: BoxRenderable;
   private readonly message: TextRenderable;
   private readonly spinner: LoadingSpinner;
@@ -48,7 +56,7 @@ export class ModelPicker {
     this.panel = new BoxRenderable(renderer, { id: "model-dialog", position: "absolute", border: true, paddingX: 1,
       flexDirection: "column", minWidth: 0, minHeight: 0 });
     const heading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    const title = new TextRenderable(renderer, { content: "Select model · current session", height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });
+    const title = new TextRenderable(renderer, { content: "Model & effort · current session", height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });
     this.spinner = new LoadingSpinner(renderer, { id: "model-loading" });
     const activity = new BoxRenderable(renderer, { height: 1, width: 1, flexShrink: 0 }); activity.add(this.spinner.root);
     const close = new TextRenderable(renderer, { content: "×", height: 1, width: 1, selectable: false,
@@ -58,7 +66,15 @@ export class ModelPicker {
     this.message = new TextRenderable(renderer, { id: "model-message", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.list = new ScrollBoxRenderable(renderer, { id: "model-list", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.list.focus() });
-    this.panel.add(heading); this.panel.add(this.search); this.panel.add(this.message); this.panel.add(this.list); this.root.add(this.panel);
+    this.effort = new BoxRenderable(renderer, { id: "model-effort", width: "100%", flexShrink: 0, flexDirection: "column", focusable: true });
+    this.effortLabel = new TextRenderable(renderer, { id: "model-effort-label", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
+    this.effortOptions = new BoxRenderable(renderer, { id: "model-effort-options", width: "100%", flexShrink: 0, flexDirection: "row", flexWrap: "wrap" });
+    this.effort.add(this.effortLabel); this.effort.add(this.effortOptions);
+    const controls = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
+    this.apply = new Button(renderer, "Apply", () => this.launch(() => this.choose())); this.apply.id = "model-apply";
+    const cancel = new Button(renderer, "Cancel", () => this.hide()); cancel.id = "model-cancel";
+    controls.add(this.apply); controls.add(cancel);
+    this.panel.add(heading); this.panel.add(this.search); this.panel.add(this.message); this.panel.add(this.list); this.panel.add(this.effort); this.panel.add(controls); this.root.add(this.panel);
     theme.input(this.search); theme.scrollbars(this.list);
     theme.bind(this.root, colors => {
       this.panel.backgroundColor = colors.panel; this.panel.borderColor = colors.accent;
@@ -66,24 +82,30 @@ export class ModelPicker {
       this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);
+    this.effort.on("focused", () => this.paint()); this.effort.on("blurred", () => this.paint());
     renderer.on("resize", this.resize); renderer.on("focused_renderable", this.keepFocus); this.resize();
   }
 
   get visible(): boolean { return !this.disposed && !this.root.isDestroyed && this.root.visible; }
   get changing(): boolean { return this.applying; }
-  get context(): KeyContext { return this.search.focused ? "model-search" : "model"; }
-  get focusTargets(): Renderable[] { return [this.search, this.list]; }
+  get context(): KeyContext { return this.search.focused ? "model-search" : this.effort.focused || this.effort.hasFocusedDescendant ? "model-effort" : "model"; }
+  get focusTargets(): Renderable[] { return [...(this.search.focused ? [this.search] : []), this.list, ...(this.effort.focusable ? [this.effort] : [])]; }
+  private get selectedEffort(): ModelEffort | undefined {
+    const model = this.filtered[this.cursor]; if (!model) return undefined;
+    const draft = this.effortDrafts.get(JSON.stringify([model.provider, model.id]));
+    return draft !== undefined && model.efforts.includes(draft) ? draft : model.efforts.includes(model.effort) ? model.effort : undefined;
+  }
   get shortcuts(): readonly FooterShortcut[] {
-    return ([ ["model.select", "Select"], ["model.previous", "Previous"], ["model.next", "Next"], ["model.refresh", "Refresh"], ["model.dismiss", "Close"] ] as const)
+    return ([ ["model.select", "Apply"], ["model.dismiss", "Cancel"], ["model.search", "Search"], ["focus.next", "Model/effort"], ["model.previous", "Previous"], ["model.next", "Next"], ["model.effort-less", "Less effort"], ["model.effort-more", "More effort"] ] as const)
       .map(([command, label]) => ({ key: this.actions.keyHint(command, this.context), label,
-        ...(command === "model.select" ? { disabled: this.loading || this.applying || !this.filtered[this.cursor] } : {}) }));
+        ...(command === "model.select" ? { disabled: this.loading || this.applying || this.selectedEffort === undefined } : {}) }));
   }
 
   show(scope: Scope): void {
     if (this.disposed || this.root.isDestroyed) return;
     this.owner = this.renderer.currentFocusedRenderable ?? undefined;
-    this.scope = scope; this.catalog = undefined; this.loadError = undefined; this.filtered = []; this.cursor = 0;
-    this.root.visible = true; this.search.value = ""; this.filter(); this.resize(); this.search.focus();
+    this.scope = scope; this.catalog = undefined; this.loadError = undefined; this.filtered = []; this.cursor = 0; this.effortDrafts.clear();
+    this.root.visible = true; this.search.value = ""; this.filter(); this.resize(); this.list.focus();
     this.launch(() => this.load());
   }
   hide(restoreFocus = true): void {
@@ -138,7 +160,7 @@ export class ModelPicker {
     for (const row of this.rows) row.destroyRecursively(); this.rows.length = 0;
     this.filtered.forEach((model, index) => {
       const row = new BoxRenderable(this.renderer, { id: `model:${JSON.stringify([model.provider, model.id])}`, height: 2, flexShrink: 0, minWidth: 0, flexDirection: "column",
-        onMouseDown: event => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.cursor = index; this.list.focus(); this.paint(); this.launch(() => this.choose()); } } });
+        onMouseDown: event => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.cursor = index; this.list.focus(); this.paint(); } } });
       const label = new TextRenderable(this.renderer, { content: `${singleLine(model.name)}${sameModel(this.catalog?.current, model) ? " [Current]" : ""}`, height: 1, wrapMode: "none", selectable: false });
       const metadata = new TextRenderable(this.renderer, { content: singleLine(`${model.provider}/${model.id} · ${model.contextWindow.toLocaleString("en-US")} context${model.images ? " · images" : ""}`), height: 1, wrapMode: "none", selectable: false });
       uiTheme(this.renderer).bind(row, colors => { label.fg = colors.text; metadata.fg = colors.muted; });
@@ -153,24 +175,64 @@ export class ModelPicker {
     const colors = uiTheme(this.renderer).colors;
     this.rows.forEach((row, index) => { row.backgroundColor = index === this.cursor ? colors.selected : colors.panel; });
     const row = this.rows[this.cursor]; if (row) this.list.scrollChildIntoView(row.id);
-    this.actions.changed();
+    this.paintEffort(); this.actions.changed();
+  }
+  private paintEffort(): void {
+    if (!this.effort || this.effort.isDestroyed) return;
+    const model = this.filtered[this.cursor], levels = model?.efforts ?? [], selected = this.selectedEffort;
+    const editable = !this.loading && !this.applying && levels.length > 1;
+    this.effort.focusable = editable;
+    const keys = [this.actions.keyHint("model.effort-less", "model-effort"), this.actions.keyHint("model.effort-more", "model-effort")].filter(Boolean).join("/");
+    this.effortLabel.content = !model || selected === undefined ? "Effort unavailable" : !model.reasoning ? "Effort · not supported (off)"
+      : levels.length === 1 ? `Effort · ${selected} (fixed)` : `Effort${keys ? ` · ${keys}` : ""}`;
+    this.effortLabel.fg = uiTheme(this.renderer).colors.muted;
+    const signature = editable || levels.length > 1 ? levels.join(",") : "";
+    if (signature !== this.effortSignature) {
+      const focused = this.effort.hasFocusedDescendant;
+      this.effortSignature = signature;
+      for (const button of this.effortButtons.values()) button.destroyRecursively(); this.effortButtons.clear();
+      if (signature) for (const level of levels) {
+        const button = new Button(this.renderer, level, () => this.setEffort(level)); button.id = `model-effort:${level}`;
+        this.effortButtons.set(level, button); this.effortOptions.add(button);
+      }
+      if (focused && editable) this.effort.focus();
+    }
+    this.effortOptions.visible = this.effortButtons.size > 0;
+    for (const [level, button] of this.effortButtons) { button.active = level === selected; button.setLabel(level === selected ? `[${level}]` : level); }
+    const colors = uiTheme(this.renderer).colors;
+    this.effort.backgroundColor = this.effort.focused || this.effort.hasFocusedDescendant ? colors.surface : colors.panel;
+    this.apply.active = !this.loading && !this.applying && selected !== undefined;
+    if (!editable && (this.effort.focused || this.effort.hasFocusedDescendant)) this.list.focus();
+  }
+  private setEffort(level: ModelEffort): void {
+    const model = this.filtered[this.cursor];
+    if (!model || this.loading || this.applying || !model.efforts.includes(level)) return;
+    this.effortDrafts.set(JSON.stringify([model.provider, model.id]), level); this.paint();
+  }
+  private moveEffort(direction: -1 | 1): void {
+    const model = this.filtered[this.cursor], selected = this.selectedEffort;
+    if (!model || selected === undefined || this.loading || this.applying) return;
+    const index = Math.max(0, Math.min(model.efforts.length - 1, model.efforts.indexOf(selected) + direction));
+    const level = model.efforts[index]; if (level !== undefined) this.setEffort(level);
   }
   private async choose(): Promise<void> {
-    const scope = this.scope, model = this.filtered[this.cursor];
-    if (!scope || !model || !this.actions.select || this.loading || this.applying) return;
-    const revision = this.revision; this.applying = true; this.spinner.start(); this.message.content = "Applying model…"; this.actions.changed();
+    const scope = this.scope, model = this.filtered[this.cursor], effort = this.selectedEffort;
+    if (!scope || !model || effort === undefined || !this.actions.select || this.loading || this.applying) return;
+    const revision = this.revision; this.applying = true; this.spinner.start(); this.message.content = "Applying model and effort…"; this.paint();
     let result: Result<string | null, ExpectedError>;
-    try { result = await this.actions.select(scope.sessionId, scope.conversationId, { provider: model.provider, id: model.id }); }
-    finally { this.applying = false; if (this.current(revision)) { this.spinner.stop(); this.actions.changed(); } }
+    try { result = await this.actions.select(scope.sessionId, scope.conversationId, { provider: model.provider, id: model.id }, effort); }
+    finally { this.applying = false; if (this.current(revision)) { this.spinner.stop(); this.paint(); } }
     if (!this.current(revision)) return;
     if (!result.ok) { this.message.content = `[${result.error.code}] ${result.error.message}`; return; }
-    this.hide(); this.actions.notice(result.value ?? `Model changed to ${singleLine(model.provider + "/" + model.id)} for this session.`);
+    this.hide(); this.actions.notice(result.value ?? `Model set to ${singleLine(model.provider + "/" + model.id)} · effort ${effort} for this session.`);
   }
   command(command: CommandId): void {
     if (!this.visible) return;
     if (command === "model.dismiss") { this.hide(); return; }
     if (command === "model.select") { this.launch(() => this.choose()); return; }
     if (command === "model.refresh") { this.launch(() => this.load()); return; }
+    if (command === "model.search") { this.search.focus(); this.actions.changed(); return; }
+    if (command === "model.effort-less" || command === "model.effort-more") { this.moveEffort(command === "model.effort-less" ? -1 : 1); return; }
     if (this.loading || this.applying) return;
     if (command === "model.first") this.cursor = 0;
     else if (command === "model.last") this.cursor = this.filtered.length - 1;
@@ -181,7 +243,7 @@ export class ModelPicker {
   private keepFocus = (): void => {
     if (!this.visible) return;
     for (let node = this.renderer.currentFocusedRenderable; node; node = node.parent as Renderable | null) if (node === this.root) return;
-    this.search.focus();
+    this.list.focus();
   };
   private resize = (): void => {
     if (this.disposed || this.root.isDestroyed) return;
