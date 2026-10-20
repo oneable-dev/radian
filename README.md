@@ -60,9 +60,11 @@ not follow-up-after-task behavior and does not interrupt or replace the running 
 and Git callers use the same runtime prompt path. The runtime acknowledges SDK acceptance separately
 from run completion; input is retained until acceptance, and rejection/unknown timeout outcomes do
 not automatically replay a prompt. Pending messages appear between the work-status row and prompt,
-with no queue count. They are removed only when actually delivered. The hint reads
-`Messages will be sent after the current response and tools finish` and
-`(press esc to interrupt and send immediately)`, with only the key in bold.
+with no queue count. They are removed only when actually delivered. One bullet-led heading combines
+`Messages will be sent after the current response and tools finish` with the muted hint
+`(press esc to interrupt and send immediately)`, with only the key in bold. Each queued message is
+indented beneath it with `↳`, followed by one blank row before the prompt when height permits.
+Narrow panes shorten the heading and hint in place instead of adding a separate help row.
 Pressing **esc** interrupts the selected session, waits for its active operation and tools to settle,
 then joins all pending messages with newlines and sends them as one message, retaining image blocks.
 Unsent drafts are never included. Without pending messages, **esc** only stops the current operation,

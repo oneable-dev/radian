@@ -9,8 +9,8 @@ import { summarizeRequest } from "../../agents/request-summary.ts";
 import { PromptInput } from "../../agents/ui/prompt-input.ts";
 import { ok } from "../../result.ts";
 
-async function mount() {
-  const clock = new ManualClock(), app = await createTestRenderer({ width: 150, height: 30, kittyKeyboard: true, exitOnCtrlC: false, clock });
+async function mount(width = 150) {
+  const clock = new ManualClock(), app = await createTestRenderer({ width, height: 30, kittyKeyboard: true, exitOnCtrlC: false, clock });
   const selection = new WorkspaceSelection(demoWorkspace()), interrupted: string[] = [], sent: string[] = [];
   let state: ExecutionState = { conversationId: "conversation", status: "working", output: "", error: null,
     runTiming: { startedAt: 1000, elapsedMs: 12000 },
@@ -30,25 +30,27 @@ async function mount() {
     async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("작업 시간과 대기 입력을 입력창 위에 표시하고 esc만 굵게 강조한다", async () => {
-  // The runtime, not a local UI queue, supplies delivered and pending requests.
-  const app = await mount();
+test("작업 상태 아래에 대기 안내·단축키를 한 줄로 묶고 들여쓴 메시지와 입력창을 구분한다", async () => {
+  // 런타임이 제공한 대기 목록과 전송하지 않은 초안을 같은 화면에서 구분한다.
+  const app = await mount(190);
   try {
     await app.mockInput.typeText("Unsent draft"); await app.render();
 
-    // Both hints must be visible without a queue count or a separate Queued heading.
-    const frame = app.captureCharFrame();
+    // 안내는 한 줄이고, 각 메시지는 그 바로 아래에 연결되며 입력창 앞에는 빈 줄이 남는다.
+    const frame = app.captureCharFrame(), lines = frame.split("\n");
+    const pending = app.get("agent-pending-messages"), status = app.get("agent-run-status"), composer = app.get("agent-composer");
+    const row = (y: number) => lines[y]!.slice(pending.x, pending.x + pending.width).trimEnd();
     expect(frame).toContain("Working (12s · esc to interrupt) “Current request”");
-    expect(frame).toContain("Messages will be sent after the current response and tools finish");
-    expect(frame).toContain("(press esc to interrupt and send immediately)");
-    expect(frame).toContain("Add tests"); expect(frame).toContain("Do not edit README"); expect(frame).not.toContain("Queued");
-    expect(app.get("agent-run-status").y).toBeLessThan(app.get("agent-pending-messages").y);
-    expect(app.get("agent-pending-messages").y).toBeLessThan(app.prompt.y);
+    expect(row(pending.y)).toBe("• Messages will be sent after the current response and tools finish (press esc to interrupt and send immediately)");
+    expect(row(pending.y + 1)).toBe("  ↳ Add tests"); expect(row(pending.y + 2)).toBe("  ↳ Do not edit README");
+    expect(row(pending.y + 3)).toBe(""); expect(frame).not.toContain("Queued");
+    expect(pending.y).toBe(status.y + status.height + 1);
+    expect(composer.y).toBe(pending.y + 4);
     const hints = app.captureSpans().lines.flatMap((line) => line.spans).filter((span) => span.text === "esc");
     expect(hints).toHaveLength(2); for (const span of hints) expect(span.attributes & TextAttributes.BOLD).not.toBe(0);
     expect(app.sent).toEqual([]);
 
-    // Esc targets this session, without submitting or clearing the unsent draft.
+    // Esc는 선택한 실행만 중단하고 초안이나 런타임 소유의 대기 목록을 임의로 비우지 않는다.
     app.mockInput.pressEscape(); await app.render();
     expect(app.interrupted).toEqual(["a1"]); expect(app.prompt.value).toBe("Unsent draft"); expect(app.sent).toEqual([]);
     expect(app.renderer.currentFocusedRenderable).toBe(app.prompt);
@@ -99,8 +101,8 @@ test("작은 화면의 긴 대기 목록도 입력창과 하단 상태·푸터�
     expect(app.prompt.height).toBeGreaterThan(0); expect(app.interrupted).toEqual([]);
 
     app.resize(150, 30); await app.render();
-    expect(app.captureCharFrame()).toContain("Messages will be sent after the current response and tools finish");
-    expect(app.captureCharFrame()).toContain("Pending 0");
+    expect(app.captureCharFrame()).toContain("• Messages waiting to be sent (press esc to interrupt and send immediately)");
+    expect(app.captureCharFrame()).toContain("↳ Pending 0");
   } finally { await app.close(); }
 });
 
