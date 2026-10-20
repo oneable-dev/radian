@@ -215,6 +215,7 @@ export class AgentPanel {
     for (const id of this.drafts.keys()) if (!openIds.has(id)) this.drafts.delete(id);
     for (const id of this.inputDrafts.keys()) if (!openIds.has(id)) this.inputDrafts.delete(id);
     this.runtimePanel.visible = Boolean(visible && session && this.actions.onPrompt);
+    this.completion.prepare(sessionId, worktree?.path, openIds);
     this.runStatus.update(sessionId, details, this.active);
     this.pending = details?.pendingMessages ?? [];
     this.sessionStatus.update(details?.telemetry, this.active, worktree);
@@ -345,7 +346,7 @@ export class AgentPanel {
       const model = parseModelCommand(submission.text);
       if (!model.ok) { this.notice(`[${model.error.code}] ${model.error.message} · prompt retained`); return; }
       // Settings dialogs and new tabs must not reset the outgoing conversation's reading position.
-      if (!model.value && control.value?.action !== "new-tab") this.transcript.followLatest();
+      if (!model.value && control.value?.action !== "new-tab" && control.value?.action !== "reload") this.transcript.followLatest();
       const result = model.value
         ? submission.images.length ? err(new InputError("/model does not accept image attachments. Input was retained."))
           : this.actions.onModel?.(id) ?? err(new CapabilityError("Model selection is unavailable in this view. No prompt was sent."))

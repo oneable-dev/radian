@@ -50,7 +50,7 @@ const telemetry = Type.Object({
     resetsAt: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
     observedAt: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }) }), Type.Null()]),
 });
-const execution = Type.Object({ conversationId: Type.Optional(id), status, activity: Type.Optional(Type.Literal("compacting")), output: Type.String(), error: Type.Union([Type.String(), Type.Null()]),
+const execution = Type.Object({ conversationId: Type.Optional(id), resourceRevision: Type.Optional(Type.Integer({ minimum: 0 })), status, activity: Type.Optional(Type.Literal("compacting")), output: Type.String(), error: Type.Union([Type.String(), Type.Null()]),
   sections: Type.Optional(Type.Array(transcriptSection)), telemetry: Type.Optional(telemetry),
   pendingMessages: Type.Optional(Type.Array(requestSummarySchema)),
   runTiming: Type.Optional(Type.Object({ startedAt: Type.Integer({ minimum: 0 }), elapsedMs: Type.Number({ minimum: 0 }) })) });
@@ -133,10 +133,10 @@ export const commandSchema = Type.Union([
   Type.Object({ type: Type.Literal("close"), sessionId: id }),
   Type.Object({ type: Type.Literal("interrupt"), sessionId: id, conversationId: id }),
   Type.Object({ type: Type.Literal("model-select"), sessionId: id, conversationId: id, model: modelIdentitySchema, effort: Type.Optional(modelEffortSchema) }),
-  Type.Object({ type: Type.Literal("prompt"), sessionId: id, text: Type.String({ minLength: 1 }), images: Type.Optional(Type.Array(id)), conversationId: Type.Optional(id) }),
+  Type.Object({ type: Type.Literal("prompt"), sessionId: id, text: Type.String({ minLength: 1 }), images: Type.Optional(Type.Array(id)), conversationId: Type.Optional(id), resourceRevision: Type.Optional(Type.Integer({ minimum: 0 })) }),
   Type.Object({ type: Type.Literal("session-control"), sessionId: id, conversationId: id,
     // Preserve legacy wire "new" as replacement; new clients use explicit tab/clear actions.
-    action: Type.Union([Type.Literal("new"), Type.Literal("new-tab"), Type.Literal("clear"), Type.Literal("compact")]), instructions: Type.Optional(Type.String()) }),
+    action: Type.Union([Type.Literal("new"), Type.Literal("new-tab"), Type.Literal("clear"), Type.Literal("compact"), Type.Literal("reload")]), instructions: Type.Optional(Type.String()) }),
   Type.Object({ type: Type.Literal("preferences"), preferences: preferencesSchema }),
   Type.Object({ type: Type.Literal("stop") }),
   Type.Object({ type: Type.Literal("editor-open"), worktreeId: id,

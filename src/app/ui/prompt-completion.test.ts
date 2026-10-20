@@ -1,15 +1,16 @@
 import { expect, test } from "bun:test";
-import { parseKeypress } from "@opentui/core";
+import { parseKeypress, ScrollBoxRenderable } from "@opentui/core";
 import { resolve } from "node:path";
 import { PromptInput } from "../../agents/ui/prompt-input.ts";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
-import { filterCompletions, type CompletionResult } from "../../agents/completion.ts";
+import { filterCatalog, filterCompletions, type CompletionItem, type CompletionResult } from "../../agents/completion.ts";
 import type { CompletionProvider } from "../../agents/ui/completion-menu.ts";
 import { CapabilityError, InputError } from "../../errors.ts";
 import { err, ok } from "../../result.ts";
+import { uiTheme } from "../../ui/theme.ts";
 
 const commandItems = ["mcp", "memory"].map((value) => ({ kind: "command" as const, value, description: `Command ${value}` }));
 const fileItems = ["src/main.ts", "src/문서 file.ts"].map((value) => ({ kind: "file" as const, value, description: "Worktree file" }));
@@ -35,6 +36,260 @@ async function mount(provider: CompletionProvider = async (_id, query) => ok(fil
   };
 }
 
+test.each(["/", "$", "@"] as const)("준비된 %s 목록은 시계 대기·로딩·추가 조회 없이 바로 표시한다", async (trigger) => {
+  // 캐시가 준비된 후에는 서버나 파일시스템을 다시 조회할 이유가 없다.
+  const items: readonly CompletionItem[] = [
+    { kind: "command", value: "compact", description: "Compact context" },
+    { kind: "skill", value: "skill:review-code", description: "Review code" },
+    { kind: "file", value: "docs/reference.ts", description: "Reference file" },
+  ];
+  let requests = 0, reads = 0;
+  const provider: CompletionProvider = Object.assign(async () => { requests++; return ok({ items, truncated: false }); }, {
+    read: (_id: string, query: Parameters<CompletionProvider>[1]) => { reads++; return ok(query.kind === "file" ? filterCompletions(items.filter(item => item.kind === "file"), query.query) : filterCatalog(items, query)); },
+  });
+  const app = await mount(provider);
+  try {
+    // 타이머를 진행시키지 않아도 첫 입력이 현재 종류의 후보를 즉시 표시한다.
+    await app.mockInput.typeText(trigger); await app.render();
+
+    const expected = trigger === "/" ? "compact" : trigger === "$" ? "review-code" : "docs/reference.ts";
+    expect(app.menu().visible).toBe(true); expect(app.captureCharFrame()).toContain(`→ ${expected}`);
+    expect(app.renderer.root.findDescendantById("completion-loading")!.visible).toBe(false);
+    expect(app.captureCharFrame()).not.toContain("Loading"); expect(requests).toBe(0);
+    const before = reads; await app.stream("More background output"); expect(reads).toBe(before);
+    app.mockInput.pressTab(); await app.render();
+
+    expect(app.input.value).toBe(trigger === "@" ? "[File #1] " : `${trigger}${expected} `);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each([
+  { trigger: "/", width: 120 }, { trigger: "@", width: 120 }, { trigger: "$", width: 120 },
+  { trigger: "/", width: 80 }, { trigger: "@", width: 80 }, { trigger: "$", width: 80 },
+  { trigger: "/", width: 60 }, { trigger: "@", width: 60 }, { trigger: "$", width: 60 },
+] as const)("%j에서 완성 화살표는 입력 시작 열과 일치하고 선택 이동 후에도 유지된다", async ({ trigger, width }) => {
+  // 메뉴 종류와 패널 여백이 달라도 입력 시작보다 한 칸 더 들여쓰지 않아야 한다.
+  const items: readonly CompletionItem[] = [
+    { kind: "command", value: "clear", description: "Clear conversation" }, { kind: "command", value: "compact", description: "Compact context" },
+    { kind: "skill", value: "skill:review-code", description: "Review code" }, { kind: "skill", value: "skill:write-tests", description: "Write tests" },
+    { kind: "file", value: "a.ts", description: "First file" }, { kind: "file", value: "b.ts", description: "Second file" },
+  ];
+  const provider: CompletionProvider = Object.assign(async () => ok({ items, truncated: false }), {
+    read: (_id: string, query: Parameters<CompletionProvider>[1]) => ok(query.kind === "file" ? filterCompletions(items.filter(item => item.kind === "file"), query.query) : filterCatalog(items, query)),
+  });
+  const app = await mount(provider);
+  const arrowColumn = (row: number) => {
+    const line = app.captureCharFrame().split("\n")[row]!;
+    expect(line).toContain("→ ");
+    return Bun.stringWidth(line.slice(0, line.indexOf("→ ")));
+  };
+  try {
+    // 입력과 메뉴를 같은 화면에서 실제 렌더링한 뒤 다음 후보로 선택을 옮긴다.
+    app.resize(width, 24); await app.render();
+    await app.mockInput.typeText(trigger); await app.render();
+    const first = app.renderer.root.findDescendantById("completion-option-0")!;
+
+    expect(first.x).toBe(app.input.x); expect(arrowColumn(first.y)).toBe(app.input.x);
+    app.mockInput.pressKey("n", { ctrl: true }); await app.render();
+    const second = app.renderer.root.findDescendantById("completion-option-1")!;
+    expect(second.x).toBe(app.input.x); expect(arrowColumn(second.y)).toBe(app.input.x);
+    expect(app.input.value).toBe(trigger); expect(app.input.cursorOffset).toBe(1);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("같은 검색어의 감시 갱신은 새 후보를 반영하면서 선택한 항목을 유지한다", async () => {
+  // 파일 감시나 리로드 이벤트는 입력을 다시 치지 않아도 열린 목록을 갱신해야 한다.
+  let items: readonly CompletionItem[] = ["command-a", "command-b"].map(value => ({ kind: "command", value, description: "Command" }));
+  let changed: (() => void) | undefined;
+  const provider: CompletionProvider = Object.assign(async () => ok({ items, truncated: false }), {
+    read: (_id: string, query: Parameters<CompletionProvider>[1]) => ok(filterCatalog(items, query)),
+    subscribe: (listener: () => void) => { changed = listener; return () => { changed = undefined; }; },
+  });
+  const app = await mount(provider);
+  try {
+    await app.mockInput.typeText("/"); await app.render(); app.mockInput.pressKey("n", { ctrl: true }); await app.render();
+
+    // 앞쪽에 새 항목이 들어와도 인덱스가 아니라 항목 이름으로 선택을 보존한다.
+    items = [{ kind: "command", value: "command-0", description: "New" }, ...items]; changed?.(); await app.render();
+
+    expect(app.captureCharFrame()).toContain("→ command-b"); expect(app.menu().height).toBe(3);
+    app.mockInput.pressTab(); await app.render(); expect(app.input.value).toBe("/command-b ");
+    expect(app.sent).toEqual([]);
+  } finally { await app.close(); expect(changed).toBeUndefined(); }
+});
+
+test("캐시 재로딩 중 Enter는 이전 카탈로그의 명령을 실행하지 않는다", async () => {
+  // 리로드 알림과 새 목록 도착 사이에도 이전 후보를 최신 후보로 간주하지 않아야 한다.
+  const pending = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>();
+  let ready = true, changed: (() => void) | undefined;
+  let items: readonly CompletionItem[] = [{ kind: "command", value: "compact", description: "Old command" }];
+  const provider: CompletionProvider = Object.assign(async () => pending.promise, {
+    read: (_id: string, query: Parameters<CompletionProvider>[1]) => ready ? ok(filterCatalog(items, query)) : undefined,
+    subscribe: (listener: () => void) => { changed = listener; return () => { changed = undefined; }; },
+  });
+  const app = await mount(provider);
+  try {
+    await app.mockInput.typeText("/co"); await app.render();
+
+    // 캐시가 무효화된 상태에서 Enter를 눌러도 이전 명령으로 즉시 전송하지 않는다.
+    ready = false; changed?.(); await app.render(); app.mockInput.pressEnter(); await app.render();
+    expect(app.sent).toEqual([]);
+    items = [{ kind: "command", value: "compare", description: "New command" }]; ready = true;
+    changed?.(); pending.resolve(ok({ items, truncated: false })); await app.render();
+
+    expect(app.sent).toEqual([]); expect(app.input.value).toBe("/co");
+    expect(app.captureCharFrame()).toContain("→ compare");
+  } finally { pending.resolve(ok({ items: [], truncated: false })); await app.close(); }
+});
+
+test("스킬은 슬래시 추천에서 제외하고 달러에서만 선택한다", async () => {
+  // 이전 단일 카탈로그 공급자도 UI에서 명령과 스킬을 섞어 노출하지 않는다.
+  const app = await mount(async () => ok({ items: [
+    { kind: "command", value: "compact", description: "Compact context" },
+    { kind: "skill", value: "skill:review-code", description: "Review fixture" },
+  ], truncated: false }));
+  try {
+    await app.type("/");
+    expect(app.captureCharFrame()).toContain("→ compact"); expect(app.captureCharFrame()).not.toContain("Review fixture");
+
+    // 달러 선택은 기존 스킬을 제거하지 않고 별도 입구로만 노출한다.
+    app.input.value = "$rev"; await app.complete();
+    expect(app.captureCharFrame()).toContain("→ review-code"); expect(app.captureCharFrame()).not.toContain("Compact context");
+    app.mockInput.pressEnter(); await app.render();
+
+    expect(app.sent).toEqual(["$review-code"]); expect(app.input.value).toBe("");
+  } finally { await app.close(); }
+});
+
+test("슬래시 목록은 닫혀 있을 때 공간이 없고 조회 상태와 결과 수에 맞춰 높이를 바꾼다", async () => {
+  // 많은 후보·한 후보·빈 결과·오류가 모두 같은 입력 아래 공간을 동적으로 사용한다.
+  const items = [
+    { kind: "command" as const, value: "compact", description: "Compact context" },
+    { kind: "command" as const, value: "model", description: "Select model" },
+    ...Array.from({ length: 92 }, (_, i) => ({ kind: "command" as const, value: `fixture-${i}`, description: "Fixture command" })),
+  ];
+  const app = await mount(async (_id, query) => query.query === "error" ? err(new CapabilityError("Lookup failed")) : ok(filterCompletions(items, query.query)));
+  const geometry = () => [app.input.y, app.renderer.root.findDescendantById("session-transcript")!.height];
+  try {
+    const closed = geometry(), composer = app.renderer.root.findDescendantById("agent-composer")!;
+    const metadata = app.renderer.root.findDescendantById("session-status")!;
+    expect(app.menu().visible).toBe(false); expect(metadata.y).toBe(composer.y + composer.height);
+
+    // 슬래시를 누르면 로딩 한 줄부터 시작해 실제 후보 다섯 줄과 하단 위치 표시로 확장한다.
+    app.mockInput.pressKey("/"); await app.render();
+    expect(app.menu().height).toBe(1);
+    app.clock.advance(150); await app.render();
+
+    const menu = app.menu();
+    const lines = () => app.captureCharFrame().split("\n").slice(menu.y, menu.y + menu.height);
+    expect(menu.y).toBe(composer.y + composer.height); expect(menu.height).toBe(6);
+    expect(lines()[0]).toContain("→ compact"); expect(lines().at(-1)).toContain("(1/94)");
+    expect(lines().join("\n")).not.toContain("Commands · SDK resources");
+
+    // 검색을 좁히거나 결과가 없어지면 사용하지 않는 후보 행을 즉시 돌려준다.
+    app.input.value = "/model"; await app.complete();
+    expect(menu.height).toBe(1); expect(lines()[0]).toContain("→ model");
+    app.input.value = "/nomatch"; await app.complete();
+    expect(menu.height).toBe(1); expect(lines()[0]).toContain("No matches");
+    app.input.value = "/error"; await app.complete();
+    expect(menu.height).toBe(1); expect(lines()[0]).toContain("Lookup failed");
+    app.mockInput.pressEscape(); await app.render();
+
+    // 닫힌 목록은 빈 행을 남기지 않고 원래 입력 위치와 대화 높이를 복원한다.
+    expect(menu.visible).toBe(false); expect(metadata.y).toBe(composer.y + composer.height); expect(geometry()).toEqual(closed);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each([false, true])("완성 목록은 명령과 설명을 셀 너비로 정렬하고 선택은 화살표와 글자색으로 표시한다: light=%j", async (light) => {
+  // 한글·결합 이모지가 있는 명령도 설명 열과 클릭 대상이 다른 행과 일치해야 한다.
+  const items = [
+    { kind: "template" as const, value: "guide:문서👩🏽‍💻", description: "Document guide" },
+    { kind: "command" as const, value: "model", description: "Select model" },
+  ];
+  const app = await mount(async () => ok({ items, truncated: false }));
+  const cell = (x: number, y: number) => {
+    let column = 0;
+    return app.captureSpans().lines[y]!.spans.find(span => { column += span.width; return column > x; })!;
+  };
+  try {
+    uiTheme(app.renderer).configure({ palette: [], defaultForeground: light ? "#202020" : "#EEEEEE", defaultBackground: light ? "#FFFFFF" : "#101010",
+      cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null });
+
+    // 두 후보는 별도 제목이나 빈 행 없이 바로 입력창 아래에 배치된다.
+    await app.type("/"); app.clock.advance(500); await app.render();
+
+    const menu = app.menu(), lines = app.captureCharFrame().split("\n"), first = lines[menu.y]!, second = lines[menu.y + 1]!;
+    const descriptionX = Bun.stringWidth(first.slice(0, first.indexOf("Document guide")));
+    expect(menu.height).toBe(2); expect(first).toContain("→ guide:문서👩🏽‍💻");
+    expect(descriptionX).toBe(Bun.stringWidth(second.slice(0, second.indexOf("Select model"))));
+    const colors = uiTheme(app.renderer).colors;
+    expect(cell(menu.x, menu.y).fg.toInts()).toEqual(colors.accent.toInts());
+    expect(cell(descriptionX, menu.y + 1).fg.toInts()).toEqual(colors.muted.toInts());
+    for (const y of [menu.y, menu.y + 1]) expect(cell(descriptionX, y).bg.toInts()).toEqual(colors.panel.toInts());
+
+    // 후보 클릭은 삽입만 하고 입력 포커스와 기존 전송 계약을 유지한다.
+    await app.mockMouse.click(menu.x + 4, menu.y + 1); await app.render();
+    expect(app.input.value).toBe("/model "); expect(app.menu().visible).toBe(false);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("많은 후보는 창 크기에 맞춰 줄이고 선택 위치를 스크롤하며 닫을 때 공간을 반환한다", async () => {
+  // 화면에 다 들어가지 않는 후보는 전체 목록을 유지한 채 보이는 행만 제한한다.
+  const items = Array.from({ length: 20 }, (_, i) => ({ kind: "command" as const, value: `command-${i}`, description: "Command description" }));
+  const app = await mount(async () => ok({ items, truncated: true }));
+  try {
+    await app.type("/");
+
+    // 첫 페이지를 넘긴 선택은 마지막 보이는 후보와 하단 위치 표시로 함께 이동한다.
+    for (let i = 0; i < 7; i++) app.mockInput.pressKey("n", { ctrl: true });
+    await app.render();
+    const page = () => app.captureCharFrame().split("\n").slice(app.menu().y, app.menu().y + app.menu().height).join("\n");
+    expect(page()).toContain("→ command-7"); expect(page()).toContain("(8/20+)");
+
+    // 작은 창에서도 입력·정보·푸터를 덮지 않고 선택과 초안은 그대로 보존한다.
+    app.resize(60, 11); await app.render();
+    const footer = app.renderer.root.findDescendantById("app-footer")!;
+    expect(page()).toContain("→ command-7"); expect(app.menu().y + app.menu().height).toBeLessThanOrEqual(footer.y);
+    const height = app.menu().height;
+    for (let i = 0; i < 6; i++) { await app.render(); expect(app.menu().height).toBe(height); }
+    app.resize(120, 24); await app.render();
+    expect(app.menu().height).toBe(6); expect(page()).toContain("(8/20+)");
+    app.mockInput.pressTab(); await app.render();
+
+    expect(app.input.value).toBe("/command-7 "); expect(app.menu().visible).toBe(false);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("과거 대화를 읽는 중 목록 높이가 바뀌어도 첫 줄·스크롤·입력 포커스를 보존한다", async () => {
+  // 큰 후보 목록의 확장·축소는 대화 뷰포트만 조정하고 사용자의 읽기 위치를 이동시키면 안 된다.
+  const items = Array.from({ length: 20 }, (_, i) => ({ kind: "command" as const, value: `command-${i}`, description: "Command" }));
+  const app = await mount(async (_id, query) => ok(filterCompletions(items, query.query)));
+  try {
+    await app.stream(Array.from({ length: 80 }, (_, i) => `HISTORY_${i}`).join("\n"));
+    const scroll = app.renderer.root.findDescendantById("session-transcript");
+    if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript viewport");
+    scroll.scrollTo(12); await app.render();
+    const first = () => app.captureCharFrame().split("\n").slice(scroll.viewport.y, scroll.viewport.y + scroll.viewport.height).join("\n").match(/HISTORY_\d+/u)?.[0];
+    const before = first(), top = scroll.scrollTop;
+    expect(before).toBeDefined(); expect(app.view.workViewPreferences.agentViews?.a1?.follow).toBe(false);
+
+    // 넓은 목록에서 한 후보로 좁히고 닫아도 같은 기록을 계속 읽을 수 있다.
+    await app.type("/");
+    expect(app.menu().height).toBe(6); expect(first()).toBe(before); expect(scroll.scrollTop).toBe(top);
+    app.input.value = "/command-19"; await app.complete();
+    expect(app.menu().height).toBe(1); expect(first()).toBe(before); expect(scroll.scrollTop).toBe(top);
+    app.mockInput.pressEscape(); await app.render();
+
+    expect(first()).toBe(before); expect(scroll.scrollTop).toBe(top); expect(app.menu().visible).toBe(false);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("빠른 입력은 마지막 변경 150ms 뒤 한 번만 조회하고 커서와 입력은 즉시 반영한다", async () => {
   const queries: string[] = [];
   const app = await mount(async (_id, query) => { queries.push(query.query); return ok({ items: fileItems, truncated: false }); });
@@ -49,7 +304,7 @@ test("빠른 입력은 마지막 변경 150ms 뒤 한 번만 조회하고 커서
   } finally { await app.close(); }
 });
 
-test("재조회 중 후보와 선택·높이·푸터를 유지하고 이전 검색 결과는 확정하지 않는다", async () => {
+test("재조회 중 기존 후보의 높이·선택·푸터를 유지하고 이전 검색 결과는 확정하지 않는다", async () => {
   const pending: ReturnType<typeof Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>>[] = [];
   const items = Array.from({ length: 10 }, (_, index) => ({ kind: "file" as const, value: `abcdef-${index}.ts`, description: "File" }));
   const app = await mount(async () => { const gate = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>(); pending.push(gate); return gate.promise; });
@@ -57,9 +312,9 @@ test("재조회 중 후보와 선택·높이·푸터를 유지하고 이전 검�
     app.renderer.root.findDescendantById("session-transcript")!.height];
   const footer = () => app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
   try {
-    await app.type("@"); const initialGeometry = geometry();
+    await app.type("@"); expect(app.menu().height).toBe(1);
     pending[0]!.resolve(ok({ items, truncated: false })); await app.render();
-    expect(geometry()).toEqual(initialGeometry);
+    expect(app.menu().height).toBeGreaterThan(1);
     app.mockInput.pressKey("n", { ctrl: true }); await app.render();
     const filledGeometry = geometry(), filledFooter = footer();
 
@@ -92,14 +347,19 @@ test.each(["escape", "blur", "session", "dispose", "renderer"] as const)("%s는 
   } finally { await app.close(); }
 });
 
-test("로딩 표시가 끝나도 헤더 글자와 후보의 가로 위치를 바꾸지 않는다", async () => {
+test("로딩 표시가 끝나도 후보의 열 위치와 높이를 바꾸지 않는다", async () => {
+  // 빠른 조회의 스피너 꼬리는 후보를 지연하거나 별도 상태 행을 유지하지 않아야 한다.
   const app = await mount();
   try {
     await app.type("@");
-    const headerX = () => app.captureCharFrame().split("\n")[app.menu().y]!.indexOf("Files");
-    const x = headerX(); expect(x).toBeGreaterThan(0);
+    const position = () => [app.menu().height, app.captureCharFrame().split("\n")[app.menu().y]!.indexOf("src/main.ts")];
+    const before = position();
+    expect(before[1]).toBeGreaterThan(0); expect(app.menu().height).toBe(2);
+
+    // 공유 로딩 표시의 최소 시간이 지나면 기존 후보의 제자리에서 표시만 사라진다.
     app.clock.advance(500); await app.render();
-    expect(headerX()).toBe(x); expect(app.captureCharFrame()).toContain("src/main.ts");
+
+    expect(position()).toEqual(before); expect(app.captureCharFrame()).toContain("src/main.ts");
   } finally { await app.close(); }
 });
 
@@ -133,11 +393,12 @@ test.each(["command", "template", "skill"] as const)("Enter 한 번으로 선택
   const value = kind === "skill" ? "skill:compact-guide" : "compact";
   const app = await mount(async () => ok({ items: [{ kind, value, description: "Selected resource" }], truncated: false }));
   try {
-    await app.type("/com"); expect(app.captureCharFrame()).toContain(`/${value}`);
+    const trigger = kind === "skill" ? "$" : "/", name = value.replace(/^skill:/u, "");
+    await app.type(`${trigger}com`); expect(app.captureCharFrame()).toContain(`→ ${name}`);
 
     app.mockInput.pressEnter(); await app.render();
 
-    expect(app.sent).toEqual([`/${value}`]); expect(app.input.value).toBe("");
+    expect(app.sent).toEqual([`${trigger}${kind === "skill" ? name : value}`]); expect(app.input.value).toBe("");
     expect(app.menu().visible).toBe(false); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
   } finally { await app.close(); }
 });

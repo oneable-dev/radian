@@ -1,6 +1,6 @@
 import { chmod } from "node:fs/promises";
 import { Value } from "typebox/value";
-import { completionQuerySchema } from "./completion-protocol.ts";
+import { completionCatalogQuerySchema, completionQuerySchema } from "./completion-protocol.ts";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { UsageMonitor } from "../usage/monitor.ts";
 import { openAiUsageResolver } from "../usage/providers/openai.ts";
@@ -140,7 +140,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "agent-interrupt", "model-selection", "model-effort"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || [this.discoveryWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
@@ -175,6 +175,14 @@ class WorkspaceRuntime {
         const query = Object.fromEntries(new URL(request.url).searchParams);
         if (!Value.Check(modelCatalogQuerySchema, query)) return this.rejected(new InputError("Malformed model catalog query."));
         const result = await this.registry.models(query.sessionId, query.conversationId, request.signal);
+        return result.ok ? Response.json(result.value) : this.rejected(result.error);
+      }
+      if (path === "/completion-catalog" && request.method === "GET") {
+        if (expectedInstance !== this.instance) return this.rejected(new ProtocolError("Catalog requires the current runtime instance identity."));
+        if (this.stopped) return this.rejected(new SessionError("RUNTIME_STOPPING", "Runtime is stopping."));
+        const query = Object.fromEntries(new URL(request.url).searchParams);
+        if (!Value.Check(completionCatalogQuerySchema, query)) return this.rejected(new InputError("Malformed completion catalog query."));
+        const result = this.registry.catalog(query.sessionId, query.conversationId);
         return result.ok ? Response.json(result.value) : this.rejected(result.error);
       }
       if (path === "/completions" && request.method === "GET") {
@@ -258,7 +266,7 @@ class WorkspaceRuntime {
       case "session-control": {
         // Old clients used wire "new" for in-place replacement. Never silently change that contract.
         const action = command.action === "new" ? "clear" : command.action;
-        if (action !== "compact" && command.instructions?.trim()) return err(new InputError(`Usage: /${action === "new-tab" ? "new" : "clear"} (no arguments).`));
+        if (action !== "compact" && command.instructions?.trim()) return err(new InputError(`Usage: /${action === "new-tab" ? "new" : action} (no arguments).`));
         const control: SessionControl = action === "compact"
           ? { action, ...(command.instructions ? { instructions: command.instructions } : {}) } : { action };
         return this.sessionControl(command.sessionId, control, command.conversationId);
@@ -273,6 +281,7 @@ class WorkspaceRuntime {
         const state = this.registry.details(command.sessionId);
         if (!state) return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
         if (command.conversationId && command.conversationId !== state.conversationId) return err(new SessionError("SESSION_CONFLICT", "This tab changed conversations. Input was retained; review the new session before submitting again."));
+        if (command.resourceRevision !== undefined && command.resourceRevision !== (state.resourceRevision ?? 0)) return err(new SessionError("SESSION_CONFLICT", "Session resources changed. Let suggestions refresh before retrying. No model prompt was sent."));
         if (!command.text.trim()) return err(new InputError("A prompt must not be empty."));
         const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
         let admitted = false;
@@ -336,6 +345,10 @@ class WorkspaceRuntime {
     if (control.action !== "compact" && !expectedConversation) return err(new SessionError("SESSION_CONFLICT", "Current conversation identity is required. No command was accepted."));
     if (expectedConversation && state.conversationId !== expectedConversation) return err(new SessionError("SESSION_CONFLICT", "This tab changed conversations. No command was accepted."));
     if (control.action === "new-tab") return this.registry.newTab(id);
+    if (control.action === "reload") {
+      const result = await this.registry.reload(id);
+      return result.ok ? ok(null) : result;
+    }
     const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
     let admitted = false;
     const accept = () => { admitted = true; accepted.resolve(ok(undefined)); };

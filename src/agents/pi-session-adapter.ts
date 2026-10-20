@@ -1,6 +1,6 @@
 import {
   createAgentSession, DefaultResourceLoader, defineTool, getAgentDir, ModelRuntime, parseSkillBlock,
-  SessionManager, SettingsManager, type AgentSession, type AgentSessionEvent,
+  SessionManager, SettingsManager, type AgentSession, type AgentSessionEvent, type ExtensionError,
 } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel, getSupportedThinkingLevels, modelsAreEqual, ModelsError, Type, type ImageContent } from "@earendil-works/pi-ai";
 import { mkdir, stat } from "node:fs/promises";
@@ -19,6 +19,8 @@ import { ManualCompaction } from "./manual-compaction.ts";
 import { summarizeRequest } from "./request-summary.ts";
 import { imageNamesEntryType } from "./transcript-images.ts";
 import { parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "./model-selection.ts";
+import { expandSkillInvocation } from "./completion.ts";
+import { parseSessionControl } from "./session-controls.ts";
 
 type QueuedUserMessage = Extract<ReturnType<AgentSession["agent"]["peekQueuedMessages"]>[number], { role: "user" }>;
 
@@ -74,7 +76,8 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         waitForIdle: () => session.waitForIdle(), newSession: unsupportedSessionAction, fork: unsupportedSessionAction,
         switchSession: unsupportedSessionAction, navigateTree: unsupportedSessionAction, reload: unsupportedSessionAction,
       } });
-      const executor = new PiSessionExecutor(session, options.usageMonitor, diagnostics, fast, options.imageLoader, compaction);
+      const executor = new PiSessionExecutor(session, options.usageMonitor, diagnostics, fast, options.imageLoader, compaction,
+        () => settingsManager.applyOverrides({ ...options.settings, cacheWarming: "off" }));
       adopted = true;
       return executor;
     }, async () => { if (!adopted) session.dispose(); });
@@ -114,6 +117,8 @@ export class PiSessionExecutor implements SessionExecutor {
   private closing = false;
   private disposed = false;
   private controlling = false;
+  private resourceRevision = 0;
+  private commandCatalog: ReturnType<typeof sessionCommands>;
   private modelSelectionSnapshot: { current: ModelCatalog["current"]; effort: ModelEffort; telemetry: NonNullable<ExecutionState["telemetry"]> } | undefined;
   private compacting = false;
   private inputRevision = 0;
@@ -123,14 +128,15 @@ export class PiSessionExecutor implements SessionExecutor {
   private interruptedMessages: QueuedUserMessage[] = [];
   private started: { wall: number; monotonic: number } | undefined;
 
-  constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode, private readonly imageLoader = loadPromptImages, private readonly compaction = new ManualCompaction()) {
+  constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode, private readonly imageLoader = loadPromptImages, private readonly compaction = new ManualCompaction(), private readonly reloadSettings: () => void = () => {}) {
     this.status = this.finalStatus(false);
+    this.commandCatalog = sessionCommands(session);
     this.transcript = new SessionTranscript(session.sessionManager.getBranch());
     this.telemetry = new PiSessionTelemetry(session, () => this.emit(), usage, fast);
     this.unsubscribe = session.subscribe((event) => this.handleEvent(event));
   }
 
-  commands() { return sessionCommands(this.session); }
+  commands() { return this.commandCatalog; }
   imageData(id: string) { return this.transcript.imageData(id); }
 
   async models(signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>> {
@@ -210,7 +216,7 @@ export class PiSessionExecutor implements SessionExecutor {
     });
     if (this.partial) messages.push(`Agent (streaming): ${this.partial}`);
     messages.push(...this.activeTools.values());
-    return { conversationId: this.savedSessionId, status: this.status, output: messages.join("\n\n").slice(-12000), error: this.error,
+    return { conversationId: this.savedSessionId, resourceRevision: this.resourceRevision, status: this.status, output: messages.join("\n\n").slice(-12000), error: this.error,
       ...(this.status === "working" && this.compacting ? { activity: "compacting" as const } : {}),
       sections: this.transcript.sections, telemetry: this.modelSelectionSnapshot?.telemetry ?? this.telemetry.read(),
       pendingMessages: this.queuedMessages().map((message) => {
@@ -250,7 +256,49 @@ export class PiSessionExecutor implements SessionExecutor {
     this.runs.add(task); return task;
   }
 
+  reload(): Promise<Result<void, ExpectedError>> {
+    if (this.closing || this.disposed) return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
+    if (this.busy) return Promise.resolve(err(new SessionError("SESSION_BUSY", "Wait for this session's current work before reloading resources. No work was interrupted.")));
+    const previousSettingsErrors = this.session.settingsManager.drainErrors();
+    if (previousSettingsErrors.length) console.warn("[radian:settings] Earlier settings errors", previousSettingsErrors);
+    this.controlling = true;
+    const reported: ExtensionError[] = [];
+    const stopReporting = this.diagnostics.observe(error => reported.push(error));
+    const task = (async (): Promise<Result<void, ExpectedError>> => {
+      const reloaded = await withCleanup(() => modelOperation(() => this.session.reload({ beforeSessionStart: this.reloadSettings })), async () => stopReporting());
+      if (!reloaded.ok) {
+        console.warn("[radian:reload] Resource reload failed", reloaded.error);
+        return err(new AgentRunError("Resource reload did not finish. Resources may have changed; the previous completion catalog was retained. Inspect runtime.log before retrying.", { cause: reloaded.error }));
+      }
+      const loader = this.session.resourceLoader;
+      const diagnostics = [...loader.getSkills().diagnostics, ...loader.getPrompts().diagnostics];
+      const errors = [...loader.getExtensions().errors, ...reported, ...this.session.settingsManager.drainErrors(), ...diagnostics.filter(item => item.type === "error")];
+      const warnings = diagnostics.filter(item => item.type !== "error");
+      if (warnings.length) console.warn("[radian:reload] Resource diagnostics", warnings);
+      if (errors.length) {
+        console.warn("[radian:reload] Resource loading failed", errors);
+        return err(new AgentRunError("Some resources could not reload. Resources may have changed; the previous completion catalog was retained. Inspect runtime.log before retrying.", { cause: errors }));
+      }
+      const catalog = sessionCommands(this.session);
+      this.telemetry.refreshUsage();
+      this.commandCatalog = catalog; this.resourceRevision++;
+      return ok(undefined);
+    })().finally(() => { this.controlling = false; this.runs.delete(task); this.emit(); });
+    this.runs.add(task);
+    return task;
+  }
+
   prompt(text: string, onAccepted?: () => void, imagePaths: readonly string[] = []): Promise<Result<void, ExpectedError>> {
+    const skills = text.startsWith("$") ? this.session.resourceLoader.getSkills().skills : [];
+    const expanded = expandSkillInvocation(text, skills.map(skill => skill.name));
+    if (expanded !== text) {
+      const name = expanded.slice(7).split(/\s/u, 1)[0];
+      if (!skills.some(skill => skill.name === name))
+        return Promise.resolve(err(new InputError("This skill is not loaded in the current session. Use /reload after adding skills; input was retained.")));
+      text = expanded;
+    }
+    const control = parseSessionControl(text); if (!control.ok) return Promise.resolve(control);
+    if (control.value) return Promise.resolve(err(new CapabilityError("Use Radian's host session controls for this command. No model prompt was sent.")));
     const model = parseModelCommand(text); if (!model.ok) return Promise.resolve(model);
     if (model.value) return Promise.resolve(err(new CapabilityError("Use /model in the Agent input to open the model picker. No model prompt was sent.")));
     return this.promptInput(text, onAccepted, imagePaths);

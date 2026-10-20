@@ -7,14 +7,14 @@ import { AgentRunError, CancelledError, capture, CleanupError, collectCleanup, H
 import { err, ok, type Result } from "../result.ts";
 import type { TranscriptSection } from "./transcript.ts";
 import type { SessionTelemetry } from "./telemetry.ts";
-import { filterCompletions, type CompletionItem, type CompletionQuery, type CompletionResult } from "./completion.ts";
+import { filterCatalog, type CompletionCatalog, type CompletionItem, type CompletionQuery, type CompletionResult } from "./completion.ts";
 import { completeFiles } from "./completion-files.ts";
 import { sessionControlCommands } from "./session-controls.ts";
 import type { RequestSummary } from "./request-summary.ts";
 import type { TranscriptImageData } from "./transcript-images.ts";
 import { modelCommand, parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "./model-selection.ts";
 
-export type ExecutionState = { readonly conversationId?: string; readonly status: AgentStatus | null; readonly activity?: "compacting"; readonly output: string; readonly error: string | null;
+export type ExecutionState = { readonly conversationId?: string; readonly resourceRevision?: number; readonly status: AgentStatus | null; readonly activity?: "compacting"; readonly output: string; readonly error: string | null;
   readonly sections?: readonly TranscriptSection[]; readonly telemetry?: SessionTelemetry;
   readonly pendingMessages?: readonly RequestSummary[]; readonly runTiming?: { readonly startedAt: number; readonly elapsedMs: number } };
 export type SessionExecutor = {
@@ -22,6 +22,7 @@ export type SessionExecutor = {
   readonly sessionFile: string | undefined;
   readonly state: ExecutionState;
   commands?(): readonly CompletionItem[];
+  reload?(): Promise<Result<void, ExpectedError>>;
   models?(signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>>;
   selectModel?(model: ModelIdentity, effort?: ModelEffort): Promise<Result<string | null, ExpectedError>>;
   imageData?(id: string): Result<TranscriptImageData, ExpectedError>;
@@ -86,7 +87,7 @@ export class SessionRegistry {
     if (entry?.phase !== "open") return null;
     const live = entry.executor?.state;
     // Recovery keeps transcript/status history, but account usage continues updating in the live SDK.
-    const state = entry.recoveredState ? { ...entry.recoveredState, ...(live?.conversationId ? { conversationId: live.conversationId } : {}), ...(live?.telemetry ? { telemetry: live.telemetry } : {}) } : live;
+    const state = entry.recoveredState ? { ...entry.recoveredState, ...(live?.conversationId ? { conversationId: live.conversationId } : {}), ...(live?.resourceRevision !== undefined ? { resourceRevision: live.resourceRevision } : {}), ...(live?.telemetry ? { telemetry: live.telemetry } : {}) } : live;
     return state && entry.replacing ? { ...state, status: "working" } : state ?? null;
   }
   sessionFile(id: string): string | undefined { return this.entries.get(id)?.executor?.sessionFile; }
@@ -206,11 +207,28 @@ export class SessionRegistry {
       const result = await completeFiles(entry.worktree.path, query.query, signal);
       return entry.phase === "open" ? result : err(new SessionError("SESSION_NOT_OPEN", "Session closed during file discovery."));
     }
-    const commands = entry.executor?.commands;
-    const controls = [...sessionControlCommands.filter((item) => item.value !== "compact" || entry.executor?.compact),
-      ...(entry.executor?.models && entry.executor.selectModel ? [modelCommand] : [])];
-    const extra = commands?.call(entry.executor) ?? [];
-    return ok(filterCompletions([...controls, ...extra.filter((item) => !controls.some((control) => control.value === item.value))], query.query));
+    const catalog = this.catalog(id, entry.executor!.savedSessionId);
+    return catalog.ok ? ok(filterCatalog(catalog.value.items, query)) : catalog;
+  }
+
+  catalog(id: string, conversationId: string): Result<CompletionCatalog, ExpectedError> {
+    const selected = this.requireOpen(id); if (!selected.ok) return selected;
+    const entry = selected.value;
+    if (entry.replacing || entry.executor?.savedSessionId !== conversationId) return err(new SessionError("SESSION_CONFLICT", "Conversation changed while loading completion resources."));
+    const executor = entry.executor!;
+    const controls = [...sessionControlCommands.filter(item => item.value === "compact" ? !!executor.compact : item.value === "reload" ? !!executor.reload : true),
+      ...(executor.models && executor.selectModel ? [modelCommand] : [])];
+    const extra = executor.commands?.() ?? [];
+    return ok({ conversationId, revision: executor.state.resourceRevision ?? 0,
+      items: [...controls, ...extra.filter(item => !controls.some(control => control.value === item.value))] });
+  }
+
+  reload(id: string): Promise<Result<void, ExpectedError>> {
+    const selected = this.requireOpen(id); if (!selected.ok) return Promise.resolve(selected);
+    const entry = selected.value;
+    if (entry.replacing || [...entry.children.values()].some(child => child.executor?.busy || child.executor?.state.status === "working" || child.ready && !child.executor))
+      return Promise.resolve(err(new SessionError("SESSION_BUSY", "Wait for this conversation and its owned work before reloading resources.")));
+    return entry.executor?.reload ? entry.executor.reload() : Promise.resolve(err(new CapabilityError("This executor does not support resource reload.")));
   }
 
   async models(id: string, conversationId: string, signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>> {

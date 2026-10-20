@@ -215,6 +215,43 @@ test("이전 런타임의 자동완성은 요청이나 재시작 없이 지원 �
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
+test("이전 서비스에는 카탈로그·리로드·달러 입력을 모델 프롬프트나 재시작으로 보내지 않는다", async () => {
+  // 새 문법을 모르는 서버에 설정 명령이 유료 모델 입력으로 전달되는 것을 막는다.
+  const fetchMock = stubFetch(async () => { throw new Error("No request should be sent"); });
+  const client = new RuntimeClient(paths, snapshot());
+  try {
+    const catalog = await client.catalog("session"), reload = await client.prompt("session", "/reload"), skill = await client.prompt("session", "$review-code");
+
+    expect(expectError(catalog).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(expectError(reload).code).toBe("UNSUPPORTED_CAPABILITY"); expect(expectError(skill).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(fetchMock).not.toHaveBeenCalled();
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
+
+test("전체 카탈로그는 100개를 넘어도 검증하고 잘못된 대화·응답은 거부한다", async () => {
+  // 검색 페이지 제한은 전체 카탈로그의 크기 제한이 아니며 연결 identity는 계속 검증한다.
+  const details = { session: { conversationId: "conversation", status: null, output: "", error: null } };
+  const state = { ...snapshot(), capabilities: ["completion-catalog"], details };
+  let mode: "valid" | "malformed" | "replaced" = "valid";
+  const fetchMock = stubFetch(async (input, options) => {
+    const url = new URL(String(input));
+    expect(url.pathname).toBe("/completion-catalog"); expect(url.searchParams.get("conversationId")).toBe("conversation");
+    expect(new Headers(options?.headers).get("X-Radian-Instance")).toBe("first");
+    if (mode === "replaced") details.session.conversationId = "replacement";
+    return Response.json(mode === "malformed" ? { conversationId: "wrong", items: [] } : { conversationId: "conversation", revision: 0,
+      items: Array.from({ length: 150 }, (_, i) => ({ kind: "command", value: `command-${i}`, description: "Command" })) });
+  });
+  const client = new RuntimeClient(paths, state);
+  try {
+    const catalog = expectOk(await client.catalog("session"));
+    mode = "malformed"; const malformed = await client.catalog("session");
+    mode = "replaced"; const replaced = await client.catalog("session");
+
+    expect(catalog.items).toHaveLength(150); expect(expectError(malformed).code).toBe("PROTOCOL_ERROR");
+    expect(expectError(replaced).code).toBe("CANCELLED");
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
+
 test("자동완성은 instance가 지정된 읽기 요청이며 잘못된 응답을 정상 후보로 사용하지 않는다", async () => {
   const state = snapshot(); state.capabilities = ["prompt-completion"];
   let malformed = false; const requests: string[] = [];

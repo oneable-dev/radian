@@ -5,10 +5,12 @@ import type { Result } from "../../result.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText, styleChunk } from "../../ui/theme-styles.ts";
-import { completionTarget, insertCompletion, type CompletionQuery, type CompletionResult, type CompletionTarget } from "../completion.ts";
+import { singleLine, truncateCells } from "../../ui/text.ts";
+import { completionTarget, insertCompletion, type CompletionResult, type CompletionTarget } from "../completion.ts";
+import type { CompletionProvider } from "../completion-cache.ts";
+export type { CompletionProvider } from "../completion-cache.ts";
 import type { PromptInput } from "./prompt-input.ts";
 
-export type CompletionProvider = (sessionId: string, query: CompletionQuery, signal: AbortSignal) => Promise<Result<CompletionResult, ExpectedError>>;
 type LookupContext = { sessionId: string; target: CompletionTarget; lookup: string; scope: string };
 const debounceMs = 150;
 
@@ -20,7 +22,6 @@ export class CompletionMenu {
   private readonly rows: TextRenderable[] = [];
   private readonly heading: BoxRenderable;
   private result: CompletionResult = { items: [], truncated: false };
-  private target: CompletionTarget | null = null;
   private selected = 0;
   private first = 0;
   private generation = 0;
@@ -35,19 +36,22 @@ export class CompletionMenu {
   private requestReady: ReturnType<typeof Promise.withResolvers<void>> | undefined;
   private queued = false;
   private disposed = false;
+  private sourceVersion = 0;
+  private readVersion = -1;
+  private readonly unsubscribeSource: (() => void) | undefined;
 
   constructor(private readonly renderer: CliRenderer, private readonly input: PromptInput,
     private readonly sessionId: () => string | null, private readonly provider: CompletionProvider | undefined,
     private readonly changed: () => void, private readonly availableRows: () => number = () => 5) {
-    this.root = new BoxRenderable(renderer, { id: "prompt-completions", width: "100%", height: 1, flexShrink: 0, visible: false, flexDirection: "column", paddingX: 1 });
-    this.heading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    this.spinner = new LoadingSpinner(renderer);
+    this.root = new BoxRenderable(renderer, { id: "prompt-completions", width: "100%", height: 0, flexShrink: 0, visible: false,
+      flexDirection: "column", paddingRight: 1, onSizeChange: this.paint });
+    this.heading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", paddingLeft: 2 });
+    this.spinner = new LoadingSpinner(renderer, { id: "completion-loading" });
     this.header = new TextRenderable(renderer, { height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });
-    const indicator = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0 });
-    // Anchor activity to the menu, not the optional header: a one-row menu can
-    // show its result immediately while the shared spinner finishes its 500ms tail.
-    this.spinner.root.position = "absolute"; this.spinner.root.left = 1; this.spinner.root.top = 0; this.spinner.root.zIndex = 1;
-    this.heading.add(indicator); this.heading.add(this.header); this.root.add(this.heading);
+    // The spinner uses an existing end cell, never a dedicated loading/header row.
+    // Its minimum-duration tail must not delay results or change their geometry.
+    this.spinner.root.position = "absolute"; this.spinner.root.right = 1; this.spinner.root.top = 0; this.spinner.root.zIndex = 1;
+    this.heading.add(this.header);
     for (let index = 0; index < 5; index++) {
       const row = new TextRenderable(renderer, { id: `completion-option-${index}`, width: "100%", height: 1, flexShrink: 0, wrapMode: "none", selectable: false,
         onMouseDown: (event) => {
@@ -58,7 +62,7 @@ export class CompletionMenu {
         } });
       this.rows.push(row); this.root.add(row);
     }
-    this.root.add(this.spinner.root);
+    this.root.add(this.heading); this.root.add(this.spinner.root);
     uiTheme(renderer).bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["completion.item"].bg;
       paintText(this.header, styles["completion.description"]); paintText(this.spinner.root, styles["status.working"]); this.paint();
@@ -66,9 +70,14 @@ export class CompletionMenu {
     input.on("focused", this.refresh); input.on("blurred", this.blur);
     input.onCursorChange = () => { this.refresh(); this.changed(); };
     renderer.on("resize", this.paint);
+    this.unsubscribeSource = provider?.subscribe?.(() => { this.sourceVersion++; this.refresh(); });
     this.root.once(RenderableEvents.DESTROYED, () => this.dispose());
   }
 
+  prepare(sessionId: string | null, cwd: string | undefined, retained: ReadonlySet<string>): void {
+    this.provider?.retain?.(retained);
+    if (sessionId && cwd) this.provider?.prepare?.(sessionId, cwd);
+  }
   get open(): boolean { return this.root.visible; }
   // Claim Tab/Esc immediately after a trigger, before the menu's queued render can update focus context.
   get engaged(): boolean { return this.context() !== null; }
@@ -88,8 +97,17 @@ export class CompletionMenu {
   private update(): void {
     const context = this.context(), provider = this.provider;
     if (!context || !provider) { this.hide(); return; }
-    this.target = context.target;
-    if (this.open && this.lookup === context.lookup) return;
+    if (this.open && this.lookup === context.lookup && this.readVersion === this.sourceVersion) return;
+    this.readVersion = this.sourceVersion;
+    const cached = provider.read?.(context.sessionId, context.target);
+    if (cached) {
+      const changedQuery = this.lookup !== context.lookup;
+      this.cancelRequest(); if (changedQuery) this.generation++;
+      if (this.scope !== context.scope) this.clearResults();
+      this.scope = context.scope; this.lookup = context.lookup; this.root.visible = true;
+      this.spinner.stop(); this.receive(context, cached); return;
+    }
+    if (this.open && this.lookup === context.lookup && this.pending) return;
     this.cancelRequest();
     const ready = this.requestReady = Promise.withResolvers<void>();
     const abort = this.abort = new AbortController(), generation = ++this.generation;
@@ -104,15 +122,7 @@ export class CompletionMenu {
         if (!this.current(generation, abort, context.lookup)) return;
         const result = await provider(context.sessionId, context.target, abort.signal);
         if (!this.current(generation, abort, context.lookup)) return;
-        this.pending = false; this.spinner.stop();
-        if (result.ok) {
-          const previous = this.result.items[this.selected];
-          this.result = result.value; this.resolvedLookup = context.lookup;
-          this.selected = Math.max(0, this.result.items.findIndex((item) => item.kind === previous?.kind && item.value === previous?.value));
-          this.message = result.value.items.length ? "" : `No matches${result.value.truncated ? " in the first page · refine search" : ""}`;
-        } else if (result.error.code === "CANCELLED") { this.hide(); return; }
-        else { this.clearResults(); this.message = `[${result.error.code}] ${result.error.message}`; }
-        this.paint(); this.changed();
+        this.spinner.stop(); this.receive(context, result);
       }).catch((error: unknown) => {
         if (!this.current(generation, abort, context.lookup)) return;
         this.pending = false; this.spinner.stop(); this.clearResults();
@@ -120,15 +130,28 @@ export class CompletionMenu {
       }).finally(() => ready.resolve());
     }, debounceMs);
   }
+  private receive(context: LookupContext, result: Result<CompletionResult, ExpectedError>): void {
+    this.pending = false;
+    if (result.ok) {
+      const previous = this.result.items[this.selected];
+      const items = context.target.kind === "skill" ? result.value.items.filter(item => item.kind === "skill").map(item => ({ ...item, value: item.value.replace(/^skill:/u, "") }))
+        : context.target.kind === "command" ? result.value.items.filter(item => item.kind !== "skill") : result.value.items;
+      this.result = { items, truncated: result.value.truncated }; this.resolvedLookup = context.lookup;
+      this.selected = Math.max(0, items.findIndex(item => item.kind === previous?.kind && item.value === previous?.value));
+      this.message = items.length ? "" : `No matches${result.value.truncated ? " in the first page · refine search" : ""}`;
+    } else if (result.error.code === "CANCELLED") { this.hide(); return; }
+    else { this.clearResults(); this.message = `[${result.error.code}] ${result.error.message}`; }
+    this.paint(); this.changed();
+  }
   private current(generation: number, abort: AbortController, lookup: string): boolean {
     return !this.disposed && generation === this.generation && !abort.signal.aborted && this.context()?.lookup === lookup;
   }
   private clearResults(): void { this.result = { items: [], truncated: false }; this.resolvedLookup = ""; this.selected = 0; this.first = 0; }
-  // Enter executes the focused slash resource; Tab remains insertion-only.
+  // Enter executes the focused command or Skill; Tab remains insertion-only.
   // Resolve synchronously when possible so ordinary prompt submission captures its draft immediately.
   prepareCommandSubmission(): boolean | Promise<boolean> {
     const context = this.context();
-    if (!context || context.target.kind !== "command") return true;
+    if (!context || context.target.kind === "file") return true;
     this.update();
     const item = this.result.items[this.selected];
     if (!this.open || this.scope !== context.scope || !item || item.kind === "file") return true;
@@ -174,25 +197,35 @@ export class CompletionMenu {
     this.dismissed = this.signature(); this.hide();
   }
   private paint = (): void => {
-    if (this.disposed || this.root.isDestroyed || !this.open) return;
-    const budget = Math.max(1, Math.min(5, Math.floor(this.renderer.height / 6), this.availableRows()));
-    const showHeader = budget > 1 || !this.result.items.length;
-    this.heading.visible = showHeader;
-    const count = Math.min(this.result.items.length, budget - Number(showHeader));
+    if (this.disposed || !this.root || this.root.isDestroyed || !this.open) return;
+    const budget = Math.max(1, Math.min(6, Math.floor(this.renderer.height / 4), this.availableRows()));
+    const overflow = this.result.items.length > Math.min(this.rows.length, budget);
+    const showSummary = !this.result.items.length || budget > 1 && (overflow || this.result.truncated);
+    this.heading.visible = showSummary;
+    const count = Math.min(this.result.items.length, this.rows.length, budget - Number(showSummary));
     this.first = Math.min(this.first, this.selected);
     if (count > 0 && this.selected >= this.first + count) this.first = Math.max(0, this.selected - count + 1);
-    // Reserve the same bounded area from opening until dismissal, even for loading, errors or no matches.
-    if (this.root.height !== budget) this.root.height = budget;
-    this.header.content = (this.message || `${this.target?.kind === "file" ? "Files" : "Commands · SDK resources"} · ${this.selected + 1}/${this.result.items.length}${this.result.truncated ? "+ · refine search" : ""}${this.pending ? " · Updating…" : ""}`).replace(/[\x00-\x1f\x7f]/gu, " ");
+    const height = count + Number(showSummary);
+    // The native getter may still report the previous layout; the setter ignores unchanged styles.
+    this.root.height = height;
+    this.header.content = singleLine(this.message || `(${this.selected + 1}/${this.result.items.length}${this.result.truncated ? "+" : ""})${this.result.truncated ? " · refine search" : ""}${this.pending ? " · Updating…" : ""}`);
     const styles = uiTheme(this.renderer).styles;
+    // Measure terminal cells, not UTF-16 lengths, so Unicode labels share one description column.
+    const width = Math.max(0, this.root.width - 2);
+    const labels = this.result.items.map(item => item.kind === "file" ? JSON.stringify(item.value).slice(1, -1) : singleLine(item.value));
+    const descriptions = width >= 20;
+    const labelWidth = descriptions ? Math.min(Math.max(0, ...labels.map(label => Bun.stringWidth(label))), Math.floor((width - 4) / 2)) : Math.max(0, width - 2);
     for (const [index, row] of this.rows.entries()) {
       const item = this.result.items[this.first + index]; row.visible = index < count && !!item;
       if (!row.visible || !item) continue;
-      const label = item.kind === "file" ? JSON.stringify(item.value).slice(1, -1) : `/${item.value}`;
       const selected = this.first + index === this.selected;
+      const marker = truncateCells(selected ? "→ " : "  ", width, "");
+      const label = truncateCells(labels[this.first + index]!, labelWidth);
+      const description = descriptions ? " ".repeat(labelWidth - Bun.stringWidth(label) + 2)
+        + truncateCells(singleLine(item.description), Math.max(0, width - labelWidth - 4)) : "";
       row.content = new StyledText([
-        styleChunk(`${selected ? "› " : "  "}${label}`.replace(/[\x00-\x1f\x7f]/gu, " "), styles[selected ? "completion.selected" : "completion.item"]),
-        styleChunk(` · ${item.description}`.replace(/[\x00-\x1f\x7f]/gu, " "), styles[selected ? "completion.selected" : "completion.description"]),
+        styleChunk(marker + label, styles[selected ? "completion.selected" : "completion.item"]),
+        styleChunk(description, styles[selected ? "completion.selected" : "completion.description"]),
       ]);
       row.bg = styles[selected ? "completion.selected" : "completion.item"].bg;
     }
@@ -206,12 +239,13 @@ export class CompletionMenu {
   private blur = (): void => { this.hide(); };
   hide(): void {
     this.generation++; this.cancelRequest(); this.pending = false; this.lookup = ""; this.scope = ""; this.clearResults(); this.spinner.cancel();
-    const wasOpen = this.open; if (!this.root.isDestroyed) this.root.visible = false; this.target = null;
+    const wasOpen = this.open;
+    if (!this.root.isDestroyed) { this.root.visible = false; this.root.height = 0; }
     if (wasOpen) this.changed();
   }
   dispose(): void {
     if (this.disposed) return;
-    this.disposed = true; this.hide();
+    this.disposed = true; this.unsubscribeSource?.(); this.hide();
     this.input.off("focused", this.refresh); this.input.off("blurred", this.blur); this.input.onCursorChange = undefined;
     this.renderer.off("resize", this.paint);
   }

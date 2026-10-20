@@ -3,7 +3,7 @@ import { createAssistantMessageEventStream, type AssistantMessage } from "@earen
 import { join } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
 import { offlineRuntime, fixtureMessage } from "../testing/offline-runtime.ts";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { WorkspaceSelection } from "../app/workspace-selection.ts";
@@ -82,6 +82,139 @@ async function commandExtension(directory: string) {
     pi.registerCommand("fixture-wait", { handler: async (_args, ctx) => { await ctx.waitForIdle(); } });
   }`);
 }
+
+test("리로드는 대화·모델·기존 출력을 보존하며 전체 명령·템플릿·스킬을 실제로 다시 읽는다", async () => {
+  // 실제 SDK 리소스 로더를 사용하며 모델 전송 경계만 오프라인으로 대체한다.
+  let requests = 0; const inputs: string[] = [];
+  const app = await sdkFixture(false, options => ({ ...options, streamFn: (model, context, request) => {
+    requests++;
+    const user = context.messages.findLast(message => message.role === "user");
+    if (user?.role === "user") inputs.push(typeof user.content === "string" ? user.content : user.content.filter(part => part.type === "text").map(part => part.text).join(""));
+    return options.streamFn!(model, context, request);
+  } }));
+  try {
+    const extensions = join(app.directory, "agent", "extensions"), skills = join(app.directory, "explicit-skills");
+    const template = join(app.directory, "reload-template.md");
+    await mkdir(extensions, { recursive: true }); await mkdir(skills);
+    await writeFile(template, "---\ndescription: Initial template\n---\nInitial template content\n");
+    await writeFile(join(extensions, "resources.ts"), `export default function(pi) {
+      pi.on("resources_discover", () => ({ skillPaths: [${JSON.stringify(skills)}], promptPaths: [${JSON.stringify(template)}] }));
+    }`);
+    const id = expectOk(await app.registry.create(app.main.id));
+    expect(expectError(await app.registry.prompt(id, "/reload")).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(requests).toBe(0);
+    expectOk(await app.registry.prompt(id, "Before reload"));
+    const before = app.registry.details(id)!, file = app.registry.sessionFile(id), conversation = before.conversationId!;
+    expect(expectOk(app.registry.catalog(id, conversation)).items.some(item => item.value === "fresh-149")).toBe(false);
+
+    // 신규 리소스는 파일을 저장한 것만으로 카탈로그에 나타나지 않고 명시적 리로드로 적용된다.
+    const skill = join(skills, "reload-skill"); await mkdir(skill);
+    await writeFile(join(skill, "SKILL.md"), "---\nname: reload-skill\ndescription: Reloaded skill\n---\nRELOADED_SKILL_MARKER\n");
+    await writeFile(template, "---\ndescription: Updated template\n---\nUpdated template content\n");
+    await writeFile(join(extensions, "fresh.ts"), `export default function(pi) {
+      for (let i = 0; i < 150; i++) pi.registerCommand("fresh-" + i, { description: "Fresh command", handler: async () => { pi.appendEntry("reload-probe", { index: i }); } });
+    }`);
+    expect(expectOk(app.registry.catalog(id, conversation)).items.some(item => item.kind === "skill")).toBe(false);
+    expectOk(await app.registry.reload(id));
+
+    const after = app.registry.details(id)!;
+    expect(after.conversationId).toBe(conversation); expect(app.registry.sessionFile(id)).toBe(file);
+    expect(after.output).toBe(before.output); expect(after.sections).toEqual(before.sections); expect(after.status).toBe(before.status);
+    expect(after.telemetry?.model).toBe(before.telemetry?.model); expect(after.telemetry?.effort).toBe(before.telemetry?.effort);
+    expect(after.resourceRevision).toBe(1); expect(requests).toBe(1);
+    const catalog = expectOk(app.registry.catalog(id, conversation));
+    expect(catalog.items.length).toBeGreaterThan(150);
+    expect(catalog.items.find(item => item.value === "reload-template")?.description).toBe("Updated template");
+    expect(catalog.items.some(item => item.kind === "skill" && item.value === "skill:reload-skill")).toBe(true);
+    expect(expectOk(await app.registry.complete(id, { kind: "command", query: "reload-skill" })).items).toEqual([]);
+    expect(expectOk(await app.registry.complete(id, { kind: "skill", query: "reload" })).items[0]?.value).toBe("reload-skill");
+
+    // 달러는 모델에 원문으로 보내지 않고 이미 로드된 스킬의 실제 지시문으로 확장한다.
+    expectOk(await app.registry.prompt(id, "$reload-skill inspect this"));
+    expect(inputs.at(-1)).toContain("RELOADED_SKILL_MARKER"); expect(inputs.at(-1)).toContain("inspect this");
+    expect(expectError(await app.registry.prompt(id, "$missing-skill")).code).toBe("INVALID_INPUT");
+    expect(requests).toBe(2);
+  } finally { await app.cleanup(); }
+});
+
+test("실행 중 리로드는 요청을 중단하지 않고 busy로 거부한다", async () => {
+  // 진행 중인 모델과 명령 리소스 교체는 동시에 허용하지 않는다.
+  const app = await sdkFixture(true);
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    const run = app.registry.prompt(id, "hold reload"); await app.streams.waitFor("reload");
+
+    const result = await app.registry.reload(id);
+
+    expect(expectError(result).code).toBe("SESSION_BUSY"); expect(app.streams.gates.get("reload")?.aborted).toBe(false);
+    expect(app.registry.details(id)?.resourceRevision).toBe(0);
+    app.streams.gates.get("reload")!.finish("Original work completed"); expectOk(await run);
+  } finally { await app.cleanup(); }
+});
+
+test("확장 리로드가 실패하면 이전 카탈로그와 revision을 성공한 새 값으로 덮지 않는다", async () => {
+  // 잘못된 확장은 설정 실패로 보고하되 부분 적용 가능성을 숨기지 않는다.
+  const app = await sdkFixture();
+  try {
+    await commandExtension(app.directory);
+    const id = expectOk(await app.registry.create(app.main.id)), conversation = app.registry.details(id)!.conversationId!;
+    const before = expectOk(app.registry.catalog(id, conversation));
+    await writeFile(join(app.directory, "agent", "extensions", "invalid.ts"), "export default function ( { invalid source");
+
+    const result = await app.registry.reload(id);
+
+    expect(expectError(result).code).toBe("AGENT_FAILED");
+    expect(expectOk(app.registry.catalog(id, conversation))).toEqual(before);
+    expect(app.registry.details(id)?.conversationId).toBe(conversation); expect(app.registry.details(id)?.resourceRevision).toBe(0);
+  } finally { await app.cleanup(); }
+});
+
+test("잘못된 설정 파일의 SDK 진단도 리로드 성공으로 숨기지 않는다", async () => {
+  // 파일 기반 설정을 실제로 다시 읽되 모델 요청은 전혀 시작하지 않는다.
+  const app = await sdkFixture(false, options => { const configured = { ...options }; delete configured.streamFn; return configured; });
+  const warned = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)), conversation = app.registry.details(id)!.conversationId!;
+    const before = expectOk(app.registry.catalog(id, conversation));
+    await writeFile(join(app.directory, "agent", "settings.json"), "{ invalid settings");
+
+    const result = await app.registry.reload(id);
+
+    expect(expectError(result).code).toBe("AGENT_FAILED"); expect(expectOk(app.registry.catalog(id, conversation))).toEqual(before);
+    expect(app.registry.details(id)?.output).toBe(""); expect(warned).toHaveBeenCalled();
+  } finally { warned.mockRestore(); await app.cleanup(); }
+});
+
+test("리로드 초기화 훅의 SDK 오류 알림도 성공으로 숨기지 않는다", async () => {
+  // SDK는 일부 훅 실패를 예외가 아니라 onError 알림으로 보고한다.
+  const app = await sdkFixture(), logged = spyOn(console, "error").mockImplementation(() => {}), warned = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await commandExtension(app.directory);
+    const id = expectOk(await app.registry.create(app.main.id)), conversation = app.registry.details(id)!.conversationId!;
+    const before = expectOk(app.registry.catalog(id, conversation));
+    await writeFile(join(app.directory, "agent", "extensions", "bad-start.ts"), `export default function(pi) {
+      pi.on("session_start", () => { throw new Error("Reload lifecycle fixture"); });
+    }`);
+
+    const result = await app.registry.reload(id);
+
+    expect(expectError(result).code).toBe("AGENT_FAILED"); expect(expectOk(app.registry.catalog(id, conversation))).toEqual(before);
+    expect(logged).toHaveBeenCalled(); expect(warned).toHaveBeenCalled();
+  } finally { logged.mockRestore(); warned.mockRestore(); await app.cleanup(); }
+});
+
+test("리로드 중 프로그래밍 결함은 같은 예외로 전파하고 카탈로그를 성공으로 교체하지 않는다", async () => {
+  // 잘못된 입력이나 SDK 리소스 진단과 호스트 프로그래밍 결함을 구분한다.
+  const app = await sdkFixture(); let restore: (() => void) | undefined;
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)), marker = new TypeError("Reload programming defect");
+    const reload = spyOn(DefaultResourceLoader.prototype, "reload").mockRejectedValue(marker); restore = () => reload.mockRestore();
+
+    const operation = app.registry.reload(id);
+
+    await expect(operation).rejects.toBe(marker); expect(app.registry.details(id)?.resourceRevision).toBe(0);
+  } finally { restore?.(); await app.cleanup(); }
+});
 
 test("실제 SDK는 경로 라벨이 아닌 이미지 바이트를 사용자 메시지에 전달하고 저장한다", async () => {
   const observed: string[] = [];
@@ -328,6 +461,9 @@ test("Fast 명령은 모델 호출 없이 처리되고 native Codex HTTP 요청�
     const id = expectOk(await app.registry.create(app.main.id));
     expect(app.registry.details(id)?.telemetry?.fast).toBe(false);
     expectOk(await app.registry.prompt(id, "/fast on")); expect(bodies).toHaveLength(0);
+    // 리로드가 기존 Fast 선택·텔레메트리 구독을 지우거나 모델 요청을 만들면 안 된다.
+    expectOk(await app.registry.reload(id));
+    expect(bodies).toHaveLength(0); expect(app.registry.details(id)?.telemetry?.fast).toBe(true);
 
     expectOk(await app.registry.prompt(id, "priority fixture request"));
 

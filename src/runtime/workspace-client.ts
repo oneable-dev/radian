@@ -9,9 +9,9 @@ import { runtimePaths, RuntimeStore } from "./storage.ts";
 import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
 
 // Keep repo identity and instance fencing inside the existing clients, including PTY leases.
-export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "newTab" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "image" | "models" | "selectModel">>;
+export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "newTab" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "image" | "models" | "selectModel" | "catalog">>;
 type Connector = (repository: Repository, cwd: string, options: ConnectOptions) => Promise<Result<RepositoryClient | null, ExpectedError>>;
-type Entry = { repository: Repository; preferences: RuntimePreferences; client?: RepositoryClient; unsubscribe?: () => void;
+type Entry = { repository: Repository; preferences: RuntimePreferences; connectionVersion: number; client?: RepositoryClient; unsubscribe?: () => void;
   watcher?: RepositoryWatcher; discoveryWarning?: string;
   pending?: Promise<Result<RepositoryClient, ExpectedError>>; saving?: Promise<Result<void, ExpectedError>>; error?: ExpectedError; warning?: string; sessions: Set<string>; editors: Set<string>; terminals: Set<string> };
 export type WorkspaceSnapshot = Pick<RuntimeSnapshot, "repositories" | "details" | "preferences" | "closingCount" | "terminalClosingCount" | "notice" | "editors" | "terminals">;
@@ -25,7 +25,7 @@ export class WorkspaceClient {
   private disconnection: Promise<void> | undefined;
 
   private constructor(repositories: readonly Repository[], private readonly options: ConnectOptions, private readonly connect: Connector) {
-    this.entries = repositories.map((repository) => ({ repository, preferences: defaultPreferences(), sessions: new Set(), editors: new Set(), terminals: new Set() }));
+    this.entries = repositories.map((repository) => ({ repository, preferences: defaultPreferences(), connectionVersion: 0, sessions: new Set(), editors: new Set(), terminals: new Set() }));
   }
 
   static async open(repositories: readonly Repository[], cwd: string, options: ConnectOptions = {}, connect: Connector = connectRuntime): Promise<Result<WorkspaceClient, ExpectedError>> {
@@ -99,7 +99,7 @@ export class WorkspaceClient {
     entry.client = client; delete entry.error; delete entry.warning; delete entry.discoveryWarning; entry.preferences = client.snapshot.preferences;
     let wasConnected = client.connected;
     entry.unsubscribe = client.subscribe(() => {
-      if (!wasConnected && client.connected) this.recovery++;
+      if (!wasConnected && client.connected) { this.recovery++; entry.connectionVersion++; }
       wasConnected = client.connected; this.emit();
     });
   }
@@ -185,6 +185,16 @@ export class WorkspaceClient {
     const entry = this.sessionOwner(args[0]); if (!entry.ok) return entry;
     const client = entry.value.client;
     return client?.selectModel ? client.selectModel(...args) : err(new CapabilityError("This repository connection does not support model selection."));
+  }
+  completionIdentity(sessionId: string): string {
+    const entry = this.sessionOwner(sessionId);
+    if (!entry.ok) return JSON.stringify([sessionId, null]);
+    const snapshot = entry.value.client?.snapshot, state = snapshot?.details[sessionId];
+    return JSON.stringify([snapshot?.instance, state?.conversationId, state?.resourceRevision ?? 0, entry.value.connectionVersion]);
+  }
+  async catalog(...args: Parameters<RuntimeClient["catalog"]>): ReturnType<RuntimeClient["catalog"]> {
+    const entry = this.sessionOwner(args[0]); if (!entry.ok) return entry;
+    return entry.value.client?.catalog ? entry.value.client.catalog(...args) : err(new CapabilityError("This repository connection does not provide completion catalogs."));
   }
   async complete(...args: Parameters<RuntimeClient["complete"]>): ReturnType<RuntimeClient["complete"]> {
     const entry = this.sessionOwner(args[0]); return entry.ok ? entry.value.client!.complete(...args) : entry;

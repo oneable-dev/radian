@@ -252,20 +252,35 @@ Git's Ask Agent input uses the same multiline, paste and attachment rules.
 ### Prompt completion
 
 The Agent prompt shows a read-only completion menu directly below the input. `/` opens command
-suggestions only in the first token at the beginning of the prompt. `@` opens file suggestions at
+suggestions only in the first token at the beginning of the prompt. `$` opens a separate Skill menu
+in that same leading position; Skills do not appear in `/` suggestions. `@` opens file suggestions at
 the beginning of any whitespace-delimited token, including in the middle of a sentence; email
 addresses do not trigger it. Matching uses the text before the cursor, not just the end of the draft.
-Lookups use a **150 ms trailing debounce**; input, cursor movement and candidate navigation remain
-immediate. During refresh the previous candidates and selection stay visible, and the open menu
-reserves a stable bounded height, including for loading, errors and no matches. Stale candidates
-cannot be inserted until results for the current query arrive. Footer shortcuts retain their positions
-and unavailable actions use muted keys instead of disappearing.
+
+Already-connected SDK sessions prefetch a full command/Skill catalog, not a 100-item search page.
+File indexes are shared by worktree within the attached UI and prepared in the background. Cold
+repository services are not started for completion. Once prepared, typing searches memory immediately:
+there is no per-keystroke IPC, Git query, 150 ms debounce, or newly started loading indicator.
+Only initial preparation or an explicit resource refresh can show loading. Legacy asynchronous
+completion providers retain their 150 ms trailing debounce. Catalogs stay cached until `/reload`,
+a new conversation, a replacement runtime, or connection recovery; ordinary streaming snapshots do
+not reload them.
+
+The closed menu reserves no space. When open, its height follows the visible results:
+up to five candidate rows, plus a compact position counter below them when the list overflows or is
+truncated. Initial loading, errors and no matches use just one row. Candidate names and descriptions
+share aligned columns; an arrow and accent text mark the selection without a background fill.
+Narrow panes prioritize candidate names. During refresh the previous candidates and selection stay
+visible until fresh results arrive, then the menu expands or shrinks to fit. Stale candidates cannot be
+inserted until results for the current query arrive. Footer shortcuts retain their positions and
+unavailable actions use muted keys instead of disappearing.
 
 - **Ctrl+N / Ctrl+P** selects the next/previous candidate. `hjkl` remains ordinary input.
 - **Tab** inserts the selected candidate without sending the prompt or executing a command.
 - **Enter** completes the focused command, template or Skill candidate and immediately submits it
-  in one key press: `/com` with `/compact` focused runs `/compact`, not `/com`. Existing arguments
-  are preserved, and immediate execution adds no trailing completion space. If a focused command is
+  in one key press: `/com` with `/compact` focused runs `/compact`, not `/com`; `$rev` with
+  `review-code` focused invokes that Skill. Existing arguments are preserved, and immediate execution
+  adds no trailing completion space. If a focused command is
   being refreshed, Enter waits for fresh results; editing, dismissing, switching sessions or a changed
   selection cancels that pending submission rather than executing stale or incomplete input.
 - With no focused command candidate, **Enter** submits the current input as written. File suggestions
@@ -274,22 +289,37 @@ and unavailable actions use muted keys instead of disappearing.
   Selected files appear as numbered file/image items rather than exposing long paths in the editor.
   Ordinary file references retain their absolute paths for tool access; images use the image transport.
 
-Command candidates come from the selected SDK session's registered extension commands, prompt
-templates and enabled Skill commands, together with Radian's host commands. `/model` opens Radian's
-native model picker; Pi CLI-only commands such as `/settings` are not advertised as implemented.
+Command candidates come from the selected SDK session's registered extension commands and prompt
+templates, together with Radian's host commands. Enabled Skills are exposed only through `$` discovery.
+A leading `$skill-name instructions` invokes the loaded Skill through Pi's existing `/skill:skill-name`
+expansion. An unknown standard `$skill-name` invocation is rejected before a model request; manually
+entered `/skill:name` still works. Inline or multiple `$` Skill references are not supported. Inline text
+and shell forms such as `$HOME`, `${HOME}` and `$(pwd)` stay literal unless the token names a loaded
+Skill. `/model` opens Radian's native model picker; Pi CLI-only commands such as `/settings` are not
+advertised as implemented.
 Pi's interactive dialogs/custom terminal components are not embedded.
-Extension session replacement, tree navigation and reload fail explicitly instead of bypassing Radian's
-ownership; commands can wait for the current run to become idle. A handled command without a model
-turn preserves the previous status. Command failures retain the draft and report an uncertain action
+Extension-initiated session replacement, tree navigation and reload still fail explicitly instead of
+bypassing Radian's ownership; use the host session commands. Commands can wait for the current run
+to become idle. A handled command without a model turn preserves the previous status. Command failures retain the draft and report an uncertain action
 outcome because an extension may already have changed state; do not blindly retry.
 
 File discovery lists existing tracked and nonignored untracked file paths in the selected session's
-worktree. It does not search other worktrees or read file contents. Responses contain at most 100
-candidates and indicate when further filtering is needed. Git listing is bounded to 5 seconds and
-4 MiB; failures are not replaced by empty successful lists. Session switching, dismissing, hiding or
-disposing the menu cancels pending lookups and ignores stale results. Lookup is read-only and never
-starts a model turn. The additive `prompt-completion` runtime capability is required: an older service
-gets an explicit upgrade notice and is never automatically restarted.
+worktree. It does not search other worktrees or read file contents. Search results contain at most
+100 candidates and indicate when further filtering is needed; this does not truncate the stored index.
+Recursive filesystem watching is installed before the initial scan. File additions, removals, renames,
+and moves invalidate the index; directory changes include all descendants. Notifications are coalesced
+for 200 ms, then reconciled with Git rather than trusted as an exact add/delete log. Ordinary content
+edits do not rebuild the path index. Ignore rules, Git index/config and global excludes changes also
+trigger reconciliation. Watcher errors are explicit and receive one bounded automatic reconnect/rescan;
+`/reload` can retry again. Failed scans retain the last good index internally, but are not presented as
+fresh successful searches. Git listing remains bounded to 5 seconds and 4 MiB.
+
+Dismissing a menu cancels that query, not the shared initialization or file watch. Session/conversation
+and runtime identities fence late catalogs; command/Skill submissions also fence resource revisions.
+Closing sessions releases unused indexes; detaching the UI closes its watchers and cancels
+initialization. Lookup is read-only and never starts a model turn.
+The additive `completion-catalog` capability requires an updated runtime for cached `/` and `$` menus.
+Finish existing work and explicitly restart an old service to load it; no service is restarted automatically.
 
 ### Agent transcript
 
@@ -522,6 +552,14 @@ The Agent prompt completes and executes these host commands instead of sending t
   A preparation failure leaves the previous execution intact. Extension cancellation and session
   lifecycle hooks are respected. This is the former `/new` behavior; it resets the current conversation,
   not saved history.
+- **`/reload`** reloads the current session's actual SDK extensions, prompt templates and Skills, then
+  replaces its command/Skill catalog and refreshes that worktree's UI file index. It preserves the tab,
+  saved conversation, transcript, model/effort and Fast selection; it does not restart the runtime.
+  The session and its owned work must be idle, otherwise reload is rejected without interruption.
+  Failed resource loading retains the last successful catalog and reports that SDK resources may have
+  partially changed. A local index failure after a successful SDK reload is an accepted action with a
+  warning, not a rejected reload. Host overrides, including disabled cache warming, remain enforced.
+  Trusted extension reload lifecycle hooks still run. The `resource-reload` capability is required.
 - **`/compact [instructions]`** invokes Pi's manual context summarization for the current conversation.
   It may make summarization model calls and consume quota. It keeps the tab, saved conversation
   and full displayed transcript; only the model context is compacted. During compaction the work-status
@@ -530,11 +568,11 @@ The Agent prompt completes and executes these host commands instead of sending t
   must be idle: running/queued input, compaction and owned work cause an explicit busy rejection,
   without interruption. Empty or too-small context is rejected without a model request.
 
-These commands do not accept image attachments; `/new` and `/clear` take no arguments. Rejected commands retain
+These commands do not accept image attachments; `/new`, `/clear` and `/reload` take no arguments. Rejected commands retain
 input. Accepted long-running actions report progress; acknowledgement is not completion. A valid
 compaction failure belongs to that conversation rather than a second global error notification.
-`/clear` resets that tab's transcript navigation. `/new` preserves the outgoing tab's navigation,
-selection and scroll position. Both preserve input edited while acknowledgement is pending.
+`/clear` resets that tab's transcript navigation. `/new` and `/reload` preserve the outgoing tab's
+navigation, selection and scroll position. Both preserve input edited while acknowledgement is pending.
 Conversation IDs fence delayed input and control requests so an operation intended for the outgoing
 conversation cannot execute in its replacement.
 

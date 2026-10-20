@@ -20,7 +20,10 @@ export class FastMode {
       // A replaceable factory can run during discovery and then be omitted. Activate only when bound.
       pi.on("session_start", () => { this.active = true; });
       pi.on("model_select", () => this.changed());
-      pi.on("session_shutdown", () => { this.active = false; this.requested.clear(); this.observed.clear(); this.listeners.clear(); });
+      pi.on("session_shutdown", (event) => {
+        this.active = false;
+        if (event.reason !== "reload") { this.requested.clear(); this.observed.clear(); this.listeners.clear(); }
+      });
       pi.registerCommand("fast", {
         description: "Toggle priority requests for this model in this session: /fast [on|off|status]. May increase usage.",
         getArgumentCompletions: (prefix) => ["on", "off", "status"].filter((value) => value.startsWith(prefix)).map((value) => ({ value, label: value })),

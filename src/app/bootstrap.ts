@@ -91,6 +91,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
   const { GitRepository } = await import("../git/repository.ts");
   const { TerminalTheme } = await import("../ui/embedded-terminal/theme.ts");
   const { TerminalNotifications } = await import("./terminal-notifications.ts");
+  const { CompletionCache } = await import("../agents/completion-cache.ts");
   const { uiTheme } = await import("../ui/theme.ts");
   const { monochromeFrame } = await import("../ui/monochrome.ts");
   let attachedTheme: ReturnType<typeof uiTheme> | undefined;
@@ -113,6 +114,17 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
   const showFailure = (error: ExpectedError): void => { message = `[${error.code}] ${error.message}`; updateNotice(); };
   const unexpected = (error: unknown): void => { message = reportUnexpected(error, "UI action"); updateNotice(); };
   const notifications = client ? new TerminalNotifications(renderer, client, unexpected) : undefined;
+  const completions = client ? new CompletionCache((id, signal) => client.catalog(id, signal), id => client.completionIdentity(id), unexpected) : undefined;
+  const warmCompletions = (): void => {
+    if (!client || !completions) return;
+    const snapshot = client.snapshot, ids = new Set<string>();
+    for (const repo of snapshot.repositories) for (const tree of repo.worktrees) for (const session of tree.sessions) {
+      // Do not activate cold repository services just to populate suggestions.
+      if (!snapshot.details[session.id]?.conversationId) continue;
+      ids.add(session.id); completions.provider.prepare?.(session.id, tree.path);
+    }
+    completions.provider.retain?.(ids);
+  };
   const observe = <T>(task: Promise<Result<T, ExpectedError>>): void => {
     void task.then((result) => { if (!result.ok) showFailure(result.error); }).catch(unexpected);
   };
@@ -144,15 +156,17 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
     recovery = client.recoveryVersion;
     if (restored) message = defaultMessage;
     selection.replaceSnapshot(client.snapshot.repositories, preferences.selection.sessions);
+    warmCompletions();
     if (restored) view?.refreshHistory();
     updateNotice();
   });
   const detach = (): void => {
-    notifications?.dispose(); unsubscribe?.(); unsubscribeSelection();
+    notifications?.dispose(); completions?.dispose(); unsubscribe?.(); unsubscribeSelection();
     if (view) { preferences.drafts = view.promptDrafts; preferences.inputDrafts = view.promptInputDrafts; persist(); }
     const mounted = view; view = undefined; mounted?.dispose(); client?.beginDetach(); renderer.destroy();
   };
   try {
+    warmCompletions();
     renderer.setTerminalTitle("radian");
     const palette = await renderer.getPalette({ size: 256, timeout: 200 });
     uiTheme(renderer).configure(palette, theme);
@@ -172,9 +186,17 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
         message = "Demo item removed · no runtime or saved history was modified"; updateNotice();
       },
       ...(client ? {
-        onPrompt: (id: string, text: string, images?: readonly string[]) => submitAgentPrompt(client, selection, id, text, images),
+        onPrompt: async (id: string, text: string, images?: readonly string[]) => {
+          const result = await submitAgentPrompt(client, selection, id, text, images);
+          if (!result.ok || text.trim() !== "/reload") return result;
+          const refreshed = await completions!.refresh(id);
+          // SDK reload was accepted. A local indexing failure is a warning, not a rejected action.
+          message = refreshed.ok ? "Resources and completion indexes reloaded."
+            : `Resources reloaded, but completion refresh failed [${refreshed.error.code}]: ${refreshed.error.message}`;
+          updateNotice(); return result;
+        },
         onInterrupt: (id: string) => client.interrupt(id),
-        onComplete: (id, query, signal) => client.complete(id, query, signal),
+        onComplete: completions!.provider,
         onListModels: (id, conversationId, signal) => client.models(id, conversationId, signal),
         onSelectModel: (id, conversationId, model, effort) => client.selectModel(id, conversationId, model, effort),
         onImage: (id, imageId, signal) => client.image(id, imageId, signal),
@@ -209,7 +231,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
     });
     updateNotice(); await renderer.closed;
   } finally {
-    notifications?.dispose(); unsubscribe?.(); unsubscribeSelection();
+    notifications?.dispose(); completions?.dispose(); unsubscribe?.(); unsubscribeSelection();
     preferences.drafts = view?.promptDrafts ?? preferences.drafts;
     if (view) preferences.inputDrafts = view.promptInputDrafts;
     persist();

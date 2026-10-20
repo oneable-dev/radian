@@ -11,8 +11,8 @@ import { emptyPreferences, historySchema, historyPreviewSchema, historyPreviewQu
 import { privateDirectory, runtimePaths, type RuntimePaths } from "./storage.ts";
 import { connectionError, readBytes, readJson, remoteError, transport } from "./transport.ts";
 import { PtyConnection } from "./pty/client.ts";
-import { completionQuerySchema, completionResultSchema } from "./completion-protocol.ts";
-import type { CompletionQuery, CompletionResult } from "../agents/completion.ts";
+import { completionCatalogQuerySchema, completionCatalogSchema, completionQuerySchema, completionResultSchema } from "./completion-protocol.ts";
+import type { CompletionCatalog, CompletionQuery, CompletionResult } from "../agents/completion.ts";
 import { NdjsonDecoder } from "./frames.ts";
 import { parseSessionControl } from "../agents/session-controls.ts";
 import { modelCatalogQuerySchema, modelCatalogSchema, modelEffortSchema, modelIdentitySchema, parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "../agents/model-selection.ts";
@@ -195,6 +195,26 @@ export class RuntimeClient {
     return this.command({ type: "model-select", sessionId, conversationId, model, ...(effort !== undefined ? { effort } : {}) }, { instance: this.state.instance, epoch: this.connectionEpoch });
   }
 
+  async catalog(sessionId: string, signal?: AbortSignal): Promise<Result<CompletionCatalog, ExpectedError>> {
+    if (this.detaching || this.failure) return err(this.connectionClosed());
+    if (!this.state.capabilities?.includes("completion-catalog")) return err(new CapabilityError("Running service predates cached command/skill catalogs. Finish work and explicitly restart it when ready. No service was restarted."));
+    const conversationId = this.state.details[sessionId]?.conversationId;
+    if (!conversationId || !Value.Check(completionCatalogQuerySchema, { sessionId, conversationId })) return err(new ProtocolError("Current conversation identity is unavailable."));
+    if (signal?.aborted) return err(new CancelledError());
+    const instance = this.state.instance, epoch = this.connectionEpoch;
+    const abort = AbortSignal.any([this.streamAbort.signal, AbortSignal.timeout(15000), ...(signal ? [signal] : [])]);
+    const requested = await capture(() => transport(this.paths, `/completion-catalog?${new URLSearchParams({ sessionId, conversationId })}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
+    if (!requested.ok) return requested;
+    if (!requested.value.ok) return requested.value;
+    const response = requested.value.value;
+    const decoded = await capture(() => readJson(response)); if (!decoded.ok) return decoded;
+    if (!decoded.value.ok) return decoded.value;
+    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance || this.state.details[sessionId]?.conversationId !== conversationId) return err(new CancelledError("Catalog belongs to an outdated conversation or connection."));
+    const body = decoded.value.value;
+    if (!response.ok) return Value.Check(replySchema, body) && !body.ok ? err(remoteError(body.error)) : err(new ProtocolError("Malformed catalog lookup failure."));
+    return Value.Check(completionCatalogSchema, body) && body.conversationId === conversationId ? ok(body) : err(new ProtocolError("Malformed or mismatched completion catalog."));
+  }
+
   async complete(sessionId: string, query: CompletionQuery, signal?: AbortSignal): Promise<Result<CompletionResult, ExpectedError>> {
     if (this.detaching || this.failure) return err(this.connectionClosed());
     if (!this.state.capabilities?.includes("prompt-completion")) return err(new CapabilityError("Running service predates prompt completion. Save work and restart it explicitly when ready; no service was restarted."));
@@ -334,12 +354,19 @@ export class RuntimeClient {
     if (control.value) {
       if (images.length) return err(new InputError(`/${control.value.action === "new-tab" ? "new" : control.value.action} does not accept image attachments. Input was retained.`));
       if (control.value.action === "new-tab") { const result = await this.newTab(sessionId); return result.ok ? ok(undefined) : result; }
-      const capability = control.value.action === "clear" ? "session-tab-commands" : "session-controls";
+      const capability = control.value.action === "reload" ? "resource-reload" : control.value.action === "clear" ? "session-tab-commands" : "session-controls";
       if (!this.state.capabilities?.includes(capability)) return err(new CapabilityError("Running service predates this session command. Finish work and restart it explicitly when ready. No prompt was sent."));
       if (!conversationId) return err(new ProtocolError("Current conversation identity is unavailable. Reconnect before retrying. No command was sent."));
-      const result = await this.command({ type: "session-control", sessionId, conversationId, ...control.value });
-      return result.ok ? ok(undefined) : result;
+      const revision = this.state.details[sessionId]?.resourceRevision ?? 0;
+      const binding = { instance: this.state.instance, epoch: this.connectionEpoch };
+      const result = await this.command({ type: "session-control", sessionId, conversationId, ...control.value }, binding);
+      if (!result.ok) return result;
+      if (control.value.action === "reload") return this.waitForState(() => this.state.instance === binding.instance && this.connectionEpoch === binding.epoch
+        && this.state.details[sessionId]?.conversationId === conversationId
+        && (this.state.details[sessionId]?.resourceRevision ?? 0) > revision, "Resource reload");
+      return ok(undefined);
     }
+    if (text.startsWith("$") && !this.state.capabilities?.includes("completion-catalog")) return err(new CapabilityError("Running service predates $skill invocations. Finish work and explicitly restart it when ready. No model prompt was sent."));
     if (images.length && !this.state.capabilities?.includes("prompt-images")) return err(new CapabilityError("Running service predates image input. Input was retained; finish work and restart the service explicitly when ready. No prompt was sent."));
     // The old wire schema capped text at 1,000,000 UTF-16 units. Do not submit a
     // new large draft to a service that cannot accept it, or restart live work.
@@ -353,7 +380,8 @@ export class RuntimeClient {
       if (!commands.value.items.some((command) => command.kind === "command" && command.value === "fast")) return unsupported();
     }
     const result = await this.command({ type: "prompt", sessionId, text, ...(images.length ? { images: [...images] } : {}),
-      ...(this.state.capabilities?.includes("session-controls") && conversationId ? { conversationId } : {}) });
+      ...(this.state.capabilities?.includes("session-controls") && conversationId ? { conversationId } : {}),
+      ...(this.state.capabilities?.includes("completion-catalog") && /^[/$]/u.test(text) ? { resourceRevision: this.state.details[sessionId]?.resourceRevision ?? 0 } : {}) });
     return result.ok ? ok(undefined) : result;
   }
   async savePreferences(preferences: RuntimePreferences): Promise<Result<void, ExpectedError>> { const result = await this.command({ type: "preferences", preferences }); return result.ok ? ok(undefined) : result; }

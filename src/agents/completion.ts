@@ -1,4 +1,5 @@
-export type CompletionQuery = { readonly kind: "command" | "file"; readonly query: string };
+export type CompletionQuery = { readonly kind: "command" | "skill" | "file"; readonly query: string };
+export type CompletionCatalog = { readonly conversationId: string; readonly revision: number; readonly items: readonly CompletionItem[] };
 export type CompletionItem = { readonly kind: "command" | "skill" | "template" | "file"; readonly value: string; readonly description: string };
 export type CompletionResult = { readonly items: readonly CompletionItem[]; readonly truncated: boolean };
 export type CompletionTarget = CompletionQuery & { readonly start: number; readonly end: number };
@@ -20,7 +21,7 @@ export function completionTarget(text: string, cursor: number): CompletionTarget
       }
     } else while (end < text.length && !/\s/u.test(text[end]!)) end++;
     if (cursor > start && cursor <= end) {
-      if (start === 0 && text[start] === "/") return { kind: "command", start, end, query: text.slice(1, cursor) };
+      if (start === 0 && (text[start] === "/" || text[start] === "$")) return { kind: text[start] === "$" ? "skill" : "command", start, end, query: text.slice(1, cursor) };
       if (text[start] !== "@") return null;
       const raw = text.slice(start + (quoted ? 2 : 1), Math.min(cursor, closed ? end - 1 : end));
       return { kind: "file", start, end, query: quoted ? decodeQuotedPrefix(raw) : raw };
@@ -45,9 +46,23 @@ function decodeQuotedPrefix(raw: string): string {
 }
 
 export function insertCompletion(text: string, target: CompletionTarget, item: CompletionItem): { text: string; cursor: number } {
-  const value = item.kind === "file" ? `@${/[\s"\\]/u.test(item.value) ? JSON.stringify(item.value) : item.value}` : `/${item.value}`;
+  const value = item.kind === "file" ? `@${/[\s"\\]/u.test(item.value) ? JSON.stringify(item.value) : item.value}`
+    : target.kind === "skill" ? `$${item.value.replace(/^skill:/u, "")}` : `/${item.value}`;
   const insertion = value + (target.end === text.length ? " " : "");
   return { text: text.slice(0, target.start) + insertion + text.slice(target.end), cursor: target.start + insertion.length };
+}
+
+// Only a leading skill token is an invocation; shell variables and inline prose stay literal.
+export function expandSkillInvocation(text: string, knownSkills: readonly string[] = []): string {
+  const token = /^\$([^\s]+)/u.exec(text);
+  if (token && knownSkills.includes(token[1]!)) return `/skill:${token[1]}${text.slice(token[0].length)}`;
+  return text.replace(/^\$([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)/u, "/skill:$1");
+}
+
+export function filterCatalog(items: readonly CompletionItem[], query: CompletionQuery): CompletionResult {
+  const candidates = query.kind === "skill" ? items.filter(item => item.kind === "skill").map(item => ({ ...item, value: item.value.replace(/^skill:/u, "") }))
+    : items.filter(item => item.kind !== "skill" && item.kind !== "file");
+  return filterCompletions(candidates, query.query);
 }
 
 export function filterCompletions(items: readonly CompletionItem[], query: string): CompletionResult {
