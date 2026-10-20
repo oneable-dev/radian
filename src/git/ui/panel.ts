@@ -98,7 +98,7 @@ export class GitPanel {
       onMouseDrag: (event) => { if (this.pointer && (this.pointer.x !== event.x || this.pointer.y !== event.y)) this.pointer.moved = true; } });
     this.toolbar = this.row(); this.toolbar.id = "git-toolbar"; this.toolbar.alignItems = "center"; this.toolbar.marginBottom = 1;
     for (const [index, label] of ["Commits", "Reflog"].entries()) {
-      const control = button(label, () => this.setTab(index === 0 ? "commits" : "reflog"));
+      const control = button(label, () => this.setTab(index === 0 ? "commits" : "reflog"), label, "work-tab");
       this.topButtons.push(control); this.toolbar.add(control);
     }
     const activity = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0,
@@ -121,7 +121,7 @@ export class GitPanel {
     this.right = new BoxRenderable(renderer, { id: "git-right", width: "38%", minWidth: 16, flexShrink: 0, minHeight: 0, paddingLeft: 1, flexDirection: "column", border: ["left"] });
     const rightTabs = this.row(); rightTabs.marginBottom = 1;
     for (const name of ["Commit", "Refs"] as const) {
-      const control = button(name, () => { const state = this.cache?.state; if (state) { this.remember(); state.right = name === "Commit" ? "commit" : "refs"; this.persist(); this.render(); } });
+      const control = button(name, () => { const state = this.cache?.state; if (state) { this.remember(); state.right = name === "Commit" ? "commit" : "refs"; this.persist(); this.render(); } }, name, "work-tab");
       this.rightButtons.push(control); rightTabs.add(control);
     }
     this.right.add(rightTabs);
@@ -139,7 +139,7 @@ export class GitPanel {
     this.refsPanel = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, flexDirection: "column" });
     const refTabs = this.row(); refTabs.marginBottom = 1;
     for (const [index, label] of ["Local", "Remote", "Tags"].entries()) {
-      const control = button(label, () => { if (this.cache) { this.remember(); this.cache.state.refs = (["local", "remote", "tag"] as const)[index]!; this.persist(); this.render(); } });
+      const control = button(label, () => { if (this.cache) { this.remember(); this.cache.state.refs = (["local", "remote", "tag"] as const)[index]!; this.persist(); this.render(); } }, label, "work-tab");
       this.refButtons.push(control); refTabs.add(control);
     }
     this.refsPanel.add(refTabs);

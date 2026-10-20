@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
-import { CodeRenderable, DiffRenderable, TextAttributes, type Renderable, type TerminalColors } from "@opentui/core";
+import { CodeRenderable, DiffRenderable, TextAttributes, TextRenderable, type Renderable, type TerminalColors } from "@opentui/core";
 import { uiTheme } from "../../ui/theme.ts";
+import { Button } from "../../ui/button.ts";
 import { PromptInput } from "../../agents/ui/prompt-input.ts";
 import { createTestRenderer, ManualClock, MockTreeSitterClient } from "@opentui/core/testing";
 import { Workbench } from "../../app/ui/workbench.ts";
@@ -99,6 +100,61 @@ test("Git의 Agent 요청도 여러 줄·접힌 원문·이미지 참조를 같�
     expect(sent[0]!.text).toContain(original);expect(sent[0]!.text).toContain('@"/tmp/context.txt"');expect(sent[0]!.text).toContain(commit.oid);
     expect(sent[0]!.images).toEqual(["/tmp/image.png"]);expect(app.view.promptDrafts.a1).toBe("existing Agent draft");
   }finally{await app.close();}
+});
+
+test.each([false, true])("밝기 %j에서도 Git의 모든 뷰·필터 탭은 포커스 배경 없이 밑줄만 표시한다", async (light) => {
+  // 실제 Git 데이터와 Workbench 버튼 factory를 사용해 세 묶음의 탭을 함께 검증한다.
+  const app = await mount();
+  const controls = (node: Renderable): Button[] => [...(node instanceof Button ? [node] : []), ...node.getChildren().flatMap(controls)];
+  const control = (name: string) => {
+    const found = controls(app.get("git-view")).find((button) => button.getChildren().some((child) => child instanceof TextRenderable && child.plainText === name));
+    if (!found) throw new Error(`Missing Git control ${name}`);
+    return found;
+  };
+  const cell = (name: string) => {
+    const button = control(name), label = button.getChildren()[0]!; let x = 0;
+    return app.captureSpans().lines[label.y]!.spans.find((span) => { x += span.width; return x > label.x; })!;
+  };
+  const expectTab = (name: string) => {
+    const button = control(name), spans = app.captureSpans().lines[button.y]!.spans;
+    expect(cell(name).attributes & TextAttributes.UNDERLINE).not.toBe(0);
+    for (let x = button.x; x < button.x + button.width; x++) {
+      let end = 0; const span = spans.find((item) => { end += item.width; return end > x; })!;
+      expect(span.bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
+    }
+  };
+  try {
+    uiTheme(app.renderer).configure({ palette: [], defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
+      cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null });
+    await app.renderOnce();
+    const loads = app.loads.length;
+
+    // 화면이나 필터를 확정하지 않은 포커스 이동에도 일관된 밑줄을 표시한다.
+    for (const name of ["Commits", "Reflog", "Commit", "Refs"]) {
+      control(name).focus(); await app.renderOnce(); expectTab(name);
+    }
+    expect(cell("Commits").attributes & TextAttributes.BOLD).not.toBe(0);
+    expect(cell("Reflog").attributes & TextAttributes.BOLD).toBe(0);
+    expect(app.loads.length).toBe(loads);
+
+    // Refs 안의 Local/Remote/Tags도 같은 탭 스타일을 쓰고 기존 선택 동작은 보존한다.
+    await app.clickIn("git-right", "Refs");
+    for (const name of ["Local", "Remote", "Tags"]) {
+      control(name).focus(); await app.renderOnce(); expectTab(name);
+    }
+    await app.clickIn("git-right", "Remote"); app.get("git-history").focus(); await app.renderOnce();
+    expectTab("Remote"); expect(cell("Remote").attributes & TextAttributes.BOLD).not.toBe(0);
+    expect(cell("Local").attributes & TextAttributes.BOLD).toBe(0);
+
+    // 실행 버튼은 탭이 아니므로 기존 포커스 배경을 유지하고 아무 요청도 전송하지 않는다.
+    await app.clickIn("git-right", "Commit"); await app.chooseCommit();
+    app.get("git-history").focus(); app.mockInput.pressKey("a"); await app.renderOnce();
+    expect(app.get("git-ask").visible).toBe(true);
+    control("Cancel").focus(); await app.renderOnce();
+    expect(cell("Cancel").bg.toInts()).toEqual(uiTheme(app.renderer).colors.selected.toInts());
+    expect(cell("Cancel").attributes & TextAttributes.UNDERLINE).toBe(0);
+    expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
+  } finally { await app.close(); }
 });
 
 test("Refresh 버튼 없이 r로 새로고침하고 spinner는 탭과 같은 행에서 최소 500ms 표시한다", async () => {

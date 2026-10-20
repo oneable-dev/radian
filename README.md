@@ -662,8 +662,9 @@ footer and diff backgrounds are derived from those colors for both light and dar
 Reported palette changes repaint the UI without restarting the runtime or losing prompt drafts,
 focus or Git navigation/scroll positions. Each attached TUI has its own theme.
 
-Top-level Agents/Editor/Git/Terminal tabs use underlines for active selection and keyboard focus,
-without a background fill. Agent and Terminal session tabs use background emphasis without
+Radian-owned view and filter tabs use underlines for active selection and keyboard focus, without
+a background fill. This includes the top-level Agents/Editor/Git/Terminal tabs and Git's
+Commits/Reflog, Commit/Refs and Local/Remote/Tags tabs. Agent and Terminal session tabs use background emphasis without
 underlines; an unfocused active session keeps a subdued background. Other buttons retain their
 usual focus styling. Navigation uses understated separators rather than boxed controls.
 Sidebar, work-view content and footer text use two-cell horizontal insets, reduced to one on terminals
