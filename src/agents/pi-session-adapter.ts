@@ -21,6 +21,7 @@ import { imageNamesEntryType } from "./transcript-images.ts";
 import { parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "./model-selection.ts";
 import { expandSkillInvocation } from "./completion.ts";
 import { parseSessionControl } from "./session-controls.ts";
+import { parseHistoryCommand } from "./history-command.ts";
 
 type QueuedUserMessage = Extract<ReturnType<AgentSession["agent"]["peekQueuedMessages"]>[number], { role: "user" }>;
 
@@ -301,6 +302,8 @@ export class PiSessionExecutor implements SessionExecutor {
     if (control.value) return Promise.resolve(err(new CapabilityError("Use Radian's host session controls for this command. No model prompt was sent.")));
     const model = parseModelCommand(text); if (!model.ok) return Promise.resolve(model);
     if (model.value) return Promise.resolve(err(new CapabilityError("Use /model in the Agent input to open the model picker. No model prompt was sent.")));
+    const history = parseHistoryCommand(text); if (!history.ok) return Promise.resolve(history);
+    if (history.value) return Promise.resolve(err(new CapabilityError("Use /history in the Agent input to open saved session history. No model prompt was sent.")));
     return this.promptInput(text, onAccepted, imagePaths);
   }
 

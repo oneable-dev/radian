@@ -15,6 +15,7 @@ import { completionCatalogQuerySchema, completionCatalogSchema, completionQueryS
 import type { CompletionCatalog, CompletionQuery, CompletionResult } from "../agents/completion.ts";
 import { NdjsonDecoder } from "./frames.ts";
 import { parseSessionControl } from "../agents/session-controls.ts";
+import { parseHistoryCommand } from "../agents/history-command.ts";
 import { modelCatalogQuerySchema, modelCatalogSchema, modelEffortSchema, modelIdentitySchema, parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "../agents/model-selection.ts";
 
 import { maximumPreviewImageBytes, transcriptImageQuerySchema } from "../agents/transcript-images.ts";
@@ -347,6 +348,8 @@ export class RuntimeClient {
     return present.ok ? ok(id) : present;
   }
   async prompt(sessionId: string, text: string, images: readonly string[] = []): Promise<Result<void, ExpectedError>> {
+    const history = parseHistoryCommand(text); if (!history.ok) return history;
+    if (history.value) return err(new CapabilityError("Use /history in the Agent input to open saved session history. No prompt was sent."));
     const model = parseModelCommand(text); if (!model.ok) return model;
     if (model.value) return err(new CapabilityError("Use /model in the Agent input to open the model picker. No prompt was sent."));
     const control = parseSessionControl(text); if (!control.ok) return control;

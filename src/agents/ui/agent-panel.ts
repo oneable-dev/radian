@@ -5,7 +5,7 @@ import {
 import type { ExecutionState } from "../session-registry.ts";
 import type { Worktree } from "../../workspace/model.ts";
 import { CapabilityError, InputError, type ExpectedError } from "../../errors.ts";
-import { err, type Result } from "../../result.ts";
+import { err, ok, type Result } from "../../result.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { TranscriptPanel, type TranscriptOptions } from "./transcript-panel.ts";
@@ -25,6 +25,7 @@ import type { TranscriptImageProvider } from "../transcript-images.ts";
 import { PendingMessages } from "./pending-messages.ts";
 import { parseSessionControl } from "../session-controls.ts";
 import { parseModelCommand } from "../model-selection.ts";
+import { parseHistoryCommand } from "../history-command.ts";
 
 export type AgentActions = {
   onNewSession: (worktreeId: string) => void;
@@ -348,12 +349,19 @@ export class AgentPanel {
       if (!control.ok) { this.notice(`[${control.error.code}] ${control.error.message} · prompt retained`); return; }
       const model = parseModelCommand(submission.text);
       if (!model.ok) { this.notice(`[${model.error.code}] ${model.error.message} · prompt retained`); return; }
-      // Settings dialogs and new tabs must not reset the outgoing conversation's reading position.
-      if (!model.value && control.value?.action !== "new-tab" && control.value?.action !== "reload") this.transcript.followLatest();
-      const result = model.value
-        ? submission.images.length ? err(new InputError("/model does not accept image attachments. Input was retained."))
-          : this.actions.onModel?.(id) ?? err(new CapabilityError("Model selection is unavailable in this view. No prompt was sent."))
-        : await this.actions.onPrompt(id, submission.text, submission.images);
+      const history = parseHistoryCommand(submission.text);
+      if (!history.ok) { this.notice(`[${history.error.code}] ${history.error.message} · prompt retained`); return; }
+      // Popups and new tabs must not reset the outgoing conversation's reading position.
+      if (!model.value && !history.value && control.value?.action !== "new-tab" && control.value?.action !== "reload") this.transcript.followLatest();
+      let result: Result<void, ExpectedError>;
+      if (history.value) {
+        if (submission.images.length) result = err(new InputError("/history does not accept image attachments. Input was retained."));
+        else if (!this.actions.onHistory) result = err(new CapabilityError("History is unavailable in this view. No prompt was sent."));
+        else { this.actions.onHistory(); result = ok(undefined); }
+      } else if (model.value) {
+        result = submission.images.length ? err(new InputError("/model does not accept image attachments. Input was retained."))
+          : this.actions.onModel?.(id) ?? err(new CapabilityError("Model selection is unavailable in this view. No prompt was sent."));
+      } else result = await this.actions.onPrompt(id, submission.text, submission.images);
       if (!result.ok) { this.notice(`[${result.error.code}] ${result.error.message} · prompt retained`); return; }
       if (fingerprint(this.inputDrafts.get(id)) === sent) {
         this.drafts.delete(id); this.inputDrafts.delete(id);

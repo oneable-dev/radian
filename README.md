@@ -540,6 +540,10 @@ The Agent prompt completes and executes these host commands instead of sending t
   The additive `model-selection` and `model-effort` service capabilities are required; older services
   report an explicit upgrade notice and are never automatically restarted. The command takes no
   arguments or images.
+- **`/history`** opens the saved-session History popup for the **active worktree**, just like
+  **Ctrl+Space → h**. It preserves the current conversation, running work and transcript reading
+  position. No model prompt is sent; **Esc** closes the popup and returns focus to the input.
+  The command takes no arguments or images.
 - **`/new`** creates a fresh session in a **new tab in the same worktree**, using the same creation
   path as the session strip's `+` / `session.new` action. Existing tabs, conversations, running Agents,
   owned subagents, queued input and saved history remain intact. The Agents UI selects the new tab
@@ -1126,10 +1130,11 @@ technical layers; neither feature depends on the other's implementation.
 
 ### Saved session history
 
-History is a searchable popup, not a sidebar tab or a session-toolbar button. Use **Ctrl+Space → h**
-(`history.show`, configurable) from any work view. Its scope is the active worktree, not the
-sidebar navigation cursor. The list uses SDK conversation names (falling back to the first prompt or
-`Untitled session`), last activity and message count, newest first, including in shared offline directories.
+History is a searchable popup, not a sidebar tab or a session-toolbar button. Use **`/history`** in
+the Agent prompt, or **Ctrl+Space → h** (`history.show`, configurable) from any work view.
+Its scope is the active worktree, not the sidebar navigation cursor. The list uses SDK conversation
+names (falling back to the first prompt or `Untitled session`), last activity and message count,
+newest first, including in shared offline directories.
 
 Type a fuzzy title query, including Unicode text. Arrows or Ctrl+N/P move the candidate cursor without
 changing the live session; normal letters, including hjkl and r, remain search text. `Tab`/`Shift+Tab`

@@ -83,6 +83,32 @@ async function commandExtension(directory: string) {
   }`);
 }
 
+test("history는 확장 명령보다 우선하는 완성 후보이며 raw 제출은 SDK와 모델로 전달하지 않는다", async () => {
+  // 같은 이름의 확장이 있어도 호스트 팝업 명령을 대체하면 안 된다.
+  let requests = 0;
+  const app = await sdkFixture(false, options => ({ ...options, streamFn: (model, context, request) => {
+    requests++; return options.streamFn!(model, context, request);
+  } }));
+  try {
+    const extensions = join(app.directory, "agent", "extensions"); await mkdir(extensions, { recursive: true });
+    await writeFile(join(extensions, "history.ts"), `export default function(pi) {
+      pi.registerCommand("history", { description: "Conflicting extension command", handler: async () => { pi.appendEntry("unexpected-history", {}); } });
+    }`);
+    const id = expectOk(await app.registry.create(app.main.id)), conversation = app.registry.details(id)!.conversationId!;
+
+    // 전체 카탈로그와 서버·SDK의 직접 제출 경로를 함께 확인한다.
+    const commands = expectOk(app.registry.catalog(id, conversation)).items.filter(item => item.value === "history");
+    const registryResult = await app.registry.prompt(id, "/history"), sdkResult = await app.executors[0]!.prompt("/history");
+    const invalid = await app.executors[0]!.prompt("/history recent");
+
+    // 확장 이름 충돌이나 팝업 없는 호출도 모델 요청을 만들지 않는다.
+    expect(commands).toHaveLength(1); expect(commands[0]?.description).toContain("saved session history");
+    expect(expectError(registryResult).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(expectError(sdkResult).code).toBe("UNSUPPORTED_CAPABILITY"); expect(expectError(invalid).code).toBe("INVALID_INPUT");
+    expect(requests).toBe(0); expect(app.registry.details(id)?.sections).toEqual([]);
+  } finally { await app.cleanup(); }
+});
+
 test("리로드는 대화·모델·기존 출력을 보존하며 전체 명령·템플릿·스킬을 실제로 다시 읽는다", async () => {
   // 실제 SDK 리소스 로더를 사용하며 모델 전송 경계만 오프라인으로 대체한다.
   let requests = 0; const inputs: string[] = [];

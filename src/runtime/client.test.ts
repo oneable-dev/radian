@@ -39,6 +39,21 @@ function events(value: unknown, signal?: AbortSignal | null, chunkBytes = Number
   };
 }
 
+test("raw history 명령은 구버전 서비스에도 모델 프롬프트나 다른 요청으로 전송하지 않는다", async () => {
+  // 팝업이 없는 API 호출과 구버전 서비스에서도 호스트 명령을 보호한다.
+  const state = snapshot(); state.capabilities = [];
+  const mocked = stubFetch(async () => { throw new Error("History commands must not transmit"); });
+  const client = new RuntimeClient(paths, state);
+  try {
+    // 유효한 명령과 잘못된 인수 모두 전송 전에 거절한다.
+    const history = await client.prompt("session", "/history"), invalid = await client.prompt("session", "/history recent");
+
+    // 거절 이유를 구분하고 모델 전송이나 자동 재시작은 하지 않는다.
+    expect(expectError(history).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(expectError(invalid).code).toBe("INVALID_INPUT"); expect(mocked).not.toHaveBeenCalled();
+  } finally { await client.disconnect(); mocked.mockRestore(); }
+});
+
 test("여러 세션의 큰 상태가 8MiB를 넘어도 대화·초안·History 연결을 손상시키지 않는다", async () => {
   // 실제 장애처럼 각각은 작은 섹션들이 합쳐진 9MiB 이상의 상태를 조각내 전송한다.
   const large: RuntimeSnapshot = { ...snapshot(), preferences: { ...structuredClone(emptyPreferences), drafts: { unsent: "keep this draft" } },
