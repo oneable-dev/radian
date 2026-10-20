@@ -31,6 +31,7 @@ export class CompletionMenu {
   private pending = false;
   private timer: ReturnType<CliRenderer["clock"]["setTimeout"]> | undefined;
   private abort: AbortController | undefined;
+  private requestReady: ReturnType<typeof Promise.withResolvers<void>> | undefined;
   private queued = false;
   private disposed = false;
 
@@ -88,6 +89,7 @@ export class CompletionMenu {
     this.target = context.target;
     if (this.open && this.lookup === context.lookup) return;
     this.cancelRequest();
+    const ready = this.requestReady = Promise.withResolvers<void>();
     const abort = this.abort = new AbortController(), generation = ++this.generation;
     if (this.scope !== context.scope) { this.result = { items: [], truncated: false }; this.selected = 0; this.first = 0; this.resolvedLookup = ""; }
     this.scope = context.scope; this.lookup = context.lookup;
@@ -113,13 +115,32 @@ export class CompletionMenu {
         if (!this.current(generation, abort, context.lookup)) return;
         this.pending = false; this.spinner.stop(); this.clearResults();
         this.message = reportUnexpected(error, "prompt completion"); this.paint(); this.changed();
-      });
+      }).finally(() => ready.resolve());
     }, debounceMs);
   }
   private current(generation: number, abort: AbortController, lookup: string): boolean {
     return !this.disposed && generation === this.generation && !abort.signal.aborted && this.context()?.lookup === lookup;
   }
   private clearResults(): void { this.result = { items: [], truncated: false }; this.resolvedLookup = ""; this.selected = 0; this.first = 0; }
+  // Enter executes the focused slash resource; Tab remains insertion-only.
+  // Resolve synchronously when possible so ordinary prompt submission captures its draft immediately.
+  prepareCommandSubmission(): boolean | Promise<boolean> {
+    const context = this.context();
+    if (!context || context.target.kind !== "command") return true;
+    this.update();
+    const item = this.result.items[this.selected];
+    if (!this.open || this.scope !== context.scope || !item || item.kind === "file") return true;
+    if (this.fresh(context)) { this.accept(false); return true; }
+    const ready = this.requestReady, generation = this.generation, signature = this.signature();
+    if (!ready) return false;
+    return ready.promise.then(() => {
+      if (this.disposed || generation !== this.generation || signature !== this.signature() || !this.available("completion.accept")) return false;
+      const selected = this.result.items[this.selected];
+      // Do not turn a pending Enter into execution of a different newly focused command.
+      if (selected?.kind !== item.kind || selected.value !== item.value) return false;
+      this.accept(false); return true;
+    });
+  }
   available(command: CommandId): boolean {
     const context = this.context();
     if (!context) return false;
@@ -134,7 +155,7 @@ export class CompletionMenu {
     this.selected = (this.selected + (command === "completion.previous" ? -1 : 1) + this.result.items.length) % this.result.items.length;
     this.paint();
   }
-  private accept(): void {
+  private accept(addTrailingSpace = true): void {
     const context = this.context(), item = this.result.items[this.selected];
     if (!context || !this.fresh(context) || !item) return;
     if (item.kind === "file") {
@@ -144,7 +165,9 @@ export class CompletionMenu {
     } else {
       const inserted = insertCompletion(this.input.value, context.target, item);
       const replacement = inserted.text.slice(context.target.start, inserted.cursor);
-      this.input.replaceRange(context.target.start, context.target.end, replacement);
+      // The spacer helps users continue editing after Tab, but is not part of an immediately sent command.
+      const suffix = !addTrailingSpace && context.target.end === this.input.value.length ? replacement.slice(0, -1) : replacement;
+      this.input.replaceRange(context.target.start, context.target.end, suffix);
     }
     this.dismissed = this.signature(); this.hide();
   }
@@ -172,6 +195,7 @@ export class CompletionMenu {
   private cancelRequest(): void {
     if (this.timer !== undefined) this.renderer.clock.clearTimeout(this.timer);
     this.timer = undefined; this.abort?.abort(); this.abort = undefined;
+    this.requestReady?.resolve(); this.requestReady = undefined;
   }
   private blur = (): void => { this.hide(); };
   hide(): void {

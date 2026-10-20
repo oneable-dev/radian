@@ -325,13 +325,17 @@ export class AgentPanel {
   async submitPrompt(): Promise<void> {
     const id = this.promptSessionId;
     if (!id || !this.canSubmit || !this.actions.onPrompt) return;
-    this.completion.command("completion.dismiss");
-    this.saveDraft();
-    const draft = this.prompt.draft, submission = this.prompt.submission;
-    const fingerprint = (value: PromptDraft | undefined) => value ? JSON.stringify([value.value, value.tokens]) : "";
-    const sent = fingerprint(draft);
     this.submitting.add(id); this.transcript.followLatest(); this.changed();
     try {
+      const prepared = this.completion.prepareCommandSubmission();
+      const ready = typeof prepared === "boolean" ? prepared : await prepared;
+      if (!ready) return;
+      if (this.disposed || this.root.isDestroyed || this.promptSessionId !== id || !this.active) return;
+      this.completion.command("completion.dismiss");
+      this.saveDraft();
+      const draft = this.prompt.draft, submission = this.prompt.submission;
+      const fingerprint = (value: PromptDraft | undefined) => value ? JSON.stringify([value.value, value.tokens]) : "";
+      const sent = fingerprint(draft);
       const result = await this.actions.onPrompt(id, submission.text, submission.images);
       if (!result.ok) { this.notice(`[${result.error.code}] ${result.error.message} · prompt retained`); return; }
       if (fingerprint(this.inputDrafts.get(id)) === sent) {

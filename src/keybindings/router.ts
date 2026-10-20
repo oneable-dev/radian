@@ -2,7 +2,7 @@ import { EmbeddedTerminalRenderable, KeyEvent, type CliRenderer, type Renderable
 import { inScope, type CommandId, type KeyContext } from "./commands.ts";
 import { keyToken, type Binding, type Keymap } from "./config.ts";
 
-const oneShot = new Set<CommandId>(["completion.accept", "completion.dismiss", "history.open", "history.dismiss", "dialog.dismiss", "dialog.activate", "dialog.copy", "app.help", "agent.inspect", "git.inspect"]);
+const oneShot = new Set<CommandId>(["agent.send", "completion.accept", "completion.dismiss", "history.open", "history.dismiss", "dialog.dismiss", "dialog.activate", "dialog.copy", "app.help", "agent.inspect", "git.inspect"]);
 type Pending = { owner: Renderable | null; events: KeyEvent[]; keys: string[]; held: Set<string>; candidates: readonly Binding[] };
 export class KeyRouter {
   private pending: Pending | undefined;
@@ -39,7 +39,7 @@ export class KeyRouter {
     if (complete) {
       this.clear();
       const once = complete.keys.length > 1 || oneShot.has(complete.command);
-      // Held overlay accept/dismiss keys must not become Send/Leave actions after that context closes.
+      // A held one-shot key must not resubmit or become a different action after its context changes.
       for (const name of pending.held) this.consumed.set(name, once);
       // A configured command with an unavailable target is still an app command.
       // Never turn a disabled close/focus action into literal edits in Neovim/a shell.

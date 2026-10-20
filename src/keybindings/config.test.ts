@@ -16,7 +16,7 @@ test("기본 leader는 Ctrl+Space이며 Ctrl+C를 앱 종료에 할당하지 않
   expect(map.bound("ctrl+b", "prompt")).toBe(false);
 });
 
-test("자동완성 목록이 열려 있어도 Enter는 전송하고 Tab만 후보를 삽입한다", () => {
+test("Enter는 후보를 반영하는 전송 경로로 보내고 Tab은 삽입 전용 경로로 보낸다", () => {
   const map = defaultKeymap();
 
   expect(map.hints("agent.send", "prompt")).toBe("Enter");

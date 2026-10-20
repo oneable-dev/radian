@@ -15,7 +15,7 @@ async function until(check: () => Promise<boolean> | boolean) {
   while (!await check()) { if (Date.now() > deadline) throw new Error("Completion runtime observation timed out"); await Bun.sleep(15); }
 }
 
-test("실제 UI·Unix IPC·SDK에서 Tab은 파일과 명령을 완성하고 Enter는 열린 목록에서도 즉시 명령을 실행한다", async () => {
+test("실제 UI·Unix IPC·SDK에서 Tab은 삽입만 하고 Enter는 선택된 명령을 완성해 바로 실행한다", async () => {
   // Real native rendering and a separate offline SDK process; no external provider or user service is touched.
   const fixture = await createWorktreeFixture();
   const options = { offline: true, stateRoot: join(fixture.directory, "state"), entry: join(import.meta.dir, "..", "..", "index.ts") };
@@ -29,9 +29,9 @@ test("실제 UI·Unix IPC·SDK에서 Tab은 파일과 명령을 완성하고 Ent
   const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
   const main = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
   const id = expectOk(await client.create(main.id));
-  const selection = new WorkspaceSelection(client.snapshot.repositories);
+  const selection = new WorkspaceSelection(client.snapshot.repositories), sent: string[] = [];
   const view = new Workbench(app.renderer, selection, { onNewSession: () => {}, onCloseSession: () => {},
-    onPrompt: (sessionId, text) => client.prompt(sessionId, text), onComplete: (sessionId, query, signal) => client.complete(sessionId, query, signal),
+    onPrompt: (sessionId, text) => { sent.push(text); return client.prompt(sessionId, text); }, onComplete: (sessionId, query, signal) => client.complete(sessionId, query, signal),
     getSessionDetails: (sessionId) => client.snapshot.details[sessionId] ?? null,
   });
   const unsubscribe = client.subscribe(() => selection.replaceSnapshot(client.snapshot.repositories));
@@ -49,9 +49,10 @@ test("실제 UI·Unix IPC·SDK에서 Tab은 파일과 명령을 완성하고 Ent
     input.value = ""; await app.mockInput.typeText("/completion-pro"); await visible("Runtime completion marker");
     app.mockInput.pressTab(); await app.renderOnce();
     expect(input.value).toBe("/completion-probe "); expect(app.captureCharFrame()).not.toContain("COMMAND_PROBE_EXECUTED");
-    // A fully typed command still opens suggestions, but a single Enter executes it without insertion.
-    input.value = "/completion-probe"; await visible("Runtime completion marker");
+    // Enter must dispatch the selected full command, never the unfinished model prompt.
+    input.value = "/completion-pro"; await visible("Runtime completion marker");
     app.mockInput.pressEnter(); await visible("COMMAND_PROBE_EXECUTED");
+    expect(sent).toEqual(["/completion-probe"]);
     expect(input.value).toBe(""); expect(client.snapshot.details[id]?.status).not.toBe("working");
   } finally {
     unsubscribe(); view.dispose(); await app.dispose();

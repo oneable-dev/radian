@@ -3,24 +3,24 @@ import { parseKeypress } from "@opentui/core";
 import { resolve } from "node:path";
 import { PromptInput } from "../../agents/ui/prompt-input.ts";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
-import { Workbench } from "./workbench.ts";
+import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
 import { filterCompletions, type CompletionResult } from "../../agents/completion.ts";
 import type { CompletionProvider } from "../../agents/ui/completion-menu.ts";
-import { CapabilityError } from "../../errors.ts";
+import { CapabilityError, InputError } from "../../errors.ts";
 import { err, ok } from "../../result.ts";
 
 const commandItems = ["mcp", "memory"].map((value) => ({ kind: "command" as const, value, description: `Command ${value}` }));
 const fileItems = ["src/main.ts", "src/문서 file.ts"].map((value) => ({ kind: "file" as const, value, description: "Worktree file" }));
-async function mount(provider: CompletionProvider = async (_id, query) => ok(filterCompletions(query.kind === "file" ? fileItems : commandItems, query.query))) {
+async function mount(provider: CompletionProvider = async (_id, query) => ok(filterCompletions(query.kind === "file" ? fileItems : commandItems, query.query)), submit?: NonNullable<WorkbenchActions["onPrompt"]>) {
   const clock = new ManualClock();
   const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true, clock });
   const selection = new WorkspaceSelection(demoWorkspace());
   const sent: string[] = [];
   let output = "Streaming transcript";
   const view = new Workbench(app.renderer, selection, { onNewSession: () => {}, onCloseSession: () => {},
-    onPrompt: (_id, text) => { sent.push(text); return ok(undefined); }, onComplete: provider,
+    onPrompt: (id, text, images) => { sent.push(text); return submit ? submit(id, text, images) : ok(undefined); }, onComplete: provider,
     getSessionDetails: () => ({ status: "working", output, error: null }),
   });
   const render = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); await app.renderOnce(); await app.renderOnce(); };
@@ -128,7 +128,99 @@ test("슬래시는 입력 맨 앞에서만 명령을 제안하고 이메일이 �
   } finally { await app.close(); }
 });
 
-test("Ctrl+N/P로 후보를 고르고 Tab은 자동완성만 하며 Enter는 입력한 명령을 즉시 전송한다", async () => {
+test.each(["command", "template", "skill"] as const)("Enter 한 번으로 선택된 %s 후보를 완성하고 즉시 전송한다", async (kind) => {
+  // The selected resource, not the incomplete token, is the intended command.
+  const value = kind === "skill" ? "skill:compact-guide" : "compact";
+  const app = await mount(async () => ok({ items: [{ kind, value, description: "Selected resource" }], truncated: false }));
+  try {
+    await app.type("/com"); expect(app.captureCharFrame()).toContain(`/${value}`);
+
+    app.mockInput.pressEnter(); await app.render();
+
+    expect(app.sent).toEqual([`/${value}`]); expect(app.input.value).toBe("");
+    expect(app.menu().visible).toBe(false); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+  } finally { await app.close(); }
+});
+
+test("Enter는 첫 후보가 아닌 현재 선택 후보를 실행하고 명령 뒤 인수도 보존한다", async () => {
+  const app = await mount(async () => ok({ items: ["compact", "compare"].map(value => ({ kind: "command" as const, value, description: value })), truncated: false }));
+  try {
+    app.input.value = "/com keep these instructions";
+    app.input.cursorOffset = app.input.editBuffer.measureText("/com"); await app.complete();
+    app.mockInput.pressKey("n", { ctrl: true }); await app.render();
+
+    app.mockInput.pressEnter(); await app.render();
+
+    expect(app.sent).toEqual(["/compare keep these instructions"]); expect(app.input.value).toBe("");
+  } finally { await app.close(); }
+});
+
+test("명령 재조회 중 Enter는 최신 결과를 기다리고 같은 선택 후보를 한 번만 전송한다", async () => {
+  const pending = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>();
+  const item = { kind: "command" as const, value: "compact", description: "Compact context" };
+  const app = await mount(async (_id, query) => query.query === "com" ? pending.promise : ok({ items: [item], truncated: false }));
+  try {
+    await app.type("/co"); app.mockInput.pressKey("m"); await app.complete();
+
+    app.mockInput.pressEnter(); app.mockInput.pressEnter(); await app.render();
+    expect(app.sent).toEqual([]); expect(app.input.value).toBe("/com");
+    pending.resolve(ok({ items: [item], truncated: false })); await app.render();
+
+    expect(app.sent).toEqual(["/compact"]); expect(app.input.value).toBe("");
+  } finally { pending.resolve(ok({ items: [item], truncated: false })); await app.close(); }
+});
+
+test.each(["edit", "dismiss", "session", "blur", "dispose", "changed-selection"] as const)("명령 재조회 중 Enter 이후 %s이면 늦은 결과로 명령을 실행하지 않는다", async (action) => {
+  const pending = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>();
+  const item = { kind: "command" as const, value: "compact", description: "Compact context" };
+  const app = await mount(async (_id, query) => query.query === "com" ? pending.promise : ok({ items: [item], truncated: false }));
+  try {
+    await app.type("/co"); app.mockInput.pressKey("m"); await app.complete();
+    app.mockInput.pressEnter(); await app.render();
+
+    if (action === "edit") app.mockInput.pressKey("x");
+    if (action === "dismiss") app.mockInput.pressEscape();
+    if (action === "session") app.selection.selectSession("demo:feature", "b1");
+    if (action === "blur") app.mockInput.pressKey("f", { ctrl: true });
+    if (action === "dispose") app.view.dispose();
+    pending.resolve(ok({ items: action === "changed-selection" ? [{ ...item, value: "compare" }] : [item], truncated: false }));
+    await app.render();
+
+    expect(app.sent).toEqual([]);
+    expect(app.view.promptDrafts.a1).toBe(action === "edit" ? "/comx" : "/com");
+  } finally { pending.resolve(ok({ items: [item], truncated: false })); await app.close(); }
+});
+
+test.each(["empty", "error"] as const)("명령 재조회가 %s로 끝나면 대기 중인 Enter가 미완성 명령을 대신 전송하지 않는다", async (outcome) => {
+  const pending = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>> | ReturnType<typeof err<CapabilityError>>>();
+  const item = { kind: "command" as const, value: "compact", description: "Compact context" };
+  const app = await mount(async (_id, query) => query.query === "com" ? pending.promise : ok({ items: [item], truncated: false }));
+  try {
+    await app.type("/co"); app.mockInput.pressKey("m"); await app.complete();
+    app.mockInput.pressEnter(); await app.render();
+
+    pending.resolve(outcome === "error" ? err(new CapabilityError("Lookup failed")) : ok({ items: [], truncated: false })); await app.render();
+
+    expect(app.sent).toEqual([]); expect(app.input.value).toBe("/com"); expect(app.menu().visible).toBe(true);
+    expect(app.captureCharFrame()).toContain(outcome === "error" ? "Lookup failed" : "No matches");
+  } finally { pending.resolve(ok({ items: [], truncated: false })); await app.close(); }
+});
+
+test("선택 명령이 거절돼도 held Enter 반복은 재전송하지 않고 완성된 초안을 유지한다", async () => {
+  const app = await mount(async () => ok({ items: [{ kind: "command", value: "compact", description: "Compact context" }], truncated: false }),
+    () => err(new InputError("Command rejected")));
+  const raw = (text: string) => { const key = parseKeypress(text, { useKittyKeyboard: true }); if (!key) throw new Error("Invalid key fixture"); app.renderer.keyInput.processParsedKey(key); };
+  try {
+    await app.type("/com");
+
+    raw("\u001b[13;1u"); await app.render(); raw("\u001b[13;1:2u"); await app.render(); raw("\u001b[13;1:3u"); await app.render();
+
+    expect(app.sent).toEqual(["/compact"]); expect(app.input.value).toBe("/compact");
+    expect(app.captureCharFrame()).toContain("Command rejected");
+  } finally { await app.close(); }
+});
+
+test("Ctrl+N/P로 후보를 고르고 Tab은 자동완성만 하며 Enter는 선택한 명령을 즉시 전송한다", async () => {
   const app = await mount();
   try {
     await app.type("/");
@@ -165,7 +257,7 @@ test("kitty Tab을 누르고 있어도 후보 삽입 뒤 반복 입력이 포커
   } finally { await app.close(); }
 });
 
-test("kitty Enter의 반복 입력도 명령을 자동완성하거나 중복 전송하지 않는다", async () => {
+test("kitty Enter의 반복 입력도 선택 명령을 중복 전송하지 않는다", async () => {
   const app = await mount();
   const raw = (text: string) => { const key = parseKeypress(text, { useKittyKeyboard: true }); if (!key) throw new Error("Invalid key fixture"); app.renderer.keyInput.processParsedKey(key); };
   try {
@@ -178,15 +270,15 @@ test("kitty Enter의 반복 입력도 명령을 자동완성하거나 중복 전
   } finally { await app.close(); }
 });
 
-test.each(["/mc", "@src/"])("후보를 선택해 두어도 Enter는 완성하지 않은 현재 입력 %s를 그대로 전송한다", async (draft) => {
+test.each([["/mc", "/mcp"], ["@src/", "@src/"]])("Enter는 명령 후보 %s만 완성하며 파일 후보는 자동 삽입하지 않는다", async (draft, submitted) => {
   const app = await mount();
   try {
-    // Only Tab may replace text or create a file attachment from a highlighted candidate.
+    // Command execution uses the focused slash resource; file attachment remains a Tab action.
     await app.type(draft); app.mockInput.pressKey("n", { ctrl: true }); await app.render();
     expect(app.menu().visible).toBe(true);
     app.mockInput.pressEnter(); await app.render();
 
-    expect(app.sent).toEqual([draft]); expect(app.input.value).toBe("");
+    expect(app.sent).toEqual([submitted]); expect(app.input.value).toBe("");
     expect(app.menu().visible).toBe(false);
   } finally { await app.close(); }
 });

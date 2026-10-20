@@ -261,9 +261,13 @@ and unavailable actions use muted keys instead of disappearing.
 
 - **Ctrl+N / Ctrl+P** selects the next/previous candidate. `hjkl` remains ordinary input.
 - **Tab** inserts the selected candidate without sending the prompt or executing a command.
-- **Enter** immediately submits the current input, even while suggestions are open, loading or unavailable.
-  It never substitutes a selected candidate; type the command in full or complete it with Tab first.
-  **Esc** dismisses only the menu and preserves focus/text.
+- **Enter** completes the focused command, template or Skill candidate and immediately submits it
+  in one key press: `/com` with `/compact` focused runs `/compact`, not `/com`. Existing arguments
+  are preserved, and immediate execution adds no trailing completion space. If a focused command is
+  being refreshed, Enter waits for fresh results; editing, dismissing, switching sessions or a changed
+  selection cancels that pending submission rather than executing stale or incomplete input.
+- With no focused command candidate, **Enter** submits the current input as written. File suggestions
+  still require **Tab** for insertion. **Esc** dismisses only the menu and preserves focus/text.
 - Selection replaces only the current token, preserving the surrounding text and native Unicode cursor.
   Selected files appear as numbered file/image items rather than exposing long paths in the editor.
   Ordinary file references retain their absolute paths for tool access; images use the image transport.
