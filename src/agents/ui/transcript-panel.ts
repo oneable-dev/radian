@@ -232,7 +232,7 @@ export class TranscriptPanel {
 
   private createRow(section: TranscriptSection): Row {
     const box = new BoxRenderable(this.renderer, { width: "100%", flexShrink: 0, flexDirection: "column" });
-    const heading = new BoxRenderable(this.renderer, { width: "100%", flexShrink: 0, minWidth: 0, flexDirection: "row", alignItems: "flex-start",
+    const heading = new BoxRenderable(this.renderer, { width: "100%", flexShrink: 0, minWidth: 0, minHeight: 1, flexDirection: "row", alignItems: "flex-start",
       onMouseDown: (event) => {
         if (event.button !== 0) return;
         event.preventDefault(); event.stopPropagation(); this.select(section.id); this.scroll.focus(); this.options.changed();
@@ -241,7 +241,7 @@ export class TranscriptPanel {
       cursorStyle: { style: "block", blinking: false }, scrollMargin: 0 });
     header.syntaxStyle = this.headerSyntax; heading.add(header);
     const error = new TextRenderable(this.renderer, { width: "100%", flexShrink: 0, wrapMode: "word", selectable: false, visible: false });
-    const bodyRow = new BoxRenderable(this.renderer, { width: "100%", minWidth: 0, flexShrink: 0, flexDirection: "row" });
+    const bodyRow = new BoxRenderable(this.renderer, { width: "100%", minWidth: 0, minHeight: 1, flexShrink: 0, flexDirection: "row" });
     const skillTag = new TextRenderable(this.renderer, { width: 8, height: 1, flexShrink: 0, wrapMode: "none", selectable: false, content: "[skill] ", attributes: TextAttributes.BOLD });
     const body = new TranscriptBody(this.renderer, { width: "auto", height: "auto", minWidth: 0, minHeight: 1, flexGrow: 1, flexShrink: 0,
       wrapMode: "word", cursorStyle: { style: "block", blinking: false }, scrollMargin: 0 });
@@ -328,7 +328,7 @@ export class TranscriptPanel {
     const background = this.legacy ? colors.panel : transcriptBackground(section.kind, colors);
     row.box.backgroundColor = background; row.box.border = false;
     row.box.paddingX = plain ? 0 : 1;
-    row.box.paddingBottom = plain || folded || skill ? 0 : spacing.bottomInset;
+    row.box.paddingY = this.legacy ? 0 : spacing.verticalInset;
     row.heading.visible = !skill && (folded || !this.legacy && (section.kind === "tool" || section.kind === "notice"));
     row.box.marginBottom = this.legacy ? 0 : spacing.sectionGap;
     const markdownKind = !this.legacy && !skill && (section.kind === "assistant" || section.kind === "thinking") ? section.kind : undefined;

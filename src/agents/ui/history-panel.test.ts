@@ -117,6 +117,8 @@ test("History의 답변·Thinking도 동일한 Markdown을 표시하되 검색·
   const app = await mount({ preview: async (worktreeId, id) => ok({ id, worktreeId, text: "", sections, truncated: false }) });
   const children = (node: Renderable): Renderable[] => node.getChildren().flatMap((child) => [child, ...children(child)]);
   try {
+    // Three padded cards need a taller dialog to inspect all Markdown surfaces together.
+    app.resize(120, 36); await app.render();
     await app.open(); app.clock.advance(150); await app.render();
     const preview = app.get("history-preview");
     for (let pass = 0; pass < 3; pass++) {
@@ -268,7 +270,14 @@ test("좁은 창은 목록과 미리보기를 전환하고 resize 뒤 검색과 
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
     expect(app.get("history-list").visible).toBe(false); expect(app.get("history-preview-pane").visible).toBe(true);
     expect(app.captureCharFrame()).toContain("Saved question second");
-    await app.mockInput.pressKeys(["\x1b[6~"]); await app.render(); expect(app.captureCharFrame()).toContain("Saved answer second");
+    // Page through the card gutters as well as the content in the tiny preview viewport.
+    const preview = app.get("history-preview") as ScrollBoxRenderable, initialScroll = preview.scrollTop;
+    await app.mockInput.pressKeys(["\x1b[6~"]); await app.render();
+    expect(preview.scrollTop).toBeGreaterThan(initialScroll);
+    for (let page = 0; page < 10 && !app.captureCharFrame().includes("Saved answer second"); page++) {
+      await app.mockInput.pressKeys(["\x1b[6~"]); await app.render();
+    }
+    expect(app.captureCharFrame()).toContain("Saved answer second");
     const dialog = app.get("history-dialog"); expect(dialog.x + dialog.width).toBeLessThanOrEqual(60); expect(dialog.y + dialog.height).toBeLessThanOrEqual(12);
     app.resize(140, 30); await app.render();
     expect(app.get("history-list").visible).toBe(true); expect(app.get("history-preview-pane").visible).toBe(true);

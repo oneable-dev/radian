@@ -281,7 +281,9 @@ folded items show an inline `(Ctrl+o to expand)` hint using the actual configure
 and Thinking have no tinted background, border or added indentation. Thinking uses italic text in
 a theme-adaptive neutral gray, independent of accent hues or colored `muted` overrides.
 User, tool and notice blocks retain subtle host-palette tints. Sections leave two blank rows between
-blocks, with the same internal spacing at every terminal height.
+blocks. Every structured section also has one row of internal padding above and below its content,
+including folded tools and single-line skill labels. These symmetric gutters remain on resize;
+legacy unstructured output keeps its existing spacing.
 
 Agent answers and Thinking use OpenTUI's `MarkdownRenderable` for headings, emphasis, links,
 lists, fenced code and tables. Tool commands/results, user messages and explicit skill names remain

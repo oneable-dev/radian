@@ -20,5 +20,5 @@ export function transcriptThinkingColor(colors: UiColors): RGBA {
 }
 
 export function transcriptSpacing() {
-  return { sectionGap: 2, bodyGap: 1, bottomInset: 1 };
+  return { sectionGap: 2, bodyGap: 1, verticalInset: 1 };
 }
