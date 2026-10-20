@@ -7,22 +7,25 @@ import { demoWorkspace } from "../../workspace/demo.ts";
 import type { TranscriptSection } from "../../agents/transcript.ts";
 import { ok } from "../../result.ts";
 
-async function mount(section: TranscriptSection | undefined) {
+async function mount(section: TranscriptSection | undefined, additional: readonly TranscriptSection[] = []) {
+  let current: readonly TranscriptSection[] | undefined = section ? [section, ...additional] : undefined;
   const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true });
   const selection = new WorkspaceSelection(demoWorkspace()), copies: string[] = [], prompts: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {}, onCloseSession: () => {}, initialDrafts: { a1: "Keep my draft" },
     onPrompt: (_id, text) => { prompts.push(text); return ok(undefined); },
     onCopyTranscript: async (text) => { copies.push(text); return ok("Copied"); },
-    getSessionDetails: () => ({ status: "complete", output: section ? "" : "LEGACY_OUTPUT", error: null, ...(section ? { sections: [section] } : {}) }),
+    getSessionDetails: () => ({ status: "complete", output: current ? "" : "LEGACY_OUTPUT", error: null, ...(current ? { sections: current } : {}) }),
   });
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
   await render();
   const scroll = app.renderer.root.findDescendantById("session-transcript");
   if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript viewport");
-  const card = scroll.content.getChildren().find((child): child is BoxRenderable => child instanceof BoxRenderable);
+  const cards = () => scroll.content.getChildren().filter((child): child is BoxRenderable => child instanceof BoxRenderable);
+  const card = cards()[0];
   if (!card) throw new Error("Missing transcript section");
-  return { ...app, view, scroll, card, copies, prompts, render,
+  return { ...app, view, scroll, card, cards, copies, prompts, render,
+    async update(next: readonly TranscriptSection[] | undefined) { current = next; selection.replaceSnapshot(selection.snapshot); await render(); },
     async close() { view.dispose(); await app.dispose(); },
   };
 }
@@ -42,6 +45,54 @@ const sections: TranscriptSection[] = [
   { id: "notice", kind: "notice", title: "Notice", text: "NOTICE_CONTENT", status: "complete" },
   { id: "skill", kind: "notice", title: "Skill", text: "review-code", skillName: "review-code", status: "complete" },
 ];
+
+test.each([120, 60])("너비 %i에서 섹션 간격은 부모 gap 한 줄이며 처음과 끝에는 외부 여백이 없다", async (width) => {
+  // Different section types share one spacing owner, including initially folded images and tools.
+  const mixed: readonly TranscriptSection[] = [...sections, { id: "image", kind: "notice", title: "read", text: "clipboard-1.png", status: "complete",
+    image: { id: "a".repeat(64), name: "clipboard-1.png", mimeType: "image/png", byteLength: 80 } }];
+  const app = await mount(mixed[0], mixed.slice(1));
+  const expectGaps = () => {
+    const cards = app.cards();
+    expect(cards).toHaveLength(mixed.length);
+    expect(cards[0]!.y - app.scroll.content.y).toBe(0);
+    for (const [index, card] of cards.entries()) {
+      expectVerticalInsets(card);
+      const next = cards[index + 1]; if (next) expect(next.y - card.y - card.height).toBe(1);
+    }
+    const last = cards.at(-1)!;
+    expect(app.scroll.scrollHeight - (last.y + last.height - app.scroll.content.y)).toBe(0);
+  };
+  try {
+    app.resize(width, 30); await app.render(); expectGaps();
+    // Folding and resizing change card heights, never the space between them.
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME");
+    app.mockInput.pressKey("z"); app.mockInput.pressKey("r"); await app.render(); expectGaps();
+    app.resize(width, 18); await app.render(); expectGaps();
+    app.mockInput.pressKey("z"); app.mockInput.pressKey("m"); await app.render(); expectGaps();
+
+    // Hidden transcript cards must not add gap around the single help surface.
+    app.mockInput.pressKey("F1"); await app.render();
+    const help = app.scroll.content.getChildren().find((node) => node.visible)!;
+    expect(help.y).toBe(app.scroll.content.y); expect(app.scroll.scrollHeight).toBe(help.height);
+    app.mockInput.pressKey("F1"); await app.render(); expectGaps();
+    expect(app.view.promptDrafts.a1).toBe("Keep my draft"); expect(app.prompts).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("평문·구조화 출력 전환에도 gap과 섹션 여백을 중복 적용하지 않는다", async () => {
+  const app = await mount(sections[0], sections.slice(1));
+  try {
+    const initial = app.cards();
+    expect(initial[1]!.y - initial[0]!.y - initial[0]!.height).toBe(1);
+    await app.update(undefined);
+    expect(app.cards()).toHaveLength(1);
+    expect(app.cards()[0]!.height).toBe(1); expect(app.captureCharFrame()).toContain("LEGACY_OUTPUT");
+    await app.update(sections);
+    const cards = app.cards();
+    for (let index = 1; index < cards.length; index++) expect(cards[index]!.y - cards[index - 1]!.y - cards[index - 1]!.height).toBe(1);
+    expect(app.view.promptDrafts.a1).toBe("Keep my draft"); expect(app.prompts).toEqual([]);
+  } finally { await app.close(); }
+});
 
 test.each(sections)("$kind 섹션은 작은 화면에서도 위아래 한 줄 내부 여백을 동일하게 유지한다: $id", async (section) => {
   // Every section type, including compact tool/skill rows, uses the same vertical card rhythm.

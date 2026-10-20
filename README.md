@@ -337,8 +337,9 @@ starts directly with its content. Tools use inline invocations such as `[read] p
 folded items show an inline `(Ctrl+o to expand)` hint using the actual configured key. Agent replies
 and Thinking have no tinted background, border or added indentation. Thinking uses italic text in
 a theme-adaptive neutral gray, independent of accent hues or colored `muted` overrides.
-User, tool and notice blocks retain subtle host-palette tints. Sections leave two blank rows between
-blocks. Every structured section also has one row of internal padding above and below its content,
+User, tool and notice blocks retain subtle host-palette tints. The transcript's parent column owns a
+one-row gap between visible sections, with no per-section bottom margin or trailing outer gap.
+Every structured section also has one row of internal padding above and below its content,
 including folded tools and single-line skill labels. These symmetric gutters remain on resize;
 legacy unstructured output keeps its existing spacing.
 

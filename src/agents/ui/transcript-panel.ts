@@ -173,6 +173,8 @@ export class TranscriptPanel {
     if (!switched && changed && !this.help.visible && !this.state?.follow && this.pending === null) this.pending = this.viewportAnchor();
     this.sessionId = id; this.visible = visible;
     this.legacy = sections === undefined;
+    // The content column owns separation; section padding stays inside each card.
+    this.scroll.content.gap = this.legacy ? 0 : transcriptSpacing().sectionGap;
     if (id && !this.views[id]) {
       this.views[id] = emptyTranscriptView();
       if (Object.hasOwn(this.positions, id) || this.options.initialPosition === "start") this.views[id]!.follow = false;
@@ -353,7 +355,6 @@ export class TranscriptPanel {
     row.box.paddingX = plain ? 0 : 1;
     row.box.paddingY = this.legacy ? 0 : spacing.verticalInset;
     row.heading.visible = !skill && (folded || !this.legacy && (section.kind === "tool" || section.kind === "notice"));
-    row.box.marginBottom = this.legacy ? 0 : spacing.sectionGap;
     const markdownKind = !this.legacy && !skill && (section.kind === "assistant" || section.kind === "thinking") ? section.kind : undefined;
     if (row.markdownKind !== markdownKind) {
       row.markdown?.root.destroyRecursively(); row.markdown = undefined; row.markdownKind = markdownKind;
