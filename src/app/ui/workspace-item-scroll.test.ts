@@ -22,7 +22,8 @@ async function mount() {
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
   await render();
   const item = app.renderer.root.findDescendantById("worktree:demo:main")!;
-  const lines = () => app.captureCharFrame().split("\n").slice(item.y, item.y + 2).map((line) => line.slice(item.x, item.x + item.width));
+  const content = item.findDescendantById("worktree:demo:main:label")!;
+  const lines = () => app.captureCharFrame().split("\n").slice(content.y, content.y + 2).map((line) => line.slice(item.x + 1, item.x + item.width - 1));
   return { ...app, clock, selection, actions, view, render, item, lines,
     label: () => texts(item).find((text) => text.plainText.includes("folder-") || text.plainText.includes("short-folder"))!,
     async close() { view.dispose(); await app.dispose(); } };
@@ -32,13 +33,13 @@ test("폴더 줄에서 가로 스크롤하면 같은 워크트리의 브랜치�
   const app = await mount();
   try {
     const before = app.lines();
-    await app.mockMouse.scroll(app.item.x + 6, app.item.y, "right"); await app.render();
+    await app.mockMouse.scroll(app.item.x + 6, app.label().y, "right"); await app.render();
     const first = app.lines();
     expect(first[0]).not.toBe(before[0]); expect(first[1]).not.toBe(before[1]);
     expect(app.label().plainText).toContain("\n"); expect(app.label().height).toBe(2);
     const offset = app.label().scrollX;
 
-    await app.mockMouse.scroll(app.item.x + 6, app.item.y + 1, "right"); await app.render();
+    await app.mockMouse.scroll(app.item.x + 6, app.label().y + 1, "right"); await app.render();
     expect(app.label().scrollX).toBe(offset + 1); expect(app.lines()[0]).not.toBe(first[0]); expect(app.lines()[1]).not.toBe(first[1]);
     expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.view.promptDrafts.a1).toBe("preserved draft"); expect(app.actions).toEqual([]);
   } finally { await app.close(); }
@@ -48,7 +49,11 @@ test("고정 상태 영역 위의 가로 스크롤도 두 줄을 함께 이동�
   const app = await mount();
   try {
     const slot = app.item.findDescendantById("worktree:demo:main:status")!;
-    expect(slot.height).toBe(2); expect(slot.y).toBe(app.item.y);
+    const body = app.item.findDescendantById("worktree:demo:main:body")!;
+    // 긴 이름의 자연 너비가 선택 배경이나 고정 상태 영역을 테두리 밖으로 밀어내면 안 된다.
+    expect(body.x).toBe(app.item.x + 1); expect(body.width).toBe(app.item.width - 2);
+    expect(slot.x + slot.width).toBe(app.item.x + app.item.width - 1);
+    expect(slot.height).toBe(2); expect(slot.y).toBe(app.label().y);
     const status = slot.getChildren()[0]!, geometry = [slot.x, slot.y, slot.width, slot.height];
     expect(status.visible).toBe(false);
     const before = app.lines();
@@ -56,7 +61,7 @@ test("고정 상태 영역 위의 가로 스크롤도 두 줄을 함께 이동�
 
     expect(app.lines()[0]).not.toBe(before[0]); expect(app.lines()[1]).not.toBe(before[1]);
     expect([slot.x, slot.y, slot.width, slot.height]).toEqual(geometry); expect(status.visible).toBe(false);
-    expect(app.item.height).toBe(2); expect(app.actions).toEqual([]);
+    expect(app.item.height).toBe(4); expect(app.actions).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -87,7 +92,7 @@ test("사이드바는 실행 중에도 애니메이션 없이 오류만 표시�
 test("가로 위치는 snapshot 갱신에 유지되고 짧은 이름이나 넓어진 패널에서는 유효 범위로 줄인다", async () => {
   const app = await mount();
   try {
-    await app.mockMouse.scroll(app.item.x + 6, app.item.y, "right"); await app.render();
+    await app.mockMouse.scroll(app.item.x + 6, app.label().y, "right"); await app.render();
     const label = app.label(), offset = label.scrollX;
     app.selection.replaceSnapshot(app.selection.snapshot); await app.render(); expect(app.label()).toBe(label); expect(label.scrollX).toBe(offset);
     label.scrollX = 1000; await app.render(); const narrowOffset = label.scrollX; expect(narrowOffset).toBeGreaterThan(0);
@@ -102,13 +107,13 @@ test("가로 위치는 snapshot 갱신에 유지되고 짧은 이름이나 넓�
 test("가로 스크롤 뒤에도 브랜치 줄 클릭은 워크트리 하나를 열고 세로 휠은 목록으로 전달한다", async () => {
   const app = await mount();
   try {
-    await app.mockMouse.scroll(app.item.x + 6, app.item.y + 1, "right"); await app.render();
-    await app.mockMouse.click(app.item.x + 6, app.item.y + 1); await app.render();
+    await app.mockMouse.scroll(app.item.x + 6, app.label().y + 1, "right"); await app.render();
+    await app.mockMouse.click(app.item.x + 6, app.label().y + 1); await app.render();
     expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree");
-    expect(app.item.height).toBe(2); expect(app.view.promptDrafts.a1).toBe("preserved draft"); expect(app.actions).toEqual([]);
+    expect(app.item.height).toBe(4); expect(app.view.promptDrafts.a1).toBe("preserved draft"); expect(app.actions).toEqual([]);
     app.resize(60, 12); await app.render();
     const tree = app.renderer.root.findDescendantById("workspace-tree")! as ScrollBoxRenderable, top = tree.scrollTop;
-    await app.mockMouse.scroll(app.item.x + 6, app.item.y + 1, "down"); await app.render();
+    await app.mockMouse.scroll(app.item.x + 6, app.label().y + 1, "down"); await app.render();
     expect(tree.scrollTop).toBeGreaterThan(top); expect(app.label().scrollY).toBe(0);
   } finally { await app.close(); }
 });

@@ -50,7 +50,12 @@ export type WorkbenchActions = AgentActions & {
   onDetach?: () => void;
 };
 
-type RowView = { box: BoxRenderable; text: TextRenderable; status?: TextRenderable };
+type RowView = { box: BoxRenderable; body: BoxRenderable; text: TextRenderable; status?: TextRenderable };
+// Reserve the same frame in every item, including in monochrome terminals.
+const hiddenWorkspaceBorder = {
+  topLeft: " ", topRight: " ", bottomLeft: " ", bottomRight: " ", horizontal: " ", vertical: " ",
+  topT: " ", bottomT: " ", leftT: " ", rightT: " ", cross: " ",
+};
 
 export class Workbench {
   readonly root: BoxRenderable;
@@ -349,6 +354,17 @@ export class Workbench {
     this.render();
   };
 
+  private revealRow(key: string): void {
+    const view = this.rows.get(key), viewport = this.tree.viewport;
+    if (!view || viewport.height < 1) return;
+    // Prefer the labels when the frame cannot fit; culled text positions can still
+    // lack their border inset. Native nearest-edge scrolling also skips exact fits.
+    const inset = view.box.height > viewport.height ? 1 : 0;
+    const top = view.box.y + inset, bottom = view.box.y + view.box.height - inset;
+    if (top < viewport.y) this.tree.scrollBy(top - viewport.y);
+    else if (bottom > viewport.y + viewport.height) this.tree.scrollBy(bottom - viewport.y - viewport.height);
+  }
+
   private moveTree(direction: "up" | "down" | "home" | "end"): void {
     const rows = this.visibleRows().filter((row) => row.kind === "worktree");
     const index = rows.findIndex((row) => row.key === this.navigationKey);
@@ -358,7 +374,7 @@ export class Workbench {
     const row = rows[Math.max(0, Math.min(rows.length - 1, next))];
     if (row) {
       this.navigationKey = row.key;
-      this.paintRows(this.visibleRows()); this.tree.scrollChildIntoView(row.key);
+      this.paintRows(this.visibleRows()); this.revealRow(row.key); this.navigationRevealPending = true;
       this.lastScrolledKey = row.key; this.updateFooter();
     }
   }
@@ -505,11 +521,12 @@ export class Workbench {
   };
 
   private spaceRows(rows: readonly WorkspaceRow[]): void {
-    const { vertical } = panelSpacing(this.renderer);
     rows.forEach((row, index) => {
-      const view = this.rows.get(row.key);
-      // Group separation remains visible in compact terminals; item spacing collapses.
-      if (view) view.box.marginTop = index === 0 ? 0 : row.kind === "repository" ? 1 : vertical;
+      const view = this.rows.get(row.key); if (!view) return;
+      // Frames occupy the existing gaps; adjacent items share one border row.
+      const previous = rows[index - 1];
+      if (row.kind === "worktree") view.box.marginTop = previous?.kind === "worktree" ? -1 : 0;
+      else view.box.marginTop = index > 0 && previous?.kind !== "worktree" ? 1 : 0;
     });
   }
 
@@ -521,7 +538,7 @@ export class Workbench {
     if (!this.navigationRevealPending) return;
     this.navigationRevealPending = false;
     // Native row positions settle after layout, not in the renderer's resize callback.
-    if (this.sidebar.visible && this.tree.focused && this.navigationKey) this.tree.scrollChildIntoView(this.navigationKey);
+    if (this.sidebar.visible && this.tree.focused && this.navigationKey) this.revealRow(this.navigationKey);
   };
 
   private render(): void {
@@ -534,8 +551,9 @@ export class Workbench {
       this.rows.clear();
       for (const row of rows) {
         const box = new BoxRenderable(this.renderer, {
-          id: row.key, height: row.kind === "worktree" ? 2 : 1, flexShrink: 0, minWidth: 0,
-          flexDirection: "row", paddingLeft: row.depth * 2,
+          id: row.key, height: row.kind === "worktree" ? 4 : 1, flexShrink: 0, minWidth: 0,
+          ...(row.kind === "worktree" ? { border: true, customBorderChars: hiddenWorkspaceBorder } : {}),
+          flexDirection: "row", paddingLeft: row.kind === "worktree" ? 0 : row.depth * 2,
           onMouseScroll: (event) => {
             if (row.kind !== "worktree" || !event.scroll || !["left", "right"].includes(event.scroll.direction)) return;
             const text = this.rows.get(row.key)?.text;
@@ -550,6 +568,10 @@ export class Workbench {
             this.activateRow(row);
           },
         });
+        // Keep both label lines and their fixed status slot in one inset body.
+        const body = row.kind === "worktree" ? new BoxRenderable(this.renderer, { id: `${row.key}:body`,
+          height: 2, flexGrow: 1, flexShrink: 1, minWidth: 0, flexDirection: "row", paddingLeft: row.depth * 2 - 1 }) : box;
+        if (body !== box) box.add(body);
         // One two-line text viewport shares its horizontal offset and width across both labels.
         const text = new TextRenderable(this.renderer, { id: `${row.key}:label`, content: row.label,
           height: row.kind === "worktree" ? 2 : 1, wrapMode: "none", selectable: false,
@@ -560,16 +582,16 @@ export class Workbench {
         text.flexGrow = 1;
         text.flexShrink = 1;
         text.minWidth = 0;
-        box.add(text);
+        body.add(text);
         const status = row.kind === "worktree" ? new TextRenderable(this.renderer, { id: `${row.key}:error`,
           content: icons.error, width: 1, height: 1, flexShrink: 0, wrapMode: "none", selectable: false, visible: false }) : undefined;
         if (status) {
           const slot = new BoxRenderable(this.renderer, { id: `${row.key}:status`, width: 1, height: "100%", flexShrink: 0,
             flexDirection: "column", justifyContent: "center", alignItems: "center" });
-          slot.add(status); box.add(slot);
+          slot.add(status); body.add(slot);
         }
         this.tree.add(box);
-        this.rows.set(row.key, { box, text, ...(status ? { status } : {}) });
+        this.rows.set(row.key, { box, body, text, ...(status ? { status } : {}) });
       }
       this.rowOrder = order;
       this.lastScrolledKey = null;
@@ -595,7 +617,7 @@ export class Workbench {
     this.history.updateScope(worktree);
     this.paintTabs();
     if (this.navigationKey && this.navigationKey !== this.lastScrolledKey) {
-      this.tree.scrollChildIntoView(this.navigationKey); this.navigationRevealPending = true;
+      this.revealRow(this.navigationKey); this.navigationRevealPending = true;
     }
     this.lastScrolledKey = this.navigationKey;
     this.updateFooter();
@@ -608,23 +630,30 @@ export class Workbench {
 
   private paintRows(rows: readonly WorkspaceRow[]): void {
     const colors = this.theme.colors;
-    const selected = this.tree.focused ? colors.selected : colors.surface;
     for (const row of rows) {
       const view = this.rows.get(row.key);
       if (!view) continue;
       const presentation = rowPresentation(row);
       const cursor = row.key === this.navigationKey && this.tree.focused, active = this.selected(row);
+      const highlighted = this.tree.focused ? cursor : active;
       const label = `${presentation.icon} ${singleLine(row.label)}`;
       view.text.content = row.kind === "worktree" ? new StyledText([
-        { __isChunk: true, text: `${label}\n`, fg: cursor ? colors.accent : colors[presentation.color] },
-        { __isChunk: true, text: `${icons.branch} ${singleLine(row.worktree.branch ?? "detached HEAD")}`, fg: cursor ? colors.accent : active ? colors.text : colors.muted },
+        { __isChunk: true, text: `${label}\n`, fg: highlighted ? colors.accent : colors[presentation.color] },
+        { __isChunk: true, text: `${icons.branch} ${singleLine(row.worktree.branch ?? "detached HEAD")}`, fg: highlighted ? colors.accent : active ? colors.text : colors.muted },
       ]) : label;
-      view.text.fg = cursor ? colors.accent : colors[presentation.color];
+      view.text.fg = highlighted ? colors.accent : colors[presentation.color];
       view.text.attributes = active ? TextAttributes.BOLD : 0;
-      view.box.backgroundColor = cursor ? selected : active ? colors.surface : colors.panel;
-      if (row.kind === "worktree" && view.status) {
-        view.status.visible = row.worktree.sessions.some((session) => sessionStatus(session) === "failure");
-        view.status.fg = colors.error;
+      view.box.backgroundColor = colors.panel;
+      view.body.backgroundColor = colors.panel;
+      if (row.kind === "worktree") {
+        view.box.customBorderChars = highlighted ? BorderChars.single : hiddenWorkspaceBorder;
+        view.box.borderColor = colors.accent;
+        // Later siblings must not erase the selected item's shared border row.
+        view.box.zIndex = highlighted ? 2 : active ? 1 : 0;
+        if (view.status) {
+          view.status.visible = row.worktree.sessions.some((session) => sessionStatus(session) === "failure");
+          view.status.fg = colors.error;
+        }
       }
     }
   }

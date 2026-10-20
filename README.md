@@ -24,9 +24,14 @@ offset, while a fixed one-cell error slot stays visible. Metadata updates preser
 resizing or shortening the labels clamps it to the valid range. The sidebar has no execution
 spinner; failures remain visible without animation. Agent tabs and the work-status row retain
 their execution indicators.
-Repository groups, headers and worktree items have one blank row between them,
-while folder/branch lines stay together. These vertical gaps do not change with terminal height;
-there is no compact-layout mode.
+Repository groups, headers and worktree labels have one separation row between them,
+while folder/branch lines stay together. A thin selection frame uses the rows above and below its
+labels. Worktree items keep the panel background even when selected; only the border and text are
+emphasized. Adjacent items share that separation row, preserving the existing text spacing; hidden
+frames reserve the same space so selection never moves or resizes items. The navigation cursor has
+the frame while the tree is focused; otherwise the active worktree keeps it. Selected text and border
+colors stay the same when focus moves elsewhere.
+These vertical gaps do not change with terminal height; there is no compact-layout mode.
 The workspace search surface spans the sidebar width with three rows and centered single-line
 input at every terminal height; narrow terminals use a shorter placeholder.
 The padded search area is clickable and preserves its query and cursor across resize/collapse.

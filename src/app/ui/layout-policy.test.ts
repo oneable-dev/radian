@@ -33,7 +33,8 @@ test("높이가 달라져도 탭·검색·항목 간격을 유지하고 작은 �
       expect(body.height).toBeGreaterThanOrEqual(1);expect(body.height).toBeGreaterThanOrEqual(previous);previous=body.height;
       expect(composer.y+composer.height).toBe(status.y);expect(status.height).toBe(3);
       expect(status.y+status.height).toBeLessThanOrEqual(app.get("app-footer").y);
-      expect(app.get("worktree:demo:feature").marginTop).toBe(1);
+      const main = app.get("worktree:demo:main:label"), feature = app.get("worktree:demo:feature:label");
+      expect(feature.y - main.y - main.height).toBe(1);
     }
   }finally{await app.close();}
 });
