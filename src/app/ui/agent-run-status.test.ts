@@ -142,7 +142,7 @@ test("요청 없는 실행은 내용을 추측하지 않고 긴 요청도 작은
   } finally { await app.close(); }
 });
 
-test("new 교체는 같은 탭과 다른 초안을 유지하고 이전 요청·스피너·읽기 상태를 제거한다", async () => {
+test("clear 교체는 같은 탭과 다른 초안을 유지하고 이전 요청·스피너·읽기 상태를 제거한다", async () => {
   const app = await mount({ onPrompt: () => {
     app.states.a1 = { conversationId: "fresh", status: null, output: "", error: null, sections: [] };
     app.selection.replaceSnapshot(app.selection.snapshot); return ok(undefined);
@@ -152,7 +152,7 @@ test("new 교체는 같은 탭과 다른 초안을 유지하고 이전 요청·�
     const tab = app.get("session:demo:main:a1"), tabStrip = app.get("agent-session-list"), count = tabStrip.getChildren().length;
     const prompt = app.get("session-prompt"); if (!(prompt instanceof PromptInput)) throw new Error("Missing input");
     app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
-    app.mockInput.pressKey("e", { ctrl: true }); prompt.value = "/new"; app.mockInput.pressEnter(); await app.render();
+    app.mockInput.pressKey("e", { ctrl: true }); prompt.value = "/clear"; app.mockInput.pressEnter(); await app.render();
 
     expect(app.selection.sessionId).toBe("a1"); expect(tabStrip.getChildren()).toHaveLength(count); expect(app.get("session:demo:main:a1")).toBe(tab);
     expect(app.status()).toBe(""); expect(app.get("agent-run-loading").visible).toBe(false); expect(app.captureCharFrame()).not.toContain("PROGRESS-99");
@@ -168,7 +168,7 @@ test("대화 교체 snapshot과 늦은 수락이 새 초안을 지우거나 작�
   try {
     app.states.a1 = { ...app.states.a1!, conversationId: "previous" }; await app.update();
     const prompt = app.get("session-prompt"); if (!(prompt instanceof PromptInput)) throw new Error("Missing input");
-    app.mockInput.pressKey("e", { ctrl: true }); prompt.value = "/new"; app.mockInput.pressEnter(); await app.render();
+    app.mockInput.pressKey("e", { ctrl: true }); prompt.value = "/clear"; app.mockInput.pressEnter(); await app.render();
     app.states.a1 = { conversationId: "fresh", status: null, output: "", error: null, sections: [] }; await app.update();
     prompt.value = "next conversation draft"; accepted.resolve(ok(undefined)); await app.render();
 

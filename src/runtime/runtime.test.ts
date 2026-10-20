@@ -119,7 +119,35 @@ test("자동완성 IPC는 선택 세션의 SDK 명령과 워크트리 파일만 
   } finally { await app.cleanup(); }
 });
 
-test("new IPC는 현재 탭만 새 대화로 바꾸고 취소 이력·다른 실행·편집기·셸을 보존한다", async () => {
+test("new IPC는 같은 워크트리에 새 탭을 추가하고 기존 대화·대기 입력·실행을 유지한다", async () => {
+  const app = await setup();
+  try {
+    const client = await app.connect(), tree = app.repository.worktrees.find((item) => item.path === app.main)!;
+    const id = expectOk(await client.create(tree.id));
+    expectOk(await client.prompt(id, "slow")); expectOk(await client.prompt(id, "Queued for original"));
+    await observed(client, (state) => progress(state.details[id]?.output) > 0 && state.details[id]?.pendingMessages?.length === 1);
+    const conversation = client.snapshot.details[id]!.conversationId, pid = client.snapshot.pid;
+    expectOk(await client.savePreferences({ ...client.snapshot.preferences, drafts: { [id]: "Unsent original draft" } }));
+
+    const added = expectOk(await client.newTab(id));
+
+    expect(client.snapshot.capabilities).toContain("session-tab-commands");
+    expect(client.snapshot.pid).toBe(pid); expect(added).not.toBe(id);
+    expect(client.snapshot.repositories[0]!.worktrees.find((item) => item.id === tree.id)!.sessions.map((session) => session.id)).toEqual([id, added]);
+    expect(client.snapshot.details[id]?.conversationId).toBe(conversation);
+    expect(client.snapshot.details[id]?.pendingMessages).toHaveLength(1);
+    expect(client.snapshot.details[id]?.status).toBe("working"); expect(client.snapshot.details[added]?.sections).toEqual([]);
+    expect(client.snapshot.preferences.drafts[id]).toBe("Unsent original draft");
+    expect(expectOk(await client.listHistory(tree.id)).find((item) => item.id === conversation)?.openSessionId).toBe(id);
+    // The text API must dispatch /new as tab creation too, never as a paid model prompt or reset.
+    expectOk(await client.prompt(id, "/new"));
+    expect(client.snapshot.repositories[0]!.worktrees.find((item) => item.id === tree.id)!.sessions).toHaveLength(3);
+    expect(client.snapshot.details[id]?.conversationId).toBe(conversation);
+    expect(client.snapshot.details[id]?.sections?.some((section) => section.kind === "user" && section.text === "/new")).toBe(false);
+  } finally { await app.cleanup(); }
+});
+
+test("clear IPC는 현재 탭만 새 대화로 바꾸고 취소 이력·다른 실행·편집기·셸을 보존한다", async () => {
   // The fixture owns the daemon and native processes; no user runtime is stopped.
   const app = await setup();
   try {
@@ -134,7 +162,7 @@ test("new IPC는 현재 탭만 새 대화로 바꾸고 취소 이력·다른 실
     await observed(client, (state) => progress(state.details[id]?.output) > 0 && progress(state.details[other]?.output) > 0);
     const previous = client.snapshot.details[id]!.conversationId!, instance = client.snapshot.instance, pid = client.snapshot.pid;
 
-    expectOk(await client.prompt(id, "/new"));
+    expectOk(await client.prompt(id, "/clear"));
     await observed(client, (state) => state.details[id]?.conversationId !== previous && state.details[id]?.sections?.length === 0);
 
     expect(client.snapshot.repositories[0]?.worktrees.find((item) => item.id === tree.id)?.sessions.map((session) => session.id)).toEqual([id, other]);
@@ -148,7 +176,11 @@ test("new IPC는 현재 탭만 새 대화로 바꾸고 취소 이력·다른 실
     await until(async () => (await app.manifest()).records.find((record) => record.id === id)?.state.conversationId === client.snapshot.details[id]?.conversationId);
 
     // A delayed operation for the old conversation must not run in the replacement.
-    for (const command of [{ type: "prompt", sessionId: id, conversationId: previous, text: "stale prompt" },
+    for (const command of [{ type: "prompt", sessionId: id, text: "/clear" },
+      { type: "prompt", sessionId: id, text: "/new" },
+      { type: "prompt", sessionId: id, conversationId: previous, text: "stale prompt" },
+      { type: "session-control", action: "clear", sessionId: id, conversationId: previous },
+      { type: "session-control", action: "new-tab", sessionId: id, conversationId: previous },
       { type: "session-control", action: "new", sessionId: id, conversationId: previous }]) {
       const response = await fetch("http://localhost/command", { unix: app.paths.socket, method: "POST", body: JSON.stringify(command), headers: { "X-Radian-Instance": instance } });
       const body = await response.json();
@@ -156,6 +188,13 @@ test("new IPC는 현재 탭만 새 대화로 바꾸고 취소 이력·다른 실
       expect(body.error.code).toBe("SESSION_CONFLICT");
     }
     expect(client.snapshot.details[id]?.sections).toEqual([]);
+    // Preserve the old typed wire contract for attached clients compiled before /clear existed.
+    const current = client.snapshot.details[id]!.conversationId;
+    const legacy = await fetch("http://localhost/command", { unix: app.paths.socket, method: "POST", headers: { "X-Radian-Instance": instance },
+      body: JSON.stringify({ type: "session-control", action: "new", sessionId: id, conversationId: current }) });
+    expect(legacy.ok).toBe(true);
+    await observed(client, (state) => state.details[id]?.conversationId !== current);
+    expect(client.snapshot.repositories[0]!.worktrees.find((item) => item.id === tree.id)!.sessions.map((session) => session.id)).toEqual([id, other]);
   } finally { await app.cleanup(); }
 });
 
@@ -164,7 +203,7 @@ test("compact IPC의 수락은 요약 완료와 구분되고 같은 대화와 �
   try {
     const client = await app.connect(), tree = app.repository.worktrees.find((item) => item.path === app.main)!;
     const id = expectOk(await client.create(tree.id));
-    expect(expectOk(await client.complete(id, { kind: "command", query: "" })).items.map((item) => item.value)).toEqual(expect.arrayContaining(["new", "compact"]));
+    expect(expectOk(await client.complete(id, { kind: "command", query: "" })).items.map((item) => item.value)).toEqual(expect.arrayContaining(["new", "clear", "compact"]));
     // Two large turns are eligible under the SDK's default retained-tail policy.
     expectOk(await client.prompt(id, "first ".repeat(16000)));
     await observed(client, (state) => state.details[id]?.status === "complete");

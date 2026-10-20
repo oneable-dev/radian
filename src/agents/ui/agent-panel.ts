@@ -22,6 +22,7 @@ import { SessionTabs } from "./session-tabs.ts";
 import { SubagentSummary } from "./subagent-summary.ts";
 import type { TranscriptImageProvider } from "../transcript-images.ts";
 import { PendingMessages } from "./pending-messages.ts";
+import { parseSessionControl } from "../session-controls.ts";
 
 export type AgentActions = {
   onNewSession: (worktreeId: string) => void;
@@ -325,7 +326,7 @@ export class AgentPanel {
   async submitPrompt(): Promise<void> {
     const id = this.promptSessionId;
     if (!id || !this.canSubmit || !this.actions.onPrompt) return;
-    this.submitting.add(id); this.transcript.followLatest(); this.changed();
+    this.submitting.add(id); this.changed();
     try {
       const prepared = this.completion.prepareCommandSubmission();
       const ready = typeof prepared === "boolean" ? prepared : await prepared;
@@ -336,6 +337,10 @@ export class AgentPanel {
       const draft = this.prompt.draft, submission = this.prompt.submission;
       const fingerprint = (value: PromptDraft | undefined) => value ? JSON.stringify([value.value, value.tokens]) : "";
       const sent = fingerprint(draft);
+      const control = parseSessionControl(submission.text);
+      if (!control.ok) { this.notice(`[${control.error.code}] ${control.error.message} · prompt retained`); return; }
+      // A new tab must not reset the outgoing tab's reader, selection or following intent.
+      if (control.value?.action !== "new-tab") this.transcript.followLatest();
       const result = await this.actions.onPrompt(id, submission.text, submission.images);
       if (!result.ok) { this.notice(`[${result.error.code}] ${result.error.message} · prompt retained`); return; }
       if (fingerprint(this.inputDrafts.get(id)) === sent) {

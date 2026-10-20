@@ -284,12 +284,27 @@ export class RuntimeClient {
     const result = await this.command({ type: "interrupt", sessionId, conversationId });
     return result.ok ? ok(undefined) : result;
   }
+  async newTab(sessionId: string): Promise<Result<string, ExpectedError>> {
+    if (!this.state.capabilities?.includes("session-tab-commands")) return err(new CapabilityError("Running service predates /new tab creation and /clear. Finish work and restart it explicitly when ready. No command was sent."));
+    const conversationId = this.state.details[sessionId]?.conversationId;
+    if (!conversationId) return err(new ProtocolError("Current conversation identity is unavailable. No new-tab command was sent."));
+    const binding = { instance: this.state.instance, epoch: this.connectionEpoch };
+    const result = await this.command({ type: "session-control", sessionId, conversationId, action: "new-tab" }, binding);
+    if (!result.ok) return result;
+    if (!result.value) return err(new ProtocolError("New-tab creation was accepted without a session ID. Inspect open tabs before retrying."));
+    const id = result.value;
+    const present = await this.waitForState(() => this.state.instance === binding.instance && this.connectionEpoch === binding.epoch
+      && this.snapshot.repositories.some((repo) => repo.worktrees.some((tree) => tree.sessions.some((session) => session.id === id))), "New-tab creation");
+    return present.ok ? ok(id) : present;
+  }
   async prompt(sessionId: string, text: string, images: readonly string[] = []): Promise<Result<void, ExpectedError>> {
     const control = parseSessionControl(text); if (!control.ok) return control;
     const conversationId = this.state.details[sessionId]?.conversationId;
     if (control.value) {
-      if (images.length) return err(new InputError(`/${control.value.action} does not accept image attachments. Input was retained.`));
-      if (!this.state.capabilities?.includes("session-controls")) return err(new CapabilityError("Running service predates /new and /compact. Finish work and restart it explicitly when ready. No prompt was sent."));
+      if (images.length) return err(new InputError(`/${control.value.action === "new-tab" ? "new" : control.value.action} does not accept image attachments. Input was retained.`));
+      if (control.value.action === "new-tab") { const result = await this.newTab(sessionId); return result.ok ? ok(undefined) : result; }
+      const capability = control.value.action === "clear" ? "session-tab-commands" : "session-controls";
+      if (!this.state.capabilities?.includes(capability)) return err(new CapabilityError("Running service predates this session command. Finish work and restart it explicitly when ready. No prompt was sent."));
       if (!conversationId) return err(new ProtocolError("Current conversation identity is unavailable. Reconnect before retrying. No command was sent."));
       const result = await this.command({ type: "session-control", sessionId, conversationId, ...control.value });
       return result.ok ? ok(undefined) : result;

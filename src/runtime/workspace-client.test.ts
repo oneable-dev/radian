@@ -26,7 +26,8 @@ function peer(repository: Repository) {
   const client: RepositoryClient = {
     get snapshot() { return state; }, get connected() { return connected; },
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-    create: (tree) => call(`create:${tree}`, `${id}-new`), resume: (tree) => call(`resume:${tree}`, `${id}-resumed`),
+    create: (tree) => call(`create:${tree}`, `${id}-new`), newTab: (session) => call(`new-tab:${session}`, `${id}-sibling`),
+    resume: (tree) => call(`resume:${tree}`, `${id}-resumed`),
     prompt: (session, text) => call(`prompt:${session}:${text}`, undefined), complete: (session) => call(`complete:${session}`, { items: [], truncated: false }),
     interrupt: (session) => call(`interrupt:${session}`, undefined),
     closeSession: (session) => call(`close:${session}`, undefined), listHistory: (tree) => call(`history:${tree}`, []),
@@ -48,6 +49,18 @@ async function isolated(run: (directory: string) => Promise<void>): Promise<void
   try { await run(directory); }
   finally { await rm(directory, { recursive: true, force: true }); }
 }
+
+test("newTab은 원래 세션의 레포에만 생성하고 새 ID의 소유권도 보존한다", () => isolated(async (stateRoot) => {
+  const a = repo("a"), b = repo("b"), pa = peer(a), pb = peer(b);
+  const workspace = expectOk(await WorkspaceClient.open([a, b], b.worktrees[0]!.path, { stateRoot, offline: true }, async (repository) => ok(repository.id === a.id ? pa.client : pb.client)));
+  try {
+    const original = expectOk(await workspace.create("a"));
+    const added = expectOk(await workspace.newTab(original));
+    expect(added).toBe("a-sibling"); expect(pa.calls).toContain(`new-tab:${original}`); expect(pb.calls).toEqual([]);
+    expectOk(await workspace.closeSession(added)); expect(pa.calls).toContain("close:a-sibling");
+    expect(expectError(await workspace.newTab("missing")).code).toBe("SESSION_NOT_OPEN");
+  } finally { await workspace.disconnect(); }
+}));
 
 test("history 미리보기는 워크트리 소유 런타임으로만 전달하고 취소 시 실행하지 않는다", () => isolated(async (stateRoot) => {
   // A workspace combines two already-connected peers without merging their saved-session identities.

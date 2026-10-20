@@ -133,7 +133,8 @@ export const commandSchema = Type.Union([
   Type.Object({ type: Type.Literal("interrupt"), sessionId: id, conversationId: id }),
   Type.Object({ type: Type.Literal("prompt"), sessionId: id, text: Type.String({ minLength: 1 }), images: Type.Optional(Type.Array(id)), conversationId: Type.Optional(id) }),
   Type.Object({ type: Type.Literal("session-control"), sessionId: id, conversationId: id,
-    action: Type.Union([Type.Literal("new"), Type.Literal("compact")]), instructions: Type.Optional(Type.String()) }),
+    // Preserve legacy wire "new" as replacement; new clients use explicit tab/clear actions.
+    action: Type.Union([Type.Literal("new"), Type.Literal("new-tab"), Type.Literal("clear"), Type.Literal("compact")]), instructions: Type.Optional(Type.String()) }),
   Type.Object({ type: Type.Literal("preferences"), preferences: preferencesSchema }),
   Type.Object({ type: Type.Literal("stop") }),
   Type.Object({ type: Type.Literal("editor-open"), worktreeId: id,

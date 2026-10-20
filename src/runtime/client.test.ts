@@ -61,15 +61,51 @@ test("여러 세션의 큰 상태가 8MiB를 넘어도 대화·초안·History �
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("구버전의 new와 compact는 모델 프롬프트나 자동 재시작으로 우회하지 않는다", async () => {
+test("구버전의 new·clear·compact는 모델 프롬프트나 자동 재시작으로 우회하지 않는다", async () => {
   // The old service would treat an unknown slash command as paid model input.
   const fetchMock = stubFetch(async () => { throw new Error("Must not transmit unsupported session commands"); });
   const client = new RuntimeClient(paths, snapshot());
   try {
-    for (const text of ["/new", "/compact", "/compact preserve this plan"]) {
+    for (const text of ["/new", "/clear", "/compact", "/compact preserve this plan"]) {
       expect(expectError(await client.prompt("session", text)).code).toBe("UNSUPPORTED_CAPABILITY");
     }
     expect(fetchMock).not.toHaveBeenCalled();
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
+
+test("기존 session-controls만 있는 서비스에 new·clear를 파괴적인 legacy new로 보내지 않는다", async () => {
+  const state: RuntimeSnapshot = { ...snapshot(), capabilities: ["session-controls"], details: { session: { conversationId: "old", status: "working", output: "Retained", error: null } } };
+  const fetchMock = stubFetch(async () => { throw new Error("Legacy replacement must not run"); });
+  const client = new RuntimeClient(paths, state);
+  try {
+    for (const text of ["/new", "/clear"]) expect(expectError(await client.prompt("session", text)).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(expectError(await client.newTab("session")).code).toBe("UNSUPPORTED_CAPABILITY"); expect(fetchMock).not.toHaveBeenCalled();
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
+
+test("newTab은 새 명시적 wire action을 쓰고 응답보다 늦은 탭 snapshot도 기다린다", async () => {
+  const state: RuntimeSnapshot = { ...snapshot(), capabilities: ["session-controls", "session-tab-commands"],
+    repositories: [{ id: "/fixture/.git", name: "Fixture", worktrees: [{ id: "tree", name: "Tree", path: "/fixture", branch: "main",
+      sessions: [{ id: "session", name: "Original", status: "working", subagents: [] }] }] }],
+    details: { session: { conversationId: "old", status: "working", output: "Retained work", error: null } } };
+  let stream: ReturnType<typeof events> | undefined;
+  const sent: unknown[] = [];
+  const fetchMock = stubFetch(async (input, options) => {
+    if (new URL(String(input)).pathname === "/events") { stream = events(state, options?.signal); return stream.response; }
+    sent.push(JSON.parse(String(options?.body))); return Response.json({ ok: true, value: "created" });
+  });
+  const client = new RuntimeClient(paths, state);
+  try {
+    expectOk(await client.attach());
+    let resolved = false;
+    const creating = client.newTab("session").then((result) => { resolved = true; return result; });
+    await settle(); expect(resolved).toBe(false);
+    stream!.frame({ ...state, repositories: state.repositories.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
+      sessions: [...tree.sessions, { id: "created", name: "New", status: null, subagents: [] }],
+    })) })), details: { ...state.details, created: { conversationId: "fresh", status: null, output: "", error: null } } });
+    expect(expectOk(await creating)).toBe("created");
+    expect(sent).toEqual([{ type: "session-control", sessionId: "session", conversationId: "old", action: "new-tab" }]);
+    expect(client.snapshot.details.session?.conversationId).toBe("old"); expect(client.snapshot.details.session?.output).toBe("Retained work");
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
@@ -91,24 +127,26 @@ test("중단은 capability와 현재 대화 ID를 확인하고 정확한 세션�
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("세션 명령과 일반 입력은 현재 대화 ID를 지정하고 첨부·잘못된 new는 전송하지 않는다", async () => {
-  // A stable tab ID alone cannot fence an operation after /new replaces its conversation.
-  const state: RuntimeSnapshot = { ...snapshot(), capabilities: ["session-controls", "prompt-images"],
+test("clear·compact·일반 입력은 현재 대화 ID를 지정하고 첨부·추가 인수는 전송하지 않는다", async () => {
+  // A stable tab ID alone cannot fence an operation after /clear replaces its conversation.
+  const state: RuntimeSnapshot = { ...snapshot(), capabilities: ["session-controls", "session-tab-commands", "prompt-images"],
     details: { session: { conversationId: "conversation-1", status: null, output: "", error: null } } };
   const sent: unknown[] = [];
   const fetchMock = stubFetch(async (_input, options) => { sent.push(JSON.parse(String(options?.body))); return Response.json({ ok: true, value: null }); });
   const client = new RuntimeClient(paths, state);
   try {
     expectOk(await client.prompt("session", "/compact keep the plan"));
-    expectOk(await client.prompt("session", "/new"));
+    expectOk(await client.prompt("session", "/clear"));
     expectOk(await client.prompt("session", "ordinary prompt"));
     expect(expectError(await client.prompt("session", "/new not supported")).code).toBe("INVALID_INPUT");
     expect(expectError(await client.prompt("session", "/new", ["/image.png"])).code).toBe("INVALID_INPUT");
+    expect(expectError(await client.prompt("session", "/clear extra")).code).toBe("INVALID_INPUT");
+    expect(expectError(await client.prompt("session", "/clear", ["/image.png"])).code).toBe("INVALID_INPUT");
     expect(expectError(await client.prompt("session", "/compact", ["/image.png"])).code).toBe("INVALID_INPUT");
 
     expect(sent).toEqual([
       { type: "session-control", sessionId: "session", conversationId: "conversation-1", action: "compact", instructions: "keep the plan" },
-      { type: "session-control", sessionId: "session", conversationId: "conversation-1", action: "new" },
+      { type: "session-control", sessionId: "session", conversationId: "conversation-1", action: "clear" },
       { type: "prompt", sessionId: "session", conversationId: "conversation-1", text: "ordinary prompt" },
     ]);
   } finally { await client.disconnect(); fetchMock.mockRestore(); }

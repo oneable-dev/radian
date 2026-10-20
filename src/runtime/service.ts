@@ -139,7 +139,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "agent-interrupt"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "agent-interrupt"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || [this.discoveryWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
@@ -246,13 +246,17 @@ class WorkspaceRuntime {
         return result.ok ? ok(null) : result;
       }
       case "session-control": {
-        if (command.action === "new" && command.instructions?.trim()) return err(new InputError("Usage: /new (no arguments)."));
-        return this.sessionControl(command.sessionId, command, command.conversationId);
+        // Old clients used wire "new" for in-place replacement. Never silently change that contract.
+        const action = command.action === "new" ? "clear" : command.action;
+        if (action !== "compact" && command.instructions?.trim()) return err(new InputError(`Usage: /${action === "new-tab" ? "new" : "clear"} (no arguments).`));
+        const control: SessionControl = action === "compact"
+          ? { action, ...(command.instructions ? { instructions: command.instructions } : {}) } : { action };
+        return this.sessionControl(command.sessionId, control, command.conversationId);
       }
       case "prompt": {
         const control = parseSessionControl(command.text); if (!control.ok) return control;
         if (control.value) {
-          if (command.images?.length) return err(new InputError(`/${control.value.action} does not accept image attachments.`));
+          if (command.images?.length) return err(new InputError(`/${control.value.action === "new-tab" ? "new" : control.value.action} does not accept image attachments.`));
           return this.sessionControl(command.sessionId, control.value, command.conversationId);
         }
         if (this.failedRecovery.has(command.sessionId)) return err(new SessionError("SESSION_NOT_OPEN", "This session needs recovery before it can run."));
@@ -315,19 +319,21 @@ class WorkspaceRuntime {
     }
   }
 
-  private async sessionControl(id: string, control: SessionControl, expectedConversation?: string): Promise<Result<null, ExpectedError>> {
+  private async sessionControl(id: string, control: SessionControl, expectedConversation?: string): Promise<Result<string | null, ExpectedError>> {
     if (this.failedRecovery.has(id)) return err(new SessionError("SESSION_NOT_OPEN", "This session needs recovery first."));
     const state = this.registry.details(id);
     if (!state) return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
+    if (control.action !== "compact" && !expectedConversation) return err(new SessionError("SESSION_CONFLICT", "Current conversation identity is required. No command was accepted."));
     if (expectedConversation && state.conversationId !== expectedConversation) return err(new SessionError("SESSION_CONFLICT", "This tab changed conversations. No command was accepted."));
+    if (control.action === "new-tab") return this.registry.newTab(id);
     const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
     let admitted = false;
     const accept = () => { admitted = true; accepted.resolve(ok(undefined)); };
-    const run = control.action === "new" ? this.registry.newSession(id, accept) : this.registry.compact(id, control.instructions, accept);
+    const run = control.action === "clear" ? this.registry.clearSession(id, accept) : this.registry.compact(id, control.instructions, accept);
     void run.then((result) => {
       if (!admitted) accepted.resolve(result);
-      else if (!result.ok && control.action === "new") { this.notice = `[${result.error.code}] Session replacement did not finish: ${result.error.message}`; this.changed(); }
-      if (result.ok && control.action === "new") {
+      else if (!result.ok && control.action === "clear") { this.notice = `[${result.error.code}] Session replacement did not finish: ${result.error.message}`; this.changed(); }
+      if (result.ok && control.action === "clear") {
         // A tab is stable, but source cursors/folds/scroll belong to its old conversation.
         if (this.preferences.agentViews) delete this.preferences.agentViews[id];
         if (this.preferences.workViews) delete this.preferences.workViews.agentScroll[id];

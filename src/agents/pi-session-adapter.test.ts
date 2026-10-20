@@ -938,7 +938,28 @@ test("압축 중 프로그래밍 결함은 일반 입력 오류로 바꾸지 않
   } finally { await app.cleanup(); }
 });
 
-test("new는 현재 탭의 실행을 중단·저장한 뒤 같은 위치의 새 대화로 바꾸고 다른 탭을 유지한다", async () => {
+test("newTab은 실행 중인 SDK 대화·하위 작업·저장 파일을 건드리지 않고 새 세션을 연다", async () => {
+  const app = await sdkFixture(true);
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    const run = app.registry.prompt(id, "delegate"); await app.streams.waitFor("child");
+    const conversation = app.registry.details(id)!.conversationId, file = app.registry.sessionFile(id)!;
+
+    const added = expectOk(await app.registry.newTab(id));
+
+    expect(added).not.toBe(id); expect(app.registry.details(id)?.conversationId).toBe(conversation);
+    expect(app.registry.sessionFile(id)).toBe(file); expect(app.registry.sessionFile(added)).not.toBe(file);
+    expect(app.registry.historyOwnership(file).openSessionId).toBe(id);
+    expect(app.registry.details(added)?.sections).toEqual([]);
+    expect(app.streams.gates.get("child")!.aborted).toBe(false);
+    expect(app.registry.records.find((record) => record.id === id)?.subagents).toHaveLength(1);
+    expect(app.registry.records.find((record) => record.id === added)?.subagents).toEqual([]);
+    app.streams.gates.get("child")!.finish("original child completed normally"); expectOk(await run);
+    expect(app.registry.details(id)?.status).toBe("complete");
+  } finally { await app.cleanup(); }
+});
+
+test("clear는 현재 탭의 실행을 중단·저장한 뒤 같은 위치의 새 대화로 바꾸고 다른 탭을 유지한다", async () => {
   const app = await sdkFixture(true);
   try {
     const id = expectOk(await app.registry.create(app.main.id)), other = expectOk(await app.registry.create(app.main.id));
@@ -948,7 +969,7 @@ test("new는 현재 탭의 실행을 중단·저장한 뒤 같은 위치의 새 
     app.selection.selectSession(app.main.id, id);
     const accepted = Promise.withResolvers<void>();
 
-    const replacement = app.registry.newSession(id, () => accepted.resolve()); await accepted.promise;
+    const replacement = app.registry.clearSession(id, () => accepted.resolve()); await accepted.promise;
     await app.streams.gates.get("previous-conversation")!.abortReceived;
     expect(expectError(await app.registry.prompt(id, "during replacement")).code).toBe("SESSION_BUSY");
     app.streams.gates.get("previous-conversation")!.finish("persisted cancellation");
@@ -966,14 +987,14 @@ test("new는 현재 탭의 실행을 중단·저장한 뒤 같은 위치의 새 
   } finally { await app.cleanup(); }
 });
 
-test("new는 현재 탭 소유의 하위 작업도 정리하고 원래 대화에서 취소 결과를 저장한다", async () => {
+test("clear는 현재 탭 소유의 하위 작업도 정리하고 원래 대화에서 취소 결과를 저장한다", async () => {
   const app = await sdkFixture(true);
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     const run = app.registry.prompt(id, "delegate"); await app.streams.waitFor("child");
     const accepted = Promise.withResolvers<void>();
 
-    const replacement = app.registry.newSession(id, () => accepted.resolve()); await accepted.promise;
+    const replacement = app.registry.clearSession(id, () => accepted.resolve()); await accepted.promise;
     await app.streams.gates.get("child")!.abortReceived;
     app.streams.gates.get("child")!.finish("cancelled owned child");
     await run; expectOk(await replacement);
@@ -983,7 +1004,7 @@ test("new는 현재 탭 소유의 하위 작업도 정리하고 원래 대화에
   } finally { await app.cleanup(); }
 });
 
-test("new는 확장의 전환 취소를 존중하고 진행 중인 모델을 중단하지 않는다", async () => {
+test("clear는 확장의 전환 취소를 존중하고 진행 중인 모델을 중단하지 않는다", async () => {
   const app = await sdkFixture(true);
   try {
     const extensions = join(app.directory, "agent", "extensions"); await mkdir(extensions, { recursive: true });
@@ -994,7 +1015,7 @@ test("new는 확장의 전환 취소를 존중하고 진행 중인 모델을 중
     const run = app.registry.prompt(id, "hold cancelled-new"); await app.streams.waitFor("cancelled-new");
     const conversation = app.registry.details(id)!.conversationId; let accepted = false;
 
-    const result = await app.registry.newSession(id, () => { accepted = true; });
+    const result = await app.registry.clearSession(id, () => { accepted = true; });
 
     expect(expectError(result).code).toBe("CANCELLED"); expect(accepted).toBe(false);
     expect(app.registry.details(id)?.conversationId).toBe(conversation); expect(app.executors).toHaveLength(1);
@@ -1003,7 +1024,7 @@ test("new는 확장의 전환 취소를 존중하고 진행 중인 모델을 중
   } finally { await app.cleanup(); }
 });
 
-test("new의 SDK 시작·종료 훅은 startup이나 quit가 아니라 세션 교체 이유를 받는다", async () => {
+test("clear의 SDK 시작·종료 훅은 startup이나 quit가 아니라 기존 세션 교체 이유를 받는다", async () => {
   const app = await sdkFixture();
   try {
     const extensions = join(app.directory, "agent", "extensions"); await mkdir(extensions, { recursive: true });
@@ -1014,7 +1035,7 @@ test("new의 SDK 시작·종료 훅은 startup이나 quit가 아니라 세션 �
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "original work"));
     const oldFile = app.registry.sessionFile(id)!;
 
-    expectOk(await app.registry.newSession(id));
+    expectOk(await app.registry.clearSession(id));
 
     const oldEntries = SessionManager.open(oldFile).getBranch();
     // Pi buffers an empty conversation's metadata until its first actual turn.

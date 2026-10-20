@@ -4,6 +4,7 @@ import { loadWorkspaceConfig } from "../workspace/config.ts";
 import { WorkspaceClient } from "../runtime/workspace-client.ts";
 import { demoWorkspace } from "../workspace/demo.ts";
 import { WorkspaceSelection } from "./workspace-selection.ts";
+import { submitAgentPrompt } from "./agent-prompt.ts";
 import type { Repository } from "../workspace/model.ts";
 import { connectRuntime, defaultPreferences, fetchSnapshot } from "../runtime/client.ts";
 import type { RuntimePreferences, WorkViewPreferences } from "../runtime/protocol.ts";
@@ -171,7 +172,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
         message = "Demo item removed · no runtime or saved history was modified"; updateNotice();
       },
       ...(client ? {
-        onPrompt: (id: string, text: string, images?: readonly string[]) => client.prompt(id, text, images),
+        onPrompt: (id: string, text: string, images?: readonly string[]) => submitAgentPrompt(client, selection, id, text, images),
         onInterrupt: (id: string) => client.interrupt(id),
         onComplete: (id, query, signal) => client.complete(id, query, signal),
         onImage: (id, imageId, signal) => client.image(id, imageId, signal),

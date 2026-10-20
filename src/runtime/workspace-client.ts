@@ -9,7 +9,7 @@ import { runtimePaths, RuntimeStore } from "./storage.ts";
 import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
 
 // Keep repo identity and instance fencing inside the existing clients, including PTY leases.
-export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "image">>;
+export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "newTab" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "image">>;
 type Connector = (repository: Repository, cwd: string, options: ConnectOptions) => Promise<Result<RepositoryClient | null, ExpectedError>>;
 type Entry = { repository: Repository; preferences: RuntimePreferences; client?: RepositoryClient; unsubscribe?: () => void;
   watcher?: RepositoryWatcher; discoveryWarning?: string;
@@ -139,6 +139,12 @@ export class WorkspaceClient {
     const entry = this.worktreeOwner(worktreeId); if (!entry.ok) return entry;
     const client = await this.ensure(entry.value); if (!client.ok) return client;
     const result = await client.value.create(worktreeId); if (result.ok) entry.value.sessions.add(result.value); return result;
+  }
+  async newTab(sessionId: string): ReturnType<RuntimeClient["newTab"]> {
+    const entry = this.sessionOwner(sessionId); if (!entry.ok) return entry;
+    const result = await entry.value.client!.newTab(sessionId);
+    if (result.ok) entry.value.sessions.add(result.value);
+    return result;
   }
   async resume(worktreeId: string, savedId: string): ReturnType<RuntimeClient["resume"]> {
     const entry = this.worktreeOwner(worktreeId); if (!entry.ok) return entry;

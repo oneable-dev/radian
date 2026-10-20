@@ -245,7 +245,13 @@ export class SessionRegistry {
     return entry.executor.interrupt(onAccepted);
   }
 
-  newSession(id: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>> {
+  newTab(id: string): Promise<Result<string, ExpectedError>> {
+    const selected = this.requireOpen(id); if (!selected.ok) return Promise.resolve(selected);
+    if (selected.value.replacing) return Promise.resolve(err(new SessionError("SESSION_BUSY", "This tab is changing conversations. No new tab was created.")));
+    return this.create(selected.value.worktree.id);
+  }
+
+  clearSession(id: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>> {
     const selected = this.requireOpen(id); if (!selected.ok) return Promise.resolve(selected);
     const previous = selected.value;
     if (previous.replacing) return Promise.resolve(err(new SessionError("SESSION_BUSY", "This tab is already changing sessions.")));
@@ -274,7 +280,7 @@ export class SessionRegistry {
       else if (this.shuttingDown || previous.phase !== "open") result = err(new CancelledError("Session replacement was cancelled by shutdown."));
       else {
         onAccepted?.(); stopping = true;
-        // Explicit /new stops only the execution owned by this tab. Keep its file
+        // Explicit /clear stops only the execution owned by this tab. Keep its file
         // fenced until all parent/child tool results have settled and persisted.
         const stopped = await collectCleanup([this.closeExecution(previous, "new"), ...[...previous.children.values()].map((child) => this.closeExecution(child, "new"))], "Could not finish the previous conversation.");
         if (!stopped.ok) {

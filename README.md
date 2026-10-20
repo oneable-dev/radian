@@ -492,13 +492,19 @@ is automatically restarted.
 
 The Agent prompt completes and executes these host commands instead of sending them to the model:
 
-- **`/new`** replaces the conversation in the **current tab**, retaining its position and tab count.
+- **`/new`** creates a fresh session in a **new tab in the same worktree**, using the same creation
+  path as the session strip's `+` / `session.new` action. Existing tabs, conversations, running Agents,
+  owned subagents, queued input and saved history remain intact. The Agents UI selects the new tab
+  once it is observable, unless the user has meanwhile selected another tab/worktree or the source
+  conversation has changed. A creation failure retains the command and original tab.
+- **`/clear`** replaces the conversation in the **current tab**, retaining its position and tab count.
   It prepares a fresh SDK session, stops and settles that tab's current Agent and owned subagents,
   then switches to the new conversation. Pending input for the outgoing conversation is cancelled,
   never replayed into the new one. The outgoing saved conversation remains in History;
   modified files are not rolled back. Other tabs, editors and terminal shells keep running.
   A preparation failure leaves the previous execution intact. Extension cancellation and session
-  lifecycle hooks are respected. The **`session.new`** command (`n` with the session strip focused) still adds another tab.
+  lifecycle hooks are respected. This is the former `/new` behavior; it resets the current conversation,
+  not saved history.
 - **`/compact [instructions]`** invokes Pi's manual context summarization for the current conversation.
   It may make summarization model calls and consume quota. It keeps the tab, saved conversation
   and full displayed transcript; only the model context is compacted. During compaction the work-status
@@ -507,16 +513,20 @@ The Agent prompt completes and executes these host commands instead of sending t
   must be idle: running/queued input, compaction and owned work cause an explicit busy rejection,
   without interruption. Empty or too-small context is rejected without a model request.
 
-These commands do not accept image attachments; `/new` takes no arguments. Rejected commands retain
+These commands do not accept image attachments; `/new` and `/clear` take no arguments. Rejected commands retain
 input. Accepted long-running actions report progress; acknowledgement is not completion. A valid
 compaction failure belongs to that conversation rather than a second global error notification.
-New conversations reset old transcript navigation while preserving other tabs and input edited
-while acknowledgement is pending. Conversation IDs fence delayed input and control requests so
-an operation intended for the outgoing conversation cannot execute in its replacement.
+`/clear` resets that tab's transcript navigation. `/new` preserves the outgoing tab's navigation,
+selection and scroll position. Both preserve input edited while acknowledgement is pending.
+Conversation IDs fence delayed input and control requests so an operation intended for the outgoing
+conversation cannot execute in its replacement.
 
-The additive `session-controls` capability requires an upgraded service. A new client explicitly
-rejects these commands on older services, without sending them as model prompts or automatically
-restarting anything. Finish existing work and restart the service explicitly when ready to upgrade.
+`/compact` uses the additive `session-controls` capability. The separate `session-tab-commands`
+capability is required for the new `/new` and `/clear` meanings. New clients reject unsupported
+commands rather than sending them as model prompts, invoking legacy in-place replacement or
+restarting services. The legacy typed wire action `new` retains its replacement meaning for older
+attached clients; new clients send explicit `new-tab` and `clear` actions. Finish existing work and
+restart the service explicitly when ready to upgrade.
 Neither automatic strategic-compaction suggestions nor a model-callable compaction tool is added.
 
 ### Agent input status
