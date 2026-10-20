@@ -88,6 +88,9 @@ test("미리보기는 Agent와 같은 섹션 카드·접힘·오류 UI를 쓰며
     const live = app.get("session-transcript"), state = app.view.workViewPreferences.agentViews;
     await app.open(); app.clock.advance(150); await app.render();
     const preview = app.get("history-preview") as ScrollBoxRenderable;
+    // 라이브 대화의 바만 숨기고 독립된 History 미리보기의 탐색 표시는 유지한다.
+    if (!(live instanceof ScrollBoxRenderable)) throw new Error("Missing live transcript");
+    expect(live.verticalScrollBar.visible).toBe(false); expect(preview.verticalScrollBar.visible).toBe(true);
     for (const section of sections) {
       const original = body(live, section.text), shown = body(preview, section.text);
       if (!(original?.parent instanceof BoxRenderable) || !(shown?.parent instanceof BoxRenderable)) throw new Error("Expected native section cards");

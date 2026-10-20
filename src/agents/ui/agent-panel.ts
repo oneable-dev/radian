@@ -103,6 +103,8 @@ export class AgentPanel {
     this.transcript = new TranscriptPanel(renderer, { notice, changed, focusPrompt: () => this.prompt.focus(), initialScroll, saveScroll,
       ...transcriptOptions, ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}), ...(actions.onImage ? { image: actions.onImage } : {}) });
     this.transcriptScroll = this.transcript.scroll;
+    // Hide only the live-session scroll thumb; wheel, keys and the shared scroll model stay active.
+    this.transcriptScroll.verticalScrollBar.visible = false;
     this.bottomButton = new TranscriptBottomButton(renderer, () => { renderer.clearSelection(); this.transcript.followLatest(); });
     this.runtimePanel.add(this.bottomButton);
     const interruptKey = () => transcriptOptions.keyHint?.("agent.interrupt", "prompt") ?? "esc";

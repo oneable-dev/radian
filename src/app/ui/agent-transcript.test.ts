@@ -264,15 +264,18 @@ test("좁은 화면의 도움말은 스크롤 가능하고 닫으면 기존 본�
     expect(app.captureCharFrame()).toContain("Sections:");
     expect(app.captureCharFrame().split("\n")[11]).toContain("Radian");
     app.mockInput.pressKey("END"); await app.render();
-    app.mockInput.pressArrow("up"); await app.render();
     const area = app.renderer.root.findDescendantById("session-transcript")! as ScrollBoxRenderable;
     const helpText = () => app.captureCharFrame().split("\n").slice(area.viewport.y, area.viewport.y + area.viewport.height)
       .map((line) => line.slice(area.viewport.x, area.viewport.x + area.viewport.width).trim()).join(" ");
-    // The padded telemetry leaves a one-row viewport: the final hint spans two scrollable lines.
-    const tail = helpText(), tailTop = area.scrollTop;
-    app.mockInput.pressArrow("up"); await app.render();
-    expect(area.scrollTop).toBe(tailTop - 1);
-    expect(`${helpText()} ${tail}`).toContain("close help");
+    // 바를 숨겨 확보한 너비에 따라 줄바꿈이 달라도 마지막 안내까지 읽을 수 있어야 한다.
+    let tail = helpText();
+    do {
+      const previous = area.scrollTop;
+      app.mockInput.pressArrow("up"); await app.render();
+      expect(area.scrollTop).toBe(Math.max(0, previous - 1));
+      tail = `${helpText()} ${tail}`;
+    } while (!tail.includes("close help") && area.scrollTop > 0);
+    expect(tail).toContain("close help");
 
     app.mockInput.pressEscape(); await app.render();
 

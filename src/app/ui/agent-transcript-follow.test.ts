@@ -45,6 +45,40 @@ async function mount(options: { paused?: boolean; completed?: boolean; keymap?: 
 }
 const bottom = (scroll: ScrollBoxRenderable) => Math.max(0, scroll.scrollHeight - scroll.viewport.height);
 
+test("긴 AI 대화는 세로 스크롤바 없이 전체 너비를 쓰고 휠·키보드 탐색을 유지한다", async () => {
+  // 실제로 넘치는 대화에서 바를 숨겨도 별도의 빈 열이 남아서는 안 된다.
+  const app = await mount();
+  const verify = () => {
+    expect(app.scroll.scrollHeight).toBeGreaterThan(app.scroll.viewport.height);
+    expect(app.scroll.verticalScrollBar.visible).toBe(false);
+    expect(app.scroll.viewport.width).toBe(app.scroll.width);
+  };
+  try {
+    verify();
+    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("Unsent scrollbar draft"); await app.settled();
+
+    // 오른쪽 끝도 본문이므로 휠을 받을 수 있고 새 결과는 읽던 위치를 밀지 않는다.
+    await app.mockMouse.scroll(app.scroll.viewport.x + app.scroll.viewport.width - 1, app.scroll.y + 3, "up"); await app.settled();
+    const position = app.scroll.scrollTop;
+    expect(position).toBeLessThan(bottom(app.scroll)); expect(app.state()?.follow).toBe(false);
+    await app.update([...history, section("new", "SCROLLBAR_FREE_TAIL")]);
+    expect(app.scroll.scrollTop).toBe(position); expect(app.state()?.follow).toBe(false);
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("END", { ctrl: true }); await app.settled();
+    expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
+    expect(app.captureCharFrame()).toContain("SCROLLBAR_FREE_TAIL");
+
+    // 리사이즈·테마 변경·화면 왕복이 네이티브 바를 다시 활성화하면 안 된다.
+    app.resize(80, 18); await app.settled(); verify();
+    uiTheme(app.renderer).configure({ palette: [], defaultForeground: "#202020", defaultBackground: "#FAFAF6",
+      cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null,
+      highlightForeground: null, highlightBackground: null });
+    await app.settled(); verify();
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("2"); await app.settled();
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("1"); await app.settled(); verify();
+    expect(app.view.promptDrafts.a1).toBe("Unsent scrollbar draft"); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test.each([false, true])("밝기 %j에서도 하단 복귀 버튼은 기존 여백에만 표시하고 본문·상태 행·입력창을 가리지 않는다", async (light) => {
   // 긴 대화를 따라가는 화면에서 버튼이 나타나도 본문·입력창의 크기는 바뀌지 않아야 한다.
   const app = await mount();
@@ -236,7 +270,7 @@ test("휠로 위로 읽다가 다시 맨 아래로 내리면 별도 키 없이 �
   } finally { await app.close(); }
 });
 
-test("스크롤바 위치로 맨 아래에 도달해도 자동 추적을 재개한다", async () => {
+test("숨은 스크롤 모델의 위치가 맨 아래에 도달해도 자동 추적을 재개한다", async () => {
   const app = await mount();
   try {
     app.scroll.verticalScrollBar.scrollPosition = 0; await app.settled(); expect(app.state()?.follow).toBe(false);
@@ -357,11 +391,11 @@ test("사용자가 휠로 과거를 읽으면 스트리밍은 그 위치를 보�
   } finally { await app.close(); }
 });
 
-test("스크롤바로 과거 위치를 선택하면 대기 중인 자동 이동보다 사용자 위치를 우선한다", async () => {
+test("본문 오른쪽 끝에서 휠로 과거를 읽으면 대기 중인 자동 이동보다 사용자 위치를 우선한다", async () => {
   const app = await mount();
   try {
-    const bar = app.scroll.verticalScrollBar;
-    await app.mockMouse.click(bar.x, bar.y + Math.floor(bar.height / 3)); await app.settled();
+    const viewport = app.scroll.viewport;
+    await app.mockMouse.scroll(viewport.x + viewport.width - 1, viewport.y + Math.floor(viewport.height / 3), "up"); await app.settled();
     expect(app.state()?.follow).toBe(false); expect(app.scroll.scrollTop).toBeLessThan(bottom(app.scroll));
     const position = app.scroll.scrollTop;
     await app.update([...history, section("late", "LATE_TOOL_RESULTS\n".repeat(30))]);

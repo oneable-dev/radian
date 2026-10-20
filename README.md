@@ -448,8 +448,9 @@ to return to Sections, then j/k (or gg/G). A selection first needs `Esc` to retu
 The former `INPUT · section/count · following` row is removed. Source/Visual/help mode and a
 `Paused` indicator appear only when relevant in the one-row footer; `Paused` refers to viewport
 following, never agent execution. Following is based on the viewport: at the bottom it follows new output; moving above the bottom pauses it;
-returning to the bottom by wheel, scrollbar or paging resumes it automatically. Merely focusing the
-transcript does not pause it. Content growth and asynchronous Markdown layout preserve the pre-growth
+returning to the bottom by wheel or paging resumes it automatically. Live Agent transcripts hide
+their vertical scrollbar and reclaim its column without disabling wheel or keyboard navigation.
+History previews retain their scrollbar. Merely focusing the transcript does not pause it. Content growth and asynchronous Markdown layout preserve the pre-growth
 bottom intent rather than treating the increased scroll range as user navigation. Following also
 keeps the bottom on resize and when returning from another work view.
 
@@ -935,8 +936,9 @@ and Neovim/shell input ownership are otherwise unchanged.
 workspace selection, or agent execution.
 
 All Radian-owned horizontal scrollbars stay hidden, including overflowing Agent and Terminal tab
-strips and read-only dialogs. Horizontal navigation/reveal remains enabled where needed; vertical
-scrollbars, Git diff movement and embedded programs' own UI/configuration are unchanged.
+strips and read-only dialogs. Horizontal navigation/reveal remains enabled where needed. The live
+Agent transcript also hides its vertical scrollbar; other vertical scrollbars, Git diff movement
+and embedded programs' own UI/configuration are unchanged.
 
 ### Terminal notifications
 
