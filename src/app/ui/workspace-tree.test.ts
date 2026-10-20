@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { TextAttributes } from "@opentui/core";
+import { ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
@@ -21,6 +21,29 @@ async function mount(repositories = demoWorkspace(), size: { width?: number; hei
   const frame = (id: string) => { const node = get(id); return app.captureCharFrame().split("\n").slice(node.y, node.y + node.height).map((line) => line.slice(node.x, node.x + node.width)); };
   return { ...app, selection, requests, get, line, cell, frame, view, async close() { view.dispose(); await app.dispose(); } };
 }
+
+test.each([[60, 26, 1], [80, 40, 2], [120, 40, 2]] as const)("너비 %i에서도 스크롤바 오른쪽은 한 칸만 띄우고 사이드바 너비·왼쪽 여백을 유지한다", async (width, sidebarWidth, leftInset) => {
+  // 모든 높이에서 세로 스크롤바가 실제로 나타나도록 충분한 항목을 준비한다.
+  const repository = demoWorkspace()[0]!, original = repository.worktrees[0]!;
+  const worktrees = Array.from({ length: 30 }, (_, index) => ({ ...original, id: `spacing-${index}`,
+    path: `/demo/spacing-${index}`, name: `workspace-${index}`, sessions: index === 0 ? original.sessions : [] }));
+  const app = await mount([{ ...repository, worktrees }], { width, height: 36 });
+  try {
+    for (const height of [12, 36]) {
+      // 창 높이가 바뀌어도 오른쪽 간격만 줄이고 검색·작업 패널 배치는 바꾸지 않는다.
+      app.resize(width, height); await app.renderOnce(); await app.renderOnce();
+      const sidebar = app.get("workspace-sidebar"), tree = app.get("workspace-tree");
+      if (!(tree instanceof ScrollBoxRenderable)) throw new Error("Missing native workspace scroll area.");
+      const bar = tree.verticalScrollBar, divider = sidebar.x + sidebar.width - 1;
+
+      expect(bar.visible).toBe(true); expect(divider - bar.x - bar.width).toBe(1);
+      expect(sidebar.width).toBe(sidebarWidth); expect(tree.x - sidebar.x).toBe(leftInset);
+      expect(app.get("work-panel").width).toBe(width - sidebarWidth);
+      expect(app.get("workspace-search-box").width).toBe(sidebarWidth - 1);
+    }
+    expect(app.selection.worktree?.id).toBe("spacing-0"); expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
 
 test("Workspace는 폴더명과 브랜치 아이콘·이름을 들여쓰기 없이 같은 열의 두 줄로 표시한다", async () => {
   // A repository owns multiple two-line worktrees, not separately selectable branch nodes.

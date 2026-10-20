@@ -513,6 +513,8 @@ export class Workbench {
     this.searchBox.marginX = -horizontal; this.searchBox.paddingX = horizontal;
     this.search.placeholder = this.renderer.width < 80 ? "Search workspaces" : "Search repo/worktree/branch";
     this.tree.marginTop = vertical;
+    // Keep one cell before the divider without changing the sidebar's left inset.
+    this.tree.marginRight = 1 - horizontal;
     this.spaceRows(this.visibleRows());
     this.navigationRevealPending = true;
     this.workPanel.minWidth = 0;

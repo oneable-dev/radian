@@ -664,7 +664,8 @@ focus or Git navigation/scroll positions. Each attached TUI has its own theme.
 
 Navigation uses understated separators and underlined active tabs rather than boxed controls.
 Sidebar, work-view content and footer text use two-cell horizontal insets, reduced to one on terminals
-narrower than 80 columns. Main work tabs leave a single blank row before their content at every
+narrower than 80 columns. The workspace scrollbar always leaves one cell before the sidebar divider,
+without changing the sidebar's left inset or width. Main work tabs leave a single blank row before their content at every
 terminal height. Tabs, search surfaces and item gaps no longer switch height modes. The composer
 retains its normal vertical padding unless fixed controls need that space. Work surfaces have no
 additional top or bottom panel inset. Routine Neovim/worktree captions, the `Git · … · All refs` line
