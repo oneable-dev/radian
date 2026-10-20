@@ -227,8 +227,12 @@ items show their source references, not rendered image thumbnails.
 Paste absolute/`~/`/`./`/`../` paths, quoted or escaped file drops, or local `file://` URLs to attach
 files. File completion inserts the same numbered items. File parts become explicit absolute path
 references for the SDK's tools; Radian does not silently upload arbitrary file contents.
-**Ctrl+V** reads supported images, file URLs or text from the host clipboard. Remote host clipboard
-reads are rejected explicitly; terminal paste remains available for text and paths.
+**Ctrl+V** reads supported images, file URLs or text from the host clipboard, including while command
+or file completion suggestions are open. Use Ctrl+V for clipboard images; terminal paste shortcuts
+(such as macOS Cmd+V) do not invoke this host read. Remote host clipboard reads are rejected
+explicitly; terminal paste remains available for text and paths. Clipboard-read progress uses an
+absolute spinner in the composer's existing right gutter; its loading/minimum-display tail never
+adds a status row or changes the transcript viewport. Hiding the composer cancels it immediately.
 Clipboard images are stored under `${XDG_CACHE_HOME:-~/.cache}/radian/attachments` using private
 directories and files, so saved drafts can retain them. These owned cache files are not automatically
 pruned while other clients or undo history may still reference them.
@@ -310,7 +314,7 @@ current request. Compaction-specific progress requires an updated service; older
 optional activity metadata.
 Normal completion removes this request banner and puts the request excerpt in the answer's completion
 footer instead. The empty status row collapses once its spinner tail finishes, unless owned-subagent
-or paste feedback still needs it. Cancellation, unconfirmed stops and failures remain explicit as
+feedback still needs it. Cancellation, unconfirmed stops and failures remain explicit as
 `Cancelled`, `Stopped` or `Failed`; an unreported run with transcript content shows `Ready`. Completion metadata is scoped to
 the latest request. Spinner tails never delay results, and switching/hiding a conversation cancels
 its indicator. Steer and queue semantics are unchanged.

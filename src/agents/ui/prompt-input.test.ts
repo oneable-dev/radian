@@ -11,6 +11,9 @@ import { ok } from "../../result.ts";
 import type { ClipboardRepresentation } from "@opentui/core";
 import type { Result } from "../../result.ts";
 import type { ExpectedError } from "../../errors.ts";
+import { CompletionMenu } from "./completion-menu.ts";
+import { KeyRouter } from "../../keybindings/router.ts";
+import { defaultKeymap } from "../../keybindings/config.ts";
 
 async function mount(options: ConstructorParameters<typeof PromptInput>[3] = {}) {
   const app = await createTestRenderer({ width: 80, height: 10, kittyKeyboard: true });
@@ -19,6 +22,36 @@ async function mount(options: ConstructorParameters<typeof PromptInput>[3] = {})
   app.renderer.root.add(input); uiTheme(app.renderer).input(input); input.focus(); await app.renderOnce();
   return { ...app, input, notices, details, async close() { input.dispose(); await app.dispose(); } };
 }
+
+test.each(["", "/", "@"])("Ctrl+V는 입력이 %j여도 이미지 첨부를 추가하고 기존 입력과 포커스를 보존한다", async (prefix) => {
+  // Only OS clipboard contents are replaced; the real keymap, router, menu and attachment conversion stay active.
+  const directory = await mkdtemp(join(tmpdir(), "radian-clipboard-keys-"));
+  let reads = 0, paste: Promise<void> | undefined;
+  const app = await mount({ cacheRoot: directory, clipboard: {
+    read: async () => { reads++; return ok({ mimeType: "image/png", bytes: tinyPng() }); }, dispose: async () => {},
+  } });
+  const menu = new CompletionMenu(app.renderer, app.input, () => "session", async () => ok({ items: [], truncated: false }), () => {});
+  app.renderer.root.add(menu.root);
+  const router = new KeyRouter(app.renderer, defaultKeymap(), () => menu.engaged ? "prompt-completion" : "prompt",
+    (command) => command === "agent.paste", (command) => { if (command === "agent.paste") paste = app.input.pasteClipboard(); });
+  try {
+    await app.mockInput.typeText(prefix); await app.renderOnce();
+    expect(menu.open).toBe(Boolean(prefix));
+
+    // Completion ownership must not swallow the paste shortcut while / or @ suggestions are open.
+    app.mockInput.pressKey("v", { ctrl: true });
+    expect(paste).toBeDefined();
+    if (!paste) throw new Error("Clipboard paste shortcut was not routed");
+    await paste; await app.renderOnce();
+
+    // The original prefix remains, and the image is retained as private bytes rather than submitted or exposed as a path.
+    expect(reads).toBe(1); expect(app.input.value).toBe(`${prefix}[Image #1]`);
+    const path = app.input.submission.images[0]!;
+    expect(path.startsWith(directory)).toBe(true); expect(await readFile(path)).toEqual(tinyPng());
+    expect(app.input.draft.tokens).toHaveLength(1); expect(app.input.pending).toBe(false);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe(app.input.id); expect(app.notices).toEqual([]);
+  } finally { router.dispose(); menu.dispose(); await app.close(); await rm(directory, { recursive: true, force: true }); }
+});
 
 test("직접 읽은 클립보드 이미지는 번호로 표시하고 초안에 유지되는 비공개 파일을 참조한다", async () => {
   const directory = await mkdtemp(join(tmpdir(), "radian-clipboard-ui-"));

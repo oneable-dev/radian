@@ -9,7 +9,8 @@ export class Clipboard {
   async read(signal?: AbortSignal): Promise<Result<ClipboardRepresentation, ExpectedError>> {
     if (this.renderer.capabilities?.remote) return err(new ClipboardError("Remote host clipboard reads are unavailable. Use terminal paste for text or file paths."));
     this.service ??= createClipboard({ host: createHostClipboard({ maxReadBytes: 16 * 1024 * 1024 }), terminal: createRendererClipboardAdapter(this.renderer) });
-    const result = await this.service.read({ preferredTypes: ["image/png", "image/jpeg", "image/webp", "image/gif", "text/uri-list", "text/plain;charset=utf-8", "text/plain"],
+    // The SDK accepts MIME essence types only, without charset parameters.
+    const result = await this.service.read({ preferredTypes: ["image/png", "image/jpeg", "image/webp", "image/gif", "text/uri-list", "text/plain"],
       signal: signal ? AbortSignal.any([this.abort.signal, signal]) : this.abort.signal });
     if (result.status === "read") return ok(result.representation);
     if (result.status === "cancelled") return err(new CancelledError());

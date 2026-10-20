@@ -105,13 +105,16 @@ export class AgentPanel {
     const composer = this.composer = new BoxRenderable(renderer, { id: "agent-composer", width: "auto", height: 3, flexShrink: 0,
       flexDirection: "row", alignItems: "center", border: ["left"],
       onMouseDown: (event) => { if (event.button === 0 && this.active && !this.prompt.focused) this.prompt.focus(); } });
-    composer.add(this.prompt);
+    // Paint clipboard progress in the existing right gutter; it must never resize the transcript.
+    this.prompt.activity.root.position = "absolute"; this.prompt.activity.root.top = 0;
+    this.prompt.activity.root.right = 0; this.prompt.activity.root.zIndex = 1;
+    composer.add(this.prompt); composer.add(this.prompt.activity.root);
     this.sessionStatus = new SessionStatus(renderer);
     this.completion = new CompletionMenu(renderer, this.prompt, () => this.active ? this.promptSessionId : null, actions.onComplete,
       () => { this.resizeComposer(); changed(); }, () => this.completionRows());
     const statusRow = this.statusRow = new BoxRenderable(renderer, { id: "transcript-status-row", width: "100%", height: 3, paddingY: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.children = new SubagentSummary(renderer);
-    statusRow.add(this.runStatus.root); statusRow.add(this.prompt.activity.root); statusRow.add(this.children.root);
+    statusRow.add(this.runStatus.root); statusRow.add(this.children.root);
     this.root.on("resize", () => this.children.resize(this.root.width));
     this.runtimePanel.add(transcriptArea); this.runtimePanel.add(statusRow);
     this.runtimePanel.add(this.pendingMessages.root); this.runtimePanel.add(composer); this.runtimePanel.add(this.completion.root); this.runtimePanel.add(this.sessionStatus.root); this.root.add(this.runtimePanel);
@@ -231,7 +234,7 @@ export class AgentPanel {
   private resizeComposer = (): void => {
     if (this.disposed || !this.composer || !this.statusRow || this.prompt.isDestroyed) return;
     const requested = Math.max(this.prompt.lineCount, this.prompt.editorView.getTotalVirtualLineCount());
-    const showStatus = this.runStatus.hasContent || this.prompt.activity.root.visible || this.children.hasContent;
+    const showStatus = this.runStatus.hasContent || this.children.hasContent;
     const menuRowsBeforeLayout = this.completion?.open ? this.completion.root.height : 0;
     const controls = (this.sessions.root.visible ? 1 : 0) + this.sessionStatus.root.height + (showStatus ? 1 : 0) + 1 + menuRowsBeforeLayout;
     this.pendingMessages.update(this.pending ?? [], this.active, Math.min(Math.floor(this.root.height / 3), Math.max(0, this.root.height - controls)));

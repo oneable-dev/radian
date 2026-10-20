@@ -67,7 +67,7 @@ export const defaultBindings = {
   "agent.newline": [key("shift+enter", "prompt"), key("alt+enter", "prompt"), key("shift+enter", "prompt-completion"), key("alt+enter", "prompt-completion")],
   "agent.interrupt": [key("escape", "prompt"), key("escape", "session-tabs")],
   "agent.clear": [key("ctrl+c", "prompt"), key("ctrl+c", "prompt-completion")],
-  "agent.paste": [key("ctrl+v", "prompt")],
+  "agent.paste": [key("ctrl+v", "prompt"), key("ctrl+v", "prompt-completion")],
   "agent.inspect": [key("ctrl+o", "prompt")],
   "completion.next": [key("ctrl+n", "prompt-completion")],
   "completion.previous": [key("ctrl+p", "prompt-completion")],

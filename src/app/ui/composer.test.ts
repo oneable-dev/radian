@@ -1,11 +1,18 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import { ScrollBoxRenderable, type ClipboardRepresentation } from "@opentui/core";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
 import { PromptInput } from "../../agents/ui/prompt-input.ts";
-import { InputError } from "../../errors.ts";
-import { err, ok } from "../../result.ts";
+import { InputError, type ExpectedError } from "../../errors.ts";
+import { err, ok, type Result } from "../../result.ts";
+import { Clipboard } from "../../ui/clipboard.ts";
+import { tinyPng } from "../../testing/image.ts";
 import type { PromptDraft } from "../../agents/prompt-input.ts";
 import type { CompletionResult } from "../../agents/completion.ts";
 
@@ -26,6 +33,77 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     async click(id: string) { const node = get(id); await app.mockMouse.click(node.x + 1, node.y); await render(); },
     async close() { view.dispose(); await app.dispose(); } };
 }
+
+test.each([
+  { width: 120, height: 30, paused: false, status: "complete" },
+  { width: 60, height: 18, paused: false, status: "complete" },
+  { width: 120, height: 30, paused: true, status: "complete" },
+  { width: 60, height: 18, paused: true, status: "complete" },
+  { width: 120, height: 30, paused: false, status: "working" },
+  { width: 60, height: 18, paused: false, status: "working" },
+] as const)("붙여넣기 로딩은 반복해도 Transcript 높이·스크롤·입력 너비를 바꾸지 않는다: %j", async ({ width, height, paused, status }) => {
+  // Use an owned image-file URL so the real attachment path runs without changing the OS clipboard or user cache.
+  const directory = await mkdtemp(join(tmpdir(), "radian-paste-layout-")), image = join(directory, "image.png");
+  await writeFile(image, tinyPng());
+  const representation: ClipboardRepresentation = { mimeType: "text/uri-list", bytes: new TextEncoder().encode(pathToFileURL(image).href) };
+  let pending = Promise.withResolvers<Result<ClipboardRepresentation, ExpectedError>>();
+  const read = spyOn(Clipboard.prototype, "read").mockImplementation(() => pending.promise);
+  const app = await mount({ getSessionDetails: () => ({ status, output: "", error: null, sections: [
+    { id: "answer", kind: "assistant", title: "Agent", text: "```text\n" + Array.from({ length: 80 }, (_, i) => `LINE-${String(i).padStart(3, "0")}`).join("\n") + "\n```", status: "complete" },
+  ] }) });
+  try {
+    app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
+      sessions: tree.sessions.map((session) => ({ ...session, subagents: [] })),
+    })) })));
+    app.resize(width, height); app.input.value = "draft "; await app.render();
+    const scroll = app.get("session-transcript"), composer = app.get("agent-composer"), spinner = app.get("prompt-paste-loading");
+    if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing native transcript viewport");
+    if (paused) {
+      app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
+      scroll.scrollTo(10); await app.render(); app.mockInput.pressKey("e", { ctrl: true }); await app.render();
+      expect(app.view.workViewPreferences.agentViews?.a1?.follow).toBe(false);
+    }
+    const geometry = () => [scroll.y, scroll.height, scroll.scrollTop, composer.y, composer.height, app.input.width,
+      app.captureCharFrame().match(/LINE-\d+/u)?.[0]];
+    const before = geometry();
+    for (let index = 1; index <= 2; index++) {
+      pending = Promise.withResolvers<Result<ClipboardRepresentation, ExpectedError>>();
+      app.mockInput.pressKey("v", { ctrl: true }); await app.render();
+
+      // Reading and the spinner tail must use existing composer cells, never a temporary status row.
+      expect(app.input.pending).toBe(true); expect(spinner.visible).toBe(true); expect(geometry()).toEqual(before);
+      expect(spinner.parent?.id).toBe(composer.id);
+      expect(spinner.x).toBeGreaterThanOrEqual(app.input.x + app.input.width);
+      expect(spinner.x + spinner.width).toBeLessThanOrEqual(composer.x + composer.width);
+      expect(spinner.y).toBeGreaterThanOrEqual(composer.y); expect(spinner.y + spinner.height).toBeLessThanOrEqual(composer.y + composer.height);
+      pending.resolve(ok(representation)); await app.render();
+      expect(app.input.submission.images).toHaveLength(index); expect(app.input.pending).toBe(false);
+      expect(spinner.visible).toBe(true); expect(geometry()).toEqual(before);
+      app.clock.advance(499); await app.render(); expect(spinner.visible).toBe(true); expect(geometry()).toEqual(before);
+      app.clock.advance(1); await app.render(); expect(spinner.visible).toBe(false); expect(geometry()).toEqual(before);
+      expect(app.renderer.currentFocusedRenderable?.id).toBe(app.input.id); expect(app.sent).toEqual([]);
+    }
+  } finally { pending.resolve(ok(representation)); await app.render(); read.mockRestore(); await app.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("입력 화면을 숨기면 붙여넣기 로딩을 즉시 취소하고 늦은 이미지를 삽입하지 않는다", async () => {
+  const pending = Promise.withResolvers<Result<ClipboardRepresentation, ExpectedError>>();
+  let signal: AbortSignal | undefined;
+  const read = spyOn(Clipboard.prototype, "read").mockImplementation((abort) => { signal = abort; return pending.promise; });
+  const app = await mount();
+  try {
+    app.input.value = "retained draft"; app.mockInput.pressKey("v", { ctrl: true }); await app.render();
+    expect(app.input.activity.root.visible).toBe(true);
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("2"); await app.render();
+
+    // A hidden composer must not leave either its spinner timers or a clipboard operation alive.
+    expect(signal?.aborted).toBe(true); expect(app.input.pending).toBe(false); expect(app.input.activity.root.visible).toBe(false);
+    pending.resolve(ok({ mimeType: "image/png", bytes: tinyPng() })); await app.render();
+    app.clock.advance(1000); await app.render();
+    expect(app.input.draft.tokens).toEqual([]); expect(app.input.value).toBe("retained draft"); expect(app.sent).toEqual([]);
+    expect(app.input.activity.root.visible).toBe(false);
+  } finally { pending.resolve(ok({ mimeType: "image/png", bytes: tinyPng() })); await app.render(); read.mockRestore(); await app.close(); }
+});
 
 test.each(["", "first\nsecond"])("입력창의 상하좌우 여백과 테두리를 클릭하면 초안·커서를 유지하고 입력에 포커스한다: %j", async (draft) => {
   // Empty and multiline drafts share the whole composer surface as their click target.
