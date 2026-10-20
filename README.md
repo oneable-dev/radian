@@ -16,29 +16,19 @@ bun run start
 ```
 
 The app discovers Git repositories under the configured workspace roots (by default `~/projects`
-and `~/.dotfiles`) and shows a workspace sidebar containing **repositories and worktrees only**.
-Each worktree shows its folder name and branch on two lines, with the folder and branch icons aligned at the same horizontal level
-(no additional branch indentation or connector). Both lines form one selectable worktree item.
-They share a single horizontal text viewport: scrolling over either line moves both by the same
-offset, while a fixed one-cell error slot stays visible. Metadata updates preserve that offset;
-resizing or shortening the labels clamps it to the valid range. The sidebar has no execution
-spinner; failures remain visible without animation. Agent tabs and the work-status row retain
-their execution indicators.
-Repository groups, headers and worktree labels have one separation row between them,
-while folder/branch lines stay together. A thin selection frame uses the rows above and below its
-labels. Worktree items keep the panel background even when selected; only the border and text are
-emphasized. Adjacent items share that separation row, preserving the existing text spacing; hidden
-frames reserve the same space so selection never moves or resizes items. The navigation cursor has
-the frame while the tree is focused; otherwise the active worktree keeps it. Selected text and border
-colors stay the same when focus moves elsewhere.
-These vertical gaps do not change with terminal height; there is no compact-layout mode.
-The workspace search surface spans the sidebar width with three rows and centered single-line
-input at every terminal height; narrow terminals use a shorter placeholder.
-The padded search area is clickable and preserves its query and cursor across resize/collapse.
-Use `Tab`/`Shift+Tab` to move focus. `j/k`, arrows and Home/End move the tree cursor
-without changing the current workspace; **Enter** opens the highlighted worktree and restores its
-last work view/session. Mouse clicks open a worktree directly. Open sessions are tabs within Agents;
-focus that strip to use `h/l` (or left/right), Home/End, `n` for new and `x` for close.
+and `~/.dotfiles`). Workspace navigation is a centered, searchable **popup**, not a permanent sidebar.
+Open it with **Ctrl+f** outside embedded programs, or **Ctrl+Space, then w/f/b** from any work view.
+It contains repositories and worktrees only, without a preview pane. Folder and branch occupy two
+aligned lines in one selectable item and share horizontal scrolling. Metadata updates preserve the
+query, cursor and scroll position. Failures have a fixed error slot; navigation does not animate.
+Use **Ctrl+N/P** or arrows while typing, or Tab into results for **j/k** and Home/End.
+**Enter** opens the highlighted worktree and restores its last work view/session; a worktree click
+also opens it. **Esc** closes without changing selection and restores the original focus.
+Opening or closing the popup never changes the work pane or PTY dimensions.
+**Ctrl+Space, then s** opens a separate session monitor with a History-style live preview.
+Neither popup adds a top-level entry button or a global notification counter.
+Open sessions remain tabs within Agents; focus that strip to use `h/l` (or left/right),
+Home/End, `n` for new and `x` for close.
 `Ctrl+e` focuses the session prompt; `Enter` submits, `Shift+Enter` or `Alt+Enter` inserts a newline,
 and `Ctrl+C` clears the draft without interrupting work. `Esc` interrupts the selected Agent;
 when messages are waiting, it interrupts and submits them together immediately.
@@ -155,7 +145,7 @@ connections, not the underlying agents or native processes.
 
 ### Work views
 
-The left panel starts directly with search and workspace navigation, without a tab heading.
+Workspace navigation is an overlay; the work pane always uses the full available width.
 The work pane switches between **Agents**, **Editor**, **Git** and **Terminal**, with one visible
 view per worktree and Agents as the initial view. There is no top-level view tab strip:
 **Ctrl+Space, then a/e/g/t** selects the view and focuses its work area. The footer identifies the
@@ -175,19 +165,14 @@ The upper-right worktree label and the New session/History toolbar buttons are r
 selection, filtering and background snapshots never implicitly activate another work view.
 Session creation/closing retain their existing rules and never implicitly launch an editor.
 
-**Ctrl+Space, then b** toggles the entire left panel closed and open, without an extra toolbar button.
-Opening also focuses the workspace tree; closing returns sidebar focus to the work area.
-Esc in the Agent prompt no longer moves focus to the sidebar.
-The work pane takes the freed width without recreating Agent, Editor or Terminal instances.
-Selection, drafts, transcript positions and loaded History rows are retained. In a connected Editor,
-a sidebar toggle prepares the target PTY size while retaining the existing layout, then presents the
-new layout and matching newer VT snapshot together. Rapid toggles retain the latest intent without
-restarting Neovim; stale sizes cannot overwrite the visible VT. Focus/search commands still reveal
-the panel immediately so subsequent typing reaches the requested control; hidden navigation controls
-are excluded from Tab traversal. Editor PTYs retain the previous snapshot until new process output
-arrives rather than publishing emulator-only resize state. That runtime-side safeguard requires an
-updated service; existing services are never restarted automatically.
-This visibility state belongs to the current TUI, not the detached runtime or terminal configuration.
+**Ctrl+Space, then b** toggles the workspace popup, initially closed, and focuses its search input.
+The existing `sidebar.toggle`, `focus.sidebar` and `focus.search` configuration IDs remain accepted.
+Search state survives closing and reopening. Tab traversal is trapped inside an open popup; hidden
+navigation controls are excluded from normal traversal. Cancelling restores the original Agent,
+Editor, Git or Terminal focus. Selecting a workspace closes the popup and focuses its restored view.
+Agent/Editor/Terminal instances, drafts, transcript positions and History rows remain intact.
+An overlay never resizes Neovim or shells, even if the native process is temporarily suspended.
+Physical terminal resizing still uses the existing PTY snapshot safeguards; no service is restarted.
 
 Every worktree remembers its active tab. Agent retains its selected session, draft, transcript
 scroll position and section/cursor/folding state; Neovim retains its actual files, cursor, editing mode and unsaved buffers in the
@@ -212,7 +197,7 @@ is still detached, and input stays disabled until a fresh exclusive attachment i
 Selecting an already connected Editor focuses it without opening or reconnecting again.
 
 While the embedded terminal is focused, Neovim receives Tab, Esc, Ctrl+f/e, mouse and paste.
-**Ctrl+]** moves focus to the visible sidebar; outside the editor, existing application focus keys
+**Ctrl+]** opens the workspace popup; outside the editor, existing application focus keys
 and Tab/Shift+Tab traversal work. **Ctrl+C is native input**, not an application detach binding.
 Use the configured detach sequence (default **Ctrl+Space, then c**). The footer follows the actual
 focused control and effective keymap. Opening, switching and resizing do not
@@ -615,8 +600,8 @@ Context labels and known values use the same foreground as account usage. Model 
 number (yellow/gold) color, effort uses keyword, and `fast` uses success when on or info when off; unknown values
 and separators stay muted. These are terminal palette roles, not fixed product colors.
 The prompt surface reaches both edges of the Agent pane; its internal padding aligns the editable
-text with the work-status and telemetry rows. The sidebar divider sits at the right edge of its
-character cell, avoiding a half-cell gap beside the prompt surface. The empty prompt has no marker or placeholder,
+text with the work-status and telemetry rows. No permanent sidebar or divider reserves any width.
+The empty prompt has no marker or placeholder,
 and focusing it keeps the same surface background; the caret and left border indicate focus.
 The transcript, optional single-line work-status row and input group use a one-row parent gap;
 neither the transcript end nor work-status row adds its own boundary padding. Pending messages,
@@ -681,8 +666,8 @@ Finish existing jobs before explicitly restarting an old runtime to load the new
 Git has **Commits / Reflog** navigation. Commits shows the colored commit history or a file comparison
 in the main area, with **Commit / Refs** tabs on the right. Commit contains details and changed files;
 Refs contains Local / Remote / Tags and an All refs action. Reflog uses the full width and hides the
-right panel. The application's Workspace sidebar stays; Git does not duplicate worktree navigation
-or provide submodules. Selecting a ref filters history, never checks it out.
+right panel. Workspace navigation remains available through the shared popup; Git does not duplicate
+worktree navigation or provide submodules. Selecting a ref filters history, never checks it out.
 
 The initial selection is Working tree, with staged, unstaged and untracked changes. A commit compares
 against its first parent (or empty content for a root commit). Staged compares HEAD/index, unstaged
@@ -794,19 +779,19 @@ Git's Commits/Reflog, Commit/Refs and Local/Remote/Tags tabs use underlines for 
 keyboard focus, without a background fill. Top-level work-view tabs are omitted. Agent and Terminal session tabs use background emphasis without
 underlines; an unfocused active session keeps a subdued background. Other buttons retain their
 usual focus styling. Navigation uses understated separators rather than boxed controls.
-Sidebar, Agent/Git/Terminal content and footer text use two-cell horizontal insets, reduced to one on terminals
-narrower than 80 columns. The workspace scrollbar always leaves one cell before the sidebar divider,
-without changing the sidebar's left inset or width. Work views start at the top of the work pane;
+Workspace popup, Agent/Git/Terminal content and footer text use two-cell horizontal insets, reduced to one on terminals
+narrower than 80 columns. Workspace navigation never consumes permanent work-pane width.
+Work views start at the top of the work pane;
 there is no reserved row for top-level view navigation. Tabs, search surfaces and item gaps no longer switch height modes. The composer
 retains its normal vertical padding unless fixed controls need that space. Work surfaces have no
 additional top or bottom panel inset. Routine Neovim/worktree captions, the `Git · … · All refs` line
 and the terminal `… · running` line are omitted; empty, error, exit and reconnect messages remain meaningful.
-Agent's padded telemetry, Editor, Git lists/diffs and Terminal end at the same bottom edge as the sidebar
-divider, without an unused row below them. The sidebar widens to retain
-room for its tree. Embedded programs receive the measured inner viewport rather than rendering
+Agent's padded telemetry, Editor, Git lists/diffs and Terminal end at the same work-pane bottom edge,
+without an unused row below them. Popup dimensions are clamped to the terminal without changing
+that viewport. Embedded programs receive the measured inner viewport rather than rendering
 beneath the padding. The footer text remains one row, with its gradient extending through the
 product text's inset to the screen's left edge.
-Keyboard focus is separate from selection: the focused sidebar or input border uses the terminal's
+Keyboard focus is separate from selection: the focused workspace popup or input border uses the terminal's
 accent, while an unfocused selection stays softly highlighted. Agent input has a dedicated surface.
 These are presentation changes only; keybindings and embedded program input ownership are unchanged.
 
@@ -871,7 +856,7 @@ and programs' explicit RGB colors or Neovim colorschemes remain unchanged.
 
 The default leader is **Ctrl+Space**. Press and release it, then press `c` to detach radian,
 `a`/`e`/`g`/`t` to select Agents/Editor/Git/Terminal, `b` to toggle workspace navigation,
-`w` to reveal/focus workspace navigation or `f` to reveal/focus search.
+`w` or `f` to open workspace search, or `s` to monitor working sessions and unread results.
 `<leader> 1` through `<leader> 9` select a session in Agents or a shell in Terminal, based on the
 visible view rather than the focused control. `<leader> n` creates a session/shell in that view;
 Editor and Git ignore these commands. `<leader> x` closes the selected terminal, and `<leader> [` / `]`
@@ -899,7 +884,7 @@ the TUI to apply edits; the runtime and its processes do not need restarting. Th
 
 Spaces separate sequential keys (`"space r"` is a two-key leader); `+` combines modifiers.
 Use explicit `shift+c` for uppercase C. A string binding is global; an object can specify `scope`:
-`global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `history-search`, `session-tabs`, `prompt`, `prompt-completion`, `button`,
+`global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `history-search`, `monitor`, `monitor-search`, `session-tabs`, `prompt`, `prompt-completion`, `button`,
 `transcript` (section navigation), `transcript-text`, `transcript-visual`, `editor`, `terminal`,
 `git`, `git-prompt`, `dialog`, or `none`. An override replaces that command's defaults;
 `[]` disables it. Command IDs/defaults are defined in `src/keybindings/commands.ts`.
@@ -915,7 +900,7 @@ currently unavailable commands are consumed without executing, never replayed as
 
 ### Common footer
 
-The left navigation and right work panel share one full-width footer. Its single text row places
+The work pane and navigation popups share one full-width footer. Its single text row places
 `Radian`, its version and the **displayed work view** on the left (for example,
 `Radian 0.0.0 · Agents`), with shortcuts for the **currently focused control** on the right.
 The view name is subtly accented, not interactive, and does not change when focus moves elsewhere.
@@ -1148,7 +1133,7 @@ technical layers; neither feature depends on the other's implementation.
 
 History is a searchable popup, not a sidebar tab or a session-toolbar button. Use **`/history`** in
 the Agent prompt, or **Ctrl+Space → h** (`history.show`, configurable) from any work view.
-Its scope is the active worktree, not the sidebar navigation cursor. The list uses SDK conversation
+Its scope is the active worktree, not the workspace popup's candidate cursor. The list uses SDK conversation
 names (falling back to the first prompt or `Untitled session`), last activity and message count,
 newest first, including in shared offline directories.
 
@@ -1157,8 +1142,8 @@ changing the live session; normal letters, including hjkl and r, remain search t
 cycle within the popup. The list additionally supports j/k and Home/End. `Enter` opens the selected
 context in Agents, or selects its existing open tab, without copying/forking the SDK file or sending a
 prompt. Clicking a row only selects its preview. `Esc` closes the popup and restores its original
-focus without changing drafts, transcript scroll, work views, sidebar visibility or PTY attachments.
-Global view/sidebar/session commands are inactive while the popup owns focus. Closing a popup while
+focus without changing drafts, transcript scroll, work views, workspace popup visibility or PTY attachments.
+Global view/workspace/session commands are inactive while the popup owns focus. Closing a popup while
 Open is pending does not cancel or roll back an accepted request; a late result never changes selection.
 
 Wide screens show the list and read-only conversation preview side by side. Below 100 columns,
@@ -1182,7 +1167,7 @@ Empty history, no matches, discovery failures, preview failures and Open failure
 
 Closing records and active owned-child writers cannot be opened until cleanup finishes. Completed
 SDK child conversations can appear in history; there is no new deletion, retention or main-only filter.
-The sidebar search remains exclusively the workspace-name projection. A worktree change closes an
+The workspace search remains exclusively the workspace-name projection. A worktree change closes an
 open popup rather than admitting an outdated selection into the new scope.
 
 The additive `history-preview` capability uses an instance-fenced read-only GET endpoint. Older
@@ -1212,31 +1197,61 @@ not automatically restarted to upgrade error handling.
 
 ### Workspace search
 
-Click the search field, press `Ctrl+f`, or use `Tab` to focus it. Results update while typing,
-deleting or pasting, without submitting the field. Matching is case-insensitive, literal substring
-search over repository names, worktree folder names and actual branch names only.
-Repository-name matches retain all worktrees; folder/branch matches retain the matching worktree
-and its parent repository. Session tabs stay with the active Agents view and are not part of the tree
-projection. Session/subagent titles, paths, status text and history are not searched.
+Open the workspace popup with `Ctrl+f` outside a PTY or leader w/f/b from any view.
+Results update while typing, deleting or pasting. Matching is normalized, case-insensitive ordered
+fuzzy matching over repository names, worktree folder names and actual branch names. Repository
+matches retain their worktrees. Session/subagent titles, paths and history are not searched.
+`Ctrl+N/P` and arrows move candidates without leaving input; Tab switches to the tree for j/k
+and Home/End. `/` returns from the tree to search. **Enter from either surface opens the candidate.**
+`Ctrl+U` clears the query. **Esc closes**, preserving the query and cursor for reopening.
+Filtering and host updates never change canonical selection or start a repository service.
 
-Press `Esc` in the search field to clear the query and restore the complete tree. Press `Enter`
-to focus the workspace results. No matches shows a sidebar message, not a new central empty
-session state. Filtering changes only the displayed tree: the current worktree/session selection
-and source snapshots stay intact, even when selected items are hidden. Keyboard tree navigation
-uses the visible results, and host snapshot changes are re-filtered with the current query.
-No Git commands or runtime operations are triggered by search input.
+### Session monitoring
+
+**Leader s** opens all working sessions and unread results across already-connected repository
+services. Needs-attention candidates come first; sessions with running owned subagents remain
+included even if another child failed. Subagents belong to their main session, not independent
+navigation destinations. Search matches delivered-request summaries, repositories, worktrees and
+branches. Candidate identity is retained during streaming and status updates. Rendering is capped
+at 200 matches with an explicit refine-search notice; search still covers all session summaries.
+
+The right-hand pane previews the selected conversation without marking it as read. Like History,
+preview is bounded to six sections / 8,192 text units each; open the session for full content.
+At narrow widths, **Ctrl+O** toggles the list and preview; PgUp/PgDn scroll preview. Preview rendering
+and loading animation stop when hidden. The monitor never polls processes, rescans session files,
+queries models or starts cold repository services. It projects in-memory session summaries in linear
+time and renders only the selected preview. Full-snapshot transport/parsing remains an existing
+cost, separate from this summary projection.
+
+**Enter** opens the actual session in Agents and reveals its latest output. A foreground Agent
+conversation acknowledges a pending result only while its latest output is actually visible, not
+while scrolled into older output, covered by a popup or in another work view. Merely restoring a
+selection, browsing preview or receiving a background snapshot does not acknowledge it.
+
+Completion, failure, unfinished (`Stopped`) and unknown-origin cancellation create unread results.
+Explicit user interruption and lifecycle shutdown do not create another alert or erase a previous
+unread result. Each result has an identity: delayed acknowledgements cannot clear a newer result
+or a replacement conversation. Read state is runtime-owned, shared by attached TUIs and saved in
+checkpoints, including work completed while detached. Reopening History does not replay old alerts.
+Restoring a previously running job after runtime termination produces a stopped result, not success.
+
+The additive `session-attention` capability is required for unread tracking. Legacy services still
+supply working sessions; the monitor explains the missing support. Finish work and explicitly
+restart old services to upgrade. No service is automatically restarted.
 
 ### Display status
 
-Repository and worktree rows retain their Nerd Font type icons. Worktrees show a compact
-working/failure summary so background activity remains visible without nested agent rows.
-Session tabs aggregate the main agent and subagents: any failure wins, otherwise any working
-agent keeps the session working, and completion requires every agent to have completed.
-Working uses the shared animated spinner; final outcomes appear immediately in a fixed-width
-badge, independently of the spinner's minimum-visible tail. Each session tab has one cell of padding
-at both ends. Working and settled status glyphs share the leading badge cell; a remaining spinner tail
-uses the second cell without shifting the title or close control. Hidden views cancel their animations.
-Selection and focus do not change execution status.
+Repository and worktree rows retain their Nerd Font type icons and a fixed error slot.
+Session tabs show the shared spinner while the main agent or any owned child is running.
+Successful completion has **no check icon**. Unread results have an **orange bell**, independent of
+execution status; acknowledging a result removes only that bell. `Stopped` uses a **warning-colored
+`?`** in the tab and warning-colored text above input, retained after acknowledgement. Failures
+remain explicit with the error glyph and conversation details. Terminal warning color normally
+comes from ANSI slot 3 (fallback `#E5C07B`); the new `attention` role defaults to `#E9953A` and can
+be overridden globally or through `status.attention`.
+Results are immediate even while a short spinner finishes its 500 ms minimum tail. Empty indicator
+slots and their gap are reclaimed for the ID. Hidden views cancel animations. Each tab retains its
+one-cell outer padding. Selection and focus never change the underlying execution outcome.
 
 The work-status row shows the selected session's run state and its subagent counts at the right
 edge. The counts remain independent of the parent run's settled outcome. Working, failure, complete
@@ -1247,14 +1262,13 @@ execution row. Model/context/account usage remains on the separate lower telemet
 
 The SDK adapter normalizes events into display snapshots. `agent_end` alone is not completion:
 automatic retries keep the run working, and `agent_settled` plus the final outcome determine
-completion/failure. Aborted or unreported outcomes show no session-tab status badge or extra gap,
-never implying successful completion or a guessed idle/waiting state. Once any spinner tail ends,
-the unused badge cells are reclaimed for the session ID; the tab keeps its normal one-cell outer
-padding. Reported outcomes retain their badge alignment. Additional idle/waiting/cancelled icon
-policies are not defined here.
+completion/failure. Aborted or unreported outcomes never imply success or a guessed idle state.
+Unknown-origin cancellation can still need attention, while intentional interruption has no new
+notification icon. `Stopped` means settlement without a confirmed success, failure or cancellation;
+it is not a pause/resume state and is unrelated to the model's normal `stop` finish reason.
 
 Use a Nerd Font-enabled terminal to view the glyphs. Current mappings are `nf-cod-repo`
-(U+EA62), `nf-cod-folder` (U+EA83), `nf-cod-check` (U+EAB2), `nf-cod-close` (U+EA76),
+(U+EA62), `nf-cod-folder` (U+EA83), `nf-cod-bell` (U+EAA2), `nf-cod-close` (U+EA76),
 `nf-cod-dash` (U+EAD9), `nf-cod-openai` (U+EC81), and
 `nf-cod-claude` (U+EC82), from Nerd Fonts 3.5.1. Headless tests
 verify code-point output, not font installation or actual terminal glyph appearance.
@@ -1274,7 +1288,7 @@ This is an incremental domain-oriented layout, not a requirement to give every f
 | Directory | Responsibility |
 | --- | --- |
 | `src/app/` | CLI/UI bootstrap, workspace selection and whole-application composition |
-| `src/app/ui/workbench.ts` | Overall layout, left navigation, view switching, focus and footer coordination; no separate Sidebar abstraction |
+| `src/app/ui/workbench.ts` | Overall layout, workspace popup, view switching, focus, acknowledgement and footer coordination |
 | `src/agents/` | Agent session/subagent models and lifecycle, saved History and Pi SDK integration |
 | `src/agents/ui/` | Session tabs/status, Agent transcript/prompt/drafts/scroll and saved-History panel |
 | `src/usage/` | Provider-neutral account usage snapshots, shared polling/cache and isolated provider sources |

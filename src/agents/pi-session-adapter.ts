@@ -16,7 +16,8 @@ import { FastMode } from "./fast-mode.ts";
 import type { UsageMonitor } from "../usage/monitor.ts";
 import { loadPromptImages } from "./prompt-attachments.ts";
 import { ManualCompaction } from "./manual-compaction.ts";
-import { summarizeRequest } from "./request-summary.ts";
+import { summarizeRequest, type RequestSummary } from "./request-summary.ts";
+import type { SessionResult } from "./session-attention.ts";
 import { imageNamesEntryType } from "./transcript-images.ts";
 import { parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "./model-selection.ts";
 import { expandSkillInvocation } from "./completion.ts";
@@ -128,11 +129,18 @@ export class PiSessionExecutor implements SessionExecutor {
   // Own undelivered messages only while interrupting; the SDK owns the live queue.
   private interruptedMessages: QueuedUserMessage[] = [];
   private started: { wall: number; monotonic: number } | undefined;
+  private request: RequestSummary | undefined;
+  private result: SessionResult | undefined;
 
   constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode, private readonly imageLoader = loadPromptImages, private readonly compaction = new ManualCompaction(), private readonly reloadSettings: () => void = () => {}) {
     this.status = this.finalStatus(false);
     this.commandCatalog = sessionCommands(session);
     this.transcript = new SessionTranscript(session.sessionManager.getBranch());
+    this.request = deliveredRequest(session.messages.findLast(message => message.role === "user"));
+    const sections = this.transcript.sections;
+    const requestIndex = sections.findLastIndex(section => section.kind === "user" || section.skillName !== undefined || section.request !== undefined);
+    const completion = sections.slice(Math.max(0, requestIndex)).findLast(section => section.completion)?.completion;
+    if (completion) this.result = { id: crypto.randomUUID(), outcome: completion.outcome, completedAt: completion.completedAt, ...(this.request ? { request: this.request } : {}) };
     this.telemetry = new PiSessionTelemetry(session, () => this.emit(), usage, fast);
     this.unsubscribe = session.subscribe((event) => this.handleEvent(event));
   }
@@ -218,6 +226,7 @@ export class PiSessionExecutor implements SessionExecutor {
     if (this.partial) messages.push(`Agent (streaming): ${this.partial}`);
     messages.push(...this.activeTools.values());
     return { conversationId: this.savedSessionId, resourceRevision: this.resourceRevision, status: this.status, output: messages.join("\n\n").slice(-12000), error: this.error,
+      ...(this.request ? { request: this.request } : {}), ...(this.result ? { result: this.result } : {}),
       ...(this.status === "working" && this.compacting ? { activity: "compacting" as const } : {}),
       sections: this.transcript.sections, telemetry: this.modelSelectionSnapshot?.telemetry ?? this.telemetry.read(),
       pendingMessages: this.queuedMessages().map((message) => {
@@ -451,7 +460,13 @@ export class PiSessionExecutor implements SessionExecutor {
     switch (event.type) {
       case "agent_start":
         this.started ??= { wall: Date.now(), monotonic: performance.now() };
+        this.result = undefined;
         this.runRevision++; this.status = "working"; break;
+      case "message_start": {
+        const request = deliveredRequest(event.message);
+        if (request) this.request = request;
+        break;
+      }
       case "auto_retry_start": this.status = "working"; break;
       case "compaction_start":
         this.started ??= { wall: Date.now(), monotonic: performance.now() };
@@ -475,6 +490,19 @@ export class PiSessionExecutor implements SessionExecutor {
       // agent_end may precede retry/compaction/follow-up; never mark it complete.
     }
     if (completion) {
+      // Resolve the delivered request once at settlement, not by scanning transcripts for each monitor update.
+      // Stop at the previous run boundary so autonomous work cannot borrow an older request title.
+      this.request = undefined;
+      const sections = this.transcript.sections;
+      for (let index = sections.length - 1; index >= 0; index--) {
+        const section = sections[index]!;
+        if (section.completion && section.completion !== completion) break;
+        if (section.request) { this.request = section.request; break; }
+      }
+      this.result = { id: crypto.randomUUID(), outcome: completion.outcome, completedAt: completion.completedAt,
+        ...(this.request ? { request: this.request } : {}),
+        ...(completion.outcome === "cancelled" && (this.closing || this.interrupting)
+          ? { cancellation: this.closing ? "lifecycle" as const : "user" as const } : {}) };
       // Optional display persistence cannot turn an accepted, settled action into a rejected run.
       try {
         const saved = saveRunCompletion(this.session.sessionManager, completion);
@@ -495,6 +523,14 @@ export class PiSessionExecutor implements SessionExecutor {
     // SDK model switching can emit an intermediate automatic effort before the explicit choice.
     if (!this.modelSelectionSnapshot) for (const listener of this.listeners) listener();
   }
+}
+
+function deliveredRequest(message: AgentSession["messages"][number] | undefined): RequestSummary | undefined {
+  if (message?.role !== "user") return undefined;
+  const text = typeof message.content === "string" ? message.content : message.content.filter(part => part.type === "text").map(part => part.text).join("");
+  const skill = parseSkillBlock(text);
+  return summarizeRequest(skill ? skill.userMessage || `/skill:${skill.name}` : text,
+    typeof message.content === "string" ? 0 : message.content.filter(part => part.type === "image").length);
 }
 
 async function modelOperation<T>(operation: () => Promise<T>): Promise<Result<T, ExpectedError>> {

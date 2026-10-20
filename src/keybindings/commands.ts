@@ -1,4 +1,4 @@
-export const contexts = ["workspace", "search", "history", "history-search", "model", "model-search", "model-effort", "session-tabs", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "dialog", "none"] as const;
+export const contexts = ["workspace", "search", "history", "history-search", "monitor", "monitor-search", "model", "model-search", "model-effort", "session-tabs", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "dialog", "none"] as const;
 export type KeyContext = typeof contexts[number];
 export type KeyScope = KeyContext | "global" | "app" | "pty";
 export type BindingInput = { keys: string; scope: KeyScope };
@@ -30,7 +30,9 @@ export const defaultBindings = {
   "focus.next": tabContexts.map((context) => key("tab", context)),
   "focus.previous": [key("shift+tab", "app")],
   "focus.results": [key("enter", "search")],
-  "search.clear": [key("escape", "search")],
+  "search.clear": [key("ctrl+u", "search")],
+  "workspace.dismiss": [key("escape", "workspace"), key("escape", "search")],
+  "workspace.search": [key("/", "workspace")],
   "view.agent": [key("<leader> a")],
   "view.editor": [key("<leader> e")],
   "view.git": [key("<leader> g")],
@@ -58,10 +60,20 @@ export const defaultBindings = {
   "session.first": [key("home", "session-tabs")],
   "session.last": [key("end", "session-tabs")],
   "workspace.open": [key("enter", "workspace")],
-  "workspace.previous": [key("k", "workspace"), key("up", "workspace")],
-  "workspace.next": [key("j", "workspace"), key("down", "workspace")],
+  "workspace.previous": [key("k", "workspace"), key("up", "workspace"), key("up", "search"), key("ctrl+p", "search")],
+  "workspace.next": [key("j", "workspace"), key("down", "workspace"), key("down", "search"), key("ctrl+n", "search")],
   "workspace.first": [key("home", "workspace")],
   "workspace.last": [key("end", "workspace")],
+  "monitor.show": [key("<leader> s")],
+  "monitor.dismiss": [key("escape", "monitor"), key("escape", "monitor-search")],
+  "monitor.open": [key("enter", "monitor"), key("enter", "monitor-search")],
+  "monitor.previous": [key("k", "monitor"), key("up", "monitor"), key("ctrl+p", "monitor"), key("up", "monitor-search"), key("ctrl+p", "monitor-search")],
+  "monitor.next": [key("j", "monitor"), key("down", "monitor"), key("ctrl+n", "monitor"), key("down", "monitor-search"), key("ctrl+n", "monitor-search")],
+  "monitor.first": [key("home", "monitor")],
+  "monitor.last": [key("end", "monitor")],
+  "monitor.preview": [key("ctrl+o", "monitor"), key("ctrl+o", "monitor-search")],
+  "monitor.page-up": [key("pageup", "monitor"), key("pageup", "monitor-search")],
+  "monitor.page-down": [key("pagedown", "monitor"), key("pagedown", "monitor-search")],
   "history.show": [key("<leader> h")],
   "history.dismiss": [key("escape", "history"), key("escape", "history-search")],
   "history.preview": [key("ctrl+o", "history"), key("ctrl+o", "history-search")],

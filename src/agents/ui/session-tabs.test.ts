@@ -43,8 +43,8 @@ test("상태 아이콘이 없는 탭은 왼쪽 상태 칸과 간격을 빼고 �
     expect(tab.width).toBe(Bun.stringWidth(firstId) + 4);
     expect(close.x).toBe(title.x + title.width + 1); expect(close.x + close.width).toBe(tab.x + tab.width - 1);
 
-    // A reported outcome restores its badge without pushing the close control off screen.
-    app.tabs.update("tree", [session()], firstId, true); await app.render();
+    // An unread result, not successful completion alone, restores the notification badge.
+    app.tabs.update("tree", [{ ...session(), attention: { id: "unread", outcome: "complete", completedAt: 1000 } }], firstId, true); await app.render();
     expect(title.x).toBe(tab.x + 4); expect(title.plainText).toEndWith("…");
     expect(close.x + close.width).toBeLessThanOrEqual(app.tabs.list.viewport.x + app.tabs.list.viewport.width);
     app.tabs.update("tree", [unknown], firstId, true); await app.render();
@@ -142,12 +142,12 @@ test("공간이 부족할 때만 ID 끝을 말줄임하고 다시 넓히면 전�
     for (const width of [40, 24, 100]) {
       app.resize(width, 6); await app.render();
       const { tab, title } = app.get(firstId), text = title.plainText;
-      if (width === 100) expect(text).toBe(firstId);
+      if (width >= 40) expect(text).toBe(firstId);
       else {
         expect(text.endsWith("…")).toBe(true);
         expect(text.match(/…/g)).toHaveLength(1);
         expect(firstId.startsWith(text.slice(0, -1))).toBe(true);
-        expect(Bun.stringWidth(text)).toBeLessThanOrEqual(width - 7);
+        expect(Bun.stringWidth(text)).toBeLessThanOrEqual(width - 4);
       }
 
       // Status and close controls stay inside the viewport instead of forcing the label to hide them.

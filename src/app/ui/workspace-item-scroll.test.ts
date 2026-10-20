@@ -20,7 +20,7 @@ async function mount() {
     onPrompt: () => { actions.push("prompt"); return ok(undefined); }, initialDrafts: { a1: "preserved draft" },
     getSessionDetails: () => ({ status: "working", error: null, output: "", sections: [{ id: "request", kind: "user", title: "You", text: "Actual work", status: "complete" }] }) });
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
-  await render();
+  app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab(); await render();
   const item = app.renderer.root.findDescendantById("worktree:demo:main")!;
   const content = item.findDescendantById("worktree:demo:main:label")!;
   const lines = () => app.captureCharFrame().split("\n").slice(content.y, content.y + 2).map((line) => line.slice(item.x + 1, item.x + item.width - 1));
@@ -109,7 +109,8 @@ test("가로 스크롤 뒤에도 브랜치 줄 클릭은 워크트리 하나를 
   try {
     await app.mockMouse.scroll(app.item.x + 6, app.label().y + 1, "right"); await app.render();
     await app.mockMouse.click(app.item.x + 6, app.label().y + 1); await app.render();
-    expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree");
+    expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
+    app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab(); await app.render();
     expect(app.item.height).toBe(4); expect(app.view.promptDrafts.a1).toBe("preserved draft"); expect(app.actions).toEqual([]);
     app.resize(60, 12); await app.render();
     const tree = app.renderer.root.findDescendantById("workspace-tree")! as ScrollBoxRenderable, top = tree.scrollTop;
@@ -125,6 +126,7 @@ test("짧은 폴더와 긴 브랜치도 하나의 뷰포트를 쓰며 한글·em
     app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id !== "demo:main" ? tree : { ...tree, name: rawName }) })));
     await app.render(); const label = app.label();
     expect(label.plainText).toContain("short-folder 한글 👨‍👩‍👧‍👦 é\n"); expect(label.lineCount).toBe(2);
+    app.resize(40, 20); await app.render();
     label.scrollX = label.maxScrollX; await app.render();
     expect(app.lines()[0]!.trim()).toBe(""); expect(app.lines()[1]).toContain("TAIL");
     label.scrollX = 3; await app.render();

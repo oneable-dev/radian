@@ -38,6 +38,7 @@ async function mount() {
   await setup.renderOnce();
   return { ...setup, ...fixture, registry, selection, creation, prompts, closes, view,
     async click(text: string) {
+      if (text.startsWith(icons.folder)) { setup.mockInput.pressKey("f", { ctrl: true }); setup.mockInput.pressKey("u", { ctrl: true }); await setup.renderOnce(); }
       const lines = setup.captureCharFrame().split("\n");
       const y = lines.findIndex((line) => line.includes(text));
       const x = lines[y]?.indexOf(text) ?? -1;
@@ -104,7 +105,7 @@ test("워크트리별 입력 초안과 포커스는 비선택 SDK 갱신과 검�
 
     // Search hides the selected main row but does not retarget its draft or create a run.
     expect(app.selection.sessionId).toBe(main);
-    expect(app.captureCharFrame()).toContain("main draf");
+    expect(app.view.promptDrafts[main]).toBe("main draf");
     expect(app.prompts).toEqual([]);
     app.mockInput.pressEscape(); await app.renderOnce();
     await app.click(`${icons.folder} feature`);

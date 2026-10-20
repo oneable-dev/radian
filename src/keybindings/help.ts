@@ -3,7 +3,9 @@ import { inScope, type CommandId, type KeyContext } from "./commands.ts";
 
 const labels: Partial<Record<CommandId, string>> = {
   "app.detach": "Detach Radian (keep background work running)", "app.help": "Open application help", "notice.details": "Read the current notification",
-  "sidebar.toggle": "Toggle the sidebar", "focus.search": "Search workspaces", "focus.sidebar": "Focus the workspace sidebar",
+  "sidebar.toggle": "Toggle the workspace popup", "focus.search": "Search workspaces", "focus.sidebar": "Open the workspace popup",
+  "workspace.dismiss": "Close without switching workspaces", "workspace.search": "Search workspaces",
+  "monitor.show": "Monitor working sessions and unread results", "monitor.open": "Open the selected session", "monitor.dismiss": "Close session monitoring", "monitor.preview": "Focus or toggle live preview",
   "focus.prompt": "Focus the Agent input", "focus.transcript": "Read the Agent conversation", "focus.next": "Next focus target", "focus.previous": "Previous focus target",
   "view.agent": "Show Agents", "view.editor": "Show Editor", "view.git": "Show Git", "view.terminal": "Show Terminal",
   "tab.new": "Create a session in Agents or a shell in Terminal",

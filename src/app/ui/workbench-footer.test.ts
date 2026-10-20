@@ -63,6 +63,7 @@ test("트리에서 검색창으로 포커스를 옮기면 해당 영역의 단�
   // Context comes from actual renderer focus, including existing global focus shortcuts.
   const app = await mount();
   try {
+    app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab(); await app.renderOnce();
     expect(app.footerLine()).toContain("Enter Open worktree");
     expect(app.footerLine()).not.toContain("Close session");
     expect(app.footerLine()).not.toContain("Ctrl+");
@@ -70,11 +71,11 @@ test("트리에서 검색창으로 포커스를 옮기면 해당 영역의 단�
     app.mockInput.pressKey("f", { ctrl: true }); await app.renderOnce();
     await app.mockInput.typeText("nxq"); await app.renderOnce();
 
-    expect(app.footerLine()).toContain("Enter Results");
-    expect(app.footerLine()).toContain("Esc Clear");
+    expect(app.footerLine()).toContain("Enter Open");
+    expect(app.footerLine()).toContain("Esc Close");
     expect(app.footerLine()).not.toContain("New session");
     expect(app.calls).toEqual([]);
-    app.mockInput.pressEscape(); app.mockInput.pressEnter(); await app.renderOnce();
+    app.mockInput.pressKey("u", { ctrl: true }); app.mockInput.pressTab(); await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree");
     expect(app.footerLine()).toContain("Enter Open worktree");
   } finally { await app.close(); }
@@ -144,34 +145,22 @@ test("패널이 숨겨지는 좁은 화면에서도 푸터와 알림은 하단�
     expect(app.selection.sessionId).toBe("a1");
     expect(app.calls).toEqual([]);
     app.resize(120, 24); await app.renderOnce();
-    expect(app.footerLine()).toContain("Enter Open worktree");
+    expect(app.footerLine()).toContain("Ctrl+t Transcript");
   } finally { await app.close(); }
 });
 
-test("사이드바 구분선과 프롬프트 배경은 가로 경계를 맞추고 상태 영역까지 아래쪽을 채운다", async () => {
-  // A centered box-drawing line leaves half of its reserved cell outside the Agent pane.
+test("프롬프트와 상태는 사이드바 공간 없이 전체 작업 영역의 왼쪽부터 배치한다", async () => {
+  // Popup navigation must not reserve a divider cell or shrink Agent content.
   const app = await mount();
   try {
-    // The edge-aligned divider must keep its cell and the prompt's text alignment on resize.
     for (const [width, height, inset] of [[120, 24, 2], [60, 12, 1], [79, 18, 1], [80, 17, 2], [120, 24, 2]] as const) {
       app.resize(width, height); await app.renderOnce();
-      const sidebar = app.renderer.root.findDescendantById("workspace-sidebar")!;
-      const composer = app.renderer.root.findDescendantById("agent-composer")!;
-      const prompt = app.renderer.root.findDescendantById("session-prompt")!;
-      const column = sidebar.x + sidebar.width - 1;
-      const panel = app.renderer.root.findDescendantById("work-panel")!;
-      expect(app.renderer.root.findDescendantById("agent-view")!.y).toBe(panel.y);
-      expect(app.renderer.root.findDescendantById("work-view-tabs")).toBeUndefined();
+      const composer = app.renderer.root.findDescendantById("agent-composer")!, prompt = app.renderer.root.findDescendantById("session-prompt")!;
+      const panel = app.renderer.root.findDescendantById("work-panel")!, status = app.renderer.root.findDescendantById("session-status")!;
 
-      // The right-edge block touches the next cell instead of drawing at the center like │.
-      expect(app.captureCharFrame().split("\n")[composer.y]!.slice(column, column + 1)).toBe("▕");
-      expect(composer.x).toBe(column + 1); expect(prompt.x).toBe(composer.x + inset);
-      // The padded telemetry follows the prompt and reaches the sidebar's final content row.
-      const status = app.renderer.root.findDescendantById("session-status")!;
-      expect(composer.y + composer.height).toBe(status.y);
-      expect(status.y + status.height).toBe(sidebar.y + sidebar.height);
-      expect(app.captureCharFrame().split("\n")[composer.y + composer.height - 1]!.slice(column, column + 1)).toBe("▕");
-      expect(app.calls).toEqual([]);
+      expect(panel.x).toBe(0); expect(panel.width).toBe(width); expect(composer.x).toBe(panel.x); expect(prompt.x).toBe(composer.x + inset);
+      expect(composer.y + composer.height).toBe(status.y); expect(status.y + status.height).toBe(panel.y + panel.height);
+      expect(app.renderer.root.findDescendantById("workspace-picker")!.visible).toBe(false); expect(app.calls).toEqual([]);
     }
   } finally { await app.close(); }
 });
@@ -179,15 +168,13 @@ test("사이드바 구분선과 프롬프트 배경은 가로 경계를 맞추�
 test("일반 화면의 넉넉한 여백은 좁은 화면에서 줄어들고 복원 시 초안과 함께 돌아온다", async () => {
   // Content and branding share a two-cell inset, without moving the gradient away from the edge.
   const app = await mount();
-  const sidebar = app.renderer.root.findDescendantById("workspace-sidebar")!;
-  const search = app.renderer.root.findDescendantById("workspace-search")!;
   const transcript = app.renderer.root.findDescendantById("session-transcript")!;
   const composer = app.renderer.root.findDescendantById("agent-composer")!;
   const prompt = app.renderer.root.findDescendantById("session-prompt")!;
   try {
-    expect(search.x - sidebar.x).toBe(2);
-    expect(transcript.x - sidebar.x - sidebar.width).toBe(2);
-    expect(composer.x).toBe(sidebar.x + sidebar.width);
+    expect(app.renderer.root.findDescendantById("workspace-picker")!.visible).toBe(false);
+    expect(transcript.x).toBe(2);
+    expect(composer.x).toBe(0);
     expect(prompt.x - composer.x).toBe(2);
     expect(app.footerLine().indexOf("Radian")).toBe(2);
 
@@ -195,9 +182,8 @@ test("일반 화면의 넉넉한 여백은 좁은 화면에서 줄어들고 복�
     app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("keep this draft");
     app.resize(60, 12); await app.renderOnce();
 
-    expect(search.x - sidebar.x).toBe(1);
-    expect(transcript.x - sidebar.x - sidebar.width).toBe(1);
-    expect(composer.x).toBe(sidebar.x + sidebar.width);
+    expect(transcript.x).toBe(1);
+    expect(composer.x).toBe(0);
     expect(prompt.x - composer.x).toBe(1);
     expect(app.footerLine().indexOf("Radian")).toBe(1);
     expect(app.renderer.currentFocusedRenderable).toBe(prompt);
@@ -205,9 +191,8 @@ test("일반 화면의 넉넉한 여백은 좁은 화면에서 줄어들고 복�
     // The normal spacing returns without rebuilding the Agent or replacing its draft.
     app.resize(120, 24); await app.renderOnce();
 
-    expect(search.x - sidebar.x).toBe(2);
-    expect(transcript.x - sidebar.x - sidebar.width).toBe(2);
-    expect(composer.x).toBe(sidebar.x + sidebar.width);
+    expect(transcript.x).toBe(2);
+    expect(composer.x).toBe(0);
     expect(prompt.x - composer.x).toBe(2);
     expect(app.footerLine().indexOf("Radian")).toBe(2);
     expect(app.view.promptDrafts.a1).toBe("keep this draft");

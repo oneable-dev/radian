@@ -101,7 +101,7 @@ test("작은 화면의 긴 대기 목록도 입력창과 하단 상태·푸터�
     expect(app.prompt.height).toBeGreaterThan(0); expect(app.interrupted).toEqual([]);
 
     app.resize(150, 30); await app.render();
-    expect(app.captureCharFrame()).toContain("• Messages waiting to be sent (press esc to interrupt and send immediately)");
+    expect(app.captureCharFrame()).toContain("• Messages will be sent after the current response and tools finish (press esc to interrupt and send immediately)");
     expect(app.captureCharFrame()).toContain("↳ Pending 0");
   } finally { await app.close(); }
 });

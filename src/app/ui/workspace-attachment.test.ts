@@ -25,6 +25,7 @@ test("연결 전 다른 레포의 초안을 지우지 않고 연결 뒤 저장�
     selection.replaceSnapshot(repositories.map((repo) => repo.id !== "B" ? repo : { ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
       sessions: ["b1", "b2"].map((id) => ({ id, name: id, status: null, subagents: [] })) })) }), { "tree-B": "b2" });
     await setup.renderOnce();
+    setup.mockInput.pressKey("f", { ctrl: true }); await setup.renderOnce();
     const lines = setup.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes(`${icons.folder} B-folder`));
     await setup.mockMouse.click(lines[y]!.indexOf("B-folder"), y); await setup.renderOnce();
 
@@ -34,7 +35,7 @@ test("연결 전 다른 레포의 초안을 지우지 않고 연결 뒤 저장�
     expect(selection.sessionId).toBe("b2");
     expect(prompt.value).toBe("retained draft B");
     expect(view.promptDrafts.a1).toBe("draft A");
-    expect(setup.captureCharFrame()).toContain("A-repo");
-    expect(setup.captureCharFrame()).toContain("B-repo");
+    expect(setup.renderer.root.findDescendantById("workspace-picker")!.visible).toBe(false);
+    expect(selection.snapshot.map(repo => repo.name)).toEqual(["A-repo", "B-repo"]);
   } finally { view.dispose(); await setup.dispose(); }
 });

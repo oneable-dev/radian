@@ -200,7 +200,7 @@ test("기존 입력이 사라졌다면 숨은 검색창 대신 표시된 탐색 
     app.get("session-prompt").focus(); await app.open();
     app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree, sessions: [] })) })));
     app.mockInput.pressEscape(); await app.render();
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree"); expect(app.get("session-history").visible).toBe(false);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("agent-session-list"); expect(app.get("session-history").visible).toBe(false);
     expect(app.resumed).toEqual([]);
   } finally { await app.close(); }
 });
@@ -208,7 +208,7 @@ test("기존 입력이 사라졌다면 숨은 검색창 대신 표시된 탐색 
 test("팝업은 Tab 포커스·전역 명령·배경 클릭을 가두고 sidebar 접기 상태를 유지한다", async () => {
   const app = await mount();
   try {
-    app.leader("b"); await app.render(); expect(app.get("workspace-sidebar").visible).toBe(false);
+    expect(app.get("workspace-picker").visible).toBe(false);
     await app.open(); const dialog = app.get("history-dialog");
     for (let i = 0; i < 9; i++) { app.mockInput.pressTab(); await app.render(); expect(["history-search", "history-list", "history-preview"]).toContain(app.renderer.currentFocusedRenderable!.id); }
     app.leader("e"); app.leader("b"); app.mockInput.pressKey("e", { ctrl: true }); await app.render();
@@ -266,9 +266,10 @@ test("좁은 창은 목록과 미리보기를 전환하고 resize 뒤 검색과 
   const app = await mount();
   try {
     await app.open(); await app.mockInput.typeText("keyboard"); app.clock.advance(150); await app.render();
-    app.resize(64, 12); await app.render();
+    app.resize(60, 12); await app.render();
     expect(app.get("history-list").visible).toBe(true); expect(app.get("history-preview-pane").visible).toBe(false);
-    expect(app.captureCharFrame().split("\n")[11]).toContain("Ctrl+o Preview");
+    expect(app.captureCharFrame().split("\n")[11]).toContain("Esc Close");
+    expect(app.view.workViewPreferences.active["demo:main"] ?? "agent").toBe("agent");
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
     expect(app.get("history-list").visible).toBe(false); expect(app.get("history-preview-pane").visible).toBe(true);
     expect(app.captureCharFrame()).toContain("Saved question second");
@@ -280,7 +281,7 @@ test("좁은 창은 목록과 미리보기를 전환하고 resize 뒤 검색과 
       await app.mockInput.pressKeys(["\x1b[6~"]); await app.render();
     }
     expect(app.captureCharFrame()).toContain("Saved answer second");
-    const dialog = app.get("history-dialog"); expect(dialog.x + dialog.width).toBeLessThanOrEqual(64); expect(dialog.y + dialog.height).toBeLessThanOrEqual(12);
+    const dialog = app.get("history-dialog"); expect(dialog.x + dialog.width).toBeLessThanOrEqual(60); expect(dialog.y + dialog.height).toBeLessThanOrEqual(12);
     app.resize(140, 30); await app.render();
     expect(app.get("history-list").visible).toBe(true); expect(app.get("history-preview-pane").visible).toBe(true);
     expect((app.get("history-search") as InputRenderable).value).toBe("keyboard"); expect(app.resumed).toEqual([]);

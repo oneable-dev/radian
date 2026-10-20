@@ -241,11 +241,11 @@ test("Editor에 포커스가 있으면 Neovim 키를 전달하고 Ctrl+]로 앱 
     app.mockInput.pressEscape(); await app.renderOnce();
     expect(editor.inputs.join("")).toContain("\t"); expect(editor.inputs.join("")).toContain("\x06"); expect(editor.inputs.join("")).toContain("\x05");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("editor-terminal:demo:main");
-    expect(app.captureCharFrame().split("\n")[23]).toContain("Ctrl+] Sidebar");
+    expect(app.captureCharFrame().split("\n")[23]).toContain("Ctrl+] Workspaces");
 
     app.mockInput.pressKey("]", { ctrl: true }); await app.renderOnce();
 
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-search");
     expect(editor.inputs.join("")).not.toContain("\x1d");
     expect(editor.opens).toEqual([]); // Existing editor metadata requires attachment, not another open.
   } finally { await app.close(); }

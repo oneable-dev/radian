@@ -160,6 +160,8 @@ export class AgentPanel {
     return drafts;
   }
   get active(): boolean { return this.runtimePanel.visible; }
+  get resultVisible(): boolean { return this.active && this.transcript.latestVisible; }
+  focusLatest(): void { this.transcript.followLatest(); this.focusTranscript(); }
   get sessionId(): string | null { return this.promptSessionId; }
   get canSubmit(): boolean { return Boolean(this.promptSessionId && this.prompt.value.trim() && !this.prompt.pending && !this.submitting.has(this.promptSessionId)); }
   get canInterrupt(): boolean {

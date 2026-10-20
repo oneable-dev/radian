@@ -9,7 +9,7 @@ import { runtimePaths, RuntimeStore } from "./storage.ts";
 import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
 
 // Keep repo identity and instance fencing inside the existing clients, including PTY leases.
-export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "newTab" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "image" | "models" | "selectModel" | "catalog">>;
+export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "newTab" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "image" | "models" | "selectModel" | "catalog" | "acknowledge">>;
 type Connector = (repository: Repository, cwd: string, options: ConnectOptions) => Promise<Result<RepositoryClient | null, ExpectedError>>;
 type Entry = { repository: Repository; preferences: RuntimePreferences; connectionVersion: number; client?: RepositoryClient; unsubscribe?: () => void;
   watcher?: RepositoryWatcher; discoveryWarning?: string;
@@ -74,6 +74,10 @@ export class WorkspaceClient {
   }
 
   get recoveryVersion(): number { return this.recovery; }
+  get attentionNotice(): string {
+    const legacy = this.entries.filter(entry => entry.client && !entry.client.snapshot.capabilities?.includes("session-attention")).map(entry => entry.repository.name);
+    return legacy.length ? `Unread tracking requires updated repository services: ${legacy.join(", ")}. Finish work, then explicitly stop/restart those services. No service was restarted.` : "";
+  }
   get retainedSessionIds(): ReadonlySet<string> {
     return new Set(this.entries.filter((entry) => !entry.client).flatMap((entry) => [...Object.keys(entry.preferences.drafts), ...Object.keys(entry.preferences.inputDrafts ?? {})]));
   }
@@ -164,6 +168,10 @@ export class WorkspaceClient {
     const client = await this.ensure(entry.value); if (!client.ok) return client;
     if (signal?.aborted) return err(new CancelledError());
     return client.value.previewHistory(worktreeId, savedId, signal);
+  }
+  async acknowledge(...args: Parameters<RuntimeClient["acknowledge"]>): ReturnType<RuntimeClient["acknowledge"]> {
+    const entry = this.sessionOwner(args[0]); if (!entry.ok) return entry;
+    return entry.value.client?.acknowledge ? entry.value.client.acknowledge(...args) : err(new CapabilityError("This repository connection does not support session attention."));
   }
   async interrupt(...args: Parameters<RuntimeClient["interrupt"]>): ReturnType<RuntimeClient["interrupt"]> {
     const entry = this.sessionOwner(args[0]); return entry.ok ? entry.value.client!.interrupt(...args) : entry;

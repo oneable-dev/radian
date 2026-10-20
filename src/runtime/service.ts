@@ -121,7 +121,8 @@ class WorkspaceRuntime {
     for (const record of records) {
       const restored = await this.registry.restore(record);
       if (!restored.ok) {
-        const state = { ...record.state, status: "failure" as const, error: `Could not restore: ${restored.error.message}` };
+        const result = { id: crypto.randomUUID(), outcome: "error" as const, completedAt: Date.now(), ...(record.state.request ? { request: record.state.request } : {}) };
+        const state = { ...record.state, result, attention: result, status: "failure" as const, error: `Could not restore: ${restored.error.message}` };
         delete state.telemetry;
         this.failedRecovery.set(record.id, { ...record, state,
           subagents: record.subagents.map((agent) => ({ ...agent, status: agent.status === "working" ? null : agent.status })) });
@@ -137,10 +138,12 @@ class WorkspaceRuntime {
     const repositories = this.registry.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({
       ...tree, sessions: [...tree.sessions, ...failed.filter((record) => record.worktreeId === tree.id).map((record) => ({
         id: record.id, name: record.name, status: record.state.status, subagents: record.subagents,
+        ...(record.state.request ? { request: record.state.request } : {}), ...(record.state.result ? { result: record.state.result } : {}),
+        ...(record.state.attention ? { attention: record.state.attention } : {}),
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || [this.discoveryWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
@@ -244,6 +247,19 @@ class WorkspaceRuntime {
         if (this.failedRecovery.delete(command.sessionId)) this.changed();
         else this.observe(this.registry.close(command.sessionId));
         return ok(null);
+      }
+      case "acknowledge": {
+        const failed = this.failedRecovery.get(command.sessionId);
+        if (failed) {
+          if (failed.state.conversationId !== command.conversationId) return err(new SessionError("SESSION_CONFLICT", "Conversation changed. No result was acknowledged."));
+          if (failed.state.attention?.id === command.resultId) {
+            const { attention: _attention, ...state } = failed.state;
+            this.failedRecovery.set(failed.id, { ...failed, state }); this.changed();
+          }
+          return ok(null);
+        }
+        const result = this.registry.acknowledge(command.sessionId, command.conversationId, command.resultId);
+        return result.ok ? ok(null) : result;
       }
       case "interrupt": {
         const state = this.registry.details(command.sessionId);

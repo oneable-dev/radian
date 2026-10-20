@@ -14,9 +14,11 @@ import type { RequestSummary } from "./request-summary.ts";
 import type { TranscriptImageData } from "./transcript-images.ts";
 import { modelCommand, parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "./model-selection.ts";
 import { historyCommand, parseHistoryCommand } from "./history-command.ts";
+import { needsAttention, type SessionResult } from "./session-attention.ts";
 
 export type ExecutionState = { readonly conversationId?: string; readonly resourceRevision?: number; readonly status: AgentStatus | null; readonly activity?: "compacting"; readonly output: string; readonly error: string | null;
   readonly sections?: readonly TranscriptSection[]; readonly telemetry?: SessionTelemetry;
+  readonly request?: RequestSummary; readonly result?: SessionResult; readonly attention?: SessionResult;
   readonly pendingMessages?: readonly RequestSummary[]; readonly runTiming?: { readonly startedAt: number; readonly elapsedMs: number } };
 export type SessionExecutor = {
   readonly savedSessionId: string;
@@ -61,6 +63,7 @@ type OpenExecution = Execution & {
   closeTask?: Promise<Result<void, ExpectedError>>;
   readonly worktree: Worktree; readonly children: Map<string, Execution>; readonly generation: string;
   phase: "creating" | "open" | "closing"; recoveredState?: ExecutionState; replacing?: boolean;
+  observedResultId?: string | undefined; attention?: SessionResult | undefined;
 };
 
 export class SessionRegistry {
@@ -75,10 +78,12 @@ export class SessionRegistry {
 
   get snapshot(): readonly Repository[] {
     return repositorySnapshot(this.repositories).map((repo) => ({ ...repo, worktrees: repo.worktrees.map((worktree) => ({ ...worktree,
-      sessions: [...this.entries.values()].filter((entry) => entry.phase === "open" && entry.worktree.id === worktree.id).map((entry) => ({
-        id: entry.id, name: entry.name, status: entry.replacing ? "working" : entry.recoveredState ? entry.recoveredState.status : entry.executor?.state.status ?? null,
-        subagents: this.children(entry),
-      })),
+      sessions: [...this.entries.values()].filter((entry) => entry.phase === "open" && entry.worktree.id === worktree.id).map((entry) => {
+        const state = this.details(entry.id);
+        return { id: entry.id, name: entry.name, status: state?.status ?? null, subagents: this.children(entry),
+          ...(state?.request ? { request: state.request } : {}), ...(state?.result ? { result: state.result } : {}),
+          ...(entry.attention ? { attention: entry.attention } : {}) };
+      }),
     })) }));
   }
   get closingCount(): number { return [...this.entries.values()].filter((entry) => entry.phase === "closing").length; }
@@ -89,7 +94,27 @@ export class SessionRegistry {
     const live = entry.executor?.state;
     // Recovery keeps transcript/status history, but account usage continues updating in the live SDK.
     const state = entry.recoveredState ? { ...entry.recoveredState, ...(live?.conversationId ? { conversationId: live.conversationId } : {}), ...(live?.resourceRevision !== undefined ? { resourceRevision: live.resourceRevision } : {}), ...(live?.telemetry ? { telemetry: live.telemetry } : {}) } : live;
-    return state && entry.replacing ? { ...state, status: "working" } : state ?? null;
+    if (!state) return null;
+    return entry.replacing || entry.attention ? { ...state, ...(entry.replacing ? { status: "working" as const } : {}), ...(entry.attention ? { attention: entry.attention } : {}) } : state;
+  }
+
+  acknowledge(id: string, conversationId: string, resultId: string): Result<void, ExpectedError> {
+    const selected = this.requireOpen(id); if (!selected.ok) return selected;
+    const entry = selected.value;
+    if (entry.replacing || entry.executor!.savedSessionId !== conversationId) return err(new SessionError("SESSION_CONFLICT", "Conversation changed. No result was acknowledged."));
+    // A delayed acknowledgement must never clear a newer result. Repeated acknowledgements are safe.
+    if (entry.attention?.id === resultId) { delete entry.attention; this.emit(); }
+    return ok(undefined);
+  }
+
+  private executionChanged(entry: OpenExecution): void {
+    if (entry.phase !== "open") return;
+    const result = entry.executor?.state.result;
+    if (result && result.id !== entry.observedResultId) {
+      entry.observedResultId = result.id;
+      if (needsAttention(result)) entry.attention = result;
+    }
+    this.emit();
   }
   sessionFile(id: string): string | undefined { return this.entries.get(id)?.executor?.sessionFile; }
   imageData(sessionId: string, imageId: string): Result<TranscriptImageData, ExpectedError> {
@@ -133,7 +158,12 @@ export class SessionRegistry {
     if (!selected.ok) return selected;
     const entry = selected.value;
     const restored = entry.executor!.state;
+    const interrupted: SessionResult | undefined = record.state.status === "working"
+      ? { id: crypto.randomUUID(), outcome: "unfinished", completedAt: Date.now(), ...(record.state.request ? { request: record.state.request } : {}) } : undefined;
+    entry.attention = interrupted ?? record.state.attention;
     entry.recoveredState = {
+      ...(record.state.request ?? restored.request ? { request: record.state.request ?? restored.request } : {}),
+      ...(interrupted ?? record.state.result ? { result: interrupted ?? record.state.result } : {}),
       output: restored.output.length >= record.state.output.length ? restored.output : record.state.output,
       ...(restored.sections ? { sections: restored.sections } : record.state.sections ? { sections: record.state.sections } : {}),
       // Restore SDK-derived telemetry, never a saved account quota or Fast setting.
@@ -196,7 +226,9 @@ export class SessionRegistry {
       if (owner && owner !== entry.id) return err(new SessionError("SESSION_CONFLICT", "This saved session is already open or still closing."));
       entry.fileKey = key.value; this.fileOwners.set(key.value, entry.id);
     }
-    entry.unsubscribe = created.value.subscribe(() => { if (entry.phase === "open") this.emit(); });
+    // Opening History and upgrading old manifests establishes a baseline, not a new notification.
+    entry.observedResultId = created.value.state.result?.id;
+    entry.unsubscribe = created.value.subscribe(() => this.executionChanged(entry));
     entry.phase = "open"; this.emit(); return ok(entry.id);
   }
   async complete(id: string, query: CompletionQuery, signal?: AbortSignal): Promise<Result<CompletionResult, ExpectedError>> {
@@ -340,7 +372,8 @@ export class SessionRegistry {
         else {
           const replacement: OpenExecution = { id: previous.id, name: previous.name, role: "main", worktree: previous.worktree,
             phase: "open", children: new Map(), ready, executor: next, generation, ...(key.value ? { fileKey: key.value } : {}) };
-          replacement.unsubscribe = next.subscribe(() => { if (replacement.phase === "open") this.emit(); });
+          replacement.observedResultId = next.state.result?.id;
+          replacement.unsubscribe = next.subscribe(() => this.executionChanged(replacement));
           previous.unsubscribe?.(); delete previous.unsubscribe;
           if (previous.fileKey && this.fileOwners.get(previous.fileKey) === previous.id) this.fileOwners.delete(previous.fileKey);
           if (key.value) this.fileOwners.set(key.value, replacement.id);

@@ -22,7 +22,7 @@ function display(state: ExecutionState | null | undefined): Display {
   // Timing/status metadata must belong to this request, not an earlier completed turn.
   const turn = sections.slice(Math.max(0, index));
   const completion = turn.findLast((item) => item.completion)?.completion;
-  const outcome = completion?.outcome;
+  const outcome = state?.result?.outcome ?? completion?.outcome;
   const assistant = turn.findLast((item) => item.kind === "assistant" || item.kind === "notice" && item.status === "cancelled"
     && (item.title === "Agent error" || !item.text));
   if (outcome === "cancelled" || !outcome && assistant?.status === "cancelled") return { label: "Cancelled", detail, color: "status.warning",

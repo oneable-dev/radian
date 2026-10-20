@@ -5,7 +5,7 @@ import { capture, InputError, parseJson, StorageError, type ExpectedError } from
 import { err, ok, type Result } from "../result.ts";
 import { isStyleGroup, type StyleOverride, type StyleOverrides } from "./theme-style-config.ts";
 
-export const themeRoles = ["text", "panel", "surface", "muted", "selected", "accent", "success", "error", "warning", "info", "keyword", "number", "added", "removed"] as const;
+export const themeRoles = ["text", "panel", "surface", "muted", "selected", "accent", "success", "error", "warning", "attention", "info", "keyword", "number", "added", "removed"] as const;
 export type ThemeRole = typeof themeRoles[number];
 export type ThemeOverrides = Partial<Record<ThemeRole, string>> & { styles?: StyleOverrides };
 export const isThemeColor = (value: unknown): value is string => typeof value === "string" && /^#[\da-f]{6}$/i.test(value);

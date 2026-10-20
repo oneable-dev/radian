@@ -6,6 +6,7 @@ export const icons = {
   tag: "\uEA66", // nf-cod-tag
   loading: "\uEB19", // nf-cod-loading
   pass: "\uEAB2", // nf-cod-check
+  bell: "\uEAA2", // nf-cod-bell
   error: "\uEA76", // nf-cod-close
   unknown: "\uEAD9", // nf-cod-dash; unreported/aborted, not a confirmed idle state
   robot: "\uEC20", // nf-cod-robot

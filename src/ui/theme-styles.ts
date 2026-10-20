@@ -44,6 +44,7 @@ const definitions = {
   "status.success": (c: UiColors) => style(c.success),
   "status.error": (c: UiColors) => style(c.error),
   "status.warning": (c: UiColors) => style(c.warning),
+  "status.attention": (c: UiColors) => style(c.attention),
   "status.info": (c: UiColors) => style(c.accent),
   "status.unknown": (c: UiColors) => style(c.muted),
   "status.elapsed": (c: UiColors) => style(c.muted),

@@ -21,7 +21,7 @@ test("실제 서비스의 완료가 연결된 CLI를 통해 터미널 알림으�
     const ready = Promise.withResolvers<void>(), notified = Promise.withResolvers<void>();
     const decoder = new TextDecoder();
     const deadline = setTimeout(() => {
-      const error = new Error("Timed out waiting for CLI terminal notification.");
+      const error = new Error(`Timed out waiting for CLI terminal notification. Terminal tail:\n${Bun.stripANSI(raw).slice(-2000)}`);
       ready.reject(error); notified.reject(error); child?.kill("SIGTERM");
     }, 10000);
     // Observe both promises immediately, including failures before the UI is ready.
@@ -31,8 +31,8 @@ test("실제 서비스의 완료가 연결된 CLI를 통해 터미널 알림으�
         cwd: fixture.main, env: { ...process.env, TERM: "xterm-ghostty", TERM_PROGRAM: "ghostty", XDG_CONFIG_HOME: join(fixture.directory, "config") },
         terminal: { cols: 120, rows: 24, name: "xterm-ghostty", data: (_terminal, bytes) => {
           raw += decoder.decode(bytes, { stream: true });
-          // View navigation has no tab strip; the visible search control proves the TUI is mounted.
-          if (raw.includes("Search repo/worktree/branch")) ready.resolve();
+          // Workspace navigation is now an on-demand popup; the footer and composer prove the TUI is mounted.
+          if (raw.includes("New line") && raw.includes("Transcript")) ready.resolve();
           if (raw.includes("\x1b]777;notify;Radian · Task completed;")) notified.resolve();
         } },
       });

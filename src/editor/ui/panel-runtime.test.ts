@@ -47,6 +47,7 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
         app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey(key); await app.renderOnce();
       },
       async click(text: string) {
+        if (text.startsWith(icons.folder)) { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("w"); app.mockInput.pressKey("u", { ctrl: true }); await app.renderOnce(); await app.renderOnce(); }
         const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes(text)), x = lines[y]?.indexOf(text) ?? -1;
         if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
         await app.mockMouse.click(x, y); await app.renderOnce();
@@ -82,7 +83,7 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
         expect(app.client.snapshot.editors![0]!.pid).toBe(pid);
       } finally { app.renderer.off("frame", capture); }
     }
-    // Sidebar changes and the new PTY image must be presented together, not converge later.
+    // Workspace overlays must not resize or restart the running native editor.
     const sidebar = app.renderer.root.findDescendantById("workspace-sidebar")!;
     const rulerColumn = () => app!.captureCharFrame().split("\n").find((line) => line.includes("[No Name]"))?.indexOf("All") ?? -1;
     const expectedRuler = rulerColumn(); expect(expectedRuler).toBeGreaterThan(0);
@@ -91,49 +92,45 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
       ruler: rulerColumn(), width: originalSurface!.width, remote: app!.editorFrame?.cols });
     app.renderer.on("frame", captureSidebar);
     try {
-      for (const visible of [false, true, false, true]) {
+      for (const visible of [true, false, true, false]) {
         app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("b");
         await until(async () => { await app!.renderOnce(); return sidebar.visible === visible; });
       }
       expect(transitions.length).toBeGreaterThan(0);
       expect(transitions.every((frame) => frame.marker && frame.ruler === expectedRuler && frame.width === frame.remote)).toBe(true);
       // Superseded resize responses may still arrive; none may replace the current visible VT.
-      for (const [count, visible] of [[3, false], [2, false], [1, true]] as const) {
+      for (const [count, visible] of [[3, true], [2, true], [1, false]] as const) {
         for (let i = 0; i < count; i++) { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("b"); }
         await until(async () => { await app!.renderOnce(); return sidebar.visible === visible; });
       }
-      // A stopped application cannot redraw: emulator dimensions alone must not commit the toggle.
+      // Even a suspended native process must not block opening or closing a popup.
       process.kill(pid, "SIGSTOP");
       try {
         app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("b");
-        for (let i = 0; i < 8; i++) { await app.renderOnce(); await Bun.sleep(10); }
+        await app.renderOnce(); await app.renderOnce();
         expect(sidebar.visible).toBe(true); expect(rulerColumn()).toBe(expectedRuler);
+        app.mockInput.pressEscape(); await app.renderOnce();
+        expect(sidebar.visible).toBe(false);
       } finally { process.kill(pid, "SIGCONT"); }
-      await until(async () => { await app!.renderOnce(); return !sidebar.visible; });
-      app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("b");
-      await until(async () => { await app!.renderOnce(); return sidebar.visible; });
       expect(transitions.every((frame) => frame.marker && frame.ruler === expectedRuler)).toBe(true);
-      expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree");
-      await app.showView("e");
-      expect(app.renderer.currentFocusedRenderable?.id).toBe(originalSurface?.id);
+      expect(app.renderer.currentFocusedRenderable).toBe(originalSurface);
       expect(app.client.snapshot.editors![0]!.pid).toBe(pid);
     } finally { app.renderer.off("frame", captureSidebar); }
     // With the navigation strip removed, the editor starts at the work pane's top edge.
     const aligned = () => {
-      const sidebar = app!.renderer.root.findDescendantById("workspace-sidebar")!;
       const panel = app!.renderer.root.findDescendantById("work-panel")!;
       expect(originalSurface!.y).toBe(panel.y);
-      expect(originalSurface!.y + originalSurface!.height).toBe(sidebar.y + sidebar.height);
+      expect(originalSurface!.y + originalSurface!.height).toBe(panel.y + panel.height);
       expect(app!.editorFrame?.rows).toBe(originalSurface!.height);
     };
     expect(app.editorFrame?.rows).toBe(23);
-    expect(app.editorFrame?.cols).toBe(80); aligned();
+    expect(app.editorFrame?.cols).toBe(120); aligned();
     expect(app.captureCharFrame()).not.toContain("Neovim ·");
     expect(app.captureCharFrame().split("\n")[23]).toContain("Radian 0.0.0");
     app.resize(100, 28); await app.renderOnce();
     await until(() => app!.editorFrame?.rows === 27); await app.visible("unsaved-native-editor");
     expect(app.editorFrame?.rows).toBe(27);
-    expect(app.editorFrame?.cols).toBe(60); aligned();
+    expect(app.editorFrame?.cols).toBe(100); aligned();
     await app.click(`${icons.folder} feature`); await app.showView("e"); await app.visible("[No Name]");
     await app.mockInput.typeText("iSECOND-WORKTREE-CACHE"); app.mockInput.pressEscape(); await app.visible("SECOND-WORKTREE-CACHE");
     expect(app.captureCharFrame()).not.toContain("unsaved-native-editor");

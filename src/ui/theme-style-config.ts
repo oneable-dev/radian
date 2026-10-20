@@ -5,7 +5,7 @@ export const styleGroups = [
   "ui.popup", "ui.backdrop", "ui.popupTitle", "ui.popupBorder", "ui.scrollbar",
   "completion.item", "completion.description", "completion.selected",
   "footer.key", "footer.description", "footer.identity", "footer.accent",
-  "status.working", "status.success", "status.error", "status.warning", "status.info", "status.unknown", "status.elapsed",
+  "status.working", "status.success", "status.error", "status.warning", "status.attention", "status.info", "status.unknown", "status.elapsed",
   "metadata.model", "metadata.effort", "metadata.fastOn", "metadata.fastOff", "metadata.meter",
   "syntax.text", "syntax.comment", "syntax.string", "syntax.keyword", "syntax.number", "syntax.function", "syntax.type", "syntax.constant", "syntax.operator",
   "markup.heading", "markup.heading.1", "markup.heading.2", "markup.heading.3", "markup.heading.4", "markup.heading.5", "markup.heading.6",

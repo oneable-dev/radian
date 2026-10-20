@@ -15,7 +15,7 @@ test("Workspace는 j/k 탐색 뒤 Enter로 전환하고 입력창에서는 같�
     onResumeSession: async (tree, id) => { opened.push(id); return ok(tree === "demo:main" ? "a1" : "b1"); },
   });
   try {
-    await app.renderOnce(); app.mockInput.pressKey("HOME"); app.mockInput.pressKey("j"); app.mockInput.pressKey("j"); await app.renderOnce();
+    await app.renderOnce(); app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab(); app.mockInput.pressKey("HOME"); app.mockInput.pressKey("j"); app.mockInput.pressKey("j"); await app.renderOnce();
     expect(selection.worktree?.id).toBe("demo:main"); expect(selection.sessionId).toBe("a1");
     app.mockInput.pressKey("k"); app.mockInput.pressEnter(); await app.renderOnce();
     expect(selection.worktree?.id).toBe("demo:feature"); expect(selection.sessionId).toBe("b1");
@@ -42,7 +42,9 @@ test("사용자 키맵은 트리 명령·비활성화·푸터와 leader 뷰 전�
   });
   try {
     await app.renderOnce(); const footer = () => app.captureCharFrame().split("\n")[23]!;
+    app.mockInput.pressKey("b", { ctrl: true }); app.mockInput.pressKey("w"); app.mockInput.pressTab(); await app.renderOnce();
     expect(footer()).toContain("Enter Open worktree"); expect(footer()).not.toContain("New session");
+    app.mockInput.pressEscape(); await app.renderOnce();
     app.renderer.root.findDescendantById("agent-session-list")!.focus(); await app.renderOnce();
     expect(footer()).toContain("s New session"); expect(footer()).not.toContain("x Close session");
     app.mockInput.pressKey("n"); app.mockInput.pressKey("x"); app.mockInput.pressKey("s");

@@ -7,11 +7,9 @@ import { demoWorkspace } from "../../workspace/demo.ts";
 import { ok } from "../../result.ts";
 import { parseKeymap } from "../../keybindings/config.ts";
 import { expectOk } from "../../testing/results.ts";
-import type { EditorFrame } from "../../runtime/protocol.ts";
 
 async function mount(actions: Partial<WorkbenchActions> = {}) {
-  const clock = new ManualClock();
-  const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true, clock });
+  const clock = new ManualClock(), app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true, clock });
   const selection = new WorkspaceSelection(demoWorkspace()), requests: string[] = [];
   const view = new Workbench(app.renderer, selection, { onNewSession: () => requests.push("new"), onCloseSession: () => requests.push("close"),
     onPrompt: () => { requests.push("prompt"); return ok(undefined); }, initialDrafts: { a1: "main draft" },
@@ -25,132 +23,98 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("접기 아이콘 없이 같은 단축키로 좌측 패널을 접고 다시 펼치며 너비와 선택을 복원한다", async () => {
-  // The sidebar's component instances stay alive while their space is given to the work pane.
+test("기존 leader b는 작업 영역 크기를 바꾸지 않고 워크스페이스 팝업만 토글한다", async () => {
+  // 이전 사용자 설정의 명령 ID를 유지하되 영구 패널은 만들지 않는다.
   const app = await mount();
   try {
-    const sidebar = app.get("workspace-sidebar"), pane = app.get("work-panel"), width = pane.width;
-    const tree = app.get("workspace-tree"), selected = app.selection.sessionId;
-    expect(app.renderer.root.findDescendantById("sidebar-toggle")).toBeUndefined();
-    expect(app.captureCharFrame()).not.toContain("≡");
+    const pane = app.get("work-panel"), tree = app.get("workspace-tree");
+    expect(app.get("workspace-picker").visible).toBe(false); expect(pane.width).toBe(120);
 
+    await app.toggle(); expect(app.get("workspace-picker").visible).toBe(true); expect(pane.width).toBe(120);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-search");
     await app.toggle();
 
-    expect(sidebar.visible).toBe(false); expect(pane.x).toBe(0); expect(pane.width).toBe(120);
-    expect(app.captureCharFrame()).not.toContain("Search repo/worktree/branch");
-    expect(app.captureCharFrame()).toContain("main draft"); expect(app.selection.sessionId).toBe(selected);
-    await app.toggle();
-    expect(sidebar.visible).toBe(true); expect(pane.width).toBe(width); expect(app.get("workspace-tree")).toBe(tree);
-    expect(app.renderer.currentFocusedRenderable).toBe(tree);
-    expect(app.requests).toEqual([]);
+    expect(app.get("workspace-picker").visible).toBe(false); expect(pane.width).toBe(120); expect(app.get("workspace-tree")).toBe(tree);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("leader b는 펼칠 때 사이드바에 포커스하고 커서·초안과 대화 스크롤을 유지한다", async () => {
+test("팝업 취소는 원래 입력 커서와 대화 스크롤을 보존한다", async () => {
+  // 팝업 개폐가 기존 Agent renderable을 재생성하면 안 된다.
   const app = await mount();
   try {
     const prompt = app.get("session-prompt") as InputRenderable, scroll = app.get("session-transcript") as ScrollBoxRenderable;
     prompt.focus(); scroll.scrollTo(31); await app.render(); const top = scroll.scrollTop, cursor = prompt.cursorOffset;
 
-    app.leader("b"); await app.render();
-    expect(app.get("workspace-sidebar").visible).toBe(false);
-    app.leader("b"); await app.render();
+    await app.toggle(); app.mockInput.pressEscape(); await app.render();
 
-    expect(app.get("workspace-sidebar").visible).toBe(true); expect(app.renderer.currentFocusedRenderable).toBe(app.get("workspace-tree"));
-    expect(prompt.cursorOffset).toBe(cursor); expect(app.view.promptDrafts.a1).toBe("main draft"); expect(scroll.scrollTop).toBe(top);
-    expect(app.requests).toEqual([]);
+    expect(app.renderer.currentFocusedRenderable).toBe(prompt); expect(prompt.cursorOffset).toBe(cursor); expect(scroll.scrollTop).toBe(top);
+    expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("숨긴 패널은 Tab 대상에서 빠지고 검색·사이드바 포커스 명령은 패널을 다시 연다", async () => {
-  // Focus must never remain inside a hidden navigation control.
+test("닫힌 팝업은 Tab 대상에서 제외되고 기존 검색·탐색 명령으로 다시 열린다", async () => {
+  // 숨겨진 네비게이션에 키 입력이 들어가지 않도록 실제 focus traversal을 확인한다.
   const app = await mount();
   try {
-    const sidebar = app.get("workspace-sidebar");
-    app.leader("b"); await app.render();
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
-    for (let index = 0; index < 8; index++) {
-      app.mockInput.pressTab(); await app.render();
-      for (let node = app.renderer.currentFocusedRenderable; node; node = node.parent as typeof node) expect(node).not.toBe(sidebar);
-    }
+    for (let i = 0; i < 8; i++) { app.mockInput.pressTab(); await app.render(); expect(["workspace-search", "workspace-tree"]).not.toContain(app.renderer.currentFocusedRenderable?.id ?? ""); }
 
-    app.mockInput.pressKey("f", { ctrl: true }); await app.render();
-    expect(sidebar.visible).toBe(true); expect(app.renderer.currentFocusedRenderable).toBe(app.get("workspace-search"));
-    app.leader("b"); await app.render(); app.leader("w"); await app.render();
-    expect(sidebar.visible).toBe(true); expect(app.renderer.currentFocusedRenderable).toBe(app.get("workspace-tree"));
+    app.leader("w"); await app.render();
+    expect(app.get("workspace-picker").visible).toBe(true); expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-search");
+    app.mockInput.pressEscape(); await app.render(); app.mockInput.pressKey("f", { ctrl: true }); await app.render();
+
+    expect(app.get("workspace-picker").visible).toBe(true); expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-search");
   } finally { await app.close(); }
 });
 
-test("History 팝업이 열려 있으면 sidebar 토글이 목록·스크롤·선택을 바꾸지 않는다", async () => {
-  // Modal navigation is independent of the sidebar, including its global toggle command.
+test("History가 열려 있으면 다른 팝업 명령은 목록·스크롤·선택을 바꾸지 않는다", async () => {
+  // 모달이 겹쳐 보이지 않는 입력 대상이 생기는 것을 막는다.
   let lookups = 0;
-  const app = await mount({ onListHistory: async () => { lookups++; return ok(Array.from({ length: 30 }, (_, i) => ({ id: `saved-${i}`,
-    title: `Saved-${i}`, worktreeId: "demo:main", modified: "2026-10-17T00:00:00Z", messageCount: 1, openSessionId: null, unavailableReason: null }))); } });
+  const app = await mount({ onListHistory: async () => { lookups++; return ok(Array.from({ length: 30 }, (_, i) => ({ id: `saved-${i}`, title: `Saved-${i}`, worktreeId: "demo:main", modified: "2026-10-17T00:00:00Z", messageCount: 1, openSessionId: null, unavailableReason: null }))); } });
   try {
-    app.leader("h"); await app.render();
-    const list = app.get("history-list") as ScrollBoxRenderable; list.scrollTo(20); await app.render();
-    const top = list.scrollTop, row = app.get("history:saved-10");
-    await app.toggle(); await app.toggle();
-    expect(app.get("workspace-sidebar").visible).toBe(true); expect(lookups).toBe(1);
-    expect(list.scrollTop).toBe(top); expect(app.get("history:saved-10")).toBe(row); expect(app.requests).toEqual([]);
+    app.leader("h"); await app.render(); const list = app.get("history-list") as ScrollBoxRenderable;
+    list.scrollTo(20); await app.render(); const top = list.scrollTop;
+
+    app.leader("b"); app.leader("s"); await app.render();
+
+    expect(app.get("workspace-picker").visible).toBe(false); expect(app.get("session-monitor").visible).toBe(false);
+    expect(list.scrollTop).toBe(top); expect(lookups).toBe(1); expect(app.selection.sessionId).toBe("a1");
   } finally { await app.close(); }
 });
 
-test("닫힌 History는 sidebar 펼치기나 연결 복구만으로 조회하거나 스피너를 실행하지 않는다", async () => {
+test("팝업 개폐와 연결 복구만으로 닫힌 History를 조회하지 않는다", async () => {
+  // workspace picker는 세션 파일 I/O를 수행할 이유가 없다.
   let lookups = 0;
   const app = await mount({ onListHistory: async () => { lookups++; return ok([]); } });
   try {
-    app.leader("h"); await app.render(); app.mockInput.pressEscape(); await app.render(); await app.toggle();
-    app.view.refreshHistory(); app.view.refreshHistory(); await app.render();
-    expect(lookups).toBe(1); expect(app.get("session-history").visible).toBe(false); expect(app.get("history-loading").visible).toBe(false);
-    await app.toggle(); expect(lookups).toBe(1);
-    app.leader("h"); await app.render(); expect(lookups).toBe(2); expect(app.captureCharFrame()).toContain("No saved sessions");
+    await app.toggle(); await app.toggle(); app.view.refreshHistory(); await app.render();
+
+    expect(lookups).toBe(0); expect(app.get("history-loading").visible).toBe(false);
+    app.leader("h"); await app.render(); expect(lookups).toBe(1);
   } finally { await app.close(); }
 });
 
-test("조회 중 History를 닫으면 늦은 응답을 무시하고 다시 열 때 조회를 재개한다", async () => {
-  const pending = [Promise.withResolvers<ReturnType<typeof ok<never[]>>>(), Promise.withResolvers<ReturnType<typeof ok<never[]>>>()];
-  let lookups = 0;
-  const app = await mount({ onListHistory: () => pending[lookups++]!.promise });
+test("늦은 History 응답은 닫힌 팝업을 다시 열거나 선택을 바꾸지 않는다", async () => {
+  // 비동기 조회의 완료와 사용자 취소를 분리한다.
+  const pending = Promise.withResolvers<ReturnType<typeof ok<never[]>>>();
+  const app = await mount({ onListHistory: () => pending.promise });
   try {
-    app.leader("h"); await app.render(); expect(lookups).toBe(1);
-    app.mockInput.pressEscape(); await app.render(); pending[0]!.resolve(ok([])); await app.render();
-    app.leader("h"); await app.render();
-    expect(lookups).toBe(2); pending[1]!.resolve(ok([])); await app.render();
-    expect(app.captureCharFrame()).toContain("No saved sessions"); expect(app.requests).toEqual([]);
-  } finally { for (const gate of pending) gate.resolve(ok([])); await app.close(); }
+    app.leader("h"); await app.render(); app.mockInput.pressEscape(); await app.render();
+    pending.resolve(ok([])); await app.render();
+
+    expect(app.get("session-history").visible).toBe(false); expect(app.selection.sessionId).toBe("a1"); expect(app.requests).toEqual([]);
+  } finally { pending.resolve(ok([])); await app.close(); }
 });
 
-test("접기 명령은 재할당할 수 있고 기존 기본 조합은 더 이상 패널을 토글하지 않는다", async () => {
+test("기존 sidebar.toggle 키 재할당도 팝업 개폐에 적용된다", async () => {
+  // 설정 파일을 깨뜨리지 않고 새 화면으로 기존 명령을 연결한다.
   const app = await mount({ keymap: expectOk(parseKeymap({ bindings: { "sidebar.toggle": ["alt+b"] } })) });
   try {
-    app.leader("b"); await app.render(); expect(app.get("workspace-sidebar").visible).toBe(true);
+    app.leader("b"); await app.render(); expect(app.get("workspace-picker").visible).toBe(false);
 
+    app.mockInput.pressKey("b", { meta: true }); await app.render(); expect(app.get("workspace-picker").visible).toBe(true);
     app.mockInput.pressKey("b", { meta: true }); await app.render();
 
-    expect(app.get("workspace-sidebar").visible).toBe(false);
-    app.mockInput.pressKey("b", { meta: true }); await app.render(); expect(app.get("workspace-sidebar").visible).toBe(true);
-  } finally { await app.close(); }
-});
-
-test("Editor 입력 중 토글은 같은 surface·연결을 유지하고 변경된 너비만 전달한다", async () => {
-  const inputs: string[] = [], sizes: number[] = []; let opens = 0, attaches = 0;
-  const app = await mount({ editor: { info: (id) => ({ id, worktreeId: id, pid: 123, exited: false, exitCode: null }),
-    open: async (id) => { opens++; return ok(id); }, attach: async (id, receive) => { attaches++; let revision = 0;
-      const frame = (cols: number, rows: number): EditorFrame => ({ id, worktreeId: id, pid: 123, exited: false, exitCode: null,
-        cols, rows, revision: revision++, ansi: "\x1bc\x1b[1;1HEditor buffer" });
-      receive(frame(80, 24)); return ok({ input: (bytes) => inputs.push(new TextDecoder().decode(bytes)),
-        resize: (cols, rows) => { sizes.push(cols); receive(frame(cols, rows)); }, disconnect: async () => {} }); } } });
-  try {
-    app.leader("e"); await app.render(); await app.waitFor(() => app.renderer.currentFocusedRenderable?.id.startsWith("editor-terminal:") === true);
-    const surface = app.renderer.currentFocusedRenderable, width = surface!.width;
-
-    app.leader("b"); await app.render();
-    expect(app.get("workspace-sidebar").visible).toBe(false); expect(app.renderer.currentFocusedRenderable).toBe(surface);
-    expect(surface!.width).toBeGreaterThan(width);
-    app.leader("b"); await app.render();
-
-    expect(surface!.width).toBe(width); expect(app.renderer.currentFocusedRenderable).toBe(app.get("workspace-tree")); expect(attaches).toBe(1); expect(opens).toBe(0); expect(inputs).toEqual([]);
-    expect(sizes.length).toBeGreaterThan(1); expect(app.view.promptDrafts.a1).toBe("main draft");
+    expect(app.get("workspace-picker").visible).toBe(false); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });

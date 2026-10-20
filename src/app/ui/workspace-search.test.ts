@@ -13,126 +13,89 @@ async function mount() {
   const view = new Workbench(app.renderer, selection, { onNewSession: () => requests.push("new"), onCloseSession: () => requests.push("close"),
     onPrompt: () => { requests.push("prompt"); return ok(undefined); }, initialDrafts: { a1: "keep agent draft" } });
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
-  await render();
+  app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab(); await render();
   const get = (id: string) => { const node = app.renderer.root.findDescendantById(id); if (!node) throw new Error(`Missing ${id}`); return node; };
   const input = get("workspace-search"); if (!(input instanceof InputRenderable)) throw new Error("Missing workspace input.");
-  const cell = (x: number, y: number) => { let column = 0; return app.captureSpans().lines[y]!.spans.find((span) => { column += span.width; return column > x; })!; };
+  const cell = (x: number, y: number) => { let column = 0; return app.captureSpans().lines[y]!.spans.find(span => { column += span.width; return column > x; })!; };
   return { ...app, selection, requests, view, render, get, input, cell, async close() { view.dispose(); await app.dispose(); } };
 }
-
 function palette(light: boolean): TerminalColors {
   return { palette: [], defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
     cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null };
 }
 
-test("Workspace 제목 없이 검색 영역부터 시작하고 세 줄 검색 높이와 입력 정렬을 유지한다", async () => {
+test("검색 팝업은 중앙에 배치되고 작업 영역을 줄이지 않으며 Preview를 만들지 않는다", async () => {
+  // 상시 사이드바의 너비 대신 터미널 안에 들어오는 독립적인 overlay를 사용한다.
   const app = await mount();
   try {
-    // 작업 화면의 너비는 바꾸지 않고 검색 배경만 양쪽 inset까지 확장한다.
-    const sidebar = app.get("workspace-sidebar"), field = app.get("workspace-search-box"), tree = app.get("workspace-tree");
+    const panel = app.get("workspace-sidebar"), field = app.get("workspace-search-box");
 
-    expect(sidebar.width).toBe(40);
-    expect(app.get("work-panel").width).toBe(80);
-    expect(field.x).toBe(sidebar.x); expect(field.width).toBe(sidebar.width - 1);
-    expect(field.y).toBe(sidebar.y);
-    const sidebarText = app.captureCharFrame().split("\n").slice(sidebar.y, sidebar.y + sidebar.height)
-      .map((line) => line.slice(sidebar.x, sidebar.x + sidebar.width)).join("\n");
-    expect(sidebarText).not.toContain("Workspace");
-    expect(field.height).toBe(3); expect(app.input.height).toBe(1);
-    expect(app.input.y).toBe(field.y + 1); expect(app.input.x - sidebar.x).toBe(2);
-    expect(app.input.width).toBe(field.width - 4);
-    expect(tree.y - field.y - field.height).toBe(1);
-    expect(app.captureCharFrame()).toContain("Search repo/worktree/branch");
-    expect(app.requests).toEqual([]);
+    expect(panel.x).toBeGreaterThan(0); expect(panel.y).toBeGreaterThan(0);
+    expect(panel.x + panel.width).toBeLessThanOrEqual(120); expect(panel.y + panel.height).toBeLessThanOrEqual(24);
+    expect(app.get("work-panel").width).toBe(120); expect(field.height).toBe(3); expect(app.input.height).toBe(1);
+    expect(app.input.y).toBe(field.y + 1); expect(app.captureCharFrame()).toContain("Search repo/worktree/branch");
+    expect(app.renderer.root.findDescendantById("workspace-preview")).toBeUndefined(); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("Tab과 Shift+Tab은 제거된 제목에 멈추지 않고 검색과 결과 사이를 바로 이동한다", async () => {
-  // With only one sidebar destination, its title must not consume a focus stop.
+test("Tab과 Shift+Tab은 팝업 안의 검색과 결과만 순회한다", async () => {
+  // 배경 Agent 입력에 검색 내용이 새어 들어가면 안 된다.
   const app = await mount();
   try {
-    app.mockInput.pressKey("f", { ctrl: true }); await app.render();
-
-    // Traverse forward to results and back without changing the query or active worktree.
-    app.mockInput.pressTab(); await app.render();
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree");
     app.mockInput.pressTab({ shift: true }); await app.render();
-
-    // Navigation is local UI state: no prompt, session creation or close request is sent.
     expect(app.renderer.currentFocusedRenderable).toBe(app.input);
-    expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.input.value).toBe("");
+    app.mockInput.pressTab(); await app.render(); expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree");
+    app.mockInput.pressTab(); await app.render();
+
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.selection.worktree?.id).toBe("demo:main");
     expect(app.view.promptDrafts.a1).toBe("keep agent draft"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
-test.each([false, true])("밝기 %j에서도 검색 여백 클릭으로 포커스하고 전체 배경이 입력과 같은 색을 유지한다", async (light) => {
+test.each([false, true])("밝기 %j에서도 검색 여백 클릭으로 포커스하고 검색 배경을 일관되게 표시한다", async light => {
+  // 글자가 없는 padding도 검색 입력의 클릭 영역이다.
   const app = await mount();
   try {
     const theme = uiTheme(app.renderer); theme.configure(palette(light)); await app.render();
     const field = app.get("workspace-search-box");
-    expect(app.cell(field.x, field.y).bg.toInts()).toEqual(theme.colors.surface.toInts());
+    expect(app.cell(field.x + 1, field.y).bg.toInts()).toEqual(theme.colors.surface.toInts());
 
-    // 입력 글자가 없는 위쪽 여백도 실제 클릭 가능한 검색 영역이다.
-    await app.mockMouse.click(field.x + 1, field.y); await app.render();
-    await app.mockInput.typeText("main"); await app.render();
+    await app.mockMouse.click(field.x + 1, field.y); await app.render(); await app.mockInput.typeText("main"); await app.render();
 
-    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
-    expect(app.input.value).toBe("main");
-    expect(app.cell(field.x, field.y).bg.toInts()).toEqual(theme.colors.selected.toInts());
-    expect(app.cell(field.x + field.width - 1, field.y + 2).bg.toInts()).toEqual(theme.colors.selected.toInts());
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.input.value).toBe("main");
     expect(app.cell(app.input.x, app.input.y).bg.toInts()).toEqual(theme.colors.selected.toInts());
     app.mockInput.pressEnter(); await app.render();
-    expect(app.renderer.currentFocusedRenderable).toBe(app.get("workspace-tree"));
-    expect(app.cell(field.x, field.y).bg.toInts()).toEqual(theme.colors.surface.toInts());
-    expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.requests).toEqual([]);
+    expect(app.get("workspace-picker").visible).toBe(false); expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("리사이즈는 검색어·커서·초안과 일관된 검색 높이를 보존한다", async () => {
+test("리사이즈는 검색어·커서·초안을 보존하고 작은 화면에서도 팝업을 터미널 안에 배치한다", async () => {
+  // 긴 검색 입력의 편집 위치가 resize로 초기화되면 안 된다.
   const app = await mount();
   try {
-    // 긴 입력은 가로로 스크롤하고 리사이즈로 검색 객체를 다시 만들지 않는다.
-    app.mockInput.pressKey("f", { ctrl: true }); await app.mockInput.typeText("workspace-query-".repeat(6));
-    app.mockInput.pressArrow("left"); await app.render();
-    const value = app.input.value, cursor = app.input.cursorOffset, field = app.get("workspace-search-box");
-    expect(cursor).toBe(value.length - 1);
+    app.mockInput.pressKey("f", { ctrl: true }); await app.mockInput.typeText("workspace-query-".repeat(6)); app.mockInput.pressArrow("left"); await app.render();
+    const value = app.input.value, cursor = app.input.cursorOffset;
 
-    app.resize(60, 24); await app.render();
-    expect(field.height).toBe(3); expect(field.width).toBe(25);
-    expect(field.y).toBe(app.get("workspace-sidebar").y);
-    expect(app.input.x - app.get("workspace-sidebar").x).toBe(1);
     app.resize(60, 12); await app.render();
-    expect(field.height).toBe(3); expect(app.input.y).toBe(field.y + 1);
-    expect(app.get("workspace-tree").height).toBeGreaterThan(0);
-    expect(app.input.value).toBe(value); expect(app.input.cursorOffset).toBe(cursor);
-    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
-    expect(app.view.promptDrafts.a1).toBe("keep agent draft");
 
-    // 좁은 화면에서는 빈 검색창의 안내도 잘리지 않게 짧게 표시한다.
-    app.mockInput.pressEscape(); await app.render();
-    expect(app.input.value).toBe(""); expect(app.captureCharFrame()).toContain("Search workspaces");
-    app.resize(120, 24); await app.render();
-    expect(app.get("workspace-search")).toBe(app.input); expect(field.height).toBe(3);
-    expect(app.captureCharFrame()).toContain("Search repo/worktree/branch");
-    expect(app.requests).toEqual([]);
+    const panel = app.get("workspace-sidebar"); expect(panel.x).toBeGreaterThanOrEqual(0); expect(panel.x + panel.width).toBeLessThanOrEqual(60);
+    expect(panel.y + panel.height).toBeLessThanOrEqual(12); expect(app.get("workspace-tree").height).toBeGreaterThan(0);
+    expect(app.input.value).toBe(value); expect(app.input.cursorOffset).toBe(cursor); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+    app.mockInput.pressKey("u", { ctrl: true }); await app.render(); expect(app.captureCharFrame()).toContain("Search workspaces");
+    expect(app.view.promptDrafts.a1).toBe("keep agent draft"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("검색 중 패널을 접고 검색 단축키로 다시 열어도 입력과 커서가 남는다", async () => {
+test("팝업을 취소하고 다시 열어도 검색 내용과 커서를 유지한다", async () => {
+  // 닫기는 선택 확정이나 검색 컨트롤 파괴와 다르다.
   const app = await mount();
   try {
     app.mockInput.pressKey("f", { ctrl: true }); await app.mockInput.typeText("feature"); app.mockInput.pressArrow("left"); await app.render();
-    const cursor = app.input.cursorOffset, field = app.get("workspace-search-box");
+    const cursor = app.input.cursorOffset;
 
-    // 패널 표시 전환은 검색 컨트롤이나 편집 상태를 파괴하지 않는다.
-    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("b"); await app.render();
-    expect(app.get("workspace-sidebar").visible).toBe(false);
-    app.mockInput.pressKey("f", { ctrl: true }); await app.render();
+    app.mockInput.pressEscape(); await app.render(); app.mockInput.pressKey("f", { ctrl: true }); await app.render();
 
-    expect(app.get("workspace-sidebar").visible).toBe(true);
-    expect(app.get("workspace-search-box")).toBe(field);
-    expect(app.input.value).toBe("feature"); expect(app.input.cursorOffset).toBe(cursor);
-    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
-    expect(app.view.promptDrafts.a1).toBe("keep agent draft"); expect(app.requests).toEqual([]);
+    expect(app.get("workspace-picker").visible).toBe(true); expect(app.input.value).toBe("feature"); expect(app.input.cursorOffset).toBe(cursor);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });

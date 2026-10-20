@@ -196,6 +196,8 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
           updateNotice(); return result;
         },
         onInterrupt: (id: string) => client.interrupt(id),
+        onAcknowledge: (id: string, conversationId: string, resultId: string) => client.acknowledge(id, conversationId, resultId),
+        getMonitoringNotice: () => client.attentionNotice,
         onComplete: completions!.provider,
         onListModels: (id, conversationId, signal) => client.models(id, conversationId, signal),
         onSelectModel: (id, conversationId, model, effort) => client.selectModel(id, conversationId, model, effort),

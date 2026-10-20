@@ -3,7 +3,7 @@ import { BoxRenderable, NativeSession, type RGBA, type TerminalColors } from "@o
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench } from "../app/ui/workbench.ts";
 import { PromptInput } from "../agents/ui/prompt-input.ts";
-import { blendColors, uiTheme } from "./theme.ts";
+import { uiTheme } from "./theme.ts";
 import { WorkspaceSelection } from "../app/workspace-selection.ts";
 import { demoWorkspace } from "../workspace/demo.ts";
 import { ok } from "../result.ts";
@@ -80,13 +80,14 @@ test("포커스가 사이드바에서 입력창으로 이동하면 경계 강조
   };
   try {
     const colors = uiTheme(app.renderer).colors;
+    app.mockInput.pressKey("f", { ctrl: true }); await app.renderOnce();
     expect(border(sidebar).equals(colors.accent)).toBe(true);
 
     // Focusing an input must not activate another tab, select a session or send its draft.
-    app.mockInput.pressKey("e", { ctrl: true }); await app.renderOnce();
+    app.mockInput.pressEscape(); await app.renderOnce();
 
     expect(border(composer).equals(colors.accent)).toBe(true);
-    expect(border(sidebar).toInts()).toEqual(blendColors(colors.panel, colors.text, 0.22).toInts());
+    expect(app.renderer.root.findDescendantById("workspace-picker")!.visible).toBe(false);
     expect(app.selection.sessionId).toBe("a1");
     expect(app.view.promptDrafts.a1).toBe("unsent request");
     expect(app.captureCharFrame()).toContain("Theme-sensitive transcript");

@@ -13,6 +13,7 @@ import { AgentPanel, type AgentActions } from "../../agents/ui/agent-panel.ts";
 import type { HistoryItem } from "../../agents/history.ts";
 import type { HistoryPreview } from "../../agents/history-preview.ts";
 import { SessionHistoryPanel } from "../../agents/ui/history-panel.ts";
+import { SessionMonitor } from "../../agents/ui/session-monitor.ts";
 import { ModelPicker, type ModelPickerActions } from "../../agents/ui/model-picker.ts";
 import { Footer, type FooterShortcut } from "../../ui/footer.ts";
 import { TextDialog } from "../../ui/text-dialog.ts";
@@ -51,6 +52,8 @@ export type WorkbenchActions = AgentActions & {
   onNotice?: (message: string) => void;
   keymap?: Keymap;
   onDetach?: () => void;
+  onAcknowledge?: (sessionId: string, conversationId: string, resultId: string) => Promise<Result<void, ExpectedError>>;
+  getMonitoringNotice?: () => string;
 };
 
 type RowView = { box: BoxRenderable; body: BoxRenderable; text: TextRenderable; status?: TextRenderable };
@@ -63,6 +66,11 @@ const hiddenWorkspaceBorder = {
 export class Workbench {
   readonly root: BoxRenderable;
   private readonly sidebar: BoxRenderable;
+  private readonly workspacePopup: BoxRenderable;
+  private workspaceOwner: Renderable | undefined;
+  private readonly monitor: SessionMonitor;
+  private foreground = false;
+  private readonly acknowledgements = new Map<string, string>();
   private readonly search: InputRenderable;
   private readonly searchBox: BoxRenderable;
   private readonly tree: ScrollBoxRenderable;
@@ -88,7 +96,6 @@ export class Workbench {
   private lastScrolledKey: string | null = null;
   private navigationRevealPending = false;
   private activeWorktreeId: string | null = null;
-  private sidebarTransition: { visible: boolean; worktreeId: string | null } | undefined;
   private readonly unsubscribe: () => void;
   private disposed = false;
   private readonly theme: UiTheme;
@@ -99,9 +106,12 @@ export class Workbench {
     this.workViews = structuredClone(actions.initialWorkViews ?? { active: {}, agentScroll: {} });
     this.root = new BoxRenderable(renderer, { id: "workspace-screen", width: "100%", height: "100%", flexDirection: "column" });
     const panels = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, flexDirection: "row" });
-    // Put the separator on the cell edge so full-bleed surfaces meet it without a half-cell gap.
-    this.sidebar = new BoxRenderable(renderer, { id: "workspace-sidebar", width: 34, flexShrink: 0, flexDirection: "column",
-      border: ["right"], customBorderChars: { ...BorderChars.single, vertical: "▕" }, paddingX: 1 });
+    this.workspacePopup = new BoxRenderable(renderer, { id: "workspace-picker", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 4900, visible: false,
+      onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
+    // Legacy search/tree IDs and key commands remain, without permanent sidebar geometry.
+    this.sidebar = new BoxRenderable(renderer, { id: "workspace-sidebar", position: "absolute", visible: false, minWidth: 0, minHeight: 0,
+      flexDirection: "column", border: true, paddingX: 1 });
+    this.workspacePopup.add(this.sidebar);
     this.searchBox = new BoxRenderable(renderer, {
       id: "workspace-search-box", width: "auto", height: 3, minWidth: 0, flexShrink: 0,
       flexDirection: "column",
@@ -134,6 +144,13 @@ export class Workbench {
       notice: message => this.setNotice(message), changed: () => this.updateFooter(), fallback: () => this.focusNavigation(),
       keyHint: (command, context) => this.keymap.hint(command, context) });
     this.dialog = new TextDialog(renderer, () => this.updateFooter(), () => this.focusNavigation(), actions.onCopyTranscript);
+    this.monitor = new SessionMonitor(renderer, {
+      details: id => actions.getSessionDetails?.(id) ?? null,
+      open: (tree, id) => { this.activateSession(tree, id); this.agent.focusLatest(); },
+      changed: () => this.updateFooter(), fallback: () => this.focusNavigation(), notice: text => { if (actions.onNotice) actions.onNotice(text); else this.setNotice(text); },
+      ...(actions.getMonitoringNotice ? { warning: actions.getMonitoringNotice } : {}),
+      keyHint: (command, context) => this.keymap.hint(command, context),
+    });
     this.sidebar.add(this.resultMessage);
     this.sidebar.add(this.tree);
     this.workPanel = new BoxRenderable(renderer, { id: "work-panel", flexGrow: 1, minWidth: 0, flexDirection: "column" });
@@ -162,7 +179,6 @@ export class Workbench {
         views[id] = state; this.saveWorkViews();
       }, this.workViews.gitViews ?? {}, (command, context) => this.keymap.hint(command, context), (content) => this.dialog.show(content));
     this.workPanel.add(this.agent.root); this.workPanel.add(this.editor.root); this.workPanel.add(this.git.root); this.workPanel.add(this.terminals.root);
-    panels.add(this.sidebar);
     panels.add(this.workPanel);
     this.root.add(panels);
     const help = this.button("Help", () => this.showHelp(), "Open help");
@@ -171,24 +187,28 @@ export class Workbench {
     help.onMouseDown = (event) => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.showHelp(); } };
     details.onMouseDown = (event) => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.showNotice(); } };
     this.footer = new Footer(renderer, `Radian ${packageInfo.version}`, { help, details }, "Radian");
-    this.root.add(this.footer.root); this.root.add(this.history.root); this.root.add(this.models.root); this.root.add(this.dialog.root);
+    this.root.add(this.footer.root); this.root.add(this.workspacePopup); this.root.add(this.monitor.root);
+    this.root.add(this.history.root); this.root.add(this.models.root); this.root.add(this.dialog.root);
     renderer.root.add(this.root);
     this.router = new KeyRouter(renderer, this.keymap, () => this.keyContext(), (command) => this.commandAvailable(command), (command) => this.command(command));
     renderer.on("resize", this.resize);
     renderer.on("focused_renderable", this.updateFooter);
-    renderer.addPostProcessFn(this.settleRows);
+    renderer.addPostProcessFn(this.settleRows); renderer.addPostProcessFn(this.acknowledgeVisible);
+    renderer.on("focus", this.focusTerminal); renderer.on("blur", this.blurTerminal);
     this.search.on(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.search.on("focused", this.repaintSearch); this.search.on("blurred", this.repaintSearch);
     this.unsubscribe = selection.subscribe(() => this.render());
     this.resize();
     this.render();
-    this.tree.focus();
+    this.focusNavigation();
     this.theme.input(this.search);
     this.theme.scrollbars(this.tree);
     this.theme.focusBorder(this.sidebar);
     this.tree.on("focused", this.repaintRows); this.tree.on("blurred", this.repaintRows);
     this.theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.text"].bg;
+      this.workspacePopup.backgroundColor = styles["ui.backdrop"].bg;
+      this.sidebar.backgroundColor = styles["ui.popup"].bg;
       this.repaintSearch(); this.paintRows(this.visibleRows());
     });
   }
@@ -201,38 +221,45 @@ export class Workbench {
 
   get workViewPreferences(): WorkViewPreferences { return structuredClone(this.workViews); }
 
-  private toggleSidebar(): void {
-    if (this.disposed || this.root.isDestroyed) return;
-    const visible = !(this.sidebarTransition?.visible ?? this.sidebar.visible);
-    this.sidebarTransition = undefined; this.editor.cancelResize();
-    if (this.sidebar.visible === visible) return;
-    const transition = { visible, worktreeId: this.selection.worktree?.id ?? null };
-    this.sidebarTransition = transition;
-    const commit = () => { if (this.sidebarTransition === transition) this.finishSidebarTransition(); };
-    const width = this.renderer.width - (visible ? this.sidebar.width : 0);
-    const cols = Math.min(500, width), rows = this.editor.input?.height ?? 0;
-    if (cols < 2 || rows < 1 || !this.editor.prepareResize(cols, rows, commit)) commit();
-  }
-  private finishSidebarTransition(): void {
-    const transition = this.sidebarTransition;
-    if (transition) this.setSidebarVisible(transition.visible);
-  }
-  private setSidebarVisible(visible: boolean): void {
-    if (this.disposed || this.root.isDestroyed) return;
-    this.sidebarTransition = undefined; this.editor.cancelResize();
-    if (this.sidebar.visible === visible) return;
-    const focused = this.sidebar.hasFocusedDescendant;
-    this.sidebar.visible = visible;
+  private toggleSidebar(): void { this.setSidebarVisible(!this.sidebar.visible); }
+  private setSidebarVisible(visible: boolean, restoreFocus = true): void {
+    if (this.disposed || this.root.isDestroyed || this.sidebar.visible === visible) return;
+    if (visible) this.workspaceOwner = this.renderer.currentFocusedRenderable ?? undefined;
+    this.sidebar.visible = this.workspacePopup.visible = visible;
     this.paintRows(this.visibleRows());
-    if (visible) this.focusNavigation();
-    else if (focused) this.focusWorkView();
+    if (visible) { this.search.focus(); this.navigationRevealPending = true; }
+    else {
+      const owner = this.workspaceOwner; this.workspaceOwner = undefined;
+      let available = !!owner && !owner.isDestroyed;
+      for (let node: Renderable | null = owner ?? null; node; node = node.parent as Renderable | null) available &&= node.visible;
+      if (restoreFocus && available && owner) owner.focus(); else if (restoreFocus) this.focusNavigation();
+    }
     this.updateFooter();
   }
 
   private focusNavigation(): void {
-    if (!this.sidebar.visible) this.focusWorkView();
-    else this.tree.focus();
+    this.focusWorkView();
+    let focused = this.renderer.currentFocusedRenderable ?? null;
+    let visible = !!focused && !focused.isDestroyed;
+    for (; focused; focused = focused.parent as Renderable | null) visible &&= focused.visible;
+    if (!visible) this.footer?.focusTargets.at(-1)?.focus();
   }
+
+  private focusTerminal = (): void => { this.foreground = true; };
+  private blurTerminal = (): void => { this.foreground = false; };
+  private acknowledgeVisible = (): void => {
+    if (this.disposed || !this.foreground || !this.actions.onAcknowledge || !this.agent.resultVisible
+      || this.sidebar.visible || this.monitor.visible || this.history.visible || this.models.visible || this.dialog.visible || this.git.modal) return;
+    const id = this.selection.sessionId, attention = this.selection.worktree?.sessions.find(session => session.id === id)?.attention;
+    // Most frames have nothing to acknowledge: do not rebuild the aggregate runtime snapshot for them.
+    if (!id || !attention || this.acknowledgements.get(id) === attention.id) return;
+    const state = this.actions.getSessionDetails?.(id);
+    if (!state?.conversationId || state.attention?.id !== attention.id) return;
+    this.acknowledgements.set(id, attention.id);
+    void this.actions.onAcknowledge(id, state.conversationId, state.attention.id).then(result => {
+      if (!result.ok && !this.disposed) this.setNotice(`[${result.error.code}] Result could not be marked as read: ${result.error.message}`);
+    }).catch(error => { if (!this.disposed) this.setNotice(reportUnexpected(error, "session acknowledgement")); });
+  };
 
   private focusWorkView(): void {
     switch (this.displayedWorkView) {
@@ -252,6 +279,7 @@ export class Workbench {
     this.focusWorkView();
   }
   private activateSession(worktreeId: string, sessionId: string): void {
+    this.foreground = true; this.acknowledgements.delete(sessionId);
     this.agent.rememberScroll();
     this.workViews.active[worktreeId] = "agent"; this.saveWorkViews();
     this.selection.selectSession(worktreeId, sessionId);
@@ -262,7 +290,6 @@ export class Workbench {
 
   private updateFooter = (): void => {
     if (this.disposed || !this.footer || this.root.isDestroyed) return;
-    if (this.sidebarTransition && !this.editor.input) this.finishSidebarTransition();
     const focused = this.renderer.currentFocusedRenderable;
     let shortcuts: readonly FooterShortcut[] = [];
     const context = this.keyContext();
@@ -273,16 +300,17 @@ export class Workbench {
     if (this.dialog.visible) shortcuts = [hint("dialog.copy", "Copy"), hint("dialog.page-down", "Page"), hint("dialog.dismiss", "Close")];
     else if (this.models.visible) shortcuts = this.models.shortcuts;
     else if (this.history.visible) shortcuts = this.history.shortcuts;
-    else if (focused === this.search) shortcuts = [hint("focus.results", "Results"), hint("search.clear", "Clear")];
+    else if (this.monitor?.visible) shortcuts = this.monitor.shortcuts;
+    else if (focused === this.search) shortcuts = [hint("focus.results", "Open"), pair("workspace.previous", "workspace.next", "Navigate"), hint("workspace.dismiss", "Close")];
     else if (focused === this.tree) shortcuts = [
-      pair("workspace.previous", "workspace.next", "Navigate"),
       ...(this.visibleRows().some((row) => row.kind === "worktree" && row.key === this.navigationKey) ? [hint("workspace.open", "Open worktree")] : []),
+      pair("workspace.previous", "workspace.next", "Navigate"), hint("workspace.dismiss", "Close"),
       pair("workspace.first", "workspace.last", "First/last"),
     ];
-    else if (focused && focused === this.editor?.input) shortcuts = [hint("focus.sidebar", "Sidebar"), ...(!this.keymap.bound("escape", "editor") ? [{ key: "Esc", label: "Normal mode" }] : [])];
+    else if (focused && focused === this.editor?.input) shortcuts = [hint("focus.sidebar", "Workspaces"), ...(!this.keymap.bound("escape", "editor") ? [{ key: "Esc", label: "Normal mode" }] : [])];
     else if (focused && focused === this.terminals?.input) shortcuts = [
       ...(!this.keymap.bound("ctrl+c", "terminal") ? [{ key: "Ctrl+C", label: "Interrupt" }] : []),
-      ...(this.terminals.canScroll ? [pair("terminal.scroll-up", "terminal.scroll-down", "Scroll")] : []), hint("focus.sidebar", "Sidebar"),
+      ...(this.terminals.canScroll ? [pair("terminal.scroll-up", "terminal.scroll-down", "Scroll")] : []), hint("focus.sidebar", "Workspaces"),
     ];
     else if (this.agent.sessionTabsFocused) shortcuts = this.agent.sessionShortcuts;
     else if (this.agent.transcriptContext()) shortcuts = this.agent.transcriptShortcuts;
@@ -306,7 +334,7 @@ export class Workbench {
       if (focused.visible && label) shortcuts = [{ key: this.keymap.hints("button.activate", "button"), label }];
     }
     this.footer.setView({ agent: "Agents", editor: "Editor", git: "Git", terminal: "Terminal" }[this.displayedWorkView]);
-    this.footer.setContext(this.agent.active && !this.dialog.visible && !this.history.visible && !this.models.visible ? this.agent.transcriptStatus : "");
+    this.footer.setContext(this.agent.active && !this.dialog.visible && !this.history.visible && !this.models.visible && !this.monitor?.visible && !this.sidebar.visible ? this.agent.transcriptStatus : "");
     this.footer.setShortcuts(shortcuts.filter((shortcut) => shortcut.key));
   };
 
@@ -345,7 +373,9 @@ export class Workbench {
 
   private activateRow(row: WorkspaceRow): void {
     this.navigationKey = row.key;
-    if (row.kind === "worktree") this.selection.selectWorktree(row.worktree.id);
+    if (row.kind === "worktree") {
+      this.setSidebarVisible(false, false); this.selection.selectWorktree(row.worktree.id); this.focusWorkView();
+    }
   }
 
   private selected(row: WorkspaceRow): boolean {
@@ -392,6 +422,8 @@ export class Workbench {
     if (this.dialog?.visible) return "dialog";
     if (this.models?.visible) return this.models.context;
     if (this.history?.visible) return this.history.context;
+    if (this.monitor?.visible) return this.monitor.context;
+    if (this.sidebar.visible) return this.search.focused ? "search" : "workspace";
     const focused = this.renderer.currentFocusedRenderable;
     if (!focused) return "none";
     const gitContext = this.git?.keyContext(); if (gitContext) return gitContext;
@@ -410,9 +442,13 @@ export class Workbench {
     if (command.startsWith("dialog.")) return false;
     if (this.models.visible) return command.startsWith("model.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
     if (command.startsWith("model.")) return false;
+    if (this.history.visible) return command.startsWith("history.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
+    if (this.monitor.visible) return command.startsWith("monitor.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
+    if (this.sidebar.visible) return command.startsWith("workspace.") || ["sidebar.toggle", "focus.sidebar", "focus.search", "focus.results", "search.clear", "focus.next", "focus.previous", "app.detach"].includes(command);
+    if (command === "monitor.show") return true;
+    if (command.startsWith("monitor.")) return false;
     if (command === "app.help") return true;
     if (command === "notice.details") return Boolean(this.footer.noticeText.trim());
-    if (this.history.visible) return command.startsWith("history.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
     if (command === "history.show") return Boolean(this.selection.worktree);
     if (command.startsWith("history.")) return false;
     const index = tabIndex(command);
@@ -441,6 +477,9 @@ export class Workbench {
     }
   }
   private command(command: CommandId): void {
+    this.foreground = true;
+    if (command === "monitor.show") { this.monitor.show(); return; }
+    if (command.startsWith("monitor.")) { this.monitor.command(command); return; }
     if (command === "app.help") { this.showHelp(); return; }
     if (command === "notice.details") { this.showNotice(); return; }
     if (command.startsWith("dialog.")) { this.dialog.command(command); return; }
@@ -468,8 +507,14 @@ export class Workbench {
     switch (command) {
       case "app.detach": this.actions.onDetach?.(); break;
       case "sidebar.toggle": this.toggleSidebar(); break;
-      case "focus.sidebar": case "focus.results": this.setSidebarVisible(true); this.focusNavigation(); break;
-      case "focus.search": this.setSidebarVisible(true); this.search.focus(); break;
+      case "focus.sidebar": case "focus.search": this.setSidebarVisible(true); this.search.focus(); break;
+      case "focus.results": {
+        const row = this.visibleRows().find(item => item.key === this.navigationKey);
+        if (row) this.activateRow(row);
+        break;
+      }
+      case "workspace.dismiss": this.setSidebarVisible(false); break;
+      case "workspace.search": this.search.focus(); break;
       case "focus.prompt": this.agent.prompt.focus(); break;
       case "focus.transcript": this.agent.focusTranscript(); break;
       case "focus.next": this.moveFocus(1); break;
@@ -518,11 +563,12 @@ export class Workbench {
       const index = targets.indexOf(this.renderer.currentFocusedRenderable!);
       targets[(index + direction + targets.length) % targets.length]?.focus(); return;
     }
-    const targets: Renderable[] = [];
-    if (this.sidebar.visible) {
-      targets.push(this.search, this.tree);
+    if (this.monitor.visible || this.sidebar.visible) {
+      const targets = this.monitor.visible ? this.monitor.focusTargets : [this.search, this.tree];
+      const index = targets.indexOf(this.renderer.currentFocusedRenderable!);
+      targets[(index + direction + targets.length) % targets.length]?.focus(); return;
     }
-    targets.push(...this.agent.focusTargets);
+    const targets: Renderable[] = [...this.agent.focusTargets];
     if (this.editor.root.visible) {
       if (this.editor.openButton.visible) targets.push(this.editor.openButton);
       if (this.editor.input) targets.push(this.editor.input);
@@ -536,10 +582,11 @@ export class Workbench {
   }
 
   private resize = (): void => {
-    // A physical terminal resize supersedes the geometry of an in-flight sidebar transition.
-    this.finishSidebarTransition();
     const { horizontal, vertical } = panelSpacing(this.renderer);
-    this.sidebar.width = this.renderer.width < 80 ? 26 : 40;
+    const width = Math.max(1, Math.min(100, Math.floor(this.renderer.width * 0.8)));
+    const height = Math.max(1, Math.min(this.renderer.height, Math.max(9, Math.floor(this.renderer.height * 0.8))));
+    this.sidebar.width = width; this.sidebar.height = height;
+    this.sidebar.left = Math.floor((this.renderer.width - width) / 2); this.sidebar.top = Math.floor((this.renderer.height - height) / 2);
     this.sidebar.paddingX = horizontal; this.sidebar.paddingBottom = vertical;
     this.searchBox.height = 1 + vertical * 2; this.searchBox.paddingY = vertical;
     this.searchBox.marginX = -horizontal; this.searchBox.paddingX = horizontal;
@@ -642,7 +689,6 @@ export class Workbench {
     this.paintRows(rows);
     const worktree = this.selection.worktree;
     const workView = worktree ? this.workViews.active[worktree.id] ?? "agent" : "agent";
-    if (this.sidebarTransition && (workView !== "editor" || this.sidebarTransition.worktreeId !== worktree?.id)) this.finishSidebarTransition();
     this.displayedWorkView = workView;
     const openIds = new Set([...this.selection.snapshot.flatMap((repo) => repo.worktrees.flatMap((tree) => tree.sessions.map((item) => item.id))), ...(this.actions.getRetainedSessionIds?.() ?? [])]);
     this.agent.update(worktree, this.selection.sessionId, openIds, workView === "agent");
@@ -652,6 +698,8 @@ export class Workbench {
     this.resultMessage.content = this.search.value ? "No matching workspaces" : "No repositories";
     this.resultMessage.visible = rows.length === 0;
     this.history.updateScope(worktree);
+    this.monitor.update(this.selection.snapshot);
+    for (const id of this.acknowledgements.keys()) if (!openIds.has(id)) this.acknowledgements.delete(id);
     this.models.updateScope(this.selection.sessionId, this.selection.sessionId ? this.actions.getSessionDetails?.(this.selection.sessionId)?.conversationId : undefined, workView === "agent");
     if (this.navigationKey && this.navigationKey !== this.lastScrolledKey) {
       this.revealRow(this.navigationKey); this.navigationRevealPending = true;
@@ -698,15 +746,16 @@ export class Workbench {
   dispose(): void {
     if (this.disposed) return;
     this.agent.rememberScroll();
-    this.sidebarTransition = undefined; this.disposed = true;
+    this.disposed = true;
     this.unsubscribe();
-    this.agent.dispose(); this.history.dispose(); this.models.dispose(); this.dialog.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
+    this.agent.dispose(); this.history.dispose(); this.monitor.dispose(); this.models.dispose(); this.dialog.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
     this.search.off(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.search.off("focused", this.repaintSearch); this.search.off("blurred", this.repaintSearch);
     this.router.dispose();
     this.renderer.off("resize", this.resize);
     this.renderer.off("focused_renderable", this.updateFooter);
-    this.renderer.removePostProcessFn(this.settleRows);
+    this.renderer.removePostProcessFn(this.settleRows); this.renderer.removePostProcessFn(this.acknowledgeVisible);
+    this.renderer.off("focus", this.focusTerminal); this.renderer.off("blur", this.blurTerminal);
     this.root.destroyRecursively();
   }
 }

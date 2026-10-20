@@ -22,7 +22,7 @@ function resolveColors(palette: TerminalColors | undefined, overrides: ThemeOver
     surface: override("surface", blendColors(panel, text, 0.05)),
     muted: override("muted", blendColors(panel, text, 0.65)),
     selected: override("selected", blendColors(panel, text, 0.16)),
-    accent: ansi("accent", 6), info: ansi("info", 4), warning: ansi("warning", 3), keyword: ansi("keyword", 5), number: ansi("number", 3),
+    accent: ansi("accent", 6), info: ansi("info", 4), warning: ansi("warning", 3), attention: override("attention", RGBA.fromHex("#E9953A")), keyword: ansi("keyword", 5), number: ansi("number", 3),
     added: override("added", blendColors(panel, success, 0.30)), removed: override("removed", blendColors(panel, error, 0.30)),
   };
 }

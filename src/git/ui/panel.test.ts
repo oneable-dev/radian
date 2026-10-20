@@ -54,6 +54,7 @@ async function mount(options: { actions?: Partial<GitActions>; initial?: WorkVie
   const get = (id: string) => { const result = walk(app.renderer.root).find((node) => node.id === id); if (!result) throw new Error(`Missing ${id}`); return result; };
   await app.renderOnce();
   const click = async (text: string) => {
+    if (text.startsWith(icons.folder)) { app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressKey("u", { ctrl: true }); await app.renderOnce(); }
     const lines = app.captureCharFrame().split("\n"); const y = lines.findIndex((line) => line.includes(text)), x = lines[y]?.indexOf(text) ?? -1;
     if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
     await app.mockMouse.click(x + Math.min(1, text.length - 1), y); await app.renderOnce();
@@ -217,8 +218,8 @@ test("Git 목록과 diff는 일반·좁은 화면 모두 사이드바 구분선 
   // Repository reads are controlled; list, diff and responsive native layout are real.
   const app = await mount();
   const aligned = (id: string) => {
-    const sidebar = app.get("workspace-sidebar"), content = app.get(id);
-    expect(content.y + content.height).toBe(sidebar.y + sidebar.height);
+    const pane = app.get("work-panel"), content = app.get(id);
+    expect(content.y + content.height).toBe(pane.y + pane.height);
   };
   try {
     for (const [width, height] of [[160, 32], [60, 12], [79, 18], [80, 17], [160, 32]] as const) {

@@ -200,7 +200,7 @@ test("fast의 전체·축약 표시는 상태와 관계없이 소문자로 통�
   try {
     expect(app.line()).toContain("fast on"); expect(app.line()).not.toContain("Fast");
 
-    app.resize(110, 24); await app.renderOnce();
+    app.resize(70, 24); await app.renderOnce();
     expect(app.line()).toContain("gpt-5.5 high f+");
     await app.set({ ...sample(), fast: false }); expect(app.line()).toContain("gpt-5.5 high f−");
     await app.set({ ...sample(), fast: null }); expect(app.line()).toContain("gpt-5.5 high f?");

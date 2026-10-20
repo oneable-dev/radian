@@ -83,7 +83,8 @@ export class SessionTabs {
         root.add(status.root); root.add(title); root.add(close); this.list.add(root);
         tab = { root, title, status }; this.tabs.set(session.id, tab);
       }
-      tab.status.update(sessionStatus(session), this.visible);
+      const working = session.status === "working" || session.subagents.some(child => child.status === "working");
+      tab.status.update(working ? "working" : sessionStatus(session), this.visible, session);
       this.setTitle(tab, session.id);
       if (this.list.getChildren()[index] !== tab.root) { this.list.add(tab.root, index); this.reveal = true; }
     }
@@ -109,8 +110,8 @@ export class SessionTabs {
   }
   private close(): void { if (this.selected) this.actions.close(this.selected); }
   private setTitle(tab: Tab, id: string): void {
-    // Edge gutters, title/close gap and close glyph need four cells; a visible badge adds three.
-    const reserved = tab.status.root.visible ? 7 : 4;
+    // Reclaim the entire badge and its gap when there is no execution/unread indicator.
+    const reserved = 4 + (tab.status.root.visible ? tab.status.root.width + 1 : 0);
     const text = singleLine(id), width = Math.max(1, this.list.width > 0 ? this.list.width - reserved : Bun.stringWidth(text));
     tab.title.maxWidth = width; tab.title.content = truncateCells(text, width);
   }

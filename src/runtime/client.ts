@@ -327,6 +327,11 @@ export class RuntimeClient {
       throw error;
     });
   }
+  async acknowledge(sessionId: string, conversationId: string, resultId: string): Promise<Result<void, ExpectedError>> {
+    if (!this.state.capabilities?.includes("session-attention")) return err(new CapabilityError("Running service predates session attention. Finish work and explicitly restart it when ready. No service was restarted."));
+    const result = await this.command({ type: "acknowledge", sessionId, conversationId, resultId }, { instance: this.state.instance, epoch: this.connectionEpoch });
+    return result.ok ? ok(undefined) : result;
+  }
   async interrupt(sessionId: string): Promise<Result<void, ExpectedError>> {
     if (!this.state.capabilities?.includes("agent-interrupt")) return err(new CapabilityError("Running service predates agent interruption. Finish work and explicitly restart it when ready. No interrupt was sent."));
     const conversationId = this.state.details[sessionId]?.conversationId;

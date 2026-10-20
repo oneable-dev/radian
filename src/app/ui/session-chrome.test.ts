@@ -41,6 +41,7 @@ test("상단 오른쪽의 워크트리·생성·History 버튼은 없고 선택�
 test("탐색 커서가 아니라 활성 워크트리를 표시하고 실제 전환·브랜치 갱신·detached 상태를 반영한다", async () => {
   const app = await mount();
   try {
+    app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab();
     app.mockInput.pressKey("j"); await app.render(); expect(app.line("session-worktree-context")).toBe("radian · main");
     app.mockInput.pressEnter(); await app.render(); expect(app.line("session-worktree-context")).toContain("radian-ui");
     app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id !== "demo:feature" ? tree : { ...tree, branch: "fix/status" }) })));

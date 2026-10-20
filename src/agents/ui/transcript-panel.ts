@@ -549,6 +549,10 @@ export class TranscriptPanel {
     // AgentPanel owns the bottom boundary to status/input; it must not be padded again here.
     this.scroll.content.paddingTop = !this.legacy && !this.help.visible && this.order.length && this.scroll.viewport.height > 1 ? spacing.sectionGap : 0;
   }
+  get latestVisible(): boolean {
+    return !this.disposed && this.visible && this.scroll.visible && this.scroll.viewport.height > 0
+      && !this.help.visible && this.atBottom() && !this.hasSelection();
+  }
   get canFollowLatest(): boolean {
     return !this.disposed && !this.scroll.isDestroyed && this.visible && this.scroll.visible && !this.help.visible
       && this.options.initialPosition !== "start" && this.order.length > 0 && !this.atBottom();

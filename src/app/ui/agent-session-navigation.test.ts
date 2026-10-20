@@ -50,7 +50,9 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
         return text;
       }).join("\n");
     },
+    async openWorkspaces() { app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab(); await render(); },
     async click(label: string) {
+      if (label.startsWith(icons.folder)) { app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressKey("u", { ctrl: true }); await render(); }
       const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes(label));
       const x = lines[y]?.indexOf(label) ?? -1;
       if (x < 0) throw new Error(`Missing ${label}\n${app.captureCharFrame()}`);
@@ -65,11 +67,11 @@ test("워크트리 커서 이동과 snapshot은 현재 화면을 바꾸지 않�
   const app = await mount({ initialWorkViews: { active: { "demo:main": "editor", "demo:feature": "git" }, agentScroll: {} } });
   try {
     const saves = app.saved.length;
-    app.mockInput.pressKey("j"); await app.render();
+    await app.openWorkspaces(); app.mockInput.pressKey("j"); await app.render();
     app.selection.replaceSnapshot(structuredClone(app.selection.snapshot)); await app.render();
 
     expect(app.selection.worktree?.id).toBe("demo:main");
-    expect(app.captureCharFrame()).toContain("Editor preview");
+    expect(app.get("editor-view").visible).toBe(true);
     expect(app.saved).toHaveLength(saves);
     expect(app.region("workspace-tree")).not.toContain("a1");
 
@@ -77,7 +79,7 @@ test("워크트리 커서 이동과 snapshot은 현재 화면을 바꾸지 않�
     app.mockInput.pressEnter(); await app.render();
     expect(app.selection.worktree?.id).toBe("demo:feature");
     expect(app.captureCharFrame()).toContain("Git preview");
-    app.mockInput.pressKey("k"); await app.render();
+    await app.openWorkspaces(); app.mockInput.pressKey("k"); await app.render();
     expect(app.selection.worktree?.id).toBe("demo:feature");
     app.mockInput.pressEnter(); await app.render();
 
@@ -93,11 +95,11 @@ test("방향키와 Home/End도 탐색만 하고 실제 선택은 Enter로 확정
   // Arrow alternatives must obey exactly the same deferred-activation rule as j/k.
   const app = await mount();
   try {
-    app.mockInput.pressKey("END"); app.mockInput.pressArrow("up"); await app.render();
+    await app.openWorkspaces(); app.mockInput.pressKey("END"); app.mockInput.pressArrow("up"); await app.render();
     expect(app.selection.worktree?.id).toBe("demo:main");
     app.mockInput.pressEnter(); await app.render();
     expect(app.selection.worktree?.id).toBe("demo:feature");
-    app.mockInput.pressKey("HOME"); await app.render();
+    await app.openWorkspaces(); app.mockInput.pressKey("HOME"); await app.render();
     expect(app.selection.worktree?.id).toBe("demo:feature");
     app.mockInput.pressEnter(); await app.render();
     expect(app.selection.worktree?.id).toBe("demo:main");
@@ -139,7 +141,7 @@ test("세션 상태는 같은 칸에 표시하고 미확정은 빈 상태 공간
     for (const focused of [false, true]) {
       if (focused) { app.get("agent-session-list").focus(); await app.render(); }
       ordered("session:demo:main:a1", "a1", spinnerFrames);
-      ordered("session:demo:main:a2", "a2", [icons.pass]);
+      expect(app.region("session:demo:main:a2")).toBe(" a2 × ");
       ordered("session:demo:main:a3", "a3", [icons.error]);
     }
 
@@ -161,8 +163,8 @@ test("세션 탭은 양 끝에 한 칸 패딩을 두고 내부와 탭 사이에�
     for (const id of ["a1", "a2", "a3"]) {
       const tab = app.get(`session:demo:main:${id}`), close = app.get(`close-session:${id}`);
       const [status, title] = tab.getChildren();
-      expect(status!.x).toBe(tab.x + 1);
-      expect(title!.x).toBe(status!.x + status!.width + 1);
+      if (status!.visible) expect(status!.x).toBe(tab.x + 1);
+      expect(title!.x).toBe(status!.visible ? status!.x + status!.width + 1 : tab.x + 1);
       expect(close.x).toBe(title!.x + title!.width + 1);
       expect(close.width).toBe(1);
       expect(close.x + close.width).toBe(tab.x + tab.width - 1);
@@ -174,7 +176,7 @@ test("세션 탭은 양 끝에 한 칸 패딩을 두고 내부와 탭 사이에�
   } finally { await app.close(); }
 });
 
-test.each([["완료", "complete", icons.pass], ["실패", "failure", icons.error], ["미확정", null, " "]] as const)(
+test.each([["완료", "complete", ""], ["실패", "failure", icons.error], ["미확정", null, ""]] as const)(
   "실행이 %s 상태로 바뀌면 스피너 최소 시간 후 아이콘 없는 상태 공간만 제거한다", async (_label, status, glyph) => {
     // A short run settles before the spinner's 500 ms minimum interval has elapsed.
     const app = await mount();
@@ -189,15 +191,15 @@ test.each([["완료", "complete", icons.pass], ["실패", "failure", icons.error
         sessions: tree.sessions.map((session) => session.id === "a1" ? { ...session, status, subagents: [] } : session),
       })) })));
       await app.render();
-      const spinnerCell = 2;
-      expect(app.region(tab.id)[1]).toBe(glyph);
+      const spinnerCell = status === "failure" ? 2 : 1;
+      if (status === "failure") expect(app.region(tab.id)[1]).toBe(glyph);
       expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[spinnerCell])).toBe(true);
       app.clock.advance(379); await app.render();
       expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[spinnerCell])).toBe(true);
       app.clock.advance(1); await app.render();
 
       // Only the now-empty indicator collapses; real outcomes retain their stable badge placement.
-      if (status === null) {
+      if (status !== "failure") {
         expect(app.region(tab.id)).toBe(" a1 × ");
         expect([tab.x, tab.width, title.x, close.x]).toEqual([geometry[0]!, geometry[1]! - 3, geometry[2]! - 3, geometry[3]! - 3]);
       } else {
@@ -288,7 +290,7 @@ test("좁은 화면의 Workspace 푸터도 Enter 확정 안내를 우선 표시�
   // Essential confirmation must fit before optional first/last navigation hints.
   const app = await mount();
   try {
-    app.resize(60, 12); await app.render();
+    app.resize(60, 12); await app.render(); await app.openWorkspaces();
     expect(app.captureCharFrame().split("\n")[11]).toContain("Enter Open worktree");
     app.mockInput.pressKey("j"); await app.render();
     expect(app.selection.worktree?.id).toBe("demo:main");
