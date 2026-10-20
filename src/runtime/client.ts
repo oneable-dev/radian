@@ -15,6 +15,7 @@ import { completionQuerySchema, completionResultSchema } from "./completion-prot
 import type { CompletionQuery, CompletionResult } from "../agents/completion.ts";
 import { NdjsonDecoder } from "./frames.ts";
 import { parseSessionControl } from "../agents/session-controls.ts";
+import { modelCatalogQuerySchema, modelCatalogSchema, modelIdentitySchema, parseModelCommand, type ModelCatalog, type ModelIdentity } from "../agents/model-selection.ts";
 
 import { maximumPreviewImageBytes, transcriptImageQuerySchema } from "../agents/transcript-images.ts";
 
@@ -166,6 +167,31 @@ export class RuntimeClient {
     if (!result.ok) return result;
     return result.value ? ok(result.value) : err(new ProtocolError("Runtime did not return a session ID."));
   }
+  async models(sessionId: string, conversationId: string, signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>> {
+    if (this.detaching || this.failure) return err(this.connectionClosed());
+    if (!this.state.capabilities?.includes("model-selection")) return err(new CapabilityError("Running service predates model selection. Finish work and explicitly restart it when ready; no service was restarted."));
+    if (signal?.aborted) return err(new CancelledError());
+    if (!Value.Check(modelCatalogQuerySchema, { sessionId, conversationId })) return err(new InputError("Invalid model selection conversation identity."));
+    const instance = this.state.instance, epoch = this.connectionEpoch;
+    const abort = AbortSignal.any([this.streamAbort.signal, AbortSignal.timeout(15000), ...(signal ? [signal] : [])]);
+    const request = await capture(() => transport(this.paths, `/models?${new URLSearchParams({ sessionId, conversationId })}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
+    if (!request.ok) return request;
+    if (!request.value.ok) return request.value;
+    const response = request.value.value;
+    const decoded = await capture(() => readJson(response)); if (!decoded.ok) return decoded;
+    if (!decoded.value.ok) return decoded.value;
+    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance || this.state.details[sessionId]?.conversationId !== conversationId) return err(new CancelledError("Model list belongs to an outdated conversation or connection."));
+    const body = decoded.value.value;
+    if (!response.ok) return Value.Check(replySchema, body) && !body.ok ? err(remoteError(body.error)) : err(new ProtocolError("Malformed model lookup failure response."));
+    return Value.Check(modelCatalogSchema, body) && body.conversationId === conversationId ? ok(body) : err(new ProtocolError("Malformed or mismatched model catalog."));
+  }
+
+  async selectModel(sessionId: string, conversationId: string, model: ModelIdentity): Promise<Result<string | null, ExpectedError>> {
+    if (!this.state.capabilities?.includes("model-selection")) return err(new CapabilityError("Running service predates model selection. Finish work and explicitly restart it when ready. No model was changed."));
+    if (!Value.Check(modelIdentitySchema, model)) return err(new InputError("Invalid model identity."));
+    return this.command({ type: "model-select", sessionId, conversationId, model }, { instance: this.state.instance, epoch: this.connectionEpoch });
+  }
+
   async complete(sessionId: string, query: CompletionQuery, signal?: AbortSignal): Promise<Result<CompletionResult, ExpectedError>> {
     if (this.detaching || this.failure) return err(this.connectionClosed());
     if (!this.state.capabilities?.includes("prompt-completion")) return err(new CapabilityError("Running service predates prompt completion. Save work and restart it explicitly when ready; no service was restarted."));
@@ -298,6 +324,8 @@ export class RuntimeClient {
     return present.ok ? ok(id) : present;
   }
   async prompt(sessionId: string, text: string, images: readonly string[] = []): Promise<Result<void, ExpectedError>> {
+    const model = parseModelCommand(text); if (!model.ok) return model;
+    if (model.value) return err(new CapabilityError("Use /model in the Agent input to open the model picker. No prompt was sent."));
     const control = parseSessionControl(text); if (!control.ok) return control;
     const conversationId = this.state.details[sessionId]?.conversationId;
     if (control.value) {

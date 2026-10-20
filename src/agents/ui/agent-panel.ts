@@ -4,8 +4,8 @@ import {
 } from "@opentui/core";
 import type { ExecutionState } from "../session-registry.ts";
 import type { Worktree } from "../../workspace/model.ts";
-import type { ExpectedError } from "../../errors.ts";
-import type { Result } from "../../result.ts";
+import { CapabilityError, InputError, type ExpectedError } from "../../errors.ts";
+import { err, type Result } from "../../result.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { TranscriptPanel, type TranscriptOptions } from "./transcript-panel.ts";
 import { TranscriptBottomButton } from "./transcript-bottom-button.ts";
@@ -23,10 +23,12 @@ import { SubagentSummary } from "./subagent-summary.ts";
 import type { TranscriptImageProvider } from "../transcript-images.ts";
 import { PendingMessages } from "./pending-messages.ts";
 import { parseSessionControl } from "../session-controls.ts";
+import { parseModelCommand } from "../model-selection.ts";
 
 export type AgentActions = {
   onNewSession: (worktreeId: string) => void;
   onHistory?: () => void;
+  onModel?: (sessionId: string) => Result<void, ExpectedError>;
   onSelectSession?: (worktreeId: string, sessionId: string) => void;
   onCloseSession?: (worktreeId: string, sessionId: string) => void;
   onPrompt?: (sessionId: string, text: string, images?: readonly string[]) => Result<void, ExpectedError> | Promise<Result<void, ExpectedError>>;
@@ -339,9 +341,14 @@ export class AgentPanel {
       const sent = fingerprint(draft);
       const control = parseSessionControl(submission.text);
       if (!control.ok) { this.notice(`[${control.error.code}] ${control.error.message} · prompt retained`); return; }
-      // A new tab must not reset the outgoing tab's reader, selection or following intent.
-      if (control.value?.action !== "new-tab") this.transcript.followLatest();
-      const result = await this.actions.onPrompt(id, submission.text, submission.images);
+      const model = parseModelCommand(submission.text);
+      if (!model.ok) { this.notice(`[${model.error.code}] ${model.error.message} · prompt retained`); return; }
+      // Settings dialogs and new tabs must not reset the outgoing conversation's reading position.
+      if (!model.value && control.value?.action !== "new-tab") this.transcript.followLatest();
+      const result = model.value
+        ? submission.images.length ? err(new InputError("/model does not accept image attachments. Input was retained."))
+          : this.actions.onModel?.(id) ?? err(new CapabilityError("Model selection is unavailable in this view. No prompt was sent."))
+        : await this.actions.onPrompt(id, submission.text, submission.images);
       if (!result.ok) { this.notice(`[${result.error.code}] ${result.error.message} · prompt retained`); return; }
       if (fingerprint(this.inputDrafts.get(id)) === sent) {
         this.drafts.delete(id); this.inputDrafts.delete(id);

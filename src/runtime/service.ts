@@ -10,6 +10,7 @@ import { err, ok, type Result } from "../result.ts";
 import { SessionRegistry, type SessionRecord } from "../agents/session-registry.ts";
 import { expandPromptDraft } from "../agents/prompt-input.ts";
 import { parseSessionControl, type SessionControl } from "../agents/session-controls.ts";
+import { modelCatalogQuerySchema } from "../agents/model-selection.ts";
 import { piSessionFactory } from "../agents/pi-session-adapter.ts";
 import { SessionHistory } from "../agents/history.ts";
 import { offlineRuntime } from "../testing/offline-runtime.ts";
@@ -139,7 +140,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "agent-interrupt"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "agent-interrupt", "model-selection"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || [this.discoveryWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
@@ -167,6 +168,14 @@ class WorkspaceRuntime {
         const image = this.registry.imageData(query.sessionId, query.imageId);
         return image.ok ? new Response(image.value.bytes, { headers: { "Content-Type": image.value.mimeType,
           "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } }) : this.rejected(image.error);
+      }
+      if (path === "/models" && request.method === "GET") {
+        if (expectedInstance !== this.instance) return this.rejected(new ProtocolError("Model lookup requires the current runtime instance identity."));
+        if (this.stopped) return this.rejected(new SessionError("RUNTIME_STOPPING", "Runtime is stopping."));
+        const query = Object.fromEntries(new URL(request.url).searchParams);
+        if (!Value.Check(modelCatalogQuerySchema, query)) return this.rejected(new InputError("Malformed model catalog query."));
+        const result = await this.registry.models(query.sessionId, query.conversationId, request.signal);
+        return result.ok ? Response.json(result.value) : this.rejected(result.error);
       }
       if (path === "/completions" && request.method === "GET") {
         if (expectedInstance !== this.instance) return this.rejected(new ProtocolError("Completion requires the current runtime instance identity."));
@@ -245,6 +254,7 @@ class WorkspaceRuntime {
         const result = await accepted.promise;
         return result.ok ? ok(null) : result;
       }
+      case "model-select": return this.registry.selectModel(command.sessionId, command.conversationId, command.model);
       case "session-control": {
         // Old clients used wire "new" for in-place replacement. Never silently change that contract.
         const action = command.action === "new" ? "clear" : command.action;

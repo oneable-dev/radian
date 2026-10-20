@@ -11,6 +11,7 @@ import { transcriptImageSchema } from "../agents/transcript-images.ts";
 import { promptDraftSchema, validatePromptDraft } from "../agents/prompt-input.ts";
 import { errorCodes, usageErrorCodes, AgentRunError, ExpectedError, InputError, parseJson, ProtocolError, type ErrorCode, type UsageErrorCode } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
+import { modelIdentitySchema } from "../agents/model-selection.ts";
 
 export const protocolVersion = 1;
 // Commands and PTY frames describe one operation/viewport. A workspace snapshot
@@ -131,6 +132,7 @@ export const commandSchema = Type.Union([
   Type.Object({ type: Type.Literal("resume"), worktreeId: id, savedId: id }),
   Type.Object({ type: Type.Literal("close"), sessionId: id }),
   Type.Object({ type: Type.Literal("interrupt"), sessionId: id, conversationId: id }),
+  Type.Object({ type: Type.Literal("model-select"), sessionId: id, conversationId: id, model: modelIdentitySchema }),
   Type.Object({ type: Type.Literal("prompt"), sessionId: id, text: Type.String({ minLength: 1 }), images: Type.Optional(Type.Array(id)), conversationId: Type.Optional(id) }),
   Type.Object({ type: Type.Literal("session-control"), sessionId: id, conversationId: id,
     // Preserve legacy wire "new" as replacement; new clients use explicit tab/clear actions.
@@ -164,7 +166,7 @@ export function errorStatus(error: ExpectedError): number {
     case "SESSION_NOT_OPEN": case "HISTORY_UNAVAILABLE": case "EDITOR_NOT_OPEN": case "PTY_NOT_OPEN": return 404;
     case "SESSION_BUSY": case "SESSION_CONFLICT": case "CANCELLED": case "EDITOR_BUSY": case "PTY_BUSY": return 409;
     case "RUNTIME_STOPPING": case "RUNTIME_ABSENT": case "CONNECTION_FAILED": case "CONNECTION_TIMEOUT": return 503;
-    case "UNSUPPORTED_CAPABILITY": case "PROTOCOL_ERROR": case "EDITOR_UNAVAILABLE": case "PTY_UNAVAILABLE": return 422;
+    case "UNSUPPORTED_CAPABILITY": case "MODEL_UNAVAILABLE": case "PROTOCOL_ERROR": case "EDITOR_UNAVAILABLE": case "PTY_UNAVAILABLE": return 422;
     default: return 500;
   }
 }

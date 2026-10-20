@@ -3,7 +3,7 @@ import { err, ok, type Result } from "./result.ts";
 export const usageErrorCodes = ["USAGE_AUTH_REQUIRED", "USAGE_QUERY_FAILED", "USAGE_PROTOCOL_ERROR", "USAGE_RATE_LIMITED", "USAGE_TIMEOUT"] as const;
 export const errorCodes = [
   "INVALID_INPUT", "SESSION_NOT_OPEN", "SESSION_BUSY", "SESSION_CONFLICT", "RUNTIME_STOPPING",
-  "CANCELLED", "AGENT_FAILED", "CLEANUP_FAILED", "HISTORY_UNAVAILABLE", "HISTORY_CORRUPT",
+  "CANCELLED", "AGENT_FAILED", "CLEANUP_FAILED", "HISTORY_UNAVAILABLE", "HISTORY_CORRUPT", "MODEL_UNAVAILABLE",
   "STORAGE_FAILED", "RUNTIME_ABSENT", "CONNECTION_FAILED", "CONNECTION_TIMEOUT", "PROTOCOL_ERROR",
   "UNSUPPORTED_CAPABILITY", "LEGACY_REMOTE_ERROR", "REMOTE_INTERNAL_ERROR", "GIT_DISCOVERY_FAILED",
   ...usageErrorCodes,
@@ -25,6 +25,9 @@ export class SessionError extends ExpectedError<"SESSION_NOT_OPEN" | "SESSION_BU
 }
 export class CancelledError extends ExpectedError<"CANCELLED"> {
   constructor(message = "Operation was cancelled.", options?: ErrorOptions) { super("CANCELLED", message, options); }
+}
+export class ModelSelectionError extends ExpectedError<"MODEL_UNAVAILABLE"> {
+  constructor(message: string, options?: ErrorOptions) { super("MODEL_UNAVAILABLE", message, options); }
 }
 export class AgentRunError extends ExpectedError<"AGENT_FAILED"> {
   constructor(message: string, options?: ErrorOptions) { super("AGENT_FAILED", message, options); }

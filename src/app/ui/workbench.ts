@@ -13,14 +13,15 @@ import { AgentPanel, type AgentActions } from "../../agents/ui/agent-panel.ts";
 import type { HistoryItem } from "../../agents/history.ts";
 import type { HistoryPreview } from "../../agents/history-preview.ts";
 import { SessionHistoryPanel } from "../../agents/ui/history-panel.ts";
+import { ModelPicker, type ModelPickerActions } from "../../agents/ui/model-picker.ts";
 import { Footer, type FooterShortcut } from "../../ui/footer.ts";
 import { TextDialog } from "../../ui/text-dialog.ts";
 import { keymapHelp } from "../../keybindings/help.ts";
 import { Button, type ButtonVariant } from "../../ui/button.ts";
 import { panelSpacing } from "../../ui/spacing.ts";
 import { singleLine } from "../../ui/text.ts";
-import type { Result } from "../../result.ts";
-import { reportUnexpected, type ExpectedError } from "../../errors.ts";
+import { err, ok, type Result } from "../../result.ts";
+import { CapabilityError, ProtocolError, SessionError, reportUnexpected, type ExpectedError } from "../../errors.ts";
 import { EditorPanel, type EditorActions } from "../../editor/ui/panel.ts";
 import { TerminalPanel, type TerminalActions } from "../../terminal/ui/panel.ts";
 import { GitPanel, type GitActions } from "../../git/ui/panel.ts";
@@ -35,6 +36,8 @@ import type { ThemeRole } from "../../ui/theme-config.ts";
 export type WorkbenchActions = AgentActions & {
   onCloseSession: (worktreeId: string, sessionId: string) => void;
   getRetainedSessionIds?: () => ReadonlySet<string>;
+  onListModels?: ModelPickerActions["list"];
+  onSelectModel?: ModelPickerActions["select"];
   onListHistory?: (worktreeId: string, signal?: AbortSignal) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
   onPreviewHistory?: (worktreeId: string, savedId: string, signal?: AbortSignal) => Promise<Result<HistoryPreview, ExpectedError>>;
   onResumeSession?: (worktreeId: string, savedId: string) => Promise<Result<string, ExpectedError>>;
@@ -65,6 +68,7 @@ export class Workbench {
   private readonly tree: ScrollBoxRenderable;
   private readonly resultMessage: TextRenderable;
   private readonly history: SessionHistoryPanel;
+  private readonly models: ModelPicker;
   private readonly agent: AgentPanel;
   private readonly workPanel: BoxRenderable;
   private readonly workTabs: Record<WorkView, Button>;
@@ -130,6 +134,9 @@ export class Workbench {
         if (this.agent.active) this.agent.focusTranscript(); else this.agent.focusTargets[0]?.focus();
       },
     });
+    this.models = new ModelPicker(renderer, { ...(actions.onListModels ? { list: actions.onListModels } : {}), ...(actions.onSelectModel ? { select: actions.onSelectModel } : {}),
+      notice: message => this.setNotice(message), changed: () => this.updateFooter(), fallback: () => this.focusNavigation(),
+      keyHint: (command, context) => this.keymap.hint(command, context) });
     this.dialog = new TextDialog(renderer, () => this.updateFooter(), () => this.focusNavigation(), actions.onCopyTranscript);
     this.sidebar.add(this.resultMessage);
     this.sidebar.add(this.tree);
@@ -143,7 +150,7 @@ export class Workbench {
     };
     for (const tab of Object.values(this.workTabs)) workTabs.add(tab);
     this.workPanel.add(workTabs);
-    this.agent = new AgentPanel(renderer, { ...actions, onHistory: () => this.history.show(this.selection.worktree), onInspectInput: (content) => this.dialog.show(content), onSelectSession: (tree, id) => this.activateSession(tree, id) }, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
+    this.agent = new AgentPanel(renderer, { ...actions, onModel: id => this.showModels(id), onHistory: () => this.history.show(this.selection.worktree), onInspectInput: (content) => this.dialog.show(content), onSelectSession: (tree, id) => this.activateSession(tree, id) }, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
       (message) => this.setNotice(message), () => this.updateFooter(), () => this.focusNavigation(), this.workViews.agentScroll,
       (id, position) => { this.workViews.agentScroll[id] = position; this.saveWorkViews(); }, {
         ...(this.workViews.agentViews ? { initialViews: this.workViews.agentViews } : {}),
@@ -177,7 +184,7 @@ export class Workbench {
     help.onMouseDown = (event) => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.showHelp(); } };
     details.onMouseDown = (event) => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.showNotice(); } };
     this.footer = new Footer(renderer, `Radian ${packageInfo.version}`, { help, details });
-    this.root.add(this.footer.root); this.root.add(this.history.root); this.root.add(this.dialog.root);
+    this.root.add(this.footer.root); this.root.add(this.history.root); this.root.add(this.models.root); this.root.add(this.dialog.root);
     renderer.root.add(this.root);
     this.router = new KeyRouter(renderer, this.keymap, () => this.keyContext(), (command) => this.commandAvailable(command), (command) => this.command(command));
     renderer.on("resize", this.resize);
@@ -273,6 +280,7 @@ export class Workbench {
     const help = this.keymap.bindings.find((binding) => binding.command === "app.help" && binding.keys.length === 1 && inScope(binding.scope, context));
     this.footer.setHelpHint(help ? formatKeys(help.keys) : this.keymap.hint("app.help", context));
     if (this.dialog.visible) shortcuts = [hint("dialog.copy", "Copy"), hint("dialog.page-down", "Page"), hint("dialog.dismiss", "Close")];
+    else if (this.models.visible) shortcuts = this.models.shortcuts;
     else if (this.history.visible) shortcuts = this.history.shortcuts;
     else if (focused === this.search) shortcuts = [hint("focus.results", "Results"), hint("search.clear", "Clear")];
     else if (focused === this.tree) shortcuts = [
@@ -306,9 +314,17 @@ export class Workbench {
       const label = this.buttonHints.get(focused);
       if (focused.visible && label) shortcuts = [{ key: this.keymap.hints("button.activate", "button"), label }];
     }
-    this.footer.setContext(this.agent.active && !this.dialog.visible && !this.history.visible ? this.agent.transcriptStatus : "");
+    this.footer.setContext(this.agent.active && !this.dialog.visible && !this.history.visible && !this.models.visible ? this.agent.transcriptStatus : "");
     this.footer.setShortcuts(shortcuts.filter((shortcut) => shortcut.key));
   };
+
+  private showModels(sessionId: string): Result<void, ExpectedError> {
+    if (!this.actions.onListModels || !this.actions.onSelectModel) return err(new CapabilityError("Model selection is unavailable in this view. No prompt was sent."));
+    if (this.models.changing) return err(new SessionError("SESSION_BUSY", "The previous model selection is still settling. Check the session model before retrying."));
+    const conversationId = this.actions.getSessionDetails?.(sessionId)?.conversationId;
+    if (!conversationId) return err(new ProtocolError("Current conversation identity is unavailable. Reconnect before opening /model."));
+    this.models.show({ sessionId, conversationId }); return ok(undefined);
+  }
 
   private showHelp(): void {
     const context = this.keyContext();
@@ -382,6 +398,7 @@ export class Workbench {
 
   private keyContext(): KeyContext {
     if (this.dialog?.visible) return "dialog";
+    if (this.models?.visible) return this.models.context;
     if (this.history?.visible) return this.history.context;
     const focused = this.renderer.currentFocusedRenderable;
     if (!focused) return "none";
@@ -399,6 +416,8 @@ export class Workbench {
   private commandAvailable(command: CommandId): boolean {
     if (this.dialog.visible) return command.startsWith("dialog.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
     if (command.startsWith("dialog.")) return false;
+    if (this.models.visible) return command.startsWith("model.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
+    if (command.startsWith("model.")) return false;
     if (command === "app.help") return true;
     if (command === "notice.details") return Boolean(this.footer.noticeText.trim());
     if (this.history.visible) return command.startsWith("history.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
@@ -428,6 +447,7 @@ export class Workbench {
     if (command === "app.help") { this.showHelp(); return; }
     if (command === "notice.details") { this.showNotice(); return; }
     if (command.startsWith("dialog.")) { this.dialog.command(command); return; }
+    if (command.startsWith("model.")) { this.models.command(command); return; }
     if (command === "history.show") { this.history.show(this.selection.worktree); return; }
     if (command.startsWith("history.")) { this.history.command(command); return; }
     if (command.startsWith("completion.")) { this.agent.completionCommand(command); return; }
@@ -474,6 +494,10 @@ export class Workbench {
   }
   private moveFocus(direction: 1 | -1): void {
     if (this.dialog.visible) { this.dialog.moveFocus(direction); return; }
+    if (this.models.visible) {
+      const targets = this.models.focusTargets, index = targets.indexOf(this.renderer.currentFocusedRenderable!);
+      targets[(index + direction + targets.length) % targets.length]?.focus(); return;
+    }
     if (this.history.visible) {
       const targets = this.history.focusTargets, index = targets.indexOf(this.renderer.currentFocusedRenderable!);
       targets[(index + direction + targets.length) % targets.length]?.focus(); return;
@@ -620,6 +644,7 @@ export class Workbench {
     this.resultMessage.content = this.search.value ? "No matching workspaces" : "No repositories";
     this.resultMessage.visible = rows.length === 0;
     this.history.updateScope(worktree);
+    this.models.updateScope(this.selection.sessionId, this.selection.sessionId ? this.actions.getSessionDetails?.(this.selection.sessionId)?.conversationId : undefined, workView === "agent");
     this.paintTabs();
     if (this.navigationKey && this.navigationKey !== this.lastScrolledKey) {
       this.revealRow(this.navigationKey); this.navigationRevealPending = true;
@@ -671,7 +696,7 @@ export class Workbench {
     this.agent.rememberScroll();
     this.sidebarTransition = undefined; this.disposed = true;
     this.unsubscribe();
-    this.agent.dispose(); this.history.dispose(); this.dialog.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
+    this.agent.dispose(); this.history.dispose(); this.models.dispose(); this.dialog.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
     this.search.off(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.search.off("focused", this.repaintSearch); this.search.off("blurred", this.repaintSearch);
     this.router.dispose();

@@ -2,11 +2,11 @@ import {
   createAgentSession, DefaultResourceLoader, defineTool, getAgentDir, ModelRuntime, parseSkillBlock,
   SessionManager, SettingsManager, type AgentSession, type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
-import { Type, type ImageContent } from "@earendil-works/pi-ai";
+import { ModelsError, Type, type ImageContent } from "@earendil-works/pi-ai";
 import { mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExecutionState, SessionContext, SessionExecutor, SessionFactory } from "./session-registry.ts";
-import { AgentRunError, CancelledError, CapabilityError, capture, InputError, knownError, reportUnexpected, SessionError, withCleanup, type ExpectedError } from "../errors.ts";
+import { AgentRunError, CancelledError, CapabilityError, capture, InputError, knownError, ModelSelectionError, reportUnexpected, SessionError, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { SessionTranscript } from "./transcript.ts";
 import { runCompletionEntryType, type RunCompletion } from "./run-completion.ts";
@@ -18,6 +18,7 @@ import { loadPromptImages } from "./prompt-attachments.ts";
 import { ManualCompaction } from "./manual-compaction.ts";
 import { summarizeRequest } from "./request-summary.ts";
 import { imageNamesEntryType } from "./transcript-images.ts";
+import { parseModelCommand, type ModelCatalog, type ModelIdentity } from "./model-selection.ts";
 
 type QueuedUserMessage = Extract<ReturnType<AgentSession["agent"]["peekQueuedMessages"]>[number], { role: "user" }>;
 
@@ -130,6 +131,47 @@ export class PiSessionExecutor implements SessionExecutor {
 
   commands() { return sessionCommands(this.session); }
   imageData(id: string) { return this.transcript.imageData(id); }
+
+  async models(signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>> {
+    if (signal?.aborted) return err(new CancelledError());
+    if (this.closing || this.disposed) return err(new SessionError("SESSION_NOT_OPEN", "Session is closing."));
+    const loaded = await modelOperation(() => this.session.modelRuntime.getAvailable(undefined, signal ? { signal } : {}));
+    if (!loaded.ok) return loaded;
+    if (signal?.aborted) return err(new CancelledError());
+    if (this.closing || this.disposed) return err(new SessionError("SESSION_NOT_OPEN", "Session closed while loading models."));
+    const current = this.session.model;
+    return ok({ conversationId: this.savedSessionId, current: current ? { provider: current.provider, id: current.id } : null,
+      models: loaded.value.map(model => ({ provider: model.provider, id: model.id, name: model.name,
+        contextWindow: model.contextWindow, reasoning: model.reasoning, images: model.input.includes("image") })) });
+  }
+
+  selectModel(identity: ModelIdentity): Promise<Result<string | null, ExpectedError>> {
+    if (this.closing || this.disposed) return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
+    if (this.busy) return Promise.resolve(err(new SessionError("SESSION_BUSY", "Wait for this session's current work to finish before switching models. No work was interrupted.")));
+    this.controlling = true;
+    const task = (async (): Promise<Result<string | null, ExpectedError>> => {
+      const available = await this.models(); if (!available.ok) return available;
+      const allowed = available.value.models.some(model => model.provider === identity.provider && model.id === identity.id);
+      const model = allowed ? this.session.modelRuntime.getModel(identity.provider, identity.id) : undefined;
+      if (!model) return err(new ModelSelectionError("This model is no longer available with the current provider credentials. Refresh the list and choose another model."));
+      if (this.closing || this.disposed) return err(new SessionError("SESSION_NOT_OPEN", "Session closed before the model could be changed."));
+      const previous = this.session.model;
+      const changed = await modelOperation(() => this.session.setModel(model, { persist: false }));
+      this.telemetry.refreshUsage();
+      if (!changed.ok) {
+        // The SDK mutates its live model before saving history. A failed save is not a rollback.
+        if (previous !== model && this.session.model === model && changed.error.code === "STORAGE_FAILED") return ok(`[${changed.error.code}] Model changed, but saving the selection could not be confirmed. Reconnect before retrying.`);
+        return changed;
+      }
+      return ok(null);
+    })().finally(() => { this.controlling = false; this.runs.delete(tracked); this.emit(); });
+    const tracked = task.then(result => result.ok ? ok(undefined) : result);
+    this.runs.add(tracked);
+    // Cleanup waits for this operation too, without converting unexpected exceptions into input errors.
+    void tracked.catch(() => {});
+    return task;
+  }
+
   get busy(): boolean { return this.controlling || this.interrupting || !!this.interruptTask || this.interruptedMessages.length > 0 || this.runs.size > 0 || !this.session.isIdle || this.session.pendingMessageCount > 0; }
   get acceptsImages(): boolean { return this.session.model?.input.includes("image") ?? false; }
   get savedSessionId(): string { return this.session.sessionId; }
@@ -187,12 +229,14 @@ export class PiSessionExecutor implements SessionExecutor {
   }
 
   prompt(text: string, onAccepted?: () => void, imagePaths: readonly string[] = []): Promise<Result<void, ExpectedError>> {
+    const model = parseModelCommand(text); if (!model.ok) return Promise.resolve(model);
+    if (model.value) return Promise.resolve(err(new CapabilityError("Use /model in the Agent input to open the model picker. No model prompt was sent.")));
     return this.promptInput(text, onAccepted, imagePaths);
   }
 
   private promptInput(text: string, onAccepted?: () => void, imagePaths: readonly string[] = [], replayImages?: ImageContent[]): Promise<Result<void, ExpectedError>> {
     if (this.interrupting) return Promise.resolve(err(new SessionError("SESSION_BUSY", "Interruption is in progress. Input was retained.")));
-    if (this.controlling) return Promise.resolve(err(new SessionError("SESSION_BUSY", "Context compaction is in progress. Input was retained.")));
+    if (this.controlling) return Promise.resolve(err(new SessionError("SESSION_BUSY", "Session control is in progress. Input was retained.")));
     if (this.closing || this.disposed) return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
     const revisionAtSubmission = this.inputRevision;
     const admitted = Promise.withResolvers<void>();
@@ -375,6 +419,14 @@ export class PiSessionExecutor implements SessionExecutor {
   }
 
   private emit(): void { for (const listener of this.listeners) listener(); }
+}
+
+async function modelOperation<T>(operation: () => Promise<T>): Promise<Result<T, ExpectedError>> {
+  try { return await capture(operation); }
+  catch (error) {
+    if (error instanceof ModelsError) return err(new ModelSelectionError("Could not load or apply model configuration. Check the provider authentication and settings before retrying.", { cause: error }));
+    throw error;
+  }
 }
 
 function saveRunCompletion(manager: SessionManager, completion: RunCompletion): Result<void, ExpectedError> {

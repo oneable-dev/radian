@@ -12,6 +12,7 @@ import { completeFiles } from "./completion-files.ts";
 import { sessionControlCommands } from "./session-controls.ts";
 import type { RequestSummary } from "./request-summary.ts";
 import type { TranscriptImageData } from "./transcript-images.ts";
+import { modelCommand, parseModelCommand, type ModelCatalog, type ModelIdentity } from "./model-selection.ts";
 
 export type ExecutionState = { readonly conversationId?: string; readonly status: AgentStatus | null; readonly activity?: "compacting"; readonly output: string; readonly error: string | null;
   readonly sections?: readonly TranscriptSection[]; readonly telemetry?: SessionTelemetry;
@@ -21,6 +22,8 @@ export type SessionExecutor = {
   readonly sessionFile: string | undefined;
   readonly state: ExecutionState;
   commands?(): readonly CompletionItem[];
+  models?(signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>>;
+  selectModel?(model: ModelIdentity): Promise<Result<string | null, ExpectedError>>;
   imageData?(id: string): Result<TranscriptImageData, ExpectedError>;
   readonly acceptsImages?: boolean;
   readonly busy?: boolean;
@@ -83,7 +86,7 @@ export class SessionRegistry {
     if (entry?.phase !== "open") return null;
     const live = entry.executor?.state;
     // Recovery keeps transcript/status history, but account usage continues updating in the live SDK.
-    const state = entry.recoveredState ? { ...entry.recoveredState, ...(live?.telemetry ? { telemetry: live.telemetry } : {}) } : live;
+    const state = entry.recoveredState ? { ...entry.recoveredState, ...(live?.conversationId ? { conversationId: live.conversationId } : {}), ...(live?.telemetry ? { telemetry: live.telemetry } : {}) } : live;
     return state && entry.replacing ? { ...state, status: "working" } : state ?? null;
   }
   sessionFile(id: string): string | undefined { return this.entries.get(id)?.executor?.sessionFile; }
@@ -204,12 +207,38 @@ export class SessionRegistry {
       return entry.phase === "open" ? result : err(new SessionError("SESSION_NOT_OPEN", "Session closed during file discovery."));
     }
     const commands = entry.executor?.commands;
-    const controls = sessionControlCommands.filter((item) => item.value !== "compact" || entry.executor?.compact);
+    const controls = [...sessionControlCommands.filter((item) => item.value !== "compact" || entry.executor?.compact),
+      ...(entry.executor?.models && entry.executor.selectModel ? [modelCommand] : [])];
     const extra = commands?.call(entry.executor) ?? [];
     return ok(filterCompletions([...controls, ...extra.filter((item) => !controls.some((control) => control.value === item.value))], query.query));
   }
 
+  async models(id: string, conversationId: string, signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>> {
+    const selected = this.modelOwner(id, conversationId); if (!selected.ok) return selected;
+    const executor = selected.value.executor;
+    if (!executor?.models) return err(new CapabilityError("This executor does not support model selection."));
+    const result = await executor.models(signal);
+    const current = this.modelOwner(id, conversationId); if (!current.ok) return current;
+    return signal?.aborted ? err(new CancelledError()) : result;
+  }
+
+  async selectModel(id: string, conversationId: string, model: ModelIdentity): Promise<Result<string | null, ExpectedError>> {
+    const selected = this.modelOwner(id, conversationId); if (!selected.ok) return selected;
+    const executor = selected.value.executor;
+    if (!executor?.selectModel) return err(new CapabilityError("This executor does not support model selection."));
+    return executor.selectModel(model);
+  }
+
+  private modelOwner(id: string, conversationId: string): Result<OpenExecution, ExpectedError> {
+    const selected = this.requireOpen(id); if (!selected.ok) return selected;
+    if (selected.value.replacing) return err(new SessionError("SESSION_BUSY", "This tab is changing conversations."));
+    if (selected.value.executor?.savedSessionId !== conversationId) return err(new SessionError("SESSION_CONFLICT", "This tab changed conversations. Reopen /model before selecting a model."));
+    return selected;
+  }
+
   async prompt(id: string, text: string, onAccepted?: () => void, imagePaths: readonly string[] = []): Promise<Result<void, ExpectedError>> {
+    const model = parseModelCommand(text); if (!model.ok) return model;
+    if (model.value) return err(new CapabilityError("Use /model in the Agent input to open the model picker. No model prompt was sent."));
     const selected = this.requireOpen(id);
     if (!selected.ok) return selected;
     if (selected.value.replacing) return err(new SessionError("SESSION_BUSY", "This tab is changing sessions. Input was retained."));

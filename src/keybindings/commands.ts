@@ -1,4 +1,4 @@
-export const contexts = ["workspace", "search", "history", "history-search", "session-tabs", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "dialog", "none"] as const;
+export const contexts = ["workspace", "search", "history", "history-search", "model", "model-search", "session-tabs", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "dialog", "none"] as const;
 export type KeyContext = typeof contexts[number];
 export type KeyScope = KeyContext | "global" | "app" | "pty";
 export type BindingInput = { keys: string; scope: KeyScope };
@@ -63,6 +63,13 @@ export const defaultBindings = {
   "history.next": [key("j", "history"), key("down", "history"), key("ctrl+n", "history"), key("down", "history-search"), key("ctrl+n", "history-search")],
   "history.first": [key("home", "history")],
   "history.last": [key("end", "history")],
+  "model.dismiss": [key("escape", "model"), key("escape", "model-search")],
+  "model.select": [key("enter", "model"), key("enter", "model-search")],
+  "model.refresh": [key("ctrl+r", "model"), key("ctrl+r", "model-search")],
+  "model.previous": [key("k", "model"), key("up", "model"), key("ctrl+p", "model"), key("up", "model-search"), key("ctrl+p", "model-search")],
+  "model.next": [key("j", "model"), key("down", "model"), key("ctrl+n", "model"), key("down", "model-search"), key("ctrl+n", "model-search")],
+  "model.first": [key("home", "model")],
+  "model.last": [key("end", "model")],
   "agent.send": [key("enter", "prompt"), key("enter", "prompt-completion")],
   "agent.newline": [key("shift+enter", "prompt"), key("alt+enter", "prompt"), key("shift+enter", "prompt-completion"), key("alt+enter", "prompt-completion")],
   "agent.interrupt": [key("escape", "prompt"), key("escape", "session-tabs")],

@@ -9,7 +9,7 @@ import { runtimePaths, RuntimeStore } from "./storage.ts";
 import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
 
 // Keep repo identity and instance fencing inside the existing clients, including PTY leases.
-export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "newTab" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "image">>;
+export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "newTab" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "image" | "models" | "selectModel">>;
 type Connector = (repository: Repository, cwd: string, options: ConnectOptions) => Promise<Result<RepositoryClient | null, ExpectedError>>;
 type Entry = { repository: Repository; preferences: RuntimePreferences; client?: RepositoryClient; unsubscribe?: () => void;
   watcher?: RepositoryWatcher; discoveryWarning?: string;
@@ -175,6 +175,16 @@ export class WorkspaceClient {
     const entry = this.sessionOwner(args[0]); if (!entry.ok) return entry;
     const client = entry.value.client;
     return client?.image ? client.image(...args) : err(new CapabilityError("This repository connection does not provide image previews."));
+  }
+  async models(...args: Parameters<RuntimeClient["models"]>): ReturnType<RuntimeClient["models"]> {
+    const entry = this.sessionOwner(args[0]); if (!entry.ok) return entry;
+    const client = entry.value.client;
+    return client?.models ? client.models(...args) : err(new CapabilityError("This repository connection does not support model selection."));
+  }
+  async selectModel(...args: Parameters<RuntimeClient["selectModel"]>): ReturnType<RuntimeClient["selectModel"]> {
+    const entry = this.sessionOwner(args[0]); if (!entry.ok) return entry;
+    const client = entry.value.client;
+    return client?.selectModel ? client.selectModel(...args) : err(new CapabilityError("This repository connection does not support model selection."));
   }
   async complete(...args: Parameters<RuntimeClient["complete"]>): ReturnType<RuntimeClient["complete"]> {
     const entry = this.sessionOwner(args[0]); return entry.ok ? entry.value.client!.complete(...args) : entry;
