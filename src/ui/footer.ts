@@ -18,13 +18,15 @@ export class Footer {
   private readonly hints: TextRenderable;
   private readonly context: TextRenderable;
   private contextText = "";
+  private viewText = "";
   private shortcuts: readonly FooterShortcut[] = [];
   private lastLayout = "";
   private message = "";
   private helpHint = "";
   private readonly theme: UiTheme;
 
-  constructor(renderer: CliRenderer, private readonly appIdentity: string, private readonly actions?: Actions) {
+  constructor(renderer: CliRenderer, private readonly appIdentity: string, private readonly actions?: Actions,
+    private readonly compactIdentity = appIdentity) {
     this.theme = uiTheme(renderer);
     this.root = new BoxRenderable(renderer, { id: "app-footer", width: "100%", height: 1, flexShrink: 0, flexDirection: "column" });
     this.noticeRow = new BoxRenderable(renderer, { id: "footer-notice-row", width: "100%", height: 1, flexShrink: 0, flexDirection: "row", visible: false });
@@ -65,6 +67,10 @@ export class Footer {
     if (hint === this.helpHint) return;
     this.helpHint = hint; this.lastLayout = ""; this.renderShortcuts();
   }
+  setView(text: string): void {
+    if (this.root.isDestroyed || text === this.viewText) return;
+    this.viewText = text; this.lastLayout = ""; this.renderShortcuts();
+  }
   setContext(text: string): void {
     if (this.root.isDestroyed || text === this.contextText) return;
     this.contextText = text; this.lastLayout = ""; this.renderShortcuts();
@@ -81,17 +87,23 @@ export class Footer {
     // Keep the help entry discoverable; its full configured key is inside the popup on narrow screens.
     const compactHelp = this.bar.width < 80 ? /^f\d+$/iu.test(this.helpHint) ? this.helpHint.toUpperCase() : "?" : helpLabel;
     const helpWidth = this.actions ? Bun.stringWidth(compactHelp) + 2 : 0;
-    const textWidth = Bun.stringWidth(this.appIdentity);
-    const identityWidth = Math.min(textWidth + Math.min(8, Math.max(0, width - 60)), width);
+    const view = singleLine(this.viewText);
+    const identityLimit = view ? Math.max(0, width - (this.actions ? helpWidth + 2 : 0)) : width;
+    let identity = view && this.bar.width < 80 ? this.compactIdentity : this.appIdentity;
+    if (view && Bun.stringWidth(`${identity} · ${view}`) > identityLimit) identity = this.compactIdentity;
+    if (view && Bun.stringWidth(`${identity} · ${view}`) > identityLimit) identity = "";
+    const label = (identity ? identity + (view ? " · " : "") : "") + view;
+    const textWidth = Bun.stringWidth(label);
+    const identityWidth = Math.min(textWidth + Math.min(8, Math.max(0, width - 60)), identityLimit);
     const remaining = Math.max(0, width - identityWidth - (this.actions ? helpWidth + 4 : 2));
     const context = singleLine(this.contextText), contextWidth = Math.min(Bun.stringWidth(context), Math.max(0, remaining - 2));
     const available = Math.max(0, remaining - contextWidth - (contextWidth ? 2 : 0));
-    const signature = JSON.stringify([width, this.shortcuts, this.helpHint, this.message, this.contextText]);
+    const signature = JSON.stringify([width, this.shortcuts, this.helpHint, this.message, this.contextText, this.viewText]);
     if (signature === this.lastLayout) return;
     this.lastLayout = signature;
     this.bar.paddingRight = inset;
     this.identity.width = identityWidth + inset;
-    this.paintIdentity(identityWidth + inset, inset);
+    this.paintIdentity(identityWidth + inset, inset, identity, view);
     if (this.actions) {
       this.actions.help.setLabel(compactHelp);
       this.actions.details.setLabel("Details");
@@ -123,16 +135,19 @@ export class Footer {
     if (truncated && available > 0) chunks.push(styleChunk(`${" ".repeat(visible.length ? gap : 0)}…`, styles["footer.description"]));
     this.hints.content = new StyledText(chunks);
   }
-  private paintIdentity(width: number, inset: number): void {
+  private paintIdentity(width: number, inset: number, identity: string, view: string): void {
     const colors = this.theme.colors, styles = this.theme.styles;
     const surface = styles["footer.identity"].bg ?? colors.surface;
     const background = (cell: number) => this.theme.monochrome ? colors.panel : cell < width
       ? blendColors(surface, styles["footer.accent"].fg, 0.28 * (1 - cell / Math.max(1, width - 1))) : surface;
-    const label = " ".repeat(inset) + this.appIdentity;
+    const prefix = " ".repeat(inset) + identity + (identity && view ? " · " : "");
+    const viewStart = Bun.stringWidth(prefix), viewEnd = viewStart + Bun.stringWidth(view);
+    const label = truncateCells(prefix + view, width);
     let cell = 0;
     this.identity.content = new StyledText(Array.from(label + " ".repeat(Math.max(0, width - Bun.stringWidth(label))), (text) => {
-      const bg = background(cell); cell += Bun.stringWidth(text);
-      return { ...styleChunk(text, styles["footer.identity"]), bg };
+      const bg = background(cell), accent = cell >= viewStart && cell < viewEnd;
+      cell += Bun.stringWidth(text);
+      return { ...styleChunk(text, styles[accent ? "footer.accent" : "footer.identity"]), bg };
     }));
   }
 }

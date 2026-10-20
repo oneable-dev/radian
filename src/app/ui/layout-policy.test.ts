@@ -26,10 +26,10 @@ test("높이가 달라져도 탭·검색·항목 간격을 유지하고 작은 �
   const app=await mount();
   try {
     let previous=0;
-    for(const [height,inputHeight] of [[11,2],[12,1],[17,3],[18,3],[24,3],[30,3]] as const) {
+    for(const [height,inputHeight] of [[11,2],[12,3],[17,3],[18,3],[24,3],[30,3]] as const) {
       app.resize(80,height);await app.render();
       const body=app.get("session-transcript"), composer=app.get("agent-composer"),status=app.get("session-status");
-      expect(app.get("workspace-search-box").height).toBe(3);expect(app.get("work-view-tabs").height).toBe(2);expect(composer.height).toBe(inputHeight);
+      expect(app.get("workspace-search-box").height).toBe(3);expect(app.renderer.root.findDescendantById("work-view-tabs")).toBeUndefined();expect(composer.height).toBe(inputHeight);
       expect(body.height).toBeGreaterThanOrEqual(1);expect(body.height).toBeGreaterThanOrEqual(previous);previous=body.height;
       expect(composer.y+composer.height).toBe(status.y);expect(status.height).toBe(3);
       expect(status.y+status.height).toBeLessThanOrEqual(app.get("app-footer").y);
@@ -47,7 +47,7 @@ test("Agent와 Terminal 탭의 가로바는 resize 후에도 숨고 선택된 �
     const agent=app.get("agent-session-list") as ScrollBoxRenderable;
     expect(agent.scrollWidth).toBeGreaterThan(agent.viewport.width);
     agent.scrollLeft=10;await app.render();expect(agent.scrollLeft).toBe(10);expect(agent.horizontalScrollBar.visible).toBe(false);
-    app.mockInput.pressKey(" ",{ctrl:true});app.mockInput.pressKey("4");await app.render();
+    app.mockInput.pressKey(" ",{ctrl:true});app.mockInput.pressKey("t");await app.render();
     const tabs=scrolls(app.get("terminal-view"))[0]!;
     expect(tabs.scrollWidth).toBeGreaterThan(tabs.viewport.width);
     for(const width of [60,120]) {

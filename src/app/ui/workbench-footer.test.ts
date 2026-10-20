@@ -116,7 +116,8 @@ test("프롬프트의 실행 가능 여부와 별도 오류 알림은 단축키 
 
     app.setStatus("working"); await app.renderOnce();
     expect(app.footerLine()).toContain("Enter Queue");
-    app.mockInput.pressEnter(); await app.renderOnce();
+    app.mockInput.pressEnter();
+    await app.waitFor(() => app.view.promptDrafts.a1 === undefined); await app.renderOnce();
 
     expect(app.calls).toEqual(["prompt:hello"]);
     expect(app.footerLine()).toContain("Ctrl+Space → b Workspace");
@@ -135,7 +136,8 @@ test("패널이 숨겨지는 좁은 화면에서도 푸터와 알림은 하단�
 
     await app.mockMouse.click(2, 11); await app.renderOnce();
 
-    expect(app.footerLine()).toContain("Radian 0.0.0");
+    expect(app.footerLine()).toContain("Radian · Agents");
+    expect(app.footerLine()).not.toContain("0.0.0");
     expect(app.captureCharFrame().split("\n")[10]).toContain("Runtime reconnecting");
     expect(app.captureCharFrame()).not.toContain("Inspector");
     expect(app.renderer.currentFocusedRenderable).toBe(focus);
@@ -157,9 +159,9 @@ test("사이드바 구분선과 프롬프트 배경은 가로 경계를 맞추�
       const composer = app.renderer.root.findDescendantById("agent-composer")!;
       const prompt = app.renderer.root.findDescendantById("session-prompt")!;
       const column = sidebar.x + sidebar.width - 1;
-      const tabs = app.renderer.root.findDescendantById("work-view-tabs")!;
-      const tab = tabs.getChildren()[0]!;
-      expect(tabs.y + tabs.height - tab.y - tab.height).toBe(1);
+      const panel = app.renderer.root.findDescendantById("work-panel")!;
+      expect(app.renderer.root.findDescendantById("agent-view")!.y).toBe(panel.y);
+      expect(app.renderer.root.findDescendantById("work-view-tabs")).toBeUndefined();
 
       // The right-edge block touches the next cell instead of drawing at the center like │.
       expect(app.captureCharFrame().split("\n")[composer.y]!.slice(column, column + 1)).toBe("▕");
@@ -225,7 +227,7 @@ test("낮은 터미널에서도 Agent 상태와 입력창은 한 줄 푸터를 �
     const prompt = app.renderer.root.findDescendantById("session-prompt")!;
     const footer = app.renderer.root.findDescendantById("footer-bar")!;
 
-    expect(composer.height).toBe(1);
+    expect(composer.height).toBe(3);
     const status = app.renderer.root.findDescendantById("session-status")!;
     expect(composer.y + composer.height).toBe(status.y);
     expect(status.height).toBe(3); expect(status.y + status.height).toBeLessThanOrEqual(footer.y);
@@ -235,7 +237,7 @@ test("낮은 터미널에서도 Agent 상태와 입력창은 한 줄 푸터를 �
     expect(prompt.y + prompt.height).toBeLessThanOrEqual(footer.y);
     expect(app.captureCharFrame().split("\n")[prompt.y]).toContain("compact draft");
     expect(app.captureCharFrame()).not.toContain("Status not supplied");
-    expect(app.footerLine().trimStart()).toStartWith("Radian 0.0.0");
+    expect(app.footerLine().trimStart()).toStartWith("Radian · Agents");
     expect(app.selection.sessionId).toBe("a1");
     expect(app.renderer.currentFocusedRenderable).toBe(prompt);
 

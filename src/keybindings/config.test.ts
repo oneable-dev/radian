@@ -16,6 +16,20 @@ test("기본 leader는 Ctrl+Space이며 Ctrl+C를 앱 종료에 할당하지 않
   expect(map.bound("ctrl+b", "prompt")).toBe(false);
 });
 
+test("화면 문자와 내부 탭 숫자·생성 키는 별도로 재지정하거나 비활성화할 수 있다", () => {
+  // Shared tab commands must participate in the same validation and override path as views.
+  const map = expectOk(parseKeymap({ leader: "ctrl+b", bindings: {
+    "tab.select-2": ["<leader> z"], "tab.new": [], "view.editor": ["<leader> v"],
+  } }));
+
+  expect(map.hint("tab.select-2", "prompt")).toBe("Ctrl+b → z");
+  expect(map.hint("tab.select-2", "terminal")).toBe("Ctrl+b → z");
+  expect(map.hint("tab.new", "terminal")).toBe("");
+  expect(map.hint("view.editor", "terminal")).toBe("Ctrl+b → v");
+  expect(map.hint("view.terminal", "editor")).toBe("Ctrl+b → t");
+  expect(map.hint("terminal.new", "terminal")).toBe("");
+});
+
 test("Enter는 후보를 반영하는 전송 경로로 보내고 Tab은 삽입 전용 경로로 보낸다", () => {
   const map = defaultKeymap();
 

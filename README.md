@@ -156,8 +156,14 @@ connections, not the underlying agents or native processes.
 ### Work views
 
 The left panel starts directly with search and workspace navigation, without a tab heading.
-The right panel switches between **Agents**,
-**Editor**, **Git** and **Terminal**, with one visible view per worktree and Agents as the initial view.
+The work pane switches between **Agents**, **Editor**, **Git** and **Terminal**, with one visible
+view per worktree and Agents as the initial view. There is no top-level view tab strip:
+**Ctrl+Space, then a/e/g/t** selects the view and focuses its work area. The footer identifies the
+current view next to the Radian product name, independently of keyboard focus.
+**Ctrl+Space, then 1–9** selects the corresponding Agent session or terminal in the current worktree's
+tab order. Missing slots and numeric selection in Editor/Git do nothing; no sessions are created.
+**Ctrl+Space, then n** explicitly creates an Agent session or terminal in the current view and does
+nothing in Editor/Git. Agent and Terminal session strips remain visible and clickable.
 Tree cursor movement is only navigation; Enter or a direct worktree click commits the selection.
 Each worktree separately remembers its work view and selected Agent session. Within Agents, session
 tabs show their session ID and aggregate status, with a close control. IDs remain complete whenever
@@ -192,14 +198,18 @@ Only view identities/positions are stored in the additive `gitViews` preference,
 or requests to replay. Git data is read again on a fresh TUI attachment. Demo mode remains display-only.
 See **Native Git** below for the supported operations and resource limits.
 
+Editor uses the entire work pane with no application-owned padding on any edge; only the shared
+footer (and any actual notice row) remains outside it. Neovim receives that full viewport size on
+both explicit launch and resize. Neovim's own UI configuration is unchanged.
+
 Select Editor to explicitly open/attach Neovim. Worktree navigation and reconnect attach an existing
 editor without restarting it. If no process remains after runtime restart, the view offers an explicit
 open action instead of silently replacing lost editing state. `:q`/`:qa` remain Neovim's commands;
-when Neovim exits the Editor tab stays selected and offers an explicit reopen action.
+when Neovim exits the Editor view stays selected and offers an explicit reopen action.
 Within one TUI, each editor's native surface retains its last screen while hidden. Returning to an
 existing editor immediately displays that screen instead of recreating a blank VT. Its old attachment
 is still detached, and input stays disabled until a fresh exclusive attachment is acknowledged.
-Clicking an already connected Editor focuses it without opening or reconnecting again.
+Selecting an already connected Editor focuses it without opening or reconnecting again.
 
 While the embedded terminal is focused, Neovim receives Tab, Esc, Ctrl+f/e, mouse and paste.
 **Ctrl+]** moves focus to the visible sidebar; outside the editor, existing application focus keys
@@ -780,15 +790,14 @@ footer and diff backgrounds are derived from those colors for both light and dar
 Reported palette changes repaint the UI without restarting the runtime or losing prompt drafts,
 focus or Git navigation/scroll positions. Each attached TUI has its own theme.
 
-Radian-owned view and filter tabs use underlines for active selection and keyboard focus, without
-a background fill. This includes the top-level Agents/Editor/Git/Terminal tabs and Git's
-Commits/Reflog, Commit/Refs and Local/Remote/Tags tabs. Agent and Terminal session tabs use background emphasis without
+Git's Commits/Reflog, Commit/Refs and Local/Remote/Tags tabs use underlines for active selection and
+keyboard focus, without a background fill. Top-level work-view tabs are omitted. Agent and Terminal session tabs use background emphasis without
 underlines; an unfocused active session keeps a subdued background. Other buttons retain their
 usual focus styling. Navigation uses understated separators rather than boxed controls.
-Sidebar, work-view content and footer text use two-cell horizontal insets, reduced to one on terminals
+Sidebar, Agent/Git/Terminal content and footer text use two-cell horizontal insets, reduced to one on terminals
 narrower than 80 columns. The workspace scrollbar always leaves one cell before the sidebar divider,
-without changing the sidebar's left inset or width. Main work tabs leave a single blank row before their content at every
-terminal height. Tabs, search surfaces and item gaps no longer switch height modes. The composer
+without changing the sidebar's left inset or width. Work views start at the top of the work pane;
+there is no reserved row for top-level view navigation. Tabs, search surfaces and item gaps no longer switch height modes. The composer
 retains its normal vertical padding unless fixed controls need that space. Work surfaces have no
 additional top or bottom panel inset. Routine Neovim/worktree captions, the `Git · … · All refs` line
 and the terminal `… · running` line are omitted; empty, error, exit and reconnect messages remain meaningful.
@@ -861,10 +870,14 @@ and programs' explicit RGB colors or Neovim colorschemes remain unchanged.
 ### Keybindings
 
 The default leader is **Ctrl+Space**. Press and release it, then press `c` to detach radian,
-`1`/`2`/`3`/`4` to select Agents/Editor/Git/Terminal, `b` to toggle the sidebar,
-`w` to reveal/focus the sidebar or `f` to reveal/focus search.
-`<leader> t` creates a terminal, `<leader> x` closes the selected terminal, and `<leader> [` / `]`
-select the previous/next terminal while the Terminal view is active.
+`a`/`e`/`g`/`t` to select Agents/Editor/Git/Terminal, `b` to toggle workspace navigation,
+`w` to reveal/focus workspace navigation or `f` to reveal/focus search.
+`<leader> 1` through `<leader> 9` select a session in Agents or a shell in Terminal, based on the
+visible view rather than the focused control. `<leader> n` creates a session/shell in that view;
+Editor and Git ignore these commands. `<leader> x` closes the selected terminal, and `<leader> [` / `]`
+select the previous/next terminal while Terminal is active. These shared actions can be rebound with
+`tab.new` and `tab.select-1` through `tab.select-9`; `terminal.new` remains available for explicit
+custom bindings but has no default binding.
 Ctrl+C clears drafts in Agent input; in Editor and Terminal, Neovim and shells still receive it as native input.
 If macOS reserves Ctrl+Space for input-source switching, change that system shortcut or radian's leader.
 
@@ -903,7 +916,10 @@ currently unavailable commands are consumed without executing, never replayed as
 ### Common footer
 
 The left navigation and right work panel share one full-width footer. Its single text row places
-`Radian` and its version on the left and shortcuts for the **currently focused control** on the right.
+`Radian`, its version and the **displayed work view** on the left (for example,
+`Radian 0.0.0 · Agents`), with shortcuts for the **currently focused control** on the right.
+The view name is subtly accented, not interactive, and does not change when focus moves elsewhere.
+Below 80 columns the version is omitted; at smaller widths the view name takes priority over branding.
 The footer occupies exactly one terminal row at every screen height, with no decorative row above it.
 Errors and notices remain separate above it. A subtle background gradient starts at the screen's left
 edge, including the product text's inset, and fades

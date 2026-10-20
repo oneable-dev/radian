@@ -9,7 +9,7 @@ async function mount(width = 100, height = 8) {
   const screen = new BoxRenderable(app.renderer, { width: "100%", height: "100%", flexDirection: "column" });
   const body = new BoxRenderable(app.renderer, { flexGrow: 1, minHeight: 0 });
   const input = new InputRenderable(app.renderer, { width: "100%", value: "draft" });
-  const footer = new Footer(app.renderer, "Radian 0.0.0");
+  const footer = new Footer(app.renderer, "Radian 0.0.0", undefined, "Radian");
   body.add(input); screen.add(body); screen.add(footer.root); app.renderer.root.add(screen);
   footer.setShortcuts([{ key: "Enter", label: "Run" }, { key: "Esc", label: "Workspace" }]);
   input.focus(); await app.renderOnce();
@@ -17,6 +17,34 @@ async function mount(width = 100, height = 8) {
     footerLine: () => app.captureCharFrame().split("\n")[footer.bar.y]!,
   };
 }
+
+test("현재 화면은 제품명 바로 옆에서 강조하고 좁은 화면에서는 버전부터 생략한다", async () => {
+  const app = await mount(120, 24);
+  try {
+    // View identity and transcript context occupy distinct slots; neither is a tab or action.
+    app.footer.setView("Terminal"); app.footer.setContext("Paused"); await app.renderOnce();
+    expect(app.footerLine().trimStart()).toStartWith("Radian 0.0.0 · Terminal");
+    expect(app.footerLine()).toContain("Paused"); expect(app.footerLine()).toContain("Enter Run");
+    const spans = app.captureSpans().lines[app.footer.bar.y]!.spans;
+    const x = app.footerLine().indexOf("Terminal");
+    let column = 0;
+    const viewCell = spans.find((span) => { column += span.width; return column > x; });
+    expect(viewCell?.fg.toInts()).toEqual(uiTheme(app.renderer).styles["footer.accent"].fg.toInts());
+    await app.mockMouse.click(x, app.footer.bar.y); await app.renderOnce();
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+
+    // Space pressure removes the version, then branding, before sacrificing the view name.
+    for (const width of [60, 30, 12]) {
+      app.resize(width, 12); await app.renderOnce();
+      expect(app.footerLine()).toContain("Terminal"); expect(app.footerLine()).not.toContain("0.0.0");
+      expect(Bun.stringWidth(app.footerLine())).toBeLessThanOrEqual(width);
+      expect(app.footer.bar.height).toBe(1); expect(app.input.value).toBe("draft");
+    }
+    app.resize(120, 24); app.footer.setView("Agents"); await app.renderOnce();
+    expect(app.footerLine().trimStart()).toStartWith("Radian 0.0.0 · Agents");
+    expect(app.footerLine()).toContain("Paused"); expect(app.footerLine()).toContain("Esc Workspace");
+  } finally { await app.dispose(); }
+});
 
 test("공통 푸터는 화면 마지막 한 줄에 있고 별도 알림은 바로 위에서 단축키를 가리지 않는다", async () => {
   // A host supplies identity and context-specific shortcuts; the footer owns no actions.

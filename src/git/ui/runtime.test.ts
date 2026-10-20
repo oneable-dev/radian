@@ -55,7 +55,8 @@ test("실제 Git 커밋의 a 요청은 같은 SDK 세션에 대기하고 Git 화
       if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
       await app.mockMouse.click(x + 1, y); await app.renderOnce();
     };
-    await click("Git"); await app.waitForFrame((frame) => frame.includes(selected.subject)); await click(selected.subject);
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("g");
+    await app.waitForFrame((frame) => frame.includes(selected.subject)); await click(selected.subject);
 
     // Admission must finish while the original response remains deliberately held.
     app.mockInput.pressKey("a"); await app.renderOnce(); await app.mockInput.typeText("Review selected commit"); app.mockInput.pressEnter();

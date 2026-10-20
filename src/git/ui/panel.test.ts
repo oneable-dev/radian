@@ -58,7 +58,8 @@ async function mount(options: { actions?: Partial<GitActions>; initial?: WorkVie
     if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
     await app.mockMouse.click(x + Math.min(1, text.length - 1), y); await app.renderOnce();
   };
-  if (!options.initial?.active["demo:main"]) await click("Git");
+  const showGit = async () => { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("g"); await app.renderOnce(); await app.renderOnce(); };
+  if (!options.initial?.active["demo:main"]) await showGit();
   await app.waitForFrame((frame) => frame.includes("Working tree") || get("git-diff").visible || frame.includes("HEAD@{"));
   const positionIn = (id: string, text: string) => {
     const region = get(id), lines = app.captureCharFrame().split("\n");
@@ -68,7 +69,7 @@ async function mount(options: { actions?: Partial<GitActions>; initial?: WorkVie
     }
     throw new Error(`Missing ${text} in ${id}\n${app.captureCharFrame()}`);
   };
-  return { ...app, view, selection, copies, requests, loads, creations, get, click, positionIn,
+  return { ...app, view, selection, copies, requests, loads, creations, get, click, showGit, positionIn,
     async clickIn(id: string, text: string) {
       const { x, y } = positionIn(id, text);
       await app.mockMouse.click(x + Math.min(1, text.length - 1), y); await app.renderOnce();
@@ -223,8 +224,8 @@ test("Git 목록과 diff는 일반·좁은 화면 모두 사이드바 구분선 
     for (const [width, height] of [[160, 32], [60, 12], [79, 18], [80, 17], [160, 32]] as const) {
       app.resize(width, height); await app.renderOnce(); await app.renderOnce();
       aligned("git-history");
-      const tabs = app.get("work-view-tabs"), panel = app.get("git-view");
-      expect(panel.y).toBe(tabs.y + tabs.height);
+      const panel = app.get("git-view");
+      expect(panel.y).toBe(app.get("work-panel").y);
       expect(app.get("git-history").y).toBe(panel.y + 2); // One blank row separates the tabs and content.
       expect(app.captureCharFrame()).not.toContain("Git ·");
       if (app.get("git-right").visible) aligned("git-right");
@@ -836,7 +837,7 @@ test("다른 worktree 선택 뒤 늦은 조회 응답은 현재 Git 화면을 �
     load: () => pending.promise, details: async () => err(new InputError("unused")), compare: async () => err(new InputError("unused")),
   } : { load: async () => ok(snapshot()), details: async () => err(new InputError("unused")), compare: async () => err(new InputError("unused")) } } });
   try {
-    await app.click(`${icons.folder} radian-ui`); await app.click("Git"); await app.click(`${icons.folder} radian`);
+    await app.click(`${icons.folder} radian-ui`); await app.showGit(); await app.click(`${icons.folder} radian`);
 
     const delayed = snapshot(); delayed.commits[0] = { ...commit, subject: "Stale result" }; pending.resolve(ok(delayed)); await app.renderOnce();
 

@@ -43,6 +43,9 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
     const unselect = selection.subscribe(persist);
     await app.renderOnce();
     return { ...app, client, selection, view, get editorFrame() { return diagnosticFrame; },
+      async showView(key: "a" | "e" | "g") {
+        app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey(key); await app.renderOnce();
+      },
       async click(text: string) {
         const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes(text)), x = lines[y]?.indexOf(text) ?? -1;
         if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
@@ -57,22 +60,22 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
   }
   let app: Awaited<ReturnType<typeof mount>> | undefined;
   try {
-    app = await mount(); await app.click("Editor"); await app.visible("[No Name]");
+    app = await mount(); await app.showView("e"); await app.visible("[No Name]");
     await app.mockInput.typeText("iunsaved-native-editor"); app.mockInput.pressEscape(); await app.visible("unsaved-native-editor");
     const pid = app.client.snapshot.editors![0]!.pid;
     const originalSurface = app.renderer.currentFocusedRenderable;
     // Every presented return frame must retain the unsaved buffer, not merely converge later.
-    for (const away of ["Agents", "Git"]) {
-      await app.click(away);
+    for (const away of ["a", "g"] as const) {
+      await app.showView(away);
       const frames: string[] = [];
       const capture = () => {
         if (app!.renderer.root.findDescendantById("editor-view")!.visible) frames.push(app!.captureCharFrame());
       };
       app.renderer.on("frame", capture);
       try {
-        await app.click("Editor"); await app.visible("unsaved-native-editor");
+        await app.showView("e"); await app.visible("unsaved-native-editor");
         await until(() => app!.renderer.currentFocusedRenderable === originalSurface);
-        await app.click("Editor"); await app.renderOnce();
+        await app.showView("e"); await app.renderOnce();
         expect(frames.length).toBeGreaterThan(0);
         expect(frames.every((frame) => frame.includes("unsaved-native-editor"))).toBe(true);
         expect(app.renderer.currentFocusedRenderable).toBe(originalSurface);
@@ -110,29 +113,31 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
       app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("b");
       await until(async () => { await app!.renderOnce(); return sidebar.visible; });
       expect(transitions.every((frame) => frame.marker && frame.ruler === expectedRuler)).toBe(true);
-      expect(app.renderer.currentFocusedRenderable).toBe(originalSurface);
+      expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree");
+      await app.showView("e");
+      expect(app.renderer.currentFocusedRenderable?.id).toBe(originalSurface?.id);
       expect(app.client.snapshot.editors![0]!.pid).toBe(pid);
     } finally { app.renderer.off("frame", captureSidebar); }
-    // A single tab-bar gap remains, with no routine caption or additional panel inset.
+    // With the navigation strip removed, the editor starts at the work pane's top edge.
     const aligned = () => {
       const sidebar = app!.renderer.root.findDescendantById("workspace-sidebar")!;
-      const tabs = app!.renderer.root.findDescendantById("work-view-tabs")!;
-      expect(originalSurface!.y).toBe(tabs.y + tabs.height);
+      const panel = app!.renderer.root.findDescendantById("work-panel")!;
+      expect(originalSurface!.y).toBe(panel.y);
       expect(originalSurface!.y + originalSurface!.height).toBe(sidebar.y + sidebar.height);
       expect(app!.editorFrame?.rows).toBe(originalSurface!.height);
     };
-    expect(app.editorFrame?.rows).toBe(21);
-    expect(app.editorFrame?.cols).toBe(76); aligned();
+    expect(app.editorFrame?.rows).toBe(23);
+    expect(app.editorFrame?.cols).toBe(80); aligned();
     expect(app.captureCharFrame()).not.toContain("Neovim ·");
     expect(app.captureCharFrame().split("\n")[23]).toContain("Radian 0.0.0");
     app.resize(100, 28); await app.renderOnce();
-    await until(() => app!.editorFrame?.rows === 25); await app.visible("unsaved-native-editor");
-    expect(app.editorFrame?.rows).toBe(25);
-    expect(app.editorFrame?.cols).toBe(56); aligned();
-    await app.click(`${icons.folder} feature`); await app.click("Editor"); await app.visible("[No Name]");
+    await until(() => app!.editorFrame?.rows === 27); await app.visible("unsaved-native-editor");
+    expect(app.editorFrame?.rows).toBe(27);
+    expect(app.editorFrame?.cols).toBe(60); aligned();
+    await app.click(`${icons.folder} feature`); await app.showView("e"); await app.visible("[No Name]");
     await app.mockInput.typeText("iSECOND-WORKTREE-CACHE"); app.mockInput.pressEscape(); await app.visible("SECOND-WORKTREE-CACHE");
     expect(app.captureCharFrame()).not.toContain("unsaved-native-editor");
-    await app.click("Git");
+    await app.showView("g");
     const returns: string[] = [];
     const captureReturn = () => {
       if (app!.renderer.root.findDescendantById("editor-view")!.visible) returns.push(app!.captureCharFrame());
@@ -155,7 +160,7 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
     expect(app.captureCharFrame()).not.toContain("unsaved-native-editor");
 
     // Normal Neovim exit must not turn the focus-out notification into a stale-input error.
-    await app.click(`${icons.folder} main`); await app.click("Editor"); await app.visible("unsaved-native-editor");
+    await app.click(`${icons.folder} main`); await app.showView("e"); await app.visible("unsaved-native-editor");
     await app.mockInput.typeText(":qa!"); app.mockInput.pressEnter(); await app.visible("Neovim exited (0)");
     await app.renderOnce(); expect(app.captureCharFrame()).not.toContain("Editor unavailable");
     await app.click("Open / reconnect editor");

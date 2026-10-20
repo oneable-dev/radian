@@ -1,6 +1,4 @@
 import { expect, test } from "bun:test";
-import { TextAttributes } from "@opentui/core";
-import { uiTheme } from "../../ui/theme.ts";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
@@ -21,7 +19,16 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
   });
   await app.renderOnce(); await app.renderOnce();
   return { ...app, selection, view, requests,
+    leader(key: string) { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey(key); },
+    async showView(key: "a" | "e" | "g" | "t") {
+      app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey(key);
+      await app.renderOnce(); await app.renderOnce();
+    },
     async click(text: string) {
+      if (text.startsWith(icons.folder) && !app.renderer.root.findDescendantById("workspace-sidebar")!.visible) {
+        app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("w");
+        await app.renderOnce(); await app.renderOnce();
+      }
       const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes(text));
       const x = lines[y]?.indexOf(text) ?? -1;
       if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
@@ -54,38 +61,112 @@ function editorFixture() {
   return { actions, inputs, opens, detaches };
 }
 
-test("상위 Agents·Editor·Git·Terminal 탭은 포커스 때 배경 없이 밑줄로만 강조한다", async () => {
-  // 실제 Workbench의 네 탭을 사용해 공통 버튼 설정이 올바르게 전달되는지 확인한다.
+test("상위 탭 없이 문자 단축키로 화면을 전환하고 현재 화면명을 푸터 왼쪽에 유지한다", async () => {
+  // The work pane has no navigation chrome; the footer identifies its displayed view.
   const app = await mount();
   try {
-    const tabs = app.renderer.root.findDescendantById("work-view-tabs")!.getChildren();
-    const active = app.view.workViewPreferences.active, selected = app.selection.sessionId;
-    expect(tabs.length).toBe(4);
-    for (const tab of tabs) {
-      // 포커스 이동만으로 표시 중인 화면이나 세션을 전환하면 안 된다.
-      tab.focus(); await app.renderOnce(); await app.renderOnce();
-      let column = 0;
-      const spans = app.captureSpans().lines[tab.y]!.spans;
-      const label = spans.find((span) => { column += span.width; return column > tab.x + 1; })!;
+    expect(app.renderer.root.findDescendantById("work-view-tabs")).toBeUndefined();
+    const panel = app.renderer.root.findDescendantById("work-panel")!;
+    for (const [key, label, id] of [["a", "Agents", "agent"], ["e", "Editor", "editor"], ["g", "Git", "git"], ["t", "Terminal", "terminal"]] as const) {
+      // View shortcuts select the work pane without creating sessions or sending prompts.
+      await app.showView(key);
+      app.renderer.root.findDescendantById("footer-help")!.focus(); await app.renderOnce();
 
-      expect(label.attributes & TextAttributes.UNDERLINE).not.toBe(0);
-      for (let x = tab.x; x < tab.x + tab.width; x++) {
-        let end = 0; const cell = spans.find((span) => { end += span.width; return end > x; })!;
-        expect(cell.bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
-      }
-      expect(app.view.workViewPreferences.active).toEqual(active); expect(app.selection.sessionId).toBe(selected);
+      const footer = app.captureCharFrame().split("\n")[23]!;
+      expect(footer.trimStart()).toStartWith(`Radian 0.0.0 · ${label}`);
+      expect(app.renderer.root.findDescendantById(`${id}-view`)!.y).toBe(panel.y);
+      expect(app.view.workViewPreferences.active["demo:main"]).toBe(id);
+      expect(app.selection.sessionId).toBe("a1");
     }
     expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("좌우 두 패널과 푸터를 표시하고 워크트리별 Editor·Git 화면을 복원한다", async () => {
+test("Editor는 화면 크기에 관계없이 작업 패널 네 모서리를 채우고 푸터만 남긴다", async () => {
+  const editor = editorFixture(), app = await mount({ editor: editor.actions });
+  try {
+    await app.showView("e"); await app.visible("Editor buffer");
+    const surface = app.renderer.root.findDescendantById("editor-terminal:demo:main")!;
+    for (const [width, height] of [[120, 24], [60, 12], [79, 18], [80, 17], [120, 24]] as const) {
+      // The editor keeps its existing connection while all application-owned gutters stay absent.
+      app.resize(width, height); await app.renderOnce(); await app.renderOnce();
+      const pane = app.renderer.root.findDescendantById("work-panel")!;
+      const footer = app.renderer.root.findDescendantById("app-footer")!;
+
+      expect(surface.x).toBe(pane.x); expect(surface.y).toBe(pane.y);
+      expect(surface.x + surface.width).toBe(pane.x + pane.width);
+      expect(surface.y + surface.height).toBe(footer.y);
+      expect(app.renderer.root.findDescendantById(surface.id)).toBe(surface);
+      expect(app.renderer.currentFocusedRenderable).toBe(surface);
+    }
+    expect(editor.detaches).toEqual([]); expect(editor.opens).toEqual([]);
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("숫자는 현재 Agents 화면의 세션 순서로 선택하고 초안·워크트리 범위를 유지한다", async () => {
+  // Session numbers follow the visible worktree's tab order, not the focused widget.
+  const app = await mount({ initialDrafts: { a1: "first draft", a2: "second draft" } });
+  try {
+    await app.showView("a");
+    app.leader("2"); await app.renderOnce();
+    expect(app.selection.sessionId).toBe("a2");
+    expect(app.captureCharFrame()).toContain("second draft");
+    expect(app.view.promptDrafts.a1).toBe("first draft");
+
+    // Moving focus and choosing a missing slot must not create or submit anything.
+    app.renderer.root.findDescendantById("footer-help")!.focus();
+    app.leader("1"); await app.renderOnce();
+    expect(app.selection.sessionId).toBe("a1");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
+    app.leader("9"); await app.renderOnce();
+    expect(app.selection.sessionId).toBe("a1");
+    expect(app.view.promptDrafts.a2).toBe("second draft");
+
+    app.selection.selectWorktree("demo:feature"); await app.renderOnce();
+    app.leader("2"); await app.renderOnce();
+    expect(app.selection.sessionId).toBe("b1");
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Editor와 Git에서 숫자·생성 단축키는 화면이나 세션을 바꾸지 않고 PTY에도 보내지 않는다", async () => {
+  // A configured but unavailable app command is consumed rather than replayed as native edits.
+  const editor = editorFixture(), app = await mount({ editor: editor.actions });
+  try {
+    await app.showView("e"); await app.visible("Editor buffer");
+    app.leader("2"); app.leader("n"); await app.renderOnce();
+    expect(app.view.workViewPreferences.active["demo:main"]).toBe("editor");
+    expect(editor.inputs).toEqual([]);
+    expect(app.selection.sessionId).toBe("a1");
+
+    await app.showView("g");
+    app.leader("1"); app.leader("n"); await app.renderOnce();
+    expect(app.view.workViewPreferences.active["demo:main"]).toBe("git");
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("공통 생성 단축키는 빈 Agents에서도 현재 워크트리에 세션을 명시적으로 생성한다", async () => {
+  const created: string[] = [], app = await mount({ onNewSession: (id) => { created.push(id); } });
+  try {
+    // Merely changing views never creates a session; only the explicit new-tab command does.
+    app.selection.selectWorktree("demo:empty"); await app.showView("a");
+    expect(created).toEqual([]);
+    app.leader("n"); await app.renderOnce();
+    expect(created).toEqual(["demo:empty"]);
+    expect(app.selection.worktree?.sessions).toEqual([]);
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("작업 화면과 푸터를 표시하고 워크트리별 Editor·Git 화면을 복원한다", async () => {
   // Demo mode provides navigation without launching any native editor or Git command.
   const app = await mount();
   try {
-    expect(app.captureCharFrame()).toContain("Agents  Editor  Git");
+    expect(app.captureCharFrame()).not.toContain("Agents  Editor  Git");
     expect(app.captureCharFrame()).not.toContain("Inspector");
-    await app.click("Editor"); await app.click(`${icons.folder} radian-ui`); await app.click("Git");
+    await app.showView("e"); await app.click(`${icons.folder} radian-ui`); await app.showView("g");
 
     await app.click(`${icons.folder} radian`);
     expect(app.captureCharFrame()).toContain("Editor preview");
@@ -94,7 +175,7 @@ test("좌우 두 패널과 푸터를 표시하고 워크트리별 Editor·Git �
     expect(app.view.workViewPreferences.active).toEqual({ "demo:main": "editor", "demo:feature": "git" });
     expect(app.requests).toEqual([]);
     app.resize(60, 12); await app.renderOnce();
-    expect(app.captureCharFrame().split("\n")[11]).toContain("Radian 0.0.0");
+    expect(app.captureCharFrame().split("\n")[11]).toContain("Radian · Git");
   } finally { await app.close(); }
 });
 
@@ -102,9 +183,9 @@ test("세션 탭은 Agents 안에서만 선택하고 다른 워크트리의 마�
   const app = await mount({ initialDrafts: { a1: "main draft", b1: "feature draft" } });
   try {
     // Session switching is local to Agents, rather than an incidental tree action.
-    await app.click("Editor"); await app.click("Agents"); await app.click("a1");
+    await app.showView("e"); await app.showView("a"); await app.click("a1");
     expect(app.captureCharFrame()).toContain("main draft");
-    await app.click("Editor"); await app.click(`${icons.folder} radian-ui`); await app.click("Agents");
+    await app.showView("e"); await app.click(`${icons.folder} radian-ui`); await app.showView("a");
     await app.click("b1");
 
     expect(app.selection.sessionId).toBe("b1");
@@ -118,9 +199,10 @@ test("세션 탭은 Agents 안에서만 선택하고 다른 워크트리의 마�
 test("검색과 백그라운드 snapshot은 Git 화면을 강제로 Agent로 바꾸지 않는다", async () => {
   const app = await mount();
   try {
-    await app.click("Git");
+    await app.showView("g");
     app.mockInput.pressKey("f", { ctrl: true }); await app.mockInput.typeText("feature/workspace");
     app.selection.replaceSnapshot(demoWorkspace()); await app.renderOnce();
+    app.mockInput.pressEscape(); await app.renderOnce();
 
     expect(app.captureCharFrame()).toContain("Git preview");
     expect(app.selection.worktree?.id).toBe("demo:main");
@@ -137,7 +219,7 @@ test("명시적으로 스크롤한 Agent 위치와 초안은 탭 왕복과 UI �
     await app.renderOnce();
     firstLine = app.captureCharFrame().match(/line \d+/)?.[0] ?? "";
     expect(firstLine).not.toBe("");
-    await app.click("Git"); await app.click("Agent");
+    await app.showView("g"); await app.showView("a");
     expect(app.captureCharFrame().match(/line \d+/)?.[0]).toBe(firstLine);
     expect(app.captureCharFrame()).toContain("unfinished draft");
   } finally { await app.close(); }
@@ -153,7 +235,7 @@ test("Editor에 포커스가 있으면 Neovim 키를 전달하고 Ctrl+]로 앱 
   // Only the process boundary is replaced; native OpenTUI VT/key handling remains real.
   const editor = editorFixture(), app = await mount({ editor: editor.actions });
   try {
-    await app.click("Editor"); await app.visible("Editor buffer");
+    await app.showView("e"); await app.visible("Editor buffer");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("editor-terminal:demo:main");
     app.mockInput.pressTab(); app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressKey("e", { ctrl: true });
     app.mockInput.pressEscape(); await app.renderOnce();
@@ -174,7 +256,7 @@ test("느린 Editor 열기 응답은 새로 선택한 Git 화면이나 포커스
   const editor = editorFixture(); editor.actions.info = () => undefined; editor.actions.open = () => ready.promise;
   const app = await mount({ editor: editor.actions });
   try {
-    await app.click("Editor"); await app.click(`${icons.folder} radian-ui`); await app.click("Git");
+    await app.showView("e"); await app.click(`${icons.folder} radian-ui`); await app.showView("g");
     const focus = app.renderer.currentFocusedRenderable;
 
     ready.resolve(ok("demo:main")); await Bun.sleep(0); await app.renderOnce();
@@ -206,7 +288,7 @@ test("복원할 Editor 프로세스가 없으면 자동 실행하지 않고 명�
 test("Editor 위 History 팝업은 Esc에서 같은 입력·연결로 복귀하고 PTY로 키를 보내지 않는다", async () => {
   const editor = editorFixture(), app = await mount({ editor: editor.actions });
   try {
-    await app.click("Editor"); await app.visible("Editor buffer");
+    await app.showView("e"); await app.visible("Editor buffer");
     const input = app.renderer.currentFocusedRenderable;
     app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("h"); await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("history-search");
@@ -225,7 +307,7 @@ test("활성 Editor의 renderer가 먼저 종료돼도 늦은 프레임과 detac
   editor.actions.attach = async (id, frame, failed) => { late = frame; return attach(id, frame, failed); };
   const app = await mount({ editor: editor.actions });
   try {
-    await app.click("Editor"); await app.visible("Editor buffer");
+    await app.showView("e"); await app.visible("Editor buffer");
     app.renderer.destroy(); await app.renderer.closed;
 
     late?.({ id: "demo:main", worktreeId: "demo:main", pid: 123, cols: 84, rows: 19, revision: 100, ansi: "late", exited: false, exitCode: null });

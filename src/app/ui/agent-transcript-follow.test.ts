@@ -73,8 +73,8 @@ test("긴 AI 대화는 세로 스크롤바 없이 전체 너비를 쓰고 휠·�
       cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null,
       highlightForeground: null, highlightBackground: null });
     await app.settled(); verify();
-    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("2"); await app.settled();
-    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("1"); await app.settled(); verify();
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("e"); await app.settled();
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("a"); await app.settled(); verify();
     expect(app.view.promptDrafts.a1).toBe("Unsent scrollbar draft"); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
@@ -168,9 +168,9 @@ test("도움말·다른 화면·빈 대화·짧은 대화에서는 하단 복귀
     expect(app.captureCharFrame()).toContain("Back to bottom");
 
     // 다른 작업 화면으로 왕복해도 버튼은 활성 대화와 그 스크롤 위치에만 속한다.
-    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("2"); await app.settled();
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("e"); await app.settled();
     expect(app.captureCharFrame()).not.toContain("Back to bottom");
-    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("1"); await app.settled();
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("a"); await app.settled();
     expect(app.captureCharFrame()).toContain("Back to bottom");
 
     // 스크롤 범위가 없으면 자동 추적 상태와 관계없이 버튼이나 빈 고정 행을 남기지 않는다.
@@ -409,9 +409,9 @@ test("Markdown 없는 도구 화면도 resize와 화면 왕복 후 추가 이벤
     const tool = section("tool", "Arguments:\n{}\n\nResult:\n" + "Tool line\n".repeat(100) + "RETURN_TOOL_TAIL", "tool");
     await app.update([tool]); app.resize(100, 22); await app.settled();
     expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
-    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("2"); await app.settled();
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("e"); await app.settled();
     await app.update([{ ...tool, text: tool.text + "\nMore background results\n".repeat(30) + "HIDDEN_VIEW_TAIL" }]);
-    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("1"); await app.settled();
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("a"); await app.settled();
     expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
     expect(app.captureCharFrame()).toContain("HIDDEN_VIEW_TAIL");
   } finally { await app.close(); }

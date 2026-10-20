@@ -32,6 +32,10 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
       app.renderer.on("frame", capture);
       return { frames, stop: () => app.renderer.off("frame", capture) };
     },
+    async showGit() {
+      app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("g");
+      await app.renderOnce(); await app.renderOnce();
+    },
     async click(label: string, right = false) {
       const text = app.captureCharFrame().split("\n"), offset = right ? 36 : 0;
       const y = text.findIndex((line) => line.indexOf(label, offset) >= 0), x = text[y]?.indexOf(label, offset) ?? -1;
@@ -115,8 +119,8 @@ test("긴 Git 목록의 초기 복원은 로딩 placeholder나 짧은 이전 목
     gitViews: { "demo:feature": { ...initialGitState(), historyScroll: 48 } } } });
   const record = app.capture(/GIT(?:MAIN|FEATURE)-\d{3}/);
   try {
-    await app.click("Git", true); await app.waitForFrame((frame) => frame.includes("GITMAIN-000"));
-    await app.click(`${icons.folder} radian-ui`); await app.click("Git", true);
+    await app.showGit(); await app.waitForFrame((frame) => frame.includes("GITMAIN-000"));
+    await app.click(`${icons.folder} radian-ui`); await app.showGit();
     await app.waitForFrame((frame) => frame.includes("GITFEATURE-"));
 
     const populated = record.frames.filter((frame) => frame.tree === "demo:feature" && frame.first !== null);
@@ -130,9 +134,9 @@ test("캐시된 Git 목록은 재조회 없이 첫 표시 프레임에 워크트
   // 데이터 조회만 대역으로 제어하고 목록과 그래프의 레이아웃·paint는 실제 native UI를 사용한다.
   const fixture = gitFixture(), app = await mount({ git: fixture.git });
   try {
-    await app.click("Git", true); await app.waitForFrame((frame) => frame.includes("GITMAIN-000"));
+    await app.showGit(); await app.waitForFrame((frame) => frame.includes("GITMAIN-000"));
     await app.scroll("git-history", 24); const main = app.first(/GITMAIN-\d{3}/);
-    await app.click(`${icons.folder} radian-ui`); await app.click("Git", true);
+    await app.click(`${icons.folder} radian-ui`); await app.showGit();
     await app.waitForFrame((frame) => frame.includes("GITFEATURE-000"));
     await app.scroll("git-history", 48); const feature = app.first(/GITFEATURE-\d{3}/);
     expect(main).not.toBeNull(); expect(feature).not.toBeNull();
@@ -156,10 +160,10 @@ test("캐시된 Git diff는 첫 표시 프레임부터 저장 위치를 적용�
     await app.renderOnce(); await app.renderOnce();
   };
   try {
-    await app.click("Git", true); await app.waitForFrame((frame) => frame.includes("probe.txt"));
+    await app.showGit(); await app.waitForFrame((frame) => frame.includes("probe.txt"));
     await app.click("probe.txt", true); await app.waitForFrame((frame) => frame.includes("DIFFMAIN-000"));
     await scroll(35); const main = app.first(/DIFFMAIN-\d{3}/); expect(main).toBe("DIFFMAIN-035");
-    await app.click(`${icons.folder} radian-ui`); await app.click("Git", true);
+    await app.click(`${icons.folder} radian-ui`); await app.showGit();
     await app.waitForFrame((frame) => frame.includes("probe.txt")); await app.click("probe.txt", true);
     await app.waitForFrame((frame) => frame.includes("DIFFFEATURE-000"));
     await scroll(7); const feature = app.first(/DIFFFEATURE-\d{3}/); expect(feature).toBe("DIFFFEATURE-007");

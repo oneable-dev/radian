@@ -211,7 +211,7 @@ test("팝업은 Tab 포커스·전역 명령·배경 클릭을 가두고 sidebar
     app.leader("b"); await app.render(); expect(app.get("workspace-sidebar").visible).toBe(false);
     await app.open(); const dialog = app.get("history-dialog");
     for (let i = 0; i < 9; i++) { app.mockInput.pressTab(); await app.render(); expect(["history-search", "history-list", "history-preview"]).toContain(app.renderer.currentFocusedRenderable!.id); }
-    app.leader("2"); app.leader("b"); app.mockInput.pressKey("e", { ctrl: true }); await app.render();
+    app.leader("e"); app.leader("b"); app.mockInput.pressKey("e", { ctrl: true }); await app.render();
     expect(app.get("agent-view").visible).toBe(true); expect(app.get("workspace-sidebar").visible).toBe(false);
     await app.mockMouse.click(0, 0); await app.render(); expect(app.get("session-history").visible).toBe(true);
     expect(dialog.x).toBeGreaterThan(0); expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.runs).toEqual([]);
@@ -266,7 +266,7 @@ test("좁은 창은 목록과 미리보기를 전환하고 resize 뒤 검색과 
   const app = await mount();
   try {
     await app.open(); await app.mockInput.typeText("keyboard"); app.clock.advance(150); await app.render();
-    app.resize(60, 12); await app.render();
+    app.resize(64, 12); await app.render();
     expect(app.get("history-list").visible).toBe(true); expect(app.get("history-preview-pane").visible).toBe(false);
     expect(app.captureCharFrame().split("\n")[11]).toContain("Ctrl+o Preview");
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
@@ -280,7 +280,7 @@ test("좁은 창은 목록과 미리보기를 전환하고 resize 뒤 검색과 
       await app.mockInput.pressKeys(["\x1b[6~"]); await app.render();
     }
     expect(app.captureCharFrame()).toContain("Saved answer second");
-    const dialog = app.get("history-dialog"); expect(dialog.x + dialog.width).toBeLessThanOrEqual(60); expect(dialog.y + dialog.height).toBeLessThanOrEqual(12);
+    const dialog = app.get("history-dialog"); expect(dialog.x + dialog.width).toBeLessThanOrEqual(64); expect(dialog.y + dialog.height).toBeLessThanOrEqual(12);
     app.resize(140, 30); await app.render();
     expect(app.get("history-list").visible).toBe(true); expect(app.get("history-preview-pane").visible).toBe(true);
     expect((app.get("history-search") as InputRenderable).value).toBe("keyboard"); expect(app.resumed).toEqual([]);

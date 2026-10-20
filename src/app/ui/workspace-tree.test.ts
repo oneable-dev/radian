@@ -139,7 +139,7 @@ test.each([false, true])("밝기 %j에서도 선택 배경 없이 테두리·글
     expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt"); expect(appearance()).toEqual(focused);
     app.mockInput.pressKey("f", { ctrl: true }); await app.renderOnce(); await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-search"); expect(appearance()).toEqual(focused);
-    app.get("work-view-tabs").getChildren()[0]!.focus(); await app.renderOnce(); await app.renderOnce();
+    app.get("agent-session-list").focus(); await app.renderOnce(); await app.renderOnce();
     expect(appearance()).toEqual(focused);
     app.get("workspace-tree").focus(); await app.renderOnce(); await app.renderOnce();
     expect(appearance()).toEqual(focused);

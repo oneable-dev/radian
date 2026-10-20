@@ -28,7 +28,7 @@ import { GitPanel, type GitActions } from "../../git/ui/panel.ts";
 import type { WorkView, WorkViewPreferences } from "../../runtime/protocol.ts";
 import { defaultKeymap, formatKeys, type Keymap } from "../../keybindings/config.ts";
 import { KeyRouter } from "../../keybindings/router.ts";
-import { inScope, type CommandId, type KeyContext } from "../../keybindings/commands.ts";
+import { inScope, tabIndex, type CommandId, type KeyContext } from "../../keybindings/commands.ts";
 import type { TerminalTheme } from "../../ui/embedded-terminal/theme.ts";
 import { uiTheme, type UiTheme } from "../../ui/theme.ts";
 import { paintText, styleChunk, type StyleGroup } from "../../ui/theme-styles.ts";
@@ -71,8 +71,6 @@ export class Workbench {
   private readonly models: ModelPicker;
   private readonly agent: AgentPanel;
   private readonly workPanel: BoxRenderable;
-  private readonly workTabs: Record<WorkView, Button>;
-  private readonly viewTabs: BoxRenderable;
   private readonly editor: EditorPanel;
   private readonly terminals: TerminalPanel;
   private readonly git: GitPanel;
@@ -139,15 +137,6 @@ export class Workbench {
     this.sidebar.add(this.resultMessage);
     this.sidebar.add(this.tree);
     this.workPanel = new BoxRenderable(renderer, { id: "work-panel", flexGrow: 1, minWidth: 0, flexDirection: "column" });
-    const workTabs = this.viewTabs = new BoxRenderable(renderer, { id: "work-view-tabs", height: 3, paddingY: 1, flexShrink: 0, flexDirection: "row", paddingX: 1 });
-    this.workTabs = {
-      agent: this.button("Agents", () => this.selectWorkView("agent"), "Show Agents", "work-tab"),
-      editor: this.button("Editor", () => this.selectWorkView("editor", true), "Show Editor", "work-tab"),
-      git: this.button("Git", () => this.selectWorkView("git"), "Show Git", "work-tab"),
-      terminal: this.button("Terminal", () => this.selectWorkView("terminal"), "Show Terminal", "work-tab"),
-    };
-    for (const tab of Object.values(this.workTabs)) workTabs.add(tab);
-    this.workPanel.add(workTabs);
     this.agent = new AgentPanel(renderer, { ...actions, onModel: id => this.showModels(id), onHistory: () => this.history.show(this.selection.worktree), onInspectInput: (content) => this.dialog.show(content), onSelectSession: (tree, id) => this.activateSession(tree, id) }, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
       (message) => this.setNotice(message), () => this.updateFooter(), () => this.focusNavigation(), this.workViews.agentScroll,
       (id, position) => { this.workViews.agentScroll[id] = position; this.saveWorkViews(); }, {
@@ -181,7 +170,7 @@ export class Workbench {
     // Opening a pointer-triggered popup restores the original editor/PTY focus on close.
     help.onMouseDown = (event) => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.showHelp(); } };
     details.onMouseDown = (event) => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.showNotice(); } };
-    this.footer = new Footer(renderer, `Radian ${packageInfo.version}`, { help, details });
+    this.footer = new Footer(renderer, `Radian ${packageInfo.version}`, { help, details }, "Radian");
     this.root.add(this.footer.root); this.root.add(this.history.root); this.root.add(this.models.root); this.root.add(this.dialog.root);
     renderer.root.add(this.root);
     this.router = new KeyRouter(renderer, this.keymap, () => this.keyContext(), (command) => this.commandAvailable(command), (command) => this.command(command));
@@ -200,7 +189,7 @@ export class Workbench {
     this.tree.on("focused", this.repaintRows); this.tree.on("blurred", this.repaintRows);
     this.theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.text"].bg;
-      this.repaintSearch(); this.paintRows(this.visibleRows()); this.paintTabs();
+      this.repaintSearch(); this.paintRows(this.visibleRows());
     });
   }
 
@@ -221,8 +210,7 @@ export class Workbench {
     this.sidebarTransition = transition;
     const commit = () => { if (this.sidebarTransition === transition) this.finishSidebarTransition(); };
     const width = this.renderer.width - (visible ? this.sidebar.width : 0);
-    const { horizontal } = panelSpacing(this.renderer);
-    const cols = Math.min(500, width - horizontal * 2), rows = this.editor.input?.height ?? 0;
+    const cols = Math.min(500, width), rows = this.editor.input?.height ?? 0;
     if (cols < 2 || rows < 1 || !this.editor.prepareResize(cols, rows, commit)) commit();
   }
   private finishSidebarTransition(): void {
@@ -237,17 +225,22 @@ export class Workbench {
     this.sidebar.visible = visible;
     this.paintRows(this.visibleRows());
     if (visible) this.focusNavigation();
-    else if (focused) {
-      if (this.agent.active) this.agent.prompt.focus();
-      else if (this.editor.input && this.displayedWorkView === "editor") this.editor.input.focus();
-      else this.workTabs[this.displayedWorkView].focus();
-    }
+    else if (focused) this.focusWorkView();
     this.updateFooter();
   }
 
   private focusNavigation(): void {
-    if (!this.sidebar.visible) this.workTabs[this.displayedWorkView].focus();
+    if (!this.sidebar.visible) this.focusWorkView();
     else this.tree.focus();
+  }
+
+  private focusWorkView(): void {
+    switch (this.displayedWorkView) {
+      case "agent": (this.agent.active ? this.agent.prompt : this.agent.focusTargets[0])?.focus(); break;
+      case "editor": (this.editor.input ?? this.editor.openButton).focus(); break;
+      case "git": this.git.focus(); break;
+      case "terminal": this.terminals.focus(); break;
+    }
   }
 
   private saveWorkViews(): void { this.actions.onWorkViewsChange?.(this.workViewPreferences); }
@@ -256,7 +249,7 @@ export class Workbench {
     this.agent.rememberScroll();
     this.workViews.active[worktree.id] = view; this.saveWorkViews(); this.render();
     if (view === "editor" && explicit) this.editor.show(worktree, true);
-    if (view === "git") this.git.focus();
+    this.focusWorkView();
   }
   private activateSession(worktreeId: string, sessionId: string): void {
     this.agent.rememberScroll();
@@ -312,6 +305,7 @@ export class Workbench {
       const label = this.buttonHints.get(focused);
       if (focused.visible && label) shortcuts = [{ key: this.keymap.hints("button.activate", "button"), label }];
     }
+    this.footer.setView({ agent: "Agents", editor: "Editor", git: "Git", terminal: "Terminal" }[this.displayedWorkView]);
     this.footer.setContext(this.agent.active && !this.dialog.visible && !this.history.visible && !this.models.visible ? this.agent.transcriptStatus : "");
     this.footer.setShortcuts(shortcuts.filter((shortcut) => shortcut.key));
   };
@@ -421,6 +415,11 @@ export class Workbench {
     if (this.history.visible) return command.startsWith("history.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
     if (command === "history.show") return Boolean(this.selection.worktree);
     if (command.startsWith("history.")) return false;
+    const index = tabIndex(command);
+    if (index >= 0) return this.displayedWorkView === "agent" ? Boolean(this.selection.worktree?.sessions[index])
+      : this.displayedWorkView === "terminal" && this.terminals.canSelect(index);
+    if (command === "tab.new") return this.displayedWorkView === "agent" ? Boolean(this.selection.worktree)
+      : this.displayedWorkView === "terminal" && Boolean(this.selection.worktree && this.actions.terminal);
     if (command.startsWith("completion.")) return this.agent.completionAvailable(command);
     if (command.startsWith("session.")) return this.agent.sessionAvailable(command);
     if (command.startsWith("git.")) return this.git.available(command);
@@ -448,6 +447,20 @@ export class Workbench {
     if (command.startsWith("model.")) { this.models.command(command); return; }
     if (command === "history.show") { this.history.show(this.selection.worktree); return; }
     if (command.startsWith("history.")) { this.history.command(command); return; }
+    const index = tabIndex(command);
+    if (index >= 0) {
+      if (this.displayedWorkView === "terminal") this.terminals.select(index);
+      else {
+        const worktree = this.selection.worktree, session = worktree?.sessions[index];
+        if (worktree && session) { this.activateSession(worktree.id, session.id); this.focusWorkView(); }
+      }
+      return;
+    }
+    if (command === "tab.new") {
+      if (this.displayedWorkView === "terminal") this.terminals.create();
+      else if (this.selection.worktree) this.actions.onNewSession(this.selection.worktree.id);
+      return;
+    }
     if (command.startsWith("completion.")) { this.agent.completionCommand(command); return; }
     if (command.startsWith("session.")) { this.agent.sessionCommand(command); return; }
     if (command.startsWith("git.")) { this.git.command(command); return; }
@@ -509,7 +522,6 @@ export class Workbench {
     if (this.sidebar.visible) {
       targets.push(this.search, this.tree);
     }
-    targets.push(...Object.values(this.workTabs));
     targets.push(...this.agent.focusTargets);
     if (this.editor.root.visible) {
       if (this.editor.openButton.visible) targets.push(this.editor.openButton);
@@ -529,8 +541,6 @@ export class Workbench {
     const { horizontal, vertical } = panelSpacing(this.renderer);
     this.sidebar.width = this.renderer.width < 80 ? 26 : 40;
     this.sidebar.paddingX = horizontal; this.sidebar.paddingBottom = vertical;
-    this.viewTabs.height = 1 + vertical; this.viewTabs.paddingTop = 0; this.viewTabs.paddingBottom = vertical;
-    this.viewTabs.paddingX = horizontal;
     this.searchBox.height = 1 + vertical * 2; this.searchBox.paddingY = vertical;
     this.searchBox.marginX = -horizontal; this.searchBox.paddingX = horizontal;
     this.search.placeholder = this.renderer.width < 80 ? "Search workspaces" : "Search repo/worktree/branch";
@@ -643,7 +653,6 @@ export class Workbench {
     this.resultMessage.visible = rows.length === 0;
     this.history.updateScope(worktree);
     this.models.updateScope(this.selection.sessionId, this.selection.sessionId ? this.actions.getSessionDetails?.(this.selection.sessionId)?.conversationId : undefined, workView === "agent");
-    this.paintTabs();
     if (this.navigationKey && this.navigationKey !== this.lastScrolledKey) {
       this.revealRow(this.navigationKey); this.navigationRevealPending = true;
     }
@@ -686,10 +695,6 @@ export class Workbench {
       }
     }
   }
-  private paintTabs(): void {
-    for (const [name, tab] of Object.entries(this.workTabs)) tab.active = name === this.displayedWorkView;
-  }
-
   dispose(): void {
     if (this.disposed) return;
     this.agent.rememberScroll();

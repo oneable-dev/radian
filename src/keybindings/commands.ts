@@ -31,11 +31,21 @@ export const defaultBindings = {
   "focus.previous": [key("shift+tab", "app")],
   "focus.results": [key("enter", "search")],
   "search.clear": [key("escape", "search")],
-  "view.agent": [key("<leader> 1")],
-  "view.editor": [key("<leader> 2")],
-  "view.git": [key("<leader> 3")],
-  "view.terminal": [key("<leader> 4")],
-  "terminal.new": [key("<leader> t")],
+  "view.agent": [key("<leader> a")],
+  "view.editor": [key("<leader> e")],
+  "view.git": [key("<leader> g")],
+  "view.terminal": [key("<leader> t")],
+  "tab.new": [key("<leader> n")],
+  "tab.select-1": [key("<leader> 1")],
+  "tab.select-2": [key("<leader> 2")],
+  "tab.select-3": [key("<leader> 3")],
+  "tab.select-4": [key("<leader> 4")],
+  "tab.select-5": [key("<leader> 5")],
+  "tab.select-6": [key("<leader> 6")],
+  "tab.select-7": [key("<leader> 7")],
+  "tab.select-8": [key("<leader> 8")],
+  "tab.select-9": [key("<leader> 9")],
+  "terminal.new": [],
   "terminal.close": [key("<leader> x")],
   "terminal.previous": [key("<leader> [")],
   "terminal.next": [key("<leader> ]")],
@@ -135,6 +145,8 @@ export const defaultBindings = {
 } satisfies Record<string, readonly BindingInput[]>;
 export type CommandId = keyof typeof defaultBindings;
 export const commandIds = Object.keys(defaultBindings) as CommandId[];
+const tabSelectionCommands = commandIds.filter((command) => command.startsWith("tab.select-"));
+export function tabIndex(command: CommandId): number { return tabSelectionCommands.indexOf(command); }
 export function isCommand(value: string): value is CommandId { return Object.hasOwn(defaultBindings, value); }
 export function inScope(scope: KeyScope, context: KeyContext): boolean {
   if (scope === "global") return true;

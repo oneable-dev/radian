@@ -136,12 +136,29 @@ export class TerminalPanel {
     if (!this.pendingTabScroll || this.disposed || this.root.isDestroyed || !this.root.visible || !this.selected) return;
     this.pendingTabScroll = false; this.tabs.scrollChildIntoView(`terminal-tab:${this.selected}`);
   };
-  next(direction: 1 | -1): void {
-    if (!this.items.length || !this.worktree) return;
+  focus(): void {
+    if (!this.root.visible || this.disposed) return;
+    const target = this.input ?? (this.reconnectButton.visible ? this.reconnectButton : this.tabButtons.get(this.selected ?? "") ?? this.newButton);
+    target.focus();
+    if (this.input || !this.selected) return;
+    const generation = this.generation;
+    // A slow attachment may focus its input only if the user has not moved elsewhere.
+    void this.task.then(() => {
+      if (this.current(generation) && this.renderer.currentFocusedRenderable === target) this.input?.focus();
+    });
+  }
+  canSelect(index: number): boolean { return this.root.visible && !!this.items[index]; }
+  select(index: number): void {
+    const item = this.items[index];
+    if (!this.root.visible || !item || !this.worktree) return;
     this.intent++;
-    const index = this.items.findIndex((item) => item.id === this.selected);
-    const item = this.items[(index + direction + this.items.length) % this.items.length]!;
+    if (item.id === this.selected) { this.focus(); return; }
     this.selectionChanged(this.worktree.id, item.id); this.activate(item.id, true); this.paintTabs();
+  }
+  next(direction: 1 | -1): void {
+    if (!this.items.length) return;
+    const index = this.items.findIndex((item) => item.id === this.selected);
+    this.select((index + direction + this.items.length) % this.items.length);
   }
   scroll(direction: 1 | -1): void { this.surface?.scroll(direction * Math.max(1, (this.surface.root.height || 10) - 1)); }
   create(): void {

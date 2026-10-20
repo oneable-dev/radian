@@ -142,7 +142,7 @@ test("Editor 입력 중 토글은 같은 surface·연결을 유지하고 변경�
       receive(frame(80, 24)); return ok({ input: (bytes) => inputs.push(new TextDecoder().decode(bytes)),
         resize: (cols, rows) => { sizes.push(cols); receive(frame(cols, rows)); }, disconnect: async () => {} }); } } });
   try {
-    app.leader("2"); await app.render(); await app.waitFor(() => app.renderer.currentFocusedRenderable?.id.startsWith("editor-terminal:") === true);
+    app.leader("e"); await app.render(); await app.waitFor(() => app.renderer.currentFocusedRenderable?.id.startsWith("editor-terminal:") === true);
     const surface = app.renderer.currentFocusedRenderable, width = surface!.width;
 
     app.leader("b"); await app.render();

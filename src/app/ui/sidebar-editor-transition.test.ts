@@ -24,14 +24,14 @@ async function mount() {
       info: () => ({ id: "editor", worktreeId: "demo:main", pid: 123, exited: false, exitCode: null }),
       open: async () => { throw new Error("A resize must not restart Neovim."); },
       attach: async (_id, frame, failed) => {
-        attaches++; receive = frame; fail = failed; publish({ cols: 76, rows: 21 });
+        attaches++; receive = frame; fail = failed; publish({ cols: 80, rows: 23 });
         return ok({ input: (bytes) => inputs.push(new TextDecoder().decode(bytes)),
           resize: (cols, rows) => { requests.push({ cols, rows }); if (!held) publish({ cols, rows }); }, disconnect: async () => {} });
       },
     } });
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
   const leader = (key: string) => { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey(key); };
-  leader("2"); await render(); await app.waitFor(() => app.renderer.currentFocusedRenderable?.id.startsWith("editor-terminal:") === true);
+  leader("e"); await render(); await app.waitFor(() => app.renderer.currentFocusedRenderable?.id.startsWith("editor-terminal:") === true);
   await render(); held = true; requests.length = 0;
   const surface = app.renderer.currentFocusedRenderable as EmbeddedTerminalRenderable;
   const sidebar = app.renderer.root.findDescendantById("workspace-sidebar")!;
@@ -57,22 +57,22 @@ test("Editor는 새 너비 화면을 받기 전 레이아웃을 유지하고 첫
     app.leader("b"); await app.render();
 
     // 새 화면을 기다리는 동안 기존 사이드바와 미저장 화면을 그대로 표시한다.
-    expect(app.requests.at(-1)).toEqual({ cols: 116, rows: 21 });
-    expect(app.sidebar.visible).toBe(true); expect(app.surface.width).toBe(76);
+    expect(app.requests.at(-1)).toEqual({ cols: 120, rows: 23 });
+    expect(app.sidebar.visible).toBe(true); expect(app.surface.width).toBe(80);
     expect(app.captureCharFrame()).toContain("UNSAVED-BUFFER");
     app.publish(app.requests.at(-1)!); await app.renderOnce();
 
     // 레이아웃이 바뀐 첫 표시 프레임에 이미 새 VT가 반영되어야 한다.
-    expect(app.sidebar.visible).toBe(false); expect(app.surface.width).toBe(116);
+    expect(app.sidebar.visible).toBe(false); expect(app.surface.width).toBe(120);
     expect(captured.frames.length).toBeGreaterThan(0);
-    expect(captured.frames.every((frame) => frame.right === 113 && frame.text.includes("UNSAVED-BUFFER"))).toBe(true);
+    expect(captured.frames.every((frame) => frame.right === 115 && frame.text.includes("UNSAVED-BUFFER"))).toBe(true);
     expect(app.renderer.currentFocusedRenderable).toBe(app.surface); expect(app.inputs).toEqual([]);
     expect(app.attaches).toBe(1); expect(app.view.promptDrafts.a1).toBe("keep draft");
 
     // 반대 방향도 새 화면이 도착하기 전에 넓은 기존 화면을 잘라내지 않는다.
     app.leader("b"); await app.render(); expect(app.sidebar.visible).toBe(false);
     app.publish(app.requests.at(-1)!); await app.renderOnce(); expect(app.sidebar.visible).toBe(true);
-    expect(captured.frames.every((frame) => frame.right === 113)).toBe(true);
+    expect(captured.frames.every((frame) => frame.right === 115)).toBe(true);
   } finally { captured.stop(); await app.close(); }
 });
 
@@ -104,12 +104,12 @@ test("준비 중 반대 토글은 즉시 원래 의도로 돌아가고 늦은 �
     // 확대 응답보다 사용자의 반대 토글이 먼저 들어온다.
     app.leader("b"); await app.render(); const old = app.requests.at(-1)!;
     app.leader("b"); await app.render(); expect(app.sidebar.visible).toBe(true);
-    expect(app.requests.at(-1)).toEqual({ cols: 76, rows: 21 });
+    expect(app.requests.at(-1)).toEqual({ cols: 80, rows: 23 });
 
     app.publish(old); await app.render();
-    expect(app.sidebar.visible).toBe(true); expect(app.surface.width).toBe(76);
+    expect(app.sidebar.visible).toBe(true); expect(app.surface.width).toBe(80);
     app.publish(app.requests.at(-1)!); await app.render();
-    expect(captured.frames.every((frame) => frame.sidebar && frame.right === 113)).toBe(true);
+    expect(captured.frames.every((frame) => frame.sidebar && frame.right === 115)).toBe(true);
     expect(app.renderer.currentFocusedRenderable).toBe(app.surface); expect(app.inputs).toEqual([]);
   } finally { captured.stop(); await app.close(); }
 });
@@ -119,12 +119,12 @@ test("연속 세 번 토글은 마지막 숨김 의도를 반영하고 중간 �
   try {
     app.leader("b"); await app.render(); app.leader("b"); await app.render(); app.leader("b"); await app.render();
     const final = app.requests.at(-1)!;
-    expect(final.cols).toBe(116); expect(app.sidebar.visible).toBe(true);
+    expect(final.cols).toBe(120); expect(app.sidebar.visible).toBe(true);
 
     app.publish(final); await app.renderOnce(); expect(app.sidebar.visible).toBe(false);
-    app.publish({ cols: 76, rows: 21 }); await app.render();
-    expect(app.sidebar.visible).toBe(false); expect(app.surface.width).toBe(116);
-    expect(captured.frames.every((frame) => frame.right === 113)).toBe(true);
+    app.publish({ cols: 80, rows: 23 }); await app.render();
+    expect(app.sidebar.visible).toBe(false); expect(app.surface.width).toBe(120);
+    expect(captured.frames.every((frame) => frame.right === 115)).toBe(true);
   } finally { captured.stop(); await app.close(); }
 });
 
@@ -132,7 +132,7 @@ test("준비 중 Agents로 이동하면 마지막 사이드바 의도는 적용�
   const app = await mount();
   try {
     app.leader("b"); await app.render(); const old = app.requests.at(-1)!;
-    app.leader("1"); await app.render();
+    app.leader("a"); await app.render();
     expect(app.sidebar.visible).toBe(false); expect(app.renderer.root.findDescendantById("agent-view")!.visible).toBe(true);
     app.publish(old); await app.render();
     expect(app.renderer.root.findDescendantById("editor-view")!.visible).toBe(false);
@@ -145,10 +145,10 @@ test("실제 창 크기 변경은 준비 중이던 옛 치수를 무효화하며
   try {
     app.leader("b"); await app.render(); const old = app.requests.at(-1)!;
     app.resize(100, 28); await app.render();
-    expect(app.sidebar.visible).toBe(false); expect(app.surface.width).toBe(96);
+    expect(app.sidebar.visible).toBe(false); expect(app.surface.width).toBe(100);
     app.publish(old); await app.render(); expect(app.sidebar.visible).toBe(false);
     app.publish(app.requests.at(-1)!); await app.render();
-    expect(app.surface.width).toBe(96); expect(app.renderer.currentFocusedRenderable).toBe(app.surface);
+    expect(app.surface.width).toBe(100); expect(app.renderer.currentFocusedRenderable).toBe(app.surface);
   } finally { await app.close(); }
 });
 

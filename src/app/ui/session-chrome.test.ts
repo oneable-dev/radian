@@ -28,7 +28,7 @@ async function mount(empty = false) {
 test("상단 오른쪽의 워크트리·생성·History 버튼은 없고 선택한 워크트리와 브랜치는 프롬프트 아래에 표시한다", async () => {
   const app = await mount();
   try {
-    expect(app.line("work-view-tabs")).not.toContain("radian · main");
+    expect(app.renderer.root.findDescendantById("work-view-tabs")).toBeUndefined();
     expect(app.line("agent-session-tabs")).not.toContain("New session"); expect(app.line("agent-session-tabs")).not.toContain("History");
     expect(app.renderer.root.findDescendantById("agent-history-button")).toBeUndefined();
     expect(app.line("session-worktree-context")).toBe("radian · main");

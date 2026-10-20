@@ -7,7 +7,6 @@ import { TerminalSurface, type PtyAttachment } from "../../ui/embedded-terminal/
 import type { TerminalTheme } from "../../ui/embedded-terminal/theme.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
-import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
 
 export type EditorAttachment = PtyAttachment;
 export type EditorActions = {
@@ -33,12 +32,11 @@ export class EditorPanel {
   constructor(private readonly renderer: CliRenderer, private readonly actions: EditorActions | undefined,
     button: (label: string, activate: () => void) => BoxRenderable, private readonly notice: (message: string) => void,
     private readonly changed: () => void, private readonly terminalTheme?: TerminalTheme) {
-    this.root = new BoxRenderable(renderer, { id: "editor-view", width: "100%", flexGrow: 1, minHeight: 0, flexDirection: "column", visible: false });
+    this.root = new BoxRenderable(renderer, { id: "editor-view", width: "100%", flexGrow: 1, minHeight: 0, padding: 0, flexDirection: "column", visible: false });
     this.message = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     uiTheme(renderer).bindStyles(this.message, (styles) => paintText(this.message, styles["ui.muted"]));
     this.openButton = button("Open / reconnect editor", () => { if (this.worktree) this.show(this.worktree, true); });
     this.root.add(this.message); this.root.add(this.openButton);
-    bindPanelSpacing(renderer, this.root);
   }
   get input(): EmbeddedTerminalRenderable | undefined {
     return this.root.visible && this.connection && this.selected?.surface.acceptsInput && this.selected.surface.root.visible
@@ -80,9 +78,8 @@ export class EditorPanel {
         this.message.content = `Opening Neovim · ${worktree.name}`; this.message.visible = true; this.openButton.visible = false;
         await this.laidOut();
         if (!this.current(generation)) return;
-        const { horizontal } = panelSpacing(this.renderer);
         const opened = await this.actions.open(worktree.id, {
-          cols: Math.max(2, Math.min(500, this.root.width - horizontal * 2)),
+          cols: Math.max(2, Math.min(500, this.root.width)),
           rows: Math.max(1, Math.min(200, this.root.height)),
         });
         if (!this.current(generation)) return;

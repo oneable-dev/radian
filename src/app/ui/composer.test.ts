@@ -94,7 +94,7 @@ test("입력 화면을 숨기면 붙여넣기 로딩을 즉시 취소하고 늦�
   try {
     app.input.value = "retained draft"; app.mockInput.pressKey("v", { ctrl: true }); await app.render();
     expect(app.input.activity.root.visible).toBe(true);
-    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("2"); await app.render();
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("e"); await app.render();
 
     // A hidden composer must not leave either its spinner timers or a clipboard operation alive.
     expect(signal?.aborted).toBe(true); expect(app.input.pending).toBe(false); expect(app.input.activity.root.visible).toBe(false);
@@ -246,7 +246,8 @@ test("항목 상세는 원문을 보여주고 닫을 때 초안·커서·포커�
 test("작은 창의 여러 줄 입력·실행 상태·알림·완성 후보가 함께 있어도 footer를 침범하지 않는다", async () => {
   const app=await mount({onComplete:async()=>ok({items:[{kind:"file",value:"context.txt",description:"Context file"}],truncated:false})});
   try {
-    app.resize(60,11);app.view.setNotice("Connection fixture notice");app.input.value="prefix\n@";await app.render();
+    // Removing the view strip gives back two rows; use the same constrained content budget.
+    app.resize(60,9);app.view.setNotice("Connection fixture notice");app.input.value="prefix\n@";await app.render();
     app.clock.advance(150);await app.render();expect(app.captureCharFrame()).toContain("context.txt");
     const menu=app.get("prompt-completions"),composer=app.get("agent-composer"),footer=app.get("app-footer"),status=app.get("session-status");
     expect(menu.visible).toBe(true);expect(menu.height).toBe(1);

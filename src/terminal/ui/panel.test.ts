@@ -37,9 +37,19 @@ async function mount(initial?: WorkViewPreferences, clock?: ManualClock) {
   await app.renderOnce();
   return { ...app, selection, view, actions, created, closed, inputs, detaches, commands,
     exit(id: string) { items = items.filter((item) => item.id !== id); selection.replaceSnapshot(selection.snapshot); },
+    async showView(key: "a" | "e" | "g" | "t") {
+      app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey(key); await app.renderOnce();
+    },
+    async createTerminal() {
+      app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("t");
+      app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("n"); await app.renderOnce();
+    },
     async click(text: string, right = false) {
+      if (text.startsWith(icons.folder) && !app.renderer.root.findDescendantById("workspace-sidebar")!.visible) {
+        app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("w"); await app.renderOnce(); await app.renderOnce();
+      }
       const lines = app.captureCharFrame().split("\n");
-      const start = right ? (app.renderer.width < 80 ? 26 : 36) : 0;
+      const start = right ? app.renderer.root.findDescendantById("work-panel")!.x : 0;
       const y = lines.findIndex((line) => line.indexOf(text, start) >= 0), x = lines[y]?.indexOf(text, start) ?? -1;
       if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
       await app.mockMouse.click(x, y); await app.renderOnce();
@@ -53,22 +63,21 @@ async function mount(initial?: WorkViewPreferences, clock?: ManualClock) {
   };
 }
 
-test("Terminal viewport는 리사이즈해도 사이드바 구분선 하단까지 채우고 쉘을 다시 만들지 않는다", async () => {
+test("Terminal viewport는 상단 탭 없이 작업 패널을 채우고 리사이즈해도 쉘을 다시 만들지 않는다", async () => {
   // The real native terminal is resized through the attachment boundary, not restarted.
   const app = await mount();
   try {
-    app.leader("t"); await app.visible("Shell shell-1");
+    await app.createTerminal(); await app.visible("Shell shell-1");
     for (const [width, height] of [[120, 24], [60, 12], [79, 18], [80, 17], [120, 24]] as const) {
       app.resize(width, height); await app.renderOnce(); await app.renderOnce();
-      const sidebar = app.renderer.root.findDescendantById("workspace-sidebar")!;
       const viewport = app.renderer.root.findDescendantById("terminal-viewport")!;
       const terminal = app.renderer.root.findDescendantById("shell-terminal")!;
 
       // Neither panel padding nor a stale VT size may leave an unused bottom row.
-      const tabs = app.renderer.root.findDescendantById("work-view-tabs")!;
-      expect(viewport.y).toBe(tabs.y + tabs.height + 1); // Only the process-tab row remains.
-      expect(viewport.y + viewport.height).toBe(sidebar.y + sidebar.height);
-      expect(terminal.y + terminal.height).toBe(sidebar.y + sidebar.height);
+      const panel = app.renderer.root.findDescendantById("work-panel")!;
+      expect(viewport.y).toBe(panel.y + 1); // Only the process-tab row remains.
+      expect(viewport.y + viewport.height).toBe(panel.y + panel.height);
+      expect(terminal.y + terminal.height).toBe(panel.y + panel.height);
       expect(terminal.height).toBe(viewport.height);
       expect(app.renderer.currentFocusedRenderable).toBe(terminal);
     }
@@ -81,7 +90,7 @@ test("프로세스 탭 이름이 바뀌어도 terminal과 포커스·탭 인스�
   let process = "zsh";
   app.actions.titles = async (items) => ok(Object.fromEntries(items.map((item) => [item.id, process])));
   try {
-    app.leader("t"); await app.visible("zsh");
+    await app.createTerminal(); await app.visible("zsh");
     const terminal = app.renderer.root.findDescendantById("shell-terminal")!;
     const tab = app.renderer.root.findDescendantById("terminal-tab:shell-1")!;
     const detached = app.detaches.length;
@@ -103,8 +112,8 @@ test("터미널을 숨기면 프로세스 이름 조회를 취소하고 늦은 �
   let signal: AbortSignal | undefined;
   app.actions.titles = async (_items, value) => { signal = value; return pending.promise; };
   try {
-    app.leader("t"); await app.visible("Shell shell-1");
-    await app.click("Git", true);
+    await app.createTerminal(); await app.visible("Shell shell-1");
+    await app.showView("g");
     expect(signal?.aborted).toBe(true);
     pending.resolve(ok({ "shell-1": "late-process" })); await app.renderOnce();
     clock.advance(1000); await app.renderOnce();
@@ -122,7 +131,7 @@ test("이전 서비스의 Terminal 번호 접두사를 숨기고 쉘 프로세�
     return result;
   };
   try {
-    app.leader("t"); await app.visible("zsh");
+    await app.createTerminal(); await app.visible("zsh");
     expect(app.captureCharFrame()).not.toContain("Terminal 1");
     expect(app.captureCharFrame()).not.toContain(" · running");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
@@ -133,7 +142,7 @@ test("프로세스 이름 조회 실패는 명시적으로 알리지만 터미�
   const app = await mount();
   app.actions.titles = async () => err(new PtyError("PTY_UNAVAILABLE", "Process inspection denied."));
   try {
-    app.leader("t"); await app.visible("Shell shell-1");
+    await app.createTerminal(); await app.visible("Shell shell-1");
     expect(app.captureCharFrame()).toContain("Process names unavailable");
     app.mockInput.pressCtrlC();
     expect(app.inputs).toContain("03"); expect(app.closed).toEqual([]);
@@ -144,12 +153,12 @@ test("프로세스 이름 조회 실패는 명시적으로 알리지만 터미�
 test("Terminal은 명시적으로 여러 쉘을 만들고 워크트리별 목록과 마지막 선택을 복원한다", async () => {
   const app = await mount();
   try {
-    await app.click("Terminal", true); expect(app.created).toEqual([]);
+    await app.showView("t"); expect(app.created).toEqual([]);
     await app.click("+ New", true); await app.visible("Shell shell-1");
-    app.leader("t"); await app.visible("Shell shell-2");
+    app.leader("n"); await app.visible("Shell shell-2");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
     await app.click("Terminal 1", true); await app.visible("Shell shell-1");
-    await app.click(`${icons.folder} radian-ui`); await app.click("Terminal", true); await app.click("+ New", true); await app.visible("Shell shell-3");
+    await app.click(`${icons.folder} radian-ui`); await app.showView("t"); await app.click("+ New", true); await app.visible("Shell shell-3");
 
     await app.click(`${icons.folder} radian`); await app.visible("Shell shell-1");
 
@@ -159,10 +168,37 @@ test("Terminal은 명시적으로 여러 쉘을 만들고 워크트리별 목록
   } finally { await app.close(); }
 });
 
+test("숫자 단축키는 Terminal의 현재 워크트리 순서로만 선택하고 없는 탭을 생성하지 않는다", async () => {
+  const app = await mount();
+  try {
+    // Each view switch is navigation only; explicit creation supplies two selectable tabs.
+    await app.showView("t"); app.leader("9"); await app.renderOnce();
+    expect(app.created).toEqual([]);
+    app.leader("n"); await app.visible("Shell shell-1");
+    app.leader("n"); await app.visible("Shell shell-2");
+    const creations = [...app.created];
+
+    app.leader("1"); await app.visible("Shell shell-1");
+    expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-1");
+    const terminal = app.renderer.root.findDescendantById("shell-terminal");
+    app.leader("1"); await app.renderOnce();
+    expect(app.renderer.root.findDescendantById("shell-terminal")).toBe(terminal);
+    app.renderer.root.findDescendantById("footer-help")!.focus();
+    app.leader("2"); await app.visible("Shell shell-2");
+    app.leader("9"); await app.renderOnce();
+
+    // Numeric selection and returning to Terminal must not leak app bytes or recreate shells.
+    await app.showView("g"); await app.showView("t"); await app.visible("Shell shell-2");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
+    expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-2");
+    expect(app.created).toEqual(creations); expect(app.closed).toEqual([]); expect(app.inputs).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("활성 하위 탭 닫기는 다음·이전·빈 상태로 이동하며 마지막 탭을 자동 생성하지 않는다", async () => {
   const app = await mount();
   try {
-    app.leader("t"); await app.visible("Shell shell-1"); app.leader("t"); await app.visible("Shell shell-2"); app.leader("t"); await app.visible("Shell shell-3");
+    await app.createTerminal(); await app.visible("Shell shell-1"); app.leader("n"); await app.visible("Shell shell-2"); app.leader("n"); await app.visible("Shell shell-3");
     await app.click("Terminal 2", true); await app.visible("Shell shell-2");
     app.leader("x"); await app.visible("Shell shell-3");
     app.leader("x"); await app.visible("Shell shell-1");
@@ -178,9 +214,9 @@ test("쉘이 종료된 탭은 이웃 탭으로 이동하고 마지막 종료는 
   // 서버가 종료된 탭을 목록에서 제거하는 동안 현재 터미널 입력에 포커스가 있다.
   const app = await mount();
   try {
-    app.leader("t"); await app.visible("Shell shell-1");
-    app.leader("t"); await app.visible("Shell shell-2");
-    app.leader("t"); await app.visible("Shell shell-3");
+    await app.createTerminal(); await app.visible("Shell shell-1");
+    app.leader("n"); await app.visible("Shell shell-2");
+    app.leader("n"); await app.visible("Shell shell-3");
     await app.click("Terminal 2", true);
 
     // 가운데 탭의 자연 종료는 다음 이웃을, 마지막 탭의 종료는 이전 이웃을 고른다.
@@ -194,7 +230,7 @@ test("쉘이 종료된 탭은 이웃 탭으로 이동하고 마지막 종료는 
     expect(app.closed).toEqual([]);
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBeUndefined();
     expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).toContain("Enter/Space New terminal");
-    await app.click("Agent", true); await app.click("Terminal", true);
+    await app.showView("a"); await app.showView("t");
     expect(app.captureCharFrame()).toContain("No terminals");
     expect(app.created).toHaveLength(3);
   } finally { await app.close(); }
@@ -203,7 +239,7 @@ test("쉘이 종료된 탭은 이웃 탭으로 이동하고 마지막 종료는 
 test("Ctrl+C는 native 입력이고 leader는 앱 분리·탭 전환·로그 스크롤을 제어한다", async () => {
   const app = await mount();
   try {
-    app.leader("t"); await app.visible("Shell shell-1"); app.leader("t"); await app.visible("Shell shell-2");
+    await app.createTerminal(); await app.visible("Shell shell-1"); app.leader("n"); await app.visible("Shell shell-2");
     app.leader("["); await app.visible("Shell shell-1");
     app.mockInput.pressCtrlC();
     const page = app.renderer.root.findDescendantById("shell-terminal")!.height - 1;
@@ -220,8 +256,8 @@ test("Terminal 세션 탭은 포커스와 활성 선택을 배경으로 구분�
   // 실제 VT 연결은 fixture로 유지하면서 두 터미널의 선택·포커스를 따로 움직인다.
   const app = await mount();
   try {
-    app.leader("t"); await app.visible("Shell shell-1");
-    app.leader("t"); await app.visible("Shell shell-2"); await app.renderOnce();
+    await app.createTerminal(); await app.visible("Shell shell-1");
+    app.leader("n"); await app.visible("Shell shell-2"); await app.renderOnce();
     const first = app.renderer.root.findDescendantById("terminal-tab:shell-1")!.getChildren()[0]!;
     const second = app.renderer.root.findDescendantById("terminal-tab:shell-2")!.getChildren()[0]!;
     const cell = (tab: typeof first) => {
@@ -250,7 +286,8 @@ test("Terminal 세션 탭은 포커스와 활성 선택을 배경으로 구분�
 test("여러 하위 탭과 좁은 화면에서도 선택한 탭과 생성·닫기 버튼을 표시한다", async () => {
   const app = await mount();
   try {
-    for (let i = 1; i <= 6; i++) { app.leader("t"); await app.visible(`Shell shell-${i}`); }
+    await app.showView("t");
+    for (let i = 1; i <= 6; i++) { app.leader("n"); await app.visible(`Shell shell-${i}`); }
     await app.renderOnce();
     expect(app.captureCharFrame()).toContain("Terminal 6");
     const selectedTab = app.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text === "Terminal 6")!;
@@ -267,8 +304,8 @@ test("늦은 터미널 생성 결과는 다른 워크트리의 Git 화면이나 
   const create = app.actions.create;
   app.actions.create = async (tree, size) => { await ready.promise; return create(tree, size); };
   try {
-    app.leader("t"); await app.renderOnce();
-    await app.click(`${icons.folder} radian-ui`); await app.click("Git", true);
+    await app.createTerminal();
+    await app.click(`${icons.folder} radian-ui`); await app.showView("g");
     ready.resolve(ok("ready")); await Bun.sleep(0); await app.renderOnce();
 
     expect(app.selection.worktree?.id).toBe("demo:feature"); expect(app.captureCharFrame()).toContain("Git preview");

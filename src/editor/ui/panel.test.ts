@@ -11,18 +11,19 @@ const tree: Worktree = { id: "tree", path: "/fixture", name: "fixture", branch: 
 async function mount() {
   const app = await createTestRenderer({ width: 60, height: 16, kittyKeyboard: true });
   const inputs: string[] = [], notices: string[] = [];
+  const openSizes: { cols: number; rows: number }[] = [], sizes: { cols: number; rows: number }[] = [];
   const failures: ((error: unknown) => void)[] = [];
   const receivers: ((frame: EditorFrame) => void)[] = [];
   let attaches = 0, opens = 0, detaches = 0;
   const actions: EditorActions = {
     info: () => ({ id: "editor", worktreeId: tree.id, pid: 123, exited: false, exitCode: null }),
-    open: async () => { opens++; return ok("editor"); },
+    open: async (_id, size) => { opens++; openSizes.push(size); return ok("editor"); },
     attach: async (id, receive, failed) => {
       attaches++; failures.push(failed); receivers.push(receive); let revision = 0;
       const frame = (cols: number, rows: number): EditorFrame => ({ id, worktreeId: tree.id, pid: 123, exited: false, exitCode: null,
         cols, rows, revision: revision++, ansi: `\x1bcBUFFER-${id}` });
       receive(frame(80, 24));
-      return ok({ input: (bytes) => inputs.push(new TextDecoder().decode(bytes)), resize: (cols, rows) => receive(frame(cols, rows)),
+      return ok({ input: (bytes) => inputs.push(new TextDecoder().decode(bytes)), resize: (cols, rows) => { sizes.push({ cols, rows }); receive(frame(cols, rows)); },
         disconnect: async () => { detaches++; } });
     },
   };
@@ -33,11 +34,43 @@ async function mount() {
   app.renderer.root.add(panel.root);
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
   panel.show(tree, true); await render(); await render();
-  return { ...app, actions, panel, inputs, notices, failures, receivers, render,
+  return { ...app, actions, panel, inputs, notices, failures, receivers, render, openSizes, sizes,
     get attaches() { return attaches; }, get opens() { return opens; }, get detaches() { return detaches; },
     async close() { panel.dispose(); await app.dispose(); },
   };
 }
+
+test("Editor는 리사이즈 전후 사방 여백 없이 전체 패널을 사용하고 PTY에 같은 크기를 전달한다", async () => {
+  // Keep the native VT real and observe only the operating-system size boundary.
+  const app = await mount();
+  try {
+    const surface = app.panel.input;
+    for (const [width, height] of [[120, 24], [60, 12], [79, 18], [80, 17], [120, 24]] as const) {
+      app.resize(width, height); await app.render();
+
+      // No Radian-owned gutter may consume a cell on any edge of the editor.
+      expect(app.panel.input).toBe(surface);
+      expect(surface!.x).toBe(0); expect(surface!.y).toBe(0);
+      expect(surface!.width).toBe(width); expect(surface!.height).toBe(height);
+      expect(app.sizes.at(-1)).toEqual({ cols: width, rows: height });
+      expect(app.captureCharFrame().split("\n")[0]).toStartWith("BUFFER-editor");
+    }
+    expect(app.attaches).toBe(1); expect(app.opens).toBe(0);
+  } finally { await app.close(); }
+});
+
+test.each([[60, 12], [120, 24]])("명시적으로 Editor를 열 때도 전체 패널 크기 %dx%d를 요청한다", async (width, height) => {
+  const app = await mount();
+  try {
+    // Starting a missing editor must use the same full-size geometry as reattachment.
+    app.panel.hide(); app.actions.info = () => undefined;
+    app.resize(width, height); await app.render();
+    app.panel.show(tree, true); await app.render(); await app.render();
+
+    expect(app.openSizes).toEqual([{ cols: width, rows: height }]);
+    expect(app.panel.input?.width).toBe(width); expect(app.panel.input?.height).toBe(height);
+  } finally { await app.close(); }
+});
 
 test("캐시한 Editor 화면은 즉시 복원하지만 새 lease 수락 전의 입력은 전송하지 않는다", async () => {
   // The fake OS boundary holds reattachment while the native VT and key input remain real.
