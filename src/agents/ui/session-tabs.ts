@@ -102,8 +102,8 @@ export class SessionTabs {
         const title = new TextRenderable(this.renderer, { height: 1, minWidth: 1, maxWidth: 24, wrapMode: "none", selectable: false });
         const status = new StatusIndicator(this.renderer);
         const close = this.actions.button("×", () => { this.list.focus(); this.actions.close(session.id); }, "Close session");
-        close.id = `close-session:${session.id}`;
-        root.add(title); root.add(close); root.add(status.root); this.list.add(root);
+        close.id = `close-session:${session.id}`; close.paddingX = 0;
+        root.add(status.root); root.add(title); root.add(close); this.list.add(root);
         tab = { root, title, status }; this.tabs.set(session.id, tab);
       }
       this.setTitle(tab, session.name);
@@ -132,8 +132,8 @@ export class SessionTabs {
   }
   private close(): void { if (this.selected) this.actions.close(this.selected); }
   private setTitle(tab: Tab, name: string): void {
-    // Keep close/status cells visible even when a selected tab fills the viewport.
-    const width = Math.max(1, Math.min(24, this.list.width > 0 ? this.list.width - 9 : 24));
+    // Reserve both edge gutters, two status cells, two internal gaps, and the close glyph.
+    const width = Math.max(1, Math.min(24, this.list.width > 0 ? this.list.width - 7 : 24));
     tab.title.maxWidth = width; tab.title.content = tabLabel(name, width);
   }
   private resizeButtons = (): void => {

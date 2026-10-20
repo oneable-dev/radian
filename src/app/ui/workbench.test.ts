@@ -99,7 +99,7 @@ test("행의 닫기 액션은 부모 세션을 잘못 선택하지 않는다", a
     if (!close) throw new Error("Missing session tab close control");
 
     // Activate A1's visible close control, rather than selecting A1's tab.
-    await app.mockMouse.click(close.x + 1, close.y);
+    await app.mockMouse.click(close.x, close.y);
     await app.renderOnce();
 
     // Event propagation leaves the existing A2 selection unchanged.

@@ -3,8 +3,10 @@ import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
-import { icons } from "../../icons.ts";
+import { icons, spinnerFrames } from "../../icons.ts";
 import { ok } from "../../result.ts";
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 async function mount(actions: Partial<WorkbenchActions> = {}) {
   const clock = new ManualClock();
@@ -36,8 +38,16 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
   return { ...app, clock, selection, view, requests, saved, render, get,
     region(id: string) {
       const node = get(id);
-      return app.captureCharFrame().split("\n").slice(node.y, node.y + node.height)
-        .map((line) => line.slice(node.x, node.x + node.width)).join("\n");
+      return app.captureCharFrame().split("\n").slice(node.y, node.y + node.height).map((line) => {
+        // Native geometry uses cells, while frame strings contain variable-width graphemes.
+        let text = "", column = 0;
+        for (const { segment } of graphemes.segment(line)) {
+          const start = column; column += Bun.stringWidth(segment);
+          if (start >= node.x && column <= node.x + node.width) text += segment;
+          if (column >= node.x + node.width) break;
+        }
+        return text;
+      }).join("\n");
     },
     async click(label: string) {
       const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes(label));
@@ -112,12 +122,90 @@ test("Agents 세션 탭의 h/l 전환은 각 초안을 보존하고 프롬프트
   } finally { await app.close(); }
 });
 
+test("모든 세션 상태는 왼쪽 한 칸 패딩 다음에 아이콘을 표시하고 닫기 버튼 뒤에도 한 칸을 남긴다", async () => {
+  // Working, completed and failed sessions must align despite using different glyphs.
+  const app = await mount();
+  const ordered = (id: string, title: string, glyphs: readonly string[]) => {
+    const text = app.region(id), position = text.indexOf(title);
+    expect(position).toBeGreaterThanOrEqual(0);
+    expect(text[0]).toBe(" ");
+    expect(glyphs).toContain(text[1]!);
+    expect(glyphs).toContain(text.slice(0, position).trim());
+    expect(text.slice(position + title.length)).toBe(" × ");
+  };
+  try {
+    // Initial rendering and tab focus use the same edge gutters and leading status cell.
+    for (const focused of [false, true]) {
+      if (focused) { app.get("agent-session-list").focus(); await app.render(); }
+      ordered("session:demo:main:a1", "Alpha", spinnerFrames);
+      ordered("session:demo:main:a2", "Beta", [icons.pass]);
+      ordered("session:demo:main:a3", "Gamma", [icons.error]);
+    }
+
+    // An unreported session keeps the same alignment after a worktree switch.
+    await app.click(`${icons.folder} radian-ui`);
+    ordered("session:demo:feature:b1", "Alpha", [icons.unknown]);
+    expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("세션 탭은 양 끝에 한 칸 패딩을 두고 내부와 탭 사이에도 한 칸 간격을 유지한다", async () => {
+  // Edge padding belongs to each tab, independently of its selection or execution status.
+  const app = await mount();
+  try {
+    // Native cell positions include both edge gutters without enlarging the close button.
+    for (const id of ["a1", "a2", "a3"]) {
+      const tab = app.get(`session:demo:main:${id}`), close = app.get(`close-session:${id}`);
+      const [status, title] = tab.getChildren();
+      expect(status!.x).toBe(tab.x + 1);
+      expect(title!.x).toBe(status!.x + status!.width + 1);
+      expect(close.x).toBe(title!.x + title!.width + 1);
+      expect(close.width).toBe(1);
+      expect(close.x + close.width).toBe(tab.x + tab.width - 1);
+      expect(app.region(tab.id).endsWith("× ")).toBe(true);
+    }
+    const first = app.get("session:demo:main:a1"), second = app.get("session:demo:main:a2");
+    expect(second.x).toBe(first.x + first.width + 1);
+    expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each([["완료", "complete", icons.pass], ["실패", "failure", icons.error], ["미확정", null, icons.unknown]] as const)(
+  "실행이 %s 상태로 바뀌어도 아이콘 위치·패딩을 유지하고 스피너만 최소 시간 뒤에 숨긴다", async (_label, status, glyph) => {
+    // A short run settles before the spinner's 500 ms minimum interval has elapsed.
+    const app = await mount();
+    try {
+      const tab = app.get("session:demo:main:a1"), close = app.get("close-session:a1"), title = tab.getChildren()[1]!;
+      const geometry = [tab.x, tab.width, title.x, close.x];
+      app.clock.advance(120); await app.render();
+      expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[1])).toBe(true);
+
+      // The settled outcome takes the leading cell immediately; its spinner tail uses the next cell.
+      app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
+        sessions: tree.sessions.map((session) => session.id === "a1" ? { ...session, status, subagents: [] } : session),
+      })) })));
+      await app.render();
+      expect(app.region(tab.id)[1]).toBe(glyph);
+      expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[2])).toBe(true);
+      app.clock.advance(379); await app.render();
+      expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[2])).toBe(true);
+      app.clock.advance(1); await app.render();
+
+      // Hiding the tail never shifts the outcome, title, close control or one-cell outer gutters.
+      expect(app.region(tab.id)[1]).toBe(glyph); expect(app.region(tab.id)[2]).toBe(" ");
+      expect(app.region(tab.id).startsWith(" ")).toBe(true); expect(app.region(tab.id).endsWith("× ")).toBe(true);
+      expect([tab.x, tab.width, title.x, close.x]).toEqual(geometry);
+      expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
+    } finally { await app.close(); }
+  },
+);
+
 test("비선택 세션 탭의 닫기 버튼은 현재 세션과 초안을 바꾸지 않는다", async () => {
   // Closing A2 must not first activate its tab or clear A1's text.
   const app = await mount();
   try {
     const close = app.get("close-session:a2");
-    await app.mockMouse.click(close.x + 1, close.y); await app.render();
+    await app.mockMouse.click(close.x, close.y); await app.render();
 
     expect(app.selection.sessionId).toBe("a1");
     expect(app.selection.worktree?.sessions.map((session) => session.id)).toEqual(["a1", "a3"]);
@@ -208,7 +296,12 @@ test("좁은 세션 탭은 Unicode 이름을 자르더라도 닫기와 상태 �
       sessions: tree.sessions.map((session) => session.id === "a1" ? { ...session, name: "연결 👩‍💻 e\u0301 긴 세션 이름" } : session),
     })) })));
     app.resize(60, 12); await app.render();
-    expect(app.get("session:demo:main:a1").width).toBeLessThanOrEqual(app.get("agent-session-list").width);
+    const tab = app.get("session:demo:main:a1"), close = app.get("close-session:a1");
+    expect(tab.width).toBeLessThanOrEqual(app.get("agent-session-list").width);
+    expect(app.region(tab.id).startsWith(" ")).toBe(true);
+    expect(app.region(tab.id).endsWith("× ")).toBe(true);
+    expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[1])).toBe(true);
+    expect(close.x + close.width).toBe(tab.x + tab.width - 1);
     expect(app.captureCharFrame()).toContain("…");
     expect(app.captureCharFrame()).not.toContain("\uFFFD");
     expect(app.selection.sessionId).toBe("a1");

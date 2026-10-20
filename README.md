@@ -959,7 +959,9 @@ working/failure summary so background activity remains visible without nested ag
 Session tabs aggregate the main agent and subagents: any failure wins, otherwise any working
 agent keeps the session working, and completion requires every agent to have completed.
 Working uses the shared animated spinner; final outcomes appear immediately in a fixed-width
-badge, independently of the spinner's minimum-visible tail. Hidden views cancel their animations.
+badge, independently of the spinner's minimum-visible tail. Each session tab has one cell of padding
+at both ends. Working and settled status glyphs share the leading badge cell; a remaining spinner tail
+uses the second cell without shifting the title or close control. Hidden views cancel their animations.
 Selection and focus do not change execution status.
 
 The work-status row shows the selected session's run state and its subagent counts at the right

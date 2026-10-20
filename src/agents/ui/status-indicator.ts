@@ -4,8 +4,8 @@ import { icons } from "../../icons.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
 
-// Reserve both cells even during the spinner's minimum-visible tail. The final
-// outcome is shown immediately, independently of the animation's lifetime.
+// Keep the primary status in the leading cell. A settled outcome uses the same
+// position immediately, with the spinner's minimum-visible tail in the second cell.
 export class StatusIndicator {
   readonly root: BoxRenderable;
   private readonly spinner: LoadingSpinner;
@@ -29,6 +29,7 @@ export class StatusIndicator {
     if (this.root.isDestroyed) return;
     const changed = status !== this.status || visible !== this.visible;
     this.status = status; this.visible = visible;
+    this.root.flexDirection = status === "working" ? "row" : "row-reverse";
     if (!visible) this.spinner.cancel();
     else if (changed && status === "working") this.spinner.start();
     else if (status !== "working") this.spinner.stop();
