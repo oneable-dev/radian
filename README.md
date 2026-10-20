@@ -337,11 +337,12 @@ starts directly with its content. Tools use inline invocations such as `[read] p
 folded items show an inline `(Ctrl+o to expand)` hint using the actual configured key. Agent replies
 and Thinking have no tinted background, border or added indentation. Thinking uses italic text in
 a theme-adaptive neutral gray, independent of accent hues or colored `muted` overrides.
-User, tool and notice blocks retain subtle host-palette tints. The transcript's parent column owns a
-one-row gap between visible sections, with no per-section bottom margin or trailing outer gap.
-Every structured section also has one row of internal padding above and below its content,
-including folded tools and single-line skill labels. These symmetric gutters remain on resize;
-legacy unstructured output keeps its existing spacing.
+User, tool and notice blocks retain subtle host-palette tints and one row of internal padding above
+and below their content, including folded tools and single-line skill labels. Plain Agent replies
+and Thinking have no internal vertical padding. The transcript's parent column owns the one-row gap
+between visible section surfaces and one-row top/bottom edge gutters, including below the final
+Context compacted card. These gutters remain on resize; legacy unstructured output keeps its
+existing spacing.
 
 Agent answers and Thinking use OpenTUI's `MarkdownRenderable` for headings, emphasis, links,
 lists, fenced code and tables. Tool commands/results, user messages and explicit skill names remain

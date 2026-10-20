@@ -10,7 +10,11 @@ import { ok } from "../../result.ts";
 async function mount(section: TranscriptSection | undefined, additional: readonly TranscriptSection[] = []) {
   let current: readonly TranscriptSection[] | undefined = section ? [section, ...additional] : undefined;
   const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true });
-  const selection = new WorkspaceSelection(demoWorkspace()), copies: string[] = [], prompts: string[] = [];
+  // Real idle sessions have no owned-subagent row to mask a missing transcript-to-composer gutter.
+  const workspace = demoWorkspace().map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
+    sessions: tree.sessions.map((session) => ({ ...session, subagents: [] })),
+  })) }));
+  const selection = new WorkspaceSelection(workspace), copies: string[] = [], prompts: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {}, onCloseSession: () => {}, initialDrafts: { a1: "Keep my draft" },
     onPrompt: (_id, text) => { prompts.push(text); return ok(undefined); },
@@ -30,11 +34,11 @@ async function mount(section: TranscriptSection | undefined, additional: readonl
   };
 }
 
-function expectVerticalInsets(card: BoxRenderable): void {
+function expectVerticalInsets(card: BoxRenderable, inset = 1): void {
   const children = card.getChildren().filter((child) => child.visible);
   const first = children[0]!, last = children.at(-1)!;
-  expect(first.y - card.y).toBe(1);
-  expect(card.y + card.height - last.y - last.height).toBe(1);
+  expect(first.y - card.y).toBe(inset);
+  expect(card.y + card.height - last.y - last.height).toBe(inset);
 }
 
 const sections: TranscriptSection[] = [
@@ -46,7 +50,43 @@ const sections: TranscriptSection[] = [
   { id: "skill", kind: "notice", title: "Skill", text: "review-code", skillName: "review-code", status: "complete" },
 ];
 
-test.each([120, 60])("너비 %i에서 섹션 간격은 부모 gap 한 줄이며 처음과 끝에는 외부 여백이 없다", async (width) => {
+test.each([120, 60])("너비 %i에서 도구·답변·압축 안내·프롬프트 사이에 보이는 간격은 모두 한 줄이다", async (width) => {
+  // A long conversation puts the final folded compaction card at the actual viewport bottom.
+  const history: TranscriptSection[] = [
+    { id: "history", kind: "assistant", title: "Agent", text: "EARLIER_CONTENT\n".repeat(40), status: "complete" },
+    { id: "request", kind: "user", title: "You", text: "Commit and push", status: "complete" },
+    { id: "push", kind: "tool", title: "bash", command: "git push origin main", text: "PUSH_RESULT", status: "complete" },
+    { id: "answer", kind: "assistant", title: "Agent", text: "PUSH_COMPLETED\n\n- Commit details\n\nChecks passed.", status: "complete",
+      completion: { startedAt: 1_000_000, completedAt: 1_090_000, durationMs: 90_000, outcome: "complete" } },
+    { id: "compact", kind: "notice", title: "Context compacted", text: "COMPACT_SUMMARY", status: "complete" },
+  ];
+  const app = await mount(history[0], history.slice(1));
+  const expectVisibleGaps = () => {
+    const [, , tool, answer, compact] = app.cards();
+    const content = answer!.getChildren().filter((child) => child.visible);
+    const first = content[0]!, last = content.at(-1)!;
+    const composer = app.renderer.root.findDescendantById("agent-composer")!;
+    // Check the visible text/surface boundaries, not only boxes with invisible internal padding.
+    expect({ toolToAnswer: first.y - tool!.y - tool!.height, answerToCompact: compact!.y - last.y - last.height,
+      compactToComposer: composer.y - compact!.y - compact!.height }).toEqual({ toolToAnswer: 1, answerToCompact: 1, compactToComposer: 1 });
+    expect(app.captureCharFrame().split("\n")[composer.y - 1]!.slice(app.scroll.viewport.x, app.scroll.viewport.x + app.scroll.viewport.width).trim()).toBe("");
+  };
+  try {
+    app.resize(width, 30); await app.render(); expectVisibleGaps();
+    expect(app.captureCharFrame()).not.toContain("COMPACT_SUMMARY");
+    // Expanding, folding and resizing the last notice must retain the bottom gutter while following.
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("END"); app.mockInput.pressKey("o", { ctrl: true });
+    await app.render(); expectVisibleGaps(); expect(app.captureCharFrame()).toContain("COMPACT_SUMMARY");
+    app.resize(width, 24); await app.render(); expectVisibleGaps();
+    app.mockInput.pressKey("o", { ctrl: true }); await app.render(); expectVisibleGaps();
+    // A compaction notice arriving after an already-rendered answer uses the same final gutter.
+    await app.update(history.slice(0, -1)); await app.update(history); expectVisibleGaps();
+    expect(app.captureCharFrame()).not.toContain("COMPACT_SUMMARY");
+    expect(app.view.promptDrafts.a1).toBe("Keep my draft"); expect(app.prompts).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each([120, 60])("너비 %i에서 부모는 섹션 사이와 목록 위아래에 한 줄 간격을 유지한다", async (width) => {
   // Different section types share one spacing owner, including initially folded images and tools.
   const mixed: readonly TranscriptSection[] = [...sections, { id: "image", kind: "notice", title: "read", text: "clipboard-1.png", status: "complete",
     image: { id: "a".repeat(64), name: "clipboard-1.png", mimeType: "image/png", byteLength: 80 } }];
@@ -54,13 +94,14 @@ test.each([120, 60])("너비 %i에서 섹션 간격은 부모 gap 한 줄이며 
   const expectGaps = () => {
     const cards = app.cards();
     expect(cards).toHaveLength(mixed.length);
-    expect(cards[0]!.y - app.scroll.content.y).toBe(0);
+    expect(cards[0]!.y - app.scroll.content.y).toBe(1);
+    const insets = [1, 0, 0, 1, 1, 1, 1];
     for (const [index, card] of cards.entries()) {
-      expectVerticalInsets(card);
+      expectVerticalInsets(card, insets[index]);
       const next = cards[index + 1]; if (next) expect(next.y - card.y - card.height).toBe(1);
     }
     const last = cards.at(-1)!;
-    expect(app.scroll.scrollHeight - (last.y + last.height - app.scroll.content.y)).toBe(0);
+    expect(app.scroll.scrollHeight - (last.y + last.height - app.scroll.content.y)).toBe(1);
   };
   try {
     app.resize(width, 30); await app.render(); expectGaps();
@@ -70,7 +111,7 @@ test.each([120, 60])("너비 %i에서 섹션 간격은 부모 gap 한 줄이며 
     app.resize(width, 18); await app.render(); expectGaps();
     app.mockInput.pressKey("z"); app.mockInput.pressKey("m"); await app.render(); expectGaps();
 
-    // Hidden transcript cards must not add gap around the single help surface.
+    // Help is not a transcript section and must not lose scarce viewport rows to its gutters.
     app.mockInput.pressKey("F1"); await app.render();
     const help = app.scroll.content.getChildren().find((node) => node.visible)!;
     expect(help.y).toBe(app.scroll.content.y); expect(app.scroll.scrollHeight).toBe(help.height);
@@ -94,21 +135,23 @@ test("평문·구조화 출력 전환에도 gap과 섹션 여백을 중복 적�
   } finally { await app.close(); }
 });
 
-test.each(sections)("$kind 섹션은 작은 화면에서도 위아래 한 줄 내부 여백을 동일하게 유지한다: $id", async (section) => {
-  // Every section type, including compact tool/skill rows, uses the same vertical card rhythm.
+test.each(sections)("$kind 섹션은 작은 화면에서도 색상 카드와 평문의 여백 규칙을 유지한다: $id", async (section) => {
+  // Tinted surfaces keep their internal gutters; plain prose relies on the parent's gutters instead.
+  const inset = section.kind === "assistant" || section.kind === "thinking" ? 0 : 1;
   const app = await mount(section);
   try {
     for (const [width, height] of [[120, 30], [60, 12], [120, 30]] as const) {
       app.resize(width, height); await app.render();
 
-      // Resize may scroll the card, but must not remove either internal gutter or overlap the footer.
-      expectVerticalInsets(app.card);
-      expect(app.card.height).toBe(section.id === "notice" ? 5 : 3);
+      // Resize may scroll the card, but must not double the prose gutters or overlap the footer.
+      expectVerticalInsets(app.card, inset);
+      expect(app.card.height).toBe(inset ? section.id === "notice" ? 5 : 3 : 1);
+      expect(app.card.y - app.scroll.content.y).toBe(1);
       expect(app.captureCharFrame().split("\n")[height - 1]).toContain("Radian");
       expect(app.view.promptDrafts.a1).toBe("Keep my draft");
     }
     const frame = app.captureCharFrame().split("\n");
-    for (const y of [app.card.y, app.card.y + app.card.height - 1]) {
+    for (const y of inset ? [app.card.y, app.card.y + app.card.height - 1] : []) {
       expect(frame[y]!.slice(app.card.x, app.card.x + app.card.width).trim()).toBe("");
     }
     expect(app.prompts).toEqual([]);
@@ -174,6 +217,7 @@ test("섹션이 없는 기존 평문 출력은 추가 카드 여백 없이 그�
     const body = app.card.getChildren().find((child) => child.visible)!;
     expect(body.y).toBe(app.card.y);
     expect(app.card.height).toBe(body.height);
+    expect(app.card.y).toBe(app.scroll.content.y);
     expect(app.captureCharFrame()).toContain("LEGACY_OUTPUT");
   } finally { await app.close(); }
 });

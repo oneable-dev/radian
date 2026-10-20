@@ -176,8 +176,6 @@ export class TranscriptPanel {
     if (!switched && changed && !this.help.visible && !this.state?.follow && this.pending === null) this.pending = this.viewportAnchor();
     this.sessionId = id; this.visible = visible;
     this.legacy = sections === undefined;
-    // The content column owns separation; section padding stays inside each card.
-    this.scroll.content.gap = this.legacy ? 0 : transcriptSpacing().sectionGap;
     if (id && !this.views[id]) {
       this.views[id] = emptyTranscriptView();
       if (Object.hasOwn(this.positions, id) || this.options.initialPosition === "start") this.views[id]!.follow = false;
@@ -356,7 +354,7 @@ export class TranscriptPanel {
     const background = this.legacy ? colors.panel : transcriptBackground(section.image ? "tool" : section.kind, colors);
     row.box.backgroundColor = background; row.box.border = false;
     row.box.paddingX = plain ? 0 : 1;
-    row.box.paddingY = this.legacy ? 0 : spacing.verticalInset;
+    row.box.paddingY = plain ? 0 : spacing.verticalInset;
     row.heading.visible = !skill && (folded || !this.legacy && (section.kind === "tool" || section.kind === "notice"));
     const markdownKind = !this.legacy && !skill && (section.kind === "assistant" || section.kind === "thinking") ? section.kind : undefined;
     if (row.markdownKind !== markdownKind) {
@@ -452,6 +450,10 @@ export class TranscriptPanel {
   };
   private paint(): void {
     this.empty.visible = !this.order.length && !this.help.visible;
+    // Only tinted cards keep internal padding; plain prose uses the column's separation.
+    const spacing = transcriptSpacing();
+    this.scroll.content.gap = this.legacy ? 0 : spacing.sectionGap;
+    this.scroll.content.paddingY = !this.legacy && !this.help.visible && this.order.length ? spacing.sectionGap : 0;
     for (const row of this.rows.values()) this.paintRow(row);
     this.paintBottomButton();
   }
@@ -750,7 +752,8 @@ export class TranscriptPanel {
         const top = this.scroll.viewport.y;
         // Keep the reader cursor and selected section above the floating control and its blank gutter.
         const bottom = top + this.scroll.viewport.height - 1 - (this.bottomButton.visible ? this.bottomButton.height : 0);
-        const end = !reading && row.box.height <= bottom - top + 1 ? row.box.y + row.box.height - 1 : y;
+        const gutter = row.section.id === this.order.at(-1) && !this.legacy ? transcriptSpacing().sectionGap : 0;
+        const end = !reading && row.box.height + gutter <= bottom - top + 1 ? row.box.y + row.box.height - 1 + gutter : y;
         if (y < top) this.scroll.scrollBy(y - top);
         else if (end > bottom) this.scroll.scrollBy(end - bottom);
       }
