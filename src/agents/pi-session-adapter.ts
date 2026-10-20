@@ -109,6 +109,7 @@ export class PiSessionExecutor implements SessionExecutor {
   private closing = false;
   private disposed = false;
   private controlling = false;
+  private compacting = false;
 
   constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode, private readonly imageLoader = loadPromptImages, private readonly compaction = new ManualCompaction()) {
     this.status = this.finalStatus(false);
@@ -135,6 +136,7 @@ export class PiSessionExecutor implements SessionExecutor {
     if (this.partial) messages.push(`Agent (streaming): ${this.partial}`);
     messages.push(...this.activeTools.values());
     return { conversationId: this.savedSessionId, status: this.status, output: messages.join("\n\n").slice(-12000), error: this.error,
+      ...(this.status === "working" && this.compacting ? { activity: "compacting" as const } : {}),
       sections: this.transcript.sections, telemetry: this.telemetry.read() };
   }
 
@@ -161,7 +163,7 @@ export class PiSessionExecutor implements SessionExecutor {
       this.status = "failure"; this.error = "Unexpected compaction failure. Inspect runtime.log.";
       if (accepted) this.transcript.notice("Compaction failed", this.error, "error");
       throw error;
-    }).finally(() => { this.controlling = false; this.runs.delete(task); this.emit(); });
+    }).finally(() => { this.compacting = false; this.controlling = false; this.runs.delete(task); this.emit(); });
     this.runs.add(task); return task;
   }
 
@@ -246,8 +248,12 @@ export class PiSessionExecutor implements SessionExecutor {
     const completion = this.transcript.handle(event);
     switch (event.type) {
       case "agent_start": this.runRevision++; this.status = "working"; break;
-      case "auto_retry_start": case "compaction_start":
-        this.status = "working";
+      case "auto_retry_start": this.status = "working"; break;
+      case "compaction_start": this.compacting = true; this.status = "working"; break;
+      case "compaction_end":
+        // Manual control restores its settled status in compact() before clearing
+        // this activity; otherwise an end-event snapshot flashes the old request.
+        if (!this.controlling) this.compacting = false;
         break;
       case "message_update":
         if (event.message.role === "assistant") this.partial = event.message.content.filter((part) => part.type === "text").map((part) => part.text).join("");

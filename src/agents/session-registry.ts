@@ -11,7 +11,7 @@ import { filterCompletions, type CompletionItem, type CompletionQuery, type Comp
 import { completeFiles } from "./completion-files.ts";
 import { sessionControlCommands } from "./session-controls.ts";
 
-export type ExecutionState = { readonly conversationId?: string; readonly status: AgentStatus | null; readonly output: string; readonly error: string | null;
+export type ExecutionState = { readonly conversationId?: string; readonly status: AgentStatus | null; readonly activity?: "compacting"; readonly output: string; readonly error: string | null;
   readonly sections?: readonly TranscriptSection[]; readonly telemetry?: SessionTelemetry };
 export type SessionExecutor = {
   readonly savedSessionId: string;

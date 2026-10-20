@@ -607,6 +607,78 @@ test("SDK가 보고한 최종 provider 실패는 AgentRunError Result이며 취�
   } finally { await app.cleanup(); }
 });
 
+test("자동 압축은 전용 활동을 알리고 압축 종료 시 일반 실행으로 복귀한 뒤 한 번만 완료한다", async () => {
+  // 낮은 압축 임계값으로 실제 SDK의 threshold 압축을 유도하고 요약 provider만 잠시 멈춘다.
+  const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const app = await sdkFixture(false, (options) => ({ ...options,
+    settings: { compaction: { enabled: true, keepRecentTokens: 0, reserveTokens: 199900 } },
+    streamFn: async (model, context, request) => {
+      const first = context.messages[0];
+      const system = first?.role === "system" ? typeof first.content === "string" ? first.content : first.content.map((part) => part.text).join("") : "";
+      if (system.startsWith("You are a context summarization assistant.")) { started.resolve(); await release.promise; }
+      return options.streamFn!(model, context, request);
+    },
+  }));
+  let unsubscribe = () => {};
+  const resumed: boolean[] = [];
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    const pending = app.registry.prompt(id, "Preserve the implementation plan. ".repeat(500));
+    await Promise.race([started.promise, pending.then((result) => { expectOk(result); throw new Error("SDK run ended without entering compaction."); })]);
+    expect(app.registry.details(id)).toMatchObject({ status: "working", activity: "compacting" });
+    unsubscribe = app.registry.subscribe(() => { const state = app.registry.details(id); resumed.push(state?.status === "working" && !("activity" in state)); });
+
+    // SDK의 compaction_end 시점에는 isCompacting이 아직 true일 수 있어도 UI 활동은 끝나야 한다.
+    release.resolve(); expectOk(await pending);
+
+    expect(resumed).toContain(true); expect(app.registry.details(id)).not.toHaveProperty("activity");
+    expect(app.registry.details(id)?.status).toBe("complete");
+    expect(app.registry.details(id)?.sections?.filter((section) => section.completion)).toHaveLength(1);
+  } finally { release.resolve(); unsubscribe(); await app.cleanup(); }
+});
+
+test.each(["complete", "error"] as const)("수동 압축의 전체 수명 동안 전용 활동을 유지하고 %s 종료 후 제거한다", async (outcome) => {
+  // 실제 SDK 요약 스트림만 멈춰 두어 압축 중 상태를 확정적으로 관찰한다.
+  const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  let summarizing = false;
+  const app = await sdkFixture(false, (options) => ({ ...options,
+    settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
+    streamFn: async (model, context, request) => {
+      if (!summarizing) return options.streamFn!(model, context, request);
+      started.resolve(); await release.promise;
+      const stream = createAssistantMessageEventStream(), message = fixtureMessage(model.api, model.provider, model.id);
+      message.content = [{ type: "text", text: "Retain the fixture implementation plan" }];
+      if (outcome === "complete") { message.stopReason = "stop"; stream.push({ type: "done", reason: "stop", message }); }
+      else {
+        message.stopReason = "error"; message.errorMessage = "Offline compaction fixture";
+        stream.push({ type: "error", reason: message.stopReason, error: message });
+      }
+      stream.end(); return stream;
+    },
+  }));
+  const observed: string[] = [];
+  let unsubscribe = () => {};
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    expectOk(await app.registry.prompt(id, "first request")); expectOk(await app.registry.prompt(id, "second request"));
+    const before = app.registry.details(id)!;
+    unsubscribe = app.registry.subscribe(() => { const state = app.registry.details(id); if (state?.status === "working") observed.push("activity" in state ? String(state.activity) : "missing"); });
+    summarizing = true;
+
+    // 명령 수락부터 SDK의 종료 이벤트까지 이전 요청의 Working on 상태로 되돌아가면 안 된다.
+    const pending = app.registry.compact(id);
+    await Promise.race([started.promise, pending.then((result) => { expectOk(result); throw new Error("SDK compaction ended before the summary provider started."); })]);
+    expect(app.registry.details(id)).toMatchObject({ status: "working", activity: "compacting", conversationId: before.conversationId });
+    release.resolve(); const result = await pending;
+
+    if (outcome === "complete") expectOk(result);
+    else expect(expectError(result).code).toBe("AGENT_FAILED");
+    expect(observed.length).toBeGreaterThan(0); expect(observed.every((activity) => activity === "compacting")).toBe(true);
+    expect(app.registry.details(id)).not.toHaveProperty("activity"); expect(app.registry.details(id)?.status).toBe(before.status);
+    expect(app.registry.details(id)?.sections?.slice(0, before.sections!.length)).toEqual([...before.sections!]);
+  } finally { release.resolve(); unsubscribe(); await app.cleanup(); }
+});
+
 test("수동 압축은 실제 SDK 요약을 저장하면서 대화·요청 ID와 같은 탭을 보존한다", async () => {
   // A small retained tail makes this offline conversation eligible without a paid model call.
   const requests: string[] = [];

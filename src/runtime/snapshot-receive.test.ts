@@ -23,6 +23,19 @@ test("요청 요약이 없는 이전 snapshot과 실제 첨부 요약이 있는 
   expect(expectError(parseSnapshot({ ...snapshot, details: { session: { ...snapshot.details.session, sections: [{ ...legacy, request: { ...request, images: -1 } }] } } })).code).toBe("PROTOCOL_ERROR");
 });
 
+test("압축 활동 메타데이터는 이전 snapshot과 호환되고 알 수 없는 활동은 거부한다", () => {
+  // 기존 서비스에는 압축 활동 필드가 없으므로 필수 필드로 만들지 않는다.
+  const legacy = { ...state(), details: { session: { status: "working", output: "", error: null } } };
+  expect(expectOk(parseSnapshot(legacy)).details.session).not.toHaveProperty("activity");
+
+  // 새 서비스가 실제 압축 수명을 전달하면 IPC 파서가 이를 보존한다.
+  const current = { ...legacy, details: { session: { ...legacy.details.session, activity: "compacting" } } };
+  expect(expectOk(parseSnapshot(current)).details.session).toHaveProperty("activity", "compacting");
+
+  // 잘못된 문자열은 UI가 임의로 추측하지 않도록 프로토콜 경계에서 거부한다.
+  expect(expectError(parseSnapshot({ ...current, details: { session: { ...current.details.session, activity: "unknown" } } })).code).toBe("PROTOCOL_ERROR");
+});
+
 test("최초 HTTP snapshot도 여러 세션의 8MiB 이상 데이터를 온전히 읽는다",async()=>{
   const large:RuntimeSnapshot={...state(),details:Object.fromEntries(Array.from({length:4},(_,index)=>[`session-${index}`,{
     status:"complete",output:"",error:null,sections:[{id:`section-${index}`,kind:"assistant",title:"Agent",text:"x".repeat(2300000),status:"complete"}],

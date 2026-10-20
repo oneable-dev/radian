@@ -9,6 +9,7 @@ import { formatRequestCaption, requestForSection } from "./request-caption.ts";
 type Display = { label: string; detail: string; color: "accent" | "error" | "warning" | "muted"; request?: RequestSummary };
 
 function display(state: ExecutionState | null | undefined): Display {
+  if (state?.status === "working" && state.activity === "compacting") return { label: "Compacting context…", detail: "", color: "accent" };
   const sections = state?.sections ?? [];
   const index = sections.findLastIndex((section) => section.kind === "user" || section.skillName !== undefined);
   const section = index >= 0 ? sections[index] : undefined;

@@ -261,9 +261,11 @@ gets an explicit upgrade notice and is never automatically restarted.
 An upgraded runtime supplies separate **You**, **Agent**, **Thinking** and **tool execution** sections.
 Tool calls and results are joined by call ID, not tool name; unknown tools and MCP bridges use the
 same generic interactions. MCP-specific transcript actions are not included.
-Tool details start folded; user/Agent text starts expanded. Thinking is always visible prose with
-no label or fold controls; old Thinking fold preferences are ignored and cleared. Other nonempty
-sections can be folded manually. Error summaries stay visible outside the folded body, and folding never deletes text.
+Tool details and `Context compacted` summaries start folded; user/Agent text starts expanded.
+Click a compaction summary's heading or use the configured fold key (`Ctrl+o` or `z a` by default)
+to expand/collapse it. Explicit fold choices are preserved in transcript view preferences.
+Thinking is always visible prose with no label or fold controls; old Thinking fold preferences
+are ignored and cleared. Other nonempty sections can be folded manually. Error summaries stay visible outside the folded body, and folding never deletes text.
 Image attachments have a text placeholder; image rendering is not part of this reader.
 Empty conversations show a subdued, centered logo without introductory text or an idle `Ready` row.
 The temporary artwork is isolated in `src/ui/radian-logo.ts` so the finalized logo can replace it
@@ -274,6 +276,10 @@ A passive work-status row above the prompt shows a shared spinner and `Working o
 the latest request actually present in the selected conversation. Whitespace collapses and long
 text is clipped on grapheme/cell boundaries. Drafts, rejected input and handled commands never
 replace that request. Without request metadata it shows `Working…`, not a guessed title.
+Manual and automatic context compaction instead show `Compacting context…` with the same animated
+spinner and no previous-request caption. Automatic work resuming after compaction restores its
+current request. Compaction-specific progress requires an updated service; older services omit this
+optional activity metadata.
 Normal completion removes this request banner and puts the request excerpt in the answer's completion
 footer instead. The empty status row collapses once its spinner tail finishes, unless owned-subagent
 or paste feedback still needs it. Cancellation, unconfirmed stops and failures remain explicit as
@@ -426,8 +432,10 @@ The Agent prompt completes and executes these host commands instead of sending t
   A preparation failure leaves the previous execution intact. Extension cancellation and session
   lifecycle hooks are respected. The **`session.new`** command (`n` with the session strip focused) still adds another tab.
 - **`/compact [instructions]`** invokes Pi's manual context summarization for the current conversation.
-  It may make summarization model calls and consume quota. It keeps the tab, saved conversation,
-  request shown by the work-status row and full displayed transcript; only the model context is compacted. The session
+  It may make summarization model calls and consume quota. It keeps the tab, saved conversation
+  and full displayed transcript; only the model context is compacted. During compaction the work-status
+  row shows `Compacting context…` and a spinner instead of the previous request. On success the progress
+  label disappears and the resulting `Context compacted` section starts folded. The session
   must be idle: running/queued input, compaction and owned work cause an explicit busy rejection,
   without interruption. Empty or too-small context is rejected without a model request.
 

@@ -27,6 +27,9 @@ type Row = { section: TranscriptSection; request: RequestSummary | undefined; bo
   header: TranscriptBody; error: TextRenderable; bodyRow: BoxRenderable; skillTag: TextRenderable; body: TranscriptBody;
   markdown: TranscriptMarkdown | undefined; markdownKind: "assistant" | "thinking" | undefined; completion: TextRenderable; completionWidth: number };
 type Target = { position: number } | { id: string; offset: number } | { reveal: true };
+function compactionNotice(section: TranscriptSection): boolean {
+  return section.kind === "notice" && section.skillName === undefined && section.title === "Context compacted";
+}
 export type TranscriptOptions = {
   notice(message: string): void;
   changed(): void;
@@ -242,7 +245,10 @@ export class TranscriptPanel {
     const heading = new BoxRenderable(this.renderer, { width: "100%", flexShrink: 0, minWidth: 0, minHeight: 1, flexDirection: "row", alignItems: "flex-start",
       onMouseDown: (event) => {
         if (event.button !== 0) return;
-        event.preventDefault(); event.stopPropagation(); this.select(section.id); this.scroll.focus(); this.options.changed();
+        event.preventDefault(); event.stopPropagation(); this.select(section.id); this.scroll.focus();
+        const row = this.rows.get(section.id);
+        if (row && compactionNotice(row.section)) this.command("transcript.fold");
+        else this.options.changed();
       } });
     const header = new TranscriptBody(this.renderer, { width: "auto", height: "auto", flexGrow: 1, minWidth: 0, wrapMode: "word",
       cursorStyle: { style: "block", blinking: false }, scrollMargin: 0 });
@@ -296,7 +302,7 @@ export class TranscriptPanel {
   }
   private folded(row: Row): boolean {
     if (!this.foldable(row)) return false;
-    return this.state?.folded[row.section.id] ?? (!this.legacy && row.section.kind === "tool");
+    return this.state?.folded[row.section.id] ?? (!this.legacy && (row.section.kind === "tool" || compactionNotice(row.section)));
   }
   private headingText(section: TranscriptSection, folded: boolean): string {
     let label: string;
@@ -308,7 +314,8 @@ export class TranscriptPanel {
     }
     const timeout = section.timeoutSeconds !== undefined ? ` (timeout ${section.timeoutSeconds}s)` : "";
     const key = this.hint("transcript.fold", "transcript");
-    return label + timeout + (folded && key ? ` (${key} to expand)` : "") + (folded && section.error ? `\n${section.error}` : "");
+    const action = folded ? "expand" : compactionNotice(section) ? "collapse" : "";
+    return label + timeout + (action && key ? ` (${key} to ${action})` : "") + (folded && section.error ? `\n${section.error}` : "");
   }
   private highlightHeader(row: Row): void {
     row.header.clearAllHighlights();
@@ -321,7 +328,7 @@ export class TranscriptPanel {
       });
       const tag = lineIndex === 0 ? /^\[[^\]\n]+\]/.exec(line) : null;
       if (tag) mark(0, tag[0].length, "tag");
-      for (const hint of line.matchAll(/\((?:timeout [\d.]+s|[^()]+ to expand)\)/g)) mark(hint.index, hint.index + hint[0].length, "hint");
+      for (const hint of line.matchAll(/\((?:timeout [\d.]+s|[^()]+ to (?:expand|collapse))\)/g)) mark(hint.index, hint.index + hint[0].length, "hint");
       if (lineIndex >= errorStart) mark(0, line.length, "error");
     }
   }
@@ -667,6 +674,7 @@ export class TranscriptPanel {
       + `${this.hint("transcript.half-page-down", "transcript")}/${this.hint("transcript.half-page-up", "transcript")} half page · linewise selection follows logical lines, not soft wraps\n`
       + `Following resumes at the viewport bottom and pauses above it; selections protect the view.\n`
       + `Markdown: sections show formatted prose; Enter reads the original source, Esc returns to formatting.\n`
+      + `Context compacted summaries start folded; click their heading or use ${this.hint("transcript.fold", "transcript")} to expand/collapse.\n`
       + `Thinking is always visible as gray italic text and never folds.\n`
       + `Skills show [skill] name only and never fold; copying excludes the decorative tag.\n`
       + `${this.hint("transcript.fold-all", "transcript")}/${this.hint("transcript.unfold-all", "transcript")} fold/unfold all · ${this.hint("transcript.latest", "transcript")} follow latest · ${this.hint("transcript.back", "transcript")} back · ${this.hint("focus.prompt", "transcript")} input · ${this.hint("transcript.help", "transcript")} close help`;

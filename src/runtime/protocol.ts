@@ -48,7 +48,7 @@ const telemetry = Type.Object({
     resetsAt: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
     observedAt: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }) }), Type.Null()]),
 });
-const execution = Type.Object({ conversationId: Type.Optional(id), status, output: Type.String(), error: Type.Union([Type.String(), Type.Null()]),
+const execution = Type.Object({ conversationId: Type.Optional(id), status, activity: Type.Optional(Type.Literal("compacting")), output: Type.String(), error: Type.Union([Type.String(), Type.Null()]),
   sections: Type.Optional(Type.Array(transcriptSection)), telemetry: Type.Optional(telemetry) });
 export const workViewSchema = Type.Union([Type.Literal("agent"), Type.Literal("editor"), Type.Literal("git"), Type.Literal("terminal")]);
 export type WorkView = Static<typeof workViewSchema>;

@@ -33,6 +33,39 @@ test("실제 최근 요청만 한 줄로 표시하고 도구 출력·응답으�
   } finally { await app.close(); }
 });
 
+test("압축 중에는 이전 요청 대신 전용 문구와 움직이는 스피너를 표시하고 작업 재개 시 요청을 복원한다", async () => {
+  // 자동 압축은 기존 실행을 끝내거나 이전 요청을 새 요청으로 만들지 않는다.
+  const app = await mount(), state = working([user("Previous delivered request")]);
+  try {
+    const compacting = { ...state, activity: "compacting" as const };
+    app.status.update("a", compacting, true); await app.render();
+    const first = app.captureCharFrame();
+
+    // 압축이 진행되는 동안에도 공통 스피너의 프레임은 계속 바뀐다.
+    app.clock.advance(80); app.status.update("a", compacting, true); await app.render();
+    expect(app.text()).toBe("Compacting context…"); expect(app.spinner().visible).toBe(true);
+    expect(app.captureCharFrame()).not.toBe(first); expect(app.text()).not.toContain("Previous delivered request");
+
+    // 압축 이후 일반 실행으로 돌아오면 같은 요청과 스피너를 이어서 표시한다.
+    app.status.update("a", state, true); await app.render();
+    expect(app.text()).toBe("Working on “Previous delivered request”"); expect(app.spinner().visible).toBe(true);
+  } finally { await app.close(); }
+});
+
+test("빠른 압축 완료는 이전 요청을 다시 표시하지 않고 스피너 최소 시간만 마무리한다", async () => {
+  // 압축 결과는 즉시 보여 주되 스피너가 깜빡이며 사라지지는 않아야 한다.
+  const app = await mount(), state = { ...working([user("Previous request")]), activity: "compacting" as const };
+  try {
+    app.status.update("a", state, true); await app.render(); app.clock.advance(100);
+
+    app.status.update("a", { ...state, status: "complete" }, true); await app.render();
+
+    expect(app.text()).toBe(""); expect(app.spinner().visible).toBe(true);
+    app.clock.advance(400); await app.render();
+    expect(app.spinner().visible).toBe(false); expect(app.status.hasContent).toBe(false);
+  } finally { await app.close(); }
+});
+
 test("Working on 요청도 한 줄 말줄임하며 실제 첨부 배지 공간은 먼저 확보한다", async () => {
   const app = await mount(50);
   try {
