@@ -47,7 +47,7 @@ function meterChunks(meter: Meter, width: number, colors: UiColors): TextChunk[]
   return chunks;
 }
 
-// Passive metadata above the composer. No manual refresh, network requests or credentials in the UI.
+// Passive metadata below the composer. No manual refresh, network requests or credentials in the UI.
 export class SessionStatus {
   readonly root: BoxRenderable;
   private readonly text: TextRenderable;
@@ -59,11 +59,13 @@ export class SessionStatus {
   private lastPaint = "";
 
   constructor(private readonly renderer: CliRenderer) {
-    this.root = new BoxRenderable(renderer, { id: "session-status", width: "100%", height: 1, flexShrink: 0,
+    this.root = new BoxRenderable(renderer, { id: "session-status", width: "100%", height: 3, paddingY: 1, flexShrink: 0,
       onSizeChange: () => this.paint() });
+    const row = new BoxRenderable(renderer, { id: "session-status-line", width: "100%", height: 1, flexShrink: 0 });
+    this.root.add(row);
     this.text = new TextRenderable(renderer, { width: "100%", height: 1, wrapMode: "none", selectable: false });
-    this.root.add(this.text);
-    this.providerIcon = new ProviderIcon(renderer); this.root.add(this.providerIcon);
+    row.add(this.text);
+    this.providerIcon = new ProviderIcon(renderer); row.add(this.providerIcon);
     uiTheme(renderer).bind(this.root, () => { this.lastPaint = ""; this.paint(); });
     this.root.once(RenderableEvents.DESTROYED, () => this.dispose());
   }

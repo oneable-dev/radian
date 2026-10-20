@@ -19,16 +19,17 @@ async function mount() {
   return {...app, view, render, get:(id:string)=>app.renderer.root.findDescendantById(id)!, async close(){view.dispose();await app.dispose();}};
 }
 
-test("높이가 달라져도 탭·검색·입력 높이와 항목 간격은 일정하고 본문만 남은 공간을 채운다", async()=>{
+test("높이가 달라져도 탭·검색·항목 간격을 유지하고 작은 창은 입력 여백보다 본문과 상태 여백을 우선한다", async()=>{
   const app=await mount();
   try {
     let previous=0;
-    for(const height of [12,17,18,24,30]) {
+    for(const [height,inputHeight] of [[11,2],[12,1],[17,3],[18,3],[24,3],[30,3]] as const) {
       app.resize(80,height);await app.render();
-      const body=app.get("session-transcript"), composer=app.get("agent-composer");
-      expect(app.get("workspace-search-box").height).toBe(3);expect(app.get("work-view-tabs").height).toBe(2);expect(composer.height).toBe(3);
-      expect(body.height).toBeGreaterThanOrEqual(previous);previous=body.height;
-      expect(composer.y+composer.height).toBeLessThanOrEqual(app.get("app-footer").y);
+      const body=app.get("session-transcript"), composer=app.get("agent-composer"),status=app.get("session-status");
+      expect(app.get("workspace-search-box").height).toBe(3);expect(app.get("work-view-tabs").height).toBe(2);expect(composer.height).toBe(inputHeight);
+      expect(body.height).toBeGreaterThanOrEqual(1);expect(body.height).toBeGreaterThanOrEqual(previous);previous=body.height;
+      expect(composer.y+composer.height).toBe(status.y);expect(status.height).toBe(3);
+      expect(status.y+status.height).toBeLessThanOrEqual(app.get("app-footer").y);
       expect(app.get("worktree:demo:feature").marginTop).toBe(1);
     }
   }finally{await app.close();}

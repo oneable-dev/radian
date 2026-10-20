@@ -303,6 +303,7 @@ export class Workbench {
       const label = this.buttonHints.get(focused);
       if (focused.visible && label) shortcuts = [{ key: this.keymap.hints("button.activate", "button"), label }];
     }
+    this.footer.setContext(this.agent.active && !this.dialog.visible && !this.history.visible ? this.agent.transcriptStatus : "");
     this.footer.setShortcuts(shortcuts.filter((shortcut) => shortcut.key));
   };
 

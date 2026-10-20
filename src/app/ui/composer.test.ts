@@ -50,7 +50,7 @@ test("긴 붙여넣기·이미지·파일은 표시만 접고 수락 뒤 실제 
     app.mockInput.pressEnter(); await app.render();
 
     expect(app.sent[0]).toEqual({id: "a1", text: `${text} [Image #1] @"/tmp/file.txt" `, images: ["/tmp/image.png"]});
-    expect(app.input.value).toBe(""); expect(app.get("agent-request").visible).toBe(true);
+    expect(app.input.value).toBe(""); expect(app.renderer.root.findDescendantById("agent-request")).toBeUndefined();
   } finally { await app.close(); }
 });
 
@@ -93,15 +93,26 @@ test("항목 상세는 원문을 보여주고 닫을 때 초안·커서·포커�
   } finally { await app.close(); }
 });
 
-test("작은 창의 여러 줄 입력·요청 헤더·알림·완성 후보가 함께 있어도 footer를 침범하지 않는다", async () => {
+test("작은 창의 여러 줄 입력·실행 상태·알림·완성 후보가 함께 있어도 footer를 침범하지 않는다", async () => {
   const app=await mount({onComplete:async()=>ok({items:[{kind:"file",value:"context.txt",description:"Context file"}],truncated:false})});
   try {
-    app.resize(60,12);app.view.setNotice("Connection fixture notice");app.input.value="prefix\n@";await app.render();
+    app.resize(60,11);app.view.setNotice("Connection fixture notice");app.input.value="prefix\n@";await app.render();
     app.clock.advance(150);await app.render();expect(app.captureCharFrame()).toContain("context.txt");
-    const menu=app.get("prompt-completions"),composer=app.get("agent-composer"),footer=app.get("app-footer");
+    const menu=app.get("prompt-completions"),composer=app.get("agent-composer"),footer=app.get("app-footer"),status=app.get("session-status");
     expect(menu.visible).toBe(true);expect(menu.height).toBe(1);
-    expect(composer.y+composer.height).toBeLessThanOrEqual(menu.y);expect(menu.y+menu.height).toBeLessThanOrEqual(footer.y);
+    expect(composer.y+composer.height).toBeLessThanOrEqual(menu.y);expect(menu.y+menu.height).toBe(status.y);
+    expect(status.height).toBe(3);expect(status.y+status.height).toBeLessThanOrEqual(footer.y);
+    const row=status.getChildren()[0]!,frame=app.captureCharFrame().split("\n");
+    // A zero-row conversation viewport must not leak its source text onto the mode line.
+    const run=app.get("agent-run-status-text");
+    expect(frame[run.y]!.slice(run.x,run.x+run.width)).toStartWith("Working on “");
+    expect(app.get("session-transcript").visible).toBe(false);
+    expect(row.y-status.y).toBe(1);expect(status.y+status.height-row.y-row.height).toBe(1);
+    for(const y of [row.y-1,row.y+1])expect(frame[y]!.slice(status.x,status.x+status.width).trim()).toBe("");
     expect(app.input.value).toBe("prefix\n@");expect(app.sent).toEqual([]);
+    app.mockInput.pressKey("t",{ctrl:true});await app.render();
+    expect(menu.visible).toBe(false);expect(app.get("session-transcript").visible).toBe(true);
+    expect(app.renderer.currentFocusedRenderable).not.toBe(app.input);expect(app.input.value).toBe("prefix\n@");
   }finally{await app.close();}
 });
 
@@ -114,8 +125,8 @@ test("긴 입력은 표시 높이만 제한하고 작은 창에서도 입력·�
     app.resize(60,12); await app.render();
 
     expect(app.input.height).toBeLessThanOrEqual(2);
-    const composer = app.get("agent-composer"), footer = app.get("app-footer");
-    expect(composer.y + composer.height).toBeLessThanOrEqual(footer.y);
+    const composer = app.get("agent-composer"), footer = app.get("app-footer"), status = app.get("session-status");
+    expect(composer.y + composer.height).toBe(status.y); expect(status.y + status.height).toBeLessThanOrEqual(footer.y);
     expect(app.input.submission.text).toContain("line 19"); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });

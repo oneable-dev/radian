@@ -232,3 +232,21 @@ test("포커스 단축키가 없으면 앱 이름만 남기고 빈 알림 행을
     expect(app.captureCharFrame()).not.toContain("Ctrl+C");
   } finally { await app.dispose(); }
 });
+
+test("탐색·선택 상태는 단축키와 별개로 한 줄 푸터에 표시하고 실제 알림과 초안을 보존한다", async () => {
+  const app = await mount(100, 24);
+  try {
+    app.footer.setContext("VISUAL LINE · Paused"); app.footer.setNotice("Runtime disconnected"); await app.renderOnce();
+    expect(app.footerLine()).toContain("VISUAL LINE · Paused"); expect(app.footerLine()).toContain("Enter Run");
+    expect(app.footer.noticeText).toBe("Runtime disconnected"); expect(app.footer.root.height).toBe(2);
+    const context = app.renderer.root.findDescendantById("footer-context")!;
+    await app.mockMouse.click(context.x, context.y); await app.renderOnce();
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.input.value).toBe("draft");
+
+    app.resize(30, 12); await app.renderOnce();
+    expect(Bun.stringWidth(app.footerLine())).toBeLessThanOrEqual(30); expect(app.footer.bar.height).toBe(1);
+    app.resize(100, 24); app.footer.setContext(""); await app.renderOnce();
+    expect(app.footerLine()).not.toContain("VISUAL"); expect(app.footerLine()).not.toContain("Paused");
+    expect(app.footerLine()).toContain("Esc Workspace"); expect(app.footer.noticeText).toBe("Runtime disconnected");
+  } finally { await app.dispose(); }
+});

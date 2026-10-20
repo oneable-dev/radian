@@ -23,8 +23,9 @@ async function mount(telemetry: SessionTelemetry = sample()) {
     getSessionDetails: (id) => ({ status: "complete", output: "Transcript", error: null, ...(states[id] ? { telemetry: states[id] } : {}) }) });
   await app.renderOnce();
   const root = app.renderer.root.findDescendantById("session-status")!;
-  return { ...app, view, selection, root,
-    line: () => app.captureCharFrame().split("\n")[root.y]!,
+  const row = root.getChildren()[0]!;
+  return { ...app, view, selection, root, row,
+    line: () => app.captureCharFrame().split("\n")[row.y]!,
     async set(value: SessionTelemetry) { states[selection.sessionId!] = value; selection.replaceSnapshot(selection.snapshot); await app.renderOnce(); },
     async close() { view.dispose(); await app.dispose(); } };
 }
@@ -32,14 +33,18 @@ const palette = (light: boolean): TerminalColors => ({ palette: ["#000000", "#CC
   defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
   cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null });
 
-test("프롬프트 위에 남은 context와 제공자 아이콘·사용한 usage·리셋 시간을 구분해 표시한다", async () => {
+test("프롬프트 아래에 위아래 한 줄 여백을 두고 context·usage를 구분해 표시한다", async () => {
   // The session has 64% context remaining, while its account has used 18% of the selected allowance.
   const app = await mount();
   try {
     app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("keep this draft"); await app.renderOnce();
 
     const prompt = app.renderer.root.findDescendantById("session-prompt")!, composer = app.renderer.root.findDescendantById("agent-composer")!;
-    expect(app.root.y + app.root.height).toBe(composer.y);
+    // The telemetry has its own one-row gutters, separate from the prompt's internal padding.
+    expect(app.root.y).toBe(composer.y + composer.height); expect(app.root.height).toBe(3);
+    expect(app.row.y - app.root.y).toBe(1); expect(app.root.y + app.root.height - app.row.y - app.row.height).toBe(1);
+    const frame = app.captureCharFrame().split("\n");
+    for (const y of [app.row.y - 1, app.row.y + 1]) expect(frame[y]!.slice(app.root.x, app.root.x + app.root.width).trim()).toBe("");
     const panel = app.renderer.root.findDescendantById("agent-view")!;
     expect(composer.x).toBe(panel.x); expect(composer.width).toBe(panel.width);
     expect(prompt.x).toBe(app.root.x); expect(prompt.x + prompt.width).toBe(app.root.x + app.root.width);
@@ -53,7 +58,7 @@ test("프롬프트 위에 남은 context와 제공자 아이콘·사용한 usage
     expect(app.line()).not.toContain("82%"); expect(app.line()).not.toContain("weekly"); expect(app.line()).not.toContain("⟳");
 
     // Passive status text never steals focus or submits a draft.
-    await app.mockMouse.click(app.root.x + 2, app.root.y); await app.renderOnce();
+    await app.mockMouse.click(app.row.x + 2, app.row.y); await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable).toBe(prompt); expect(app.view.promptDrafts.a1).toBe("keep this draft");
     const icon = app.renderer.root.findDescendantById("usage-provider-icon")!;
     await app.mockMouse.click(icon.x, icon.y); await app.renderOnce();
@@ -61,26 +66,27 @@ test("프롬프트 위에 남은 context와 제공자 아이콘·사용한 usage
   } finally { await app.close(); }
 });
 
-test("입력 배경은 패널 양끝을 채우고 입력 내용은 TRANSCRIPT·모델 줄과 같은 내부 여백에 정렬한다", async () => {
+test("입력 배경은 패널 양끝을 채우고 입력 내용은 실행 상태·모델 줄과 같은 내부 여백에 정렬한다", async () => {
   // The surface reaches the pane edges; its editable content keeps the shared responsive inset.
   const app = await mount({ ...sample(), model: "gpt-6.1-sol", effort: "xhigh", fast: null,
     context: { usedTokens: 6000, maxTokens: 200000 }, usage: unavailable() });
   try {
     // Width changes adapt text insets; height changes keep the same vertical treatment.
-    for (const [width, height, inset, gap] of [[120, 24, 2, 0], [79, 18, 1, 0], [80, 18, 2, 0], [60, 12, 1, 0], [120, 24, 2, 0]] as const) {
+    for (const [width, height, inset, gap] of [[120, 24, 2, 1], [79, 18, 1, 1], [80, 18, 2, 1], [60, 12, 1, 1], [120, 24, 2, 1]] as const) {
       app.resize(width, height); await app.renderOnce();
-      const frame = app.captureCharFrame().split("\n"), modeY = frame.findIndex((line) => line.includes("TRANSCRIPT ·"));
+      const run = app.renderer.root.findDescendantById("agent-run-status")!;
       const composer = app.renderer.root.findDescendantById("agent-composer")!;
       const prompt = app.renderer.root.findDescendantById("session-prompt")!;
       const panel = app.renderer.root.findDescendantById("agent-view")!;
-      const modeColumn = Bun.stringWidth(frame[modeY]!.slice(0, frame[modeY]!.indexOf("TRANSCRIPT")));
+      const statusColumn = run.x;
 
       // Only the background expands; the mode line, telemetry and editable text stay aligned.
       expect(composer.x).toBe(panel.x); expect(composer.width).toBe(panel.width);
       expect(prompt.x - composer.x).toBe(inset); expect(composer.x + composer.width - prompt.x - prompt.width).toBe(inset);
-      expect(modeColumn).toBe(prompt.x); expect(app.root.x).toBe(prompt.x);
+      expect(statusColumn).toBe(prompt.x); expect(app.root.x).toBe(prompt.x);
       expect(app.root.x + app.root.width).toBe(prompt.x + prompt.width);
-      expect(app.root.y - modeY - 1).toBe(gap); expect(composer.y - app.root.y - app.root.height).toBe(gap);
+      expect(composer.y - run.y - run.height).toBe(gap); expect(app.row.y - composer.y - composer.height).toBe(1);
+      expect(app.root.y + app.root.height - app.row.y - app.row.height).toBe(1);
     }
   } finally { await app.close(); }
 });
@@ -125,7 +131,7 @@ test("바의 채워진 부분은 테마 accent 그라데이션으로 다시 칠�
   const data = sample();
   const app = await mount({ ...data, context: { usedTokens: 0, maxTokens: 200000 },
     usage: { ...data.usage!, windows: [{ ...data.usage!.windows[0]!, usedPercent: 100 }] } });
-  const spanAt = (column: number) => { let x = 0; return app.captureSpans().lines[app.root.y]!.spans.find((span) => { x += span.width; return x > column; })!; };
+  const spanAt = (column: number) => { let x = 0; return app.captureSpans().lines[app.row.y]!.spans.find((span) => { x += span.width; return x > column; })!; };
   const verify = () => {
     const line = app.line(), start = Bun.stringWidth(line.slice(0, line.indexOf("context"))) + "context ".length;
     const first = spanAt(start), last = spanAt(start + 7);
@@ -145,7 +151,7 @@ test("바의 채워진 부분은 테마 accent 그라데이션으로 다시 칠�
 
 test("context는 used와 같은 본문색이고 모델·effort·Fast는 테마 역할과 상태를 따른다", async () => {
   const app = await mount();
-  const span = (text: string) => app.captureSpans().lines[app.root.y]!.spans.find((value) => value.text.includes(text))!;
+  const span = (text: string) => app.captureSpans().lines[app.row.y]!.spans.find((value) => value.text.includes(text))!;
   const verify = (enabled: boolean) => {
     const colors = uiTheme(app.renderer).colors;
     expect(span("context").fg.toInts()).toEqual(span("18% used").fg.toInts());
@@ -171,15 +177,16 @@ test("좁은 화면은 바·설정·시간을 축약해 두 비율과 초안을 
   const app = await mount();
   try {
     app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("resize draft");
-    for (const [width, height, gap] of [[100, 20, 0], [60, 12, 0], [120, 24, 0]] as const) {
+    for (const [width, height, gap] of [[100, 20, 1], [60, 12, 1], [120, 24, 1]] as const) {
       app.resize(width, height); await app.renderOnce();
 
       expect(app.line()).toContain("context"); expect(app.line()).toContain("64%"); expect(app.line()).toContain("18% used");
       expect(app.line()).toContain(icons.openai); expect(Bun.stringWidth(app.line())).toBeLessThanOrEqual(width);
       const prompt = app.renderer.root.findDescendantById("session-prompt")!, composer = app.renderer.root.findDescendantById("agent-composer")!;
       const footer = app.renderer.root.findDescendantById("footer-bar")!;
-      const modeY = app.captureCharFrame().split("\n").findIndex((line) => line.includes("INPUT ·"));
-      expect(app.root.y - modeY - 1).toBe(gap); expect(composer.y - app.root.y - app.root.height).toBe(gap);
+      const run = app.renderer.root.findDescendantById("agent-run-status")!;
+      expect(composer.y - run.y - run.height).toBe(gap); expect(app.row.y - composer.y - composer.height).toBe(1);
+      expect(app.root.y + app.root.height).toBeLessThanOrEqual(footer.y);
       expect(app.root.x).toBe(prompt.x); expect(app.root.x + app.root.width).toBe(prompt.x + prompt.width);
       expect(composer.y + composer.height).toBeLessThanOrEqual(footer.y);
       expect(app.renderer.currentFocusedRenderable).toBe(prompt); expect(app.view.promptDrafts.a1).toBe("resize draft");

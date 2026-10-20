@@ -151,7 +151,7 @@ test("패널이 숨겨지는 좁은 화면에서도 푸터와 알림은 하단�
   } finally { await app.close(); }
 });
 
-test("사이드바 구분선과 프롬프트 배경은 가로 경계와 아래쪽 끝을 맞춘다", async () => {
+test("사이드바 구분선과 프롬프트 배경은 가로 경계를 맞추고 상태 영역까지 아래쪽을 채운다", async () => {
   // A centered box-drawing line leaves half of its reserved cell outside the Agent pane.
   const app = await mount();
   try {
@@ -169,8 +169,10 @@ test("사이드바 구분선과 프롬프트 배경은 가로 경계와 아래�
       // The right-edge block touches the next cell instead of drawing at the center like │.
       expect(app.captureCharFrame().split("\n")[composer.y]!.slice(column, column + 1)).toBe("▕");
       expect(composer.x).toBe(column + 1); expect(prompt.x).toBe(composer.x + inset);
-      // The prompt surface reaches the same final content row as the sidebar divider.
-      expect(composer.y + composer.height).toBe(sidebar.y + sidebar.height);
+      // The padded telemetry follows the prompt and reaches the sidebar's final content row.
+      const status = app.renderer.root.findDescendantById("session-status")!;
+      expect(composer.y + composer.height).toBe(status.y);
+      expect(status.y + status.height).toBe(sidebar.y + sidebar.height);
       expect(app.captureCharFrame().split("\n")[composer.y + composer.height - 1]!.slice(column, column + 1)).toBe("▕");
       expect(app.calls).toEqual([]);
     }
@@ -228,12 +230,13 @@ test("낮은 터미널에서도 Agent 상태와 입력창은 한 줄 푸터를 �
     const prompt = app.renderer.root.findDescendantById("session-prompt")!;
     const footer = app.renderer.root.findDescendantById("footer-bar")!;
 
-    expect(composer.height).toBe(3);
+    expect(composer.height).toBe(1);
     const status = app.renderer.root.findDescendantById("session-status")!;
-    expect(status.y + status.height).toBe(composer.y);
-    expect(status.y + status.height).toBeLessThanOrEqual(footer.y);
-    expect(app.captureCharFrame().split("\n")[status.y]).toContain("context");
-    expect(app.captureCharFrame().split("\n")[status.y]).toContain("usage");
+    expect(composer.y + composer.height).toBe(status.y);
+    expect(status.height).toBe(3); expect(status.y + status.height).toBeLessThanOrEqual(footer.y);
+    const row = status.getChildren()[0]!;
+    expect(app.captureCharFrame().split("\n")[row.y]).toContain("context");
+    expect(app.captureCharFrame().split("\n")[row.y]).toContain("usage");
     expect(prompt.y + prompt.height).toBeLessThanOrEqual(footer.y);
     expect(app.captureCharFrame().split("\n")[prompt.y]).toContain("compact draft");
     expect(app.captureCharFrame()).not.toContain("Status not supplied");

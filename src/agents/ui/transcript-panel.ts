@@ -39,7 +39,6 @@ export type TranscriptOptions = {
 
 export class TranscriptPanel {
   readonly scroll: ScrollBoxRenderable;
-  readonly status: TextRenderable;
   private readonly help: TextRenderable;
   private readonly empty: TextRenderable;
   private helpPosition = 0;
@@ -61,6 +60,7 @@ export class TranscriptPanel {
   private selectionHeldFor: string | null = null;
   private geometry: { id: string | null; content: number; viewport: number } | undefined;
   private lastSavedView = "";
+  private lastStatus = "";
   private readonly theme;
   private readonly headerSyntax: SyntaxStyle;
   private readonly proseSyntax: SyntaxStyle;
@@ -82,7 +82,6 @@ export class TranscriptPanel {
       },
       verticalScrollbarOptions: { onMouseDown: (event) => { if (event.button === 0) this.scrollIntent(); } },
     });
-    this.status = new TextRenderable(renderer, { height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.help = new TextRenderable(renderer, { width: "100%", flexShrink: 0, wrapMode: "word", selectable: false, visible: false });
     this.empty = new TextRenderable(renderer, { width: "100%", flexShrink: 0, wrapMode: "word", selectable: false,
       content: "No messages yet. Enter a prompt to start this session explicitly." });
@@ -98,9 +97,9 @@ export class TranscriptPanel {
       this.headerSyntax.registerStyle("hint", { fg: colors.muted });
       this.headerSyntax.registerStyle("error", { fg: colors.error });
       updateTranscriptMarkdownStyles(this.proseSyntax, colors, false); updateTranscriptMarkdownStyles(this.thinkingSyntax, colors, true);
+      this.help.fg = colors.muted; this.empty.fg = colors.muted;
       this.paint();
     });
-    this.theme.bind(this.status, (colors) => { this.status.fg = colors.accent; this.help.fg = colors.muted; this.empty.fg = colors.muted; });
   }
 
   private get state(): TranscriptViewState | undefined { return this.sessionId ? this.views[this.sessionId] : undefined; }
@@ -385,24 +384,24 @@ export class TranscriptPanel {
     this.empty.visible = !this.order.length && !this.help.visible;
     for (const row of this.rows.values()) this.paintRow(row);
   }
-  private modeLabel(): string {
-    if (this.help.visible) return "HELP";
-    if (!this.focused) return this.renderer.currentFocusedRenderable?.id === "session-prompt" ? "INPUT" : "TRANSCRIPT";
-    if (this.state?.mode === "visual" && this.state.linewise) return "VISUAL LINE";
-    return this.state?.mode.toUpperCase() ?? "SECTIONS";
+  get footerStatus(): string {
+    if (!this.visible) return "";
+    const labels: string[] = [];
+    if (this.focused) {
+      if (this.help.visible) labels.push("HELP");
+      else if (this.state?.mode === "visual") labels.push(this.state.linewise ? "VISUAL LINE" : "VISUAL");
+      else if (this.state?.mode === "text") labels.push("TEXT");
+    }
+    if (this.state && !this.state.follow && !this.help.visible) labels.push("Paused");
+    if (this.focused && !this.help.visible && this.selected?.markdown && !this.folded(this.selected) && this.state?.mode !== "sections") labels.push("Markdown source");
+    if (this.focused && this.legacy) labels.push("legacy preview");
+    return labels.join(" · ");
   }
   private refreshStatus(): void {
-    if (this.disposed || this.status.isDestroyed) return;
-    const mode = this.modeLabel();
-    const index = this.order.indexOf(this.state?.selectedId ?? "");
-    let content = `${mode} · ${Math.max(0, index + 1)}/${this.order.length}${this.state?.follow ? " · following" : " · paused"}${this.legacy ? " · legacy preview" : ""}`;
-    const selected = this.selected;
-    if (!this.help.visible && selected?.markdown && !this.folded(selected) && this.state?.mode !== "sections") content += " · Markdown source";
-    if (!this.help.visible && this.focused && selected && this.state?.mode !== "sections") {
-      const cursor = this.reader(selected).logicalCursor;
-      content += `${this.folded(selected) ? " · summary" : ""} · ${cursor.row + 1}:${cursor.col + 1}`;
-    }
-    this.status.content = content;
+    if (this.disposed) return;
+    const status = this.footerStatus;
+    if (status === this.lastStatus) return;
+    this.lastStatus = status; this.options.changed();
   }
   private focusChanged = (): void => { this.paint(); this.refreshStatus(); };
   private resize = (): void => {
@@ -657,7 +656,7 @@ export class TranscriptPanel {
     return null;
   }
   private applyTarget = (): void => {
-    if (!this.visible || this.disposed || this.scroll.isDestroyed || !this.pending) return;
+    if (!this.visible || !this.scroll.visible || this.disposed || this.scroll.isDestroyed || !this.pending) return;
     this.syncing = true;
     try {
       if ("position" in this.pending) this.scroll.scrollTo(this.pending.position);
@@ -695,7 +694,7 @@ export class TranscriptPanel {
     this.geometry = { id: this.sessionId, content: this.scroll.scrollHeight, viewport: this.scroll.viewport.height };
   };
   rememberScroll = (): void => {
-    if (this.disposed || this.scroll.isDestroyed || this.syncing || this.pending || this.help.visible || !this.sessionId || !this.visible) return;
+    if (this.disposed || this.scroll.isDestroyed || this.syncing || this.pending || this.help.visible || !this.sessionId || !this.visible || !this.scroll.visible) return;
     const position = Math.max(0, Math.round(this.scroll.scrollTop));
     if (this.positions[this.sessionId] === position) return;
     this.positions[this.sessionId] = position; this.options.saveScroll(this.sessionId, position);

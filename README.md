@@ -246,12 +246,15 @@ no label or fold controls; old Thinking fold preferences are ignored and cleared
 sections can be folded manually. Error summaries stay visible outside the folded body, and folding never deletes text.
 Image attachments have a text placeholder; image rendering is not part of this reader.
 
-A passive **Request** row stays above the scrolling transcript and shows the latest user request
-already present in that session's conversation. Whitespace collapses to spaces, and overflowing text
-ends with `...` without splitting Unicode graphemes. It consumes only one row, remains after a run
-finishes, and restores from the selected session's transcript. Drafts, rejected input and handled
-settings commands do not replace it. Sessions without request metadata reserve no row; no request
-is inferred from legacy output or session names. This display does not change steer or queue behavior.
+The former pinned **Request** row is removed; the original user message remains in the transcript.
+A passive work-status row above the prompt shows a shared spinner and `Working on “request”` using
+the latest request actually present in the selected conversation. Whitespace collapses and long
+text is clipped on grapheme/cell boundaries. Drafts, rejected input and handled commands never
+replace that request. Without request metadata it shows `Working…`, not a guessed title.
+Settled state changes immediately to `Completed`, `Cancelled`, `Stopped` or `Failed`; an unreported
+run shows `Ready`. Completion metadata is scoped to the latest request. Spinner tails never delay
+these results, and switching/hiding a conversation cancels its indicator. Steer and queue semantics
+are unchanged.
 
 Sections have no disclosure arrows or separate role/status heading rows. Expanded user/Agent text
 starts directly with its content. Tools use inline invocations such as `[read] path:line` or `$ command`;
@@ -317,8 +320,9 @@ resize and warm reconnect. `Ctrl+D/U` scrolls the viewport in Sections and moves
 or Visual; it does not select another section. To jump between sections while reading, press `Esc`
 to return to Sections, then j/k (or gg/G). A selection first needs `Esc` to return to Text.
 
-The status row shows the mode, selected section and whether output following is paused. Following
-is based on the viewport: at the bottom it follows new output; moving above the bottom pauses it;
+The former `INPUT · section/count · following` row is removed. Source/Visual/help mode and a
+`Paused` indicator appear only when relevant in the one-row footer; `Paused` refers to viewport
+following, never agent execution. Following is based on the viewport: at the bottom it follows new output; moving above the bottom pauses it;
 returning to the bottom by wheel, scrollbar or paging resumes it automatically. Merely focusing the
 transcript does not pause it. Content growth and asynchronous Markdown layout preserve the pre-growth
 bottom intent rather than treating the increased scroll range as user navigation. Following also
@@ -382,7 +386,7 @@ The Agent prompt completes and executes these host commands instead of sending t
   lifecycle hooks are respected. The separate **`+ New session`** button still adds another tab.
 - **`/compact [instructions]`** invokes Pi's manual context summarization for the current conversation.
   It may make summarization model calls and consume quota. It keeps the tab, saved conversation,
-  pinned request and full displayed transcript; only the model context is compacted. The session
+  request shown by the work-status row and full displayed transcript; only the model context is compacted. The session
   must be idle: running/queued input, compaction and owned work cause an explicit busy rejection,
   without interruption. Empty or too-small context is rejected without a model request.
 
@@ -400,9 +404,9 @@ Neither automatic strategic-compaction suggestions nor a model-callable compacti
 
 ### Agent input status
 
-A passive row above and outside the prompt box shows the selected model, effort and current `fast`
-setting, followed by **context remaining** and **account usage**. Both meters use the same block-bar
-style. A provider icon identifies the account meter; `18% used 1h 20m` means consumption followed by
+A passive row below and outside the prompt box, with one blank row above and below it, shows the
+selected model, effort and current `fast` setting, followed by **context remaining** and **account usage**.
+Both meters use the same block-bar style. A provider icon identifies the account meter; `18% used 1h 20m` means consumption followed by
 time until reset, without a middle-dot separator. Reset times use `5d 23h`, `1h 20m` or `18m`. The compact meter selects the longest returned
 quota window; all returned windows remain available in the IPC snapshot. There is no refresh button.
 
@@ -411,10 +415,15 @@ Context labels and known values use the same foreground as account usage. Model 
 number (yellow/gold) color, effort uses keyword, and `fast` uses success when on or info when off; unknown values
 and separators stay muted. These are terminal palette roles, not fixed product colors.
 The prompt surface reaches both edges of the Agent pane; its internal padding aligns the editable
-text with the transcript mode and telemetry rows. The sidebar divider sits at the right edge of its
+text with the work-status and telemetry rows. The sidebar divider sits at the right edge of its
 character cell, avoiding a half-cell gap beside the prompt surface. The empty prompt has no marker or placeholder,
 and focusing it keeps the same surface background; the caret and left border indicate focus.
-The mode, telemetry and prompt rows form one stable input/status group without interleaved blank rows. Narrow panels shorten bars and omit settings or the
+The work-status row above the prompt also has one blank row above and below its content. Completion
+candidates appear below the prompt and before the padded telemetry row. Constrained windows first
+reduce the prompt's internal padding; if necessary, the work-status gutters collapse to retain
+usable input and conversation space. The lower telemetry keeps its one-row gutters. A temporary
+zero-height conversation viewport is hidden rather than painting over adjacent controls, and
+closing completion restores its position. Narrow panels shorten bars and omit settings or the
 countdown before dropping either resource percentage. Theme changes preserve the current draft and focus.
 
 Provider logos reserve two columns. On terminals reporting Kitty/Sixel graphics and pixel resolution,
@@ -576,9 +585,11 @@ focus or Git navigation/scroll positions. Each attached TUI has its own theme.
 Navigation uses understated separators and underlined active tabs rather than boxed controls.
 Sidebar, work-view content and footer text use two-cell horizontal insets, reduced to one on terminals
 narrower than 80 columns. Main work tabs leave a single blank row before their content at every
-terminal height. Tabs, search surfaces, item gaps and composer padding no longer switch height modes. Work surfaces have no additional top or bottom panel inset. Routine Neovim/worktree captions, the `Git · … · All refs` line and the terminal
-`… · running` line are omitted; empty, error, exit and reconnect messages remain meaningful.
-Agent input, Editor, Git lists/diffs and Terminal end at the same bottom edge as the sidebar
+terminal height. Tabs, search surfaces and item gaps no longer switch height modes. The composer
+retains its normal vertical padding unless fixed controls need that space. Work surfaces have no
+additional top or bottom panel inset. Routine Neovim/worktree captions, the `Git · … · All refs` line
+and the terminal `… · running` line are omitted; empty, error, exit and reconnect messages remain meaningful.
+Agent's padded telemetry, Editor, Git lists/diffs and Terminal end at the same bottom edge as the sidebar
 divider, without an unused row below them. The sidebar widens to retain
 room for its tree. Embedded programs receive the measured inner viewport rather than rendering
 beneath the padding. The footer text remains one row, with its gradient extending through the
@@ -943,12 +954,12 @@ Working uses the shared animated spinner; final outcomes appear immediately in a
 badge, independently of the spinner's minimum-visible tail. Hidden views cancel their animations.
 Selection and focus do not change execution status.
 
-The transcript mode/Input row shows the selected session's subagent counts at its right edge.
-Working, failure, complete and unknown counts use reserved widths; narrow panels omit less urgent
-counts or shorten the prefix without adding rows. Counts only include runtime-owned children
-already supplied by the snapshot, not arbitrary extension-managed processes. The row's `paused`
-means transcript auto-follow is paused, not agent execution. Model/context/account usage remains
-on the separate telemetry row.
+The work-status row shows the selected session's run state and its subagent counts at the right
+edge. The counts remain independent of the parent run's settled outcome. Working, failure, complete
+and unknown counts use reserved widths; narrow panels omit less urgent counts or shorten the prefix
+without adding rows. Counts only include runtime-owned children already supplied by the snapshot,
+not arbitrary extension-managed processes. Transcript `Paused` appears in the footer, not this
+execution row. Model/context/account usage remains on the separate lower telemetry row.
 
 The SDK adapter normalizes events into display snapshots. `agent_end` alone is not completion:
 automatic retries keep the run working, and `agent_settled` plus the final outcome determine

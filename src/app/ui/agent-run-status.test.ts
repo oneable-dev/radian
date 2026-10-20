@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { ScrollBoxRenderable } from "@opentui/core";
 import { PromptInput } from "../../agents/ui/prompt-input.ts";
-import { createTestRenderer } from "@opentui/core/testing";
+import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -13,7 +13,8 @@ import { err, ok, type Result } from "../../result.ts";
 const request = (id: string, text: string): TranscriptSection => ({ id, kind: "user", title: "You", text, status: "complete" });
 const answer = (text: string): TranscriptSection => ({ id: "answer", kind: "assistant", title: "Agent", text, status: "streaming" });
 async function mount(actions: Partial<WorkbenchActions> = {}) {
-  const app = await createTestRenderer({ width: 120, height: 28, kittyKeyboard: true });
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width: 120, height: 28, kittyKeyboard: true, clock });
   const selection = new WorkspaceSelection(demoWorkspace());
   const states: Record<string, ExecutionState> = {
     a1: { status: "working", output: "", error: null, sections: [request("first", "Implement workspace search"), answer(Array.from({ length: 100 }, (_, i) => `PROGRESS-${i}`).join("\n"))] },
@@ -25,54 +26,65 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     getSessionDetails: (id) => states[id] ?? null, initialDrafts: { a1: "unsent next command", a2: "second session draft", b1: "feature draft" }, ...actions });
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
   const get = (id: string) => { const node = app.renderer.root.findDescendantById(id); if (!node) throw new Error(`Missing ${id}`); return node; };
-  const heading = () => { const node = get("agent-request"); return app.captureCharFrame().split("\n")[node.y]!.slice(node.x).trimEnd(); };
+  const status = () => { const node = get("agent-run-status-text"); return app.captureCharFrame().split("\n")[node.y]!.slice(node.x, node.x + node.width).trimEnd(); };
   const update = async () => { selection.replaceSnapshot(selection.snapshot); await render(); };
   await render();
-  return { ...app, view, selection, states, sent, render, get, heading, update, async close() { view.dispose(); await app.dispose(); } };
+  return { ...app, clock, view, selection, states, sent, render, get, status, update, async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("상단 요청은 스크롤 밖에 고정되고 스트리밍 갱신에도 초안·포커스·대화 위치를 보존한다", async () => {
+test("프롬프트 위에 실제 요청과 실행 스피너를 표시하고 상단 Request·모드·섹션 개수는 제거한다", async () => {
   const app = await mount();
   try {
-    const header = app.get("agent-request"), scroll = app.get("session-transcript"), prompt = app.get("session-prompt");
+    const row = app.get("agent-run-status"), scroll = app.get("session-transcript"), prompt = app.get("session-prompt");
     if (!(scroll instanceof ScrollBoxRenderable) || !(prompt instanceof PromptInput)) throw new Error("Missing native controls.");
-    const y = header.y, draft = prompt.value, cursor = prompt.cursorOffset;
-    expect(app.heading()).toBe("Request Implement workspace search");
-    expect(scroll.y).toBe(header.y + 1);
+    const y = row.y, draft = prompt.value, cursor = prompt.cursorOffset;
+    expect(app.status()).toBe("Working on “Implement workspace search”");
+    expect(app.get("agent-run-loading").visible).toBe(true);
+    expect(app.renderer.root.findDescendantById("agent-request")).toBeUndefined();
+    expect(scroll.y).toBe(app.get("agent-transcript-area").y);
+    const group = app.get("transcript-status-row");
+    expect(group.height).toBe(3); expect(row.y).toBe(group.y + 1);
+    expect(app.get("agent-composer").y).toBe(row.y + row.height + 1);
+    const initialFrame = app.captureCharFrame().split("\n");
+    for (const gutter of [group.y, group.y + group.height - 1]) expect(initialFrame[gutter]!.slice(group.x, group.x + group.width).trim()).toBe("");
+    expect(app.captureCharFrame()).not.toMatch(/(?:INPUT|TRANSCRIPT) · \d+\/\d+|Request Implement/);
 
-    // 사용자는 긴 대화를 읽는 동안에도 자신이 요청한 작업을 볼 수 있다.
+    // Reading old output must not move the running-request anchor or overwrite the draft.
     app.mockInput.pressKey("t", { ctrl: true }); scroll.scrollTo(20); await app.render();
     const focus = app.renderer.currentFocusedRenderable, top = scroll.scrollTop;
     const sections = app.states.a1!.sections!;
     app.states.a1 = { ...app.states.a1!, sections: [sections[0]!, answer(`${sections[1]!.text}\nNEW STREAM OUTPUT`)] };
     await app.update();
 
-    expect(header.y).toBe(y); expect(header.height).toBe(1);
-    expect(app.heading()).toBe("Request Implement workspace search");
+    expect(row.y).toBe(y); expect(row.height).toBe(1); expect(app.status()).toBe("Working on “Implement workspace search”");
     expect(scroll.scrollTop).toBe(top); expect(app.renderer.currentFocusedRenderable).toBe(focus);
-    expect(prompt.value).toBe(draft); expect(prompt.cursorOffset).toBe(cursor);
-    expect(app.view.promptDrafts.a1).toBe("unsent next command"); expect(app.sent).toEqual([]);
+    expect(prompt.value).toBe(draft); expect(prompt.cursorOffset).toBe(cursor); expect(app.sent).toEqual([]);
+    const frame = app.captureCharFrame().split("\n");
+    expect(frame[row.y]).not.toContain("Paused"); expect(frame[app.get("footer-bar").y]).toContain("Paused");
+    app.mockInput.pressKey("END", { ctrl: true }); await app.render();
+    expect(app.captureCharFrame().split("\n")[app.get("footer-bar").y]).not.toContain("Paused");
+    expect(app.status()).toBe("Working on “Implement workspace search”");
   } finally { await app.close(); }
 });
 
-test("세션과 워크트리를 오가면 각 대화의 마지막 요청을 복원하고 완료 후에도 남긴다", async () => {
+test("세션·워크트리 전환은 요청과 실행 상태를 함께 복원하고 이전 스피너를 다른 세션에 남기지 않는다", async () => {
   const app = await mount();
   try {
-    // 저장된 대화에서 읽기 때문에 전송을 재생하거나 UI 전역 요청을 공유하지 않는다.
     app.selection.selectSession("demo:main", "a2"); await app.render();
-    expect(app.heading()).toBe("Request Review the editor changes");
+    expect(app.status()).toBe("Completed “Review the editor changes”"); expect(app.get("agent-run-loading").visible).toBe(false);
     app.selection.selectWorktree("demo:feature"); await app.render();
-    expect(app.heading()).toBe("Request Fix the feature worktree");
+    expect(app.status()).toBe("Completed “Fix the feature worktree”");
     app.selection.selectSession("demo:main", "a1"); await app.render();
+    expect(app.get("agent-run-loading").visible).toBe(true);
 
     app.states.a1 = { ...app.states.a1!, status: "complete" }; await app.update();
-    expect(app.heading()).toBe("Request Implement workspace search");
-    expect(app.view.promptDrafts).toMatchObject({ a1: "unsent next command", a2: "second session draft", b1: "feature draft" });
-    expect(app.sent).toEqual([]);
+    expect(app.status()).toBe("Completed “Implement workspace search”");
+    app.clock.advance(500); await app.render(); expect(app.get("agent-run-loading").visible).toBe(false);
+    expect(app.view.promptDrafts).toMatchObject({ a1: "unsent next command", a2: "second session draft", b1: "feature draft" }); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("초안·거절·설정 명령 수락은 요청을 덮지 않고 실제 대화에 들어온 입력만 갱신한다", async () => {
+test("초안·거절·설정 명령은 작업 요청을 바꾸지 않고 실제 대화에 추가된 요청만 갱신한다", async () => {
   let response: Result<void, ExpectedError> = ok(undefined);
   const sent: string[] = [];
   const app = await mount({ onPrompt: (_id, text) => { sent.push(text); return response; } });
@@ -80,82 +92,62 @@ test("초안·거절·설정 명령 수락은 요청을 덮지 않고 실제 대
     const prompt = app.get("session-prompt"); if (!(prompt instanceof PromptInput)) throw new Error("Missing prompt.");
     app.mockInput.pressKey("e", { ctrl: true }); prompt.value = "";
     await app.mockInput.typeText("/fast status"); app.mockInput.pressEnter(); await app.render();
-    expect(app.heading()).toBe("Request Implement workspace search");
-
-    // 수락되지 않은 입력은 편집기에 남고 처리 중 요청으로 표시하지 않는다.
+    expect(app.status()).toBe("Working on “Implement workspace search”");
     response = err(new InputError("Request rejected"));
     await app.mockInput.typeText("rejected input"); app.mockInput.pressEnter(); await app.render();
-    expect(prompt.value).toBe("rejected input");
-    expect(app.heading()).toBe("Request Implement workspace search");
+    expect(prompt.value).toBe("rejected input"); expect(app.status()).toBe("Working on “Implement workspace search”");
 
-    // steer의 전송 방식이나 대기열은 바꾸지 않고 반영된 사용자 섹션을 따라간다.
     app.states.a1 = { ...app.states.a1!, sections: [...app.states.a1!.sections!, request("delivered", "Run the tests first")] }; await app.update();
-    expect(app.heading()).toBe("Request Run the tests first");
+    expect(app.status()).toBe("Working on “Run the tests first”");
     expect(prompt.value).toBe("rejected input"); expect(sent).toEqual(["/fast status", "rejected input"]);
   } finally { await app.close(); }
 });
 
-test("요청 정보가 없는 세션은 공간을 차지하지 않고 작은 화면에서도 한 줄만 예약한다", async () => {
+test("요청 없는 실행은 내용을 추측하지 않고 긴 요청도 작은 화면의 상태 한 줄 안에 표시한다", async () => {
   const app = await mount();
   try {
-    const header = app.get("agent-request"), scroll = app.get("session-transcript"), area = app.get("agent-transcript-area");
-    const previousHeight = scroll.height;
-
-    // 구버전 output이나 세션 이름을 사용자가 내린 요청으로 추측하지 않는다.
-    app.states.a1 = { status: null, output: "Legacy output without request metadata", error: null }; await app.update();
-    expect(header.visible).toBe(false); expect(scroll.y).toBe(area.y);
-    expect(scroll.height).toBe(previousHeight + 1);
-
+    app.states.a1 = { status: "working", output: "Legacy output without request metadata", error: null }; await app.update();
+    expect(app.status()).toBe("Working…");
     app.states.a1 = { status: "complete", output: "", error: null, sections: [request("restored", "A long request that should stay on one line while the screen becomes narrow")] }; await app.update();
     app.resize(60, 12); await app.render();
-
-    expect(header.visible).toBe(true); expect(header.height).toBe(1);
-    expect(app.heading().endsWith("...")).toBe(true);
-    expect(scroll.y).toBe(header.y + 1); expect(scroll.height).toBeGreaterThan(0);
-    const composer = app.get("agent-composer");
-    expect(composer.y + composer.height).toBeLessThanOrEqual(app.renderer.root.height - 1);
+    expect(app.get("agent-run-status").height).toBe(1); expect(app.status().endsWith("…")).toBe(true);
+    expect(app.get("session-transcript").height).toBeGreaterThan(0);
+    expect(app.get("session-status").y + app.get("session-status").height).toBeLessThanOrEqual(app.get("app-footer").y);
     expect(app.view.promptDrafts.a1).toBe("unsent next command"); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("new가 같은 탭의 대화를 교체하면 요청·스크롤·읽기 상태만 초기화하고 다른 초안을 유지한다", async () => {
+test("new 교체는 같은 탭과 다른 초안을 유지하고 이전 요청·스피너·읽기 상태를 제거한다", async () => {
   const app = await mount({ onPrompt: () => {
     app.states.a1 = { conversationId: "fresh", status: null, output: "", error: null, sections: [] };
     app.selection.replaceSnapshot(app.selection.snapshot); return ok(undefined);
   } });
   try {
-    // Seed the prior conversation identity, then navigate far into its transcript.
     app.states.a1 = { ...app.states.a1!, conversationId: "previous" }; await app.update();
-    const tab = app.get("session:demo:main:a1"), tabStrip = app.get("agent-session-list");
-    const count = tabStrip.getChildren().length;
+    const tab = app.get("session:demo:main:a1"), tabStrip = app.get("agent-session-list"), count = tabStrip.getChildren().length;
     const prompt = app.get("session-prompt"); if (!(prompt instanceof PromptInput)) throw new Error("Missing input");
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); app.mockInput.pressKey("f"); await app.render();
-    app.mockInput.pressKey("e", { ctrl: true }); prompt.value = "/new";
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
+    app.mockInput.pressKey("e", { ctrl: true }); prompt.value = "/new"; app.mockInput.pressEnter(); await app.render();
 
-    app.mockInput.pressEnter(); await app.render();
-
-    expect(app.selection.sessionId).toBe("a1"); expect(tabStrip.getChildren()).toHaveLength(count);
-    expect(app.get("session:demo:main:a1")).toBe(tab);
-    expect(app.get("agent-request").visible).toBe(false); expect(app.captureCharFrame()).not.toContain("PROGRESS-99");
+    expect(app.selection.sessionId).toBe("a1"); expect(tabStrip.getChildren()).toHaveLength(count); expect(app.get("session:demo:main:a1")).toBe(tab);
+    expect(app.status()).toBe("Ready"); expect(app.get("agent-run-loading").visible).toBe(false); expect(app.captureCharFrame()).not.toContain("PROGRESS-99");
     expect(prompt.value).toBe(""); expect(app.renderer.currentFocusedRenderable).toBe(prompt);
     expect(app.view.workViewPreferences.agentViews?.a1).toMatchObject({ mode: "sections", selectedId: null, follow: true });
     expect(app.view.promptDrafts).toMatchObject({ a2: "second session draft", b1: "feature draft" });
   } finally { await app.close(); }
 });
 
-test("새 대화의 snapshot이나 늦은 수락은 사용자가 그 사이 작성한 입력을 지우지 않는다", async () => {
+test("대화 교체 snapshot과 늦은 수락이 새 초안을 지우거나 작업 요청으로 오인하지 않는다", async () => {
   const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
   const app = await mount({ onPrompt: () => accepted.promise });
   try {
     app.states.a1 = { ...app.states.a1!, conversationId: "previous" }; await app.update();
     const prompt = app.get("session-prompt"); if (!(prompt instanceof PromptInput)) throw new Error("Missing input");
     app.mockInput.pressKey("e", { ctrl: true }); prompt.value = "/new"; app.mockInput.pressEnter(); await app.render();
-
-    // A separate connection publishes replacement while the submit acknowledgement is pending.
     app.states.a1 = { conversationId: "fresh", status: null, output: "", error: null, sections: [] }; await app.update();
     prompt.value = "next conversation draft"; accepted.resolve(ok(undefined)); await app.render();
 
     expect(prompt.value).toBe("next conversation draft"); expect(app.view.promptDrafts.a1).toBe("next conversation draft");
-    expect(app.selection.sessionId).toBe("a1"); expect(app.get("agent-request").visible).toBe(false);
+    expect(app.selection.sessionId).toBe("a1"); expect(app.status()).toBe("Ready");
   } finally { accepted.resolve(ok(undefined)); await app.close(); }
 });

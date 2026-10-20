@@ -94,7 +94,6 @@ export class SessionHistoryPanel {
       focusPrompt: () => this.search.focus(), notice: actions.onError, changed: () => actions.onChange?.() });
     this.preview = this.transcript.scroll; this.preview.id = "history-preview";
     this.previewPane.add(previewHeading); this.previewPane.add(this.preview);
-    this.transcript.status.visible = false; this.previewPane.add(this.transcript.status);
     body.add(this.list); body.add(this.previewPane);
     this.panel.add(heading); this.panel.add(this.search); this.panel.add(this.message); this.panel.add(body); this.root.add(this.panel);
     theme.input(this.search); theme.scrollbars(this.list); theme.scrollbars(this.preview);

@@ -12,7 +12,7 @@ import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
 import { SessionStatus } from "./session-status.ts";
-import { RequestHeading } from "./request-heading.ts";
+import { RunStatus } from "./run-status.ts";
 import { PromptInput } from "./prompt-input.ts";
 import { expandPromptDraft, type PromptDraft } from "../prompt-input.ts";
 import type { DialogContent } from "../../ui/text-dialog.ts";
@@ -49,10 +49,12 @@ export class AgentPanel {
   private readonly children: SubagentSummary;
   private readonly runtimePanel: BoxRenderable;
   private readonly composer: BoxRenderable;
+  private readonly statusRow: BoxRenderable;
+  private statusRows = 3;
   private readonly sessionStatus: SessionStatus;
   private readonly completion: CompletionMenu;
   private readonly transcript: TranscriptPanel;
-  private readonly requestHeading: RequestHeading;
+  private readonly runStatus: RunStatus;
   private readonly drafts = new Map<string, string>();
   private readonly inputDrafts = new Map<string, PromptDraft>();
   private readonly submitting = new Set<string>();
@@ -87,9 +89,9 @@ export class AgentPanel {
     this.transcript = new TranscriptPanel(renderer, { notice, changed, focusPrompt: () => this.prompt.focus(), initialScroll, saveScroll,
       ...transcriptOptions, ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}) });
     this.transcriptScroll = this.transcript.scroll;
-    this.requestHeading = new RequestHeading(renderer);
-    const transcriptArea = new BoxRenderable(renderer, { id: "agent-transcript-area", width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "column" });
-    transcriptArea.add(this.requestHeading.root); transcriptArea.add(this.transcriptScroll);
+    this.runStatus = new RunStatus(renderer);
+    const transcriptArea = new BoxRenderable(renderer, { id: "agent-transcript-area", width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "column", overflow: "hidden" });
+    transcriptArea.add(this.transcriptScroll);
     this.prompt = new PromptInput(renderer, notice, (content) => actions.onInspectInput?.(content));
     for (const [id, draft] of Object.entries(actions.initialDrafts ?? {})) this.drafts.set(id, draft);
     for (const [id, draft] of Object.entries(actions.initialInputDrafts ?? {})) { this.inputDrafts.set(id, draft); this.drafts.set(id, expandPromptDraft(draft, false).text); }
@@ -100,13 +102,12 @@ export class AgentPanel {
     this.sessionStatus = new SessionStatus(renderer);
     this.completion = new CompletionMenu(renderer, this.prompt, () => this.active ? this.promptSessionId : null, actions.onComplete,
       () => { this.resizeComposer(); changed(); }, () => this.completionRows());
-    const statusRow = new BoxRenderable(renderer, { id: "transcript-status-row", width: "100%", height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    this.transcript.status.flexGrow = 1; this.transcript.status.flexShrink = 1; this.transcript.status.minWidth = 0;
+    const statusRow = this.statusRow = new BoxRenderable(renderer, { id: "transcript-status-row", width: "100%", height: 3, paddingY: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.children = new SubagentSummary(renderer);
-    statusRow.add(this.transcript.status); statusRow.add(this.prompt.activity.root); statusRow.add(this.children.root);
+    statusRow.add(this.runStatus.root); statusRow.add(this.prompt.activity.root); statusRow.add(this.children.root);
     this.root.on("resize", () => this.children.resize(this.root.width));
     this.runtimePanel.add(transcriptArea); this.runtimePanel.add(statusRow);
-    this.runtimePanel.add(this.sessionStatus.root); this.runtimePanel.add(composer); this.runtimePanel.add(this.completion.root); this.root.add(this.runtimePanel);
+    this.runtimePanel.add(composer); this.runtimePanel.add(this.completion.root); this.runtimePanel.add(this.sessionStatus.root); this.root.add(this.runtimePanel);
     theme.input(this.prompt); theme.scrollbars(this.transcriptScroll); theme.focusBorder(composer);
     theme.bind(this.root, (colors) => {
       this.title.fg = colors.text; this.details.fg = colors.muted;
@@ -136,6 +137,7 @@ export class AgentPanel {
   get canSubmit(): boolean { return Boolean(this.promptSessionId && this.prompt.value.trim() && !this.prompt.pending && !this.submitting.has(this.promptSessionId)); }
   get working(): boolean { return !!this.promptSessionId && this.actions.getSessionDetails?.(this.promptSessionId)?.status === "working"; }
   get transcriptShortcuts(): readonly FooterShortcut[] { return this.transcript.shortcuts; }
+  get transcriptStatus(): string { return this.transcript.footerStatus; }
   get completionOpen(): boolean { return this.completion.engaged; }
   get sessionTabsFocused(): boolean { return this.root.visible && this.sessions.focused; }
   get sessionShortcuts(): readonly FooterShortcut[] { return this.sessions.shortcuts; }
@@ -144,11 +146,11 @@ export class AgentPanel {
   completionAvailable(command: CommandId): boolean { return this.active && this.completion.available(command); }
   completionCommand(command: CommandId): void { this.completion.command(command); }
   transcriptContext(): KeyContext | null { return this.transcript.keyContext(); }
-  focusTranscript(): void { this.transcript.focus(); }
+  focusTranscript(): void { this.completion.hide(); if (this.transcriptScroll.visible) this.transcript.focus(); }
   transcriptAvailable(command: CommandId): boolean { return this.active && this.transcript.available(command); }
   transcriptCommand(command: CommandId): void { this.transcript.command(command); }
   get focusTargets(): Renderable[] {
-    return this.root.visible ? [...this.sessions.focusTargets, ...(this.active ? [this.prompt, this.transcript.focusTarget] : [])] : [];
+    return this.root.visible ? [...this.sessions.focusTargets, ...(this.active ? [this.prompt, ...(this.transcriptScroll.visible ? [this.transcript.focusTarget] : [])] : [])] : [];
   }
 
   update(worktree: Worktree | null, selectedId: string | null, openIds: ReadonlySet<string>, visible: boolean): void {
@@ -185,7 +187,7 @@ export class AgentPanel {
     for (const id of this.drafts.keys()) if (!openIds.has(id)) this.drafts.delete(id);
     for (const id of this.inputDrafts.keys()) if (!openIds.has(id)) this.inputDrafts.delete(id);
     this.runtimePanel.visible = Boolean(visible && session && this.actions.onPrompt);
-    this.requestHeading.update(details?.sections, this.active);
+    this.runStatus.update(sessionId, details, this.active);
     this.sessionStatus.update(details?.telemetry, this.active);
     this.emptyPanel.visible = visible && !this.active;
     this.children.update(session?.subagents ?? [], this.active);
@@ -215,27 +217,42 @@ export class AgentPanel {
   };
 
   private resizeComposer = (): void => {
-    if (this.disposed || !this.composer || this.prompt.isDestroyed) return;
+    if (this.disposed || !this.composer || !this.statusRow || this.prompt.isDestroyed) return;
     const requested = Math.max(this.prompt.lineCount, this.prompt.editorView.getTotalVirtualLineCount());
     const signature = JSON.stringify([this.root.height, this.prompt.width, this.prompt.height, this.composer.height, this.sessions.root.visible,
-      this.requestHeading.root.visible, requested, this.completion?.open, this.completion?.root.height]);
+      this.statusRows, this.sessionStatus.root.height, requested, this.completion?.open, this.completion?.root.height]);
     if (signature === this.composerLayout) return;
     this.composerLayout = signature;
     const menuRows = this.completion?.open ? this.completion.root.height : 0;
-    const statusRows = 2, paddingRows = 2;
-    const reserved = (this.sessions.root.visible ? 1 : 0) + (this.requestHeading.root.visible ? 1 : 0) + statusRows + paddingRows + menuRows;
+    const fixedRows = (this.sessions.root.visible ? 1 : 0) + this.sessionStatus.root.height + menuRows;
+    // Tiny windows keep controls usable; normal layouts give work status a blank row on both sides.
+    const statusRows = this.root.height >= fixedRows + 5 ? 3 : 1;
+    if (this.statusRows !== statusRows) {
+      this.transcript.prepareLayoutChange();
+      this.statusRows = statusRows; this.statusRow.height = statusRows; this.statusRow.paddingY = statusRows === 3 ? 1 : 0;
+    }
+    const reserved = this.reservedRows() + menuRows;
+    // Prefer one conversation row over prompt padding while retaining the telemetry gutters.
+    const paddingRows = Math.max(0, Math.min(2, this.root.height - reserved - 2));
     // Preserve a conversation row when possible; temporary menus may use the last one.
-    const capacity = Math.max(1, this.root.height - reserved - 1);
+    const capacity = Math.max(1, this.root.height - reserved - paddingRows - 1);
     const lines = Math.max(1, Math.min(6, capacity, requested));
-    const height = lines + 2;
+    const height = lines + paddingRows;
+    const showTranscript = this.root.height > reserved + height;
+    if (this.transcriptScroll.visible !== showTranscript) {
+      this.transcript.prepareLayoutChange(); this.transcriptScroll.visible = showTranscript;
+    }
     if (this.composer.height !== height || this.prompt.height !== lines) {
       this.transcript.prepareLayoutChange();
       this.prompt.height = lines; this.composer.height = height;
     }
     this.completion?.reflow();
   };
+  private reservedRows(): number {
+    return (this.sessions.root.visible ? 1 : 0) + this.statusRows + this.sessionStatus.root.height;
+  }
   private completionRows(): number {
-    return Math.max(1, this.root.height - (this.sessions.root.visible ? 1 : 0) - (this.requestHeading.root.visible ? 1 : 0) - 2 - this.composer.height);
+    return Math.max(1, this.root.height - this.reservedRows() - this.composer.height);
   }
   private saveDraft(): void {
     if (!this.promptSessionId) return;
@@ -277,7 +294,7 @@ export class AgentPanel {
     if (this.disposed) return;
     this.rememberScroll(); this.disposed = true;
     this.renderer.off("resize", this.resize); this.renderer.removePostProcessFn(this.resizeComposer);
-    this.completion.dispose(); this.prompt.dispose(); this.sessionStatus.dispose(); this.transcript.dispose(); this.sessions.dispose(); this.children.dispose();
+    this.completion.dispose(); this.prompt.dispose(); this.runStatus.dispose(); this.sessionStatus.dispose(); this.transcript.dispose(); this.sessions.dispose(); this.children.dispose();
     this.prompt.off("resize", this.resizeComposer); this.prompt.off("line-info-change", this.resizeComposer);
     this.prompt.off(InputRenderableEvents.INPUT, this.handleDraftInput);
   }
