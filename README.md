@@ -245,6 +245,9 @@ Tool details start folded; user/Agent text starts expanded. Thinking is always v
 no label or fold controls; old Thinking fold preferences are ignored and cleared. Other nonempty
 sections can be folded manually. Error summaries stay visible outside the folded body, and folding never deletes text.
 Image attachments have a text placeholder; image rendering is not part of this reader.
+Empty conversations show a subdued, centered logo without introductory text or an idle `Ready` row.
+The temporary artwork is isolated in `src/ui/radian-logo.ts` so the finalized logo can replace it
+without changing transcript behavior. Short viewports use a compact mark; the first message replaces it.
 
 The former pinned **Request** row is removed; the original user message remains in the transcript.
 A passive work-status row above the prompt shows a shared spinner and `Working on “request”` using
@@ -252,7 +255,7 @@ the latest request actually present in the selected conversation. Whitespace col
 text is clipped on grapheme/cell boundaries. Drafts, rejected input and handled commands never
 replace that request. Without request metadata it shows `Working…`, not a guessed title.
 Settled state changes immediately to `Completed`, `Cancelled`, `Stopped` or `Failed`; an unreported
-run shows `Ready`. Completion metadata is scoped to the latest request. Spinner tails never delay
+run with transcript content shows `Ready`. Completion metadata is scoped to the latest request. Spinner tails never delay
 these results, and switching/hiding a conversation cancels its indicator. Steer and queue semantics
 are unchanged.
 

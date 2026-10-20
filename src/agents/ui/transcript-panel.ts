@@ -13,6 +13,7 @@ import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
 import type { TranscriptSection } from "../transcript.ts";
 import { emptyTranscriptView, type TranscriptViewState } from "../transcript-preferences.ts";
+import { RadianLogo } from "../../ui/radian-logo.ts";
 
 // Reuse native grapheme-aware cursor/selection/layout, but never install editing or
 // paste handlers. Unbound keys (including a timed-out keymap prefix) are inert.
@@ -40,7 +41,7 @@ export type TranscriptOptions = {
 export class TranscriptPanel {
   readonly scroll: ScrollBoxRenderable;
   private readonly help: TextRenderable;
-  private readonly empty: TextRenderable;
+  private readonly empty: RadianLogo;
   private helpPosition = 0;
   private helpFollow = false;
   private readonly rows = new Map<string, Row>();
@@ -83,9 +84,10 @@ export class TranscriptPanel {
       verticalScrollbarOptions: { onMouseDown: (event) => { if (event.button === 0) this.scrollIntent(); } },
     });
     this.help = new TextRenderable(renderer, { width: "100%", flexShrink: 0, wrapMode: "word", selectable: false, visible: false });
-    this.empty = new TextRenderable(renderer, { width: "100%", flexShrink: 0, wrapMode: "word", selectable: false,
-      content: "No messages yet. Enter a prompt to start this session explicitly." });
-    this.scroll.add(this.help); this.scroll.add(this.empty);
+    this.empty = new RadianLogo(renderer);
+    this.scroll.add(this.help);
+    // Branding belongs to the viewport, not scrollable or selectable transcript content.
+    this.scroll.viewport.add(this.empty);
     this.scroll.verticalScrollBar.on("change", this.rememberScroll);
     this.scroll.content.on("resize", this.applyTarget);
     this.scroll.viewport.on("resize", this.applyTarget);
@@ -97,7 +99,7 @@ export class TranscriptPanel {
       this.headerSyntax.registerStyle("hint", { fg: colors.muted });
       this.headerSyntax.registerStyle("error", { fg: colors.error });
       updateTranscriptMarkdownStyles(this.proseSyntax, colors, false); updateTranscriptMarkdownStyles(this.thinkingSyntax, colors, true);
-      this.help.fg = colors.muted; this.empty.fg = colors.muted;
+      this.help.fg = colors.muted;
       this.paint();
     });
   }
@@ -149,7 +151,8 @@ export class TranscriptPanel {
     if (switched) { this.positionIntent = false; this.selectionHeldFor = null; this.geometry = undefined; }
     const hadFocus = this.focused;
     const previousIndex = this.order.indexOf(this.state?.selectedId ?? "");
-    const incoming = sections ?? [{ id: "legacy-output", kind: "notice", title: "Transcript", text: output, status: "complete" }];
+    const incoming: readonly TranscriptSection[] = sections ?? (output
+      ? [{ id: "legacy-output", kind: "notice", title: "Transcript", text: output, status: "complete" }] : []);
     const changed = switched || incoming.length !== this.order.length || incoming.some((section, index) => {
       const previous = this.rows.get(this.order[index] ?? "")?.section;
       return !previous || section.id !== previous.id || section.text !== previous.text || section.title !== previous.title

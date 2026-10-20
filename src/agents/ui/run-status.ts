@@ -22,7 +22,8 @@ function display(state: ExecutionState | null | undefined): Display {
   if (outcome === "unfinished" || !outcome && assistant?.status === "unfinished") return { label: "Stopped", detail, color: "warning" };
   if (outcome === "error" || state?.error) return { label: "Failed", detail: state?.error ? `: ${singleLine(state.error)}` : detail, color: "error" };
   if (outcome === "complete" || state?.status === "complete") return { label: "Completed", detail, color: "success" };
-  return { label: "Ready", detail: "", color: "muted" };
+  const hasTranscript = state?.sections !== undefined ? sections.length > 0 : !!state?.output;
+  return { label: hasTranscript ? "Ready" : "", detail: "", color: "muted" };
 }
 
 // Only runtime transcript requests can label the work; drafts, admissions and lookup results cannot.
@@ -47,6 +48,8 @@ export class RunStatus {
     this.root.once(RenderableEvents.DESTROYED, () => this.dispose());
   }
 
+  get hasContent(): boolean { return this.root.visible && (!!this.current.label || this.spinner.root.visible); }
+
   update(sessionId: string | null, state: ExecutionState | null | undefined, visible: boolean): void {
     if (this.disposed || this.root.isDestroyed) return;
     const scope = sessionId ? JSON.stringify([sessionId, state?.conversationId]) : null;
@@ -62,6 +65,7 @@ export class RunStatus {
     if (!this.root || this.root.isDestroyed || !this.text || this.disposed) return;
     const colors: UiColors = uiTheme(this.renderer).colors;
     this.spinner.root.fg = colors.accent;
+    this.text.visible = !!this.current.label;
     const width = Math.max(0, this.root.width - 2), label = truncateCells(this.current.label, width);
     this.text.content = new StyledText([
       { __isChunk: true, text: label, fg: colors[this.current.color] },

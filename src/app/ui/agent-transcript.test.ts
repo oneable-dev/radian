@@ -282,7 +282,7 @@ test("좁은 화면의 도움말은 스크롤 가능하고 닫으면 기존 본�
   } finally { await app.close(); }
 });
 
-test("전체 접기 설정은 스트리밍에도 유지되며 빈 대화로 바뀌면 안전한 안내로 복귀한다", async () => {
+test("전체 접기 설정은 스트리밍에도 유지되며 빈 대화로 바뀌면 로고로 복귀한다", async () => {
   const app = await mount();
   try {
     await app.transcript(); app.mockInput.pressKey("z"); app.mockInput.pressKey("m"); await app.render();
@@ -293,7 +293,8 @@ test("전체 접기 설정은 스트리밍에도 유지되며 빈 대화로 바�
 
     await app.update([]);
 
-    expect(app.captureCharFrame()).toContain("No messages yet");
+    expect(app.renderer.root.findDescendantById("radian-logo")?.visible).toBe(true);
+    expect(app.captureCharFrame()).not.toContain("No messages yet");
     expect(app.state()?.selectedId).toBeNull();
     expect(app.state()?.mode).toBe("sections");
     app.mockInput.pressEscape(); await app.render();

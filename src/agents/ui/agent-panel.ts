@@ -194,7 +194,7 @@ export class AgentPanel {
     this.root.gap = 0;
     this.root.alignItems = "stretch";
     this.root.justifyContent = "flex-start";
-    const output = details?.output || "Enter a prompt to start this session explicitly.";
+    const output = details?.output ?? "";
     const transcriptFocused = this.transcript.focused;
     this.transcript.update(sessionId, details?.sections, output, this.active, details?.conversationId);
     if (replaced && this.active && transcriptFocused) this.prompt.focus();
@@ -219,17 +219,19 @@ export class AgentPanel {
   private resizeComposer = (): void => {
     if (this.disposed || !this.composer || !this.statusRow || this.prompt.isDestroyed) return;
     const requested = Math.max(this.prompt.lineCount, this.prompt.editorView.getTotalVirtualLineCount());
+    const showStatus = this.runStatus.hasContent || this.prompt.activity.root.visible || this.children.root.visible;
     const signature = JSON.stringify([this.root.height, this.prompt.width, this.prompt.height, this.composer.height, this.sessions.root.visible,
-      this.statusRows, this.sessionStatus.root.height, requested, this.completion?.open, this.completion?.root.height]);
+      this.statusRows, showStatus, this.sessionStatus.root.height, requested, this.completion?.open, this.completion?.root.height]);
     if (signature === this.composerLayout) return;
     this.composerLayout = signature;
     const menuRows = this.completion?.open ? this.completion.root.height : 0;
     const fixedRows = (this.sessions.root.visible ? 1 : 0) + this.sessionStatus.root.height + menuRows;
     // Tiny windows keep controls usable; normal layouts give work status a blank row on both sides.
-    const statusRows = this.root.height >= fixedRows + 5 ? 3 : 1;
+    const statusRows = showStatus ? this.root.height >= fixedRows + 5 ? 3 : 1 : 0;
     if (this.statusRows !== statusRows) {
       this.transcript.prepareLayoutChange();
-      this.statusRows = statusRows; this.statusRow.height = statusRows; this.statusRow.paddingY = statusRows === 3 ? 1 : 0;
+      this.statusRows = statusRows; this.statusRow.visible = showStatus;
+      this.statusRow.height = statusRows; this.statusRow.paddingY = statusRows === 3 ? 1 : 0;
     }
     const reserved = this.reservedRows() + menuRows;
     // Prefer one conversation row over prompt padding while retaining the telemetry gutters.

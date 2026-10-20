@@ -26,7 +26,7 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     getSessionDetails: (id) => states[id] ?? null, initialDrafts: { a1: "unsent next command", a2: "second session draft", b1: "feature draft" }, ...actions });
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
   const get = (id: string) => { const node = app.renderer.root.findDescendantById(id); if (!node) throw new Error(`Missing ${id}`); return node; };
-  const status = () => { const node = get("agent-run-status-text"); return app.captureCharFrame().split("\n")[node.y]!.slice(node.x, node.x + node.width).trimEnd(); };
+  const status = () => { const node = get("agent-run-status-text"); return node.visible ? app.captureCharFrame().split("\n")[node.y]!.slice(node.x, node.x + node.width).trimEnd() : ""; };
   const update = async () => { selection.replaceSnapshot(selection.snapshot); await render(); };
   await render();
   return { ...app, clock, view, selection, states, sent, render, get, status, update, async close() { view.dispose(); await app.dispose(); } };
@@ -130,7 +130,7 @@ test("new 교체는 같은 탭과 다른 초안을 유지하고 이전 요청·�
     app.mockInput.pressKey("e", { ctrl: true }); prompt.value = "/new"; app.mockInput.pressEnter(); await app.render();
 
     expect(app.selection.sessionId).toBe("a1"); expect(tabStrip.getChildren()).toHaveLength(count); expect(app.get("session:demo:main:a1")).toBe(tab);
-    expect(app.status()).toBe("Ready"); expect(app.get("agent-run-loading").visible).toBe(false); expect(app.captureCharFrame()).not.toContain("PROGRESS-99");
+    expect(app.status()).toBe(""); expect(app.get("agent-run-loading").visible).toBe(false); expect(app.captureCharFrame()).not.toContain("PROGRESS-99");
     expect(prompt.value).toBe(""); expect(app.renderer.currentFocusedRenderable).toBe(prompt);
     expect(app.view.workViewPreferences.agentViews?.a1).toMatchObject({ mode: "sections", selectedId: null, follow: true });
     expect(app.view.promptDrafts).toMatchObject({ a2: "second session draft", b1: "feature draft" });
@@ -148,6 +148,6 @@ test("대화 교체 snapshot과 늦은 수락이 새 초안을 지우거나 작�
     prompt.value = "next conversation draft"; accepted.resolve(ok(undefined)); await app.render();
 
     expect(prompt.value).toBe("next conversation draft"); expect(app.view.promptDrafts.a1).toBe("next conversation draft");
-    expect(app.selection.sessionId).toBe("a1"); expect(app.status()).toBe("Ready");
+    expect(app.selection.sessionId).toBe("a1"); expect(app.status()).toBe("");
   } finally { accepted.resolve(ok(undefined)); await app.close(); }
 });

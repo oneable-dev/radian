@@ -15,7 +15,7 @@ async function mount(width = 70) {
   const status = new RunStatus(app.renderer); app.renderer.root.add(status.root);
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
   const node = () => app.renderer.root.findDescendantById("agent-run-status-text")!;
-  return { ...app, clock, status, render, node, text: () => app.captureCharFrame().split("\n")[node().y]!.slice(node().x).trimEnd(),
+  return { ...app, clock, status, render, node, text: () => node().visible ? app.captureCharFrame().split("\n")[node().y]!.slice(node().x).trimEnd() : "",
     spinner: () => app.renderer.root.findDescendantById("agent-run-loading")!, async close() { status.dispose(); await app.dispose(); } };
 }
 
@@ -93,7 +93,7 @@ test("화면 숨김·대화 교체·제거는 이전 스피너를 즉시 정리�
     app.status.update("a", state, false); expect(app.spinner().visible).toBe(false);
     app.status.update("a", state, true); expect(app.spinner().visible).toBe(true);
     app.status.update("a", { status: null, error: null, output: "", sections: [], conversationId: "new" }, true); await app.render();
-    expect(app.text()).toBe("Ready"); expect(app.spinner().visible).toBe(false);
+    expect(app.text()).toBe(""); expect(app.spinner().visible).toBe(false); expect(app.status.hasContent).toBe(false);
     app.status.update("a", state, true); app.status.root.destroyRecursively(); app.clock.advance(5000);
     expect(() => app.status.update("a", state, true)).not.toThrow();
   } finally { await app.close(); }
