@@ -25,7 +25,7 @@ function palette(light: boolean): TerminalColors {
     cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null };
 }
 
-test("검색 영역은 사이드바 전체 폭과 세 줄 높이를 쓰고 입력은 중앙 한 줄에 정렬한다", async () => {
+test("Workspace 제목 없이 검색 영역부터 시작하고 세 줄 검색 높이와 입력 정렬을 유지한다", async () => {
   const app = await mount();
   try {
     // 작업 화면의 너비는 바꾸지 않고 검색 배경만 양쪽 inset까지 확장한다.
@@ -34,12 +34,34 @@ test("검색 영역은 사이드바 전체 폭과 세 줄 높이를 쓰고 입�
     expect(sidebar.width).toBe(40);
     expect(app.get("work-panel").width).toBe(80);
     expect(field.x).toBe(sidebar.x); expect(field.width).toBe(sidebar.width - 1);
+    expect(field.y).toBe(sidebar.y);
+    const sidebarText = app.captureCharFrame().split("\n").slice(sidebar.y, sidebar.y + sidebar.height)
+      .map((line) => line.slice(sidebar.x, sidebar.x + sidebar.width)).join("\n");
+    expect(sidebarText).not.toContain("Workspace");
     expect(field.height).toBe(3); expect(app.input.height).toBe(1);
     expect(app.input.y).toBe(field.y + 1); expect(app.input.x - sidebar.x).toBe(2);
     expect(app.input.width).toBe(field.width - 4);
     expect(tree.y - field.y - field.height).toBe(1);
     expect(app.captureCharFrame()).toContain("Search repo/worktree/branch");
     expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Tab과 Shift+Tab은 제거된 제목에 멈추지 않고 검색과 결과 사이를 바로 이동한다", async () => {
+  // With only one sidebar destination, its title must not consume a focus stop.
+  const app = await mount();
+  try {
+    app.mockInput.pressKey("f", { ctrl: true }); await app.render();
+
+    // Traverse forward to results and back without changing the query or active worktree.
+    app.mockInput.pressTab(); await app.render();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree");
+    app.mockInput.pressTab({ shift: true }); await app.render();
+
+    // Navigation is local UI state: no prompt, session creation or close request is sent.
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+    expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.input.value).toBe("");
+    expect(app.view.promptDrafts.a1).toBe("keep agent draft"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -77,6 +99,7 @@ test("리사이즈는 검색어·커서·초안과 일관된 검색 높이를 �
 
     app.resize(60, 24); await app.render();
     expect(field.height).toBe(3); expect(field.width).toBe(25);
+    expect(field.y).toBe(app.get("workspace-sidebar").y);
     expect(app.input.x - app.get("workspace-sidebar").x).toBe(1);
     app.resize(60, 12); await app.render();
     expect(field.height).toBe(3); expect(app.input.y).toBe(field.y + 1);

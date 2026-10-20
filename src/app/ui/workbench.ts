@@ -68,7 +68,6 @@ export class Workbench {
   private readonly agent: AgentPanel;
   private readonly workPanel: BoxRenderable;
   private readonly workTabs: Record<WorkView, Button>;
-  private readonly sidebarTabs: BoxRenderable;
   private readonly viewTabs: BoxRenderable;
   private readonly editor: EditorPanel;
   private readonly terminals: TerminalPanel;
@@ -81,7 +80,6 @@ export class Workbench {
   private readonly buttonActions = new WeakMap<Renderable, () => void>();
   private readonly keymap: Keymap;
   private readonly router: KeyRouter;
-  private readonly workspaceTab: Button;
   private readonly rows = new Map<string, RowView>();
   private rowOrder: string[] = [];
   private navigationKey: string | null = null;
@@ -113,10 +111,6 @@ export class Workbench {
       placeholder: "Search repo/worktree/branch", placeholderColor: colors.muted,
       textColor: colors.text, backgroundColor: colors.panel, focusedBackgroundColor: colors.selected,
     });
-    const tabs = this.sidebarTabs = new BoxRenderable(renderer, { height: 3, paddingY: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    this.workspaceTab = this.button("Workspace", () => this.focusNavigation(), "Open Workspace");
-    tabs.add(this.workspaceTab);
-    this.sidebar.add(tabs);
     this.searchBox.add(this.search); this.sidebar.add(this.searchBox);
     this.tree = new ScrollBoxRenderable(renderer, {
       id: "workspace-tree", flexGrow: 1, minHeight: 0, marginTop: 1, scrollX: false,
@@ -481,7 +475,7 @@ export class Workbench {
     }
     const targets: Renderable[] = [];
     if (this.sidebar.visible) {
-      targets.push(this.search, this.workspaceTab, this.tree);
+      targets.push(this.search, this.tree);
     }
     targets.push(...Object.values(this.workTabs));
     targets.push(...this.agent.focusTargets);
@@ -503,7 +497,6 @@ export class Workbench {
     const { horizontal, vertical } = panelSpacing(this.renderer);
     this.sidebar.width = this.renderer.width < 80 ? 26 : 40;
     this.sidebar.paddingX = horizontal; this.sidebar.paddingBottom = vertical;
-    this.sidebarTabs.height = 1 + vertical; this.sidebarTabs.paddingTop = 0; this.sidebarTabs.paddingBottom = vertical;
     this.viewTabs.height = 1 + vertical; this.viewTabs.paddingTop = 0; this.viewTabs.paddingBottom = vertical;
     this.viewTabs.paddingX = horizontal;
     this.searchBox.height = 1 + vertical * 2; this.searchBox.paddingY = vertical;
@@ -659,7 +652,6 @@ export class Workbench {
   }
   private paintTabs(): void {
     for (const [name, tab] of Object.entries(this.workTabs)) tab.active = name === this.displayedWorkView;
-    this.workspaceTab.active = true;
   }
 
   dispose(): void {

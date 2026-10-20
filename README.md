@@ -141,7 +141,8 @@ connections, not the underlying agents or native processes.
 
 ### Work views
 
-The left panel retains Workspace navigation. The right panel switches between **Agents**,
+The left panel starts directly with search and workspace navigation, without a tab heading.
+The right panel switches between **Agents**,
 **Editor**, **Git** and **Terminal**, with one visible view per worktree and Agents as the initial view.
 Tree cursor movement is only navigation; Enter or a direct worktree click commits the selection.
 Each worktree separately remembers its work view and selected Agent session. Within Agents, session
