@@ -526,12 +526,12 @@ test("접힌 오류 요약도 커서와 줄 선택으로 복사할 수 있지만
   const app = await mount([{ ...section(text), kind: "tool", title: "read", status: "error", error: "Permission denied" }]);
   try {
     await app.enter();
-    expect(app.body().plainText).toBe("[read] (Ctrl+o to expand)\nPermission denied");
+    expect(app.body().plainText).toBe("[read] (Ctrl+o to expand)\n\nPermission denied");
     expect(app.captureCharFrame()).not.toContain("HIDDEN_STACK_TRACE");
 
-    app.mockInput.pressKey("v", { shift: true }); app.mockInput.pressKey("j"); await app.copy();
+    app.mockInput.pressKey("v", { shift: true }); app.mockInput.pressKey("j"); app.mockInput.pressKey("j"); await app.copy();
 
-    expect(app.copies).toEqual(["[read] (Ctrl+o to expand)\nPermission denied"]);
+    expect(app.copies).toEqual(["[read] (Ctrl+o to expand)\n\nPermission denied"]);
     expect(app.captureCharFrame()).not.toContain("HIDDEN_STACK_TRACE");
     app.mockInput.pressKey("y", { shift: true }); await app.render(); expect(app.copies.at(-1)).toBe(text);
     expect(app.prompts).toEqual([]);

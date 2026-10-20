@@ -315,7 +315,7 @@ export class TranscriptPanel {
     const timeout = section.timeoutSeconds !== undefined ? ` (timeout ${section.timeoutSeconds}s)` : "";
     const key = this.hint("transcript.fold", "transcript");
     const action = folded ? "expand" : compactionNotice(section) ? "collapse" : "";
-    return label + timeout + (action && key ? ` (${key} to ${action})` : "") + (folded && section.error ? `\n${section.error}` : "");
+    return label + timeout + (action && key ? ` (${key} to ${action})` : "") + (folded && section.error ? `\n\n${section.error}` : "");
   }
   private highlightHeader(row: Row): void {
     row.header.clearAllHighlights();

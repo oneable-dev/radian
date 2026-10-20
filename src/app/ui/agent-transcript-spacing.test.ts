@@ -88,6 +88,32 @@ test("도구를 펼치거나 접고 요약 원문에 진입해도 대칭 여백�
   } finally { await app.close(); }
 });
 
+test.each([120, 60])("너비 %i의 접힌·펼친 명령 오류 위에는 빈 줄을 정확히 하나 둔다", async (width) => {
+  // A multiline command exposes the boundary between its last visual line and the error summary.
+  const app = await mount({ id: "failed-command", kind: "tool", title: "bash", command: "printf 'Header output'\nfalse",
+    text: "RAW_TOOL_RESULT", status: "error", error: "Command exited with code 1" });
+  try {
+    app.resize(width, 24); await app.render();
+    const expectErrorGap = () => {
+      const lines = app.captureCharFrame().split("\n").map((line) => line.slice(app.card.x, app.card.x + app.card.width));
+      const error = lines.findIndex((line) => line.includes("Command exited with code 1"));
+      expect(error).toBeGreaterThan(1);
+      expect(lines[error - 1]!.trim()).toBe("");
+      expect(lines[error - 2]!.trim()).not.toBe("");
+    };
+
+    // Folding, expansion and repainting must use the same one-row error separation.
+    expectErrorGap(); expect(app.captureCharFrame()).not.toContain("RAW_TOOL_RESULT");
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME");
+    app.mockInput.pressKey("o", { ctrl: true }); await app.render();
+    expectErrorGap(); expect(app.captureCharFrame()).toContain("RAW_TOOL_RESULT");
+    app.mockInput.pressKey("o", { ctrl: true }); await app.render();
+
+    expectErrorGap(); expectVerticalInsets(app.card);
+    expect(app.prompts).toEqual([]); expect(app.view.promptDrafts.a1).toBe("Keep my draft");
+  } finally { await app.close(); }
+});
+
 test("섹션이 없는 기존 평문 출력은 추가 카드 여백 없이 그대로 표시한다", async () => {
   // Legacy output is one text surface rather than a structured transcript card.
   const app = await mount(undefined);
