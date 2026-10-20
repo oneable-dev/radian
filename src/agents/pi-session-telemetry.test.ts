@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { ManualClock } from "@opentui/core/testing";
 import { UsageMonitor } from "../usage/monitor.ts";
 import { ok } from "../result.ts";
@@ -150,6 +150,96 @@ test("SDK 모델·effort·컨텍스트를 전달하고 Fast를 임의로 활성�
     expect(telemetry.fast).toBe(false); expect(telemetry.weekly).toBeNull();
     expect(sent).toBe(outgoing); expect(outgoing).toEqual({ model: "model-fixture" });
   } finally { await app.close(); }
+});
+
+test("압축 직후에는 남은 컨텍스트만 로컬 추정하고 다음 정상 응답의 사용량으로 교체한다", async () => {
+  // 압축 전 사용량과 삭제된 기록을 섞지 않고 시스템·요약·유지 메시지만 합산해야 한다.
+  let requests = 0;
+  const app = await mount(async () => { requests++; });
+  const manager = app.session.sessionManager;
+  try {
+    manager.appendMessage({ role: "system", content: "s".repeat(800), timestamp: 0 });
+    manager.appendMessage({ role: "user", content: "omitted".repeat(40000), timestamp: 1 });
+    const kept = manager.appendMessage({ role: "user", content: [{ type: "text", text: "u".repeat(4000) },
+      { type: "image", data: "AA==", mimeType: "image/png" }], timestamp: 2 });
+    const assistant = fixtureMessage("openai-codex-responses", "telemetry-fixture", "model-fixture");
+    assistant.content = [{ type: "text", text: "a".repeat(400) }];
+    assistant.usage.input = 72000; assistant.usage.totalTokens = 72000;
+    manager.appendMessage(assistant);
+    manager.appendCompaction("c".repeat(8000), kept, 72000);
+    expect(app.session.getContextUsage()?.tokens).toBeNull();
+
+    // SDK가 미확정 값을 반환해도 추가 모델 호출 없이 압축 후 크기를 제공한다.
+    const context = app.executor.state.telemetry?.context;
+
+    // 시스템 200 + 요약 2000 + 입력 1000 + 이미지 1200 + 답변 100 토큰이다.
+    expect(context).toEqual({ usedTokens: 4500, maxTokens: 200000 });
+    expect(requests).toBe(0);
+
+    // 새 응답의 사용량이 확보되면 로컬 추정치나 압축 전 캐시를 유지하지 않는다.
+    expectOk(await app.executor.prompt("Continue with measured usage"));
+    expect(app.executor.state.telemetry?.context).toEqual({ usedTokens: 72000, maxTokens: 200000 });
+    expect(requests).toBe(1);
+  } finally { await app.close(); }
+});
+
+test("추정 컨텍스트는 반복 조회에서 캐시하고 확정 메시지·내용 수정·시스템 변경 때만 갱신한다", async () => {
+  // 압축 이후 사용량을 받을 때까지 화면 갱신마다 전체 컨텍스트를 재구성하지 않아야 한다.
+  const app = await mount(async () => {}), manager = app.session.sessionManager;
+  manager.appendCompaction("c".repeat(400), null, 72000);
+  const projection = spyOn(manager, "buildSessionProjection");
+  try {
+    expect(app.executor.state.telemetry?.context).toEqual({ usedTokens: 100, maxTokens: 200000 });
+    const reads = projection.mock.calls.length;
+
+    // 같은 대화 위치를 조회하는 스냅샷은 기존 추정치를 그대로 재사용한다.
+    for (let i = 0; i < 50; i++) expect(app.executor.state.telemetry?.context?.usedTokens).toBe(100);
+    expect(projection.mock.calls.length).toBe(reads);
+
+    // 확정 입력과 append-only 수정은 새 대화 위치이므로 즉시 반영한다.
+    const user = manager.appendMessage({ role: "user", content: "u".repeat(400), timestamp: 1 });
+    expect(app.executor.state.telemetry?.context?.usedTokens).toBe(200);
+    manager.appendContextEdit(user, { content: "u".repeat(800) });
+    expect(app.executor.state.telemetry?.context?.usedTokens).toBe(300);
+
+    // 시스템 패치는 이전 내용을 누적하지 않고 현재 유효한 프롬프트로 합산한다.
+    manager.appendMessage({ role: "system", content: "", sections: { instruction: "s".repeat(400) }, timestamp: 2 });
+    expect(app.executor.state.telemetry?.context?.usedTokens).toBe(400);
+    manager.appendMessage({ role: "system", content: "", sections: { instruction: "s".repeat(800) }, timestamp: 3 });
+    expect(app.executor.state.telemetry?.context?.usedTokens).toBe(500);
+  } finally { projection.mockRestore(); await app.close(); }
+});
+
+test("실제 SDK 수동 압축이 완료되면 다음 요청 없이 컨텍스트 잔량을 다시 제공한다", async () => {
+  // 공급자 경계만 오프라인으로 대체하고 SDK의 실제 압축·체크포인트 생성을 사용한다.
+  const app = await mount(async () => {});
+  try {
+    app.session.settingsManager.applyOverrides({ compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } });
+    expectOk(await app.executor.prompt("Compact this conversation"));
+
+    // 수동 압축 직후 SDK 토큰 수는 null이지만 Radian은 현재 체크포인트를 추정한다.
+    expectOk(await app.executor.compact());
+
+    const context = app.executor.state.telemetry?.context;
+    expect(app.session.getContextUsage()?.tokens).toBeNull();
+    expect(context?.usedTokens).toBeGreaterThan(0);
+    expect(context?.usedTokens).toBeLessThan(72000); expect(context?.maxTokens).toBe(200000);
+    expect(app.executor.state.status).toBe("complete");
+    expect(app.executor.state.sections?.at(-1)?.title).toBe("Context compacted");
+  } finally { await app.close(); }
+});
+
+test("모델 한도가 없으면 압축 기록이 있어도 컨텍스트를 임의로 채우지 않는다", async () => {
+  // SDK 모델이 미확정인 경우에는 추정 토큰이 있어도 잔여 비율의 분모를 만들 수 없다.
+  const app = await mount(async () => {});
+  app.session.sessionManager.appendCompaction("c".repeat(400), null, 72000);
+  const usage = spyOn(app.session, "getContextUsage").mockReturnValue(undefined);
+  try {
+    // 모델 메타데이터가 없는 상태로 읽어도 100%나 임의의 총한도로 대체하지 않는다.
+    const context = app.executor.state.telemetry?.context;
+
+    expect(context).toBeNull();
+  } finally { usage.mockRestore(); await app.close(); }
 });
 
 test("확장의 기존 요청 변환과 응답 관찰을 보존하면서 Fast와 weekly 헤더를 읽는다", async () => {

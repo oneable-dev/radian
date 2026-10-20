@@ -221,6 +221,19 @@ test("미확정 context와 미지원 usage는 바 없이 -로 표시하고 세�
   } finally { await app.close(); }
 });
 
+test("압축 후 추정 컨텍스트도 별도 표식 없이 현재 모델 한도의 잔량 퍼센트로 표시한다", async () => {
+  // 사용량이 미확정이면 추정값을 받되 실제 모델의 총한도로 잔량을 계산한다.
+  const app = await mount();
+  try {
+    // 87.2만 토큰 모델에서 추정 사용량 4만 토큰은 반올림한 잔량 95%이다.
+    await app.set({ ...sample(), context: { usedTokens: 40000, maxTokens: 872000 } });
+
+    // 기존 바·퍼센트 형식을 유지하며 틸드나 미확정 대시를 덧붙이지 않는다.
+    expect(app.line()).toMatch(/context [█▏▎▍▌▋▊▉░]+ 95%/);
+    expect(app.line()).not.toContain("~"); expect(app.line()).not.toContain("context -");
+  } finally { await app.close(); }
+});
+
 test("usage가 없거나 조회 중·실패이면 context 바만 유지하고 사용률 바나 시간을 꾸미지 않는다", async () => {
   const app = await mount();
   try {

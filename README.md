@@ -553,8 +553,15 @@ within the same row. Other terminals retain a bold Nerd Font glyph; individual c
 not assumed. No terminal font settings are changed. Asset attribution is in
 `src/ui/provider-icon-data.LICENSE`.
 
-Context comes from Pi's estimated usage and model limit. After compaction it can be unknown until
-the next response. Radian supplies `/fast [on|off|status]` for OpenAI Responses/Codex models, including
+Context comes from Pi's usage estimate and model limit. When Pi reports unknown usage after
+compaction, Radian locally estimates the current system/tool checkpoint, summary and retained messages
+with Pi's token estimator, without reusing pre-compaction usage. The estimate uses the same percentage
+and bar without an approximation marker; SDK usage takes precedence as soon as it is available again.
+Context calculations are cached by finalized conversation position and model, not repeated for streamed
+tokens or repaints. Missing model limits remain unknown. Existing repository services need an explicit
+restart to load this fallback; reopening only the TUI does not update it.
+
+Radian supplies `/fast [on|off|status]` for OpenAI Responses/Codex models, including
 prompt completion. Its per-model, per-session state starts **off**, so a restored session does not
 remain unknown merely because it has not sent a request. `/fast on` opts into `service_tier: priority`;
 `/fast off` removes an explicit priority/fast tier. These commands themselves never invoke a model or

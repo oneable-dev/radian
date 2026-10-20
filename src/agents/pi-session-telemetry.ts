@@ -1,5 +1,5 @@
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { estimateTokens, type AgentSession } from "@earendil-works/pi-coding-agent";
+import { getCurrentSystemMessage, type Api, type Model } from "@earendil-works/pi-ai";
 import type { SessionTelemetry, WeeklyQuota } from "./telemetry.ts";
 import type { UsageMonitor } from "../usage/monitor.ts";
 import type { UsageSubscription } from "../usage/model.ts";
@@ -107,7 +107,15 @@ export class PiSessionTelemetry {
     const key = `${this.session.sessionManager.getLeafId()}/${model ? scope(model) : ""}/${model?.contextWindow}`;
     if (key !== this.contextCache?.key) {
       const usage = this.session.getContextUsage();
-      this.contextCache = { key, value: usage ? { usedTokens: usage.tokens, maxTokens: usage.contextWindow } : null };
+      let usedTokens = usage?.tokens ?? null;
+      if (usage && usedTokens === null) {
+        // Pre-compaction usage is stale. Estimate only the current projection, replaying system patches once.
+        const { messages } = this.session.sessionManager.buildSessionProjection();
+        const system = getCurrentSystemMessage(messages);
+        usedTokens = system ? estimateTokens(system) : 0;
+        for (const message of messages) if (message.role !== "system") usedTokens += estimateTokens(message);
+      }
+      this.contextCache = { key, value: usage ? { usedTokens, maxTokens: usage.contextWindow } : null };
     }
     const matches = model !== undefined && scope(model) === this.requestScope;
     return { provider: model?.provider ?? null, model: model?.id ?? null,
