@@ -1133,9 +1133,11 @@ execution row. Model/context/account usage remains on the separate lower telemet
 
 The SDK adapter normalizes events into display snapshots. `agent_end` alone is not completion:
 automatic retries keep the run working, and `agent_settled` plus the final outcome determine
-completion/failure. Aborted or unreported outcomes leave the session-tab status glyph blank,
-never implying successful completion or a guessed idle/waiting state. Reserved badge cells preserve
-tab alignment. Additional idle/waiting/cancelled icon policies are not defined here.
+completion/failure. Aborted or unreported outcomes show no session-tab status badge or extra gap,
+never implying successful completion or a guessed idle/waiting state. Once any spinner tail ends,
+the unused badge cells are reclaimed for the session ID; the tab keeps its normal one-cell outer
+padding. Reported outcomes retain their badge alignment. Additional idle/waiting/cancelled icon
+policies are not defined here.
 
 Use a Nerd Font-enabled terminal to view the glyphs. Current mappings are `nf-cod-repo`
 (U+EA62), `nf-cod-folder` (U+EA83), `nf-cod-check` (U+EAB2), `nf-cod-close` (U+EA76),

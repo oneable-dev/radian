@@ -73,14 +73,17 @@ export class SessionTabs {
             event.preventDefault(); event.stopPropagation(); this.list.focus(); this.actions.select(session.id);
           } });
         const title = new TextRenderable(this.renderer, { height: 1, minWidth: 1, wrapMode: "none", selectable: false });
-        const status = new StatusIndicator(this.renderer);
+        const status = new StatusIndicator(this.renderer, () => {
+          const current = this.tabs.get(session.id); if (!current) return;
+          this.setTitle(current, session.id); this.reveal = true; this.renderer.requestRender();
+        });
         const close = this.actions.button("×", () => { this.list.focus(); this.actions.close(session.id); }, "Close session");
         close.id = `close-session:${session.id}`; close.paddingX = 0;
         root.add(status.root); root.add(title); root.add(close); this.list.add(root);
         tab = { root, title, status }; this.tabs.set(session.id, tab);
       }
-      this.setTitle(tab, session.id);
       tab.status.update(sessionStatus(session), this.visible);
+      this.setTitle(tab, session.id);
       if (this.list.getChildren()[index] !== tab.root) { this.list.add(tab.root, index); this.reveal = true; }
     }
     // The empty strip remains a keyboard target for explicit creation after the last tab closes.
@@ -105,8 +108,9 @@ export class SessionTabs {
   }
   private close(): void { if (this.selected) this.actions.close(this.selected); }
   private setTitle(tab: Tab, id: string): void {
-    // Reserve both edge gutters, two status cells, two internal gaps, and the close glyph.
-    const text = singleLine(id), width = Math.max(1, this.list.width > 0 ? this.list.width - 7 : Bun.stringWidth(text));
+    // Edge gutters, title/close gap and close glyph need four cells; a visible badge adds three.
+    const reserved = tab.status.root.visible ? 7 : 4;
+    const text = singleLine(id), width = Math.max(1, this.list.width > 0 ? this.list.width - reserved : Bun.stringWidth(text));
     tab.title.maxWidth = width; tab.title.content = truncateCells(text, width);
   }
   private resizeTitles(): void {

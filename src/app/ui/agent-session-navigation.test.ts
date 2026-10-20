@@ -123,7 +123,7 @@ test("Agents 세션 탭의 h/l 전환은 각 초안을 보존하고 프롬프트
   } finally { await app.close(); }
 });
 
-test("세션 상태는 같은 칸에 표시하고 미확정은 아이콘 없이 간격을 유지한다", async () => {
+test("세션 상태는 같은 칸에 표시하고 미확정은 빈 상태 공간 없이 ID를 표시한다", async () => {
   // 실행·완료·실패 표시는 서로 다른 글리프를 사용해도 같은 위치에 놓인다.
   const app = await mount();
   const ordered = (id: string, title: string, glyphs: readonly string[]) => {
@@ -143,11 +143,11 @@ test("세션 상태는 같은 칸에 표시하고 미확정은 아이콘 없이 
       ordered("session:demo:main:a3", "a3", [icons.error]);
     }
 
-    // 미확정 세션은 포커스와 무관하게 상태 칸을 비우고 ID·닫기 버튼의 간격을 유지한다.
+    // Unreported sessions keep the tab's outer padding, not an empty badge and its extra gap.
     await app.click(`${icons.folder} radian-ui`);
     for (const focused of [false, true]) {
       if (focused) { app.get("agent-session-list").focus(); await app.render(); }
-      expect(app.region("session:demo:feature:b1")).toBe("    b1 × ");
+      expect(app.region("session:demo:feature:b1")).toBe(" b1 × ");
     }
     expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
@@ -175,7 +175,7 @@ test("세션 탭은 양 끝에 한 칸 패딩을 두고 내부와 탭 사이에�
 });
 
 test.each([["완료", "complete", icons.pass], ["실패", "failure", icons.error], ["미확정", null, " "]] as const)(
-  "실행이 %s 상태로 바뀌어도 상태 칸·패딩을 유지하고 스피너만 최소 시간 뒤에 숨긴다", async (_label, status, glyph) => {
+  "실행이 %s 상태로 바뀌면 스피너 최소 시간 후 아이콘 없는 상태 공간만 제거한다", async (_label, status, glyph) => {
     // A short run settles before the spinner's 500 ms minimum interval has elapsed.
     const app = await mount();
     try {
@@ -184,21 +184,27 @@ test.each([["완료", "complete", icons.pass], ["실패", "failure", icons.error
       app.clock.advance(120); await app.render();
       expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[1])).toBe(true);
 
-      // 완료·실패만 첫 칸에 표시하고 미확정은 비워 두며, 남은 스피너는 두 번째 칸을 사용한다.
+      // Known outcomes use the leading cell; an unreported outcome keeps only its spinner tail.
       app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
         sessions: tree.sessions.map((session) => session.id === "a1" ? { ...session, status, subagents: [] } : session),
       })) })));
       await app.render();
+      const spinnerCell = 2;
       expect(app.region(tab.id)[1]).toBe(glyph);
-      expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[2])).toBe(true);
+      expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[spinnerCell])).toBe(true);
       app.clock.advance(379); await app.render();
-      expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[2])).toBe(true);
+      expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[spinnerCell])).toBe(true);
       app.clock.advance(1); await app.render();
 
-      // 최소 표시 시간이 끝나면 미확정은 아이콘이 없고, 모든 상태의 ID·닫기 버튼 위치는 유지된다.
-      expect(app.region(tab.id)[1]).toBe(glyph); expect(app.region(tab.id)[2]).toBe(" ");
+      // Only the now-empty indicator collapses; real outcomes retain their stable badge placement.
+      if (status === null) {
+        expect(app.region(tab.id)).toBe(" a1 × ");
+        expect([tab.x, tab.width, title.x, close.x]).toEqual([geometry[0]!, geometry[1]! - 3, geometry[2]! - 3, geometry[3]! - 3]);
+      } else {
+        expect(app.region(tab.id)[1]).toBe(glyph); expect(app.region(tab.id)[2]).toBe(" ");
+        expect([tab.x, tab.width, title.x, close.x]).toEqual(geometry);
+      }
       expect(app.region(tab.id).startsWith(" ")).toBe(true); expect(app.region(tab.id).endsWith("× ")).toBe(true);
-      expect([tab.x, tab.width, title.x, close.x]).toEqual(geometry);
       expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
     } finally { await app.close(); }
   },

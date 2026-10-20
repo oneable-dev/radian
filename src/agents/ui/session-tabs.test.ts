@@ -11,7 +11,8 @@ const secondId = "23ec1867-d98a-4d41-b656-d2c13806b5de";
 const session = (id = firstId, name = "A conversation title, not the session ID"): OpenSession => ({ id, name, status: "complete", subagents: [] });
 
 async function mount(initial: readonly OpenSession[] = [session()]) {
-  const app = await createTestRenderer({ width: 100, height: 6, kittyKeyboard: true, clock: new ManualClock() });
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width: 100, height: 6, kittyKeyboard: true, clock });
   const selected: string[] = [], closed: string[] = [];
   const tabs = new SessionTabs(app.renderer, { select: (id) => selected.push(id), close: (id) => closed.push(id),
     create() {}, changed() {}, keyHint: () => "", button: (label, activate) => new Button(app.renderer, label, activate) });
@@ -27,9 +28,67 @@ async function mount(initial: readonly OpenSession[] = [session()]) {
     return { tab, title };
   };
   return { ...app, tabs, selected, closed, get, render,
+    clock,
     async close() { tabs.dispose(); await app.dispose(); },
   };
 }
+
+test("상태 아이콘이 없는 탭은 왼쪽 상태 칸과 간격을 빼고 확보한 너비를 ID에 사용한다", async () => {
+  const unknown = { ...session(), status: null }, app = await mount([unknown]);
+  try {
+    // A UUID fits in 40 columns only when the unused two-cell badge and its gap are reclaimed.
+    app.resize(40, 6); await app.render();
+    const { tab, title } = app.get(firstId), close = app.renderer.root.findDescendantById(`close-session:${firstId}`)!;
+    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstId);
+    expect(tab.width).toBe(Bun.stringWidth(firstId) + 4);
+    expect(close.x).toBe(title.x + title.width + 1); expect(close.x + close.width).toBe(tab.x + tab.width - 1);
+
+    // A reported outcome restores its badge without pushing the close control off screen.
+    app.tabs.update("tree", [session()], firstId, true); await app.render();
+    expect(title.x).toBe(tab.x + 4); expect(title.plainText).toEndWith("…");
+    expect(close.x + close.width).toBeLessThanOrEqual(app.tabs.list.viewport.x + app.tabs.list.viewport.width);
+    app.tabs.update("tree", [unknown], firstId, true); await app.render();
+    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstId);
+  } finally { await app.close(); }
+});
+
+test("미확정으로 바뀐 탭은 스피너 최소 시간 뒤 상태 칸을 제거하고 전체 ID를 복원한다", async () => {
+  const working = { ...session(), status: "working" as const }, app = await mount([working]);
+  try {
+    app.resize(40, 6); await app.render(); const { tab, title } = app.get(firstId);
+    app.clock.advance(120); app.tabs.update("tree", [{ ...working, status: null }], firstId, true); await app.render();
+    const width = tab.width, titleX = title.x;
+    app.clock.advance(379); await app.render(); expect(title.x).toBe(titleX); expect(title.plainText).toEndWith("…");
+    // The spinner tail ending is enough to reclaim the slot; no snapshot or focus event is required.
+    app.clock.advance(1); await app.render();
+    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstId);
+    expect(tab.width).toBeLessThanOrEqual(width); expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("숨겼다가 돌아온 미확정 탭은 취소된 스피너 공간을 다시 예약하지 않는다", async () => {
+  const working = { ...session(), status: "working" as const }, unknown = { ...working, status: null }, app = await mount([working]);
+  try {
+    app.clock.advance(120); app.tabs.update("tree", [unknown], firstId, true); await app.render();
+    app.tabs.update("tree", [unknown], firstId, false); app.clock.advance(500);
+    app.tabs.update("tree", [unknown], firstId, true); await app.render();
+    const { tab, title } = app.get(firstId);
+    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstId);
+    expect(tab.width).toBe(Bun.stringWidth(firstId) + 4);
+  } finally { await app.close(); }
+});
+
+test("앞선 탭의 상태 칸이 나타나도 선택한 탭의 ID와 닫기 버튼을 화면 안에 유지한다", async () => {
+  const entries = [{ ...session("short"), status: null }, session(secondId)], app = await mount(entries);
+  try {
+    app.resize(40, 6); app.tabs.update("tree", entries, secondId, true); await app.render();
+    app.tabs.update("tree", [{ ...entries[0]!, status: "working" }, entries[1]!], secondId, true); await app.render();
+    const { tab } = app.get(secondId), close = app.renderer.root.findDescendantById(`close-session:${secondId}`)!;
+    expect(tab.x).toBeGreaterThanOrEqual(app.tabs.list.viewport.x);
+    expect(close.x + close.width).toBeLessThanOrEqual(app.tabs.list.viewport.x + app.tabs.list.viewport.width);
+    expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
+  } finally { await app.close(); }
+});
 
 test("Agent 세션은 포커스·선택이 바뀌어도 밑줄 없이 배경으로만 활성 항목을 구분한다", async () => {
   // 두 세션을 준비하고 실제 strip 포커스와 선택 메타데이터를 사용한다.

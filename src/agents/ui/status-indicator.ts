@@ -13,8 +13,9 @@ export class StatusIndicator {
   private status: AgentStatus | null | undefined;
   private visible = false;
 
-  constructor(private readonly renderer: CliRenderer) {
-    this.root = new BoxRenderable(renderer, { width: 2, height: 1, flexShrink: 0, flexDirection: "row" });
+  constructor(private readonly renderer: CliRenderer, private readonly changed?: () => void) {
+    this.root = new BoxRenderable(renderer, { width: 2, height: 1, flexShrink: 0, flexDirection: "row", visible: false,
+      renderBefore: () => this.syncVisibility() });
     const animation = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0 });
     this.spinner = new LoadingSpinner(renderer);
     this.outcome = new TextRenderable(renderer, { width: 1, height: 1, wrapMode: "none", selectable: false });
@@ -36,6 +37,14 @@ export class StatusIndicator {
     this.outcome.content = status === "complete" ? icons.pass : status === "failure" ? icons.error : "";
     const colors = uiTheme(this.renderer).colors;
     this.outcome.fg = status === "failure" ? colors.error : status === "complete" ? colors.success : colors.muted;
+    this.syncVisibility();
+  }
+
+  private syncVisibility(): void {
+    if (this.root.isDestroyed) return;
+    const visible = this.visible && (this.status != null || this.spinner.root.visible);
+    if (this.root.visible === visible) return;
+    this.root.visible = visible; this.changed?.(); this.renderer.requestRender();
   }
 
   dispose(): void { this.spinner.cancel(); }
