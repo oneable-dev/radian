@@ -118,7 +118,7 @@ export class TerminalPanel {
       let tab = this.tabButtons.get(item.id);
       if (!tab) {
         const wrapper = new BoxRenderable(this.renderer, { id: `terminal-tab:${item.id}`, height: 1, flexShrink: 0 });
-        tab = this.button("", () => { this.intent++; if (this.worktree) this.selectionChanged(this.worktree.id, item.id); this.activate(item.id, true); this.paintTabs(); }, "Select terminal");
+        tab = this.button("", () => { this.intent++; if (this.worktree) this.selectionChanged(this.worktree.id, item.id); this.activate(item.id, true); this.paintTabs(); }, "Select terminal", "session-tab");
         this.tabButtons.set(item.id, tab); wrapper.add(tab); this.tabs.add(wrapper);
       }
       tab.setLabel(`${this.processName(item)}${item.exited ? " (exited)" : ""}`);

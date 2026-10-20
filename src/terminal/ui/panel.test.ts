@@ -7,6 +7,7 @@ import { demoWorkspace } from "../../workspace/demo.ts";
 import { icons } from "../../icons.ts";
 import { err, ok } from "../../result.ts";
 import { PtyError } from "../../errors.ts";
+import { uiTheme } from "../../ui/theme.ts";
 import type { TerminalInfo, WorkViewPreferences } from "../../runtime/protocol.ts";
 import type { TerminalActions } from "./panel.ts";
 
@@ -215,6 +216,37 @@ test("Ctrl+C는 native 입력이고 leader는 앱 분리·탭 전환·로그 스
   } finally { await app.close(); }
 });
 
+test("Terminal 세션 탭은 포커스와 활성 선택을 배경으로 구분하고 밑줄은 표시하지 않는다", async () => {
+  // 실제 VT 연결은 fixture로 유지하면서 두 터미널의 선택·포커스를 따로 움직인다.
+  const app = await mount();
+  try {
+    app.leader("t"); await app.visible("Shell shell-1");
+    app.leader("t"); await app.visible("Shell shell-2"); await app.renderOnce();
+    const first = app.renderer.root.findDescendantById("terminal-tab:shell-1")!.getChildren()[0]!;
+    const second = app.renderer.root.findDescendantById("terminal-tab:shell-2")!.getChildren()[0]!;
+    const cell = (tab: typeof first) => {
+      let x = 0; return app.captureSpans().lines[tab.y]!.spans.find((span) => { x += span.width; return x > tab.x + 1; })!;
+    };
+    const colors = uiTheme(app.renderer).colors;
+    expect(cell(second).bg.toInts()).toEqual(colors.surface.toInts());
+    expect(cell(second).attributes & TextAttributes.UNDERLINE).toBe(0);
+
+    // 비활성 탭에 포커스만 두면 쉘을 전환하지 않고 포커스 배경만 표시한다.
+    first.focus(); await app.renderOnce();
+    expect(cell(first).bg.toInts()).toEqual(colors.selected.toInts());
+    expect(cell(first).attributes & TextAttributes.UNDERLINE).toBe(0);
+    expect(cell(second).bg.toInts()).toEqual(colors.surface.toInts());
+    expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-2");
+
+    // Enter로 탭을 연 뒤 PTY로 돌아가도 활성 세션은 밑줄이 아닌 배경으로 남는다.
+    app.mockInput.pressEnter(); await app.visible("Shell shell-1"); await app.renderOnce();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
+    expect(cell(first).bg.toInts()).toEqual(colors.surface.toInts()); expect(cell(first).attributes & TextAttributes.UNDERLINE).toBe(0);
+    expect(cell(second).bg.toInts()).toEqual(colors.panel.toInts()); expect(cell(second).attributes & TextAttributes.UNDERLINE).toBe(0);
+    expect(app.created).toEqual(["demo:main", "demo:main"]); expect(app.closed).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("여러 하위 탭과 좁은 화면에서도 선택한 탭과 생성·닫기 버튼을 표시한다", async () => {
   const app = await mount();
   try {
@@ -222,7 +254,8 @@ test("여러 하위 탭과 좁은 화면에서도 선택한 탭과 생성·닫�
     await app.renderOnce();
     expect(app.captureCharFrame()).toContain("Terminal 6");
     const selectedTab = app.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text === "Terminal 6")!;
-    expect(selectedTab.attributes & TextAttributes.UNDERLINE).not.toBe(0);
+    expect(selectedTab.attributes & TextAttributes.UNDERLINE).toBe(0);
+    expect(selectedTab.bg.toInts()).toEqual(uiTheme(app.renderer).colors.surface.toInts());
     app.resize(60, 12); await app.renderOnce(); await app.renderOnce();
     const row = app.captureCharFrame().split("\n").find((line) => line.includes("Terminal 6"))!;
     expect(row).toContain("Terminal 6"); expect(row).toContain("+ New"); expect(row).toContain("Close");

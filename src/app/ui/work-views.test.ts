@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { TextAttributes } from "@opentui/core";
+import { uiTheme } from "../../ui/theme.ts";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
@@ -51,6 +53,31 @@ function editorFixture() {
   };
   return { actions, inputs, opens, detaches };
 }
+
+test("상위 Agents·Editor·Git·Terminal 탭은 포커스 때 배경 없이 밑줄로만 강조한다", async () => {
+  // 실제 Workbench의 네 탭을 사용해 공통 버튼 설정이 올바르게 전달되는지 확인한다.
+  const app = await mount();
+  try {
+    const tabs = app.renderer.root.findDescendantById("work-view-tabs")!.getChildren();
+    const active = app.view.workViewPreferences.active, selected = app.selection.sessionId;
+    expect(tabs.length).toBe(4);
+    for (const tab of tabs) {
+      // 포커스 이동만으로 표시 중인 화면이나 세션을 전환하면 안 된다.
+      tab.focus(); await app.renderOnce(); await app.renderOnce();
+      let column = 0;
+      const spans = app.captureSpans().lines[tab.y]!.spans;
+      const label = spans.find((span) => { column += span.width; return column > tab.x + 1; })!;
+
+      expect(label.attributes & TextAttributes.UNDERLINE).not.toBe(0);
+      for (let x = tab.x; x < tab.x + tab.width; x++) {
+        let end = 0; const cell = spans.find((span) => { end += span.width; return end > x; })!;
+        expect(cell.bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
+      }
+      expect(app.view.workViewPreferences.active).toEqual(active); expect(app.selection.sessionId).toBe(selected);
+    }
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
 
 test("좌우 두 패널과 푸터를 표시하고 워크트리별 Editor·Git 화면을 복원한다", async () => {
   // Demo mode provides navigation without launching any native editor or Git command.

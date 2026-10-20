@@ -1,13 +1,15 @@
 import { BoxRenderable, TextAttributes, TextRenderable, type CliRenderer } from "@opentui/core";
 import { uiTheme } from "./theme.ts";
 
+export type ButtonVariant = "default" | "work-tab" | "session-tab";
+
 // Input routing belongs to the workbench; this control owns only pointer activation and presentation.
 export class Button extends BoxRenderable {
   private readonly label: TextRenderable;
   private selected: boolean | undefined;
   private readonly paint: () => void;
 
-  constructor(renderer: CliRenderer, label: string, activate: () => void) {
+  constructor(renderer: CliRenderer, label: string, activate: () => void, private readonly variant: ButtonVariant = "default") {
     super(renderer, {
       height: 1, flexShrink: 0, paddingX: 1, focusable: true,
       onMouseDown: (event) => {
@@ -20,9 +22,11 @@ export class Button extends BoxRenderable {
     const theme = uiTheme(renderer);
     this.paint = () => {
       const colors = theme.colors;
-      this.backgroundColor = this.focused ? colors.selected : undefined;
+      this.backgroundColor = this.variant === "work-tab" ? undefined : this.focused ? colors.selected
+        : this.variant === "session-tab" && this.selected ? colors.surface : undefined;
       this.label.fg = this.selected === undefined ? colors.accent : this.selected ? colors.text : colors.muted;
-      this.label.attributes = this.selected ? TextAttributes.BOLD | TextAttributes.UNDERLINE : 0;
+      const underline = this.variant !== "session-tab" && (this.selected || this.variant === "work-tab" && this.focused);
+      this.label.attributes = (this.selected ? TextAttributes.BOLD : 0) | (underline ? TextAttributes.UNDERLINE : 0);
     };
     theme.bind(this, this.paint); this.on("focused", this.paint); this.on("blurred", this.paint);
   }
@@ -35,4 +39,4 @@ export class Button extends BoxRenderable {
   }
 }
 
-export type ButtonFactory = (label: string, activate: () => void, actionLabel?: string) => Button;
+export type ButtonFactory = (label: string, activate: () => void, actionLabel?: string, variant?: ButtonVariant) => Button;

@@ -16,7 +16,7 @@ import { SessionHistoryPanel } from "../../agents/ui/history-panel.ts";
 import { Footer, type FooterShortcut } from "../../ui/footer.ts";
 import { TextDialog } from "../../ui/text-dialog.ts";
 import { keymapHelp } from "../../keybindings/help.ts";
-import { Button } from "../../ui/button.ts";
+import { Button, type ButtonVariant } from "../../ui/button.ts";
 import { panelSpacing } from "../../ui/spacing.ts";
 import { singleLine } from "../../ui/text.ts";
 import type { Result } from "../../result.ts";
@@ -136,10 +136,10 @@ export class Workbench {
     this.workPanel = new BoxRenderable(renderer, { id: "work-panel", flexGrow: 1, minWidth: 0, flexDirection: "column" });
     const workTabs = this.viewTabs = new BoxRenderable(renderer, { id: "work-view-tabs", height: 3, paddingY: 1, flexShrink: 0, flexDirection: "row", paddingX: 1 });
     this.workTabs = {
-      agent: this.button("Agents", () => this.selectWorkView("agent"), "Show Agents"),
-      editor: this.button("Editor", () => this.selectWorkView("editor", true), "Show Editor"),
-      git: this.button("Git", () => this.selectWorkView("git"), "Show Git"),
-      terminal: this.button("Terminal", () => this.selectWorkView("terminal"), "Show Terminal"),
+      agent: this.button("Agents", () => this.selectWorkView("agent"), "Show Agents", "work-tab"),
+      editor: this.button("Editor", () => this.selectWorkView("editor", true), "Show Editor", "work-tab"),
+      git: this.button("Git", () => this.selectWorkView("git"), "Show Git", "work-tab"),
+      terminal: this.button("Terminal", () => this.selectWorkView("terminal"), "Show Terminal", "work-tab"),
     };
     for (const tab of Object.values(this.workTabs)) workTabs.add(tab);
     this.workPanel.add(workTabs);
@@ -152,7 +152,7 @@ export class Workbench {
       });
     this.editor = new EditorPanel(renderer, actions.editor, (label, activate) => this.button(label, activate, "Open editor"),
       (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); }, () => this.updateFooter(), actions.terminalTheme);
-    this.terminals = new TerminalPanel(renderer, actions.terminal, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
+    this.terminals = new TerminalPanel(renderer, actions.terminal, (label, activate, actionLabel, variant) => this.button(label, activate, actionLabel, variant),
       (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); },
       (worktreeId, id) => {
         const selected = this.workViews.terminalSelection ??= {};
@@ -160,7 +160,7 @@ export class Workbench {
         if (id) selected[worktreeId] = id; else delete selected[worktreeId];
         this.saveWorkViews();
       }, () => this.updateFooter(), actions.terminalUnavailable, actions.terminalTheme);
-    this.git = new GitPanel(renderer, actions.git, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
+    this.git = new GitPanel(renderer, actions.git, (label, activate, actionLabel, variant) => this.button(label, activate, actionLabel, variant),
       (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); }, () => this.updateFooter(),
       (id, state) => {
         const views = this.workViews.gitViews ??= {};
@@ -329,8 +329,8 @@ export class Workbench {
     return text;
   }
 
-  private button(label: string, activate: () => void, actionLabel = label): Button {
-    const button = new Button(this.renderer, label, activate);
+  private button(label: string, activate: () => void, actionLabel = label, variant: ButtonVariant = "default"): Button {
+    const button = new Button(this.renderer, label, activate, variant);
     this.buttonHints.set(button, actionLabel); this.buttonActions.set(button, activate);
     return button;
   }

@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
-import { TextRenderable } from "@opentui/core";
+import { TextAttributes, TextRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Button } from "../../ui/button.ts";
+import { uiTheme } from "../../ui/theme.ts";
 import type { OpenSession } from "../model.ts";
 import { SessionTabs } from "./session-tabs.ts";
 
@@ -29,6 +30,37 @@ async function mount(initial: readonly OpenSession[] = [session()]) {
     async close() { tabs.dispose(); await app.dispose(); },
   };
 }
+
+test("Agent 세션은 포커스·선택이 바뀌어도 밑줄 없이 배경으로만 활성 항목을 구분한다", async () => {
+  // 두 세션을 준비하고 실제 strip 포커스와 선택 메타데이터를 사용한다.
+  const entries = [session(), session(secondId)], app = await mount(entries);
+  const cell = (id: string) => {
+    const title = app.get(id).title; let x = 0;
+    return app.captureSpans().lines[title.y]!.spans.find((span) => { x += span.width; return x > title.x; })!;
+  };
+  try {
+    app.tabs.list.focus(); await app.render();
+
+    const colors = uiTheme(app.renderer).colors;
+    expect(cell(firstId).bg.toInts()).toEqual(colors.selected.toInts());
+    expect(cell(firstId).attributes & TextAttributes.UNDERLINE).toBe(0);
+    expect(cell(firstId).attributes & TextAttributes.BOLD).not.toBe(0);
+    expect(cell(secondId).bg.toInts()).toEqual(colors.panel.toInts());
+
+    // 다음 세션으로 이동하면 배경만 옮기고 세션 선택 이벤트도 기존대로 전달한다.
+    app.tabs.command("session.next"); app.tabs.update("tree", entries, secondId, true); await app.render();
+    expect(app.selected).toEqual([secondId]); expect(cell(firstId).bg.toInts()).toEqual(colors.panel.toInts());
+    expect(cell(secondId).bg.toInts()).toEqual(colors.selected.toInts());
+    expect(cell(firstId).attributes & TextAttributes.UNDERLINE).toBe(0);
+    expect(cell(secondId).attributes & TextAttributes.UNDERLINE).toBe(0);
+
+    // 포커스가 세션 줄을 떠나도 선택된 세션을 밑줄로 되돌리지 않는다.
+    const outside = new Button(app.renderer, "Outside", () => {}); app.renderer.root.add(outside);
+    outside.focus(); await app.render();
+    expect(cell(secondId).bg.toInts()).toEqual(colors.surface.toInts());
+    expect(cell(secondId).attributes & TextAttributes.UNDERLINE).toBe(0); expect(app.closed).toEqual([]);
+  } finally { await app.close(); }
+});
 
 test("충분히 넓은 탭에는 이름이나 고정 축약 없이 세션 ID 전체를 표시한다", async () => {
   // A normal UUID exceeds the old 24-cell cap, but fits comfortably in this strip.

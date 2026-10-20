@@ -119,7 +119,7 @@ export class SessionTabs {
     for (const [id, tab] of this.tabs) {
       tab.root.backgroundColor = id === this.selected ? this.focused ? colors.selected : colors.surface : colors.panel;
       tab.title.fg = id === this.selected ? colors.text : colors.muted;
-      tab.title.attributes = id === this.selected ? TextAttributes.BOLD | TextAttributes.UNDERLINE : 0;
+      tab.title.attributes = id === this.selected ? TextAttributes.BOLD : 0;
     }
   }
   private revealSelected = (): void => {
