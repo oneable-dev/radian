@@ -294,7 +294,20 @@ Click a compaction summary's heading or use the configured fold key (`Ctrl+o` or
 to expand/collapse it. Explicit fold choices are preserved in transcript view preferences.
 Thinking is always visible prose with no label or fold controls; old Thinking fold preferences
 are ignored and cleared. Other nonempty sections can be folded manually. Error summaries stay visible outside the folded body, and folding never deletes text.
-Image attachments have a text placeholder; image rendering is not part of this reader.
+User image attachments have independent, initially folded `[read] filename.png` sections. Click the
+header or use the configured fold key (default `Ctrl+o` / `z a`) to toggle a proportional inline preview.
+The header is presentation only; it never executes the read tool. Editor-only image labels are removed
+from the displayed prose, without changing SDK messages or model input. Original filenames are saved
+as display-only metadata; unnamed/older attachments use names such as `clipboard-1.png`.
+
+Pixels are requested only when expanded, using a session-scoped, instance-fenced image identity rather
+than a filesystem path. Snapshot/events contain descriptors, never encoded image bodies. Preview reads
+are bounded to 16 MiB; each transcript retains at most eight previews / 32 MiB of compressed image bytes.
+Additional expanded sections wait for another image to collapse. Collapse, hiding or switching sessions
+cancels pending requests and releases native image resources. Kitty/Sixel-capable terminals render the
+image; other terminals show an explicit compatibility message. History preview shows attachment headers;
+open the saved session in Agents for image previews. Updated service code is required for descriptors
+and image reads; existing services are never automatically restarted.
 Empty conversations show a subdued, centered logo without introductory text or an idle `Ready` row.
 The temporary artwork is isolated in `src/ui/radian-logo.ts` so the finalized logo can replace it
 without changing transcript behavior. Short viewports use a compact mark; the first message replaces it.

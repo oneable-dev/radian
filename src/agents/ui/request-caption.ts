@@ -4,6 +4,7 @@ import { singleLine, truncateCells } from "../../ui/text.ts";
 
 // Legacy sections retain their text but supply no guessed attachment counts.
 export function requestForSection(section: TranscriptSection | undefined): RequestSummary | undefined {
+  if (section?.image) return section.request;
   if (!section || section.kind !== "user" && section.skillName === undefined) return undefined;
   return section.request ?? { text: section.skillName !== undefined ? `/skill:${section.skillName}` : singleLine(section.text), images: 0, files: 0 };
 }

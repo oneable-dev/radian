@@ -1,6 +1,8 @@
 import { parseSkillBlock, type AgentSession, type AgentSessionEvent, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { parseRunCompletion, runCompletionEntryType, systemRunClock, type RunClock, type RunCompletion } from "./run-completion.ts";
 import { summarizeRequest, type RequestSummary } from "./request-summary.ts";
+import type { ImageContent } from "@earendil-works/pi-ai";
+import { imageNamesEntryType, TranscriptImages, type TranscriptImage } from "./transcript-images.ts";
 
 type AgentMessage = AgentSession["messages"][number];
 
@@ -20,6 +22,7 @@ export type TranscriptSection = {
   readonly timeoutSeconds?: number;
   readonly completion?: RunCompletion;
   readonly request?: RequestSummary;
+  readonly image?: TranscriptImage;
 };
 type Message = { id: string; message: AgentMessage; streaming: boolean; noticeStatus?: TranscriptStatus };
 type Tool = { name: string; arguments: unknown; text: string; status: TranscriptStatus; error?: string };
@@ -64,6 +67,7 @@ export class SessionTranscript {
   private current: Message | undefined;
   private cached: readonly TranscriptSection[] | undefined;
   private readonly completions = new Map<string, RunCompletion>();
+  private readonly images = new TranscriptImages();
   private run: { startedAt: number; monotonic: number; messageIndex: number; sectionCount: number } | undefined;
 
   constructor(entries: readonly SessionEntry[], private readonly clock: RunClock = systemRunClock) {
@@ -74,6 +78,10 @@ export class SessionTranscript {
         if (parsed.ok) { if (previous) this.completions.set(previous.id, parsed.value); }
         else this.messages.push({ id: entry.id, streaming: false, message: { role: "custom", customType: "Run timing unavailable",
           content: `[${parsed.error.code}] ${parsed.error.message}`, display: true, timestamp: Date.parse(entry.timestamp) } });
+      }
+      else if (entry.type === "custom" && entry.customType === imageNamesEntryType) {
+        const restored = this.images.restore(entry.data);
+        if (!restored.ok) this.notice("Image metadata unavailable", `[${restored.error.code}] ${restored.error.message}`);
       }
       else if (entry.type === "custom_message") this.messages.push({ id: entry.id, streaming: false, message: {
         role: "custom", customType: entry.customType, content: entry.content, display: entry.display, timestamp: Date.parse(entry.timestamp),
@@ -149,8 +157,15 @@ export class SessionTranscript {
     this.cached = undefined;
   }
 
+  rememberImages(images: readonly ImageContent[], paths: readonly string[]) {
+    this.cached = undefined;
+    return this.images.remember(images, paths);
+  }
+  imageData(id: string) { void this.sections; return this.images.read(id); }
+
   get sections(): readonly TranscriptSection[] {
     if (this.cached) return this.cached;
+    this.images.clearReferences();
     const tools = new Map(this.tools);
     for (const { message } of this.messages) if (message.role === "toolResult") {
       const previous = tools.get(message.toolCallId);
@@ -163,17 +178,29 @@ export class SessionTranscript {
     for (const { id, message, streaming, noticeStatus } of this.messages) {
       switch (message.role) {
         case "user": {
-          const text = contentText(message.content), skill = parseSkillBlock(text);
-          const images = typeof message.content === "string" ? 0 : message.content.filter((part) => part.type === "image").length;
+          const images = typeof message.content === "string" ? [] : message.content.filter((part) => part.type === "image");
           const prose = typeof message.content === "string" ? message.content : message.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("");
-          if (!skill) { sections.push({ id, kind: "user", title: "You", text, status: "complete", request: summarizeRequest(prose, images) }); break; }
-          const name = skill.name.replace(/\s+/g, " ").trim() || "Skill";
-          const requestProse = parseSkillBlock(prose)?.userMessage || `/skill:${name}`;
-          // The SDK's explicit invocation metadata, not a SKILL.md filename, identifies
-          // this compact item. Its instruction body stays in SDK history, not the UI.
-          sections.push({ id: `${id}:skill`, kind: "notice", title: name, text: name, skillName: name, status: "complete",
-            ...(!skill.userMessage ? { request: summarizeRequest(`/skill:${name}`, images) } : {}) });
-          if (skill.userMessage) sections.push({ id: `${id}:request`, kind: "user", title: "You", text: skill.userMessage, status: "complete", request: summarizeRequest(requestProse, images) });
+          const clean = (text: string) => images.length ? text.replace(/[ \t]*\[Image #\d+\][ \t]*/gu, " ").trim() : text;
+          const text = clean(prose), skill = parseSkillBlock(text), start = sections.length;
+          if (!skill) {
+            if (text || !images.length) sections.push({ id, kind: "user", title: "You", text, status: "complete", request: summarizeRequest(prose, images.length) });
+          } else {
+            const name = skill.name.replace(/\s+/g, " ").trim() || "Skill";
+            const requestProse = skill.userMessage || `/skill:${name}`;
+            // Instructions stay in SDK history; only invocation metadata and the user's request are visible.
+            sections.push({ id: `${id}:skill`, kind: "notice", title: name, text: name, skillName: name, status: "complete",
+              ...(!skill.userMessage ? { request: summarizeRequest(`/skill:${name}`, images.length) } : {}) });
+            if (skill.userMessage) sections.push({ id: `${id}:request`, kind: "user", title: "You", text: skill.userMessage, status: "complete", request: summarizeRequest(requestProse, images.length) });
+          }
+          for (const [index, block] of images.entries()) {
+            if (typeof block.data !== "string" || typeof block.mimeType !== "string" || !block.mimeType.length || block.mimeType.length > 128) {
+              sections.push({ id: `${id}:image:${index}`, kind: "notice", title: "Image unavailable", text: "[HISTORY_CORRUPT] Stored image metadata is invalid.", status: "error" });
+              continue;
+            }
+            const image = this.images.describe(block, index);
+            sections.push({ id: `${id}:image:${index}`, kind: "notice", title: "read", text: image.name, summary: image.name, image, status: "complete",
+              ...(sections.length === start ? { request: summarizeRequest(prose, images.length) } : {}) });
+          }
           break;
         }
         case "assistant": {

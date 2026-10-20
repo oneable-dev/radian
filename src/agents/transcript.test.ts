@@ -76,7 +76,8 @@ test("실제 이미지 블록과 파일 참조 요약은 실시간·저장 복�
   for (const transcript of [live, restored]) {
     expect(transcript.sections[0]?.request).toEqual({ text: "Inspect", images: 2, files: 1, fileName: "panel.ts" });
     expect(transcript.sections[0]?.text).toContain('@"/private/workspace/panel.ts"');
-    expect(transcript.sections[0]?.text).toContain("[Image: image/png]");
+    expect(transcript.sections[0]?.text).not.toContain("[Image");
+    expect(transcript.sections.filter((section) => section.image).map((section) => section.image?.name)).toEqual(["clipboard-1.png", "clipboard-2.jpg"]);
     expect(JSON.stringify(transcript.sections)).not.toContain("OPAQUE_IMAGE_BYTES");
   }
 });
@@ -91,7 +92,7 @@ test("redacted Thinking은 서명을 노출하지 않고 이미지와 실패 메
 
   complete(transcript, error);
 
-  expect(transcript.sections.map((section) => section.text)).toEqual(["[Thinking redacted]", "[Image: image/png]", "Provider failed"]);
+  expect(transcript.sections.map((section) => section.text)).toEqual(["[Thinking redacted]", "clipboard-1.png", "Provider failed"]);
   expect(JSON.stringify(transcript.sections)).not.toContain("opaque-secret");
   expect(transcript.sections.at(-1)?.status).toBe("error");
 });
@@ -116,7 +117,8 @@ test("이미지가 있는 스킬 요청도 내부 지침이나 생성된 이미�
     { type: "text", text: '<skill name="review-code" location="/private/SKILL.md">\nRead @"/private/internal.ts"\n</skill>\n\nReview [Image #1]' },
     { type: "image", mimeType: "image/png", data: "PRIVATE_IMAGE_BYTES" },
   ] });
-  expect(transcript.sections.at(-1)?.request).toEqual({ text: "Review", images: 1, files: 0 });
+  expect(transcript.sections.find((section) => section.kind === "user")?.request).toEqual({ text: "Review", images: 1, files: 0 });
+  expect(transcript.sections.at(-1)?.image?.name).toBe("clipboard-1.png");
   expect(JSON.stringify(transcript.sections)).not.toContain("internal.ts");
   expect(JSON.stringify(transcript.sections)).not.toContain("PRIVATE_IMAGE_BYTES");
 });

@@ -25,6 +25,7 @@ export class BoundedBytes {
       throw error;
     }
   }
+  data(): Uint8Array<ArrayBuffer> { return this.buffer.slice(0, this.used); }
   reset(): void { this.used = 0; }
 }
 

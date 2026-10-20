@@ -21,6 +21,7 @@ import { acquireRuntime, privateDirectory, RuntimeStore, runtimePaths } from "./
 import { EditorSessions } from "../editor/sessions.ts";
 import { TerminalSessions } from "../terminal/sessions.ts";
 import { snapshotEvents } from "./events.ts";
+import { transcriptImageQuerySchema } from "../agents/transcript-images.ts";
 import { emptyPreferences, errorStatus, historyPreviewQuerySchema, maxFrameBytes, parseCommand, protocolVersion, wireError,
   type RuntimeCommand, type RuntimeManifest, type RuntimePreferences, type RuntimeSnapshot } from "./protocol.ts";
 
@@ -138,7 +139,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "session-controls", "agent-interrupt"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "agent-interrupt"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || [this.discoveryWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
@@ -157,6 +158,15 @@ class WorkspaceRuntime {
         if (!id || !lease || id.length > 4096 || lease.length > 4096) return this.rejected(new InputError("Missing editor attachment identity."));
         const attached = path === "/editor/events" ? this.editors.attach(id, lease) : this.terminals.attach(id, lease);
         return attached.ok ? attached.value : this.rejected(attached.error);
+      }
+      if (path === "/images" && request.method === "GET") {
+        if (expectedInstance !== this.instance) return this.rejected(new ProtocolError("Image preview requires the current runtime instance identity."));
+        if (this.stopped) return this.rejected(new SessionError("RUNTIME_STOPPING", "Runtime is stopping."));
+        const query = Object.fromEntries(new URL(request.url).searchParams);
+        if (!Value.Check(transcriptImageQuerySchema, query)) return this.rejected(new InputError("Malformed image preview query."));
+        const image = this.registry.imageData(query.sessionId, query.imageId);
+        return image.ok ? new Response(image.value.bytes, { headers: { "Content-Type": image.value.mimeType,
+          "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } }) : this.rejected(image.error);
       }
       if (path === "/completions" && request.method === "GET") {
         if (expectedInstance !== this.instance) return this.rejected(new ProtocolError("Completion requires the current runtime instance identity."));

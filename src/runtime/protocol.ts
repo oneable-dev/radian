@@ -7,6 +7,7 @@ import { gitViewsSchema } from "../git/preferences.ts";
 import { agentViewsSchema, type TranscriptViewState } from "../agents/transcript-preferences.ts";
 import { runCompletionSchema } from "../agents/run-completion.ts";
 import { requestSummarySchema } from "../agents/request-summary.ts";
+import { transcriptImageSchema } from "../agents/transcript-images.ts";
 import { promptDraftSchema, validatePromptDraft } from "../agents/prompt-input.ts";
 import { errorCodes, usageErrorCodes, AgentRunError, ExpectedError, InputError, parseJson, ProtocolError, type ErrorCode, type UsageErrorCode } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
@@ -27,7 +28,7 @@ const transcriptSection = Type.Object({
   title: Type.String(), text: Type.String(),
   status: Type.Union([Type.Literal("complete"), Type.Literal("streaming"), Type.Literal("pending"), Type.Literal("running"), Type.Literal("error"), Type.Literal("cancelled"), Type.Literal("unfinished")]),
   summary: Type.Optional(Type.String()), error: Type.Optional(Type.String()), toolCallId: Type.Optional(Type.String()),
-  completion: Type.Optional(runCompletionSchema), request: Type.Optional(requestSummarySchema),
+  completion: Type.Optional(runCompletionSchema), request: Type.Optional(requestSummarySchema), image: Type.Optional(transcriptImageSchema),
   skillName: Type.Optional(Type.String({ minLength: 1 })), command: Type.Optional(Type.String({ maxLength: 4096 })), timeoutSeconds: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
 });
 const nullableText = Type.Union([Type.String(), Type.Null()]);

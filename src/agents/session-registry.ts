@@ -11,6 +11,7 @@ import { filterCompletions, type CompletionItem, type CompletionQuery, type Comp
 import { completeFiles } from "./completion-files.ts";
 import { sessionControlCommands } from "./session-controls.ts";
 import type { RequestSummary } from "./request-summary.ts";
+import type { TranscriptImageData } from "./transcript-images.ts";
 
 export type ExecutionState = { readonly conversationId?: string; readonly status: AgentStatus | null; readonly activity?: "compacting"; readonly output: string; readonly error: string | null;
   readonly sections?: readonly TranscriptSection[]; readonly telemetry?: SessionTelemetry;
@@ -20,6 +21,7 @@ export type SessionExecutor = {
   readonly sessionFile: string | undefined;
   readonly state: ExecutionState;
   commands?(): readonly CompletionItem[];
+  imageData?(id: string): Result<TranscriptImageData, ExpectedError>;
   readonly acceptsImages?: boolean;
   readonly busy?: boolean;
   compact?(instructions?: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>>;
@@ -85,6 +87,12 @@ export class SessionRegistry {
     return state && entry.replacing ? { ...state, status: "working" } : state ?? null;
   }
   sessionFile(id: string): string | undefined { return this.entries.get(id)?.executor?.sessionFile; }
+  imageData(sessionId: string, imageId: string): Result<TranscriptImageData, ExpectedError> {
+    const entry = this.requireOpen(sessionId); if (!entry.ok) return entry;
+    if (entry.value.replacing) return err(new SessionError("SESSION_BUSY", "This tab is changing conversations."));
+    const executor = entry.value.executor;
+    return executor?.imageData ? executor.imageData(imageId) : err(new CapabilityError("This session does not provide image previews."));
+  }
   historyOwnership(canonicalFile: string): { openSessionId: string | null; unavailableReason: string | null } {
     const owner = this.fileOwners.get(canonicalFile);
     if (!owner) return { openSessionId: null, unavailableReason: null };

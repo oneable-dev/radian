@@ -9,12 +9,14 @@ import { CapabilityError, CancelledError, capture, ConnectionError, InputError, 
 import { err, ok, type Result } from "../result.ts";
 import { emptyPreferences, historySchema, historyPreviewSchema, historyPreviewQuerySchema, maxFrameBytes, maxSnapshotBytes, parseSnapshot, replySchema, type RuntimeCommand, type RuntimePreferences, type RuntimeSnapshot, type EditorFrame } from "./protocol.ts";
 import { privateDirectory, runtimePaths, type RuntimePaths } from "./storage.ts";
-import { connectionError, readJson, remoteError, transport } from "./transport.ts";
+import { connectionError, readBytes, readJson, remoteError, transport } from "./transport.ts";
 import { PtyConnection } from "./pty/client.ts";
 import { completionQuerySchema, completionResultSchema } from "./completion-protocol.ts";
 import type { CompletionQuery, CompletionResult } from "../agents/completion.ts";
 import { NdjsonDecoder } from "./frames.ts";
 import { parseSessionControl } from "../agents/session-controls.ts";
+
+import { maximumPreviewImageBytes, transcriptImageQuerySchema } from "../agents/transcript-images.ts";
 
 const reconnectDelays = [250, 500, 1000, 2000] as const;
 const streamHandshakeMs = 2000;
@@ -180,6 +182,31 @@ export class RuntimeClient {
     if (epoch !== this.connectionEpoch || instance !== this.state.instance || signal?.aborted) return err(new CancelledError("Completion belongs to an outdated connection."));
     if (!response.value.ok) return Value.Check(replySchema, body.value) && !body.value.ok ? err(remoteError(body.value.error)) : err(new ProtocolError("Malformed completion failure response."));
     return Value.Check(completionResultSchema, body.value) ? ok(body.value) : err(new ProtocolError("Malformed completion response."));
+  }
+  async image(sessionId: string, imageId: string, signal?: AbortSignal): Promise<Result<Uint8Array, ExpectedError>> {
+    if (this.detaching || this.failure) return err(this.connectionClosed());
+    if (!this.state.capabilities?.includes("transcript-images")) return err(new CapabilityError("Running service predates image previews. Finish work and restart it explicitly when ready; no service was restarted."));
+    if (signal?.aborted) return err(new CancelledError());
+    if (!Value.Check(transcriptImageQuerySchema, { sessionId, imageId })) return err(new InputError("Invalid image preview identity."));
+    const instance = this.state.instance, epoch = this.connectionEpoch, conversation = this.state.details[sessionId]?.conversationId;
+    const abort = AbortSignal.any([this.streamAbort.signal, AbortSignal.timeout(8000), ...(signal ? [signal] : [])]);
+    const requested = await capture(() => transport(this.paths, `/images?${new URLSearchParams({ sessionId, imageId })}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
+    if (!requested.ok) return requested;
+    const response = requested.value; if (!response.ok) return response;
+    const reply = response.value;
+    if (!reply.ok) {
+      const decoded = await capture(() => readJson(reply)); if (!decoded.ok) return decoded;
+      if (!decoded.value.ok) return decoded.value;
+      const body = decoded.value.value;
+      return Value.Check(replySchema, body) && !body.ok ? err(remoteError(body.error)) : err(new ProtocolError("Malformed image preview failure response."));
+    }
+    if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(reply.headers.get("Content-Type")?.split(";", 1)[0] ?? "")) {
+      await reply.body?.cancel(); return err(new ProtocolError("Image preview response has an unsupported content type."));
+    }
+    const decoded = await capture(() => readBytes(reply, { maximumBytes: maximumPreviewImageBytes, label: "Image preview" }));
+    if (!decoded.ok) return decoded;
+    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance || conversation !== this.state.details[sessionId]?.conversationId) return err(new CancelledError("Image preview belongs to an outdated conversation."));
+    return decoded.value;
   }
   async listHistory(worktreeId: string, signal?: AbortSignal): Promise<Result<readonly HistoryItem[], ExpectedError>> {
     const capability = this.requireHistory(); if (!capability.ok) return capability;

@@ -15,7 +15,16 @@ export function connectionError(error: unknown): ConnectionError | null {
   if (["EACCES", "EPERM", "ECONNRESET", "EPIPE", "EIO"].includes(code ?? "")) return new ConnectionError("CONNECTION_FAILED", `Runtime connection failed (${code}).`, { cause: error });
   return null;
 }
-export async function readJson(response: Response, options: { maximumBytes?: number; label?: string } = {}): Promise<Result<unknown, ExpectedError>> {
+type ReceiveOptions = { maximumBytes?: number; label?: string };
+export async function readJson(response: Response, options: ReceiveOptions = {}): Promise<Result<unknown, ExpectedError>> {
+  const received = await readResponse(response, options); if (!received.ok) return received;
+  const text = received.value.text(); if (!text.ok) return text;
+  const json = parseJson(text.value, "runtime response"); return json.ok ? json : err(new ProtocolError(json.error.message, { cause: json.error }));
+}
+export async function readBytes(response: Response, options: ReceiveOptions): Promise<Result<Uint8Array<ArrayBuffer>, ExpectedError>> {
+  const received = await readResponse(response, options); return received.ok ? ok(received.value.data()) : received;
+}
+async function readResponse(response: Response, options: ReceiveOptions): Promise<Result<BoundedBytes, ExpectedError>> {
   if (!response.body) return err(new ProtocolError("Runtime response is empty."));
   const maximum = options.maximumBytes ?? maxFrameBytes, label = options.label ?? "Runtime response";
   const bytes = new BoundedBytes(maximum, label), reader = response.body.getReader();
@@ -29,8 +38,7 @@ export async function readJson(response: Response, options: { maximumBytes?: num
       if (chunk.done) { ended = true; break; }
       const added = bytes.append(chunk.value); if (!added.ok) return added;
     }
-    const text = bytes.text(); if (!text.ok) return text;
-    const json = parseJson(text.value, "runtime response"); return json.ok ? json : err(new ProtocolError(json.error.message, { cause: json.error }));
+    return ok(bytes);
   } finally {
     if (!ended) {
       try { await reader.cancel(); }

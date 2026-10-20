@@ -100,8 +100,14 @@ test("실제 SDK는 경로 라벨이 아닌 이미지 바이트를 사용자 메
     const file = app.registry.sessionFile(id)!;
     const saved = await readFile(file, "utf8"); expect(saved).toContain('"type":"image"'); expect(saved).not.toContain(path);
     expect(app.registry.details(id)?.status).toBe("complete");
+    const original = app.registry.details(id)?.sections?.find((section) => section.image)?.image;
+    expect(original?.name).toBe("image.png");
+    expect(expectOk(app.registry.imageData(id, original!.id)).bytes).toEqual(tinyPng());
     expectOk(await app.registry.close(id)); const restored = expectOk(await app.registry.create(app.main.id, file));
     expect(app.registry.details(restored)?.sections?.some(section => section.kind === "user")).toBe(true);
+    expect(app.registry.details(restored)?.sections?.find((section) => section.image)?.image).toEqual(original);
+    expect(expectOk(app.registry.imageData(restored, original!.id)).bytes).toEqual(tinyPng());
+    expect(expectError(app.registry.imageData(id, original!.id)).code).toBe("SESSION_NOT_OPEN");
     expect(observed).toHaveLength(1);
   } finally { await app.cleanup(); }
 });
@@ -126,7 +132,13 @@ test("느린 이미지 준비 중에도 나중에 보낸 텍스트가 먼저 수
     // SDK는 첫 모델 호출 전에 받은 steer를 함께 반영할 수 있다. 호출 횟수를
     // 강제하지 않고 수락과 실제 사용자 메시지의 순서가 보존되는지 확인한다.
     expect(admissions).toEqual(["first", "second"]);
-    expect(app.registry.details(id)?.sections?.filter(section => section.kind === "user").map(section => section.text)).toEqual(["first image input[Image: image/png]", "later text input"]);
+    // Image previews now have their own section; text order and the real attachment must both survive.
+    const sections = app.registry.details(id)?.sections ?? [];
+    expect(sections.filter(section => section.kind === "user").map(section => section.text)).toEqual(["first image input", "later text input"]);
+    const images = sections.filter(section => section.image);
+    expect(images).toHaveLength(1);
+    expect(images[0]?.image).toMatchObject({ name: "image.png", mimeType: "image/png", byteLength: tinyPng().byteLength });
+    expect(sections.indexOf(images[0]!)).toBeLessThan(sections.findIndex(section => section.text === "later text input"));
     expect(contexts.at(-1)).toEqual(["first image input", "later text input"]);
   } finally { release.resolve(); await app.cleanup(); }
 });

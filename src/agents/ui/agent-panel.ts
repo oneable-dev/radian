@@ -19,6 +19,7 @@ import type { DialogContent } from "../../ui/text-dialog.ts";
 import { CompletionMenu, type CompletionProvider } from "./completion-menu.ts";
 import { SessionTabs } from "./session-tabs.ts";
 import { SubagentSummary } from "./subagent-summary.ts";
+import type { TranscriptImageProvider } from "../transcript-images.ts";
 import { PendingMessages } from "./pending-messages.ts";
 
 export type AgentActions = {
@@ -35,6 +36,7 @@ export type AgentActions = {
   onInspectInput?: (content: DialogContent) => void;
   onCopyTranscript?: (text: string) => Promise<Result<string, ExpectedError>>;
   onComplete?: CompletionProvider;
+  onImage?: TranscriptImageProvider;
 };
 type Button = (label: string, activate: () => void, actionLabel: string) => BoxRenderable;
 
@@ -91,7 +93,7 @@ export class AgentPanel {
     this.root.add(this.sessions.root); this.root.add(this.emptyPanel);
     this.runtimePanel = new BoxRenderable(renderer, { width: "100%", flexGrow: 1, minHeight: 0, marginTop: 1, flexDirection: "column", gap: 1 });
     this.transcript = new TranscriptPanel(renderer, { notice, changed, focusPrompt: () => this.prompt.focus(), initialScroll, saveScroll,
-      ...transcriptOptions, ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}) });
+      ...transcriptOptions, ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}), ...(actions.onImage ? { image: actions.onImage } : {}) });
     this.transcriptScroll = this.transcript.scroll;
     const interruptKey = () => transcriptOptions.keyHint?.("agent.interrupt", "prompt") ?? "esc";
     this.runStatus = new RunStatus(renderer, interruptKey);

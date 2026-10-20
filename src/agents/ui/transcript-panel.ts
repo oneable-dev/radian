@@ -16,6 +16,8 @@ import { emptyTranscriptView, type TranscriptViewState } from "../transcript-pre
 import { sameRequestSummary, type RequestSummary } from "../request-summary.ts";
 import { formatRequestCaption, requestForSection } from "./request-caption.ts";
 import { RadianLogo } from "../../ui/radian-logo.ts";
+import { maximumPreviewImageBytes, type TranscriptImageProvider } from "../transcript-images.ts";
+import { TranscriptImagePreview } from "./transcript-image.ts";
 
 // Reuse native grapheme-aware cursor/selection/layout, but never install editing or
 // paste handlers. Unbound keys (including a timed-out keymap prefix) are inert.
@@ -25,7 +27,7 @@ class TranscriptBody extends EditBufferRenderable {
 }
 type Row = { section: TranscriptSection; request: RequestSummary | undefined; box: BoxRenderable; heading: BoxRenderable;
   header: TranscriptBody; error: TextRenderable; bodyRow: BoxRenderable; skillTag: TextRenderable; body: TranscriptBody;
-  markdown: TranscriptMarkdown | undefined; markdownKind: "assistant" | "thinking" | undefined; completion: TextRenderable; completionWidth: number };
+  markdown: TranscriptMarkdown | undefined; markdownKind: "assistant" | "thinking" | undefined; completion: TextRenderable; completionWidth: number; preview?: TranscriptImagePreview };
 type Target = { position: number } | { id: string; offset: number } | { reveal: true };
 function compactionNotice(section: TranscriptSection): boolean {
   return section.kind === "notice" && section.skillName === undefined && section.title === "Context compacted";
@@ -41,6 +43,7 @@ export type TranscriptOptions = {
   saveView?(id: string, state: TranscriptViewState): void;
   keyHint?(command: CommandId, context: KeyContext): string;
   copy?(text: string): Promise<Result<string, ExpectedError>>;
+  image?: TranscriptImageProvider;
 };
 
 export class TranscriptPanel {
@@ -50,6 +53,7 @@ export class TranscriptPanel {
   private helpPosition = 0;
   private helpFollow = false;
   private readonly rows = new Map<string, Row>();
+  private readonly imagePreviews = new Set<Row>();
   private readonly readers = new WeakSet<Renderable>();
   private order: string[] = [];
   private readonly views: Record<string, TranscriptViewState>;
@@ -112,11 +116,11 @@ export class TranscriptPanel {
 
   private get state(): TranscriptViewState | undefined { return this.sessionId ? this.views[this.sessionId] : undefined; }
   private get selected(): Row | undefined { return this.state?.selectedId ? this.rows.get(this.state.selectedId) : undefined; }
-  private reader(row: Row): TranscriptBody { return this.folded(row) ? row.header : row.body; }
-  private readerText(row: Row): string { return this.folded(row) ? row.header.plainText : row.section.text; }
+  private reader(row: Row): TranscriptBody { return this.folded(row) || row.section.image ? row.header : row.body; }
+  private readerText(row: Row): string { return this.folded(row) || row.section.image ? row.header.plainText : row.section.text; }
   private rememberCursor(row: Row): void {
     const state = this.state; if (!state) return;
-    if (this.folded(row)) (state.headingCursors ??= {})[row.section.id] = row.header.cursorOffset;
+    if (this.folded(row) || row.section.image) (state.headingCursors ??= {})[row.section.id] = row.header.cursorOffset;
     else state.cursors[row.section.id] = row.body.cursorOffset;
   }
   get focused(): boolean {
@@ -163,7 +167,8 @@ export class TranscriptPanel {
       const previous = this.rows.get(this.order[index] ?? "")?.section;
       return !previous || section.id !== previous.id || section.text !== previous.text || section.title !== previous.title
         || section.status !== previous.status || section.error !== previous.error || section.summary !== previous.summary
-        || section.kind !== previous.kind || section.skillName !== previous.skillName || section.command !== previous.command || section.timeoutSeconds !== previous.timeoutSeconds || !sameRunCompletion(section.completion, previous.completion) || !sameRequestSummary(section.request, previous.request);
+        || section.kind !== previous.kind || section.skillName !== previous.skillName || section.command !== previous.command || section.timeoutSeconds !== previous.timeoutSeconds || !sameRunCompletion(section.completion, previous.completion) || !sameRequestSummary(section.request, previous.request)
+        || section.image?.id !== previous.image?.id || section.image?.name !== previous.image?.name || section.image?.byteLength !== previous.image?.byteLength;
     });
     if (!switched && changed && !this.help.visible && !this.state?.follow && this.pending === null) this.pending = this.viewportAnchor();
     this.sessionId = id; this.visible = visible;
@@ -182,13 +187,13 @@ export class TranscriptPanel {
         for (const row of this.rows.values()) row.box.destroyRecursively();
       } finally { this.syncing = false; }
       this.help.visible = false;
-      this.rows.clear(); this.order = []; this.lastSavedView = "";
+      this.rows.clear(); this.imagePreviews.clear(); this.order = []; this.lastSavedView = "";
     }
     if (changed) {
       const ids = new Set(incoming.map((section) => section.id));
       for (const [key, row] of this.rows) if (!ids.has(key)) {
         if (row.body.focused || row.header.focused) this.scroll.focus();
-        row.box.destroyRecursively(); this.rows.delete(key);
+        row.box.destroyRecursively(); this.imagePreviews.delete(row); this.rows.delete(key);
       }
       let request: RequestSummary | undefined;
       for (const section of incoming) {
@@ -247,7 +252,7 @@ export class TranscriptPanel {
         if (event.button !== 0) return;
         event.preventDefault(); event.stopPropagation(); this.select(section.id); this.scroll.focus();
         const row = this.rows.get(section.id);
-        if (row && compactionNotice(row.section)) this.command("transcript.fold");
+        if (row && (compactionNotice(row.section) || row.section.image)) this.command("transcript.fold");
         else this.options.changed();
       } });
     const header = new TranscriptBody(this.renderer, { width: "auto", height: "auto", flexGrow: 1, minWidth: 0, wrapMode: "word",
@@ -302,10 +307,14 @@ export class TranscriptPanel {
   }
   private folded(row: Row): boolean {
     if (!this.foldable(row)) return false;
-    return this.state?.folded[row.section.id] ?? (!this.legacy && (row.section.kind === "tool" || compactionNotice(row.section)));
+    return this.state?.folded[row.section.id] ?? (!this.legacy && (row.section.kind === "tool" || !!row.section.image || compactionNotice(row.section)));
   }
   private headingText(section: TranscriptSection, folded: boolean): string {
     let label: string;
+    if (section.image) {
+      const key = this.hint("transcript.fold", "transcript");
+      return `[read] ${section.image.name}` + (key ? ` (${key} to ${folded ? "expand" : "collapse"})` : "");
+    }
     switch (section.kind) {
       case "tool": label = section.command !== undefined ? `$ ${section.command}` : `[${section.title}]${section.summary ? ` ${section.summary}` : ""}`; break;
       case "thinking": return "";
@@ -339,7 +348,7 @@ export class TranscriptPanel {
     const selected = this.state?.selectedId === section.id, skill = section.skillName !== undefined;
     const folded = this.folded(row), spacing = transcriptSpacing();
     const plain = this.legacy || section.kind === "assistant" || section.kind === "thinking";
-    const background = this.legacy ? colors.panel : transcriptBackground(section.kind, colors);
+    const background = this.legacy ? colors.panel : transcriptBackground(section.image ? "tool" : section.kind, colors);
     row.box.backgroundColor = background; row.box.border = false;
     row.box.paddingX = plain ? 0 : 1;
     row.box.paddingY = this.legacy ? 0 : spacing.verticalInset;
@@ -361,7 +370,17 @@ export class TranscriptPanel {
       row.markdown.update(section.text, section.status === "streaming");
       row.markdown.root.visible = !folded && !source;
     }
-    row.bodyRow.visible = row.body.visible = !folded && (!row.markdown || source);
+    row.bodyRow.visible = row.body.visible = !section.image && !folded && (!row.markdown || source);
+    const preview = section.image && !folded && this.visible && !this.help.visible;
+    if (preview) {
+      if (!row.preview) {
+        row.preview = new TranscriptImagePreview(this.renderer, `image-preview:${section.id}`, this.options.image,
+          () => this.prepareLayoutChange(), () => Math.max(1, this.scroll.viewport.height - 5));
+        row.preview.root.marginTop = spacing.bodyGap;
+        row.box.remove(row.completion); row.box.add(row.preview.root); row.box.add(row.completion);
+      }
+      this.updatePreview(row);
+    } else if (row.preview) { row.preview.dispose(); row.preview.root.destroyRecursively(); this.imagePreviews.delete(row); delete row.preview; }
     row.bodyRow.marginTop = row.heading.visible && !folded ? spacing.bodyGap : 0;
     row.body.height = skill ? 1 : "auto"; row.body.wrapMode = skill ? "none" : "word";
     row.skillTag.visible = skill;
@@ -405,10 +424,23 @@ export class TranscriptPanel {
   // Native widths settle after size callbacks; repaint only completion rows whose measured width changed.
   private reflowCompletions = (): void => {
     if (this.disposed || this.scroll.isDestroyed) return;
-    for (const row of this.rows.values()) if (row.section.completion && row.completion.width !== row.completionWidth) {
-      this.prepareLayoutChange(); this.paintCompletion(row);
+    for (const row of this.rows.values()) {
+      this.updatePreview(row);
+      if (row.section.completion && row.completion.width !== row.completionWidth) { this.prepareLayoutChange(); this.paintCompletion(row); }
     }
   };
+  private updatePreview(row: Row): void {
+    if (!row.preview || !row.section.image) return;
+    let count = 0, bytes = 0;
+    for (const other of this.imagePreviews) {
+      if (!other.preview?.retaining) { this.imagePreviews.delete(other); continue; }
+      if (other !== row) { count++; bytes += other.section.image?.byteLength ?? 0; }
+    }
+    // Unfold-all must not retain an unbounded number of binary responses or native decodes.
+    const allowed = row.preview.retaining || count < 8 && bytes + row.section.image.byteLength <= maximumPreviewImageBytes * 2;
+    row.preview.update(this.sessionId, row.section.image, allowed);
+    if (row.preview.retaining) this.imagePreviews.add(row); else this.imagePreviews.delete(row);
+  }
   private markdownChanging = (): void => {
     if (!this.visible || this.disposed || this.help.visible || this.pending) return;
     this.reconcileSelection();
@@ -513,7 +545,7 @@ export class TranscriptPanel {
   private restoreFocus(): void {
     if (!this.help.visible && this.state?.mode !== "sections" && this.selected) {
       const row = this.selected, reader = this.reader(row);
-      reader.cursorOffset = this.folded(row) ? this.state?.headingCursors?.[row.section.id] ?? 0 : this.state?.cursors[row.section.id] ?? 0;
+      reader.cursorOffset = this.folded(row) || row.section.image ? this.state?.headingCursors?.[row.section.id] ?? 0 : this.state?.cursors[row.section.id] ?? 0;
       this.applySelection(row);
       reader.focus();
     } else this.scroll.focus();
@@ -675,6 +707,7 @@ export class TranscriptPanel {
       + `Following resumes at the viewport bottom and pauses above it; selections protect the view.\n`
       + `Markdown: sections show formatted prose; Enter reads the original source, Esc returns to formatting.\n`
       + `Context compacted summaries start folded; click their heading or use ${this.hint("transcript.fold", "transcript")} to expand/collapse.\n`
+      + `Image attachments show [read] filename, start folded, and preview on header click or ${this.hint("transcript.fold", "transcript")}.\n`
       + `Thinking is always visible as gray italic text and never folds.\n`
       + `Skills show [skill] name only and never fold; copying excludes the decorative tag.\n`
       + `${this.hint("transcript.fold-all", "transcript")}/${this.hint("transcript.unfold-all", "transcript")} fold/unfold all · ${this.hint("transcript.latest", "transcript")} follow latest · ${this.hint("transcript.back", "transcript")} back · ${this.hint("focus.prompt", "transcript")} input · ${this.hint("transcript.help", "transcript")} close help`;
@@ -745,6 +778,7 @@ export class TranscriptPanel {
     this.scroll.verticalScrollBar.off("change", this.rememberScroll);
     this.scroll.content.off("resize", this.applyTarget); this.scroll.viewport.off("resize", this.applyTarget);
     for (const row of this.rows.values()) {
+      row.preview?.dispose();
       if (!row.header.isDestroyed) row.header.syntaxStyle = null;
       if (row.markdown && !row.markdown.root.isDestroyed) row.markdown.root.destroyRecursively();
     }

@@ -1,7 +1,7 @@
 import { resolve, sep } from "node:path";
 import type { Repository } from "../workspace/model.ts";
 import { RepositoryWatcher } from "../workspace/repository-watcher.ts";
-import { CancelledError, collectCleanup, ConnectionError, InputError, SessionError, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
+import { CancelledError, CapabilityError, collectCleanup, ConnectionError, InputError, SessionError, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { connectRuntime, defaultPreferences, type ConnectOptions, type RuntimeClient } from "./client.ts";
 import type { RuntimePreferences, RuntimeSnapshot } from "./protocol.ts";
@@ -9,7 +9,7 @@ import { runtimePaths, RuntimeStore } from "./storage.ts";
 import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
 
 // Keep repo identity and instance fencing inside the existing clients, including PTY leases.
-export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect">;
+export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "image">>;
 type Connector = (repository: Repository, cwd: string, options: ConnectOptions) => Promise<Result<RepositoryClient | null, ExpectedError>>;
 type Entry = { repository: Repository; preferences: RuntimePreferences; client?: RepositoryClient; unsubscribe?: () => void;
   watcher?: RepositoryWatcher; discoveryWarning?: string;
@@ -164,6 +164,11 @@ export class WorkspaceClient {
   }
   async prompt(...args: Parameters<RuntimeClient["prompt"]>): ReturnType<RuntimeClient["prompt"]> {
     const entry = this.sessionOwner(args[0]); return entry.ok ? entry.value.client!.prompt(...args) : entry;
+  }
+  async image(...args: Parameters<RuntimeClient["image"]>): ReturnType<RuntimeClient["image"]> {
+    const entry = this.sessionOwner(args[0]); if (!entry.ok) return entry;
+    const client = entry.value.client;
+    return client?.image ? client.image(...args) : err(new CapabilityError("This repository connection does not provide image previews."));
   }
   async complete(...args: Parameters<RuntimeClient["complete"]>): ReturnType<RuntimeClient["complete"]> {
     const entry = this.sessionOwner(args[0]); return entry.ok ? entry.value.client!.complete(...args) : entry;

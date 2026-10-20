@@ -17,6 +17,7 @@ import type { UsageMonitor } from "../usage/monitor.ts";
 import { loadPromptImages } from "./prompt-attachments.ts";
 import { ManualCompaction } from "./manual-compaction.ts";
 import { summarizeRequest } from "./request-summary.ts";
+import { imageNamesEntryType } from "./transcript-images.ts";
 
 type QueuedUserMessage = Extract<ReturnType<AgentSession["agent"]["peekQueuedMessages"]>[number], { role: "user" }>;
 
@@ -128,6 +129,7 @@ export class PiSessionExecutor implements SessionExecutor {
   }
 
   commands() { return sessionCommands(this.session); }
+  imageData(id: string) { return this.transcript.imageData(id); }
   get busy(): boolean { return this.controlling || this.interrupting || !!this.interruptTask || this.interruptedMessages.length > 0 || this.runs.size > 0 || !this.session.isIdle || this.session.pendingMessageCount > 0; }
   get acceptsImages(): boolean { return this.session.model?.input.includes("image") ?? false; }
   get savedSessionId(): string { return this.session.sessionId; }
@@ -209,11 +211,17 @@ export class PiSessionExecutor implements SessionExecutor {
       if (this.session.isCompacting && !this.session.isStreaming) return err(new SessionError("SESSION_BUSY", "Session is compacting; retry after it finishes."));
       if ((imagePaths.length || replayImages?.length) && !this.acceptsImages) return err(new CapabilityError("The selected model no longer accepts image input. Input was retained."));
       const images = loaded.value;
-      const before = { status: this.status, error: this.error, aborted: this.aborted };
-      const revision = this.runRevision;
       const name = text.startsWith("/") ? text.slice(1).split(" ", 1)[0]! : "";
       const registered = name ? this.session.extensionRunner.getCommand(name) : undefined;
       if (images.length && registered) return err(new InputError(`/${name} does not accept image attachments. Send the images in an ordinary prompt instead.`));
+      const names = this.transcript.rememberImages(images, imagePaths);
+      if (names.length) {
+        const saved = await capture(async () => this.session.sessionManager.appendCustomEntry(imageNamesEntryType, names));
+        if (!saved.ok) return saved;
+        if (revisionAtSubmission !== this.inputRevision || this.closing || this.disposed) return err(new CancelledError("Input was cancelled while saving attachment metadata."));
+      }
+      const before = { status: this.status, error: this.error, aborted: this.aborted };
+      const revision = this.runRevision;
       const command = registered ? this.diagnostics.begin(name) : undefined;
       let handled = false;
       if (this.session.isIdle) { this.status = "working"; this.error = null; this.aborted = false; }

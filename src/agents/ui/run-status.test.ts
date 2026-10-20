@@ -77,6 +77,18 @@ test("Working 요청도 한 줄 말줄임하며 실제 첨부 배지 공간은 �
   } finally { await app.close(); }
 });
 
+test("이미지 전용 요청의 첨부 섹션은 파일명을 작업 요청으로 오인하지 않고 이미지 개수만 표시한다", async () => {
+  const app = await mount();
+  try {
+    const attachment: TranscriptSection = { id: "attachment", kind: "notice", title: "read", text: "clipboard-1.png", status: "complete",
+      image: { id: "a".repeat(64), name: "clipboard-1.png", mimeType: "image/png", byteLength: 80 }, request: { text: "", images: 1, files: 0 } };
+    app.status.update("a", working([attachment]), true); await app.render();
+
+    expect(app.text()).toStartWith("Working"); expect(app.text()).toContain("[1 image]");
+    expect(app.text()).not.toContain("clipboard-1.png"); expect(app.text()).not.toContain("“");
+  } finally { await app.close(); }
+});
+
 test("반복 스냅샷은 최소 시간을 다시 시작하지 않고 정상 완료 문구 없이 스피너만 마무리한다", async () => {
   const app = await mount();
   try {
