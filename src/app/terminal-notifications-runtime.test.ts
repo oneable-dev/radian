@@ -44,6 +44,8 @@ test("실제 서비스의 완료가 연결된 CLI를 통해 터미널 알림으�
 
       // native 알림과 종료 시의 터미널 복구를 모두 확인한다.
       expect(raw.match(/\x1b\]777;notify;Radian · Task completed;/gu)).toHaveLength(1);
+      const notification = raw.match(/\x1b\]777;notify;Radian · Task completed;([^\x1b\x07]*)\x1b\\/u);
+      expect(notification?.[1]).toMatch(/^read · (?:<1s|(?:\d+h )?(?:\d+m )?\d+s)$/u);
       expect(raw).toContain("\x1b[?1049l"); expect(code).toBe(0);
     } finally {
       clearTimeout(deadline);

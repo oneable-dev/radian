@@ -33,9 +33,12 @@ class Terminal extends EventEmitter {
   }
   destroy(): void { this.isDestroyed = true; this.emit("destroy"); }
 }
-function state(completions: readonly RunCompletion[] = [], status: ExecutionState["status"] = "complete"): ExecutionState {
+function state(completions: readonly RunCompletion[] = [], status: ExecutionState["status"] = "complete", request = "터미널 알림 기능 구현"): ExecutionState {
   return { conversationId: "conversation", status, output: "Private response", error: "Private provider error",
-    sections: completions.map((completion, index) => ({ id: `answer-${index}`, kind: "assistant", title: "Agent", text: "Private response", status: "complete", completion })) };
+    sections: completions.flatMap((completion, index) => [
+      { id: `request-${index}`, kind: "user", title: "You", text: request, status: "complete" },
+      { id: `answer-${index}`, kind: "assistant", title: "Agent", text: "Private response", status: "complete", completion },
+    ]) };
 }
 function snapshot(execution: ExecutionState = state()): WorkspaceSnapshot {
   return { repositories: [{ id: "repo", name: "radian", worktrees: [{ id: "tree", path: "/private/workspace", name: "main", branch: "main",
@@ -66,7 +69,7 @@ for (const focus of ["unknown", "blur", "focus"] as const) for (const outcome of
       // 포커스 중 소비한 결과는 이후 포커스를 잃어도 재생하지 않는다.
       expect(app.terminal.sent).toEqual(focus === "focus" ? [] : [{
         title: outcome === "complete" ? "Radian · Task completed" : "Radian · Task failed",
-        body: "radian / main / Notification work · 42s",
+        body: "터미널 알림 기능 구현 · 42s",
       }]);
       expect(app.errors).toEqual([]);
     } finally { app.notifications.dispose(); }
@@ -161,31 +164,80 @@ test("합쳐진 스냅샷의 여러 최종 실행은 각각 한 번만 알리고
   } finally { app.notifications.dispose(); }
 });
 
+test("각 완료에는 같은 실행의 마지막 요청만 연결하고 이전·미래 요청을 빌리지 않는다", () => {
+  // 여러 실행과 다음 대기 요청이 한 스냅샷에 합쳐진 경우를 준비한다.
+  const app = fixture(), first = state([completion()], "complete", "첫 번째 작업").sections!;
+  const second = state([completion("error", 50000)], "failure", "두 번째 작업").sections!.map((section) => ({ ...section, id: `second-${section.id}` }));
+  try {
+    app.source.publish({ ...state(), sections: [...first, ...second,
+      { id: "background", kind: "assistant", title: "Agent", text: "Private response", status: "complete", completion: completion("complete", 100000) },
+      { id: "future", kind: "user", title: "You", text: "다음 실행의 요청", status: "complete" },
+    ] });
+
+    // 요청 없는 실행은 시간만 표시하고 다음 요청을 이전 알림에 섞지 않는다.
+    expect(app.terminal.sent.map((item) => item.body)).toEqual(["첫 번째 작업 · 42s", "두 번째 작업 · 42s", "42s"]);
+  } finally { app.notifications.dispose(); }
+});
+
+test.each(["missing", "empty"] as const)("요청 요약이 %s이면 식별자나 응답 대신 시간만 표시한다", (request) => {
+  // 과거 데이터나 첨부만 있는 요청에는 표시할 작업 문구가 없을 수 있다.
+  const app = fixture(), finished = state([completion()], "complete", "");
+  try {
+    app.source.publish({ ...finished, sections: request === "missing" ? finished.sections!.filter((section) => section.kind !== "user") : finished.sections! });
+
+    expect(app.terminal.sent).toEqual([{ title: "Radian · Task completed", body: "42s" }]);
+  } finally { app.notifications.dispose(); }
+});
+
+test("스킬 호출은 내부 지침 대신 호출 이름으로 요약한다", () => {
+  // 스킬 notice 본문은 사용자 작업명이 아닌 비공개 지침일 수 있다.
+  const app = fixture(), finished = state([completion()]);
+  try {
+    app.source.publish({ ...finished, sections: [
+      { id: "skill", kind: "notice", title: "Skill", text: "PRIVATE_SKILL_INSTRUCTIONS", skillName: "review-code", status: "complete" },
+      ...finished.sections!.filter((section) => section.kind !== "user"),
+    ] });
+
+    expect(app.terminal.sent[0]?.body).toBe("/skill:review-code · 42s");
+    expect(app.terminal.sent[0]?.body).not.toContain("PRIVATE_SKILL_INSTRUCTIONS");
+  } finally { app.notifications.dispose(); }
+});
+
+test("구조화된 작업 요약이 있으면 첨부 경로가 들어 있는 원문 대신 사용한다", () => {
+  // runtime이 만든 요약과 실제 대화 원문을 구분한다.
+  const app = fixture(), finished = state([completion()]);
+  const request = { id: "request", kind: "user" as const, title: "You", text: 'Private raw request @"/private/workspace/secret.ts"', status: "complete" as const,
+    request: { text: "선택한 파일 수정", images: 0, files: 1, fileName: "secret.ts" } };
+  try {
+    app.source.publish({ ...finished, sections: [request, ...finished.sections!.filter((section) => section.kind !== "user")] });
+
+    expect(app.terminal.sent[0]?.body).toBe("선택한 파일 수정 · 42s");
+  } finally { app.notifications.dispose(); }
+});
+
 test.each([[0, "<1s"], [90000, "1m 30s"], [3604000, "1h 0m 4s"]] as const)("실행 시간 %dms를 세션 경과 시간이 아닌 %s로 표시한다", (durationMs, expected) => {
   // 저장된 실행 시간만 사용하고 현재 시각이나 세션의 대기 시간을 더하지 않는다.
   const app = fixture();
   try {
     app.source.publish(state([{ ...completion(), durationMs }]));
 
-    expect(app.terminal.sent[0]?.body).toBe(`radian / main / Notification work · ${expected}`);
+    expect(app.terminal.sent[0]?.body).toBe(`터미널 알림 기능 구현 · ${expected}`);
   } finally { app.notifications.dispose(); }
 });
 
-test("짧은 알림에는 식별 정보와 시간만 넣고 제어문자·OSC 구분자를 제거한다", () => {
-  // 로컬 이름에도 OSC 종료와 추가 명령을 주입할 수 있는 문자가 있을 수 있다.
-  const app = fixture(), repository = app.source.snapshot.repositories[0]!, tree = repository.worktrees[0]!;
+test("짧은 작업 요약의 제어문자·OSC 구분자를 제거하고 시간은 보존한다", () => {
+  // 요청 요약에도 OSC 종료나 별도 제어 명령이 포함될 수 있다.
+  const app = fixture();
   try {
-    app.source.snapshot = { ...app.source.snapshot, repositories: [{ ...repository, name: "\x1b[31mradian\x1b[0m;\nrepo\x07",
-      worktrees: [{ ...tree, sessions: [{ ...tree.sessions[0]!, name: "작업".repeat(200) + "\x9c" }] }] }] };
-
-    app.source.publish(state([completion("error")]));
+    app.source.publish(state([completion("error")], "failure", "\x1b[31m알림\x1b[0m;\n구현\x07 " + "작업".repeat(200) + "\x9c"));
 
     const sent = app.terminal.sent[0]!;
-    expect(sent.body).toStartWith("radian, repo / main / ");
+    expect(sent.body).toStartWith("알림, 구현 ");
     expect(sent.body).not.toMatch(/[\x00-\x1f\x7f-\x9f;]/u);
     expect(Bun.stringWidth(sent.body)).toBeLessThanOrEqual(240);
     expect(sent.body).toEndWith("… · 42s");
     expect(sent.body).not.toContain("Private"); expect(sent.body).not.toContain("/private/workspace");
+    expect(sent.body).not.toContain("radian"); expect(sent.body).not.toContain("Notification work");
   } finally { app.notifications.dispose(); }
 });
 
@@ -224,7 +276,7 @@ test("예상하지 못한 SDK 예외는 원본 그대로 UI 경계에 보고하�
   } finally { app.notifications.dispose(); }
 });
 
-test("선택되지 않은 다른 저장소의 세션도 해당 저장소와 워크트리 이름으로 알린다", () => {
+test("선택되지 않은 다른 저장소의 세션도 식별자 대신 해당 작업 요약으로 알린다", () => {
   // 포커스 정책은 선택한 세션이 아니라 이 TUI 전체의 터미널 포커스에 적용한다.
   const app = fixture();
   const repository = { id: "other-repo", name: "server", worktrees: [{ id: "feature", path: "/private/server", name: "feature/api", branch: "feature/api",
@@ -235,10 +287,10 @@ test("선택되지 않은 다른 저장소의 세션도 해당 저장소와 워�
     app.source.changed();
 
     // 다른 저장소에서만 완료가 발생해도 메인 세션과 섞이지 않는다.
-    app.source.snapshot = { ...app.source.snapshot, details: { ...app.source.snapshot.details, "other-session": state([completion()]) } };
+    app.source.snapshot = { ...app.source.snapshot, details: { ...app.source.snapshot.details, "other-session": state([completion()], "complete", "API 오류 수정") } };
     app.source.changed(); app.source.changed();
 
-    expect(app.terminal.sent).toEqual([{ title: "Radian · Task completed", body: "server / feature/api / API work · 42s" }]);
+    expect(app.terminal.sent).toEqual([{ title: "Radian · Task completed", body: "API 오류 수정 · 42s" }]);
   } finally { app.notifications.dispose(); }
 });
 
@@ -262,7 +314,7 @@ test("Ghostty용 native 출력은 실제 OSC 777 알림을 순서 있는 출력 
     // 알림은 화면 텍스트가 아니라 Ghostty가 해석하는 OSC 제어 패킷이다.
     source.publish(state([completion()])); await driver.idle();
 
-    expect(raw).toBe("\x1b]777;notify;Radian · Task completed;radian / main / Notification work · 42s\x1b\\");
+    expect(raw).toBe("\x1b]777;notify;Radian · Task completed;터미널 알림 기능 구현 · 42s\x1b\\");
     expect(errors).toEqual([]);
   } finally { notifications?.dispose(); await driver.close(); }
 });
@@ -282,7 +334,7 @@ test("실제 OpenTUI 입력 파서의 포커스 신호로 발송 여부를 갱�
     // 포커스를 잃은 뒤의 새 결과는 native 출력 API로 한 번만 전달한다.
     app.renderer.stdin.emit("data", Buffer.from("\x1b[O")); await app.renderOnce();
     source.publish(state([completion(), completion("error", 50000)])); source.changed();
-    expect(send.mock.calls).toEqual([["radian / main / Notification work · 42s", "Radian · Task failed"]]);
+    expect(send.mock.calls).toEqual([["터미널 알림 기능 구현 · 42s", "Radian · Task failed"]]);
     expect(errors).toEqual([]);
   } finally { notifications.dispose(); send.mockRestore(); await app.dispose(); }
 });

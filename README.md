@@ -729,9 +729,13 @@ scrollbars, Git diff movement and embedded programs' own UI/configuration are un
 
 An attached TUI requests a terminal desktop notification once for each newly settled main-agent
 run that completes or fails. The title is `Radian · Task completed` or `Radian · Task failed`;
-the body contains the repository, worktree, session name and elapsed run time. Prompt/response
-content, raw provider errors and full paths are not included. Names are sanitized and the body
-is limited to 240 terminal cells.
+the body contains only a short task excerpt and elapsed run time, for example
+`Implement terminal notifications · 42s`. Project/worktree names and session identifiers are not
+repeated. The excerpt uses the latest delivered request belonging to that settled run, not a draft,
+a later request or an assistant response. Skill-only requests use their invocation name, not internal
+instructions. When no request text is available, only elapsed time is shown. Excerpts are sanitized
+and clipped to 160 terminal cells without truncating the time. User-written request text can appear
+in the excerpt; assistant responses and raw provider errors are excluded.
 
 OpenTUI terminal `focus` events suppress notifications; `blur` enables them. Before a focus event
 is received, the state is unknown and notifications are attempted. Focus reporting depends on the

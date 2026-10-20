@@ -2,6 +2,7 @@ import type { CliRenderer } from "@opentui/core";
 import type { EventEmitter } from "node:events";
 import type { WorkspaceClient } from "../runtime/workspace-client.ts";
 import type { RunCompletion } from "../agents/run-completion.ts";
+import type { TranscriptSection } from "../agents/transcript.ts";
 import { singleLine, truncateCells } from "../ui/text.ts";
 
 type Source = Pick<WorkspaceClient, "snapshot" | "recoveryVersion" | "subscribe">;
@@ -47,16 +48,21 @@ export class TerminalNotifications {
       }
       const initial = baseline || !previous || previous.conversationId !== state.conversationId;
       const completions = new Set<string>();
+      let request: string | undefined;
       for (const section of state.sections) {
+        const delivered = requestExcerpt(section);
+        if (delivered !== undefined) request = delivered;
         const completion = section.completion;
         if (!completion) continue;
+        const excerpt = request; request = undefined; // Never borrow another run's request.
         // Persistence warnings are not another run or a reason to alert again.
         const key = JSON.stringify([section.id, completion.startedAt, completion.completedAt, completion.durationMs, completion.outcome]);
         completions.add(key);
         if (initial || previous.completions.has(key) || completion.outcome !== "complete" && completion.outcome !== "error") continue;
-        // Never include prompt/response text, raw provider errors or full paths.
-        const context = `${notificationName(repository.name, 64)} / ${notificationName(worktree.name, 64)} / ${notificationName(session.name, 80)}`;
-        const body = `${context} · ${duration(completion)}`;
+        // Only a short delivered-request excerpt and run time belong in the body;
+        // project/worktree/session identifiers, responses and raw errors do not.
+        const summary = notificationSummary(excerpt ?? ""), elapsed = duration(completion);
+        const body = summary ? `${summary} · ${elapsed}` : elapsed;
         notifications.push({ title: completion.outcome === "complete" ? "Radian · Task completed" : "Radian · Task failed", body });
       }
       next.set(session.id, { conversationId: state.conversationId, completions });
@@ -82,10 +88,17 @@ export class TerminalNotifications {
   };
 }
 
+// Accept optional request metadata without requiring it from older runtimes.
+// Keep raw legacy text until ANSI sanitization so escape prefixes are not lost.
+function requestExcerpt(section: Pick<TranscriptSection, "kind" | "text" | "skillName"> & { readonly request?: { readonly text: string } }): string | undefined {
+  if (section.kind !== "user" && section.skillName === undefined) return undefined;
+  return section.request?.text ?? (section.skillName !== undefined ? `/skill:${section.skillName}` : section.text);
+}
+
 // Bound encoded size as well as display width, including zero-width input, and
-// keep terminal controls and OSC 777 delimiters out of untrusted local names.
-function notificationName(value: string, width: number): string {
-  return truncateCells(singleLine(Bun.stripANSI(value.slice(0, 256))).replaceAll(";", ","), width);
+// keep terminal controls and OSC 777 delimiters out of untrusted request excerpts.
+function notificationSummary(value: string): string {
+  return truncateCells(singleLine(Bun.stripANSI(value.slice(0, 256))).replaceAll(";", ","), 160);
 }
 
 function duration(completion: RunCompletion): string {
