@@ -66,7 +66,7 @@ test("재조회 중 후보와 선택·높이·푸터를 유지하고 이전 검�
     app.mockInput.pressKey("a"); await app.render();
     expect(app.captureCharFrame()).toContain("abcdef-1.ts"); expect(app.captureCharFrame()).toContain("Updating");
     expect(geometry()).toEqual(filledGeometry); expect(footer()).toBe(filledFooter);
-    app.mockInput.pressEnter(); app.mockInput.pressTab(); await app.render();
+    app.mockInput.pressTab(); await app.render();
     expect(app.input.value).toBe("@a"); expect(app.sent).toEqual([]);
     app.mockInput.pressKey("n", { ctrl: true }); await app.render();
     app.clock.advance(150); await app.render(); pending[1]!.resolve(ok({ items, truncated: false })); await app.render();
@@ -128,11 +128,14 @@ test("슬래시는 입력 맨 앞에서만 명령을 제안하고 이메일이 �
   } finally { await app.close(); }
 });
 
-test("Ctrl+N/P로 후보를 고르고 Tab이나 Enter는 삽입만 하며 다음 Enter에서 전송한다", async () => {
+test("Ctrl+N/P로 후보를 고르고 Tab은 자동완성만 하며 Enter는 입력한 명령을 즉시 전송한다", async () => {
   const app = await mount();
   try {
     await app.type("/");
     expect(app.captureCharFrame()).toContain("Ctrl+n Next");
+    expect(app.captureCharFrame()).toContain("Tab Insert");
+    expect(app.captureCharFrame()).toContain("Enter Queue");
+    expect(app.captureCharFrame()).not.toContain("Tab/Enter");
     app.mockInput.pressKey("n", { ctrl: true }); await app.render();
     app.mockInput.pressKey("p", { ctrl: true }); await app.render();
     app.mockInput.pressTab(); await app.render();
@@ -141,33 +144,91 @@ test("Ctrl+N/P로 후보를 고르고 Tab이나 Enter는 삽입만 하며 다음
     expect(app.renderer.currentFocusedRenderable).toBe(app.input);
     app.mockInput.pressEnter(); await app.render(); expect(app.sent).toEqual(["/mcp "]);
 
-    app.input.value = ""; await app.type("/"); app.mockInput.pressKey("p", { ctrl: true }); await app.render();
+    // A fully typed command must not need a second Enter or acquire a completion's trailing space.
+    await app.type("/memory");
+    expect(app.menu().visible).toBe(true);
     app.mockInput.pressEnter(); await app.render();
-    expect(app.input.value).toBe("/memory "); expect(app.sent).toHaveLength(1);
+    expect(app.input.value).toBe(""); expect(app.sent).toEqual(["/mcp ", "/memory"]);
+    expect(app.menu().visible).toBe(false);
   } finally { await app.close(); }
 });
 
-test("kitty Enter를 누르고 있어도 후보 삽입 뒤 반복 입력이 프롬프트 전송으로 바뀌지 않는다", async () => {
+test("kitty Tab을 누르고 있어도 후보 삽입 뒤 반복 입력이 포커스 이동으로 바뀌지 않는다", async () => {
   const app = await mount();
   const raw = (text: string) => { const key = parseKeypress(text, { useKittyKeyboard: true }); if (!key) throw new Error("Invalid key fixture"); app.renderer.keyInput.processParsedKey(key); };
   try {
-    await app.type("/"); raw("\u001b[13;1u"); raw("\u001b[13;1:2u"); await app.render();
+    await app.type("/"); raw("\u001b[9;1u"); raw("\u001b[9;1:2u"); await app.render();
     expect(app.input.value).toBe("/mcp "); expect(app.sent).toEqual([]);
-    raw("\u001b[13;1:3u"); raw("\u001b[13;1u"); await app.render();
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+    raw("\u001b[9;1:3u"); app.mockInput.pressEnter(); await app.render();
     expect(app.sent).toEqual(["/mcp "]);
   } finally { await app.close(); }
 });
 
-test("트리거와 Enter·Tab이 같은 입력 묶음에 도착해도 조회를 우회해 전송하거나 포커스를 옮기지 않는다", async () => {
+test("kitty Enter의 반복 입력도 명령을 자동완성하거나 중복 전송하지 않는다", async () => {
+  const app = await mount();
+  const raw = (text: string) => { const key = parseKeypress(text, { useKittyKeyboard: true }); if (!key) throw new Error("Invalid key fixture"); app.renderer.keyInput.processParsedKey(key); };
+  try {
+    // Key repeat can arrive before admission or after the accepted draft has been cleared.
+    await app.type("/mcp"); raw("\u001b[13;1u"); raw("\u001b[13;1:2u"); await app.render();
+    raw("\u001b[13;1:2u"); raw("\u001b[13;1:3u"); await app.render();
+
+    expect(app.sent).toEqual(["/mcp"]); expect(app.input.value).toBe("");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe(app.input.id);
+  } finally { await app.close(); }
+});
+
+test.each(["/mc", "@src/"])("후보를 선택해 두어도 Enter는 완성하지 않은 현재 입력 %s를 그대로 전송한다", async (draft) => {
   const app = await mount();
   try {
-    app.mockInput.pressKey("/"); app.mockInput.pressEnter(); app.mockInput.pressTab(); await app.render();
-    expect(app.sent).toEqual([]); expect(app.input.value).toBe("/");
+    // Only Tab may replace text or create a file attachment from a highlighted candidate.
+    await app.type(draft); app.mockInput.pressKey("n", { ctrl: true }); await app.render();
+    expect(app.menu().visible).toBe(true);
+    app.mockInput.pressEnter(); await app.render();
+
+    expect(app.sent).toEqual([draft]); expect(app.input.value).toBe("");
+    expect(app.menu().visible).toBe(false);
+  } finally { await app.close(); }
+});
+
+test("트리거와 Enter가 같은 입력 묶음에 도착해도 후보가 아닌 실제 입력만 즉시 전송한다", async () => {
+  const app = await mount();
+  try {
+    // Submission is independent of the completion debounce and its queued render.
+    app.mockInput.pressKey("/"); app.mockInput.pressEnter(); await app.render();
+
+    expect(app.sent).toEqual(["/"]); expect(app.input.value).toBe("");
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.menu().visible).toBe(false);
+  } finally { await app.close(); }
+});
+
+test.each(["/", "@"])("트리거 %s와 Tab이 같은 입력 묶음에 도착하면 전송하거나 포커스를 옮기지 않는다", async (trigger) => {
+  const app = await mount();
+  try {
+    // Tab waits for fresh candidates instead of sending a partially typed command or reference.
+    app.mockInput.pressKey(trigger); app.mockInput.pressTab(); await app.render();
+
+    expect(app.sent).toEqual([]); expect(app.input.value).toBe(trigger);
     expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.menu().visible).toBe(true);
     app.mockInput.pressEscape(); await app.render();
-    app.input.value = ""; app.mockInput.pressKey("@"); app.mockInput.pressEscape(); await app.render();
-    expect(app.menu().visible).toBe(false); expect(app.input.value).toBe("@");
+    expect(app.menu().visible).toBe(false); expect(app.input.value).toBe(trigger);
   } finally { await app.close(); }
+});
+
+test.each(["pending", "empty", "error"] as const)("후보 조회가 %s 상태여도 Enter는 입력한 명령을 한 번만 전송한다", async (state) => {
+  const pending = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>();
+  const app = await mount(async () => state === "pending" ? pending.promise
+    : state === "error" ? err(new CapabilityError("Lookup unavailable")) : ok({ items: [], truncated: false }));
+  try {
+    // Read-only discovery must not gate execution, even when it fails or has no matches.
+    await app.type("/mcp"); expect(app.menu().visible).toBe(true);
+    if (state === "empty") expect(app.captureCharFrame()).toContain("No matches");
+    if (state === "error") expect(app.captureCharFrame()).toContain("UNSUPPORTED_CAPABILITY");
+    app.mockInput.pressEnter(); app.mockInput.pressEnter(); await app.render();
+
+    expect(app.sent).toEqual(["/mcp"]); expect(app.input.value).toBe("");
+    expect(app.menu().visible).toBe(false); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+  } finally { pending.resolve(ok({ items: commandItems, truncated: false })); await app.close(); }
 });
 
 test("Esc는 후보 목록만 닫고 hjkl은 입력 문자로 남으며 기존 초안을 전송하지 않는다", async () => {
@@ -202,11 +263,11 @@ test("한글·이모지 뒤의 토큰 중간에서도 전체 경로만 바꾸고
   } finally { await app.close(); }
 });
 
-test("조회 중 Enter는 전송하지 않고 실패를 빈 목록으로 숨기지 않으며 초안과 포커스를 유지한다", async () => {
+test("조회 중 Tab은 전송하지 않고 실패를 빈 목록으로 숨기지 않으며 초안과 포커스를 유지한다", async () => {
   const pending = Promise.withResolvers<ReturnType<typeof err<CapabilityError>>>();
   const app = await mount(async () => pending.promise);
   try {
-    await app.type("/"); app.mockInput.pressEnter(); await app.render();
+    await app.type("/"); app.mockInput.pressTab(); await app.render();
     expect(app.sent).toEqual([]); expect(app.input.value).toBe("/");
     pending.resolve(err(new CapabilityError("Service needs an explicit upgrade"))); await app.render();
     expect(app.captureCharFrame()).toContain("UNSUPPORTED_CAPABILITY"); expect(app.menu().visible).toBe(true);
@@ -257,7 +318,7 @@ test("스트리밍과 좁은 화면에서도 후보는 입력창 아래와 푸�
     expect(app.menu().y).toBeGreaterThanOrEqual(composer.y + composer.height);
     expect(app.menu().y + app.menu().height).toBeLessThanOrEqual(footer.y);
     expect(queries).toBe(before); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
-    app.mockInput.pressEnter(); await app.render();
+    app.mockInput.pressTab(); await app.render();
     expect(app.input.value).toBe("/memory "); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });

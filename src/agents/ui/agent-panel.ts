@@ -97,7 +97,8 @@ export class AgentPanel {
     for (const [id, draft] of Object.entries(actions.initialInputDrafts ?? {})) { this.inputDrafts.set(id, draft); this.drafts.set(id, expandPromptDraft(draft, false).text); }
     this.prompt.on(InputRenderableEvents.INPUT, this.handleDraftInput);
     const composer = this.composer = new BoxRenderable(renderer, { id: "agent-composer", width: "auto", height: 3, flexShrink: 0,
-      flexDirection: "row", alignItems: "center", border: ["left"] });
+      flexDirection: "row", alignItems: "center", border: ["left"],
+      onMouseDown: (event) => { if (event.button === 0 && this.active && !this.prompt.focused) this.prompt.focus(); } });
     composer.add(this.prompt);
     this.sessionStatus = new SessionStatus(renderer);
     this.completion = new CompletionMenu(renderer, this.prompt, () => this.active ? this.promptSessionId : null, actions.onComplete,
@@ -271,9 +272,9 @@ export class AgentPanel {
   };
 
   async submitPrompt(): Promise<void> {
-    if (this.completionOpen) { this.completion.command("completion.accept"); return; }
     const id = this.promptSessionId;
     if (!id || !this.canSubmit || !this.actions.onPrompt) return;
+    this.completion.command("completion.dismiss");
     this.saveDraft();
     const draft = this.prompt.draft, submission = this.prompt.submission;
     const fingerprint = (value: PromptDraft | undefined) => value ? JSON.stringify([value.value, value.tokens]) : "";

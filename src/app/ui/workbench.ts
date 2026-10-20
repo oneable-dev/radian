@@ -286,9 +286,10 @@ export class Workbench {
     else if (focused === this.agent.prompt && this.agent.active) {
       shortcuts = this.agent.completionOpen
         ? [
+          { ...hint("agent.send", this.agent.working ? "Queue" : "Run"), disabled: !this.agent.canSubmit },
+          { key: this.keymap.hints("completion.accept", context), label: "Insert", disabled: !this.agent.completionAvailable("completion.accept") },
           { ...hint("completion.next", "Next"), disabled: !this.agent.completionAvailable("completion.next") },
           { ...hint("completion.previous", "Previous"), disabled: !this.agent.completionAvailable("completion.previous") },
-          { key: this.keymap.hints("completion.accept", context), label: "Insert", disabled: !this.agent.completionAvailable("completion.accept") },
           hint("completion.dismiss", "Dismiss"),
         ]
         : [...(this.agent.canSubmit ? [hint("agent.send", this.agent.working ? "Queue" : "Run")] : []),

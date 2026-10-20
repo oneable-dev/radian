@@ -191,7 +191,9 @@ send a prompt to an agent or run a Git mutation. Entering Git may perform read-o
 Agent input has no 1,000-character editor limit. **Enter** sends; **Shift+Enter** inserts a newline.
 **Alt+Enter** is an alternative for terminals that cannot distinguish Shift+Enter. Editing grows the
 input to at most six visible rows, bounded by available screen space, then scrolls inside the editor.
-Pasting never sends automatically and preserves original newlines.
+Pasting never sends automatically and preserves original newlines. Clicking anywhere on the input
+surface, including its padding and border, focuses the editor without changing the draft or cursor;
+clicking directly on text still uses native cursor positioning.
 
 Long pasted text (at least 1,024 UTF-16 units or nine lines) appears as
 `[Pasted Content 6324 chars]`. Control-containing text also collapses rather than painting control
@@ -234,8 +236,10 @@ cannot be inserted until results for the current query arrive. Footer shortcuts 
 and unavailable actions use muted keys instead of disappearing.
 
 - **Ctrl+N / Ctrl+P** selects the next/previous candidate. `hjkl` remains ordinary input.
-- **Tab / Enter** inserts the selected candidate without sending the prompt or executing a command.
-  Press Enter again after insertion to submit. **Esc** dismisses only the menu and preserves focus/text.
+- **Tab** inserts the selected candidate without sending the prompt or executing a command.
+- **Enter** immediately submits the current input, even while suggestions are open, loading or unavailable.
+  It never substitutes a selected candidate; type the command in full or complete it with Tab first.
+  **Esc** dismisses only the menu and preserves focus/text.
 - Selection replaces only the current token, preserving the surrounding text and native Unicode cursor.
   Selected files appear as numbered file/image items rather than exposing long paths in the editor.
   Ordinary file references retain their absolute paths for tool access; images use the image transport.

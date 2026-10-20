@@ -67,7 +67,7 @@ export class CompletionMenu {
   }
 
   get open(): boolean { return this.root.visible; }
-  // Include a freshly typed trigger before its queued render, so a burst of / + Enter cannot submit it.
+  // Claim Tab/Esc immediately after a trigger, before the menu's queued render can update focus context.
   get engaged(): boolean { return this.context() !== null; }
   private signature(): string { return JSON.stringify([this.sessionId(), this.input.value, this.input.cursorOffset]); }
   private context(): LookupContext | null {

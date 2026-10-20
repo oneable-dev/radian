@@ -16,6 +16,14 @@ test("기본 leader는 Ctrl+Space이며 Ctrl+C를 앱 종료에 할당하지 않
   expect(map.bound("ctrl+b", "prompt")).toBe(false);
 });
 
+test("자동완성 목록이 열려 있어도 Enter는 전송하고 Tab만 후보를 삽입한다", () => {
+  const map = defaultKeymap();
+
+  expect(map.hints("agent.send", "prompt")).toBe("Enter");
+  expect(map.hints("agent.send", "prompt-completion")).toBe("Enter");
+  expect(map.hints("completion.accept", "prompt-completion")).toBe("Tab");
+});
+
 test("키 설정은 scoped 기본값을 바꾸거나 비활성화하고 실제 힌트에 반영한다", () => {
   const map = expectOk(parseKeymap({ leader: "ctrl+b", bindings: {
     "session.new": [{ keys: "s", scope: "workspace" }], "session.close": [],

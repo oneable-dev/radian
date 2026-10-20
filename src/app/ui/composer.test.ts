@@ -7,6 +7,7 @@ import { PromptInput } from "../../agents/ui/prompt-input.ts";
 import { InputError } from "../../errors.ts";
 import { err, ok } from "../../result.ts";
 import type { PromptDraft } from "../../agents/prompt-input.ts";
+import type { CompletionResult } from "../../agents/completion.ts";
 
 async function mount(actions: Partial<WorkbenchActions> = {}) {
   const clock = new ManualClock();
@@ -26,6 +27,54 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     async close() { view.dispose(); await app.dispose(); } };
 }
 
+test.each(["", "first\nsecond"])("입력창의 상하좌우 여백과 테두리를 클릭하면 초안·커서를 유지하고 입력에 포커스한다: %j", async (draft) => {
+  // Empty and multiline drafts share the whole composer surface as their click target.
+  const app = await mount();
+  try {
+    app.input.value = draft; app.input.cursorOffset = Math.min(2, draft.length);
+    for (const width of [120, 60]) {
+      app.resize(width, 30); await app.render();
+      const composer = app.get("agent-composer"), cursor = app.input.cursorOffset;
+      const points = [
+        [composer.x, app.input.y], [app.input.x - 1, app.input.y],
+        [app.input.x + app.input.width, app.input.y],
+        [app.input.x + 2, composer.y], [app.input.x + 2, composer.y + composer.height - 1],
+      ] as const;
+      // Move focus away before every click so an already-focused editor cannot mask a missed hit.
+      for (const [x, y] of points) {
+        app.get("workspace-tree").focus(); await app.render();
+        await app.mockMouse.click(x, y); await app.render();
+
+        expect(app.renderer.currentFocusedRenderable?.id).toBe(app.input.id);
+        expect(app.input.value).toBe(draft); expect(app.input.cursorOffset).toBe(cursor);
+        expect(app.sent).toEqual([]);
+      }
+    }
+    // Subsequent typing belongs to the editor, not the previously focused sidebar.
+    const cursor = app.input.cursorOffset;
+    await app.mockInput.typeText("!"); await app.render();
+    expect(app.input.value).toBe(draft.slice(0, cursor) + "!" + draft.slice(cursor));
+  } finally { await app.close(); }
+});
+
+test("입력 텍스트 클릭은 native 커서 위치를 유지하고 여백의 우클릭은 포커스를 빼앗지 않는다", async () => {
+  // The larger hit target must not replace native text hit-testing or react to secondary clicks.
+  const app = await mount();
+  try {
+    app.input.value = "abcdef"; await app.render();
+    app.get("workspace-tree").focus(); await app.render();
+    const composer = app.get("agent-composer");
+    await app.mockMouse.click(app.input.x + 2, composer.y, 2); await app.render();
+    expect(app.renderer.currentFocusedRenderable).toBe(app.get("workspace-tree"));
+
+    await app.mockMouse.click(app.input.x + 2, app.input.y); await app.render();
+    await app.mockInput.typeText("!"); await app.render();
+
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+    expect(app.input.value).toBe("ab!cdef"); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("Shift Enter는 여러 줄 초안을 만들고 Enter는 줄바꿈을 보존해 한 번 전송한다", async () => {
   const app = await mount();
   try {
@@ -37,6 +86,29 @@ test("Shift Enter는 여러 줄 초안을 만들고 Enter는 줄바꿈을 보존
     expect(app.sent).toEqual([{id: "a1", text: "first\nsecond", images: []}]); expect(app.input.value).toBe("");
     expect(app.view.promptDrafts.a1).toBeUndefined(); expect(app.view.promptInputDrafts.a1).toBeUndefined();
   } finally { await app.close(); }
+});
+
+test("완성 조회 중 명령 전송이 거절되면 조회를 취소하고 초안·커서·포커스를 보존한다", async () => {
+  // Completion is optional discovery; rejection still belongs to the ordinary submission contract.
+  const pending = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>();
+  const sent: string[] = []; let signal: AbortSignal | undefined;
+  const app = await mount({
+    onComplete: async (_id, _query, abort) => { signal = abort; return pending.promise; },
+    onPrompt: (_id, text) => { sent.push(text); return err(new InputError("Rejected command")); },
+  });
+  try {
+    app.input.value = "/new"; await app.render(); app.clock.advance(150); await app.render();
+    const cursor = app.input.cursorOffset;
+    expect(app.get("prompt-completions").visible).toBe(true);
+    app.mockInput.pressEnter(); await app.render();
+    pending.resolve(ok({ items: [], truncated: false })); await app.render();
+
+    expect(sent).toEqual(["/new"]); expect(signal?.aborted).toBe(true);
+    expect(app.input.value).toBe("/new"); expect(app.input.cursorOffset).toBe(cursor);
+    expect(app.view.promptDrafts.a1).toBe("/new"); expect(app.get("prompt-completions").visible).toBe(false);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe(app.input.id);
+    expect(app.captureCharFrame()).toContain("Rejected command");
+  } finally { pending.resolve(ok({ items: [], truncated: false })); await app.close(); }
 });
 
 test("긴 붙여넣기·이미지·파일은 표시만 접고 수락 뒤 실제 데이터와 참조를 전달한다", async () => {

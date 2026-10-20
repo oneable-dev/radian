@@ -15,7 +15,7 @@ async function until(check: () => Promise<boolean> | boolean) {
   while (!await check()) { if (Date.now() > deadline) throw new Error("Completion runtime observation timed out"); await Bun.sleep(15); }
 }
 
-test("실제 UI·Unix IPC·SDK 자동완성은 첫 Enter에서 삽입만 하고 다음 Enter에서만 명령을 실행한다", async () => {
+test("실제 UI·Unix IPC·SDK에서 Tab은 파일과 명령을 완성하고 Enter는 열린 목록에서도 즉시 명령을 실행한다", async () => {
   // Real native rendering and a separate offline SDK process; no external provider or user service is touched.
   const fixture = await createWorktreeFixture();
   const options = { offline: true, stateRoot: join(fixture.directory, "state"), entry: join(import.meta.dir, "..", "..", "index.ts") };
@@ -41,14 +41,16 @@ test("실제 UI·Unix IPC·SDK 자동완성은 첫 Enter에서 삽입만 하고 
     selection.selectSession(main.id, id); await app.renderOnce(); app.mockInput.pressKey("e", { ctrl: true });
     const input = app.renderer.root.findDescendantById("session-prompt") as PromptInput;
     await app.mockInput.typeText("@work"); await visible("workspace.txt");
-    app.mockInput.pressEnter(); await app.renderOnce();
+    app.mockInput.pressTab(); await app.renderOnce();
     expect(input.value).toBe("[File #1] ");
     expect(input.submission.text).toBe(`@${JSON.stringify(join(fixture.main, "workspace.txt"))} `);
     expect(client.snapshot.details[id]?.output).toBe("");
 
     input.value = ""; await app.mockInput.typeText("/completion-pro"); await visible("Runtime completion marker");
-    app.mockInput.pressEnter(); await app.renderOnce();
+    app.mockInput.pressTab(); await app.renderOnce();
     expect(input.value).toBe("/completion-probe "); expect(app.captureCharFrame()).not.toContain("COMMAND_PROBE_EXECUTED");
+    // A fully typed command still opens suggestions, but a single Enter executes it without insertion.
+    input.value = "/completion-probe"; await visible("Runtime completion marker");
     app.mockInput.pressEnter(); await visible("COMMAND_PROBE_EXECUTED");
     expect(input.value).toBe(""); expect(client.snapshot.details[id]?.status).not.toBe("working");
   } finally {
