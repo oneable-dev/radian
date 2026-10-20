@@ -82,7 +82,7 @@ export const defaultBindings = {
   "transcript.fold": [...transcriptKeys("ctrl+o"), ...transcriptKeys("z a")],
   "transcript.fold-all": transcriptKeys("z m"),
   "transcript.unfold-all": transcriptKeys("z r"),
-  "transcript.latest": [key("ctrl+end", "transcript"), ...transcriptKeys("g e")],
+  "transcript.latest": [...transcriptKeys("g e"), key("ctrl+end", "transcript")],
   "transcript.copy": transcriptKeys("y"),
   "transcript.copy-section": transcriptKeys("shift+y"),
   "transcript.help": transcriptKeys("f1"),

@@ -7,16 +7,18 @@ import { demoWorkspace } from "../../workspace/demo.ts";
 import type { TranscriptSection } from "../../agents/transcript.ts";
 import type { ExpectedError } from "../../errors.ts";
 import { ok, type Result } from "../../result.ts";
-import { defaultKeymap } from "../../keybindings/config.ts";
+import { defaultKeymap, parseKeymap, type Keymap } from "../../keybindings/config.ts";
+import { expectOk } from "../../testing/results.ts";
+import { uiTheme } from "../../ui/theme.ts";
 
 const section = (id: string, text: string, kind: TranscriptSection["kind"] = "assistant"): TranscriptSection => ({ id, kind, title: kind, text, status: "complete" });
 const history = [section("history", Array.from({ length: 70 }, (_, i) => `OLD-LINE-${i}`).join("\n"))];
 function children(node: Renderable): Renderable[] { return node.getChildren().flatMap((child) => [child, ...children(child)]); }
-async function mount(options: { paused?: boolean; onPrompt?: (id: string, text: string) => Result<void, ExpectedError> | Promise<Result<void, ExpectedError>> } = {}) {
+async function mount(options: { paused?: boolean; keymap?: Keymap; onPrompt?: (id: string, text: string) => Result<void, ExpectedError> | Promise<Result<void, ExpectedError>> } = {}) {
   const app = await createTestRenderer({ width: 120, height: 26, kittyKeyboard: true });
   const selection = new WorkspaceSelection(demoWorkspace()), sent: string[] = [];
   const data: Record<string, readonly TranscriptSection[]> = { a1: history, b1: [section("other", "OTHER_SESSION\n".repeat(60))] };
-  const view = new Workbench(app.renderer, selection, { onNewSession: () => {}, onCloseSession: () => {},
+  const view = new Workbench(app.renderer, selection, { onNewSession: () => {}, onCloseSession: () => {}, ...(options.keymap ? { keymap: options.keymap } : {}),
     initialWorkViews: { active: {}, agentScroll: options.paused ? { a1: 0 } : {}, agentViews: { a1: { selectedId: "history", folded: { tool: false }, cursors: {}, mode: "sections", anchor: null, follow: !options.paused } } },
     onPrompt: (id, text) => {
       sent.push(`${id}:${text}`);
@@ -37,6 +39,146 @@ async function mount(options: { paused?: boolean; onPrompt?: (id: string, text: 
   };
 }
 const bottom = (scroll: ScrollBoxRenderable) => Math.max(0, scroll.scrollHeight - scroll.viewport.height);
+
+test.each([false, true])("밝기 %j에서도 하단 복귀 버튼은 중앙·아래 한 줄 여백을 유지하고 클릭하면 초안 포커스 그대로 따라간다", async (light) => {
+  // 긴 대화를 따라가는 화면에서 버튼이 나타나도 본문·입력창의 크기는 바뀌지 않아야 한다.
+  const app = await mount();
+  try {
+    uiTheme(app.renderer).configure({ palette: [], defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
+      cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null });
+    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("Unsent draft"); await app.settled();
+    const composer = app.renderer.root.findDescendantById("agent-composer")!;
+    const geometry = [app.scroll.height, app.scroll.viewport.height, app.scroll.scrollHeight, composer.y];
+    expect(app.captureCharFrame()).not.toContain("Back to bottom");
+
+    // 위로 스크롤하면 클릭 가능한 표시가 나타나며, 오른쪽 클릭은 이동 명령이 아니다.
+    await app.mockMouse.scroll(app.scroll.x + 3, app.scroll.y + 3, "up"); await app.settled();
+    expect(app.captureCharFrame()).toContain("↓ Back to bottom · g → e");
+    const button = app.renderer.root.findDescendantById("transcript-bottom-button");
+    if (!button) throw new Error("Missing back-to-bottom button");
+    const viewport = app.scroll.viewport;
+    expect(Math.abs(button.x + button.width / 2 - viewport.x - viewport.width / 2)).toBeLessThanOrEqual(0.5);
+    expect(viewport.y + viewport.height - button.y - button.height).toBe(1);
+    let end = 0;
+    const cell = app.captureSpans().lines[button.y]!.spans.find((span) => { end += span.width; return end > button.x + 1; })!;
+    expect(cell.bg.toInts()).toEqual(uiTheme(app.renderer).colors.selected.toInts());
+    expect(cell.fg.toInts()).toEqual(uiTheme(app.renderer).colors.accent.toInts());
+    expect(app.captureCharFrame().split("\n")[button.y + 1]!.slice(viewport.x, viewport.x + viewport.width).trim()).toBe("");
+    expect([app.scroll.height, viewport.height, app.scroll.scrollHeight, composer.y]).toEqual(geometry);
+    const position = app.scroll.scrollTop;
+    await app.mockMouse.click(button.x, button.y, 2); await app.settled();
+    expect(app.scroll.scrollTop).toBe(position); expect(app.state()?.follow).toBe(false);
+
+    // 왼쪽 패딩도 클릭할 수 있고, 요청 전송이나 입력 포커스 변경 없이 맨 아래로 복귀한다.
+    await app.mockMouse.click(button.x, button.y); await app.settled();
+    expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.state()?.follow).toBe(true);
+    expect(app.captureCharFrame()).not.toContain("Back to bottom");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
+    expect(app.view.promptDrafts.a1).toBe("Unsent draft"); expect(app.sent).toEqual([]);
+    await app.update([...history, section("tail", "BUTTON_RESUMED_TAIL")]);
+    expect(app.captureCharFrame()).toContain("BUTTON_RESUMED_TAIL"); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
+  } finally { await app.close(); }
+});
+
+test("하단 복귀 버튼은 재지정한 바인딩을 표시하고 같은 키로 따라가기를 재개한다", async () => {
+  // 기본 키 대신 섹션 모드 전용 단축키가 설정된 과거 대화를 연다.
+  const keymap = expectOk(parseKeymap({ bindings: { "transcript.latest": [{ keys: "alt+z", scope: "transcript" }] } }));
+  const app = await mount({ paused: true, keymap });
+  try {
+    app.mockInput.pressKey("t", { ctrl: true }); await app.settled();
+    expect(app.captureCharFrame()).toContain("↓ Back to bottom · Alt+z");
+
+    // 표시한 단축키와 실제 이동 명령이 일치하며 바닥에서는 버튼이 사라진다.
+    app.mockInput.pressKey("z", { meta: true }); await app.settled();
+    expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
+    expect(app.captureCharFrame()).not.toContain("Back to bottom");
+  } finally { await app.close(); }
+});
+
+test("하단 이동 키를 비활성화해도 버튼은 잘못된 키 안내 없이 클릭으로 동작한다", async () => {
+  // 키맵의 빈 배열은 기본 바인딩을 없애지만 마우스 복귀 동작까지 막지는 않는다.
+  const keymap = expectOk(parseKeymap({ bindings: { "transcript.latest": [] } }));
+  const app = await mount({ paused: true, keymap });
+  try {
+    expect(app.captureCharFrame()).toContain("↓ Back to bottom");
+    expect(app.captureCharFrame()).not.toContain("Back to bottom ·");
+    const button = app.renderer.root.findDescendantById("transcript-bottom-button");
+    if (!button) throw new Error("Missing back-to-bottom button");
+
+    // 단축키가 없어도 오른쪽 패딩까지 클릭 대상으로 유지한다.
+    await app.mockMouse.click(button.x + button.width - 1, button.y); await app.settled();
+    expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
+    expect(app.captureCharFrame()).not.toContain("Back to bottom");
+  } finally { await app.close(); }
+});
+
+test("도움말·다른 화면·빈 대화·짧은 대화에서는 하단 복귀 버튼을 표시하지 않는다", async () => {
+  // 과거 대화에는 표시하되, 같은 viewport를 사용하는 도움말에는 표시하지 않아야 한다.
+  const app = await mount({ paused: true });
+  try {
+    expect(app.captureCharFrame()).toContain("Back to bottom");
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("F1"); await app.settled();
+    expect(app.captureCharFrame()).not.toContain("Back to bottom");
+    app.mockInput.pressKey("F1"); await app.settled();
+    expect(app.captureCharFrame()).toContain("Back to bottom");
+
+    // 다른 작업 화면으로 왕복해도 버튼은 활성 대화와 그 스크롤 위치에만 속한다.
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("2"); await app.settled();
+    expect(app.captureCharFrame()).not.toContain("Back to bottom");
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("1"); await app.settled();
+    expect(app.captureCharFrame()).toContain("Back to bottom");
+
+    // 스크롤 범위가 없으면 자동 추적 상태와 관계없이 버튼이나 빈 고정 행을 남기지 않는다.
+    await app.update([]); expect(app.captureCharFrame()).not.toContain("Back to bottom");
+    await app.update([section("short", "SHORT_REPLY")]);
+    expect(app.captureCharFrame()).toContain("SHORT_REPLY"); expect(app.captureCharFrame()).not.toContain("Back to bottom");
+  } finally { await app.close(); }
+});
+
+test("원문을 읽을 때 커서는 복귀 버튼에 가려지지 않고 클릭은 선택을 해제해 최신 출력으로 이동한다", async () => {
+  // 첫 섹션 아래에도 내용이 있어 원문의 마지막 화면 행을 읽어도 아직 맨 아래가 아니다.
+  const app = await mount();
+  try {
+    await app.update([...history, section("later", "LATER_SECTION\n".repeat(30))]);
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); app.mockInput.pressEnter(); await app.settled();
+    const body = app.renderer.currentFocusedRenderable;
+    if (!(body instanceof EditBufferRenderable)) throw new Error("Missing source reader");
+
+    // 화면 하단까지 내려가도 원문 커서가 플로팅 영역 아래로 숨지 않는다.
+    for (let i = 0; i < app.scroll.viewport.height; i++) app.mockInput.pressKey("j");
+    await app.settled();
+    const button = app.renderer.root.findDescendantById("transcript-bottom-button")!;
+    expect(app.captureCharFrame()).toContain("Back to bottom");
+    expect(body.y + body.visualCursor.visualRow).toBeLessThan(button.y);
+    app.mockInput.pressKey("v"); await app.settled(); expect(app.state()?.mode).toBe("visual");
+
+    // 명시적인 복귀 클릭은 보호 중인 선택을 끝내고 섹션 모드와 자동 따라가기를 복원한다.
+    await app.mockMouse.click(button.x + 1, button.y); await app.settled();
+    expect(app.state()?.mode).toBe("sections"); expect(app.state()?.follow).toBe(true);
+    expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-transcript");
+    expect(app.captureCharFrame()).not.toContain("Back to bottom");
+  } finally { await app.close(); }
+});
+
+test("좁은 창에서도 하단 복귀 버튼을 중앙에 두고 여백을 확보할 수 없는 높이에서는 숨긴다", async () => {
+  // 멈춘 대화의 플로팅 UI는 리사이즈 후에도 스크롤 콘텐츠의 일부가 되어서는 안 된다.
+  const app = await mount({ paused: true });
+  try {
+    app.resize(60, 18); await app.settled();
+    const button = app.renderer.root.findDescendantById("transcript-bottom-button")!;
+    const viewport = app.scroll.viewport;
+    expect(app.captureCharFrame()).toContain("Back to bottom");
+    expect(Math.abs(button.x + button.width / 2 - viewport.x - viewport.width / 2)).toBeLessThanOrEqual(0.5);
+    expect(viewport.y + viewport.height - button.y - button.height).toBe(1);
+    expect(button.width).toBeLessThanOrEqual(viewport.width);
+
+    // 최소 본문과 아래 여백이 들어가지 않는 화면은 버튼을 숨기고 복원 시 다시 표시한다.
+    app.resize(60, 10); await app.settled(); expect(app.captureCharFrame()).not.toContain("Back to bottom");
+    app.resize(120, 26); await app.settled(); expect(app.captureCharFrame()).toContain("Back to bottom");
+    expect(app.state()?.follow).toBe(false);
+  } finally { await app.close(); }
+});
 
 test("맨 아래에서는 대화 영역에 포커스를 옮겨도 자동 추적을 유지한다", async () => {
   const app = await mount();

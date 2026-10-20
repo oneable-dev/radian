@@ -18,6 +18,7 @@ import { formatRequestCaption, requestForSection } from "./request-caption.ts";
 import { RadianLogo } from "../../ui/radian-logo.ts";
 import { maximumPreviewImageBytes, type TranscriptImageProvider } from "../transcript-images.ts";
 import { TranscriptImagePreview } from "./transcript-image.ts";
+import { TranscriptBottomButton } from "./transcript-bottom-button.ts";
 
 // Reuse native grapheme-aware cursor/selection/layout, but never install editing or
 // paste handlers. Unbound keys (including a timed-out keymap prefix) are inert.
@@ -50,6 +51,7 @@ export class TranscriptPanel {
   readonly scroll: ScrollBoxRenderable;
   private readonly help: TextRenderable;
   private readonly empty: RadianLogo;
+  private readonly bottomButton: TranscriptBottomButton;
   private helpPosition = 0;
   private helpFollow = false;
   private readonly rows = new Map<string, Row>();
@@ -94,9 +96,10 @@ export class TranscriptPanel {
     });
     this.help = new TextRenderable(renderer, { width: "100%", flexShrink: 0, wrapMode: "word", selectable: false, visible: false });
     this.empty = new RadianLogo(renderer);
+    this.bottomButton = new TranscriptBottomButton(renderer, () => { this.renderer.clearSelection(); this.followLatest(); });
     this.scroll.add(this.help);
-    // Branding belongs to the viewport, not scrollable or selectable transcript content.
-    this.scroll.viewport.add(this.empty);
+    // Viewport decorations must not become scrollable or selectable transcript content.
+    this.scroll.viewport.add(this.empty); this.scroll.viewport.add(this.bottomButton);
     this.scroll.verticalScrollBar.on("change", this.rememberScroll);
     this.scroll.content.on("resize", this.applyTarget);
     this.scroll.viewport.on("resize", this.applyTarget);
@@ -450,6 +453,13 @@ export class TranscriptPanel {
   private paint(): void {
     this.empty.visible = !this.order.length && !this.help.visible;
     for (const row of this.rows.values()) this.paintRow(row);
+    this.paintBottomButton();
+  }
+  private paintBottomButton(): void {
+    const viewport = this.scroll.viewport;
+    const visible = this.visible && this.scroll.visible && !this.help.visible && this.options.initialPosition !== "start"
+      && this.order.length > 0 && viewport.height >= 3 && viewport.width >= 3 && !this.atBottom();
+    this.bottomButton.update(visible, this.hint("transcript.latest"), viewport.width);
   }
   get footerStatus(): string {
     if (!this.visible) return "";
@@ -737,8 +747,10 @@ export class TranscriptPanel {
         const reading = this.state?.mode !== "sections";
         const reader = this.reader(row);
         const y = reading ? reader.y + reader.visualCursor.visualRow : row.box.y;
-        const top = this.scroll.viewport.y, bottom = top + this.scroll.viewport.height - 1;
-        const end = !reading && row.box.height <= this.scroll.viewport.height ? row.box.y + row.box.height - 1 : y;
+        const top = this.scroll.viewport.y;
+        // Keep the reader cursor and selected section above the floating control and its blank gutter.
+        const bottom = top + this.scroll.viewport.height - 1 - (this.bottomButton.visible ? this.bottomButton.height : 0);
+        const end = !reading && row.box.height <= bottom - top + 1 ? row.box.y + row.box.height - 1 : y;
         if (y < top) this.scroll.scrollBy(y - top);
         else if (end > bottom) this.scroll.scrollBy(end - bottom);
       }
@@ -759,7 +771,7 @@ export class TranscriptPanel {
       this.applyTarget(); this.pending = null;
       if (this.atBottom()) this.syncFollowingFromPosition();
     }
-    this.rememberScroll();
+    this.rememberScroll(); this.paintBottomButton();
     this.geometry = { id: this.sessionId, content: this.scroll.scrollHeight, viewport: this.scroll.viewport.height };
   };
   rememberScroll = (): void => {
