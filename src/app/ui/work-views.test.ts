@@ -75,10 +75,10 @@ test("세션 탭은 Agents 안에서만 선택하고 다른 워크트리의 마�
   const app = await mount({ initialDrafts: { a1: "main draft", b1: "feature draft" } });
   try {
     // Session switching is local to Agents, rather than an incidental tree action.
-    await app.click("Editor"); await app.click("Agents"); await app.click("Workspace layout");
+    await app.click("Editor"); await app.click("Agents"); await app.click("a1");
     expect(app.captureCharFrame()).toContain("main draft");
     await app.click("Editor"); await app.click(`${icons.folder} radian-ui`); await app.click("Agents");
-    await app.click("Sidebar prototype");
+    await app.click("b1");
 
     expect(app.selection.sessionId).toBe("b1");
     expect(app.view.workViewPreferences.active["demo:feature"]).toBe("agent");

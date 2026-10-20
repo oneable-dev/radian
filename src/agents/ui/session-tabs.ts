@@ -4,24 +4,8 @@ import { sessionStatus } from "../status.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { singleLine, truncateCells } from "../../ui/text.ts";
 import { StatusIndicator } from "./status-indicator.ts";
-
-const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-function tabLabel(name: string, width: number): string {
-  const text = name.replace(/\s+/g, " ");
-  if (Bun.stringWidth(text) <= width) return text;
-  const parts = [...graphemes.segment(text)].map((part) => part.segment);
-  let start = "", end = "", used = 1;
-  while (parts.length) {
-    const left = Bun.stringWidth(start) <= Bun.stringWidth(end);
-    const part = (left ? parts.shift() : parts.pop())!;
-    const cells = Bun.stringWidth(part);
-    if (used + cells > width) break;
-    if (left) start += part; else end = part + end;
-    used += cells;
-  }
-  return `${start}…${end}`;
-}
 
 type Tab = { root: BoxRenderable; title: TextRenderable; status: StatusIndicator };
 type Actions = {
@@ -99,14 +83,14 @@ export class SessionTabs {
             if (event.button !== 0) return;
             event.preventDefault(); event.stopPropagation(); this.list.focus(); this.actions.select(session.id);
           } });
-        const title = new TextRenderable(this.renderer, { height: 1, minWidth: 1, maxWidth: 24, wrapMode: "none", selectable: false });
+        const title = new TextRenderable(this.renderer, { height: 1, minWidth: 1, wrapMode: "none", selectable: false });
         const status = new StatusIndicator(this.renderer);
         const close = this.actions.button("×", () => { this.list.focus(); this.actions.close(session.id); }, "Close session");
         close.id = `close-session:${session.id}`; close.paddingX = 0;
         root.add(status.root); root.add(title); root.add(close); this.list.add(root);
         tab = { root, title, status }; this.tabs.set(session.id, tab);
       }
-      this.setTitle(tab, session.name);
+      this.setTitle(tab, session.id);
       tab.status.update(sessionStatus(session), this.visible);
       if (this.list.getChildren()[index] !== tab.root) { this.list.add(tab.root, index); this.reveal = true; }
     }
@@ -131,10 +115,10 @@ export class SessionTabs {
     const session = this.sessions[target]; if (session) this.actions.select(session.id);
   }
   private close(): void { if (this.selected) this.actions.close(this.selected); }
-  private setTitle(tab: Tab, name: string): void {
+  private setTitle(tab: Tab, id: string): void {
     // Reserve both edge gutters, two status cells, two internal gaps, and the close glyph.
-    const width = Math.max(1, Math.min(24, this.list.width > 0 ? this.list.width - 7 : 24));
-    tab.title.maxWidth = width; tab.title.content = tabLabel(name, width);
+    const text = singleLine(id), width = Math.max(1, this.list.width > 0 ? this.list.width - 7 : Bun.stringWidth(text));
+    tab.title.maxWidth = width; tab.title.content = truncateCells(text, width);
   }
   private resizeButtons = (): void => {
     const label = this.createButton.getChildren().find((child) => child instanceof TextRenderable);
@@ -142,7 +126,7 @@ export class SessionTabs {
   };
   private resizeTitles(): void {
     for (const session of this.sessions) {
-      const tab = this.tabs.get(session.id); if (tab) this.setTitle(tab, session.name);
+      const tab = this.tabs.get(session.id); if (tab) this.setTitle(tab, session.id);
     }
   }
   private paint(): void {
@@ -156,7 +140,13 @@ export class SessionTabs {
   private revealSelected = (): void => {
     if (!this.reveal || !this.visible || this.disposed || this.root.isDestroyed) return;
     this.reveal = false;
-    if (this.selected) this.list.scrollChildIntoView(`session:${this.worktreeId}:${this.selected}`);
+    const tab = this.selected ? this.tabs.get(this.selected)?.root : undefined;
+    if (!tab) return;
+    const viewport = this.list.viewport;
+    // Native nearest-edge scrolling skips children exactly as wide as the viewport.
+    const delta = tab.x < viewport.x ? tab.x - viewport.x
+      : Math.max(0, tab.x + tab.width - viewport.x - viewport.width);
+    if (delta) this.list.scrollBy({ x: delta, y: 0 });
   };
   dispose(): void {
     this.disposed = true; this.renderer.off("frame", this.revealSelected); this.renderer.off("resize", this.resizeButtons);

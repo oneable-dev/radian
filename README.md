@@ -140,8 +140,11 @@ The left panel retains Workspace/History navigation. The right panel switches be
 **Editor**, **Git** and **Terminal**, with one visible view per worktree and Agents as the initial view.
 Tree cursor movement is only navigation; Enter or a direct worktree click commits the selection.
 Each worktree separately remembers its work view and selected Agent session. Within Agents, session
-tabs show their name and trailing aggregate status, with a close control and explicit new-session
-button. Session-tab selection and History resume open the chosen session in Agents. Restoring a
+tabs show their session ID and aggregate status, with a close control and explicit new-session
+button. IDs remain complete whenever they fit the available strip width; narrower tabs truncate
+only at the end with `…`, never in the middle. There is no fixed label-length cap, and widening the
+pane restores the full ID. Session names remain unchanged for History and other metadata.
+Session-tab selection and History resume open the chosen session in Agents. Restoring a
 selection, filtering and background snapshots never implicitly activate another work view.
 Session creation/closing retain their existing rules and never implicitly launch an editor.
 

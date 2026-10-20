@@ -57,13 +57,13 @@ test("마우스로 세션과 워크트리를 선택하면 마지막 선택과 �
   const app = await mount();
   try {
     // Select A2, leave for B, and return to the main worktree.
-    await app.clickText("Session navigation");
+    await app.clickText("a2");
     await app.clickText(`${icons.folder} radian-ui`);
     await app.clickText(`${icons.folder} radian`);
 
     // The central panel reflects restored A2, without replacing source metadata.
     expect(app.selection.sessionId).toBe("a2");
-    expect(app.captureCharFrame().split("\n").map((line) => line.slice(35, 99)).join("\n")).toContain("Session navigation");
+    expect(app.captureCharFrame().split("\n").map((line) => line.slice(35, 99)).join("\n")).toContain("a2");
   } finally { await app.close(); }
 });
 
@@ -94,7 +94,7 @@ test("행의 닫기 액션은 부모 세션을 잘못 선택하지 않는다", a
   // A2 is selected; the close control belongs to the preceding A1 row.
   const app = await mount();
   try {
-    await app.clickText("Session navigation");
+    await app.clickText("a2");
     const close = app.renderer.root.findDescendantById("close-session:a1");
     if (!close) throw new Error("Missing session tab close control");
 
@@ -154,8 +154,8 @@ test("세션 탭의 End는 화면 밖 세션을 표시하고 작은 터미널에
     app.mockInput.pressKey("END");
     await app.renderOnce(); await app.renderOnce();
     expect(app.selection.sessionId).toBe("long-39");
-    expect(app.captureCharFrame()).toContain("Long session 39");
-    expect(app.treeFrame()).not.toContain("Long session");
+    expect(app.captureCharFrame()).toContain("long-39");
+    expect(app.treeFrame()).not.toContain("long-39");
     app.resize(60, 12);
     await app.renderOnce(); await app.renderOnce();
 
@@ -187,7 +187,7 @@ test("종류 아이콘은 왼쪽에 두고 부모·자식의 합산 상태는 �
     expect(app.treeFrame()).toContain(`${icons.branch} main`);
     expect(app.treeFrame()).not.toContain("UI review");
     expect(spinnerFrames.some((frame) => app.tabFrame("a1").includes(frame))).toBe(true);
-    await app.clickText("Session navigation");
+    await app.clickText("a2");
     expect(app.tabFrame("a2")).toContain(workspaceIcons.complete);
     app.renderer.root.findDescendantById("agent-session-list")!.focus(); app.mockInput.pressKey("END");
     await app.renderOnce(); await app.renderOnce();
@@ -256,7 +256,7 @@ test("브랜치 검색은 워크트리 목록만 필터하고 오른쪽 세션�
     expect(app.treeFrame()).toContain(`${icons.branch} main`);
     expect(app.treeFrame()).not.toContain("Workspace layout");
     expect(app.treeFrame()).not.toContain("UI review");
-    expect(app.captureCharFrame()).toContain("Session navigation");
+    expect(app.captureCharFrame()).toContain("a2");
     expect(app.treeFrame()).not.toContain("Sidebar prototype");
     expect(app.treeFrame()).not.toContain("radian-empty");
     expect(app.renderer.currentFocusedRenderable).toBe(input);
@@ -353,7 +353,7 @@ test("필터가 적용된 트리에서 닫아도 원본 목록의 다음 세션�
     // Canonical fallback and filtering remain separate; B's hidden session is untouched.
     expect(app.selection.sessionId).toBe("a2");
     expect(app.treeFrame()).not.toContain("Workspace layout");
-    expect(app.captureCharFrame()).toContain("Session navigation");
+    expect(app.captureCharFrame()).toContain("a2");
     expect(app.selection.snapshot.flatMap((repo) => repo.worktrees).find((tree) => tree.id === "demo:feature")?.sessions).toHaveLength(1);
   } finally { await app.close(); }
 });

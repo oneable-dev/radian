@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
+import { TextRenderable } from "@opentui/core";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -70,7 +71,7 @@ test("워크트리 커서 이동과 snapshot은 현재 화면을 바꾸지 않�
     expect(app.selection.worktree?.id).toBe("demo:main");
     expect(app.captureCharFrame()).toContain("Editor preview");
     expect(app.saved).toHaveLength(saves);
-    expect(app.region("workspace-tree")).not.toContain("Alpha");
+    expect(app.region("workspace-tree")).not.toContain("a1");
 
     // Confirmation commits only the highlighted worktree and uses its existing view identity.
     app.mockInput.pressEnter(); await app.render();
@@ -111,14 +112,14 @@ test("Agents 세션 탭의 h/l 전환은 각 초안을 보존하고 프롬프트
     app.get("agent-session-list").focus(); app.mockInput.pressKey("l"); await app.render();
     expect(app.selection.sessionId).toBe("a2");
     app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("hjklnx");
-    await app.click("Alpha");
+    await app.click("a1");
 
     expect(app.selection.sessionId).toBe("a1");
     expect(app.captureCharFrame()).toContain("main draft");
     expect(app.view.promptDrafts.a2).toBe("hjklnx");
     expect(app.requests).toEqual([]);
-    expect(app.region("workspace-tree")).not.toContain("Beta");
-    expect(app.region("agent-session-tabs")).toContain("Beta");
+    expect(app.region("workspace-tree")).not.toContain("a2");
+    expect(app.region("agent-session-tabs")).toContain("a2");
   } finally { await app.close(); }
 });
 
@@ -137,14 +138,14 @@ test("모든 세션 상태는 왼쪽 한 칸 패딩 다음에 아이콘을 표�
     // Initial rendering and tab focus use the same edge gutters and leading status cell.
     for (const focused of [false, true]) {
       if (focused) { app.get("agent-session-list").focus(); await app.render(); }
-      ordered("session:demo:main:a1", "Alpha", spinnerFrames);
-      ordered("session:demo:main:a2", "Beta", [icons.pass]);
-      ordered("session:demo:main:a3", "Gamma", [icons.error]);
+      ordered("session:demo:main:a1", "a1", spinnerFrames);
+      ordered("session:demo:main:a2", "a2", [icons.pass]);
+      ordered("session:demo:main:a3", "a3", [icons.error]);
     }
 
     // An unreported session keeps the same alignment after a worktree switch.
     await app.click(`${icons.folder} radian-ui`);
-    ordered("session:demo:feature:b1", "Alpha", [icons.unknown]);
+    ordered("session:demo:feature:b1", "b1", [icons.unknown]);
     expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
@@ -249,7 +250,7 @@ test("서브에이전트는 선택한 세션의 실행 상태 행에만 집계�
     expect(app.get("session:demo:main:a1")).toBe(tab);
     expect(app.region("session:demo:main:a1")).toContain(icons.error);
     expect([tab.x, tab.y, tab.width, input.y, row.y, row.height]).toEqual(geometry);
-    await app.click("Beta");
+    await app.click("a2");
     expect(app.region("transcript-status-row")).not.toContain("Subagents");
     expect(app.requests).toEqual([]);
   } finally { await app.close(); }
@@ -288,8 +289,8 @@ test("좁은 화면의 Workspace 푸터도 Enter 확정 안내를 우선 표시�
   } finally { await app.close(); }
 });
 
-test("좁은 세션 탭은 Unicode 이름을 자르더라도 닫기와 상태 셀을 화면 안에 유지한다", async () => {
-  // Combining characters and emoji must be shortened as graphemes, not UTF-16 halves.
+test("좁은 세션 탭은 긴 Unicode 이름 대신 ID를 표시하고 닫기와 상태 셀을 유지한다", async () => {
+  // Display names may contain complex text, but tabs consistently use the stable ID.
   const app = await mount();
   try {
     app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
@@ -302,7 +303,10 @@ test("좁은 세션 탭은 Unicode 이름을 자르더라도 닫기와 상태 �
     expect(app.region(tab.id).endsWith("× ")).toBe(true);
     expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[1])).toBe(true);
     expect(close.x + close.width).toBe(tab.x + tab.width - 1);
-    expect(app.captureCharFrame()).toContain("…");
+    const title = tab.getChildren()[1];
+    if (!(title instanceof TextRenderable)) throw new Error("Missing session ID label");
+    expect(title.plainText).toBe("a1");
+    expect(app.region(tab.id)).not.toContain("연결");
     expect(app.captureCharFrame()).not.toContain("\uFFFD");
     expect(app.selection.sessionId).toBe("a1");
   } finally { await app.close(); }
