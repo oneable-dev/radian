@@ -33,7 +33,7 @@ export class StatusIndicator {
     if (!visible) this.spinner.cancel();
     else if (changed && status === "working") this.spinner.start();
     else if (status !== "working") this.spinner.stop();
-    this.outcome.content = status === "complete" ? icons.pass : status === "failure" ? icons.error : status === null ? icons.unknown : "";
+    this.outcome.content = status === "complete" ? icons.pass : status === "failure" ? icons.error : "";
     const colors = uiTheme(this.renderer).colors;
     this.outcome.fg = status === "failure" ? colors.error : status === "complete" ? colors.success : colors.muted;
   }
