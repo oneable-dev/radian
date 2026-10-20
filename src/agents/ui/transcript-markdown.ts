@@ -38,7 +38,7 @@ export class TranscriptMarkdown {
     const theme = uiTheme(renderer); this.colors = theme.colors;
     this.root = new MarkdownRenderable(renderer, { width: "100%", minWidth: 0, minHeight: 1, flexShrink: 0,
       syntaxStyle: syntax, streaming: true, conceal: true, concealCode: false, internalBlockMode: "top-level",
-      tableOptions: { style: "columns", widthMode: "content", wrapMode: "word", cellPaddingX: 1, cellPaddingY: 0 },
+      tableOptions: { style: "grid", widthMode: "content", wrapMode: "word", cellPaddingX: 1, cellPaddingY: 0 },
       renderBefore: () => this.paintLeaves(theme.colors), renderAfter: () => this.settle(),
     });
     this.root.once(RenderableEvents.DESTROYED, () => { this.revision++; });

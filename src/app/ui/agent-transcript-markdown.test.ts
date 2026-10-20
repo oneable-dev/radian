@@ -46,6 +46,8 @@ test("답변은 실제 OpenTUI Markdown으로 제목·강조·코드·링크·�
   try {
     await app.settled();
     const frame = app.captureCharFrame();
+    // 표의 셀 내용뿐 아니라 외곽선과 열·행 구분선이 실제 화면에 그려져야 한다.
+    expect(frame).toMatch(/┌─+┬─+┐/u); expect(frame).toMatch(/├─+┼─+┤/u); expect(frame).toMatch(/└─+┴─+┘/u);
     // 표시 문법은 숨기되 코드 내부 문법과 표 셀은 내용 그대로 유지한다.
     expect(app.markdown()).toBeInstanceOf(MarkdownRenderable); expect(app.markdown().streaming).toBe(false);
     for (const text of ["실제 구조", "강조한 답변", "inline code", "README", "첫 번째 항목", "두 번째 항목", "CODE_LITERAL **keep stars**", "Radian", "ready"]) expect(frame).toContain(text);
@@ -114,9 +116,16 @@ test("미완성 Markdown 스트리밍을 같은 렌더러로 갱신하고 완료
     const original = app.markdown(); expect(app.captureCharFrame()).toContain("hello");
     await app.update([prose("### Streaming\n\n**hello 한글**\n\n```text\nfirst", "assistant", true)]);
     await app.settled(); expect(app.markdown()).toBe(original); expect(original.streaming).toBe(true);
-    await app.update([prose("### Streaming\n\n**hello 한글**\n\n```text\nfirst\nsecond\n```\n\n| Key | Value |\n|---|---|\n| final | complete |")]);
-    await app.settled();
+    // 마지막 셀이 아직 전송 중인 표도 테두리와 수신한 내용을 함께 보여 준다.
+    const prefix = "### Streaming\n\n**hello 한글**\n\n```text\nfirst\nsecond\n```\n\n| Key | Value |\n|---|---|\n";
+    await app.update([prose(prefix + "| final | comp", "assistant", true)]); await app.settled();
+    expect(original.streaming).toBe(true); expect(app.captureCharFrame()).toContain("comp");
+    expect(app.captureCharFrame()).toMatch(/┌─+┬─+┐/u);
+
+    // 응답이 완료되어도 같은 렌더러의 표 테두리와 최종 셀 내용이 유지된다.
+    await app.update([prose(prefix + "| final | complete |")]); await app.settled();
     const frame = app.captureCharFrame(); expect(original.streaming).toBe(false);
+    expect(frame).toMatch(/┌─+┬─+┐/u); expect(frame).toMatch(/└─+┴─+┘/u);
     for (const text of ["hello 한글", "first", "second", "final", "complete"]) expect(frame).toContain(text);
     expect(frame).not.toContain("```text"); expect(frame).not.toContain("|---|---|");
   } finally { await app.close(); }
@@ -154,8 +163,15 @@ test("좁은 창에서도 Markdown 표는 가용 너비에 맞추고 원문 구�
     app.resize(80, 26); await app.settled(); await app.focus();
     const scroll = app.renderer.root.findDescendantById("session-transcript")!;
     expect(app.markdown().width).toBeLessThanOrEqual(scroll.width);
+    // 좁은 화면에서도 양쪽 테두리와 마지막 행이 잘리지 않는다.
     const frame = app.captureCharFrame(); expect(frame).toContain("Name"); expect(frame).toContain("Value");
-    expect(frame).toContain("한글 항목"); expect(frame).not.toContain("|---|---|");
+    expect(frame).toMatch(/┌─+┬─+┐/u); expect(frame).toMatch(/└─+┴─+┘/u);
+    for (const text of ["한글 항목", "second", "ready"]) expect(frame).toContain(text);
+    // 한글은 음절 사이에서도 줄바꿈되므로 보이는 값 열을 연결해 전체 내용의 보존을 확인한다.
+    const values = frame.split("\n").map((line) => line.split("│")).filter((cells) => cells.length >= 4)
+      .map((cells) => cells.at(-2)).join("").replace(/\s+/gu, "");
+    expect(values).toContain("긴설명을단어단위로줄바꿈해서표시합니다");
+    expect(frame).not.toContain("|---|---|");
     expect(app.view.promptDrafts.a1).toBe("Keep this draft");
   } finally { await app.close(); }
 });

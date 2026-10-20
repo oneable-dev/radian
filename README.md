@@ -361,6 +361,7 @@ internal spacing.
 Agent answers and Thinking use OpenTUI's `MarkdownRenderable` for headings, emphasis, links,
 lists, fenced code and tables. Tool commands/results, user messages and explicit skill names remain
 literal text. Thinking keeps its neutral-gray italic style, including Markdown/code/table content.
+Tables use bordered grids with word-wrapped cells, including during streaming.
 Incomplete streaming Markdown updates incrementally; completed messages finalize after native
 highlighting, without hiding their initial prose or code while the bundled grammars initialize.
 
