@@ -3,8 +3,9 @@ import type { GraphCell } from "./graph.ts";
 import { uiTheme, type UiColors } from "../../ui/theme.ts";
 import type { ThemeRole } from "../../ui/theme-config.ts";
 
-export type GitListItem = { key: string; label: string; graph?: GraphCell[]; connector?: GraphCell[]; color?: ThemeRole; disabled?: boolean };
-const styledGraph = (cells: GraphCell[], colors: UiColors) => new StyledText(cells.map((cell) => ({ __isChunk: true as const, text: cell.text, ...(cell.color ? { fg: colors[cell.color] } : {}) })));
+type GitListSpan = { text: string; color?: ThemeRole };
+export type GitListItem = { key: string; label: string | readonly GitListSpan[]; graph?: GraphCell[]; connector?: GraphCell[]; color?: ThemeRole; disabled?: boolean; gapBefore?: boolean };
+const styledText = (spans: readonly GitListSpan[], colors: UiColors) => new StyledText(spans.map((span) => ({ __isChunk: true as const, text: span.text, fg: colors[span.color ?? "text"] })));
 
 export class GitList {
   readonly root: ScrollBoxRenderable;
@@ -30,7 +31,7 @@ export class GitList {
       this.rows.clear();
       for (const item of items) {
         let down: { x: number; y: number } | undefined;
-        const row = new BoxRenderable(this.renderer, { id: `${this.root.id}:${item.key}`, height: item.connector ? 2 : 1, flexShrink: 0,
+        const row = new BoxRenderable(this.renderer, { id: `${this.root.id}:${item.key}`, height: item.connector ? 2 : 1, flexShrink: 0, marginTop: item.gapBefore ? 1 : 0,
           flexDirection: "column", onMouseDown: (event) => { if (event.button === 0) down = { x: event.x, y: event.y }; },
           onMouseUp: (event) => {
             if (event.button !== 0 || !down || event.x !== down.x || event.y !== down.y || item.disabled) { down = undefined; return; }
@@ -38,9 +39,10 @@ export class GitList {
           } });
         const line = new BoxRenderable(this.renderer, { height: 1, flexDirection: "row", flexShrink: 0, minWidth: 0 });
         if (item.graph) line.add(this.graph(item.graph, item.graph.length));
-        const label = new TextRenderable(this.renderer, { content: item.label, height: 1, flexGrow: 1,
+        const label = new TextRenderable(this.renderer, { height: 1, flexGrow: 1,
           minWidth: 0, wrapMode: "none", selectable: !item.disabled });
         uiTheme(this.renderer).bind(label, (colors) => {
+          label.content = typeof item.label === "string" ? item.label : styledText(item.label, colors);
           label.fg = colors[item.color ?? "text"]; label.selectionBg = colors.selected; label.selectionFg = colors.text;
         });
         uiTheme(this.renderer).bind(row, (colors) => { row.backgroundColor = item.key === this.selected ? this.selectionColor : colors.panel; });
@@ -53,7 +55,7 @@ export class GitList {
   }
   private graph(cells: GraphCell[], width?: number): TextRenderable {
     const text = new TextRenderable(this.renderer, { ...(width ? { width } : {}), height: 1, selectable: false, flexShrink: 0 });
-    uiTheme(this.renderer).bind(text, (colors) => { text.content = styledGraph(cells, colors); });
+    uiTheme(this.renderer).bind(text, (colors) => { text.content = styledText(cells, colors); });
     return text;
   }
   private get selectionColor() {

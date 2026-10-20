@@ -298,7 +298,7 @@ export class Workbench {
         : [...(this.agent.canSubmit ? [hint("agent.send", this.agent.working ? "Queue" : "Run")] : []),
           hint("agent.newline", "New line"), ...(this.agent.prompt.canInspect ? [hint("agent.inspect", "Inspect")] : []),
           hint("focus.transcript", "Transcript"), hint("focus.sidebar", "Workspace")];
-    } else if (context === "git" || context === "git-prompt") shortcuts = this.git.shortcuts;
+    } else if (context === "git" || context === "git-prompt" || this.git.available("git.back")) shortcuts = this.git.shortcuts;
     else if (focused) {
       const label = this.buttonHints.get(focused);
       if (focused.visible && label) shortcuts = [{ key: this.keymap.hints("button.activate", "button"), label }];

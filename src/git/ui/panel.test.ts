@@ -58,15 +58,25 @@ async function mount(options: { actions?: Partial<GitActions>; initial?: WorkVie
     await app.mockMouse.click(x + Math.min(1, text.length - 1), y); await app.renderOnce();
   };
   if (!options.initial?.active["demo:main"]) await click("Git");
-  await app.waitForFrame((frame) => frame.includes("Working tree") || frame.includes("Before / After") || frame.includes("HEAD@{"));
-  return { ...app, view, selection, copies, requests, loads, creations, get, click,
+  await app.waitForFrame((frame) => frame.includes("Working tree") || get("git-diff").visible || frame.includes("HEAD@{"));
+  const positionIn = (id: string, text: string) => {
+    const region = get(id), lines = app.captureCharFrame().split("\n");
+    for (let y = region.y; y < region.y + region.height; y++) {
+      const offset = lines[y]?.slice(region.x, region.x + region.width).indexOf(text) ?? -1;
+      if (offset >= 0) return { x: region.x + offset, y };
+    }
+    throw new Error(`Missing ${text} in ${id}\n${app.captureCharFrame()}`);
+  };
+  return { ...app, view, selection, copies, requests, loads, creations, get, click, positionIn,
     async clickIn(id: string, text: string) {
-      const region = get(id), lines = app.captureCharFrame().split("\n");
-      for (let y = region.y; y < region.y + region.height; y++) {
-        const x = lines[y]?.slice(region.x, region.x + region.width).indexOf(text) ?? -1;
-        if (x >= 0) { await app.mockMouse.click(region.x + x + 1, y); await app.renderOnce(); return; }
-      }
-      throw new Error(`Missing ${text} in ${id}`);
+      const { x, y } = positionIn(id, text);
+      await app.mockMouse.click(x + Math.min(1, text.length - 1), y); await app.renderOnce();
+    },
+    spanIn(id: string, text: string) {
+      const position = positionIn(id, text); let x = 0;
+      const span = app.captureSpans().lines[position.y]!.spans.find((item) => { x += item.width; return x > position.x; });
+      if (!span) throw new Error(`Missing colored text ${text} in ${id}`);
+      return span;
     },
     codes: () => walk(get("git-diff")).filter((node): node is CodeRenderable => node instanceof CodeRenderable),
     async chooseCommit() { await click("Update login"); await app.waitForFrame((frame) => frame.includes("Author: Ada")); },
@@ -123,8 +133,8 @@ test("Refresh 버튼 없이 r로 새로고침하고 spinner는 탭과 같은 행
   } finally { pending.resolve(ok(snapshot())); await app.close(); }
 });
 
-test("Refresh 버튼을 제거해도 More는 300개씩 추가 조회하고 소진되면 숨긴다", async () => {
-  // Pagination must not accidentally target the Back button after toolbar indices change.
+test("More 버튼 없이 + 키로 커밋을 300개씩 더 읽고 소진되면 추가 조회하지 않는다", async () => {
+  // Keep pagination available without adding an action beside the history tabs.
   const limits: number[] = [];
   const app = await mount({ source: {
     load: async (_reference, limit) => {
@@ -136,11 +146,13 @@ test("Refresh 버튼을 제거해도 More는 300개씩 추가 조회하고 소�
     details: async (commit) => ok({ commit, message: commit.subject, files: [] }), compare: async () => ok(comparison()),
   } });
   try {
-    await app.waitForFrame((frame) => frame.includes("+ More"));
-    await app.click("+ More"); await app.waitFor(() => limits.length === 2); await app.renderOnce();
+    expect(app.captureCharFrame()).not.toContain("+ More");
+    app.get("git-history").focus(); app.mockInput.pressKey("+");
+    await app.waitFor(() => limits.length === 2); await app.renderOnce();
     expect(limits).toEqual([300, 600]);
     expect(app.captureCharFrame()).not.toContain("+ More");
-    expect(app.requests).toEqual([]);
+    app.mockInput.pressKey("+"); await app.renderOnce();
+    expect(limits).toEqual([300, 600]); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -157,7 +169,7 @@ test("Git 목록과 diff는 일반·좁은 화면 모두 사이드바 구분선 
       aligned("git-history");
       const tabs = app.get("work-view-tabs"), panel = app.get("git-view");
       expect(panel.y).toBe(tabs.y + tabs.height);
-      expect(app.get("git-history").y).toBe(panel.y + 1); // Only Commits/Reflog controls remain.
+      expect(app.get("git-history").y).toBe(panel.y + 2); // One blank row separates the tabs and content.
       expect(app.captureCharFrame()).not.toContain("Git ·");
       if (app.get("git-right").visible) aligned("git-right");
     }
@@ -169,6 +181,163 @@ test("Git 목록과 diff는 일반·좁은 화면 모두 사이드바 구분선 
       aligned("git-diff"); aligned("git-file-diff");
     }
     expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Git 탭 아래에는 화면 크기와 Commit·Refs·Reflog 전환에 관계없이 한 줄 여백을 둔다", async () => {
+  // Keep real terminal layout while using read-only fixture data.
+  const app = await mount();
+  try {
+    await app.chooseCommit();
+    for (const [width, height] of [[160, 32], [79, 18], [80, 18], [60, 12], [160, 32]] as const) {
+      app.resize(width, height); await app.renderOnce(); await app.renderOnce();
+      const toolbar = app.get("git-toolbar"), panel = app.get("git-view"), right = app.get("git-right");
+      const rightTab = app.positionIn("git-right", "Commit");
+      const contentX = app.positionIn("git-right", "Changed files").x;
+      const lines = app.captureCharFrame().split("\n");
+
+      // Both navigation bars reserve an actual blank row, not just text padding.
+      expect(app.get("git-history").y).toBe(toolbar.y + toolbar.height + 1);
+      expect(lines[toolbar.y + 1]!.slice(panel.x, panel.x + panel.width).trim()).toBe("");
+      expect(app.get("git-details").y).toBe(rightTab.y + 2);
+      expect(lines[rightTab.y + 1]!.slice(contentX, right.x + right.width).trim()).toBe("");
+
+      await app.clickIn("git-right", "Refs");
+      expect(app.positionIn("git-right", "Local").y).toBe(app.positionIn("git-right", "Commit").y + 2);
+      await app.clickIn("git-right", "Commit");
+      await app.click("Reflog");
+      expect(app.positionIn("git-history", "HEAD@{0}").y).toBe(toolbar.y + 2);
+      await app.click("Commits");
+    }
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Git 탭·상세·Refs의 텍스트는 Changed files와 같은 왼쪽 시작선을 사용한다", async () => {
+  // Changed files already has the desired content inset; it must not move to compensate for buttons.
+  const app = await mount();
+  try {
+    await app.chooseCommit();
+    // Select Remote while its full label is visible, then retain that view through resizes.
+    await app.clickIn("git-right", "Refs"); await app.clickIn("git-right", "Remote"); await app.clickIn("git-right", "Commit");
+    for (const [width, height] of [[160, 32], [79, 18], [80, 18], [60, 12], [160, 32]] as const) {
+      app.resize(width, height); await app.renderOnce(); await app.renderOnce();
+      const contentX = app.positionIn("git-right", "Changed files").x;
+
+      expect(app.positionIn("git-toolbar", "Commits").x).toBe(app.get("git-history").x);
+      expect(app.positionIn("git-right", "Commit").x).toBe(contentX);
+      expect(app.get("git-detail-text").x).toBe(contentX);
+      expect(app.get("git-files").x).toBe(contentX);
+
+      await app.clickIn("git-right", "Refs");
+      expect(app.positionIn("git-right", "Local").x).toBe(contentX);
+      expect(app.captureCharFrame()).not.toContain("All refs");
+      expect(app.get("git-refs").x).toBe(contentX);
+      expect(app.positionIn("git-refs", `${icons.branch} origin/main`).x).toBe(contentX);
+      expect(app.positionIn("git-refs", "origin/main").x).toBe(contentX + 2);
+      await app.clickIn("git-right", "Commit");
+    }
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Changed files와 Refs 종류 탭 아래에도 한 줄을 비우고 All refs 버튼은 표시하지 않는다", async () => {
+  // Empty spacing replaces the extra action row without changing the content inset.
+  const app = await mount();
+  try {
+    await app.chooseCommit();
+    const details = app.get("git-details");
+    expect(app.positionIn("git-right", "Changed files").y).toBe(details.y + details.height + 1);
+    await app.click("Working tree");
+    for (const [width, height] of [[160, 32], [79, 18], [80, 18], [60, 12], [160, 32]] as const) {
+      app.resize(width, height); await app.renderOnce(); await app.renderOnce();
+      const title = app.positionIn("git-right", "Changed files"), right = app.get("git-right");
+      expect(title.y).toBe(app.positionIn("git-right", "Commit").y + 2);
+      expect(app.get("git-files").y).toBe(title.y + 2);
+      expect(app.captureCharFrame().split("\n")[title.y + 1]!.slice(title.x, right.x + right.width).trim()).toBe("");
+
+      await app.clickIn("git-right", "Refs");
+      const tabs = app.positionIn("git-right", "Local");
+      expect(app.get("git-refs").y).toBe(tabs.y + 2);
+      expect(app.captureCharFrame().split("\n")[tabs.y + 1]!.slice(tabs.x, right.x + right.width).trim()).toBe("");
+      expect(app.captureCharFrame()).not.toContain("All refs");
+      await app.clickIn("git-right", "Commit");
+    }
+  } finally { await app.close(); }
+});
+
+test("커밋 상세의 Changed files와 첫 파일 사이에는 화면 높이에 관계없이 실제 빈 줄 하나만 그린다", async () => {
+  // A percent-height detail viewport must not introduce an extra rounded row below the title.
+  const app = await mount({ source: { load: async () => ok(snapshot()), details: async (selected) => ok({ commit: selected,
+    message: "Commit explanation\n".repeat(40), files: [{ kind: "commit", status: "M", path: "src/only-file.ts", commit: selected }] }), compare: async () => ok(comparison()) } });
+  try {
+    await app.chooseCommit();
+    for (const width of [120, 160, 240]) for (let height = 20; height <= 70; height++) {
+      app.resize(width, height); await app.renderOnce(); await app.renderOnce();
+      const title = app.positionIn("git-right", "Changed files"), file = app.positionIn("git-files", "M src/only-file.ts");
+      expect({ width, height, gap: file.y - title.y - 1 }).toEqual({ width, height, gap: 1 });
+      expect(app.captureCharFrame().split("\n")[title.y + 1]!.slice(title.x, app.get("git-right").x + app.get("git-right").width).trim()).toBe("");
+    }
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Refs 버튼에 포커스가 있어도 Esc는 커밋 선택과 초안을 유지하며 Commit으로 돌아간다", async () => {
+  // Mouse focus stays on the tab button rather than entering the refs list.
+  const app = await mount();
+  try {
+    await app.chooseCommit(); await app.clickIn("git-right", "Refs");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("Esc Back");
+
+    app.mockInput.pressEscape(); await app.renderOnce();
+
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.right).toBe("commit");
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-history");
+    expect(app.captureCharFrame()).toContain("Changed files");
+    expect(app.view.promptDrafts.a1).toBe("existing Agent draft"); expect(app.loads).toEqual(["all"]);
+    expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each(["list", "button", "history"] as const)("Refs 필터를 고른 뒤 %s 포커스의 Esc는 checkout 없이 전체 커밋으로 돌아간다", async (focus) => {
+  // A ref only changes the read query; Escape must replace the removed All refs action.
+  const app = await mount();
+  try {
+    await app.clickIn("git-right", "Refs"); await app.clickIn("git-right", "Remote"); await app.clickIn("git-refs", "origin/main");
+    await app.waitFor(() => app.loads.includes("refs/remotes/origin/main"));
+    if (focus === "button") await app.clickIn("git-right", "Local");
+    if (focus === "history") { await app.clickIn("git-right", "Commit"); app.get("git-history").focus(); await app.renderOnce(); }
+
+    app.mockInput.pressEscape(); await app.waitFor(() => app.loads.at(-1) === "all"); await app.renderOnce();
+
+    const state = app.view.workViewPreferences.gitViews?.["demo:main"];
+    expect(state?.reference).toBeNull(); expect(state?.right).toBe("commit"); expect(state?.diff).toBe(false);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-history");
+    expect(app.captureCharFrame()).toContain("Working tree");
+    expect(app.view.promptDrafts.a1).toBe("existing Agent draft");
+    expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("필터된 diff의 Esc는 먼저 diff만 닫고 다음 Esc에서 ref 필터를 해제한다", async () => {
+  // Going back one level must not unexpectedly discard the ref being reviewed.
+  const app = await mount();
+  try {
+    await app.clickIn("git-right", "Refs"); await app.clickIn("git-right", "Remote"); await app.clickIn("git-refs", "origin/main");
+    await app.waitFor(() => app.loads.includes("refs/remotes/origin/main"));
+    await app.clickIn("git-right", "Commit"); await app.chooseCommit(); await app.click("M src/login.ts");
+    await app.waitForFrame((frame) => frame.includes("const line00")); app.get("git-diff").focus(); await app.renderOnce();
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("Esc Back");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("Esc Commits");
+
+    app.mockInput.pressEscape(); await app.renderOnce();
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.reference).toBe("refs/remotes/origin/main");
+    expect(app.get("git-history").visible).toBe(true);
+    app.mockInput.pressEscape(); await app.waitFor(() => app.loads.at(-1) === "all"); await app.renderOnce();
+
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.reference).toBeNull();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-history"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -189,6 +358,109 @@ test("Git은 Commits/Reflog와 오른쪽 Commit/Refs를 표시하고 Reflog에�
     expect(tab("Reflog").attributes & TextAttributes.UNDERLINE).not.toBe(0);
     expect(tab("Commits").attributes & TextAttributes.UNDERLINE).toBe(0);
     expect(app.captureCharFrame()).toContain("HEAD@{0}"); expect(app.captureCharFrame()).not.toContain("Changed files");
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Commits는 테마가 바뀌어도 해시와 그래프만 강조하고 메시지와 ref는 기본 텍스트색을 쓴다", async () => {
+  // A visible graph and ref label expose accidental whole-row coloring.
+  const app = await mount();
+  try {
+    await app.chooseCommit();
+    const before = app.captureCharFrame();
+
+    // Repaint the mounted list in both dark and light terminal palettes.
+    for (const text of ["#EEEEEE", "#202020"]) {
+      uiTheme(app.renderer).configure({ palette: [], defaultForeground: text, defaultBackground: text === "#EEEEEE" ? "#121212" : "#FAFAFA",
+        cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null,
+        highlightForeground: null, highlightBackground: null });
+      await app.renderOnce();
+
+      const colors = uiTheme(app.renderer).colors;
+      expect(app.spanIn("git-history", "aaaaaaa").fg.equals(colors.text)).toBe(false);
+      expect(app.spanIn("git-history", "aaaaaaa").fg.toInts()).toEqual(app.spanIn("git-history", "●").fg.toInts());
+      expect(app.spanIn("git-history", "Update login").fg.toInts()).toEqual(colors.text.toInts());
+      expect(app.spanIn("git-history", "HEAD → main").fg.toInts()).toEqual(colors.text.toInts());
+      expect(app.spanIn("git-history", "Working tree").fg.toInts()).toEqual(colors.text.toInts());
+      expect(app.captureCharFrame()).toBe(before);
+      expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid);
+    }
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Reflog는 해시만 강조하고 selector와 메시지는 기본 텍스트색을 쓴다", async () => {
+  // Reflog has no graph, so its hash needs an explicit semantic color.
+  const app = await mount();
+  try {
+    await app.click("Reflog");
+
+    const colors = uiTheme(app.renderer).colors;
+    expect(app.spanIn("git-history", "aaaaaaa").fg.toInts()).toEqual(colors.warning.toInts());
+    expect(app.spanIn("git-history", "HEAD@{0}").fg.toInts()).toEqual(colors.text.toInts());
+    expect(app.spanIn("git-history", "commit: Update login").fg.toInts()).toEqual(colors.text.toInts());
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("변경 파일 섹션 사이에는 빈 줄 하나를 두고 빈 줄은 선택이나 diff 열기의 대상이 아니다", async () => {
+  // Multiple staged files distinguish section spacing from per-file spacing.
+  const data = snapshot();
+  data.files.unshift({ kind: "staged", status: "A", path: "new.ts" }, { kind: "staged", status: "M", path: "staged.ts" });
+  const app = await mount({ source: { load: async () => ok(data), details: async () => ok({ commit, message: commit.subject, files: [] }), compare: async () => ok(comparison()) } });
+  try {
+    const staged = app.positionIn("git-files", "STAGED"), first = app.positionIn("git-files", "A new.ts");
+    const last = app.positionIn("git-files", "M staged.ts"), unstaged = app.positionIn("git-files", "UNSTAGED");
+    const modified = app.positionIn("git-files", "M src/login.ts"), untracked = app.positionIn("git-files", "UNTRACKED");
+    expect(staged.y).toBe(app.get("git-files").y);
+    expect(first.y).toBe(staged.y + 1); expect(last.y).toBe(first.y + 1);
+    expect(unstaged.y).toBe(last.y + 2); expect(modified.y).toBe(unstaged.y + 1);
+    expect(untracked.y).toBe(modified.y + 2);
+    expect(app.positionIn("git-files", "? notes.txt").y).toBe(untracked.y + 1);
+
+    // Blank margins remain inert even though clicking them can focus the list.
+    const list = app.get("git-files"), selected = app.view.workViewPreferences.gitViews?.["demo:main"]?.file;
+    for (const y of [unstaged.y - 1, untracked.y - 1]) {
+      expect(app.captureCharFrame().split("\n")[y]!.slice(list.x, list.x + list.width).trim()).toBe("");
+      await app.mockMouse.click(list.x + 1, y); await app.renderOnce();
+      expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.file).toBe(selected);
+      expect(app.get("git-history").visible).toBe(true);
+    }
+
+    // Keyboard navigation counts only files, not headings or the new whitespace.
+    list.focus(); app.mockInput.pressKey("HOME");
+    for (let index = 0; index < 3; index++) app.mockInput.pressArrow("down");
+    app.mockInput.pressKey("y"); await app.waitFor(() => app.copies.length > 0);
+    expect(app.copies).toEqual(["notes.txt"]); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("비어 있는 변경 파일 섹션을 건너뛰어도 첫 섹션 위나 파일 사이에 여백을 더하지 않는다", async () => {
+  // With no staged or unstaged files, untracked is the first visible section.
+  const data = snapshot(); data.files = [{ kind: "untracked", status: "?", path: "first.txt" }, { kind: "untracked", status: "?", path: "second.txt" }];
+  const app = await mount({ source: { load: async () => ok(data), details: async () => ok({ commit, message: commit.subject, files: [] }), compare: async () => ok(comparison()) } });
+  try {
+    const title = app.positionIn("git-files", "UNTRACKED"), first = app.positionIn("git-files", "? first.txt");
+    expect(title.y).toBe(app.get("git-files").y);
+    expect(first.y).toBe(title.y + 1);
+    expect(app.positionIn("git-files", "? second.txt").y).toBe(first.y + 1);
+    expect(app.captureCharFrame()).not.toContain("UNSTAGED"); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Changed files는 M 글자만 강조하고 A·D·미추적 파일의 전체 색상은 유지한다", async () => {
+  // Exercise working-tree statuses without changing repository files on disk.
+  const data = snapshot();
+  data.files.push({ kind: "staged", status: "A", path: "added.ts" }, { kind: "unstaged", status: "D", path: "deleted.ts" });
+  const app = await mount({ source: { load: async () => ok(data), details: async () => ok({ commit, message: commit.subject, files: [] }), compare: async () => ok(comparison()) } });
+  try {
+    app.get("git-files").focus(); await app.renderOnce();
+
+    const colors = uiTheme(app.renderer).colors;
+    expect(app.spanIn("git-files", "M src/login.ts").fg.toInts()).toEqual(colors.warning.toInts());
+    expect(app.spanIn("git-files", "src/login.ts").fg.toInts()).toEqual(colors.text.toInts());
+    for (const text of ["A added.ts", "added.ts", "? notes.txt", "notes.txt"]) expect(app.spanIn("git-files", text).fg.toInts()).toEqual(colors.success.toInts());
+    for (const text of ["D deleted.ts", "deleted.ts"]) expect(app.spanIn("git-files", text).fg.toInts()).toEqual(colors.error.toInts());
     expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
@@ -220,6 +492,33 @@ test("Commit details에서 a는 전체 상세를 보내며 화면에 안 보이�
     expect(app.requests[0]!.text).toContain("Author: Ada");
     expect(app.requests[0]!.text).toContain("Full explanation of the change.");
     expect(app.requests[0]!.text).not.toContain("const line");
+  } finally { await app.close(); }
+});
+
+test("Refs는 브랜치·태그 아이콘을 표시하고 현재 브랜치만 체크 대신 강조색으로 구분한다", async () => {
+  // Two local branches can share a tip without both being the checked-out branch.
+  const data = snapshot(); data.refs.push({ kind: "local", name: "feature/topic", ref: "refs/heads/feature/topic", oid: commit.oid });
+  const app = await mount({ source: { load: async () => ok(data), details: async () => ok({ commit, message: commit.subject, files: [] }), compare: async () => ok(comparison()) } });
+  try {
+    await app.clickIn("git-right", "Refs");
+    const colors = uiTheme(app.renderer).colors;
+    expect(app.positionIn("git-refs", `${icons.branch} main`).x).toBe(app.positionIn("git-refs", `${icons.branch} feature/topic`).x);
+    expect(app.spanIn("git-refs", `${icons.branch} main`).fg.toInts()).toEqual(colors.accent.toInts());
+    expect(app.spanIn("git-refs", "main").fg.toInts()).toEqual(colors.accent.toInts());
+    expect(app.spanIn("git-refs", `${icons.branch} feature/topic`).fg.toInts()).toEqual(colors.text.toInts());
+    expect(app.captureCharFrame()).not.toContain("✓ main");
+
+    // Selecting a different ref changes the query, not which branch gets HEAD coloring.
+    await app.clickIn("git-refs", "feature/topic");
+    expect(app.spanIn("git-refs", `${icons.branch} main`).fg.toInts()).toEqual(colors.accent.toInts());
+    expect(app.spanIn("git-refs", `${icons.branch} feature/topic`).fg.toInts()).toEqual(colors.text.toInts());
+    app.mockInput.pressKey("y"); await app.waitFor(() => app.copies.length === 1);
+    expect(app.copies).toEqual(["feature/topic"]);
+    await app.clickIn("git-right", "Remote");
+    expect(app.spanIn("git-refs", `${icons.branch} origin/main`).fg.toInts()).toEqual(colors.text.toInts());
+    await app.clickIn("git-right", "Tags");
+    expect(app.spanIn("git-refs", `${icons.tag} v1`).fg.toInts()).toEqual(colors.text.toInts());
+    expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -262,6 +561,10 @@ test("파일 선택은 중앙만 전체 파일 diff로 바꾸고 양쪽을 하�
     await app.click("M src/login.ts");
     await app.waitForFrame((frame) => frame.includes("const line00"));
     expect(app.get("git-right").visible).toBe(true); expect(app.captureCharFrame()).toContain("Changed files");
+    expect(app.captureCharFrame()).not.toContain("← Commits");
+    expect(app.captureCharFrame()).not.toContain("Before / After");
+    expect(app.get("git-file-diff").y).toBe(app.get("git-diff").y);
+    expect(app.get("git-file-diff").height).toBe(app.get("git-diff").height);
     app.get("git-diff").focus();
 
     app.mockInput.pressArrow("down"); await app.renderOnce();
@@ -411,6 +714,10 @@ test("Git diff의 테마 변경은 밝은 배경·구문색을 반영하고 스�
     const oldDiff = app.get("git-file-diff");
     if (!(oldDiff instanceof DiffRenderable)) throw new Error("Missing whole-file diff");
     expect(oldDiff.contextBg.toInts().slice(0, 3)).toEqual([18, 18, 18]);
+    expect(oldDiff.addedBg.toInts().slice(0, 3)).toEqual([23, 53, 23]);
+    expect(oldDiff.removedBg.toInts().slice(0, 3)).toEqual([64, 23, 23]);
+    expect(oldDiff.addedSignColor.toInts().slice(0, 3)).toEqual([34, 136, 34]);
+    expect(oldDiff.removedSignColor.toInts().slice(0, 3)).toEqual([170, 34, 34]);
     app.get("git-diff").focus(); app.mockInput.pressKey("END"); await app.renderOnce();
     const scroll = app.codes()[0]!.scrollY;
     app.mockInput.pressKey("a"); await app.renderOnce(); await app.mockInput.typeText("keep this request");
@@ -423,8 +730,12 @@ test("Git diff의 테마 변경은 밝은 배경·구문색을 반영하고 스�
     if (!(diff instanceof DiffRenderable) || !(prompt instanceof PromptInput)) throw new Error("Missing themed controls");
     expect(diff.contextBg.toInts().slice(0, 3)).toEqual([250, 250, 250]);
     expect(diff.lineNumberFg.toInts()[0]).toBeLessThan(160);
-    expect(diff.addedBg.toInts()[0]).toBeGreaterThan(210);
-    expect(diff.removedBg.toInts()[1]).toBeGreaterThan(210);
+    expect(diff.addedBg.toInts().slice(0, 3)).toEqual([185, 216, 185]);
+    expect(diff.removedBg.toInts().slice(0, 3)).toEqual([226, 185, 185]);
+    expect(diff.addedContentBg?.toInts()).toEqual(diff.addedBg.toInts());
+    expect(diff.removedContentBg?.toInts()).toEqual(diff.removedBg.toInts());
+    expect(diff.addedLineNumberBg.toInts()).toEqual(diff.addedBg.toInts());
+    expect(diff.removedLineNumberBg.toInts()).toEqual(diff.removedBg.toInts());
     expect(diff.syntaxStyle?.getStyle("keyword")?.fg?.toInts().slice(0, 3)).toEqual([102, 68, 136]);
     expect(app.codes()[0]!.scrollY).toBe(scroll); expect(app.codes()[1]!.scrollY).toBe(scroll);
     expect(prompt.value).toBe("keep this request"); expect(app.renderer.currentFocusedRenderable).toBe(prompt);

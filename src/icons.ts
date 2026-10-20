@@ -3,6 +3,7 @@ export const icons = {
   repo: "\uEA62", // nf-cod-repo
   folder: "\uEA83", // nf-cod-folder
   branch: "\uEA68", // nf-cod-source_control
+  tag: "\uEA66", // nf-cod-tag
   loading: "\uEB19", // nf-cod-loading
   pass: "\uEAB2", // nf-cod-check
   error: "\uEA76", // nf-cod-close

@@ -25,7 +25,7 @@ function resolveColors(palette: TerminalColors | undefined, overrides: ThemeOver
     muted: override("muted", blendColors(panel, text, 0.65)),
     selected: override("selected", blendColors(panel, text, 0.16)),
     accent: ansi("accent", 6), info: ansi("info", 4), warning: ansi("warning", 3), keyword: ansi("keyword", 5), number: ansi("number", 3),
-    added: override("added", blendColors(panel, success, 0.14)), removed: override("removed", blendColors(panel, error, 0.14)),
+    added: override("added", blendColors(panel, success, 0.30)), removed: override("removed", blendColors(panel, error, 0.30)),
   };
 }
 

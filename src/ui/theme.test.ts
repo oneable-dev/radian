@@ -113,7 +113,7 @@ test("자체 색상 재정의만 고정하고 나머지는 이후 터미널 테�
   const app = await mount();
   try {
     const theme = uiTheme(app.renderer);
-    theme.configure(palette(), { accent: "#ABCDEF" });
+    theme.configure(palette(), { accent: "#ABCDEF", added: "#224422", removed: "#442222" });
 
     app.renderer.emit("palette", palette(true)); await app.renderOnce();
 
@@ -121,6 +121,8 @@ test("자체 색상 재정의만 고정하고 나머지는 이후 터미널 테�
     expect(rgb(app.span("Theme-sensitive transcript").bg)).toEqual([250, 250, 246]);
     expect(theme.colors.accent.intent).toBe("rgb");
     expect(theme.colors.panel.intent).toBe("default");
+    expect(rgb(theme.colors.added)).toEqual([34, 68, 34]);
+    expect(rgb(theme.colors.removed)).toEqual([68, 34, 34]);
   } finally { await app.close(); }
 });
 

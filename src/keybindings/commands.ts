@@ -108,7 +108,7 @@ export const defaultBindings = {
   "git.inspect": [key("ctrl+o", "git-prompt")],
   "git.cancel": [key("escape", "git-prompt")],
   "git.open": [key("enter", "git")],
-  "git.back": [key("escape", "git")],
+  "git.back": [key("escape", "git"), key("escape", "button")],
   "git.refresh": [key("r", "git")],
   "git.more": [key("plus", "git")],
   "git.previous": [key("up", "git"), key("k", "git")],
