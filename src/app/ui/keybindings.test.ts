@@ -23,8 +23,7 @@ test("Workspace는 j/k 탐색 뒤 Enter로 전환하고 입력창에서는 같�
     expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-search"); expect(app.captureCharFrame()).toContain("hjkl");
     app.mockInput.pressEscape(); await app.renderOnce();
 
-    const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes("History"));
-    await app.mockMouse.click(lines[y]!.indexOf("History") + 1, y);
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("h");
     await app.waitForFrame((frame) => frame.includes("Saved second"));
     app.renderer.root.findDescendantById("history-list")!.focus(); app.mockInput.pressKey("j"); app.mockInput.pressEnter();
     await app.waitFor(() => opened.length > 0);

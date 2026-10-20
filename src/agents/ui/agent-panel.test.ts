@@ -27,7 +27,7 @@ async function mount(actions: Partial<AgentActions> = {}, scroll: Record<string,
   return { ...app, panel, notices, saved, async close() { panel.dispose(); await app.dispose(); } };
 }
 
-test("독립 Agent 패널은 세션이 없을 때 명시적인 생성 클릭만 전달한다", async () => {
+test("독립 Agent 패널은 세션이 없을 때 명시적인 생성 명령만 전달한다", async () => {
   // Workbench 없이도 빈 상태를 표시하며 패널 진입 자체는 세션을 만들지 않는다.
   const created: string[] = [];
   const app = await mount({ onNewSession: (id) => created.push(id) });
@@ -36,9 +36,8 @@ test("독립 Agent 패널은 세션이 없을 때 명시적인 생성 클릭만 
     await app.renderOnce();
     expect(created).toEqual([]); expect(app.captureCharFrame()).toContain("No open sessions");
 
-    // 사용자가 빈 상태의 생성 버튼을 직접 누른다.
-    const rows = app.captureCharFrame().split("\n"), y = rows.findIndex((row) => row.includes("+ New session"));
-    await app.mockMouse.click(rows[y]!.indexOf("+ New session") + 1, y);
+    // The host routes the same explicit session command used by the keyboard-only strip.
+    app.panel.sessionCommand("session.new");
 
     expect(created).toEqual(["tree"]);
   } finally { await app.close(); }

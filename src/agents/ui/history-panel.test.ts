@@ -57,8 +57,7 @@ test("History는 Agents의 검색 팝업이고 좌측에는 Workspace만 남긴�
   // Browsing metadata is not a model/session action, and sidebar space is no longer spent on history.
   const app = await mount();
   try {
-    const sidebar = app.get("workspace-sidebar");
-    expect(app.get("agent-history-button").x).toBeGreaterThanOrEqual(sidebar.x + sidebar.width);
+    expect(app.renderer.root.findDescendantById("agent-history-button")).toBeUndefined();
     await app.open(); await app.visible("Saved layout review");
 
     expect(app.get("session-history").visible).toBe(true);
@@ -168,8 +167,8 @@ test("Esc는 프롬프트 커서·초안·대화 스크롤과 원래 포커스�
   try {
     const prompt = app.get("session-prompt") as InputRenderable, transcript = app.get("session-transcript") as ScrollBoxRenderable;
     prompt.focus(); prompt.cursorOffset = 5; transcript.scrollTo(21); await app.render(); const top = transcript.scrollTop;
-    // Pointer opening preserves the prompt as the owner instead of focusing the History trigger first.
-    await app.click("agent-history-button"); await app.mockInput.typeText("review"); await app.render();
+    // The global shortcut preserves the prompt as the owner without a visible trigger button.
+    await app.open(); await app.mockInput.typeText("review"); await app.render();
     app.mockInput.pressEscape(); await app.render();
     expect(app.get("session-history").visible).toBe(false); expect(app.renderer.currentFocusedRenderable).toBe(prompt);
     expect(prompt.cursorOffset).toBe(5); expect(app.view.promptDrafts.a1).toBe("untouched draft"); expect(transcript.scrollTop).toBe(top);

@@ -23,6 +23,7 @@ async function mount(repositories: readonly Repository[] = demoWorkspace(), opti
   await setup.renderOnce();
   return {
     ...setup, selection, requests, view,
+    async openHistory() { setup.mockInput.pressKey(" ", { ctrl: true }); setup.mockInput.pressKey("h"); await setup.renderOnce(); },
     async clickText(text: string): Promise<void> {
       const lines = setup.captureCharFrame().split("\n");
       const y = lines.findIndex((line) => line.includes(text));
@@ -86,7 +87,8 @@ test("닫기 키는 끝 항목의 이전 세션을 선택하고 마지막 항목
     expect(app.selection.sessionId).toBeNull();
     expect(app.selection.worktree?.sessions).toHaveLength(0);
     expect(app.captureCharFrame()).toContain("No open sessions");
-    expect(app.captureCharFrame()).toContain("+ New session");
+    expect(app.renderer.root.findDescendantById("agent-session-list")!.visible).toBe(true);
+    expect(app.captureCharFrame().split("\n")[23]).toContain("n New session");
   } finally { await app.close(); }
 });
 
@@ -108,7 +110,7 @@ test("행의 닫기 액션은 부모 세션을 잘못 선택하지 않는다", a
   } finally { await app.close(); }
 });
 
-test("빈 워크트리의 생성 버튼은 요청만 보내며 선택이나 열린 목록을 조작하지 않는다", async () => {
+test("빈 워크트리의 생성 명령은 요청만 보내며 선택이나 열린 목록을 조작하지 않는다", async () => {
   // No sessions exist in the empty worktree before the user requests creation.
   const app = await mount();
   try {
@@ -116,7 +118,7 @@ test("빈 워크트리의 생성 버튼은 요청만 보내며 선택이나 열�
     const before = app.selection.snapshot;
 
     // The action crosses the host callback boundary without implementing OA-5.
-    await app.clickText("+ New session");
+    app.renderer.root.findDescendantById("agent-session-list")!.focus(); app.mockInput.pressKey("n"); await app.renderOnce();
 
     // No runtime, automatic selection or placeholder session was manufactured.
     expect(app.requests).toEqual(["demo:empty"]);
@@ -131,7 +133,7 @@ test("History 팝업은 지원 없는 preview를 설명하고 선택을 유지�
   const app = await mount();
   try {
     // Opening history overlays navigation without changing workspace state.
-    await app.clickText("History");
+    await app.openHistory();
 
     // No history or resume operation is implied by the placeholder.
     expect(app.captureCharFrame()).toContain("Session history is unavailable in this preview.");
@@ -159,7 +161,7 @@ test("세션 탭의 End는 화면 밖 세션을 표시하고 작은 터미널에
     app.resize(60, 12);
     await app.renderOnce(); await app.renderOnce();
 
-    // The selected tab keeps its status visible rather than clipping it behind New session.
+    // The selected tab keeps its status visible throughout horizontal navigation.
     expect(app.tabFrame("long-39")).toContain(workspaceIcons.unreported);
     expect(app.captureCharFrame()).not.toContain("Inspector");
     expect(app.selection.sessionId).toBe("long-39");
@@ -202,7 +204,7 @@ test("History 팝업 뒤에서 바뀐 실패 상태도 닫은 뒤 선택과 무�
   const app = await mount();
   try {
     await app.clickText(`${icons.folder} radian-ui`);
-    await app.clickText("History");
+    await app.openHistory();
 
     // A host snapshot reports failure while the tree is not being painted.
     app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({

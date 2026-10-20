@@ -188,7 +188,7 @@ export class AgentPanel {
     for (const id of this.inputDrafts.keys()) if (!openIds.has(id)) this.inputDrafts.delete(id);
     this.runtimePanel.visible = Boolean(visible && session && this.actions.onPrompt);
     this.runStatus.update(sessionId, details, this.active);
-    this.sessionStatus.update(details?.telemetry, this.active);
+    this.sessionStatus.update(details?.telemetry, this.active, worktree);
     this.emptyPanel.visible = visible && !this.active;
     this.children.update(session?.subagents ?? [], this.active);
     this.root.gap = 0;
@@ -198,7 +198,7 @@ export class AgentPanel {
     const transcriptFocused = this.transcript.focused;
     this.transcript.update(sessionId, details?.sections, output, this.active, details?.conversationId);
     if (replaced && this.active && transcriptFocused) this.prompt.focus();
-    if ((!this.active && (this.prompt.focused || transcriptFocused)) || (!visible && tabsFocused)) this.focusSidebar();
+    if ((!this.active && (this.prompt.focused || transcriptFocused)) || (!this.sessions.root.visible && tabsFocused)) this.focusSidebar();
     if (!this.active) { this.completion.hide(); this.prompt.cancelPaste(); } else this.completion.refresh();
     this.resizeComposer();
     if (switchedSession) this.publishDrafts();

@@ -16,7 +16,7 @@ const sample = (): SessionTelemetry => ({ provider: "openai-codex", model: "gpt-
   usage: { provider: "openai", status: "ready", windows: [{ id: "period", usedPercent: 18, periodMs: 604800000, resetsAt: Date.now() + 3600000 }],
     updatedAt: Date.now(), errorCode: null } });
 async function mount(telemetry: SessionTelemetry = sample()) {
-  const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
+  const app = await createTestRenderer({ width: 140, height: 24, kittyKeyboard: true });
   const selection = new WorkspaceSelection(demoWorkspace());
   const states: Record<string, SessionTelemetry | undefined> = { a1: telemetry };
   const view = new Workbench(app.renderer, selection, { onNewSession: () => {}, onCloseSession: () => {}, onPrompt: () => ok(undefined),
@@ -177,7 +177,7 @@ test("좁은 화면은 바·설정·시간을 축약해 두 비율과 초안을 
   const app = await mount();
   try {
     app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("resize draft");
-    for (const [width, height, gap] of [[100, 20, 1], [60, 12, 1], [120, 24, 1]] as const) {
+    for (const [width, height, gap] of [[100, 20, 1], [60, 12, 1], [140, 24, 1]] as const) {
       app.resize(width, height); await app.renderOnce();
 
       expect(app.line()).toContain("context"); expect(app.line()).toContain("64%"); expect(app.line()).toContain("18% used");
@@ -200,7 +200,7 @@ test("fast의 전체·축약 표시는 상태와 관계없이 소문자로 통�
   try {
     expect(app.line()).toContain("fast on"); expect(app.line()).not.toContain("Fast");
 
-    app.resize(96, 24); await app.renderOnce();
+    app.resize(110, 24); await app.renderOnce();
     expect(app.line()).toContain("gpt-5.5 high f+");
     await app.set({ ...sample(), fast: false }); expect(app.line()).toContain("gpt-5.5 high f−");
     await app.set({ ...sample(), fast: null }); expect(app.line()).toContain("gpt-5.5 high f?");

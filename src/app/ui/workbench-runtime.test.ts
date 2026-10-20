@@ -44,7 +44,10 @@ async function mount() {
       if (x < 0 || y < 0) throw new Error(`Missing visible text: ${text}\n${setup.captureCharFrame()}`);
       await setup.mockMouse.click(x, y); await setup.renderOnce();
     },
-    async newSession() { await this.click("+ New session"); const id = await creation.at(-1)!; await setup.renderOnce(); return id; },
+    async newSession() {
+      setup.renderer.root.findDescendantById("agent-session-list")!.focus(); setup.mockInput.pressKey("n");
+      const id = await creation.at(-1)!; await setup.renderOnce(); return id;
+    },
     async send(text: string) {
       setup.mockInput.pressKey("e", { ctrl: true }); await setup.mockInput.typeText(text);
       setup.mockInput.pressEnter(); await prompts.at(-1)!.done; await setup.renderOnce();

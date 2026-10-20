@@ -21,8 +21,6 @@ type Actions = {
 export class SessionTabs {
   readonly root: BoxRenderable;
   readonly list: ScrollBoxRenderable;
-  private readonly createButton: BoxRenderable;
-  private readonly historyButton: BoxRenderable | undefined;
   private readonly tabs = new Map<string, Tab>();
   private sessions: readonly OpenSession[] = [];
   private selected: string | null = null;
@@ -36,16 +34,7 @@ export class SessionTabs {
     this.list = new ScrollBoxRenderable(renderer, { id: "agent-session-list", height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0,
       scrollX: true, scrollY: false, contentOptions: { flexDirection: "row", gap: 1 }, horizontalScrollbarOptions: { visible: false },
       onSizeChange: () => { this.resizeTitles(); this.reveal = true; this.renderer.requestRender(); } });
-    this.createButton = actions.button("+ New session", () => actions.create(), "New session");
-    this.root.add(this.list); this.root.add(this.createButton);
-    if (actions.history) {
-      this.historyButton = actions.button("History", actions.history, "Open History");
-      this.historyButton.id = "agent-history-button";
-      // Pointer opening must remember the original prompt/transcript, not the trigger button.
-      this.historyButton.onMouseDown = (event) => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); actions.history?.(); } };
-      this.root.add(this.historyButton);
-    }
-    renderer.on("resize", this.resizeButtons); this.resizeButtons();
+    this.root.add(this.list);
     uiTheme(renderer).scrollbars(this.list);
     uiTheme(renderer).bind(this.root, () => this.paint());
     this.list.on("focused", () => { this.paint(); actions.changed(); });
@@ -56,12 +45,12 @@ export class SessionTabs {
   get focused(): boolean { return this.renderer.currentFocusedRenderable === this.list; }
   get containsFocus(): boolean { return this.root.hasFocusedDescendant; }
   get focusTargets(): Renderable[] {
-    return this.visible ? [...(this.sessions.length ? [this.list] : []), this.createButton, ...(this.historyButton ? [this.historyButton] : [])] : [];
+    return this.visible ? [this.list] : [];
   }
   get shortcuts(): readonly FooterShortcut[] {
     const hint = (id: CommandId) => this.actions.keyHint(id, "session-tabs");
-    return [{ key: [hint("session.previous"), hint("session.next")].filter(Boolean).join("/"), label: "Session" },
-      { key: hint("session.new"), label: "New session" }, ...(this.historyButton ? [{ key: hint("history.show"), label: "History" }] : []), ...(this.selected ? [{ key: hint("session.close"), label: "Close session" }] : [])];
+    return [...(this.sessions.length ? [{ key: [hint("session.previous"), hint("session.next")].filter(Boolean).join("/"), label: "Session" }] : []),
+      { key: hint("session.new"), label: "New session" }, ...(this.actions.history ? [{ key: hint("history.show"), label: "History" }] : []), ...(this.selected ? [{ key: hint("session.close"), label: "Close session" }] : [])];
   }
 
   update(worktreeId: string | null, sessions: readonly OpenSession[], selected: string | null, visible: boolean): void {
@@ -94,8 +83,8 @@ export class SessionTabs {
       tab.status.update(sessionStatus(session), this.visible);
       if (this.list.getChildren()[index] !== tab.root) { this.list.add(tab.root, index); this.reveal = true; }
     }
-    if (this.focused && this.visible && !sessions.length) this.createButton.focus();
-    this.list.visible = sessions.length > 0;
+    // The empty strip remains a keyboard target for explicit creation after the last tab closes.
+    this.list.visible = this.visible;
     this.paint();
     if (this.reveal) this.renderer.requestRender();
   }
@@ -120,10 +109,6 @@ export class SessionTabs {
     const text = singleLine(id), width = Math.max(1, this.list.width > 0 ? this.list.width - 7 : Bun.stringWidth(text));
     tab.title.maxWidth = width; tab.title.content = truncateCells(text, width);
   }
-  private resizeButtons = (): void => {
-    const label = this.createButton.getChildren().find((child) => child instanceof TextRenderable);
-    if (label instanceof TextRenderable) label.content = this.historyButton && this.renderer.width < 100 ? "+ New" : "+ New session";
-  };
   private resizeTitles(): void {
     for (const session of this.sessions) {
       const tab = this.tabs.get(session.id); if (tab) this.setTitle(tab, session.id);
@@ -149,7 +134,7 @@ export class SessionTabs {
     if (delta) this.list.scrollBy({ x: delta, y: 0 });
   };
   dispose(): void {
-    this.disposed = true; this.renderer.off("frame", this.revealSelected); this.renderer.off("resize", this.resizeButtons);
+    this.disposed = true; this.renderer.off("frame", this.revealSelected);
     for (const tab of this.tabs.values()) tab.status.dispose();
   }
 }

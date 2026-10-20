@@ -136,15 +136,16 @@ connections, not the underlying agents or native processes.
 
 ### Work views
 
-The left panel retains Workspace/History navigation. The right panel switches between **Agents**,
+The left panel retains Workspace navigation. The right panel switches between **Agents**,
 **Editor**, **Git** and **Terminal**, with one visible view per worktree and Agents as the initial view.
 Tree cursor movement is only navigation; Enter or a direct worktree click commits the selection.
 Each worktree separately remembers its work view and selected Agent session. Within Agents, session
-tabs show their session ID and aggregate status, with a close control and explicit new-session
-button. IDs remain complete whenever they fit the available strip width; narrower tabs truncate
-only at the end with `…`, never in the middle. There is no fixed label-length cap, and widening the
-pane restores the full ID. Session names remain unchanged for History and other metadata.
-Session-tab selection and History resume open the chosen session in Agents. Restoring a
+tabs show their session ID and aggregate status, with a close control. IDs remain complete whenever
+they fit the available strip width; narrower tabs truncate only at the end with `…`, never in the
+middle. There is no fixed label-length cap, and widening the pane restores the full ID. Session names
+remain unchanged for History and other metadata. Focus the strip and press `n`
+(or the configured `session.new` key) to add a session; the strip remains focusable when empty.
+The upper-right worktree label and the New session/History toolbar buttons are removed. Session-tab selection and History resume open the chosen session in Agents. Restoring a
 selection, filtering and background snapshots never implicitly activate another work view.
 Session creation/closing retain their existing rules and never implicitly launch an editor.
 
@@ -407,7 +408,7 @@ The Agent prompt completes and executes these host commands instead of sending t
   never replayed into the new one. The outgoing saved conversation remains in History;
   modified files are not rolled back. Other tabs, editors and terminal shells keep running.
   A preparation failure leaves the previous execution intact. Extension cancellation and session
-  lifecycle hooks are respected. The separate **`+ New session`** button still adds another tab.
+  lifecycle hooks are respected. The **`session.new`** command (`n` with the session strip focused) still adds another tab.
 - **`/compact [instructions]`** invokes Pi's manual context summarization for the current conversation.
   It may make summarization model calls and consume quota. It keeps the tab, saved conversation,
   request shown by the work-status row and full displayed transcript; only the model context is compacted. The session
@@ -429,7 +430,10 @@ Neither automatic strategic-compaction suggestions nor a model-callable compacti
 ### Agent input status
 
 A passive row below and outside the prompt box, with one blank row above and below it, shows the
-selected model, effort and current `fast` setting, followed by **context remaining** and **account usage**.
+active worktree and branch, selected model, effort and current `fast` setting, followed by
+**context remaining** and **account usage**. Worktree/branch updates follow the active workspace,
+not the sidebar cursor. Long scope labels are shortened on grapheme boundaries to at most one third
+of the row; known resource percentages take precedence in constrained space.
 Both meters use the same block-bar style. A provider icon identifies the account meter; `18% used 1h 20m` means consumption followed by
 time until reset, without a middle-dot separator. Reset times use `5d 23h`, `1h 20m` or `18m`. The compact meter selects the longest returned
 quota window; all returned windows remain available in the IPC snapshot. There is no refresh button.
@@ -914,8 +918,8 @@ technical layers; neither feature depends on the other's implementation.
 
 ### Saved session history
 
-History is a searchable popup, not a sidebar tab. Use **History** beside the Agents session controls,
-or **Ctrl+Space → h** (`history.show`) from any work view. Its scope is the active worktree, not the
+History is a searchable popup, not a sidebar tab or a session-toolbar button. Use **Ctrl+Space → h**
+(`history.show`, configurable) from any work view. Its scope is the active worktree, not the
 sidebar navigation cursor. The list uses SDK conversation names (falling back to the first prompt or
 `Untitled session`), last activity and message count, newest first, including in shared offline directories.
 

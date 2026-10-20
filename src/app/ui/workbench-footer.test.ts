@@ -27,12 +27,7 @@ async function mount(list: () => Promise<readonly HistoryItem[]> = async () => [
   return { ...app, selection, calls, view, initialFocusListeners,
     footerLine: () => app.captureCharFrame().split("\n")[app.renderer.height - 1]!,
     setStatus(next: ExecutionState["status"]) { status = next; selection.replaceSnapshot(selection.snapshot); },
-    async click(text: string) {
-      const lines = app.captureCharFrame().split("\n"); const y = lines.findIndex((line) => line.includes(text));
-      const x = lines[y]?.indexOf(text) ?? -1;
-      if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
-      await app.mockMouse.click(x, y); await app.renderOnce();
-    },
+    async openHistory() { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("h"); await app.renderOnce(); },
     async visible(text: string) {
       const deadline = Date.now() + 3000;
       while (!app.captureCharFrame().includes(text)) {
@@ -85,12 +80,12 @@ test("트리에서 검색창으로 포커스를 옮기면 해당 영역의 단�
   } finally { await app.close(); }
 });
 
-test("History 버튼·조회 중 목록·사용 가능한 기록에 따라 표시되는 키가 달라진다", async () => {
+test("History 명령·조회 중 목록·사용 가능한 기록에 따라 표시되는 키가 달라진다", async () => {
   // Metadata arrives after focus reaches the list; this is not a new model/session action.
   const pending = Promise.withResolvers<readonly HistoryItem[]>();
   const app = await mount(() => pending.promise);
   try {
-    await app.click("History");
+    await app.openHistory();
     expect(app.footerLine()).toContain("Ctrl+r Refresh");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("history-search");
     expect(app.footerLine()).not.toContain("Enter Open");

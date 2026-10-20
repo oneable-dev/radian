@@ -41,7 +41,8 @@ test("높이가 달라져도 탭·검색·항목 간격을 유지하고 작은 �
 test("Agent와 Terminal 탭의 가로바는 resize 후에도 숨고 선택된 탭으로의 좌우 이동은 유지한다",async()=>{
   const app=await mount(true);
   try {
-    // Long session IDs, not display names, produce real overflow.
+    // Long session IDs, not display names or removed toolbar buttons, produce real overflow.
+    app.resize(80,24);await app.render();
     const agent=app.get("agent-session-list") as ScrollBoxRenderable;
     expect(agent.scrollWidth).toBeGreaterThan(agent.viewport.width);
     agent.scrollLeft=10;await app.render();expect(agent.scrollLeft).toBe(10);expect(agent.horizontalScrollBar.visible).toBe(false);

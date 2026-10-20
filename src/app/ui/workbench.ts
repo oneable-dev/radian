@@ -63,7 +63,6 @@ export class Workbench {
   private readonly agent: AgentPanel;
   private readonly workPanel: BoxRenderable;
   private readonly workTabs: Record<WorkView, Button>;
-  private readonly workContext: TextRenderable;
   private readonly sidebarTabs: BoxRenderable;
   private readonly viewTabs: BoxRenderable;
   private readonly editor: EditorPanel;
@@ -144,9 +143,6 @@ export class Workbench {
       terminal: this.button("Terminal", () => this.selectWorkView("terminal"), "Show Terminal"),
     };
     for (const tab of Object.values(this.workTabs)) workTabs.add(tab);
-    this.workContext = this.text("", "muted");
-    this.workContext.flexGrow = 1; this.workContext.flexShrink = 1; this.workContext.minWidth = 0;
-    this.workContext.textAlign = "right"; workTabs.add(this.workContext);
     this.workPanel.add(workTabs);
     this.agent = new AgentPanel(renderer, { ...actions, onHistory: () => this.history.show(this.selection.worktree), onInspectInput: (content) => this.dialog.show(content), onSelectSession: (tree, id) => this.activateSession(tree, id) }, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
       (message) => this.setNotice(message), () => this.updateFooter(), () => this.focusNavigation(), this.workViews.agentScroll,
@@ -499,7 +495,6 @@ export class Workbench {
     this.tree.marginTop = vertical;
     this.spaceRows(this.visibleRows());
     this.navigationRevealPending = true;
-    this.workContext.visible = this.renderer.width >= 100;
     this.workPanel.minWidth = 0;
   };
 
@@ -586,7 +581,6 @@ export class Workbench {
     if (!rows.some((row) => row.key === this.navigationKey)) this.navigationKey = selectedKey ?? rows.find((row) => row.kind === "worktree")?.key ?? null;
     this.paintRows(rows);
     const worktree = this.selection.worktree;
-    this.workContext.content = worktree ? `${worktree.name} · ${worktree.branch ?? "detached"}` : "";
     const workView = worktree ? this.workViews.active[worktree.id] ?? "agent" : "agent";
     if (this.sidebarTransition && (workView !== "editor" || this.sidebarTransition.worktreeId !== worktree?.id)) this.finishSidebarTransition();
     this.displayedWorkView = workView;
