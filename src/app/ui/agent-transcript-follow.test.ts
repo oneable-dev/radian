@@ -14,18 +14,23 @@ import { uiTheme } from "../../ui/theme.ts";
 const section = (id: string, text: string, kind: TranscriptSection["kind"] = "assistant"): TranscriptSection => ({ id, kind, title: kind, text, status: "complete" });
 const history = [section("history", Array.from({ length: 70 }, (_, i) => `OLD-LINE-${i}`).join("\n"))];
 function children(node: Renderable): Renderable[] { return node.getChildren().flatMap((child) => [child, ...children(child)]); }
-async function mount(options: { paused?: boolean; keymap?: Keymap; onPrompt?: (id: string, text: string) => Result<void, ExpectedError> | Promise<Result<void, ExpectedError>> } = {}) {
+async function mount(options: { paused?: boolean; completed?: boolean; keymap?: Keymap; onPrompt?: (id: string, text: string) => Result<void, ExpectedError> | Promise<Result<void, ExpectedError>> } = {}) {
   const app = await createTestRenderer({ width: 120, height: 26, kittyKeyboard: true });
-  const selection = new WorkspaceSelection(demoWorkspace()), sent: string[] = [];
-  const data: Record<string, readonly TranscriptSection[]> = { a1: history, b1: [section("other", "OTHER_SESSION\n".repeat(60))] };
+  const snapshot = () => demoWorkspace().map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
+    sessions: tree.sessions.map((session) => options.completed ? { ...session, subagents: [] } : session),
+  })) }));
+  const selection = new WorkspaceSelection(snapshot()), sent: string[] = [];
+  const data: Record<string, readonly TranscriptSection[]> = { a1: options.completed ? [{ ...history[0]!, completion: {
+    startedAt: 0, completedAt: 1000, durationMs: 1000, outcome: "complete",
+  } }] : history, b1: [section("other", "OTHER_SESSION\n".repeat(60))] };
   const view = new Workbench(app.renderer, selection, { onNewSession: () => {}, onCloseSession: () => {}, ...(options.keymap ? { keymap: options.keymap } : {}),
     initialWorkViews: { active: {}, agentScroll: options.paused ? { a1: 0 } : {}, agentViews: { a1: { selectedId: "history", folded: { tool: false }, cursors: {}, mode: "sections", anchor: null, follow: !options.paused } } },
     onPrompt: (id, text) => {
       sent.push(`${id}:${text}`);
       if (options.onPrompt) return options.onPrompt(id, text);
-      data[id] = [...data[id] ?? [], section(`prompt-${sent.length}`, text, "user")]; selection.replaceSnapshot(demoWorkspace());
+      data[id] = [...data[id] ?? [], section(`prompt-${sent.length}`, text, "user")]; selection.replaceSnapshot(snapshot());
       return ok(undefined);
-    }, getSessionDetails: (id) => ({ status: "working", error: null, output: "", sections: data[id] ?? [] }),
+    }, getSessionDetails: (id) => ({ status: options.completed ? "complete" : "working", error: null, output: "", sections: data[id] ?? [] }),
   });
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
   const settled = async () => { await render(); for (let i = 0; i < 3; i++) { await Promise.all(children(app.renderer.root).filter((node): node is CodeRenderable => node instanceof CodeRenderable).map((node) => node.highlightingDone)); await render(); } };
@@ -34,13 +39,13 @@ async function mount(options: { paused?: boolean; keymap?: Keymap; onPrompt?: (i
   return { ...app, view, selection, scroll, sent, render, settled,
     state(id = selection.sessionId ?? "a1") { return view.workViewPreferences.agentViews?.[id]; },
     async prompt(text: string) { app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText(text); app.mockInput.pressEnter(); await settled(); },
-    async update(next: readonly TranscriptSection[], id = selection.sessionId ?? "a1") { data[id] = next; selection.replaceSnapshot(demoWorkspace()); await settled(); },
+    async update(next: readonly TranscriptSection[], id = selection.sessionId ?? "a1") { data[id] = next; selection.replaceSnapshot(snapshot()); await settled(); },
     async close() { view.dispose(); await app.dispose(); },
   };
 }
 const bottom = (scroll: ScrollBoxRenderable) => Math.max(0, scroll.scrollHeight - scroll.viewport.height);
 
-test.each([false, true])("밝기 %j에서도 하단 복귀 버튼은 중앙·아래 한 줄 여백을 유지하고 클릭하면 초안 포커스 그대로 따라간다", async (light) => {
+test.each([false, true])("밝기 %j에서도 하단 복귀 버튼은 기존 여백에만 표시하고 본문·상태 행·입력창을 가리지 않는다", async (light) => {
   // 긴 대화를 따라가는 화면에서 버튼이 나타나도 본문·입력창의 크기는 바뀌지 않아야 한다.
   const app = await mount();
   try {
@@ -48,7 +53,9 @@ test.each([false, true])("밝기 %j에서도 하단 복귀 버튼은 중앙·아
       cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null });
     app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("Unsent draft"); await app.settled();
     const composer = app.renderer.root.findDescendantById("agent-composer")!;
-    const geometry = [app.scroll.height, app.scroll.viewport.height, app.scroll.scrollHeight, composer.y];
+    const prompt = app.renderer.root.findDescendantById("session-prompt")!;
+    const status = app.renderer.root.findDescendantById("transcript-status-row")!;
+    const geometry = [app.scroll.height, app.scroll.viewport.height, app.scroll.scrollHeight, status.y, composer.y, prompt.y];
     expect(app.captureCharFrame()).not.toContain("Back to bottom");
 
     // 위로 스크롤하면 클릭 가능한 표시가 나타나며, 오른쪽 클릭은 이동 명령이 아니다.
@@ -58,13 +65,17 @@ test.each([false, true])("밝기 %j에서도 하단 복귀 버튼은 중앙·아
     if (!button) throw new Error("Missing back-to-bottom button");
     const viewport = app.scroll.viewport;
     expect(Math.abs(button.x + button.width / 2 - viewport.x - viewport.width / 2)).toBeLessThanOrEqual(0.5);
-    expect(viewport.y + viewport.height - button.y - button.height).toBe(1);
+    expect(button.y).toBe(viewport.y + viewport.height);
+    expect(button.y + 1).toBe(app.renderer.root.findDescendantById("agent-run-status")!.y);
+    expect(button.height).toBe(1);
     let end = 0;
     const cell = app.captureSpans().lines[button.y]!.spans.find((span) => { end += span.width; return end > button.x + 1; })!;
     expect(cell.bg.toInts()).toEqual(uiTheme(app.renderer).colors.selected.toInts());
     expect(cell.fg.toInts()).toEqual(uiTheme(app.renderer).colors.accent.toInts());
-    expect(app.captureCharFrame().split("\n")[button.y + 1]!.slice(viewport.x, viewport.x + viewport.width).trim()).toBe("");
-    expect([app.scroll.height, viewport.height, app.scroll.scrollHeight, composer.y]).toEqual(geometry);
+    const frame = app.captureCharFrame().split("\n");
+    expect(frame[viewport.y + viewport.height - 1]).toMatch(/OLD-LINE-\d+/);
+    expect(frame[button.y + 1]).toContain("Subagents");
+    expect([app.scroll.height, viewport.height, app.scroll.scrollHeight, status.y, composer.y, prompt.y]).toEqual(geometry);
     const position = app.scroll.scrollTop;
     await app.mockMouse.click(button.x, button.y, 2); await app.settled();
     expect(app.scroll.scrollTop).toBe(position); expect(app.state()?.follow).toBe(false);
@@ -161,7 +172,7 @@ test("원문을 읽을 때 커서는 복귀 버튼에 가려지지 않고 클릭
   } finally { await app.close(); }
 });
 
-test("좁은 창에서도 하단 복귀 버튼을 중앙에 두고 여백을 확보할 수 없는 높이에서는 숨긴다", async () => {
+test("좁은 창에서도 기존 여백에 버튼을 중앙 정렬하고 여백이 없는 높이에서는 숨긴다", async () => {
   // 멈춘 대화의 플로팅 UI는 리사이즈 후에도 스크롤 콘텐츠의 일부가 되어서는 안 된다.
   const app = await mount({ paused: true });
   try {
@@ -170,13 +181,36 @@ test("좁은 창에서도 하단 복귀 버튼을 중앙에 두고 여백을 확
     const viewport = app.scroll.viewport;
     expect(app.captureCharFrame()).toContain("Back to bottom");
     expect(Math.abs(button.x + button.width / 2 - viewport.x - viewport.width / 2)).toBeLessThanOrEqual(0.5);
-    expect(viewport.y + viewport.height - button.y - button.height).toBe(1);
+    expect(button.y).toBe(viewport.y + viewport.height);
     expect(button.width).toBeLessThanOrEqual(viewport.width);
 
-    // 최소 본문과 아래 여백이 들어가지 않는 화면은 버튼을 숨기고 복원 시 다시 표시한다.
-    app.resize(60, 10); await app.settled(); expect(app.captureCharFrame()).not.toContain("Back to bottom");
+    // 기존 빈 행이 없는 화면에서는 본문이나 입력창을 덮지 않고 버튼만 숨긴다.
+    app.resize(60, 8); await app.settled(); expect(app.captureCharFrame()).not.toContain("Back to bottom");
     app.resize(120, 26); await app.settled(); expect(app.captureCharFrame()).toContain("Back to bottom");
     expect(app.state()?.follow).toBe(false);
+  } finally { await app.close(); }
+});
+
+test("실행 상태 행이 없으면 입력창의 기존 위쪽 여백에만 복귀 버튼을 표시한다", async () => {
+  // 완료된 세션에는 실행·서브에이전트 상태 행이 없어도 입력창 자체의 빈 윗줄이 남아 있다.
+  const app = await mount({ paused: true, completed: true });
+  try {
+    const status = app.renderer.root.findDescendantById("transcript-status-row")!;
+    const composer = app.renderer.root.findDescendantById("agent-composer")!;
+    const prompt = app.renderer.root.findDescendantById("session-prompt")!;
+    const button = app.renderer.root.findDescendantById("transcript-bottom-button")!;
+    const geometry = [app.scroll.viewport.height, app.scroll.scrollHeight, composer.y, prompt.y];
+    expect(status.visible).toBe(false); expect(app.captureCharFrame()).toContain("Back to bottom");
+
+    // 스크롤 영역 밖의 기존 빈 행만 사용하고 입력 본문을 한 줄 더 아래로 밀지 않는다.
+    expect(button.y).toBeLessThanOrEqual(composer.y);
+    expect(button.y).toBe(app.scroll.viewport.y + app.scroll.viewport.height);
+    expect(button.y + button.height).toBeLessThanOrEqual(prompt.y);
+    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("Kept draft"); await app.settled();
+    await app.mockMouse.click(button.x, button.y); await app.settled();
+    expect(app.state()?.follow).toBe(true); expect(app.captureCharFrame()).not.toContain("Back to bottom");
+    expect([app.scroll.viewport.height, app.scroll.scrollHeight, composer.y, prompt.y]).toEqual(geometry);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt"); expect(app.view.promptDrafts.a1).toBe("Kept draft");
   } finally { await app.close(); }
 });
 

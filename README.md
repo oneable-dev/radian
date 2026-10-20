@@ -414,11 +414,11 @@ transcript does not pause it. Content growth and asynchronous Markdown layout pr
 bottom intent rather than treating the increased scroll range as user navigation. Following also
 keeps the bottom on resize and when returning from another work view.
 
-Above the bottom, a centered `↓ Back to bottom` button floats over the transcript with one blank
-row below it. It shows the effective `transcript.latest` shortcut (default `g → e`); clicking resumes
-following without sending a prompt or taking input focus. The overlay never resizes the transcript
-or changes its scroll range. It is hidden at the bottom, in help/history previews and in viewports
-too small to retain content above the button and its gutter.
+Above the bottom, a centered `↓ Back to bottom` button uses an existing blank row above the work
+status or in the composer's top inset. It never adds blank rows, covers transcript content or moves
+the input. It shows the effective `transcript.latest` shortcut (default `g → e`); clicking resumes
+following without sending a prompt or taking input focus. It is hidden at the bottom, in help/history
+previews and whenever no existing blank row is available.
 
 Character/line selections and native mouse selections temporarily protect their viewport. Once
 selection is cleared, following resumes only if the viewport is still at the bottom. Auto-following

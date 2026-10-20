@@ -8,6 +8,7 @@ import type { ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { TranscriptPanel, type TranscriptOptions } from "./transcript-panel.ts";
+import { TranscriptBottomButton } from "./transcript-bottom-button.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
@@ -58,6 +59,7 @@ export class AgentPanel {
   private readonly sessionStatus: SessionStatus;
   private readonly completion: CompletionMenu;
   private readonly transcript: TranscriptPanel;
+  private readonly bottomButton: TranscriptBottomButton;
   private readonly runStatus: RunStatus;
   private readonly pendingMessages: PendingMessages;
   private pending: ExecutionState["pendingMessages"] = [];
@@ -75,7 +77,7 @@ export class AgentPanel {
     private readonly notice: (message: string) => void, private readonly changed: () => void,
     private readonly focusSidebar: () => void, initialScroll: Readonly<Record<string, number>>,
     saveScroll: (sessionId: string, position: number) => void,
-    transcriptOptions: Pick<TranscriptOptions, "initialViews" | "saveView" | "keyHint"> = {}) {
+    private readonly transcriptOptions: Pick<TranscriptOptions, "initialViews" | "saveView" | "keyHint"> = {}) {
     const theme = uiTheme(renderer);
     this.root = new BoxRenderable(renderer, { id: "agent-view", onSizeChange: () => this.resizeComposer(), flexGrow: 1, minHeight: 0, minWidth: 0, padding: 1, flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
     this.title = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false, attributes: TextAttributes.BOLD });
@@ -95,6 +97,8 @@ export class AgentPanel {
     this.transcript = new TranscriptPanel(renderer, { notice, changed, focusPrompt: () => this.prompt.focus(), initialScroll, saveScroll,
       ...transcriptOptions, ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}), ...(actions.onImage ? { image: actions.onImage } : {}) });
     this.transcriptScroll = this.transcript.scroll;
+    this.bottomButton = new TranscriptBottomButton(renderer, () => { renderer.clearSelection(); this.transcript.followLatest(); });
+    this.runtimePanel.add(this.bottomButton);
     const interruptKey = () => transcriptOptions.keyHint?.("agent.interrupt", "prompt") ?? "esc";
     this.runStatus = new RunStatus(renderer, interruptKey);
     this.pendingMessages = new PendingMessages(renderer, interruptKey);
@@ -131,7 +135,7 @@ export class AgentPanel {
     renderer.on("resize", this.resize);
     // Native public geometry settles after size callbacks. The signature-guarded
     // post-layout pass fits the editor/menu without creating a render loop.
-    renderer.addPostProcessFn(this.resizeComposer); this.resize();
+    renderer.addPostProcessFn(this.resizeComposer); renderer.addPostProcessFn(this.layoutBottomButton); this.resize();
   }
 
   get promptDrafts(): Record<string, string> {
@@ -270,6 +274,19 @@ export class AgentPanel {
     }
     this.completion?.reflow();
   };
+  private layoutBottomButton = (): void => {
+    if (this.disposed || this.root.isDestroyed) return;
+    const viewport = this.transcriptScroll.viewport;
+    // Reuse a parent-owned boundary gap, a padded status row, or the composer's top inset.
+    const edge = viewport.y + viewport.height;
+    const next = this.statusRow.visible ? this.statusRow : this.pendingMessages.rows ? this.pendingMessages.root : this.composer;
+    const y = next.y > edge ? edge : this.statusRow.visible && this.statusRow.height === 3 ? this.statusRow.y
+      : this.prompt.y > this.composer.y ? this.prompt.y - 1 : null;
+    const space = y !== null && y >= viewport.y + viewport.height && y < this.runtimePanel.y + this.runtimePanel.height
+      ? { left: viewport.x - this.runtimePanel.x, top: y - this.runtimePanel.y, width: viewport.width } : null;
+    const hint = this.transcriptOptions.keyHint?.("transcript.latest", this.transcript.keyContext() ?? "transcript") ?? "";
+    this.bottomButton.update(this.active && this.transcript.canFollowLatest, hint, space);
+  };
   private reservedRows(): number {
     return (this.sessions.root.visible ? 1 : 0) + this.statusRows + this.sessionStatus.root.height + this.pendingMessages.rows;
   }
@@ -325,6 +342,7 @@ export class AgentPanel {
     if (this.disposed) return;
     this.rememberScroll(); this.disposed = true;
     this.renderer.off("resize", this.resize); this.renderer.removePostProcessFn(this.resizeComposer);
+    this.renderer.removePostProcessFn(this.layoutBottomButton);
     this.completion.dispose(); this.prompt.dispose(); this.runStatus.dispose(); this.sessionStatus.dispose(); this.transcript.dispose(); this.sessions.dispose(); this.children.dispose();
     this.prompt.off("resize", this.resizeComposer); this.prompt.off("line-info-change", this.resizeComposer);
     this.prompt.off(InputRenderableEvents.INPUT, this.handleDraftInput);
