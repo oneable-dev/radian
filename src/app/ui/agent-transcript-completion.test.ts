@@ -54,10 +54,14 @@ test("정착된 요청의 마지막 답변 바로 아래에만 시간·완료 �
   } finally { await app.close(); }
 });
 
-test.each([["error", "Failed after"], ["cancelled", "Cancelled after"], ["unfinished", "Stopped after"]] as const)("종료 결과를 완료 문구와 구분한다: %s", async (outcome, text) => {
+test.each([["error", "Failed after 1m 30s"], ["cancelled", "Cancelled (1m 30s)"], ["unfinished", "Stopped after 1m 30s"]] as const)("종료 결과를 완료 문구와 구분한다: %s", async (outcome, text) => {
   const app = await mount([answer({ ...completion, outcome })]);
   try {
-    expect(app.captureCharFrame()).toContain(`${text} 1m 30s`); expect(app.captureCharFrame()).not.toContain("Worked for");
+    expect(app.captureCharFrame()).toContain(text); expect(app.captureCharFrame()).not.toContain("Worked for");
+    if (outcome === "cancelled") {
+      const scroll = app.renderer.root.findDescendantById("session-transcript")!;
+      expect(app.captureCharFrame().split("\n").slice(scroll.y, scroll.y + scroll.height).join("\n")).not.toContain("Cancelled");
+    }
   } finally { await app.close(); }
 });
 
@@ -104,6 +108,19 @@ test("새 사용자 요청 없이 시작된 다음 실행은 이전 완료 요�
   } finally { await app.close(); }
 });
 
+test("숨긴 취소 경계 뒤의 독립 실행은 취소된 요청 문구를 완료 푸터에 재사용하지 않는다", async () => {
+  const request: TranscriptSection = { id: "cancelled-request", kind: "user", title: "You", text: "Cancelled request", status: "complete" };
+  const marker: TranscriptSection = { id: "cancelled-boundary", kind: "notice", title: "Cancelled", text: "", status: "cancelled", completion: { ...completion, outcome: "cancelled" } };
+  const app = await mount([request, marker, answer(completion)]);
+  try {
+    // The invisible boundary still ends request ownership for a subsequent background run.
+    const footer = descendants(app.renderer.root).find((node): node is TextRenderable => node instanceof TextRenderable && node.plainText.startsWith("Worked for"))!;
+
+    expect(footer.plainText).toContain("Worked for 1m 30s"); expect(footer.plainText).not.toContain("Cancelled request");
+    expect(app.captureCharFrame()).not.toContain("[Cancelled]");
+  } finally { await app.close(); }
+});
+
 test("완료 요청의 말줄임은 resize에 맞춰 갱신하고 시간·원문·초안은 보존한다", async () => {
   const text = "Review 👩‍💻 한글 e\u0301 tab layout and keep all original details. ".repeat(12);
   const request: TranscriptSection = { id: "long-request", kind: "user", title: "You", text, status: "complete" };
@@ -147,6 +164,16 @@ test("완료 요청의 아랫줄은 이미지·파일 배지를 보존하고 긴
 
     await app.update([{ ...user, text: "[Image: image/png]", request: { text: "", images: 1, files: 0 } }, answer(completion)]);
     expect(footer.plainText.split("\n")[1]).toBe("[1 image]");
+  } finally { await app.close(); }
+});
+
+test("취소 푸터를 숨겨도 완료 정보의 저장 경고는 숨기지 않는다", async () => {
+  // An accepted cancellation with a persistence warning is neither a failed request nor silent success.
+  const app = await mount([answer({ ...completion, outcome: "cancelled", warning: "[STORAGE_FAILED] Cancellation timing could not be saved." })]);
+  try {
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("Cancelled (1m 30s)"); expect(frame).toContain("Cancellation timing could not be saved.");
+    expect(frame).not.toContain("Cancelled after"); expect(frame).not.toContain("Failed after");
   } finally { await app.close(); }
 });
 

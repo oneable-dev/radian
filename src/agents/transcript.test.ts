@@ -97,6 +97,33 @@ test("redacted Thinking은 서명을 노출하지 않고 이미지와 실패 메
   expect(transcript.sections.at(-1)?.status).toBe("error");
 });
 
+test.each([false, true])("취소 결과는 부분 응답 %s를 보존하되 오류 카드나 중복 오류 문구를 만들지 않는다", (partial) => {
+  // The SDK puts cancellation text in errorMessage too; stopReason is authoritative.
+  let now = 1000;
+  const transcript = new SessionTranscript([], { wallTime: () => now, monotonicTime: () => now });
+  const assistant = fixtureMessage("openai-responses", "fixture", "fixture");
+  assistant.stopReason = "aborted"; assistant.errorMessage = "Request was aborted";
+  assistant.content = partial ? [{ type: "text", text: "Keep the partial response" }] : [];
+  transcript.handle({ type: "agent_start" }); complete(transcript, { role: "user", content: "/ne", timestamp: now });
+
+  complete(transcript, assistant); now += 1200;
+  const completion = transcript.handle({ type: "agent_settled", aborted: true });
+
+  expect(completion).toMatchObject({ outcome: "cancelled", durationMs: 1200 });
+  expect(transcript.sections.at(-1)?.completion).toEqual(completion);
+  expect(transcript.sections.some(section => section.title === "Agent error" || section.error !== undefined)).toBe(false);
+  expect(JSON.stringify(transcript.sections)).not.toContain("Request was aborted");
+  if (partial) expect(transcript.sections.find(section => section.kind === "assistant")?.text).toBe("Keep the partial response");
+
+  // Saved JSONL retains the original SDK result; rebuilding display metadata must behave identically.
+  const manager = SessionManager.inMemory("/fixture");
+  manager.appendMessage({ role: "user", content: "/ne", timestamp: 1000 }); manager.appendMessage(assistant);
+  manager.appendCustomEntry("radian.run-completion.v1", completion);
+  const restored = new SessionTranscript(manager.getBranch());
+  expect(restored.sections.at(-1)?.completion).toEqual(completion);
+  expect(JSON.stringify(restored.sections)).not.toContain("Request was aborted");
+});
+
 test("SDK 스킬 호출은 이름만 남기고 뒤따르는 사용자 요청을 별도 섹션으로 보존한다", () => {
   // Explicit invocation metadata is authoritative; hidden instructions and paths are not display text.
   const transcript = new SessionTranscript([]);

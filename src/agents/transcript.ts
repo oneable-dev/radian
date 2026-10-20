@@ -204,15 +204,18 @@ export class SessionTranscript {
           break;
         }
         case "assistant": {
-          const status = streaming ? "streaming" : message.stopReason === "aborted" ? "cancelled" : message.stopReason === "error" ? "error" : "complete";
+          const cancelled = message.stopReason === "aborted";
+          const status = streaming ? "streaming" : cancelled ? "cancelled" : message.stopReason === "error" ? "error" : "complete";
+          const error = cancelled ? undefined : message.errorMessage;
+          const start = sections.length;
           for (const [index, part] of message.content.entries()) {
             const blockId = `${id}:${index}`;
             if (part.type === "text" || part.type === "thinking") {
               const text = part.type === "text" ? part.text : part.redacted ? "[Thinking redacted]" : part.thinking;
               if (text) sections.push({ id: blockId, kind: part.type === "text" ? "assistant" : "thinking",
                 title: part.type === "text" ? "Agent" : "Thinking",
-                text: message.errorMessage && !text.includes(message.errorMessage) ? `${text}\n\nError:\n${message.errorMessage}` : text, status,
-                ...(message.errorMessage ? { error: summary(message.errorMessage) } : {}) });
+                text: error && !text.includes(error) ? `${text}\n\nError:\n${error}` : text, status,
+                ...(error ? { error: summary(error) } : {}) });
             } else if (part.type === "toolCall") {
               const tool = tools.get(part.id);
               sections.push(toolSection(blockId, part.id, { name: part.name, arguments: part.arguments, text: tool?.text ?? "",
@@ -221,8 +224,11 @@ export class SessionTranscript {
               seenTools.add(part.id);
             }
           }
-          if (!message.content.length && message.errorMessage) sections.push({ id, kind: "notice", title: "Agent error",
-            text: message.errorMessage, error: summary(message.errorMessage), status });
+          // Retain a metadata-only boundary for timing/history when cancellation has no prose.
+          // The transcript reader omits this marker; the work-status row owns its presentation.
+          if (cancelled && sections.length === start) sections.push({ id, kind: "notice", title: "Cancelled", text: "", status: "cancelled" });
+          else if (!message.content.length && error) sections.push({ id, kind: "notice", title: "Agent error",
+            text: error, error: summary(error), status });
           break;
         }
         case "toolResult":

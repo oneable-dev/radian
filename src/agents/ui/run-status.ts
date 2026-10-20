@@ -5,8 +5,9 @@ import { singleLine, truncateCells } from "../../ui/text.ts";
 import { uiTheme, type UiColors } from "../../ui/theme.ts";
 import type { RequestSummary } from "../request-summary.ts";
 import { formatRequestCaption, requestForSection } from "./request-caption.ts";
+import { formatRunDuration } from "./run-completion.ts";
 
-type Display = { label: string; detail: string; color: "accent" | "error" | "warning" | "muted"; request?: RequestSummary };
+type Display = { label: string; detail: string; color: "accent" | "error" | "warning" | "muted"; request?: RequestSummary; durationMs?: number };
 
 function display(state: ExecutionState | null | undefined): Display {
   if (state?.status === "working" && state.activity === "compacting") return { label: "Compacting context", detail: "", color: "accent" };
@@ -19,14 +20,15 @@ function display(state: ExecutionState | null | undefined): Display {
   if (state?.status === "failure") return { label: "Failed", detail: state.error ? `: ${singleLine(state.error)}` : detail, color: "error" };
   // Timing/status metadata must belong to this request, not an earlier completed turn.
   const turn = sections.slice(Math.max(0, index));
-  const outcome = turn.findLast((item) => item.completion)?.completion?.outcome;
-  const assistant = turn.findLast((item) => item.kind === "assistant");
-  if (outcome === "cancelled" || !outcome && assistant?.status === "cancelled") return { label: "Cancelled", detail, color: "warning" };
+  const completion = turn.findLast((item) => item.completion)?.completion;
+  const outcome = completion?.outcome;
+  const assistant = turn.findLast((item) => item.kind === "assistant" || item.kind === "notice" && item.status === "cancelled"
+    && (item.title === "Agent error" || !item.text));
+  if (outcome === "cancelled" || !outcome && assistant?.status === "cancelled") return { label: "Cancelled", detail, color: "warning",
+    ...(summary ? { request: summary } : {}), ...(completion ? { durationMs: completion.durationMs } : {}) };
   if (outcome === "unfinished" || !outcome && assistant?.status === "unfinished") return { label: "Stopped", detail, color: "warning" };
   if (outcome === "error" || state?.error) return { label: "Failed", detail: state?.error ? `: ${singleLine(state.error)}` : detail, color: "error" };
-  if (outcome === "complete" || state?.status === "complete") return { label: "", detail: "", color: "muted" };
-  const hasTranscript = state?.sections !== undefined ? sections.length > 0 : !!state?.output;
-  return { label: hasTranscript ? "Ready" : "", detail: "", color: "muted" };
+  return { label: "", detail: "", color: "muted" };
 }
 
 // Only runtime transcript requests can label the work; drafts, admissions and lookup results cannot.
@@ -46,11 +48,11 @@ export class RunStatus {
   constructor(private readonly renderer: CliRenderer, private readonly interruptKey: () => string = () => "esc") {
     this.root = new BoxRenderable(renderer, { id: "agent-run-status", width: "auto", height: 1, minWidth: 0,
       flexGrow: 1, flexShrink: 1, flexDirection: "row", gap: 1, onSizeChange: () => this.paint() });
-    const slot = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0 });
-    this.spinner = new LoadingSpinner(renderer, { id: "agent-run-loading" }); slot.add(this.spinner.root);
+    this.spinner = new LoadingSpinner(renderer, { id: "agent-run-loading" });
     this.text = new TextRenderable(renderer, { id: "agent-run-status-text", width: "auto", height: 1, minWidth: 0,
-      flexGrow: 1, flexShrink: 1, selectable: false, wrapMode: "none" });
-    this.root.add(slot); this.root.add(this.text);
+      flexGrow: 1, flexShrink: 1, selectable: false, wrapMode: "none", onSizeChange: () => this.paint() });
+    // Hidden loading feedback must not leave a fixed slot or a gap before static text.
+    this.root.add(this.spinner.root); this.root.add(this.text);
     uiTheme(renderer).bind(this.root, () => this.paint());
     this.root.once(RenderableEvents.DESTROYED, () => this.dispose());
   }
@@ -79,19 +81,20 @@ export class RunStatus {
     const colors: UiColors = uiTheme(this.renderer).colors;
     this.spinner.root.fg = colors.accent;
     this.text.visible = !!this.current.label;
-    const width = Math.max(0, this.root.width - 2);
+    const width = Math.max(0, this.root.width - (this.spinner.root.visible ? 2 : 0));
     const seconds = Math.floor((this.elapsed + Math.max(0, this.renderer.clock.now() - this.sampledAt)) / 1000);
     const elapsed = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
     const key = this.running ? this.interruptKey().toLowerCase() : "";
-    const timedLabel = this.running ? `${this.current.label} (${elapsed}` : this.current.label;
+    const duration = this.running ? elapsed : this.current.durationMs === undefined ? "" : formatRunDuration(this.current.durationMs);
+    const timedLabel = duration ? `${this.current.label} (${duration}` : this.current.label;
     const requestReserve = this.current.request ? this.current.request.images || this.current.request.files ? 28 : 12 : 0;
     const showHint = !!key && Bun.stringWidth(`${timedLabel} · ${key} to interrupt)`) + requestReserve <= width;
-    const label = truncateCells(timedLabel + (this.running && !showHint ? ")" : ""), width);
+    const label = truncateCells(timedLabel + (duration && !showHint ? ")" : ""), width);
     const hint = showHint ? ` · ${key} to interrupt)` : "";
     const remaining = width - Bun.stringWidth(label + hint), request = this.current.request;
     const caption = request ? formatRequestCaption({ ...request, text: request.text ? `“${request.text}”` : "" }, remaining - 1) : "";
-    const statusLabel = this.running ? label.slice(0, this.current.label.length) : label;
-    const elapsedLabel = this.running ? label.slice(this.current.label.length) : "";
+    const statusLabel = label.slice(0, this.current.label.length);
+    const elapsedLabel = label.slice(this.current.label.length);
     this.text.content = new StyledText([
       { __isChunk: true, text: statusLabel, fg: colors[this.current.color] },
       ...(elapsedLabel ? [{ __isChunk: true as const, text: elapsedLabel, fg: colors.muted }] : []),

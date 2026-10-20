@@ -104,15 +104,63 @@ test("반복 스냅샷은 최소 시간을 다시 시작하지 않고 정상 완
   } finally { await app.close(); }
 });
 
+test.each(["cancelled", "unfinished", "error"] as const)("스피너 없는 %s 상태는 빈 칸 없이 본문 시작선에 맞춘다", async (outcome) => {
+  // Static outcomes have no loading indicator whose width needs reserving.
+  const app = await mount();
+  try {
+    app.status.update("a", { status: null, output: "", error: null, sections: [user("Task"), settled(outcome)] }, true);
+    await app.render();
+
+    expect(app.spinner().visible).toBe(false);
+    expect(app.node().x).toBe(app.status.root.x);
+    expect(app.node().width).toBe(app.status.root.width);
+    if (outcome === "cancelled") expect(app.text()).toBe("Cancelled (1s) “Task”");
+  } finally { await app.close(); }
+});
+
+test.each([false, true])("취소 문구는 테마 밝기 %s에서도 warning 색이고 시간은 회색·요청은 본문색이다", async (light) => {
+  const app = await mount(), theme = uiTheme(app.renderer);
+  try {
+    // Host palette roles, not hardcoded product colors, define the cancellation presentation.
+    theme.configure({ palette: [], defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
+      cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null });
+
+    app.status.update("a", { status: null, output: "", error: null, sections: [user("Task"), settled("cancelled")] }, true); await app.render();
+
+    const spans = app.captureSpans().lines[app.node().y]!.spans;
+    expect(spans.find(span => span.text.includes("Cancelled"))!.fg.toInts()).toEqual(theme.colors.warning.toInts());
+    expect(spans.find(span => span.text.includes("(1s)"))!.fg.toInts()).toEqual(theme.colors.muted.toInts());
+    expect(spans.find(span => span.text.includes("Task"))!.fg.toInts()).toEqual(theme.colors.text.toInts());
+    expect(app.node().x).toBe(app.status.root.x);
+  } finally { await app.close(); }
+});
+
+test("빠른 취소의 스피너 꼬리가 끝나는 즉시 자리와 간격도 사라지고 취소 시간은 고정된다", async () => {
+  const app = await mount();
+  try {
+    // The shared spinner keeps its minimum interval, independently of the settled result.
+    app.status.update("a", working([user("Task")]), true); await app.render();
+    expect(app.node().x).toBe(app.status.root.x + 2);
+    app.clock.advance(100);
+    app.status.update("a", { status: null, output: "", error: null, sections: [user("Task"), settled("cancelled")] }, true); await app.render();
+    expect(app.spinner().visible).toBe(true); expect(app.text()).toBe("Cancelled (1s) “Task”");
+
+    app.clock.advance(400); await app.render();
+
+    expect(app.spinner().visible).toBe(false); expect(app.node().x).toBe(app.status.root.x);
+    app.clock.advance(5000); await app.render(); expect(app.text()).toBe("Cancelled (1s) “Task”");
+  } finally { await app.close(); }
+});
+
 test("취소·중단·실패는 완료와 구분하고 이전 요청의 완료 정보는 새 요청에 재사용하지 않는다", async () => {
   const app = await mount();
   try {
-    for (const [outcome, label] of [["cancelled", "Cancelled"], ["unfinished", "Stopped"], ["error", "Failed"], ["complete", ""]] as const) {
+    for (const [outcome, label] of [["cancelled", "Cancelled (1s)"], ["unfinished", "Stopped"], ["error", "Failed"], ["complete", ""]] as const) {
       app.status.update("a", { status: null, output: "", error: null, sections: [user("Task"), settled(outcome)] }, true); await app.render();
       expect(app.text()).toBe(label ? `${label} “Task”` : ""); expect(app.spinner().visible).toBe(false);
     }
     app.status.update("a", { status: null, output: "", error: null, sections: [user("Old"), settled("cancelled"), user("New", "new")] }, true); await app.render();
-    expect(app.text()).toBe("Ready");
+    expect(app.text()).toBe("");
     app.status.update("a", { status: "failure", output: "", error: "AGENT_FAILED: fixture failure", sections: [user("Task"), settled("complete")] }, true); await app.render();
     expect(app.text()).toBe("Failed: AGENT_FAILED: fixture failure");
   } finally { await app.close(); }
@@ -137,7 +185,21 @@ test("스킬 호출은 내부 지침을 노출하지 않고 요청 없는 실행
     app.status.update("a", working([{ id: "skill", kind: "notice", title: "write-good-code", skillName: "write-good-code", text: "PRIVATE INTERNAL INSTRUCTIONS", status: "complete" }]), true); await app.render();
     expect(app.text()).toBe("Working (0s · esc to interrupt) “/skill:write-good-code”"); expect(app.captureCharFrame()).not.toContain("PRIVATE INTERNAL INSTRUCTIONS");
     app.status.update("a", { status: "working", output: "Legacy output", error: null }, true); await app.render(); expect(app.text()).toBe("Working (0s · esc to interrupt)");
-    app.status.update("a", { status: null, output: "Legacy output", error: null }, true); await app.render(); expect(app.text()).toBe("Ready");
+    app.status.update("a", { status: null, output: "Legacy output", error: null }, true); await app.render(); expect(app.text()).toBe("");
+  } finally { await app.close(); }
+});
+
+test.each([false, true])("종료 상태 없는 대화는 기록 형식이 %s여도 Ready나 빈 상태 행을 남기지 않는다", async (structured) => {
+  // Retained transcript content is not evidence of active work or a terminal outcome.
+  const app = await mount();
+  try {
+    const state: ExecutionState = { status: null, output: "Retained conversation", error: null,
+      ...(structured ? { sections: [user("Previous request")] } : {}) };
+
+    app.status.update("a", state, true); await app.render();
+
+    expect(app.text()).toBe(""); expect(app.status.hasContent).toBe(false); expect(app.spinner().visible).toBe(false);
+    expect(app.captureCharFrame()).not.toContain("Ready"); expect(state.output).toBe("Retained conversation");
   } finally { await app.close(); }
 });
 

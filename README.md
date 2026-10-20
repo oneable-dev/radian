@@ -327,10 +327,16 @@ current request. Compaction-specific progress requires an updated service; older
 optional activity metadata.
 Normal completion removes this request banner and puts the request excerpt in the answer's completion
 footer instead. The empty status row collapses once its spinner tail finishes, unless owned-subagent
-feedback still needs it. Cancellation, unconfirmed stops and failures remain explicit as
-`Cancelled`, `Stopped` or `Failed`; an unreported run with transcript content shows `Ready`. Completion metadata is scoped to
-the latest request. Spinner tails never delay results, and switching/hiding a conversation cancels
-its indicator. Steer and queue semantics are unchanged.
+feedback still needs it. A cancelled run appears only here as `Cancelled (12s) “request”`:
+the label uses the theme's warning color, the settled duration is muted, and the request uses the
+normal text color. Its elapsed time freezes at confirmed cancellation, not at the initial key press.
+Without timing metadata, the label is simply `Cancelled`; no duration is invented.
+Partial responses remain visible, but cancellation does not create an Agent error card or a duplicate
+completion footer. Unconfirmed stops and failures remain explicit as `Stopped` or `Failed`.
+Without reported active work or a terminal outcome, status text stays empty even with transcript content.
+Hidden spinners reserve no slot or gap, including after their minimum-visible tail ends.
+Completion metadata is scoped to the latest request. Spinner tails never delay results, and
+switching/hiding a conversation cancels its indicator. Steer and queue semantics are unchanged.
 
 Sections have no disclosure arrows or separate role/status heading rows. Expanded user/Agent text
 starts directly with its content. Tools use inline invocations such as `[read] path:line` or `$ command`;
@@ -430,7 +436,7 @@ anchor where scrolling permits. Copying preserves raw text, including original l
 than inserting display-wrap breaks. Unbound keys, timed-out prefixes and paste cannot edit transcript
 content. Help uses the same scroll viewport and returns to the prior position/mode when closed.
 
-After a run actually settles, its final displayed section has a gray footer such as
+After a non-cancelled run actually settles, its final displayed section has a gray footer such as
 `Worked for 1m 30s • Sep 19 at 10:55 AM`, followed by a separate request line such as `“Review tab icons”`.
 Request text uses the same quotation marks as `Working`; attachment badges stay outside them.
 The excerpt comes from the actual preceding user/skill request, never a draft or assistant output.
@@ -446,11 +452,13 @@ automatically. At widths too small for the timing metadata itself, its existing 
 Runtime monotonic time measures processing from the first
 `agent_start` through final `agent_settled`, including tools, retries, compaction and coalesced queued
 follow-ups; intermediate model/tool endings do not finalize it. Queued input joined into one SDK run
-shares one footer using the latest delivered request excerpt, rather than inventing separate
+shares one completion record using the latest delivered request excerpt, rather than inventing separate
 per-prompt durations. A subsequent run with no delivered request does not borrow the prior run's
 excerpt. Idle time between runs is excluded.
-The completion timestamp is formatted in the attached UI's local timezone. Failure, cancellation and
-unconfirmed outcomes use `Failed after`, `Cancelled after` and `Stopped after`, never `Worked for`.
+The completion timestamp is formatted in the attached UI's local timezone. Failure and unconfirmed
+outcomes use `Failed after` and `Stopped after`, never `Worked for`. Confirmed cancellation keeps
+its saved completion metadata but is displayed above the prompt instead of in a transcript footer.
+Persistence warnings remain visible even when a cancellation footer is suppressed.
 The footer is decorative and is not included in source selection or raw answer copying.
 
 The existing SDK writer saves versioned completion metadata as a context-neutral custom entry, so

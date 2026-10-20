@@ -4,7 +4,7 @@ const labels: Record<RunCompletion["outcome"], string> = { complete: "Worked for
 const localDate = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
 const localTime = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
 
-function duration(milliseconds: number): string {
+export function formatRunDuration(milliseconds: number): string {
   const seconds = Math.floor(milliseconds / 1000);
   if (seconds < 1) return "<1s";
   const hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60);
@@ -15,7 +15,7 @@ function duration(milliseconds: number): string {
 export function formatRunCompletion(completion: RunCompletion, timeZone?: string): string {
   const date = timeZone ? new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone }) : localDate;
   const time = timeZone ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone }) : localTime;
-  return `${labels[completion.outcome]} ${duration(completion.durationMs)} • ${date.format(completion.completedAt)} at ${time.format(completion.completedAt)}`.replace(/\s+/g, " ");
+  return `${labels[completion.outcome]} ${formatRunDuration(completion.durationMs)} • ${date.format(completion.completedAt)} at ${time.format(completion.completedAt)}`.replace(/\s+/g, " ");
 }
 
 export function sameRunCompletion(a: RunCompletion | undefined, b: RunCompletion | undefined): boolean {

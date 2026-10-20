@@ -33,6 +33,14 @@ type Target = { position: number } | { id: string; offset: number } | { reveal: 
 function compactionNotice(section: TranscriptSection): boolean {
   return section.kind === "notice" && section.skillName === undefined && section.title === "Context compacted";
 }
+function cancellationNotice(section: TranscriptSection): boolean {
+  // Also recognize old runtime snapshots that rendered a cancelled request as Agent error.
+  return section.kind === "notice" && section.status === "cancelled" && !section.image && !section.skillName
+    && (section.title === "Agent error" || !section.text);
+}
+function hiddenCancellation(section: TranscriptSection): boolean {
+  return cancellationNotice(section) && !section.completion?.warning;
+}
 export type TranscriptOptions = {
   notice(message: string): void;
   changed(): void;
@@ -164,8 +172,9 @@ export class TranscriptPanel {
     if (switched) { this.positionIntent = false; this.selectionHeldFor = null; this.geometry = undefined; }
     const hadFocus = this.focused;
     const previousIndex = this.order.indexOf(this.state?.selectedId ?? "");
-    const incoming: readonly TranscriptSection[] = sections ?? (output
+    const source: readonly TranscriptSection[] = sections ?? (output
       ? [{ id: "legacy-output", kind: "notice", title: "Transcript", text: output, status: "complete" }] : []);
+    const incoming = source.filter(section => !hiddenCancellation(section));
     const changed = switched || incoming.length !== this.order.length || incoming.some((section, index) => {
       const previous = this.rows.get(this.order[index] ?? "")?.section;
       return !previous || section.id !== previous.id || section.text !== previous.text || section.title !== previous.title
@@ -199,7 +208,9 @@ export class TranscriptPanel {
         row.box.destroyRecursively(); this.imagePreviews.delete(row); this.rows.delete(key);
       }
       let request: RequestSummary | undefined;
-      for (const section of incoming) {
+      for (const section of source) {
+        // Hidden outcomes still delimit runs, so later work cannot borrow an old request caption.
+        if (hiddenCancellation(section)) { if (section.completion) request = undefined; continue; }
         const delivered = requestForSection(section);
         if (delivered) request = delivered;
         const row = this.rows.get(section.id) ?? this.createRow(section);
@@ -349,13 +360,14 @@ export class TranscriptPanel {
     row.box.visible = !this.help.visible;
     const colors = this.theme.colors, section = row.section;
     const selected = this.state?.selectedId === section.id, skill = section.skillName !== undefined;
+    const cancelled = cancellationNotice(section);
     const folded = this.folded(row), spacing = transcriptSpacing();
     const plain = this.legacy || section.kind === "assistant" || section.kind === "thinking";
     const background = this.legacy ? colors.panel : transcriptBackground(section.image ? "tool" : section.kind, colors);
     row.box.backgroundColor = background; row.box.border = false;
     row.box.paddingX = plain ? 0 : 1;
     row.box.paddingY = plain ? 0 : spacing.verticalInset;
-    row.heading.visible = !skill && (folded || !this.legacy && (section.kind === "tool" || section.kind === "notice"));
+    row.heading.visible = !cancelled && !skill && (folded || !this.legacy && (section.kind === "tool" || section.kind === "notice"));
     const markdownKind = !this.legacy && !skill && (section.kind === "assistant" || section.kind === "thinking") ? section.kind : undefined;
     if (row.markdownKind !== markdownKind) {
       row.markdown?.root.destroyRecursively(); row.markdown = undefined; row.markdownKind = markdownKind;
@@ -372,7 +384,7 @@ export class TranscriptPanel {
       row.markdown.update(section.text, section.status === "streaming");
       row.markdown.root.visible = !folded && !source;
     }
-    row.bodyRow.visible = row.body.visible = !section.image && !folded && (!row.markdown || source);
+    row.bodyRow.visible = row.body.visible = !cancelled && !section.image && !folded && (!row.markdown || source);
     const preview = section.image && !folded && this.visible && !this.help.visible;
     if (preview) {
       if (!row.preview) {
@@ -393,7 +405,7 @@ export class TranscriptPanel {
       row.header.setText(headingText); row.header.cursorOffset = cursor;
       if (selected && folded) this.applySelection(row);
     }
-    row.error.visible = !skill && !folded && !!section.error;
+    row.error.visible = !cancelled && !skill && !folded && !!section.error;
     row.error.content = section.error ?? ""; row.error.fg = colors.error; row.error.bg = background;
     const headingBackground = selected && !plain ? blendColors(background, colors.selected, this.focused ? 0.7 : 0.35) : background;
     row.heading.backgroundColor = row.header.backgroundColor = headingBackground;
@@ -414,11 +426,12 @@ export class TranscriptPanel {
     if (this.disposed || row.box.isDestroyed) return;
     const completion = row.section.completion, colors = this.theme.colors;
     row.completionWidth = row.completion.width;
-    row.completion.visible = !!completion;
     const request = row.request;
     const caption = request ? formatRequestCaption({ ...request, text: request.text ? `“${request.text}”` : "" }, row.completion.width) : "";
-    const text = completion ? formatRunCompletion(completion) + (caption ? `\n${caption}` : "")
-      + (completion.warning ? `\n${completion.warning}` : "") : "";
+    const timing = completion && completion.outcome !== "cancelled" ? formatRunCompletion(completion) + (caption ? `\n${caption}` : "") : "";
+    // Cancellation is shown above the prompt, but persistence warnings must remain explicit.
+    const text = [timing, completion?.warning].filter(Boolean).join("\n");
+    row.completion.visible = !!text;
     if (row.completion.plainText !== text) row.completion.content = text;
     row.completion.fg = completion?.warning ? colors.warning : transcriptThinkingColor(colors);
     row.completion.bg = colors.panel;
