@@ -1,5 +1,5 @@
 import {
-  BorderChars, BoxRenderable, InputRenderable, InputRenderableEvents, ScrollBoxRenderable, TextAttributes, TextRenderable,
+  BorderChars, BoxRenderable, InputRenderable, InputRenderableEvents, ScrollBoxRenderable, StyledText, TextAttributes, TextRenderable,
   type CliRenderer, type Renderable,
 } from "@opentui/core";
 import packageInfo from "../../../package.json";
@@ -9,7 +9,6 @@ import { filterWorkspaces } from "../../workspace/filter-workspaces.ts";
 import { rowPresentation } from "./workspace-status.ts";
 import { icons } from "../../icons.ts";
 import { sessionStatus } from "../../agents/status.ts";
-import { StatusIndicator } from "../../agents/ui/status-indicator.ts";
 import { AgentPanel, type AgentActions } from "../../agents/ui/agent-panel.ts";
 import type { HistoryItem } from "../../agents/history.ts";
 import type { HistoryPreview } from "../../agents/history-preview.ts";
@@ -19,6 +18,7 @@ import { TextDialog } from "../../ui/text-dialog.ts";
 import { keymapHelp } from "../../keybindings/help.ts";
 import { Button } from "../../ui/button.ts";
 import { panelSpacing } from "../../ui/spacing.ts";
+import { singleLine } from "../../ui/text.ts";
 import type { Result } from "../../result.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import { EditorPanel, type EditorActions } from "../../editor/ui/panel.ts";
@@ -50,7 +50,7 @@ export type WorkbenchActions = AgentActions & {
   onDetach?: () => void;
 };
 
-type RowView = { box: BoxRenderable; text: TextRenderable; branch?: TextRenderable; status?: StatusIndicator };
+type RowView = { box: BoxRenderable; text: TextRenderable; status?: TextRenderable };
 
 export class Workbench {
   readonly root: BoxRenderable;
@@ -187,7 +187,7 @@ export class Workbench {
     this.router = new KeyRouter(renderer, this.keymap, () => this.keyContext(), (command) => this.commandAvailable(command), (command) => this.command(command));
     renderer.on("resize", this.resize);
     renderer.on("focused_renderable", this.updateFooter);
-    renderer.addPostProcessFn(this.revealNavigation);
+    renderer.addPostProcessFn(this.settleRows);
     this.search.on(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.search.on("focused", this.repaintSearch); this.search.on("blurred", this.repaintSearch);
     this.unsubscribe = selection.subscribe(() => this.render());
@@ -517,8 +517,12 @@ export class Workbench {
     });
   }
 
-  private revealNavigation = (): void => {
-    if (!this.navigationRevealPending || this.disposed) return;
+  private settleRows = (): void => {
+    if (this.disposed || !this.sidebar.visible) return;
+    // Public text widths settle after native layout. Keep the shared offset valid
+    // after resize or metadata shrink, without resetting it for ordinary repaint.
+    for (const { text } of this.rows.values()) if (text.scrollX > 0) text.scrollX = text.scrollX;
+    if (!this.navigationRevealPending) return;
     this.navigationRevealPending = false;
     // Native row positions settle after layout, not in the renderer's resize callback.
     if (this.sidebar.visible && this.tree.focused && this.navigationKey) this.tree.scrollChildIntoView(this.navigationKey);
@@ -530,12 +534,19 @@ export class Workbench {
     const order = rows.map((row) => row.key);
     if (order.join("\0") !== this.rowOrder.join("\0")) {
       const focusedRow = this.tree.content.hasFocusedDescendant;
-      for (const row of this.rows.values()) { row.status?.dispose(); row.box.destroyRecursively(); }
+      for (const row of this.rows.values()) row.box.destroyRecursively();
       this.rows.clear();
       for (const row of rows) {
         const box = new BoxRenderable(this.renderer, {
           id: row.key, height: row.kind === "worktree" ? 2 : 1, flexShrink: 0, minWidth: 0,
-          flexDirection: "column", paddingLeft: row.depth * 2,
+          flexDirection: "row", paddingLeft: row.depth * 2,
+          onMouseScroll: (event) => {
+            if (row.kind !== "worktree" || !event.scroll || !["left", "right"].includes(event.scroll.direction)) return;
+            const text = this.rows.get(row.key)?.text;
+            if (!text) return;
+            event.preventDefault(); event.stopPropagation();
+            text.scrollX += event.scroll.direction === "right" ? event.scroll.delta : -event.scroll.delta;
+          },
           onMouseDown: (event) => {
             if (event.button !== 0 || row.kind !== "worktree") return;
             event.preventDefault();
@@ -543,24 +554,26 @@ export class Workbench {
             this.activateRow(row);
           },
         });
-        const heading = new BoxRenderable(this.renderer, { width: "100%", height: 1, flexShrink: 0, minWidth: 0, flexDirection: "row" });
-        const text = new TextRenderable(this.renderer, { content: row.label, height: 1, wrapMode: "none", selectable: false });
+        // One two-line text viewport shares its horizontal offset and width across both labels.
+        const text = new TextRenderable(this.renderer, { id: `${row.key}:label`, content: row.label,
+          height: row.kind === "worktree" ? 2 : 1, wrapMode: "none", selectable: false,
+          onMouseScroll: (event) => {
+            // The native text handler already pans both lines. Avoid applying the same delta twice.
+            if (row.kind === "worktree" && event.scroll && ["left", "right"].includes(event.scroll.direction)) event.stopPropagation();
+          } });
         text.flexGrow = 1;
         text.flexShrink = 1;
         text.minWidth = 0;
-        heading.add(text); box.add(heading);
-        const status = row.kind === "worktree" ? new StatusIndicator(this.renderer) : undefined;
+        box.add(text);
+        const status = row.kind === "worktree" ? new TextRenderable(this.renderer, { id: `${row.key}:error`,
+          content: icons.error, width: 1, height: 1, flexShrink: 0, wrapMode: "none", selectable: false, visible: false }) : undefined;
         if (status) {
-          const slot = new BoxRenderable(this.renderer, { width: 2, height: 1, flexShrink: 0 });
-          slot.add(status.root); heading.add(slot);
+          const slot = new BoxRenderable(this.renderer, { id: `${row.key}:status`, width: 1, height: "100%", flexShrink: 0,
+            flexDirection: "column", justifyContent: "center", alignItems: "center" });
+          slot.add(status); box.add(slot);
         }
-        // Both lines belong to one navigation/click target and use the same horizontal inset.
-        const branch = row.kind === "worktree" ? new TextRenderable(this.renderer, {
-          width: "100%", height: 1, flexShrink: 0, minWidth: 0, wrapMode: "none", selectable: false,
-        }) : undefined;
-        if (branch) box.add(branch);
         this.tree.add(box);
-        this.rows.set(row.key, { box, text, ...(branch ? { branch } : {}), ...(status ? { status } : {}) });
+        this.rows.set(row.key, { box, text, ...(status ? { status } : {}) });
       }
       this.rowOrder = order;
       this.lastScrolledKey = null;
@@ -605,21 +618,18 @@ export class Workbench {
       const view = this.rows.get(row.key);
       if (!view) continue;
       const presentation = rowPresentation(row);
-      view.text.content = `${presentation.icon} ${row.label}`;
       const cursor = row.key === this.navigationKey && this.tree.focused, active = this.selected(row);
+      const label = `${presentation.icon} ${singleLine(row.label)}`;
+      view.text.content = row.kind === "worktree" ? new StyledText([
+        { __isChunk: true, text: `${label}\n`, fg: cursor ? colors.accent : colors[presentation.color] },
+        { __isChunk: true, text: `${icons.branch} ${singleLine(row.worktree.branch ?? "detached HEAD")}`, fg: cursor ? colors.accent : active ? colors.text : colors.muted },
+      ]) : label;
       view.text.fg = cursor ? colors.accent : colors[presentation.color];
       view.text.attributes = active ? TextAttributes.BOLD : 0;
       view.box.backgroundColor = cursor ? selected : active ? colors.surface : colors.panel;
-      if (row.kind === "worktree" && view.branch) {
-        view.branch.content = `${icons.branch} ${row.worktree.branch ?? "detached HEAD"}`;
-        view.branch.fg = cursor ? colors.accent : active ? colors.text : colors.muted;
-        view.branch.attributes = active ? TextAttributes.BOLD : 0;
-      }
       if (row.kind === "worktree" && view.status) {
-        const statuses = row.worktree.sessions.map(sessionStatus);
-        const status = statuses.includes("failure") ? "failure" : statuses.includes("working") ? "working" : null;
-        view.status.update(status, this.sidebar.visible && status !== null);
-        view.status.root.visible = status !== null;
+        view.status.visible = row.worktree.sessions.some((session) => sessionStatus(session) === "failure");
+        view.status.fg = colors.error;
       }
     }
   }
@@ -634,13 +644,12 @@ export class Workbench {
     this.sidebarTransition = undefined; this.disposed = true;
     this.unsubscribe();
     this.agent.dispose(); this.history.dispose(); this.dialog.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
-    for (const row of this.rows.values()) row.status?.dispose();
     this.search.off(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.search.off("focused", this.repaintSearch); this.search.off("blurred", this.repaintSearch);
     this.router.dispose();
     this.renderer.off("resize", this.resize);
     this.renderer.off("focused_renderable", this.updateFooter);
-    this.renderer.removePostProcessFn(this.revealNavigation);
+    this.renderer.removePostProcessFn(this.settleRows);
     this.root.destroyRecursively();
   }
 }

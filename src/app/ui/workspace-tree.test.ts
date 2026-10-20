@@ -31,9 +31,11 @@ test("Workspace는 폴더명과 브랜치 아이콘·이름을 들여쓰기 없�
     expect(main.height).toBe(2); expect(feature.y).toBe(main.y + 3);
     expect(app.line("worktree:demo:main").trim()).toContain(`${icons.folder} radian`);
     expect(app.line("worktree:demo:main")).not.toContain("(main)");
-    expect(app.line("worktree:demo:main")).toContain(icons.error);
-    expect(app.line("worktree:demo:main", 1)).not.toContain(icons.error);
-    expect(app.line("worktree:demo:main", 1).trim()).toBe(`${icons.branch} main`);
+    const status = main.findDescendantById("worktree:demo:main:status")!;
+    expect(status.height).toBe(main.height); expect(status.y).toBe(main.y);
+    const indicator = status.getChildren()[0]!;
+    expect(app.line("worktree:demo:main", indicator.y - main.y)).toContain(icons.error);
+    expect(app.line("worktree:demo:main", 1)).toContain(`${icons.branch} main`);
     expect(app.line("worktree:demo:main", 1).indexOf(icons.branch)).toBe(app.line("worktree:demo:main").indexOf(icons.folder));
     expect(app.line("worktree:demo:main", 1)).not.toContain("└");
     expect(app.get("repository:demo:radian").height).toBe(1);

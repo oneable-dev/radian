@@ -19,6 +19,11 @@ The app discovers Git repositories under the configured workspace roots (by defa
 and `~/.dotfiles`) and shows a workspace sidebar containing **repositories and worktrees only**.
 Each worktree shows its folder name and branch on two lines, with the folder and branch icons aligned at the same horizontal level
 (no additional branch indentation or connector). Both lines form one selectable worktree item.
+They share a single horizontal text viewport: scrolling over either line moves both by the same
+offset, while a fixed one-cell error slot stays visible. Metadata updates preserve that offset;
+resizing or shortening the labels clamps it to the valid range. The sidebar has no execution
+spinner; failures remain visible without animation. Agent tabs and the work-status row retain
+their execution indicators.
 Repository groups, headers and worktree items have one blank row between them,
 while folder/branch lines stay together. These vertical gaps do not change with terminal height;
 there is no compact-layout mode.
