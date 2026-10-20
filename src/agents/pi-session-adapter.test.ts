@@ -606,3 +606,197 @@ test("SDK가 보고한 최종 provider 실패는 AgentRunError Result이며 취�
     expect(app.registry.details(id)?.error).toBe("Provider rejected this test request");
   } finally { await app.cleanup(); }
 });
+
+test("수동 압축은 실제 SDK 요약을 저장하면서 대화·요청 ID와 같은 탭을 보존한다", async () => {
+  // A small retained tail makes this offline conversation eligible without a paid model call.
+  const requests: string[] = [];
+  const app = await sdkFixture(false, (options) => ({ ...options,
+    settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
+    streamFn: (model, context, request) => { requests.push(JSON.stringify(context.messages)); return options.streamFn!(model, context, request); },
+  }));
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    expectOk(await app.registry.prompt(id, "Keep the current implementation plan"));
+    expectOk(await app.registry.prompt(id, "Continue the fixture work"));
+    const before = app.registry.details(id)!, file = app.registry.sessionFile(id)!, calls = requests.length;
+    let accepted = 0;
+    const commands = expectOk(await app.registry.complete(id, { kind: "command", query: "" })).items;
+    expect(commands.map((item) => item.value)).toEqual(expect.arrayContaining(["new", "compact"]));
+
+    // Instructions go to SDK summarization, never into a new user/model turn.
+    expectOk(await app.registry.compact(id, "Preserve the implementation plan", () => accepted++));
+
+    expect(accepted).toBe(1); expect(requests.length).toBeGreaterThan(calls);
+    expect(requests.slice(calls).join("\n")).toContain("Preserve the implementation plan");
+    const after = app.registry.details(id)!;
+    expect(after.conversationId).toBe(before.conversationId); expect(app.registry.sessionFile(id)).toBe(file);
+    expect(after.sections?.slice(0, before.sections!.length)).toEqual([...before.sections!]);
+    expect(after.sections?.at(-1)?.title).toBe("Context compacted"); expect(after.status).toBe("complete");
+    expect(SessionManager.open(file).getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(1);
+    expect(app.selection.worktree?.sessions.map((session) => session.id)).toEqual([id]);
+  } finally { await app.cleanup(); }
+});
+
+test("빈 세션과 너무 작은 대화의 수동 압축은 모델 호출 없이 입력 오류로 거부한다", async () => {
+  let calls = 0;
+  const app = await sdkFixture(false, (options) => ({ ...options, streamFn: (model, context, request) => {
+    calls++; return options.streamFn!(model, context, request);
+  } }));
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)); let accepted = 0;
+    expect(expectError(await app.registry.compact(id, undefined, () => accepted++)).code).toBe("INVALID_INPUT");
+    expect(calls).toBe(0);
+    expectOk(await app.registry.prompt(id, "tiny fixture")); const before = calls;
+
+    expect(expectError(await app.registry.compact(id, undefined, () => accepted++)).code).toBe("INVALID_INPUT");
+
+    expect(calls).toBe(before); expect(accepted).toBe(0); expect(app.registry.details(id)?.status).toBe("complete");
+  } finally { await app.cleanup(); }
+});
+
+test("실행 중 수동 압축은 원래 모델 실행을 중단하거나 입력을 대기열에 넣지 않는다", async () => {
+  // Hold a real SDK response so refusal can be distinguished from abort-and-restart.
+  const app = await sdkFixture(true);
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    const run = app.registry.prompt(id, "hold compact-busy"); await app.streams.waitFor("compact-busy");
+
+    expect(expectError(await app.registry.compact(id)).code).toBe("SESSION_BUSY");
+
+    expect(app.streams.gates.get("compact-busy")!.aborted).toBe(false);
+    app.streams.gates.get("compact-busy")!.finish("original result"); expectOk(await run);
+    expect(app.registry.details(id)?.sections?.some((section) => section.text === "original result")).toBe(true);
+  } finally { await app.cleanup(); }
+});
+
+test("압축 모델의 실패는 기존 대화를 유지하고 수락된 명령의 대화 안에 기록한다", async () => {
+  let failSummary = false;
+  const app = await sdkFixture(false, (options) => ({ ...options,
+    settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
+    streamFn: (model, context, request) => {
+      if (!failSummary) return options.streamFn!(model, context, request);
+      const stream = createAssistantMessageEventStream(), message = fixtureMessage(model.api, model.provider, model.id);
+      message.stopReason = "error"; message.errorMessage = "Offline summary rejected";
+      stream.push({ type: "error", reason: "error", error: message }); stream.end(); return stream;
+    },
+  }));
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    expectOk(await app.registry.prompt(id, "first")); expectOk(await app.registry.prompt(id, "second"));
+    const before = app.registry.details(id)!; let accepted = 0; failSummary = true;
+
+    const result = await app.registry.compact(id, undefined, () => accepted++);
+
+    expect(expectError(result).code).toBe("AGENT_FAILED"); expect(accepted).toBe(1);
+    expect(app.registry.details(id)?.sections?.slice(0, before.sections!.length)).toEqual([...before.sections!]);
+    expect(app.registry.details(id)?.sections?.at(-1)).toMatchObject({ title: "Compaction failed", status: "error" });
+    expect(app.registry.details(id)?.sections?.at(-1)?.text).toContain("Offline summary rejected");
+    expect(SessionManager.open(app.registry.sessionFile(id)!).getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+    expect(app.registry.details(id)?.status).toBe("complete");
+  } finally { await app.cleanup(); }
+});
+
+test("압축 중 프로그래밍 결함은 일반 입력 오류로 바꾸지 않고 같은 예외로 전파한다", async () => {
+  let broken = false;
+  const defect = new TypeError("Offline compaction defect", { cause: new Error("Original cause") });
+  const app = await sdkFixture(false, (options) => ({ ...options,
+    settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
+    streamFn: (model, context, request) => { if (broken) throw defect; return options.streamFn!(model, context, request); },
+  }));
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    expectOk(await app.registry.prompt(id, "first")); expectOk(await app.registry.prompt(id, "second")); broken = true;
+
+    await expect(app.registry.compact(id)).rejects.toBe(defect);
+
+    expect(app.registry.details(id)?.status).toBe("failure");
+    expect(app.registry.details(id)?.error).toContain("Unexpected compaction failure");
+  } finally { await app.cleanup(); }
+});
+
+test("new는 현재 탭의 실행을 중단·저장한 뒤 같은 위치의 새 대화로 바꾸고 다른 탭을 유지한다", async () => {
+  const app = await sdkFixture(true);
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)), other = expectOk(await app.registry.create(app.main.id));
+    const first = app.registry.prompt(id, "hold previous-conversation"); await app.streams.waitFor("previous-conversation");
+    const second = app.registry.prompt(other, "hold other-tab"); await app.streams.waitFor("other-tab");
+    const conversation = app.registry.details(id)!.conversationId, oldFile = app.registry.sessionFile(id)!;
+    app.selection.selectSession(app.main.id, id);
+    const accepted = Promise.withResolvers<void>();
+
+    const replacement = app.registry.newSession(id, () => accepted.resolve()); await accepted.promise;
+    await app.streams.gates.get("previous-conversation")!.abortReceived;
+    expect(expectError(await app.registry.prompt(id, "during replacement")).code).toBe("SESSION_BUSY");
+    app.streams.gates.get("previous-conversation")!.finish("persisted cancellation");
+    expect(expectError(await first).code).toBe("CANCELLED"); expectOk(await replacement);
+
+    expect(app.selection.sessionId).toBe(id); expect(app.selection.worktree?.sessions.map((session) => session.id)).toEqual([id, other]);
+    expect(app.registry.details(id)?.conversationId).not.toBe(conversation); expect(app.registry.details(id)?.sections).toEqual([]);
+    expect(app.registry.sessionFile(id)).not.toBe(oldFile);
+    expect(app.registry.historyOwnership(oldFile)).toEqual({ openSessionId: null, unavailableReason: null });
+    expect(SessionManager.open(oldFile).getBranch().some((entry) => entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "aborted")).toBe(true);
+    expect(app.streams.gates.get("other-tab")!.aborted).toBe(false);
+    app.streams.gates.get("other-tab")!.finish("unrelated tab result"); expectOk(await second);
+    expectOk(await app.registry.prompt(id, "fresh conversation"));
+    expect(app.registry.details(id)?.sections?.some((section) => section.text === "hold previous-conversation")).toBe(false);
+  } finally { await app.cleanup(); }
+});
+
+test("new는 현재 탭 소유의 하위 작업도 정리하고 원래 대화에서 취소 결과를 저장한다", async () => {
+  const app = await sdkFixture(true);
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    const run = app.registry.prompt(id, "delegate"); await app.streams.waitFor("child");
+    const accepted = Promise.withResolvers<void>();
+
+    const replacement = app.registry.newSession(id, () => accepted.resolve()); await accepted.promise;
+    await app.streams.gates.get("child")!.abortReceived;
+    app.streams.gates.get("child")!.finish("cancelled owned child");
+    await run; expectOk(await replacement);
+
+    expect(app.registry.records[0]?.subagents).toEqual([]); expect(app.registry.details(id)?.sections).toEqual([]);
+    expect(app.executors).toHaveLength(3);
+  } finally { await app.cleanup(); }
+});
+
+test("new는 확장의 전환 취소를 존중하고 진행 중인 모델을 중단하지 않는다", async () => {
+  const app = await sdkFixture(true);
+  try {
+    const extensions = join(app.directory, "agent", "extensions"); await mkdir(extensions, { recursive: true });
+    await writeFile(join(extensions, "cancel-new.ts"), `export default (pi) => {
+      pi.on("session_before_switch", (event) => event.reason === "new" ? { cancel: true } : undefined);
+    };`);
+    const id = expectOk(await app.registry.create(app.main.id));
+    const run = app.registry.prompt(id, "hold cancelled-new"); await app.streams.waitFor("cancelled-new");
+    const conversation = app.registry.details(id)!.conversationId; let accepted = false;
+
+    const result = await app.registry.newSession(id, () => { accepted = true; });
+
+    expect(expectError(result).code).toBe("CANCELLED"); expect(accepted).toBe(false);
+    expect(app.registry.details(id)?.conversationId).toBe(conversation); expect(app.executors).toHaveLength(1);
+    expect(app.streams.gates.get("cancelled-new")!.aborted).toBe(false);
+    app.streams.gates.get("cancelled-new")!.finish("continued original"); expectOk(await run);
+  } finally { await app.cleanup(); }
+});
+
+test("new의 SDK 시작·종료 훅은 startup이나 quit가 아니라 세션 교체 이유를 받는다", async () => {
+  const app = await sdkFixture();
+  try {
+    const extensions = join(app.directory, "agent", "extensions"); await mkdir(extensions, { recursive: true });
+    await writeFile(join(extensions, "lifecycle.ts"), `export default (pi) => {
+      pi.on("session_start", (event) => { pi.appendEntry("start-reason", event); });
+      pi.on("session_shutdown", (event) => { pi.appendEntry("shutdown-reason", event); });
+    };`);
+    const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "original work"));
+    const oldFile = app.registry.sessionFile(id)!;
+
+    expectOk(await app.registry.newSession(id));
+
+    const oldEntries = SessionManager.open(oldFile).getBranch();
+    // Pi buffers an empty conversation's metadata until its first actual turn.
+    expectOk(await app.registry.prompt(id, "first fresh conversation turn"));
+    const newEntries = SessionManager.open(app.registry.sessionFile(id)!).getBranch();
+    expect(oldEntries.filter((entry) => entry.type === "custom" && entry.customType === "shutdown-reason").map((entry) => entry.type === "custom" ? entry.data : null)).toEqual([{ type: "session_shutdown", reason: "new" }]);
+    expect(newEntries.filter((entry) => entry.type === "custom" && entry.customType === "start-reason").map((entry) => entry.type === "custom" ? entry.data : null)).toEqual([{ type: "session_start", reason: "new", previousSessionFile: oldFile }]);
+  } finally { await app.cleanup(); }
+});

@@ -91,6 +91,68 @@ test("자동완성 IPC는 선택 세션의 SDK 명령과 워크트리 파일만 
   } finally { await app.cleanup(); }
 });
 
+test("new IPC는 현재 탭만 새 대화로 바꾸고 취소 이력·다른 실행·편집기·셸을 보존한다", async () => {
+  // The fixture owns the daemon and native processes; no user runtime is stopped.
+  const app = await setup();
+  try {
+    const client = await app.connect(), tree = app.repository.worktrees.find((item) => item.path === app.main)!;
+    const id = expectOk(await client.create(tree.id)), other = expectOk(await client.create(tree.id));
+    const terminal = expectOk(await client.createTerminal(tree.id, { cols: 80, rows: 24 }));
+    const editor = expectOk(await client.openEditor(tree.id, { cols: 80, rows: 24 }));
+    await observed(client, (state) => !!state.terminals?.some((item) => item.id === terminal) && !!state.editors?.some((item) => item.id === editor));
+    const terminalPid = client.snapshot.terminals!.find((item) => item.id === terminal)!.pid;
+    const editorPid = client.snapshot.editors!.find((item) => item.id === editor)!.pid;
+    expectOk(await client.prompt(id, "slow")); expectOk(await client.prompt(other, "slow"));
+    await observed(client, (state) => progress(state.details[id]?.output) > 0 && progress(state.details[other]?.output) > 0);
+    const previous = client.snapshot.details[id]!.conversationId!, instance = client.snapshot.instance, pid = client.snapshot.pid;
+
+    expectOk(await client.prompt(id, "/new"));
+    await observed(client, (state) => state.details[id]?.conversationId !== previous && state.details[id]?.sections?.length === 0);
+
+    expect(client.snapshot.repositories[0]?.worktrees.find((item) => item.id === tree.id)?.sessions.map((session) => session.id)).toEqual([id, other]);
+    expect(client.snapshot.pid).toBe(pid); expect(client.snapshot.instance).toBe(instance);
+    expect(client.snapshot.details[other]?.status).toBe("working");
+    expect(client.snapshot.terminals?.find((item) => item.id === terminal)?.pid).toBe(terminalPid);
+    expect(client.snapshot.editors?.find((item) => item.id === editor)?.pid).toBe(editorPid);
+    const history = expectOk(await client.listHistory(tree.id));
+    expect(history.find((item) => item.id === previous)?.openSessionId).toBeNull();
+    const preview = expectOk(await client.previewHistory(tree.id, previous)); expect(preview.text).toContain("slow");
+    await until(async () => (await app.manifest()).records.find((record) => record.id === id)?.state.conversationId === client.snapshot.details[id]?.conversationId);
+
+    // A delayed operation for the old conversation must not run in the replacement.
+    for (const command of [{ type: "prompt", sessionId: id, conversationId: previous, text: "stale prompt" },
+      { type: "session-control", action: "new", sessionId: id, conversationId: previous }]) {
+      const response = await fetch("http://localhost/command", { unix: app.paths.socket, method: "POST", body: JSON.stringify(command), headers: { "X-Radian-Instance": instance } });
+      const body = await response.json();
+      if (!Value.Check(replySchema, body) || body.ok || typeof body.error === "string") throw new Error("Expected a typed stale-conversation rejection");
+      expect(body.error.code).toBe("SESSION_CONFLICT");
+    }
+    expect(client.snapshot.details[id]?.sections).toEqual([]);
+  } finally { await app.cleanup(); }
+});
+
+test("compact IPC의 수락은 요약 완료와 구분되고 같은 대화와 전체 transcript를 유지한다", async () => {
+  const app = await setup();
+  try {
+    const client = await app.connect(), tree = app.repository.worktrees.find((item) => item.path === app.main)!;
+    const id = expectOk(await client.create(tree.id));
+    expect(expectOk(await client.complete(id, { kind: "command", query: "" })).items.map((item) => item.value)).toEqual(expect.arrayContaining(["new", "compact"]));
+    // Two large turns are eligible under the SDK's default retained-tail policy.
+    expectOk(await client.prompt(id, "first ".repeat(16000)));
+    await observed(client, (state) => state.details[id]?.status === "complete");
+    expectOk(await client.prompt(id, "second ".repeat(16000)));
+    await observed(client, (state) => state.details[id]?.sections?.filter((section) => section.kind === "user").length === 2 && state.details[id]?.status === "complete");
+    const previous = client.snapshot.details[id]!, conversation = previous.conversationId;
+
+    expectOk(await client.prompt(id, "/compact preserve the current plan"));
+    await observed(client, (state) => state.details[id]?.sections?.at(-1)?.title === "Context compacted");
+
+    expect(client.snapshot.details[id]?.conversationId).toBe(conversation);
+    expect(client.snapshot.details[id]?.sections?.slice(0, previous.sections!.length)).toEqual([...previous.sections!]);
+    expect(client.snapshot.notice).toBe(""); expect(client.snapshot.details[id]?.status).toBe("complete");
+  } finally { await app.cleanup(); }
+});
+
 test("별도 프로세스는 모든 UI가 분리된 동안에도 agent와 subagent를 진행하고 같은 실행에 재접속한다", async () => {
   // The detached Bun process owns actual SDK instances in two real Git worktrees.
   const app = await setup();

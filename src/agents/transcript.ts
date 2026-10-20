@@ -19,7 +19,7 @@ export type TranscriptSection = {
   readonly timeoutSeconds?: number;
   readonly completion?: RunCompletion;
 };
-type Message = { id: string; message: AgentMessage; streaming: boolean };
+type Message = { id: string; message: AgentMessage; streaming: boolean; noticeStatus?: TranscriptStatus };
 type Tool = { name: string; arguments: unknown; text: string; status: TranscriptStatus; error?: string };
 
 function contentText(content: string | readonly { type: string; text?: string; mimeType?: string }[]): string {
@@ -136,6 +136,12 @@ export class SessionTranscript {
     return completion;
   }
 
+  notice(title: string, text: string, status: TranscriptStatus = "complete"): void {
+    this.messages.push({ id: `notice:${crypto.randomUUID()}`, streaming: false, noticeStatus: status,
+      message: { role: "custom", customType: title, content: text, display: true, timestamp: this.clock.wallTime() } });
+    this.cached = undefined;
+  }
+
   warnCompletion(completion: RunCompletion, warning: string): void {
     for (const [id, value] of this.completions) if (value === completion) this.completions.set(id, { ...value, warning: warning.slice(0, 512) });
     this.cached = undefined;
@@ -152,7 +158,7 @@ export class SessionTranscript {
     }
     const sections: TranscriptSection[] = [];
     const seenTools = new Set<string>();
-    for (const { id, message, streaming } of this.messages) {
+    for (const { id, message, streaming, noticeStatus } of this.messages) {
       switch (message.role) {
         case "user": {
           const text = contentText(message.content), skill = parseSkillBlock(text);
@@ -194,7 +200,7 @@ export class SessionTranscript {
         case "bashExecution": sections.push({ id, kind: "tool", title: "Shell", text: `$ ${message.command}\n\n${message.output}`,
           summary: summary(message.command), command: invocation(message.command), status: message.cancelled ? "cancelled" : message.exitCode === 0 ? "complete" : "error" }); break;
         case "custom":
-          if (message.display) sections.push({ id, kind: "notice", title: message.customType, text: contentText(message.content), status: "complete" });
+          if (message.display) sections.push({ id, kind: "notice", title: message.customType, text: contentText(message.content), status: noticeStatus ?? "complete" });
           break;
         case "compactionSummary": case "branchSummary": sections.push({ id, kind: "notice", title: "Context summary", text: message.summary, status: "complete" }); break;
         case "system": break;

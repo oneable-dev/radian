@@ -51,6 +51,7 @@ export class TranscriptPanel {
   private readonly positions: Record<string, number>;
   private readonly clipboard: Clipboard;
   private sessionId: string | null = null;
+  private readonly conversations = new Map<string, string>();
   private visible = false;
   private legacy = false;
   private syncing = false;
@@ -135,10 +136,17 @@ export class TranscriptPanel {
         hint("transcript.half-page-down", "½ page"), hint("transcript.help", "Help"), hint("transcript.back", "Back")];
   }
 
-  update(id: string | null, sections: readonly TranscriptSection[] | undefined, output: string, visible: boolean): void {
+  update(id: string | null, sections: readonly TranscriptSection[] | undefined, output: string, visible: boolean, conversationId?: string): void {
     if (this.disposed || this.scroll.isDestroyed) return;
     this.reconcileSelection(); this.rememberScroll();
-    const switched = id !== this.sessionId, returning = visible && !this.visible;
+    const previousConversation = id ? this.conversations.get(id) : undefined;
+    const replaced = !!id && !!conversationId && previousConversation !== undefined && previousConversation !== conversationId;
+    if (id && conversationId) this.conversations.set(id, conversationId);
+    if (replaced && id) {
+      this.views[id] = emptyTranscriptView(); this.positions[id] = 0;
+      this.options.saveScroll(id, 0); this.options.saveView?.(id, structuredClone(this.views[id]!));
+    }
+    const switched = id !== this.sessionId || replaced, returning = visible && !this.visible;
     if (switched) { this.positionIntent = false; this.selectionHeldFor = null; this.geometry = undefined; }
     const hadFocus = this.focused;
     const previousIndex = this.order.indexOf(this.state?.selectedId ?? "");

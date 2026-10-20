@@ -61,6 +61,41 @@ test("여러 세션의 큰 상태가 8MiB를 넘어도 대화·초안·History �
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
+test("구버전의 new와 compact는 모델 프롬프트나 자동 재시작으로 우회하지 않는다", async () => {
+  // The old service would treat an unknown slash command as paid model input.
+  const fetchMock = stubFetch(async () => { throw new Error("Must not transmit unsupported session commands"); });
+  const client = new RuntimeClient(paths, snapshot());
+  try {
+    for (const text of ["/new", "/compact", "/compact preserve this plan"]) {
+      expect(expectError(await client.prompt("session", text)).code).toBe("UNSUPPORTED_CAPABILITY");
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
+
+test("세션 명령과 일반 입력은 현재 대화 ID를 지정하고 첨부·잘못된 new는 전송하지 않는다", async () => {
+  // A stable tab ID alone cannot fence an operation after /new replaces its conversation.
+  const state: RuntimeSnapshot = { ...snapshot(), capabilities: ["session-controls", "prompt-images"],
+    details: { session: { conversationId: "conversation-1", status: null, output: "", error: null } } };
+  const sent: unknown[] = [];
+  const fetchMock = stubFetch(async (_input, options) => { sent.push(JSON.parse(String(options?.body))); return Response.json({ ok: true, value: null }); });
+  const client = new RuntimeClient(paths, state);
+  try {
+    expectOk(await client.prompt("session", "/compact keep the plan"));
+    expectOk(await client.prompt("session", "/new"));
+    expectOk(await client.prompt("session", "ordinary prompt"));
+    expect(expectError(await client.prompt("session", "/new not supported")).code).toBe("INVALID_INPUT");
+    expect(expectError(await client.prompt("session", "/new", ["/image.png"])).code).toBe("INVALID_INPUT");
+    expect(expectError(await client.prompt("session", "/compact", ["/image.png"])).code).toBe("INVALID_INPUT");
+
+    expect(sent).toEqual([
+      { type: "session-control", sessionId: "session", conversationId: "conversation-1", action: "compact", instructions: "keep the plan" },
+      { type: "session-control", sessionId: "session", conversationId: "conversation-1", action: "new" },
+      { type: "prompt", sessionId: "session", conversationId: "conversation-1", text: "ordinary prompt" },
+    ]);
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
+
 test("이전 런타임의 이미지와 큰 입력은 전송·자동 재시작 없이 보존 가능한 실패로 거부한다", async () => {
   const fetchMock = stubFetch(async () => { throw new Error("Must not send unsupported input"); });
   const client = new RuntimeClient(paths, snapshot());

@@ -15,6 +15,7 @@ import { CommandDiagnostics, sessionCommands } from "./session-commands.ts";
 import { FastMode } from "./fast-mode.ts";
 import type { UsageMonitor } from "../usage/monitor.ts";
 import { loadPromptImages } from "./prompt-attachments.ts";
+import { ManualCompaction } from "./manual-compaction.ts";
 
 export type PiSessionOptions = {
   agentDir?: string;
@@ -40,8 +41,9 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       retry: { enabled: false }, compaction: { enabled: false },
     }) : SettingsManager.create(context.cwd, agentDir);
     const fast = new FastMode();
+    const compaction = new ManualCompaction();
     const resourceLoader = new DefaultResourceLoader({
-      cwd: context.cwd, agentDir, settingsManager, noThemes: true, extensionFactories: [fast.extension],
+      cwd: context.cwd, agentDir, settingsManager, noThemes: true, extensionFactories: [fast.extension, compaction.extension],
       ...(options.streamFn ? { noSkills: true, noContextFiles: true, noPromptTemplates: true } : {}),
     });
     await resourceLoader.reload();
@@ -52,6 +54,7 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       : options.sessionDir ? SessionManager.create(context.cwd, options.sessionDir) : undefined;
     const { session } = await createAgentSession({
       cwd: context.cwd, agentDir, modelRuntime, settingsManager, resourceLoader,
+      ...(context.startReason ? { sessionStartEvent: { type: "session_start", reason: context.startReason, ...(context.previousSessionFile ? { previousSessionFile: context.previousSessionFile } : {}) } as const } : {}),
       ...(sessionManager ? { sessionManager } : {}),
       ...(options.model ? { model: options.model } : {}),
       ...(context.role === "main" ? { customTools: [subagentTool(context)] } : {}),
@@ -66,7 +69,7 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         waitForIdle: () => session.waitForIdle(), newSession: unsupportedSessionAction, fork: unsupportedSessionAction,
         switchSession: unsupportedSessionAction, navigateTree: unsupportedSessionAction, reload: unsupportedSessionAction,
       } });
-      const executor = new PiSessionExecutor(session, options.usageMonitor, diagnostics, fast, options.imageLoader);
+      const executor = new PiSessionExecutor(session, options.usageMonitor, diagnostics, fast, options.imageLoader, compaction);
       adopted = true;
       return executor;
     }, async () => { if (!adopted) session.dispose(); });
@@ -105,8 +108,9 @@ export class PiSessionExecutor implements SessionExecutor {
   private runRevision = 0;
   private closing = false;
   private disposed = false;
+  private controlling = false;
 
-  constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode, private readonly imageLoader = loadPromptImages) {
+  constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode, private readonly imageLoader = loadPromptImages, private readonly compaction = new ManualCompaction()) {
     this.status = this.finalStatus(false);
     this.transcript = new SessionTranscript(session.sessionManager.getBranch());
     this.telemetry = new PiSessionTelemetry(session, () => this.emit(), usage, fast);
@@ -114,6 +118,7 @@ export class PiSessionExecutor implements SessionExecutor {
   }
 
   commands() { return sessionCommands(this.session); }
+  get busy(): boolean { return this.controlling || this.runs.size > 0 || !this.session.isIdle || this.session.pendingMessageCount > 0; }
   get acceptsImages(): boolean { return this.session.model?.input.includes("image") ?? false; }
   get savedSessionId(): string { return this.session.sessionId; }
   get sessionFile(): string | undefined { return this.session.sessionFile; }
@@ -129,7 +134,7 @@ export class PiSessionExecutor implements SessionExecutor {
     });
     if (this.partial) messages.push(`Agent (streaming): ${this.partial}`);
     messages.push(...this.activeTools.values());
-    return { status: this.status, output: messages.join("\n\n").slice(-12000), error: this.error,
+    return { conversationId: this.savedSessionId, status: this.status, output: messages.join("\n\n").slice(-12000), error: this.error,
       sections: this.transcript.sections, telemetry: this.telemetry.read() };
   }
 
@@ -138,7 +143,30 @@ export class PiSessionExecutor implements SessionExecutor {
     return () => this.listeners.delete(listener);
   }
 
+  compact(instructions?: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>> {
+    if (this.closing || this.disposed) return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
+    if (this.busy) return Promise.resolve(err(new SessionError("SESSION_BUSY", "Wait for this session's current work to finish before compacting. No work was interrupted.")));
+    this.controlling = true;
+    const before = { status: this.status, error: this.error };
+    let accepted = false;
+    const task = this.compaction.run(this.session, instructions, () => {
+      accepted = true; this.status = "working"; this.error = null; this.emit(); onAccepted?.();
+    }).then((result): Result<void, ExpectedError> => {
+      if (result.ok) this.transcript.notice("Context compacted", result.value.summary);
+      else if (accepted) this.transcript.notice("Compaction failed", `[${result.error.code}] ${result.error.message}`, "error");
+      this.status = before.status; this.error = before.error;
+      this.telemetry.refreshUsage();
+      return result.ok ? ok(undefined) : result;
+    }).catch((error: unknown) => {
+      this.status = "failure"; this.error = "Unexpected compaction failure. Inspect runtime.log.";
+      if (accepted) this.transcript.notice("Compaction failed", this.error, "error");
+      throw error;
+    }).finally(() => { this.controlling = false; this.runs.delete(task); this.emit(); });
+    this.runs.add(task); return task;
+  }
+
   prompt(text: string, onAccepted?: () => void, imagePaths: readonly string[] = []): Promise<Result<void, ExpectedError>> {
+    if (this.controlling) return Promise.resolve(err(new SessionError("SESSION_BUSY", "Context compaction is in progress. Input was retained.")));
     if (this.closing || this.disposed) return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
     const admitted = Promise.withResolvers<void>();
     const previous = this.admission;
@@ -188,7 +216,13 @@ export class PiSessionExecutor implements SessionExecutor {
     this.runs.add(task); this.emit(); return task;
   }
 
-  close(): Promise<Result<void, ExpectedError>> {
+  async beforeNewSession(): Promise<Result<void, ExpectedError>> {
+    if (this.disposed) return ok(undefined);
+    const result = await this.session.extensionRunner.emit({ type: "session_before_switch", reason: "new" });
+    return result?.cancel ? err(new CancelledError("Session replacement was cancelled by an extension.")) : ok(undefined);
+  }
+
+  close(reason: "quit" | "new" = "quit"): Promise<Result<void, ExpectedError>> {
     if (this.disposed) return Promise.resolve(ok(undefined));
     if (this.closeTask) return this.closeTask;
     this.closing = true;
@@ -200,7 +234,7 @@ export class PiSessionExecutor implements SessionExecutor {
       await withCleanup(async () => {
         // Run failure/cancellation is not cleanup failure, but unexpected rejections still propagate.
         await Promise.all(this.runs);
-        await this.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+        await this.session.extensionRunner.emit({ type: "session_shutdown", reason });
       }, async () => {
         this.telemetry.dispose(); this.session.dispose(); this.unsubscribe(); this.listeners.clear(); this.disposed = true;
       });

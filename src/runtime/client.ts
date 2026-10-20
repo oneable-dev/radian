@@ -14,6 +14,7 @@ import { PtyConnection } from "./pty/client.ts";
 import { completionQuerySchema, completionResultSchema } from "./completion-protocol.ts";
 import type { CompletionQuery, CompletionResult } from "../agents/completion.ts";
 import { NdjsonDecoder } from "./frames.ts";
+import { parseSessionControl } from "../agents/session-controls.ts";
 
 const reconnectDelays = [250, 500, 1000, 2000] as const;
 const streamHandshakeMs = 2000;
@@ -250,6 +251,15 @@ export class RuntimeClient {
     });
   }
   async prompt(sessionId: string, text: string, images: readonly string[] = []): Promise<Result<void, ExpectedError>> {
+    const control = parseSessionControl(text); if (!control.ok) return control;
+    const conversationId = this.state.details[sessionId]?.conversationId;
+    if (control.value) {
+      if (images.length) return err(new InputError(`/${control.value.action} does not accept image attachments. Input was retained.`));
+      if (!this.state.capabilities?.includes("session-controls")) return err(new CapabilityError("Running service predates /new and /compact. Finish work and restart it explicitly when ready. No prompt was sent."));
+      if (!conversationId) return err(new ProtocolError("Current conversation identity is unavailable. Reconnect before retrying. No command was sent."));
+      const result = await this.command({ type: "session-control", sessionId, conversationId, ...control.value });
+      return result.ok ? ok(undefined) : result;
+    }
     if (images.length && !this.state.capabilities?.includes("prompt-images")) return err(new CapabilityError("Running service predates image input. Input was retained; finish work and restart the service explicitly when ready. No prompt was sent."));
     // The old wire schema capped text at 1,000,000 UTF-16 units. Do not submit a
     // new large draft to a service that cannot accept it, or restart live work.
@@ -262,7 +272,8 @@ export class RuntimeClient {
       if (!commands.ok) return commands;
       if (!commands.value.items.some((command) => command.kind === "command" && command.value === "fast")) return unsupported();
     }
-    const result = await this.command({ type: "prompt", sessionId, text, ...(images.length ? { images: [...images] } : {}) });
+    const result = await this.command({ type: "prompt", sessionId, text, ...(images.length ? { images: [...images] } : {}),
+      ...(this.state.capabilities?.includes("session-controls") && conversationId ? { conversationId } : {}) });
     return result.ok ? ok(undefined) : result;
   }
   async savePreferences(preferences: RuntimePreferences): Promise<Result<void, ExpectedError>> { const result = await this.command({ type: "preferences", preferences }); return result.ok ? ok(undefined) : result; }

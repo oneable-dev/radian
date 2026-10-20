@@ -117,3 +117,45 @@ test("요청 정보가 없는 세션은 공간을 차지하지 않고 작은 화
     expect(app.view.promptDrafts.a1).toBe("unsent next command"); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
+
+test("new가 같은 탭의 대화를 교체하면 요청·스크롤·읽기 상태만 초기화하고 다른 초안을 유지한다", async () => {
+  const app = await mount({ onPrompt: () => {
+    app.states.a1 = { conversationId: "fresh", status: null, output: "", error: null, sections: [] };
+    app.selection.replaceSnapshot(app.selection.snapshot); return ok(undefined);
+  } });
+  try {
+    // Seed the prior conversation identity, then navigate far into its transcript.
+    app.states.a1 = { ...app.states.a1!, conversationId: "previous" }; await app.update();
+    const tab = app.get("session:demo:main:a1"), tabStrip = app.get("agent-session-list");
+    const count = tabStrip.getChildren().length;
+    const prompt = app.get("session-prompt"); if (!(prompt instanceof PromptInput)) throw new Error("Missing input");
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); app.mockInput.pressKey("f"); await app.render();
+    app.mockInput.pressKey("e", { ctrl: true }); prompt.value = "/new";
+
+    app.mockInput.pressEnter(); await app.render();
+
+    expect(app.selection.sessionId).toBe("a1"); expect(tabStrip.getChildren()).toHaveLength(count);
+    expect(app.get("session:demo:main:a1")).toBe(tab);
+    expect(app.get("agent-request").visible).toBe(false); expect(app.captureCharFrame()).not.toContain("PROGRESS-99");
+    expect(prompt.value).toBe(""); expect(app.renderer.currentFocusedRenderable).toBe(prompt);
+    expect(app.view.workViewPreferences.agentViews?.a1).toMatchObject({ mode: "sections", selectedId: null, follow: true });
+    expect(app.view.promptDrafts).toMatchObject({ a2: "second session draft", b1: "feature draft" });
+  } finally { await app.close(); }
+});
+
+test("새 대화의 snapshot이나 늦은 수락은 사용자가 그 사이 작성한 입력을 지우지 않는다", async () => {
+  const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
+  const app = await mount({ onPrompt: () => accepted.promise });
+  try {
+    app.states.a1 = { ...app.states.a1!, conversationId: "previous" }; await app.update();
+    const prompt = app.get("session-prompt"); if (!(prompt instanceof PromptInput)) throw new Error("Missing input");
+    app.mockInput.pressKey("e", { ctrl: true }); prompt.value = "/new"; app.mockInput.pressEnter(); await app.render();
+
+    // A separate connection publishes replacement while the submit acknowledgement is pending.
+    app.states.a1 = { conversationId: "fresh", status: null, output: "", error: null, sections: [] }; await app.update();
+    prompt.value = "next conversation draft"; accepted.resolve(ok(undefined)); await app.render();
+
+    expect(prompt.value).toBe("next conversation draft"); expect(app.view.promptDrafts.a1).toBe("next conversation draft");
+    expect(app.selection.sessionId).toBe("a1"); expect(app.get("agent-request").visible).toBe(false);
+  } finally { accepted.resolve(ok(undefined)); await app.close(); }
+});

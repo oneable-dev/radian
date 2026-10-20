@@ -9,6 +9,7 @@ import { CancelledError, collectCleanup, InputError, ProtocolError, SessionError
 import { err, ok, type Result } from "../result.ts";
 import { SessionRegistry, type SessionRecord } from "../agents/session-registry.ts";
 import { expandPromptDraft } from "../agents/prompt-input.ts";
+import { parseSessionControl, type SessionControl } from "../agents/session-controls.ts";
 import { piSessionFactory } from "../agents/pi-session-adapter.ts";
 import { SessionHistory } from "../agents/history.ts";
 import { offlineRuntime } from "../testing/offline-runtime.ts";
@@ -108,7 +109,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "session-controls"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || this.notice, editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
@@ -188,10 +189,20 @@ class WorkspaceRuntime {
         else this.observe(this.registry.close(command.sessionId));
         return ok(null);
       }
+      case "session-control": {
+        if (command.action === "new" && command.instructions?.trim()) return err(new InputError("Usage: /new (no arguments)."));
+        return this.sessionControl(command.sessionId, command, command.conversationId);
+      }
       case "prompt": {
+        const control = parseSessionControl(command.text); if (!control.ok) return control;
+        if (control.value) {
+          if (command.images?.length) return err(new InputError(`/${control.value.action} does not accept image attachments.`));
+          return this.sessionControl(command.sessionId, control.value, command.conversationId);
+        }
         if (this.failedRecovery.has(command.sessionId)) return err(new SessionError("SESSION_NOT_OPEN", "This session needs recovery before it can run."));
         const state = this.registry.details(command.sessionId);
         if (!state) return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
+        if (command.conversationId && command.conversationId !== state.conversationId) return err(new SessionError("SESSION_CONFLICT", "This tab changed conversations. Input was retained; review the new session before submitting again."));
         if (!command.text.trim()) return err(new InputError("A prompt must not be empty."));
         const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
         let admitted = false;
@@ -246,6 +257,32 @@ class WorkspaceRuntime {
       }
       case "stop": setTimeout(() => this.onStop(), 20); return ok(null);
     }
+  }
+
+  private async sessionControl(id: string, control: SessionControl, expectedConversation?: string): Promise<Result<null, ExpectedError>> {
+    if (this.failedRecovery.has(id)) return err(new SessionError("SESSION_NOT_OPEN", "This session needs recovery first."));
+    const state = this.registry.details(id);
+    if (!state) return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
+    if (expectedConversation && state.conversationId !== expectedConversation) return err(new SessionError("SESSION_CONFLICT", "This tab changed conversations. No command was accepted."));
+    const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
+    let admitted = false;
+    const accept = () => { admitted = true; accepted.resolve(ok(undefined)); };
+    const run = control.action === "new" ? this.registry.newSession(id, accept) : this.registry.compact(id, control.instructions, accept);
+    void run.then((result) => {
+      if (!admitted) accepted.resolve(result);
+      else if (!result.ok && control.action === "new") { this.notice = `[${result.error.code}] Session replacement did not finish: ${result.error.message}`; this.changed(); }
+      if (result.ok && control.action === "new") {
+        // A tab is stable, but source cursors/folds/scroll belong to its old conversation.
+        if (this.preferences.agentViews) delete this.preferences.agentViews[id];
+        if (this.preferences.workViews) delete this.preferences.workViews.agentScroll[id];
+        this.changed();
+      }
+    }, (error: unknown) => {
+      if (!admitted) accepted.reject(error);
+      else { this.notice = reportUnexpected(error, "session control"); this.changed(); }
+    });
+    const result = await accepted.promise;
+    return result.ok ? ok(null) : result;
   }
 
   private events(): Response {

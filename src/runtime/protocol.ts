@@ -47,7 +47,7 @@ const telemetry = Type.Object({
     resetsAt: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
     observedAt: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }) }), Type.Null()]),
 });
-const execution = Type.Object({ status, output: Type.String(), error: Type.Union([Type.String(), Type.Null()]),
+const execution = Type.Object({ conversationId: Type.Optional(id), status, output: Type.String(), error: Type.Union([Type.String(), Type.Null()]),
   sections: Type.Optional(Type.Array(transcriptSection)), telemetry: Type.Optional(telemetry) });
 export const workViewSchema = Type.Union([Type.Literal("agent"), Type.Literal("editor"), Type.Literal("git"), Type.Literal("terminal")]);
 export type WorkView = Static<typeof workViewSchema>;
@@ -126,7 +126,9 @@ export const commandSchema = Type.Union([
   Type.Object({ type: Type.Literal("create"), worktreeId: id }),
   Type.Object({ type: Type.Literal("resume"), worktreeId: id, savedId: id }),
   Type.Object({ type: Type.Literal("close"), sessionId: id }),
-  Type.Object({ type: Type.Literal("prompt"), sessionId: id, text: Type.String({ minLength: 1 }), images: Type.Optional(Type.Array(id)) }),
+  Type.Object({ type: Type.Literal("prompt"), sessionId: id, text: Type.String({ minLength: 1 }), images: Type.Optional(Type.Array(id)), conversationId: Type.Optional(id) }),
+  Type.Object({ type: Type.Literal("session-control"), sessionId: id, conversationId: id,
+    action: Type.Union([Type.Literal("new"), Type.Literal("compact")]), instructions: Type.Optional(Type.String()) }),
   Type.Object({ type: Type.Literal("preferences"), preferences: preferencesSchema }),
   Type.Object({ type: Type.Literal("stop") }),
   Type.Object({ type: Type.Literal("editor-open"), worktreeId: id,

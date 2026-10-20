@@ -58,6 +58,7 @@ export class AgentPanel {
   private readonly submitting = new Set<string>();
   private worktree: Worktree | null = null;
   private promptSessionId: string | null = null;
+  private readonly conversations = new Map<string, string>();
   private syncingDraft = false;
   private disposed = false;
   private composerLayout = "";
@@ -163,6 +164,10 @@ export class AgentPanel {
       ? session ? `Workspace: ${worktree.name} · ${details ? details.error ?? details.status ?? "Ready" : "display preview only"}` : `Workspace: ${worktree.name} · create a session explicitly`
       : "Open radian inside a Git repository.";
     const sessionId = session?.id ?? null;
+    const previousConversation = sessionId ? this.conversations.get(sessionId) : undefined;
+    const replaced = !!details?.conversationId && previousConversation !== undefined && previousConversation !== details.conversationId;
+    if (sessionId && details?.conversationId) this.conversations.set(sessionId, details.conversationId);
+    if (replaced) this.completion.hide();
     const switchedSession = sessionId !== this.promptSessionId;
     if (switchedSession) {
       this.completion.hide();
@@ -189,7 +194,8 @@ export class AgentPanel {
     this.root.justifyContent = "flex-start";
     const output = details?.output || "Enter a prompt to start this session explicitly.";
     const transcriptFocused = this.transcript.focused;
-    this.transcript.update(sessionId, details?.sections, output, this.active);
+    this.transcript.update(sessionId, details?.sections, output, this.active, details?.conversationId);
+    if (replaced && this.active && transcriptFocused) this.prompt.focus();
     if ((!this.active && (this.prompt.focused || transcriptFocused)) || (!visible && tabsFocused)) this.focusSidebar();
     if (!this.active) { this.completion.hide(); this.prompt.cancelPaste(); } else this.completion.refresh();
     this.resizeComposer();

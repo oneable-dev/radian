@@ -8,8 +8,9 @@ import type { TranscriptSection } from "./transcript.ts";
 import type { SessionTelemetry } from "./telemetry.ts";
 import { filterCompletions, type CompletionItem, type CompletionQuery, type CompletionResult } from "./completion.ts";
 import { completeFiles } from "./completion-files.ts";
+import { sessionControlCommands } from "./session-controls.ts";
 
-export type ExecutionState = { readonly status: AgentStatus | null; readonly output: string; readonly error: string | null;
+export type ExecutionState = { readonly conversationId?: string; readonly status: AgentStatus | null; readonly output: string; readonly error: string | null;
   readonly sections?: readonly TranscriptSection[]; readonly telemetry?: SessionTelemetry };
 export type SessionExecutor = {
   readonly savedSessionId: string;
@@ -17,14 +18,19 @@ export type SessionExecutor = {
   readonly state: ExecutionState;
   commands?(): readonly CompletionItem[];
   readonly acceptsImages?: boolean;
+  readonly busy?: boolean;
+  compact?(instructions?: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>>;
   subscribe(listener: () => void): () => void;
   // Resolves on run completion; the optional callback marks SDK input acceptance.
   prompt(text: string, onAccepted?: () => void, imagePaths?: readonly string[]): Promise<Result<void, ExpectedError>>;
-  close(): Promise<Result<void, ExpectedError>>;
+  beforeNewSession?(): Promise<Result<void, ExpectedError>>;
+  close(reason?: "quit" | "new"): Promise<Result<void, ExpectedError>>;
 };
 export type SessionContext = {
   readonly cwd: string;
   readonly sessionFile?: string;
+  readonly previousSessionFile?: string;
+  readonly startReason?: "new";
   readonly role: "main" | "subagent";
   spawnSubagent(name: string, task: string, signal?: AbortSignal): Promise<Result<string, ExpectedError>>;
 };
@@ -42,8 +48,8 @@ type Execution = {
 };
 type OpenExecution = Execution & {
   closeTask?: Promise<Result<void, ExpectedError>>;
-  readonly worktree: Worktree; readonly children: Map<string, Execution>;
-  phase: "creating" | "open" | "closing"; recoveredState?: ExecutionState;
+  readonly worktree: Worktree; readonly children: Map<string, Execution>; readonly generation: string;
+  phase: "creating" | "open" | "closing"; recoveredState?: ExecutionState; replacing?: boolean;
 };
 
 export class SessionRegistry {
@@ -51,12 +57,13 @@ export class SessionRegistry {
   private readonly listeners = new Set<() => void>();
   private readonly fileOwners = new Map<string, string>();
   private shuttingDown = false;
+  private readonly replacements = new Set<Promise<Result<void, ExpectedError>>>();
   constructor(private readonly repositories: readonly Repository[], private readonly factory: SessionFactory) {}
 
   get snapshot(): readonly Repository[] {
     return this.repositories.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((worktree) => ({ ...worktree,
       sessions: [...this.entries.values()].filter((entry) => entry.phase === "open" && entry.worktree.id === worktree.id).map((entry) => ({
-        id: entry.id, name: entry.name, status: entry.recoveredState ? entry.recoveredState.status : entry.executor?.state.status ?? null,
+        id: entry.id, name: entry.name, status: entry.replacing ? "working" : entry.recoveredState ? entry.recoveredState.status : entry.executor?.state.status ?? null,
         subagents: this.children(entry),
       })),
     })) }));
@@ -68,13 +75,15 @@ export class SessionRegistry {
     if (entry?.phase !== "open") return null;
     const live = entry.executor?.state;
     // Recovery keeps transcript/status history, but account usage continues updating in the live SDK.
-    return entry.recoveredState ? { ...entry.recoveredState, ...(live?.telemetry ? { telemetry: live.telemetry } : {}) } : live ?? null;
+    const state = entry.recoveredState ? { ...entry.recoveredState, ...(live?.telemetry ? { telemetry: live.telemetry } : {}) } : live;
+    return state && entry.replacing ? { ...state, status: "working" } : state ?? null;
   }
   sessionFile(id: string): string | undefined { return this.entries.get(id)?.executor?.sessionFile; }
   historyOwnership(canonicalFile: string): { openSessionId: string | null; unavailableReason: string | null } {
     const owner = this.fileOwners.get(canonicalFile);
     if (!owner) return { openSessionId: null, unavailableReason: null };
     const entry = this.entries.get(owner);
+    if (entry?.replacing) return { openSessionId: null, unavailableReason: "Saved session is being replaced. Wait for cleanup to finish." };
     if (entry?.phase === "open") return { openSessionId: entry.id, unavailableReason: null };
     return { openSessionId: null, unavailableReason: !entry ? "Saved session belongs to an active subagent."
       : entry.phase === "creating" ? "Saved session is being opened. Try again shortly." : "Session is still closing. Try again after cleanup." };
@@ -130,9 +139,10 @@ export class SessionRegistry {
     const id = identity?.id ?? crypto.randomUUID();
     if (this.entries.has(id)) return err(new SessionError("SESSION_CONFLICT", "This open-session ID already exists."));
     if (requestedFile) this.fileOwners.set(requestedFile, id);
+    const generation = crypto.randomUUID();
     const ready = capture(() => this.factory({ cwd: worktree.path, role: "main", ...(requestedFile ? { sessionFile: requestedFile } : {}),
-      spawnSubagent: (name, task, signal) => this.spawnSubagent(id, name, task, signal) }));
-    const entry: OpenExecution = { id, name: identity?.name ?? `Session ${id.slice(0, 8)}`, role: "main", worktree, ready,
+      spawnSubagent: (name, task, signal) => this.spawnSubagent(id, name, task, signal, generation) }));
+    const entry: OpenExecution = { id, name: identity?.name ?? `Session ${id.slice(0, 8)}`, role: "main", worktree, ready, generation,
       phase: "creating", children: new Map(), ...(requestedFile ? { fileKey: requestedFile } : {}) };
     this.entries.set(id, entry);
     let result: Result<string, ExpectedError>;
@@ -180,13 +190,15 @@ export class SessionRegistry {
       return entry.phase === "open" ? result : err(new SessionError("SESSION_NOT_OPEN", "Session closed during file discovery."));
     }
     const commands = entry.executor?.commands;
-    return commands ? ok(filterCompletions(commands.call(entry.executor), query.query))
-      : err(new CapabilityError("This executor does not provide command discovery."));
+    const controls = sessionControlCommands.filter((item) => item.value !== "compact" || entry.executor?.compact);
+    const extra = commands?.call(entry.executor) ?? [];
+    return ok(filterCompletions([...controls, ...extra.filter((item) => !controls.some((control) => control.value === item.value))], query.query));
   }
 
   async prompt(id: string, text: string, onAccepted?: () => void, imagePaths: readonly string[] = []): Promise<Result<void, ExpectedError>> {
     const selected = this.requireOpen(id);
     if (!selected.ok) return selected;
+    if (selected.value.replacing) return err(new SessionError("SESSION_BUSY", "This tab is changing sessions. Input was retained."));
     if (!text.trim()) return err(new InputError("A prompt must not be empty."));
     if (imagePaths.length && !selected.value.executor?.acceptsImages) return err(new CapabilityError("The selected model does not accept image input. Switch models or remove the image; input was retained."));
     const entry = selected.value;
@@ -202,6 +214,72 @@ export class SessionRegistry {
     if (result.ok && !accepted) accept();
     return result;
   }
+  compact(id: string, instructions?: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>> {
+    const selected = this.requireOpen(id); if (!selected.ok) return Promise.resolve(selected);
+    const entry = selected.value;
+    if (entry.replacing) return Promise.resolve(err(new SessionError("SESSION_BUSY", "This tab is changing sessions.")));
+    if ([...entry.children.values()].some((child) => child.executor?.busy || child.executor?.state.status === "working" || child.ready && !child.executor)) return Promise.resolve(err(new SessionError("SESSION_BUSY", "Wait for this session's owned work to finish before compacting.")));
+    if (!entry.executor?.compact) return Promise.resolve(err(new CapabilityError("This executor does not support manual compaction.")));
+    return entry.executor.compact(instructions, () => { delete entry.recoveredState; onAccepted?.(); });
+  }
+
+  newSession(id: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>> {
+    const selected = this.requireOpen(id); if (!selected.ok) return Promise.resolve(selected);
+    const previous = selected.value;
+    if (previous.replacing) return Promise.resolve(err(new SessionError("SESSION_BUSY", "This tab is already changing sessions.")));
+    previous.replacing = true; this.emit();
+    const task = this.replaceSession(previous, onAccepted).finally(() => { previous.replacing = false; this.replacements.delete(task); this.emit(); });
+    this.replacements.add(task); return task;
+  }
+  private async replaceSession(previous: OpenExecution, onAccepted?: () => void): Promise<Result<void, ExpectedError>> {
+    // Prepare a distinct SDK conversation before interrupting the old one. A
+    // failed factory must not discard a working tab or its on-disk history.
+    const allowed = await previous.executor?.beforeNewSession?.();
+    if (allowed && !allowed.ok) return allowed;
+    if (this.shuttingDown || previous.phase !== "open") return err(new CancelledError("Session replacement was cancelled by shutdown."));
+    const generation = crypto.randomUUID();
+    const previousSessionFile = previous.executor?.sessionFile;
+    const ready = capture(() => this.factory({ cwd: previous.worktree.path, role: "main", startReason: "new", ...(previousSessionFile ? { previousSessionFile } : {}),
+      spawnSubagent: (name, task, signal) => this.spawnSubagent(previous.id, name, task, signal, generation) }));
+    const created = await ready; if (!created.ok) return created;
+    const next = created.value;
+    let stopping = false, adopted = false;
+    let result: Result<void, ExpectedError>;
+    try {
+      const key = await capture(() => this.fileKey(next));
+      if (!key.ok) result = key;
+      else if (next.savedSessionId === previous.executor?.savedSessionId || key.value && this.fileOwners.has(key.value)) result = err(new SessionError("SESSION_CONFLICT", "Replacement did not create a distinct conversation."));
+      else if (this.shuttingDown || previous.phase !== "open") result = err(new CancelledError("Session replacement was cancelled by shutdown."));
+      else {
+        onAccepted?.(); stopping = true;
+        // Explicit /new stops only the execution owned by this tab. Keep its file
+        // fenced until all parent/child tool results have settled and persisted.
+        const stopped = await collectCleanup([this.closeExecution(previous, "new"), ...[...previous.children.values()].map((child) => this.closeExecution(child, "new"))], "Could not finish the previous conversation.");
+        if (!stopped.ok) {
+          previous.recoveredState = { ...previous.executor!.state, status: "failure", error: "Session replacement could not confirm cleanup of the previous conversation. Inspect the cleanup error before retrying." };
+          result = err(new AgentRunError(previous.recoveredState.error!, { cause: stopped.error }));
+        } else if (this.shuttingDown || previous.phase !== "open") result = err(new CancelledError("Session replacement was cancelled by shutdown."));
+        else {
+          const replacement: OpenExecution = { id: previous.id, name: previous.name, role: "main", worktree: previous.worktree,
+            phase: "open", children: new Map(), ready, executor: next, generation, ...(key.value ? { fileKey: key.value } : {}) };
+          replacement.unsubscribe = next.subscribe(() => { if (replacement.phase === "open") this.emit(); });
+          previous.unsubscribe?.(); delete previous.unsubscribe;
+          if (previous.fileKey && this.fileOwners.get(previous.fileKey) === previous.id) this.fileOwners.delete(previous.fileKey);
+          if (key.value) this.fileOwners.set(key.value, replacement.id);
+          this.entries.set(previous.id, replacement); adopted = true; this.emit(); return ok(undefined);
+        }
+      }
+    } catch (error) {
+      if (adopted) throw error;
+      if (stopping) previous.recoveredState = { ...previous.executor!.state, status: "failure", error: "Unexpected session replacement failure. Inspect runtime.log before retrying." };
+      try { const cleanup = await next.close(); if (!cleanup.ok) throw cleanup.error; }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], "Replacement and cleanup failed."); }
+      throw error;
+    }
+    const cleanup = await next.close();
+    return cleanup.ok ? result : err(new CleanupError("Replacement and cleanup failed.", [...(!result.ok ? [result.error] : []), cleanup.error]));
+  }
+
   close(id: string): Promise<Result<void, ExpectedError>> {
     const entry = this.entries.get(id);
     if (!entry) return Promise.resolve(ok(undefined));
@@ -221,13 +299,15 @@ export class SessionRegistry {
   }
   async shutdown(): Promise<Result<void, ExpectedError>> {
     this.shuttingDown = true;
-    return collectCleanup([...this.entries.keys()].map((id) => this.close(id)), "Some session executions could not be shut down.");
+    return collectCleanup([...this.entries.keys()].map((id) => this.close(id)).concat([...this.replacements].map((task) => task.then(() => ok(undefined)))), "Some session executions could not be shut down.");
   }
-  private async spawnSubagent(ownerId: string, name: string, task: string, signal?: AbortSignal): Promise<Result<string, ExpectedError>> {
+  private async spawnSubagent(ownerId: string, name: string, task: string, signal?: AbortSignal, generation?: string): Promise<Result<string, ExpectedError>> {
     const selected = this.requireOpen(ownerId);
     if (!selected.ok) return selected;
     if (signal?.aborted) return err(new CancelledError());
     const owner = selected.value;
+    if (generation && generation !== owner.generation) return err(new SessionError("SESSION_CONFLICT", "The originating conversation is no longer active in this tab."));
+    if (owner.replacing) return err(new SessionError("SESSION_BUSY", "This conversation is being replaced."));
     const ready = capture(() => this.factory({ cwd: owner.worktree.path, role: "subagent",
       spawnSubagent: async () => err(new InputError("Nested delegation is not enabled.")) }));
     const child: Execution = { id: crypto.randomUUID(), name, role: "subagent", ready };
@@ -271,13 +351,13 @@ export class SessionRegistry {
     if (executor.state.status === "failure") return err(new AgentRunError(executor.state.error ?? "Subagent failed."));
     return ok(executor.state.output);
   }
-  private closeExecution(execution: Execution): Promise<Result<void, ExpectedError>> {
+  private closeExecution(execution: Execution, reason: "quit" | "new" = "quit"): Promise<Result<void, ExpectedError>> {
     if (execution.cleanupTask) return execution.cleanupTask;
     const ready = execution.ready; if (!ready) return Promise.resolve(ok(undefined));
     const task = (async (): Promise<Result<void, ExpectedError>> => {
       const created = await ready;
       if (!created.ok) return ok(undefined); // Factory failure is returned to create/runChild; no handle exists.
-      const closed = await created.value.close();
+      const closed = await created.value.close(reason);
       if (!closed.ok) { delete execution.cleanupTask; return closed; }
       execution.unsubscribe?.(); delete execution.unsubscribe;
       if (execution.role === "subagent") {
