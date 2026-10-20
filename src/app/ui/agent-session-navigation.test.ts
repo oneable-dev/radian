@@ -235,7 +235,7 @@ test("서브에이전트는 선택한 세션의 실행 상태 행에만 집계�
     app.mockInput.pressKey("e", { ctrl: true }); await app.render();
     const tab = app.get("session:demo:main:a1"), input = app.get("agent-composer"), row = app.get("transcript-status-row");
     const geometry = [tab.x, tab.y, tab.width, input.y, row.y, row.height];
-    expect(app.region("transcript-status-row")).toContain("Completed");
+    expect(app.region("transcript-status-row")).not.toContain("Completed");
     expect(app.region("transcript-status-row")).toContain("Subagents");
     app.clock.advance(160); await app.render();
     expect([tab.x, tab.y, tab.width, input.y, row.y, row.height]).toEqual(geometry);

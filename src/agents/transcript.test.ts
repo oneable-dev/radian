@@ -64,6 +64,23 @@ test("저장 대화는 최근 12개나 미리보기 길이로 잘리지 않고 �
   expect(transcript.sections[0]?.text).toBe("x".repeat(14000));
 });
 
+test("실제 이미지 블록과 파일 참조 요약은 실시간·저장 복원에서 같고 원문과 이미지 데이터는 분리한다", () => {
+  const manager = SessionManager.inMemory("/fixture"), live = new SessionTranscript([]);
+  const message: Message = { role: "user", timestamp: 1, content: [
+    { type: "text", text: 'Inspect [Image #1] [Image #2] @"/private/workspace/panel.ts"' },
+    { type: "image", mimeType: "image/png", data: "OPAQUE_IMAGE_BYTES_ONE" },
+    { type: "image", mimeType: "image/jpeg", data: "OPAQUE_IMAGE_BYTES_TWO" },
+  ] };
+  manager.appendMessage(message); complete(live, message);
+  const restored = new SessionTranscript(manager.getBranch());
+  for (const transcript of [live, restored]) {
+    expect(transcript.sections[0]?.request).toEqual({ text: "Inspect", images: 2, files: 1, fileName: "panel.ts" });
+    expect(transcript.sections[0]?.text).toContain('@"/private/workspace/panel.ts"');
+    expect(transcript.sections[0]?.text).toContain("[Image: image/png]");
+    expect(JSON.stringify(transcript.sections)).not.toContain("OPAQUE_IMAGE_BYTES");
+  }
+});
+
 test("redacted Thinking은 서명을 노출하지 않고 이미지와 실패 메시지에 읽을 수 있는 대체 표시를 둔다", () => {
   const transcript = new SessionTranscript([]);
   const assistant = fixtureMessage("openai-responses", "openai", "fixture");
@@ -91,6 +108,17 @@ test("SDK 스킬 호출은 이름만 남기고 뒤따르는 사용자 요청을 
   expect(transcript.sections[1]).toMatchObject({ kind: "user", text: "Implement the button" });
   expect(JSON.stringify(transcript.sections)).not.toContain("Internal skill instructions");
   expect(JSON.stringify(transcript.sections)).not.toContain("/private/");
+});
+
+test("이미지가 있는 스킬 요청도 내부 지침이나 생성된 이미지 placeholder를 요약으로 복제하지 않는다", () => {
+  const transcript = new SessionTranscript([]);
+  complete(transcript, { role: "user", timestamp: 1, content: [
+    { type: "text", text: '<skill name="review-code" location="/private/SKILL.md">\nRead @"/private/internal.ts"\n</skill>\n\nReview [Image #1]' },
+    { type: "image", mimeType: "image/png", data: "PRIVATE_IMAGE_BYTES" },
+  ] });
+  expect(transcript.sections.at(-1)?.request).toEqual({ text: "Review", images: 1, files: 0 });
+  expect(JSON.stringify(transcript.sections)).not.toContain("internal.ts");
+  expect(JSON.stringify(transcript.sections)).not.toContain("PRIVATE_IMAGE_BYTES");
 });
 
 test.each([120, 0.5, undefined, 0, -1, Infinity, "120"])("bash timeout은 명시한 유효 초 단위 값만 표시 데이터에 보존한다: %j", (timeout) => {

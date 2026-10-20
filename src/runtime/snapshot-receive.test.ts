@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { fetchSnapshot, RuntimeClient } from "./client.ts";
-import { emptyPreferences, maxFrameBytes, maxSnapshotBytes, protocolVersion, type RuntimeSnapshot } from "./protocol.ts";
+import { emptyPreferences, maxFrameBytes, maxSnapshotBytes, parseSnapshot, protocolVersion, type RuntimeSnapshot } from "./protocol.ts";
 import { readJson } from "./transport.ts";
 import { runtimePaths } from "./storage.ts";
 import { expectError, expectOk } from "../testing/results.ts";
@@ -12,6 +12,16 @@ const state = (): RuntimeSnapshot => ({version:protocolVersion,pid:process.pid,i
 function stubFetch(implementation:()=>Promise<Response>) {
   return spyOn(globalThis,"fetch").mockImplementation(Object.assign(implementation,{preconnect:fetch.preconnect}));
 }
+
+test("요청 요약이 없는 이전 snapshot과 실제 첨부 요약이 있는 새 snapshot을 함께 수신한다", () => {
+  const legacy = { id: "request", kind: "user" as const, title: "You", text: "Original full request", status: "complete" as const };
+  const snapshot = { ...state(), details: { session: { status: "complete" as const, output: "", error: null, sections: [legacy] } } };
+  expect(expectOk(parseSnapshot(snapshot)).details.session?.sections?.[0]?.request).toBeUndefined();
+  const request = { text: "Inspect", images: 2, files: 1, fileName: "panel.ts" };
+  const current = { ...snapshot, details: { session: { ...snapshot.details.session, sections: [{ ...legacy, request }] } } };
+  expect(expectOk(parseSnapshot(current)).details.session?.sections?.[0]?.request).toEqual(request);
+  expect(expectError(parseSnapshot({ ...snapshot, details: { session: { ...snapshot.details.session, sections: [{ ...legacy, request: { ...request, images: -1 } }] } } })).code).toBe("PROTOCOL_ERROR");
+});
 
 test("최초 HTTP snapshot도 여러 세션의 8MiB 이상 데이터를 온전히 읽는다",async()=>{
   const large:RuntimeSnapshot={...state(),details:Object.fromEntries(Array.from({length:4},(_,index)=>[`session-${index}`,{

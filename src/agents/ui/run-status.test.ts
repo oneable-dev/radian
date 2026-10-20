@@ -33,7 +33,18 @@ test("실제 최근 요청만 한 줄로 표시하고 도구 출력·응답으�
   } finally { await app.close(); }
 });
 
-test("반복 스냅샷은 스피너 최소 시간을 다시 시작하지 않고 완료 결과를 즉시 표시한다", async () => {
+test("Working on 요청도 한 줄 말줄임하며 실제 첨부 배지 공간은 먼저 확보한다", async () => {
+  const app = await mount(50);
+  try {
+    const request = { ...user("Original full prompt"), request: { text: "A long original prompt ".repeat(20), images: 2, files: 3 } };
+    app.status.update("a", working([request]), true); await app.render();
+    expect(app.text()).toStartWith("Working on"); expect(app.text()).toContain("…  [2 images] [3 files]");
+    expect(Bun.stringWidth(app.text())).toBeLessThanOrEqual(48);
+    expect(app.captureCharFrame().split("\n")[1]?.trim()).toBe(""); expect(request.text).toBe("Original full prompt");
+  } finally { await app.close(); }
+});
+
+test("반복 스냅샷은 최소 시간을 다시 시작하지 않고 정상 완료 문구 없이 스피너만 마무리한다", async () => {
   const app = await mount();
   try {
     const state = working([user("Short job")]); app.status.update("a", state, true); await app.render();
@@ -41,19 +52,19 @@ test("반복 스냅샷은 스피너 최소 시간을 다시 시작하지 않고 
     app.clock.advance(400); app.status.update("a", state, true);
     app.status.update("a", { ...state, status: "complete" }, true); await app.render();
 
-    // Only the shared indicator's tail may remain; the settled result is never delayed.
-    expect(app.text()).toBe("Completed “Short job”"); expect(app.spinner().visible).toBe(true);
-    app.clock.advance(20); await app.render(); expect(app.spinner().visible).toBe(false);
-    app.clock.advance(1000); await app.render(); expect(app.text()).toBe("Completed “Short job”");
+    // The final answer can show its completion footer while the shared spinner finishes its minimum interval.
+    expect(app.text()).toBe(""); expect(app.spinner().visible).toBe(true); expect(app.status.hasContent).toBe(true);
+    app.clock.advance(20); await app.render(); expect(app.spinner().visible).toBe(false); expect(app.status.hasContent).toBe(false);
+    app.clock.advance(1000); await app.render(); expect(app.text()).toBe("");
   } finally { await app.close(); }
 });
 
 test("취소·중단·실패는 완료와 구분하고 이전 요청의 완료 정보는 새 요청에 재사용하지 않는다", async () => {
   const app = await mount();
   try {
-    for (const [outcome, label] of [["cancelled", "Cancelled"], ["unfinished", "Stopped"], ["error", "Failed"], ["complete", "Completed"]] as const) {
+    for (const [outcome, label] of [["cancelled", "Cancelled"], ["unfinished", "Stopped"], ["error", "Failed"], ["complete", ""]] as const) {
       app.status.update("a", { status: null, output: "", error: null, sections: [user("Task"), settled(outcome)] }, true); await app.render();
-      expect(app.text()).toBe(`${label} “Task”`); expect(app.spinner().visible).toBe(false);
+      expect(app.text()).toBe(label ? `${label} “Task”` : ""); expect(app.spinner().visible).toBe(false);
     }
     app.status.update("a", { status: null, output: "", error: null, sections: [user("Old"), settled("cancelled"), user("New", "new")] }, true); await app.render();
     expect(app.text()).toBe("Ready");

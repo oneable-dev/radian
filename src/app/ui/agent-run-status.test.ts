@@ -71,16 +71,40 @@ test("세션·워크트리 전환은 요청과 실행 상태를 함께 복원하
   const app = await mount();
   try {
     app.selection.selectSession("demo:main", "a2"); await app.render();
-    expect(app.status()).toBe("Completed “Review the editor changes”"); expect(app.get("agent-run-loading").visible).toBe(false);
+    expect(app.status()).toBe(""); expect(app.get("agent-run-loading").visible).toBe(false);
+    expect(app.get("transcript-status-row").visible).toBe(false);
     app.selection.selectWorktree("demo:feature"); await app.render();
-    expect(app.status()).toBe("Completed “Fix the feature worktree”");
+    expect(app.status()).toBe(""); expect(app.get("transcript-status-row").visible).toBe(false);
     app.selection.selectSession("demo:main", "a1"); await app.render();
     expect(app.get("agent-run-loading").visible).toBe(true);
 
     app.states.a1 = { ...app.states.a1!, status: "complete" }; await app.update();
-    expect(app.status()).toBe("Completed “Implement workspace search”");
+    expect(app.status()).toBe("");
     app.clock.advance(500); await app.render(); expect(app.get("agent-run-loading").visible).toBe(false);
     expect(app.view.promptDrafts).toMatchObject({ a1: "unsent next command", a2: "second session draft", b1: "feature draft" }); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("정상 완료는 스피너 최소 시간이 끝나면 상태 행을 비우고 읽던 위치·입력 포커스를 보존한다", async () => {
+  const app = await mount();
+  try {
+    // No owned child or paste indicator should keep an otherwise empty status row open.
+    app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
+      sessions: tree.sessions.map((session) => ({ ...session, subagents: [] })),
+    })) })));
+    const scroll = app.get("session-transcript"); if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript");
+    app.mockInput.pressKey("t", { ctrl: true }); scroll.scrollTo(20); await app.render();
+    const top = scroll.scrollTop, prompt = app.get("session-prompt");
+    app.mockInput.pressKey("e", { ctrl: true }); await app.render(); const promptY = prompt.y;
+    app.clock.advance(100);
+    app.states.a1 = { ...app.states.a1!, status: "complete" }; await app.update();
+    expect(app.status()).toBe(""); expect(app.get("agent-run-loading").visible).toBe(true);
+
+    app.clock.advance(400); await app.render();
+
+    expect(app.get("agent-run-loading").visible).toBe(false); expect(app.get("transcript-status-row").visible).toBe(false);
+    expect(scroll.scrollTop).toBe(top); expect(prompt.y).toBe(promptY); expect(app.renderer.currentFocusedRenderable).toBe(prompt);
+    expect(app.view.promptDrafts.a1).toBe("unsent next command"); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -108,7 +132,7 @@ test("요청 없는 실행은 내용을 추측하지 않고 긴 요청도 작은
   try {
     app.states.a1 = { status: "working", output: "Legacy output without request metadata", error: null }; await app.update();
     expect(app.status()).toBe("Working…");
-    app.states.a1 = { status: "complete", output: "", error: null, sections: [request("restored", "A long request that should stay on one line while the screen becomes narrow")] }; await app.update();
+    app.states.a1 = { status: "working", output: "", error: null, sections: [request("restored", "A long request that should stay on one line while the screen becomes narrow")] }; await app.update();
     app.resize(60, 12); await app.render();
     expect(app.get("agent-run-status").height).toBe(1); expect(app.status().endsWith("…")).toBe(true);
     expect(app.get("session-transcript").height).toBeGreaterThan(0);

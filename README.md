@@ -274,10 +274,12 @@ A passive work-status row above the prompt shows a shared spinner and `Working o
 the latest request actually present in the selected conversation. Whitespace collapses and long
 text is clipped on grapheme/cell boundaries. Drafts, rejected input and handled commands never
 replace that request. Without request metadata it shows `Working…`, not a guessed title.
-Settled state changes immediately to `Completed`, `Cancelled`, `Stopped` or `Failed`; an unreported
-run with transcript content shows `Ready`. Completion metadata is scoped to the latest request. Spinner tails never delay
-these results, and switching/hiding a conversation cancels its indicator. Steer and queue semantics
-are unchanged.
+Normal completion removes this request banner and puts the request excerpt in the answer's completion
+footer instead. The empty status row collapses once its spinner tail finishes, unless owned-subagent
+or paste feedback still needs it. Cancellation, unconfirmed stops and failures remain explicit as
+`Cancelled`, `Stopped` or `Failed`; an unreported run with transcript content shows `Ready`. Completion metadata is scoped to
+the latest request. Spinner tails never delay results, and switching/hiding a conversation cancels
+its indicator. Steer and queue semantics are unchanged.
 
 Sections have no disclosure arrows or separate role/status heading rows. Expanded user/Agent text
 starts directly with its content. Tools use inline invocations such as `[read] path:line` or `$ command`;
@@ -370,10 +372,24 @@ than inserting display-wrap breaks. Unbound keys, timed-out prefixes and paste c
 content. Help uses the same scroll viewport and returns to the prior position/mode when closed.
 
 After a run actually settles, its final displayed section has a gray footer such as
-`Worked for 1m 30s • Sep 19 at 10:55 AM`. Runtime monotonic time measures processing from the first
+`Worked for 1m 30s • Sep 19 at 10:55 AM`, followed by a separate request line such as `“Review tab icons”`.
+Request text uses the same quotation marks as `Working on`; attachment badges stay outside them.
+The excerpt comes from the actual preceding user/skill request, never a draft or assistant output.
+Duration, completion date and time keep their existing format on the first line. The request caption
+uses its own one-line width below it; only the caption is shortened, not the original message.
+Actual SDK image blocks and explicit Radian `@"absolute path"` file references produce attachment
+badges. A single file uses its basename when it fits; narrow views fall back to counts. Badge space
+is reserved before shortening request text. Image data and full file paths are not copied into badges.
+Request previews are bounded to 4,096 UTF-16 units on grapheme boundaries; source messages remain intact.
+These optional previews need updated service code. Older services/sections keep a text-only caption,
+without guessing attachment counts from filenames or image-like text. Services are never restarted
+automatically. At widths too small for the timing metadata itself, its existing wrapping is retained.
+Runtime monotonic time measures processing from the first
 `agent_start` through final `agent_settled`, including tools, retries, compaction and coalesced queued
 follow-ups; intermediate model/tool endings do not finalize it. Queued input joined into one SDK run
-shares one footer, rather than inventing separate per-prompt durations. Idle time between runs is excluded.
+shares one footer using the latest delivered request excerpt, rather than inventing separate
+per-prompt durations. A subsequent run with no delivered request does not borrow the prior run's
+excerpt. Idle time between runs is excluded.
 The completion timestamp is formatted in the attached UI's local timezone. Failure, cancellation and
 unconfirmed outcomes use `Failed after`, `Cancelled after` and `Stopped after`, never `Worked for`.
 The footer is decorative and is not included in source selection or raw answer copying.

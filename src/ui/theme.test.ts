@@ -47,7 +47,7 @@ test("화면 전체가 터미널 기본색과 ANSI 팔레트를 사용하고 밝
   try {
     expect(rgb(app.span("Theme-sensitive transcript").fg)).toEqual([236, 236, 236]);
     expect(rgb(app.span("Theme-sensitive transcript").bg)).toEqual([20, 20, 20]);
-    expect(rgb(app.span("+ New session").fg)).toEqual([17, 119, 153]);
+    expect(rgb(app.span("×").fg)).toEqual([17, 119, 153]);
     expect(rgb(app.identitySpan().fg)).toEqual([236, 236, 236]);
     const prompt = app.renderer.root.findDescendantById("session-prompt");
     if (!(prompt instanceof PromptInput)) throw new Error("Missing Agent input");
@@ -117,7 +117,7 @@ test("자체 색상 재정의만 고정하고 나머지는 이후 터미널 테�
 
     app.renderer.emit("palette", palette(true)); await app.renderOnce();
 
-    expect(rgb(app.span("+ New session").fg)).toEqual([171, 205, 239]);
+    expect(rgb(app.span("×").fg)).toEqual([171, 205, 239]);
     expect(rgb(app.span("Theme-sensitive transcript").bg)).toEqual([250, 250, 246]);
     expect(theme.colors.accent.intent).toBe("rgb");
     expect(theme.colors.panel.intent).toBe("default");

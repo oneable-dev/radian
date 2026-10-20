@@ -13,6 +13,8 @@ import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
 import type { TranscriptSection } from "../transcript.ts";
 import { emptyTranscriptView, type TranscriptViewState } from "../transcript-preferences.ts";
+import { sameRequestSummary, type RequestSummary } from "../request-summary.ts";
+import { formatRequestCaption, requestForSection } from "./request-caption.ts";
 import { RadianLogo } from "../../ui/radian-logo.ts";
 
 // Reuse native grapheme-aware cursor/selection/layout, but never install editing or
@@ -21,9 +23,9 @@ class TranscriptBody extends EditBufferRenderable {
   handleKeyPress(_key: KeyEvent): boolean { return true; }
   handlePaste(_event: PasteEvent): void {}
 }
-type Row = { section: TranscriptSection; box: BoxRenderable; heading: BoxRenderable;
+type Row = { section: TranscriptSection; request: RequestSummary | undefined; box: BoxRenderable; heading: BoxRenderable;
   header: TranscriptBody; error: TextRenderable; bodyRow: BoxRenderable; skillTag: TextRenderable; body: TranscriptBody;
-  markdown: TranscriptMarkdown | undefined; markdownKind: "assistant" | "thinking" | undefined; completion: TextRenderable };
+  markdown: TranscriptMarkdown | undefined; markdownKind: "assistant" | "thinking" | undefined; completion: TextRenderable; completionWidth: number };
 type Target = { position: number } | { id: string; offset: number } | { reveal: true };
 export type TranscriptOptions = {
   notice(message: string): void;
@@ -93,6 +95,7 @@ export class TranscriptPanel {
     this.scroll.viewport.on("resize", this.applyTarget);
     renderer.on("focused_renderable", this.focusChanged);
     renderer.on("resize", this.resize);
+    renderer.addPostProcessFn(this.reflowCompletions);
     this.theme.scrollbars(this.scroll);
     this.theme.bind(this.scroll, (colors) => {
       this.headerSyntax.registerStyle("tag", { fg: colors.keyword, bold: true });
@@ -157,7 +160,7 @@ export class TranscriptPanel {
       const previous = this.rows.get(this.order[index] ?? "")?.section;
       return !previous || section.id !== previous.id || section.text !== previous.text || section.title !== previous.title
         || section.status !== previous.status || section.error !== previous.error || section.summary !== previous.summary
-        || section.kind !== previous.kind || section.skillName !== previous.skillName || section.command !== previous.command || section.timeoutSeconds !== previous.timeoutSeconds || !sameRunCompletion(section.completion, previous.completion);
+        || section.kind !== previous.kind || section.skillName !== previous.skillName || section.command !== previous.command || section.timeoutSeconds !== previous.timeoutSeconds || !sameRunCompletion(section.completion, previous.completion) || !sameRequestSummary(section.request, previous.request);
     });
     if (!switched && changed && !this.help.visible && !this.state?.follow && this.pending === null) this.pending = this.viewportAnchor();
     this.sessionId = id; this.visible = visible;
@@ -184,10 +187,14 @@ export class TranscriptPanel {
         if (row.body.focused || row.header.focused) this.scroll.focus();
         row.box.destroyRecursively(); this.rows.delete(key);
       }
+      let request: RequestSummary | undefined;
       for (const section of incoming) {
+        const delivered = requestForSection(section);
+        if (delivered) request = delivered;
         const row = this.rows.get(section.id) ?? this.createRow(section);
         const previousText = row.section.text;
-        row.section = section;
+        row.section = section; row.request = request;
+        if (section.completion) request = undefined; // A later run without a delivered request must not borrow this one.
         if (previousText !== section.text) this.replaceBody(row, section.text);
         if (state && section.kind === "thinking" && Object.hasOwn(state.folded, section.id)) {
           // Old heading selections cannot be applied to the now always-visible body.
@@ -247,7 +254,7 @@ export class TranscriptPanel {
       wrapMode: "word", cursorStyle: { style: "block", blinking: false }, scrollMargin: 0 });
     body.setText(section.text); bodyRow.add(skillTag); bodyRow.add(body);
     const completion = new TextRenderable(this.renderer, { width: "100%", flexShrink: 0, wrapMode: "word", selectable: false, visible: false, marginTop: 1 });
-    const row: Row = { section, box, heading, header, error, bodyRow, skillTag, body, markdown: undefined, markdownKind: undefined, completion };
+    const row: Row = { section, request: undefined, box, heading, header, error, bodyRow, skillTag, body, markdown: undefined, markdownKind: undefined, completion, completionWidth: 0 };
     box.add(heading); box.add(error); box.add(bodyRow); box.add(completion); this.scroll.add(box); this.rows.set(section.id, row);
     for (const reader of [header, body]) {
       this.readers.add(reader);
@@ -373,11 +380,28 @@ export class TranscriptPanel {
     row.body.cursorColor = colors.accent;
     row.body.selectionBg = this.legacy ? colors.selected : blendColors(background, colors.accent, 0.38);
     row.body.selectionFg = colors.text;
-    row.completion.visible = !!section.completion;
-    row.completion.content = section.completion ? formatRunCompletion(section.completion) + (section.completion.warning ? `\n${section.completion.warning}` : "") : "";
-    row.completion.fg = section.completion?.warning ? colors.warning : transcriptThinkingColor(colors);
+    this.paintCompletion(row);
+  }
+  private paintCompletion(row: Row): void {
+    if (this.disposed || row.box.isDestroyed) return;
+    const completion = row.section.completion, colors = this.theme.colors;
+    row.completionWidth = row.completion.width;
+    row.completion.visible = !!completion;
+    const request = row.request;
+    const caption = request ? formatRequestCaption({ ...request, text: request.text ? `“${request.text}”` : "" }, row.completion.width) : "";
+    const text = completion ? formatRunCompletion(completion) + (caption ? `\n${caption}` : "")
+      + (completion.warning ? `\n${completion.warning}` : "") : "";
+    if (row.completion.plainText !== text) row.completion.content = text;
+    row.completion.fg = completion?.warning ? colors.warning : transcriptThinkingColor(colors);
     row.completion.bg = colors.panel;
   }
+  // Native widths settle after size callbacks; repaint only completion rows whose measured width changed.
+  private reflowCompletions = (): void => {
+    if (this.disposed || this.scroll.isDestroyed) return;
+    for (const row of this.rows.values()) if (row.section.completion && row.completion.width !== row.completionWidth) {
+      this.prepareLayoutChange(); this.paintCompletion(row);
+    }
+  };
   private markdownChanging = (): void => {
     if (!this.visible || this.disposed || this.help.visible || this.pending) return;
     this.reconcileSelection();
@@ -709,6 +733,7 @@ export class TranscriptPanel {
     this.rememberScroll(); this.disposed = true;
     this.renderer.off("focused_renderable", this.focusChanged);
     this.renderer.off("resize", this.resize);
+    this.renderer.removePostProcessFn(this.reflowCompletions);
     this.scroll.verticalScrollBar.off("change", this.rememberScroll);
     this.scroll.content.off("resize", this.applyTarget); this.scroll.viewport.off("resize", this.applyTarget);
     for (const row of this.rows.values()) {

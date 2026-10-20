@@ -3,16 +3,18 @@ import type { ExecutionState } from "../session-registry.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
 import { uiTheme, type UiColors } from "../../ui/theme.ts";
+import type { RequestSummary } from "../request-summary.ts";
+import { formatRequestCaption, requestForSection } from "./request-caption.ts";
 
-type Display = { label: string; detail: string; color: "accent" | "success" | "error" | "warning" | "muted" };
+type Display = { label: string; detail: string; color: "accent" | "error" | "warning" | "muted"; request?: RequestSummary };
 
 function display(state: ExecutionState | null | undefined): Display {
   const sections = state?.sections ?? [];
   const index = sections.findLastIndex((section) => section.kind === "user" || section.skillName !== undefined);
   const section = index >= 0 ? sections[index] : undefined;
-  const request = singleLine(section ? section.skillName !== undefined ? `/skill:${section.skillName}` : section.text : "");
+  const summary = requestForSection(section), request = summary?.text ?? "";
   const detail = request ? ` “${request}”` : "";
-  if (state?.status === "working") return { label: request ? "Working on" : "Working…", detail, color: "accent" };
+  if (state?.status === "working") return { label: summary && (request || summary.images || summary.files) ? "Working on" : "Working…", detail, color: "accent", ...(summary ? { request: summary } : {}) };
   if (state?.status === "failure") return { label: "Failed", detail: state.error ? `: ${singleLine(state.error)}` : detail, color: "error" };
   // Timing/status metadata must belong to this request, not an earlier completed turn.
   const turn = sections.slice(Math.max(0, index));
@@ -21,7 +23,7 @@ function display(state: ExecutionState | null | undefined): Display {
   if (outcome === "cancelled" || !outcome && assistant?.status === "cancelled") return { label: "Cancelled", detail, color: "warning" };
   if (outcome === "unfinished" || !outcome && assistant?.status === "unfinished") return { label: "Stopped", detail, color: "warning" };
   if (outcome === "error" || state?.error) return { label: "Failed", detail: state?.error ? `: ${singleLine(state.error)}` : detail, color: "error" };
-  if (outcome === "complete" || state?.status === "complete") return { label: "Completed", detail, color: "success" };
+  if (outcome === "complete" || state?.status === "complete") return { label: "", detail: "", color: "muted" };
   const hasTranscript = state?.sections !== undefined ? sections.length > 0 : !!state?.output;
   return { label: hasTranscript ? "Ready" : "", detail: "", color: "muted" };
 }
@@ -67,9 +69,11 @@ export class RunStatus {
     this.spinner.root.fg = colors.accent;
     this.text.visible = !!this.current.label;
     const width = Math.max(0, this.root.width - 2), label = truncateCells(this.current.label, width);
+    const remaining = width - Bun.stringWidth(label), request = this.current.request;
+    const caption = request ? formatRequestCaption({ ...request, text: request.text ? `“${request.text}”` : "" }, remaining - 1) : "";
     this.text.content = new StyledText([
       { __isChunk: true, text: label, fg: colors[this.current.color] },
-      { __isChunk: true, text: truncateCells(this.current.detail, width - Bun.stringWidth(label)), fg: colors.text },
+      { __isChunk: true, text: request ? caption ? ` ${caption}` : "" : truncateCells(this.current.detail, remaining), fg: colors.text },
     ]);
   }
 

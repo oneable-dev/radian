@@ -1,5 +1,6 @@
 import { parseSkillBlock, type AgentSession, type AgentSessionEvent, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { parseRunCompletion, runCompletionEntryType, systemRunClock, type RunClock, type RunCompletion } from "./run-completion.ts";
+import { summarizeRequest, type RequestSummary } from "./request-summary.ts";
 
 type AgentMessage = AgentSession["messages"][number];
 
@@ -18,6 +19,7 @@ export type TranscriptSection = {
   readonly command?: string;
   readonly timeoutSeconds?: number;
   readonly completion?: RunCompletion;
+  readonly request?: RequestSummary;
 };
 type Message = { id: string; message: AgentMessage; streaming: boolean; noticeStatus?: TranscriptStatus };
 type Tool = { name: string; arguments: unknown; text: string; status: TranscriptStatus; error?: string };
@@ -162,12 +164,16 @@ export class SessionTranscript {
       switch (message.role) {
         case "user": {
           const text = contentText(message.content), skill = parseSkillBlock(text);
-          if (!skill) { sections.push({ id, kind: "user", title: "You", text, status: "complete" }); break; }
+          const images = typeof message.content === "string" ? 0 : message.content.filter((part) => part.type === "image").length;
+          const prose = typeof message.content === "string" ? message.content : message.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("");
+          if (!skill) { sections.push({ id, kind: "user", title: "You", text, status: "complete", request: summarizeRequest(prose, images) }); break; }
           const name = skill.name.replace(/\s+/g, " ").trim() || "Skill";
+          const requestProse = parseSkillBlock(prose)?.userMessage || `/skill:${name}`;
           // The SDK's explicit invocation metadata, not a SKILL.md filename, identifies
           // this compact item. Its instruction body stays in SDK history, not the UI.
-          sections.push({ id: `${id}:skill`, kind: "notice", title: name, text: name, skillName: name, status: "complete" });
-          if (skill.userMessage) sections.push({ id: `${id}:request`, kind: "user", title: "You", text: skill.userMessage, status: "complete" });
+          sections.push({ id: `${id}:skill`, kind: "notice", title: name, text: name, skillName: name, status: "complete",
+            ...(!skill.userMessage ? { request: summarizeRequest(`/skill:${name}`, images) } : {}) });
+          if (skill.userMessage) sections.push({ id: `${id}:request`, kind: "user", title: "You", text: skill.userMessage, status: "complete", request: summarizeRequest(requestProse, images) });
           break;
         }
         case "assistant": {

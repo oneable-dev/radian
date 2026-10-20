@@ -28,13 +28,16 @@ export class SubagentSummary {
       this.paint();
     });
   }
+  // Reserve the row before its first measured width (or while returning from a hidden zero-width pane).
+  get hasContent(): boolean { return this.active && this.children.length > 0 && (this.width === 0 || this.width >= 22); }
+
   update(children: readonly Subagent[], active: boolean): void {
     this.children = children; this.active = active; this.paint();
   }
   resize(width: number): void { this.width = width; this.paint(); }
   private paint(): void {
     if (this.root.isDestroyed) return;
-    const visible = this.active && this.children.length > 0 && this.width >= 22;
+    const visible = this.hasContent && this.width > 0;
     this.root.visible = visible;
     const working = this.children.filter((child) => child.status === "working").length;
     const complete = this.children.filter((child) => child.status === "complete").length;

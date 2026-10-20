@@ -219,7 +219,7 @@ export class AgentPanel {
   private resizeComposer = (): void => {
     if (this.disposed || !this.composer || !this.statusRow || this.prompt.isDestroyed) return;
     const requested = Math.max(this.prompt.lineCount, this.prompt.editorView.getTotalVirtualLineCount());
-    const showStatus = this.runStatus.hasContent || this.prompt.activity.root.visible || this.children.root.visible;
+    const showStatus = this.runStatus.hasContent || this.prompt.activity.root.visible || this.children.hasContent;
     const signature = JSON.stringify([this.root.height, this.prompt.width, this.prompt.height, this.composer.height, this.sessions.root.visible,
       this.statusRows, showStatus, this.sessionStatus.root.height, requested, this.completion?.open, this.completion?.root.height]);
     if (signature === this.composerLayout) return;
