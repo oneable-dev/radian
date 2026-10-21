@@ -352,7 +352,7 @@ export class TranscriptPanel {
     const body = new TranscriptBody(this.renderer, { width: "auto", height: "auto", minWidth: 0, minHeight: 1, flexGrow: 1, flexShrink: 0,
       wrapMode: "word", cursorStyle: { style: "block", blinking: false }, scrollMargin: 0 });
     body.setText(section.text); bodyRow.add(skillTag); bodyRow.add(body);
-    const completion = new TextRenderable(this.renderer, { width: "100%", flexShrink: 0, wrapMode: "word", selectable: false, visible: false, marginTop: 1 });
+    const completion = new TextRenderable(this.renderer, { width: "100%", flexShrink: 0, wrapMode: "word", selectable: false, visible: false });
     const row: Row = { section, request: undefined, box, heading, header, error, bodyRow, skillTag, body, markdown: undefined, markdownKind: undefined, completion, completionWidth: 0 };
     box.add(heading); box.add(error); box.add(bodyRow); box.add(completion); this.scroll.add(box); this.rows.set(section.id, row);
     for (const reader of [header, body]) {
@@ -441,6 +441,8 @@ export class TranscriptPanel {
     row.box.backgroundColor = background; row.box.border = false;
     row.box.paddingX = plain ? 0 : 1;
     row.box.paddingY = plain ? 0 : spacing.verticalInset;
+    // One owner separates visible content without leaving margins beside hidden headings or errors.
+    row.box.gap = this.legacy ? 0 : spacing.bodyGap;
     row.heading.visible = !cancelled && !skill && (folded || !this.legacy && (section.kind === "tool" || section.kind === "notice"));
     const markdownKind = !this.legacy && !skill && (section.kind === "assistant" || section.kind === "thinking") ? section.kind : undefined;
     if (row.markdownKind !== markdownKind) {
@@ -466,15 +468,12 @@ export class TranscriptPanel {
       if (!row.preview) {
         row.preview = new TranscriptImagePreview(this.renderer, `image-preview:${section.id}`, this.options.image,
           () => this.prepareLayoutChange(), () => Math.max(1, this.scroll.viewport.height - 5));
-        row.preview.root.marginTop = spacing.bodyGap;
         row.box.remove(row.completion); row.box.add(row.preview.root); row.box.add(row.completion);
       }
       this.updatePreview(row);
     } else if (row.preview) { row.preview.dispose(); row.preview.root.destroyRecursively(); this.imagePreviews.delete(row); delete row.preview; }
-    row.bodyRow.marginTop = row.heading.visible && !folded ? spacing.bodyGap : 0;
     row.body.height = skill ? 1 : "auto"; row.body.wrapMode = skill ? "none" : "word";
     row.skillTag.visible = skill;
-    row.error.marginTop = this.legacy ? 0 : spacing.bodyGap;
     const headingText = this.headingText(section, folded);
     if (row.header.plainText !== headingText) {
       const cursor = row.header.cursorOffset;

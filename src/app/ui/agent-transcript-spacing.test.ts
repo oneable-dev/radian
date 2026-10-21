@@ -120,6 +120,46 @@ test.each([120, 60])("너비 %i에서 Transcript는 섹션 사이와 상단만 �
   } finally { await app.close(); }
 });
 
+test.each(["assistant", "thinking"] as const)("%s 오류는 섹션 경계·본문·완료 정보 사이를 한 줄씩 띄운다", async (kind) => {
+  // 헤더 없는 본문에 뒤늦게 오류가 생기면 섹션 간격과 내부 간격이 중복되지 않아야 한다.
+  const tool: TranscriptSection = { id: "edit", kind: "tool", title: "edit", text: "HIDDEN_RESULT", status: "complete" };
+  const prose: TranscriptSection = { id: "prose", kind, title: kind, text: "**PROSE_BODY**", status: "streaming" };
+  const failed: TranscriptSection = { ...prose, status: "error", error: "ECONNRESET: The socket connection was closed unexpectedly. ERROR_END" };
+  const app = await mount(tool, [prose]);
+  const expectErrorGaps = () => {
+    const [toolCard, proseCard] = app.cards();
+    const lines = app.captureCharFrame().split("\n").map((line) => line.slice(app.scroll.viewport.x, app.scroll.viewport.x + app.scroll.viewport.width));
+    const errorStart = lines.findIndex((line) => line.includes("ECONNRESET"));
+    const errorEnd = lines.findIndex((line) => line.includes("ERROR_END"));
+    const body = lines.findIndex((line) => line.includes("PROSE_BODY"));
+    expect(errorStart - toolCard!.y - toolCard!.height).toBe(1);
+    expect(errorEnd).toBeGreaterThanOrEqual(errorStart);
+    expect(body - errorEnd).toBe(2);
+    expect(lines[errorStart - 1]!.trim()).toBe(""); expect(lines[body - 1]!.trim()).toBe("");
+    expectVerticalInsets(proseCard!, 0);
+    const content = proseCard!.getChildren().filter((child) => child.visible);
+    for (let index = 1; index < content.length; index++) expect(content[index]!.y - content[index - 1]!.y - content[index - 1]!.height).toBe(1);
+  };
+  try {
+    // 오류 줄바꿈과 Markdown·원문 보기 전환 모두 같은 화면 간격을 사용한다.
+    await app.update([tool, failed]);
+    for (const width of [120, 60, 120]) {
+      app.resize(width, 30); await app.render(); expectErrorGaps();
+      app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("END"); app.mockInput.pressEnter();
+      await app.render(); expectErrorGaps();
+      app.mockInput.pressEscape(); await app.render(); expectErrorGaps();
+    }
+    await app.update([tool, { ...failed, completion: { startedAt: 1000, completedAt: 2000, durationMs: 1000, outcome: "error" } }]);
+
+    // 완료 정보가 추가되어도 보이는 항목 사이만 띄우고 숨겨진 오류는 빈 줄을 남기지 않는다.
+    expectErrorGaps(); expect(app.captureCharFrame()).toContain("Failed after");
+    await app.update([tool, prose]);
+    expect(app.captureCharFrame()).not.toContain("ECONNRESET");
+    expectVerticalInsets(app.cards()[1]!, 0); expect(app.cards()[1]!.height).toBe(1);
+    expect(app.view.promptDrafts.a1).toBe("Keep my draft"); expect(app.prompts).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("평문·구조화 출력 전환에도 gap과 섹션 여백을 중복 적용하지 않는다", async () => {
   const app = await mount(sections[0], sections.slice(1));
   try {
@@ -195,6 +235,11 @@ test.each([120, 60])("너비 %i의 접힌·펼친 명령 오류 위에는 빈 �
       expect(error).toBeGreaterThan(1);
       expect(lines[error - 1]!.trim()).toBe("");
       expect(lines[error - 2]!.trim()).not.toBe("");
+      const result = lines.findIndex((line) => line.includes("RAW_TOOL_RESULT"));
+      if (result >= 0) {
+        expect(result - error).toBe(2);
+        expect(lines[result - 1]!.trim()).toBe("");
+      }
     };
 
     // Folding, expansion and repainting must use the same one-row error separation.
