@@ -48,7 +48,7 @@ export async function openRepositoryRuntime(repositoryId: string, offline: boole
     const registry = new SessionRegistry(catalog, piSessionFactory({ ...options, sessionDir, modelRuntime, ...(usage ? { usageMonitor: usage } : {}) }));
     runtime = new WorkspaceRuntime(instance, registry, catalog, repository, offline, store, manifest?.preferences ?? emptyPreferences,
       new SessionHistory(catalog, registry, sessionDir, store, !offline), paths.directory, usage, settings.value.exists ? settings.value.path : configPath);
-    await runtime.restore(manifest?.records ?? []);
+    await runtime.restore(manifest?.records ?? [], manifest?.repositories ?? []);
     await runtime.watchRepository();
     runtime.startRetention();
     ready = true;
@@ -68,6 +68,7 @@ export class WorkspaceRuntime {
   private readonly editors: EditorSessions;
   private readonly terminals: TerminalSessions;
   private readonly failedRecovery = new Map<string, SessionRecord>();
+  private readonly restoredSessionOrder = new Map<string, number>();
   private readonly unsubscribe: () => void;
   private notice = "";
   private persistenceError = "";
@@ -134,9 +135,17 @@ export class WorkspaceRuntime {
     this.catalog.replace([this.repository], retained);
   }
 
-  async restore(records: readonly SessionRecord[]): Promise<void> {
-    for (const record of records) {
-      if (record.lifecycle === "closed") continue;
+  async restore(records: readonly SessionRecord[], repositories: readonly Repository[] = []): Promise<void> {
+    // Saved tab IDs determine position; conversation indexes only determine recovery membership.
+    const savedOrder = new Map<string, number>();
+    for (const repo of repositories) for (const tree of repo.worktrees) for (const session of tree.sessions) {
+      const key = JSON.stringify([tree.id, session.id]);
+      if (!savedOrder.has(key)) savedOrder.set(key, savedOrder.size);
+    }
+    const rank = (record: SessionRecord) => savedOrder.get(JSON.stringify([record.worktreeId, record.id])) ?? Number.MAX_SAFE_INTEGER;
+    const open = records.filter(record => record.lifecycle !== "closed").toSorted((a, b) => rank(a) - rank(b));
+    for (const record of open) {
+      this.restoredSessionOrder.set(record.id, this.restoredSessionOrder.size);
       const restored = await this.registry.restore(record);
       if (!restored.ok) {
         const result = { id: crypto.randomUUID(), outcome: "error" as const, completedAt: Date.now(), ...(record.state.request ? { request: record.state.request } : {}) };
@@ -151,16 +160,21 @@ export class WorkspaceRuntime {
     const saved = await this.checkpoint(); if (!saved.ok) throw saved.error;
   }
 
-  get snapshot(): RuntimeSnapshot {
+  private get repositories(): readonly Repository[] {
     const failed = [...this.failedRecovery.values()];
-    const repositories = this.registry.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({
+    return this.registry.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({
       ...tree, sessions: [...tree.sessions, ...failed.filter((record) => record.worktreeId === tree.id).map((record) => ({
         id: record.id, name: record.name, status: record.state.status, subagents: record.subagents,
         ...(record.state.request ? { request: record.state.request } : {}), ...(record.state.result ? { result: record.state.result } : {}),
         ...(record.state.attention ? { attention: record.state.attention } : {}),
-      }))],
+      }))].sort((a, b) =>
+        (this.restoredSessionOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (this.restoredSessionOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)),
     })) }));
-    const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
+  }
+
+  get snapshot(): RuntimeSnapshot {
+    const repositories = this.repositories;
+    const details = Object.fromEntries([...this.registry.records, ...this.failedRecovery.values()].map((record) => [record.id, record.state]));
     return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["shared-daemon", "repository-runtime", "history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "session-exit", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention"], repositoryId: this.repositoryId,
       ...(this.retentionStatus ? { sessionRetention: this.retentionStatus } : {}),
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
@@ -437,7 +451,7 @@ export class WorkspaceRuntime {
   }
   private async checkpoint(manifest?: RuntimeManifest): Promise<Result<void, ExpectedError>> {
     const checkpoint = manifest ?? { version: protocolVersion, repositoryId: this.repositoryId,
-      repositories: this.registry.snapshot, records: [...this.registry.checkpointRecords, ...this.failedRecovery.values()], preferences: this.preferences };
+      repositories: this.repositories, records: [...this.registry.checkpointRecords, ...this.failedRecovery.values()], preferences: this.preferences };
     const saved = await this.store.save(checkpoint);
     if (saved.ok) this.registry.acknowledgeCheckpoint(checkpoint.records);
     if (!saved.ok && !this.persistenceError) console.error(`[radian:${saved.error.code}] Checkpoint failed`, saved.error);
@@ -454,7 +468,7 @@ export class WorkspaceRuntime {
     this.unsubscribe();
     // Stopping the service is NOT explicit session close. Freeze open intent before teardown emits removals.
     const manifest: RuntimeManifest = { version: protocolVersion, repositoryId: this.repositoryId,
-      repositories: this.registry.snapshot, records: [...this.registry.checkpointRecords, ...this.failedRecovery.values()], preferences: this.preferences };
+      repositories: this.repositories, records: [...this.registry.checkpointRecords, ...this.failedRecovery.values()], preferences: this.preferences };
     const stopped = await collectCleanup([this.watcher ? this.watcher.stop().then(() => ok(undefined)) : Promise.resolve(ok(undefined)),
       this.checkpoint(manifest), this.registry.shutdown(), this.editors.stop(), this.terminals.stop(),
       this.usage ? this.usage.stop().then(() => ok(undefined)) : Promise.resolve(ok(undefined))], "Checkpoint or runtime shutdown failed.");

@@ -128,7 +128,8 @@ export class RepositoryHost {
         if (this.activating || this.runtime) return this.fetch(request);
         if (command.value.type === "stop") { setTimeout(this.requestStop, 20); return Response.json({ ok: true, value: null }); }
         if (command.value.type === "preferences") {
-          this.manifest = { ...this.manifest, repositories: [this.repository], preferences: command.value.preferences };
+          // The cold catalog has no live tabs; preserve the last runtime's saved order.
+          this.manifest = { ...this.manifest, preferences: command.value.preferences };
           this.saving = this.store.save(this.manifest);
           const saved = await this.saving;
           this.warning = saved.ok ? "" : `Runtime persistence failed: ${saved.error.message}`; this.emit();
