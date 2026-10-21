@@ -32,6 +32,7 @@ export type GitActions = {
 type Cache = { state: GitViewState; source: GitSource; data?: GitSnapshot; details?: GitDetails | undefined; comparison?: GitComparison | undefined; error?: string | undefined; diffError?: string | undefined };
 type Ask = { context: GitContext; worktree: Worktree; session: string | null; createdSession?: string; owner: Renderable | null; sending: boolean };
 const workingKey = "__working_tree__";
+const refKinds = ["local", "remote", "tag"] as const;
 const display = (value: string) => value.replace(/[\x00-\x1f\x7f-\x9f]/g, (character) => `\\x${character.charCodeAt(0).toString(16).padStart(2, "0")}`);
 const within = (target: Renderable | null, parent: Renderable): boolean => {
   for (let current: Renderable | null = target; current; current = current.parent instanceof Renderable ? current.parent : null) if (current === parent) return true;
@@ -121,7 +122,7 @@ export class GitPanel {
     this.right = new BoxRenderable(renderer, { id: "git-right", width: "38%", minWidth: 16, flexShrink: 0, minHeight: 0, paddingLeft: 1, flexDirection: "column", border: ["left"] });
     const rightTabs = this.row(); rightTabs.marginBottom = 1;
     for (const name of ["Commit", "Refs"] as const) {
-      const control = button(name, () => { const state = this.cache?.state; if (state) { this.remember(); state.right = name === "Commit" ? "commit" : "refs"; this.persist(); this.render(); } }, name, "work-tab");
+      const control = button(name, () => this.setRight(name === "Commit" ? "commit" : "refs"), name, "work-tab");
       this.rightButtons.push(control); rightTabs.add(control);
     }
     this.right.add(rightTabs);
@@ -139,7 +140,7 @@ export class GitPanel {
     this.refsPanel = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, flexDirection: "column" });
     const refTabs = this.row(); refTabs.marginBottom = 1;
     for (const [index, label] of ["Local", "Remote", "Tags"].entries()) {
-      const control = button(label, () => { if (this.cache) { this.remember(); this.cache.state.refs = (["local", "remote", "tag"] as const)[index]!; this.persist(); this.render(); } }, label, "work-tab");
+      const control = button(label, () => this.setRefs(refKinds[index]!), label, "work-tab");
       this.refButtons.push(control); refTabs.add(control);
     }
     this.refsPanel.add(refTabs);
@@ -202,7 +203,7 @@ export class GitPanel {
     this.topButtons[1]!.active = state.tab === "reflog";
     this.rightButtons[0]!.active = state.right === "commit";
     this.rightButtons[1]!.active = state.right === "refs";
-    for (const [index, kind] of ["local", "remote", "tag"].entries()) this.refButtons[index]!.active = state.refs === kind;
+    for (const [index, kind] of refKinds.entries()) this.refButtons[index]!.active = state.refs === kind;
   }
   get modal(): boolean { return this.dialog.visible; }
   focus(): void { if (this.root.visible && this.cache) this.history.root.focus(); }
@@ -224,10 +225,14 @@ export class GitPanel {
         : [...this.refButtons, this.refs.root])] : [])];
   }
   private visible(target: Renderable): boolean { for (let node: Renderable | null = target; node; node = node.parent as Renderable | null) if (!node.visible) return false; return true; }
+  private tabGroup(): Button[] | undefined {
+    return [this.topButtons, this.rightButtons, this.refButtons].find(group => group.some(control => control.focused && this.visible(control)));
+  }
   keyContext(): KeyContext | null {
     const focused = this.renderer.currentFocusedRenderable;
     if (!this.root.visible || !focused) return null;
     if (focused === this.prompt) return "git-prompt";
+    if (!this.dialog.visible && this.tabGroup()) return "git-tabs";
     if ([this.history.root, this.files.root, this.refs.root, this.details, this.diffFocus].some((target) => within(focused, target))) return "git";
     return null;
   }
@@ -249,6 +254,9 @@ export class GitPanel {
     const context = this.keyContext() ?? "button";
     const hint = (command: CommandId, label: string) => ({ key: this.hint(command, context), label });
     if (context === "git-prompt") return [hint("git.submit", "Send"), hint("git.newline", "New line"), ...(this.prompt.canInspect ? [hint("git.inspect", "Inspect")] : []), hint("git.cancel", "Cancel")];
+    if (context === "git-tabs") return [hint("button.activate", "Select"),
+      { key: [this.hint("git.tab-previous", context), this.hint("git.tab-next", context)].filter(Boolean).join("/"), label: "Tabs" },
+      ...(this.canGoBack ? [hint("git.back", "Back")] : [])];
     const target = this.context;
     return [...(target ? [hint("git.ask", `Ask ${target.label.split(" ")[0]!.toLowerCase()}`), hint("git.copy", target.label.startsWith("File") ? "Copy path" : target.label.startsWith("Branch") || target.label.startsWith("Tag") ? "Copy name" : "Copy hash")] : []),
       hint(context === "button" ? "button.activate" : "git.open", "Select"), hint("git.refresh", "Refresh"), ...(this.canGoBack ? [hint("git.back", "Back")] : [])];
@@ -307,6 +315,24 @@ export class GitPanel {
   private setTab(tab: GitViewState["tab"]): void {
     if (!this.cache) return;
     this.remember(); this.cache.state.tab = tab; this.pendingRestore = true; this.persist(); this.render(); this.history.root.focus();
+  }
+  private setRight(tab: GitViewState["right"]): void {
+    if (!this.cache) return;
+    this.remember(); this.cache.state.right = tab; this.persist(); this.render();
+  }
+  private setRefs(kind: GitViewState["refs"]): void {
+    if (!this.cache) return;
+    this.remember(); this.cache.state.refs = kind; this.persist(); this.render();
+  }
+  private moveTab(direction: -1 | 1): void {
+    const group = this.tabGroup(); if (!group) return;
+    const current = group.findIndex(control => control.focused);
+    const index = Math.max(0, Math.min(group.length - 1, current + direction));
+    if (group === this.topButtons) this.setTab(index === 0 ? "commits" : "reflog");
+    else if (group === this.rightButtons) this.setRight(index === 0 ? "commit" : "refs");
+    else this.setRefs(refKinds[index]!);
+    // Keep subsequent navigation within the same strip instead of jumping to its content.
+    group[index]?.focus();
   }
   private filter(reference: string | null): void {
     if (!this.cache) return;
@@ -499,6 +525,8 @@ export class GitPanel {
       case "git.refresh": this.refresh(); return;
       case "git.more": this.more(); return;
       case "git.back": if (this.canGoBack) this.back(); return;
+      case "git.tab-previous": this.moveTab(-1); return;
+      case "git.tab-next": this.moveTab(1); return;
       case "git.open": list?.open(); return;
       case "git.previous": case "git.next": case "git.first": case "git.last":
         if (list) { list.move(command.slice(4) as "previous" | "next" | "first" | "last"); return; }
@@ -522,6 +550,7 @@ export class GitPanel {
     this.remember();
   }
   available(command: CommandId): boolean {
+    if (command === "git.tab-previous" || command === "git.tab-next") return this.root.visible && !this.dialog.visible && !!this.cache && !!this.tabGroup();
     if (command === "git.more") return this.root.visible && this.canLoadMore;
     if (command === "git.back") return this.root.visible && !this.dialog.visible && within(this.renderer.currentFocusedRenderable, this.root) && this.canGoBack;
     if (command === "git.left" || command === "git.right") return within(this.renderer.currentFocusedRenderable, this.diffFocus);

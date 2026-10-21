@@ -63,6 +63,38 @@ async function mount(initial?: WorkViewPreferences, clock?: ManualClock) {
   };
 }
 
+test.each(["arrows", "vim"] as const)("터미널 탭의 %s 탐색은 포커스한 탭을 기준으로 전환하고 쉘에 키를 보내지 않는다", async navigation => {
+  // 활성 터미널과 포커스한 비활성 탭이 달라도 포커스 위치를 기준으로 이동한다.
+  const app = await mount();
+  const tab = (id: string) => app.renderer.root.findDescendantById(`terminal-tab:${id}`)!.getChildren()[0]!;
+  const move = (next: boolean) => navigation === "arrows" ? app.mockInput.pressArrow(next ? "right" : "left") : app.mockInput.pressKey(next ? "l" : "h");
+  try {
+    await app.createTerminal(); await app.visible("Shell shell-1");
+    app.leader("n"); await app.visible("Shell shell-2"); app.leader("n"); await app.visible("Shell shell-3");
+    tab("shell-1").focus(); await app.renderOnce();
+
+    // 연결 완료가 탐색 중인 탭에서 PTY로 포커스를 빼앗지 않아야 한다.
+    move(true); await app.visible("Shell shell-2");
+    expect(app.renderer.currentFocusedRenderable).toBe(tab("shell-2"));
+    move(true); await app.visible("Shell shell-3"); move(false); await app.visible("Shell shell-2"); await app.renderOnce();
+
+    expect(app.renderer.currentFocusedRenderable).toBe(tab("shell-2"));
+    expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-2");
+    expect(app.inputs).toEqual([]); expect(app.created).toHaveLength(3); expect(app.closed).toEqual([]);
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("h/l Terminal");
+    app.mockInput.pressEnter(); await app.renderOnce();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
+
+    // PTY로 돌아간 뒤에는 같은 탐색 키도 원래 쉘 입력으로 전달한다.
+    app.mockInput.pressKey("h"); app.mockInput.pressKey("l");
+    app.mockInput.pressKey("n", { ctrl: true }); app.mockInput.pressKey("p", { ctrl: true });
+    app.mockInput.pressArrow("left"); app.mockInput.pressArrow("right");
+    expect(app.inputs).toContain("68"); expect(app.inputs).toContain("6c");
+    expect(app.inputs).toContain("0e"); expect(app.inputs).toContain("10"); expect(app.inputs.length).toBeGreaterThanOrEqual(6);
+    expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-2");
+  } finally { await app.close(); }
+});
+
 test("Terminal viewport는 상단 탭 없이 작업 패널을 채우고 리사이즈해도 쉘을 다시 만들지 않는다", async () => {
   // The real native terminal is resized through the attachment boundary, not restarted.
   const app = await mount();

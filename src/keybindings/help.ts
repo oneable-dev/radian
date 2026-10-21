@@ -1,4 +1,4 @@
-import { formatKeys, type Keymap } from "./config.ts";
+import { formatKeys, isImplicitArrowBinding, type Keymap } from "./config.ts";
 import { inScope, type CommandId, type KeyContext } from "./commands.ts";
 
 const labels: Partial<Record<CommandId, string>> = {
@@ -22,7 +22,7 @@ export function keymapHelp(keymap: Keymap, context: KeyContext, available: (comm
     for (const binding of keymap.bindings) {
       const common = binding.scope === "global" || binding.scope === "app" || binding.scope === "pty"
         || binding.command === "app.help" || binding.command === "focus.next" || binding.command === "focus.previous";
-      if (common !== global || !inScope(binding.scope, context) || !available(binding.command)) continue;
+      if (common !== global || !inScope(binding.scope, context) || !available(binding.command) || isImplicitArrowBinding(binding)) continue;
       const keys = groups.get(binding.command) ?? [];
       const key = formatKeys(binding.keys);
       if (!keys.includes(key)) keys.push(key);
@@ -37,5 +37,5 @@ export function keymapHelp(keymap: Keymap, context: KeyContext, available: (comm
       return width < 28 ? key + " ".repeat(28 - width) + description : `${key}\n  ${description}`;
     }).join("\n") || "No additional bindings in this context.";
   };
-  return `Current context: ${context}\n\n${rows(false)}\n\nApplication shortcuts\n\n${rows(true)}\n\nInput ownership\n\nEnter sends the current Agent input, even with suggestions open; Tab inserts the selected completion. Shift+Enter inserts a newline (Alt+Enter is an alternative). Paste never sends automatically.\n\nUnbound input, mouse and paste in Editor/Terminal belong to the embedded program. F1 stays native there. The configured application leader remains available.\n\nThe active keybindings are shown above, including user overrides. Read-only details use arrows/j/k and PgUp/PgDn; Esc returns to the previous focus.`;
+  return `Current context: ${context}\n\n${rows(false)}\n\nApplication shortcuts\n\n${rows(true)}\n\nInput ownership\n\nEnter sends the current Agent input, even with suggestions open; Tab inserts the selected completion. Shift+Enter inserts a newline (Alt+Enter is an alternative). Paste never sends automatically.\n\nUnbound input, mouse and paste in Editor/Terminal belong to the embedded program. F1 stays native there. The configured application leader remains available.\n\nThe active keybindings are shown above, including user overrides. Read-only details use j/k and PgUp/PgDn; Esc returns to the previous focus.`;
 }

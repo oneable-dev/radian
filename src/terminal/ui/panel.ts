@@ -80,6 +80,7 @@ export class TerminalPanel {
   get input(): Renderable | undefined { return this.surface?.root; }
   get canClose(): boolean { return !!this.selected && !!this.actions; }
   get canScroll(): boolean { return this.surface?.canScroll ?? false; }
+  get tabsFocused(): boolean { return this.root.visible && [...this.tabButtons.values()].some(button => button.focused); }
   get focusTargets(): Renderable[] {
     return [...this.tabButtons.values(), this.newButton, this.closeButton, this.reconnectButton, ...(this.input ? [this.input] : [])].filter((item) => item.visible);
   }
@@ -148,12 +149,21 @@ export class TerminalPanel {
     });
   }
   canSelect(index: number): boolean { return this.root.visible && !!this.items[index]; }
-  select(index: number): void {
+  select(index: number, focusInput = true): void {
     const item = this.items[index];
     if (!this.root.visible || !item || !this.worktree) return;
     this.intent++;
-    if (item.id === this.selected) { this.focus(); return; }
-    this.selectionChanged(this.worktree.id, item.id); this.activate(item.id, true); this.paintTabs();
+    if (item.id === this.selected) {
+      if (focusInput) this.focus(); else this.tabButtons.get(item.id)?.focus();
+      return;
+    }
+    this.selectionChanged(this.worktree.id, item.id); this.activate(item.id, focusInput); this.paintTabs();
+    if (!focusInput) this.tabButtons.get(item.id)?.focus();
+  }
+  moveTab(direction: 1 | -1): void {
+    if (!this.tabsFocused || !this.items.length) return;
+    const index = this.items.findIndex(item => this.tabButtons.get(item.id)?.focused);
+    this.select(Math.max(0, Math.min(this.items.length - 1, index + direction)), false);
   }
   next(direction: 1 | -1): void {
     if (!this.items.length) return;

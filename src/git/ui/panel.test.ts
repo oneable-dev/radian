@@ -88,6 +88,38 @@ async function mount(options: { actions?: Partial<GitActions>; initial?: WorkVie
   };
 }
 
+test.each(["arrows", "vim"] as const)("Git의 세 탭 묶음은 %s로 전환하고 탭 포커스를 유지한다", async navigation => {
+  // 뷰·상세·ref 종류 탭 모두 같은 가로 탐색 계약을 갖는다.
+  const app = await mount();
+  const controls = (node: Renderable): Button[] => [...(node instanceof Button ? [node] : []), ...node.getChildren().flatMap(controls)];
+  const control = (label: string) => {
+    const found = controls(app.get("git-view")).find(button => button.getChildren().some(child => child instanceof TextRenderable && child.plainText === label));
+    if (!found) throw new Error(`Missing Git tab ${label}`);
+    return found;
+  };
+  const move = (next: boolean) => navigation === "arrows" ? app.mockInput.pressArrow(next ? "right" : "left") : app.mockInput.pressKey(next ? "l" : "h");
+  const state = () => app.view.workViewPreferences.gitViews?.["demo:main"];
+  try {
+    control("Commits").focus(); await app.renderOnce();
+
+    // 가로 이동이 목록 탐색이나 새 Git 조회로 새지 않아야 한다.
+    move(true); await app.renderOnce();
+    expect(state()?.tab).toBe("reflog"); expect(app.renderer.currentFocusedRenderable).toBe(control("Reflog"));
+    move(false); await app.renderOnce();
+    expect(state()?.tab).toBe("commits"); expect(app.renderer.currentFocusedRenderable).toBe(control("Commits"));
+    control("Commit").focus(); move(true); await app.renderOnce();
+    expect(state()?.right).toBe("refs"); expect(app.renderer.currentFocusedRenderable).toBe(control("Refs"));
+    control("Local").focus(); move(true); move(true); move(false); await app.renderOnce();
+
+    expect(state()?.refs).toBe("remote"); expect(app.renderer.currentFocusedRenderable).toBe(control("Remote"));
+    expect(state()?.reference).toBeNull(); expect(app.loads).toEqual(["all"]); expect(app.requests).toEqual([]);
+    const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
+    expect(footer).toContain("h/l Tabs"); expect(footer).not.toMatch(/[←→]/u);
+    app.mockInput.pressEnter(); await app.renderOnce();
+    expect(state()?.refs).toBe("remote"); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("Git의 Agent 요청도 여러 줄·접힌 원문·이미지 참조를 같은 입력 규칙으로 전달한다", async () => {
   const sent: {text:string;images:readonly string[]}[]=[];
   const app=await mount({actions:{prompt:(_id,text,images)=>{sent.push({text,images:images??[]});return ok(undefined);}}});

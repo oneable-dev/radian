@@ -327,6 +327,7 @@ export class Workbench {
       pair("workspace.first", "workspace.last", "First/last"),
     ];
     else if (focused && focused === this.editor?.input) shortcuts = [hint("focus.sidebar", "Workspaces"), ...(!this.keymap.bound("escape", "editor") ? [{ key: "Esc", label: "Normal mode" }] : [])];
+    else if (this.terminals.tabsFocused) shortcuts = [pair("terminal.tab-previous", "terminal.tab-next", "Terminal"), hint("button.activate", "Open"), hint("tab.new", "New terminal"), hint("terminal.close", "Close")];
     else if (focused && focused === this.terminals?.input) shortcuts = [
       ...(!this.keymap.bound("ctrl+c", "terminal") ? [{ key: "Ctrl+C", label: "Interrupt" }] : []),
       ...(this.terminals.canScroll ? [pair("terminal.scroll-up", "terminal.scroll-down", "Scroll")] : []), hint("focus.sidebar", "Workspaces"),
@@ -347,7 +348,7 @@ export class Workbench {
           ...(this.agent.canInterrupt ? [hint("agent.interrupt", "Interrupt")] : []),
           ...(this.agent.prompt.value ? [hint("agent.clear", "Clear")] : []),
           hint("focus.transcript", "Transcript"), hint("sidebar.toggle", "Workspace")];
-    } else if (context === "git" || context === "git-prompt" || this.git.available("git.back")) shortcuts = this.git.shortcuts;
+    } else if (context === "git" || context === "git-tabs" || context === "git-prompt" || this.git.available("git.back")) shortcuts = this.git.shortcuts;
     else if (focused) {
       const label = this.buttonHints.get(focused);
       if (focused.visible && label) shortcuts = [{ key: this.keymap.hints("button.activate", "button"), label }];
@@ -449,6 +450,7 @@ export class Workbench {
     const transcriptContext = this.agent?.transcriptContext(); if (transcriptContext) return transcriptContext;
     if (focused === this.editor.input) return "editor";
     if (focused === this.terminals.input) return "terminal";
+    if (this.terminals.tabsFocused) return "terminal-tabs";
     if (focused === this.tree) return "workspace";
     if (focused === this.search) return "search";
     if (this.agent.sessionTabsFocused) return "session-tabs";
@@ -485,6 +487,7 @@ export class Workbench {
       case "workspace.open": return this.visibleRows().some((row) => row.kind === "worktree" && row.key === this.navigationKey);
       case "terminal.new": return Boolean(this.selection.worktree && this.actions.terminal);
       case "terminal.close": case "terminal.next": case "terminal.previous": return this.terminals.root.visible && this.terminals.canClose;
+      case "terminal.tab-previous": case "terminal.tab-next": return this.terminals.tabsFocused && this.terminals.canClose;
       case "terminal.scroll-up": case "terminal.scroll-down": return this.terminals.root.visible && this.terminals.canScroll;
       case "focus.prompt": case "focus.transcript": return this.agent.active;
       case "agent.send": return this.agent.active && Boolean(this.agent.sessionId);
@@ -547,6 +550,8 @@ export class Workbench {
       case "terminal.close": this.terminals.closeSelected(); break;
       case "terminal.previous": this.terminals.next(-1); break;
       case "terminal.next": this.terminals.next(1); break;
+      case "terminal.tab-previous": this.terminals.moveTab(-1); break;
+      case "terminal.tab-next": this.terminals.moveTab(1); break;
       case "terminal.scroll-up": this.terminals.scroll(-1); break;
       case "terminal.scroll-down": this.terminals.scroll(1); break;
       case "workspace.open": {

@@ -16,6 +16,34 @@ test("기본 leader는 Ctrl+Space이며 Ctrl+C를 앱 종료에 할당하지 않
   expect(map.bound("ctrl+b", "prompt")).toBe(false);
 });
 
+test("방향키 바인딩은 유지하되 단축키 안내에는 대체 탐색 키만 표시한다", () => {
+  // 방향키가 먼저 등록된 검색과 Git에서도 대체 키를 안내해야 한다.
+  const map = defaultKeymap();
+
+  // 안내용 조회는 실제 입력 라우팅에 쓰이는 바인딩을 변경하지 않는다.
+  const searchHints = [map.hint("workspace.previous", "search"), map.hint("workspace.next", "search")];
+  const listHints = map.hints("workspace.previous", "workspace");
+
+  expect(searchHints).toEqual(["Ctrl+p", "Ctrl+n"]); expect(listHints).toBe("k/Ctrl+p");
+  expect(map.hints("git.previous", "git")).toBe("k"); expect(map.hints("session.next", "session-tabs")).toBe("l");
+  expect(map.bound("up", "search")).toBe(true); expect(map.bound("down", "workspace")).toBe(true);
+});
+
+test("방향키만 재지정하면 안내는 생략하되 수정키와 시퀀스는 그대로 안내한다", () => {
+  // 사용자 재지정은 존중하며 Ctrl+방향키나 leader 시퀀스까지 숨기지 않는다.
+  const map = expectOk(parseKeymap({ bindings: {
+    "workspace.previous": [{ keys: "up", scope: "workspace" }],
+    "workspace.next": [{ keys: "down", scope: "workspace" }, { keys: "ctrl+down", scope: "workspace" }, { keys: "<leader> down", scope: "workspace" }],
+  } }));
+
+  // 방향키만 있는 명령에 존재하지 않는 기본 대체 키를 안내해서는 안 된다.
+  const previous = map.hint("workspace.previous", "workspace"), next = map.hints("workspace.next", "workspace");
+
+  expect(previous).toBe(""); expect(map.hints("workspace.previous", "workspace")).toBe("");
+  expect(next).toBe("Ctrl+↓/Ctrl+Space → ↓"); expect(map.hint("workspace.next", "workspace")).toBe("Ctrl+↓");
+  expect(map.bound("up", "workspace")).toBe(true); expect(map.bound("ctrl+p", "workspace")).toBe(false);
+});
+
 test("화면 문자와 내부 탭 숫자·생성 키는 별도로 재지정하거나 비활성화할 수 있다", () => {
   // Shared tab commands must participate in the same validation and override path as views.
   const map = expectOk(parseKeymap({ leader: "ctrl+b", bindings: {

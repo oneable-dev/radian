@@ -74,6 +74,51 @@ test("워크스페이스 팝업의 Esc와 Tab은 원래 포커스·선택·대�
   } finally { await app.close(); }
 });
 
+test.each([
+  ["search", "control"], ["workspace", "control"],
+  ["search", "arrows"], ["workspace", "arrows"], ["workspace", "vim"],
+] as const)("워크스페이스 %s 포커스에서 %s 탐색은 후보만 이동하고 Enter로 확정한다", async (focus, navigation) => {
+  // 검색과 결과 목록 모두 같은 후보를 탐색하며 현재 세션과 초안은 유지한다.
+  const app = await fixture();
+  try {
+    app.leader("b"); await app.mockInput.typeText("radian");
+    if (focus === "workspace") app.mockInput.pressTab();
+    await app.render();
+    const input = app.get("workspace-search") as InputRenderable;
+    const move = (next: boolean) => {
+      if (navigation === "control") app.mockInput.pressKey(next ? "n" : "p", { ctrl: true });
+      else if (navigation === "arrows") app.mockInput.pressArrow(next ? "down" : "up");
+      else app.mockInput.pressKey(next ? "j" : "k");
+    };
+
+    // 한 칸을 왕복하는 것만으로는 누락된 이전/다음 키를 구분할 수 없어 두 칸 내려간다.
+    move(true); move(true); move(false); await app.render();
+
+    expect(app.selection.worktree?.id).toBe("demo:main");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe(focus === "search" ? "workspace-search" : "workspace-tree");
+    expect(input.value).toBe("radian"); expect(app.view.promptDrafts.a1).toBe("KEEP_DRAFT");
+    app.mockInput.pressEnter(); await app.render();
+
+    expect(app.selection.worktree?.id).toBe("demo:feature"); expect(app.get("workspace-picker").visible).toBe(false);
+    expect(app.submitted).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("워크스페이스 안내는 방향키 대신 포커스별 대체 탐색 키를 표시한다", async () => {
+  // 방향키는 기본 동작이므로 안내 공간은 검색창의 Ctrl+N/P와 목록의 j/k에 사용한다.
+  const app = await fixture();
+  const footer = () => app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
+  try {
+    app.leader("b"); await app.render();
+
+    expect(footer()).toContain("Ctrl+p/Ctrl+n Navigate");
+    expect(footer()).not.toMatch(/[↑↓]/u);
+    app.mockInput.pressTab(); await app.render();
+
+    expect(footer()).toContain("k/j Navigate"); expect(footer()).not.toMatch(/[↑↓]/u);
+  } finally { await app.close(); }
+});
+
 test("모니터 Preview와 후보 이동은 읽음 처리하지 않고 Enter로 연 세션만 확인한다", async () => {
   // 다른 워크스페이스의 미확인 결과를 현재 대화와 분리한다.
   const app = await fixture();

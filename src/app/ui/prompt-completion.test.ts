@@ -481,6 +481,48 @@ test("선택 명령이 거절돼도 held Enter 반복은 재전송하지 않고 
   } finally { await app.close(); }
 });
 
+test.each(["/", "$", "@"] as const)("%s 자동완성에서 방향키는 입력 커서 대신 후보를 이동한다", async trigger => {
+  // 입력 포커스는 유지하면서 세 종류의 후보 목록 모두 기본 방향키를 지원한다.
+  const kind = trigger === "/" ? "command" : trigger === "$" ? "skill" : "file";
+  const items: CompletionItem[] = ["candidate-a", "candidate-b", "candidate-c"].map(value => ({ kind, value, description: "Candidate" }));
+  const app = await mount(async () => ok({ items, truncated: false }));
+  try {
+    await app.type(trigger);
+    const cursor = app.input.cursorOffset;
+
+    // 두 칸 내려갔다 한 칸 올라가 이전과 다음 방향키를 모두 검증한다.
+    app.mockInput.pressArrow("down"); app.mockInput.pressArrow("down"); app.mockInput.pressArrow("up"); await app.render();
+
+    expect(app.captureCharFrame()).toContain("→ candidate-b");
+    expect(app.input.value).toBe(trigger); expect(app.input.cursorOffset).toBe(cursor);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.sent).toEqual([]);
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("Ctrl+n Next");
+    app.mockInput.pressTab(); await app.render();
+
+    expect(app.input.value).toBe(trigger === "@" ? "[File #1] " : `${trigger}candidate-b `);
+    expect(app.menu().visible).toBe(false); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("자동완성을 닫으면 방향키와 hjkl은 다시 원래 입력 편집에 사용한다", async () => {
+  // 여러 줄 입력에서 메뉴를 닫은 뒤에는 방향키를 후보 탐색용으로 계속 소비하면 안 된다.
+  const app = await mount();
+  try {
+    await app.mockInput.pasteBracketedText("first line\n@"); await app.complete();
+    expect(app.menu().visible).toBe(true);
+    app.mockInput.pressEscape(); await app.render();
+    const cursor = app.input.cursorOffset;
+
+    // Esc 후 같은 입력창에서 커서를 위로 옮기고 Vim 문자를 실제 텍스트로 입력한다.
+    app.mockInput.pressArrow("up"); await app.render();
+    expect(app.input.cursorOffset).toBeLessThan(cursor);
+    await app.mockInput.typeText("hjkl"); await app.render();
+
+    expect(app.input.value).toContain("hjkl"); expect(app.menu().visible).toBe(false);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("Ctrl+N/P로 후보를 고르고 Tab은 자동완성만 하며 Enter는 선택한 명령을 즉시 전송한다", async () => {
   const app = await mount();
   try {

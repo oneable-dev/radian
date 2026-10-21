@@ -1,4 +1,4 @@
-export const contexts = ["workspace", "search", "history", "history-search", "monitor", "monitor-search", "model", "model-search", "model-effort", "session-tabs", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "dialog", "none"] as const;
+export const contexts = ["workspace", "search", "history", "history-search", "monitor", "monitor-search", "model", "model-search", "model-effort", "session-tabs", "terminal-tabs", "git-tabs", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "dialog", "none"] as const;
 export type KeyContext = typeof contexts[number];
 export type KeyScope = KeyContext | "global" | "app" | "pty";
 export type BindingInput = { keys: string; scope: KeyScope };
@@ -51,6 +51,8 @@ export const defaultBindings = {
   "terminal.close": [key("<leader> x")],
   "terminal.previous": [key("<leader> [")],
   "terminal.next": [key("<leader> ]")],
+  "terminal.tab-previous": [key("h", "terminal-tabs"), key("left", "terminal-tabs")],
+  "terminal.tab-next": [key("l", "terminal-tabs"), key("right", "terminal-tabs")],
   "terminal.scroll-up": [key("shift+pageup", "terminal")],
   "terminal.scroll-down": [key("shift+pagedown", "terminal")],
   "session.new": [key("n", "session-tabs")],
@@ -60,8 +62,8 @@ export const defaultBindings = {
   "session.first": [key("home", "session-tabs")],
   "session.last": [key("end", "session-tabs")],
   "workspace.open": [key("enter", "workspace")],
-  "workspace.previous": [key("k", "workspace"), key("up", "workspace"), key("up", "search"), key("ctrl+p", "search")],
-  "workspace.next": [key("j", "workspace"), key("down", "workspace"), key("down", "search"), key("ctrl+n", "search")],
+  "workspace.previous": [key("k", "workspace"), key("up", "workspace"), key("ctrl+p", "workspace"), key("up", "search"), key("ctrl+p", "search")],
+  "workspace.next": [key("j", "workspace"), key("down", "workspace"), key("ctrl+n", "workspace"), key("down", "search"), key("ctrl+n", "search")],
   "workspace.first": [key("home", "workspace")],
   "workspace.last": [key("end", "workspace")],
   "monitor.show": [key("<leader> s")],
@@ -101,8 +103,8 @@ export const defaultBindings = {
   "agent.clear": [key("ctrl+c", "prompt"), key("ctrl+c", "prompt-completion")],
   "agent.paste": [key("ctrl+v", "prompt"), key("ctrl+v", "prompt-completion")],
   "agent.inspect": [key("ctrl+o", "prompt")],
-  "completion.next": [key("ctrl+n", "prompt-completion")],
-  "completion.previous": [key("ctrl+p", "prompt-completion")],
+  "completion.next": [key("ctrl+n", "prompt-completion"), key("down", "prompt-completion")],
+  "completion.previous": [key("ctrl+p", "prompt-completion"), key("up", "prompt-completion")],
   "completion.accept": [key("tab", "prompt-completion")],
   "completion.dismiss": [key("escape", "prompt-completion")],
   "transcript.previous": [key("k", "transcript"), key("up", "transcript")],
@@ -142,7 +144,9 @@ export const defaultBindings = {
   "git.inspect": [key("ctrl+o", "git-prompt")],
   "git.cancel": [key("escape", "git-prompt")],
   "git.open": [key("enter", "git")],
-  "git.back": [key("escape", "git"), key("escape", "button")],
+  "git.back": [key("escape", "git"), key("escape", "git-tabs"), key("escape", "button")],
+  "git.tab-previous": [key("h", "git-tabs"), key("left", "git-tabs")],
+  "git.tab-next": [key("l", "git-tabs"), key("right", "git-tabs")],
   "git.refresh": [key("r", "git")],
   "git.more": [key("plus", "git")],
   "git.previous": [key("up", "git"), key("k", "git")],
@@ -153,7 +157,7 @@ export const defaultBindings = {
   "git.page-down": [key("pagedown", "git")],
   "git.left": [key("h", "git"), key("left", "git")],
   "git.right": [key("l", "git"), key("right", "git")],
-  "button.activate": [key("enter", "button"), key("space", "button")],
+  "button.activate": [key("enter", "button"), key("space", "button"), key("enter", "terminal-tabs"), key("space", "terminal-tabs"), key("enter", "git-tabs"), key("space", "git-tabs")],
 } satisfies Record<string, readonly BindingInput[]>;
 export type CommandId = keyof typeof defaultBindings;
 export const commandIds = Object.keys(defaultBindings) as CommandId[];

@@ -21,7 +21,8 @@ Open it with **Ctrl+f** outside embedded programs, or **Ctrl+Space, then w/f/b**
 It contains repositories and worktrees only, without a preview pane. Folder and branch occupy two
 aligned lines in one selectable item and share horizontal scrolling. Metadata updates preserve the
 query, cursor and scroll position. Failures have a fixed error slot; navigation does not animate.
-Use **Ctrl+N/P** or arrows while typing, or Tab into results for **j/k** and Home/End.
+Use **Ctrl+N/P** in either search or results; Tab into results for **j/k** and Home/End.
+Arrow navigation remains available by default and is omitted from shortcut hints and help.
 **Enter** opens the highlighted worktree and restores its last work view/session; a worktree click
 also opens it. **Esc** closes without changing selection and restores the original focus.
 Opening or closing the popup never changes the work pane or PTY dimensions.
@@ -271,6 +272,7 @@ inserted until results for the current query arrive. Footer shortcuts retain the
 unavailable actions use muted keys instead of disappearing.
 
 - **Ctrl+N / Ctrl+P** selects the next/previous candidate. `hjkl` remains ordinary input.
+  Dismissing the menu restores ordinary cursor movement.
 - **Tab** inserts the selected candidate without sending the prompt or executing a command.
 - **Enter** completes the focused command, template or Skill candidate and immediately submits it
   in one key press: `/com` with `/compact` focused runs `/compact`, not `/com`; `$rev` with
@@ -706,6 +708,10 @@ without writing an unrelated remote host clipboard. OSC52 is reported as a **req
 confirmed clipboard contents; unsupported/failed delivery is reported explicitly. Real SSH terminal
 acceptance depends on the terminal/multiplexer configuration and is not assumed from dispatch alone.
 
+When a Git tab strip is focused, `h/l` selects its neighboring tab and keeps focus in
+that strip. This applies to Commits/Reflog, Commit/Refs and Local/Remote/Tags without filtering or
+mutating a Git reference.
+
 Arrows/j/k navigate, Enter selects, r refreshes, + loads another 300 commits, Home/End jump, and
 PgUp/PgDn scroll. Refresh is keyboard-only; its shared spinner stays vertically centered beside
 the tabs in a reserved cell, with the same minimum-visible policy and no toolbar layout shift. Diff j/k scrolls both columns vertically, and h/l or left/right arrows scroll them horizontally. History is bounded to
@@ -726,6 +732,8 @@ Select **Terminal**, then **+ New** (or the configured new-terminal command). Me
 empty Terminal view never launches a shell. Each worktree has an independent list of shells;
 creating one selects it unless a later navigation action supersedes that request. **Close** removes
 the selected tab and selects its next/previous neighbor, or leaves an explicit empty state.
+While a terminal tab is focused, `h/l` switches to its neighbor without leaving the
+strip. Enter opens the selected terminal input. These keys retain their native meaning inside the shell.
 Tab labels show the foreground executable (for example `zsh`, `nvim` or `bun`), not `Terminal N`.
 The TUI reads a bounded local process snapshot while Terminal is visible, checks each shell's
 supervisor parent, and selects its actual terminal foreground group rather than a background job.
@@ -884,9 +892,9 @@ the TUI to apply edits; the runtime and its processes do not need restarting. Th
 
 Spaces separate sequential keys (`"space r"` is a two-key leader); `+` combines modifiers.
 Use explicit `shift+c` for uppercase C. A string binding is global; an object can specify `scope`:
-`global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `history-search`, `monitor`, `monitor-search`, `session-tabs`, `prompt`, `prompt-completion`, `button`,
-`transcript` (section navigation), `transcript-text`, `transcript-visual`, `editor`, `terminal`,
-`git`, `git-prompt`, `dialog`, or `none`. An override replaces that command's defaults;
+`global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `history-search`, `monitor`, `monitor-search`, `session-tabs`, `terminal-tabs`, `git-tabs`,
+`prompt`, `prompt-completion`, `button`, `transcript` (section navigation), `transcript-text`,
+`transcript-visual`, `editor`, `terminal`, `git`, `git-prompt`, `dialog`, or `none`. An override replaces that command's defaults;
 `[]` disables it. Command IDs/defaults are defined in `src/keybindings/commands.ts`.
 Unknown commands, invalid keys and overlapping/prefix bindings are errors rather than silent fallbacks.
 For example, a printable Space leader conflicts with the default button Space activation unless that
@@ -1225,8 +1233,8 @@ Open the workspace popup with `Ctrl+f` outside a PTY or leader w/f/b from any vi
 Results update while typing, deleting or pasting. Matching is normalized, case-insensitive ordered
 fuzzy matching over repository names, worktree folder names and actual branch names. Repository
 matches retain their worktrees. Session/subagent titles, paths and history are not searched.
-`Ctrl+N/P` and arrows move candidates without leaving input; Tab switches to the tree for j/k
-and Home/End. `/` returns from the tree to search. **Enter from either surface opens the candidate.**
+`Ctrl+N/P` move candidates in both search and tree focus without changing the active workspace;
+Tab switches to the tree for j/k and Home/End. `/` returns from the tree to search. **Enter from either surface opens the candidate.**
 `Ctrl+U` clears the query. **Esc closes**, preserving the query and cursor for reopening.
 Filtering and host updates never change canonical selection or start a repository service.
 

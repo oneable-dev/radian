@@ -4,6 +4,18 @@ Use English for repository documentation and commit messages.
 
 - Use `LoadingSpinner` from `src/ui/loading-spinner.ts` for loading indicators across the UI. It keeps the animation visible for at least 500 ms without delaying results or errors. Call `cancel()` when the owning screen is hidden; destroying its renderable also clears its timers.
 
+## Keyboard navigation
+
+- Arrow keys and `Ctrl+N/P` are required defaults throughout app-owned navigable UI. `Ctrl+N` moves down/next and `Ctrl+P` moves up/previous as appropriate to the surface. Keep both input styles available; `Ctrl+N/P` is not merely a fallback when Vim keys are unavailable.
+- Additionally support the applicable `h/j/k/l` navigation keys wherever practical. Do not force them where they conflict with text input, existing key semantics or native input ownership.
+- In scrollable or paged views, provide jump navigation such as `Ctrl+D/U` for half-page down/up wherever practical. Scope these shortcuts to the relevant view without overriding focused text-editing or native PTY behavior.
+- Searchable lists must support `Ctrl+N/P` in both search-input and results-list focus; offer `j/k` in results lists where practical. Do not let navigation disappear when focus moves within a popup.
+- Tab strips support Left/Right and `Ctrl+N/P` in their own focus context, with `h/l` where practical. Keep repeated navigation within the strip instead of moving focus into its content after one key.
+- Active completion menus support Up/Down and `Ctrl+N/P`; after dismissal, restore ordinary input editing.
+- Keep unmodified `h/j/k/l` literal in text inputs and preserve native input ownership in embedded editors and terminals. Respect explicit user keybinding overrides.
+- Omit bare arrow-key navigation from shortcut hints and help; show the actual configured alternative keys instead. Modified arrow keys and multi-key sequences remain meaningful shortcuts.
+- Cover navigation across search/results focus, text-input preservation and shortcut hints with regression tests when changing these surfaces.
+
 ## Error handling
 
 - Return `Result<T, E>` with custom error types and stable codes for expected domain, I/O, cancellation and protocol failures. Callers must explicitly handle both branches.

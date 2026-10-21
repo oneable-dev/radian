@@ -34,15 +34,20 @@ export function keyToken(key: { name: string; ctrl: boolean; meta: boolean; opti
 const labels: Record<string, string> = { ctrl: "Ctrl", alt: "Alt", shift: "Shift", super: "Super", space: "Space", plus: "+", return: "Enter", escape: "Esc", tab: "Tab", up: "↑", down: "↓", left: "←", right: "→", home: "Home", end: "End", pageup: "PgUp", pagedown: "PgDn", backspace: "Backspace", delete: "Delete", insert: "Insert" };
 export function formatKeys(keys: readonly string[]): string { return keys.map((key) => key.split("+").map((part) => labels[part] ?? (/^f\d+$/u.test(part) ? part.toUpperCase() : part)).join("+")).join(" → "); }
 
+// Bare arrows are implicit navigation; modified keys and sequences still need hints.
+export function isImplicitArrowBinding(binding: Binding): boolean {
+  return binding.keys.length === 1 && ["up", "down", "left", "right"].includes(binding.keys[0]!);
+}
+
 export class Keymap {
   constructor(readonly bindings: readonly Binding[], readonly leader: readonly string[], readonly timeoutMs: number) {}
   bound(firstKey: string, context: KeyContext): boolean { return this.bindings.some((binding) => binding.keys[0] === firstKey && inScope(binding.scope, context)); }
   hint(command: CommandId, context: KeyContext): string {
-    const match = this.bindings.find((binding) => binding.command === command && inScope(binding.scope, context));
+    const match = this.bindings.find((binding) => binding.command === command && inScope(binding.scope, context) && !isImplicitArrowBinding(binding));
     return match ? formatKeys(match.keys) : "";
   }
   hints(command: CommandId, context: KeyContext): string {
-    return this.bindings.filter((binding) => binding.command === command && inScope(binding.scope, context)).map((binding) => formatKeys(binding.keys)).join("/");
+    return this.bindings.filter((binding) => binding.command === command && inScope(binding.scope, context) && !isImplicitArrowBinding(binding)).map((binding) => formatKeys(binding.keys)).join("/");
   }
 }
 function object(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
