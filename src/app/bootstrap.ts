@@ -176,9 +176,12 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
     view = new Workbench(renderer, selection, {
       keymap, onDetach: detach, terminalTheme,
       onNotice: (text) => { message = text; updateNotice(); },
-      onNewSession: (worktreeId) => {
+      onNewSession: (worktreeId, onCreated) => {
         if (!client) { message = "Demo creation request · no agents running"; updateNotice(); return; }
-        observe(client.create(worktreeId));
+        observe(client.create(worktreeId).then(result => {
+          if (result.ok) onCreated?.(result.value);
+          return result;
+        }));
       },
       onCloseSession: (worktreeId, sessionId) => {
         if (client) { observe(client.closeSession(sessionId)); return; }

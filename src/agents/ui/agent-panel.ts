@@ -28,7 +28,8 @@ import { parseModelCommand } from "../model-selection.ts";
 import { parseHistoryCommand } from "../history-command.ts";
 
 export type AgentActions = {
-  onNewSession: (worktreeId: string) => void;
+  // Invoke onCreated only after the new session is observable in the workspace snapshot.
+  onNewSession: (worktreeId: string, onCreated?: (sessionId: string) => void) => void;
   onHistory?: () => void;
   onModel?: (sessionId: string) => Result<void, ExpectedError>;
   onSelectSession?: (worktreeId: string, sessionId: string) => void;

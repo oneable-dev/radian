@@ -98,7 +98,8 @@ test("기존 session-controls만 있는 서비스에 new·clear를 파괴적인 
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("newTab은 새 명시적 wire action을 쓰고 응답보다 늦은 탭 snapshot도 기다린다", async () => {
+test.each(["newTab", "create"] as const)("%s는 생성 응답보다 늦은 탭 snapshot까지 기다린 뒤 새 ID를 반환한다", async action => {
+  // The command reply can arrive before the event stream exposes the created session.
   const state: RuntimeSnapshot = { ...snapshot(), capabilities: ["session-controls", "session-tab-commands"],
     repositories: [{ id: "/fixture/.git", name: "Fixture", worktrees: [{ id: "tree", name: "Tree", path: "/fixture", branch: "main",
       sessions: [{ id: "session", name: "Original", status: "working", subagents: [] }] }] }],
@@ -113,13 +114,17 @@ test("newTab은 새 명시적 wire action을 쓰고 응답보다 늦은 탭 snap
   try {
     expectOk(await client.attach());
     let resolved = false;
-    const creating = client.newTab("session").then((result) => { resolved = true; return result; });
+    // A caller must be able to select the returned session immediately after creation resolves.
+    const creating = (action === "create" ? client.create("tree") : client.newTab("session")).then((result) => { resolved = true; return result; });
     await settle(); expect(resolved).toBe(false);
     stream!.frame({ ...state, repositories: state.repositories.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
       sessions: [...tree.sessions, { id: "created", name: "New", status: null, subagents: [] }],
     })) })), details: { ...state.details, created: { conversationId: "fresh", status: null, output: "", error: null } } });
+    // Both entry points preserve the original conversation while waiting for the new tab.
     expect(expectOk(await creating)).toBe("created");
-    expect(sent).toEqual([{ type: "session-control", sessionId: "session", conversationId: "old", action: "new-tab" }]);
+    expect(client.snapshot.repositories[0]?.worktrees[0]?.sessions.map(session => session.id)).toEqual(["session", "created"]);
+    expect(sent).toEqual(action === "create" ? [{ type: "create", worktreeId: "tree" }]
+      : [{ type: "session-control", sessionId: "session", conversationId: "old", action: "new-tab" }]);
     expect(client.snapshot.details.session?.conversationId).toBe("old"); expect(client.snapshot.details.session?.output).toBe("Retained work");
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
@@ -310,6 +315,11 @@ for (const failure of ["eof", "reset"] as const) {
       if (path === "/history") return Response.json([]);
       const command = JSON.parse(String(options?.body)); commands.push(command.type);
       if (command.type === "prompt") throw Object.assign(new Error("Acknowledgement lost"), { code: "ECONNRESET" });
+      if (command.type === "create") streams[0]!.frame({ ...initial,
+        repositories: [{ id: "/fixture/.git", name: "Fixture", worktrees: [{ id: "worktree", name: "Worktree", path: "/fixture", branch: "main",
+          sessions: [{ id: "session", name: "Session", status: null, subagents: [] }] }] }],
+        details: { session: { conversationId: "original", status: null, output: "", error: null } },
+      });
       return Response.json({ ok: true, value: command.type === "create" ? "session" : null });
     });
     const client = new RuntimeClient(paths, initial);

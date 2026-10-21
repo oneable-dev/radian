@@ -21,7 +21,9 @@ async function mount() {
   const prompts: { id: string; text: string; done: Promise<void>; accepted: Promise<Result<void, ExpectedError>> }[] = [];
   const closes: Promise<void>[] = [];
   const view = new Workbench(setup.renderer, selection, {
-    onNewSession: (id) => { creation.push(registry.create(id).then(expectOk)); },
+    onNewSession: (id, onCreated) => { creation.push(registry.create(id).then(result => {
+      const sessionId = expectOk(result); onCreated?.(sessionId); return sessionId;
+    })); },
     onCloseSession: (_tree, id) => { closes.push(registry.close(id).then(expectOk)); },
     onPrompt: (id, text) => {
       const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
@@ -56,6 +58,27 @@ async function mount() {
     async closeApp() { unsubscribe(); view.dispose(); await registry.shutdown(); await setup.dispose(); await fixture.cleanup(); },
   };
 }
+
+test("실제 SDK 세션을 추가하면 새 입력창으로 이동하고 이전 세션의 초안을 보존한다", async () => {
+  // The runtime publishes the new session before handing its ID back to the UI.
+  const app = await mount();
+  try {
+    const original = await app.newSession();
+    await app.mockInput.typeText("Keep original draft");
+
+    // Creating another session must make typing target the new SDK session immediately.
+    const created = await app.newSession();
+    await app.mockInput.typeText("read"); app.mockInput.pressEnter();
+    await app.prompts.at(-1)!.done; await app.renderOnce();
+
+    // The old draft remains local to its session, while only the new session receives the prompt.
+    expect(app.selection.sessionId).toBe(created);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
+    expect(app.prompts.map(prompt => prompt.id)).toEqual([created]);
+    expect(app.view.promptDrafts[original]).toBe("Keep original draft");
+    expect(app.captureCharFrame()).toContain("main-worktree-marker");
+  } finally { await app.closeApp(); }
+});
 
 test("실제 워크트리 UI에서 명시적으로 세션을 만들고 입력을 각 SDK 실행에 전달한다", async () => {
   // The view, registry, Git discovery and SDK tools are real; only model output is scripted.

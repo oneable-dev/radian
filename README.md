@@ -154,7 +154,9 @@ current view next to the Radian product name, independently of keyboard focus.
 **Ctrl+Space, then 1–9** selects the corresponding Agent session or terminal in the current worktree's
 tab order. Missing slots and numeric selection in Editor/Git do nothing; no sessions are created.
 **Ctrl+Space, then n** explicitly creates an Agent session or terminal in the current view and does
-nothing in Editor/Git. Agent and Terminal session strips remain visible and clickable.
+nothing in Editor/Git. In Agents, the new session is selected and its prompt receives focus once
+it appears. If you navigate elsewhere while creation is pending, the new tab opens in the background
+without taking focus. Agent and Terminal session strips remain visible and clickable.
 Tree cursor movement is only navigation; Enter or a direct worktree click commits the selection.
 Each worktree separately remembers its work view and selected Agent session. Within Agents, session
 tabs show their session ID and aggregate status, with a close control. IDs remain complete whenever

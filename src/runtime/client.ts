@@ -166,7 +166,9 @@ export class RuntimeClient {
   async create(worktreeId: string): Promise<Result<string, ExpectedError>> {
     const result = await this.command({ type: "create", worktreeId });
     if (!result.ok) return result;
-    return result.value ? ok(result.value) : err(new ProtocolError("Runtime did not return a session ID."));
+    if (!result.value) return err(new ProtocolError("Runtime did not return a session ID."));
+    const opened = await this.waitForOpen(result.value, "Session creation");
+    return opened.ok ? ok(result.value) : opened;
   }
   async models(sessionId: string, conversationId: string, signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>> {
     if (this.detaching || this.failure) return err(this.connectionClosed());
@@ -298,9 +300,9 @@ export class RuntimeClient {
     if (!result.value) return err(new ProtocolError("Runtime did not return a resumed session ID."));
     const opened = await this.waitForOpen(result.value); return opened.ok ? ok(result.value) : opened;
   }
-  private waitForOpen(id: string): Promise<Result<void, ExpectedError>> {
+  private waitForOpen(id: string, action = "Resume"): Promise<Result<void, ExpectedError>> {
     const present = () => this.snapshot.repositories.some((repo) => repo.worktrees.some((tree) => tree.sessions.some((session) => session.id === id)));
-    return this.waitForState(present, "Resume");
+    return this.waitForState(present, action);
   }
   private waitForState(present: () => boolean, action: string): Promise<Result<void, ExpectedError>> {
     if (present()) return Promise.resolve(ok(undefined));

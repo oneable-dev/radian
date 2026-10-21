@@ -87,6 +87,7 @@ export class Workbench {
   private readonly git: GitPanel;
   private readonly workViews: WorkViewPreferences;
   private displayedWorkView: WorkView = "agent";
+  private sessionCreationIntent = 0;
   private readonly footer: Footer;
   private readonly dialog: TextDialog;
   private readonly buttonHints = new WeakMap<Renderable, string>();
@@ -157,7 +158,7 @@ export class Workbench {
     this.sidebar.add(this.resultMessage);
     this.sidebar.add(this.tree);
     this.workPanel = new BoxRenderable(renderer, { id: "work-panel", flexGrow: 1, minWidth: 0, flexDirection: "column" });
-    this.agent = new AgentPanel(renderer, { ...actions, onModel: id => this.showModels(id), onHistory: () => this.history.show(this.selection.worktree), onInspectInput: (content) => this.dialog.show(content), onSelectSession: (tree, id) => this.activateSession(tree, id) }, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
+    this.agent = new AgentPanel(renderer, { ...actions, onNewSession: id => this.createAgentSession(id), onModel: id => this.showModels(id), onHistory: () => this.history.show(this.selection.worktree), onInspectInput: (content) => this.dialog.show(content), onSelectSession: (tree, id) => this.activateSession(tree, id) }, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
       (message) => this.setNotice(message), () => this.updateFooter(), () => this.focusNavigation(), this.workViews.agentScroll,
       (id, position) => { this.workViews.agentScroll[id] = position; this.saveWorkViews(); }, {
         ...(this.workViews.agentViews ? { initialViews: this.workViews.agentViews } : {}),
@@ -282,6 +283,21 @@ export class Workbench {
     this.workViews.active[worktree.id] = view; this.saveWorkViews(); this.render();
     if (view === "editor" && explicit) this.editor.show(worktree, true);
     this.focusWorkView();
+  }
+  private createAgentSession(worktreeId: string): void {
+    const sessionId = this.selection.sessionId, owner = this.renderer.currentFocusedRenderable;
+    const intent = ++this.sessionCreationIntent;
+    this.actions.onNewSession(worktreeId, createdId => {
+      // A late creation must not take focus from navigation, a popup or a newer request.
+      if (this.disposed || this.root.isDestroyed || intent !== this.sessionCreationIntent
+        || this.displayedWorkView !== "agent" || this.selection.worktree?.id !== worktreeId
+        || this.renderer.currentFocusedRenderable !== owner) return;
+      const selected = this.selection.sessionId;
+      // The first snapshot in an empty worktree may already have selected this new session.
+      if (selected !== sessionId && (sessionId !== null || selected !== createdId)) return;
+      this.activateSession(worktreeId, createdId);
+      this.focusWorkView();
+    });
   }
   private activateSession(worktreeId: string, sessionId: string): void {
     this.foreground = true; this.acknowledgements.delete(sessionId);
@@ -519,7 +535,7 @@ export class Workbench {
     }
     if (command === "tab.new") {
       if (this.displayedWorkView === "terminal") this.terminals.create();
-      else if (this.selection.worktree) this.actions.onNewSession(this.selection.worktree.id);
+      else if (this.selection.worktree) this.createAgentSession(this.selection.worktree.id);
       return;
     }
     if (command.startsWith("completion.")) { this.agent.completionCommand(command); return; }
