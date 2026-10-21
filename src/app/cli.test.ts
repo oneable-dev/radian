@@ -24,10 +24,12 @@ test("기존 내부 서비스 옵션과 새 runtime 서브커맨드는 같은 �
   expect(options(["runtime","status","--test-runtime","--runtime-cwd","/repo"]).status).toBe(true);
   expect(options(["runtime","stop"]).stop).toBe(true);expect(options(["--runtime-status"]).status).toBe(true);expect(options(["--stop-runtime"]).stop).toBe(true);
   expect(options(["--theme","theme.json","--keybindings","keys.json","--workspace-config","roots.json"]).workspaceConfig).toBe("roots.json");
+  expect(options(["--config", "settings.json"]).config).toBe("/fixture/settings.json");
+  expect(options(["--runtime-service", "--config", "/config/settings.json"]).config).toBe("/config/settings.json");
 });
 
 test.each([
-  ["--unknown"],["unknown-command"],["--theme"],["--state-dir",""],["--runtime-cwd","x\0y"],
+  ["--unknown"],["unknown-command"],["--theme"],["--config"],["--config", ""],["--state-dir",""],["--runtime-cwd","x\0y"],
   ["--demo","--test-runtime"],["--demo","--stop-runtime"],["--runtime-service","--runtime-status"],["--runtime-status","--stop-runtime"],
   ["runtime","status","--stop-runtime"],["runtime","missing"],
 ].map(args=>({args})))("잘못된 CLI 인수 %j는 프로세스를 종료하지 않고 안정적인 입력 오류를 반환한다",({args})=>{

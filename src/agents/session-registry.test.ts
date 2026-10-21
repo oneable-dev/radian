@@ -1,5 +1,5 @@
-import { expect, test } from "bun:test";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { expect, spyOn, test } from "bun:test";
+import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { demoWorkspace } from "../workspace/demo.ts";
@@ -120,6 +120,36 @@ test("닫힌 스냅샷은 최종 대화와 종료 전 상태줄을 보존하고 
     expectOk(await app.registry.restore(final[0]!)); expect(app.executors).toHaveLength(1);
     app.registry.acknowledgeCheckpoint(final); expect(app.registry.checkpointRecords).toEqual([]);
   } finally { await app.cleanup(); }
+});
+
+test("재개하면 closedAt을 비우고 재닫힘 시각을 갱신하며 정리 예약은 새 SDK writer를 막는다", async () => {
+  // 같은 SDK 대화를 재개할 때 생성일이나 과거 닫힘 시각을 재사용하지 않는다.
+  const directory = await mkdtemp(join(tmpdir(), "radian-retention-registry-")), path = join(directory, "saved.jsonl");
+  await writeFile(path, JSON.stringify({ type: "session" }) + "\n"); const file = await realpath(path);
+  const repositories = demoWorkspace(); let time = 1000, factories = 0;
+  const clock = spyOn(Date, "now").mockImplementation(() => time);
+  const registry = new SessionRegistry(repositories, async () => {
+    factories++;
+    return { savedSessionId: "saved", sessionFile: file, state: { status: "complete", output: "Saved", error: null },
+      subscribe: () => () => {}, prompt: async () => ok(undefined), close: async () => ok(undefined) };
+  });
+  try {
+    const first = expectOk(await registry.create("demo:main")); expect(registry.records[0]?.managed).toBe(true);
+    expectOk(await registry.close(first)); const old = registry.checkpointRecords[0]!; expect(old.closedAt).toBe(1000);
+
+    // 다른 탭으로 재개하면 만료 대상에서 빠지고 다시 닫을 때 새 기산점을 기록한다.
+    time = 2000; const second = expectOk(await registry.create("demo:main", file, { id: "reopened", name: "Saved", managed: true }));
+    expect(registry.records[0]?.closedAt).toBeNull(); time = 3000; expectOk(await registry.close(second));
+    const closed = registry.checkpointRecords[0]!;
+    const info = { ...closed, lifecycle: "closed" as const, conversationId: "saved", updatedAt: 3000, title: "Saved", messageCount: 1 };
+
+    // 오래된 삭제 후보는 거절하고 유효한 정리 예약 동안은 SDK writer를 새로 만들지 못한다.
+    expect(closed.closedAt).toBe(3000);
+    expect(registry.reserveSnapshotCleanup({ ...info, closedAt: 1000 }, file)).toBeNull();
+    const release = registry.reserveSnapshotCleanup(info, file); if (!release) throw new Error("Missing cleanup reservation");
+    expect(expectError(await registry.create("demo:main", file)).code).toBe("SESSION_CONFLICT"); expect(factories).toBe(2);
+    release(); expectOk(await registry.create("demo:main", file)); expect(factories).toBe(3);
+  } finally { clock.mockRestore(); await registry.shutdown(); await rm(directory, { recursive: true, force: true }); }
 });
 
 test("주 agent와 소속 자식의 취소를 함께 시작해 부모가 자식을 기다리는 교착을 피한다", async () => {

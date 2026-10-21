@@ -17,7 +17,7 @@ export type HistoryItem = {
   readonly unavailableReason: string | null;
 };
 
-type SavedHistory = HistoryItem & { readonly path?: string; readonly snapshotOnly?: boolean };
+type SavedHistory = HistoryItem & { readonly path?: string; readonly snapshotOnly?: boolean; readonly requireCwd?: boolean };
 type HistoryIndex = { readonly cwd: string; readonly items: readonly SavedHistory[]; readonly byId: ReadonlyMap<string, SavedHistory> };
 type Discovery = { readonly ready: Promise<Result<HistoryIndex, ExpectedError>>; readonly signal: AbortSignal | undefined; valid: boolean };
 
@@ -26,15 +26,18 @@ export class SessionHistory {
   private readonly indexes = new Map<string, Discovery>();
 
   constructor(private readonly repositories: RepositorySource, private readonly registry: SessionRegistry,
-    private readonly sessionDir?: string, private readonly snapshots?: SessionSnapshotSource) {}
+    private readonly sessionDir?: string, private readonly snapshots?: SessionSnapshotSource, private readonly includeDefaultSessions = false) {}
+
+  invalidate(): void { this.indexes.clear(); }
 
   async list(worktreeId: string, signal?: AbortSignal): Promise<Result<readonly HistoryItem[], ExpectedError>> {
     const saved = await this.index(worktreeId, signal, true);
-    return saved.ok ? ok(saved.value.items.map(({ path: _path, snapshotOnly: _snapshotOnly, ...item }) => item)) : saved;
+    return saved.ok ? ok(saved.value.items.map(({ path: _path, snapshotOnly: _snapshotOnly, requireCwd: _requireCwd, ...item }) => item)) : saved;
   }
 
   async preview(worktreeId: string, savedId: string, signal?: AbortSignal): Promise<Result<HistoryPreview, ExpectedError>> {
     if (signal?.aborted) return err(new CancelledError());
+    if (this.snapshots?.isExpired?.(worktreeId, savedId)) return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved session has expired."));
     const tree = repositorySnapshot(this.repositories).flatMap(repo => repo.worktrees).find(entry => entry.id === worktreeId);
     if (!tree) return err(new HistoryError("HISTORY_UNAVAILABLE", "No worktree is available for history."));
     let saved = await this.index(worktreeId, signal);
@@ -57,7 +60,7 @@ export class SessionHistory {
     if (!selectedPath) return err(new HistoryError("HISTORY_UNAVAILABLE", "No session snapshot or SDK conversation is available."));
     const path = await capture(() => realpath(selectedPath)); if (!path.ok) return path;
     if (cwd.value !== saved.value.cwd || path.value !== item.path) return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved session location changed. Refresh history."));
-    const preview = await readHistoryPreview(path.value, worktreeId, savedId, signal, { cwd: cwd.value, requireCwd: !!this.sessionDir });
+    const preview = await readHistoryPreview(path.value, worktreeId, savedId, signal, { cwd: cwd.value, requireCwd: item.requireCwd ?? !!this.sessionDir });
     if (!preview.ok) return preview;
     const owner = this.registry.historyOwnership(path.value).openSessionId;
     const telemetry = owner ? this.registry.details(owner)?.telemetry : undefined;
@@ -74,6 +77,7 @@ export class SessionHistory {
   }
 
   async resume(worktreeId: string, savedId: string): Promise<Result<string, ExpectedError>> {
+    if (this.snapshots?.isExpired?.(worktreeId, savedId)) return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved session has expired."));
     // Mutating actions always rediscover current membership and writer ownership.
     const saved = await this.index(worktreeId, undefined, true); if (!saved.ok) return saved;
     const item = saved.value.byId.get(savedId);
@@ -83,7 +87,8 @@ export class SessionHistory {
     if (item.openSessionId) return ok(item.openSessionId);
     if (!item.path) return err(new HistoryError("HISTORY_UNAVAILABLE", "The SDK conversation is unavailable. The saved snapshot is read only."));
     const validated = await validateHistory(item.path); if (!validated.ok) return validated;
-    return this.registry.create(worktreeId, item.path, { id: crypto.randomUUID(), name: item.title });
+    const managed = this.snapshots?.listSessions(worktreeId).find(snapshot => snapshot.conversationId === savedId)?.managed === true;
+    return this.registry.create(worktreeId, item.path, { id: crypto.randomUUID(), name: item.title, managed });
   }
 
   private index(worktreeId: string, signal?: AbortSignal, refresh = false): Promise<Result<HistoryIndex, ExpectedError>> {
@@ -106,9 +111,15 @@ export class SessionHistory {
     if (!tree) return err(new HistoryError("HISTORY_UNAVAILABLE", "No worktree is available for history."));
     const cwd = await capture(() => realpath(tree.path)); if (!cwd.ok) return cwd;
     if (signal?.aborted) return err(new CancelledError());
-    const sessions = await capture(() => SessionManager.list(tree.path, this.sessionDir, undefined, signal)); if (!sessions.ok) return sessions;
+    const sessions = await capture(async () => {
+      const owned = (await SessionManager.list(tree.path, this.sessionDir, undefined, signal)).map(session => ({ ...session, requireCwd: !!this.sessionDir }));
+      const legacy = this.includeDefaultSessions ? (await SessionManager.list(tree.path, undefined, undefined, signal)).map(session => ({ ...session, requireCwd: false })) : [];
+      return [...owned, ...legacy];
+    });
+    if (!sessions.ok) return sessions;
     const result: SavedHistory[] = [];
     for (const session of sessions.value) {
+      if (this.snapshots?.isExpired?.(worktreeId, session.id)) continue;
       if (signal?.aborted) return err(new CancelledError());
       // A custom directory may be shared by worktrees; cwd metadata must still scope each list.
       if (session.cwd) {
@@ -118,10 +129,10 @@ export class SessionHistory {
           return savedCwd;
         }
         if (savedCwd.value !== cwd.value) continue;
-      } else if (this.sessionDir) continue;
+      } else if (session.requireCwd) continue;
       const path = await capture(() => realpath(session.path)); if (!path.ok) return path;
       const ownership = this.registry.historyOwnership(path.value);
-      result.push({ id: session.id, path: path.value, worktreeId, title: (session.name?.trim() || session.firstMessage.trim() || "Untitled session").replace(/\s+/g, " ").slice(0, 120),
+      result.push({ id: session.id, path: path.value, requireCwd: session.requireCwd, worktreeId, title: (session.name?.trim() || session.firstMessage.trim() || "Untitled session").replace(/\s+/g, " ").slice(0, 120),
         modified: session.modified.toISOString(), messageCount: session.messageCount,
         openSessionId: ownership.openSessionId, unavailableReason: ownership.unavailableReason });
     }

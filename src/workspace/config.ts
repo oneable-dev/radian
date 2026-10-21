@@ -32,5 +32,9 @@ export async function loadWorkspaceConfig(explicitPath?: string): Promise<Result
     config = parseWorkspaceConfig(json.value);
   }
   if (!config.ok) return err(new InputError(`${path}: ${config.error.message}`, { cause: config.error }));
-  return ok({ ...config.value, roots: config.value.roots.map((root) => root === "~" ? homedir() : root.startsWith("~/") ? resolve(homedir(), root.slice(2)) : resolve(dirname(path), root)) });
+  return ok(resolveWorkspaceConfig(config.value, path));
+}
+
+export function resolveWorkspaceConfig(config: WorkspaceConfig, path: string): WorkspaceConfig {
+  return { ...config, roots: config.roots.map(root => root === "~" ? homedir() : root.startsWith("~/") ? resolve(homedir(), root.slice(2)) : resolve(dirname(path), root)) };
 }

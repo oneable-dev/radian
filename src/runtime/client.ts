@@ -24,7 +24,7 @@ const reconnectDelays = [250, 500, 1000, 2000] as const;
 const streamHandshakeMs = 2000;
 const stableConnectionMs = 10000;
 
-export type ConnectOptions = { offline?: boolean; stateRoot?: string; entry?: string; start?: boolean };
+export type ConnectOptions = { offline?: boolean; stateRoot?: string; config?: string; entry?: string; start?: boolean };
 export async function connectRuntime(repository: Repository, cwd: string, options: ConnectOptions = {}): Promise<Result<RuntimeClient | null, ExpectedError>> {
   const paths = runtimePaths(repository.id, options.offline ?? false, options.stateRoot);
   let fetched = await fetchSnapshot(paths);
@@ -39,6 +39,7 @@ export async function connectRuntime(repository: Repository, cwd: string, option
         const args = [entry, "--runtime-service", "--runtime-cwd", cwd];
         if (options.stateRoot) args.push("--state-dir", resolve(options.stateRoot));
         if (options.offline) args.push("--test-runtime");
+        if (options.config) args.push("--config", resolve(options.config));
         const child = spawn(process.execPath, args, { cwd, detached: true, stdio: ["ignore", log.fd, log.fd] });
         const started = Promise.withResolvers<void>();
         child.once("spawn", () => started.resolve()); child.once("error", (error) => started.reject(error));

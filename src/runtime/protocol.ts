@@ -101,12 +101,15 @@ export const snapshotSchema = Type.Object({
   editors: Type.Optional(Type.Array(editorInfoSchema)),
   terminals: Type.Optional(Type.Array(terminalInfoSchema)),
   terminalClosingCount: Type.Optional(Type.Integer({ minimum: 0 })),
+  sessionRetention: Type.Optional(Type.Object({ retentionDays: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
+    lastSweepAt: Type.Integer({ minimum: 0, maximum: 8640000000000000 }), removed: Type.Integer({ minimum: 0 }) })),
 });
 export type RuntimeSnapshot = Omit<Static<typeof snapshotSchema>, "repositories" | "details"> & { readonly repositories: readonly Repository[]; readonly details: Readonly<Record<string, ExecutionState>> };
 export const sessionRecordSchema = Type.Object({
   id, name: Type.String(), worktreeId: id, sessionFile: Type.Optional(id),
   state: execution, subagents: Type.Array(agent),
   lifecycle: Type.Optional(Type.Union([Type.Literal("open"), Type.Literal("closed")])),
+  closedAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0, maximum: 8640000000000000 }), Type.Null()])), managed: Type.Optional(Type.Boolean()),
   updatedAt: Type.Optional(Type.Integer({ minimum: 0, maximum: 8640000000000000 })), cwd: Type.Optional(id),
 });
 export const manifestSchema = Type.Object({

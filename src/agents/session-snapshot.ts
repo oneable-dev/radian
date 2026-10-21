@@ -11,6 +11,8 @@ export type SessionSnapshotInfo = {
   readonly sessionFile?: string;
   readonly cwd?: string;
   readonly lifecycle: SessionLifecycle;
+  readonly closedAt?: number | null;
+  readonly managed?: boolean;
   readonly updatedAt: number;
   readonly title: string;
   readonly messageCount: number;
@@ -20,6 +22,7 @@ export type SessionSnapshotInfo = {
 export type SessionSnapshotSource = {
   listSessions(worktreeId: string): readonly SessionSnapshotInfo[];
   readSession(worktreeId: string, conversationId: string): Promise<Result<SessionRecord | null, ExpectedError>>;
+  isExpired?(worktreeId: string, conversationId: string): boolean;
 };
 
 export function sessionRecordKey(record: SessionRecord): string {

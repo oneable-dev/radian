@@ -1,6 +1,6 @@
 import { discoverRepository } from "../workspace/discovery.ts";
 import { discoverWorkspace } from "../workspace/roots.ts";
-import { loadWorkspaceConfig } from "../workspace/config.ts";
+import { loadSettings } from "./settings.ts";
 import { WorkspaceClient } from "../runtime/workspace-client.ts";
 import { demoWorkspace } from "../workspace/demo.ts";
 import { WorkspaceSelection } from "./workspace-selection.ts";
@@ -11,40 +11,37 @@ import type { RuntimePreferences, WorkViewPreferences } from "../runtime/protoco
 import { restoreWorkViews, saveWorkViews } from "../runtime/work-view-preferences.ts";
 import { capture, ConnectionError, InputError, reportUnexpected, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
-import { loadKeymap, type Keymap } from "../keybindings/config.ts";
-import { loadTheme, type ThemeOverrides } from "../ui/theme-config.ts";
+import type { Keymap } from "../keybindings/config.ts";
+import type { ThemeOverrides } from "../ui/theme-config.ts";
 import { readTerminalProcessTitles } from "../terminal/process-titles.ts";
 import type { CliOptions as Options } from "./cli.ts";
 
 export async function main(options: Options): Promise<Result<void, ExpectedError>> {
   if (options.service) {
     const { runRuntime } = await import("../runtime/service.ts");
-    return capture(() => runRuntime(options.cwd, options.offline, options.stateRoot));
+    return capture(() => runRuntime(options.cwd, options.offline, options.stateRoot, options.config));
   }
   const administrative = options.stop || options.status;
   if (administrative) return runAdministrative(options);
-  const keymap = await loadKeymap(options.keybindings);
-  if (!keymap.ok) return keymap;
-  const theme = await loadTheme(options.theme);
-  if (!theme.ok) return theme;
+  const settings = await loadSettings({ ...options, includeWorkspace: !options.demo && !options.offline });
+  if (!settings.ok) return settings;
   let repositories: readonly Repository[] = [];
   let discoveryError: string | null = null;
   if (options.demo) repositories = demoWorkspace();
   else {
-    const config = options.offline ? ok({ roots: [], maxDepth: 0 }) : await loadWorkspaceConfig(options.workspaceConfig);
-    if (!config.ok) return config;
-    if (!config.value.roots.length) {
+    const config = settings.value.workspace;
+    if (!config.roots.length) {
       const discovered = await discoverRepository(options.cwd);
       if (discovered.ok) repositories = [discovered.value];
       else discoveryError = discovered.error.message;
     } else {
-      const discovered = await discoverWorkspace(config.value); if (!discovered.ok) return discovered;
+      const discovered = await discoverWorkspace(config); if (!discovered.ok) return discovered;
       repositories = discovered.value.repositories;
       discoveryError = discovered.value.warnings.map(({ path, error }) => `${path}: [${error.code}] ${error.message}`).join(" · ") || (repositories.length ? null : "No Git repositories found in workspace roots.");
     }
   }
   const connected = !options.demo && repositories.length ? await WorkspaceClient.open(repositories, options.cwd, {
-    offline: options.offline, ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
+    offline: options.offline, ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}), ...(options.config ? { config: options.config } : {}),
   }) : ok(null);
   if (!connected.ok) return connected;
   const client = connected.value;
@@ -54,7 +51,7 @@ export async function main(options: Options): Promise<Result<void, ExpectedError
       const activated = await client.activate(selected);
       if (!activated.ok) discoveryError = [discoveryError, activated.error.message].filter(Boolean).join(" · ");
     }
-    await runUI(repositories, client, options, discoveryError, keymap.value, theme.value);
+    await runUI(repositories, client, options, discoveryError, settings.value.keymap, settings.value.theme);
     return ok(undefined);
   } finally { await client?.disconnect(); }
 }

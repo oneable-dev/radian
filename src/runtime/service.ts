@@ -1,4 +1,6 @@
-import { chmod } from "node:fs/promises";
+import { chmod, realpath } from "node:fs/promises";
+import { loadSessionSettings } from "../app/settings.ts";
+import { RetentionScheduler } from "./session-retention.ts";
 import { Value } from "typebox/value";
 import { completionCatalogQuerySchema, completionQuerySchema } from "./completion-protocol.ts";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -8,6 +10,7 @@ import { join } from "node:path";
 import { CancelledError, collectCleanup, InputError, ProtocolError, SessionError, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { SessionRegistry, type SessionRecord } from "../agents/session-registry.ts";
+import { sessionRecordKey } from "../agents/session-snapshot.ts";
 import { expandPromptDraft } from "../agents/prompt-input.ts";
 import { parseSessionControl, type SessionControl } from "../agents/session-controls.ts";
 import { modelCatalogQuerySchema } from "../agents/model-selection.ts";
@@ -26,7 +29,8 @@ import { transcriptImageQuerySchema } from "../agents/transcript-images.ts";
 import { emptyPreferences, errorStatus, historyPreviewQuerySchema, maxFrameBytes, parseCommand, protocolVersion, wireError,
   type RuntimeCommand, type RuntimeManifest, type RuntimePreferences, type RuntimeSnapshot } from "./protocol.ts";
 
-export async function runRuntime(cwd: string, offline: boolean, stateRoot?: string): Promise<void> {
+export async function runRuntime(cwd: string, offline: boolean, stateRoot?: string, configPath?: string): Promise<void> {
+  const settings = await loadSessionSettings(configPath); if (!settings.ok) throw settings.error;
   const discovered = await discoverRepository(cwd); if (!discovered.ok) throw discovered.error;
   const repository = discovered.value;
   const paths = runtimePaths(repository.id, offline, stateRoot);
@@ -44,15 +48,19 @@ export async function runRuntime(cwd: string, offline: boolean, stateRoot?: stri
     const options = offline ? await offlineRuntime(join(paths.directory, "offline-agent")) : undefined;
     const modelRuntime = options?.modelRuntime ?? await ModelRuntime.create();
     const usage = offline ? undefined : new UsageMonitor(openAiUsageResolver(modelRuntime));
-    const registry = new SessionRegistry(catalog, piSessionFactory({ ...options, modelRuntime, ...(usage ? { usageMonitor: usage } : {}) }));
+    const requestedSessionDir = options?.sessionDir ?? join(paths.directory, "sdk-sessions");
+    await privateDirectory(requestedSessionDir);
+    const sessionDir = await realpath(requestedSessionDir);
+    const registry = new SessionRegistry(catalog, piSessionFactory({ ...options, sessionDir, modelRuntime, ...(usage ? { usageMonitor: usage } : {}) }));
     runtime = new WorkspaceRuntime(registry, catalog, repository, offline, store, manifest?.preferences ?? emptyPreferences,
-      new SessionHistory(catalog, registry, options?.sessionDir, store), paths.directory, usage);
+      new SessionHistory(catalog, registry, sessionDir, store, !offline), paths.directory, usage, settings.value.exists ? settings.value.path : configPath);
     await runtime.restore(manifest?.records ?? []);
     await runtime.watchRepository();
     server = Bun.serve({ unix: paths.socket,
       fetch: (request) => runtime!.fetch(request),
     });
     await chmod(paths.socket, 0o600);
+    runtime.startRetention();
     const stopped = Promise.withResolvers<void>();
     const stop = (): void => stopped.resolve();
     process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -84,15 +92,38 @@ class WorkspaceRuntime {
   private initializing = true;
   private watcher: RepositoryWatcher | undefined;
   private discoveryWarning = "";
+  private retentionWarning = "";
+  private retention: RetentionScheduler | undefined;
+  private retentionStatus: RuntimeSnapshot["sessionRetention"];
   private get repositoryId(): string { return this.repository.id; }
 
   constructor(private readonly registry: SessionRegistry, private readonly catalog: RepositoryCatalog, private repository: Repository,
     private readonly offline: boolean, private readonly store: RuntimeStore, preferences: RuntimePreferences, private readonly history: SessionHistory,
-    supervisorDirectory: string, private readonly usage?: UsageMonitor) {
+    supervisorDirectory: string, private readonly usage?: UsageMonitor, private readonly configPath?: string) {
     this.preferences = preferences;
     this.editors = new EditorSessions(catalog, () => this.changed(), { clean: offline });
     this.terminals = new TerminalSessions(catalog, () => this.changed(), supervisorDirectory, offline, (task) => this.observe(task));
     this.unsubscribe = registry.subscribe(() => this.changed());
+  }
+
+  startRetention(): void {
+    let configuredFile = this.configPath, retentionDays: number | null = 30;
+    this.retention = new RetentionScheduler(async () => {
+      const settings = await loadSessionSettings(configuredFile); if (!settings.ok) return settings;
+      // Once observed, a missing policy file is an error, not a surprise return to destructive defaults.
+      if (settings.value.exists) configuredFile = settings.value.path;
+      retentionDays = settings.value.retentionDays;
+      return this.store.pruneExpired(retentionDays, (snapshot, file) => this.stopped ? null : this.registry.reserveSnapshotCleanup(snapshot, file));
+    }, result => {
+      this.history.invalidate();
+      if (!result.ok && result.error.code !== "INVALID_INPUT") console.error(`[radian:${result.error.code}] Session retention cleanup failed`, result.error);
+      const warning = result.ok ? "" : `Session cleanup [${result.error.code}]: ${result.error.message}`;
+      const changed = warning !== this.retentionWarning || result.ok;
+      if (result.ok) this.retentionStatus = { retentionDays, lastSweepAt: Date.now(), removed: result.value };
+      this.retentionWarning = warning; if (changed) this.changed();
+    }, error => { this.retentionWarning = reportUnexpected(error, "session retention"); this.changed(); });
+    // Maintenance must not delay the HTTP handshake for a large accumulated history.
+    void this.retention.start().catch(error => { this.retentionWarning = reportUnexpected(error, "session retention startup"); this.changed(); });
   }
 
   async watchRepository(): Promise<void> {
@@ -145,8 +176,9 @@ class WorkspaceRuntime {
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
     return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "session-exit", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention"], repositoryId: this.repositoryId,
+      ...(this.retentionStatus ? { sessionRetention: this.retentionStatus } : {}),
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
-      preferences: this.preferences, notice: this.persistenceError || [this.discoveryWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
+      preferences: this.preferences, notice: this.persistenceError || [this.discoveryWarning, this.retentionWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
   }
 
@@ -431,14 +463,21 @@ class WorkspaceRuntime {
   async stop(): Promise<Result<void, ExpectedError>> {
     if (this.stopped) return ok(undefined);
     this.stopped = true;
+    await this.retention?.stop();
     if (this.checkpointTimer) clearTimeout(this.checkpointTimer);
     this.unsubscribe();
     // Stopping the service is NOT explicit session close. Freeze open intent before teardown emits removals.
     const manifest: RuntimeManifest = { version: protocolVersion, repositoryId: this.repositoryId,
       repositories: this.registry.snapshot, records: [...this.registry.checkpointRecords, ...this.failedRecovery.values()], preferences: this.preferences };
-    return collectCleanup([this.watcher ? this.watcher.stop().then(() => ok(undefined)) : Promise.resolve(ok(undefined)),
+    const stopped = await collectCleanup([this.watcher ? this.watcher.stop().then(() => ok(undefined)) : Promise.resolve(ok(undefined)),
       this.checkpoint(manifest), this.registry.shutdown(), this.editors.stop(), this.terminals.stop(),
       this.usage ? this.usage.stop().then(() => ok(undefined)) : Promise.resolve(ok(undefined))], "Checkpoint or runtime shutdown failed.");
+    const openIntent = new Set(manifest.records.filter(record => record.lifecycle !== "closed").map(sessionRecordKey));
+    const finished = this.registry.checkpointRecords.filter(record => !openIntent.has(sessionRecordKey(record)));
+    if (!finished.length) return stopped;
+    // Persist children that settled during shutdown without turning the frozen open main tabs into closed tabs.
+    const records = new Map([...manifest.records, ...finished].map(record => [sessionRecordKey(record), record]));
+    return collectCleanup([Promise.resolve(stopped), this.checkpoint({ ...manifest, records: [...records.values()] })], "Final session checkpoint or runtime shutdown failed.");
   }
 }
 

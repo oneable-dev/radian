@@ -15,7 +15,7 @@ import type { TranscriptImageData } from "./transcript-images.ts";
 import { modelCommand, parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "./model-selection.ts";
 import { historyCommand, parseHistoryCommand } from "./history-command.ts";
 import { needsAttention, type SessionResult } from "./session-attention.ts";
-import { sessionRecordKey, type SessionLifecycle } from "./session-snapshot.ts";
+import { sessionRecordKey, type SessionLifecycle, type SessionSnapshotInfo } from "./session-snapshot.ts";
 
 export type ExecutionState = { readonly conversationId?: string; readonly resourceRevision?: number; readonly status: AgentStatus | null; readonly activity?: "compacting"; readonly output: string; readonly error: string | null;
   readonly sections?: readonly TranscriptSection[]; readonly telemetry?: SessionTelemetry;
@@ -52,6 +52,7 @@ export type SessionRecord = {
   readonly id: string; readonly name: string; readonly worktreeId: string; readonly sessionFile?: string;
   readonly state: ExecutionState; readonly subagents: readonly Subagent[];
   readonly lifecycle?: SessionLifecycle; readonly updatedAt?: number; readonly cwd?: string;
+  readonly closedAt?: number | null; readonly managed?: boolean;
 };
 // Creation is an exception-based SDK boundary. The registry converts only classified failures.
 export type SessionFactory = (context: SessionContext) => Promise<SessionExecutor>;
@@ -60,6 +61,7 @@ type Execution = {
   ready: Promise<Result<SessionExecutor, ExpectedError>> | undefined;
   finishedStatus?: AgentStatus | null; fileKey?: string; executor?: SessionExecutor; unsubscribe?: () => void;
   cleanupTask?: Promise<Result<void, ExpectedError>>; failure?: string;
+  readonly worktree?: Worktree; readonly managed?: boolean; closedAt?: number;
 };
 type OpenExecution = Execution & {
   closeTask?: Promise<Result<void, ExpectedError>>;
@@ -129,18 +131,28 @@ export class SessionRegistry {
   historyOwnership(canonicalFile: string): { openSessionId: string | null; unavailableReason: string | null } {
     const owner = this.fileOwners.get(canonicalFile);
     if (!owner) return { openSessionId: null, unavailableReason: null };
+    if (owner.startsWith("retention:")) return { openSessionId: null, unavailableReason: "Saved session cleanup is in progress." };
     const entry = this.entries.get(owner);
     if (entry?.replacing) return { openSessionId: null, unavailableReason: "Saved session is being replaced. Wait for cleanup to finish." };
     if (entry?.phase === "open") return { openSessionId: entry.id, unavailableReason: null };
     return { openSessionId: null, unavailableReason: !entry ? "Saved session belongs to an active subagent."
       : entry.phase === "creating" ? "Saved session is being opened. Try again shortly." : "Session is still closing. Try again after cleanup." };
   }
+  reserveSnapshotCleanup(snapshot: SessionSnapshotInfo, canonicalFile?: string): (() => void) | null {
+    if (this.shuttingDown) return null;
+    const current = this.sessionSnapshot(snapshot.worktreeId, snapshot.conversationId ?? snapshot.id);
+    if (current && (current.lifecycle !== "closed" || current.closedAt !== snapshot.closedAt)) return null;
+    if (canonicalFile && this.fileOwners.has(canonicalFile)) return null;
+    const token = `retention:${crypto.randomUUID()}`;
+    if (canonicalFile) this.fileOwners.set(canonicalFile, token);
+    return () => { if (canonicalFile && this.fileOwners.get(canonicalFile) === token) this.fileOwners.delete(canonicalFile); };
+  }
   get records(): readonly SessionRecord[] {
     return [...this.entries.values()].filter((entry) => entry.phase === "open").map((entry) => ({
       id: entry.id, name: entry.name, worktreeId: entry.worktree.id,
-      ...(entry.executor?.sessionFile ? { sessionFile: entry.executor.sessionFile } : {}),
+      ...(entry.fileKey ? { sessionFile: entry.fileKey } : entry.executor?.sessionFile ? { sessionFile: entry.executor.sessionFile } : {}),
       state: { ...(this.details(entry.id) ?? { status: null, output: "", error: null }), conversationId: entry.executor!.savedSessionId },
-      subagents: this.children(entry), lifecycle: "open", cwd: entry.worktree.path,
+      subagents: this.children(entry), lifecycle: "open", closedAt: null, managed: entry.managed ?? false, cwd: entry.worktree.path,
     }));
   }
   sessionSnapshot(worktreeId: string, conversationId: string): SessionRecord | undefined {
@@ -153,15 +165,18 @@ export class SessionRegistry {
     for (const record of records) if (this.retired.get(sessionRecordKey(record)) === record) this.retired.delete(sessionRecordKey(record));
   }
   private retire(entry: OpenExecution, before?: SessionRecord): SessionRecord | undefined {
-    if (!entry.executor) return undefined;
-    const state = entry.executor.state;
+    return entry.executor ? this.retireExecution(entry, entry.worktree, this.children(entry), entry.executor, before) : undefined;
+  }
+  private retireExecution(entry: Execution, worktree: Worktree, subagents: readonly Subagent[], executor: SessionExecutor, before?: SessionRecord): SessionRecord {
+    const state = executor.state, sessionFile = entry.fileKey ?? executor.sessionFile;
     const telemetry = before?.state.telemetry ?? state.telemetry;
     const interrupted = state.status === "working";
-    const record: SessionRecord = { id: entry.id, name: entry.name, worktreeId: entry.worktree.id, cwd: entry.worktree.path,
-      ...(entry.executor.sessionFile ? { sessionFile: entry.executor.sessionFile } : {}), lifecycle: "closed", updatedAt: Date.now(),
-      state: { ...state, conversationId: entry.executor.savedSessionId, ...(telemetry ? { telemetry } : {}),
+    const record: SessionRecord = { id: entry.id, name: entry.name, worktreeId: worktree.id, cwd: worktree.path,
+      ...(sessionFile ? { sessionFile } : {}), lifecycle: "closed", closedAt: entry.closedAt ?? before?.closedAt ?? Date.now(),
+      managed: entry.managed ?? false, updatedAt: Date.now(),
+      state: { ...state, conversationId: executor.savedSessionId, ...(telemetry ? { telemetry } : {}),
         ...(interrupted ? { status: null, pendingMessages: [], result: { id: crypto.randomUUID(), outcome: "unfinished", completedAt: Date.now() } } : {}) },
-      subagents: this.children(entry) };
+      subagents };
     this.retired.set(sessionRecordKey(record), record); return record;
   }
   private children(entry: OpenExecution): Subagent[] {
@@ -202,7 +217,7 @@ export class SessionRegistry {
     this.emit(); return ok(undefined);
   }
 
-  async create(worktreeId: string, sessionFile?: string, identity?: { readonly id: string; readonly name: string }): Promise<Result<string, ExpectedError>> {
+  async create(worktreeId: string, sessionFile?: string, identity?: { readonly id: string; readonly name: string; readonly managed?: boolean }): Promise<Result<string, ExpectedError>> {
     if (this.shuttingDown) return err(this.stopping());
     const worktree = repositorySnapshot(this.repositories).flatMap((repo) => repo.worktrees).find((tree) => tree.id === worktreeId);
     if (!worktree) return err(new InputError(`Unknown worktree: ${worktreeId}`));
@@ -218,7 +233,7 @@ export class SessionRegistry {
     const ready = capture(() => this.factory({ cwd: worktree.path, role: "main", ...(requestedFile ? { sessionFile: requestedFile } : {}),
       spawnSubagent: (name, task, signal) => this.spawnSubagent(id, name, task, signal, generation) }));
     const entry: OpenExecution = { id, name: identity?.name ?? `Session ${id.slice(0, 8)}`, role: "main", worktree, ready, generation,
-      phase: "creating", children: new Map(), ...(requestedFile ? { fileKey: requestedFile } : {}) };
+      phase: "creating", children: new Map(), managed: identity?.managed ?? !requestedFile, ...(requestedFile ? { fileKey: requestedFile } : {}) };
     this.entries.set(id, entry);
     let result: Result<string, ExpectedError>;
     try { result = await this.initialize(entry, ready, requestedFile); }
@@ -388,6 +403,7 @@ export class SessionRegistry {
       else if (this.shuttingDown || previous.phase !== "open") result = err(new CancelledError("Session replacement was cancelled by shutdown."));
       else {
         onAccepted?.(); stopping = true;
+        previous.closedAt = Date.now();
         const archived = this.retire(previous);
         // Explicit /clear stops only the execution owned by this tab. Keep its file
         // fenced until all parent/child tool results have settled and persisted.
@@ -398,7 +414,7 @@ export class SessionRegistry {
         } else if (this.shuttingDown || previous.phase !== "open") result = err(new CancelledError("Session replacement was cancelled by shutdown."));
         else {
           const replacement: OpenExecution = { id: previous.id, name: previous.name, role: "main", worktree: previous.worktree,
-            phase: "open", children: new Map(), ready, executor: next, generation, ...(key.value ? { fileKey: key.value } : {}) };
+            phase: "open", children: new Map(), ready, executor: next, generation, managed: true, ...(key.value ? { fileKey: key.value } : {}) };
           replacement.observedResultId = next.state.result?.id;
           replacement.unsubscribe = next.subscribe(() => this.executionChanged(replacement));
           previous.unsubscribe?.(); delete previous.unsubscribe;
@@ -423,6 +439,7 @@ export class SessionRegistry {
     const entry = this.entries.get(id);
     if (!entry) return Promise.resolve(ok(undefined));
     if (entry.closeTask) return entry.closeTask;
+    if (entry.phase !== "closing") entry.closedAt = Date.now();
     const archived = this.retire(entry);
     entry.phase = "closing";
     const task = Promise.resolve().then(async () => {
@@ -451,7 +468,7 @@ export class SessionRegistry {
     if (owner.replacing) return err(new SessionError("SESSION_BUSY", "This conversation is being replaced."));
     const ready = capture(() => this.factory({ cwd: owner.worktree.path, role: "subagent",
       spawnSubagent: async () => err(new InputError("Nested delegation is not enabled.")) }));
-    const child: Execution = { id: crypto.randomUUID(), name, role: "subagent", ready };
+    const child: Execution = { id: crypto.randomUUID(), name, role: "subagent", ready, worktree: owner.worktree, managed: true };
     owner.children.set(child.id, child); this.emit();
     let cancelTask: Promise<Result<void, ExpectedError>> | undefined;
     const cancel = () => {
@@ -498,12 +515,17 @@ export class SessionRegistry {
     const task = (async (): Promise<Result<void, ExpectedError>> => {
       const created = await ready;
       if (!created.ok) return ok(undefined); // Factory failure is returned to create/runChild; no handle exists.
+      const tree = execution.role === "subagent" ? execution.worktree : undefined;
+      if (tree) execution.closedAt ??= Date.now();
+      const archived = tree ? this.retireExecution(execution, tree, [], created.value) : undefined;
       const closed = await created.value.close(reason);
       if (!closed.ok) { delete execution.cleanupTask; return closed; }
       execution.unsubscribe?.(); delete execution.unsubscribe;
       if (execution.role === "subagent") {
+        if (tree) this.retireExecution(execution, tree, [], created.value, archived);
         if (execution.fileKey && this.fileOwners.get(execution.fileKey) === execution.id) this.fileOwners.delete(execution.fileKey);
         execution.finishedStatus = created.value.state.status; execution.ready = undefined; delete execution.executor;
+        this.emit();
       }
       return ok(undefined);
     })();

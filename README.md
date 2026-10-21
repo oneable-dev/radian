@@ -98,13 +98,46 @@ escapes. Provider icons use the text fallback and branding omits its color fade.
 configuration remains untouched; only the attached UI's final frame is rendered without color.
 The normal colored UI continues to follow the host palette. `--runtime-cwd` chooses the repository
 for administrative commands; a relative `--state-dir` is resolved once against the launching directory.
-`--workspace-config`, `--keybindings` and `--theme` continue selecting explicit configuration files.
+`--config PATH` selects unified settings. `--workspace-config`, `--keybindings` and `--theme` remain
+compatible per-section overrides.
+
+### Unified settings
+
+User settings live in `${XDG_CONFIG_HOME:-~/.config}/radian/settings.json`. The file is optional;
+`--config PATH` selects another file and resolves its path once against the launching directory.
+For example:
+
+```json
+{
+  "theme": { "accent": "#7DD3FC" },
+  "keybindings": { "leader": "ctrl+space", "timeoutMs": 1000 },
+  "workspace": { "roots": ["~/projects"], "maxDepth": 4 },
+  "sessions": { "retentionDays": 30 }
+}
+```
+
+Each section uses its existing domain validator. Precedence is: an explicit per-section CLI file,
+that section in unified settings, its optional legacy file (`theme.json`, `keybindings.json`, or
+`workspace.json`), then built-in defaults. A present unified section replaces that legacy section;
+missing sections still honor existing files. Legacy files are not rewritten or deleted. Relative
+workspace roots resolve against the file that defines them. Unknown sections and invalid values
+are errors; an explicitly selected settings file must exist.
+
+Reopen the TUI to apply theme, keybinding and workspace edits; this does not stop running jobs.
+The daemon reads session retention at startup and every hour, so edits to its selected policy file
+apply at the next sweep. An existing daemon keeps the configuration path it started with: changing
+`--config` for retention requires explicitly restarting that daemon after saving/finishing work.
+A malformed or previously observed but now missing policy file pauses cleanup with a notice; it
+never silently switches to a destructive default. Help, version and administrative runtime commands
+remain independent of user configuration. Pi authentication/model settings and persisted session
+snapshots remain separate from this Radian user-settings file. There is no settings UI yet.
 
 ### Workspace roots
 
 Normal mode scans `~/projects` and `~/.dotfiles`, including a root that is itself a repository.
-Customize `${XDG_CONFIG_HOME:-~/.config}/radian/workspace.json`, or select another file with
-`--workspace-config PATH`:
+Set the `workspace` section in unified settings. The legacy
+`${XDG_CONFIG_HOME:-~/.config}/radian/workspace.json` and explicit `--workspace-config PATH` remain
+supported with this section's contents:
 
 ```json
 {
@@ -818,9 +851,10 @@ Keyboard focus is separate from selection: the focused workspace popup or input 
 accent, while an unfocused selection stays softly highlighted. Agent input has a dedicated surface.
 These are presentation changes only; keybindings and embedded program input ownership are unchanged.
 
-No theme file is required. Optional `#RRGGBB` color overrides are read at TUI startup from
-`$XDG_CONFIG_HOME/radian/theme.json`, falling back to `~/.config/radian/theme.json`.
-Use `--theme PATH` to choose an explicit file. For example:
+No theme file is required. Put optional `#RRGGBB` color overrides in the unified `theme` section.
+Without that section, the legacy `$XDG_CONFIG_HOME/radian/theme.json` (defaulting to
+`~/.config/radian/theme.json`) is read at TUI startup. `--theme PATH` overrides that section.
+The following is the section's contents, or a complete legacy theme file:
 
 ```json
 {
@@ -901,9 +935,10 @@ custom bindings but has no default binding.
 Ctrl+C clears drafts in Agent input; in Editor and Terminal, Neovim and shells still receive it as native input.
 If macOS reserves Ctrl+Space for input-source switching, change that system shortcut or radian's leader.
 
-Settings are read when the TUI starts from `$XDG_CONFIG_HOME/radian/keybindings.json`, falling back
-to `~/.config/radian/keybindings.json`. `--keybindings PATH` selects an explicit file. Restart only
-the TUI to apply edits; the runtime and its processes do not need restarting. There is no settings UI yet.
+Keybindings are read from the unified `keybindings` section at TUI startup. Without that section,
+`$XDG_CONFIG_HOME/radian/keybindings.json` (defaulting to `~/.config/radian/keybindings.json`) remains
+supported; `--keybindings PATH` overrides that section. Reopen only the TUI to apply these edits;
+the runtime and its processes do not need restarting.
 
 ```json
 {
@@ -1168,6 +1203,39 @@ is automatically replaced or restarted.
 Full SDK history remains in JSONL. Configured Pi extensions, including MCP adapters, use SDK discovery;
 this does not embed Pi's interactive CLI UI or provide remote-machine services.
 
+### Session retention
+
+The default policy retains Radian-created closed conversations for **30 days after their latest
+close**. Set `sessions.retentionDays` to a positive integer in unified settings, or `null` for unlimited
+retention. A separate `closedAt` timestamp is recorded on close and `/clear`, cleared when the same
+SDK conversation is reopened, and set anew when it is closed again. Ordinary checkpoints, usage
+updates and creation dates do not reset that clock. Open or runtime-owned active sessions are never
+removed. Owned subagent conversations receive closed snapshots after their work settles as well.
+
+Only records positively marked as Radian-created (`managed`) are eligible. New hosted SDK conversations
+are created under the repository runtime's private `sdk-sessions/` directory, not mixed into Pi's default
+session directory; isolated test runtimes keep their existing private fixture directory. Existing files
+are never moved. History combines that owned directory with Pi's default per-worktree discovery, so
+older/external conversations remain accessible. External Pi conversations and older records without
+provenance are preserved, even if Radian has displayed or resumed them.
+Older closed snapshots missing `closedAt` receive a new grace timestamp rather than expiring from
+an old checkpoint date. Previously unknown ownership is never inferred from a path or file age.
+
+Each running repository daemon sweeps once in the background after restoring open-session intent,
+then once per hour without overlapping runs. Maintenance does not delay the HTTP/TUI handshake;
+a stopped daemon catches up at its next startup. `runtime status` reports the active policy and last
+successful sweep under `sessionRetention`. The daemon rereads the policy each time. Before deleting a JSONL file it verifies a regular, unchanged
+file, its SDK conversation ID and original worktree, then reserves it against Radian resume/create
+operations. Files changed externally after the snapshot and symbolic/replaced paths are preserved.
+The final file fingerprint is checked again immediately before removal.
+
+Expired owned JSONL and snapshot bodies are removed together. A durable cleanup marker hides a
+partially removed conversation from History's JSONL fallback and permits retry after interruption;
+small redacted identity markers prevent stale checkpoints from recreating expired bodies. Disabling
+new cleanup does not roll back a deletion already started. Permission, corruption or policy failures
+remain visible and do not turn into successful empty results. This affects only persisted history;
+no model call, extension execution, repository content or current input is replayed by cleanup.
+
 ### Work-view runtime foundation
 
 The additive `work-views` capability provides a daemon-owned Neovim per worktree and optional
@@ -1277,7 +1345,8 @@ results or errors, and cancels on close/disposal. Preview failures remain visibl
 Empty history, no matches, discovery failures, preview failures and Open failures remain distinct.
 
 Closing records and active owned-child writers cannot be opened until cleanup finishes. Completed
-SDK child conversations can appear in history; there is no new deletion, retention or main-only filter.
+SDK child conversations can appear in history. The shared retention policy applies only to expired,
+closed records with confirmed Radian ownership; external and legacy conversations remain visible.
 The workspace search remains exclusively the workspace-name projection. A worktree change closes an
 open popup rather than admitting an outdated selection into the new scope.
 

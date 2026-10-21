@@ -89,6 +89,33 @@ test("실제 SDK 기록이 4MiB를 넘어도 닫힌 세션의 최근 대화를 �
   } finally { await app.cleanup(); }
 });
 
+test("Radian 전용 SDK 저장소와 기존 Pi 기록을 함께 조회하고 구형 기록은 읽기만 한다", async () => {
+  // 새 기록을 전용 경로로 옮겨도 기본 Pi 디렉터리의 구형 대화를 숨기면 안 된다.
+  const app = await setup(), timestamp = new Date();
+  const ownedPath = join(app.directory, "owned.jsonl"), legacyPath = join(app.directory, "legacy.jsonl");
+  await writeFile(ownedPath, [
+    { type: "session", version: 3, id: "owned", cwd: app.main.path, timestamp: timestamp.toISOString() },
+    { type: "message", id: "q", parentId: null, timestamp: timestamp.toISOString(), message: { role: "user", content: "Owned question" } },
+  ].map(entry => JSON.stringify(entry)).join("\n") + "\n");
+  const legacy = [{ type: "session", version: 1, id: "legacy", timestamp: timestamp.toISOString() },
+    { type: "message", message: { role: "user", content: "Legacy question" } }].map(entry => JSON.stringify(entry)).join("\n") + "\n";
+  await writeFile(legacyPath, legacy);
+  const info = (id: string, path: string, cwd: string) => ({ id, path, cwd, created: timestamp, modified: timestamp, messageCount: 1, firstMessage: id, allMessagesText: id });
+  const listing = spyOn(SessionManager, "list").mockImplementation(async (_cwd, directory) => directory
+    ? [info("owned", ownedPath, app.main.path), info("unscoped-private", ownedPath, "")] : [info("legacy", legacyPath, "")]);
+  try {
+    const history = new SessionHistory([app.repository], app.registry, join(app.directory, "private-sessions"), undefined, true);
+
+    // 전용 디렉터리는 cwd를 검증하고, 기본 디렉터리는 SDK가 프로젝트별로 범위를 정한다.
+    const items = expectOk(await history.list(app.main.id));
+    const preview = expectOk(await history.preview(app.main.id, "legacy"));
+
+    expect(items.map(item => item.id).sort()).toEqual(["legacy", "owned"]); expect(listing).toHaveBeenCalledTimes(2);
+    expect(preview.text).toContain("Legacy question"); expect(await readFile(legacyPath, "utf8")).toBe(legacy);
+    expect(app.registry.records).toEqual([]);
+  } finally { listing.mockRestore(); await app.cleanup(); }
+});
+
 test("닫은 기록을 resume하면 동일 SDK ID·파일·대화를 사용하고 별도의 열린 UI 항목만 추가한다", async () => {
   // The existing finalized JSONL is authoritative, not copied to a new conversation.
   const app = await setup();

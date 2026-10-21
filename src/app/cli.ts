@@ -6,11 +6,11 @@ import { err, ok, type Result } from "../result.ts";
 
 export type CliOptions = {
   demo: boolean; offline: boolean; service: boolean; status: boolean; stop: boolean; noColor: boolean;
-  cwd: string; stateRoot: string | undefined; keybindings: string | undefined; theme: string | undefined; workspaceConfig: string | undefined;
+  cwd: string; stateRoot: string | undefined; config: string | undefined; keybindings: string | undefined; theme: string | undefined; workspaceConfig: string | undefined;
 };
 type RawOptions = {
   demo?: boolean; testRuntime?: boolean; runtimeService?: boolean; runtimeStatus?: boolean; stopRuntime?: boolean; color?: boolean;
-  runtimeCwd?: string; stateDir?: string; keybindings?: string; theme?: string; workspaceConfig?: string;
+  runtimeCwd?: string; stateDir?: string; config?: string; keybindings?: string; theme?: string; workspaceConfig?: string;
 };
 export type CliAction = { kind: "output"; text: string } | { kind: "run"; options: CliOptions };
 
@@ -26,6 +26,7 @@ export function parseCli(args: readonly string[], context: { cwd?: string; env?:
     .option("--test-runtime", "Use isolated scripted SDK responses instead of a provider")
     .option("--runtime-cwd <path>", "Working directory for repository-scoped runtime commands")
     .option("--state-dir <path>", "Override the runtime state directory")
+    .option("--config <path>", "Select unified Radian settings")
     .option("--workspace-config <path>", "Select workspace roots configuration")
     .option("--keybindings <path>", "Select application keybindings")
     .option("--theme <path>", "Select UI theme overrides")
@@ -49,13 +50,13 @@ export function parseCli(args: readonly string[], context: { cwd?: string; env?:
   if (new Set(statuses).size > 1 || raw.runtimeService && statuses.length) return err(new InputError("Choose exactly one runtime operation."));
   const administrative = statuses[0];
   if (raw.demo && (raw.testRuntime || raw.runtimeService || administrative)) return err(new InputError("--demo cannot be combined with test-runtime or runtime operations."));
-  for (const [name, path] of Object.entries({ "--runtime-cwd": raw.runtimeCwd, "--state-dir": raw.stateDir, "--keybindings": raw.keybindings, "--theme": raw.theme, "--workspace-config": raw.workspaceConfig })) {
+  for (const [name, path] of Object.entries({ "--runtime-cwd": raw.runtimeCwd, "--state-dir": raw.stateDir, "--config": raw.config, "--keybindings": raw.keybindings, "--theme": raw.theme, "--workspace-config": raw.workspaceConfig })) {
     if (path !== undefined && (!path || path.includes("\0"))) return err(new InputError(`${name} requires a nonempty local path.`));
   }
   const base = context.cwd ?? process.cwd();
   return ok({ kind: "run", options: { demo: raw.demo ?? false, offline: raw.testRuntime ?? false, service: raw.runtimeService ?? false,
     status: administrative === "status", stop: administrative === "stop", noColor: raw.color === false || Boolean((context.env ?? process.env).NO_COLOR),
-    cwd: resolve(base, raw.runtimeCwd ?? "."), stateRoot: raw.stateDir === undefined ? undefined : resolve(base, raw.stateDir), keybindings: raw.keybindings, theme: raw.theme, workspaceConfig: raw.workspaceConfig } });
+    cwd: resolve(base, raw.runtimeCwd ?? "."), stateRoot: raw.stateDir === undefined ? undefined : resolve(base, raw.stateDir), config: raw.config === undefined ? undefined : resolve(base, raw.config), keybindings: raw.keybindings, theme: raw.theme, workspaceConfig: raw.workspaceConfig } });
 }
 
 export function checkInteractiveHost(options: CliOptions, host: { stdinTTY: boolean; stdoutTTY: boolean; term: string | undefined }): Result<void, InputError> {
