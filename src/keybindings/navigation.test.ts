@@ -51,6 +51,15 @@ test.each([["search", "workspace"], ["history-search", "history"], ["monitor-sea
   expect(defaultKeymap().hints("search.clear", context)).toBe("Ctrl+c");
 });
 
+test("Agent와 Git 프롬프트의 Ctrl+C는 각각 초안을 지우고 사용자 키 재설정을 존중한다", () => {
+  // 공용 입력기가 키를 직접 가로채면 사용자 설정으로 기본 지우기를 교체할 수 없게 된다.
+  const map = expectOk(parseKeymap({ bindings: { "git.clear": [{ keys: "ctrl+g", scope: "git-prompt" }] } }));
+
+  // 두 기본 경로를 동일한 지우기 동작에 연결하되 명시적 재설정은 기본 바인딩을 대체한다.
+  expect(commandFor("prompt", "ctrl+c")).toBe("agent.clear"); expect(commandFor("git-prompt", "ctrl+c")).toBe("git.clear");
+  expect(map.bound("ctrl+c", "git-prompt")).toBe(false); expect(map.hint("git.clear", "git-prompt")).toBe("Ctrl+g");
+});
+
 test("워크스페이스 검색 지우기와 사용자 점프 재설정은 기본 점프와 충돌하지 않는다", () => {
   // 점프 키 재설정은 검색어 지우기와 별개이며 해당 명령의 기본 바인딩을 교체한다.
   const map = expectOk(parseKeymap({ bindings: { "workspace.half-page-down": [{ keys: "ctrl+y", scope: "workspace" }] } }));

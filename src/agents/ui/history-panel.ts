@@ -1,8 +1,9 @@
-import { BoxRenderable, InputRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
+import { BoxRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
 import type { HistoryItem } from "../history.ts";
 import type { HistoryPreview } from "../history-preview.ts";
 import { HistoryPreviewCache } from "../history-preview-cache.ts";
 import { singleLine } from "../../ui/text.ts";
+import { SearchInput } from "../../ui/search-input.ts";
 import type { Worktree } from "../../workspace/model.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
@@ -38,7 +39,7 @@ function matches(title: string, query: string): boolean {
 // The popup owns only a query and a candidate cursor. Canonical session selection changes on Open.
 export class SessionHistoryPanel {
   readonly root: BoxRenderable;
-  readonly search: InputRenderable;
+  readonly search: SearchInput;
   readonly list: ScrollBoxRenderable;
   readonly preview: ScrollBoxRenderable;
   private readonly panel: BoxRenderable;
@@ -82,7 +83,7 @@ export class SessionHistoryPanel {
     const activity = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0 }); activity.add(this.spinner.root); heading.add(activity);
     const close = new TextRenderable(renderer, { content: "×", width: 1, height: 1, selectable: false,
       onMouseDown: (event) => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.hide(); } } }); heading.add(close);
-    this.search = new InputRenderable(renderer, { id: "history-search", width: "100%", placeholder: "Search session titles…", maxLength: 256 });
+    this.search = new SearchInput(renderer, { id: "history-search", placeholder: "Search session titles…" });
     this.message = new TextRenderable(renderer, { id: "history-message", content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     const body = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "row" });
     this.list = new ScrollBoxRenderable(renderer, { id: "history-list", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
@@ -98,8 +99,8 @@ export class SessionHistoryPanel {
     this.preview = this.transcript.scroll; this.preview.id = "history-preview";
     this.previewPane.add(previewHeading); this.previewPane.add(this.preview);
     body.add(this.list); body.add(this.previewPane);
-    this.panel.add(heading); this.panel.add(this.search); this.panel.add(this.message); this.panel.add(body); this.root.add(this.panel);
-    theme.input(this.search); theme.scrollbars(this.list); theme.scrollbars(this.preview);
+    this.panel.add(heading); this.panel.add(this.search.field); this.panel.add(this.message); this.panel.add(body); this.root.add(this.panel);
+    theme.scrollbars(this.list); theme.scrollbars(this.preview);
     theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
       this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg; paintText(this.title, styles["ui.popupTitle"]);
@@ -295,6 +296,8 @@ export class SessionHistoryPanel {
     if (this.disposed || this.root.isDestroyed) return;
     const width = Math.max(1, Math.min(this.renderer.width, Math.floor(this.renderer.width * 0.9)));
     const height = Math.max(1, Math.min(this.renderer.height, Math.max(8, Math.floor(this.renderer.height * 0.8))));
+    // Keep at least four body rows for the preview in short dialogs.
+    this.search.fit(height - 8);
     this.panel.width = width; this.panel.height = height; this.panel.left = Math.floor((this.renderer.width - width) / 2); this.panel.top = Math.floor((this.renderer.height - height) / 2);
     const wide = this.renderer.width >= 100;
     this.list.visible = wide || !this.compactPreview; this.previewPane.visible = wide || this.compactPreview;

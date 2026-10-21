@@ -9,7 +9,7 @@ import { singleLine, truncateCells } from "../../ui/text.ts";
 import { completionTarget, insertCompletion, type CompletionResult, type CompletionTarget } from "../completion.ts";
 import type { CompletionProvider } from "../completion-cache.ts";
 export type { CompletionProvider } from "../completion-cache.ts";
-import type { PromptInput } from "./prompt-input.ts";
+import type { PromptInput } from "../../ui/prompt-input.ts";
 
 type LookupContext = { sessionId: string; target: CompletionTarget; lookup: string; scope: string };
 const debounceMs = 150;

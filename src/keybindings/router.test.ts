@@ -68,24 +68,24 @@ test("kitty release는 문자 재생을 중복하지 않고 명령 소비 후 na
   } finally { await app.close(); }
 });
 
-test("검색 지우기의 held Ctrl+C는 포커스 이동 뒤 쉘 인터럽트로 재생되지 않는다", async () => {
-  // 검색에서 시작한 입력과 나중에 쉘에서 새로 누른 인터럽트를 구분한다.
+test.each([["search", "search.clear"], ["prompt", "agent.clear"], ["git-prompt", "git.clear"]] as const)("%s 입력 지우기의 held Ctrl+C는 포커스 이동 뒤 쉘 인터럽트로 재생되지 않는다", async (context, clearCommand) => {
+  // 앱 입력에서 시작한 지우기와 나중에 쉘에서 새로 누른 인터럽트를 구분한다.
   const app = await createTestRenderer({ width: 60, height: 8, kittyKeyboard: true, exitOnCtrlC: false });
   const input = new InputRenderable(app.renderer, { width: 60 }); input.value = "candidate"; app.renderer.root.add(input);
   const surface = new TerminalSurface(app.renderer, "search-clear-terminal"); app.renderer.root.add(surface.root);
   const bytes: string[] = [], commands: string[] = [];
   surface.connect({ input: value => bytes.push(Buffer.from(value).toString("hex")), resize() {}, disconnect: async () => {} });
   input.focus();
-  const router = new KeyRouter(app.renderer, defaultKeymap(), () => input.focused ? "search" : "terminal", command => command === "search.clear",
+  const router = new KeyRouter(app.renderer, defaultKeymap(), () => input.focused ? context : "terminal", command => command === clearCommand,
     command => { commands.push(command); input.value = ""; });
   const raw = (event: string) => { const key = parseKeypress(event, { useKittyKeyboard: true }); if (!key) throw new Error("Invalid Kitty key"); app.renderer.keyInput.processParsedKey(key); };
   try {
     raw("\x1b[99;5u"); surface.root.focus(); raw("\x1b[99;5:2u");
 
-    expect(input.value).toBe(""); expect(commands).toEqual(["search.clear"]); expect(bytes).toEqual([]);
+    expect(input.value).toBe(""); expect(commands).toEqual([clearCommand]); expect(bytes).toEqual([]);
     raw("\x1b[99;5:3u"); app.mockInput.pressCtrlC();
 
-    expect(bytes).toContain("03"); expect(commands).toEqual(["search.clear"]);
+    expect(bytes).toContain("03"); expect(commands).toEqual([clearCommand]);
   } finally { router.dispose(); surface.dispose(); await app.dispose(); }
 });
 

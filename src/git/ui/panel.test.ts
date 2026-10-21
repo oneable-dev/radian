@@ -1,8 +1,9 @@
-import { expect, test } from "bun:test";
-import { CodeRenderable, DiffRenderable, ScrollBoxRenderable, TextAttributes, TextRenderable, type Renderable, type TerminalColors } from "@opentui/core";
+import { expect, spyOn, test } from "bun:test";
+import { CodeRenderable, DiffRenderable, ScrollBoxRenderable, TextAttributes, TextRenderable, type ClipboardRepresentation, type Renderable, type TerminalColors } from "@opentui/core";
 import { uiTheme } from "../../ui/theme.ts";
 import { Button } from "../../ui/button.ts";
-import { PromptInput } from "../../agents/ui/prompt-input.ts";
+import { PromptInput } from "../../ui/prompt-input.ts";
+import { Clipboard } from "../../ui/clipboard.ts";
 import { createTestRenderer, ManualClock, MockTreeSitterClient } from "@opentui/core/testing";
 import { Workbench } from "../../app/ui/workbench.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
@@ -87,6 +88,74 @@ async function mount(options: { actions?: Partial<GitActions>; initial?: WorkVie
     async close() { view.dispose(); await app.dispose(); await highlighter.destroy(); },
   };
 }
+
+test.each([{ width: 160, light: false }, { width: 60, light: false }, { width: 160, light: true }, { width: 60, light: true }])("Agent와 Git의 공용 Prompt는 같은 외관·여백·자동 높이·지우기를 사용한다: %j", async ({ width, light }) => {
+  // 같은 원문을 각 화면에 배치해 부모가 입력 스타일을 덮어쓰는 회귀를 검출한다.
+  const app = await mount();
+  const render = async () => { await app.renderOnce(); await app.renderOnce(); };
+  const appearance = (input: PromptInput) => ({
+    rows: input.height, height: input.field.height, top: input.y - input.field.y,
+    left: input.x - input.field.x, right: input.field.x + input.field.width - input.x - input.width,
+    background: input.field.backgroundColor.toInts(), editorBackground: input.backgroundColor.toInts(),
+    border: input.field.border, borderColor: input.field.borderColor.toInts(),
+  });
+  try {
+    app.resize(width, 32);
+    uiTheme(app.renderer).configure({ palette: [], defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
+      cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null });
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("a"); await render();
+    const live = app.get("session-prompt"); if (!(live instanceof PromptInput)) throw new Error("Missing Agent prompt");
+    live.value = "first\nsecond"; live.focus(); await render(); const expected = appearance(live);
+
+    // Git에서도 별도 입력기를 구성하지 않고 동일한 필드를 그대로 사용한다.
+    await app.showGit(); await app.chooseCommit(); app.mockInput.pressKey("a"); await render();
+    const input = app.get("git-prompt"); if (!(input instanceof PromptInput)) throw new Error("Missing Git prompt");
+    input.value = "first\nsecond"; await render();
+    expect(appearance(input)).toEqual(expected); expect(input.height).toBe(2); expect(input.field.height).toBe(4);
+    expect(input.activity.root.parent).toBe(input.field);
+    input.cursorOffset = 3; app.get("git-history").focus();
+    await app.mockMouse.click(input.field.x + 2, input.field.y); await render();
+    expect(app.renderer.currentFocusedRenderable).toBe(input); expect(input.cursorOffset).toBe(3);
+    app.mockInput.pressCtrlC(); await render(); app.mockInput.pressCtrlC(); await render();
+
+    // Ctrl+C는 현재 입력만 지우고 요청이나 닫기, 다른 Agent 초안 변경을 만들지 않는다.
+    expect(input.value).toBe(""); expect(input.field.height).toBe(3); expect(app.get("git-ask").visible).toBe(true);
+    expect(app.renderer.currentFocusedRenderable).toBe(input); expect(app.view.promptDrafts.a1).toBe("first\nsecond");
+    expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Git의 붙여넣기 로딩도 공용 Prompt의 오른쪽 여백을 사용하고 닫으면 즉시 정리한다", async () => {
+  // OS 클립보드만 제어하고 실제 필드·키 라우팅·공용 스피너를 함께 사용한다.
+  const clock = new ManualClock();
+  let pending = Promise.withResolvers<Result<ClipboardRepresentation, ExpectedError>>(), signal: AbortSignal | undefined;
+  const read = spyOn(Clipboard.prototype, "read").mockImplementation(current => { signal = current; return pending.promise; });
+  const app = await mount({ clock });
+  const render = async () => { await app.renderOnce(); await app.renderOnce(); };
+  try {
+    await app.chooseCommit(); app.mockInput.pressKey("a"); await render();
+    const input = app.get("git-prompt"); if (!(input instanceof PromptInput)) throw new Error("Missing Git prompt");
+    input.value = "draft"; await render();
+    const geometry = () => [input.field.y, input.field.height, input.width, app.get("git-ask").height];
+    const before = geometry();
+
+    // 읽기와 최소 표시 시간 모두 입력 너비나 대화상자 높이를 변경하지 않는다.
+    app.mockInput.pressKey("v", { ctrl: true }); await render();
+    expect(input.pending).toBe(true); expect(input.activity.root.visible).toBe(true); expect(geometry()).toEqual(before);
+    expect(input.activity.root.parent).toBe(input.field);
+    expect(input.activity.root.x).toBeGreaterThanOrEqual(input.x + input.width);
+    pending.resolve(ok({ mimeType: "text/plain", bytes: new TextEncoder().encode(" pasted") })); await render();
+    expect(input.value).toBe("draft pasted"); expect(input.pending).toBe(false); expect(geometry()).toEqual(before);
+    expect(input.activity.root.visible).toBe(true); clock.advance(500); await render(); expect(input.activity.root.visible).toBe(false);
+    pending = Promise.withResolvers<Result<ClipboardRepresentation, ExpectedError>>();
+    app.mockInput.pressKey("v", { ctrl: true }); await render(); app.mockInput.pressEscape(); await render();
+    pending.resolve(ok({ mimeType: "text/plain", bytes: new TextEncoder().encode(" too late") })); await render();
+
+    // 숨긴 대화상자의 비동기 결과는 버리고 기존 입력과 Agent 초안을 보존한다.
+    expect(signal?.aborted).toBe(true); expect(input.activity.root.visible).toBe(false); expect(input.value).toBe("draft pasted");
+    expect(app.get("git-ask").visible).toBe(false); expect(app.view.promptDrafts.a1).toBe("existing Agent draft"); expect(app.requests).toEqual([]);
+  } finally { pending.resolve(ok({ mimeType: "text/plain", bytes: new Uint8Array() })); read.mockRestore(); await app.close(); }
+});
 
 test("Git 커밋의 Ctrl+D/U는 선택을 반 페이지 이동하고 중간 커밋을 조회하지 않는다", async () => {
   // 그래프의 연결선까지 포함한 실제 행 높이로 여러 후보를 한 번에 건너뛴다.

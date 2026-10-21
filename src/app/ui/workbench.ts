@@ -1,5 +1,5 @@
 import {
-  BorderChars, BoxRenderable, InputRenderable, InputRenderableEvents, ScrollBoxRenderable, StyledText, TextAttributes, TextRenderable,
+  BorderChars, BoxRenderable, InputRenderableEvents, ScrollBoxRenderable, StyledText, TextAttributes, TextRenderable,
   type CliRenderer, type Renderable,
 } from "@opentui/core";
 import packageInfo from "../../../package.json";
@@ -19,6 +19,7 @@ import type { SessionNotification } from "../../agents/session-notification.ts";
 import { ModelPicker, type ModelPickerActions } from "../../agents/ui/model-picker.ts";
 import { Footer, type FooterShortcut } from "../../ui/footer.ts";
 import { TextDialog } from "../../ui/text-dialog.ts";
+import { SearchInput } from "../../ui/search-input.ts";
 import { keymapHelp } from "../../keybindings/help.ts";
 import { Button, type ButtonVariant } from "../../ui/button.ts";
 import { panelSpacing } from "../../ui/spacing.ts";
@@ -75,8 +76,7 @@ export class Workbench {
   private readonly notifications: SessionNotificationStack;
   private foreground = false;
   private readonly acknowledgements = new Map<string, string>();
-  private readonly search: InputRenderable;
-  private readonly searchBox: BoxRenderable;
+  private readonly search: SearchInput;
   private readonly tree: ScrollBoxRenderable;
   private readonly resultMessage: TextRenderable;
   private readonly history: SessionHistoryPanel;
@@ -117,16 +117,8 @@ export class Workbench {
     this.sidebar = new BoxRenderable(renderer, { id: "workspace-sidebar", position: "absolute", visible: false, minWidth: 0, minHeight: 0,
       flexDirection: "column", border: true, paddingX: 1 });
     this.workspacePopup.add(this.sidebar);
-    this.searchBox = new BoxRenderable(renderer, {
-      id: "workspace-search-box", width: "auto", height: 3, minWidth: 0, flexShrink: 0,
-      flexDirection: "column",
-      onMouseDown: (event) => { if (event.button === 0 && !this.search.focused) this.search.focus(); },
-    });
-    this.search = new InputRenderable(renderer, {
-      id: "workspace-search", width: "auto", minWidth: 0, flexShrink: 0,
-      placeholder: "Search repo/worktree/branch",
-    });
-    this.searchBox.add(this.search); this.sidebar.add(this.searchBox);
+    this.search = new SearchInput(renderer, { id: "workspace-search", fieldId: "workspace-search-box", placeholder: "Search repo/worktree/branch" });
+    this.sidebar.add(this.search.field);
     this.tree = new ScrollBoxRenderable(renderer, {
       id: "workspace-tree", flexGrow: 1, minHeight: 0, marginTop: 1, scrollX: false,
       contentOptions: { flexDirection: "column" },
@@ -203,12 +195,10 @@ export class Workbench {
     renderer.addPostProcessFn(this.settleRows); renderer.addPostProcessFn(this.acknowledgeVisible);
     renderer.on("focus", this.focusTerminal); renderer.on("blur", this.blurTerminal);
     this.search.on(InputRenderableEvents.INPUT, this.handleSearchInput);
-    this.search.on("focused", this.repaintSearch); this.search.on("blurred", this.repaintSearch);
     this.unsubscribe = selection.subscribe(() => this.render());
     this.resize();
     this.render();
     this.focusNavigation();
-    this.theme.input(this.search);
     this.theme.scrollbars(this.tree);
     this.theme.focusBorder(this.sidebar);
     this.tree.on("focused", this.repaintRows); this.tree.on("blurred", this.repaintRows);
@@ -216,7 +206,7 @@ export class Workbench {
       this.root.backgroundColor = styles["ui.text"].bg;
       this.workspacePopup.backgroundColor = styles["ui.backdrop"].bg;
       this.sidebar.backgroundColor = styles["ui.popup"].bg;
-      this.repaintSearch(); this.paintRows(this.visibleRows());
+      this.paintRows(this.visibleRows());
     });
   }
 
@@ -566,7 +556,7 @@ export class Workbench {
       case "focus.previous": this.moveFocus(-1); break;
       case "search.clear": {
         const focused = this.renderer.currentFocusedRenderable;
-        if (focused instanceof InputRenderable && focused.value) focused.value = "";
+        if (focused instanceof SearchInput) focused.clear();
         break;
       }
       case "view.agent": this.selectWorkView("agent"); break;
@@ -645,8 +635,8 @@ export class Workbench {
     this.sidebar.width = width; this.sidebar.height = height;
     this.sidebar.left = Math.floor((this.renderer.width - width) / 2); this.sidebar.top = Math.floor((this.renderer.height - height) / 2);
     this.sidebar.paddingX = horizontal; this.sidebar.paddingBottom = vertical;
-    this.searchBox.height = 1 + vertical * 2; this.searchBox.paddingY = vertical;
-    this.searchBox.marginX = -horizontal; this.searchBox.paddingX = horizontal;
+    this.search.fit(height - 4);
+    this.search.field.marginX = -horizontal;
     this.search.placeholder = this.renderer.width < 80 ? "Search workspaces" : "Search repo/worktree/branch";
     this.tree.marginTop = vertical;
     // Keep one cell before the divider without changing the sidebar's left inset.
@@ -654,11 +644,6 @@ export class Workbench {
     this.spaceRows(this.visibleRows());
     this.navigationRevealPending = true;
     this.workPanel.minWidth = 0;
-  };
-
-  private repaintSearch = (): void => {
-    if (this.disposed || this.searchBox.isDestroyed) return;
-    this.searchBox.backgroundColor = this.theme.styles[this.search.focused ? "ui.inputFocused" : "ui.input"].bg;
   };
 
   private spaceRows(rows: readonly WorkspaceRow[]): void {
@@ -811,7 +796,6 @@ export class Workbench {
     this.notifications.dispose();
     this.agent.dispose(); this.history.dispose(); this.monitor.dispose(); this.models.dispose(); this.dialog.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
     this.search.off(InputRenderableEvents.INPUT, this.handleSearchInput);
-    this.search.off("focused", this.repaintSearch); this.search.off("blurred", this.repaintSearch);
     this.router.dispose();
     this.renderer.off("resize", this.resize);
     this.renderer.off("focused_renderable", this.updateFooter);

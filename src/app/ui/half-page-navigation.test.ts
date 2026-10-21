@@ -7,6 +7,7 @@ import { demoWorkspace } from "../../workspace/demo.ts";
 import { modelCommand } from "../../agents/model-selection.ts";
 import { ok } from "../../result.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { SearchInput } from "../../ui/search-input.ts";
 
 type Surface = "workspace" | "history" | "monitor" | "model";
 const surfaces = ["workspace", "history", "monitor", "model"] as const;
@@ -50,6 +51,36 @@ async function mount(surface: Surface) {
   return { ...app, clock, view, selection, opened, submitted, interrupted, closed, detached, input, list, get, render,
     async close() { view.dispose(); await app.dispose(); } };
 }
+
+test.each(surfaces)("%s 검색은 공용 입력의 여백·포커스 배경을 사용하고 리사이즈 후에도 커서를 보존한다", async surface => {
+  // 검색 대상은 달라도 입력 영역 전체의 모양과 클릭 계약은 같아야 한다.
+  const app = await mount(surface);
+  try {
+    if (!(app.input instanceof SearchInput)) throw new Error("Missing shared search field");
+    const input = app.input, field = input.field;
+    await app.mockInput.typeText("candidate"); app.mockInput.pressArrow("left");
+    const value = input.value, cursor = input.cursorOffset;
+    const background = (x: number, y: number) => {
+      let end = 0;
+      return app.captureSpans().lines[y]!.spans.find(span => { end += span.width; return end > x; })!.bg.toInts();
+    };
+
+    // 넓고 좁은 터미널에서 결과 목록으로 나갔다가 입력 여백을 눌러 돌아온다.
+    for (const width of [120, 60]) {
+      app.resize(width, 30); await app.render(); app.list.focus(); await app.render();
+      expect(background(field.x + 1, field.y)).toEqual(uiTheme(app.renderer).styles["ui.input"].bg!.toInts());
+      await app.mockMouse.click(field.x + 1, field.y); await app.render();
+
+      // 입력은 한 줄이며 양쪽·상하 여백과 포커스 배경은 화면별 덮어쓰기 없이 일치한다.
+      expect(field.height).toBe(3); expect(input.height).toBe(1); expect(input.y - field.y).toBe(1);
+      expect(input.x - field.x).toBe(width < 80 ? 1 : 2);
+      expect(field.x + field.width - input.x - input.width).toBe(width < 80 ? 1 : 2);
+      expect(background(field.x + 1, field.y)).toEqual(uiTheme(app.renderer).styles["ui.inputFocused"].bg!.toInts());
+      expect(app.renderer.currentFocusedRenderable).toBe(input); expect(input.value).toBe(value); expect(input.cursorOffset).toBe(cursor);
+    }
+    expect(input.maxLength).toBe(256); expect(app.opened).toEqual([]); expect(app.submitted).toEqual([]);
+  } finally { await app.close(); }
+});
 
 test.each(surfaces)("%s 목록의 Ctrl+D/U는 반 페이지 후보를 왕복하며 Enter 전에는 확정하지 않는다", async surface => {
   // 실제 목록 높이와 행 간격에 맞춰 한 번에 여러 후보를 이동한다.

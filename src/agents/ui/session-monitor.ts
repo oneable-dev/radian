@@ -1,4 +1,4 @@
-import { BoxRenderable, InputRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
+import { BoxRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
 import type { Repository } from "../../workspace/model.ts";
 import type { ExecutionState } from "../session-registry.ts";
 import { monitoredSessions, type MonitoredSession } from "../session-monitor.ts";
@@ -8,6 +8,7 @@ import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { singleLine } from "../../ui/text.ts";
+import { SearchInput } from "../../ui/search-input.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import { icons } from "../../icons.ts";
 import { TranscriptPanel } from "./transcript-panel.ts";
@@ -29,7 +30,7 @@ const previewTail = (text: string): string => text.slice(-8192).replace(/^[\uDC0
 // This popup owns browsing only. Preview and candidate movement never acknowledge a result.
 export class SessionMonitor {
   readonly root: BoxRenderable;
-  readonly search: InputRenderable;
+  readonly search: SearchInput;
   readonly list: ScrollBoxRenderable;
   private readonly panel: BoxRenderable;
   private readonly message: TextRenderable;
@@ -60,7 +61,7 @@ export class SessionMonitor {
     const close = new TextRenderable(renderer, { content: "×", width: 1, height: 1, selectable: false,
       onMouseDown: event => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.hide(); } } });
     heading.add(title); heading.add(this.spinner.root); heading.add(close);
-    this.search = new InputRenderable(renderer, { id: "monitor-search", width: "100%", minWidth: 0, placeholder: "Search tasks, repositories or worktrees…", maxLength: 256 });
+    this.search = new SearchInput(renderer, { id: "monitor-search", placeholder: "Search tasks, repositories or worktrees…" });
     this.message = new TextRenderable(renderer, { id: "monitor-message", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     const body = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "row" });
     this.list = new ScrollBoxRenderable(renderer, { id: "monitor-list", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
@@ -72,9 +73,9 @@ export class SessionMonitor {
     this.transcript.scroll.id = "monitor-preview";
     this.previewPane.add(label); this.previewPane.add(this.transcript.scroll);
     body.add(this.list); body.add(this.previewPane);
-    this.panel.add(heading); this.panel.add(this.search); this.panel.add(this.message); this.panel.add(body); this.root.add(this.panel);
+    this.panel.add(heading); this.panel.add(this.search.field); this.panel.add(this.message); this.panel.add(body); this.root.add(this.panel);
     const theme = uiTheme(renderer);
-    theme.input(this.search); theme.scrollbars(this.list); theme.scrollbars(this.transcript.scroll);
+    theme.scrollbars(this.list); theme.scrollbars(this.transcript.scroll);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
       this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
@@ -211,6 +212,7 @@ export class SessionMonitor {
   private resize = (): void => {
     if (this.disposed) return;
     const width = Math.max(1, Math.floor(this.renderer.width * 0.9)), height = Math.max(1, Math.floor(this.renderer.height * 0.8));
+    this.search.fit(height - 5);
     this.panel.width = width; this.panel.height = height; this.panel.left = Math.floor((this.renderer.width - width) / 2); this.panel.top = Math.floor((this.renderer.height - height) / 2);
     const wide = this.renderer.width >= 100;
     this.list.visible = wide || !this.compactPreview; this.previewPane.visible = wide || this.compactPreview;

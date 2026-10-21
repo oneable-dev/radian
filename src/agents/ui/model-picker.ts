@@ -1,4 +1,4 @@
-import { BoxRenderable, InputRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
+import { BoxRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
 import type { ModelCatalog, ModelEffort, ModelIdentity } from "../model-selection.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
@@ -6,6 +6,7 @@ import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { singleLine } from "../../ui/text.ts";
+import { SearchInput } from "../../ui/search-input.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { Button } from "../../ui/button.ts";
@@ -25,7 +26,7 @@ const sameModel = (left: ModelIdentity | null | undefined, right: ModelIdentity 
 // The popup holds plain catalog metadata. Authentication and SDK model objects stay in the runtime.
 export class ModelPicker {
   readonly root: BoxRenderable;
-  readonly search: InputRenderable;
+  readonly search: SearchInput;
   readonly list: ScrollBoxRenderable;
   readonly effort: BoxRenderable;
   private readonly effortLabel: TextRenderable;
@@ -64,7 +65,7 @@ export class ModelPicker {
     const close = new TextRenderable(renderer, { content: "×", height: 1, width: 1, selectable: false,
       onMouseDown: event => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.hide(); } } });
     heading.add(title); heading.add(activity); heading.add(close);
-    this.search = new InputRenderable(renderer, { id: "model-search", width: "100%", placeholder: "Search model or provider…", maxLength: 256, flexShrink: 0 });
+    this.search = new SearchInput(renderer, { id: "model-search", placeholder: "Search model or provider…" });
     this.message = new TextRenderable(renderer, { id: "model-message", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.list = new ScrollBoxRenderable(renderer, { id: "model-list", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.list.focus() });
@@ -76,8 +77,8 @@ export class ModelPicker {
     this.apply = new Button(renderer, "Apply", () => this.launch(() => this.choose())); this.apply.id = "model-apply";
     const cancel = new Button(renderer, "Cancel", () => this.hide()); cancel.id = "model-cancel";
     controls.add(this.apply); controls.add(cancel);
-    this.panel.add(heading); this.panel.add(this.search); this.panel.add(this.message); this.panel.add(this.list); this.panel.add(this.effort); this.panel.add(controls); this.root.add(this.panel);
-    theme.input(this.search); theme.scrollbars(this.list);
+    this.panel.add(heading); this.panel.add(this.search.field); this.panel.add(this.message); this.panel.add(this.list); this.panel.add(this.effort); this.panel.add(controls); this.root.add(this.panel);
+    theme.scrollbars(this.list);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
       this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
@@ -254,6 +255,7 @@ export class ModelPicker {
   private resize = (): void => {
     if (this.disposed || this.root.isDestroyed) return;
     const width = Math.max(1, Math.min(100, this.renderer.width - 4)), height = Math.max(1, Math.min(24, this.renderer.height - 2));
+    this.search.fit(height - 8);
     this.panel.width = width; this.panel.height = height;
     this.panel.left = Math.floor((this.renderer.width - width) / 2); this.panel.top = Math.floor((this.renderer.height - height) / 2);
   };

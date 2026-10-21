@@ -153,6 +153,7 @@ export const defaultBindings = {
   "git.copy": [key("y", "git")],
   "git.submit": [key("enter", "git-prompt")],
   "git.newline": [key("shift+enter", "git-prompt"), key("alt+enter", "git-prompt")],
+  "git.clear": [key("ctrl+c", "git-prompt")],
   "git.paste": [key("ctrl+v", "git-prompt")],
   "git.inspect": [key("ctrl+o", "git-prompt")],
   "git.cancel": [key("escape", "git-prompt")],

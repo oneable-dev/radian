@@ -20,7 +20,7 @@ import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import type { Button, ButtonFactory } from "../../ui/button.ts";
 import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
-import { PromptInput } from "../../agents/ui/prompt-input.ts";
+import { PromptInput } from "../../ui/prompt-input.ts";
 import type { DialogContent } from "../../ui/text-dialog.ts";
 
 export type GitActions = {
@@ -159,13 +159,13 @@ export class GitPanel {
     const targetRow = this.row();
     this.targetText = this.text("Session: "); targetRow.add(this.targetText);
     this.targetButton = button("Change session", () => this.cycleSession(), "Choose session"); targetRow.add(this.targetButton); this.dialog.add(targetRow);
-    this.prompt = new PromptInput(renderer, notice, (content) => inspect?.(content)); this.prompt.id = "git-prompt";
-    this.prompt.width = "100%"; this.prompt.placeholder = "Prompt · Enter to send"; this.dialog.add(this.prompt);
-    this.prompt.on(InputRenderableEvents.INPUT, this.resizeAsk); this.prompt.on("resize", this.resizeAsk);
+    this.prompt = new PromptInput(renderer, notice, (content) => inspect?.(content), { id: "git-prompt" });
+    this.dialog.add(this.prompt.field);
+    this.prompt.on(InputRenderableEvents.INPUT, this.resizeAsk); this.prompt.on("resize", this.resizeAsk); this.prompt.on("line-info-change", this.resizeAsk);
     const dialogControls = this.row();
     const send = button("Send", () => this.launch(() => this.submit()), "Send Git context");
     const cancel = button("Cancel", () => this.closeAsk(), "Cancel request");
-    this.dialogButtons.push(this.targetButton, this.prompt, send, cancel); dialogControls.add(send); dialogControls.add(cancel); dialogControls.add(this.prompt.activity.root);
+    this.dialogButtons.push(this.targetButton, this.prompt, send, cancel); dialogControls.add(send); dialogControls.add(cancel);
     this.dialog.add(dialogControls); this.root.add(this.dialog);
     bindPanelSpacing(renderer, this.root);
     renderer.on("selection", this.selectionFinished);
@@ -174,7 +174,7 @@ export class GitPanel {
       box.content.on("resize", this.applyScroll); box.viewport.on("resize", this.applyScroll);
     }
     const theme = uiTheme(renderer);
-    theme.input(this.prompt); theme.scrollbars(this.details); theme.focusBorder(this.right);
+    theme.scrollbars(this.details); theme.focusBorder(this.right);
     theme.bindStyles(this.root, (styles) => {
       paintText(this.spinner.root, styles["status.working"]); paintText(this.status, styles["ui.muted"]); paintText(this.diffNotice, styles["ui.muted"]);
       this.dialog.borderColor = styles["ui.popupBorder"].fg; this.dialog.backgroundColor = styles["ui.popup"].bg;
@@ -254,7 +254,7 @@ export class GitPanel {
   get shortcuts(): FooterShortcut[] {
     const context = this.keyContext() ?? "button";
     const hint = (command: CommandId, label: string) => ({ key: this.hint(command, context), label });
-    if (context === "git-prompt") return [hint("git.submit", "Send"), hint("git.newline", "New line"), ...(this.prompt.canInspect ? [hint("git.inspect", "Inspect")] : []), hint("git.cancel", "Cancel")];
+    if (context === "git-prompt") return [hint("git.submit", "Send"), hint("git.newline", "New line"), ...(this.prompt.value ? [hint("git.clear", "Clear")] : []), ...(this.prompt.canInspect ? [hint("git.inspect", "Inspect")] : []), hint("git.cancel", "Cancel")];
     if (context === "git-tabs") return [hint("button.activate", "Select"),
       { key: [this.hint("git.tab-previous", context), this.hint("git.tab-next", context)].filter(Boolean).join("/"), label: "Tabs" },
       ...(this.canGoBack ? [hint("git.back", "Back")] : [])];
@@ -520,6 +520,7 @@ export class GitPanel {
       case "git.copy": { const context = this.context; if (context) this.copy(context.copy); return; }
       case "git.submit": this.launch(() => this.submit()); return;
       case "git.newline": this.prompt.newLine(); return;
+      case "git.clear": this.prompt.clear(); return;
       case "git.paste": this.launch(() => this.prompt.pasteClipboard()); return;
       case "git.inspect": this.prompt.inspectAtCursor(); return;
       case "git.cancel": this.closeAsk(); return;
@@ -562,7 +563,7 @@ export class GitPanel {
     if (command === "git.left" || command === "git.right") return within(this.renderer.currentFocusedRenderable, this.diffFocus);
     if (command === "git.ask" || command === "git.copy") return !!this.context;
     if (command === "git.submit") return !!this.ask && !this.ask.sending && !this.prompt.pending && !!this.prompt.value.trim();
-    if (command === "git.newline" || command === "git.paste") return !!this.ask;
+    if (command === "git.newline" || command === "git.paste" || command === "git.clear") return !!this.ask;
     if (command === "git.inspect") return !!this.ask && !!this.inspect && this.prompt.canInspect;
     if (command === "git.cancel") return !!this.ask;
     return !!this.cache;
@@ -613,10 +614,9 @@ export class GitPanel {
   }
   private resizeAsk = (): void => {
     if (this.disposed || !this.dialog?.visible || this.prompt.isDestroyed) return;
-    const requested = Math.max(this.prompt.lineCount, this.prompt.editorView.getTotalVirtualLineCount());
-    const rows = Math.max(1, Math.min(6, this.root.height - 9, requested));
-    if (this.prompt.height !== rows) this.prompt.height = rows;
-    const height = Math.min(this.root.height, 9 + rows);
+    // Heading, context, target, controls and the dialog border consume seven rows.
+    const input = this.prompt.fit(this.root.height - 7);
+    const height = Math.min(this.root.height, 7 + input.height);
     if (this.dialog.height !== height) this.dialog.height = height;
     this.changed();
   };
@@ -647,7 +647,7 @@ export class GitPanel {
     if (this.disposed) return;
     this.hide(); this.disposed = true;
     this.renderer.off("selection", this.selectionFinished);
-    this.prompt.off(InputRenderableEvents.INPUT, this.resizeAsk); this.prompt.off("resize", this.resizeAsk); this.prompt.dispose();
+    this.prompt.off(InputRenderableEvents.INPUT, this.resizeAsk); this.prompt.off("resize", this.resizeAsk); this.prompt.off("line-info-change", this.resizeAsk); this.prompt.dispose();
     for (const box of [this.history.root, this.files.root, this.refs.root, this.details]) {
       box.content.off("resize", this.applyScroll); box.viewport.off("resize", this.applyScroll);
     }

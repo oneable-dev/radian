@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
 import { PromptInput } from "./prompt-input.ts";
 import type { DialogContent } from "../../ui/text-dialog.ts";
-import { uiTheme } from "../../ui/theme.ts";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -19,7 +18,7 @@ async function mount(options: ConstructorParameters<typeof PromptInput>[3] = {})
   const app = await createTestRenderer({ width: 80, height: 10, kittyKeyboard: true });
   const notices: string[] = [], details: DialogContent[] = [];
   const input = new PromptInput(app.renderer, (message) => notices.push(message), (content) => details.push(content), options);
-  app.renderer.root.add(input); uiTheme(app.renderer).input(input); input.focus(); await app.renderOnce();
+  app.renderer.root.add(input.field); input.focus(); await app.renderOnce();
   return { ...app, input, notices, details, async close() { input.dispose(); await app.dispose(); } };
 }
 

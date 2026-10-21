@@ -15,7 +15,7 @@ import type { FooterShortcut } from "../../ui/footer.ts";
 import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
 import { SessionStatus } from "./session-status.ts";
 import { RunStatus } from "./run-status.ts";
-import { PromptInput } from "./prompt-input.ts";
+import { PromptInput } from "../../ui/prompt-input.ts";
 import { expandPromptDraft, type PromptDraft } from "../prompt-input.ts";
 import type { DialogContent } from "../../ui/text-dialog.ts";
 import { CompletionMenu, type CompletionProvider } from "./completion-menu.ts";
@@ -114,17 +114,13 @@ export class AgentPanel {
     this.pendingMessages = new PendingMessages(renderer, interruptKey);
     const transcriptArea = this.transcriptArea = new BoxRenderable(renderer, { id: "agent-transcript-area", width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "column", overflow: "hidden" });
     transcriptArea.add(this.transcriptScroll);
-    this.prompt = new PromptInput(renderer, notice, (content) => actions.onInspectInput?.(content));
+    this.prompt = new PromptInput(renderer, notice, (content) => actions.onInspectInput?.(content), {
+      fieldId: "agent-composer", activityId: "prompt-paste-loading",
+    });
     for (const [id, draft] of Object.entries(actions.initialDrafts ?? {})) this.drafts.set(id, draft);
     for (const [id, draft] of Object.entries(actions.initialInputDrafts ?? {})) { this.inputDrafts.set(id, draft); this.drafts.set(id, expandPromptDraft(draft, false).text); }
     this.prompt.on(InputRenderableEvents.INPUT, this.handleDraftInput);
-    const composer = this.composer = new BoxRenderable(renderer, { id: "agent-composer", width: "auto", height: 3, flexShrink: 0,
-      flexDirection: "row", alignItems: "center", border: ["left"],
-      onMouseDown: (event) => { if (event.button === 0 && this.active && !this.prompt.focused) this.prompt.focus(); } });
-    // Paint clipboard progress in the existing right gutter; it must never resize the transcript.
-    this.prompt.activity.root.position = "absolute"; this.prompt.activity.root.top = 0;
-    this.prompt.activity.root.right = 0; this.prompt.activity.root.zIndex = 1;
-    composer.add(this.prompt); composer.add(this.prompt.activity.root);
+    const composer = this.composer = this.prompt.field;
     this.sessionStatus = new SessionStatus(renderer);
     this.completion = new CompletionMenu(renderer, this.prompt, () => this.active ? this.promptSessionId : null, actions.onComplete,
       () => { this.resizeComposer(); changed(); }, () => this.completionRows());
@@ -136,11 +132,10 @@ export class AgentPanel {
     const inputArea = new BoxRenderable(renderer, { id: "agent-input-area", width: "100%", minWidth: 0, minHeight: 0, flexShrink: 0, flexDirection: "column" });
     inputArea.add(this.pendingMessages.root); inputArea.add(composer); inputArea.add(this.completion.root); inputArea.add(this.sessionStatus.root);
     this.runtimePanel.add(transcriptArea); this.runtimePanel.add(statusRow); this.runtimePanel.add(inputArea); this.root.add(this.runtimePanel);
-    theme.input(this.prompt, "prompt.input", "prompt.input"); theme.scrollbars(this.transcriptScroll); theme.focusBorder(composer);
+    theme.scrollbars(this.transcriptScroll);
     theme.bindStyles(this.root, (styles) => {
       paintText(this.title, { ...styles["ui.label"], attributes: styles["ui.label"].attributes | TextAttributes.BOLD });
       paintText(this.details, styles["ui.muted"]);
-      composer.backgroundColor = styles["prompt.input"].bg;
     });
     bindPanelSpacing(renderer, this.root);
     this.prompt.on("resize", this.resizeComposer); this.prompt.on("line-info-change", this.resizeComposer);
@@ -248,13 +243,11 @@ export class AgentPanel {
     // Bleed the surface through the pane inset, keeping its text aligned with the other rows.
     this.resizeComposer();
     this.composer.marginX = -horizontal;
-    this.composer.paddingLeft = horizontal - 1; // The left focus border occupies one cell of the inset.
-    this.composer.paddingRight = horizontal;
   };
 
   private resizeComposer = (): void => {
     if (this.disposed || !this.composer || !this.statusRow || this.prompt.isDestroyed) return;
-    const requested = Math.max(this.prompt.lineCount, this.prompt.editorView.getTotalVirtualLineCount());
+    const requested = this.prompt.requestedRows;
     const showStatus = this.runStatus.hasContent || this.children.hasContent;
     const menuRowsBeforeLayout = this.completion?.open ? this.completion.root.height : 0;
     const controls = (this.sessions.root.visible ? 1 : 0) + this.sessionStatus.root.height + (showStatus ? 1 : 0) + 1 + menuRowsBeforeLayout;
@@ -275,20 +268,17 @@ export class AgentPanel {
       this.layoutGap = gap; this.runtimePanel.gap = gap;
     }
     const reserved = this.reservedRows(true) + menuRows;
-    // Prefer one conversation row over prompt padding while retaining the telemetry gutters.
-    const paddingRows = Math.max(0, Math.min(2, this.root.height - reserved - 2));
-    // Preserve a conversation row when possible; temporary menus may use the last one.
-    const capacity = Math.max(1, this.root.height - reserved - paddingRows - 1);
-    const lines = Math.max(1, Math.min(6, capacity, requested));
-    const height = lines + paddingRows;
+    // The panel allocates space; the shared input alone fits its editor and decoration.
+    const available = Math.max(1, this.root.height - reserved - 1);
+    const { rows: lines, height } = this.prompt.measure(available);
     const showTranscript = this.root.height > reserved + height;
     if (this.transcriptScroll.visible !== showTranscript || this.transcriptArea.visible !== showTranscript) {
       this.transcript.prepareLayoutChange(); this.transcriptScroll.visible = this.transcriptArea.visible = showTranscript;
     }
     if (this.composer.height !== height || this.prompt.height !== lines) {
       this.transcript.prepareLayoutChange();
-      this.prompt.height = lines; this.composer.height = height;
     }
+    this.prompt.fit(available);
     this.completion?.reflow();
   };
   private layoutBottomButton = (): void => {
@@ -325,7 +315,7 @@ export class AgentPanel {
     this.saveDraft(); this.publishDrafts(); this.resizeComposer(); this.completion.refresh(); this.changed();
   };
 
-  clearPrompt(): void { this.completion.hide(); this.prompt.value = ""; }
+  clearPrompt(): void { this.completion.hide(); this.prompt.clear(); }
 
   async interrupt(): Promise<void> {
     const id = this.promptSessionId;

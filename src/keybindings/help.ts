@@ -13,7 +13,7 @@ const labels: Partial<Record<CommandId, string>> = {
   "tab.select-4": "Select tab 4", "tab.select-5": "Select tab 5", "tab.select-6": "Select tab 6",
   "tab.select-7": "Select tab 7", "tab.select-8": "Select tab 8", "tab.select-9": "Select tab 9",
   "agent.send": "Send input (steer at the next eligible turn when busy)", "agent.newline": "Insert a newline without sending", "agent.paste": "Paste text, images or files from the clipboard", "agent.inspect": "Inspect the attachment at the cursor",
-  "git.submit": "Send input with the frozen Git context", "git.newline": "Insert a newline without sending", "git.paste": "Paste from the clipboard", "git.inspect": "Inspect the attachment at the cursor",
+  "git.submit": "Send input with the frozen Git context", "git.newline": "Insert a newline without sending", "git.clear": "Clear the current prompt", "git.paste": "Paste from the clipboard", "git.inspect": "Inspect the attachment at the cursor",
   "history.show": "Open saved session history", "transcript.help": "Open conversation navigation help",
 };
 export function keymapHelp(keymap: Keymap, context: KeyContext, available: (command: CommandId) => boolean): string {
