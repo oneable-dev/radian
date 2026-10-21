@@ -177,7 +177,7 @@ test("세션 탭은 양 끝에 한 칸 패딩을 두고 내부와 탭 사이에�
 });
 
 test.each([["완료", "complete", ""], ["실패", "failure", icons.error], ["미확정", null, ""]] as const)(
-  "실행이 %s 상태로 바뀌면 스피너 최소 시간 후 아이콘 없는 상태 공간만 제거한다", async (_label, status, glyph) => {
+  "실행이 %s 상태로 바뀌어도 한 아이콘만 표시하고 빈 상태 칸을 회수한다", async (_label, status, glyph) => {
     // A short run settles before the spinner's 500 ms minimum interval has elapsed.
     const app = await mount();
     try {
@@ -186,22 +186,23 @@ test.each([["완료", "complete", ""], ["실패", "failure", icons.error], ["미
       app.clock.advance(120); await app.render();
       expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[1])).toBe(true);
 
-      // Known outcomes use the leading cell; an unreported outcome keeps only its spinner tail.
+      // Failure supersedes the spinner immediately; an empty badge can retain its minimum-visible tail.
       app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
         sessions: tree.sessions.map((session) => session.id === "a1" ? { ...session, status, subagents: [] } : session),
       })) })));
       await app.render();
-      const spinnerCell = status === "failure" ? 2 : 1;
-      if (status === "failure") expect(app.region(tab.id)[1]).toBe(glyph);
-      expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[spinnerCell])).toBe(true);
+      const prefix = () => app.region(tab.id).slice(0, app.region(tab.id).indexOf("a1")).trim();
+      if (status === "failure") expect(app.region(tab.id)).toBe(` ${glyph} a1 × `);
+      else expect(spinnerFrames.some(frame => frame === prefix())).toBe(true);
       app.clock.advance(379); await app.render();
-      expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[spinnerCell])).toBe(true);
+      if (status === "failure") expect(app.region(tab.id)).toBe(` ${glyph} a1 × `);
+      else expect(spinnerFrames.some(frame => frame === prefix())).toBe(true);
       app.clock.advance(1); await app.render();
 
       // Only the now-empty indicator collapses; real outcomes retain their stable badge placement.
       if (status !== "failure") {
         expect(app.region(tab.id)).toBe(" a1 × ");
-        expect([tab.x, tab.width, title.x, close.x]).toEqual([geometry[0]!, geometry[1]! - 3, geometry[2]! - 3, geometry[3]! - 3]);
+        expect([tab.x, tab.width, title.x, close.x]).toEqual([geometry[0]!, geometry[1]! - 2, geometry[2]! - 2, geometry[3]! - 2]);
       } else {
         expect(app.region(tab.id)[1]).toBe(glyph); expect(app.region(tab.id)[2]).toBe(" ");
         expect([tab.x, tab.width, title.x, close.x]).toEqual(geometry);

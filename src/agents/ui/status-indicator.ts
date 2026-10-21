@@ -3,31 +3,28 @@ import type { AgentStatus, OpenSession } from "../model.ts";
 import { icons } from "../../icons.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
-import { paintText } from "../../ui/theme-styles.ts";
+import { paintText, type StyleGroup } from "../../ui/theme-styles.ts";
 
-// Execution and unread results are independent: acknowledging a result never changes its outcome.
+// One presentation cell: working > failure > stopped > unread. Read state remains independent.
 export class StatusIndicator {
   readonly root: BoxRenderable;
   private readonly spinner: LoadingSpinner;
   private readonly animation: BoxRenderable;
-  private readonly outcome: TextRenderable;
-  private readonly attention: TextRenderable;
+  private readonly icon: TextRenderable;
+  private iconStyle: StyleGroup = "status.attention";
+  private hasIcon = false;
   private status: AgentStatus | null | undefined;
-  private stopped = false;
-  private unread = false;
   private visible = false;
 
   constructor(private readonly renderer: CliRenderer, private readonly changed?: () => void) {
-    this.root = new BoxRenderable(renderer, { width: 2, height: 1, flexShrink: 0, flexDirection: "row", visible: false,
+    this.root = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0, flexDirection: "row", visible: false,
       renderBefore: () => this.syncVisibility() });
     this.animation = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0 });
     this.spinner = new LoadingSpinner(renderer);
-    this.outcome = new TextRenderable(renderer, { width: 1, height: 1, wrapMode: "none", selectable: false, visible: false });
-    this.attention = new TextRenderable(renderer, { width: 1, height: 1, wrapMode: "none", selectable: false, visible: false, content: icons.bell });
-    this.animation.add(this.spinner.root); this.root.add(this.outcome); this.root.add(this.attention); this.root.add(this.animation);
+    this.icon = new TextRenderable(renderer, { width: 1, height: 1, wrapMode: "none", selectable: false, visible: false });
+    this.animation.add(this.spinner.root); this.root.add(this.icon); this.root.add(this.animation);
     uiTheme(renderer).bindStyles(this.root, styles => {
-      paintText(this.outcome, styles[this.stopped ? "status.warning" : "status.error"]);
-      paintText(this.attention, styles["status.attention"]); paintText(this.spinner.root, styles["status.working"]);
+      paintText(this.icon, styles[this.iconStyle]); paintText(this.spinner.root, styles["status.working"]);
     });
   }
 
@@ -35,25 +32,26 @@ export class StatusIndicator {
     if (this.root.isDestroyed) return;
     const changed = status !== this.status || visible !== this.visible;
     this.status = status; this.visible = visible;
-    this.stopped = status !== "working" && session?.result?.outcome === "unfinished";
-    this.unread = !!session?.attention;
-    if (!visible) this.spinner.cancel();
+    const stopped = session?.result?.outcome === "unfinished";
+    const icon = status === "working" ? "" : status === "failure" ? icons.error : stopped ? "?" : session?.attention ? icons.bell : "";
+    this.iconStyle = status === "failure" ? "status.error" : stopped ? "status.warning" : "status.attention";
+    this.hasIcon = icon !== ""; this.icon.content = icon;
+    // A settled badge supersedes the spinner tail immediately. Cancelling the hidden
+    // animation also prevents it from returning when a completed result is acknowledged.
+    if (!visible || this.hasIcon) this.spinner.cancel();
     else if (changed && status === "working") this.spinner.start();
     else if (status !== "working") this.spinner.stop();
-    this.outcome.content = this.stopped ? "?" : status === "failure" ? icons.error : "";
-    paintText(this.outcome, uiTheme(this.renderer).styles[this.stopped ? "status.warning" : "status.error"]);
+    paintText(this.icon, uiTheme(this.renderer).styles[this.iconStyle]);
     this.syncVisibility();
   }
 
   private syncVisibility(): void {
     if (this.root.isDestroyed) return;
-    this.outcome.visible = this.visible && (this.stopped || this.status === "failure");
-    this.animation.visible = this.visible && this.spinner.root.visible;
-    this.attention.visible = this.visible && this.unread;
-    const width = Number(this.outcome.visible) + Number(this.animation.visible) + Number(this.attention.visible);
-    const visible = this.visible && width > 0;
-    if (this.root.visible === visible && this.root.width === Math.max(2, width)) return;
-    this.root.visible = visible; this.root.width = Math.max(2, width);
+    this.icon.visible = this.visible && this.hasIcon;
+    this.animation.visible = this.visible && !this.hasIcon && this.spinner.root.visible;
+    const visible = this.icon.visible || this.animation.visible;
+    if (this.root.visible === visible) return;
+    this.root.visible = visible;
     this.changed?.(); this.renderer.requestRender();
   }
 

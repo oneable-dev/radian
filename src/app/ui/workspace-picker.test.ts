@@ -6,7 +6,6 @@ import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
 import { ok } from "../../result.ts";
 import type { ExecutionState } from "../../agents/session-registry.ts";
-import { icons } from "../../icons.ts";
 import { uiTheme } from "../../ui/theme.ts";
 
 async function fixture(options: Partial<WorkbenchActions> = {}) {
@@ -128,7 +127,7 @@ test("좁은 화면의 모니터는 History처럼 목록과 Preview를 전환하
   } finally { await app.close(); }
 });
 
-test("Stopped 탭은 물음표와 미확인 알림을 구분하고 완료된 탭에는 체크를 남기지 않는다", async () => {
+test("Stopped 탭은 벨보다 물음표 하나를 우선 표시하고 읽음과 무관하게 유지한다", async () => {
   // Stopped는 읽음과 별개로 유지되는 실행 결과다.
   const app = await fixture();
   try {
@@ -138,18 +137,18 @@ test("Stopped 탭은 물음표와 미확인 알림을 구분하고 완료된 탭
     await app.render();
     const tab = app.get("session:demo:main:a2"), region = () => app.captureCharFrame().split("\n")[tab.y]!.slice(tab.x, tab.x + tab.width);
 
-    expect(region()).toContain("?"); expect(region()).toContain(icons.bell); expect(region()).not.toContain(icons.pass);
+    expect(region()).toBe(" ? a2 × ");
+    expect(app.selection.worktree?.sessions.find(session => session.id === "a2")?.attention?.id).toBe("stopped");
     const colorAt = (column: number) => {
       let x = 0; return app.captureSpans().lines[tab.y]!.spans.find(span => { x += span.width; return x > column; })!.fg.toInts();
     };
     expect(colorAt(tab.x + 1)).toEqual(uiTheme(app.renderer).colors.warning.toInts());
-    expect(colorAt(tab.x + 2)).toEqual(uiTheme(app.renderer).colors.attention.toInts());
     app.selection.replaceSnapshot(app.selection.snapshot.map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => ({ ...tree, sessions: tree.sessions.map(session => {
       if (session.id !== "a2") return session;
       const { attention: _attention, ...next } = session; return next;
     }) })) })));
     await app.render();
-    expect(region()).toContain("?"); expect(region()).not.toContain(icons.bell);
+    expect(region()).toBe(" ? a2 × ");
   } finally { await app.close(); }
 });
 

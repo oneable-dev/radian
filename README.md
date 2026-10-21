@@ -1266,16 +1266,20 @@ restart old services to upgrade. No service is automatically restarted.
 ### Display status
 
 Repository and worktree rows retain their Nerd Font type icons and a fixed error slot.
-Session tabs show the shared spinner while the main agent or any owned child is running.
-Successful completion has **no check icon**. Unread results have an **orange bell**, independent of
-execution status; acknowledging a result removes only that bell. `Stopped` uses a **warning-colored
-`?`** in the tab and warning-colored text above input, retained after acknowledgement. Failures
-remain explicit with the error glyph and conversation details. Terminal warning color normally
-comes from ANSI slot 3 (fallback `#E5C07B`); the new `attention` role defaults to `#E9953A` and can
-be overridden globally or through `status.attention`.
-Results are immediate even while a short spinner finishes its 500 ms minimum tail. Empty indicator
-slots and their gap are reclaimed for the ID. Hidden views cancel animations. Each tab retains its
-one-cell outer padding. Selection and focus never change the underlying execution outcome.
+Session tabs display **at most one icon in one cell**, in this priority order: **working spinner >
+failure glyph > stopped `?` > unread bell**. Main-agent or owned-child work takes precedence even
+when an earlier result is unread or another child failed. Successful completion has **no check icon**.
+Unread state remains independent of execution status and is retained when a higher-priority icon
+hides the orange bell; the session monitor still lists that unread result. Acknowledging a result
+never changes its execution outcome. Stopped `?` and failure glyphs remain after acknowledgement.
+`Stopped` uses warning-colored text above input as well. Terminal warning color normally comes
+from ANSI slot 3 (fallback `#E5C07B`); the `attention` role defaults to `#E9953A` and can be overridden
+globally or through `status.attention`.
+A settled icon replaces and cancels the hidden spinner immediately, rather than displaying beside
+its 500 ms minimum tail. Without a replacement icon the shared spinner retains its minimum-visible
+tail before collapsing. Empty indicator cells and their gap are reclaimed for the ID. Hidden views
+cancel animations. Each tab retains its one-cell outer padding. Selection and focus never change
+the underlying execution outcome.
 
 The work-status row shows the selected session's run state and its subagent counts at the right
 edge. The counts remain independent of the parent run's settled outcome. Working, failure, complete
