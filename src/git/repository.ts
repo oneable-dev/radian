@@ -144,7 +144,7 @@ export class GitRepository implements GitSource {
       this.run(["show", "--no-show-signature", "-s", "--format=%B", commit.oid], signal),
       this.run(commit.parents[0] ? ["diff", "--no-ext-diff", "--name-status", "-z", "--find-renames", commit.parents[0], commit.oid, "--"]
         : ["diff-tree", "--root", "--no-commit-id", "--name-status", "-r", "-z", "--find-renames", commit.oid, "--"], signal),
-      this.run(["for-each-ref", `--contains=${commit.oid}`, "--format=%(refname)%00%(objectname)%00%(*objectname)", "refs/heads", "refs/remotes"], signal),
+      this.run(["for-each-ref", `--points-at=${commit.oid}`, "--format=%(refname)%00%(objectname)%00%(*objectname)", "refs/heads", "refs/remotes"], signal),
     ]);
     if (!message.ok) return message; if (!names.ok) return names; if (!references.ok) return references;
     const files = parseFiles(names.value, commit); if (!files.ok) return files;

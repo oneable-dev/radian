@@ -38,7 +38,7 @@ async function mount(options: { actions?: Partial<GitActions>; initial?: WorkVie
   const source: GitSource = options.source ?? {
     load: async (ref) => { loads.push(ref ?? "all"); return ok(snapshot()); },
     details: async (selected) => ok({ commit: selected, message: `${selected.subject}\n\nFull explanation of the change.\n`,
-      branches: snapshot().refs.filter(ref => ref.kind !== "tag" && (ref.oid === selected.oid || selected.oid === rootCommit.oid)),
+      branches: snapshot().refs.filter(ref => ref.kind !== "tag" && ref.oid === selected.oid),
       files: [{ kind: "commit", status: "M", path: "src/login.ts", commit: selected }, { kind: "commit", status: "M", path: "src/other.ts", commit: selected }] }),
     compare: async () => ok(comparison()),
   };
@@ -103,12 +103,12 @@ test("ref 라벨은 그래프 왼쪽에서 노드와 연결되고 그래프와 �
     compare: async () => ok(comparison()) } });
   try {
     const prefix = `git-history:${commit.oid}`;
-    const refs = app.positionIn("git-history", "HEAD → main +2"), graph = app.get(`${prefix}:graph`);
+    const refs = app.positionIn("git-history", `HEAD → ${icons.branch} main +2`), graph = app.get(`${prefix}:graph`);
     const link = app.get(`${prefix}:message-link`), label = app.get(`${prefix}:label`);
 
     // 연결 장식은 메시지 자체나 커밋 부모 관계를 대체하지 않는다.
     expect(refs.y).toBe(graph.y); expect(refs.x).toBeLessThan(graph.x);
-    expect(app.captureCharFrame().split("\n")[refs.y]!.slice(refs.x, graph.x + 2)).toMatch(/HEAD → main \+2 ─+●/u);
+    expect(app.captureCharFrame().split("\n")[refs.y]!.slice(refs.x, graph.x + 2)).toMatch(new RegExp(`HEAD → ${icons.branch} main \\+2 ─+●`, "u"));
     expect(link.x).toBe(graph.x + graph.width); expect(label.x).toBe(link.x + link.width + 2);
     expect(link instanceof TextRenderable && link.plainText).toBe("    ");
     if (!(graph instanceof TextRenderable) || !(link instanceof TextRenderable)) throw new Error("Missing graph band");
@@ -117,9 +117,38 @@ test("ref 라벨은 그래프 왼쪽에서 노드와 연결되고 그래프와 �
     const previousBand = blendColors(uiTheme(app.renderer).colors.panel, foreground, 0.16);
     const distance = (values: readonly number[]) => values.slice(0, 3).reduce((sum, value, index) => sum + (value - foreground.toInts()[index]!) ** 2, 0);
     expect(distance(link.bg.toInts())).toBeLessThan(distance(previousBand.toInts()));
-    expect(app.spanIn("git-history", "HEAD → main +2").fg.toInts()).toEqual(app.spanIn("git-history", "aaaaaaa").fg.toInts());
+    expect(app.spanIn("git-history", `HEAD → ${icons.branch} main +2`).fg.toInts()).toEqual(app.spanIn("git-history", "aaaaaaa").fg.toInts());
     expect(link instanceof TextRenderable && link.bg.equals(uiTheme(app.renderer).colors.panel)).toBe(false);
     expect(app.captureCharFrame()).not.toContain("Update login ["); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each([160, 60])("HEAD 현재 브랜치 라벨도 %d열 화면에서 이름 앞의 브랜치 아이콘을 유지한다", async width => {
+  // HEAD와 현재 브랜치를 합쳐 표시해도 다른 브랜치와 같은 아이콘이 필요하다.
+  const app = await mount();
+  try {
+    app.resize(width, 32); await app.renderOnce(); await app.renderOnce();
+
+    const caption = app.get(`git-history:${commit.oid}:refs`);
+    if (!(caption instanceof TextRenderable)) throw new Error("Missing HEAD ref label");
+    expect(caption.plainText).toBe(`HEAD → ${icons.branch} main`);
+    expect(app.positionIn("git-history", `${icons.branch} main`).y).toBe(caption.y);
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("detached HEAD 라벨에는 존재하지 않는 현재 브랜치 아이콘을 붙이지 않는다", async () => {
+  // 브랜치 없이 커밋을 직접 checkout한 HEAD는 브랜치 라벨과 구분한다.
+  const data = { ...snapshot(), head: "" };
+  const app = await mount({ source: { load: async () => ok(data), compare: async () => ok(comparison()),
+    details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }) } });
+  try {
+    const caption = app.get(`git-history:${commit.oid}:refs`);
+    if (!(caption instanceof TextRenderable)) throw new Error("Missing HEAD ref label");
+
+    expect(caption.plainText).toStartWith("HEAD (detached)");
+    expect(caption.plainText).not.toContain(icons.branch); expect(caption.plainText).not.toContain("HEAD →");
+    expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -252,8 +281,8 @@ test.each(["arrows", "vim", "control"] as const)("Working tree와 커밋을 %s�
   } finally { await app.close(); }
 });
 
-test("상세는 tip이 다른 포함 브랜치를 표시하지만 태그와 그래프 라벨은 직접 가리키는 ref만 쓴다", async () => {
-  // 과거 커밋을 포함하는 main과 origin/main의 tip은 더 최신 커밋에 있다.
+test("상세의 브랜치·원격·태그는 선택 커밋을 직접 가리키는 ref만 표시한다", async () => {
+  // main과 origin/main이 과거 커밋을 포함해도 tip이 다른 동안 그 상세에는 표시하면 안 된다.
   const data = snapshot(); data.refs = [
     { kind: "local", name: "main", ref: "refs/heads/main", oid: commit.oid },
     { kind: "remote", name: "origin/main", ref: "refs/remotes/origin/main", oid: commit.oid },
@@ -261,17 +290,22 @@ test("상세는 tip이 다른 포함 브랜치를 표시하지만 태그와 그�
     { kind: "tag", name: "new-tag", ref: "refs/tags/new-tag", oid: commit.oid },
   ];
   const app = await mount({ source: { load: async () => ok(data), compare: async () => ok(comparison()),
-    details: async selected => ok({ commit: selected, message: `Message for ${selected.subject}`, files: [], branches: data.refs.filter(ref => ref.kind !== "tag") }) } });
+    details: async selected => ok({ commit: selected, message: `Message for ${selected.subject}`, files: [], branches: data.refs.filter(ref => ref.kind !== "tag" && ref.oid === selected.oid) }) } });
   try {
     await app.click("Initial login"); await app.waitForFrame(frame => frame.includes("Message for Initial login"));
 
     const text = app.get("git-detail-text"); if (!(text instanceof TextRenderable)) throw new Error("Missing commit details");
-    expect(text.plainText).toContain("Branches: main"); expect(text.plainText).toContain("Remotes: origin/main");
+    expect(text.plainText).toContain("Branches: —"); expect(text.plainText).toContain("Remotes: —");
     expect(text.plainText).toContain("Tags: old-tag"); expect(text.plainText).not.toContain("new-tag");
     expect(text.plainText).not.toContain("HEAD");
     const tip = app.get(`git-history:${commit.oid}:refs`), ancestor = app.get(`git-history:${rootCommit.oid}:refs`);
     if (!(tip instanceof TextRenderable) || !(ancestor instanceof TextRenderable)) throw new Error("Missing ref labels");
-    expect(tip.plainText).toContain("main"); expect(ancestor.plainText).not.toContain("main"); expect(app.requests).toEqual([]);
+    expect(tip.plainText).toContain("main"); expect(ancestor.plainText).not.toContain("main");
+
+    // 실제 tip으로 이동하면 로컬·원격 이름과 그 커밋의 태그가 다시 나타난다.
+    await app.chooseCommit(); await app.waitForFrame(frame => frame.includes("Message for Update login"));
+    expect(text.plainText).toContain("Branches: main"); expect(text.plainText).toContain("Remotes: origin/main");
+    expect(text.plainText).toContain("Tags: new-tag"); expect(text.plainText).not.toContain("old-tag"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -700,7 +734,7 @@ test("Changes를 닫은 뒤 커밋 텍스트 드래그는 숨겨진 diff 대신 
   try {
     await app.openWorkingTree(); await app.waitForFrame(frame => frame.includes("const line00"));
     app.mockInput.pressEscape(); await app.renderOnce();
-    const { x, y } = app.positionIn("git-history", "HEAD → main");
+    const { x, y } = app.positionIn("git-history", `HEAD → ${icons.branch} main`);
 
     await app.mockMouse.drag(x, y, x + 3, y); await app.waitFor(() => app.copies.length > 0);
 
@@ -1195,7 +1229,7 @@ test("Commits의 ref·그래프·연결선은 같은 색을 쓰고 메시지는 
       expect(app.spanIn("git-history", "aaaaaaa").fg.equals(colors.text)).toBe(false);
       expect(app.spanIn("git-history", "aaaaaaa").fg.toInts()).toEqual(app.spanIn("git-history", "●").fg.toInts());
       expect(app.spanIn("git-history", "Update login").fg.toInts()).toEqual(colors.text.toInts());
-      expect(app.spanIn("git-history", "HEAD → main").fg.toInts()).toEqual(app.spanIn("git-history", "aaaaaaa").fg.toInts());
+      expect(app.spanIn("git-history", `HEAD → ${icons.branch} main`).fg.toInts()).toEqual(app.spanIn("git-history", "aaaaaaa").fg.toInts());
       const band = app.get(`git-history:${commit.oid}:message-link`); if (!(band instanceof TextRenderable)) throw new Error("Missing graph band");
       expect(band.plainText.trim()).toBe(""); expect(band.fg.toInts()).toEqual(app.spanIn("git-history", "aaaaaaa").fg.toInts());
       expect(app.spanIn("git-history", "Working tree").fg.toInts()).toEqual(colors.text.toInts());

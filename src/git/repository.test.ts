@@ -62,7 +62,7 @@ test("같은 파일의 staged와 unstaged 비교는 HEAD/index/worktree를 구�
   } finally { await app.cleanup(); }
 });
 
-test("커밋 상세는 --contains로 로컬·원격 브랜치를 찾고 태그는 해당 커밋의 것만 표시한다", async () => {
+test("커밋 상세는 --points-at으로 해당 커밋을 직접 가리키는 브랜치·원격·태그만 표시한다", async () => {
   // 두 브랜치 tip보다 오래된 공통 조상과 관계없는 별도 root를 준비한다.
   const app = await fixture();
   try {
@@ -76,25 +76,24 @@ test("커밋 상세는 --contains로 로컬·원격 브랜치를 찾고 태그�
     for (const [name, oid] of [["main", third], ["topic", second], ["unrelated", unrelated]] as const) await app.git("update-ref", `refs/remotes/origin/${name}`, oid);
     await app.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
 
-    // 일치하는 tip이 하나도 없는 조상에도 포함 브랜치가 모두 있어야 한다.
+    // 조상을 포함하더라도 tip이 다르면 표시하지 않고 일치하는 ref만 반환한다.
     const snapshot = expectOk(await app.source.load(null, 300, app.signal));
     const ancestor = expectOk(await app.source.details(snapshot.commits.find(commit => commit.oid === first)!, app.signal));
     const middle = expectOk(await app.source.details(snapshot.commits.find(commit => commit.oid === second)!, app.signal));
     const latest = expectOk(await app.source.details(snapshot.commits.find(commit => commit.oid === third)!, app.signal));
 
-    expect(ancestor).toMatchObject({ branches: [
-      { kind: "local", name: "feature/topic", oid: second }, { kind: "local", name: "main", oid: third },
-      { kind: "remote", name: "origin/main", oid: third }, { kind: "remote", name: "origin/topic", oid: second },
-    ] });
+    expect(ancestor).toMatchObject({ branches: [] });
+    expect(middle).toMatchObject({ branches: [{ kind: "local", name: "feature/topic", oid: second }, { kind: "remote", name: "origin/topic", oid: second }] });
     expect(latest).toMatchObject({ branches: [{ kind: "local", name: "main", oid: third }, { kind: "remote", name: "origin/main", oid: third }] });
     const text = describeCommit(middle, snapshot.refs, snapshot);
-    expect(text).toContain("Branches: feature/topic, main"); expect(text).toContain("Remotes: origin/main, origin/topic");
+    expect(text).toContain("Branches: feature/topic\n"); expect(text).toContain("Remotes: origin/topic\n");
+    expect(text).not.toContain("origin/main");
     expect(text).toContain("Tags: selected-tag"); expect(text).not.toContain("future-tag"); expect(text).not.toContain("unrelated");
   } finally { await app.cleanup(); }
 });
 
-test("포함 브랜치 조회가 취소되거나 커밋이 없으면 빈 브랜치 성공 대신 실패를 반환한다", async () => {
-  // 실제 조회 경계에서도 미조회·취소·존재하지 않는 커밋을 빈 포함 관계와 구분한다.
+test("브랜치 ref 조회가 취소되거나 커밋이 없으면 빈 브랜치 성공 대신 실패를 반환한다", async () => {
+  // 실제 조회 경계에서도 미조회·취소·존재하지 않는 커밋을 빈 ref 결과와 구분한다.
   const app = await fixture();
   try {
     await writeFile(join(app.cwd, "sample.txt"), "initial\n"); await app.commit("Initial");

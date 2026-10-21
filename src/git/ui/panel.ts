@@ -528,7 +528,7 @@ export class GitPanel {
         const head = row.commit.oid === data.headOid;
         const labels = data.refs.filter(ref => ref.oid === row.commit.oid
           && !(head && ref.ref === `refs/heads/${data.head}`)).map(ref => display(`${ref.kind === "tag" ? icons.tag : icons.branch} ${ref.name}`));
-        if (head) labels.unshift(data.head ? `HEAD → ${display(data.head)}` : "HEAD (detached)");
+        if (head) labels.unshift(data.head ? `HEAD → ${icons.branch} ${display(data.head)}` : "HEAD (detached)");
         const subject = display(row.commit.subject);
         return { key: row.commit.oid, label: row.commit.workingTree ? subject : [
           { text: `${row.commit.oid.slice(0, 7)} `, color: row.color }, { text: subject },

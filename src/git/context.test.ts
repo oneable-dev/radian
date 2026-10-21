@@ -50,7 +50,7 @@ test("detached HEAD는 브랜치처럼 표시하지 않고 다른 커밋 상세�
 });
 
 test("커밋에 ref가 없어도 브랜치·원격·태그 항목을 숨기지 않고 빈 값을 명시한다", () => {
-  // 포함 브랜치가 없는 커밋도 값을 조회하지 못한 것과 구분할 수 있어야 한다.
+  // 직접 가리키는 브랜치가 없는 커밋도 값을 조회하지 못한 것과 구분할 수 있어야 한다.
   const details = { commit, message: "Subject", files: [], branches: [] };
 
   const text = describeCommit(details, []);
@@ -61,8 +61,8 @@ test("커밋에 ref가 없어도 브랜치·원격·태그 항목을 숨기지 �
   expect(text).not.toContain("HEAD");
 });
 
-test("포함 브랜치를 아직 조회하지 않은 상세는 빈 결과로 표시하지 않는다", () => {
-  // tip ref만으로 --contains 결과를 추정하거나 미조회 상태를 없음으로 가장하면 안 된다.
+test("브랜치 ref를 아직 조회하지 않은 상세는 빈 결과로 표시하지 않는다", () => {
+  // 새 조회 응답이 오기 전에 이전 snapshot이나 미조회 상태로 빈 결과를 가정하면 안 된다.
   const refs = [{ kind: "local" as const, name: "main", ref: "refs/heads/main", oid: commit.oid }];
 
   const text = describeCommit({ commit, message: "Loading commit details…" }, refs);

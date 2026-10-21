@@ -731,11 +731,12 @@ while history is unfocused, so the graph and messages do not move horizontally a
 Focusing a selected commit reveals a fully unfolded details card anchored to that row; commit row
 heights do not change. The card has no internal scrollbar, height cap or redundant title and includes
 the complete hash, author, date, message, HEAD status, local/remote branches and tags. Branches and
-remotes are queried with `for-each-ref --contains`: their tips may be newer than the selected commit.
-Remote membership uses locally available remote-tracking refs, not a network lookup. Tags and graph
-ref labels still identify refs pointing directly at a commit, not all descendant tags or branch tips.
+remotes are queried with `for-each-ref --points-at`: only refs whose tips match the selected commit
+are displayed, not every branch containing it in history. Remote refs use locally available
+remote-tracking data, not a network lookup. Tags and graph labels also identify refs pointing directly
+at a commit.
 Branches, remotes and tags appear above author/date; `—` denotes a completed empty result and `…`
-marks branch membership that has not loaded yet. Commits without tip refs still have details.
+marks branch refs that have not loaded yet. Commits without tip refs still have details.
 Cards taller than the terminal extend the shared Commits viewport instead of clipping text or
 introducing nested scrolling. Tab focuses the card; Ctrl+D/U and the mouse wheel move that shared
 viewport, Home/End reach the card's ends, and Esc returns to the history cursor. Moving focus outside
