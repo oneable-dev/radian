@@ -745,6 +745,42 @@ TUI or saved in its preferences. Restoring history always uses live usage rather
 Earlier telemetry snapshots with only `weekly` remain readable and are converted to `used` for display.
 Finish existing jobs before explicitly restarting an old runtime to load the new usage source.
 
+### Agent Dashboard
+
+Open **/dashboard** from the Agent input, or press **Ctrl+Space d** (the configured leader followed
+by `d`). Opening it never sends a model prompt or interrupts work. Esc restores the previous focus
+and preserves drafts. The shortcut is configurable as `dashboard.show`.
+
+The dashboard shows only **total tokens**, **recorded runs**, and **total run time** above a daily
+bar chart. Select Tokens, Runs or Run time to change the chart. Today, 7-day and 30-day filters use
+local calendar dates; Project cycles between all discovered repositories and individual projects.
+The resource tabs show horizontal bars with exact values:
+
+- **Skills:** explicit skill commands and successful skill-file loads combined by skill name.
+- **Models:** input, output, cache-read and cache-write tokens grouped by provider/model. Reasoning
+  tokens already included in output are not added again. Context occupancy is not consumption.
+  Tool-reported nested model usage without a model identity is shown as **Tool work (unattributed)**.
+- **MCP:** recorded server calls, including structured nested calls, without double-counting gateway
+  wrappers. Native server metadata preserves the original server name when available.
+- **Subagents:** execution calls grouped by agent name, not a main-versus-child token comparison.
+  Management requests such as list/status are excluded; structured workflow child results are counted
+  when present. Scripts without stored server/child metadata report a coverage warning, not invented counts.
+
+Tab/Shift+Tab moves between filters, chart metric, resource tabs and the read-only body. Tab strips
+support Ctrl+N/P and h/l; the body supports Ctrl+N/P, j/k, Home/End and Ctrl+D/U half-page scrolling.
+Configured alternatives appear in the footer; bare arrow-key hints are omitted. Use r or Ctrl+R to
+refresh. Lookups run on open, filter changes and explicit refresh, not on every rendered frame.
+
+Statistics come from bounded, read-only scans of the discovered SDK session files, including closed
+sessions and raw pre-compaction/alternate-branch history. Shared entry identities copied by forks are
+counted once within a repository. Run counts and duration use Radian's recorded settled-run metadata;
+older conversations without it still contribute tokens but cannot supply reliable run timing. Times
+are summed elapsed run durations (including overlapping work), not time spent at the keyboard.
+Expired/deleted histories are not reconstructed. Missing/corrupt records and unsupported repository
+services produce explicit errors or partial-coverage warnings; authentication and transcript bodies
+never leave the runtime as dashboard data. An old runtime must be restarted explicitly after its work
+is finished to enable this feature; opening the dashboard never restarts it automatically.
+
 ### Native Git
 
 Git has **Commits / Reflog** navigation. Both use a full-width history list without a permanent right

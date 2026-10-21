@@ -137,7 +137,7 @@ export class RepositoryHost {
         }
       }
       // Unknown paths must not allocate an SDK or start a process.
-      if (!["/command", "/history", "/history/preview", "/models", "/completions", "/completion-catalog", "/images", "/editor/events", "/terminal/events"].includes(path)) return new Response("Not found", { status: 404 });
+      if (!["/command", "/dashboard", "/history", "/history/preview", "/models", "/completions", "/completion-catalog", "/images", "/editor/events", "/terminal/events"].includes(path)) return new Response("Not found", { status: 404 });
       const activated = await this.activate(); if (!activated.ok) return rejected(activated.error);
       return this.runtime!.fetch(request);
     } catch (error) {

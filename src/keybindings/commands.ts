@@ -1,4 +1,4 @@
-export const contexts = ["workspace", "search", "history", "history-search", "monitor", "monitor-search", "model", "model-search", "model-effort", "session-tabs", "terminal-tabs", "git-tabs", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "dialog", "none"] as const;
+export const contexts = ["workspace", "search", "history", "history-search", "monitor", "monitor-search", "dashboard", "dashboard-tabs", "model", "model-search", "model-effort", "session-tabs", "terminal-tabs", "git-tabs", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "dialog", "none"] as const;
 export type KeyContext = typeof contexts[number];
 export type KeyScope = KeyContext | "global" | "app" | "pty";
 export type BindingInput = { keys: string; scope: KeyScope };
@@ -73,6 +73,15 @@ export const defaultBindings = {
   "workspace.last": [key("end", "workspace")],
   "workspace.half-page-up": [key("ctrl+u", "workspace"), key("ctrl+u", "search")],
   "workspace.half-page-down": [key("ctrl+d", "workspace"), key("ctrl+d", "search")],
+  "dashboard.show": [key("<leader> d")],
+  "dashboard.dismiss": [key("escape", "dashboard"), key("escape", "dashboard-tabs")],
+  "dashboard.refresh": [key("r", "dashboard"), key("ctrl+r", "dashboard"), key("r", "dashboard-tabs"), key("ctrl+r", "dashboard-tabs")],
+  "dashboard.previous": [key("up", "dashboard"), key("k", "dashboard"), key("ctrl+p", "dashboard"), key("left", "dashboard-tabs"), key("h", "dashboard-tabs"), key("ctrl+p", "dashboard-tabs")],
+  "dashboard.next": [key("down", "dashboard"), key("j", "dashboard"), key("ctrl+n", "dashboard"), key("right", "dashboard-tabs"), key("l", "dashboard-tabs"), key("ctrl+n", "dashboard-tabs")],
+  "dashboard.half-page-up": [key("ctrl+u", "dashboard"), key("ctrl+u", "dashboard-tabs")],
+  "dashboard.half-page-down": [key("ctrl+d", "dashboard"), key("ctrl+d", "dashboard-tabs")],
+  "dashboard.first": [key("home", "dashboard")],
+  "dashboard.last": [key("end", "dashboard")],
   "monitor.show": [key("<leader> s")],
   "monitor.dismiss": [key("escape", "monitor"), key("escape", "monitor-search")],
   "monitor.open": [key("enter", "monitor"), key("enter", "monitor-search")],

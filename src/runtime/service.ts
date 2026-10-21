@@ -16,6 +16,7 @@ import { parseSessionControl, type SessionControl } from "../agents/session-cont
 import { modelCatalogQuerySchema } from "../agents/model-selection.ts";
 import { piSessionFactory } from "../agents/pi-session-adapter.ts";
 import { SessionHistory } from "../agents/history.ts";
+import { dashboardPeriods } from "../agents/dashboard.ts";
 import { offlineRuntime } from "../testing/offline-runtime.ts";
 import { discoverRepository } from "../workspace/discovery.ts";
 import type { Repository } from "../workspace/model.ts";
@@ -175,7 +176,7 @@ export class WorkspaceRuntime {
   get snapshot(): RuntimeSnapshot {
     const repositories = this.repositories;
     const details = Object.fromEntries([...this.registry.records, ...this.failedRecovery.values()].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["shared-daemon", "repository-runtime", "history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "session-exit", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["shared-daemon", "repository-runtime", "history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "session-exit", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention", "agent-dashboard"], repositoryId: this.repositoryId,
       ...(this.retentionStatus ? { sessionRetention: this.retentionStatus } : {}),
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || [this.discoveryWarning, this.retentionWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
@@ -227,6 +228,15 @@ export class WorkspaceRuntime {
         const query = Object.fromEntries(new URL(request.url).searchParams);
         if (!Value.Check(completionQuerySchema, query)) return this.rejected(new InputError("Malformed completion query."));
         const result = await this.registry.complete(query.sessionId, query, request.signal);
+        return result.ok ? Response.json(result.value) : this.rejected(result.error);
+      }
+      if (path === "/dashboard" && request.method === "GET") {
+        if (expectedInstance !== this.instance) return this.rejected(new ProtocolError("Dashboard requires the current runtime instance identity."));
+        if (this.stopped) return this.rejected(new SessionError("RUNTIME_STOPPING", "Runtime is stopping."));
+        const params = new URL(request.url).searchParams, days = Number(params.get("days"));
+        const period = dashboardPeriods.find(period => period === days);
+        if (!period || [...params.keys()].some(key => key !== "days")) return this.rejected(new InputError("Dashboard period must be 1, 7 or 30 days."));
+        const result = await this.history.dashboard(period, request.signal);
         return result.ok ? Response.json(result.value) : this.rejected(result.error);
       }
       if (path === "/history/preview" && request.method === "GET") {

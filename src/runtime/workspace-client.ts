@@ -1,5 +1,6 @@
 import { resolve, sep } from "node:path";
 import type { Repository } from "../workspace/model.ts";
+import { mergeDashboards, type DashboardPeriod, type DashboardSnapshot } from "../agents/dashboard.ts";
 import { RepositoryWatcher } from "../workspace/repository-watcher.ts";
 import { CancelledError, CapabilityError, collectCleanup, ConnectionError, InputError, SessionError, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
@@ -9,7 +10,7 @@ import { runtimePaths, RuntimeStore } from "./storage.ts";
 import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
 
 // Repository-scoped channels share a daemon process; identity fencing and PTY leases stay local.
-export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "newTab" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "activate" | "image" | "models" | "selectModel" | "catalog" | "acknowledge">>;
+export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "newTab" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "activate" | "image" | "models" | "selectModel" | "catalog" | "acknowledge" | "dashboard">>;
 type Connector = (repository: Repository, cwd: string, options: ConnectOptions) => Promise<Result<RepositoryClient | null, ExpectedError>>;
 type Entry = { repository: Repository; preferences: RuntimePreferences; connectionVersion: number; client?: RepositoryClient; unsubscribe?: () => void;
   watcher?: RepositoryWatcher; discoveryWarning?: string; legacy?: boolean;
@@ -162,6 +163,29 @@ export class WorkspaceClient {
     const entry = this.worktreeOwner(worktreeId); if (!entry.ok) return entry;
     const client = await this.ensure(entry.value); if (!client.ok) return client;
     const result = await client.value.resume(worktreeId, savedId); if (result.ok) entry.value.sessions.add(result.value); return result;
+  }
+  async dashboard(days: DashboardPeriod, repositoryId?: string, signal?: AbortSignal): Promise<Result<DashboardSnapshot, ExpectedError>> {
+    if (signal?.aborted || this.detaching) return err(new CancelledError());
+    const entries = repositoryId ? this.entries.filter(entry => entry.repository.id === repositoryId) : this.entries;
+    if (!entries.length) return err(new InputError("Dashboard project does not belong to this workspace."));
+    const snapshots: DashboardSnapshot[] = [], warnings: string[] = [];
+    let firstError: ExpectedError | undefined;
+    for (const entry of entries) {
+      if (signal?.aborted || this.detaching) return err(new CancelledError());
+      const connected = await this.ensure(entry);
+      if (signal?.aborted || this.detaching) return err(new CancelledError());
+      const result = !connected.ok ? connected : connected.value.dashboard ? await connected.value.dashboard(days, signal)
+        : err(new CapabilityError("This repository service does not support Agent Dashboard."));
+      if (!result.ok) {
+        if (result.error.code === "CANCELLED") return result;
+        firstError ??= result.error; warnings.push(`${entry.repository.name}: excluded [${result.error.code}].`); continue;
+      }
+      snapshots.push(result.value);
+    }
+    if (!snapshots.length && firstError) return err(firstError);
+    const merged = mergeDashboards(snapshots, days);
+    merged.warnings = [...new Set([...merged.warnings, ...warnings])].slice(0, 100);
+    return ok(merged);
   }
   async listHistory(worktreeId: string, signal?: AbortSignal): ReturnType<RuntimeClient["listHistory"]> {
     if (signal?.aborted) return err(new CancelledError());

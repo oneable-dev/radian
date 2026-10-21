@@ -6,6 +6,8 @@ import { CancelledError, capture, HistoryError, SessionError, StorageError, type
 import { err, ok, type Result } from "../result.ts";
 import { previewSessionSnapshot, readHistoryPreview, type HistoryPreview } from "./history-preview.ts";
 import type { SessionSnapshotSource } from "./session-snapshot.ts";
+import { mergeDashboards, type DashboardPeriod, type DashboardSnapshot } from "./dashboard.ts";
+import { readDashboardHistory } from "./dashboard-history.ts";
 
 export type HistoryItem = {
   readonly id: string;
@@ -89,6 +91,30 @@ export class SessionHistory {
     const validated = await validateHistory(item.path); if (!validated.ok) return validated;
     const managed = this.snapshots?.listSessions(worktreeId).find(snapshot => snapshot.conversationId === savedId)?.managed === true;
     return this.registry.create(worktreeId, item.path, { id: crypto.randomUUID(), name: item.title, managed });
+  }
+
+  async dashboard(days: DashboardPeriod, signal?: AbortSignal): Promise<Result<DashboardSnapshot, ExpectedError>> {
+    const now = Date.now(), seen = new Set<string>(), files = new Set<string>(), summaries: DashboardSnapshot[] = [], warnings: string[] = [];
+    for (const tree of repositorySnapshot(this.repositories).flatMap(repository => repository.worktrees)) {
+      if (signal?.aborted) return err(new CancelledError());
+      const index = await this.index(tree.id, signal, true); if (!index.ok) return index;
+      for (const item of index.value.items) {
+        if (signal?.aborted) return err(new CancelledError());
+        if (!item.path) { warnings.push("Some saved snapshots have no SDK history and are excluded."); continue; }
+        if (files.has(item.path)) continue;
+        files.add(item.path);
+        const summary = await readDashboardHistory(item.path, index.value.cwd, days, now, seen, signal);
+        if (!summary.ok) {
+          if (summary.error.code === "CANCELLED") return summary;
+          warnings.push(`A conversation was excluded [${summary.error.code}]. Refresh to retry.`); continue;
+        }
+        summaries.push(summary.value.snapshot);
+        for (const identity of summary.value.identities) seen.add(identity);
+      }
+    }
+    const snapshot = mergeDashboards(summaries, days, now);
+    snapshot.warnings = [...new Set([...snapshot.warnings, ...warnings])].slice(0, 100);
+    return ok(snapshot);
   }
 
   private index(worktreeId: string, signal?: AbortSignal, refresh = false): Promise<Result<HistoryIndex, ExpectedError>> {

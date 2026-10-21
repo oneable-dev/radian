@@ -14,6 +14,7 @@ import type { RequestSummary } from "./request-summary.ts";
 import type { TranscriptImageData } from "./transcript-images.ts";
 import { modelCommand, parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "./model-selection.ts";
 import { historyCommand, parseHistoryCommand } from "./history-command.ts";
+import { dashboardCommand, parseDashboardCommand } from "./dashboard-command.ts";
 import { needsAttention, type SessionResult } from "./session-attention.ts";
 import { sessionRecordKey, type SessionLifecycle, type SessionSnapshotInfo } from "./session-snapshot.ts";
 
@@ -292,7 +293,7 @@ export class SessionRegistry {
     if (entry.replacing || entry.executor?.savedSessionId !== conversationId) return err(new SessionError("SESSION_CONFLICT", "Conversation changed while loading completion resources."));
     const executor = entry.executor!;
     const controls = [...sessionControlCommands.filter(item => item.value === "compact" ? !!executor.compact : item.value === "reload" ? !!executor.reload : true),
-      ...(executor.models && executor.selectModel ? [modelCommand] : []), historyCommand];
+      ...(executor.models && executor.selectModel ? [modelCommand] : []), historyCommand, dashboardCommand];
     const extra = executor.commands?.() ?? [];
     return ok({ conversationId, revision: executor.state.resourceRevision ?? 0,
       items: [...controls, ...extra.filter(item => !controls.some(control => control.value === item.value))] });
@@ -330,6 +331,8 @@ export class SessionRegistry {
   }
 
   async prompt(id: string, text: string, onAccepted?: () => void, imagePaths: readonly string[] = []): Promise<Result<void, ExpectedError>> {
+    const dashboard = parseDashboardCommand(text); if (!dashboard.ok) return dashboard;
+    if (dashboard.value) return err(new CapabilityError("Use /dashboard in the Agent input to open usage statistics. No model prompt was sent."));
     const history = parseHistoryCommand(text); if (!history.ok) return history;
     if (history.value) return err(new CapabilityError("Use /history in the Agent input to open saved session history. No model prompt was sent."));
     const model = parseModelCommand(text); if (!model.ok) return model;

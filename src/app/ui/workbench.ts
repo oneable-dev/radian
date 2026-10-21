@@ -14,6 +14,7 @@ import type { HistoryItem } from "../../agents/history.ts";
 import type { HistoryPreview } from "../../agents/history-preview.ts";
 import { SessionHistoryPanel } from "../../agents/ui/history-panel.ts";
 import { SessionMonitor } from "../../agents/ui/session-monitor.ts";
+import { DashboardPanel, type DashboardActions } from "../../agents/ui/dashboard-panel.ts";
 import { SessionNotificationStack } from "../../agents/ui/session-notifications.ts";
 import type { SessionNotification } from "../../agents/session-notification.ts";
 import { ModelPicker, type ModelPickerActions } from "../../agents/ui/model-picker.ts";
@@ -41,6 +42,7 @@ import { paintText, styleChunk, type StyleGroup } from "../../ui/theme-styles.ts
 export type WorkbenchActions = AgentActions & {
   onCloseSession: (worktreeId: string, sessionId: string) => void;
   getRetainedSessionIds?: () => ReadonlySet<string>;
+  onDashboard?: DashboardActions["load"];
   onListModels?: ModelPickerActions["list"];
   onSelectModel?: ModelPickerActions["select"];
   onListHistory?: (worktreeId: string, signal?: AbortSignal) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
@@ -73,6 +75,7 @@ export class Workbench {
   private readonly workspacePopup: BoxRenderable;
   private workspaceOwner: Renderable | undefined;
   private readonly monitor: SessionMonitor;
+  private readonly dashboard: DashboardPanel;
   private readonly notifications: SessionNotificationStack;
   private foreground = false;
   private readonly acknowledgements = new Map<string, string>();
@@ -148,10 +151,16 @@ export class Workbench {
       ...(actions.getMonitoringNotice ? { warning: actions.getMonitoringNotice } : {}),
       keyHint: (command, context) => this.keymap.hint(command, context),
     });
+    this.dashboard = new DashboardPanel(renderer, {
+      ...(actions.onDashboard ? { load: actions.onDashboard } : {}),
+      projects: () => this.selection.snapshot.map(repository => ({ id: repository.id, name: repository.name })),
+      changed: () => this.updateFooter(), fallback: () => this.focusNavigation(),
+      keyHint: (command, context) => this.keymap.hint(command, context),
+    });
     this.sidebar.add(this.resultMessage);
     this.sidebar.add(this.tree);
     this.workPanel = new BoxRenderable(renderer, { id: "work-panel", flexGrow: 1, minWidth: 0, flexDirection: "column" });
-    this.agent = new AgentPanel(renderer, { ...actions, onNewSession: id => this.createAgentSession(id), onModel: id => this.showModels(id), onHistory: () => this.history.show(this.selection.worktree), onInspectInput: (content) => this.dialog.show(content), onSelectSession: (tree, id) => this.activateSession(tree, id) }, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
+    this.agent = new AgentPanel(renderer, { ...actions, onNewSession: id => this.createAgentSession(id), onModel: id => this.showModels(id), onHistory: () => this.history.show(this.selection.worktree), onShowDashboard: () => this.dashboard.show(), onInspectInput: (content) => this.dialog.show(content), onSelectSession: (tree, id) => this.activateSession(tree, id) }, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
       (message) => this.setNotice(message), () => this.updateFooter(), () => this.focusNavigation(), this.workViews.agentScroll,
       (id, position) => { this.workViews.agentScroll[id] = position; this.saveWorkViews(); }, {
         ...(this.workViews.agentViews ? { initialViews: this.workViews.agentViews } : {}),
@@ -186,7 +195,7 @@ export class Workbench {
     details.onMouseDown = (event) => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.showNotice(); } };
     this.footer = new Footer(renderer, `Radian ${packageInfo.version}`, { help, details }, "Radian");
     this.root.add(this.footer.root); this.root.add(this.workspacePopup); this.root.add(this.monitor.root);
-    this.root.add(this.history.root); this.root.add(this.models.root); this.root.add(this.dialog.root);
+    this.root.add(this.history.root); this.root.add(this.models.root); this.root.add(this.dashboard.root); this.root.add(this.dialog.root);
     this.notifications = new SessionNotificationStack(renderer, notification => this.openNotification(notification));
     this.root.add(this.notifications.root);
     renderer.root.add(this.root);
@@ -248,7 +257,7 @@ export class Workbench {
   private blurTerminal = (): void => { this.foreground = false; };
   private acknowledgeVisible = (): void => {
     if (this.disposed || !this.foreground || !this.actions.onAcknowledge || !this.agent.resultVisible
-      || this.sidebar.visible || this.monitor.visible || this.history.visible || this.models.visible || this.dialog.visible || this.git.modal) return;
+      || this.sidebar.visible || this.monitor.visible || this.history.visible || this.models.visible || this.dashboard.visible || this.dialog.visible || this.git.modal) return;
     const id = this.selection.sessionId, attention = this.selection.worktree?.sessions.find(session => session.id === id)?.attention;
     // Most frames have nothing to acknowledge: do not rebuild the aggregate runtime snapshot for them.
     if (!id || !attention || this.acknowledgements.get(id) === attention.id) return;
@@ -308,7 +317,7 @@ export class Workbench {
     if (!tree?.sessions.some(session => session.id === notification.sessionId) || !state || state.conversationId !== notification.conversationId) {
       this.setNotice("This notification's conversation is no longer open."); return;
     }
-    this.setSidebarVisible(false, false); this.monitor.hide(false); this.history.hide(false); this.models.hide(false); this.dialog.hide();
+    this.setSidebarVisible(false, false); this.monitor.hide(false); this.history.hide(false); this.models.hide(false); this.dashboard.hide(false); this.dialog.hide();
     this.activateSession(notification.worktreeId, notification.sessionId); this.agent.focusLatest();
   }
 
@@ -326,6 +335,7 @@ export class Workbench {
     const help = this.keymap.bindings.find((binding) => binding.command === "app.help" && binding.keys.length === 1 && inScope(binding.scope, context));
     this.footer.setHelpHint(help ? formatKeys(help.keys) : this.keymap.hint("app.help", context));
     if (this.dialog.visible) shortcuts = [hint("dialog.copy", "Copy"), hint("dialog.half-page-down", "½ page"), hint("dialog.dismiss", "Close")];
+    else if (this.dashboard.visible) shortcuts = this.dashboard.shortcuts;
     else if (this.models.visible) shortcuts = this.models.shortcuts;
     else if (this.history.visible) shortcuts = this.history.shortcuts;
     else if (this.monitor?.visible) shortcuts = this.monitor.shortcuts;
@@ -357,14 +367,14 @@ export class Workbench {
           hint("agent.newline", "New line"), ...(this.agent.prompt.canInspect ? [hint("agent.inspect", "Inspect")] : []),
           ...(this.agent.canInterrupt ? [hint("agent.interrupt", "Interrupt")] : []),
           ...(this.agent.prompt.value ? [hint("agent.clear", "Clear")] : []),
-          hint("focus.transcript", "Transcript"), hint("sidebar.toggle", "Workspace"), hint("tab.new", "New session")];
+          hint("focus.transcript", "Transcript"), hint("sidebar.toggle", "Workspace"), hint("tab.new", "New session"), hint("dashboard.show", "Dashboard")];
     } else if (context === "git" || context === "git-tabs" || context === "git-prompt" || this.git.available("git.back")) shortcuts = this.git.shortcuts;
     else if (focused) {
       const label = this.buttonHints.get(focused);
       if (focused.visible && label) shortcuts = [{ key: this.keymap.hints("button.activate", "button"), label }];
     }
     this.footer.setView({ agent: "Agents", editor: "Editor", git: "Git", terminal: "Terminal" }[this.displayedWorkView]);
-    this.footer.setContext(this.agent.active && !this.dialog.visible && !this.history.visible && !this.models.visible && !this.monitor?.visible && !this.sidebar.visible ? this.agent.transcriptStatus : "");
+    this.footer.setContext(this.agent.active && !this.dialog.visible && !this.history.visible && !this.models.visible && !this.dashboard.visible && !this.monitor?.visible && !this.sidebar.visible ? this.agent.transcriptStatus : "");
     this.footer.setShortcuts(shortcuts.filter((shortcut) => shortcut.key));
   };
 
@@ -450,6 +460,7 @@ export class Workbench {
 
   private keyContext(): KeyContext {
     if (this.dialog?.visible) return "dialog";
+    if (this.dashboard?.visible) return this.dashboard.context;
     if (this.models?.visible) return this.models.context;
     if (this.history?.visible) return this.history.context;
     if (this.monitor?.visible) return this.monitor.context;
@@ -477,6 +488,9 @@ export class Workbench {
     }
     if (this.dialog.visible) return command.startsWith("dialog.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
     if (command.startsWith("dialog.")) return false;
+    if (this.dashboard.visible) return command.startsWith("dashboard.") && command !== "dashboard.show" || command === "focus.next" || command === "focus.previous" || command === "app.detach";
+    if (command === "dashboard.show") return !this.models.visible && !this.history.visible && !this.monitor.visible && !this.sidebar.visible && !this.git.modal;
+    if (command.startsWith("dashboard.")) return false;
     if (this.models.visible) return command.startsWith("model.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
     if (command.startsWith("model.")) return false;
     if (this.history.visible) return command.startsWith("history.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
@@ -516,6 +530,8 @@ export class Workbench {
   }
   private command(command: CommandId): void {
     this.foreground = true;
+    if (command === "dashboard.show") { this.dashboard.show(); return; }
+    if (command.startsWith("dashboard.")) { this.dashboard.command(command); return; }
     if (command === "monitor.show") { this.monitor.show(); return; }
     if (command.startsWith("monitor.")) { this.monitor.command(command); return; }
     if (command === "app.help") { this.showHelp(); return; }
@@ -604,6 +620,10 @@ export class Workbench {
   }
   private moveFocus(direction: 1 | -1): void {
     if (this.dialog.visible) { this.dialog.moveFocus(direction); return; }
+    if (this.dashboard.visible) {
+      const targets = this.dashboard.focusTargets, index = targets.indexOf(this.renderer.currentFocusedRenderable!);
+      targets[(index + direction + targets.length) % targets.length]?.focus(); return;
+    }
     if (this.models.visible) {
       const targets = this.models.focusTargets, index = targets.indexOf(this.renderer.currentFocusedRenderable!);
       targets[(index + direction + targets.length) % targets.length]?.focus(); return;
@@ -801,7 +821,7 @@ export class Workbench {
     this.disposed = true;
     this.unsubscribe();
     this.notifications.dispose();
-    this.agent.dispose(); this.history.dispose(); this.monitor.dispose(); this.models.dispose(); this.dialog.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
+    this.agent.dispose(); this.history.dispose(); this.monitor.dispose(); this.models.dispose(); this.dashboard.dispose(); this.dialog.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
     this.search.off(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.router.dispose();
     this.renderer.off("resize", this.resize);

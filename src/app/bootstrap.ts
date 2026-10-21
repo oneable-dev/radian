@@ -228,6 +228,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
           prompt: (sessionId, text, images) => client.prompt(sessionId, text, images),
         },
         getSessionDetails: (id: string) => client.snapshot.details[id] ?? null,
+        onDashboard: (days, repositoryId, signal) => client.dashboard(days, repositoryId, signal),
         onListHistory: (worktreeId, signal) => client.listHistory(worktreeId, signal),
         onPreviewHistory: (worktreeId, savedId, signal) => client.previewHistory(worktreeId, savedId, signal),
         onResumeSession: (worktreeId: string, savedId: string) => client.resume(worktreeId, savedId),

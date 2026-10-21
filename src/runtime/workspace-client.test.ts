@@ -6,6 +6,7 @@ import { ConnectionError, InputError, StorageError } from "../errors.ts";
 import { ok, err } from "../result.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 import type { Repository } from "../workspace/model.ts";
+import { emptyDashboard } from "../agents/dashboard.ts";
 import { defaultPreferences } from "./client.ts";
 import type { RuntimePreferences, RuntimeSnapshot } from "./protocol.ts";
 import { WorkspaceClient, type RepositoryClient } from "./workspace-client.ts";
@@ -49,6 +50,30 @@ async function isolated(run: (directory: string) => Promise<void>): Promise<void
   try { await run(directory); }
   finally { await rm(directory, { recursive: true, force: true }); }
 }
+
+test("대시보드는 전체·선택 프로젝트를 집계하고 일부 서비스 미지원과 취소를 구분한다", () => isolated(async (stateRoot) => {
+  // 서로 다른 저장소의 사용량은 합칠 수 있지만 조회 실패를 0으로 숨기면 안 된다.
+  const a = repo("a"), b = repo("b"), pa = peer(a), pb = peer(b), queried: string[] = [];
+  for (const [name, client, tokens] of [["a", pa.client, 100], ["b", pb.client, 200]] as const) client.dashboard = async days => {
+    queried.push(name); const data = emptyDashboard(days); data.totals.tokens = tokens; data.daily.at(-1)!.tokens = tokens;
+    data.models = [{ name: "test/large", value: tokens }]; return ok(data);
+  };
+  const workspace = expectOk(await WorkspaceClient.open([a, b], a.worktrees[0]!.path, { stateRoot, offline: true }, async repository => ok(repository.id === a.id ? pa.client : pb.client)));
+  try {
+    // 전체 범위와 선택 범위는 같은 리소스를 이름별로 합산한다.
+    const all = expectOk(await workspace.dashboard(7)), selected = expectOk(await workspace.dashboard(7, a.id));
+    expect(all.totals.tokens).toBe(300); expect(all.models).toEqual([{ name: "test/large", value: 300 }]); expect(selected.totals.tokens).toBe(100); expect(queried).toEqual(["a", "b", "a"]);
+    delete pb.client.dashboard;
+    const partial = expectOk(await workspace.dashboard(7));
+
+    // 부분 실패는 표시하고 취소·잘못된 프로젝트는 조회하지 않는다.
+    expect(partial.totals.tokens).toBe(100); expect(partial.warnings).toEqual(["b: excluded [UNSUPPORTED_CAPABILITY]."]);
+    const before = queried.length;
+    expect(expectError(await workspace.dashboard(7, undefined, AbortSignal.abort())).code).toBe("CANCELLED");
+    expect(expectError(await workspace.dashboard(7, "unknown")).code).toBe("INVALID_INPUT"); expect(queried).toHaveLength(before);
+    expect([...pa.calls, ...pb.calls].some(call => call.startsWith("create:") || call.startsWith("prompt:"))).toBe(false);
+  } finally { await workspace.disconnect(); }
+}));
 
 test("newTab은 원래 세션의 레포에만 생성하고 새 ID의 소유권도 보존한다", () => isolated(async (stateRoot) => {
   const a = repo("a"), b = repo("b"), pa = peer(a), pb = peer(b);

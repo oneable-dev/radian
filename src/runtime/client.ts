@@ -5,6 +5,7 @@ import { Value } from "typebox/value";
 import type { Repository } from "../workspace/model.ts";
 import type { HistoryItem } from "../agents/history.ts";
 import type { HistoryPreview } from "../agents/history-preview.ts";
+import { dashboardPeriods, dashboardSchema, type DashboardPeriod, type DashboardSnapshot } from "../agents/dashboard.ts";
 import { CapabilityError, CancelledError, capture, ConnectionError, InputError, parseJson, ProtocolError, reportUnexpected, systemCode, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { emptyPreferences, historySchema, historyPreviewSchema, historyPreviewQuerySchema, maxFrameBytes, maxSnapshotBytes, parseSnapshot, replySchema, type RuntimeCommand, type RuntimePreferences, type RuntimeSnapshot, type EditorFrame } from "./protocol.ts";
@@ -16,6 +17,7 @@ import type { CompletionCatalog, CompletionQuery, CompletionResult } from "../ag
 import { NdjsonDecoder } from "./frames.ts";
 import { parseSessionControl } from "../agents/session-controls.ts";
 import { parseHistoryCommand } from "../agents/history-command.ts";
+import { parseDashboardCommand } from "../agents/dashboard-command.ts";
 import { modelCatalogQuerySchema, modelCatalogSchema, modelEffortSchema, modelIdentitySchema, parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "../agents/model-selection.ts";
 
 import { maximumPreviewImageBytes, transcriptImageQuerySchema } from "../agents/transcript-images.ts";
@@ -314,6 +316,24 @@ export class RuntimeClient {
     if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance || conversation !== this.state.details[sessionId]?.conversationId) return err(new CancelledError("Image preview belongs to an outdated conversation."));
     return decoded.value;
   }
+  async dashboard(days: DashboardPeriod, signal?: AbortSignal): Promise<Result<DashboardSnapshot, ExpectedError>> {
+    if (this.detaching || this.failure) return err(this.connectionClosed());
+    if (!this.state.capabilities?.includes("agent-dashboard")) return err(new CapabilityError("Running service predates Agent Dashboard. Finish work and restart it explicitly; no service was restarted."));
+    if (!dashboardPeriods.includes(days)) return err(new InputError("Invalid dashboard period."));
+    if (signal?.aborted) return err(new CancelledError());
+    const instance = this.state.instance, epoch = this.connectionEpoch;
+    const abort = AbortSignal.any([this.streamAbort.signal, AbortSignal.timeout(60000), ...(signal ? [signal] : [])]);
+    const attempted = await capture(() => transport(this.paths, `/dashboard?days=${days}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
+    if (!attempted.ok) return attempted;
+    const response = attempted.value; if (!response.ok) return response;
+    const received = await capture(() => readJson(response.value)); if (!received.ok) return received;
+    const decoded = received.value; if (!decoded.ok) return decoded;
+    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance) return err(new CancelledError("Dashboard belongs to an outdated connection."));
+    if (!response.value.ok) return Value.Check(replySchema, decoded.value) && !decoded.value.ok ? err(remoteError(decoded.value.error)) : err(new ProtocolError("Malformed dashboard failure response."));
+    if (!Value.Check(dashboardSchema, decoded.value) || decoded.value.days !== days || decoded.value.daily.length !== days
+      || new Set(decoded.value.daily.map(day => day.date)).size !== days) return err(new ProtocolError("Malformed dashboard response."));
+    return ok(decoded.value);
+  }
   async listHistory(worktreeId: string, signal?: AbortSignal): Promise<Result<readonly HistoryItem[], ExpectedError>> {
     const capability = this.requireHistory(); if (!capability.ok) return capability;
     if (signal?.aborted) return err(new CancelledError());
@@ -413,6 +433,8 @@ export class RuntimeClient {
     return present.ok ? ok(id) : present;
   }
   async prompt(sessionId: string, text: string, images: readonly string[] = []): Promise<Result<void, ExpectedError>> {
+    const dashboard = parseDashboardCommand(text); if (!dashboard.ok) return dashboard;
+    if (dashboard.value) return err(new CapabilityError("Use /dashboard in the Agent input to open usage statistics. No prompt was sent."));
     const history = parseHistoryCommand(text); if (!history.ok) return history;
     if (history.value) return err(new CapabilityError("Use /history in the Agent input to open saved session history. No prompt was sent."));
     const model = parseModelCommand(text); if (!model.ok) return model;

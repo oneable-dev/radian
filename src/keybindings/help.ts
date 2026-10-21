@@ -15,6 +15,7 @@ const labels: Partial<Record<CommandId, string>> = {
   "agent.send": "Send input (steer at the next eligible turn when busy)", "agent.newline": "Insert a newline without sending", "agent.paste": "Paste text, images or files from the clipboard", "agent.inspect": "Inspect the attachment at the cursor",
   "git.submit": "Send input with the frozen Git context", "git.newline": "Insert a newline without sending", "git.clear": "Clear the current prompt", "git.paste": "Paste from the clipboard", "git.inspect": "Inspect the attachment at the cursor",
   "history.show": "Open saved session history", "transcript.help": "Open conversation navigation help",
+  "dashboard.show": "Open Agent usage dashboard", "dashboard.dismiss": "Close Agent dashboard", "dashboard.refresh": "Refresh saved statistics",
 };
 export function keymapHelp(keymap: Keymap, context: KeyContext, available: (command: CommandId) => boolean): string {
   const rows = (global: boolean): string => {

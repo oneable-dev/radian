@@ -23,6 +23,7 @@ import { parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdent
 import { expandSkillInvocation } from "./completion.ts";
 import { parseSessionControl } from "./session-controls.ts";
 import { parseHistoryCommand } from "./history-command.ts";
+import { parseDashboardCommand } from "./dashboard-command.ts";
 
 type QueuedUserMessage = Extract<ReturnType<AgentSession["agent"]["peekQueuedMessages"]>[number], { role: "user" }>;
 
@@ -306,6 +307,8 @@ export class PiSessionExecutor implements SessionExecutor {
         return Promise.resolve(err(new InputError("This skill is not loaded in the current session. Use /reload after adding skills; input was retained.")));
       text = expanded;
     }
+    const dashboard = parseDashboardCommand(text); if (!dashboard.ok) return Promise.resolve(dashboard);
+    if (dashboard.value) return Promise.resolve(err(new CapabilityError("Use /dashboard in the Agent input to open usage statistics. No model prompt was sent.")));
     const control = parseSessionControl(text); if (!control.ok) return Promise.resolve(control);
     if (control.value) return Promise.resolve(err(new CapabilityError("Use Radian's host session controls for this command. No model prompt was sent.")));
     const model = parseModelCommand(text); if (!model.ok) return Promise.resolve(model);

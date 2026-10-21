@@ -27,11 +27,13 @@ import { PendingMessages } from "./pending-messages.ts";
 import { parseSessionControl } from "../session-controls.ts";
 import { parseModelCommand } from "../model-selection.ts";
 import { parseHistoryCommand } from "../history-command.ts";
+import { parseDashboardCommand } from "../dashboard-command.ts";
 
 export type AgentActions = {
   // Invoke onCreated only after the new session is observable in the workspace snapshot.
   onNewSession: (worktreeId: string, onCreated?: (sessionId: string) => void) => void;
   onHistory?: () => void;
+  onShowDashboard?: () => void;
   onModel?: (sessionId: string) => Result<void, ExpectedError>;
   onSelectSession?: (worktreeId: string, sessionId: string) => void;
   onCloseSession?: (worktreeId: string, sessionId: string) => void;
@@ -350,10 +352,16 @@ export class AgentPanel {
       if (!model.ok) { this.notice(`[${model.error.code}] ${model.error.message} · prompt retained`); return; }
       const history = parseHistoryCommand(submission.text);
       if (!history.ok) { this.notice(`[${history.error.code}] ${history.error.message} · prompt retained`); return; }
+      const dashboard = parseDashboardCommand(submission.text);
+      if (!dashboard.ok) { this.notice(`[${dashboard.error.code}] ${dashboard.error.message} · prompt retained`); return; }
       // Non-conversation actions must not reset the outgoing conversation's reading position.
-      if (!model.value && !history.value && control.value?.action !== "new-tab" && control.value?.action !== "exit" && control.value?.action !== "reload") this.transcript.followLatest();
+      if (!model.value && !history.value && !dashboard.value && control.value?.action !== "new-tab" && control.value?.action !== "exit" && control.value?.action !== "reload") this.transcript.followLatest();
       let result: Result<void, ExpectedError>;
-      if (history.value) {
+      if (dashboard.value) {
+        if (submission.images.length) result = err(new InputError("/dashboard does not accept image attachments. Input was retained."));
+        else if (!this.actions.onShowDashboard) result = err(new CapabilityError("Dashboard is unavailable in this view. No prompt was sent."));
+        else { this.actions.onShowDashboard(); result = ok(undefined); }
+      } else if (history.value) {
         if (submission.images.length) result = err(new InputError("/history does not accept image attachments. Input was retained."));
         else if (!this.actions.onHistory) result = err(new CapabilityError("History is unavailable in this view. No prompt was sent."));
         else { this.actions.onHistory(); result = ok(undefined); }

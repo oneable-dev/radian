@@ -55,6 +55,27 @@ async function setup() {
   };
 }
 
+test("대시보드는 실제 Unix IPC로 닫힌 SDK 실행을 읽고 대화나 새 모델 실행을 만들지 않는다", async () => {
+  // 이 테스트가 소유한 별도 offline daemon만 사용한다.
+  const app = await setup();
+  try {
+    const client = await app.connect(), tree = client.snapshot.repositories.flatMap(repo => repo.worktrees).find(tree => tree.path === app.main)!;
+    const id = expectOk(await client.create(tree.id));
+    expectOk(await client.prompt(id, "read"));
+    await observed(client, snapshot => !!snapshot.details[id]?.result);
+    expect(expectOk(await client.catalog(id)).items.some(item => item.value === "dashboard")).toBe(true);
+    expectOk(await client.closeSession(id));
+    const before = client.snapshot.repositories;
+
+    // Host 경로 허용, capability 협상, 응답 스키마와 저장 파일 집계를 함께 통과한다.
+    const dashboard = expectOk(await client.dashboard(7));
+
+    // 닫힌 실행도 남고 통계 조회는 읽기 전용이다.
+    expect(dashboard.totals.runs).toBe(1); expect(dashboard.daily).toHaveLength(7); expect(dashboard.warnings).toEqual([]);
+    expect(client.snapshot.repositories).toEqual(before);
+  } finally { await app.cleanup(); }
+});
+
 test("중단 IPC는 대기 입력 전체를 한 메시지로 전달하고 세션·초안과 다른 실행을 유지한다", async () => {
   // This test owns an isolated daemon; interruption never targets a user runtime.
   const app = await setup();
