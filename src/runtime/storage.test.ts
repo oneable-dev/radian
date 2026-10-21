@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Value } from "typebox/value";
 import { commandSchema, emptyPreferences, parseSnapshot, protocolVersion, type RuntimeManifest } from "./protocol.ts";
-import { privateDirectory, runtimePaths, RuntimeStore } from "./storage.ts";
+import { daemonPaths, privateDirectory, runtimePaths, RuntimeStore } from "./storage.ts";
 import { RuntimeClient } from "./client.ts";
 import { expectOk, expectError } from "../testing/results.ts";
 
@@ -33,6 +33,9 @@ test("live/test 모드와 상태 디렉터리는 다른 endpoint를 사용하고
   expect(live.socket).not.toBe(offline.socket);
   expect(live.socket).not.toBe(other.socket);
   expect(Buffer.byteLength(live.socket)).toBeLessThan(100);
+  expect(daemonPaths(false, root).socket).not.toBe(daemonPaths(true, root).socket);
+  expect(daemonPaths(false, root).socket).not.toBe(daemonPaths(false, root + "other").socket);
+  expect(Buffer.byteLength(daemonPaths(false, root).socket)).toBeLessThan(100);
 });
 
 test("손상된 manifest는 빈 성공으로 바꾸거나 원본 파일을 덮어쓰지 않는다", async () => {

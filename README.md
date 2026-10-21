@@ -73,7 +73,7 @@ The Editor view embeds Neovim; Git provides a native, read-only history and whol
 
 ### Command-line interface
 
-Commander handles options, help, version and repository-scoped runtime commands:
+Commander handles options, help, version and shared-daemon lifecycle commands:
 
 ```sh
 bun run start --help
@@ -82,22 +82,27 @@ bun run start --demo
 bun run start --no-color
 bun run start runtime status
 bun run start runtime stop
+bun run start runtime restart
+bun run restart # Same daemon restart; reopen the TUI with dev/start if needed
 ```
 
 Help/version and invalid arguments are handled before SDK/resource initialization, configuration
 reads, workspace discovery or service activation. Interactive mode requires TTY stdin/stdout and a
 cursor-addressable UTF-8 terminal; pipes and `TERM=dumb` receive plain guidance instead of fullscreen
 escape sequences. Runtime commands remain usable without a TTY and ignore workspace-root discovery.
-`runtime stop` is explicit and closes the selected repository service's owned agents, editors and shells;
-save work first. The existing `--runtime-status` and `--stop-runtime` aliases remain accepted.
+`runtime stop` explicitly closes the shared daemon and its agents, editors and shells across **all**
+owned repositories. `runtime restart` then starts a fresh daemon without replaying interrupted work;
+save work and editor buffers first. The existing `--runtime-status` and `--stop-runtime` aliases remain accepted.
 Internal service flags and isolated `--test-runtime` startup remain compatible.
 
 `--no-color` or a nonempty `NO_COLOR` uses terminal-default foreground/background with existing
 bold/underline and reverse selection emphasis. It does not merely replace colors with gray RGB
 escapes. Provider icons use the text fallback and branding omits its color fade. Embedded programs'
 configuration remains untouched; only the attached UI's final frame is rendered without color.
-The normal colored UI continues to follow the host palette. `--runtime-cwd` chooses the repository
-for administrative commands; a relative `--state-dir` is resolved once against the launching directory.
+The normal colored UI continues to follow the host palette. Ordinary runtime commands select the
+shared daemon by state directory and live/test mode, not `cwd`. `--runtime-cwd` chooses the initial
+repository or the target of an explicit `--legacy` command; a relative `--state-dir` is resolved once
+against the launching directory.
 `--config PATH` selects unified settings. `--workspace-config`, `--keybindings` and `--theme` remain
 compatible per-section overrides.
 
@@ -125,8 +130,9 @@ are errors; an explicitly selected settings file must exist.
 
 Reopen the TUI to apply theme, keybinding and workspace edits; this does not stop running jobs.
 The daemon reads session retention at startup and every hour, so edits to its selected policy file
-apply at the next sweep. An existing daemon keeps the configuration path it started with: changing
-`--config` for retention requires explicitly restarting that daemon after saving/finishing work.
+apply at the next sweep. Each repository registration retains its selected policy-file path across
+shared-daemon restarts. A conflicting `--config` is rejected rather than silently changing another
+client's cleanup policy; use the registered file or a separate `--state-dir` for an independent policy.
 A malformed or previously observed but now missing policy file pauses cleanup with a notice; it
 never silently switches to a destructive default. Help, version and administrative runtime commands
 remain independent of user configuration. Pi authentication/model settings and persisted session
@@ -162,20 +168,22 @@ directories and run on TUI launch; reopen the TUI to discover newly added reposi
 Worktrees within discovered repositories update automatically. Native filesystem watches observe
 Git's canonical common directory and linked-worktree registration metadata, including the first
 creation or replacement of the `worktrees` directory. Events are debounced for 250 ms, then Git's
-worktree list is reread; there is no periodic workspace scan or polling loop. Repository services
-own their watches, while the TUI watches cold repositories without starting their services and
-hands ownership over on activation. Agent sessions, History, Editor and Terminal share the updated
+worktree list is reread; there is no periodic workspace scan or polling loop. The shared daemon
+owns a catalog watcher for every registered repository, including cold repositories with no SDK,
+Editor or Terminal resources. Watching continues after the TUI detaches. Agent sessions, History, Editor and Terminal share the updated
 catalog. Existing sessions, drafts and selection survive refresh; removed worktrees with open
 resources remain listed until those resources are released. Failed scans retain the last valid
 list and expose a notice. Services that were started before this feature was installed need a
 one-time restart to load it; reopening only the TUI does not replace an existing service.
 
-The TUI attaches to already-running repository services without restarting them. A cold repository's
-service starts only when that repository is selected or explicitly used, not once per scan result.
-The launching repository is preferred initially when present, otherwise the first discovered repo.
-Prompts, History, editors, terminals and preference writes route to their owning repository service.
-Drafts, selected sessions and view state survive lazy attachment; detaching releases this TUI's
-connections, not the underlying agents or native processes.
+The TUI registers discovered repositories with **one shared Bun daemon per user/state-root/mode**.
+Repository execution resources initialize only when selected or explicitly used; registration does
+not create an Agent, editor or shell. The launching repository is preferred initially when present,
+otherwise the first discovered repo. Repository-scoped channels retain their own instance fencing,
+PTY leases, catalogs, preferences and persistence; these channels do not spawn additional Bun services.
+Drafts, selected sessions and view state survive lazy activation; detaching releases this TUI's
+connections, not the underlying agents or native processes. Existing legacy repository processes are
+attached without being stopped or overwritten and show a migration notice (see Service lifetime).
 
 ### Work views
 
@@ -1112,8 +1120,8 @@ detaching stops delivery, while agents continue running in the service.
 
 ### Runtime ownership and closing
 
-A detached Bun service owns the registry and an independent SDK instance for each open item,
-with an explicit worktree `cwd`. The TUI uses private Unix-domain HTTP/NDJSON to send actions
+One detached Bun service owns independent in-process repository registries and an SDK instance for
+each open item, with an explicit worktree `cwd`. The TUI uses private Unix-domain HTTP/NDJSON to send actions
 and receive snapshots; it never owns or disposes SDK executions. macOS/Linux are the supported
 local-service platforms for this implementation.
 Changing selection/search never calls SDK `switchSession()`, aborts an execution, or changes
@@ -1163,22 +1171,45 @@ validation. Use `bun run start` for real provider execution after configuring Pi
 
 ### Service lifetime and recovery
 
-The service starts automatically on first connection. Its Unix socket is user-private (directory
-`0700`, socket `0600`), and manifests/logs use private files. No TCP port is exposed.
-State defaults to `~/.radian/workspaces/<identity>/`; use `--state-dir PATH` or `RADIAN_STATE_DIR`
-to isolate another instance. Identity includes the canonical Git repository, state root and live/test
-mode, so launching from different worktrees attaches to the same service.
+The shared daemon starts automatically on first workspace registration. Its process identity includes
+only the state root and live/test mode, not a repository or worktree. Unix sockets are user-private
+(directory `0700`, socket `0600`); manifests/logs use private files. No TCP port is exposed.
+Repository-scoped Unix endpoints remain available for protocol compatibility, but every new endpoint
+is served by the **same Bun process**.
+
+Repository data stays at its existing `~/.radian/workspaces/<identity>/` location, keyed by canonical
+Git repository, state root and live/test mode. `workspace.json`, `sessions/` and `sdk-sessions/` do not
+move or merge. Shared process registrations and logs live separately under `~/.radian/daemon/live/`
+or `offline/` (`repositories.json` and `runtime.log`). Registrations remember lazy/active intent so a
+restart can restore the same repositories without replaying prompts, shells or editor commands.
+Use `--state-dir PATH` or `RADIAN_STATE_DIR` to isolate another daemon and its data.
 
 ```sh
-bun run start --runtime-status                   # Inspect this repository's existing service
-bun run start --stop-runtime                     # Explicitly stop its service and owned executions
-bun run start --test-runtime --runtime-status    # Inspect the separate offline service
-bun run start --test-runtime --stop-runtime      # Stop the separate offline service
+bun run start runtime status                   # Inspect the shared daemon, from any directory
+bun run start runtime stop                     # Stop all repositories owned by that daemon
+bun run restart                                # Restart it, preserving stored state (does not open a TUI)
+bun run start --test-runtime runtime status     # Inspect the separate offline daemon
+bun run start --test-runtime runtime stop       # Stop the separate offline daemon
 ```
 
-These administrative commands target only the repository containing the launching directory,
-regardless of configured workspace roots, and do not start a missing service. `--stop-runtime` retains
-open-session intent and saved history; it is different from closing a session, which removes that open item.
+Status/stop do not scan workspace roots, require a Git cwd, read UI settings or start a missing daemon.
+The existing `--runtime-status`/`--stop-runtime` aliases have the same shared scope. Explicit stop and
+restart retain open-session intent and saved history, unlike closing an individual session. They
+interrupt Agent work and close **all** owned terminals and editors; save unsaved buffers first.
+Live/test daemons and different state roots remain independent.
+
+**Legacy migration:** old repository processes can still own live sessions and the same on-disk data.
+They are never automatically killed, adopted, or allowed a second writer. Ordinary shared stop/restart
+does not target them. Finish their jobs and save editor buffers, then explicitly stop each legacy
+owner and reopen the TUI to register it with the shared daemon:
+
+```sh
+bun run start runtime status --legacy --runtime-cwd /path/to/repository
+bun run start runtime stop --legacy --runtime-cwd /path/to/repository
+```
+
+`--legacy` is only valid for status/stop and refuses to stop a repository already owned by the shared
+daemon. Existing history and repository data paths are retained; no destructive migration is needed.
 
 Event subscriptions send the current snapshot every 5 s while idle, keeping `GET /events` alive
 without disabling ordinary request timeouts. These heartbeat snapshots use the existing protocol and

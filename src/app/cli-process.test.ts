@@ -28,12 +28,12 @@ test("실제 --help·--version·인수 오류·비TTY 실행은 손상된 설정
   }finally{await rm(directory,{recursive:true,force:true});}
 },20000);
 
-test("새 runtime 서브커맨드도 비TTY에서 단일 저장소를 조회·종료하며 없는 서비스를 시작하지 않는다",async()=>{
+test("공용 runtime 조회·종료는 비TTY와 Git 저장소 밖에서도 동작하며 없는 서비스를 시작하지 않는다",async()=>{
   const fixture=await createWorktreeFixture(),state=join(fixture.directory,"state"),config=join(fixture.directory,"config");
   try {
     await mkdir(join(config,"radian"),{recursive:true});await writeFile(join(config,"radian","workspace.json"),"{broken");
     for(const operation of ["status","stop"]) {
-      const result=await run(["runtime",operation,"--test-runtime","--runtime-cwd",fixture.main,"--state-dir",state],fixture.main,config,state);
+      const result=await run(["runtime",operation,"--test-runtime","--state-dir",state],fixture.directory,config,state);
       expect(result.code).toBe(0);expect(result.stdout).toContain("No running workspace service.");expect(result.stderr).toBe("");
     }
     expect(await readdir(fixture.directory)).not.toContain("state");

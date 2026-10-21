@@ -1,4 +1,4 @@
-import { chmod, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { loadSessionSettings } from "../app/settings.ts";
 import { RetentionScheduler } from "./session-retention.ts";
 import { Value } from "typebox/value";
@@ -21,7 +21,7 @@ import { discoverRepository } from "../workspace/discovery.ts";
 import type { Repository } from "../workspace/model.ts";
 import { RepositoryCatalog } from "../workspace/catalog.ts";
 import { RepositoryWatcher } from "../workspace/repository-watcher.ts";
-import { acquireRuntime, privateDirectory, RuntimeStore, runtimePaths } from "./storage.ts";
+import { privateDirectory, RuntimeStore, runtimePaths } from "./storage.ts";
 import { EditorSessions } from "../editor/sessions.ts";
 import { TerminalSessions } from "../terminal/sessions.ts";
 import { snapshotEvents } from "./events.ts";
@@ -29,55 +29,38 @@ import { transcriptImageQuerySchema } from "../agents/transcript-images.ts";
 import { emptyPreferences, errorStatus, historyPreviewQuerySchema, maxFrameBytes, parseCommand, protocolVersion, wireError,
   type RuntimeCommand, type RuntimeManifest, type RuntimePreferences, type RuntimeSnapshot } from "./protocol.ts";
 
-export async function runRuntime(cwd: string, offline: boolean, stateRoot?: string, configPath?: string): Promise<void> {
-  const settings = await loadSessionSettings(configPath); if (!settings.ok) throw settings.error;
-  const discovered = await discoverRepository(cwd); if (!discovered.ok) throw discovered.error;
-  const repository = discovered.value;
-  const paths = runtimePaths(repository.id, offline, stateRoot);
-  await privateDirectory(paths.directory);
-  const release = await acquireRuntime(paths);
-  if (!release) return; // Another launch owns initialization or the active service.
-  let server: Bun.Server<undefined> | undefined;
+// Repository execution is an in-process resource of the shared daemon, never another service.
+export async function openRepositoryRuntime(repositoryId: string, offline: boolean, instance: string, stateRoot?: string, configPath?: string): Promise<Result<WorkspaceRuntime, ExpectedError>> {
+  const settings = await loadSessionSettings(configPath); if (!settings.ok) return settings;
+  const discovered = await discoverRepository(repositoryId); if (!discovered.ok) return discovered;
+  const repository = discovered.value, paths = runtimePaths(repository.id, offline, stateRoot), store = new RuntimeStore(paths);
+  const loaded = await store.load(repository.id); if (!loaded.ok) return loaded;
+  const manifest = loaded.value, catalog = new RepositoryCatalog(mergeRepositories(repository, manifest));
+  const options = offline ? await offlineRuntime(join(paths.directory, "offline-agent")) : undefined;
+  const modelRuntime = options?.modelRuntime ?? await ModelRuntime.create();
+  const usage = offline ? undefined : new UsageMonitor(openAiUsageResolver(modelRuntime));
   let runtime: WorkspaceRuntime | undefined;
-  await withCleanup(async () => {
-    const store = new RuntimeStore(paths);
-    const loaded = await store.load(repository.id);
-    if (!loaded.ok) throw loaded.error; // CLI startup boundary, not a domain API.
-    const manifest = loaded.value;
-    const catalog = new RepositoryCatalog(mergeRepositories(repository, manifest));
-    const options = offline ? await offlineRuntime(join(paths.directory, "offline-agent")) : undefined;
-    const modelRuntime = options?.modelRuntime ?? await ModelRuntime.create();
-    const usage = offline ? undefined : new UsageMonitor(openAiUsageResolver(modelRuntime));
+  let ready = false;
+  return withCleanup(async () => {
     const requestedSessionDir = options?.sessionDir ?? join(paths.directory, "sdk-sessions");
     await privateDirectory(requestedSessionDir);
     const sessionDir = await realpath(requestedSessionDir);
     const registry = new SessionRegistry(catalog, piSessionFactory({ ...options, sessionDir, modelRuntime, ...(usage ? { usageMonitor: usage } : {}) }));
-    runtime = new WorkspaceRuntime(registry, catalog, repository, offline, store, manifest?.preferences ?? emptyPreferences,
+    runtime = new WorkspaceRuntime(instance, registry, catalog, repository, offline, store, manifest?.preferences ?? emptyPreferences,
       new SessionHistory(catalog, registry, sessionDir, store, !offline), paths.directory, usage, settings.value.exists ? settings.value.path : configPath);
     await runtime.restore(manifest?.records ?? []);
     await runtime.watchRepository();
-    server = Bun.serve({ unix: paths.socket,
-      fetch: (request) => runtime!.fetch(request),
-    });
-    await chmod(paths.socket, 0o600);
     runtime.startRetention();
-    const stopped = Promise.withResolvers<void>();
-    const stop = (): void => stopped.resolve();
-    process.on("SIGTERM", stop); process.on("SIGINT", stop);
-    runtime.onStop = stop;
-    try { await stopped.promise; const result = await runtime.stop(); if (!result.ok) throw result.error; }
-    finally { process.off("SIGTERM", stop); process.off("SIGINT", stop); }
+    ready = true;
+    return ok(runtime);
   }, async () => {
-    await withCleanup(async () => {
-      await withCleanup(async () => { await server?.stop(true); }, async () => {
-        if (runtime && !runtime.stopped) { const result = await runtime.stop(); if (!result.ok) throw result.error; }
-      });
-    }, release);
+    if (ready) return;
+    if (runtime) { const stopped = await runtime.stop(); if (!stopped.ok) throw stopped.error; }
+    else await usage?.stop();
   });
 }
 
-class WorkspaceRuntime {
-  readonly instance = crypto.randomUUID();
+export class WorkspaceRuntime {
   onStop: () => void = () => {};
   stopped = false;
   private preferences: RuntimePreferences;
@@ -97,7 +80,7 @@ class WorkspaceRuntime {
   private retentionStatus: RuntimeSnapshot["sessionRetention"];
   private get repositoryId(): string { return this.repository.id; }
 
-  constructor(private readonly registry: SessionRegistry, private readonly catalog: RepositoryCatalog, private repository: Repository,
+  constructor(readonly instance: string, private readonly registry: SessionRegistry, private readonly catalog: RepositoryCatalog, private repository: Repository,
     private readonly offline: boolean, private readonly store: RuntimeStore, preferences: RuntimePreferences, private readonly history: SessionHistory,
     supervisorDirectory: string, private readonly usage?: UsageMonitor, private readonly configPath?: string) {
     this.preferences = preferences;
@@ -105,6 +88,9 @@ class WorkspaceRuntime {
     this.terminals = new TerminalSessions(catalog, () => this.changed(), supervisorDirectory, offline, (task) => this.observe(task));
     this.unsubscribe = registry.subscribe(() => this.changed());
   }
+
+  subscribe(listener: () => void): () => void { this.subscribers.add(listener); return () => this.subscribers.delete(listener); }
+  setObserved(active: boolean): void { this.usage?.setActive(active); }
 
   startRetention(): void {
     let configuredFile = this.configPath, retentionDays: number | null = 30;
@@ -175,7 +161,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "session-exit", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["shared-daemon", "repository-runtime", "history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "session-exit", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention"], repositoryId: this.repositoryId,
       ...(this.retentionStatus ? { sessionRetention: this.retentionStatus } : {}),
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || [this.discoveryWarning, this.retentionWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,

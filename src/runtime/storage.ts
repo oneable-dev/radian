@@ -22,6 +22,15 @@ export function runtimePaths(repositoryId: string, offline: boolean, stateRoot =
     log: join(directory, "runtime.log"), manifest: join(directory, "workspace.json") };
 }
 
+// The process identity is independent of repositories; their persisted paths above stay unchanged.
+export function daemonPaths(offline: boolean, stateRoot = process.env.RADIAN_STATE_DIR ?? join(homedir(), ".radian")): RuntimePaths {
+  const key = createHash("sha256").update(`daemon-v1\0${resolve(stateRoot)}\0${offline}`).digest("hex").slice(0, 32);
+  const directory = join(resolve(stateRoot), "daemon", offline ? "offline" : "live");
+  const endpoint = join("/tmp", `radian-${process.getuid?.() ?? "user"}`);
+  return { directory, socket: join(endpoint, `${key}.sock`), lock: join(endpoint, `${key}.lock`),
+    log: join(directory, "runtime.log"), manifest: join(directory, "repositories.json") };
+}
+
 export async function privateDirectory(path: string): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 });
   const stat = await lstat(path);
@@ -292,6 +301,16 @@ async function readOwner(path: string): Promise<unknown> {
   const parsed = parseJson(await readFile(path, "utf8"), "runtime ownership");
   if (!parsed.ok) throw new StorageError("Invalid runtime ownership file; refusing to remove it.", undefined, { cause: parsed.error });
   return parsed.value;
+}
+
+export function runtimeOwned(paths: RuntimePaths): Promise<Result<boolean, ExpectedError>> {
+  return capture(async () => {
+    let owner: unknown;
+    try { owner = await readOwner(paths.lock); }
+    catch (error) { if (hasCode(error, "ENOENT")) return false; throw error; }
+    if (!isOwner(owner)) throw new StorageError("Invalid runtime ownership file; refusing to replace its owner.");
+    return pidAlive(owner.pid);
+  });
 }
 
 export function pidAlive(pid: number): boolean {

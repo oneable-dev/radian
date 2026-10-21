@@ -178,6 +178,21 @@ test("분리 중 늦게 시작된 연결도 닫고 생성 명령이나 새 snaps
   expect(expectError(await workspace.activate("a")).code).toBe("CANCELLED");
 }));
 
+test("구형 저장소 서비스 전환 안내는 설정 저장이 성공해도 사라지거나 서비스를 교체하지 않는다", () => isolated(async (stateRoot) => {
+  // 공용 데몬 capability가 없는 기존 연결을 유지한다.
+  const a = repo("a"), pa = peer(a);
+  const workspace = expectOk(await WorkspaceClient.open([a], "/outside", { stateRoot }, async () => ok(pa.client)));
+  try {
+    // UI 설정 저장은 데몬 교체나 전환 완료로 취급하지 않는다.
+    expectOk(await workspace.savePreferences(workspace.snapshot.preferences));
+
+    // 저장 경고가 없어져도 구형 소유권 안내는 남고 프로세스 제어 요청은 보내지 않는다.
+    expect(workspace.snapshot.notice).toContain("legacy repository process");
+    expect(workspace.snapshot.notice).toContain("runtime stop --legacy");
+    expect(pa.calls).toEqual([]);
+  } finally { await workspace.disconnect(); }
+}));
+
 test("분리 전 최종 저장도 레포별로 나누고 한 저장 실패가 다른 레포 저장을 막지 않는다", () => isolated(async (stateRoot) => {
   const a = repo("a"), b = repo("b"), pa = peer(a), pb = peer(b);
   const workspace = expectOk(await WorkspaceClient.open([a, b], "/outside", { stateRoot }, async (repository) => ok(repository.id === a.id ? pa.client : pb.client)));

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { open } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Value } from "typebox/value";
@@ -8,7 +8,7 @@ import type { HistoryPreview } from "../agents/history-preview.ts";
 import { CapabilityError, CancelledError, capture, ConnectionError, InputError, parseJson, ProtocolError, reportUnexpected, systemCode, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { emptyPreferences, historySchema, historyPreviewSchema, historyPreviewQuerySchema, maxFrameBytes, maxSnapshotBytes, parseSnapshot, replySchema, type RuntimeCommand, type RuntimePreferences, type RuntimeSnapshot, type EditorFrame } from "./protocol.ts";
-import { privateDirectory, runtimePaths, type RuntimePaths } from "./storage.ts";
+import { daemonPaths, privateDirectory, runtimeOwned, runtimePaths, type RuntimePaths } from "./storage.ts";
 import { connectionError, readBytes, readJson, remoteError, transport } from "./transport.ts";
 import { PtyConnection } from "./pty/client.ts";
 import { completionCatalogQuerySchema, completionCatalogSchema, completionQuerySchema, completionResultSchema } from "./completion-protocol.ts";
@@ -24,41 +24,83 @@ const reconnectDelays = [250, 500, 1000, 2000] as const;
 const streamHandshakeMs = 2000;
 const stableConnectionMs = 10000;
 
-export type ConnectOptions = { offline?: boolean; stateRoot?: string; config?: string; entry?: string; start?: boolean };
+export type ConnectOptions = { offline?: boolean; stateRoot?: string; config?: string; entry?: string; start?: boolean; register?: boolean };
 export async function connectRuntime(repository: Repository, cwd: string, options: ConnectOptions = {}): Promise<Result<RuntimeClient | null, ExpectedError>> {
   const paths = runtimePaths(repository.id, options.offline ?? false, options.stateRoot);
   let fetched = await fetchSnapshot(paths);
   if (!fetched.ok) return fetched;
-  if (!fetched.value && options.start === false) return ok(null);
-  if (!fetched.value) {
-    const launched = await capture(async () => {
-      await privateDirectory(paths.directory);
-      const log = await open(paths.log, "a", 0o600);
-      await withCleanup(async () => {
-        const entry = resolve(options.entry ?? process.argv[1] ?? "src/index.ts");
-        const args = [entry, "--runtime-service", "--runtime-cwd", cwd];
-        if (options.stateRoot) args.push("--state-dir", resolve(options.stateRoot));
-        if (options.offline) args.push("--test-runtime");
-        if (options.config) args.push("--config", resolve(options.config));
-        const child = spawn(process.execPath, args, { cwd, detached: true, stdio: ["ignore", log.fd, log.fd] });
-        const started = Promise.withResolvers<void>();
-        child.once("spawn", () => started.resolve()); child.once("error", (error) => started.reject(error));
-        await started.promise; child.unref();
-      }, () => log.close());
+  if (!fetched.value && options.start === false && !options.register) return ok(null);
+  let registrationWarning = "";
+  if (!fetched.value || fetched.value.capabilities?.includes("shared-daemon") && (options.register || options.start !== false)) {
+    const daemon = await ensureSharedDaemon(options); if (!daemon.ok) return daemon;
+    const registered = await transport(daemonPaths(options.offline ?? false, options.stateRoot), "/repositories", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Radian-Instance": daemon.value.instance },
+      body: JSON.stringify({ repositoryId: repository.id, cwd, ...(options.config ? { config: resolve(options.config) } : {}) }), signal: AbortSignal.timeout(15000),
     });
-    if (!launched.ok) return launched;
-    const deadline = Date.now() + 15000;
-    while (!fetched.value && Date.now() < deadline) {
-      fetched = await fetchSnapshot(paths); if (!fetched.ok) return fetched;
-      if (!fetched.value) await new Promise<void>((resolve) => setTimeout(resolve, 40));
-    }
-    if (!fetched.value) return err(new ConnectionError("CONNECTION_TIMEOUT", `Runtime failed to start. Inspect ${paths.log}`));
+    if (!registered.ok) return registered;
+    const body = await readJson(registered.value); if (!body.ok) return body;
+    if (!Value.Check(replySchema, body.value)) return err(new ProtocolError("Malformed shared daemon registration reply; registration outcome may be unknown."));
+    if (!body.value.ok) return err(remoteError(body.value.error));
+    registrationWarning = body.value.warnings?.map(warning => `Repository registered; ${warning.message}`).join(" · ") ?? "";
+    fetched = await fetchSnapshot(paths); if (!fetched.ok) return fetched;
+    if (!fetched.value) return err(new ConnectionError("RUNTIME_ABSENT", "Repository endpoint is missing after registration. Reconnect before retrying."));
   }
   const snapshot = fetched.value;
   if (snapshot.repositoryId !== repository.id || snapshot.mode !== (options.offline ? "offline" : "live")) return err(new ProtocolError("Runtime identity does not match this workspace."));
-  const client = new RuntimeClient(paths, snapshot);
+  const client = new RuntimeClient(paths, snapshot, registrationWarning);
   const attached = await client.attach();
-  return attached.ok ? ok(client) : attached;
+  if (!attached.ok) { await client.disconnect(); return attached; }
+  if (options.start !== false) {
+    const activated = await client.activate();
+    if (!activated.ok) { await client.disconnect(); return activated; }
+  }
+  return ok(client);
+}
+
+export async function ensureSharedDaemon(options: ConnectOptions = {}): Promise<Result<RuntimeSnapshot, ExpectedError>> {
+  const paths = daemonPaths(options.offline ?? false, options.stateRoot);
+  const deadline = Date.now() + 15000;
+  let child: ChildProcess | undefined, attempts = 0;
+  while (Date.now() < deadline) {
+    const fetched = await fetchSnapshot(paths); if (!fetched.ok) return fetched;
+    if (fetched.value) {
+      const identity = sharedIdentity(fetched.value, options.offline ?? false); if (!identity.ok) return identity;
+      if (!fetched.value.capabilities?.includes("daemon-stopping")) return identity;
+    } else if (!child || child.exitCode !== null) {
+      if (child?.exitCode !== undefined && child.exitCode !== null && child.exitCode !== 0) return err(new ConnectionError("CONNECTION_FAILED", `Shared daemon startup failed. Inspect ${paths.log}`));
+      const owned = await runtimeOwned(paths); if (!owned.ok) return owned;
+      // A repository socket may close before the common owner finishes shutting down.
+      // Wait for ownership release rather than registering with a dying owner or losing a launch race.
+      if (!owned.value) {
+        if (attempts++ >= 4) return err(new ConnectionError("CONNECTION_FAILED", "Shared daemon ownership changed repeatedly. No existing owner was stopped."));
+        const launched = await launchSharedDaemon(paths, options); if (!launched.ok) return launched;
+        child = launched.value;
+      }
+    }
+    await new Promise<void>(resolve => setTimeout(resolve, 40));
+  }
+  return err(new ConnectionError("CONNECTION_TIMEOUT", `Shared daemon startup/shutdown has not completed. Inspect ${paths.log}; no existing owner was stopped.`));
+}
+
+function launchSharedDaemon(paths: RuntimePaths, options: ConnectOptions): Promise<Result<ChildProcess, ExpectedError>> {
+  return capture(async () => {
+    await privateDirectory(paths.directory);
+    const log = await open(paths.log, "a", 0o600);
+    return withCleanup(async () => {
+      const args = [resolve(options.entry ?? process.argv[1] ?? "src/index.ts"), "--runtime-service"];
+      if (options.stateRoot) args.push("--state-dir", resolve(options.stateRoot));
+      if (options.offline) args.push("--test-runtime");
+      const child = spawn(process.execPath, args, { detached: true, stdio: ["ignore", log.fd, log.fd] });
+      const started = Promise.withResolvers<void>();
+      child.once("spawn", () => started.resolve()); child.once("error", error => started.reject(error));
+      await started.promise; child.unref(); return child;
+    }, () => log.close());
+  });
+}
+
+function sharedIdentity(snapshot: RuntimeSnapshot, offline: boolean): Result<RuntimeSnapshot, ExpectedError> {
+  return snapshot.repositoryId === "radian:shared" && snapshot.mode === (offline ? "offline" : "live") && snapshot.capabilities?.includes("shared-daemon")
+    ? ok(snapshot) : err(new ProtocolError("Shared daemon identity or mode does not match this client."));
 }
 
 export class RuntimeClient {
@@ -77,7 +119,7 @@ export class RuntimeClient {
   private readonly connections = new Set<PtyConnection>();
   private failure = "";
   private warning = "";
-  constructor(readonly paths: RuntimePaths, snapshot: RuntimeSnapshot) { this.state = snapshot; }
+  constructor(readonly paths: RuntimePaths, snapshot: RuntimeSnapshot, warning = "") { this.state = snapshot; this.warning = warning; }
   get connected(): boolean { return !this.detaching && !this.failure; }
   get snapshot(): RuntimeSnapshot {
     if (!this.hidden.size && !this.hiddenTerminals.size && !this.failure && !this.warning) return this.state;
@@ -94,6 +136,17 @@ export class RuntimeClient {
     };
   }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+  async activate(): Promise<Result<void, ExpectedError>> {
+    if (this.detaching || this.failure) return err(this.connectionClosed());
+    if (!this.state.capabilities?.includes("repository-catalog")) return ok(undefined);
+    const instance = this.state.instance;
+    const response = await transport(this.paths, "/activate", { method: "POST", headers: { "X-Radian-Instance": instance }, signal: AbortSignal.timeout(15000) });
+    if (!response.ok) return response;
+    const body = await readJson(response.value); if (!body.ok) return body;
+    if (!Value.Check(replySchema, body.value)) return err(new ProtocolError("Malformed repository activation reply; outcome may be unknown."));
+    if (!body.value.ok) return err(remoteError(body.value.error));
+    return this.waitForState(() => this.state.instance === instance && this.state.capabilities?.includes("repository-runtime") === true, "Repository activation");
+  }
   attach(): Promise<Result<void, ExpectedError>> {
     if (this.detaching) return Promise.resolve(err(this.connectionClosed()));
     if (this.attachment) return this.attachment;

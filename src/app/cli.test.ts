@@ -17,7 +17,7 @@ test("Commander 도움말과 버전은 실행 옵션이 아닌 즉시 출력 결
   const version=expectOk(parseCli(["--version"]));expect(version).toEqual({kind:"output",text:packageInfo.version+"\n"});
 });
 
-test("기존 내부 서비스 옵션과 새 runtime 서브커맨드는 같은 저장소 범위 옵션으로 해석한다",()=>{
+test("공용 데몬 수명 주기와 구형 저장소 서비스 대상은 별도 옵션으로 해석한다",()=>{
   const service=options(["--runtime-service","--test-runtime","--runtime-cwd","/repo","--state-dir","/state"]);
   expect(options(["--runtime-cwd","repo","--state-dir","state"]).stateRoot).toBe("/fixture/state");
   expect(service.service).toBe(true);expect(service.offline).toBe(true);expect(service.cwd).toBe("/repo");expect(service.stateRoot).toBe("/state");
@@ -26,12 +26,16 @@ test("기존 내부 서비스 옵션과 새 runtime 서브커맨드는 같은 �
   expect(options(["--theme","theme.json","--keybindings","keys.json","--workspace-config","roots.json"]).workspaceConfig).toBe("roots.json");
   expect(options(["--config", "settings.json"]).config).toBe("/fixture/settings.json");
   expect(options(["--runtime-service", "--config", "/config/settings.json"]).config).toBe("/config/settings.json");
+  expect(options(["runtime", "restart"]).restart).toBe(true);
+  expect(options(["runtime", "stop", "--legacy", "--runtime-cwd", "/legacy"]).legacy).toBe(true);
+  expect(options(["runtime", "status", "--legacy"]).legacy).toBe(true);
 });
 
 test.each([
   ["--unknown"],["unknown-command"],["--theme"],["--config"],["--config", ""],["--state-dir",""],["--runtime-cwd","x\0y"],
   ["--demo","--test-runtime"],["--demo","--stop-runtime"],["--runtime-service","--runtime-status"],["--runtime-status","--stop-runtime"],
-  ["runtime","status","--stop-runtime"],["runtime","missing"],
+  ["runtime","status","--stop-runtime"],["runtime","missing"],["--legacy"],["--demo","--legacy"],
+  ["runtime","restart","--legacy"],["runtime","restart","--stop-runtime"],["--runtime-service","runtime","restart"],
 ].map(args=>({args})))("잘못된 CLI 인수 %j는 프로세스를 종료하지 않고 안정적인 입력 오류를 반환한다",({args})=>{
   expect(expectError(parseCli(args,{cwd:"/fixture"})).code).toBe("INVALID_INPUT");
 });
@@ -44,6 +48,6 @@ test("NO_COLOR와 --no-color는 명시적인 단색 UI 옵션으로 전달된다
 test("TTY·TERM 검사에서 도움말 아닌 대화형 실행만 거부하고 관리·서비스 작업은 허용한다",()=>{
   expect(expectError(checkInteractiveHost(options(),{stdinTTY:false,stdoutTTY:false,term:"xterm-256color"})).code).toBe("INVALID_INPUT");
   expect(expectError(checkInteractiveHost(options(["--demo"]),{stdinTTY:true,stdoutTTY:true,term:"dumb"})).code).toBe("INVALID_INPUT");
-  for(const args of [["runtime","status"],["runtime","stop"],["--runtime-service"]]) expectOk(checkInteractiveHost(options(args),{stdinTTY:false,stdoutTTY:false,term:"dumb"}));
+  for(const args of [["runtime","status"],["runtime","stop"],["runtime","restart"],["--runtime-service"]]) expectOk(checkInteractiveHost(options(args),{stdinTTY:false,stdoutTTY:false,term:"dumb"}));
   expectOk(checkInteractiveHost(options(),{stdinTTY:true,stdoutTTY:true,term:"xterm-256color"}));
 });

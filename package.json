@@ -16,6 +16,7 @@
   "scripts": {
     "start": "bun src/index.ts",
     "dev": "bun src/index.ts",
+    "restart": "bun src/index.ts runtime restart",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:workspace": "bun src/testing/worktree-fixture.ts"

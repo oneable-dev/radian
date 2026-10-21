@@ -111,23 +111,30 @@ test("삭제된 워크트리의 열린 세션은 보존하고 마지막 세션�
   } finally { await app.cleanup(); }
 }, 20000);
 
-test("아직 시작하지 않은 저장소도 워크트리를 갱신하고 활성화 후에는 소유 데몬으로 감시를 넘긴다", async () => {
+test("공용 데몬은 SDK를 시작하지 않은 저장소도 감시하고 같은 프로세스에서 활성화한다", async () => {
   const app = await fixtureRuntime();
   let workspace: WorkspaceClient | undefined;
   try {
     workspace = expectOk(await WorkspaceClient.open([app.repository], app.main, app.options));
-    expect(expectOk(await fetchSnapshot(app.paths))).toBeNull();
+    const catalog = expectOk(await fetchSnapshot(app.paths))!;
+    expect(catalog.capabilities).toContain("repository-catalog");
     const selection = new WorkspaceSelection(workspace.snapshot.repositories);
     const main = selection.worktree!.id;
     const unsubscribe = workspace.subscribe(() => selection.replaceSnapshot(workspace!.snapshot.repositories));
     try {
-      // Watching a cold repository must not launch an agent service just to refresh navigation.
+      // Shared catalog watching must not allocate SDK/Editor/Terminal resources.
       const added = join(app.directory, "cold-added");
       await app.git(app.main, ["worktree", "add", "-b", "cold-added", added]);
       await until(() => workspace!.snapshot.repositories[0]!.worktrees.some((tree) => tree.path === added));
-      expect(expectOk(await fetchSnapshot(app.paths))).toBeNull();
+      const updated = expectOk(await fetchSnapshot(app.paths))!;
+      expect(updated.pid).toBe(catalog.pid); expect(updated.instance).toBe(catalog.instance);
+      expect(updated.capabilities).toContain("repository-catalog");
+      expect(updated.details).toEqual({}); expect(updated.editors).toEqual([]); expect(updated.terminals).toEqual([]);
       expect(selection.worktree?.id).toBe(main);
       expectOk(await workspace.activate(added));
+      const active = expectOk(await fetchSnapshot(app.paths))!;
+      expect(active.pid).toBe(catalog.pid); expect(active.instance).toBe(catalog.instance);
+      expect(active.capabilities).toContain("repository-runtime");
       const id = expectOk(await workspace.create(added));
       expectOk(await workspace.prompt(id, "read"));
       await until(() => workspace!.snapshot.details[id]?.output.includes("main-worktree-marker") === true);

@@ -8,11 +8,11 @@ import type { RuntimePreferences, RuntimeSnapshot } from "./protocol.ts";
 import { runtimePaths, RuntimeStore } from "./storage.ts";
 import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
 
-// Keep repo identity and instance fencing inside the existing clients, including PTY leases.
-export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "newTab" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "image" | "models" | "selectModel" | "catalog" | "acknowledge">>;
+// Repository-scoped channels share a daemon process; identity fencing and PTY leases stay local.
+export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "newTab" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "activate" | "image" | "models" | "selectModel" | "catalog" | "acknowledge">>;
 type Connector = (repository: Repository, cwd: string, options: ConnectOptions) => Promise<Result<RepositoryClient | null, ExpectedError>>;
 type Entry = { repository: Repository; preferences: RuntimePreferences; connectionVersion: number; client?: RepositoryClient; unsubscribe?: () => void;
-  watcher?: RepositoryWatcher; discoveryWarning?: string;
+  watcher?: RepositoryWatcher; discoveryWarning?: string; legacy?: boolean;
   pending?: Promise<Result<RepositoryClient, ExpectedError>>; saving?: Promise<Result<void, ExpectedError>>; error?: ExpectedError; warning?: string; sessions: Set<string>; editors: Set<string>; terminals: Set<string> };
 export type WorkspaceSnapshot = Pick<RuntimeSnapshot, "repositories" | "details" | "preferences" | "closingCount" | "terminalClosingCount" | "notice" | "editors" | "terminals">;
 
@@ -55,8 +55,8 @@ export class WorkspaceClient {
     const saved = await new RuntimeStore(runtimePaths(entry.repository.id, this.options.offline ?? false, this.options.stateRoot)).load(entry.repository.id);
     if (saved.ok) { if (saved.value) entry.preferences = saved.value.preferences; }
     else entry.error = saved.error;
-    // Discover already-running services without launching one for every repository.
-    const connected = await this.connect(entry.repository, this.cwd(entry), { ...this.options, start: false });
+    // Register metadata with the shared daemon without allocating repository execution resources.
+    const connected = await this.connect(entry.repository, this.cwd(entry), { ...this.options, start: false, register: true });
     if (!connected.ok) entry.error = connected.error;
     else if (connected.value) this.bind(entry, connected.value);
     if (!entry.client) {
@@ -79,10 +79,10 @@ export class WorkspaceClient {
     return legacy.length ? `Unread tracking requires updated repository services: ${legacy.join(", ")}. Finish work, then explicitly stop/restart those services. No service was restarted.` : "";
   }
   get retainedSessionIds(): ReadonlySet<string> {
-    return new Set(this.entries.filter((entry) => !entry.client).flatMap((entry) => [...Object.keys(entry.preferences.drafts), ...Object.keys(entry.preferences.inputDrafts ?? {})]));
+    return new Set(this.entries.filter((entry) => !entry.client || entry.client.snapshot.capabilities?.includes("repository-catalog")).flatMap((entry) => [...Object.keys(entry.preferences.drafts), ...Object.keys(entry.preferences.inputDrafts ?? {})]));
   }
   hasSnapshot(worktreeId: string): boolean {
-    return this.entries.some((entry) => entry.client?.snapshot.repositories.some((repo) => repo.worktrees.some((tree) => tree.id === worktreeId)));
+    return this.entries.some((entry) => !entry.client?.snapshot.capabilities?.includes("repository-catalog") && entry.client?.snapshot.repositories.some((repo) => repo.worktrees.some((tree) => tree.id === worktreeId)));
   }
   get snapshot(): WorkspaceSnapshot {
     const snapshots = this.entries.flatMap((entry) => entry.client ? [entry.client.snapshot] : []);
@@ -92,7 +92,11 @@ export class WorkspaceClient {
       closingCount: snapshots.reduce((count, snapshot) => count + snapshot.closingCount, 0),
       terminalClosingCount: snapshots.reduce((count, snapshot) => count + (snapshot.terminalClosingCount ?? 0), 0),
       editors: snapshots.flatMap((snapshot) => snapshot.editors ?? []), terminals: snapshots.flatMap((snapshot) => snapshot.terminals ?? []),
-      notice: this.entries.flatMap((entry) => { const notice = entry.error?.message || entry.warning || entry.discoveryWarning || entry.client?.snapshot.notice; return notice ? [`${entry.repository.name}: ${notice}`] : []; }).join(" · "),
+      notice: this.entries.flatMap((entry) => {
+        const notice = entry.error?.message || entry.warning || entry.discoveryWarning || entry.client?.snapshot.notice;
+        const legacy = entry.legacy ? "A legacy repository process still owns this state. It was not stopped or migrated. Finish work, save editor buffers, then use runtime stop --legacy with --runtime-cwd to migrate." : "";
+        return notice || legacy ? [`${entry.repository.name}: ${[notice, legacy].filter(Boolean).join(" · ")}`] : [];
+      }).join(" · "),
     };
   }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
@@ -101,6 +105,7 @@ export class WorkspaceClient {
   private bind(entry: Entry, client: RepositoryClient): void {
     entry.watcher?.close();
     entry.client = client; delete entry.error; delete entry.warning; delete entry.discoveryWarning; entry.preferences = client.snapshot.preferences;
+    entry.legacy = !client.snapshot.capabilities?.includes("shared-daemon");
     let wasConnected = client.connected;
     entry.unsubscribe = client.subscribe(() => {
       if (!wasConnected && client.connected) { this.recovery++; entry.connectionVersion++; }
@@ -109,7 +114,10 @@ export class WorkspaceClient {
   }
   private ensure(entry: Entry): Promise<Result<RepositoryClient, ExpectedError>> {
     if (this.detaching) return Promise.resolve(err(new CancelledError("Workspace is detaching.")));
-    if (entry.client) return Promise.resolve(ok(entry.client));
+    if (entry.client) {
+      const client = entry.client;
+      return client.activate ? client.activate().then(result => result.ok ? ok(client) : result) : Promise.resolve(ok(client));
+    }
     entry.pending ??= this.connectEntry(entry).finally(() => { delete entry.pending; });
     return entry.pending;
   }

@@ -15,7 +15,7 @@ async function until(predicate: () => boolean | Promise<boolean>): Promise<void>
   }
 }
 
-test("실제 두 레포의 SDK·쉘과 저장 상태는 소유 데몬으로 전달되고 TUI 재접속에도 유지된다", async () => {
+test("두 레포는 공용 데몬 하나를 사용하고 SDK·쉘·저장 상태는 분리하며 전체 재시작 후에도 복원한다", async () => {
   // 사용자 서비스가 아닌 두 임시 Git 레포와 오프라인 SDK만 실행한다.
   const a = await createWorktreeFixture(), b = await createWorktreeFixture();
   const options = { offline: true, stateRoot: join(a.directory, "state"), entry: join(import.meta.dir, "..", "index.ts") };
@@ -27,12 +27,15 @@ test("실제 두 레포의 SDK·쉘과 저장 상태는 소유 데몬으로 전�
     await writeFile(join(a.main, "workspace.txt"), "isolated-repository-A");
     await writeFile(join(b.main, "workspace.txt"), "isolated-repository-B");
     workspace = expectOk(await WorkspaceClient.open(repositories, a.main, options));
-    expect(expectOk(await fetchSnapshot(aPaths))).toBeNull(); expect(expectOk(await fetchSnapshot(bPaths))).toBeNull();
+    const aCatalog = expectOk(await fetchSnapshot(aPaths))!, bCatalog = expectOk(await fetchSnapshot(bPaths))!;
+    expect(aCatalog.pid).toBe(bCatalog.pid);
+    expect(aCatalog.capabilities).toContain("repository-catalog"); expect(bCatalog.capabilities).toContain("repository-catalog");
+    expect(aCatalog.details).toEqual({}); expect(bCatalog.details).toEqual({});
 
-    // A를 사용해도 B를 시작하지 않으며 각 SDK read는 자신의 cwd에서 실행된다.
+    // 하나의 데몬 안에서 A를 활성화해도 B의 SDK는 초기화하지 않는다.
     expectOk(await workspace.activate(aTree.id));
     const aId = expectOk(await workspace.create(aTree.id));
-    expect(expectOk(await fetchSnapshot(bPaths))).toBeNull();
+    expect(expectOk(await fetchSnapshot(bPaths))!.capabilities).toContain("repository-catalog");
     const bId = expectOk(await workspace.create(bTree.id));
     expectOk(await workspace.prompt(aId, "read")); expectOk(await workspace.prompt(bId, "read"));
     await until(() => workspace!.snapshot.details[aId]?.output.includes("isolated-repository-A") === true && workspace!.snapshot.details[bId]?.output.includes("isolated-repository-B") === true);
@@ -50,6 +53,8 @@ test("실제 두 레포의 SDK·쉘과 저장 상태는 소유 데몬으로 전�
     expect(failures).toEqual([]);
     const shellPid = workspace.snapshot.terminals!.find((shell) => shell.id === terminal)!.shellPid;
     const aPid = expectOk(await fetchSnapshot(aPaths))!.pid, bPid = expectOk(await fetchSnapshot(bPaths))!.pid;
+    expect(aPid).toBe(bPid);
+    expect(aPaths.directory).not.toBe(bPaths.directory);
     const preferences = workspace.snapshot.preferences;
     preferences.selection = { worktreeId: bTree.id, sessions: { [aTree.id]: aId, [bTree.id]: bId } };
     preferences.drafts = { [aId]: "draft A", [bId]: "draft B" };
@@ -67,7 +72,7 @@ test("실제 두 레포의 SDK·쉘과 저장 상태는 소유 데몬으로 전�
     expect(expectOk(await fetchSnapshot(aPaths))!.preferences.drafts).toEqual({ [aId]: "draft A" });
     expect(expectOk(await fetchSnapshot(bPaths))!.preferences.drafts).toEqual({ [bId]: "draft B" });
 
-    // 여러 루트가 설정돼 있어도 관리 명령은 실행한 레포 A만 대상으로 한다.
+    // 관리 명령은 cwd에 관계없이 공용 데몬과 그 안의 모든 저장소를 대상으로 한다.
     const config = join(a.directory, "workspace.json");
     await writeFile(config, JSON.stringify({ roots: [a.directory, b.directory] }));
     const administrative = async (command: string): Promise<string> => {
@@ -77,11 +82,23 @@ test("실제 두 레포의 SDK·쉘과 저장 상태는 소유 데몬으로 전�
       if (code !== 0) throw new Error(error);
       return output;
     };
-    expect(JSON.parse(await administrative("--runtime-status")).repositoryId).toBe(a.repository.id);
+    const status = JSON.parse(await administrative("--runtime-status"));
+    expect(status.repositoryId).toBe("radian:shared");
+    expect(status.repositories.map((repo: { id: string }) => repo.id).sort()).toEqual([a.repository.id, b.repository.id].sort());
     expect(await administrative("--stop-runtime")).toContain("Workspace service stopped");
     await until(() => !pidAlive(aPid));
-    expect(expectOk(await fetchSnapshot(bPaths))!.pid).toBe(bPid);
-    expect(pidAlive(shellPid)).toBe(true);
+    expect(expectOk(await fetchSnapshot(aPaths))).toBeNull(); expect(expectOk(await fetchSnapshot(bPaths))).toBeNull();
+    expect(pidAlive(shellPid)).toBe(false);
+    await workspace.disconnect();
+
+    // 저장 경로를 옮기지 않고 기존 두 저장소의 대화와 초안을 새 공용 프로세스에서 복원한다.
+    workspace = expectOk(await WorkspaceClient.open(repositories, b.main, options));
+    expectOk(await workspace.activate(aTree.id)); expectOk(await workspace.activate(bTree.id));
+    expect(workspace.snapshot.details[aId]?.output).toContain("isolated-repository-A");
+    expect(workspace.snapshot.details[bId]?.output).toContain("isolated-repository-B");
+    expect(workspace.snapshot.preferences.drafts).toEqual({ [aId]: "draft A", [bId]: "draft B" });
+    expect(expectOk(await fetchSnapshot(aPaths))!.pid).toBe(expectOk(await fetchSnapshot(bPaths))!.pid);
+    expect(expectOk(await fetchSnapshot(aPaths))!.pid).not.toBe(aPid);
   } finally {
     await workspace?.disconnect();
     for (const fixture of [a, b]) {

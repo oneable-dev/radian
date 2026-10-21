@@ -6,7 +6,8 @@ import { demoWorkspace } from "../workspace/demo.ts";
 import { WorkspaceSelection } from "./workspace-selection.ts";
 import { submitAgentPrompt } from "./agent-prompt.ts";
 import type { Repository } from "../workspace/model.ts";
-import { connectRuntime, defaultPreferences, fetchSnapshot } from "../runtime/client.ts";
+import { connectRuntime, defaultPreferences, ensureSharedDaemon, fetchSnapshot, RuntimeClient } from "../runtime/client.ts";
+import { daemonPaths } from "../runtime/storage.ts";
 import type { RuntimePreferences, WorkViewPreferences } from "../runtime/protocol.ts";
 import { restoreWorkViews, saveWorkViews } from "../runtime/work-view-preferences.ts";
 import { capture, ConnectionError, InputError, reportUnexpected, type ExpectedError } from "../errors.ts";
@@ -18,10 +19,10 @@ import type { CliOptions as Options } from "./cli.ts";
 
 export async function main(options: Options): Promise<Result<void, ExpectedError>> {
   if (options.service) {
-    const { runRuntime } = await import("../runtime/service.ts");
-    return capture(() => runRuntime(options.cwd, options.offline, options.stateRoot, options.config));
+    const { runRuntime } = await import("../runtime/daemon.ts");
+    return capture(() => runRuntime(options.offline, options.stateRoot));
   }
-  const administrative = options.stop || options.status;
+  const administrative = options.stop || options.status || options.restart;
   if (administrative) return runAdministrative(options);
   const settings = await loadSettings({ ...options, includeWorkspace: !options.demo && !options.offline });
   if (!settings.ok) return settings;
@@ -56,28 +57,45 @@ export async function main(options: Options): Promise<Result<void, ExpectedError
   } finally { await client?.disconnect(); }
 }
 
-// Administrative commands remain scoped to the launching repository, never every scan root.
+// Ordinary lifecycle commands address the shared owner, independently of cwd or workspace roots.
 async function runAdministrative(options: Options): Promise<Result<void, ExpectedError>> {
-  const discovered = await discoverRepository(options.cwd);
-  if (!discovered.ok) return err(new InputError(discovered.error.message, { cause: discovered.error }));
-  const connected = await connectRuntime(discovered.value, options.cwd, { offline: options.offline,
-    ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}), start: false });
-  if (!connected.ok) return connected;
-  const client = connected.value;
-  try {
-    if (!client) { console.log("No running workspace service."); return ok(undefined); }
-    if (options.status) { console.log(JSON.stringify(client.snapshot, null, 2)); return ok(undefined); }
-    if (client.snapshot.editors?.some((editor) => !editor.exited)) console.error("Stopping the runtime also closes Neovim. Unsaved editor buffers are not restored after restart; save them before using --stop-runtime.");
-    if (client.snapshot.terminals?.length) console.error("Stopping the runtime also closes all terminal shells and their owned jobs.");
-    const stopped = await client.stopRuntime(); if (!stopped.ok) return stopped;
-    const deadline = Date.now() + 15000;
-    while (true) {
-      const snapshot = await fetchSnapshot(client.paths); if (!snapshot.ok) return snapshot;
-      if (!snapshot.value) break;
-      if (Date.now() > deadline) return err(new ConnectionError("CONNECTION_TIMEOUT", "Runtime shutdown has not completed; its outcome is not confirmed."));
-      await new Promise<void>((resolve) => setTimeout(resolve, 40));
+  let client: RuntimeClient | null;
+  if (options.legacy) {
+    const discovered = await discoverRepository(options.cwd);
+    if (!discovered.ok) return err(new InputError(discovered.error.message, { cause: discovered.error }));
+    const connected = await connectRuntime(discovered.value, options.cwd, { offline: options.offline, ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}), start: false });
+    if (!connected.ok) return connected;
+    client = connected.value;
+    if (client?.snapshot.capabilities?.includes("shared-daemon")) {
+      await client.disconnect();
+      return err(new InputError("This repository belongs to the shared daemon. Omit --legacy to manage it."));
     }
-    console.log("Workspace service stopped. Open-session state and saved history were retained.");
+  } else {
+    const paths = daemonPaths(options.offline, options.stateRoot), snapshot = await fetchSnapshot(paths);
+    if (!snapshot.ok) return snapshot;
+    client = snapshot.value ? new RuntimeClient(paths, snapshot.value) : null;
+  }
+  try {
+    if (!client && !options.restart) { console.log("No running workspace service."); return ok(undefined); }
+    if (options.status) { console.log(JSON.stringify(client!.snapshot, null, 2)); return ok(undefined); }
+    if (client) {
+      if (client.snapshot.editors?.some(editor => !editor.exited)) console.error("Stopping the daemon closes Neovim across all owned repositories. Save unsaved buffers first.");
+      if (client.snapshot.terminals?.length) console.error("Stopping the daemon closes all owned terminal shells and their jobs.");
+      if (Object.values(client.snapshot.details).some(state => state.status === "working")) console.error("Stopping the daemon interrupts active Agent work; prompts are not replayed on restart.");
+      const stopped = await client.stopRuntime(); if (!stopped.ok) return stopped;
+      const deadline = Date.now() + 15000;
+      while (true) {
+        const snapshot = await fetchSnapshot(client.paths); if (!snapshot.ok) return snapshot;
+        if (!snapshot.value) break;
+        if (snapshot.value.instance !== client.snapshot.instance) return err(new ConnectionError("CONNECTION_FAILED", "Another daemon replaced the stopped instance. It was not stopped again."));
+        if (Date.now() > deadline) return err(new ConnectionError("CONNECTION_TIMEOUT", "Daemon shutdown has not completed; its outcome is not confirmed."));
+        await new Promise<void>(resolve => setTimeout(resolve, 40));
+      }
+    }
+    if (options.restart) {
+      const started = await ensureSharedDaemon({ offline: options.offline, ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}) }); if (!started.ok) return started;
+      console.log("Shared daemon restarted. Stored history and open-session intent were retained; interrupted jobs were not replayed.");
+    } else console.log("Workspace service stopped. Open-session state and saved history were retained.");
     return ok(undefined);
   } finally { await client?.disconnect(); }
 }
