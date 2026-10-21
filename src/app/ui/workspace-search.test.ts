@@ -81,7 +81,7 @@ test("리사이즈는 검색어·커서·초안을 보존하고 작은 화면에
     const panel = app.get("workspace-sidebar"); expect(panel.x).toBeGreaterThanOrEqual(0); expect(panel.x + panel.width).toBeLessThanOrEqual(60);
     expect(panel.y + panel.height).toBeLessThanOrEqual(12); expect(app.get("workspace-tree").height).toBeGreaterThan(0);
     expect(app.input.value).toBe(value); expect(app.input.cursorOffset).toBe(cursor); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
-    app.mockInput.pressKey("l", { ctrl: true }); await app.render(); expect(app.captureCharFrame()).toContain("Search workspaces");
+    app.mockInput.pressCtrlC(); await app.render(); expect(app.captureCharFrame()).toContain("Search workspaces");
     expect(app.view.promptDrafts.a1).toBe("keep agent draft"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });

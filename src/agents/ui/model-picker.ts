@@ -236,11 +236,13 @@ export class ModelPicker {
     if (command === "model.refresh") { this.launch(() => this.load()); return; }
     if (command === "model.search") { this.search.focus(); this.actions.changed(); return; }
     if (command === "model.effort-less" || command === "model.effort-more") { this.moveEffort(command === "model.effort-less" ? -1 : 1); return; }
+    const halfPage = command === "model.half-page-up" || command === "model.half-page-down";
+    if (halfPage && this.search.focused) this.list.focus();
     if (this.loading || this.applying) return;
     if (command === "model.first") this.cursor = 0;
     else if (command === "model.last") this.cursor = this.filtered.length - 1;
     else if (command === "model.previous" || command === "model.next") this.cursor += command === "model.previous" ? -1 : 1;
-    else if (command === "model.half-page-up" || command === "model.half-page-down") this.cursor += (command === "model.half-page-up" ? -1 : 1) * halfPageStep(this.list.viewport.height, 2);
+    else if (halfPage) this.cursor += (command === "model.half-page-up" ? -1 : 1) * halfPageStep(this.list.viewport.height, 2);
     else return;
     this.cursor = Math.max(0, Math.min(this.filtered.length - 1, this.cursor)); this.paint();
   }

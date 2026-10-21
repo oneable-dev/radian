@@ -27,7 +27,7 @@ async function mount(repositories: readonly Repository[] = demoWorkspace(), opti
     async openHistory() { setup.mockInput.pressKey(" ", { ctrl: true }); setup.mockInput.pressKey("h"); await setup.renderOnce(); },
     async clickText(text: string): Promise<void> {
       if (text.startsWith(icons.folder) || text === "radian-empty" || text.startsWith("Search")) {
-        setup.mockInput.pressKey("f", { ctrl: true }); setup.mockInput.pressKey("l", { ctrl: true }); await setup.renderOnce();
+        setup.mockInput.pressKey("f", { ctrl: true }); setup.mockInput.pressCtrlC(); await setup.renderOnce();
       } else if (setup.renderer.root.findDescendantById("workspace-picker")!.visible) { setup.mockInput.pressEscape(); await setup.renderOnce(); }
       const lines = setup.captureCharFrame().split("\n");
       const y = lines.findIndex((line) => line.includes(text));
@@ -48,7 +48,7 @@ async function mount(repositories: readonly Repository[] = demoWorkspace(), opti
     },
     async searchFor(query: string): Promise<void> {
       setup.mockInput.pressKey("f", { ctrl: true });
-      setup.mockInput.pressKey("l", { ctrl: true });
+      setup.mockInput.pressCtrlC();
       await setup.renderOnce();
       await setup.mockInput.typeText(query);
       await setup.renderOnce();
@@ -273,7 +273,7 @@ test("브랜치 검색은 워크트리 목록만 필터하고 오른쪽 세션�
   } finally { await app.close(); }
 });
 
-test("q・n・x를 검색에 입력해도 종료나 세션 액션을 실행하지 않고 Ctrl+L로 결과를 복원한다", async () => {
+test("q・n・x를 검색에 입력해도 종료나 세션 액션을 실행하지 않고 Ctrl+C로 결과를 복원한다", async () => {
   // The original selection should remain on screen even if the query hides its row.
   const app = await mount();
   try {
@@ -286,7 +286,7 @@ test("q・n・x를 검색에 입력해도 종료나 세션 액션을 실행하�
     expect(app.selection.sessionId).toBe("a1");
     expect(app.selection.snapshot).toBe(before);
     expect(app.requests).toEqual([]);
-    app.mockInput.pressKey("l", { ctrl: true });
+    app.mockInput.pressCtrlC();
     await app.renderOnce();
 
     // Clearing restores the tree without creating, closing or selecting another session.
@@ -310,7 +310,7 @@ test("검색어 삭제와 붙여넣기도 결과를 갱신하고 입력 포커�
     app.mockInput.pressBackspace();
     await app.renderOnce();
     expect(app.treeFrame()).toContain(`${icons.branch} main`);
-    app.mockInput.pressKey("l", { ctrl: true });
+    app.mockInput.pressCtrlC();
     await app.renderOnce();
     await app.mockInput.pasteBracketedText("FEATURE/EMPTY");
     await app.renderOnce();
@@ -393,7 +393,7 @@ test("검색 중 주입한 snapshot은 현재 검색어로 갱신되고 숨겨�
     expect(app.treeFrame()).toContain(`${icons.branch} feature/workspace`);
     expect(app.treeFrame()).not.toContain("Fresh child");
     expect(app.treeFrame()).not.toContain("Workspace layout");
-    app.mockInput.pressKey("l", { ctrl: true });
+    app.mockInput.pressCtrlC();
     await app.renderOnce();
 
     // Clearing renders current aggregate state without moving the selection or input focus.
@@ -436,7 +436,7 @@ test("레포가 없는 화면에서도 검색 및 초기화는 세션을 생성�
     // Search and clear remain safe without any selectable tree row.
     await app.searchFor("missing");
     expect(app.captureCharFrame()).toContain("No matching workspaces");
-    app.mockInput.pressKey("l", { ctrl: true });
+    app.mockInput.pressCtrlC();
     await app.renderOnce();
 
     // The empty workspace is unchanged and no new-session request was emitted.
@@ -485,7 +485,7 @@ test("레거시 Esc의 20ms 구분 시간이 지나면 팝업을 닫고 다시 �
     clock.advance(20);
     await app.renderOnce();
     expect(app.captureCharFrame()).not.toContain("No matching workspaces");
-    await app.openWorkspaces(); app.mockInput.pressKey("l", { ctrl: true });
+    await app.openWorkspaces(); app.mockInput.pressCtrlC();
     await app.mockInput.typeText("MAIN");
     await app.renderOnce();
 

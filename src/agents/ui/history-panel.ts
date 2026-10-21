@@ -118,7 +118,7 @@ export class SessionHistoryPanel {
   get shortcuts(): readonly FooterShortcut[] {
     const hint = (command: Extract<CommandId, `history.${string}`>, label: string) => ({ key: this.actions.keyHint(command, this.context), label });
     return [...(this.selected && !this.selected.unavailableReason && this.actions.resume && !this.resuming && !this.loading ? [hint("history.open", "Open")] : []),
-      hint("history.dismiss", "Close"), hint("history.preview", "Preview"), hint("history.previous", "Previous"), hint("history.next", "Next"), hint("history.half-page-down", "½ page"), hint("history.refresh", "Refresh")].filter((item) => item.key);
+      hint("history.dismiss", "Close"), hint("history.preview", "Preview"), hint("history.previous", "Previous"), hint("history.next", "Next"), hint("history.refresh", "Refresh"), hint("history.half-page-down", "½ page")].filter((item) => item.key);
   }
   private get selected(): HistoryItem | undefined { return this.filtered[this.cursor]; }
 
@@ -282,7 +282,12 @@ export class SessionHistoryPanel {
     else if (command === "history.half-page-up" || command === "history.half-page-down") {
       const direction = command === "history.half-page-up" ? -1 : 1;
       if (this.transcript.focused) { this.preview.scrollBy(direction * halfPageStep(this.preview.viewport.height)); return; }
-      this.cursor += direction * halfPageStep(this.list.viewport.height, 2);
+      const height = this.list.visible ? this.list.viewport.height : this.list.parent?.height ?? this.list.viewport.height;
+      if (this.search.focused) {
+        if (this.compactPreview) { this.compactPreview = false; this.resize(); }
+        this.list.focus();
+      }
+      this.cursor += direction * halfPageStep(height, 2);
     } else return;
     this.cursor = Math.max(0, Math.min(this.filtered.length - 1, this.cursor)); this.paint(); this.schedulePreview();
   }

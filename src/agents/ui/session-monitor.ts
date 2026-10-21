@@ -199,7 +199,12 @@ export class SessionMonitor {
     else if (command === "monitor.half-page-up" || command === "monitor.half-page-down") {
       const direction = command === "monitor.half-page-up" ? -1 : 1;
       if (this.transcript.focused) { this.transcript.scroll.scrollBy(direction * halfPageStep(this.transcript.scroll.viewport.height)); return; }
-      this.cursor += direction * halfPageStep(this.list.viewport.height, 3);
+      const height = this.list.visible ? this.list.viewport.height : this.list.parent?.height ?? this.list.viewport.height;
+      if (this.search.focused) {
+        if (this.compactPreview) { this.compactPreview = false; this.resize(); }
+        this.list.focus();
+      }
+      this.cursor += direction * halfPageStep(height, 3);
     } else return;
     this.cursor = Math.max(0, Math.min(this.items.length - 1, this.cursor)); this.paint(); this.preview();
   }

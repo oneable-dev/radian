@@ -875,8 +875,10 @@ and programs' explicit RGB colors or Neovim colorschemes remain unchanged.
 `Ctrl+D/U` jumps the candidate by half a viewport of items: this applies to Workspace, History,
 AI Sessions, model selection and Git lists. In History/AI Sessions previews, Git details/diffs,
 conversation text and help/notification details, `Ctrl+D/U` moves the focused body by half a viewport.
-Search inputs explicitly ignore `Ctrl+D/U`, including held-key repeats, without changing the query,
-caret, candidate or viewport. **Ctrl+L** clears the query; use **Tab** to focus results before jumping.
+From a search input, `Ctrl+D/U` preserves the query and caret, focuses the results list and jumps
+from the current candidate. Further presses and held-key repeats continue navigating the list.
+In compact layouts this returns from preview to results. **Ctrl+C** clears only the search query,
+without closing the popup or interrupting work; an empty query is a no-op.
 Agent/Git prompt editing and embedded editors/shells retain their native input bindings.
 
 The default leader is **Ctrl+Space**. Press and release it, then press `c` to detach radian,
@@ -1268,8 +1270,9 @@ fuzzy matching over repository names, worktree folder names and actual branch na
 matches retain their worktrees. Session/subagent titles, paths and history are not searched.
 `Ctrl+N/P` move candidates in both search and tree focus without changing the active workspace;
 Tab switches to the tree for j/k and Home/End. `/` returns from the tree to search. **Enter from either surface opens the candidate.**
-`Ctrl+L` clears the query. `Ctrl+D/U` is blocked while search has focus; in the results list it jumps
-the candidate by half a viewport. **Esc closes**, preserving the query and cursor for reopening.
+`Ctrl+C` clears the query; it never closes the popup or interrupts the Agent.
+From search, `Ctrl+D/U` transfers focus to results and jumps the current
+candidate by half a viewport without editing the query. **Esc closes**, preserving the query and cursor for reopening.
 Filtering and host updates never change canonical selection or start a repository service.
 
 ### Session monitoring

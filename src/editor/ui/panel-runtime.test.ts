@@ -47,7 +47,7 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
         app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey(key); await app.renderOnce();
       },
       async click(text: string) {
-        if (text.startsWith(icons.folder)) { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("w"); app.mockInput.pressKey("l", { ctrl: true }); await app.renderOnce(); await app.renderOnce(); }
+        if (text.startsWith(icons.folder)) { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("w"); app.mockInput.pressCtrlC(); await app.renderOnce(); await app.renderOnce(); }
         const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes(text)), x = lines[y]?.indexOf(text) ?? -1;
         if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
         await app.mockMouse.click(x, y); await app.renderOnce();

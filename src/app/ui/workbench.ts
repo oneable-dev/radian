@@ -337,7 +337,7 @@ export class Workbench {
     else if (this.models.visible) shortcuts = this.models.shortcuts;
     else if (this.history.visible) shortcuts = this.history.shortcuts;
     else if (this.monitor?.visible) shortcuts = this.monitor.shortcuts;
-    else if (focused === this.search) shortcuts = [hint("focus.results", "Open"), pair("workspace.previous", "workspace.next", "Navigate"), hint("focus.next", "Results"), hint("workspace.dismiss", "Close")];
+    else if (focused === this.search) shortcuts = [hint("focus.results", "Open"), pair("workspace.previous", "workspace.next", "Navigate"), hint("workspace.half-page-down", "½ page"), hint("workspace.dismiss", "Close")];
     else if (focused === this.tree) shortcuts = [
       ...(this.visibleRows().some((row) => row.kind === "worktree" && row.key === this.navigationKey) ? [hint("workspace.open", "Open worktree")] : []),
       pair("workspace.previous", "workspace.next", "Navigate"), hint("workspace.dismiss", "Close"),
@@ -476,7 +476,7 @@ export class Workbench {
     return "button";
   }
   private commandAvailable(command: CommandId): boolean {
-    // Reserved search keys are consumed by the router without reaching native editing or help.
+    // Explicit ignore bindings are consumed without reaching native input or shortcut help.
     if (command === "input.ignore") return false;
     if (command === "search.clear") {
       const context = this.keyContext();
@@ -566,7 +566,7 @@ export class Workbench {
       case "focus.previous": this.moveFocus(-1); break;
       case "search.clear": {
         const focused = this.renderer.currentFocusedRenderable;
-        if (focused instanceof InputRenderable) focused.value = "";
+        if (focused instanceof InputRenderable && focused.value) focused.value = "";
         break;
       }
       case "view.agent": this.selectWorkView("agent"); break;
@@ -590,9 +590,12 @@ export class Workbench {
       case "workspace.next": this.moveTree("down"); break;
       case "workspace.first": this.moveTree("home"); break;
       case "workspace.last": this.moveTree("end"); break;
-      // Two label lines plus the shared border give each workspace a three-row stride.
-      case "workspace.half-page-up": this.moveTree("up", halfPageStep(this.tree.viewport.height, 3)); break;
-      case "workspace.half-page-down": this.moveTree("down", halfPageStep(this.tree.viewport.height, 3)); break;
+      case "workspace.half-page-up": case "workspace.half-page-down": {
+        if (this.search.focused) this.tree.focus();
+        // Two label lines plus the shared border give each workspace a three-row stride.
+        this.moveTree(command === "workspace.half-page-up" ? "up" : "down", halfPageStep(this.tree.viewport.height, 3));
+        break;
+      }
       case "agent.clear": this.agent.clearPrompt(); break;
       case "agent.interrupt": void this.agent.interrupt().catch((error: unknown) => this.setNotice(reportUnexpected(error, "agent interruption"))); break;
       case "agent.newline": this.agent.prompt.newLine(); break;
