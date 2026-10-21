@@ -22,7 +22,6 @@ export class SessionTab {
   readonly title: TextRenderable;
   readonly closeButton: BoxRenderable;
   private label = "";
-  private suffix = "…";
   private width = SESSION_TAB_WIDTH;
   private active = false;
   private stripFocused = false;
@@ -58,8 +57,8 @@ export class SessionTab {
     this.refreshLabel();
   }
 
-  setLabel(label: string, suffix = "…"): void {
-    this.label = singleLine(label); this.suffix = suffix; this.refreshLabel();
+  setLabel(label: string): void {
+    this.label = singleLine(label); this.refreshLabel();
   }
 
   update(active: boolean, stripFocused = false): void {
@@ -71,8 +70,7 @@ export class SessionTab {
     const leading = this.options.leading;
     const reserved = padding + 1 + gap + (leading?.visible ? leading.width + gap : 0);
     const width = Math.max(0, this.width - reserved);
-    const suffix = Bun.stringWidth(this.suffix) < width ? this.suffix : "…";
-    this.title.content = truncateCells(this.label, width, suffix);
+    this.title.content = truncateCells(this.label, width);
   }
 
   private paint = (): void => {

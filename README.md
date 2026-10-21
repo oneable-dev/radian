@@ -192,14 +192,14 @@ receives focus once it appears. If you navigate elsewhere while creation is pend
 without taking focus. Agent and Terminal session strips remain visible and clickable.
 Tree cursor movement is only navigation; Enter or a direct worktree click commits the selection.
 Each worktree separately remembers its work view and selected Agent session. Within Agents, session
-tabs show the first eight characters of their session ID and aggregate status, with a close control.
+tabs use the full session UUID as their label, alongside aggregate status and a close control.
 Agent and Terminal tabs share an 18-cell frame, including padding and the right-aligned `×` control.
 Status changes and process renames do not move neighboring tabs or their close controls. If the pane
 is narrower than one tab, the frame shrinks to fit and truncates its label with `…`.
-If open sessions in the same worktree share a prefix, labels expand only within that fixed frame;
-long collisions retain the distinguishing tail after `…`. IDs of eight characters or fewer stay
-unchanged. Selection, closing and persistence still use the full ID. Session names remain unchanged for History and other
-metadata. Use the same configured `tab.new` sequence from input, the tab strip or the empty body;
+UUID labels use all available title space and truncate only at the end with `…` when necessary;
+IDs that fit are shown in full. There is no eight-character prefix limit or special collision-based
+formatting. Selection, closing and persistence still use the full UUID, even when truncated labels
+look identical. Session names remain unchanged for History and other metadata. Use the same configured `tab.new` sequence from input, the tab strip or the empty body;
 the strip remains focusable when empty. `Ctrl+N/P` navigates tabs, not session creation.
 The upper-right worktree label and the New session/History toolbar buttons are removed. Session-tab selection and History resume open the chosen session in Agents. Restoring a
 selection, filtering and background snapshots never implicitly activate another work view.

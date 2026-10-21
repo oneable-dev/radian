@@ -11,8 +11,8 @@ import { SessionTabs } from "./session-tabs.ts";
 
 const firstId = "01a156a2-ba64-707c-bd92-fc877962e972";
 const secondId = "23ec1867-d98a-4d41-b656-d2c13806b5de";
-const firstLabel = "01a156a2";
-const secondLabel = "23ec1867";
+const firstLabel = "01a156a2-ba64…";
+const secondLabel = "23ec1867-d98a…";
 const collisionId = "01a156a2-ba65-4d41-b656-d2c13806b5de";
 const session = (id = firstId, name = "A conversation title, not the session ID"): OpenSession => ({ id, name, status: "complete", subagents: [] });
 
@@ -125,10 +125,10 @@ test("실행 중 숨긴 미확인 벨은 화면 복귀와 직접 취소 뒤에�
 test("상태 아이콘이 없는 탭은 왼쪽 상태 칸과 간격을 빼고 확보한 너비를 ID에 사용한다", async () => {
   const unknown = { ...session(), status: null }, app = await mount([unknown]);
   try {
-    // 짧은 ID가 정확히 들어가는 너비에서 사용하지 않는 상태 칸을 회수한다.
+    // 좁은 탭에서도 상태가 없으면 UUID를 표시할 공간을 두 칸 더 확보한다.
     app.resize(12, 6); await app.render();
     const { tab, title } = app.get(firstId), close = app.renderer.root.findDescendantById(`close-session:${firstId}`)!;
-    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstLabel);
+    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe("01a156a…");
     expect(tab.width).toBe(12);
     expect(close.x).toBe(title.x + title.width + 1); expect(close.x + close.width).toBe(tab.x + tab.width - 1);
 
@@ -137,20 +137,20 @@ test("상태 아이콘이 없는 탭은 왼쪽 상태 칸과 간격을 빼고 �
     expect(title.x).toBe(tab.x + 3); expect(title.plainText).toEndWith("…");
     expect(close.x + close.width).toBeLessThanOrEqual(app.tabs.list.viewport.x + app.tabs.list.viewport.width);
     app.tabs.update("tree", [unknown], firstId, true); await app.render();
-    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstLabel);
+    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe("01a156a…");
   } finally { await app.close(); }
 });
 
-test("미확정으로 바뀐 탭은 스피너 최소 시간 뒤 상태 칸을 제거하고 짧은 ID를 복원한다", async () => {
+test("미확정으로 바뀐 탭은 스피너 최소 시간 뒤 상태 칸을 제거하고 UUID 표시 공간을 복원한다", async () => {
   const working = { ...session(), status: "working" as const }, app = await mount([working]);
   try {
     app.resize(12, 6); await app.render(); const { tab, title } = app.get(firstId);
     app.clock.advance(120); app.tabs.update("tree", [{ ...working, status: null }], firstId, true); await app.render();
     const width = tab.width, titleX = title.x;
     app.clock.advance(379); await app.render(); expect(title.x).toBe(titleX); expect(title.plainText).toEndWith("…");
-    // The spinner tail ending is enough to reclaim the slot; no snapshot or focus event is required.
+    // 스피너가 끝나면 추가 snapshot 없이 원래 UUID의 앞부분을 두 칸 더 표시한다.
     app.clock.advance(1); await app.render();
-    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstLabel);
+    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe("01a156a…");
     expect(tab.width).toBe(width); expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
   } finally { await app.close(); }
 });
@@ -210,15 +210,16 @@ test("Agent 세션은 포커스·선택이 바뀌어도 밑줄 없이 배경으�
   } finally { await app.close(); }
 });
 
-test("충분히 넓은 탭도 이름 대신 세션 ID의 앞 8자리만 표시한다", async () => {
-  // 전체 UUID가 들어가는 화면에서도 탭 라벨만 줄이고 세션 메타데이터는 유지한다.
+test("AI 탭은 전체 UUID를 라벨로 사용하고 고정 폭을 넘는 끝부분만 말줄임한다", async () => {
+  // 세션 이름이나 임의의 8자리 접두사 대신 전체 UUID가 라벨의 원본이다.
   const entry = session(), app = await mount([entry]);
   try {
-    // 화면 너비와 무관하게 기본 라벨은 8자리이다.
+    // 큰 화면에서도 기존 18칸 프레임을 유지한 채 UUID를 표시한다.
     await app.render();
 
-    // 축약 자체에는 말줄임표가 없고 실제 식별자와 이름은 바뀌지 않는다.
+    // 표시 가능한 앞부분 뒤에 말줄임표 하나만 붙이고 원본 메타데이터는 보존한다.
     expect(app.get(firstId).title.plainText).toBe(firstLabel);
+    expect(app.get(firstId).tab.width).toBe(18);
     expect(app.captureCharFrame()).toContain(firstLabel);
     expect(app.captureCharFrame()).not.toContain(firstId);
     expect(app.captureCharFrame()).not.toContain(entry.name);
@@ -227,20 +228,18 @@ test("충분히 넓은 탭도 이름 대신 세션 ID의 앞 8자리만 표시�
   } finally { await app.close(); }
 });
 
-test("공간이 부족할 때만 짧은 ID 끝을 말줄임하고 다시 넓히면 8자리를 복원한다", async () => {
+test("UUID는 가용 폭에 맞춰 끝을 말줄임하고 다시 넓히면 표시 가능한 앞부분을 복원한다", async () => {
   const app = await mount();
   try {
-    // 짧은 ID마저 들어가지 않는 너비에서만 말줄임하고 넓히면 축약 라벨을 복원한다.
-    for (const width of [12, 10, 100]) {
+    // 작은 창을 거쳐도 원본 UUID를 잃지 않고 프레임의 가용 폭만 반영한다.
+    for (const [width, expected] of [[12, "01a156a…"], [10, "01a15…"], [100, firstLabel]] as const) {
       app.resize(width, 6); await app.render();
       const { tab, title } = app.get(firstId), text = title.plainText;
-      if (width >= 12) expect(text).toBe(firstLabel);
-      else {
-        expect(text.endsWith("…")).toBe(true);
-        expect(text.match(/…/g)).toHaveLength(1);
-        expect(firstId.startsWith(text.slice(0, -1))).toBe(true);
-        expect(Bun.stringWidth(text)).toBeLessThanOrEqual(width - 4);
-      }
+
+      // 중간이나 끝자리 식별자를 합성하지 않고 UUID의 연속된 앞부분만 표시한다.
+      expect(text).toBe(expected); expect(text.match(/…/g)).toHaveLength(1);
+      expect(firstId.startsWith(text.slice(0, -1))).toBe(true);
+      expect(Bun.stringWidth(text)).toBeLessThanOrEqual(title.width);
 
       // Status and close controls stay inside the viewport instead of forcing the label to hide them.
       const close = app.renderer.root.findDescendantById(`close-session:${firstId}`)!;
@@ -251,17 +250,17 @@ test("공간이 부족할 때만 짧은 ID 끝을 말줄임하고 다시 넓히�
 });
 
 test.each([
-  { id: "01a156a2-ca64-707c-bd92-fc877962e972", first: "01a156a2-b", other: "01a156a2-c" },
-  { id: collisionId, first: "01a156a2-ba64", other: "01a156a2-ba65" },
-  { id: "01a156a2-ba64-707c-bd92-fc877962e973", first: "01a156a2-…e972", other: "01a156a2-…e973" },
-])("접두사가 겹치는 $id 탭은 고정 폭 안에서도 서로 구분되게 표시한다", async ({ id, first, other }) => {
+  { id: "01a156a2-ca64-707c-bd92-fc877962e972", first: firstLabel, other: "01a156a2-ca64…" },
+  { id: collisionId, first: firstLabel, other: "01a156a2-ba65…" },
+  { id: "01a156a2-ba64-707c-bd92-fc877962e973", first: firstLabel, other: firstLabel },
+])("접두사가 겹치는 $id 탭도 같은 UUID 끝 말줄임 규칙만 적용한다", async ({ id, first, other }) => {
   // 충돌 위치가 8자리 바로 뒤부터 마지막 자리까지인 세션 쌍을 준비한다.
   const app = await mount([session(), session(id)]);
   try {
     // 같은 워크트리의 두 세션을 함께 표시한다.
     await app.render();
 
-    // 짧은 충돌은 접두사를 늘리고 긴 충돌은 구분되는 끝부분을 말줄임 뒤에 남긴다.
+    // 주변 세션에 따라 접두사를 바꾸거나 말줄임 뒤에 식별자 끝부분을 덧붙이지 않는다.
     expect(app.get(firstId).title.plainText).toBe(first);
     expect(app.get(id).title.plainText).toBe(other);
     expect(app.captureCharFrame()).toContain(first);
@@ -269,8 +268,8 @@ test.each([
   } finally { await app.close(); }
 });
 
-test("충돌하는 탭의 추가·제거에 맞춰 기존 라벨을 갱신하고 선택한 탭을 화면에 유지한다", async () => {
-  // 두 개의 짧은 라벨은 들어가지만 앞선 탭의 라벨이 늘어나면 선택 탭이 밀리는 너비이다.
+test("비슷한 UUID 탭을 추가·제거해도 기존 라벨과 폭을 유지하고 선택한 탭을 화면에 표시한다", async () => {
+  // 표시 가능한 UUID 길이는 다른 탭의 존재가 아니라 공통 프레임 폭으로 정한다.
   const entries = [session(), session(secondId)], app = await mount(entries);
   try {
     app.resize(28, 6); app.tabs.update("tree", entries, secondId, true); await app.render();
@@ -279,16 +278,16 @@ test("충돌하는 탭의 추가·제거에 맞춰 기존 라벨을 갱신하고
     // 다른 세션의 선택은 유지한 채 접두사가 겹치는 새 탭이 생긴다.
     app.tabs.update("tree", [...entries, session(collisionId)], secondId, true); await app.render();
 
-    // 기존 인스턴스를 유지하며 충돌하는 라벨만 늘리고 선택 탭을 다시 드러낸다.
+    // 기존 인스턴스와 UUID 라벨을 유지하면서 선택한 탭을 다시 드러낸다.
     expect(app.get(firstId).tab).toBe(firstTab);
-    expect(app.get(firstId).title.plainText).toBe("01a156a2-ba64");
-    expect(app.get(collisionId).title.plainText).toBe("01a156a2-ba65");
+    expect(app.get(firstId).title.plainText).toBe(firstLabel);
+    expect(app.get(collisionId).title.plainText).toBe("01a156a2-ba65…");
     expect(app.get(secondId).title.plainText).toBe(secondLabel);
     const selectedTab = app.get(secondId).tab, viewport = app.tabs.list.viewport;
     expect(selectedTab.x).toBeGreaterThanOrEqual(viewport.x);
     expect(selectedTab.x + selectedTab.width).toBeLessThanOrEqual(viewport.x + viewport.width);
 
-    // 충돌 상대가 닫히면 기존 탭을 다시 기본 8자리로 줄인다.
+    // 다른 탭이 닫혀도 이미 표시 중인 UUID 길이는 달라지지 않는다.
     app.tabs.update("tree", entries, secondId, true); await app.render();
     expect(app.get(firstId).title.plainText).toBe(firstLabel);
     expect(app.get(secondId).title.plainText).toBe(secondLabel);
@@ -296,24 +295,24 @@ test("충돌하는 탭의 추가·제거에 맞춰 기존 라벨을 갱신하고
   } finally { await app.close(); }
 });
 
-test("다른 워크트리로 전환하면 이전 워크트리의 접두사 충돌을 적용하지 않는다", async () => {
-  // 첫 워크트리에서는 두 세션의 접두사가 겹쳐 라벨이 길어진 상태이다.
+test("워크트리를 전환해도 같은 UUID와 프레임 폭에는 같은 라벨을 표시한다", async () => {
+  // 같은 세션을 다른 워크트리에 하나만 표시해도 라벨을 줄이지 않는다.
   const app = await mount([session(), session(collisionId)]);
   try {
     // 다른 워크트리에는 그중 한 세션만 표시한다.
     app.tabs.update("other-tree", [session(collisionId)], collisionId, true); await app.render();
 
-    // 충돌 검사는 현재 워크트리의 열린 탭에만 한정한다.
-    expect(app.get(collisionId, "other-tree").title.plainText).toBe(firstLabel);
+    // 세션 수와 무관하게 전체 UUID의 동일한 앞부분을 표시한다.
+    expect(app.get(collisionId, "other-tree").title.plainText).toBe("01a156a2-ba65…");
     expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
   } finally { await app.close(); }
 });
 
-test.each(["a1", "12345678"])("8자리 이하인 %s 세션 ID는 그대로 표시한다", async id => {
+test.each(["a1", "12345678", "12345678901234"])("가용 폭에 들어가는 %s 세션 ID는 말줄임 없이 전부 표시한다", async id => {
   // 기존 짧은 식별자는 패딩하거나 다른 이름으로 바꿀 필요가 없다.
   const app = await mount([session(id)]);
   try {
-    // 기본 축약 규칙을 짧은 ID에도 적용한다.
+    // ID 길이가 가용 폭과 같을 때도 불필요한 말줄임표를 붙이지 않는다.
     await app.render();
 
     // 원래 ID가 그대로 사용자에게 보인다.
@@ -321,33 +320,34 @@ test.each(["a1", "12345678"])("8자리 이하인 %s 세션 ID는 그대로 표�
   } finally { await app.close(); }
 });
 
-test("세션 이름을 갱신해도 충돌하는 탭의 라벨과 실제 선택·닫기 대상 ID를 바꾸지 않는다", async () => {
-  // 접두사가 겹치는 세션도 키보드와 마우스 동작은 전체 ID로 처리해야 한다.
-  const entries = [session(), session(collisionId, "Other conversation")], app = await mount(entries);
+test("두 UUID가 같은 라벨로 말줄임돼도 선택·닫기는 각각의 전체 ID로 처리한다", async () => {
+  // 화면에 보이는 앞부분은 같고 마지막 문자만 다른 UUID 두 개를 준비한다.
+  const otherId = "01a156a2-ba64-707c-bd92-fc877962e973";
+  const entries = [session(), session(otherId, "Other conversation")], app = await mount(entries);
   try {
-    // 이름 변경 뒤 키보드로 다음 세션을 선택하고 그 탭의 닫기 버튼을 누른다.
+    // 이름 변경과 키보드 선택 뒤에도 두 라벨은 같은 끝 말줄임 규칙을 따른다.
     const renamed = entries.map((entry) => ({ ...entry, name: "Renamed conversation" }));
     app.tabs.update("tree", renamed, firstId, true);
     app.tabs.command("session.next");
-    app.tabs.update("tree", renamed, collisionId, true);
+    app.tabs.update("tree", renamed, otherId, true);
     app.resize(32, 6); await app.render();
-    const close = app.renderer.root.findDescendantById(`close-session:${collisionId}`)!;
+    expect(app.get(firstId).title.plainText).toBe(firstLabel);
+    expect(app.get(otherId).title.plainText).toBe(firstLabel);
+    const close = app.renderer.root.findDescendantById(`close-session:${otherId}`)!;
     expect(close.x).toBeGreaterThanOrEqual(app.tabs.list.viewport.x);
     expect(close.x + close.width).toBeLessThanOrEqual(app.tabs.list.viewport.x + app.tabs.list.viewport.width);
     await app.mockMouse.click(close.x, close.y); await app.render();
 
-    // 라벨이 길어져도 전체 ID가 선택·닫기 콜백에 전달되고 메타데이터는 유지된다.
-    expect(app.selected).toEqual([collisionId]);
-    expect(app.closed).toEqual([collisionId]);
-    expect(app.get(collisionId).title.plainText).toBe("01a156a2-ba65");
+    // 동일한 표시 문자열이 아닌 고유 UUID로 닫고 원래 메타데이터를 보존한다.
+    expect(app.selected).toEqual([otherId]); expect(app.closed).toEqual([otherId]);
     expect(app.captureCharFrame()).not.toContain("Renamed conversation");
-    expect(renamed.map((entry) => entry.id)).toEqual([firstId, collisionId]);
+    expect(renamed.map((entry) => entry.id)).toEqual([firstId, otherId]);
 
-    // 첫 탭을 마우스로 선택해도 축약 라벨 대신 원래 ID를 전달한다.
+    // 첫 탭의 제목을 클릭해도 다른 UUID와 혼동하지 않는다.
     app.tabs.update("tree", renamed, firstId, true); await app.render();
     const { tab, title } = app.get(firstId);
     expect(tab.x).toBe(app.tabs.list.viewport.x);
     await app.mockMouse.click(title.x, title.y); await app.render();
-    expect(app.selected).toEqual([collisionId, firstId]);
+    expect(app.selected).toEqual([otherId, firstId]);
   } finally { await app.close(); }
 });

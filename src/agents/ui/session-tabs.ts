@@ -105,14 +105,9 @@ export class SessionTabs {
   }
   private close(): void { if (this.selected) this.actions.close(this.selected); }
   private setTitle(tab: Tab, id: string): void {
-    // Extend the default prefix only when another open tab in this worktree shares it.
-    let length = 8;
-    while (length < id.length && this.sessions.some(session => session.id !== id && session.id.startsWith(id.slice(0, length)))) length++;
     const previous = tab.title.plainText;
     tab.frame.resize(this.list.width);
-    // Long colliding prefixes keep their distinguishing tail inside the fixed-width label.
-    const suffix = length > 8 ? `…${id.slice(Math.max(8, length - 4), length)}` : "…";
-    tab.frame.setLabel(id.slice(0, length), suffix);
+    tab.frame.setLabel(id);
     this.reveal ||= tab.title.plainText !== previous;
   }
   private resizeTitles(): void {
