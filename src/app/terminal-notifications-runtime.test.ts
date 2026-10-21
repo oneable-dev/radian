@@ -6,7 +6,7 @@ import { connectRuntime, fetchSnapshot, type RuntimeClient } from "../runtime/cl
 import { pidAlive } from "../runtime/storage.ts";
 
 // The PTY captures notification bytes rather than displaying OS notifications.
-test("실제 서비스의 완료가 연결된 CLI를 통해 터미널 알림으로 전달되고 정상 detach한다", async () => {
+test("실제 서비스의 완료가 연결된 CLI의 화면·터미널 알림으로 전달되고 정상 detach한다", async () => {
   // 실제 Git·SDK·IPC·TUI를 연결하고 모델 응답만 offline fixture로 대체한다.
   const fixture = await createWorktreeFixture(), entry = join(import.meta.dir, "..", "index.ts");
   const stateRoot = join(fixture.directory, "state");
@@ -33,7 +33,7 @@ test("실제 서비스의 완료가 연결된 CLI를 통해 터미널 알림으�
           raw += decoder.decode(bytes, { stream: true });
           // Workspace navigation is now an on-demand popup; the footer and composer prove the TUI is mounted.
           if (raw.includes("New line") && raw.includes("Transcript")) ready.resolve();
-          if (raw.includes("\x1b]777;notify;Radian · Task completed;")) notified.resolve();
+          if (raw.includes("\x1b]777;notify;Radian · Task completed;") && raw.includes("Completed")) notified.resolve();
         } },
       });
       // unknown 포커스의 실제 TUI에 서비스의 새 최종 결과를 전달한다.
@@ -43,7 +43,8 @@ test("실제 서비스의 완료가 연결된 CLI를 통해 터미널 알림으�
       child.terminal?.write("\x00c");
       const code = await child.exited;
 
-      // native 알림과 종료 시의 터미널 복구를 모두 확인한다.
+      // The real service drives both the in-app card and native delivery without changing detach ownership.
+      expect(raw).toContain("Completed");
       expect(raw.match(/\x1b\]777;notify;Radian · Task completed;/gu)).toHaveLength(1);
       const notification = raw.match(/\x1b\]777;notify;Radian · Task completed;([^\x1b\x07]*)\x1b\\/u);
       expect(notification?.[1]).toMatch(/^read · (?:<1s|(?:\d+h )?(?:\d+m )?\d+s)$/u);

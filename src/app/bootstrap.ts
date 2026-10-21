@@ -91,6 +91,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
   const { GitRepository } = await import("../git/repository.ts");
   const { TerminalTheme } = await import("../ui/embedded-terminal/theme.ts");
   const { TerminalNotifications } = await import("./terminal-notifications.ts");
+  const { SessionNotifications } = await import("./session-notifications.ts");
   const { CompletionCache } = await import("../agents/completion-cache.ts");
   const { uiTheme } = await import("../ui/theme.ts");
   const { monochromeFrame } = await import("../ui/monochrome.ts");
@@ -102,6 +103,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
     ...(options.noColor ? { postProcessFns: [(buffer) => monochromeFrame(buffer, attachedTheme?.colors, attachedTheme?.styles)] } : {}) });
   attachedTheme = uiTheme(renderer); attachedTheme.setMonochrome(options.noColor);
   let view: InstanceType<typeof Workbench> | undefined;
+  let sessionNotifications: InstanceType<typeof SessionNotifications> | undefined;
   const detachHint = keymap.hint("app.detach", "none") || "No detach binding";
   const defaultMessage = discoveryError ?? (options.demo ? `DEMO · display fixtures only · ${detachHint} detaches` : options.offline
     ? `OFFLINE SDK · scripted slow / read / write / delegate · ${detachHint} detaches`
@@ -161,7 +163,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
     updateNotice();
   });
   const detach = (): void => {
-    notifications?.dispose(); completions?.dispose(); unsubscribe?.(); unsubscribeSelection();
+    sessionNotifications?.dispose(); notifications?.dispose(); completions?.dispose(); unsubscribe?.(); unsubscribeSelection();
     if (view) { preferences.drafts = view.promptDrafts; preferences.inputDrafts = view.promptInputDrafts; persist(); }
     const mounted = view; view = undefined; mounted?.dispose(); client?.beginDetach(); renderer.destroy();
   };
@@ -231,9 +233,10 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
         },
       } : {}),
     });
+    if (client) sessionNotifications = new SessionNotifications(client, notification => view?.notifySession(notification));
     updateNotice(); await renderer.closed;
   } finally {
-    notifications?.dispose(); completions?.dispose(); unsubscribe?.(); unsubscribeSelection();
+    sessionNotifications?.dispose(); notifications?.dispose(); completions?.dispose(); unsubscribe?.(); unsubscribeSelection();
     preferences.drafts = view?.promptDrafts ?? preferences.drafts;
     if (view) preferences.inputDrafts = view.promptInputDrafts;
     persist();

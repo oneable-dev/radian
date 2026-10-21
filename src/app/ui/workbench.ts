@@ -14,6 +14,8 @@ import type { HistoryItem } from "../../agents/history.ts";
 import type { HistoryPreview } from "../../agents/history-preview.ts";
 import { SessionHistoryPanel } from "../../agents/ui/history-panel.ts";
 import { SessionMonitor } from "../../agents/ui/session-monitor.ts";
+import { SessionNotificationStack } from "../../agents/ui/session-notifications.ts";
+import type { SessionNotification } from "../../agents/session-notification.ts";
 import { ModelPicker, type ModelPickerActions } from "../../agents/ui/model-picker.ts";
 import { Footer, type FooterShortcut } from "../../ui/footer.ts";
 import { TextDialog } from "../../ui/text-dialog.ts";
@@ -69,6 +71,7 @@ export class Workbench {
   private readonly workspacePopup: BoxRenderable;
   private workspaceOwner: Renderable | undefined;
   private readonly monitor: SessionMonitor;
+  private readonly notifications: SessionNotificationStack;
   private foreground = false;
   private readonly acknowledgements = new Map<string, string>();
   private readonly search: InputRenderable;
@@ -189,6 +192,8 @@ export class Workbench {
     this.footer = new Footer(renderer, `Radian ${packageInfo.version}`, { help, details }, "Radian");
     this.root.add(this.footer.root); this.root.add(this.workspacePopup); this.root.add(this.monitor.root);
     this.root.add(this.history.root); this.root.add(this.models.root); this.root.add(this.dialog.root);
+    this.notifications = new SessionNotificationStack(renderer, notification => this.openNotification(notification));
+    this.root.add(this.notifications.root);
     renderer.root.add(this.root);
     this.router = new KeyRouter(renderer, this.keymap, () => this.keyContext(), (command) => this.commandAvailable(command), (command) => this.command(command));
     renderer.on("resize", this.resize);
@@ -284,6 +289,20 @@ export class Workbench {
     this.workViews.active[worktreeId] = "agent"; this.saveWorkViews();
     this.selection.selectSession(worktreeId, sessionId);
   }
+  notifySession(notification: SessionNotification): void {
+    if (!this.disposed) this.notifications.show(notification);
+  }
+
+  private openNotification(notification: SessionNotification): void {
+    const tree = this.selection.snapshot.flatMap(repo => repo.worktrees).find(tree => tree.id === notification.worktreeId);
+    const state = this.actions.getSessionDetails?.(notification.sessionId);
+    if (!tree?.sessions.some(session => session.id === notification.sessionId) || !state || state.conversationId !== notification.conversationId) {
+      this.setNotice("This notification's conversation is no longer open."); return;
+    }
+    this.setSidebarVisible(false, false); this.monitor.hide(false); this.history.hide(false); this.models.hide(false); this.dialog.hide();
+    this.activateSession(notification.worktreeId, notification.sessionId); this.agent.focusLatest();
+  }
+
   setNotice(message: string): void {
     if (!this.disposed && !this.root.isDestroyed) this.footer.setNotice(message);
   }
@@ -690,7 +709,9 @@ export class Workbench {
     const worktree = this.selection.worktree;
     const workView = worktree ? this.workViews.active[worktree.id] ?? "agent" : "agent";
     this.displayedWorkView = workView;
-    const openIds = new Set([...this.selection.snapshot.flatMap((repo) => repo.worktrees.flatMap((tree) => tree.sessions.map((item) => item.id))), ...(this.actions.getRetainedSessionIds?.() ?? [])]);
+    const sessionIds = new Set(this.selection.snapshot.flatMap(repo => repo.worktrees.flatMap(tree => tree.sessions.map(item => item.id))));
+    this.notifications.retain(sessionIds);
+    const openIds = new Set([...sessionIds, ...(this.actions.getRetainedSessionIds?.() ?? [])]);
     this.agent.update(worktree, this.selection.sessionId, openIds, workView === "agent");
     if (workView === "git") this.git.show(worktree, this.selection.sessionId); else this.git.hide();
     if (workView === "editor") this.editor.show(worktree); else this.editor.hide();
@@ -748,6 +769,7 @@ export class Workbench {
     this.agent.rememberScroll();
     this.disposed = true;
     this.unsubscribe();
+    this.notifications.dispose();
     this.agent.dispose(); this.history.dispose(); this.monitor.dispose(); this.models.dispose(); this.dialog.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
     this.search.off(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.search.off("focused", this.repaintSearch); this.search.off("blurred", this.repaintSearch);

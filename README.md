@@ -945,6 +945,30 @@ strips and read-only dialogs. Horizontal navigation/reveal remains enabled where
 Agent transcript also hides its vertical scrollbar; other vertical scrollbars, Git diff movement
 and embedded programs' own UI/configuration are unchanged.
 
+### In-app session notifications
+
+An attached TUI shows newly observed main-agent results in a top-right overlay across all
+already-connected repositories and worktrees, regardless of the current Agents, Editor, Git or
+Terminal view or terminal focus. Completed results use success styling, failures use error styling,
+and stopped or unknown-origin cancelled results use warning styling. Explicit user interruption
+and lifecycle shutdown do not create new popups, matching the unread-bell policy. Individual
+messages, tools, retries and subagent status changes are not separate notifications.
+
+Cards fade in and show the result, delivered-request summary, repository/worktree and elapsed run
+time when available. At most three fit on screen; smaller terminals show fewer, with excess cards
+queued until space is available. Completion cards expire after five seconds and other result cards
+after eight seconds of display. The overlay never changes keyboard focus or reserves workspace
+layout space. Click a card to open that conversation's latest output; a closed or replaced
+conversation is not opened. The close control and automatic expiry only dismiss the popup, never
+the runtime-owned unread bell. Reading the actual result uses the existing acknowledgement path.
+Successful session tabs still have no check icon.
+
+Initial attachment, newly loaded history and reconnection establish a baseline rather than
+replaying past popups. Restored unread bells remain available in the session monitor. This feature
+uses the additive result metadata supplied by `session-attention` services; it does not start cold
+services, automatically restart older services or deliver while the TUI is detached. Terminal desktop
+notifications remain a separate, focus-dependent delivery policy.
+
 ### Terminal notifications
 
 An attached TUI requests a terminal desktop notification once for each newly settled main-agent
