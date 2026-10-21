@@ -5,6 +5,7 @@ import { formatRunDuration } from "./run-completion.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText, type StyleGroup } from "../../ui/theme-styles.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
+import { icons } from "../../icons.ts";
 
 type Timer = ReturnType<CliRenderer["clock"]["setTimeout"]>;
 type Toast = { notification: SessionNotification; root: BoxRenderable; heading: TextRenderable; task: TextRenderable; location: TextRenderable;
@@ -98,7 +99,8 @@ export class SessionNotificationStack {
     const elapsed = durationMs === undefined ? "" : ` · ${formatRunDuration(durationMs)}`;
     toast.heading.content = truncateCells(labels[result.outcome] + elapsed, Math.max(0, width - 2));
     toast.task.content = truncateCells(excerpt(result.request?.text || "AI session"), width);
-    toast.location.content = truncateCells(excerpt(`${toast.notification.repository} / ${toast.notification.worktree}`), width);
+    const worktree = excerpt(toast.notification.worktree), branch = excerpt(toast.notification.branch ?? "detached HEAD");
+    toast.location.content = truncateCells(`${icons.folder} ${worktree} / ${icons.branch} ${branch}`, width);
   }
 
   private dismiss(id: string): void {

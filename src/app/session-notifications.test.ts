@@ -47,10 +47,26 @@ test.each(["complete", "error", "unfinished", "cancelled"] as const)("다른 저
 
     // Removing the bell does not retract or replay a delivery, nor expose response/error text.
     expect(app.sent).toHaveLength(1);
-    expect(app.sent[0]).toMatchObject({ sessionId: "two", worktreeId: "two-tree", repository: "two", worktree: "main", durationMs: 42000,
+    expect(app.sent[0]).toMatchObject({ sessionId: "two", worktreeId: "two-tree", repository: "two", worktree: "main", branch: "main", durationMs: 42000,
       result: { id: "new", outcome, request: { text: "Task new" } } });
     expect(JSON.stringify(app.sent)).not.toContain("Private");
     expect(app.source.snapshot.details.two?.result?.id).toBe("new");
+  } finally { app.notifications.dispose(); }
+});
+
+test.each(["feature/auth", null])("브랜치가 %s인 워크트리의 이름과 브랜치를 새 알림에 전달한다", branch => {
+  // A worktree name need not match its repository or branch, and detached HEAD has no branch.
+  const source = new Source();
+  source.snapshot = { ...source.snapshot, repositories: source.snapshot.repositories.map(repo => ({ ...repo,
+    worktrees: repo.worktrees.map(tree => ({ ...tree, name: "auth-checkout", branch })) })) };
+  const app = fixture(source);
+  try {
+    // The newly completed result captures the checkout metadata from its own workspace.
+    source.publish("two", settled(result("new")));
+
+    // Delivery preserves the actual branch, including the absence of one.
+    expect(app.sent).toHaveLength(1);
+    expect(app.sent[0]).toMatchObject({ worktreeId: "two-tree", worktree: "auth-checkout", branch });
   } finally { app.notifications.dispose(); }
 });
 

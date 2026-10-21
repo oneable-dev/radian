@@ -8,6 +8,7 @@ export type SessionNotification = {
   readonly conversationId: string | undefined;
   readonly repository: string;
   readonly worktree: string;
+  readonly branch: string | null;
   readonly result: SessionResult;
   readonly durationMs?: number;
 };

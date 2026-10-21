@@ -5,9 +5,10 @@ import type { SessionNotification } from "../session-notification.ts";
 import type { SessionResult } from "../session-attention.ts";
 import { SessionNotificationStack } from "./session-notifications.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { icons } from "../../icons.ts";
 
 function notification(id: string, outcome: SessionResult["outcome"] = "complete"): SessionNotification {
-  return { id, sessionId: id, worktreeId: "tree", conversationId: "conversation", repository: "server", worktree: "feature/auth", durationMs: 42000,
+  return { id, sessionId: id, worktreeId: "tree", conversationId: "conversation", repository: "server", worktree: "auth-checkout", branch: "feature/auth", durationMs: 42000,
     result: { id, outcome, completedAt: 43000, request: { text: `Task ${id}`, images: 0, files: 0 } } };
 }
 async function fixture() {
@@ -24,18 +25,33 @@ async function fixture() {
     async close() { stack.dispose(); await app.dispose(); } };
 }
 
-test.each(["complete", "error", "unfinished", "cancelled"] as const)("새 %s 알림은 우측 상단에 상태색·요약·위치를 표시하고 포커스를 보존한다", async outcome => {
-  // The input owns focus before a passive notification arrives.
+test.each(["complete", "error", "unfinished", "cancelled"] as const)("새 %s 알림은 상태색·요약과 아이콘이 붙은 워크트리·브랜치를 표시하고 포커스를 보존한다", async outcome => {
+  // The input owns focus, and the checkout name differs from both the repository and branch.
   const app = await fixture(), labels = { complete: "Completed", error: "Failed", unfinished: "Stopped", cancelled: "Cancelled" };
   try {
+    // A passive notification identifies its checkout without taking over input.
     app.stack.show(notification("one", outcome)); app.clock.advance(160); await app.render();
 
+    // Worktree and branch each keep their own icon; the repository no longer occupies this row.
     const card = app.get("session-toast:one"), frame = app.captureCharFrame();
-    expect(frame).toContain(`${labels[outcome]} · 42s`); expect(frame).toContain("Task one"); expect(frame).toContain("server / feature/auth");
+    expect(frame).toContain(`${labels[outcome]} · 42s`); expect(frame).toContain("Task one");
+    expect(frame).toContain(`${icons.folder} auth-checkout / ${icons.branch} feature/auth`); expect(frame).not.toContain("server");
     expect(card.x + card.width).toBe(98); expect(card.y).toBe(1); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
     let x = 0; const border = app.captureSpans().lines[card.y]!.spans.find(span => { x += span.width; return x > card.x; })!;
     expect(border.fg.toInts()).toEqual(uiTheme(app.renderer).colors[outcome === "complete" ? "success" : outcome === "error" ? "error" : "warning"].toInts());
     expect(app.opened).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("브랜치가 없는 알림은 워크트리와 detached HEAD를 아이콘으로 구분한다", async () => {
+  // A detached checkout has no branch name to display.
+  const app = await fixture();
+  try {
+    // The same card presentation must handle detached HEAD without inventing a branch.
+    app.stack.show({ ...notification("detached"), branch: null }); app.clock.advance(160); await app.render();
+
+    // The checkout remains identifiable and the missing branch is explicit.
+    expect(app.captureCharFrame()).toContain(`${icons.folder} auth-checkout / ${icons.branch} detached HEAD`);
   } finally { await app.close(); }
 });
 

@@ -8,10 +8,11 @@ import { SessionNotifications } from "../session-notifications.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { Workbench } from "./workbench.ts";
 import { ok } from "../../result.ts";
+import { icons } from "../../icons.ts";
 
 async function fixture(workView: WorkView = "agent") {
   const clock = new ManualClock(), app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
-  let snapshot: WorkspaceSnapshot = { repositories: ["one", "two"].map(id => ({ id, name: id, worktrees: [{ id: `${id}-tree`, path: `/${id}`, name: "main", branch: "main",
+  let snapshot: WorkspaceSnapshot = { repositories: ["one", "two"].map(id => ({ id, name: id, worktrees: [{ id: `${id}-tree`, path: `/${id}`, name: `${id}-checkout`, branch: `feature/${id}`,
     sessions: [{ id, name: id, status: "working", subagents: [] }] }] })), details: Object.fromEntries(["one", "two"].map(id => [id,
       { conversationId: id, status: "working", output: `Body ${id}`, error: null } satisfies ExecutionState])),
     preferences: { selection: { worktreeId: "one-tree", sessions: {} }, drafts: {} }, closingCount: 0, notice: "" };
@@ -53,7 +54,8 @@ test.each(["agent", "editor", "git", "terminal"] as const)("%s 화면에서도 �
   try {
     app.complete(); app.clock.advance(160); await app.render();
 
-    expect(app.captureCharFrame()).toContain("Fix authentication"); expect(app.captureCharFrame()).toContain("two / main");
+    expect(app.captureCharFrame()).toContain("Fix authentication");
+    expect(app.captureCharFrame()).toContain(`${icons.folder} two-checkout / ${icons.branch} feature/two`);
     expect(app.selection.sessionId).toBe("one"); expect(app.view.workViewPreferences.active["one-tree"]).toBe(workView);
     expect(app.renderer.currentFocusedRenderable).toBe(owner); expect(app.view.promptDrafts.one).toBe("KEEP_DRAFT");
     expect(app.acknowledged).toEqual([]); expect(app.state("two").attention?.id).toBe("new-result");

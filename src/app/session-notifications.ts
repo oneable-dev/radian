@@ -41,7 +41,7 @@ export class SessionNotifications {
         if (initial || !needsAttention(result)) continue;
         const completion = state.sections?.findLast(section => section.completion?.completedAt === result.completedAt && section.completion.outcome === result.outcome)?.completion;
         notifications.push({ id: JSON.stringify([session.id, state.conversationId, result.id]), sessionId: session.id,
-          worktreeId: worktree.id, conversationId: state.conversationId, repository: repository.name, worktree: worktree.name, result,
+          worktreeId: worktree.id, conversationId: state.conversationId, repository: repository.name, worktree: worktree.name, branch: worktree.branch, result,
           ...(completion ? { durationMs: completion.durationMs } : {}) });
       }
       next.set(session.id, observed);
