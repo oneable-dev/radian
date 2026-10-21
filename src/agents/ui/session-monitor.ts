@@ -8,6 +8,7 @@ import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { singleLine } from "../../ui/text.ts";
+import { halfPageStep } from "../../ui/navigation.ts";
 import { icons } from "../../icons.ts";
 import { TranscriptPanel } from "./transcript-panel.ts";
 import type { TranscriptSection } from "../transcript.ts";
@@ -90,7 +91,7 @@ export class SessionMonitor {
   get focusTargets(): Renderable[] { return [this.search, ...(this.list.visible ? [this.list] : []), ...(this.previewPane.visible ? [this.transcript.scroll] : [])]; }
   get shortcuts(): readonly FooterShortcut[] {
     const hint = (command: CommandId, label: string) => ({ key: this.actions.keyHint(command, this.context), label });
-    return [...(this.items.length ? [hint("monitor.open", "Open")] : []), hint("monitor.dismiss", "Close"), hint("monitor.next", "Next"), hint("monitor.previous", "Previous"), hint("monitor.preview", "Preview"), hint("monitor.page-down", "Page")];
+    return [...(this.items.length ? [hint("monitor.open", "Open")] : []), hint("monitor.dismiss", "Close"), hint("monitor.next", "Next"), hint("monitor.previous", "Previous"), hint("monitor.half-page-down", "½ page"), hint("monitor.preview", "Preview"), hint("monitor.page-down", "Page")];
   }
 
   update(repositories: readonly Repository[]): void {
@@ -195,7 +196,11 @@ export class SessionMonitor {
     if (command === "monitor.first") this.cursor = 0;
     else if (command === "monitor.last") this.cursor = this.items.length - 1;
     else if (command === "monitor.next" || command === "monitor.previous") this.cursor += command === "monitor.next" ? 1 : -1;
-    else return;
+    else if (command === "monitor.half-page-up" || command === "monitor.half-page-down") {
+      const direction = command === "monitor.half-page-up" ? -1 : 1;
+      if (this.transcript.focused) { this.transcript.scroll.scrollBy(direction * halfPageStep(this.transcript.scroll.viewport.height)); return; }
+      this.cursor += direction * halfPageStep(this.list.viewport.height, 3);
+    } else return;
     this.cursor = Math.max(0, Math.min(this.items.length - 1, this.cursor)); this.paint(); this.preview();
   }
   private resize = (): void => {

@@ -158,7 +158,10 @@ test("섹션 모드의 반 페이지 스크롤과 j/k 섹션 점프는 서로 �
     expect(app.state()?.selectedId).toBe("section-0");
     const keymap = defaultKeymap();
     expect(keymap.bound("ctrl+d", "prompt")).toBe(false); expect(keymap.bound("ctrl+u", "terminal")).toBe(false);
-    expect(keymap.bound("ctrl+n", "transcript")).toBe(false); expect(keymap.bound("ctrl+p", "transcript")).toBe(false);
+    // Ctrl+N/P도 섹션 선택을 이동하며 본문 스크롤 점프와 혼동하지 않는다.
+    app.mockInput.pressKey("n", { ctrl: true }); await app.render(); expect(app.state()?.selectedId).toBe("section-1");
+    app.mockInput.pressKey("p", { ctrl: true }); await app.render(); expect(app.state()?.selectedId).toBe("section-0");
+    expect(keymap.bound("ctrl+n", "transcript")).toBe(true); expect(keymap.bound("ctrl+p", "transcript")).toBe(true);
   } finally { await app.close(); }
 });
 

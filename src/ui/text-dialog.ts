@@ -3,6 +3,7 @@ import type { CommandId } from "../keybindings/commands.ts";
 import { reportUnexpected, type ExpectedError } from "../errors.ts";
 import type { Result } from "../result.ts";
 import { Button } from "./button.ts";
+import { halfPageStep } from "./navigation.ts";
 import { Clipboard } from "./clipboard.ts";
 import { uiTheme } from "./theme.ts";
 import { paintText } from "./theme-styles.ts";
@@ -94,6 +95,8 @@ export class TextDialog {
       case "dialog.next": this.scroll.scrollBy(1); break;
       case "dialog.page-up": this.scroll.scrollBy(-page); break;
       case "dialog.page-down": this.scroll.scrollBy(page); break;
+      case "dialog.half-page-up": this.scroll.scrollBy(-halfPageStep(this.scroll.viewport.height)); break;
+      case "dialog.half-page-down": this.scroll.scrollBy(halfPageStep(this.scroll.viewport.height)); break;
       case "dialog.first": this.scroll.scrollTo(0); break;
       case "dialog.last": this.scroll.scrollTo(Infinity); break;
       case "dialog.activate":

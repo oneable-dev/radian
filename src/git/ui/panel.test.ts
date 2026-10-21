@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { CodeRenderable, DiffRenderable, TextAttributes, TextRenderable, type Renderable, type TerminalColors } from "@opentui/core";
+import { CodeRenderable, DiffRenderable, ScrollBoxRenderable, TextAttributes, TextRenderable, type Renderable, type TerminalColors } from "@opentui/core";
 import { uiTheme } from "../../ui/theme.ts";
 import { Button } from "../../ui/button.ts";
 import { PromptInput } from "../../agents/ui/prompt-input.ts";
@@ -88,7 +88,56 @@ async function mount(options: { actions?: Partial<GitActions>; initial?: WorkVie
   };
 }
 
-test.each(["arrows", "vim"] as const)("Git의 세 탭 묶음은 %s로 전환하고 탭 포커스를 유지한다", async navigation => {
+test("Git 커밋의 Ctrl+D/U는 선택을 반 페이지 이동하고 중간 커밋을 조회하지 않는다", async () => {
+  // 그래프의 연결선까지 포함한 실제 행 높이로 여러 후보를 한 번에 건너뛴다.
+  const commits = Array.from({ length: 40 }, (_, index) => ({ ...commit, oid: (index + 1).toString(16).padStart(40, "0"), subject: `Candidate ${index}`, parents: [] }));
+  const data = { ...snapshot(), headOid: commits[0]!.oid, commits }, lookups: string[] = [];
+  const app = await mount({ source: { load: async () => ok(data), compare: async () => ok(comparison()), details: async selected => {
+    lookups.push(selected.oid); return ok({ commit: selected, message: selected.subject, files: [] });
+  } } });
+  try {
+    const list = app.get("git-history") as ScrollBoxRenderable;
+    const step = Math.max(1, Math.floor(list.viewport.height / (2 * app.get("git-history:__working_tree__").height)));
+    list.focus();
+
+    app.mockInput.pressKey("d", { ctrl: true }); await app.renderOnce(); await app.renderOnce();
+
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commits[step - 1]!.oid);
+    expect(lookups).toEqual([commits[step - 1]!.oid]);
+    app.mockInput.pressKey("u", { ctrl: true }); await app.renderOnce();
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBeNull();
+    expect(lookups).toHaveLength(1); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Git 상세와 양쪽 diff의 Ctrl+D/U는 포커스한 본문을 반 페이지 왕복한다", async () => {
+  // 후보 목록이 아닌 상세 본문에서는 선택을 바꾸지 않고 스크롤만 이동한다.
+  const app = await mount({ source: { load: async () => ok(snapshot()), compare: async () => ok(comparison()), details: async selected => ok({
+    commit: selected, message: Array.from({ length: 80 }, (_, index) => `Detail ${index}`).join("\n"),
+    files: [{ kind: "commit", status: "M", path: "src/login.ts", commit: selected }],
+  }) } });
+  try {
+    await app.chooseCommit(); const details = app.get("git-details") as ScrollBoxRenderable;
+    details.focus(); details.scrollTo(0); await app.renderOnce();
+    const half = Math.floor(details.viewport.height / 2);
+
+    app.mockInput.pressKey("d", { ctrl: true }); await app.renderOnce(); expect(details.scrollTop).toBe(half);
+    app.mockInput.pressKey("u", { ctrl: true }); await app.renderOnce(); expect(details.scrollTop).toBe(0);
+    app.get("git-files").focus(); app.mockInput.pressEnter();
+    await app.waitFor(() => app.codes().length === 2); await app.renderOnce();
+    app.get("git-diff").focus();
+    const panes = app.codes(), distance = Math.floor(panes[0]!.height / 2);
+    for (const pane of panes) pane.scrollY = 0;
+    app.mockInput.pressKey("d", { ctrl: true }); await app.renderOnce();
+
+    expect(panes.map(pane => pane.scrollY)).toEqual([distance, distance]);
+    app.mockInput.pressKey("u", { ctrl: true }); await app.renderOnce();
+    expect(panes.map(pane => pane.scrollY)).toEqual([0, 0]);
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each(["arrows", "vim", "control"] as const)("Git의 세 탭 묶음은 %s로 전환하고 탭 포커스를 유지한다", async navigation => {
   // 뷰·상세·ref 종류 탭 모두 같은 가로 탐색 계약을 갖는다.
   const app = await mount();
   const controls = (node: Renderable): Button[] => [...(node instanceof Button ? [node] : []), ...node.getChildren().flatMap(controls)];
@@ -97,7 +146,8 @@ test.each(["arrows", "vim"] as const)("Git의 세 탭 묶음은 %s로 전환하�
     if (!found) throw new Error(`Missing Git tab ${label}`);
     return found;
   };
-  const move = (next: boolean) => navigation === "arrows" ? app.mockInput.pressArrow(next ? "right" : "left") : app.mockInput.pressKey(next ? "l" : "h");
+  const move = (next: boolean) => navigation === "arrows" ? app.mockInput.pressArrow(next ? "right" : "left")
+    : navigation === "control" ? app.mockInput.pressKey(next ? "n" : "p", { ctrl: true }) : app.mockInput.pressKey(next ? "l" : "h");
   const state = () => app.view.workViewPreferences.gitViews?.["demo:main"];
   try {
     control("Commits").focus(); await app.renderOnce();

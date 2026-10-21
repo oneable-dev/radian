@@ -63,11 +63,12 @@ async function mount(initial?: WorkViewPreferences, clock?: ManualClock) {
   };
 }
 
-test.each(["arrows", "vim"] as const)("터미널 탭의 %s 탐색은 포커스한 탭을 기준으로 전환하고 쉘에 키를 보내지 않는다", async navigation => {
+test.each(["arrows", "vim", "control"] as const)("터미널 탭의 %s 탐색은 포커스한 탭을 기준으로 전환하고 쉘에 키를 보내지 않는다", async navigation => {
   // 활성 터미널과 포커스한 비활성 탭이 달라도 포커스 위치를 기준으로 이동한다.
   const app = await mount();
   const tab = (id: string) => app.renderer.root.findDescendantById(`terminal-tab:${id}`)!.getChildren()[0]!;
-  const move = (next: boolean) => navigation === "arrows" ? app.mockInput.pressArrow(next ? "right" : "left") : app.mockInput.pressKey(next ? "l" : "h");
+  const move = (next: boolean) => navigation === "arrows" ? app.mockInput.pressArrow(next ? "right" : "left")
+    : navigation === "control" ? app.mockInput.pressKey(next ? "n" : "p", { ctrl: true }) : app.mockInput.pressKey(next ? "l" : "h");
   try {
     await app.createTerminal(); await app.visible("Shell shell-1");
     app.leader("n"); await app.visible("Shell shell-2"); app.leader("n"); await app.visible("Shell shell-3");
@@ -88,9 +89,11 @@ test.each(["arrows", "vim"] as const)("터미널 탭의 %s 탐색은 포커스�
     // PTY로 돌아간 뒤에는 같은 탐색 키도 원래 쉘 입력으로 전달한다.
     app.mockInput.pressKey("h"); app.mockInput.pressKey("l");
     app.mockInput.pressKey("n", { ctrl: true }); app.mockInput.pressKey("p", { ctrl: true });
+    app.mockInput.pressKey("d", { ctrl: true }); app.mockInput.pressKey("u", { ctrl: true });
     app.mockInput.pressArrow("left"); app.mockInput.pressArrow("right");
     expect(app.inputs).toContain("68"); expect(app.inputs).toContain("6c");
-    expect(app.inputs).toContain("0e"); expect(app.inputs).toContain("10"); expect(app.inputs.length).toBeGreaterThanOrEqual(6);
+    expect(app.inputs).toContain("0e"); expect(app.inputs).toContain("10");
+    expect(app.inputs).toContain("04"); expect(app.inputs).toContain("15"); expect(app.inputs.length).toBeGreaterThanOrEqual(8);
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-2");
   } finally { await app.close(); }
 });

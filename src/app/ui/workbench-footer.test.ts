@@ -66,7 +66,7 @@ test("트리에서 검색창으로 포커스를 옮기면 해당 영역의 단�
     app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab(); await app.renderOnce();
     expect(app.footerLine()).toContain("Enter Open worktree");
     expect(app.footerLine()).not.toContain("Close session");
-    expect(app.footerLine()).not.toContain("Ctrl+");
+    expect(app.footerLine()).toContain("Ctrl+d ½ page");
 
     app.mockInput.pressKey("f", { ctrl: true }); await app.renderOnce();
     await app.mockInput.typeText("nxq"); await app.renderOnce();

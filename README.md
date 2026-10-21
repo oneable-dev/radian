@@ -864,6 +864,13 @@ and programs' explicit RGB colors or Neovim colorschemes remain unchanged.
 
 ### Keybindings
 
+`Ctrl+N/P` moves the current candidate, tab or read-only cursor by one step. In result lists,
+`Ctrl+D/U` jumps the candidate by half a viewport of items: this applies to Workspace, History,
+AI Sessions, model selection and Git lists. In History/AI Sessions previews, Git details/diffs,
+conversation text and help/notification details, `Ctrl+D/U` moves the focused body by half a viewport.
+Search inputs keep native `Ctrl+D` deletion and `Ctrl+U` clearing; use **Tab** to focus results before
+jumping. Agent/Git prompt editing and embedded editors/shells retain their native input bindings.
+
 The default leader is **Ctrl+Space**. Press and release it, then press `c` to detach radian,
 `a`/`e`/`g`/`t` to select Agents/Editor/Git/Terminal, `b` to toggle workspace navigation,
 `w` or `f` to open workspace search, or `s` to monitor working sessions and unread results.

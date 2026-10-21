@@ -19,6 +19,7 @@ import { GitClipboard } from "./clipboard.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import type { Button, ButtonFactory } from "../../ui/button.ts";
 import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
+import { halfPageStep } from "../../ui/navigation.ts";
 import { PromptInput } from "../../agents/ui/prompt-input.ts";
 import type { DialogContent } from "../../ui/text-dialog.ts";
 
@@ -259,7 +260,7 @@ export class GitPanel {
       ...(this.canGoBack ? [hint("git.back", "Back")] : [])];
     const target = this.context;
     return [...(target ? [hint("git.ask", `Ask ${target.label.split(" ")[0]!.toLowerCase()}`), hint("git.copy", target.label.startsWith("File") ? "Copy path" : target.label.startsWith("Branch") || target.label.startsWith("Tag") ? "Copy name" : "Copy hash")] : []),
-      hint(context === "button" ? "button.activate" : "git.open", "Select"), hint("git.refresh", "Refresh"), ...(this.canGoBack ? [hint("git.back", "Back")] : [])];
+      hint(context === "button" ? "button.activate" : "git.open", "Select"), hint("git.half-page-down", "½ page"), hint("git.refresh", "Refresh"), ...(this.canGoBack ? [hint("git.back", "Back")] : [])];
   }
   show(worktree: Worktree | null, sessionId: string | null): void {
     if (this.disposed || this.root.isDestroyed) return;
@@ -531,10 +532,15 @@ export class GitPanel {
       case "git.previous": case "git.next": case "git.first": case "git.last":
         if (list) { list.move(command.slice(4) as "previous" | "next" | "first" | "last"); return; }
         break;
+      case "git.half-page-up": case "git.half-page-down":
+        if (list) { list.moveHalfPage(command === "git.half-page-up" ? -1 : 1); return; }
+        break;
     }
-    const down = command === "git.next" || command === "git.page-down";
+    const half = command === "git.half-page-up" || command === "git.half-page-down";
+    const down = command === "git.next" || command === "git.page-down" || command === "git.half-page-down";
     const page = command === "git.page-down" || command === "git.page-up";
-    const delta = (down ? 1 : -1) * (page ? Math.max(1, this.main.height - 3) : 1);
+    const height = within(focus, this.diffFocus) ? this.codePanes()[0]?.height ?? this.diffFocus.height : this.details.viewport.height;
+    const delta = (down ? 1 : -1) * (half ? halfPageStep(height) : page ? Math.max(1, this.main.height - 3) : 1);
     if (within(focus, this.diffFocus)) {
       const panes = this.codePanes(); const left = panes[0];
       if (left) {

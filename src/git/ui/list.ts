@@ -2,6 +2,7 @@ import { BoxRenderable, ScrollBoxRenderable, StyledText, TextRenderable, type Cl
 import type { GraphCell } from "./graph.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText, styleChunk, type StyleGroup, type UiStyles } from "../../ui/theme-styles.ts";
+import { halfPageStep } from "../../ui/navigation.ts";
 
 type GitListSpan = { text: string; color?: StyleGroup };
 export type GitListItem = { key: string; label: string | readonly GitListSpan[]; graph?: GraphCell[]; connector?: GraphCell[]; color?: StyleGroup; disabled?: boolean; gapBefore?: boolean };
@@ -72,12 +73,16 @@ export class GitList {
     this.selected = key; this.highlight();
     this.root.scrollChildIntoView(`${this.root.id}:${key}`); this.choose(key);
   }
-  move(direction: "previous" | "next" | "first" | "last"): void {
+  moveHalfPage(direction: -1 | 1): void {
+    const stride = this.rows.get(this.selected ?? "")?.height ?? 1;
+    this.move(direction < 0 ? "previous" : "next", halfPageStep(this.root.viewport.height, stride));
+  }
+  move(direction: "previous" | "next" | "first" | "last", count = 1): void {
     const items = this.items.filter((item) => !item.disabled);
     if (!items.length) return;
     const current = items.findIndex((item) => item.key === this.selected);
     const next = direction === "first" ? 0 : direction === "last" ? items.length - 1
-      : Math.max(0, Math.min(items.length - 1, current + (direction === "previous" ? -1 : 1)));
+      : Math.max(0, Math.min(items.length - 1, current + (direction === "previous" ? -count : count)));
     this.select(items[next]!.key);
   }
   open(): void { if (this.selected) this.activate(this.selected); }

@@ -51,6 +51,58 @@ test("키보드 이동과 백그라운드 갱신은 선택을 바꾸지 않고 E
   } finally { await app.close(); }
 });
 
+test.each(["search", "results"] as const)("%s 포커스에서 Ctrl+N/P는 화면 안 후보의 강조만 옮기고 스크롤하지 않는다", async focus => {
+  // 세 후보가 모두 보이는 목록에서는 키보드 탐색이 뷰포트를 움직일 이유가 없다.
+  const app = await mount();
+  try {
+    if (focus === "search") app.mockInput.pressTab({ shift: true });
+    await app.render();
+    const tree = app.get("workspace-tree") as ScrollBoxRenderable, top = tree.scrollTop;
+    const border = (id: string) => { const row = app.get(id); return app.captureCharFrame().split("\n")[row.y]![row.x]; };
+
+    // 검색에 포커스가 남아 있어도 다음 후보를 실제 화면에서 식별할 수 있어야 한다.
+    app.mockInput.pressKey("n", { ctrl: true }); await app.render();
+
+    expect(border("worktree:demo:feature")).toBe("┌"); expect(border("worktree:demo:main")).not.toBe("┌");
+    expect(tree.scrollTop).toBe(top); expect(app.selection.worktree?.id).toBe("demo:main");
+    app.selection.replaceSnapshot(structuredClone(app.selection.snapshot)); await app.render();
+    expect(border("worktree:demo:feature")).toBe("┌"); expect(tree.scrollTop).toBe(top);
+    app.mockInput.pressTab(); await app.render();
+    expect(border("worktree:demo:feature")).toBe("┌");
+    app.mockInput.pressKey("p", { ctrl: true }); await app.render();
+
+    expect(border("worktree:demo:main")).toBe("┌"); expect(border("worktree:demo:feature")).not.toBe("┌");
+    expect(tree.scrollTop).toBe(top); expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each(["search", "results"] as const)("%s 포커스의 긴 목록에서도 Ctrl+N/P는 후보를 표시하며 필요한 만큼만 따라간다", async focus => {
+  // 화면 밖 후보로 이동할 때도 선택 표시 없이 목록만 스크롤하는 상태가 되면 안 된다.
+  const repository = demoWorkspace()[0]!;
+  const worktrees = Array.from({ length: 20 }, (_, index) => ({ ...repository.worktrees[0]!, id: `tree-${index}`, path: `/demo/${index}`, name: `workspace-${index}`, branch: `branch-${index}`, sessions: [] }));
+  const app = await mount([{ ...repository, worktrees }], { width: 60, height: 12 });
+  try {
+    if (focus === "search") app.mockInput.pressTab({ shift: true });
+    await app.render();
+    const tree = app.get("workspace-tree") as ScrollBoxRenderable, theme = uiTheme(app.renderer);
+
+    // 다음/이전 후보가 이미 보이면 뷰포트를 유지하고, 벗어날 때만 그 후보를 드러낸다.
+    for (const [index, key] of [[1, "n"], [2, "n"], [3, "n"], [4, "n"], [5, "n"], [4, "p"], [3, "p"]] as const) {
+      const row = app.get(`worktree:tree-${index}`), top = tree.scrollTop;
+      const visible = row.y >= tree.viewport.y && row.y + row.height <= tree.viewport.y + tree.viewport.height;
+      app.mockInput.pressKey(key, { ctrl: true }); await app.render();
+
+      const label = app.get(`${row.id}:label`);
+      expect(label.y).toBeGreaterThanOrEqual(tree.viewport.y); expect(label.y + 2).toBeLessThanOrEqual(tree.viewport.y + tree.viewport.height);
+      expect(app.cell(label.x, label.y).fg.toInts()).toEqual(theme.styles["sidebar.selected"].fg.toInts());
+      if (visible) expect(tree.scrollTop).toBe(top);
+      expect(app.selection.worktree?.id).toBe("tree-0");
+    }
+    expect(app.renderer.currentFocusedRenderable?.id).toBe(focus === "search" ? "workspace-search" : "workspace-tree");
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("브랜치 줄 클릭도 같은 워크트리를 열고 팝업을 닫는다", async () => {
   // 두 줄의 클릭 영역을 같은 워크트리로 취급한다.
   const app = await mount();

@@ -25,7 +25,7 @@ test("방향키 바인딩은 유지하되 단축키 안내에는 대체 탐색 �
   const listHints = map.hints("workspace.previous", "workspace");
 
   expect(searchHints).toEqual(["Ctrl+p", "Ctrl+n"]); expect(listHints).toBe("k/Ctrl+p");
-  expect(map.hints("git.previous", "git")).toBe("k"); expect(map.hints("session.next", "session-tabs")).toBe("l");
+  expect(map.hints("git.previous", "git")).toBe("k/Ctrl+p"); expect(map.hints("session.next", "session-tabs")).toBe("l/Ctrl+n");
   expect(map.bound("up", "search")).toBe(true); expect(map.bound("down", "workspace")).toBe(true);
 });
 

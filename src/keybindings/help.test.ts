@@ -10,7 +10,7 @@ test("도움말은 기본 방향키 대신 실제 등록된 대체 탐색 키를
   // 현재 문맥에서 사용 가능한 Git 명령만 도움말에 포함한다.
   const help = keymapHelp(keymap, "git", command => command.startsWith("git."));
 
-  expect(help).toMatch(/^k\s+git previous$/mu); expect(help).toMatch(/^j\s+git next$/mu);
+  expect(help).toMatch(/^k \/ Ctrl\+p\s+git previous$/mu); expect(help).toMatch(/^j \/ Ctrl\+n\s+git next$/mu);
   expect(help).toMatch(/^h\s+git left$/mu); expect(help).toMatch(/^l\s+git right$/mu);
   expect(help).not.toMatch(/[↑↓←→]/u); expect(help).not.toContain("arrows");
 });

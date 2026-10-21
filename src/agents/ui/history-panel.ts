@@ -10,6 +10,7 @@ import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { TranscriptPanel } from "./transcript-panel.ts";
+import { halfPageStep } from "../../ui/navigation.ts";
 import type { TranscriptSection } from "../transcript.ts";
 
 export type HistoryActions = {
@@ -116,7 +117,7 @@ export class SessionHistoryPanel {
   get shortcuts(): readonly FooterShortcut[] {
     const hint = (command: Extract<CommandId, `history.${string}`>, label: string) => ({ key: this.actions.keyHint(command, this.context), label });
     return [...(this.selected && !this.selected.unavailableReason && this.actions.resume && !this.resuming && !this.loading ? [hint("history.open", "Open")] : []),
-      hint("history.dismiss", "Close"), hint("history.preview", "Preview"), hint("history.previous", "Previous"), hint("history.next", "Next"), hint("history.refresh", "Refresh")].filter((item) => item.key);
+      hint("history.dismiss", "Close"), hint("history.preview", "Preview"), hint("history.previous", "Previous"), hint("history.next", "Next"), hint("history.half-page-down", "½ page"), hint("history.refresh", "Refresh")].filter((item) => item.key);
   }
   private get selected(): HistoryItem | undefined { return this.filtered[this.cursor]; }
 
@@ -276,7 +277,11 @@ export class SessionHistoryPanel {
     if (command === "history.first") this.cursor = 0;
     else if (command === "history.last") this.cursor = this.filtered.length - 1;
     else if (command === "history.previous" || command === "history.next") this.cursor += command === "history.previous" ? -1 : 1;
-    else return;
+    else if (command === "history.half-page-up" || command === "history.half-page-down") {
+      const direction = command === "history.half-page-up" ? -1 : 1;
+      if (this.transcript.focused) { this.preview.scrollBy(direction * halfPageStep(this.preview.viewport.height)); return; }
+      this.cursor += direction * halfPageStep(this.list.viewport.height, 2);
+    } else return;
     this.cursor = Math.max(0, Math.min(this.filtered.length - 1, this.cursor)); this.paint(); this.schedulePreview();
   }
   private resize = (): void => {

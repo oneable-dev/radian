@@ -9,6 +9,7 @@ import { singleLine } from "../../ui/text.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { Button } from "../../ui/button.ts";
+import { halfPageStep } from "../../ui/navigation.ts";
 
 type Scope = { sessionId: string; conversationId: string };
 export type ModelPickerActions = {
@@ -98,7 +99,7 @@ export class ModelPicker {
     return draft !== undefined && model.efforts.includes(draft) ? draft : model.efforts.includes(model.effort) ? model.effort : undefined;
   }
   get shortcuts(): readonly FooterShortcut[] {
-    return ([ ["model.select", "Apply"], ["model.dismiss", "Cancel"], ["model.search", "Search"], ["focus.next", "Model/effort"], ["model.previous", "Previous"], ["model.next", "Next"], ["model.effort-less", "Less effort"], ["model.effort-more", "More effort"] ] as const)
+    return ([ ["model.select", "Apply"], ["model.dismiss", "Cancel"], ["model.search", "Search"], ["focus.next", "Model/effort"], ["model.previous", "Previous"], ["model.next", "Next"], ["model.half-page-down", "½ page"], ["model.effort-less", "Less effort"], ["model.effort-more", "More effort"] ] as const)
       .map(([command, label]) => ({ key: this.actions.keyHint(command, this.context), label,
         ...(command === "model.select" ? { disabled: this.loading || this.applying || this.selectedEffort === undefined } : {}) }));
   }
@@ -239,6 +240,7 @@ export class ModelPicker {
     if (command === "model.first") this.cursor = 0;
     else if (command === "model.last") this.cursor = this.filtered.length - 1;
     else if (command === "model.previous" || command === "model.next") this.cursor += command === "model.previous" ? -1 : 1;
+    else if (command === "model.half-page-up" || command === "model.half-page-down") this.cursor += (command === "model.half-page-up" ? -1 : 1) * halfPageStep(this.list.viewport.height, 2);
     else return;
     this.cursor = Math.max(0, Math.min(this.filtered.length - 1, this.cursor)); this.paint();
   }

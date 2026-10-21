@@ -22,6 +22,7 @@ import { TextDialog } from "../../ui/text-dialog.ts";
 import { keymapHelp } from "../../keybindings/help.ts";
 import { Button, type ButtonVariant } from "../../ui/button.ts";
 import { panelSpacing } from "../../ui/spacing.ts";
+import { halfPageStep } from "../../ui/navigation.ts";
 import { singleLine } from "../../ui/text.ts";
 import { err, ok, type Result } from "../../result.ts";
 import { CapabilityError, ProtocolError, SessionError, reportUnexpected, type ExpectedError } from "../../errors.ts";
@@ -332,15 +333,15 @@ export class Workbench {
     const pair = (a: CommandId, b: CommandId, label: string): FooterShortcut => ({ key: [this.keymap.hint(a, context), this.keymap.hint(b, context)].filter(Boolean).join("/"), label });
     const help = this.keymap.bindings.find((binding) => binding.command === "app.help" && binding.keys.length === 1 && inScope(binding.scope, context));
     this.footer.setHelpHint(help ? formatKeys(help.keys) : this.keymap.hint("app.help", context));
-    if (this.dialog.visible) shortcuts = [hint("dialog.copy", "Copy"), hint("dialog.page-down", "Page"), hint("dialog.dismiss", "Close")];
+    if (this.dialog.visible) shortcuts = [hint("dialog.copy", "Copy"), hint("dialog.half-page-down", "½ page"), hint("dialog.dismiss", "Close")];
     else if (this.models.visible) shortcuts = this.models.shortcuts;
     else if (this.history.visible) shortcuts = this.history.shortcuts;
     else if (this.monitor?.visible) shortcuts = this.monitor.shortcuts;
-    else if (focused === this.search) shortcuts = [hint("focus.results", "Open"), pair("workspace.previous", "workspace.next", "Navigate"), hint("workspace.dismiss", "Close")];
+    else if (focused === this.search) shortcuts = [hint("focus.results", "Open"), pair("workspace.previous", "workspace.next", "Navigate"), hint("focus.next", "Results"), hint("workspace.dismiss", "Close")];
     else if (focused === this.tree) shortcuts = [
       ...(this.visibleRows().some((row) => row.kind === "worktree" && row.key === this.navigationKey) ? [hint("workspace.open", "Open worktree")] : []),
       pair("workspace.previous", "workspace.next", "Navigate"), hint("workspace.dismiss", "Close"),
-      pair("workspace.first", "workspace.last", "First/last"),
+      hint("workspace.half-page-down", "½ page"), pair("workspace.first", "workspace.last", "First/last"),
     ];
     else if (focused && focused === this.editor?.input) shortcuts = [hint("focus.sidebar", "Workspaces"), ...(!this.keymap.bound("escape", "editor") ? [{ key: "Esc", label: "Normal mode" }] : [])];
     else if (this.terminals.tabsFocused) shortcuts = [pair("terminal.tab-previous", "terminal.tab-next", "Terminal"), hint("button.activate", "Open"), hint("tab.new", "New terminal"), hint("terminal.close", "Close")];
@@ -440,10 +441,10 @@ export class Workbench {
     else if (bottom > viewport.y + viewport.height) this.tree.scrollBy(bottom - viewport.y - viewport.height);
   }
 
-  private moveTree(direction: "up" | "down" | "home" | "end"): void {
+  private moveTree(direction: "up" | "down" | "home" | "end", step = 1): void {
     const rows = this.visibleRows().filter((row) => row.kind === "worktree");
     const index = rows.findIndex((row) => row.key === this.navigationKey);
-    let next = direction === "up" ? index - 1 : index + 1;
+    let next = direction === "up" ? index - step : index + step;
     if (direction === "home") next = 0;
     if (direction === "end") next = rows.length - 1;
     const row = rows[Math.max(0, Math.min(rows.length - 1, next))];
@@ -579,6 +580,9 @@ export class Workbench {
       case "workspace.next": this.moveTree("down"); break;
       case "workspace.first": this.moveTree("home"); break;
       case "workspace.last": this.moveTree("end"); break;
+      // Two label lines plus the shared border give each workspace a three-row stride.
+      case "workspace.half-page-up": this.moveTree("up", halfPageStep(this.tree.viewport.height, 3)); break;
+      case "workspace.half-page-down": this.moveTree("down", halfPageStep(this.tree.viewport.height, 3)); break;
       case "agent.clear": this.agent.clearPrompt(); break;
       case "agent.interrupt": void this.agent.interrupt().catch((error: unknown) => this.setNotice(reportUnexpected(error, "agent interruption"))); break;
       case "agent.newline": this.agent.prompt.newLine(); break;
@@ -662,7 +666,7 @@ export class Workbench {
     if (!this.navigationRevealPending) return;
     this.navigationRevealPending = false;
     // Native row positions settle after layout, not in the renderer's resize callback.
-    if (this.sidebar.visible && this.tree.focused && this.navigationKey) this.revealRow(this.navigationKey);
+    if (this.navigationKey) this.revealRow(this.navigationKey);
   };
 
   private render(): void {
@@ -761,8 +765,9 @@ export class Workbench {
       const view = this.rows.get(row.key);
       if (!view) continue;
       const presentation = rowPresentation(row);
-      const cursor = row.key === this.navigationKey && this.tree.focused, active = this.selected(row);
-      const highlighted = this.tree.focused ? cursor : active;
+      const active = this.selected(row);
+      // Search keeps input focus, but candidate navigation still needs a visible cursor.
+      const highlighted = row.key === this.navigationKey;
       const label = `${presentation.icon} ${singleLine(row.label)}`;
       const itemStyle = styles[highlighted ? "sidebar.selected" : "sidebar.item"];
       paintText(view.text, itemStyle);

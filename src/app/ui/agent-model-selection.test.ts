@@ -95,6 +95,8 @@ test("j/k와 h/l로 모델·effort를 미리 고르고 Tab 영역 이동 후 한
     app.mockInput.pressKey("h"); await app.render(); expect(app.captureCharFrame()).toContain("[low]");
     app.mockInput.pressKey("l"); app.mockInput.pressArrow("right"); await app.render(); expect(app.captureCharFrame()).toContain("[high]");
     app.mockInput.pressArrow("left"); await app.render(); expect(app.captureCharFrame()).toContain("[medium]");
+    app.mockInput.pressKey("p", { ctrl: true }); await app.render(); expect(app.captureCharFrame()).toContain("[low]");
+    app.mockInput.pressKey("n", { ctrl: true }); await app.render(); expect(app.captureCharFrame()).toContain("[medium]");
     expect(app.changes).toEqual([]);
     app.mockInput.pressEnter(); await app.render();
 
