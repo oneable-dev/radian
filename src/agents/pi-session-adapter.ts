@@ -115,7 +115,6 @@ export class PiSessionExecutor implements SessionExecutor {
   private admission: Promise<void> = Promise.resolve();
   private closeTask: Promise<Result<void, ExpectedError>> | undefined;
   private aborted = false;
-  private runRevision = 0;
   private closing = false;
   private disposed = false;
   private controlling = false;
@@ -346,21 +345,16 @@ export class PiSessionExecutor implements SessionExecutor {
         if (!saved.ok) return saved;
         if (revisionAtSubmission !== this.inputRevision || this.closing || this.disposed) return err(new CancelledError("Input was cancelled while saving attachment metadata."));
       }
-      const before = { status: this.status, error: this.error, aborted: this.aborted };
-      const revision = this.runRevision;
       const command = registered ? this.diagnostics.begin(name) : undefined;
       let handled = false;
-      // Command-side telemetry updates must not publish a provisional model run.
-      // Commands that actually start work still transition through the SDK's agent_start event.
-      if (this.session.isIdle && !registered) { this.status = "working"; this.error = null; this.aborted = false; }
+      // Admission, commands and handled input are not model runs. Only SDK work
+      // events may publish working, including work started by an extension.
       const result = await withCleanup(() => capture(() => this.session.prompt(text, {
         streamingBehavior: "steer",
         ...(replayImages ? { expandPromptTemplates: false } : {}),
         ...(images.length ? { images: [...images] } : {}),
-        // Handled input may never start a model run; restore its previous display state.
         preflightResult: (disposition) => {
           handled = disposition === "handled";
-          if (handled && this.session.isIdle && revision === this.runRevision) { this.status = before.status; this.error = before.error; this.aborted = before.aborted; }
           admitted.resolve(); if (!command?.failure) onAccepted?.();
         },
       })), async () => { if (command) this.diagnostics.end(command); });
@@ -463,7 +457,7 @@ export class PiSessionExecutor implements SessionExecutor {
       case "agent_start":
         this.started ??= { wall: Date.now(), monotonic: performance.now() };
         this.result = undefined;
-        this.runRevision++; this.status = "working"; break;
+        this.status = "working"; this.error = null; this.aborted = false; break;
       case "message_start": {
         const request = deliveredRequest(event.message);
         if (request) this.request = request;
@@ -487,7 +481,7 @@ export class PiSessionExecutor implements SessionExecutor {
       case "tool_execution_end": this.activeTools.delete(event.toolCallId); break;
       case "agent_settled":
         this.started = undefined;
-        this.runRevision++; this.aborted = event.aborted; this.status = this.finalStatus(event.aborted);
+        this.aborted = event.aborted; this.status = this.finalStatus(event.aborted);
         this.telemetry.refreshUsage(); break;
       // agent_end may precede retry/compaction/follow-up; never mark it complete.
     }

@@ -1,18 +1,43 @@
 import { expect, test } from "bun:test";
 import { demoWorkspace } from "../workspace/demo.ts";
-import { SessionRegistry, type SessionExecutor, type SessionContext } from "./session-registry.ts";
+import { SessionRegistry, type SessionExecutor, type SessionContext, type ExecutionState } from "./session-registry.ts";
 import { StorageError } from "../errors.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 import { ok } from "../result.ts";
 
-function executor(): SessionExecutor & { closes: number } {
+function executor(status: ExecutionState["status"] = "working"): SessionExecutor & { closes: number } {
   const conversationId = crypto.randomUUID();
   return { savedSessionId: conversationId, sessionFile: undefined,
-    state: { conversationId, status: "working", output: "original work", error: null }, closes: 0,
+    state: { conversationId, status, output: "original work", error: null }, closes: 0,
     subscribe: () => () => {}, prompt: async () => ok(undefined),
     async close() { this.closes++; return ok(undefined); },
   };
 }
+
+test.each([null, "complete", "failure", "working"] as const)("clear 준비 중에도 기존 %s 상태를 보존하고 명령 때문에 working을 만들지 않는다", async status => {
+  // 교체가 오래 걸려도 명령 처리 중인 상태와 실제 모델 실행 상태는 구분한다.
+  const original = executor(status), next = executor(null);
+  const prepared = Promise.withResolvers<SessionExecutor>(), creating = Promise.withResolvers<void>();
+  let calls = 0, replacement: ReturnType<SessionRegistry["clearSession"]> | undefined;
+  const registry = new SessionRegistry(demoWorkspace(), async () => {
+    if (++calls === 1) return original;
+    creating.resolve(); return prepared.promise;
+  });
+  try {
+    const id = expectOk(await registry.create("demo:main"));
+
+    // 새 대화 준비를 보류해 스피너가 잠깐 켜지는 중간 상태까지 확인한다.
+    replacement = registry.clearSession(id); await creating.promise;
+
+    // 실행 중이던 작업만 실행 상태를 유지하고 중복 요청 차단은 그대로 작동한다.
+    expect(registry.details(id)?.status).toBe(status);
+    expect(registry.snapshot[0]?.worktrees[0]?.sessions[0]?.status).toBe(status);
+    expect(registry.records[0]?.state.status).toBe(status);
+    expect(expectError(await registry.prompt(id, "wait for replacement")).code).toBe("SESSION_BUSY");
+    prepared.resolve(next); expectOk(await replacement);
+    expect(registry.details(id)?.status).toBeNull(); expect(original.closes).toBe(1);
+  } finally { prepared.resolve(next); if (replacement) await replacement; expectOk(await registry.shutdown()); }
+});
 
 test("새 SDK 세션 준비 실패는 원래 실행을 중단하거나 탭을 없애지 않는다", async () => {
   // Only the second factory call fails, before ownership is transferred or abort is requested.

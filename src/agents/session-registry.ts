@@ -100,7 +100,8 @@ export class SessionRegistry {
     // Recovery keeps transcript/status history, but account usage continues updating in the live SDK.
     const state = entry.recoveredState ? { ...entry.recoveredState, ...(live?.conversationId ? { conversationId: live.conversationId } : {}), ...(live?.resourceRevision !== undefined ? { resourceRevision: live.resourceRevision } : {}), ...(live?.telemetry ? { telemetry: live.telemetry } : {}) } : live;
     if (!state) return null;
-    return entry.replacing || entry.attention ? { ...state, ...(entry.replacing ? { status: "working" as const } : {}), ...(entry.attention ? { attention: entry.attention } : {}) } : state;
+    // Replacement guards input admission; it must not invent model activity for /clear.
+    return entry.attention ? { ...state, attention: entry.attention } : state;
   }
 
   acknowledge(id: string, conversationId: string, resultId: string): Result<void, ExpectedError> {

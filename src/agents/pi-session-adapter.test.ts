@@ -163,6 +163,38 @@ test("리로드는 대화·모델·기존 출력을 보존하며 전체 명령·
   } finally { await app.cleanup(); }
 });
 
+test.each([
+  ["new", false], ["new", true], ["clear", false], ["clear", true],
+  ["exit", false], ["exit", true], ["reload", false], ["reload", true],
+] as const)("/%s 관리 명령은 완료 이력 %j에서도 모델 요청이나 중간 working을 만들지 않는다", async (command, seeded) => {
+  // 빈 대화와 완료된 대화 모두에서 관리 명령을 실제 SDK 경로로 실행한다.
+  let requests = 0;
+  const app = await sdkFixture(false, options => ({ ...options, streamFn: (model, context, request) => {
+    requests++; return options.streamFn!(model, context, request);
+  } }));
+  let unsubscribe = () => {};
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    if (seeded) expectOk(await app.registry.prompt(id, "Existing completed conversation"));
+    const before = requests, statuses: (SessionExecutor["state"]["status"])[] = [];
+    unsubscribe = app.registry.subscribe(() => {
+      for (const repository of app.registry.snapshot) for (const tree of repository.worktrees)
+        for (const session of tree.sessions) statuses.push(session.status);
+    });
+
+    // UI 명령 파서 이후 호스트가 호출하는 동일한 관리 작업을 사용한다.
+    switch (command) {
+      case "new": expectOk(await app.registry.newTab(id)); break;
+      case "clear": expectOk(await app.registry.clearSession(id)); break;
+      case "exit": expectOk(await app.registry.close(id)); break;
+      case "reload": expectOk(await app.registry.reload(id)); break;
+    }
+
+    // 최종 상태뿐 아니라 모든 발행 스냅샷에도 가짜 실행이 없어야 한다.
+    expect(statuses).not.toContain("working"); expect(requests).toBe(before);
+  } finally { unsubscribe(); await app.cleanup(); }
+});
+
 test("실행 중 리로드는 요청을 중단하지 않고 busy로 거부한다", async () => {
   // 진행 중인 모델과 명령 리소스 교체는 동시에 허용하지 않는다.
   const app = await sdkFixture(true);
@@ -374,6 +406,61 @@ test("SDK 명령 목록 조회와 실행은 모델을 호출하지 않고 이전
   } finally { await app.cleanup(); }
 });
 
+test("확장이 안내만 표시하고 입력을 소비하면 중간 상태에도 가짜 실행을 표시하지 않는다", async () => {
+  // 등록 명령뿐 아니라 input 훅이 소비하는 입력도 모델 실행과 구분한다.
+  let requests = 0;
+  const app = await sdkFixture(false, options => ({ ...options, streamFn: (model, context, request) => {
+    requests++; return options.streamFn!(model, context, request);
+  } }));
+  let unsubscribe = () => {};
+  try {
+    const directory = join(app.directory, "agent", "extensions"); await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "handled.ts"), `export default function (pi) {
+      pi.on("input", async (event) => {
+        if (event.text !== "/fixture-handled") return;
+        pi.sendMessage({ customType: "fixture-info", content: "Settings updated", display: true }, { triggerTurn: false });
+        return { action: "handled" };
+      });
+    }`);
+    const id = expectOk(await app.registry.create(app.main.id));
+    const statuses: (SessionExecutor["state"]["status"] | undefined)[] = [];
+    unsubscribe = app.registry.subscribe(() => statuses.push(app.registry.details(id)?.status));
+
+    // 안내 메시지가 세션 변경 이벤트를 발행하는 순간까지 관찰한다.
+    expectOk(await app.registry.prompt(id, "/fixture-handled"));
+
+    // 최종 상태만 복구해서는 이미 시작된 스피너의 잔여 애니메이션을 막지 못한다.
+    expect(statuses.length).toBeGreaterThan(0); expect(statuses).not.toContain("working");
+    expect(app.registry.details(id)?.status).toBeNull(); expect(requests).toBe(0);
+    expect(app.registry.details(id)?.result).toBeUndefined();
+    expect(app.registry.details(id)?.sections?.some(section => section.completion)).toBe(false);
+  } finally { unsubscribe(); await app.cleanup(); }
+});
+
+test("등록된 슬래시 명령이 실제 모델 작업을 시작하면 working과 완료를 정상적으로 표시한다", async () => {
+  // 슬래시 접두어만으로 로딩을 숨기면 실제 실행을 시작하는 확장도 숨겨진다.
+  const app = await sdkFixture(true);
+  const settled = Promise.withResolvers<void>();
+  let unsubscribe = () => {};
+  try {
+    const directory = join(app.directory, "agent", "extensions"); await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "run.ts"), `export default function (pi) {
+      pi.registerCommand("fixture-run", { handler: async () => { pi.sendUserMessage("hold command"); } });
+    }`);
+    const id = expectOk(await app.registry.create(app.main.id));
+    unsubscribe = app.registry.subscribe(() => { if (app.registry.details(id)?.status === "complete") settled.resolve(); });
+
+    // 실제 SDK 작업이 시작한 뒤 공급자 응답만 보류한다.
+    expectOk(await app.registry.prompt(id, "/fixture-run")); await app.streams.waitFor("command");
+
+    // 제어 명령과 달리 실제 작업은 시작부터 종료까지 추적되어야 한다.
+    expect(app.registry.details(id)?.status).toBe("working");
+    expect(app.registry.details(id)?.runTiming).toBeDefined();
+    app.streams.gates.get("command")!.finish("Command work finished"); await settled.promise;
+    expect(app.registry.details(id)?.status).toBe("complete"); expect(app.registry.details(id)?.result?.outcome).toBe("complete");
+  } finally { unsubscribe(); await app.cleanup(); }
+});
+
 test.each([true, false])("부가 완료 기록 저장 실패는 완료된 요청을 거절로 바꾸지 않고 경고로 구분한다: %j", async (expected) => {
   // 실제 모델·도구 처리가 끝난 뒤 부가 메타데이터의 저장 경계만 실패시킨다.
   const app = await sdkFixture();
@@ -486,7 +573,19 @@ test("Fast 명령은 모델 호출 없이 처리되고 native Codex HTTP 요청�
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     expect(app.registry.details(id)?.telemetry?.fast).toBe(false);
-    expectOk(await app.registry.prompt(id, "/fast on")); expect(bodies).toHaveLength(0);
+    const statuses: (SessionExecutor["state"]["status"] | undefined)[] = [];
+    const toggle = async (text: string) => {
+      statuses.length = 0;
+      const before = app.registry.details(id);
+      const unsubscribe = app.registry.subscribe(() => statuses.push(app.registry.details(id)?.status));
+      try { expectOk(await app.registry.prompt(id, text)); } finally { unsubscribe(); }
+      // Fast 설정 텔레메트리는 프롬프트 위와 세션 탭의 로딩을 시작해서는 안 된다.
+      expect(statuses.length).toBeGreaterThan(0); expect(statuses).not.toContain("working");
+      expect(app.registry.details(id)?.status).toBe(before?.status);
+      expect(app.registry.details(id)?.result).toEqual(before?.result);
+    };
+    await toggle("/fast on"); await toggle("/fast status"); await toggle("/fast off"); await toggle("/fast");
+    expect(bodies).toHaveLength(0);
     // 리로드가 기존 Fast 선택·텔레메트리 구독을 지우거나 모델 요청을 만들면 안 된다.
     expectOk(await app.registry.reload(id));
     expect(bodies).toHaveLength(0); expect(app.registry.details(id)?.telemetry?.fast).toBe(true);
@@ -495,7 +594,7 @@ test("Fast 명령은 모델 호출 없이 처리되고 native Codex HTTP 요청�
 
     expect(bodies[0]?.service_tier).toBe("priority"); expect(bodies[0]?.reasoning).toMatchObject({ effort: "high" });
     expect(app.registry.details(id)?.telemetry?.fast).toBe(true);
-    expectOk(await app.registry.prompt(id, "/fast off")); expect(bodies).toHaveLength(1);
+    await toggle("/fast off"); expect(bodies).toHaveLength(1);
     expect(app.registry.details(id)?.telemetry?.fast).toBe(false);
     expectOk(await app.registry.prompt(id, "standard fixture request"));
     expect(bodies).toHaveLength(2); expect(bodies[1]).not.toHaveProperty("service_tier");
