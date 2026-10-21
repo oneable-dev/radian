@@ -42,7 +42,7 @@ export const defaultBindings = {
   "view.editor": [key("<leader> e")],
   "view.git": [key("<leader> g")],
   "view.terminal": [key("<leader> t")],
-  "tab.new": [key("<leader> n")],
+  "tab.new": [key("ctrl+n", "prompt"), key("ctrl+n", "terminal"), key("ctrl+n", "button"), key("ctrl+n", "none"), key("<leader> n")],
   "tab.select-1": [key("<leader> 1")],
   "tab.select-2": [key("<leader> 2")],
   "tab.select-3": [key("<leader> 3")],

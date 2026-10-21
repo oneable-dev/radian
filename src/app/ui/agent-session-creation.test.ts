@@ -40,14 +40,16 @@ async function mount() {
   };
 }
 
-test.each(["leader", "session-strip"] as const)("%s에서 새 세션을 만들면 새 탭과 입력창으로 이동하고 기존 초안을 보존한다", async source => {
+test.each(["leader", "ctrl-n", "session-strip"] as const)("%s에서 새 세션을 만들면 새 탭과 입력창으로 이동하고 기존 초안을 보존한다", async source => {
   // Both creation entry points must target the new conversation, not the previous draft.
   const app = await mount();
   try {
     if (source === "session-strip") app.renderer.root.findDescendantById("agent-session-list")!.focus();
 
     // Creation is asynchronous, so edits made before it finishes must remain in the old session.
-    if (source === "leader") app.leader("n"); else app.mockInput.pressKey("n");
+    if (source === "leader") app.leader("n");
+    else if (source === "ctrl-n") app.mockInput.pressKey("n", { ctrl: true });
+    else app.mockInput.pressKey("n");
     expect(app.creations.map(request => request.worktreeId)).toEqual(["demo:main"]);
     expect(app.selection.sessionId).toBe("a1");
     app.input.value = "Edited while creating";

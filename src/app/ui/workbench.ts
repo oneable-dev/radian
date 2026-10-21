@@ -337,8 +337,9 @@ export class Workbench {
     else if (this.terminals.tabsFocused) shortcuts = [pair("terminal.tab-previous", "terminal.tab-next", "Terminal"), hint("button.activate", "Open"), hint("tab.new", "New terminal"), hint("terminal.close", "Close")];
     else if (focused && focused === this.terminals?.input) shortcuts = [
       ...(!this.keymap.bound("ctrl+c", "terminal") ? [{ key: "Ctrl+C", label: "Interrupt" }] : []),
-      ...(this.terminals.canScroll ? [pair("terminal.scroll-up", "terminal.scroll-down", "Scroll")] : []), hint("focus.sidebar", "Workspaces"),
+      hint("tab.new", "New terminal"), ...(this.terminals.canScroll ? [pair("terminal.scroll-up", "terminal.scroll-down", "Scroll")] : []), hint("focus.sidebar", "Workspaces"),
     ];
+    else if (this.terminals.root.visible && this.commandAvailable("tab.new")) shortcuts = [hint("tab.new", "New terminal")];
     else if (this.agent.sessionTabsFocused) shortcuts = this.agent.sessionShortcuts;
     else if (this.agent.transcriptContext()) shortcuts = this.agent.transcriptShortcuts;
     else if (focused === this.agent.prompt && this.agent.active) {
@@ -354,7 +355,7 @@ export class Workbench {
           hint("agent.newline", "New line"), ...(this.agent.prompt.canInspect ? [hint("agent.inspect", "Inspect")] : []),
           ...(this.agent.canInterrupt ? [hint("agent.interrupt", "Interrupt")] : []),
           ...(this.agent.prompt.value ? [hint("agent.clear", "Clear")] : []),
-          hint("focus.transcript", "Transcript"), hint("sidebar.toggle", "Workspace")];
+          hint("focus.transcript", "Transcript"), hint("sidebar.toggle", "Workspace"), hint("tab.new", "New session")];
     } else if (context === "git" || context === "git-tabs" || context === "git-prompt" || this.git.available("git.back")) shortcuts = this.git.shortcuts;
     else if (focused) {
       const label = this.buttonHints.get(focused);

@@ -26,11 +26,11 @@ export class TerminalPanel {
   private readonly messageRow: BoxRenderable;
   private readonly viewport: BoxRenderable;
   private readonly spinner: LoadingSpinner;
-  private readonly newButton: BoxRenderable;
   private readonly closeButton: BoxRenderable;
   private readonly reconnectButton: BoxRenderable;
   private readonly tabButtons = new Map<string, Button>();
   private readonly creating = new Set<string>();
+  private defaultRequest: string | undefined;
   private worktree: Worktree | null = null;
   private items: readonly TerminalInfo[] = [];
   private selected: string | undefined;
@@ -52,16 +52,15 @@ export class TerminalPanel {
   constructor(private readonly renderer: CliRenderer, private readonly actions: TerminalActions | undefined,
     private readonly button: ButtonFactory, private readonly notice: (message: string) => void,
     private readonly selectionChanged: (worktreeId: string, id: string | null) => void, private readonly changed: () => void, private readonly unavailable?: string, private readonly terminalTheme?: TerminalTheme) {
-    this.root = new BoxRenderable(renderer, { id: "terminal-view", flexGrow: 1, minHeight: 0, flexDirection: "column", visible: false });
+    this.root = new BoxRenderable(renderer, { id: "terminal-view", flexGrow: 1, minHeight: 0, flexDirection: "column", visible: false, focusable: true });
     const toolbar = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.tabs = new ScrollBoxRenderable(renderer, { height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0, scrollX: true, scrollY: false,
       contentOptions: { flexDirection: "row", gap: 1 }, horizontalScrollbarOptions: { visible: false },
       onSizeChange: () => { this.pendingTabScroll = true; this.renderer.requestRender(); } });
-    this.newButton = button("+ New", () => this.create(), "New terminal");
     this.closeButton = button("Close", () => this.closeSelected(), "Close terminal");
     this.reconnectButton = button("Reconnect", () => { this.intent++; this.activate(this.selected, true); }, "Reconnect terminal");
     this.reconnectButton.visible = false;
-    toolbar.add(this.tabs); toolbar.add(this.newButton); toolbar.add(this.closeButton); toolbar.add(this.reconnectButton);
+    toolbar.add(this.tabs); toolbar.add(this.closeButton); toolbar.add(this.reconnectButton);
     const status = this.messageRow = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", visible: false });
     this.message = new TextRenderable(renderer, { content: "", flexGrow: 1, minWidth: 0, height: 1, wrapMode: "none", selectable: false });
     this.spinner = new LoadingSpinner(renderer, { id: "terminal-spinner" });
@@ -82,7 +81,8 @@ export class TerminalPanel {
   get canScroll(): boolean { return this.surface?.canScroll ?? false; }
   get tabsFocused(): boolean { return this.root.visible && [...this.tabButtons.values()].some(button => button.focused); }
   get focusTargets(): Renderable[] {
-    return [...this.tabButtons.values(), this.newButton, this.closeButton, this.reconnectButton, ...(this.input ? [this.input] : [])].filter((item) => item.visible);
+    const targets = [...this.tabButtons.values(), this.closeButton, this.reconnectButton, ...(this.input ? [this.input] : [])].filter((item) => item.visible);
+    return targets.length ? targets : [this.root];
   }
   show(worktree: Worktree | null, remembered?: string): void {
     if (this.disposed || this.root.isDestroyed) return;
@@ -92,7 +92,7 @@ export class TerminalPanel {
     this.worktree = worktree; this.root.visible = true;
     this.items = this.actions?.list().filter((item) => item.worktreeId === worktree?.id) ?? [];
     const selected = this.items.find((item) => item.id === remembered)?.id ?? this.items[Math.max(0, Math.min(oldIndex, this.items.length - 1))]?.id;
-    const focus = Boolean(this.surface?.root.focused);
+    const focus = Boolean(this.surface?.root.focused || this.root.focused);
     if (!same || selected !== this.selected) this.activate(selected, focus);
     if (worktree && selected !== remembered) this.selectionChanged(worktree.id, selected ?? null);
     const info = this.items.find((item) => item.id === selected);
@@ -100,11 +100,19 @@ export class TerminalPanel {
     this.paintTabs();
     if (!this.actions) this.setMessage(this.unavailable ?? "Terminal preview · no shells run in demo mode.");
     else if (!worktree) this.setMessage("Select a workspace to use terminals.");
-    else if (!selected) this.setMessage("No terminals · create one explicitly.");
+    else if (!selected) this.setMessage("No terminals");
     else if (!this.reconnectButton.visible) this.setMessage("");
     this.refreshTitles();
-    this.newButton.visible = Boolean(worktree && this.actions);
     this.closeButton.visible = Boolean(selected && this.actions);
+    // Only entering an empty view starts a shell; exit/close updates must stay empty.
+    if (!same && worktree && this.actions && !this.items.length) this.defaultRequest = worktree.id;
+    this.createDefault();
+  }
+  private createDefault(): void {
+    const worktree = this.worktree;
+    if (!worktree || this.defaultRequest !== worktree.id || this.creating.has(worktree.id)) return;
+    this.defaultRequest = undefined;
+    if (!this.actions?.list().some(item => item.worktreeId === worktree.id)) this.create();
   }
   private paintTabs(): void {
     const key = JSON.stringify([this.selected, this.items.map((item) => [item.id, this.processName(item), item.exited])]);
@@ -139,7 +147,7 @@ export class TerminalPanel {
   };
   focus(): void {
     if (!this.root.visible || this.disposed) return;
-    const target = this.input ?? (this.reconnectButton.visible ? this.reconnectButton : this.tabButtons.get(this.selected ?? "") ?? this.newButton);
+    const target = this.input ?? (this.reconnectButton.visible ? this.reconnectButton : this.tabButtons.get(this.selected ?? "") ?? this.root);
     target.focus();
     if (this.input || !this.selected) return;
     const generation = this.generation;
@@ -174,20 +182,23 @@ export class TerminalPanel {
   create(): void {
     const worktree = this.worktree, actions = this.actions;
     if (!worktree || !actions || this.creating.has(worktree.id)) return;
-    const intent = this.intent;
+    const intent = this.intent, owner = this.renderer.currentFocusedRenderable;
     const current = () => !this.disposed && !this.root.isDestroyed && this.root.visible && this.worktree?.id === worktree.id && this.intent === intent;
     this.creating.add(worktree.id); this.spinner.start();
     let handedOff = false;
     void (async () => {
       await this.laidOut();
       if (!current()) return;
+      // Entering an empty view focuses its root after show(); popups must keep their own focus.
+      const focusOwner = this.root.focused ? this.root : owner;
       const result = await actions.create(worktree.id, { cols: Math.max(2, Math.min(500, this.viewport.width)), rows: Math.max(1, Math.min(200, this.viewport.height)) });
       if (!current()) return;
       if (!result.ok) { this.failure(result.error); return; }
+      const focus = this.renderer.currentFocusedRenderable === focusOwner;
       this.selectionChanged(worktree.id, result.value);
-      this.show(worktree, result.value); this.activate(result.value, true); handedOff = true;
+      this.show(worktree, result.value); this.activate(result.value, focus); handedOff = true;
     })().catch((error: unknown) => { if (current()) this.failure(error); else reportUnexpected(error, "terminal creation"); })
-      .finally(() => { this.creating.delete(worktree.id); if (!handedOff && current()) this.spinner.stop(); });
+      .finally(() => { this.creating.delete(worktree.id); if (!handedOff && current()) this.spinner.stop(); this.createDefault(); });
   }
   closeSelected(): void {
     if (!this.selected || !this.actions) return;
@@ -201,7 +212,7 @@ export class TerminalPanel {
     this.cancelLayout?.(); this.removeSurface(); this.reconnectButton.visible = false;
     if (!id || !this.actions) {
       this.task = this.task.then(() => this.detach()).catch((error: unknown) => { reportUnexpected(error, "terminal detach"); });
-      this.spinner.cancel(); if (focus) this.newButton.focus(); return;
+      this.spinner.cancel(); if (focus) this.root.focus(); return;
     }
     this.spinner.start();
     this.task = this.task.then(async () => {
@@ -277,7 +288,7 @@ export class TerminalPanel {
   hide(): void {
     if (!this.root.visible) return;
     if (this.surface && !this.surface.root.isDestroyed) this.surface.root.blur();
-    this.generation++; this.intent++; this.cancelLayout?.(); this.spinner.cancel(); this.stopTitles(); this.worktree = null; this.selected = undefined;
+    this.generation++; this.intent++; this.cancelLayout?.(); this.spinner.cancel(); this.stopTitles(); this.worktree = null; this.selected = undefined; this.defaultRequest = undefined;
     if (!this.root.isDestroyed) this.root.visible = false;
     this.removeSurface(); this.task = this.task.then(() => this.detach()).catch((error: unknown) => { reportUnexpected(error, "terminal detach"); });
   }
