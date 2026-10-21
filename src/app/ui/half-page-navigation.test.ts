@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { InputRenderable, ScrollBoxRenderable } from "@opentui/core";
+import { InputRenderable, ScrollBoxRenderable, parseKeypress } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Workbench } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
@@ -100,18 +100,88 @@ test.each(surfaces)("%s 목록의 반 페이지 점프는 마지막 후보에서
   } finally { await app.close(); }
 });
 
-test.each(surfaces)("%s 검색창에서는 Ctrl+D 삭제와 Ctrl+U 입력 지우기를 보존한다", async surface => {
-  // 점프 키 때문에 검색어 편집이 후보 탐색으로 바뀌어서는 안 된다.
+test.each(surfaces.flatMap(surface => (["d", "u"] as const).map(key => ({ surface, key }))))("$surface 검색창의 Ctrl+$key 입력은 검색어·커서·후보·스크롤을 바꾸지 않는다", async ({ surface, key }) => {
+  // 목록 중간 후보를 선택하고 입력 커서를 옮겨 문자 삭제와 필터 초기화를 모두 검출한다.
   const app = await mount(surface);
   try {
-    await app.mockInput.typeText("abcd"); app.mockInput.pressArrow("left"); app.mockInput.pressArrow("left");
+    await app.mockInput.typeText("candidate"); await app.render();
+    for (let index = 0; index < 20; index++) { app.mockInput.pressKey("n", { ctrl: true }); await app.render(); }
+    app.mockInput.pressArrow("left"); app.mockInput.pressArrow("left"); await app.render();
+    const cursor = app.input.cursorOffset, top = app.list.scrollTop;
+    expect(top).toBeGreaterThan(0);
 
-    app.mockInput.pressKey("d", { ctrl: true }); await app.render();
-    expect(app.input.value).toBe("abd");
-    app.mockInput.pressKey("END"); app.mockInput.pressKey("u", { ctrl: true }); await app.render();
+    app.mockInput.pressKey(key, { ctrl: true }); await app.render();
+
+    expect(app.input.value).toBe("candidate"); expect(app.input.cursorOffset).toBe(cursor); expect(app.list.scrollTop).toBe(top);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.opened).toEqual([]); expect(app.submitted).toEqual([]);
+    app.mockInput.pressEnter(); await app.render();
+    if (surface === "workspace") expect(app.selection.worktree?.id).toBe("tree-20");
+    else if (surface === "monitor") expect(app.selection.sessionId).toBe("session-20");
+    else expect(app.opened).toEqual([surface === "history" ? "saved-20" : "candidate-20"]);
+  } finally { await app.close(); }
+});
+
+test("빈 워크스페이스 검색창에서도 Ctrl+D/U는 후보나 스크롤을 초기화하지 않는다", async () => {
+  // 검색어가 없더라도 키를 비워 두지 않고 명시적으로 소비해야 한다.
+  const app = await mount("workspace");
+  try {
+    for (let index = 0; index < 6; index++) app.mockInput.pressKey("n", { ctrl: true });
+    await app.render(); const top = app.list.scrollTop;
+
+    app.mockInput.pressKey("d", { ctrl: true }); app.mockInput.pressKey("u", { ctrl: true }); await app.render();
+
+    expect(app.input.value).toBe(""); expect(app.input.cursorOffset).toBe(0); expect(app.list.scrollTop).toBe(top);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+    app.mockInput.pressEnter(); await app.render(); expect(app.selection.worktree?.id).toBe("tree-6");
+  } finally { await app.close(); }
+});
+
+test("검색창 안내는 차단된 Ctrl+D/U를 사용 가능한 점프로 표시하지 않는다", async () => {
+  // 검색과 목록은 서로 다른 입력 소유자이므로 검색창에 점프 키를 안내하면 안 된다.
+  const app = await mount("workspace");
+  try {
+    await app.mockInput.typeText("candidate"); await app.render();
+
+    const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
+
+    expect(footer).toContain("Ctrl+p/Ctrl+n Navigate");
+    expect(footer).not.toContain("Ctrl+d"); expect(footer).not.toContain("Ctrl+u"); expect(footer).not.toContain("½ page");
+  } finally { await app.close(); }
+});
+
+test.each(surfaces)("%s 검색어 지우기는 Ctrl+L로 명시적으로 실행한다", async surface => {
+  // 반 페이지 키와 검색 초기화를 분리해 뜻하지 않은 후보 점프를 방지한다.
+  const app = await mount(surface);
+  try {
+    await app.mockInput.typeText("candidate");
+
+    app.mockInput.pressKey("l", { ctrl: true }); await app.render();
 
     expect(app.input.value).toBe(""); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
     expect(app.opened).toEqual([]); expect(app.submitted).toEqual([]); expect(app.selection.sessionId).toBe("session-0");
+  } finally { await app.close(); }
+});
+
+test.each(["d", "u"] as const)("검색창에서 누른 Ctrl+%s 반복 입력은 Tab 뒤에도 점프로 바뀌지 않는다", async key => {
+  // 키를 누른 채 목록으로 포커스를 옮겨도 차단한 키의 반복은 새 동작이 아니다.
+  const app = await mount("workspace");
+  const raw = (event: string) => { const parsed = parseKeypress(event, { useKittyKeyboard: true }); if (!parsed) throw new Error("Invalid Kitty key"); app.renderer.keyInput.processParsedKey(parsed); };
+  const code = key === "d" ? 100 : 117;
+  try {
+    await app.mockInput.typeText("candidate");
+    for (let index = 0; index < 6; index++) app.mockInput.pressKey("n", { ctrl: true });
+    await app.render(); const top = app.list.scrollTop;
+
+    raw(`\x1b[${code};5u`); app.mockInput.pressTab(); raw(`\x1b[${code};5:2u`); await app.render();
+
+    expect(app.input.value).toBe("candidate"); expect(app.list.scrollTop).toBe(top);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.list);
+    raw(`\x1b[${code};5:3u`); raw(`\x1b[${code};5u`); raw(`\x1b[${code};5:3u`); await app.render();
+    app.mockInput.pressEnter(); await app.render();
+
+    const step = Math.max(1, Math.floor(app.list.viewport.height / 6));
+    expect(app.selection.worktree?.id).toBe(`tree-${6 + (key === "d" ? step : -step)}`);
+    expect(app.submitted).toEqual([]);
   } finally { await app.close(); }
 });
 

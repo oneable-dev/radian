@@ -75,7 +75,7 @@ test("트리에서 검색창으로 포커스를 옮기면 해당 영역의 단�
     expect(app.footerLine()).toContain("Esc Close");
     expect(app.footerLine()).not.toContain("New session");
     expect(app.calls).toEqual([]);
-    app.mockInput.pressKey("u", { ctrl: true }); app.mockInput.pressTab(); await app.renderOnce();
+    app.mockInput.pressKey("l", { ctrl: true }); app.mockInput.pressTab(); await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree");
     expect(app.footerLine()).toContain("Enter Open worktree");
   } finally { await app.close(); }

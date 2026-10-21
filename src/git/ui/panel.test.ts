@@ -54,7 +54,7 @@ async function mount(options: { actions?: Partial<GitActions>; initial?: WorkVie
   const get = (id: string) => { const result = walk(app.renderer.root).find((node) => node.id === id); if (!result) throw new Error(`Missing ${id}`); return result; };
   await app.renderOnce();
   const click = async (text: string) => {
-    if (text.startsWith(icons.folder)) { app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressKey("u", { ctrl: true }); await app.renderOnce(); }
+    if (text.startsWith(icons.folder)) { app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressKey("l", { ctrl: true }); await app.renderOnce(); }
     const lines = app.captureCharFrame().split("\n"); const y = lines.findIndex((line) => line.includes(text)), x = lines[y]?.indexOf(text) ?? -1;
     if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
     await app.mockMouse.click(x + Math.min(1, text.length - 1), y); await app.renderOnce();

@@ -40,7 +40,7 @@ async function mount() {
   await setup.renderOnce();
   return { ...setup, ...fixture, registry, selection, creation, prompts, closes, view,
     async click(text: string) {
-      if (text.startsWith(icons.folder)) { setup.mockInput.pressKey("f", { ctrl: true }); setup.mockInput.pressKey("u", { ctrl: true }); await setup.renderOnce(); }
+      if (text.startsWith(icons.folder)) { setup.mockInput.pressKey("f", { ctrl: true }); setup.mockInput.pressKey("l", { ctrl: true }); await setup.renderOnce(); }
       const lines = setup.captureCharFrame().split("\n");
       const y = lines.findIndex((line) => line.includes(text));
       const x = lines[y]?.indexOf(text) ?? -1;

@@ -52,7 +52,7 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     },
     async openWorkspaces() { app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab(); await render(); },
     async click(label: string) {
-      if (label.startsWith(icons.folder)) { app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressKey("u", { ctrl: true }); await render(); }
+      if (label.startsWith(icons.folder)) { app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressKey("l", { ctrl: true }); await render(); }
       const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes(label));
       const x = lines[y]?.indexOf(label) ?? -1;
       if (x < 0) throw new Error(`Missing ${label}\n${app.captureCharFrame()}`);

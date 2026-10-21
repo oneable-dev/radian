@@ -476,6 +476,12 @@ export class Workbench {
     return "button";
   }
   private commandAvailable(command: CommandId): boolean {
+    // Reserved search keys are consumed by the router without reaching native editing or help.
+    if (command === "input.ignore") return false;
+    if (command === "search.clear") {
+      const context = this.keyContext();
+      return context === "search" || context.endsWith("-search");
+    }
     if (this.dialog.visible) return command.startsWith("dialog.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
     if (command.startsWith("dialog.")) return false;
     if (this.models.visible) return command.startsWith("model.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
@@ -558,7 +564,11 @@ export class Workbench {
       case "focus.transcript": this.agent.focusTranscript(); break;
       case "focus.next": this.moveFocus(1); break;
       case "focus.previous": this.moveFocus(-1); break;
-      case "search.clear": this.search.value = ""; break;
+      case "search.clear": {
+        const focused = this.renderer.currentFocusedRenderable;
+        if (focused instanceof InputRenderable) focused.value = "";
+        break;
+      }
       case "view.agent": this.selectWorkView("agent"); break;
       case "view.editor": this.selectWorkView("editor", true); break;
       case "view.git": this.selectWorkView("git"); break;

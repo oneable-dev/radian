@@ -4,6 +4,7 @@ export type KeyScope = KeyContext | "global" | "app" | "pty";
 export type BindingInput = { keys: string; scope: KeyScope };
 const key = (keys: string, scope: KeyScope = "global"): BindingInput => ({ keys, scope });
 
+const searchContexts = ["search", "history-search", "monitor-search", "model-search"] as const;
 const transcriptContexts = ["transcript", "transcript-text", "transcript-visual"] as const;
 const transcriptKeys = (keys: string): BindingInput[] => transcriptContexts.map((scope) => key(keys, scope));
 const textKeys = (...keys: string[]): BindingInput[] => keys.flatMap((keys) => [key(keys, "transcript-text"), key(keys, "transcript-visual")]);
@@ -32,7 +33,8 @@ export const defaultBindings = {
   "focus.next": tabContexts.map((context) => key("tab", context)),
   "focus.previous": [key("shift+tab", "app")],
   "focus.results": [key("enter", "search")],
-  "search.clear": [key("ctrl+u", "search")],
+  "search.clear": searchContexts.map(scope => key("ctrl+l", scope)),
+  "input.ignore": searchContexts.flatMap(scope => [key("ctrl+d", scope), key("ctrl+u", scope)]),
   "workspace.dismiss": [key("escape", "workspace"), key("escape", "search")],
   "workspace.search": [key("/", "workspace")],
   "view.agent": [key("<leader> a")],

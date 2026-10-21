@@ -35,18 +35,25 @@ test.each([
   expect(up).toBe(previous); expect(down).toBe(next);
 });
 
-test.each(["editor", "terminal", "prompt", "prompt-completion", "history-search", "monitor-search", "model-search"] as const)("%s의 Ctrl+D/U는 네이티브 입력 소유권을 유지한다", context => {
-  // 검색·입력과 임베디드 프로그램에는 앱의 반 페이지 명령을 설치하지 않는다.
+test.each(["editor", "terminal", "prompt", "prompt-completion"] as const)("%s의 Ctrl+D/U는 네이티브 입력 소유권을 유지한다", context => {
+  // 일반 프롬프트와 임베디드 프로그램의 입력까지 검색창 차단 정책을 전파하지 않는다.
   const map = defaultKeymap();
 
   expect(map.bound("ctrl+d", context)).toBe(false); expect(map.bound("ctrl+u", context)).toBe(false);
 });
 
+test.each(["search", "history-search", "monitor-search", "model-search"] as const)("%s의 Ctrl+D/U는 명시적으로 소비하고 Ctrl+L로만 검색을 지운다", context => {
+  // 바인딩을 비워 네이티브 편집에 흘려보내지 않고 no-op 명령으로 차단한다.
+  const down = commandFor(context, "ctrl+d"), up = commandFor(context, "ctrl+u");
+
+  expect(down).toBe("input.ignore"); expect(up).toBe("input.ignore"); expect(commandFor(context, "ctrl+l")).toBe("search.clear");
+});
+
 test("워크스페이스 검색 지우기와 사용자 점프 재설정은 기본 점프와 충돌하지 않는다", () => {
-  // 검색창의 기존 Ctrl+U 의미를 유지하고 점프 키는 다른 키로 교체할 수 있다.
+  // 검색 키 차단과 목록 점프 재설정은 별개이므로 사용자 재설정을 유지한다.
   const map = expectOk(parseKeymap({ bindings: { "workspace.half-page-down": [{ keys: "ctrl+y", scope: "workspace" }] } }));
 
-  expect(commandFor("search", "ctrl+u")).toBe("search.clear");
+  expect(commandFor("search", "ctrl+u")).toBe("input.ignore");
   expect(map.hint("workspace.half-page-down", "workspace")).toBe("Ctrl+y");
-  expect(map.bound("ctrl+d", "workspace")).toBe(false); expect(map.bound("ctrl+d", "search")).toBe(false);
+  expect(map.bound("ctrl+d", "workspace")).toBe(false); expect(map.bound("ctrl+d", "search")).toBe(true);
 });
