@@ -55,11 +55,11 @@ test("프롬프트 아래에 위아래 한 줄 여백을 두고 context·usage�
     expect(app.line()).toContain(`${icons.model} gpt-5.5 · ${icons.brain} high · ${icons.bolt} fast on`);
     expect(app.line()).toContain(icons.context); expect(app.line()).toContain("64% left");
     expect(app.line()).toContain("chatgpt"); expect(app.line()).not.toContain("ChatGPT");
-    expect(app.line()).toMatch(/context [█▏▎▍▌▋▊▉░]+ 64%/);
+    expect(app.line()).toMatch(/context ▉{8} 64%/);
     expect(app.line()).toContain(icons.openai); expect(app.line()).toContain("18% used 1h 0m");
     const usageText = app.line().slice(app.line().indexOf(icons.openai));
     expect(usageText).not.toContain("·"); expect(usageText).not.toContain("━");
-    expect(usageText).toMatch(/[█▏▎▍▌▋▊▉░]+ 18% used 1h 0m/);
+    expect(usageText).toMatch(/▉{8} 18% used 1h 0m/);
     expect(app.renderer.root.findDescendantById("usage-provider-icon")?.width).toBe(2);
     expect(app.line()).not.toContain("82%"); expect(app.line()).not.toContain("weekly"); expect(app.line()).not.toContain("⟳");
 
@@ -185,7 +185,7 @@ test("바의 채워진 부분은 테마 accent 그라데이션으로 다시 칠�
     const first = spanAt(start), last = spanAt(start + 7);
     expect(first.fg.toInts()).toEqual(uiTheme(app.renderer).colors.accent.toInts()); expect(last.fg.equals(first.fg)).toBe(false);
     expect(first.bg.equals(uiTheme(app.renderer).colors.panel)).toBe(true);
-    expect(app.line()).toContain("context ████████ 100%"); expect(app.line()).toContain("████████ 100% used");
+    expect(app.line()).toContain("context ▉▉▉▉▉▉▉▉ 100%"); expect(app.line()).toContain("▉▉▉▉▉▉▉▉ 100% used");
     return first.fg.toInts();
   };
   try {
@@ -194,6 +194,33 @@ test("바의 채워진 부분은 테마 accent 그라데이션으로 다시 칠�
     app.renderer.emit("palette", palette(true)); await app.renderOnce();
 
     expect(verify()).not.toEqual(dark);
+  } finally { await app.close(); }
+});
+
+test("77%·53% 바는 굵은 세그먼트 모양을 고정하고 한 칸 단위로 채움 색을 구분한다", async () => {
+  // Eight segments approximate the fill; the labels must retain the exact percentages.
+  const data = sample(), app = await mount({ ...data, context: { usedTokens: 46000, maxTokens: 200000 },
+    usage: { ...data.usage!, windows: [{ ...data.usage!.windows[0]!, usedPercent: 53 }] } });
+  const spanAt = (column: number) => { let x = 0; return app.captureSpans().lines[app.row.y]!.spans.find((span) => { x += span.width; return x > column; })!; };
+  try {
+    for (const light of [false, true]) {
+      // Switching palettes must preserve thick segments without adding a continuous background track.
+      app.renderer.emit("palette", palette(light)); await app.renderOnce();
+
+      // Six context segments and four usage segments are active; empty cells keep the same glyph.
+      const line = app.line(), panel = uiTheme(app.renderer).colors.panel;
+      expect(line).toContain("context ▉▉▉▉▉▉▉▉ 77% left"); expect(line).toContain("chatgpt ▉▉▉▉▉▉▉▉ 53% used");
+      for (const [label, filled] of [["context ", 6], ["chatgpt ", 4]] as const) {
+        const start = Bun.stringWidth(line.slice(0, line.indexOf(label) + label.length));
+        const empty = spanAt(start + 7).fg;
+        expect(empty.equals(panel)).toBe(false);
+        for (let cell = 0; cell < 8; cell++) {
+          const span = spanAt(start + cell);
+          expect(span.bg.toInts()).toEqual(panel.toInts());
+          expect(span.fg.equals(empty)).toBe(cell >= filled);
+        }
+      }
+    }
   } finally { await app.close(); }
 });
 
@@ -239,7 +266,7 @@ test("좁은 화면은 바·설정·시간을 축약해 두 비율과 초안을 
       expect(composer.y + composer.height).toBeLessThanOrEqual(footer.y);
       expect(app.renderer.currentFocusedRenderable).toBe(prompt); expect(app.view.promptDrafts.a1).toBe("resize draft");
     }
-    expect(app.line()).toContain("fast on"); expect(app.line()).toContain("█"); expect(app.line()).toContain("1h 0m");
+    expect(app.line()).toContain("fast on"); expect(app.line()).toContain("▉▉▉▉▉▉▉▉"); expect(app.line()).toContain("1h 0m");
   } finally { await app.close(); }
 });
 
@@ -285,7 +312,7 @@ test("미확정 context와 미지원 usage는 바 없이 -로 표시하고 세�
 
     expect(app.line()).toContain("fast —"); expect(app.line()).toContain("context -");
     expect(app.line().slice(app.line().indexOf(icons.openai)).trim().replace(/\s+/g, " ")).toBe(`${icons.openai} chatgpt -`);
-    expect(app.line()).not.toMatch(/[█▏▎▍▌▋▊▉░─]/); expect(app.line()).not.toContain("0%");
+    expect(app.line()).not.toContain("▉"); expect(app.line()).not.toContain("0%");
     app.selection.selectSession("demo:main", "a2"); await app.renderOnce();
     expect(app.line()).not.toContain("gpt-5.5"); expect(app.line()).not.toContain("18% used");
   } finally { await app.close(); }
@@ -299,7 +326,7 @@ test("압축 후 추정 컨텍스트도 별도 표식 없이 현재 모델 한�
     await app.set({ ...sample(), context: { usedTokens: 40000, maxTokens: 872000 } });
 
     // 기존 바·퍼센트 형식을 유지하며 틸드나 미확정 대시를 덧붙이지 않는다.
-    expect(app.line()).toMatch(/context [█▏▎▍▌▋▊▉░]+ 95%/);
+    expect(app.line()).toMatch(/context ▉{8} 95%/);
     expect(app.line()).not.toContain("~"); expect(app.line()).not.toContain("context -");
   } finally { await app.close(); }
 });
@@ -310,7 +337,7 @@ test("usage가 없거나 조회 중·실패이면 context 바만 유지하고 �
     for (const status of ["loading", "unavailable", "error"] as const) {
       await app.set({ ...sample(), usage: { ...unavailable(), status } });
 
-      expect(app.line()).toMatch(/context [█▏▎▍▌▋▊▉░]+ 64% left/);
+      expect(app.line()).toMatch(/context ▉+ 64% left/);
       expect(app.line().slice(app.line().indexOf(icons.openai)).trim().replace(/\s+/g, " ")).toBe(`${icons.openai} chatgpt -`);
     }
   } finally { await app.close(); }
@@ -323,8 +350,12 @@ test("실제 사용량 0%와 context 잔량 0%는 미확정 값과 다른 빈 �
   try {
     await app.renderOnce();
 
-    expect(app.line()).toContain("context ░░░░░░░░ 0%"); expect(app.line()).toContain("░░░░░░░░ 0% used");
+    expect(app.line()).toContain("context ▉▉▉▉▉▉▉▉ 0%"); expect(app.line()).toContain("▉▉▉▉▉▉▉▉ 0% used");
     expect(app.line()).not.toContain("100%");
+    const colors = uiTheme(app.renderer).colors;
+    for (const span of app.captureSpans().lines[app.row.y]!.spans.filter((span) => span.text.includes("▉"))) {
+      expect(span.fg.equals(colors.accent)).toBe(false); expect(span.bg.toInts()).toEqual(colors.panel.toInts());
+    }
   } finally { await app.close(); }
 });
 

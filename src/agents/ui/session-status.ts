@@ -60,13 +60,12 @@ function usageWindow(telemetry: SessionTelemetry | null, now: number): UsageWind
 function meterChunks(meter: Meter, width: number, colors: UiColors, styles: UiStyles): TextChunk[] {
   const chunks: TextChunk[] = [styleChunk(`${meter.label} `, styles["ui.label"])];
   if (width && meter.percent !== null) {
-    const filled = meter.percent * width / 100;
-    const partials = ["░", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
+    const filled = Math.round(meter.percent * width / 100);
+    const empty = blendColors(colors.panel, styles["ui.label"].fg, 0.2);
     for (let cell = 0; cell < width; cell++) {
-      const part = Math.floor(Math.max(0, Math.min(1, filled - cell)) * 8);
-      chunks.push({ ...styleChunk(partials[part]!, styles["metadata.meter"]),
-        fg: part > 0 ? blendColors(colors.panel, styles["metadata.meter"].fg, 1 - 0.45 * cell / Math.max(1, width - 1))
-          : blendColors(colors.panel, styles["ui.label"].fg, 0.2) });
+      // Fixed seven-eighths blocks keep uniform gaps; fill only changes their color, not their shape or background.
+      chunks.push({ ...styleChunk("▉", styles["metadata.meter"]),
+        fg: cell < filled ? blendColors(colors.panel, styles["metadata.meter"].fg, 1 - 0.45 * cell / Math.max(1, width - 1)) : empty });
     }
     chunks.push(styleChunk(" ", styles["ui.muted"]));
   }
