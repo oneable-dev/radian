@@ -192,11 +192,13 @@ it appears. If you navigate elsewhere while creation is pending, the new tab ope
 without taking focus. Agent and Terminal session strips remain visible and clickable.
 Tree cursor movement is only navigation; Enter or a direct worktree click commits the selection.
 Each worktree separately remembers its work view and selected Agent session. Within Agents, session
-tabs show their session ID and aggregate status, with a close control. IDs remain complete whenever
-they fit the available strip width; narrower tabs truncate only at the end with `…`, never in the
-middle. There is no fixed label-length cap, and widening the pane restores the full ID. Session names
-remain unchanged for History and other metadata. Focus the strip and press `n`
-(or the configured `session.new` key) to add a session; the strip remains focusable when empty.
+tabs show the first eight characters of their session ID and aggregate status, with a close control.
+If open sessions in the same worktree share a prefix, only those labels expand to the shortest
+prefixes that distinguish them. IDs of eight characters or fewer stay unchanged. Narrower tabs
+truncate the label only at the end with `…`; widening the pane restores the short label. Selection,
+closing and persistence still use the full ID. Session names remain unchanged for History and other
+metadata. Focus the strip and press `n` (or the configured `session.new` key) to add a session; the strip
+remains focusable when empty.
 The upper-right worktree label and the New session/History toolbar buttons are removed. Session-tab selection and History resume open the chosen session in Agents. Restoring a
 selection, filtering and background snapshots never implicitly activate another work view.
 Session creation/closing retain their existing rules and never implicitly launch an editor.
@@ -1480,7 +1482,7 @@ notification icon. `Stopped` means settlement without a confirmed success, failu
 it is not a pause/resume state and is unrelated to the model's normal `stop` finish reason.
 
 Use a Nerd Font-enabled terminal to view the glyphs. Current mappings are `nf-cod-repo`
-(U+EA62), `nf-cod-folder` (U+EA83), `nf-cod-bell` (U+EAA2), `nf-cod-close` (U+EA76),
+(U+EA62), `nf-cod-folder` (U+EA83), filled `nf-fa-bell` (U+F0F3), `nf-cod-close` (U+EA76),
 `nf-cod-dash` (U+EAD9), `nf-cod-openai` (U+EC81), and
 `nf-cod-claude` (U+EC82), from Nerd Fonts 3.5.1. Headless tests
 verify code-point output, not font installation or actual terminal glyph appearance.

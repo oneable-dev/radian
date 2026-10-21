@@ -1,4 +1,4 @@
-// Codicon names/code points from Nerd Fonts 3.5.1 glyphnames.json.
+// Icon names/code points from Nerd Fonts 3.5.1 glyphnames.json.
 export const icons = {
   repo: "\uEA62", // nf-cod-repo
   folder: "\uEA83", // nf-cod-folder
@@ -6,7 +6,7 @@ export const icons = {
   tag: "\uEA66", // nf-cod-tag
   loading: "\uEB19", // nf-cod-loading
   pass: "\uEAB2", // nf-cod-check
-  bell: "\uEAA2", // nf-cod-bell
+  bell: "\uF0F3", // nf-fa-bell; filled unread indicator
   error: "\uEA76", // nf-cod-close
   unknown: "\uEAD9", // nf-cod-dash; unreported/aborted, not a confirmed idle state
   robot: "\uEC20", // nf-cod-robot

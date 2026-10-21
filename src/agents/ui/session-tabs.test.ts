@@ -10,6 +10,9 @@ import { SessionTabs } from "./session-tabs.ts";
 
 const firstId = "01a156a2-ba64-707c-bd92-fc877962e972";
 const secondId = "23ec1867-d98a-4d41-b656-d2c13806b5de";
+const firstLabel = "01a156a2";
+const secondLabel = "23ec1867";
+const collisionId = "01a156a2-ba65-4d41-b656-d2c13806b5de";
 const session = (id = firstId, name = "A conversation title, not the session ID"): OpenSession => ({ id, name, status: "complete", subagents: [] });
 
 async function mount(initial: readonly OpenSession[] = [session()]) {
@@ -22,8 +25,8 @@ async function mount(initial: readonly OpenSession[] = [session()]) {
   tabs.update("tree", initial, initial[0]?.id ?? null, true);
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
   await render();
-  const get = (id: string) => {
-    const tab = app.renderer.root.findDescendantById(`session:tree:${id}`);
+  const get = (id: string, worktreeId = "tree") => {
+    const tab = app.renderer.root.findDescendantById(`session:${worktreeId}:${id}`);
     if (!tab) throw new Error(`Missing tab ${id}`);
     const title = tab.getChildren().find((node): node is TextRenderable => node instanceof TextRenderable);
     if (!title) throw new Error(`Missing tab title ${id}`);
@@ -47,8 +50,8 @@ const priorities = [
   { name: "자식 실패는 중단·미확인 벨보다 오류", entry: { ...session(), status: null, result: stopped, attention: stopped,
     subagents: [{ id: "failed", name: "Failed", status: "failure" }] }, glyph: icons.error },
   { name: "중단은 미확인 벨보다 물음표", entry: { ...session(), status: null, result: stopped, attention: stopped }, glyph: "?" },
-  { name: "완료 미확인은 체크 없이 벨", entry: { ...session(), result: completed, attention: completed }, glyph: icons.bell },
-  { name: "원인 불명 취소 미확인은 벨", entry: { ...session(), status: null, result: cancelled, attention: cancelled }, glyph: icons.bell },
+  { name: "완료 미확인은 체크 없이 채워진 벨", entry: { ...session(), result: completed, attention: completed }, glyph: "\uF0F3" },
+  { name: "원인 불명 취소 미확인은 채워진 벨", entry: { ...session(), status: null, result: cancelled, attention: cancelled }, glyph: "\uF0F3" },
   { name: "읽은 완료는 상태 아이콘 없음", entry: { ...session(), result: completed }, glyph: "" },
 ] satisfies { name: string; entry: OpenSession; glyph: string }[];
 
@@ -121,11 +124,11 @@ test("실행 중 숨긴 미확인 벨은 화면 복귀와 직접 취소 뒤에�
 test("상태 아이콘이 없는 탭은 왼쪽 상태 칸과 간격을 빼고 확보한 너비를 ID에 사용한다", async () => {
   const unknown = { ...session(), status: null }, app = await mount([unknown]);
   try {
-    // A UUID fits in 40 columns only when the unused status cell and its gap are reclaimed.
-    app.resize(40, 6); await app.render();
+    // 짧은 ID가 정확히 들어가는 너비에서 사용하지 않는 상태 칸을 회수한다.
+    app.resize(12, 6); await app.render();
     const { tab, title } = app.get(firstId), close = app.renderer.root.findDescendantById(`close-session:${firstId}`)!;
-    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstId);
-    expect(tab.width).toBe(Bun.stringWidth(firstId) + 4);
+    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstLabel);
+    expect(tab.width).toBe(12);
     expect(close.x).toBe(title.x + title.width + 1); expect(close.x + close.width).toBe(tab.x + tab.width - 1);
 
     // An unread result, not successful completion alone, restores the notification badge.
@@ -133,20 +136,20 @@ test("상태 아이콘이 없는 탭은 왼쪽 상태 칸과 간격을 빼고 �
     expect(title.x).toBe(tab.x + 3); expect(title.plainText).toEndWith("…");
     expect(close.x + close.width).toBeLessThanOrEqual(app.tabs.list.viewport.x + app.tabs.list.viewport.width);
     app.tabs.update("tree", [unknown], firstId, true); await app.render();
-    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstId);
+    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstLabel);
   } finally { await app.close(); }
 });
 
-test("미확정으로 바뀐 탭은 스피너 최소 시간 뒤 상태 칸을 제거하고 전체 ID를 복원한다", async () => {
+test("미확정으로 바뀐 탭은 스피너 최소 시간 뒤 상태 칸을 제거하고 짧은 ID를 복원한다", async () => {
   const working = { ...session(), status: "working" as const }, app = await mount([working]);
   try {
-    app.resize(40, 6); await app.render(); const { tab, title } = app.get(firstId);
+    app.resize(12, 6); await app.render(); const { tab, title } = app.get(firstId);
     app.clock.advance(120); app.tabs.update("tree", [{ ...working, status: null }], firstId, true); await app.render();
     const width = tab.width, titleX = title.x;
     app.clock.advance(379); await app.render(); expect(title.x).toBe(titleX); expect(title.plainText).toEndWith("…");
     // The spinner tail ending is enough to reclaim the slot; no snapshot or focus event is required.
     app.clock.advance(1); await app.render();
-    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstId);
+    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstLabel);
     expect(tab.width).toBeLessThanOrEqual(width); expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
   } finally { await app.close(); }
 });
@@ -158,15 +161,15 @@ test("숨겼다가 돌아온 미확정 탭은 취소된 스피너 공간을 다�
     app.tabs.update("tree", [unknown], firstId, false); app.clock.advance(500);
     app.tabs.update("tree", [unknown], firstId, true); await app.render();
     const { tab, title } = app.get(firstId);
-    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstId);
-    expect(tab.width).toBe(Bun.stringWidth(firstId) + 4);
+    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstLabel);
+    expect(tab.width).toBe(12);
   } finally { await app.close(); }
 });
 
 test("앞선 탭의 상태 칸이 나타나도 선택한 탭의 ID와 닫기 버튼을 화면 안에 유지한다", async () => {
   const entries = [{ ...session("short"), status: null }, session(secondId)], app = await mount(entries);
   try {
-    app.resize(40, 6); app.tabs.update("tree", entries, secondId, true); await app.render();
+    app.resize(20, 6); app.tabs.update("tree", entries, secondId, true); await app.render();
     app.tabs.update("tree", [{ ...entries[0]!, status: "working" }, entries[1]!], secondId, true); await app.render();
     const { tab } = app.get(secondId), close = app.renderer.root.findDescendantById(`close-session:${secondId}`)!;
     expect(tab.x).toBeGreaterThanOrEqual(app.tabs.list.viewport.x);
@@ -206,28 +209,31 @@ test("Agent 세션은 포커스·선택이 바뀌어도 밑줄 없이 배경으�
   } finally { await app.close(); }
 });
 
-test("충분히 넓은 탭에는 이름이나 고정 축약 없이 세션 ID 전체를 표시한다", async () => {
-  // A normal UUID exceeds the old 24-cell cap, but fits comfortably in this strip.
+test("충분히 넓은 탭도 이름 대신 세션 ID의 앞 8자리만 표시한다", async () => {
+  // 전체 UUID가 들어가는 화면에서도 탭 라벨만 줄이고 세션 메타데이터는 유지한다.
   const entry = session(), app = await mount([entry]);
   try {
+    // 화면 너비와 무관하게 기본 라벨은 8자리이다.
     await app.render();
 
-    expect(app.get(firstId).title.plainText).toBe(firstId);
-    expect(app.captureCharFrame()).toContain(firstId);
+    // 축약 자체에는 말줄임표가 없고 실제 식별자와 이름은 바뀌지 않는다.
+    expect(app.get(firstId).title.plainText).toBe(firstLabel);
+    expect(app.captureCharFrame()).toContain(firstLabel);
+    expect(app.captureCharFrame()).not.toContain(firstId);
     expect(app.captureCharFrame()).not.toContain(entry.name);
-    expect(app.get(firstId).title.plainText).not.toContain("…");
+    expect(entry.id).toBe(firstId);
     expect(entry.name).toBe("A conversation title, not the session ID");
   } finally { await app.close(); }
 });
 
-test("공간이 부족할 때만 ID 끝을 말줄임하고 다시 넓히면 전체를 복원한다", async () => {
+test("공간이 부족할 때만 짧은 ID 끝을 말줄임하고 다시 넓히면 8자리를 복원한다", async () => {
   const app = await mount();
   try {
-    // Truncation follows the actual strip width, while preserving the leading ID characters.
-    for (const width of [40, 24, 100]) {
+    // 짧은 ID마저 들어가지 않는 너비에서만 말줄임하고 넓히면 축약 라벨을 복원한다.
+    for (const width of [12, 10, 100]) {
       app.resize(width, 6); await app.render();
       const { tab, title } = app.get(firstId), text = title.plainText;
-      if (width >= 40) expect(text).toBe(firstId);
+      if (width >= 12) expect(text).toBe(firstLabel);
       else {
         expect(text.endsWith("…")).toBe(true);
         expect(text.match(/…/g)).toHaveLength(1);
@@ -243,26 +249,104 @@ test("공간이 부족할 때만 ID 끝을 말줄임하고 다시 넓히면 전�
   } finally { await app.close(); }
 });
 
-test("세션 이름을 갱신해도 탭 라벨과 실제 선택·닫기 대상 ID를 바꾸지 않는다", async () => {
-  const entries = [session(), session(secondId, "Other conversation")], app = await mount(entries);
+test.each([
+  { id: "01a156a2-ca64-707c-bd92-fc877962e972", first: "01a156a2-b", other: "01a156a2-c" },
+  { id: collisionId, first: "01a156a2-ba64", other: "01a156a2-ba65" },
+  { id: "01a156a2-ba64-707c-bd92-fc877962e973", first: firstId, other: "01a156a2-ba64-707c-bd92-fc877962e973" },
+])("접두사가 겹치는 $id 탭은 서로 구분되는 최소 길이까지 표시한다", async ({ id, first, other }) => {
+  // 충돌 위치가 8자리 바로 뒤부터 마지막 자리까지인 세션 쌍을 준비한다.
+  const app = await mount([session(), session(id)]);
   try {
-    // Display names remain available to History, but never replace the tab's stable identity.
+    // 같은 워크트리의 두 세션을 함께 표시한다.
+    await app.render();
+
+    // UUID의 하이픈도 포함한 실제 접두사로 구분하고 불필요한 말줄임표는 붙이지 않는다.
+    expect(app.get(firstId).title.plainText).toBe(first);
+    expect(app.get(id).title.plainText).toBe(other);
+    expect(app.captureCharFrame()).toContain(first);
+    expect(app.captureCharFrame()).toContain(other);
+  } finally { await app.close(); }
+});
+
+test("충돌하는 탭의 추가·제거에 맞춰 기존 라벨을 갱신하고 선택한 탭을 화면에 유지한다", async () => {
+  // 두 개의 짧은 라벨은 들어가지만 앞선 탭의 라벨이 늘어나면 선택 탭이 밀리는 너비이다.
+  const entries = [session(), session(secondId)], app = await mount(entries);
+  try {
+    app.resize(28, 6); app.tabs.update("tree", entries, secondId, true); await app.render();
+    const firstTab = app.get(firstId).tab;
+
+    // 다른 세션의 선택은 유지한 채 접두사가 겹치는 새 탭이 생긴다.
+    app.tabs.update("tree", [...entries, session(collisionId)], secondId, true); await app.render();
+
+    // 기존 인스턴스를 유지하며 충돌하는 라벨만 늘리고 선택 탭을 다시 드러낸다.
+    expect(app.get(firstId).tab).toBe(firstTab);
+    expect(app.get(firstId).title.plainText).toBe("01a156a2-ba64");
+    expect(app.get(collisionId).title.plainText).toBe("01a156a2-ba65");
+    expect(app.get(secondId).title.plainText).toBe(secondLabel);
+    const selectedTab = app.get(secondId).tab, viewport = app.tabs.list.viewport;
+    expect(selectedTab.x).toBeGreaterThanOrEqual(viewport.x);
+    expect(selectedTab.x + selectedTab.width).toBeLessThanOrEqual(viewport.x + viewport.width);
+
+    // 충돌 상대가 닫히면 기존 탭을 다시 기본 8자리로 줄인다.
+    app.tabs.update("tree", entries, secondId, true); await app.render();
+    expect(app.get(firstId).title.plainText).toBe(firstLabel);
+    expect(app.get(secondId).title.plainText).toBe(secondLabel);
+    expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("다른 워크트리로 전환하면 이전 워크트리의 접두사 충돌을 적용하지 않는다", async () => {
+  // 첫 워크트리에서는 두 세션의 접두사가 겹쳐 라벨이 길어진 상태이다.
+  const app = await mount([session(), session(collisionId)]);
+  try {
+    // 다른 워크트리에는 그중 한 세션만 표시한다.
+    app.tabs.update("other-tree", [session(collisionId)], collisionId, true); await app.render();
+
+    // 충돌 검사는 현재 워크트리의 열린 탭에만 한정한다.
+    expect(app.get(collisionId, "other-tree").title.plainText).toBe(firstLabel);
+    expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each(["a1", "12345678"])("8자리 이하인 %s 세션 ID는 그대로 표시한다", async id => {
+  // 기존 짧은 식별자는 패딩하거나 다른 이름으로 바꿀 필요가 없다.
+  const app = await mount([session(id)]);
+  try {
+    // 기본 축약 규칙을 짧은 ID에도 적용한다.
+    await app.render();
+
+    // 원래 ID가 그대로 사용자에게 보인다.
+    expect(app.get(id).title.plainText).toBe(id);
+  } finally { await app.close(); }
+});
+
+test("세션 이름을 갱신해도 충돌하는 탭의 라벨과 실제 선택·닫기 대상 ID를 바꾸지 않는다", async () => {
+  // 접두사가 겹치는 세션도 키보드와 마우스 동작은 전체 ID로 처리해야 한다.
+  const entries = [session(), session(collisionId, "Other conversation")], app = await mount(entries);
+  try {
+    // 이름 변경 뒤 키보드로 다음 세션을 선택하고 그 탭의 닫기 버튼을 누른다.
     const renamed = entries.map((entry) => ({ ...entry, name: "Renamed conversation" }));
     app.tabs.update("tree", renamed, firstId, true);
     app.tabs.command("session.next");
-    app.tabs.update("tree", renamed, secondId, true);
+    app.tabs.update("tree", renamed, collisionId, true);
     app.resize(32, 6); await app.render();
-    const close = app.renderer.root.findDescendantById(`close-session:${secondId}`)!;
+    const close = app.renderer.root.findDescendantById(`close-session:${collisionId}`)!;
     expect(close.x).toBeGreaterThanOrEqual(app.tabs.list.viewport.x);
     expect(close.x + close.width).toBeLessThanOrEqual(app.tabs.list.viewport.x + app.tabs.list.viewport.width);
     await app.mockMouse.click(close.x, close.y); await app.render();
 
-    expect(app.selected).toEqual([secondId]);
-    expect(app.closed).toEqual([secondId]);
-    expect(app.get(secondId).title.plainText.endsWith("…")).toBe(true);
+    // 라벨이 길어져도 전체 ID가 선택·닫기 콜백에 전달되고 메타데이터는 유지된다.
+    expect(app.selected).toEqual([collisionId]);
+    expect(app.closed).toEqual([collisionId]);
+    expect(app.get(collisionId).title.plainText).toBe("01a156a2-ba65");
     expect(app.captureCharFrame()).not.toContain("Renamed conversation");
-    expect(renamed.map((entry) => entry.id)).toEqual([firstId, secondId]);
+    expect(renamed.map((entry) => entry.id)).toEqual([firstId, collisionId]);
+
+    // 첫 탭을 마우스로 선택해도 축약 라벨 대신 원래 ID를 전달한다.
     app.tabs.update("tree", renamed, firstId, true); await app.render();
-    expect(app.get(firstId).tab.x).toBe(app.tabs.list.viewport.x);
+    const { tab, title } = app.get(firstId);
+    expect(tab.x).toBe(app.tabs.list.viewport.x);
+    await app.mockMouse.click(title.x, title.y); await app.render();
+    expect(app.selected).toEqual([collisionId, firstId]);
   } finally { await app.close(); }
 });

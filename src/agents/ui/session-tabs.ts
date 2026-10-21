@@ -110,10 +110,15 @@ export class SessionTabs {
   }
   private close(): void { if (this.selected) this.actions.close(this.selected); }
   private setTitle(tab: Tab, id: string): void {
+    // Extend the default prefix only when another open tab in this worktree shares it.
+    let length = 8;
+    while (length < id.length && this.sessions.some(session => session.id !== id && session.id.startsWith(id.slice(0, length)))) length++;
     // Reclaim the entire badge and its gap when there is no execution/unread indicator.
     const reserved = 4 + (tab.status.root.visible ? tab.status.root.width + 1 : 0);
-    const text = singleLine(id), width = Math.max(1, this.list.width > 0 ? this.list.width - reserved : Bun.stringWidth(text));
-    tab.title.maxWidth = width; tab.title.content = truncateCells(text, width);
+    const text = singleLine(id.slice(0, length)), width = Math.max(1, this.list.width > 0 ? this.list.width - reserved : Bun.stringWidth(text));
+    const content = truncateCells(text, width);
+    this.reveal ||= tab.title.plainText !== content;
+    tab.title.maxWidth = width; tab.title.content = content;
   }
   private resizeTitles(): void {
     for (const session of this.sessions) {
