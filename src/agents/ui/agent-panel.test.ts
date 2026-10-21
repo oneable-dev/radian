@@ -11,7 +11,7 @@ const tree: Worktree = { id: "tree", path: "/fixture", name: "fixture", branch: 
   { id: "b", name: "Session B", status: null, subagents: [] },
 ] };
 const openIds = new Set(["a", "b"]);
-async function mount(actions: Partial<AgentActions> = {}, scroll: Record<string, number> = {}) {
+async function mount(actions: Partial<AgentActions> = {}, scroll: Record<string, number> = {}, options: ConstructorParameters<typeof AgentPanel>[8] = {}) {
   const app = await createTestRenderer({ width: 80, height: 18, kittyKeyboard: true });
   const notices: string[] = [], saved: Record<string, number> = {};
   const panel = new AgentPanel(app.renderer, {
@@ -20,7 +20,7 @@ async function mount(actions: Partial<AgentActions> = {}, scroll: Record<string,
   }, (label, activate) => {
     const button = new BoxRenderable(app.renderer, { height: 1, flexShrink: 0, focusable: true, onMouseDown: activate });
     button.add(new TextRenderable(app.renderer, { content: label })); return button;
-  }, (notice) => notices.push(notice), () => {}, () => panel.prompt.blur(), scroll, (id, value) => { saved[id] = value; });
+  }, (notice) => notices.push(notice), () => {}, () => panel.prompt.blur(), scroll, (id, value) => { saved[id] = value; }, options);
   app.renderer.root.add(panel.root);
   panel.update(tree, "a", openIds, true);
   await app.renderOnce(); await app.renderOnce();
@@ -40,6 +40,25 @@ test("독립 Agent 패널은 세션이 없을 때 명시적인 생성 명령만 
     app.panel.sessionCommand("session.new");
 
     expect(created).toEqual(["tree"]);
+  } finally { await app.close(); }
+});
+
+test("읽기 전용 Agent 패널은 콜백이 있어도 전송·중단·세션 생성 명령을 실행하지 않는다", async () => {
+  // 호스트 콜백이 실수로 전달돼도 미리보기 모드 자체가 쓰기 동작을 차단한다.
+  const actions: string[] = [];
+  const app = await mount({ initialDrafts: { a: "Saved draft" },
+    onPrompt: () => { actions.push("prompt"); return ok(undefined); },
+    onInterrupt: async () => { actions.push("interrupt"); return ok(undefined); },
+    onNewSession: () => actions.push("create"),
+    getSessionDetails: () => ({ status: "working", output: "Saved output", error: null }),
+  }, {}, { readOnly: true });
+  try {
+    // UI 키 라우팅을 우회해도 공개 명령 경계에서 같은 정책을 적용한다.
+    await app.panel.submitPrompt(); await app.panel.interrupt(); app.panel.sessionCommand("session.new");
+
+    // 쓰기 콜백은 호출되지 않고 초안과 상태줄은 그대로 표시된다.
+    expect(actions).toEqual([]); expect(app.panel.canSubmit).toBe(false); expect(app.panel.canInterrupt).toBe(false);
+    expect(app.panel.prompt.value).toBe("Saved draft"); expect(app.captureCharFrame()).not.toContain("to interrupt");
   } finally { await app.close(); }
 });
 

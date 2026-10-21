@@ -6,6 +6,7 @@ import { WorkspaceSelection } from "../../app/workspace-selection.ts";
 import type { HistoryItem } from "../history.ts";
 import type { HistoryPreview } from "../history-preview.ts";
 import type { TranscriptSection } from "../transcript.ts";
+import type { SessionRecord } from "../session-registry.ts";
 import { Workbench } from "../../app/ui/workbench.ts";
 import { capture, HistoryError, type ExpectedError } from "../../errors.ts";
 import { ok, type Result } from "../../result.ts";
@@ -72,7 +73,7 @@ test("History는 Agents의 검색 팝업이고 좌측에는 Workspace만 남긴�
   } finally { await app.close(); }
 });
 
-test("미리보기는 Agent와 같은 섹션 카드·접힘·오류 UI를 쓰며 마지막 프롬프트부터 읽기만 한다", async () => {
+test("미리보기는 Agent와 같은 섹션 카드·접힘·오류 UI를 쓰며 최신 내용부터 읽기만 한다", async () => {
   // Live and preview surfaces receive identical structured data, but must not share view state.
   const sections: TranscriptSection[] = [
     { id: "latest-q", kind: "user", title: "You", text: "Newest prompt", status: "complete" },
@@ -89,9 +90,9 @@ test("미리보기는 Agent와 같은 섹션 카드·접힘·오류 UI를 쓰며
     const live = app.get("session-transcript"), state = app.view.workViewPreferences.agentViews;
     await app.open(); app.clock.advance(150); await app.render();
     const preview = app.get("history-preview") as ScrollBoxRenderable;
-    // 라이브 대화의 바만 숨기고 독립된 History 미리보기의 탐색 표시는 유지한다.
+    // 미리보기의 Transcript도 실제 세션과 같은 스크롤바 표시 정책을 따른다.
     if (!(live instanceof ScrollBoxRenderable)) throw new Error("Missing live transcript");
-    expect(live.verticalScrollBar.visible).toBe(false); expect(preview.verticalScrollBar.visible).toBe(true);
+    expect(live.verticalScrollBar.visible).toBe(false); expect(preview.verticalScrollBar.visible).toBe(false);
     for (const section of sections) {
       const original = body(live, section.text), shown = body(preview, section.text);
       if (!(original?.parent instanceof BoxRenderable) || !(shown?.parent instanceof BoxRenderable)) throw new Error("Expected native section cards");
@@ -99,9 +100,9 @@ test("미리보기는 Agent와 같은 섹션 카드·접힘·오류 UI를 쓰며
       expect(shown.parent.border).toEqual(original.parent.border); expect(shown.parent.paddingLeft).toBe(original.parent.paddingLeft);
       expect(shown.visible).toBe(original.visible);
     }
-    // A fresh preview starts at its latest prompt, not at the old conversation's beginning or the last card.
-    expect(preview.scrollTop).toBe(0); expect(app.captureCharFrame()).toContain("Newest prompt");
-    expect(app.captureCharFrame()).toContain("Visible reasoning"); expect(app.captureCharFrame()).not.toContain("[thinking]"); expect(app.captureCharFrame()).not.toContain("DO NOT RENDER THE LEGACY STRING");
+    // 새 미리보기는 실제 세션처럼 최신 답변이 보이는 위치에서 시작한다.
+    expect(preview.scrollTop).toBe(Math.max(0, preview.scrollHeight - preview.viewport.height)); expect(app.captureCharFrame()).toContain("Latest reply");
+    expect(app.captureCharFrame()).not.toContain("[thinking]"); expect(app.captureCharFrame()).not.toContain("DO NOT RENDER THE LEGACY STRING");
     const prompt = body(preview, "Newest prompt")!; prompt.focus();
     await app.mockInput.pasteBracketedText("must not edit"); app.mockInput.pressBackspace(); await app.render();
     expect(prompt.plainText).toBe("Newest prompt"); expect(app.view.workViewPreferences.agentViews).toEqual(state);
@@ -135,6 +136,65 @@ test("History의 답변·Thinking도 동일한 Markdown을 표시하되 검색·
     expect(frame).not.toContain("### Preview title"); expect(frame).not.toContain("**Saved answer**"); expect(frame).not.toContain("[thinking]");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("history-search");
     expect(app.selection.sessionId).toBe("a1"); expect(app.view.promptDrafts.a1).toBe("untouched draft"); expect(app.runs).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("History는 실제 세션의 Prompt·상태줄을 표시하되 입력·전송과 원래 초안을 바꾸지 않는다", async () => {
+  // 저장된 세션의 모델 정보와 취소 상태가 배경 세션과 다르게 보이는지 확인한다.
+  const sections: TranscriptSection[] = [
+    { id: "saved-q", kind: "user", title: "You", text: "Saved task", status: "complete" },
+    { id: "saved-tool", kind: "tool", title: "read", text: "Recovered tool failure", status: "error", error: "Recovered tool failure" },
+    { id: "saved-a", kind: "assistant", title: "Agent", text: "Saved result", status: "cancelled",
+      completion: { startedAt: 1000, completedAt: 2000, durationMs: 1000, outcome: "cancelled" } },
+  ];
+  const app = await mount({ preview: async (worktreeId, id) => ok({ id, worktreeId, text: "", sections, truncated: false,
+    telemetry: { provider: "fixture", model: "saved-model", effort: "high", fast: null, context: null, weekly: null } }) });
+  try {
+    app.resize(180, 36); await app.render();
+
+    // 미리보기에서도 같은 composer와 telemetry 컴포넌트를 배치하고 읽기 전용임을 명시한다.
+    await app.open();
+    const prompt = app.get("history-preview-session-prompt") as EditBufferRenderable;
+    const composer = app.get("history-preview-agent-composer") as BoxRenderable;
+    const liveComposer = app.get("agent-composer") as BoxRenderable;
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("Read-only preview"); expect(frame).toContain("saved-model"); expect(frame).toContain("Cancelled");
+    expect(frame).toContain("context -"); expect(frame).toContain("usage -");
+    expect(composer.border).toEqual(liveComposer.border); expect(composer.height).toBe(liveComposer.height);
+    expect(app.get("history-preview-session-status").visible).toBe(true);
+
+    // 읽기 전용 입력에 키와 붙여넣기를 보내도 저장 기록이나 실제 세션 초안은 수정하지 않는다.
+    prompt.focus(); await app.mockInput.typeText("must not send");
+    await app.mockInput.pasteBracketedText("pasted text"); app.mockInput.pressBackspace(); await app.render();
+    expect(prompt.plainText).toBe(""); expect(app.runs).toEqual([]); expect(app.resumed).toEqual([]);
+    expect(app.selection.sessionId).toBe("a1"); expect(app.view.promptDrafts.a1).toBe("untouched draft");
+    app.resize(60, 12); await app.render();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("history-search");
+    app.mockInput.pressEscape(); await app.render();
+    expect(app.get("session-history").visible).toBe(false);
+  } finally { await app.close(); }
+});
+
+test("공유 스냅샷 preview는 저장된 실행 상태와 당시 context·usage·Fast를 같은 세션 UI에 표시한다", async () => {
+  // 현재는 이미 만료된 usage 창도 당시 화면에서는 실제 관측값이 있었다.
+  const capturedAt = 1700000000000;
+  const snapshot: SessionRecord = { id: "closed-tab", name: "Archived task", worktreeId: "demo:main", lifecycle: "closed", updatedAt: capturedAt,
+    state: { conversationId: "first", status: "failure", error: "Saved failure", output: "",
+      sections: [{ id: "a", kind: "assistant", title: "Agent", text: "Saved snapshot answer", status: "complete" }],
+      telemetry: { provider: "fixture", model: "archived-model", effort: "high", fast: true,
+        context: { usedTokens: 72000, maxTokens: 200000 }, weekly: null,
+        usage: { provider: "fixture", status: "ready", windows: [{ id: "quota", usedPercent: 43, periodMs: 604800000, resetsAt: capturedAt + 3600000 }], updatedAt: capturedAt, errorCode: null } } }, subagents: [] };
+  const app = await mount({ preview: async (worktreeId, id) => ok({ id, worktreeId, text: "", truncated: false, snapshot }) });
+  try {
+    app.resize(220, 36); await app.render();
+
+    // 개별 필드를 추정해서 만드는 대신 같은 저장 record를 AgentPanel로 전달한다.
+    await app.open(); const frame = app.captureCharFrame();
+
+    // 과거 값을 현재 시계로 지우거나 실제 실행 설정으로 적용하지 않는다.
+    expect(frame).toContain("Saved snapshot answer"); expect(frame).toContain("Failed"); expect(frame).toContain("Saved failure");
+    expect(frame).toContain("archived-model"); expect(frame).toContain("fast on"); expect(frame).toContain("64%"); expect(frame).toContain("43% used");
+    expect(frame).toContain("saved 2023-11-14"); expect(app.selection.sessionId).toBe("a1"); expect(app.runs).toEqual([]); expect(app.resumed).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -314,15 +374,15 @@ test("좁은 창은 목록과 미리보기를 전환하고 resize 뒤 검색과 
     expect(app.view.workViewPreferences.active["demo:main"] ?? "agent").toBe("agent");
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
     expect(app.get("history-list").visible).toBe(false); expect(app.get("history-preview-pane").visible).toBe(true);
-    expect(app.captureCharFrame()).toContain("Saved question second");
-    // Page through the card gutters as well as the content in the tiny preview viewport.
-    const preview = app.get("history-preview") as ScrollBoxRenderable, initialScroll = preview.scrollTop;
-    await app.mockInput.pressKeys(["\x1b[6~"]); await app.render();
-    expect(preview.scrollTop).toBeGreaterThan(initialScroll);
-    for (let page = 0; page < 10 && !app.captureCharFrame().includes("Saved answer second"); page++) {
-      await app.mockInput.pressKeys(["\x1b[6~"]); await app.render();
-    }
     expect(app.captureCharFrame()).toContain("Saved answer second");
+    // 작은 뷰포트에서도 최신 답변에서 위로 이동하면 같은 대화의 요청을 읽을 수 있다.
+    const preview = app.get("history-preview") as ScrollBoxRenderable, initialScroll = preview.scrollTop;
+    await app.mockInput.pressKeys(["\x1b[5~"]); await app.render();
+    expect(preview.scrollTop).toBeLessThan(initialScroll);
+    for (let page = 0; page < 10 && !app.captureCharFrame().includes("Saved question second"); page++) {
+      await app.mockInput.pressKeys(["\x1b[5~"]); await app.render();
+    }
+    expect(app.captureCharFrame()).toContain("Saved question second");
     const dialog = app.get("history-dialog"); expect(dialog.x + dialog.width).toBeLessThanOrEqual(60); expect(dialog.y + dialog.height).toBeLessThanOrEqual(12);
     app.resize(140, 30); await app.render();
     expect(app.get("history-list").visible).toBe(true); expect(app.get("history-preview-pane").visible).toBe(true);
@@ -335,6 +395,7 @@ test("빈 목록·검색 결과 없음·조회 오류를 구분하고 커스텀 
   const app = await mount({ keymap: expectOk(parseKeymap({ bindings: { "history.refresh": [{ keys: "ctrl+g", scope: "history-search" }] } })),
     list: async () => { calls++; if (calls === 1) throw new HistoryError("HISTORY_UNAVAILABLE", "Lookup failed"); return calls === 2 ? [] : [saved("restored", "Restored history")]; } });
   try {
+    app.resize(160, 24); await app.render();
     await app.open(); await app.visible("History error:"); expect(app.captureCharFrame()).toContain("Ctrl+g Refresh");
     app.mockInput.pressKey("r", { ctrl: true }); await app.render(); expect(calls).toBe(1);
     app.mockInput.pressKey("g", { ctrl: true }); await app.visible("No saved sessions");

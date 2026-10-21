@@ -103,13 +103,15 @@ export const snapshotSchema = Type.Object({
   terminalClosingCount: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 export type RuntimeSnapshot = Omit<Static<typeof snapshotSchema>, "repositories" | "details"> & { readonly repositories: readonly Repository[]; readonly details: Readonly<Record<string, ExecutionState>> };
-const record = Type.Object({
+export const sessionRecordSchema = Type.Object({
   id, name: Type.String(), worktreeId: id, sessionFile: Type.Optional(id),
   state: execution, subagents: Type.Array(agent),
+  lifecycle: Type.Optional(Type.Union([Type.Literal("open"), Type.Literal("closed")])),
+  updatedAt: Type.Optional(Type.Integer({ minimum: 0, maximum: 8640000000000000 })), cwd: Type.Optional(id),
 });
 export const manifestSchema = Type.Object({
   version: Type.Literal(protocolVersion), repositoryId: id,
-  repositories: Type.Array(repository), records: Type.Array(record), preferences: preferencesSchema,
+  repositories: Type.Array(repository), records: Type.Array(sessionRecordSchema), preferences: preferencesSchema,
 });
 export type RuntimeManifest = Omit<Static<typeof manifestSchema>, "repositories" | "records"> & {
   readonly repositories: readonly Repository[];
@@ -119,7 +121,11 @@ export const historySchema = Type.Array(Type.Object({ id, worktreeId: id, title:
   messageCount: Type.Integer({ minimum: 0 }), openSessionId: Type.Union([id, Type.Null()]), unavailableReason: Type.Union([Type.String(), Type.Null()]),
 }));
 export const historyPreviewSchema = Type.Object({ id, worktreeId: id, text: Type.String({ maxLength: 65536 }), truncated: Type.Boolean(),
-  sections: Type.Optional(Type.Array(Type.Object({ ...transcriptSection.properties, text: Type.String({ maxLength: 8192 }) }), { maxItems: 6 })),
+  sections: Type.Optional(Type.Array(Type.Object({ ...transcriptSection.properties, text: Type.String({ maxLength: 8192 }) }), { maxItems: 15 })),
+  telemetry: Type.Optional(telemetry),
+  snapshot: Type.Optional(Type.Object({ ...sessionRecordSchema.properties, state: Type.Object({ ...execution.properties,
+    output: Type.String({ maxLength: 65536 }), sections: Type.Optional(Type.Array(Type.Object({ ...transcriptSection.properties, text: Type.String({ maxLength: 8192 }) }), { maxItems: 15 })),
+  }) })),
 });
 export const historyPreviewQuerySchema = Type.Object({ worktreeId: id, savedId: id }, { additionalProperties: false });
 const size = { cols: Type.Integer({ minimum: 2, maximum: 500 }), rows: Type.Integer({ minimum: 1, maximum: 200 }) };

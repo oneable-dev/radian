@@ -5,7 +5,7 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { createWorktreeFixture } from "../../testing/worktree-fixture.ts";
 import { connectRuntime, fetchSnapshot } from "../../runtime/client.ts";
 import { restoreWorkViews, saveWorkViews } from "../../runtime/work-view-preferences.ts";
-import type { RuntimeManifest } from "../../runtime/protocol.ts";
+import { RuntimeStore } from "../../runtime/storage.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { Workbench } from "./workbench.ts";
 import { expectOk } from "../../testing/results.ts";
@@ -63,8 +63,9 @@ test("실제 SDK·IPC 섹션의 접힘·선택·커서는 TUI 재접속 후 같�
     const sections = app.client.snapshot.details[id]!.sections!;
     const toolIndex = sections.findIndex((section) => section.kind === "tool");
     expect(toolIndex).toBeGreaterThan(0);
-    await until(async () => (JSON.parse(await Bun.file(app!.client.paths.manifest).text()) as RuntimeManifest).records.some((record) => record.id === id && record.sessionFile));
-    const manifest: RuntimeManifest = JSON.parse(await Bun.file(app.client.paths.manifest).text());
+    await until(async () => !!expectOk(await new RuntimeStore(app!.client.paths).load(fixture.repository.id))?.records.some((record) => record.id === id && record.sessionFile));
+    const manifest = expectOk(await new RuntimeStore(app.client.paths).load(fixture.repository.id));
+    if (!manifest) throw new Error("Missing runtime manifest");
     const file = manifest.records.find((record) => record.id === id)!.sessionFile!;
     const originalHistory = await Bun.file(file).text();
 

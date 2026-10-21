@@ -1,10 +1,9 @@
 import { expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { connectRuntime, fetchSnapshot, type RuntimeClient } from "./client.ts";
-import { pidAlive } from "./storage.ts";
-import { emptyPreferences, parseCommand, parseSnapshot, type RuntimeManifest, type RuntimeSnapshot } from "./protocol.ts";
+import { pidAlive, RuntimeStore } from "./storage.ts";
+import { emptyPreferences, parseCommand, parseSnapshot, type RuntimeSnapshot } from "./protocol.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 
 function observed(client: RuntimeClient, predicate: (snapshot: RuntimeSnapshot) => boolean): Promise<void> {
@@ -56,7 +55,8 @@ test("실제 런타임은 TUI 없이 완료된 결과를 저장하고 모든 연
     await observed(first, state => !state.details[id]?.attention);
     await observed(second, state => !state.details[id]?.attention);
 
-    const saved: RuntimeManifest = JSON.parse(await readFile(first.paths.manifest, "utf8"));
+    const saved = expectOk(await new RuntimeStore(first.paths).load(app.repository.id));
+    if (!saved) throw new Error("Missing runtime manifest");
     expect(saved.records.find(record => record.id === id)?.state.attention).toBeUndefined();
     expect(first.snapshot.details[id]?.result?.id).toBe(attention.id);
     expect(first.snapshot.details[id]?.status).toBe("complete");

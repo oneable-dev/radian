@@ -12,7 +12,8 @@ import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
-import { TranscriptPanel } from "./transcript-panel.ts";
+import { AgentPanel } from "./agent-panel.ts";
+import type { ExecutionState, SessionRecord } from "../session-registry.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import type { TranscriptSection } from "../transcript.ts";
 
@@ -49,7 +50,9 @@ export class SessionHistoryPanel {
   private readonly previewCache: HistoryPreviewCache;
   private readonly message: TextRenderable;
   private readonly previewPane: BoxRenderable;
-  private readonly transcript: TranscriptPanel;
+  private readonly session: AgentPanel;
+  private previewState: ExecutionState | null = null;
+  private previewCapturedAt: number | undefined;
   private readonly rows: BoxRenderable[] = [];
   private items: readonly HistoryItem[] = [];
   private filtered: readonly HistoryItem[] = [];
@@ -67,8 +70,8 @@ export class SessionHistoryPanel {
   private readonly listenerBudget: number;
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: HistoryActions) {
-    // Two native scroll areas add renderer subscriptions; budget these owned listeners, not an unlimited exemption.
-    this.listenerBudget = renderer.getMaxListeners() === 0 ? 0 : 4;
+    // The list and shared session surface own native scroll/layout subscriptions.
+    this.listenerBudget = renderer.getMaxListeners() === 0 ? 0 : 8;
     if (this.listenerBudget) renderer.setMaxListeners(renderer.getMaxListeners() + this.listenerBudget);
     const theme = uiTheme(renderer);
     this.root = new BoxRenderable(renderer, { id: "session-history", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 5000,
@@ -92,12 +95,15 @@ export class SessionHistoryPanel {
     const previewHeading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.previewLabel = new TextRenderable(renderer, { content: "Preview · read only", height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0, selectable: false, wrapMode: "none" });
     previewHeading.add(this.previewLabel);
-    this.transcript = new TranscriptPanel(renderer, { initialScroll: {}, initialPosition: "start", emptyLogo: false, saveScroll: () => {},
-      focusPrompt: () => this.search.focus(), notice: actions.onError, changed: () => actions.onChange?.() });
+    this.session = new AgentPanel(renderer, { onNewSession: () => {}, getSessionDetails: () => this.previewState },
+      (label) => { const button = new BoxRenderable(renderer, {}); button.add(new TextRenderable(renderer, { content: label })); return button; },
+      actions.onError, () => actions.onChange?.(), () => this.search.focus(), {}, () => {},
+      { readOnly: true, idPrefix: "history-preview-", initialPosition: "end", emptyLogo: false, snapshotTime: () => this.previewCapturedAt });
+    this.session.update(null, null, new Set(), false);
     this.previewCache = new HistoryPreviewCache((tree, id, signal) => actions.preview!(tree, id, signal),
       () => this.renderPreview(), error => reportUnexpected(error, "history preview"));
-    this.preview = this.transcript.scroll; this.preview.id = "history-preview";
-    this.previewPane.add(previewHeading); this.previewPane.add(this.preview);
+    this.preview = this.session.transcriptScroll; this.preview.id = "history-preview";
+    this.previewPane.add(previewHeading); this.previewPane.add(this.session.root);
     body.add(this.list); body.add(this.previewPane);
     this.panel.add(heading); this.panel.add(this.search.field); this.panel.add(this.message); this.panel.add(body); this.root.add(this.panel);
     theme.scrollbars(this.list); theme.scrollbars(this.preview);
@@ -106,6 +112,7 @@ export class SessionHistoryPanel {
       this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg; paintText(this.title, styles["ui.popupTitle"]);
       for (const text of [this.message, this.previewLabel, close]) paintText(text, styles["ui.muted"]);
       this.previewPane.borderColor = styles["ui.border"].fg;
+      this.session.root.backgroundColor = styles["ui.text"].bg;
       paintText(this.spinner.root, styles["status.working"]);
       this.paint();
     });
@@ -134,7 +141,7 @@ export class SessionHistoryPanel {
   hide(restoreFocus = true): void {
     if (!this.visible) return;
     this.generation++; this.loading = false; this.cancelPreview(); this.loadRequest?.abort(); this.spinner.cancel();
-    this.transcript.update(null, [], "", false);
+    this.updatePreview(null, [], "", false);
     this.root.visible = false;
     if (this.resuming && restoreFocus) this.actions.onError("Open is still settling. Closing history does not cancel an accepted request; check the session tabs before retrying.");
     const owner = this.owner; this.owner = undefined;
@@ -194,7 +201,7 @@ export class SessionHistoryPanel {
     for (const [index, item] of this.filtered.entries()) {
       const row = new BoxRenderable(this.renderer, { id: `history:${item.id}`, height: 2, flexShrink: 0, minWidth: 0, flexDirection: "column",
         onMouseDown: (event) => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); this.list.focus(); this.cursor = index; this.paint(); this.schedulePreview(); } });
-      const title = new TextRenderable(this.renderer, { content: `${item.unavailableReason ? "[Busy] " : item.openSessionId ? "[Open] " : ""}${item.title}`, height: 1, wrapMode: "none", selectable: false });
+      const title = new TextRenderable(this.renderer, { content: `${item.unavailableReason ? "[Unavailable] " : item.openSessionId ? "[Open] " : ""}${item.title}`, height: 1, wrapMode: "none", selectable: false });
       const metadata = new TextRenderable(this.renderer, { content: `${item.modified.slice(0, 16).replace("T", " ")} · ${item.messageCount} messages`, height: 1, wrapMode: "none", selectable: false });
       uiTheme(this.renderer).bindStyles(row, (styles) => { paintText(title, styles["ui.label"]); paintText(metadata, styles["ui.muted"]); row.backgroundColor = styles[index === this.cursor ? "ui.selection" : "ui.popup"].bg; });
       row.add(title); row.add(metadata); this.list.add(row); this.rows.push(row);
@@ -213,17 +220,39 @@ export class SessionHistoryPanel {
   }
   private cancelPreview(): void {
     this.previewIdentity = undefined; this.previewCache.clear();
-    this.transcript.update(null, [], "", this.visible);
+    this.updatePreview(null, [], "", this.visible);
   }
   private previewMessage(message: string): void {
-    this.transcript.update(null, undefined, message, this.visible);
+    this.updatePreview(null, undefined, message, this.visible);
+  }
+  private updatePreview(id: string | null, sections: readonly TranscriptSection[] | undefined, output: string, visible: boolean, telemetry?: HistoryPreview["telemetry"], snapshot?: SessionRecord): void {
+    const sessionId = id ?? "history:empty";
+    const turn = sections?.slice(Math.max(0, sections.findLastIndex(section => section.kind === "user" || section.request !== undefined))) ?? [];
+    const answer = turn.findLast(section => section.kind === "assistant" || section.kind === "notice" && section.status === "error");
+    const failure = answer?.status === "error" ? answer : undefined;
+    this.previewCapturedAt = snapshot?.lifecycle === "closed" ? snapshot.updatedAt : undefined;
+    const status = snapshot ? snapshot.state.status : failure ? "failure" : "complete";
+    this.previewState = { status, error: failure?.error ?? null, ...snapshot?.state, output, ...(sections !== undefined ? { sections } : {}), ...(telemetry ? { telemetry } : {}) };
+    const tree = this.worktree ?? { id: "history", path: "", name: "History", branch: null, sessions: [] };
+    this.session.update({ ...tree, sessions: [{ id: sessionId, name: this.selected?.title ?? "Preview", status, subagents: snapshot?.subagents ?? [] }] },
+      sessionId, new Set([sessionId]), visible && this.previewPane.visible);
   }
   private showPreview(value: HistoryPreview): void {
+    if (value.snapshot) {
+      const snapshot = value.snapshot;
+      const sections = snapshot.state.sections;
+      const savedAt = snapshot.updatedAt === undefined ? "" : ` · saved ${new Date(snapshot.updatedAt).toISOString().slice(0, 16).replace("T", " ")}`;
+      this.previewLabel.content = `Preview · ${singleLine(this.selected?.title ?? snapshot.name)} · read only${savedAt}`;
+      this.updatePreview(`history:${value.worktreeId}:${value.id}`, value.truncated && sections ? [...sections, {
+        id: "history-preview-truncated", kind: "notice", title: "Preview truncated", text: "Open the session to read the full section content.", status: "complete",
+      }] : sections, snapshot.state.output, this.visible, snapshot.state.telemetry, snapshot);
+      return;
+    }
     const sections: readonly TranscriptSection[] = value.sections ?? (value.text ? [{ id: "legacy-preview", kind: "notice", title: "Saved conversation", text: value.text, status: "complete" }] : []);
-    if (!sections.length) { this.previewMessage("No saved sections in this branch."); return; }
-    this.transcript.update(`history:${value.worktreeId}:${value.id}:${sections[0]!.id}`, value.truncated ? [...sections, {
+    if (!sections.length) { this.updatePreview(`history:${value.worktreeId}:${value.id}`, undefined, "No saved sections in this branch.", this.visible, value.telemetry); return; }
+    this.updatePreview(`history:${value.worktreeId}:${value.id}:${sections[0]!.id}`, value.truncated ? [...sections, {
       id: "history-preview-truncated", kind: "notice", title: "Preview truncated", text: "Open the session to read the full section content.", status: "complete",
-    }] : sections, "", this.visible);
+    }] : sections, "", this.visible, value.telemetry);
   }
   private schedulePreview(): void {
     const item = this.selected, worktree = this.worktree;
@@ -246,7 +275,7 @@ export class SessionHistoryPanel {
       case "ready": this.showPreview(state.value); break;
       case "error": this.previewMessage(`[${state.error.code}] ${state.error.message}`); break;
       case "unexpected": this.previewMessage(state.message); break;
-      default: this.transcript.update(null, [], "", true);
+      default: this.updatePreview(null, [], "", true);
     }
     this.actions.onChange?.();
   }
@@ -271,7 +300,7 @@ export class SessionHistoryPanel {
     if (command === "history.open") { this.launch(() => this.openSelected()); return; }
     if (command === "history.preview") {
       if (this.renderer.width < 100) { this.compactPreview = !this.compactPreview; this.resize(); }
-      else if (this.transcript.focused) this.search.focus(); else this.preview.focus();
+      else if (this.session.transcriptFocused) this.search.focus(); else this.preview.focus();
       this.actions.onChange?.(); return;
     }
     if (command === "history.page-up" || command === "history.page-down") {
@@ -282,7 +311,7 @@ export class SessionHistoryPanel {
     else if (command === "history.previous" || command === "history.next") this.cursor += command === "history.previous" ? -1 : 1;
     else if (command === "history.half-page-up" || command === "history.half-page-down") {
       const direction = command === "history.half-page-up" ? -1 : 1;
-      if (this.transcript.focused) { this.preview.scrollBy(direction * halfPageStep(this.preview.viewport.height)); return; }
+      if (this.session.transcriptFocused) { this.preview.scrollBy(direction * halfPageStep(this.preview.viewport.height)); return; }
       const height = this.list.visible ? this.list.viewport.height : this.list.parent?.height ?? this.list.viewport.height;
       if (this.search.focused) {
         if (this.compactPreview) { this.compactPreview = false; this.resize(); }
@@ -304,13 +333,14 @@ export class SessionHistoryPanel {
     this.list.width = wide ? "42%" : "100%";
     this.previewPane.width = wide ? "58%" : "100%";
     this.previewPane.border = wide ? ["left"] : false; this.previewPane.paddingLeft = wide ? 1 : 0;
-    if (this.visible && ((this.transcript.focused && !this.previewPane.visible) || (this.list.focused && !this.list.visible))) this.search.focus();
+    if (this.visible && ((this.session.root.hasFocusedDescendant && !this.previewPane.visible) || (this.list.focused && !this.list.visible))) this.search.focus();
+    if (this.visible) this.renderPreview();
     this.actions.onChange?.();
   };
   dispose(): void {
     if (this.disposed) return;
     this.hide(false); this.disposed = true; this.generation++; this.cancelPreview(); this.loadRequest?.abort(); this.spinner.cancel();
-    this.search.off(InputRenderableEvents.INPUT, this.filter); this.renderer.off("resize", this.resize); this.transcript.dispose();
+    this.search.off(InputRenderableEvents.INPUT, this.filter); this.renderer.off("resize", this.resize); this.session.dispose();
     if (!this.root.isDestroyed) this.root.destroyRecursively();
     if (this.listenerBudget) this.renderer.setMaxListeners(Math.max(1, this.renderer.getMaxListeners() - this.listenerBudget));
   }

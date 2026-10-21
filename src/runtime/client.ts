@@ -292,7 +292,11 @@ export class RuntimeClient {
     if (epoch !== this.connectionEpoch || instance !== this.state.instance || signal?.aborted) return err(new CancelledError("History preview belongs to an outdated connection."));
     const body = decoded.value.value;
     if (!reply.ok) return Value.Check(replySchema, body) && !body.ok ? err(remoteError(body.error)) : err(new ProtocolError("Malformed history preview failure response."));
-    return Value.Check(historyPreviewSchema, body) && body.id === savedId && body.worktreeId === worktreeId ? ok(body) : err(new ProtocolError("Malformed or mismatched history preview response."));
+    if (!Value.Check(historyPreviewSchema, body) || body.id !== savedId || body.worktreeId !== worktreeId
+      || body.snapshot && (body.snapshot.worktreeId !== worktreeId || (body.snapshot.state.conversationId ?? body.snapshot.id) !== savedId)) {
+      return err(new ProtocolError("Malformed or mismatched history preview response."));
+    }
+    return ok(body);
   }
   async resume(worktreeId: string, savedId: string): Promise<Result<string, ExpectedError>> {
     const capability = this.requireHistory(); if (!capability.ok) return capability;

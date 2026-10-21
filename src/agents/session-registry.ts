@@ -15,6 +15,7 @@ import type { TranscriptImageData } from "./transcript-images.ts";
 import { modelCommand, parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "./model-selection.ts";
 import { historyCommand, parseHistoryCommand } from "./history-command.ts";
 import { needsAttention, type SessionResult } from "./session-attention.ts";
+import { sessionRecordKey, type SessionLifecycle } from "./session-snapshot.ts";
 
 export type ExecutionState = { readonly conversationId?: string; readonly resourceRevision?: number; readonly status: AgentStatus | null; readonly activity?: "compacting"; readonly output: string; readonly error: string | null;
   readonly sections?: readonly TranscriptSection[]; readonly telemetry?: SessionTelemetry;
@@ -50,6 +51,7 @@ export type SessionContext = {
 export type SessionRecord = {
   readonly id: string; readonly name: string; readonly worktreeId: string; readonly sessionFile?: string;
   readonly state: ExecutionState; readonly subagents: readonly Subagent[];
+  readonly lifecycle?: SessionLifecycle; readonly updatedAt?: number; readonly cwd?: string;
 };
 // Creation is an exception-based SDK boundary. The registry converts only classified failures.
 export type SessionFactory = (context: SessionContext) => Promise<SessionExecutor>;
@@ -70,6 +72,7 @@ export class SessionRegistry {
   private readonly entries = new Map<string, OpenExecution>();
   private readonly listeners = new Set<() => void>();
   private readonly fileOwners = new Map<string, string>();
+  private readonly retired = new Map<string, SessionRecord>();
   private shuttingDown = false;
   private readonly replacements = new Set<Promise<Result<void, ExpectedError>>>();
   constructor(private readonly repositories: RepositorySource, private readonly factory: SessionFactory) {}
@@ -136,8 +139,30 @@ export class SessionRegistry {
     return [...this.entries.values()].filter((entry) => entry.phase === "open").map((entry) => ({
       id: entry.id, name: entry.name, worktreeId: entry.worktree.id,
       ...(entry.executor?.sessionFile ? { sessionFile: entry.executor.sessionFile } : {}),
-      state: this.details(entry.id) ?? { status: null, output: "", error: null }, subagents: this.children(entry),
+      state: { ...(this.details(entry.id) ?? { status: null, output: "", error: null }), conversationId: entry.executor!.savedSessionId },
+      subagents: this.children(entry), lifecycle: "open", cwd: entry.worktree.path,
     }));
+  }
+  sessionSnapshot(worktreeId: string, conversationId: string): SessionRecord | undefined {
+    return this.records.find(record => record.worktreeId === worktreeId && record.state.conversationId === conversationId)
+      ?? [...this.retired.values()].find(record => record.worktreeId === worktreeId && record.state.conversationId === conversationId);
+  }
+  // Retain closed records only until the shared store confirms persistence.
+  get checkpointRecords(): readonly SessionRecord[] { return [...this.retired.values(), ...this.records]; }
+  acknowledgeCheckpoint(records: readonly SessionRecord[]): void {
+    for (const record of records) if (this.retired.get(sessionRecordKey(record)) === record) this.retired.delete(sessionRecordKey(record));
+  }
+  private retire(entry: OpenExecution, before?: SessionRecord): SessionRecord | undefined {
+    if (!entry.executor) return undefined;
+    const state = entry.executor.state;
+    const telemetry = before?.state.telemetry ?? state.telemetry;
+    const interrupted = state.status === "working";
+    const record: SessionRecord = { id: entry.id, name: entry.name, worktreeId: entry.worktree.id, cwd: entry.worktree.path,
+      ...(entry.executor.sessionFile ? { sessionFile: entry.executor.sessionFile } : {}), lifecycle: "closed", updatedAt: Date.now(),
+      state: { ...state, conversationId: entry.executor.savedSessionId, ...(telemetry ? { telemetry } : {}),
+        ...(interrupted ? { status: null, pendingMessages: [], result: { id: crypto.randomUUID(), outcome: "unfinished", completedAt: Date.now() } } : {}) },
+      subagents: this.children(entry) };
+    this.retired.set(sessionRecordKey(record), record); return record;
   }
   private children(entry: OpenExecution): Subagent[] {
     return [...entry.children.values()].map((child) => ({ id: child.id, name: child.name,
@@ -145,6 +170,7 @@ export class SessionRegistry {
   }
 
   async restore(record: SessionRecord): Promise<Result<void, ExpectedError>> {
+    if (record.lifecycle === "closed") return ok(undefined);
     const existence = await capture(async () => record.sessionFile ? Bun.file(record.sessionFile).exists() : false);
     if (!existence.ok) return existence;
     if (!existence.value && record.state.output) return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved conversation file is missing; refusing to replace it with an empty session."));
@@ -362,6 +388,7 @@ export class SessionRegistry {
       else if (this.shuttingDown || previous.phase !== "open") result = err(new CancelledError("Session replacement was cancelled by shutdown."));
       else {
         onAccepted?.(); stopping = true;
+        const archived = this.retire(previous);
         // Explicit /clear stops only the execution owned by this tab. Keep its file
         // fenced until all parent/child tool results have settled and persisted.
         const stopped = await collectCleanup([this.closeExecution(previous, "new"), ...[...previous.children.values()].map((child) => this.closeExecution(child, "new"))], "Could not finish the previous conversation.");
@@ -377,6 +404,7 @@ export class SessionRegistry {
           previous.unsubscribe?.(); delete previous.unsubscribe;
           if (previous.fileKey && this.fileOwners.get(previous.fileKey) === previous.id) this.fileOwners.delete(previous.fileKey);
           if (key.value) this.fileOwners.set(key.value, replacement.id);
+          this.retire(previous, archived);
           this.entries.set(previous.id, replacement); adopted = true; this.emit(); return ok(undefined);
         }
       }
@@ -395,10 +423,12 @@ export class SessionRegistry {
     const entry = this.entries.get(id);
     if (!entry) return Promise.resolve(ok(undefined));
     if (entry.closeTask) return entry.closeTask;
+    const archived = this.retire(entry);
     entry.phase = "closing";
     const task = Promise.resolve().then(async () => {
       const result = await collectCleanup([this.closeExecution(entry), ...[...entry.children.values()].map((child) => this.closeExecution(child))], `Could not finish closing ${entry.name}`);
       if (!result.ok) { delete entry.closeTask; this.emit(); return result; }
+      this.retire(entry, archived);
       this.entries.delete(id);
       if (entry.fileKey && this.fileOwners.get(entry.fileKey) === id) this.fileOwners.delete(entry.fileKey);
       this.emit(); return ok(undefined);

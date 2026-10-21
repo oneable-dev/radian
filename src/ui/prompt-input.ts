@@ -1,4 +1,4 @@
-import { createExtmarksController, RenderableEvents, SyntaxStyle, TextareaRenderable, InputRenderableEvents, type ExtmarksController, type CliRenderer, type PasteEvent, type Renderable } from "@opentui/core";
+import { createExtmarksController, RenderableEvents, SyntaxStyle, TextareaRenderable, InputRenderableEvents, type ExtmarksController, type CliRenderer, type KeyEvent, type PasteEvent, type Renderable } from "@opentui/core";
 import { Value } from "typebox/value";
 import { capture, reportUnexpected, type ExpectedError } from "../errors.ts";
 import { rm } from "node:fs/promises";
@@ -13,7 +13,7 @@ import { collapsedPaste, expandPromptDraft, promptPartLabel, promptPartSchema, v
 import type { DialogContent } from "./text-dialog.ts";
 import { InputField, type InputLayout } from "./input-field.ts";
 
-type Options = { clipboard?: Pick<Clipboard, "read" | "dispose">; cacheRoot?: string; id?: string; fieldId?: string; activityId?: string };
+type Options = { clipboard?: Pick<Clipboard, "read" | "dispose">; cacheRoot?: string; readOnly?: boolean; id?: string; fieldId?: string; activityId?: string };
 
 export class PromptInput extends TextareaRenderable {
   readonly field: InputField;
@@ -62,7 +62,7 @@ export class PromptInput extends TextareaRenderable {
     this.availableHeight = availableHeight;
     return this.field.fit(this.requestedRows, availableHeight);
   }
-  clear(): void { if (this.value || this.pending) this.value = ""; }
+  clear(): void { if (!this.options.readOnly && (this.value || this.pending)) this.value = ""; }
   private reflow = (): void => {
     if (this.disposed || this.isDestroyed || this.field.isDestroyed) return;
     for (let node: Renderable | null = this.field; node; node = node.parent) {
@@ -112,14 +112,16 @@ export class PromptInput extends TextareaRenderable {
     this.insertPart({ ...file, index: this.sequence[file.kind]++ }, start, end);
     return true;
   }
+  override handleKeyPress(key: KeyEvent): boolean { return this.options.readOnly ? true : super.handleKeyPress(key); }
   override handlePaste(event: PasteEvent): void {
+    if (this.options.readOnly) return;
     let text: string;
     try { text = new TextDecoder("utf-8", { fatal: true }).decode(event.bytes); }
     catch (error) { if (error instanceof TypeError) { this.notice("[INVALID_INPUT] Paste is not valid UTF-8. Nothing was inserted."); return; } throw error; }
     this.pasteText(text);
   }
   pasteText(text: string): void {
-    if (!text) return;
+    if (this.options.readOnly || !text) return;
     if (Buffer.byteLength(text) + Buffer.byteLength(this.legacyText) > maxFrameBytes) { this.notice("Paste exceeds the runtime payload safety limit. Nothing was inserted; input was retained."); return; }
     const files = pastedFiles(text, this.cwd);
     if (files) {
@@ -129,7 +131,7 @@ export class PromptInput extends TextareaRenderable {
     else this.insertText(text);
   }
   async pasteClipboard(): Promise<void> {
-    if (this.reading || this.disposed) return;
+    if (this.options.readOnly || this.reading || this.disposed) return;
     const generation = this.generation, controller = this.readAbort = new AbortController();
     this.readCursor = this.cursorOffset; this.reading = true; this.activity.start(); this.emit(InputRenderableEvents.INPUT, this.value);
     try {

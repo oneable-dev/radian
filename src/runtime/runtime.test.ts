@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { WorkspaceSelection } from "../app/workspace-selection.ts";
 import { connectRuntime, fetchSnapshot, RuntimeClient } from "./client.ts";
-import { runtimePaths, pidAlive } from "./storage.ts";
+import { runtimePaths, pidAlive, privateDirectory, RuntimeStore } from "./storage.ts";
 import { replySchema, type RuntimeManifest, type RuntimeSnapshot } from "./protocol.ts";
 import { Value } from "typebox/value";
 import { expectOk, expectError } from "../testing/results.ts";
@@ -42,7 +42,7 @@ async function setup() {
       clients.push(client); return client;
     },
     async stopped(pid: number) { await until(async () => !expectOk(await fetchSnapshot(paths)) && !pidAlive(pid)); },
-    async manifest(): Promise<RuntimeManifest> { return JSON.parse(await readFile(paths.manifest, "utf8")); },
+    async manifest(): Promise<RuntimeManifest> { const manifest = expectOk(await new RuntimeStore(paths).load(fixture.repository.id)); if (!manifest) throw new Error("Missing runtime manifest"); return manifest; },
     async cleanup() {
       const existing = expectOk(await connectRuntime(fixture.repository, fixture.main, { ...options, start: false }));
       if (existing) {
@@ -173,6 +173,7 @@ test("clear IPC는 현재 탭만 새 대화로 바꾸고 취소 이력·다른 �
     const history = expectOk(await client.listHistory(tree.id));
     expect(history.find((item) => item.id === previous)?.openSessionId).toBeNull();
     const preview = expectOk(await client.previewHistory(tree.id, previous)); expect(preview.text).toContain("slow");
+    expect(preview.snapshot?.lifecycle).toBe("closed"); expect(preview.snapshot?.state.conversationId).toBe(previous);
     await until(async () => (await app.manifest()).records.find((record) => record.id === id)?.state.conversationId === client.snapshot.details[id]?.conversationId);
 
     // A delayed operation for the old conversation must not run in the replacement.
@@ -547,6 +548,87 @@ test.each(["close", "exit"] as const)("%s: 손상된 저장 기록은 덮어쓰�
   } finally { await app.cleanup(); }
 }, 20000);
 
+test("공유 스냅샷의 닫힌 대화는 SDK 파일 없이도 미리보기만 제공하고 재실행하지 않는다", async () => {
+  // 복구와 미리보기가 같은 저장 형식을 읽는지 실제 IPC 경계에서 확인한다.
+  const app = await setup();
+  try {
+    await privateDirectory(app.paths.directory);
+    const tree = app.repository.worktrees[0]!, store = new RuntimeStore(app.paths);
+    const archived = { id: "archived-tab", name: "Archived task", worktreeId: tree.id, cwd: tree.path, lifecycle: "closed" as const,
+      sessionFile: join(tree.path, "missing-conversation.jsonl"), updatedAt: 1000,
+      state: { conversationId: "archived-conversation", status: "failure" as const, error: "Saved failure", output: "Stored output",
+        sections: Array.from({ length: 20 }, (_, index) => ({ id: `s${index}`, kind: "assistant" as const, title: "Agent", text: `Stored section ${index}`, status: "complete" as const })),
+        telemetry: { provider: "fixture", model: "archived-model", effort: "high", fast: true, context: { usedTokens: 72000, maxTokens: 200000 }, weekly: null } }, subagents: [] };
+    expectOk(await store.save({ version: 1, repositoryId: app.repository.id, repositories: [app.repository], records: [archived], preferences: { selection: { worktreeId: tree.id, sessions: {} }, drafts: {} } }));
+
+    // 서비스 시작과 History 조회는 닫힌 대화의 executor나 SDK writer를 만들지 않는다.
+    const client = await app.connect(), items = expectOk(await client.listHistory(tree.id));
+    const preview = expectOk(await client.previewHistory(tree.id, "archived-conversation"));
+
+    // 최근 섹션 제한만 적용하고 저장된 실행 상태와 telemetry는 그대로 전달한다.
+    expect(client.snapshot.details).toEqual({}); expect(items.map(item => item.id)).toEqual(["archived-conversation"]);
+    expect(preview.snapshot?.lifecycle).toBe("closed"); expect(preview.snapshot?.state.status).toBe("failure");
+    expect(preview.snapshot?.state.error).toBe("Saved failure"); expect(preview.telemetry).toEqual(archived.state.telemetry);
+    expect(preview.snapshot?.state.sections).toHaveLength(15); expect(preview.snapshot?.state.sections?.[0]?.text).toBe("Stored section 5");
+    expect(preview.snapshot?.state.sections?.at(-1)?.text).toBe("Stored section 19");
+    expect(expectError(await client.resume(tree.id, "archived-conversation")).code).toBe("HISTORY_UNAVAILABLE");
+    expect(await Bun.file(archived.sessionFile).exists()).toBe(false);
+  } finally { await app.cleanup(); }
+});
+
+test("스냅샷이 없는 외부 SDK 대화만 JSONL로 미리보기를 구성하고 원본은 바꾸지 않는다", async () => {
+  // 공유 스냅샷 도입 전에 만들어진 대화도 계속 읽을 수 있어야 한다.
+  const app = await setup();
+  try {
+    const client = await app.connect(), tree = app.repository.worktrees[0]!;
+    const directory = join(app.paths.directory, "offline-agent", "sessions"), file = join(directory, "external.jsonl");
+    await mkdir(directory, { recursive: true });
+    const timestamp = new Date().toISOString();
+    const bytes = [
+      { type: "session", version: 3, id: "external", cwd: tree.path, timestamp },
+      { type: "message", id: "q", parentId: null, timestamp, message: { role: "user", content: "External question" } },
+      { type: "message", id: "a", parentId: "q", timestamp, message: { role: "assistant", content: [{ type: "text", text: "External answer" }], provider: "radian-offline", model: "fixture" } },
+    ].map(entry => JSON.stringify(entry)).join("\n") + "\n";
+    await writeFile(file, bytes);
+
+    // History를 탐색할 뿐 SDK executor나 새로운 공유 스냅샷은 만들지 않는다.
+    expect(expectOk(await client.listHistory(tree.id)).map(item => item.id)).toEqual(["external"]);
+    const preview = expectOk(await client.previewHistory(tree.id, "external"));
+
+    // 동일 renderer에 전달할 섹션만 복원하고 새 대화나 파일을 추가하지 않는다.
+    expect(preview.snapshot).toBeUndefined(); expect(preview.sections?.map(section => section.text)).toEqual(["External question", "External answer"]);
+    expect(client.snapshot.details).toEqual({}); expect(await readFile(file, "utf8")).toBe(bytes);
+    const store = new RuntimeStore(app.paths); expectOk(await store.load(app.repository.id)); expect(store.listSessions(tree.id)).toEqual([]);
+  } finally { await app.cleanup(); }
+});
+
+test("서비스 재시작은 열린 세션만 복구하고 닫힌 대화의 같은 스냅샷을 History에 유지한다", async () => {
+  // 실제 SDK 대화와 다른 열린 탭을 만들어 복구 대상 필터링을 검증한다.
+  const app = await setup();
+  try {
+    const client = await app.connect(), tree = app.repository.worktrees[0]!;
+    const closed = expectOk(await client.create(tree.id)), open = expectOk(await client.create(tree.id));
+    expectOk(await client.prompt(closed, "read")); await observed(client, state => state.details[closed]?.status === "complete");
+    const before = client.snapshot.details[closed]!, conversation = before.conversationId!;
+
+    // 명시적으로 닫힌 세션의 저장이 끝난 뒤 런타임을 완전히 재시작한다.
+    expectOk(await client.closeSession(closed)); await observed(client, state => !state.details[closed] && state.closingCount === 0);
+    const pid = client.snapshot.pid; expectOk(await client.stopRuntime()); await client.disconnect(); await app.stopped(pid);
+    const restored = await app.connect(), preview = expectOk(await restored.previewHistory(tree.id, conversation));
+
+    // 닫힌 실행은 생성되지 않고 저장된 상태줄과 대화는 preview에서만 읽힌다.
+    expect(Object.keys(restored.snapshot.details)).toEqual([open]);
+    expect(preview.snapshot?.lifecycle).toBe("closed"); expect(preview.telemetry).toEqual(before.telemetry);
+    expect(preview.snapshot?.state.sections).toEqual(before.sections);
+    expect(expectOk(await restored.listHistory(tree.id)).find(item => item.id === conversation)?.openSessionId).toBeNull();
+    const reopened = expectOk(await restored.resume(tree.id, conversation));
+    expect(reopened).not.toBe(closed); expect(restored.snapshot.details[reopened]?.conversationId).toBe(conversation);
+    const snapshots = new RuntimeStore(app.paths); expectOk(await snapshots.load(app.repository.id));
+    expect(snapshots.listSessions(tree.id).filter(item => item.conversationId === conversation)).toHaveLength(1);
+    expect(snapshots.listSessions(tree.id).find(item => item.conversationId === conversation)?.lifecycle).toBe("open");
+  } finally { await app.cleanup(); }
+});
+
 test("IPC history는 워크트리별 SDK 기록을 열고 이미 열린 saved ID는 기존 항목을 반환한다", async () => {
   // The real daemon discovers saved SDK files in a shared offline history directory.
   const app = await setup();
@@ -563,7 +645,8 @@ test("IPC history는 워크트리별 SDK 기록을 열고 이미 열린 saved ID
     let bytes = await readFile(file, "utf8"); const count = Object.keys(client.snapshot.details).length;
     const preview = expectOk(await client.previewHistory(main, saved.id));
     expect(preview.sections?.[0]).toMatchObject({ kind: "user", text: "read" });
-    expect(preview.sections!.length).toBeLessThanOrEqual(3); expect(preview.text).toContain("read");
+    expect(preview.sections!.length).toBeLessThanOrEqual(15); expect(preview.text).toContain("read");
+    expect(preview.telemetry).toEqual(client.snapshot.details[a]?.telemetry);
     expect(client.snapshot.capabilities).toContain("run-completion");
     expect(preview.sections?.at(-1)?.completion).toEqual(client.snapshot.details[a]?.sections?.at(-1)?.completion);
     expect(preview.sections?.at(-1)?.completion?.outcome).toBe("complete");
@@ -585,7 +668,7 @@ test("IPC history는 워크트리별 SDK 기록을 열고 이미 열린 saved ID
       customType: "preview-size-fixture", data: "x".repeat(5 * 1024 * 1024) }) + "\n");
     bytes = await readFile(file, "utf8");
     const largePreview = expectOk(await client.previewHistory(main, saved.id));
-    expect(largePreview.text).toContain("read"); expect(largePreview.sections!.length).toBeLessThanOrEqual(3);
+    expect(largePreview.text).toContain("read"); expect(largePreview.sections!.length).toBeLessThanOrEqual(15);
     expect(largePreview.sections?.at(-1)?.completion).toEqual(preview.sections?.at(-1)?.completion);
     expect(client.snapshot.details[a]).toBeUndefined(); expect(await readFile(file, "utf8")).toBe(bytes);
     const reopened = expectOk(await client.resume(main, saved.id));

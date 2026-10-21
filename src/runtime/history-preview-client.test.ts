@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { RuntimeClient } from "./client.ts";
+import type { SessionRecord } from "../agents/session-registry.ts";
 import { emptyPreferences, protocolVersion, type RuntimeSnapshot } from "./protocol.ts";
 import { runtimePaths } from "./storage.ts";
 import { expectError, expectOk } from "../testing/results.ts";
@@ -39,13 +40,52 @@ test("미리보기는 instance-fenced GET이고 잘못된 신원·형식은 prot
     response = { text: "Missing identity" }; expect(expectError(await client.previewHistory("문서/a b", "saved")).code).toBe("PROTOCOL_ERROR");
     response = { ...valid, sections: [{ ...valid.sections[0], kind: "unsupported" }] };
     expect(expectError(await client.previewHistory("문서/a b", "saved")).code).toBe("PROTOCOL_ERROR");
-    response = { ...valid, sections: Array.from({ length: 7 }, (_, i) => ({ ...valid.sections[0], id: `q${i}` })) };
+    response = { ...valid, sections: Array.from({ length: 16 }, (_, i) => ({ ...valid.sections[0], id: `q${i}` })) };
     expect(expectError(await client.previewHistory("문서/a b", "saved")).code).toBe("PROTOCOL_ERROR");
     response = { ...valid, sections: [{ ...valid.sections[0], text: "x".repeat(8193) }] };
     expect(expectError(await client.previewHistory("문서/a b", "saved")).code).toBe("PROTOCOL_ERROR");
     response = { id: "saved", worktreeId: "문서/a b", text: "Legacy preview", truncated: false };
     expect(expectOk(await client.previewHistory("문서/a b", "saved")).sections).toBeUndefined();
     expect(requests).toEqual(Array(7).fill("/history/preview"));
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
+
+test("15개 섹션과 저장된 상태줄 정보는 IPC로 전달하고 잘못된 telemetry는 거절한다", async () => {
+  // 섹션 수 확장과 함께 새 상태줄 데이터도 런타임 경계에서 검증한다.
+  const valid = { id: "saved", worktreeId: "tree", text: "", truncated: false,
+    sections: Array.from({ length: 15 }, (_, index) => ({ id: `s${index}`, kind: "assistant", title: "Agent", text: `Answer ${index}`, status: "complete" })),
+    telemetry: { provider: "fixture", model: "saved-model", effort: "high", fast: null, context: null, weekly: null } };
+  let response: unknown = valid;
+  const fetchMock = stub(async () => Response.json(response)), client = new RuntimeClient(paths, snapshot());
+  try {
+    // 새 미리보기 응답을 실제 클라이언트의 스키마 검사로 읽는다.
+    const preview = expectOk(await client.previewHistory("tree", "saved"));
+
+    // 최대 개수는 허용하되 잘못된 사용량을 정상 상태처럼 표시하지 않는다.
+    expect(preview.sections).toHaveLength(15); expect(preview.telemetry).toEqual(valid.telemetry);
+    response = { ...valid, telemetry: { ...valid.telemetry, context: { usedTokens: -1, maxTokens: 1000 } } };
+    expect(expectError(await client.previewHistory("tree", "saved")).code).toBe("PROTOCOL_ERROR");
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
+
+test("공유 스냅샷은 요청한 대화·워크트리와 일치하고 최근 섹션 제한을 지켜야 한다", async () => {
+  // 최상위 응답 ID가 맞더라도 내부 스냅샷이 다른 세션이면 표시하면 안 된다.
+  const saved: SessionRecord = { id: "old-tab", name: "Archived", worktreeId: "tree", lifecycle: "closed", updatedAt: 1700000000000,
+    state: { conversationId: "saved", status: "failure", output: "", error: "Saved failure",
+      sections: [{ id: "a", kind: "assistant", title: "Agent", text: "Saved answer", status: "complete" }] }, subagents: [] };
+  let returned: unknown = saved;
+  const fetchMock = stub(async () => Response.json({ id: "saved", worktreeId: "tree", text: "", truncated: false, snapshot: returned }));
+  const client = new RuntimeClient(paths, snapshot());
+  try {
+    // 같은 저장 record가 wire 경계에서도 상태를 유지한다.
+    expect(expectOk(await client.previewHistory("tree", "saved")).snapshot).toEqual(saved);
+
+    // 잘못된 신원, 날짜와 과도한 본문은 명시적인 protocol 오류다.
+    for (const invalid of [{ ...saved, worktreeId: "other" }, { ...saved, state: { ...saved.state, conversationId: "other" } },
+      { ...saved, updatedAt: 8640000000000001 },
+      { ...saved, state: { ...saved.state, sections: Array.from({ length: 16 }, (_, index) => ({ ...saved.state.sections![0], id: `s${index}` })) } }]) {
+      returned = invalid; expect(expectError(await client.previewHistory("tree", "saved")).code).toBe("PROTOCOL_ERROR");
+    }
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 

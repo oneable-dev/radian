@@ -1,10 +1,11 @@
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { realpath } from "node:fs/promises";
 import { repositorySnapshot, type RepositorySource } from "../workspace/catalog.ts";
-import { validateHistory, type SessionRegistry } from "./session-registry.ts";
+import { validateHistory, type SessionRecord, type SessionRegistry } from "./session-registry.ts";
 import { CancelledError, capture, HistoryError, SessionError, StorageError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
-import { readHistoryPreview, type HistoryPreview } from "./history-preview.ts";
+import { previewSessionSnapshot, readHistoryPreview, type HistoryPreview } from "./history-preview.ts";
+import type { SessionSnapshotSource } from "./session-snapshot.ts";
 
 export type HistoryItem = {
   readonly id: string;
@@ -16,7 +17,7 @@ export type HistoryItem = {
   readonly unavailableReason: string | null;
 };
 
-type SavedHistory = HistoryItem & { readonly path: string };
+type SavedHistory = HistoryItem & { readonly path?: string; readonly snapshotOnly?: boolean };
 type HistoryIndex = { readonly cwd: string; readonly items: readonly SavedHistory[]; readonly byId: ReadonlyMap<string, SavedHistory> };
 type Discovery = { readonly ready: Promise<Result<HistoryIndex, ExpectedError>>; readonly signal: AbortSignal | undefined; valid: boolean };
 
@@ -25,11 +26,11 @@ export class SessionHistory {
   private readonly indexes = new Map<string, Discovery>();
 
   constructor(private readonly repositories: RepositorySource, private readonly registry: SessionRegistry,
-    private readonly sessionDir?: string) {}
+    private readonly sessionDir?: string, private readonly snapshots?: SessionSnapshotSource) {}
 
   async list(worktreeId: string, signal?: AbortSignal): Promise<Result<readonly HistoryItem[], ExpectedError>> {
     const saved = await this.index(worktreeId, signal, true);
-    return saved.ok ? ok(saved.value.items.map(({ path: _path, ...item }) => item)) : saved;
+    return saved.ok ? ok(saved.value.items.map(({ path: _path, snapshotOnly: _snapshotOnly, ...item }) => item)) : saved;
   }
 
   async preview(worktreeId: string, savedId: string, signal?: AbortSignal): Promise<Result<HistoryPreview, ExpectedError>> {
@@ -44,9 +45,32 @@ export class SessionHistory {
     const item = saved.value.byId.get(savedId);
     if (!item) return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved session is not available in this worktree. Refresh history."));
     const cwd = await capture(() => realpath(tree.path)); if (!cwd.ok) return cwd;
-    const path = await capture(() => realpath(item.path)); if (!path.ok) return path;
+    if (cwd.value !== saved.value.cwd) return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved session worktree changed. Refresh history."));
+    const current = this.registry.sessionSnapshot(worktreeId, savedId);
+    if (this.snapshots && current) return this.snapshotPreview(current, savedId, cwd.value, signal);
+    if (this.snapshots) {
+      const snapshot = await this.snapshots.readSession(worktreeId, savedId); if (!snapshot.ok) return snapshot;
+      if (signal?.aborted) return err(new CancelledError());
+      if (snapshot.value && (!item.path || snapshot.value.sessionFile === item.path)) return this.snapshotPreview(snapshot.value, savedId, cwd.value, signal);
+    }
+    const selectedPath = item.path;
+    if (!selectedPath) return err(new HistoryError("HISTORY_UNAVAILABLE", "No session snapshot or SDK conversation is available."));
+    const path = await capture(() => realpath(selectedPath)); if (!path.ok) return path;
     if (cwd.value !== saved.value.cwd || path.value !== item.path) return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved session location changed. Refresh history."));
-    return readHistoryPreview(path.value, worktreeId, savedId, signal, { cwd: cwd.value, requireCwd: !!this.sessionDir });
+    const preview = await readHistoryPreview(path.value, worktreeId, savedId, signal, { cwd: cwd.value, requireCwd: !!this.sessionDir });
+    if (!preview.ok) return preview;
+    const owner = this.registry.historyOwnership(path.value).openSessionId;
+    const telemetry = owner ? this.registry.details(owner)?.telemetry : undefined;
+    return ok(telemetry ? { ...preview.value, telemetry } : preview.value);
+  }
+
+  private async snapshotPreview(record: SessionRecord, savedId: string, cwd: string, signal?: AbortSignal): Promise<Result<HistoryPreview, ExpectedError>> {
+    const snapshotCwd = record.cwd;
+    if (snapshotCwd) {
+      const scope = await capture(() => realpath(snapshotCwd)); if (!scope.ok) return scope;
+      if (scope.value !== cwd) return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved snapshot belongs to a different worktree. Refresh history."));
+    }
+    return signal?.aborted ? err(new CancelledError()) : ok(previewSessionSnapshot(record, savedId));
   }
 
   async resume(worktreeId: string, savedId: string): Promise<Result<string, ExpectedError>> {
@@ -54,8 +78,10 @@ export class SessionHistory {
     const saved = await this.index(worktreeId, undefined, true); if (!saved.ok) return saved;
     const item = saved.value.byId.get(savedId);
     if (!item) return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved session is not available in this worktree. Refresh history."));
+    if (item.snapshotOnly && !item.openSessionId) return err(new HistoryError("HISTORY_UNAVAILABLE", item.unavailableReason ?? "The SDK conversation is unavailable."));
     if (item.unavailableReason) return err(new SessionError("SESSION_CONFLICT", item.unavailableReason));
     if (item.openSessionId) return ok(item.openSessionId);
+    if (!item.path) return err(new HistoryError("HISTORY_UNAVAILABLE", "The SDK conversation is unavailable. The saved snapshot is read only."));
     const validated = await validateHistory(item.path); if (!validated.ok) return validated;
     return this.registry.create(worktreeId, item.path, { id: crypto.randomUUID(), name: item.title });
   }
@@ -98,6 +124,21 @@ export class SessionHistory {
       result.push({ id: session.id, path: path.value, worktreeId, title: (session.name?.trim() || session.firstMessage.trim() || "Untitled session").replace(/\s+/g, " ").slice(0, 120),
         modified: session.modified.toISOString(), messageCount: session.messageCount,
         openSessionId: ownership.openSessionId, unavailableReason: ownership.unavailableReason });
+    }
+    const listed = new Set(result.map(item => item.id));
+    for (const snapshot of this.snapshots?.listSessions(worktreeId) ?? []) {
+      const id = snapshot.conversationId ?? snapshot.id;
+      if (listed.has(id)) continue;
+      const snapshotCwd = snapshot.cwd;
+      if (snapshotCwd) {
+        const scope = await capture(() => realpath(snapshotCwd)); if (!scope.ok) return scope;
+        if (scope.value !== cwd.value) continue;
+      }
+      const live = this.registry.records.find(record => record.worktreeId === worktreeId && record.state.conversationId === id);
+      result.push({ id, worktreeId, snapshotOnly: true, title: snapshot.title, modified: new Date(snapshot.updatedAt).toISOString(), messageCount: snapshot.messageCount,
+        ...(snapshot.sessionFile ? { path: snapshot.sessionFile } : {}), openSessionId: live?.id ?? null,
+        unavailableReason: live ? null : "The SDK conversation is unavailable. Its saved snapshot can still be previewed." });
+      listed.add(id);
     }
     if (signal?.aborted) return err(new CancelledError());
     result.sort((a, b) => b.modified.localeCompare(a.modified) || a.id.localeCompare(b.id));

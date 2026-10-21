@@ -97,6 +97,31 @@ test("닫기는 즉시 표시 항목을 제거하고 종료 완료까지 핸들�
   } finally { await app.cleanup(); }
 });
 
+test("닫힌 스냅샷은 최종 대화와 종료 전 상태줄을 보존하고 저장 확인 전까지 유지한다", async () => {
+  // 종료 과정이 Fast 관측값을 비워도 History에는 종료 전 화면 상태가 남아야 한다.
+  const app = setup();
+  try {
+    const id = expectOk(await app.registry.create("demo:main")), executor = app.executors[0]!;
+    const telemetry = { provider: "fixture", model: "model", effort: "high", fast: true, context: null, weekly: null };
+    executor.update({ status: "working", output: "Before close", error: null, telemetry });
+
+    // 첫 저장이 진행 중인 동안 정리가 끝나 더 최신의 닫힌 스냅샷이 생긴다.
+    const closing = app.registry.close(id), firstCheckpoint = app.registry.checkpointRecords;
+    await executor.closeStarted.promise;
+    executor.update({ status: "complete", output: "Final settled output", error: null });
+    executor.finishClose.resolve(); expectOk(await closing);
+    app.registry.acknowledgeCheckpoint(firstCheckpoint);
+
+    // 늦은 첫 저장의 확인으로 최종 스냅샷을 제거하지 않고 닫힌 대화는 실행하지 않는다.
+    const final = app.registry.checkpointRecords;
+    expect(final).toHaveLength(1); expect(final[0]).toMatchObject({ lifecycle: "closed", state: { output: "Final settled output", telemetry } });
+    expect(app.registry.sessionSnapshot("demo:main", executor.savedSessionId)).toBe(final[0]);
+    expect(app.registry.records).toEqual([]);
+    expectOk(await app.registry.restore(final[0]!)); expect(app.executors).toHaveLength(1);
+    app.registry.acknowledgeCheckpoint(final); expect(app.registry.checkpointRecords).toEqual([]);
+  } finally { await app.cleanup(); }
+});
+
 test("주 agent와 소속 자식의 취소를 함께 시작해 부모가 자식을 기다리는 교착을 피한다", async () => {
   // A child remains owned while its cleanup is blocked.
   const app = setup();

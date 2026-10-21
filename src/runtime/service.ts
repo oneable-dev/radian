@@ -46,7 +46,7 @@ export async function runRuntime(cwd: string, offline: boolean, stateRoot?: stri
     const usage = offline ? undefined : new UsageMonitor(openAiUsageResolver(modelRuntime));
     const registry = new SessionRegistry(catalog, piSessionFactory({ ...options, modelRuntime, ...(usage ? { usageMonitor: usage } : {}) }));
     runtime = new WorkspaceRuntime(registry, catalog, repository, offline, store, manifest?.preferences ?? emptyPreferences,
-      new SessionHistory(catalog, registry, options?.sessionDir), paths.directory, usage);
+      new SessionHistory(catalog, registry, options?.sessionDir, store), paths.directory, usage);
     await runtime.restore(manifest?.records ?? []);
     await runtime.watchRepository();
     server = Bun.serve({ unix: paths.socket,
@@ -119,6 +119,7 @@ class WorkspaceRuntime {
 
   async restore(records: readonly SessionRecord[]): Promise<void> {
     for (const record of records) {
+      if (record.lifecycle === "closed") continue;
       const restored = await this.registry.restore(record);
       if (!restored.ok) {
         const result = { id: crypto.randomUUID(), outcome: "error" as const, completedAt: Date.now(), ...(record.state.request ? { request: record.state.request } : {}) };
@@ -417,8 +418,10 @@ class WorkspaceRuntime {
     }).catch((error: unknown) => { this.notice = reportUnexpected(error, "background operation"); this.changed(); });
   }
   private async checkpoint(manifest?: RuntimeManifest): Promise<Result<void, ExpectedError>> {
-    const saved = await this.store.save(manifest ?? { version: protocolVersion, repositoryId: this.repositoryId,
-      repositories: this.registry.snapshot, records: [...this.registry.records, ...this.failedRecovery.values()], preferences: this.preferences });
+    const checkpoint = manifest ?? { version: protocolVersion, repositoryId: this.repositoryId,
+      repositories: this.registry.snapshot, records: [...this.registry.checkpointRecords, ...this.failedRecovery.values()], preferences: this.preferences };
+    const saved = await this.store.save(checkpoint);
+    if (saved.ok) this.registry.acknowledgeCheckpoint(checkpoint.records);
     if (!saved.ok && !this.persistenceError) console.error(`[radian:${saved.error.code}] Checkpoint failed`, saved.error);
     this.persistenceError = saved.ok ? "" : `Runtime persistence failed: ${saved.error.message}`;
     if (!saved.ok) for (const subscriber of this.subscribers) subscriber();
@@ -432,7 +435,7 @@ class WorkspaceRuntime {
     this.unsubscribe();
     // Stopping the service is NOT explicit session close. Freeze open intent before teardown emits removals.
     const manifest: RuntimeManifest = { version: protocolVersion, repositoryId: this.repositoryId,
-      repositories: this.registry.snapshot, records: [...this.registry.records, ...this.failedRecovery.values()], preferences: this.preferences };
+      repositories: this.registry.snapshot, records: [...this.registry.checkpointRecords, ...this.failedRecovery.values()], preferences: this.preferences };
     return collectCleanup([this.watcher ? this.watcher.stop().then(() => ok(undefined)) : Promise.resolve(ok(undefined)),
       this.checkpoint(manifest), this.registry.shutdown(), this.editors.stop(), this.terminals.stop(),
       this.usage ? this.usage.stop().then(() => ok(undefined)) : Promise.resolve(ok(undefined))], "Checkpoint or runtime shutdown failed.");

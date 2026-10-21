@@ -46,6 +46,7 @@ export type AgentActions = {
   onImage?: TranscriptImageProvider;
 };
 type Button = (label: string, activate: () => void, actionLabel: string) => BoxRenderable;
+type PanelOptions = Pick<TranscriptOptions, "initialViews" | "saveView" | "keyHint" | "initialPosition" | "emptyLogo"> & { readOnly?: boolean; idPrefix?: string; snapshotTime?: () => number | undefined };
 
 // Owns the Agent view, drafts and transcript viewport. The workbench supplies
 // selection and visibility; it alone decides how this panel joins other features.
@@ -85,9 +86,10 @@ export class AgentPanel {
     private readonly notice: (message: string) => void, private readonly changed: () => void,
     private readonly focusSidebar: () => void, initialScroll: Readonly<Record<string, number>>,
     saveScroll: (sessionId: string, position: number) => void,
-    private readonly transcriptOptions: Pick<TranscriptOptions, "initialViews" | "saveView" | "keyHint"> = {}) {
+    private readonly transcriptOptions: PanelOptions = {}) {
     const theme = uiTheme(renderer);
-    this.root = new BoxRenderable(renderer, { id: "agent-view", onSizeChange: () => this.resizeComposer(), flexGrow: 1, minHeight: 0, minWidth: 0, padding: 1, flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
+    const id = (name: string) => `${transcriptOptions.idPrefix ?? ""}${name}`;
+    this.root = new BoxRenderable(renderer, { id: id("agent-view"), onSizeChange: () => this.resizeComposer(), flexGrow: 1, minHeight: 0, minWidth: 0, padding: 1, flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
     this.title = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false, attributes: TextAttributes.BOLD });
     this.details = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.sessions = new SessionTabs(renderer, { button, changed,
@@ -105,31 +107,34 @@ export class AgentPanel {
     this.transcript = new TranscriptPanel(renderer, { notice, changed, focusPrompt: () => this.prompt.focus(), initialScroll, saveScroll, cacheSessions: true,
       ...transcriptOptions, ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}), ...(actions.onImage ? { image: actions.onImage } : {}) });
     this.transcriptScroll = this.transcript.scroll;
-    // Hide only the live-session scroll thumb; wheel, keys and the shared scroll model stay active.
+    this.transcriptScroll.id = id("session-transcript");
+    // Hide the session scroll thumb; wheel, keys and the shared scroll model stay active.
     this.transcriptScroll.verticalScrollBar.visible = false;
     this.bottomButton = new TranscriptBottomButton(renderer, () => { renderer.clearSelection(); this.transcript.followLatest(); });
     this.runtimePanel.add(this.bottomButton);
-    const interruptKey = () => transcriptOptions.keyHint?.("agent.interrupt", "prompt") ?? "esc";
+    const interruptKey = () => transcriptOptions.readOnly ? "" : transcriptOptions.keyHint?.("agent.interrupt", "prompt") ?? "esc";
     this.runStatus = new RunStatus(renderer, interruptKey);
     this.pendingMessages = new PendingMessages(renderer, interruptKey);
-    const transcriptArea = this.transcriptArea = new BoxRenderable(renderer, { id: "agent-transcript-area", width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "column", overflow: "hidden" });
+    const transcriptArea = this.transcriptArea = new BoxRenderable(renderer, { id: id("agent-transcript-area"), width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "column", overflow: "hidden" });
     transcriptArea.add(this.transcriptScroll);
     this.prompt = new PromptInput(renderer, notice, (content) => actions.onInspectInput?.(content), {
-      fieldId: "agent-composer", activityId: "prompt-paste-loading",
+      id: id("session-prompt"), fieldId: id("agent-composer"), activityId: id("prompt-paste-loading"), readOnly: transcriptOptions.readOnly ?? false,
     });
+    if (transcriptOptions.readOnly) this.prompt.placeholder = "Read-only preview · Open session to continue";
     for (const [id, draft] of Object.entries(actions.initialDrafts ?? {})) this.drafts.set(id, draft);
     for (const [id, draft] of Object.entries(actions.initialInputDrafts ?? {})) { this.inputDrafts.set(id, draft); this.drafts.set(id, expandPromptDraft(draft, false).text); }
     this.prompt.on(InputRenderableEvents.INPUT, this.handleDraftInput);
     const composer = this.composer = this.prompt.field;
     this.sessionStatus = new SessionStatus(renderer);
+    this.sessionStatus.root.id = id("session-status");
     this.completion = new CompletionMenu(renderer, this.prompt, () => this.active ? this.promptSessionId : null, actions.onComplete,
       () => { this.resizeComposer(); changed(); }, () => this.completionRows());
-    const statusRow = this.statusRow = new BoxRenderable(renderer, { id: "transcript-status-row", width: "100%", height: 1, visible: false, flexShrink: 0, flexDirection: "row", gap: 1 });
+    const statusRow = this.statusRow = new BoxRenderable(renderer, { id: id("transcript-status-row"), width: "100%", height: 1, visible: false, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.children = new SubagentSummary(renderer);
     statusRow.add(this.runStatus.root); statusRow.add(this.children.root);
     this.root.on("resize", () => this.children.resize(this.root.width));
     // Keep completion and telemetry attached to the composer; only the three outer regions use gap.
-    const inputArea = new BoxRenderable(renderer, { id: "agent-input-area", width: "100%", minWidth: 0, minHeight: 0, flexShrink: 0, flexDirection: "column" });
+    const inputArea = new BoxRenderable(renderer, { id: id("agent-input-area"), width: "100%", minWidth: 0, minHeight: 0, flexShrink: 0, flexDirection: "column" });
     inputArea.add(this.pendingMessages.root); inputArea.add(composer); inputArea.add(this.completion.root); inputArea.add(this.sessionStatus.root);
     this.runtimePanel.add(transcriptArea); this.runtimePanel.add(statusRow); this.runtimePanel.add(inputArea); this.root.add(this.runtimePanel);
     theme.scrollbars(this.transcriptScroll);
@@ -159,10 +164,10 @@ export class AgentPanel {
   get resultVisible(): boolean { return this.active && this.transcript.latestVisible; }
   focusLatest(): void { this.transcript.followLatest(); this.focusTranscript(); }
   get sessionId(): string | null { return this.promptSessionId; }
-  get canSubmit(): boolean { return Boolean(this.promptSessionId && this.prompt.value.trim() && !this.prompt.pending && !this.submitting.has(this.promptSessionId)); }
+  get canSubmit(): boolean { return !this.transcriptOptions.readOnly && Boolean(this.promptSessionId && this.prompt.value.trim() && !this.prompt.pending && !this.submitting.has(this.promptSessionId)); }
   get canInterrupt(): boolean {
     const details = this.promptSessionId ? this.actions.getSessionDetails?.(this.promptSessionId) : null;
-    return this.active && !!this.actions.onInterrupt && (!!details?.pendingMessages?.length || details?.status === "working" || !!this.promptSessionId && this.submitting.has(this.promptSessionId));
+    return !this.transcriptOptions.readOnly && this.active && !!this.actions.onInterrupt && (!!details?.pendingMessages?.length || details?.status === "working" || !!this.promptSessionId && this.submitting.has(this.promptSessionId));
   }
   get working(): boolean { return !!this.promptSessionId && this.actions.getSessionDetails?.(this.promptSessionId)?.status === "working"; }
   get transcriptShortcuts(): readonly FooterShortcut[] { return this.transcript.shortcuts; }
@@ -176,6 +181,7 @@ export class AgentPanel {
   completionCommand(command: CommandId): void { this.completion.command(command); }
   transcriptContext(): KeyContext | null { return this.transcript.keyContext(); }
   focusTranscript(): void { this.completion.hide(); if (this.transcriptScroll.visible) this.transcript.focus(); }
+  get transcriptFocused(): boolean { return this.transcript.focused; }
   transcriptAvailable(command: CommandId): boolean { return this.active && this.transcript.available(command); }
   transcriptCommand(command: CommandId): void { this.transcript.command(command); }
   get focusTargets(): Renderable[] {
@@ -187,7 +193,7 @@ export class AgentPanel {
     this.rememberScroll();
     const tabsFocused = this.sessions.containsFocus;
     this.root.visible = visible; this.worktree = worktree;
-    this.sessions.update(worktree?.id ?? null, worktree?.sessions ?? [], selectedId, visible);
+    this.sessions.update(worktree?.id ?? null, this.transcriptOptions.readOnly ? [] : worktree?.sessions ?? [], selectedId, visible && !this.transcriptOptions.readOnly);
     const session = worktree?.sessions.find((item) => item.id === selectedId);
     this.title.content = session?.name ?? (worktree ? "No open sessions" : "No workspace available");
     const details = session ? this.actions.getSessionDetails?.(session.id) : null;
@@ -215,11 +221,11 @@ export class AgentPanel {
     }
     for (const id of this.drafts.keys()) if (!openIds.has(id)) this.drafts.delete(id);
     for (const id of this.inputDrafts.keys()) if (!openIds.has(id)) this.inputDrafts.delete(id);
-    this.runtimePanel.visible = Boolean(visible && session && this.actions.onPrompt);
+    this.runtimePanel.visible = Boolean(visible && session && (this.actions.onPrompt || this.transcriptOptions.readOnly));
     this.completion.prepare(sessionId, worktree?.path, openIds);
     this.runStatus.update(sessionId, details, this.active);
     this.pending = details?.pendingMessages ?? [];
-    this.sessionStatus.update(details?.telemetry, this.active, worktree);
+    this.sessionStatus.update(details?.telemetry, this.active, worktree, this.transcriptOptions.snapshotTime?.());
     this.emptyPanel.visible = visible && !this.active;
     this.children.update(session?.subagents ?? [], this.active);
     this.root.gap = 0;
@@ -247,6 +253,10 @@ export class AgentPanel {
 
   private resizeComposer = (): void => {
     if (this.disposed || !this.composer || !this.statusRow || this.prompt.isDestroyed) return;
+    if (this.transcriptOptions.readOnly) {
+      const compact = this.root.height < 8;
+      this.sessionStatus.root.height = compact ? 1 : 3; this.sessionStatus.root.paddingY = compact ? 0 : 1;
+    }
     const requested = this.prompt.requestedRows;
     const showStatus = this.runStatus.hasContent || this.children.hasContent;
     const menuRowsBeforeLayout = this.completion?.open ? this.completion.root.height : 0;
@@ -269,7 +279,7 @@ export class AgentPanel {
     }
     const reserved = this.reservedRows(true) + menuRows;
     // The panel allocates space; the shared input alone fits its editor and decoration.
-    const available = Math.max(1, this.root.height - reserved - 1);
+    const available = this.transcriptOptions.readOnly && this.root.height < 8 ? 1 : Math.max(1, this.root.height - reserved - 1);
     const { rows: lines, height } = this.prompt.measure(available);
     const showTranscript = this.root.height > reserved + height;
     if (this.transcriptScroll.visible !== showTranscript || this.transcriptArea.visible !== showTranscript) {

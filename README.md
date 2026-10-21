@@ -449,15 +449,15 @@ The former `INPUT · section/count · following` row is removed. Source/Visual/h
 following, never agent execution. Following is based on the viewport: at the bottom it follows new output; moving above the bottom pauses it;
 returning to the bottom by wheel or paging resumes it automatically. Live Agent transcripts hide
 their vertical scrollbar and reclaim its column without disabling wheel or keyboard navigation.
-History previews retain their scrollbar. Merely focusing the transcript does not pause it. Content growth and asynchronous Markdown layout preserve the pre-growth
+History previews use the same hidden-scrollbar policy. Merely focusing the transcript does not pause it. Content growth and asynchronous Markdown layout preserve the pre-growth
 bottom intent rather than treating the increased scroll range as user navigation. Following also
 keeps the bottom on resize and when returning from another work view.
 
 Above the bottom, a centered `↓ Back to bottom` button uses an existing blank row above the work
 status or in the composer's top inset. It never adds blank rows, covers transcript content or moves
 the input. It shows the effective `transcript.latest` shortcut (default `g → e`); clicking resumes
-following without sending a prompt or taking input focus. It is hidden at the bottom, in help/history
-previews and whenever no existing blank row is available.
+following without sending a prompt or taking input focus. It is hidden at the bottom, in help
+and whenever no existing blank row is available.
 
 Character/line selections and native mouse selections temporarily protect their viewport. Once
 selection is cleared, following resumes only if the viewport is still at the bottom. Auto-following
@@ -1045,7 +1045,9 @@ of the originating UI connection.
 Stored JSONL history is never deleted or forked by closing. The registry's `create(worktreeId, file)`
 API reopens the same saved session; the History tab uses this same-file resume boundary. Duplicate writers,
 including attempts to reopen while closing, are rejected. Unused-session persistence follows
-SDK defaults: a session with no user/assistant exchange may not have a history file.
+SDK defaults: a session with no user/assistant exchange may not have a history file. Closing retains
+the same session snapshot used by runtime recovery, marked `closed`, for read-only History previews.
+A missing SDK conversation does not prevent viewing that snapshot, but it cannot be resumed.
 
 ### Test real SDK switching without a paid model
 
@@ -1094,7 +1096,8 @@ without disabling ordinary request timeouts. These heartbeat snapshots use the e
 do not run agents or write checkpoints. A heartbeat is used because the installed Bun 1.4.3 can still
 time out streaming Unix requests after `server.timeout(request, 0)`.
 
-A workspace snapshot includes every retained session, not one prompt or one terminal viewport.
+A workspace snapshot includes every open session, not one prompt or one terminal viewport. Closed
+session snapshots stay on disk and are fetched individually by History, not broadcast to every TUI.
 Both its initial HTTP response and streamed logical frames therefore use a separate **64 MiB**
 receive budget. Commands, ordinary replies and PTY frames retain their **8 MiB** limits. Snapshot
 receivers count actual UTF-8 bytes incrementally, validate text only after complete frames arrive, and bound
@@ -1128,8 +1131,8 @@ replace notices belonging to a recovered connection or new service.
 
 - **Warm reconnect:** the same service PID, SDK instances, owned children and ongoing output survive
   TUI exit. No prompt is replayed or agent restarted.
-- **Service restart/reboot:** open IDs, selection, drafts and saved contexts are restored from an atomic
-  checkpoint. Previously working agents are marked interrupted/unreported; model requests and tool
+- **Service restart/reboot:** open IDs, selection, drafts and saved contexts are restored from the
+  checkpoint; records marked `closed` are never instantiated. Previously working agents are marked interrupted/unreported; model requests and tool
   calls are **not** automatically replayed. Submit a new prompt explicitly to continue.
 - **Missing/corrupt saved history:** recovery reports an error rather than silently making an empty
   replacement. Unused items without a history file can be restored as empty items with the same UI ID.
@@ -1138,6 +1141,22 @@ replace notices belonging to a recovered connection or new service.
 
 The Agent view uses the structured read-only transcript described above on services advertising
 `agent-transcript`; the bounded recent `output` field remains for compatibility with older clients.
+Runtime recovery and History share the same session-record format, containing the structured
+Transcript, compatible plain output, execution/result state, subagent summaries and telemetry.
+`lifecycle: open | closed` is independent of `working | complete | failure`. Explicit close and `/clear`
+preserve the outgoing conversation as closed; stopping the runtime preserves open-session intent.
+Records are keyed by worktree and SDK conversation ID, not the replaceable UI tab ID.
+
+On disk, `workspace.json` storage version 2 contains the workspace/preferences and a small session
+index. Session bodies are private `sessions/<identity-hash>.json` files, atomically replaced only when
+their content changes. Ordinary checkpoints neither load nor rewrite old closed bodies. Recovery
+loads only open records; History lazily reads the selected record. A close body published before an
+interrupted index update is still treated as closed. Index and session-file updates are individually
+atomic, not a multi-file transaction; persistence failures remain explicit warnings, not rollbacks.
+Original inline manifests remain readable, default missing lifecycle fields to open, and migrate on
+the next successful checkpoint. The new on-disk index requires an updated runtime; no running service
+is automatically replaced or restarted.
+
 Full SDK history remains in JSONL. Configured Pi extensions, including MCP adapters, use SDK discovery;
 this does not embed Pi's interactive CLI UI or provide remote-machine services.
 
@@ -1198,11 +1217,21 @@ Global view/workspace/session commands are inactive while the popup owns focus. 
 Open is pending does not cancel or roll back an accepted request; a late result never changes selection.
 
 Wide screens show the list and read-only conversation preview side by side. Below 100 columns,
-Ctrl+O switches between them; PageUp/PageDown scroll the preview. Preview reuses the Agent transcript
-component, including compact inline invocations, Markdown prose, error styling and initially folded
-tool sections; Thinking remains visible just as in the live transcript.
-It shows at most the three newest sections of the saved current branch, in chronological order.
-A new unanswered prompt is not filled with the previous turn's replies; explicit skills remain name-only.
+Ctrl+O switches between them; PageUp/PageDown scroll the preview. Preview reuses the Agent session
+panel, including the Prompt composer, run-status row and model/context/usage line, as well as compact
+inline invocations, Markdown prose, error styling and initially folded tool sections. Thinking remains
+visible just as in the live transcript. The Prompt is visibly read-only: typing and paste do not edit
+it, read the OS clipboard or send a request. Session-management controls are hidden.
+The transcript retains at most the 15 newest sections of the saved current branch, including earlier
+turns, in chronological order, and initially scrolls to the latest content. Completion metadata stays
+on its original section rather than moving to a new unanswered prompt; explicit skills remain name-only.
+Open sessions supply their current session snapshot. Closed sessions reuse their preserved snapshot,
+including execution state, subagent summaries, model, context, Fast and account usage. The header shows
+the snapshot's saved time, and closed-session usage/countdowns are rendered as of that time, not as
+current account allowance. These values are display-only: SDK resume still resolves current telemetry
+and never restores a historical quota or enables Fast from the preview. Only records without a snapshot
+fall back to JSONL, where unavailable metadata remains unknown.
+Small previews compact composer/status padding to preserve conversation space.
 This does not open a writable SDK session, load extensions or execute tools.
 
 Preview lookup has no fixed debounce or preview spinner. The selected title stays visible above a blank
@@ -1216,15 +1245,22 @@ entries; these are data-retention limits, not total heap measurements. The cache
 current popup: Ctrl+R or closing clears it and cancels its queries. Reopening discovers current metadata;
 there is no background polling or file watcher. Late responses cannot populate a replacement cache.
 
-The runtime reuses the ID-to-file index from metadata discovery rather than listing every saved session
-for each Preview. The selected file's canonical path, header ID and worktree binding are still checked;
-Open always rediscovers current membership and writer ownership. Cold direct Preview requests lazily
-initialize an index. The reader then scans JSONL record offsets backwards in 64 KiB chunks and follows the active branch's
-parent IDs. It stops once the recent window and required tool-call associations are available, rather
+History combines the shared snapshot index with SDK-discovered conversations. Snapshots also cover
+empty or closed sessions whose SDK file is absent; those records remain previewable but cannot start
+a new SDK execution. Preview reads the current or preserved session record and applies its 15-section
+and per-body limits only to the response, never to the recovery record. A corrupt snapshot is an explicit
+error, not a silent JSONL fallback. Open always rediscovers current membership and writer ownership.
+
+For older/external conversations without a snapshot, the runtime reuses the ID-to-file index from SDK
+metadata discovery rather than listing every saved session for each Preview. The selected file's
+canonical path, header ID and worktree binding are checked. Cold direct Preview requests lazily
+initialize an index. This fallback reader scans JSONL record offsets backwards in 64 KiB chunks and
+follows the active branch's parent IDs. It stops once the recent window and required tool-call associations are available, rather
 than loading or size-rejecting the entire file. Older unneeded record bodies are not decoded or validated;
 opening a closed session still validates the complete history. Safety limits apply to individual records (16 MiB),
 the retained association working set (32 MiB), header size (64 KiB) and lookup time (5 seconds), not
-total file size. Each returned section body is capped at 8,192 UTF-16
+total file size. If an older record exceeds the record/working-set budget after a recent turn has been
+reconstructed, the reader returns that safe tail with an explicit truncation notice. Each returned section body is capped at 8,192 UTF-16
 units with an explicit truncation notice; the compatibility text field remains capped at 65,536 units. The title query searches all returned metadata locally; at most 200
 matching rows render at once, with a prompt to refine larger result sets. Full-message search is not
 implemented. Ctrl+R refreshes metadata and Preview data (`r` also works while the list has focus).

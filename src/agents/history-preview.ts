@@ -4,14 +4,16 @@ import { CancelledError, capture, HistoryError, parseJson, withCleanup, type Exp
 import { err, ok, type Result } from "../result.ts";
 
 import { SessionTranscript, type TranscriptSection } from "./transcript.ts";
+import type { SessionTelemetry } from "./telemetry.ts";
+import type { SessionRecord } from "./session-registry.ts";
 import { parseRunCompletion, runCompletionEntryType } from "./run-completion.ts";
 import { historyReadChunk, historyReadFailure, readHistoryBytes, reverseHistoryLines } from "./history-lines.ts";
 
 export type HistoryPreview = { readonly id: string; readonly worktreeId: string; readonly text: string; readonly truncated: boolean;
-  readonly sections?: readonly TranscriptSection[] };
+  readonly sections?: readonly TranscriptSection[]; readonly telemetry?: SessionTelemetry; readonly snapshot?: SessionRecord };
 export const historyPreviewLimit = 65536;
 export const historyPreviewSectionLimit = 8192;
-const recentSectionCount = 3;
+export const historyPreviewSectionCount = 15;
 const recordLimit = 16 * 1024 * 1024;
 const retainedLimit = 32 * 1024 * 1024;
 const corrupt = (message: string) => err(new HistoryError("HISTORY_CORRUPT", message));
@@ -28,6 +30,8 @@ function validateContent(content: unknown): Result<void, HistoryError> {
 }
 
 function validateEntry(entry: SessionEntry): Result<void, HistoryError> {
+  if (entry.type === "model_change") return typeof entry.provider === "string" && typeof entry.modelId === "string" ? ok(undefined) : corrupt("Invalid saved model.");
+  if (entry.type === "thinking_level_change") return typeof entry.thinkingLevel === "string" ? ok(undefined) : corrupt("Invalid saved thinking level.");
   if (entry.type === "custom" && entry.customType === runCompletionEntryType) {
     const completion = parseRunCompletion(entry.data); return completion.ok ? ok(undefined) : completion;
   }
@@ -68,10 +72,7 @@ function clip(text: string, limit: number): string {
 }
 
 function latestSections(sections: readonly TranscriptSection[]): readonly TranscriptSection[] {
-  const prompt = sections.findLastIndex((section) => section.kind === "user" || section.skillName !== undefined);
-  // A new unanswered prompt must never be paired with the previous turn's answer.
-  const start = sections[prompt - 1]?.skillName !== undefined && sections[prompt]?.kind === "user" ? prompt - 1 : Math.max(0, prompt);
-  return sections.slice(Math.max(start, sections.length - recentSectionCount));
+  return sections.slice(-historyPreviewSectionCount);
 }
 
 function parseEntry(text: string): Result<FileEntry, HistoryError> {
@@ -157,6 +158,8 @@ export async function readHistoryPreview(path: string, worktreeId: string, id: s
       const retained: SessionEntry[] = [], seen = new Set<string>();
       let parent: string | null | undefined, retainedBytes = 0;
       let recent: readonly TranscriptSection[] = [];
+      // A completed turn boundary is safe to return if older records exceed the preview budget.
+      let boundedRecent: readonly TranscriptSection[] = [];
       for await (const line of reverseHistoryLines(file, size, signal, deadline)) {
         if (!line.ok) return line;
         const failure = historyReadFailure(signal, deadline); if (failure) return err(failure);
@@ -166,7 +169,8 @@ export async function readHistoryPreview(path: string, worktreeId: string, id: s
           const candidate = prefixId(hint.value);
           if (candidate !== undefined && candidate !== parent) continue;
         }
-        if (length > recordLimit) return err(new HistoryError("HISTORY_UNAVAILABLE", "A saved history record exceeds the 16 MiB per-record preview safety limit."));
+        if (length > recordLimit) return boundedRecent.length ? ok(previewResult(worktreeId, id, boundedRecent, retained, true))
+          : err(new HistoryError("HISTORY_UNAVAILABLE", "A saved history record exceeds the 16 MiB per-record preview safety limit."));
         const bytes = await readHistoryBytes(file, line.value.start, length, signal, deadline); if (!bytes.ok) return bytes;
         const text = bytes.value.toString("utf8").trim(); if (!text) continue;
         const parsed = parseEntry(text); if (!parsed.ok) return parsed;
@@ -174,7 +178,7 @@ export async function readHistoryPreview(path: string, worktreeId: string, id: s
         if (entry.type === "session") {
           if (line.value.start !== headerStart) return corrupt("Saved conversation has more than one session header.");
           if (!legacy && parent !== undefined && parent !== null) return corrupt("Saved conversation branch is incomplete.");
-          return ok(previewResult(worktreeId, id, recent));
+          return ok(previewResult(worktreeId, id, recent, retained));
         }
         if (!legacy) {
           if (typeof entry.id !== "string" || !entry.id || entry.id.length > 4096 || (entry.parentId !== null && typeof entry.parentId !== "string")) return corrupt("Invalid saved conversation branch.");
@@ -183,17 +187,19 @@ export async function readHistoryPreview(path: string, worktreeId: string, id: s
           if (line.value.start === headerEnd && entry.parentId !== null) return corrupt("Saved conversation branch is incomplete.");
           seen.add(entry.id); parent = entry.parentId;
         }
-        if (["message", "custom_message", "compaction", "branch_summary"].includes(entry.type) || entry.type === "custom" && entry.customType === runCompletionEntryType) {
+        if (["message", "custom_message", "compaction", "branch_summary", "model_change", "thinking_level_change"].includes(entry.type) || entry.type === "custom" && entry.customType === runCompletionEntryType) {
           const valid = validateEntry(entry); if (!valid.ok) return valid;
           retainedBytes += length;
-          if (retainedBytes > retainedLimit) return err(new HistoryError("HISTORY_UNAVAILABLE", "Recent tool association exceeds the 32 MiB working-set safety limit."));
+          if (retainedBytes > retainedLimit) return boundedRecent.length ? ok(previewResult(worktreeId, id, boundedRecent, retained, true))
+            : err(new HistoryError("HISTORY_UNAVAILABLE", "Recent tool association exceeds the 32 MiB working-set safety limit."));
           retained.push(entry); recent = project(header, retained);
           const stopped = historyReadFailure(signal, deadline); if (stopped) return err(stopped);
           const prompt = entry.type === "message" && entry.message.role === "user";
-          // Missing calls remain honest orphan-tool sections; never search into an older user turn for them.
-          if (prompt || (recent.length >= recentSectionCount && resolvedTools(recent, retained))) return ok(previewResult(worktreeId, id, recent));
+          if (prompt) boundedRecent = recent;
+          // Resolve tool calls before cutting the tail; orphan results are safe at a prompt boundary.
+          if (recent.length >= historyPreviewSectionCount && (prompt || resolvedTools(recent, retained))) return ok(previewResult(worktreeId, id, recent, retained));
         }
-        if (!legacy && parent === null) return ok(previewResult(worktreeId, id, recent));
+        if (!legacy && parent === null) return ok(previewResult(worktreeId, id, recent, retained));
       }
       return corrupt("Saved conversation branch is incomplete.");
     }, () => file.close());
@@ -201,8 +207,18 @@ export async function readHistoryPreview(path: string, worktreeId: string, id: s
   return read.ok ? read.value : read;
 }
 
-function previewResult(worktreeId: string, id: string, recent: readonly TranscriptSection[]): HistoryPreview {
-  let truncated = false;
+export function previewSessionSnapshot(record: SessionRecord, id: string): HistoryPreview {
+  const bounded = previewResult(record.worktreeId, id, record.state.sections?.slice(-historyPreviewSectionCount) ?? [], []);
+  const { sections, telemetry: _telemetry, ...preview } = bounded;
+  const output = clip(record.state.output, historyPreviewLimit);
+  const state = { ...record.state, output, ...(record.state.sections !== undefined ? { sections: sections! } : {}) };
+  return { ...preview, text: record.state.sections === undefined ? output : preview.text,
+    truncated: preview.truncated || output !== record.state.output,
+    ...(record.state.sections !== undefined ? { sections: sections! } : {}), ...(record.state.telemetry ? { telemetry: record.state.telemetry } : {}),
+    snapshot: { ...record, state } };
+}
+
+function previewResult(worktreeId: string, id: string, recent: readonly TranscriptSection[], newestFirst: readonly SessionEntry[], truncated = false): HistoryPreview {
   const sections = recent.map((section): TranscriptSection => {
     const text = clip(section.text, historyPreviewSectionLimit), title = clip(section.title, 256);
     const summary = section.summary === undefined ? undefined : clip(section.summary, 512);
@@ -214,5 +230,16 @@ function previewResult(worktreeId: string, id: string, recent: readonly Transcri
   // Keep the original bounded text field for clients predating structured previews.
   const preview = clip(sections.filter((section) => section.kind === "user" || section.kind === "assistant" || section.skillName !== undefined)
     .map((section) => `${section.title}\n${section.text}`).join("\n\n"), historyPreviewLimit);
-  return { id, worktreeId, text: preview, sections, truncated };
+  // Saved files can identify a model/effort, but cannot authorize current account usage or Fast state.
+  let provider: string | null = null, model: string | null = null, effort: string | null = null;
+  for (const entry of newestFirst) {
+    if (entry.type === "thinking_level_change" && effort === null) effort = clip(entry.thinkingLevel, 256);
+    if (model !== null) continue;
+    if (entry.type === "model_change") { provider = clip(entry.provider, 256); model = clip(entry.modelId, 256); }
+    else if (entry.type === "message" && entry.message.role === "assistant" && typeof entry.message.model === "string" && typeof entry.message.provider === "string") {
+      provider = clip(entry.message.provider, 256); model = clip(entry.message.model, 256);
+    }
+  }
+  const telemetry: SessionTelemetry = { provider, model, effort, fast: null, context: null, weekly: null };
+  return { id, worktreeId, text: preview, sections, truncated, telemetry };
 }

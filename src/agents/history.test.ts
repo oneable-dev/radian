@@ -55,7 +55,8 @@ test("미리보기는 열린·닫힌 기록을 읽기만 하고 다른 워크트
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
     const saved = expectOk(await app.history.list(app.main.id))[0]!, file = app.registry.sessionFile(id)!;
     const before = await readFile(file, "utf8"), records = app.registry.records;
-    expect(expectOk(await app.history.preview(app.main.id, saved.id)).text).toContain("read");
+    const preview = expectOk(await app.history.preview(app.main.id, saved.id));
+    expect(preview.text).toContain("read"); expect(preview.telemetry).toEqual(app.registry.details(id)?.telemetry);
     expect(app.registry.records).toEqual(records); expect(await readFile(file, "utf8")).toBe(before);
     expect(expectError(await app.history.preview(app.feature.id, saved.id)).code).toBe("HISTORY_UNAVAILABLE");
     expect(expectError(await app.history.preview(app.main.id, "unknown")).code).toBe("HISTORY_UNAVAILABLE");
@@ -65,7 +66,7 @@ test("미리보기는 열린·닫힌 기록을 읽기만 하고 다른 워크트
   } finally { await app.cleanup(); }
 });
 
-test("실제 SDK 기록이 4MiB를 넘어도 닫힌 세션의 최신 세 섹션을 읽기만 한다", async () => {
+test("실제 SDK 기록이 4MiB를 넘어도 닫힌 세션의 최근 대화를 읽기만 한다", async () => {
   // Close the fixture-owned writer before extending its JSONL, then use real SDK discovery.
   const app = await setup();
   try {
@@ -82,7 +83,8 @@ test("실제 SDK 기록이 4MiB를 넘어도 닫힌 세션의 최신 세 섹션�
     ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
     const before = await readFile(file, "utf8");
     const preview = expectOk(await app.history.preview(app.main.id, saved.id));
-    expect(preview.sections?.map((section) => section.text)).toEqual(["LATEST QUESTION", "LATEST PLAN", "LATEST ANSWER"]);
+    expect(preview.sections?.slice(-3).map((section) => section.text)).toEqual(["LATEST QUESTION", "LATEST PLAN", "LATEST ANSWER"]);
+    expect(preview.sections?.[0]?.text).toBe("read"); expect(preview.sections!.length).toBeLessThanOrEqual(15);
     expect(app.registry.records).toEqual([]); expect(await readFile(file, "utf8")).toBe(before);
   } finally { await app.cleanup(); }
 });

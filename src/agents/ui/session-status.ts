@@ -70,6 +70,7 @@ export class SessionStatus {
   private worktree: WorkspaceScope | null = null;
   private readonly providerIcon: ProviderIcon;
   private telemetry: SessionTelemetry | null = null;
+  private capturedAt: number | undefined;
   private expiry: ReturnType<typeof setTimeout> | undefined;
   private visible = false;
   private disposed = false;
@@ -88,13 +89,13 @@ export class SessionStatus {
     this.root.once(RenderableEvents.DESTROYED, () => this.dispose());
   }
 
-  update(telemetry: SessionTelemetry | undefined, visible: boolean, worktree: WorkspaceScope | null = null): void {
-    this.telemetry = telemetry ?? null; this.worktree = worktree; this.visible = visible; this.root.visible = visible;
+  update(telemetry: SessionTelemetry | undefined, visible: boolean, worktree: WorkspaceScope | null = null, capturedAt?: number): void {
+    this.telemetry = telemetry ?? null; this.worktree = worktree; this.capturedAt = capturedAt; this.visible = visible; this.root.visible = visible;
     this.cancelExpiry(); this.paint(); this.scheduleTick();
   }
 
   private scheduleTick(): void {
-    if (this.disposed || !this.visible) return;
+    if (this.disposed || !this.visible || this.capturedAt !== undefined) return;
     const now = Date.now(), reset = usageWindow(this.telemetry, now)?.resetsAt;
     if (reset === undefined || reset === null || reset <= now) return;
     this.expiry = setTimeout(() => { this.expiry = undefined; this.paint(); this.scheduleTick(); }, Math.min(60000, reset - now));
@@ -104,7 +105,7 @@ export class SessionStatus {
     if (this.disposed || !this.visible || !this.root || this.root.isDestroyed) return;
     const theme = uiTheme(this.renderer), colors = theme.colors, styles = theme.styles;
     this.root.backgroundColor = styles["ui.text"].bg; this.text.bg = styles["ui.text"].bg;
-    const totalWidth = Math.max(0, this.root.width), now = Date.now();
+    const totalWidth = Math.max(0, this.root.width), now = this.capturedAt ?? Date.now();
     const telemetry = this.telemetry;
     const context = telemetry?.context;
     const window = usageWindow(telemetry, now);

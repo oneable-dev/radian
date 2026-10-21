@@ -52,6 +52,27 @@ test.each(["", "/", "@"])("Ctrl+V는 입력이 %j여도 이미지 첨부를 추�
   } finally { router.dispose(); menu.dispose(); await app.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
+test("읽기 전용 Prompt는 키·붙여넣기를 무시하고 OS 클립보드도 읽지 않는다", async () => {
+  // 미리보기에는 같은 입력 컴포넌트를 쓰지만 읽기나 파일 생성 부작용은 없어야 한다.
+  let reads = 0;
+  const app = await mount({ readOnly: true, clipboard: {
+    read: async () => { reads++; return ok({ mimeType: "image/png", bytes: tinyPng() }); }, dispose: async () => {},
+  } });
+  try {
+    app.input.value = "Saved draft";
+
+    // 일반 키, 네이티브 붙여넣기와 명시적 클립보드 경로를 모두 시도한다.
+    await app.mockInput.typeText("edit"); app.mockInput.pressBackspace();
+    app.mockInput.pressEnter(); app.mockInput.pressKey("return", { shift: true });
+    await app.mockInput.pasteBracketedText("pasted edit"); app.input.pasteText("direct paste");
+    await app.input.pasteClipboard(); await app.renderOnce();
+
+    // 저장된 표시값은 유지하고 첨부·로딩·OS 읽기를 만들지 않는다.
+    expect(app.input.value).toBe("Saved draft"); expect(reads).toBe(0);
+    expect(app.input.draft.tokens).toEqual([]); expect(app.input.pending).toBe(false); expect(app.input.activity.root.visible).toBe(false);
+  } finally { await app.close(); }
+});
+
 test("직접 읽은 클립보드 이미지는 번호로 표시하고 초안에 유지되는 비공개 파일을 참조한다", async () => {
   const directory = await mkdtemp(join(tmpdir(), "radian-clipboard-ui-"));
   const app = await mount({cacheRoot: directory, clipboard: {read: async () => ok({mimeType: "image/png", bytes: tinyPng()}), dispose: async () => {}}});

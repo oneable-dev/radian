@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { readHistoryPreview, historyPreviewLimit, historyPreviewSectionLimit } from "./history-preview.ts";
+import { readHistoryPreview, previewSessionSnapshot, historyPreviewLimit, historyPreviewSectionLimit } from "./history-preview.ts";
 import { runCompletionEntryType } from "./run-completion.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 
@@ -25,29 +25,81 @@ test("미리보기는 현재 분기의 최신 SDK 섹션만 읽고 writer나 파
   try {
     const before = await readFile(app.path, "utf8");
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
-    expect(preview.sections?.map((section) => section.kind)).toEqual(["thinking", "assistant", "tool"]);
-    expect(preview.text).toContain("Current answer"); expect(preview.text).not.toContain("Original question"); expect(preview.text).not.toContain("ABANDONED BRANCH");
+    expect(preview.sections?.map((section) => section.kind)).toEqual(["user", "user", "notice", "thinking", "assistant", "tool"]);
+    expect(preview.text).toContain("Current answer"); expect(preview.text).toContain("Original question"); expect(preview.text).not.toContain("ABANDONED BRANCH");
     expect(preview.worktreeId).toBe("tree"); expect(preview.id).toBe("saved"); expect(preview.truncated).toBe(false);
     expect(opened).not.toHaveBeenCalled(); expect(await readFile(app.path, "utf8")).toBe(before);
   } finally { opened.mockRestore(); await app.close(); }
 });
 
-test("최신 3개 섹션만 Agent와 같은 도구·오류·redaction 표현으로 반환한다", async () => {
+test("최신 15개 섹션만 Agent와 같은 도구·오류·redaction 표현으로 반환한다", async () => {
   // Several earlier turns and intermediate blocks must not displace the latest question/answer.
   const entries: unknown[] = [header, message("old-q", null, "user", "OLD QUESTION"), message("old-a", "old-q", "assistant", [{ type: "text", text: "OLD ANSWER" }]), message("q", "old-a", "user", "Latest request")];
   let parent = "q";
-  for (let i = 1; i <= 4; i++) { entries.push(message(`a${i}`, parent, "assistant", [{ type: "text", text: `Step ${i}` }])); parent = `a${i}`; }
+  for (let i = 1; i <= 14; i++) { entries.push(message(`a${i}`, parent, "assistant", [{ type: "text", text: `Step ${i}` }])); parent = `a${i}`; }
   entries.push(message("work", parent, "assistant", [{ type: "thinking", thinking: "HIDDEN THOUGHT", redacted: true, thinkingSignature: "SECRET SIGNATURE" }, { type: "toolCall", id: "call", name: "read", arguments: { path: "fixture.ts" } }]));
   entries.push({ ...message("result", "work", "toolResult", []), message: { role: "toolResult", toolCallId: "call", toolName: "read", isError: true, content: [{ type: "text", text: "Read failed" }] } });
   entries.push(message("final", "result", "assistant", [{ type: "text", text: "Latest answer" }]));
   const app = await fixture(entries);
   try {
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
-    expect(preview.sections?.map((section) => section.text.split("\n")[0])).toEqual(["[Thinking redacted]", "Arguments:", "Latest answer"]);
-    expect(preview.sections?.[1]).toMatchObject({ kind: "tool", title: "read", status: "error", error: "Read failed" });
-    expect(preview.sections?.[1]?.text).toContain("Read failed"); expect(preview.truncated).toBe(false);
-    expect(JSON.stringify(preview)).not.toMatch(/OLD QUESTION|OLD ANSWER|Step 1|Step 2|Step 3|Step 4|HIDDEN THOUGHT|SECRET SIGNATURE/);
+    expect(preview.sections).toHaveLength(15);
+    expect(preview.sections?.map((section) => section.text.split("\n")[0])).toEqual([
+      ...Array.from({ length: 12 }, (_, index) => `Step ${index + 3}`), "[Thinking redacted]", "Arguments:", "Latest answer",
+    ]);
+    expect(preview.sections?.at(-2)).toMatchObject({ kind: "tool", title: "read", status: "error", error: "Read failed" });
+    expect(preview.sections?.at(-2)?.text).toContain("Read failed"); expect(preview.truncated).toBe(false);
+    expect(JSON.stringify(preview)).not.toMatch(/OLD QUESTION|OLD ANSWER|HIDDEN THOUGHT|SECRET SIGNATURE/);
   } finally { await app.close(); }
+});
+
+test("최근 15개 섹션은 이전 턴까지 시간순으로 포함하고 저장된 모델·effort만 복원한다", async () => {
+  // 마지막 요청만으로는 15개가 되지 않는 여러 턴을 준비한다.
+  const entries: unknown[] = [header];
+  let parent: string | null = null;
+  for (let turn = 1; turn <= 9; turn++) {
+    entries.push(message(`q${turn}`, parent, "user", `Question ${turn}`));
+    parent = `q${turn}`;
+    if (turn === 9) {
+      entries.push({ type: "thinking_level_change", id: "effort", parentId: parent, timestamp: header.timestamp, thinkingLevel: "high" });
+      parent = "effort";
+    }
+    entries.push({ ...message(`a${turn}`, parent, "assistant", [{ type: "text", text: `Answer ${turn}` }]),
+      message: { role: "assistant", content: [{ type: "text", text: `Answer ${turn}` }], provider: "fixture", model: "saved-model" } });
+    parent = `a${turn}`;
+  }
+  const app = await fixture(entries);
+  try {
+    const before = await readFile(app.path, "utf8");
+
+    // 최신 요청을 경계로 멈추지 않고 한정된 대화 꼬리를 읽는다.
+    const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
+
+    // 잘린 시작은 두 번째 답변이며 현재 계정 사용량이나 Fast 설정은 추정하지 않는다.
+    expect(preview.sections).toHaveLength(15);
+    expect(preview.sections?.[0]?.text).toBe("Answer 2"); expect(preview.sections?.at(-1)?.text).toBe("Answer 9");
+    expect(preview.sections?.slice(1, 5).map(section => section.text)).toEqual(["Question 3", "Answer 3", "Question 4", "Answer 4"]);
+    expect(preview.telemetry).toEqual({ provider: "fixture", model: "saved-model", effort: "high", fast: null, context: null, weekly: null });
+    expect(await readFile(app.path, "utf8")).toBe(before);
+  } finally { await app.close(); }
+});
+
+test("공유 스냅샷의 미리보기 제한은 저장된 대화·실행 상태·telemetry를 수정하지 않는다", () => {
+  // 공유 저장 record는 복구에도 쓰이므로 preview를 만든다고 본문을 잘라 저장하면 안 된다.
+  const snapshot = { id: "tab", name: "Archived", worktreeId: "tree", lifecycle: "closed" as const, updatedAt: 1000,
+    state: { conversationId: "saved", status: "failure" as const, error: "Saved failure", output: "Saved output",
+      sections: Array.from({ length: 20 }, (_, index) => ({ id: `s${index}`, kind: "assistant" as const, title: "Agent", text: `Answer ${index} ` + "x".repeat(9000), status: "complete" as const })),
+      telemetry: { provider: "fixture", model: "model", effort: "high", fast: true, context: { usedTokens: 100, maxTokens: 1000 }, weekly: null } }, subagents: [] };
+  const before = JSON.stringify(snapshot);
+
+  // 같은 record에서 IPC로 보낼 읽기 전용 projection만 만든다.
+  const preview = previewSessionSnapshot(snapshot, "saved");
+
+  // 최근 15개만 표시하고 복구용 원본이나 상태줄 정보는 손대지 않는다.
+  expect(preview.snapshot?.state.sections).toHaveLength(15); expect(preview.snapshot?.state.sections?.[0]?.id).toBe("s5");
+  expect(preview.snapshot?.state.sections?.[0]?.text).toHaveLength(historyPreviewSectionLimit); expect(preview.truncated).toBe(true);
+  expect(preview.snapshot?.state.status).toBe("failure"); expect(preview.snapshot?.state.error).toBe("Saved failure");
+  expect(preview.telemetry).toEqual(snapshot.state.telemetry); expect(JSON.stringify(snapshot)).toBe(before);
 });
 
 test("저장 미리보기에도 Bash 명령·timeout을 보존하며 기존 요약 길이로 명령을 자르지 않는다", async () => {
@@ -64,7 +116,7 @@ test("저장 미리보기에도 Bash 명령·timeout을 보존하며 기존 요�
   } finally { await app.close(); }
 });
 
-test("최신 3개 미리보기는 완료 메타데이터를 유지하지만 새 미응답 요청에는 옛 완료를 붙이지 않는다", async () => {
+test("최근 대화의 완료 메타데이터를 유지하지만 새 미응답 요청에는 옛 완료를 붙이지 않는다", async () => {
   const completion = { startedAt: 1000000, completedAt: 1090000, durationMs: 90000, outcome: "complete" as const };
   const app = await fixture([header, message("q", null, "user", "Question"), message("a", "q", "assistant", [{ type: "text", text: "Answer" }]),
     { type: "custom", id: "completed", parentId: "a", timestamp: header.timestamp, customType: runCompletionEntryType, data: completion }]);
@@ -75,7 +127,8 @@ test("최신 3개 미리보기는 완료 메타데이터를 유지하지만 새 
     expect(await readFile(app.path, "utf8")).toBe(before);
     await writeFile(app.path, before + JSON.stringify(message("next", "completed", "user", "Unanswered")) + "\n");
     const next = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
-    expect(next.sections).toHaveLength(1); expect(next.sections?.[0]?.completion).toBeUndefined();
+    expect(next.sections?.map(section => section.text)).toEqual(["Question", "Answer", "Unanswered"]);
+    expect(next.sections?.[1]?.completion).toEqual(completion); expect(next.sections?.at(-1)?.completion).toBeUndefined();
   } finally { await app.close(); }
 });
 
@@ -86,15 +139,15 @@ test("선택한 분기의 손상된 완료 메타데이터는 실패 Result로 �
   finally { await app.close(); }
 });
 
-test("새 프롬프트만 저장됐으면 이전 답변을 섞지 않고 스킬은 이름만 표시한다", async () => {
+test("최근 대화에 새 스킬 요청을 이어서 표시하되 스킬 지침은 노출하지 않는다", async () => {
   const skill = '<skill name="good-code" location="/private/SKILL.md">\nHIDDEN INSTRUCTIONS\n</skill>\n\nLatest skill request';
   const app = await fixture([header, message("q", null, "user", "OLD PROMPT"), message("a", "q", "assistant", [{ type: "text", text: "OLD ANSWER" }]), message("new", "a", "user", skill)]);
   try {
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
-    expect(preview.sections).toHaveLength(2);
-    expect(preview.sections?.[0]).toMatchObject({ kind: "notice", skillName: "good-code", text: "good-code" });
-    expect(preview.sections?.[1]).toMatchObject({ kind: "user", text: "Latest skill request" });
-    expect(JSON.stringify(preview)).not.toMatch(/OLD PROMPT|OLD ANSWER|HIDDEN INSTRUCTIONS|\/private/);
+    expect(preview.sections).toHaveLength(4);
+    expect(preview.sections?.[2]).toMatchObject({ kind: "notice", skillName: "good-code", text: "good-code" });
+    expect(preview.sections?.[3]).toMatchObject({ kind: "user", text: "Latest skill request" });
+    expect(JSON.stringify(preview)).not.toMatch(/HIDDEN INSTRUCTIONS|\/private/);
   } finally { await app.close(); }
 });
 
@@ -139,7 +192,7 @@ test("잘못된 JSON과 빈 파일도 예상 가능한 기록 오류로 반환�
   } finally { await app.close(); }
 });
 
-test("전체 파일이 4MiB를 넘어도 뒤쪽 최신 3개 섹션만 읽어 미리보기를 반환한다", async () => {
+test("오래된 대형 기록이 안전 제한을 넘으면 완성된 최근 턴을 잘림 표시와 함께 반환한다", async () => {
   // A large old turn must not block the small recent turn or be loaded into the preview model.
   const app = await fixture([header, message("old", null, "user", "OLD PAYLOAD " + "x".repeat(20 * 1024 * 1024)),
     message("current-q", "old", "user", "CURRENT QUESTION"),
@@ -148,7 +201,7 @@ test("전체 파일이 4MiB를 넘어도 뒤쪽 최신 3개 섹션만 읽어 미
     const before = await readFile(app.path, "utf8");
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
     expect(preview.sections?.map((section) => section.text)).toEqual(["CURRENT QUESTION", "Current plan", "CURRENT ANSWER"]);
-    expect(JSON.stringify(preview)).not.toContain("OLD PAYLOAD"); expect(preview.truncated).toBe(false);
+    expect(JSON.stringify(preview)).not.toContain("OLD PAYLOAD"); expect(preview.truncated).toBe(true);
     expect(await readFile(app.path, "utf8")).toBe(before);
   } finally { await app.close(); }
 });
@@ -174,7 +227,7 @@ test("물리적으로 뒤에 있는 다른 분기는 건너뛰고 최신 분기�
     message("answer", "q", "assistant", [{ type: "text", text: "Current answer" }])]);
   try {
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
-    expect(preview.sections?.map((section) => section.text)).toEqual(["Current question", "Current answer"]);
+    expect(preview.sections?.map((section) => section.text)).toEqual(["Root", "Current question", "Current answer"]);
     expect(JSON.stringify(preview)).not.toContain("OTHER BRANCH");
   } finally { await app.close(); }
 });
@@ -200,8 +253,8 @@ test("도구 결과 세 개가 역순 완료돼도 호출을 찾고 Agent와 같
   const app = await fixture(entries);
   try {
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
-    expect(preview.sections?.map((section) => section.toolCallId)).toEqual(["a", "b", "c"]);
-    expect(preview.sections?.[0]?.text).toContain('"path": "a"'); expect(preview.sections?.[0]?.text).toContain("RESULT a");
+    expect(preview.sections?.map((section) => section.toolCallId)).toEqual([undefined, "a", "b", "c"]);
+    expect(preview.sections?.[1]?.text).toContain('"path": "a"'); expect(preview.sections?.[1]?.text).toContain("RESULT a");
   } finally { await app.close(); }
 });
 
