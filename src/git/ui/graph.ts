@@ -7,7 +7,7 @@ type Lane = { target: string | null; color: GraphColor; dotted?: boolean };
 type Edge = { from: number; to: number; color: GraphColor; dotted: boolean; kind: "lane" | "parent" };
 export type GraphCommit = GitCommit & { workingTree?: boolean };
 export type GraphCell = { text: string; color?: GraphColor };
-export type GraphRow = { commit: GraphCommit; color: GraphColor; node: GraphCell[]; connector: GraphCell[] };
+export type GraphRow = { commit: GraphCommit; color: GraphColor; nodeColumn: number; node: GraphCell[]; connector: GraphCell[] };
 const glyphs = [" ", "│", "│", "│", "─", "╯", "╮", "┤", "─", "╰", "╭", "├", "─", "┴", "┬", "┼"];
 const column = (lane: number) => lane * 3 + 1;
 const find = (lanes: Lane[], target: string) => lanes.findIndex((lane) => lane.target === target);
@@ -65,7 +65,7 @@ export function layoutGraph(commits: readonly GraphCommit[], width = 24): GraphR
         connect(to, to < from ? 10 : 6);
       }
     }
-    rows.push({ commit, color: current.color, node, connector: cells.map((cell) => ({
+    rows.push({ commit, color: current.color, nodeColumn: column(lane), node, connector: cells.map((cell) => ({
       text: cell.dotted && glyphs[cell.mask] === "│" ? "┊" : cell.dotted && glyphs[cell.mask] === "─" ? "┄" : glyphs[cell.mask]!,
       ...(cell.color ? { color: cell.color } : {}),
     })) });

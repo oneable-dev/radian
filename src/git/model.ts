@@ -16,7 +16,8 @@ export type GitSnapshot = {
   commits: GitCommit[]; refs: GitRef[]; files: GitFile[]; reflog: GitReflog[];
   head: string; headOid: string | null;
 };
-export type GitDetails = { commit: GitCommit; message: string; files: GitFile[] };
+// Branch refs contain this commit, even when their tips point at newer commits. Tags remain snapshot tip refs.
+export type GitDetails = { commit: GitCommit; message: string; files: GitFile[]; branches: GitRef[] };
 export type GitComparison = { before: string; after: string; beforeLabel: string; afterLabel: string };
 export type GitSource = {
   load(reference: string | null, limit: number, signal: AbortSignal): Promise<Result<GitSnapshot, ExpectedError>>;

@@ -25,6 +25,19 @@ function parseCommits(output: string): Result<GitCommit[], GitError> {
   return ok(commits);
 }
 
+function parseRefs(output: string): Result<GitRef[], GitError> {
+  const refs: GitRef[] = [];
+  for (const line of output.split("\n").filter(Boolean)) {
+    const [ref, direct, peeled] = line.split("\0");
+    if (!ref || !direct) return protocol("Malformed Git reference.");
+    const kind = ref.startsWith("refs/heads/") ? "local" : ref.startsWith("refs/remotes/") ? "remote" : "tag";
+    const name = ref.replace(/^refs\/(heads|remotes|tags)\//, "");
+    if (kind === "remote" && name.endsWith("/HEAD")) continue;
+    refs.push({ kind, name, ref, oid: peeled || direct });
+  }
+  return ok(refs);
+}
+
 export function parseStatus(output: string): Result<GitFile[], GitError> {
   const records = output.split("\0");
   const files: GitFile[] = [];
@@ -115,34 +128,28 @@ export class GitRepository implements GitSource {
     const [log, references, status, events, branch] = results.map((result) => result.ok ? result.value : "");
     const commits = parseCommits(log!); if (!commits.ok) return commits;
     const files = parseStatus(status!); if (!files.ok) return files;
-    const refs: GitRef[] = [];
-    for (const line of references!.split("\n").filter(Boolean)) {
-      const [ref, direct, peeled] = line.split("\0");
-      if (!ref || !direct) return protocol("Malformed Git reference.");
-      const kind = ref.startsWith("refs/heads/") ? "local" : ref.startsWith("refs/remotes/") ? "remote" : "tag";
-      const name = ref.replace(/^refs\/(heads|remotes|tags)\//, "");
-      if (kind === "remote" && name.endsWith("/HEAD")) continue;
-      refs.push({ kind, name, ref, oid: peeled || direct });
-    }
+    const refs = parseRefs(references!); if (!refs.ok) return refs;
     const reflog: GitReflog[] = [];
     if (events) {
       const fields = events.split("\0");
       if (fields.pop() !== "" || fields.length % 4) return protocol("Malformed reflog records.");
       for (let i = 0; i < fields.length; i += 4) reflog.push({ oid: fields[i]!, selector: fields[i + 1]!, subject: fields[i + 2]!, date: fields[i + 3]! });
     }
-    return ok({ commits: commits.value, refs, files: files.value, reflog, head: branch!.trim(), headOid });
+    return ok({ commits: commits.value, refs: refs.value, files: files.value, reflog, head: branch!.trim(), headOid });
   }
 
   async details(commit: GitCommit, signal: AbortSignal): Promise<Result<GitDetails, ExpectedError>> {
     if (!oidPattern.test(commit.oid)) return protocol("Invalid commit identity.");
-    const [message, names] = await Promise.all([
+    const [message, names, references] = await Promise.all([
       this.run(["show", "--no-show-signature", "-s", "--format=%B", commit.oid], signal),
       this.run(commit.parents[0] ? ["diff", "--no-ext-diff", "--name-status", "-z", "--find-renames", commit.parents[0], commit.oid, "--"]
         : ["diff-tree", "--root", "--no-commit-id", "--name-status", "-r", "-z", "--find-renames", commit.oid, "--"], signal),
+      this.run(["for-each-ref", `--contains=${commit.oid}`, "--format=%(refname)%00%(objectname)%00%(*objectname)", "refs/heads", "refs/remotes"], signal),
     ]);
-    if (!message.ok) return message; if (!names.ok) return names;
+    if (!message.ok) return message; if (!names.ok) return names; if (!references.ok) return references;
     const files = parseFiles(names.value, commit); if (!files.ok) return files;
-    return ok({ commit, message: message.value, files: files.value });
+    const branches = parseRefs(references.value); if (!branches.ok) return branches;
+    return ok({ commit, message: message.value, files: files.value, branches: branches.value });
   }
 
   async compare(file: GitFile, signal: AbortSignal): Promise<Result<GitComparison, ExpectedError>> {

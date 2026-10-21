@@ -713,11 +713,32 @@ Finish existing jobs before explicitly restarting an old runtime to load the new
 
 ### Native Git
 
-Git has **Commits / Reflog** navigation. Commits shows the colored commit history or a file comparison
-in the main area, with **Commit / Refs** tabs on the right. Commit contains details and changed files;
-Refs contains Local / Remote / Tags and an All refs action. Reflog uses the full width and hides the
-right panel. Workspace navigation remains available through the shared popup; Git does not duplicate
-worktree navigation or provide submodules. Selecting a ref filters history, never checks it out.
+Git has **Commits / Reflog** navigation. Both use a full-width history list without a permanent right
+panel. The **Refs** button above Commits opens a separate Local / Remote / Tags popup. Selecting a ref
+filters history, never checks it out. Esc closes the Refs popup; a further Esc clears the history
+filter. Workspace navigation remains available through the shared popup; Git does not duplicate
+worktree navigation or provide submodules.
+
+Commits places ref labels in a dedicated left column, connected to their commit nodes. Multiple refs
+share one caption with a +N count; long captions are truncated on terminal-cell boundaries. A stronger
+node-colored background band connects the graph to each commit message without a decorative horizontal
+line, followed by two neutral cells before the message. Working tree has no connecting band, while
+keeping messages aligned with commit rows. Parent lanes and ref-to-node lines remain intact.
+The left column always reserves the responsive details-card width, including on Working tree and
+while history is unfocused, so the graph and messages do not move horizontally as focus changes.
+Focusing a selected commit reveals a fully unfolded details card anchored to that row; commit row
+heights do not change. The card has no internal scrollbar, height cap or redundant title and includes
+the complete hash, author, date, message, HEAD status, local/remote branches and tags. Branches and
+remotes are queried with `for-each-ref --contains`: their tips may be newer than the selected commit.
+Remote membership uses locally available remote-tracking refs, not a network lookup. Tags and graph
+ref labels still identify refs pointing directly at a commit, not all descendant tags or branch tips.
+Branches, remotes and tags appear above author/date; `—` denotes a completed empty result and `…`
+marks branch membership that has not loaded yet. Commits without tip refs still have details.
+Cards taller than the terminal extend the shared Commits viewport instead of clipping text or
+introducing nested scrolling. Tab focuses the card; Ctrl+D/U and the mouse wheel move that shared
+viewport, Home/End reach the card's ends, and Esc returns to the history cursor. Moving focus outside
+history/details hides the card but keeps the column width reserved for ref labels.
+Dragging details text still copies it, but the card has no separate `a` or `y` action.
 
 The initial selection is Working tree, with staged, unstaged and untracked changes. A commit compares
 against its first parent (or empty content for a root commit). Staged compares HEAD/index, unstaged
@@ -725,18 +746,21 @@ compares index/worktree, and untracked compares empty/worktree. A staged rename 
 unstaged edit uses the new index path. Git queries disable optional locks and external diff/textconv;
 they never stage, commit, push or change branches.
 
-Selecting a changed file replaces **only the main history area** with a whole-file Before / After
-comparison. The right file list stays available, and selecting another file updates the comparison.
-Both columns share one keyboard-focus target and synchronized wheel/keyboard scrolling. Esc or
-Back returns to the prior history position. No collapsed-context feature is required: unchanged
-content is included, not silently omitted by a default short-context patch.
+Enter on a commit or Working tree opens a large changes popup containing only changed files on the
+left and a whole-file Before / After comparison on the right. A short title identifies the commit;
+metadata remains in the main history's left column rather than consuming diff space. The first file
+is loaded automatically, and selecting another file updates the comparison without closing the popup.
+Both diff columns share one keyboard-focus target and synchronized wheel/keyboard scrolling.
+Tab / Shift+Tab cycle only between files and diff. Esc closes the popup and restores the prior history
+selection and shared reading position. Empty commits show an explicit no-changed-files state.
+Unchanged content is included, not silently omitted by a default short-context patch.
 
 Git-specific actions are scoped to Git browsing controls and can be rebound in the normal keymap:
 
 | Focus | `a`: attach to an Agent prompt | `y`: copy the complete identifier |
 | --- | --- | --- |
 | Commit history row | Commit hash only | Full hash |
-| Commit details | Full metadata, message and tags | Full hash |
+| Commit details | Not available (read-only) | Not available; drag text to copy |
 | Changed file / entire Diff | Relative path and historical revision/change identity | Relative path |
 | Local / Remote branch | Name only; no automatic tip hash | Name, including remote prefix |
 | Tag | Name only | Name |
@@ -756,13 +780,15 @@ without writing an unrelated remote host clipboard. OSC52 is reported as a **req
 confirmed clipboard contents; unsupported/failed delivery is reported explicitly. Real SSH terminal
 acceptance depends on the terminal/multiplexer configuration and is not assumed from dispatch alone.
 
-When a Git tab strip is focused, `h/l` selects its neighboring tab and keeps focus in
-that strip. This applies to Commits/Reflog, Commit/Refs and Local/Remote/Tags without filtering or
-mutating a Git reference.
+When a Git tab strip is focused, `h/l` or `Ctrl+N/P` selects its neighboring tab and keeps focus in
+that strip. This applies to Commits/Reflog and Local/Remote/Tags without filtering or mutating a
+Git reference.
 
-Arrows/j/k navigate, Enter selects, r refreshes, + loads another 300 commits, Home/End jump, and
-PgUp/PgDn scroll. Refresh is keyboard-only; its shared spinner stays vertically centered beside
-the tabs in a reserved cell, with the same minimum-visible policy and no toolbar layout shift. Diff j/k scrolls both columns vertically, and h/l or left/right arrows scroll them horizontally. History is bounded to
+`j/k` or `Ctrl+N/P` navigate, Enter opens the selected commit or focuses a selected file's diff,
+r refreshes, + loads another 300 commits, Home/End jump, and PgUp/PgDn scroll. Refresh is keyboard-only;
+its shared spinner stays vertically centered beside the tabs in a reserved cell, with the same
+minimum-visible policy and no toolbar layout shift. The changes popup has its own spinner, canceled
+when it closes. Diff `j/k` or `Ctrl+N/P` scroll both columns vertically, and `h/l` scroll them horizontally. History is bounded to
 3,000 commits per ref filter. Text preview is bounded to 1 MiB per version and 20,000 combined lines;
 Git command output is bounded to 4 MiB with a 10-second query timeout. Exceeding a preview/computation
 limit, binary content, gitlinks and unmerged files produce an explicit notice rather than a partial
@@ -831,7 +857,7 @@ footer and diff backgrounds are derived from those colors for both light and dar
 Reported palette changes repaint the UI without restarting the runtime or losing prompt drafts,
 focus or Git navigation/scroll positions. Each attached TUI has its own theme.
 
-Git's Commits/Reflog, Commit/Refs and Local/Remote/Tags tabs use underlines for active selection and
+Git's Commits/Reflog and Local/Remote/Tags tabs use underlines for active selection and
 keyboard focus, without a background fill. Top-level work-view tabs are omitted. Agent and Terminal session tabs use background emphasis without
 underlines; an unfocused active session keeps a subdued background. Other buttons retain their
 usual focus styling. Navigation uses understated separators rather than boxed controls.
@@ -842,7 +868,7 @@ there is no reserved row for top-level view navigation. Tabs, search surfaces an
 retains its normal vertical padding unless fixed controls need that space. Work surfaces have no
 additional top or bottom panel inset. Routine Neovim/worktree captions, the `Git · … · All refs` line
 and the terminal `… · running` line are omitted; empty, error, exit and reconnect messages remain meaningful.
-Agent's padded telemetry, Editor, Git lists/diffs and Terminal end at the same work-pane bottom edge,
+Agent's padded telemetry, Editor, Git history/changes popups and Terminal end at the same work-pane bottom edge,
 without an unused row below them. Popup dimensions are clamped to the terminal without changing
 that viewport. Embedded programs receive the measured inner viewport rather than rendering
 beneath the padding. The footer text remains one row, with its gradient extending through the

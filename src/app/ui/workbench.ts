@@ -605,7 +605,7 @@ export class Workbench {
       const targets = this.history.focusTargets, index = targets.indexOf(this.renderer.currentFocusedRenderable!);
       targets[(index + direction + targets.length) % targets.length]?.focus(); return;
     }
-    if (this.git.modal) {
+    if (this.git.modal && !this.monitor.visible && !this.sidebar.visible) {
       const targets = this.git.focusTargets;
       const index = targets.indexOf(this.renderer.currentFocusedRenderable!);
       targets[(index + direction + targets.length) % targets.length]?.focus(); return;

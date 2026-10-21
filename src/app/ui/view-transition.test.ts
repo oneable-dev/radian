@@ -26,9 +26,13 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
   await app.renderOnce(); await app.renderOnce();
   return { ...app, selection, view, get,
     first(pattern: RegExp) { return app.captureCharFrame().match(pattern)?.[0] ?? null; },
-    capture(pattern: RegExp) {
+    capture(pattern: RegExp, unobscured = false) {
       const frames: { tree: string | null; first: string | null }[] = [];
-      const capture = () => frames.push({ tree: selection.worktree?.id ?? null, first: app.captureCharFrame().match(pattern)?.[0] ?? null });
+      const capture = () => {
+        // The workspace picker can cover the first diff line while leaving its last line visible.
+        if (unobscured && get("workspace-picker").visible) return;
+        frames.push({ tree: selection.worktree?.id ?? null, first: app.captureCharFrame().match(pattern)?.[0] ?? null });
+      };
       app.renderer.on("frame", capture);
       return { frames, stop: () => app.renderer.off("frame", capture) };
     },
@@ -62,7 +66,7 @@ function gitFixture(counts = { MAIN: 70, FEATURE: 70 }) {
         parents: index < count - 1 ? [(index + 2).toString(16).padStart(40, "0")] : [], subject: `GIT${tree}-${String(index).padStart(3, "0")}`, author: "Ada", date: "2026-10-15" }));
       return ok({ head: tree, headOid: commits[0]!.oid, commits, refs: [], reflog: [], files: [{ kind: "unstaged" as const, status: "M", path: "probe.txt" }] });
     },
-    details: async (commit) => ok({ commit, message: commit.subject, files: [] }),
+    details: async (commit) => ok({ commit, message: commit.subject, files: [], branches: [] }),
     compare: async () => {
       comparisons.push(tree);
       const before = lines(`DIFF${tree}`) + "\n";
@@ -161,14 +165,14 @@ test("캐시된 Git diff는 첫 표시 프레임부터 저장 위치를 적용�
     await app.renderOnce(); await app.renderOnce();
   };
   try {
-    await app.showGit(); await app.waitForFrame((frame) => frame.includes("probe.txt"));
-    await app.click("probe.txt", true); await app.waitForFrame((frame) => frame.includes("DIFFMAIN-000"));
+    await app.showGit(); await app.waitForFrame((frame) => frame.includes("Working tree"));
+    app.get("git-history").focus(); app.mockInput.pressEnter(); await app.waitForFrame((frame) => frame.includes("DIFFMAIN-000"));
     await scroll(35); const main = app.first(/DIFFMAIN-\d{3}/); expect(main).toBe("DIFFMAIN-035");
     await app.click(`${icons.folder} radian-ui`); await app.showGit();
-    await app.waitForFrame((frame) => frame.includes("probe.txt")); await app.click("probe.txt", true);
+    await app.waitForFrame((frame) => frame.includes("Working tree")); app.get("git-history").focus(); app.mockInput.pressEnter();
     await app.waitForFrame((frame) => frame.includes("DIFFFEATURE-000"));
     await scroll(7); const feature = app.first(/DIFFFEATURE-\d{3}/); expect(feature).toBe("DIFFFEATURE-007");
-    const record = app.capture(/DIFF(?:MAIN|FEATURE)-\d{3}/);
+    const record = app.capture(/DIFF(?:MAIN|FEATURE)-\d{3}/, true);
 
     await app.click(`${icons.folder} radian`); await app.click(`${icons.folder} radian-ui`); record.stop();
 

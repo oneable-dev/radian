@@ -1,14 +1,20 @@
-import type { GitCommit, GitDetails, GitFile, GitRef, GitReflog } from "./model.ts";
+import type { GitCommit, GitDetails, GitFile, GitRef, GitReflog, GitSnapshot } from "./model.ts";
 
 export type GitContext = { label: string; text: string; copy: string };
 export function commitContext(commit: GitCommit): GitContext {
   return { label: `Commit ${commit.oid.slice(0, 10)}`, text: commit.oid, copy: commit.oid };
 }
-export function describeCommit(details: GitDetails, refs: readonly GitRef[]): string {
+type CommitDescription = { commit: GitCommit; message: string; branches?: readonly GitRef[] };
+export function describeCommit(details: CommitDescription, refs: readonly GitRef[], head?: Pick<GitSnapshot, "head" | "headOid">): string {
   const commit = details.commit;
-  const tags = refs.filter((ref) => ref.kind === "tag" && ref.oid === commit.oid).map((ref) => ref.name);
-  return [`Commit ${commit.oid}`, `Author: ${commit.author}`, `Date: ${commit.date}`,
-    ...(tags.length ? [`Tags: ${tags.join(", ")}`] : []), "", details.message.trimEnd()].join("\n");
+  const branchNames = (kind: "local" | "remote") => details.branches === undefined ? "…"
+    : details.branches.filter(ref => ref.kind === kind).map(ref => ref.name).join(", ");
+  const local = branchNames("local"), remote = branchNames("remote");
+  const tags = refs.filter(ref => ref.kind === "tag" && ref.oid === commit.oid).map(ref => ref.name).join(", ");
+  return [`Commit ${commit.oid}`,
+    ...(head?.headOid === commit.oid ? [head.head ? `HEAD → ${head.head}` : "HEAD (detached)"] : []),
+    `Branches: ${local || "—"}`, `Remotes: ${remote || "—"}`, `Tags: ${tags || "—"}`,
+    `Author: ${commit.author}`, `Date: ${commit.date}`, "", details.message.trimEnd()].join("\n");
 }
 export function detailsContext(details: GitDetails, refs: readonly GitRef[]): GitContext {
   return { ...commitContext(details.commit), label: `Details ${details.commit.oid.slice(0, 10)}`, text: describeCommit(details, refs) };
