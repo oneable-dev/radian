@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { BoxRenderable, TextRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { LoadingSpinner } from "./loading-spinner.ts";
+import { uiTheme } from "./theme.ts";
 
 const glyph = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/;
 async function mount() {
@@ -31,6 +32,40 @@ test("공통 스피너는 즉시 완료된 작업도 499ms에는 회전하고 50
     await app.advance(1);
 
     expect(app.spinning()).toBe(false);
+  } finally { await app.dispose(); }
+});
+
+test("Fast 스피너는 고정 세 칸 안에서 노란 화살표를 오른쪽으로 순환시킨다", async () => {
+  // Only priority work changes the shared spinner's presentation; normal loaders retain their frames.
+  const app = await mount();
+  try {
+    app.spinner.setFast(true); app.spinner.start(); await app.renderOnce();
+    const x = app.spinner.root.x, width = app.spinner.root.width;
+
+    for (const expected of ["▶▷▷", "▷▶▷", "▷▷▶", "▶▷▷"]) {
+      expect(app.spinner.root.plainText).toBe(expected);
+      expect(app.spinner.root.x).toBe(x); expect(app.spinner.root.width).toBe(3); expect(width).toBe(3);
+      const spans = app.captureSpans().lines[app.spinner.root.y]!.spans;
+      expect(spans.find(span => span.text.includes("▶"))!.fg.toInts()).toEqual(uiTheme(app.renderer).colors.number.toInts());
+      expect(spans.find(span => span.text.includes("▷"))!.fg.toInts()).toEqual(uiTheme(app.renderer).colors.muted.toInts());
+      await app.advance(80);
+    }
+  } finally { await app.dispose(); }
+});
+
+test("일반·Fast 모드를 전환해도 최소 표시 시간과 취소 수명은 바꾸지 않는다", async () => {
+  // Changing animation style is not a new operation and cannot reset its 500ms visibility window.
+  const app = await mount();
+  try {
+    app.spinner.start(); await app.advance(120);
+
+    app.spinner.setFast(true); app.spinner.stop(); await app.advance(379);
+
+    expect(app.spinner.root.visible).toBe(true); expect(app.spinner.root.width).toBe(3);
+    await app.advance(1); expect(app.spinner.root.visible).toBe(false);
+    app.spinner.setFast(false); app.spinner.start(); await app.renderOnce();
+    expect(app.spinner.root.plainText).toBe("⠋"); expect(app.spinner.root.width).toBe(1);
+    app.spinner.cancel(); await app.renderOnce(); expect(app.clock.pendingTimerCount).toBe(0);
   } finally { await app.dispose(); }
 });
 

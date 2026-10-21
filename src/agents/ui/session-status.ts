@@ -31,6 +31,11 @@ function scopeChunks(scope: WorkspaceScope, width: number, styles: UiStyles): Te
   ];
 }
 
+function providerLabel(provider: string | null | undefined, sessionProvider: string | null | undefined): string | null {
+  if (provider === "openai" || provider === "openai-codex") return provider === "openai-codex" || sessionProvider === "openai-codex" ? "chatgpt" : "openai";
+  return provider === "anthropic" ? "claude" : null;
+}
+
 function resetTime(resetsAt: number | null, now: number): string {
   if (resetsAt === null || resetsAt <= now) return "";
   const minutes = Math.ceil((resetsAt - now) / 60000);
@@ -117,15 +122,20 @@ export class SessionStatus {
     const context = telemetry?.context;
     const window = usageWindow(telemetry, now);
     const countdown = resetTime(window?.resetsAt ?? null, now);
-    const hasIcon = this.providerIcon.setProvider(telemetry?.usage?.provider ?? telemetry?.provider);
+    const provider = telemetry?.usage?.provider ?? telemetry?.provider;
+    const hasIcon = this.providerIcon.setProvider(provider), providerName = providerLabel(provider, telemetry?.provider);
     const signature = JSON.stringify([totalWidth, this.worktree?.name, this.worktree?.branch, telemetry, window?.id, countdown]);
     if (signature === this.lastPaint) return;
     this.lastPaint = signature;
     const remaining = context?.usedTokens !== null && context?.usedTokens !== undefined && context.maxTokens > 0
       ? clampPercent((1 - context.usedTokens / context.maxTokens) * 100) : null;
-    const contextMeter: Meter = { label: "context", percent: remaining, value: percentage(remaining) };
+    const contextMeter: Meter = { label: "context", percent: remaining, value: remaining === null ? "-" : `${percentage(remaining)} left` };
     const usage: Meter = { label: hasIcon ? "  " : "usage", percent: window?.usedPercent ?? null,
       value: window ? `${percentage(window.usedPercent)} used` : "-" };
+    const presentations = [
+      [{ ...contextMeter, label: `${icons.context} context` }, { ...usage, label: providerName ? `   ${providerName}` : usage.label }],
+      [contextMeter, usage],
+    ] as const;
     // Reserve known resource percentages before fitting workspace/model detail. The scope
     // gets at most a third of the row and shrinks on grapheme boundaries when space is tight.
     const minimumMeters = cellWidth(`${contextMeter.label} ${contextMeter.value}`) + cellWidth(`${usage.label} ${usage.value}`) + 2;
@@ -138,38 +148,39 @@ export class SessionStatus {
     const model = telemetry?.model ?? "model —", effort = telemetry?.effort ?? "—";
     const fast = telemetry?.fast === true ? "on" : telemetry?.fast === false ? "off" : "—";
     const chunk = (text: string, group: StyleGroup): TextChunk => styleChunk(text, styles[group]);
-    const modelChunk = chunk(model, telemetry?.model ? "metadata.model" : "ui.muted");
-    const effortChunk = chunk(effort, telemetry?.effort ? "metadata.effort" : "ui.muted");
+    const modelChunk = chunk(`${icons.model} ${model}`, telemetry?.model ? "metadata.model" : "ui.muted");
+    const effortChunk = chunk(`${icons.brain} ${effort}`, telemetry?.effort ? "metadata.effort" : "ui.muted");
     const fastStyle = telemetry?.fast === true ? "metadata.fastOn" : telemetry?.fast === false ? "metadata.fastOff" : "ui.muted";
     const identities = [
-      [modelChunk, chunk(" · ", "ui.muted"), effortChunk, chunk(" · ", "ui.muted"), chunk(`fast ${fast}`, fastStyle)],
-      [modelChunk, chunk(" ", "ui.muted"), effortChunk, chunk(" ", "ui.muted"), chunk(`f${fast === "on" ? "+" : fast === "off" ? "−" : "?"}`, fastStyle)],
+      [modelChunk, chunk(" · ", "ui.muted"), effortChunk, chunk(" · ", "ui.muted"), chunk(`${icons.bolt} fast ${fast}`, fastStyle)],
+      [modelChunk, chunk(" ", "ui.muted"), effortChunk, chunk(" ", "ui.muted"), chunk(`${icons.bolt} ${fast}`, fastStyle)],
       [modelChunk], [],
     ].map((chunks) => ({ chunks, text: chunks.map((part) => part.text).join("") }));
-    for (const detail of new Set(details)) {
-      const meters = [contextMeter, { ...usage, value: detail }];
-      const base = meters.reduce((size, meter) => size + cellWidth(`${meter.label} ${meter.value}`), 2);
-      for (const identity of identities) {
-        for (const barWidth of [8, 6, 4, 2, 0]) {
-          const meterWidth = base + meters.reduce((size, meter) => size + (barWidth && meter.percent !== null ? barWidth + 1 : 0), 0);
-          const identityWidth = identity.text ? cellWidth(identity.text) + 2 : 0;
-          if (meterWidth + identityWidth > width) continue;
-          const chunks: TextChunk[] = identity.text ? [...identity.chunks, chunk(" ".repeat(width - meterWidth - cellWidth(identity.text)), "ui.muted")] : [];
-          const separation = identity.text ? 2 : 2 + width - meterWidth;
-          chunks.push(...meterChunks(meters[0]!, barWidth, colors, styles), chunk(" ".repeat(separation), "ui.muted"), ...meterChunks(meters[1]!, barWidth, colors, styles));
-          this.text.content = new StyledText(chunks);
-          const usageWidth = cellWidth(`${meters[1]!.label} ${meters[1]!.value}`)
-            + (barWidth && meters[1]!.percent !== null ? barWidth + 1 : 0);
-          this.providerIcon.left = scopePrefix + width - usageWidth; this.providerIcon.visible = hasIcon;
-          return;
+    // Keep configuration and known percentages before spending cells on bars or provider detail.
+    for (const identity of identities) {
+      for (const presentation of presentations) {
+        for (const detail of new Set(details)) {
+          const meters = [presentation[0], { ...presentation[1], value: detail }];
+          const base = meters.reduce((size, meter) => size + cellWidth(`${meter.label} ${meter.value}`), 2);
+          for (const barWidth of [8, 6, 4, 2, 0]) {
+            const meterWidth = base + meters.reduce((size, meter) => size + (barWidth && meter.percent !== null ? barWidth + 1 : 0), 0);
+            const identityWidth = identity.text ? cellWidth(identity.text) + 2 : 0;
+            if (meterWidth + identityWidth > width) continue;
+            const chunks: TextChunk[] = identity.text ? [...identity.chunks, chunk(" ".repeat(width - meterWidth - cellWidth(identity.text)), "ui.muted")] : [];
+            const separation = identity.text ? 2 : 2 + width - meterWidth;
+            chunks.push(...meterChunks(meters[0]!, barWidth, colors, styles), chunk(" ".repeat(separation), "ui.muted"), ...meterChunks(meters[1]!, barWidth, colors, styles));
+            this.text.content = new StyledText(chunks);
+            const usageWidth = cellWidth(`${meters[1]!.label} ${meters[1]!.value}`)
+              + (barWidth && meters[1]!.percent !== null ? barWidth + 1 : 0);
+            this.providerIcon.left = scopePrefix + width - usageWidth; this.providerIcon.visible = hasIcon;
+            return;
+          }
         }
       }
     }
-    const compact = `context ${contextMeter.value} ${usage.label} ${usage.value}`;
-    const showCompact = cellWidth(compact) <= width;
-    this.text.content = showCompact ? compact : width >= 9 ? "context -" : "-";
-    this.providerIcon.left = scopePrefix + cellWidth(`context ${contextMeter.value} `);
-    this.providerIcon.visible = hasIcon && showCompact;
+    const compact = `${contextMeter.value} ${usage.value}`;
+    this.text.content = cellWidth(compact) <= width ? compact : "-";
+    this.providerIcon.visible = false;
     paintText(this.text, styles["ui.muted"]);
   }
 

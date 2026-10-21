@@ -16,12 +16,12 @@ const secondLabel = "23ec1867-d98a…";
 const collisionId = "01a156a2-ba65-4d41-b656-d2c13806b5de";
 const session = (id = firstId, name = "A conversation title, not the session ID"): OpenSession => ({ id, name, status: "complete", subagents: [] });
 
-async function mount(initial: readonly OpenSession[] = [session()]) {
+async function mount(initial: readonly OpenSession[] = [session()], fast: (id: string) => boolean = () => false) {
   const clock = new ManualClock();
   const app = await createTestRenderer({ width: 100, height: 6, kittyKeyboard: true, clock });
   const selected: string[] = [], closed: string[] = [];
   const tabs = new SessionTabs(app.renderer, { select: (id) => selected.push(id), close: (id) => closed.push(id),
-    create() {}, changed() {}, keyHint: () => "", button: (label, activate) => new Button(app.renderer, label, activate) });
+    fast, create() {}, changed() {}, keyHint: () => "", button: (label, activate) => new Button(app.renderer, label, activate) });
   app.renderer.root.add(tabs.root);
   tabs.update("tree", initial, initial[0]?.id ?? null, true);
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
@@ -68,6 +68,36 @@ test.each(priorities)("$name 하나만 한 칸에 표시한다", async ({ entry,
     expect(Bun.stringWidth(prefix)).toBe(glyph ? 1 : 0);
     expect(title.x - tab.x).toBe(glyph ? 3 : 1);
     expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Fast 세션 탭만 노란 세 칸 화살표를 쓰고 프레임·모드 전환에도 탭과 닫기 위치를 유지한다", async () => {
+  // The two running tabs observe independent session-local Fast settings.
+  const entries = [{ ...session(), status: "working" as const }, { ...session(secondId), status: "working" as const }];
+  let fast = true;
+  const app = await mount(entries, id => id === firstId && fast);
+  const prefix = (id: string) => { const { tab, title } = app.get(id); return app.captureCharFrame().split("\n")[tab.y]!.slice(tab.x + 1, title.x).trim(); };
+  try {
+    const { tab, title } = app.get(firstId), other = app.get(secondId).tab;
+    const close = app.renderer.root.findDescendantById(`close-session:${firstId}`)!;
+    const geometry = [tab.x, tab.width, title.x, close.x, other.x];
+    expect(prefix(firstId)).toBe("▶▷▷"); expect(title.x).toBe(tab.x + 5);
+    expect(prefix(secondId)).toBe("⠋"); expect(tab.width).toBe(SESSION_TAB_WIDTH);
+    const spans = app.captureSpans().lines[tab.y]!.spans;
+    expect(spans.find(span => span.text.includes("▶"))!.fg.toInts()).toEqual(uiTheme(app.renderer).colors.number.toInts());
+
+    // Arrow movement never changes the reserved three cells or shifts the close button and next tab.
+    app.clock.advance(80); await app.render();
+
+    expect(prefix(firstId)).toBe("▷▶▷"); expect([tab.x, tab.width, title.x, close.x, other.x]).toEqual(geometry);
+    expect(prefix(secondId)).toBe("⠙");
+    fast = false; app.tabs.update("tree", entries, firstId, true); await app.render();
+    expect(prefix(firstId)).toBe("⠋"); expect(title.x).toBe(tab.x + 3);
+    expect([tab.width, close.x, other.x]).toEqual([geometry[1]!, geometry[3]!, geometry[4]!]);
+    fast = true; app.tabs.update("tree", entries, firstId, true); app.resize(12, 6); await app.render();
+    expect(Bun.stringWidth(title.plainText)).toBeLessThanOrEqual(title.width);
+    expect(close.x + close.width).toBeLessThanOrEqual(app.tabs.list.viewport.x + app.tabs.list.viewport.width);
+    app.tabs.update("tree", entries, firstId, false); await app.render(); expect(app.clock.pendingTimerCount).toBe(0);
   } finally { await app.close(); }
 });
 

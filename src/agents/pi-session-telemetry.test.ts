@@ -71,6 +71,33 @@ test("Fast는 모델 호출 전부터 off이며 명시적 명령만 상태와 �
   } finally { await app.close(); }
 });
 
+test.each([false, true])("이전 대화가 %s여도 Fast 명령은 중간 Working 상태나 새 모델 실행을 만들지 않는다", async seeded => {
+  // Fast only changes request configuration, including before the first model turn.
+  const fast = new FastMode(); let requests = 0;
+  const app = await mount(async () => { requests++; }, [], undefined, fast);
+  const statuses: ("working" | "complete" | "failure" | null)[] = [];
+  let unsubscribe = () => {};
+  try {
+    if (seeded) expectOk(await app.executor.prompt("Previous actual request"));
+    const expected = seeded ? "complete" : null, messages = app.session.messages.length;
+    expect(app.executor.state.status).toBe(expected);
+    unsubscribe = app.executor.subscribe(() => statuses.push(app.executor.state.status));
+
+    // Observe every published snapshot, not only the restored state after command completion.
+    for (const action of ["on", "off", "status"]) {
+      statuses.length = 0;
+      expectOk(await app.executor.prompt(`/fast ${action}`));
+
+      expect(statuses.length).toBeGreaterThan(0);
+      expect(statuses.every(status => status === expected)).toBe(true);
+      expect(app.executor.state.status).toBe(expected);
+      expect(app.executor.state.telemetry?.fast).toBe(action === "on");
+      expect(requests).toBe(seeded ? 1 : 0); expect(app.session.messages).toHaveLength(messages);
+      expect(app.executor.state.runTiming).toBeUndefined();
+    }
+  } finally { unsubscribe(); await app.close(); }
+});
+
 test("Fast 명령 검증은 요청을 보내지 않고 모델별·세션별 상태를 분리한다", async () => {
   const fast = new FastMode(); let requests = 0;
   const app = await mount(async () => { requests++; }, [], undefined, fast);

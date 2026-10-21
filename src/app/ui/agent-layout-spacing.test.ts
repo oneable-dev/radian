@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BoxRenderable, ScrollBoxRenderable } from "@opentui/core";
+import { BoxRenderable, ScrollBoxRenderable, type TextRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Workbench } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
@@ -7,10 +7,10 @@ import { demoWorkspace } from "../../workspace/demo.ts";
 import type { ExecutionState } from "../../agents/session-registry.ts";
 import { ok } from "../../result.ts";
 
-async function mount() {
+async function mount(withRequest = false) {
   const clock = new ManualClock();
   const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
-  let status: ExecutionState["status"] = "working", children = false;
+  let status: ExecutionState["status"] = "working", children = false, request = withRequest;
   const workspace = () => demoWorkspace().map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
     sessions: tree.sessions.map((session) => ({ ...session, subagents: children ? session.subagents : [] })),
   })) }));
@@ -21,6 +21,7 @@ async function mount() {
     getSessionDetails: () => ({ status, output: "", error: null, sections: [
       { id: "history", kind: "assistant", title: "Agent", text: "```text\n" + Array.from({ length: 70 }, (_, index) => `OLDER_LINE_${index}\n`).join("") + "```", status: "complete" },
       { id: "edit", kind: "tool", title: "edit", summary: "example.ts", text: "EDIT_RESULT", status: "complete" },
+      ...(request ? [{ id: "request", kind: "user" as const, title: "You", text: "Request caption ".repeat(30), status: "complete" as const }] : []),
     ] }),
   });
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
@@ -32,6 +33,7 @@ async function mount() {
   return { ...app, clock, view, scroll, render, get,
     lastCard() { return scroll.content.getChildren().filter((node): node is BoxRenderable => node instanceof BoxRenderable).at(-1)!; },
     async state(next: ExecutionState["status"], ownedChildren = false) { status = next; children = ownedChildren; selection.replaceSnapshot(workspace()); await render(); },
+    async request(next: boolean) { request = next; selection.replaceSnapshot(workspace()); await render(); },
     async close() { view.dispose(); await app.dispose(); },
   };
 }
@@ -82,6 +84,45 @@ test("과거 대화를 읽는 중 상태 행이 사라져도 읽던 첫 줄·스
     expect(app.renderer.currentFocusedRenderable).toBe(focus); expect(app.view.promptDrafts.a1).toBe("Retained draft");
     await app.state("working");
     expect(first()).toBe(before); expect(app.scroll.scrollTop).toBe(top);
+  } finally { await app.close(); }
+});
+
+test.each([120, 60])("너비 %i의 두 줄 Working은 하단 복귀 버튼과 겹치지 않고 읽기 위치·초안을 보존한다", async width => {
+  // Request captions add an occupied status row, never a blank slot for the floating button.
+  const app = await mount(true);
+  const first = () => app.captureCharFrame().split("\n").slice(app.scroll.viewport.y, app.scroll.viewport.y + app.scroll.viewport.height).join("\n").match(/OLDER_LINE_\d+/u)?.[0];
+  const verify = () => {
+    const row = app.get("transcript-status-row"), run = app.get("agent-run-status"), caption = app.get("agent-run-request") as TextRenderable;
+    const button = app.get("transcript-bottom-button"), composer = app.get("agent-composer");
+    expect(row.height).toBe(2); expect(run.height).toBe(2); expect(caption.y).toBe(run.y + 1); expect(caption.x).toBe(run.x);
+    expect(caption.plainText).toContain("Request caption"); expect(caption.plainText).toEndWith("…");
+    expect(caption.height).toBe(1); expect(composer.y - row.y - row.height).toBe(1);
+    expect(button.visible).toBe(true); expect(button.y).toBe(app.scroll.viewport.y + app.scroll.viewport.height);
+    expect(button.y + button.height).toBeLessThanOrEqual(run.y);
+  };
+  try {
+    app.resize(width, 30); await app.render();
+    app.mockInput.pressKey("e", { ctrl: true }); app.scroll.scrollTo(12); await app.render();
+    const before = first(), top = app.scroll.scrollTop;
+    expect(before).toBeDefined(); verify();
+
+    // Adding/removing the caption and settling a run may resize the viewport, not move its reader.
+    await app.request(false); expect(app.get("transcript-status-row").height).toBe(1);
+    expect(first()).toBe(before); expect(app.scroll.scrollTop).toBe(top);
+    await app.request(true); verify(); expect(first()).toBe(before); expect(app.scroll.scrollTop).toBe(top);
+    await app.state("complete"); app.clock.advance(500); await app.render();
+    expect(app.get("transcript-status-row").visible).toBe(false); expect(first()).toBe(before); expect(app.scroll.scrollTop).toBe(top);
+    await app.state("working"); verify();
+    app.resize(width, 8); await app.render(); expect(app.get("transcript-bottom-button").visible).toBe(false);
+    app.resize(width, 30); await app.render(); verify(); expect(first()).toBe(before);
+
+    // A primary click resumes following without submitting or clearing the retained input.
+    const button = app.get("transcript-bottom-button");
+    await app.mockMouse.click(button.x + 1, button.y); await app.render();
+    expect(app.view.workViewPreferences.agentViews?.a1?.follow).toBe(true);
+    expect(app.scroll.scrollTop).toBe(Math.max(0, app.scroll.scrollHeight - app.scroll.viewport.height));
+    expect(button.visible).toBe(false); expect(app.view.promptDrafts.a1).toBe("Retained draft");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
   } finally { await app.close(); }
 });
 

@@ -5,20 +5,19 @@ import { uiTheme } from "./theme.ts";
 export type InputLayout = Readonly<{ rows: number; height: number }>;
 type InputKind = "search" | "prompt";
 
-// The field owns decoration and hit testing; native editors retain caret/selection ownership.
+// The field owns spacing and hit testing; native editors retain caret/selection ownership.
 export class InputField extends BoxRenderable {
   private inset = -1;
 
   constructor(private readonly renderer: CliRenderer, private readonly editor: TextareaRenderable,
     private readonly kind: InputKind, id: string) {
     super(renderer, { id, width: "auto", minWidth: 0, height: 3, flexShrink: 0,
-      flexDirection: "row", alignItems: "center", border: kind === "prompt" ? ["left"] : false,
+      flexDirection: "row", alignItems: "center", border: false,
       onMouseDown: event => { if (event.button === 0 && !editor.focused) editor.focus(); } });
     this.add(editor);
     const theme = uiTheme(renderer);
     theme.input(editor, kind === "prompt" ? "prompt.input" : "ui.input", kind === "prompt" ? "prompt.input" : "ui.inputFocused");
     theme.bindStyles(this, this.paint);
-    if (kind === "prompt") theme.focusBorder(this);
     editor.on("focused", this.paint); editor.on("blurred", this.paint);
     this.onLifecyclePass = this.resize;
     this.once(RenderableEvents.DESTROYED, () => {
@@ -51,6 +50,6 @@ export class InputField extends BoxRenderable {
     const inset = horizontalInset(this.renderer.width);
     if (inset === this.inset) return;
     this.inset = inset;
-    this.paddingLeft = inset - Number(this.kind === "prompt"); this.paddingRight = inset;
+    this.paddingLeft = inset; this.paddingRight = inset;
   };
 }

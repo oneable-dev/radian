@@ -10,6 +10,7 @@ import { StatusIndicator } from "./status-indicator.ts";
 type Tab = { root: BoxRenderable; title: TextRenderable; frame: SessionTab; status: StatusIndicator };
 type Actions = {
   select(id: string): void;
+  fast?(id: string): boolean;
   create(): void;
   history?(): void;
   close(id: string): void;
@@ -79,7 +80,7 @@ export class SessionTabs {
         tab = { root: frame.root, title: frame.title, frame, status }; this.tabs.set(session.id, tab);
       }
       const working = session.status === "working" || session.subagents.some(child => child.status === "working");
-      tab.status.update(working ? "working" : sessionStatus(session), this.visible, session);
+      tab.status.update(working ? "working" : sessionStatus(session), this.visible, session, this.actions.fast?.(session.id) ?? false);
       this.setTitle(tab, session.id);
       if (this.list.getChildren()[index] !== tab.root) { this.list.add(tab.root, index); this.reveal = true; }
     }

@@ -68,14 +68,14 @@ test("화면 전체가 터미널 기본색과 ANSI 팔레트를 사용하고 밝
   } finally { await app.close(); }
 });
 
-test("포커스가 사이드바에서 입력창으로 이동하면 경계 강조만 옮기고 선택과 초안을 유지한다", async () => {
+test("포커스가 사이드바에서 보더 없는 입력창으로 이동해도 선택과 초안을 유지한다", async () => {
   // Both a selected session and an existing draft remain owned by the same Agent view.
   const app = await mount();
   const sidebar = app.renderer.root.findDescendantById("workspace-sidebar")!;
   const composer = app.renderer.root.findDescendantById("agent-composer")!;
   const border = (box: typeof sidebar) => {
     let x = 0;
-    const column = box === sidebar ? box.x + box.width - 1 : box.x;
+    const column = box.x + box.width - 1;
     return app.captureSpans().lines[box.y]!.spans.find((span) => { x += span.width; return x > column; })!.fg;
   };
   try {
@@ -86,7 +86,8 @@ test("포커스가 사이드바에서 입력창으로 이동하면 경계 강조
     // Focusing an input must not activate another tab, select a session or send its draft.
     app.mockInput.pressEscape(); await app.renderOnce();
 
-    expect(border(composer).equals(colors.accent)).toBe(true);
+    const frame = app.captureCharFrame().split("\n");
+    for (const y of [composer.y, composer.y + composer.height - 1]) expect(frame[y]!.slice(composer.x, composer.x + composer.width).trim()).toBe("");
     expect(app.renderer.root.findDescendantById("workspace-picker")!.visible).toBe(false);
     expect(app.selection.sessionId).toBe("a1");
     expect(app.view.promptDrafts.a1).toBe("unsent request");

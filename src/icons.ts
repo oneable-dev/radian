@@ -10,6 +10,10 @@ export const icons = {
   error: "\uEA76", // nf-cod-close
   unknown: "\uEAD9", // nf-cod-dash; unreported/aborted, not a confirmed idle state
   robot: "\uEC20", // nf-cod-robot
+  model: "\u{F167A}", // nf-md-robot_outline; distinct from the empty-state robot
+  brain: "\u{F09D1}", // nf-md-brain
+  bolt: "\uF0E7", // nf-fa-bolt
+  context: "\uF1C0", // nf-fa-database
   openai: "\uEC81", // nf-cod-openai
   claude: "\uEC82", // nf-cod-claude
 } as const;

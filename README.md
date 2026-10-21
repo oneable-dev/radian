@@ -532,7 +532,8 @@ content. Help uses the same scroll viewport and returns to the prior position/mo
 
 After a non-cancelled run actually settles, its final displayed section has a gray footer such as
 `Worked for 1m 30s • Sep 19 at 10:55 AM`, followed by a separate request line such as `“Review tab icons”`.
-Request text uses the same quotation marks as `Working`; attachment badges stay outside them.
+The running `Working` block also puts its request on a separate line; both use the same quotation
+marks and keep attachment badges outside them.
 The excerpt comes from the actual preceding user/skill request, never a draft or assistant output.
 Duration, completion date and time keep their existing format on the first line. The request caption
 uses its own one-line width below it; only the caption is shortened, not the original message.
@@ -657,19 +658,32 @@ active worktree and branch, selected model, effort and current `fast` setting, f
 **context remaining** and **account usage**. Worktree/branch updates follow the active workspace,
 not the sidebar cursor. Long scope labels are shortened on grapheme boundaries to at most one third
 of the row; known resource percentages take precedence in constrained space.
-Both meters use the same block-bar style. A provider icon identifies the account meter; `18% used 1h 20m` means consumption followed by
-time until reset, without a middle-dot separator. Reset times use `5d 23h`, `1h 20m` or `18m`. The compact meter selects the longest returned
+Model, effort, fast and context have outline-robot, brain, lightning and database icons respectively.
+Both meters use the same block-bar style. Context explicitly reports the percentage `left`.
+The account meter pairs its provider logo with lowercase `chatgpt`, `openai` or `claude` when space permits;
+`18% used 1h 20m` means consumption followed by time until reset, without a middle-dot separator.
+Reset times use `5d 23h`, `1h 20m` or `18m`. The compact meter selects the longest returned
 quota window; all returned windows remain available in the IPC snapshot. There is no refresh button.
 
 Filled bar cells fade from the terminal's accent toward the panel color; empty cells stay subdued.
 Context labels and known values use the same foreground as account usage. Model names use the theme's
-number (yellow/gold) color, effort uses keyword, and `fast` uses success when on or info when off; unknown values
-and separators stay muted. These are terminal palette roles, not fixed product colors.
+success (green) color, effort uses keyword, and `fast` uses number (yellow/gold) when on or muted when off;
+unknown values and separators stay muted. These are terminal palette roles, not fixed product colors.
 The prompt surface reaches both edges of the Agent pane; its internal padding aligns the editable
 text with the work-status and telemetry rows. No permanent sidebar or divider reserves any width.
-The empty prompt has no marker or placeholder,
-and focusing it keeps the same surface background; the caret and left border indicate focus.
-The transcript, optional single-line work-status row and input group use a one-row parent gap;
+The prompt has no borders in either mode. When empty it shows the muted `Ask to do anything`
+placeholder; the placeholder is never submitted or persisted as a draft. Focus retains the same background.
+Normal work keeps its existing spinner and colors. Fast work uses a fixed three-cell yellow arrow
+indicator (`▶▷▷`, `▷▶▷`, `▷▷▶`) in its session tab and Working row. Tab frames and close buttons do
+not move between arrow frames. Only the Fast `Working` word shimmers; elapsed time, the interrupt
+hint, request caption and passive `fast on` metadata stay static. Hidden work views stop their effects,
+and read-only previews do not shimmer. These are display effects, never a priority-speed guarantee.
+Working shows its gray request summary on a second line, aligned with the start of the spinner and shortened
+on grapheme boundaries. Very short layouts collapse it into the existing single-line presentation
+before sacrificing the input or conversation. Status height changes preserve the transcript reading
+anchor and follow intent. Back to bottom uses only an existing blank boundary or composer inset,
+never either occupied Working row.
+The transcript, optional work-status block and input group use a one-row parent gap;
 neither the transcript end nor work-status row adds its own boundary padding. Pending messages,
 the composer, completion candidates and padded telemetry remain adjacent inside the input group.
 Constrained windows retain usable input and conversation space before adding boundary gaps or
@@ -695,7 +709,7 @@ restart to load this fallback; reopening only the TUI does not update it.
 Radian supplies `/fast [on|off|status]` for OpenAI Responses/Codex models, including
 prompt completion. Its per-model, per-session state starts **off**, so a restored session does not
 remain unknown merely because it has not sent a request. `/fast on` opts into `service_tier: priority`;
-`/fast off` removes an explicit priority/fast tier. These commands themselves never invoke a model or
+`/fast off` removes an explicit priority/fast tier. These commands themselves never invoke a model, publish a transient Working state or
 add conversation messages. They do not change effort, write global configuration, or persist priority
 across a runtime restart. Priority can increase usage and is not a guarantee of server speed.
 

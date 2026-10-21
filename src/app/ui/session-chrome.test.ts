@@ -9,6 +9,7 @@ import { ok } from "../../result.ts";
 import { icons } from "../../icons.ts";
 import { parseKeymap, type Keymap } from "../../keybindings/config.ts";
 import { expectOk } from "../../testing/results.ts";
+import { truncateCells } from "../../ui/text.ts";
 
 async function mount(empty = false, keymap?: Keymap) {
   const app = await createTestRenderer({ width: 160, height: 28, kittyKeyboard: true });
@@ -22,7 +23,8 @@ async function mount(empty = false, keymap?: Keymap) {
       usage: { provider: "openai", status: "ready", windows: [{ id: "period", usedPercent: 18, resetsAt: Date.now() + 3600000, periodMs: 604800000 }], updatedAt: Date.now(), errorCode: null } } }) });
   const get = (id: string) => { const node = app.renderer.root.findDescendantById(id); if (!node) throw new Error(`Missing ${id}`); return node; };
   const render = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); await app.renderOnce(); await app.renderOnce(); };
-  const line = (id: string) => { const node = get(id); return app.captureCharFrame().split("\n")[node.y]!.slice(node.x, node.x + node.width); };
+  // Supplementary-plane Nerd Font glyphs occupy one cell, but two UTF-16 code units.
+  const line = (id: string) => { const node = get(id); return truncateCells(app.captureCharFrame().split("\n")[node.y]!.slice(node.x), node.width, ""); };
   const history = async () => { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("h"); await render(); };
   await render();
   return { ...app, selection, view, created, lookups, sent, get, render, line, history, async close() { view.dispose(); await app.dispose(); } };

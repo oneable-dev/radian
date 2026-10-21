@@ -5,7 +5,7 @@ import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText, type StyleGroup } from "../../ui/theme-styles.ts";
 
-// One presentation cell: working > failure > stopped > unread. Read state remains independent.
+// One presentation slot: working > failure > stopped > unread. Fast loading uses three fixed cells.
 export class StatusIndicator {
   readonly root: BoxRenderable;
   private readonly spinner: LoadingSpinner;
@@ -18,7 +18,7 @@ export class StatusIndicator {
 
   constructor(private readonly renderer: CliRenderer, private readonly changed?: () => void) {
     this.root = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0, flexDirection: "row", visible: false,
-      renderBefore: () => this.syncVisibility() });
+      renderBefore: () => this.syncVisibility(), onSizeChange: () => this.changed?.() });
     this.animation = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0 });
     this.spinner = new LoadingSpinner(renderer);
     this.icon = new TextRenderable(renderer, { width: 1, height: 1, wrapMode: "none", selectable: false, visible: false });
@@ -28,10 +28,11 @@ export class StatusIndicator {
     });
   }
 
-  update(status: AgentStatus | null, visible: boolean, session?: Pick<OpenSession, "result" | "attention">): void {
+  update(status: AgentStatus | null, visible: boolean, session?: Pick<OpenSession, "result" | "attention">, fast = false): void {
     if (this.root.isDestroyed) return;
     const changed = status !== this.status || visible !== this.visible;
     this.status = status; this.visible = visible;
+    this.spinner.setFast(fast); this.animation.width = this.spinner.columns;
     const stopped = session?.result?.outcome === "unfinished";
     const icon = status === "working" ? "" : status === "failure" ? icons.error : stopped ? "?" : session?.attention ? icons.bell : "";
     this.iconStyle = status === "failure" ? "status.error" : stopped ? "status.warning" : "status.attention";
@@ -50,8 +51,9 @@ export class StatusIndicator {
     this.icon.visible = this.visible && this.hasIcon;
     this.animation.visible = this.visible && !this.hasIcon && this.spinner.root.visible;
     const visible = this.icon.visible || this.animation.visible;
-    if (this.root.visible === visible) return;
-    this.root.visible = visible;
+    const width = this.animation.visible ? this.spinner.columns : 1;
+    if (this.root.visible === visible && this.root.width === width) return;
+    this.root.width = width; this.root.visible = visible;
     this.changed?.(); this.renderer.requestRender();
   }
 

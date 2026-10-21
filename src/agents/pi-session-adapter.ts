@@ -350,7 +350,9 @@ export class PiSessionExecutor implements SessionExecutor {
       const revision = this.runRevision;
       const command = registered ? this.diagnostics.begin(name) : undefined;
       let handled = false;
-      if (this.session.isIdle) { this.status = "working"; this.error = null; this.aborted = false; }
+      // Command-side telemetry updates must not publish a provisional model run.
+      // Commands that actually start work still transition through the SDK's agent_start event.
+      if (this.session.isIdle && !registered) { this.status = "working"; this.error = null; this.aborted = false; }
       const result = await withCleanup(() => capture(() => this.session.prompt(text, {
         streamingBehavior: "steer",
         ...(replayImages ? { expandPromptTemplates: false } : {}),

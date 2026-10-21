@@ -40,7 +40,8 @@ test("작업 상태 아래에 대기 안내·단축키를 한 줄로 묶고 들�
     const frame = app.captureCharFrame(), lines = frame.split("\n");
     const pending = app.get("agent-pending-messages"), status = app.get("agent-run-status"), composer = app.get("agent-composer");
     const row = (y: number) => lines[y]!.slice(pending.x, pending.x + pending.width).trimEnd();
-    expect(frame).toContain("Working (12s · esc to interrupt) “Current request”");
+    expect(row(status.y)).toContain("Working (12s · esc to interrupt)");
+    expect(row(status.y + 1)).toBe("“Current request”"); expect(status.height).toBe(2);
     expect(row(pending.y)).toBe("• Messages will be sent after the current response and tools finish (press esc to interrupt and send immediately)");
     expect(row(pending.y + 1)).toBe("  ↳ Add tests"); expect(row(pending.y + 2)).toBe("  ↳ Do not edit README");
     expect(row(pending.y + 3)).toBe(""); expect(frame).not.toContain("Queued");

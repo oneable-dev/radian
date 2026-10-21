@@ -36,6 +36,7 @@ export class PromptInput extends TextareaRenderable {
   constructor(private readonly renderer: CliRenderer, private readonly notice: (message: string) => void,
     private readonly inspect: (content: DialogContent) => void, private readonly options: Options = {}) {
     super(renderer, { id: options.id ?? "session-prompt", width: "auto", flexGrow: 1, minWidth: 0, height: 1, flexShrink: 0, wrapMode: "word",
+      placeholder: options.readOnly ? "" : "Ask to do anything",
       keyBindings: [{ name: "return", shift: true, action: "newline" }, { name: "return", meta: true, action: "newline" },
         { name: "kpenter", shift: true, action: "newline" }, { name: "kpenter", meta: true, action: "newline" }] });
     this.field = new InputField(renderer, this, "prompt", options.fieldId ?? `${this.id}-field`);

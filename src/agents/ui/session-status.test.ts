@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import type { TerminalColors, TextRenderable } from "@opentui/core";
-import { createTestRenderer } from "@opentui/core/testing";
+import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Workbench } from "../../app/ui/workbench.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -16,9 +16,12 @@ const sample = (): SessionTelemetry => ({ provider: "openai-codex", model: "gpt-
   context: { usedTokens: 72000, maxTokens: 200000 }, weekly: null,
   usage: { provider: "openai", status: "ready", windows: [{ id: "period", usedPercent: 18, periodMs: 604800000, resetsAt: Date.now() + 3600000 }],
     updatedAt: Date.now(), errorCode: null } });
-async function mount(telemetry: SessionTelemetry = sample()) {
-  const app = await createTestRenderer({ width: 140, height: 24, kittyKeyboard: true });
-  const selection = new WorkspaceSelection(demoWorkspace());
+async function mount(telemetry: SessionTelemetry = sample(), clock?: ManualClock, settled = false) {
+  const app = await createTestRenderer({ width: 140, height: 24, kittyKeyboard: true, ...(clock ? { clock } : {}) });
+  const snapshot = demoWorkspace();
+  const selection = new WorkspaceSelection(settled ? snapshot.map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => ({ ...tree,
+    sessions: tree.sessions.map(session => ({ ...session, subagents: [] })),
+  })) })) : snapshot);
   const states: Record<string, SessionTelemetry | undefined> = { a1: telemetry };
   const view = new Workbench(app.renderer, selection, { onNewSession: () => {}, onCloseSession: () => {}, onPrompt: () => ok(undefined),
     getSessionDetails: (id) => ({ status: "complete", output: "Transcript", error: null, ...(states[id] ? { telemetry: states[id] } : {}) }) });
@@ -49,7 +52,9 @@ test("프롬프트 아래에 위아래 한 줄 여백을 두고 context·usage�
     const panel = app.renderer.root.findDescendantById("agent-view")!;
     expect(composer.x).toBe(panel.x); expect(composer.width).toBe(panel.width);
     expect(prompt.x).toBe(app.root.x); expect(prompt.x + prompt.width).toBe(app.root.x + app.root.width);
-    expect(app.line()).toContain("gpt-5.5 · high · fast on");
+    expect(app.line()).toContain(`${icons.model} gpt-5.5 · ${icons.brain} high · ${icons.bolt} fast on`);
+    expect(app.line()).toContain(icons.context); expect(app.line()).toContain("64% left");
+    expect(app.line()).toContain("chatgpt"); expect(app.line()).not.toContain("ChatGPT");
     expect(app.line()).toMatch(/context [█▏▎▍▌▋▊▉░]+ 64%/);
     expect(app.line()).toContain(icons.openai); expect(app.line()).toContain("18% used 1h 0m");
     const usageText = app.line().slice(app.line().indexOf(icons.openai));
@@ -94,7 +99,7 @@ test("워크트리 그룹 전체를 담을 수 없으면 숨기고 넓히면 복
   status.update(sample(), true, { name: "radian", branch: "main" });
   const scope = status.root.findDescendantById("session-worktree-context") as TextRenderable;
   try {
-    for (const [width, visible] of [[60, true], [40, true], [36, false], [30, false], [60, true]] as const) {
+    for (const [width, visible] of [[60, true], [50, true], [40, false], [30, false], [60, true]] as const) {
       // Shrinking and restoring the row must never leave orphan brackets or hide known percentages.
       app.resize(width, 5); await app.renderOnce();
 
@@ -134,8 +139,8 @@ test("입력 배경은 패널 양끝을 채우고 입력 내용은 실행 상태
   } finally { await app.close(); }
 });
 
-test("빈 입력창은 안내·기호 없이 표시하고 포커스와 테마 변경에도 내부 배경을 바꾸지 않는다", async () => {
-  // The caret and border identify focus without a second background stripe inside the composer.
+test("빈 입력창은 placeholder만 표시하고 포커스와 테마 변경에도 내부 배경을 바꾸지 않는다", async () => {
+  // Placeholder and native caret identify the input without a border or second background stripe.
   const app = await mount();
   const composer = app.renderer.root.findDescendantById("agent-composer")!;
   const prompt = app.renderer.root.findDescendantById("session-prompt")!;
@@ -157,7 +162,7 @@ test("빈 입력창은 안내·기호 없이 표시하고 포커스와 테마 �
         if (focused) prompt.focus(); else prompt.blur();
         await app.renderOnce();
 
-        expect(app.captureCharFrame().split("\n")[prompt.y]!.slice(composer.x + 1, composer.x + composer.width).trim()).toBe("");
+        expect(app.captureCharFrame().split("\n")[prompt.y]!.slice(composer.x + 1, composer.x + composer.width).trim()).toBe("Ask to do anything");
         verifyBackground();
       }
     }
@@ -199,9 +204,9 @@ test("context는 used와 같은 본문색이고 모델·effort·Fast는 테마 �
     const colors = uiTheme(app.renderer).colors;
     expect(span("context").fg.toInts()).toEqual(span("18% used").fg.toInts());
     expect(span("context").fg.toInts()).toEqual(colors.text.toInts());
-    expect(span("gpt-5.5").fg.toInts()).toEqual(colors.number.toInts());
+    expect(span("gpt-5.5").fg.toInts()).toEqual(colors.success.toInts());
     expect(span("high").fg.toInts()).toEqual(colors.keyword.toInts());
-    expect(span(`fast ${enabled ? "on" : "off"}`).fg.toInts()).toEqual((enabled ? colors.success : colors.info).toInts());
+    expect(span(`fast ${enabled ? "on" : "off"}`).fg.toInts()).toEqual((enabled ? colors.number : colors.muted).toInts());
   };
   try {
     // A known palette makes each role distinguishable from a hardcoded color or blanket muted style.
@@ -212,7 +217,7 @@ test("context는 used와 같은 본문색이고 모델·effort·Fast는 테마 �
     await app.renderOnce();
 
     verify(false);
-    expect(app.line()).toContain("gpt-5.5 · high · fast off");
+    expect(app.line()).toContain(`${icons.model} gpt-5.5 · ${icons.brain} high · ${icons.bolt} fast off`);
   } finally { await app.close(); }
 });
 
@@ -243,12 +248,33 @@ test("fast의 전체·축약 표시는 상태와 관계없이 소문자로 통�
   try {
     expect(app.line()).toContain("fast on"); expect(app.line()).not.toContain("Fast");
 
-    // Leave room for both location icons while still exercising the compact identity.
-    app.resize(72, 24); await app.renderOnce();
-    expect(app.line()).toContain("gpt-5.5 high f+");
-    await app.set({ ...sample(), fast: false }); expect(app.line()).toContain("gpt-5.5 high f−");
-    await app.set({ ...sample(), fast: null }); expect(app.line()).toContain("gpt-5.5 high f?");
+    // A compact identity keeps the robot, brain and bolt while dropping verbose labels.
+    app.resize(84, 24); await app.renderOnce();
+    const compact = `${icons.model} gpt-5.5 ${icons.brain} high ${icons.bolt}`;
+    expect(app.line()).toContain(`${compact} on`);
+    await app.set({ ...sample(), fast: false }); expect(app.line()).toContain(`${compact} off`);
+    await app.set({ ...sample(), fast: null }); expect(app.line()).toContain(`${compact} —`);
     expect(app.line()).not.toContain("Fast");
+  } finally { await app.close(); }
+});
+
+test("작업 중이 아닐 때 Fast 표시는 정적이고 입력창은 애니메이션이나 보더를 만들지 않는다", async () => {
+  // Fast is session configuration; it must not animate the idle composer or passive metadata.
+  const clock = new ManualClock(), app = await mount(sample(), clock, true);
+  try {
+    const before = app.captureSpans().lines[app.row.y], baseline = clock.pendingTimerCount;
+
+    clock.advance(450); await app.renderOnce();
+
+    expect(app.captureSpans().lines[app.row.y]).toEqual(before);
+    expect(clock.pendingTimerCount).toBe(baseline);
+    const composer = app.renderer.root.findDescendantById("agent-composer")!;
+    const frame = app.captureCharFrame().split("\n");
+    for (const y of [composer.y, composer.y + composer.height - 1]) expect(frame[y]!.trim()).toBe("");
+    expect(app.line()).toContain("fast on");
+    await app.set({ ...sample(), fast: false }); expect(app.line()).toContain("fast off");
+    await app.set({ ...sample(), fast: null }); expect(app.line()).toContain("fast —");
+    expect(clock.pendingTimerCount).toBe(baseline);
   } finally { await app.close(); }
 });
 
@@ -258,7 +284,7 @@ test("미확정 context와 미지원 usage는 바 없이 -로 표시하고 세�
     await app.set({ ...sample(), fast: null, context: { usedTokens: null, maxTokens: 200000 }, usage: unavailable() });
 
     expect(app.line()).toContain("fast —"); expect(app.line()).toContain("context -");
-    expect(app.line().slice(app.line().indexOf(icons.openai)).trim().replace(/\s+/g, " ")).toBe(`${icons.openai} -`);
+    expect(app.line().slice(app.line().indexOf(icons.openai)).trim().replace(/\s+/g, " ")).toBe(`${icons.openai} chatgpt -`);
     expect(app.line()).not.toMatch(/[█▏▎▍▌▋▊▉░─]/); expect(app.line()).not.toContain("0%");
     app.selection.selectSession("demo:main", "a2"); await app.renderOnce();
     expect(app.line()).not.toContain("gpt-5.5"); expect(app.line()).not.toContain("18% used");
@@ -284,8 +310,8 @@ test("usage가 없거나 조회 중·실패이면 context 바만 유지하고 �
     for (const status of ["loading", "unavailable", "error"] as const) {
       await app.set({ ...sample(), usage: { ...unavailable(), status } });
 
-      expect(app.line()).toMatch(/context [█▏▎▍▌▋▊▉░]+ 64%/);
-      expect(app.line().slice(app.line().indexOf(icons.openai)).trim().replace(/\s+/g, " ")).toBe(`${icons.openai} -`);
+      expect(app.line()).toMatch(/context [█▏▎▍▌▋▊▉░]+ 64% left/);
+      expect(app.line().slice(app.line().indexOf(icons.openai)).trim().replace(/\s+/g, " ")).toBe(`${icons.openai} chatgpt -`);
     }
   } finally { await app.close(); }
 });
@@ -310,7 +336,9 @@ test("이전 runtime의 weekly 응답도 used 기준으로 변환하고 새 제�
 
     await app.set({ ...sample(), provider: "anthropic", usage: { ...unavailable(), provider: "anthropic" } });
 
-    expect(app.line()).toContain(icons.claude); expect(app.line()).not.toContain(icons.openai);
+    expect(app.line()).toContain(icons.claude); expect(app.line()).toContain("claude"); expect(app.line()).not.toContain("Claude"); expect(app.line()).not.toContain(icons.openai);
+    await app.set({ ...sample(), provider: "openai" });
+    expect(app.line()).toContain(icons.openai); expect(app.line()).toContain("openai"); expect(app.line()).not.toContain("OpenAI"); expect(app.line()).not.toContain("chatgpt");
   } finally { await app.close(); }
 });
 
@@ -331,7 +359,7 @@ test("카운트다운은 로컬 시계로 갱신하고 리셋 뒤에는 새 한�
 
     expect(app.line()).toContain("10% used 5d 22h");
     clock.mockReturnValue(reset + 1); tick(); await app.renderOnce();
-    expect(app.line().slice(app.line().indexOf(icons.openai)).trim().replace(/\s+/g, " ")).toBe(`${icons.openai} -`);
+    expect(app.line().slice(app.line().indexOf(icons.openai)).trim().replace(/\s+/g, " ")).toBe(`${icons.openai} chatgpt -`);
     expect(app.line()).not.toContain("100%");
   } finally { await app.close(); scheduled.mockRestore(); clock.mockRestore(); }
 });
