@@ -86,16 +86,19 @@ test("리사이즈는 검색어·커서·초안을 보존하고 작은 화면에
   } finally { await app.close(); }
 });
 
-test("팝업을 취소하고 다시 열어도 검색 내용과 커서를 유지한다", async () => {
-  // 닫기는 선택 확정이나 검색 컨트롤 파괴와 다르다.
+test("팝업을 취소하고 다시 열면 검색어와 커서를 초기화하고 Agent 초안은 유지한다", async () => {
+  // 팝업 검색어는 일시적인 필터이며 Agent 초안과 달리 재열기 시 복원하지 않는다.
   const app = await mount();
   try {
     app.mockInput.pressKey("f", { ctrl: true }); await app.mockInput.typeText("feature"); app.mockInput.pressArrow("left"); await app.render();
-    const cursor = app.input.cursorOffset;
 
+    // 후보를 확정하지 않고 닫은 뒤 새로운 검색을 시작한다.
     app.mockInput.pressEscape(); await app.render(); app.mockInput.pressKey("f", { ctrl: true }); await app.render();
 
-    expect(app.get("workspace-picker").visible).toBe(true); expect(app.input.value).toBe("feature"); expect(app.input.cursorOffset).toBe(cursor);
+    // 새 검색은 비어 있지만 활성 워크스페이스와 대화 초안에는 영향을 주지 않는다.
+    expect(app.get("workspace-picker").visible).toBe(true); expect(app.input.value).toBe(""); expect(app.input.cursorOffset).toBe(0);
+    expect(app.captureCharFrame()).toContain("Search repo/worktree/branch");
+    expect(app.view.promptDrafts.a1).toBe("keep agent draft");
     expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });

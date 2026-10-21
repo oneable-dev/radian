@@ -104,6 +104,27 @@ test.each([
   } finally { await app.close(); }
 });
 
+test("열린 팝업의 검색 포커스 이동은 입력을 보존하고 선택 후 다시 열 때만 초기화한다", async () => {
+  // 검색 중 포커스를 되돌리는 동작과 새 검색 세션을 시작하는 동작을 구분한다.
+  const app = await fixture();
+  try {
+    app.leader("b"); await app.mockInput.typeText("rdui"); await app.render();
+    const input = app.get("workspace-search") as InputRenderable;
+    app.mockInput.pressTab(); app.mockInput.pressKey("f", { ctrl: true }); await app.render();
+
+    // 이미 열린 팝업에서는 포커스를 옮겨도 검색어를 지우지 않는다.
+    expect(input.value).toBe("rdui"); expect(app.renderer.currentFocusedRenderable).toBe(input);
+    app.mockInput.pressEnter(); await app.render();
+    expect(app.selection.worktree?.id).toBe("demo:feature");
+    expect(app.get("workspace-picker").visible).toBe(false);
+
+    // 선택으로 닫은 경우도 Esc로 닫은 경우처럼 다음 검색은 비어 있어야 한다.
+    app.leader("b"); await app.render();
+    expect(input.value).toBe(""); expect(app.captureCharFrame()).toContain("radian-ui");
+    expect(app.view.promptDrafts.a1).toBe("KEEP_DRAFT"); expect(app.submitted).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("워크스페이스 안내는 방향키 대신 포커스별 대체 탐색 키를 표시한다", async () => {
   // 방향키는 기본 동작이므로 안내 공간은 검색창의 Ctrl+N/P와 목록의 j/k에 사용한다.
   const app = await fixture();

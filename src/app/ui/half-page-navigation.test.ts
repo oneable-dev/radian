@@ -52,6 +52,31 @@ async function mount(surface: Surface) {
     async close() { view.dispose(); await app.dispose(); } };
 }
 
+test.each(surfaces)("%s 검색 팝업을 닫고 다시 열면 이전 검색어 없이 새 입력을 받는다", async surface => {
+  // 같은 검색 입력 인스턴스를 재사용해도 팝업의 검색어는 초안으로 보존하지 않는다.
+  const app = await mount(surface);
+  try {
+    await app.mockInput.typeText("candidate-1"); await app.render();
+    app.mockInput.pressEscape(); await app.render();
+
+    // 다시 여는 진입점이 달라도 검색어와 캐럿은 새 검색 상태여야 한다.
+    if (surface === "model") {
+      const prompt = app.get("session-prompt") as InputRenderable;
+      prompt.focus(); prompt.value = "/model"; await app.render(); app.clock.advance(150); await app.render();
+      app.mockInput.pressEnter(); await app.render(); app.mockInput.pressKey("/");
+    } else if (surface === "workspace") app.mockInput.pressKey("f", { ctrl: true });
+    else { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey(surface === "history" ? "h" : "s"); }
+    await app.render();
+
+    // 필터만 초기화하거나 예전 텍스트 뒤에 새 검색어를 붙여서는 안 된다.
+    expect(app.input.value).toBe(""); expect(app.input.cursorOffset).toBe(0);
+    expect(app.captureCharFrame().split("\n")[app.input.y]).not.toContain("candidate-1");
+    await app.mockInput.typeText("candidate-2"); await app.render();
+    expect(app.input.value).toBe("candidate-2"); expect(app.captureCharFrame()).toContain("candidate-2");
+    expect(app.opened).toEqual([]); expect(app.submitted).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test.each(surfaces)("%s 검색은 공용 입력의 여백·포커스 배경을 사용하고 리사이즈 후에도 커서를 보존한다", async surface => {
   // 검색 대상은 달라도 입력 영역 전체의 모양과 클릭 계약은 같아야 한다.
   const app = await mount(surface);

@@ -224,6 +224,7 @@ export class Workbench {
     if (this.disposed || this.root.isDestroyed || this.sidebar.visible === visible) return;
     if (visible) this.workspaceOwner = this.renderer.currentFocusedRenderable ?? undefined;
     this.sidebar.visible = this.workspacePopup.visible = visible;
+    if (visible) this.search.clear();
     this.paintRows(this.visibleRows());
     if (visible) { this.search.focus(); this.navigationRevealPending = true; }
     else {
