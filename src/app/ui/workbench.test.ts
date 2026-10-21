@@ -167,7 +167,7 @@ test("세션 탭의 End는 화면 밖 세션을 표시하고 작은 터미널에
     await app.renderOnce(); await app.renderOnce();
 
     // Fixed-width tabs keep the selected ID and right-aligned close control inside the viewport.
-    expect(app.tabFrame("long-39")).toBe(" long-39        × ");
+    expect(app.tabFrame("long-39")).toBe("│ 40. long-39   × ");
     expect(app.captureCharFrame()).not.toContain("Inspector");
     expect(app.selection.sessionId).toBe("long-39");
   } finally { await app.close(); }
@@ -202,7 +202,7 @@ test("종류 아이콘은 왼쪽에 두고 부모·자식의 합산 상태는 �
     await app.renderOnce(); await app.renderOnce();
     expect(app.tabFrame("a3")).toContain(workspaceIcons.failure);
     await app.clickText(`${icons.folder} radian-ui`);
-    expect(app.tabFrame("b1")).toBe(" b1             × ");
+    expect(app.tabFrame("b1")).toBe("│ 1. b1         × ");
   } finally { await app.close(); }
 });
 

@@ -202,6 +202,10 @@ Tree cursor movement is only navigation; Enter or a direct worktree click commit
 Each worktree separately remembers its work view and selected Agent session. Within Agents, session
 tabs use the full session UUID as their label, alongside aggregate status and a close control.
 Agent and Terminal tabs share an 18-cell frame, including padding and the right-aligned `×` control.
+Each tab has a left-only accent border and a separate, one-based position number (`1.`, `2.`, …) before its status and title.
+Both strips use the same accent color, brighter on the active tab and subdued on inactive tabs.
+Numbers follow each strip's current order, including positions above nine, and are updated when tabs close or reorder.
+Title truncation preserves the number; at widths too small for both the number and close control, the close control takes priority.
 Status changes and process renames do not move neighboring tabs or their close controls. If the pane
 is narrower than one tab, the frame shrinks to fit and truncates its label with `…`.
 UUID labels use all available title space and truncate only at the end with `…` when necessary;

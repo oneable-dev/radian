@@ -14,6 +14,7 @@ test("짧은 이름·긴 Unicode 이름·상태 변화에도 공통 탭 폭과 �
   const first = new SessionTab(app.renderer, { id: "first", closeId: "close-first", closeLabel: "Close", leading, select() {}, close() {}, button });
   const second = new SessionTab(app.renderer, { id: "second", closeId: "close-second", closeLabel: "Close", select() {}, close() {}, button });
   row.add(first.root); row.add(second.root); app.renderer.root.add(row);
+  first.setPosition(1); second.setPosition(2);
   first.setLabel("01a156a2"); second.setLabel("zsh");
   try {
     await app.renderOnce();
@@ -73,6 +74,67 @@ test("탭의 여백은 선택하고 닫기 버튼은 선택이나 포커스 이�
     expect(calls).toEqual(["close"]); expect(app.renderer.currentFocusedRenderable).toBe(outside);
     await app.mockMouse.click(tab.root.x, tab.root.y);
     expect(calls).toEqual(["close", "select"]); expect(app.renderer.currentFocusedRenderable).toBe(tab.root);
+  } finally { await app.dispose(); }
+});
+
+test.each([false, true])("밝은 테마 %s에서도 같은 계열의 왼쪽 보더만 칠하고 활성 탭을 선명하게 구분한다", async light => {
+  // 상태와 제목이 달라도 모든 탭은 같은 포인트 색상을 사용한다.
+  const app = await createTestRenderer({ width: 80, height: 4 }), theme = uiTheme(app.renderer);
+  const row = new BoxRenderable(app.renderer, { height: 1, flexDirection: "row", gap: 1 });
+  const tabs = [1, 2, 10].map(position => {
+    const tab = new SessionTab(app.renderer, { id: `tab-${position}`, closeId: `close-${position}`, closeLabel: "Close", select() {}, close() {},
+      button: (label, activate) => new Button(app.renderer, label, activate) });
+    tab.setPosition(position); tab.setLabel("zsh"); row.add(tab.root); return tab;
+  });
+  app.renderer.root.add(row);
+  theme.configure({ palette: [], defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
+    cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null });
+  const border = (tab: SessionTab) => {
+    let column = 0;
+    return app.captureSpans().lines[tab.root.y]!.spans.find(span => { column += span.width; return column > tab.root.x; })!;
+  };
+  try {
+    // 활성 탭만 바꾸고 포커스나 제목 내용으로 색을 결정하지 않는다.
+    tabs[0]!.update(true); await app.renderOnce();
+
+    // 실제 보더는 세로선 한 칸이며 배경을 포인트 색으로 채우지 않는다.
+    const line = app.captureCharFrame().split("\n")[row.y]!;
+    for (const [index, position] of [1, 2, 10].entries()) {
+      const tab = tabs[index]!;
+      expect(line.slice(tab.root.x, tab.root.x + tab.root.width).startsWith(`│ ${position}. zsh`)).toBe(true);
+      expect(tab.root.height).toBe(1);
+    }
+    expect(border(tabs[0]!).fg.toInts()).toEqual(theme.styles["ui.focusBorder"].fg.toInts());
+    expect(border(tabs[0]!).bg.toInts()).toEqual(theme.colors.surface.toInts());
+    expect(border(tabs[1]!).fg.toInts()).toEqual(border(tabs[2]!).fg.toInts());
+    expect(border(tabs[1]!).fg.toInts()).not.toEqual(border(tabs[0]!).fg.toInts());
+    expect(border(tabs[1]!).bg.toInts()).toEqual(theme.colors.panel.toInts());
+
+    // 선택을 옮기면 같은 색의 강조만 새 탭으로 이동한다.
+    tabs[0]!.update(false); tabs[1]!.update(true); await app.renderOnce();
+    expect(border(tabs[1]!).fg.toInts()).toEqual(theme.styles["ui.focusBorder"].fg.toInts());
+    expect(border(tabs[0]!).fg.toInts()).toEqual(border(tabs[2]!).fg.toInts());
+  } finally { await app.dispose(); }
+});
+
+test("두 자리 번호는 제목이 말줄임돼도 유지하고 다시 넓히면 제목을 복원한다", async () => {
+  // 열 번째 탭의 번호는 프로세스명의 일부가 아니므로 잘려서는 안 된다.
+  const app = await createTestRenderer({ width: 30, height: 4 });
+  const tab = new SessionTab(app.renderer, { id: "tenth", closeId: "close-tenth", closeLabel: "Close", select() {}, close() {},
+    button: (label, activate) => new Button(app.renderer, label, activate) });
+  tab.setPosition(10); tab.setLabel("long-process-name"); app.renderer.root.add(tab.root);
+  try {
+    // 리사이즈를 반복해도 번호와 닫기 컨트롤을 제목보다 우선한다.
+    for (const width of [18, 10, 5, 2, 18]) {
+      tab.resize(width); await app.renderOnce();
+
+      // 번호가 들어갈 수 있는 폭에서는 전체 번호가 남고 제목만 축약된다.
+      const line = app.captureCharFrame().split("\n")[tab.root.y]!;
+      if (width >= 5) expect(line.slice(tab.root.x, tab.root.x + tab.root.width)).toMatch(/^│\s?10\./);
+      expect(tab.closeButton.x + tab.closeButton.width).toBeLessThanOrEqual(tab.root.x + tab.root.width);
+      expect(Bun.stringWidth(tab.title.plainText)).toBeLessThanOrEqual(tab.title.width);
+    }
+    expect(tab.title.plainText).toBe("long-pro…");
   } finally { await app.dispose(); }
 });
 

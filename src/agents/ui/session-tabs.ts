@@ -79,6 +79,7 @@ export class SessionTabs {
         this.list.add(frame.root);
         tab = { root: frame.root, title: frame.title, frame, status }; this.tabs.set(session.id, tab);
       }
+      tab.frame.setPosition(index + 1);
       const working = session.status === "working" || session.subagents.some(child => child.status === "working");
       tab.status.update(working ? "working" : sessionStatus(session), this.visible, session, this.actions.fast?.(session.id) ?? false);
       this.setTitle(tab, session.id);

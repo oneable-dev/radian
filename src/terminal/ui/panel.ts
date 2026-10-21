@@ -144,6 +144,7 @@ export class TerminalPanel {
         this.tabButtons.set(item.id, tab); wrapper.add(tab.root); this.tabs.add(wrapper);
       }
       tab.resize(this.tabs.width);
+      tab.setPosition(index + 1);
       tab.setLabel(`${this.processName(item)}${item.exited ? " (exited)" : ""}`);
       tab.update(item.id === this.selected);
       const wrapper = this.tabs.getChildren().find((child) => child.id === `terminal-tab:${item.id}`)!;

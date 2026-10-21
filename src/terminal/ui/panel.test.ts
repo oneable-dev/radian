@@ -273,6 +273,8 @@ test("프로세스 탭 이름이 바뀌어도 terminal과 포커스·탭 인스�
     const terminal = app.renderer.root.findDescendantById("shell-terminal")!;
     const tab = app.renderer.root.findDescendantById("terminal-tab:shell-1")!;
     const detached = app.detaches.length;
+    const number = app.renderer.root.findDescendantById("terminal-session:shell-1:number") as TextRenderable;
+    expect(number.plainText).toBe("1.");
     process = "nvim"; clock.advance(750); await app.visible("nvim");
 
     expect(app.renderer.root.findDescendantById("shell-terminal")).toBe(terminal);
@@ -281,6 +283,7 @@ test("프로세스 탭 이름이 바뀌어도 terminal과 포커스·탭 인스�
     expect(app.captureCharFrame()).not.toContain("Terminal 1");
     expect(app.captureCharFrame()).not.toContain(" · running");
     expect(app.detaches).toHaveLength(detached);
+    expect(number.plainText).toBe("1.");
     expect(app.closed).toEqual([]);
   } finally { await app.close(); }
 });
@@ -405,6 +408,30 @@ test("숫자 단축키는 Terminal의 현재 워크트리 순서로만 선택하
   } finally { await app.close(); }
 });
 
+test("앞선 터미널을 닫으면 번호를 다시 매기고 표시 번호로 전환해도 PTY에 키를 보내지 않는다", async () => {
+  // 프로세스명과 내부 ID가 달라도 화면의 번호는 현재 탭 위치를 뜻한다.
+  const app = await mount();
+  const number = (id: string) => (app.renderer.root.findDescendantById(`terminal-session:${id}:number`) as TextRenderable).plainText;
+  try {
+    await app.showView("t"); await app.visible("Shell shell-1");
+    app.leader("n"); await app.visible("Shell shell-2"); app.leader("n"); await app.visible("Shell shell-3");
+    expect(number("shell-1")).toBe("1."); expect(number("shell-2")).toBe("2."); expect(number("shell-3")).toBe("3.");
+    const terminal = app.renderer.root.findDescendantById("shell-terminal")!;
+    const tab = app.renderer.root.findDescendantById("terminal-session:shell-2")!;
+
+    // 입력 중인 마지막 쉘은 그대로 두고 앞선 탭만 목록에서 사라진다.
+    app.exit("shell-1"); await app.renderOnce(); await app.renderOnce();
+
+    // 새 번호는 기존 탭에 반영되며 단축키도 같은 순서를 선택한다.
+    expect(number("shell-2")).toBe("1."); expect(number("shell-3")).toBe("2.");
+    expect(app.renderer.root.findDescendantById("terminal-session:shell-2")).toBe(tab);
+    expect(app.renderer.currentFocusedRenderable).toBe(terminal);
+    app.leader("1"); await app.visible("Shell shell-2");
+    expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-2");
+    expect(app.inputs).toEqual([]); expect(app.created).toHaveLength(3);
+  } finally { await app.close(); }
+});
+
 test("활성 하위 탭 닫기는 다음·이전·빈 상태로 이동하며 마지막 탭을 자동 생성하지 않는다", async () => {
   const app = await mount();
   try {
@@ -512,7 +539,7 @@ test("AI와 Terminal 탭은 프로세스명·상태와 무관하게 같은 18칸
     app.leader("n"); await app.visible("Shell shell-2"); await app.renderOnce();
     const first = app.renderer.root.findDescendantById("terminal-session:shell-1")!;
     const second = app.renderer.root.findDescendantById("terminal-session:shell-2")!;
-    const title = second.getChildren().find((node): node is TextRenderable => node instanceof TextRenderable)!;
+    const title = app.renderer.root.findDescendantById(`${second.id}:title`) as TextRenderable;
     app.resize(60, 12); await app.renderOnce(); await app.renderOnce();
 
     // 고정 경계와 닫기 위치는 일치하고 긴 Unicode 이름만 안전하게 말줄임한다.

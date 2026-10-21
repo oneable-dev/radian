@@ -131,9 +131,9 @@ test("세션 상태는 같은 칸에 표시하고 미확정은 빈 상태 공간
   const ordered = (id: string, title: string, glyphs: readonly string[]) => {
     const text = app.region(id), position = text.indexOf(title);
     expect(position).toBeGreaterThanOrEqual(0);
-    expect(text[0]).toBe(" ");
-    expect(glyphs).toContain(text[1]!);
-    expect(glyphs).toContain(text.slice(0, position).trim());
+    expect(text.startsWith("│ ")).toBe(true);
+    expect(glyphs).toContain(text[5]!);
+    expect(glyphs).toContain(text.slice(5, position).trim());
     expect(text.slice(position + title.length).trim()).toBe("×");
     expect(app.get(id).width).toBe(18);
   };
@@ -142,30 +142,32 @@ test("세션 상태는 같은 칸에 표시하고 미확정은 빈 상태 공간
     for (const focused of [false, true]) {
       if (focused) { app.get("agent-session-list").focus(); await app.render(); }
       ordered("session:demo:main:a1", "a1", spinnerFrames);
-      expect(app.region("session:demo:main:a2")).toBe(" a2             × ");
-      ordered("session:demo:main:a3", "a3", [icons.error]);
+      expect(app.region("session:demo:main:a2")).toBe("│ 2. a2         × ");
+      ordered("session:demo:main:a3", "a3", [icons.failure]);
     }
 
     // Unreported sessions keep the tab's outer padding, not an empty badge and its extra gap.
     await app.click(`${icons.folder} radian-ui`);
     for (const focused of [false, true]) {
       if (focused) { app.get("agent-session-list").focus(); await app.render(); }
-      expect(app.region("session:demo:feature:b1")).toBe(" b1             × ");
+      expect(app.region("session:demo:feature:b1")).toBe("│ 1. b1         × ");
     }
     expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("세션 탭은 양 끝에 한 칸 패딩을 두고 내부와 탭 사이에도 한 칸 간격을 유지한다", async () => {
+test("세션 탭은 왼쪽 보더 안쪽과 오른쪽에 한 칸 패딩을 두고 번호·상태·제목 사이 간격을 유지한다", async () => {
   // Edge padding belongs to each tab, independently of its selection or execution status.
   const app = await mount();
   try {
     // Native cell positions include both edge gutters without enlarging the close button.
     for (const id of ["a1", "a2", "a3"]) {
       const tab = app.get(`session:demo:main:${id}`), close = app.get(`close-session:${id}`);
-      const [status, title] = tab.getChildren();
-      if (status!.visible) expect(status!.x).toBe(tab.x + 1);
-      expect(title!.x).toBe(status!.visible ? status!.x + status!.width + 1 : tab.x + 1);
+      const [number, status, title] = tab.getChildren();
+      expect(app.region(tab.id).startsWith(`│ ${id.slice(1)}. `)).toBe(true);
+      expect(number!.x).toBe(tab.x + 2);
+      if (status!.visible) expect(status!.x).toBe(number!.x + number!.width + 1);
+      expect(title!.x).toBe(status!.visible ? status!.x + status!.width + 1 : number!.x + number!.width + 1);
       expect(close.x).toBe(title!.x + title!.width + 1);
       expect(close.width).toBe(1);
       expect(close.x + close.width).toBe(tab.x + tab.width - 1);
@@ -177,38 +179,38 @@ test("세션 탭은 양 끝에 한 칸 패딩을 두고 내부와 탭 사이에�
   } finally { await app.close(); }
 });
 
-test.each([["완료", "complete", ""], ["실패", "failure", icons.error], ["미확정", null, ""]] as const)(
+test.each([["완료", "complete", ""], ["실패", "failure", icons.failure], ["미확정", null, ""]] as const)(
   "실행이 %s 상태로 바뀌어도 한 아이콘만 표시하고 빈 상태 칸을 회수한다", async (_label, status, glyph) => {
     // A short run settles before the spinner's 500 ms minimum interval has elapsed.
     const app = await mount();
     try {
-      const tab = app.get("session:demo:main:a1"), close = app.get("close-session:a1"), title = tab.getChildren()[1]!;
+      const tab = app.get("session:demo:main:a1"), close = app.get("close-session:a1"), title = app.get(`${tab.id}:title`);
       const geometry = [tab.x, tab.width, title.x, close.x];
       app.clock.advance(120); await app.render();
-      expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[1])).toBe(true);
+      expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[5])).toBe(true);
 
       // Failure supersedes the spinner immediately; an empty badge can retain its minimum-visible tail.
       app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
         sessions: tree.sessions.map((session) => session.id === "a1" ? { ...session, status, subagents: [] } : session),
       })) })));
       await app.render();
-      const prefix = () => app.region(tab.id).slice(0, app.region(tab.id).indexOf("a1")).trim();
-      if (status === "failure") expect(app.region(tab.id)).toBe(` ${glyph} a1           × `);
+      const prefix = () => app.region(tab.id).slice(5, app.region(tab.id).indexOf("a1")).trim();
+      if (status === "failure") expect(app.region(tab.id)).toBe(`│ 1. ${glyph} a1       × `);
       else expect(spinnerFrames.some(frame => frame === prefix())).toBe(true);
       app.clock.advance(379); await app.render();
-      if (status === "failure") expect(app.region(tab.id)).toBe(` ${glyph} a1           × `);
+      if (status === "failure") expect(app.region(tab.id)).toBe(`│ 1. ${glyph} a1       × `);
       else expect(spinnerFrames.some(frame => frame === prefix())).toBe(true);
       app.clock.advance(1); await app.render();
 
       // The badge collapses into label space without moving the tab boundary or close control.
       if (status !== "failure") {
-        expect(app.region(tab.id)).toBe(" a1             × ");
+        expect(app.region(tab.id)).toBe("│ 1. a1         × ");
         expect([tab.x, tab.width, title.x, close.x]).toEqual([geometry[0]!, geometry[1]!, geometry[2]! - 2, geometry[3]!]);
       } else {
-        expect(app.region(tab.id)[1]).toBe(glyph); expect(app.region(tab.id)[2]).toBe(" ");
+        expect(app.region(tab.id)[5]).toBe(glyph); expect(app.region(tab.id)[6]).toBe(" ");
         expect([tab.x, tab.width, title.x, close.x]).toEqual(geometry);
       }
-      expect(app.region(tab.id).startsWith(" ")).toBe(true); expect(app.region(tab.id).endsWith("× ")).toBe(true);
+      expect(app.region(tab.id).startsWith("│ 1. ")).toBe(true); expect(app.region(tab.id).endsWith("× ")).toBe(true);
       expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
     } finally { await app.close(); }
   },
@@ -223,6 +225,7 @@ test("비선택 세션 탭의 닫기 버튼은 현재 세션과 초안을 바꾸
 
     expect(app.selection.sessionId).toBe("a1");
     expect(app.selection.worktree?.sessions.map((session) => session.id)).toEqual(["a1", "a3"]);
+    expect((app.get("session:demo:main:a3:number") as TextRenderable).plainText).toBe("2.");
     expect(app.view.promptDrafts.a1).toBe("main draft");
     expect(app.requests).toEqual(["close:a2"]);
   } finally { await app.close(); }
@@ -262,7 +265,7 @@ test("서브에이전트는 선택한 세션의 실행 상태 행에만 집계�
     })) })));
     await app.render();
     expect(app.get("session:demo:main:a1")).toBe(tab);
-    expect(app.region("session:demo:main:a1")).toContain(icons.error);
+    expect(app.region("session:demo:main:a1")).toContain(icons.failure);
     expect([tab.x, tab.y, tab.width, input.y, row.y, row.height]).toEqual(geometry);
     await app.click("a2");
     expect(app.region("transcript-status-row")).not.toContain("Subagents");
@@ -283,8 +286,12 @@ test("snapshot의 세션 순서가 바뀌어도 ID 선택과 탭 인스턴스를
     expect(app.selection.sessionId).toBe("a1");
     expect(app.get("session:demo:main:a1")).toBe(alpha);
     expect(app.get("session:demo:main:a2").x).toBeLessThan(alpha.x);
+    expect((app.get(`${alpha.id}:number`) as TextRenderable).plainText).toBe("3.");
+    expect((app.get("session:demo:main:a3:number") as TextRenderable).plainText).toBe("1.");
     app.get("agent-session-list").focus(); app.mockInput.pressKey("h"); await app.render();
     expect(app.selection.sessionId).toBe("a2");
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("1"); await app.render();
+    expect(app.selection.sessionId).toBe("a3");
     expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
@@ -313,11 +320,11 @@ test("좁은 세션 탭은 긴 Unicode 이름 대신 ID를 표시하고 닫기�
     app.resize(60, 12); await app.render();
     const tab = app.get("session:demo:main:a1"), close = app.get("close-session:a1");
     expect(tab.width).toBeLessThanOrEqual(app.get("agent-session-list").width);
-    expect(app.region(tab.id).startsWith(" ")).toBe(true);
+    expect(app.region(tab.id).startsWith("│ 1. ")).toBe(true);
     expect(app.region(tab.id).endsWith("× ")).toBe(true);
-    expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[1])).toBe(true);
+    expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[5])).toBe(true);
     expect(close.x + close.width).toBe(tab.x + tab.width - 1);
-    const title = tab.getChildren()[1];
+    const title = app.get(`${tab.id}:title`);
     if (!(title instanceof TextRenderable)) throw new Error("Missing session ID label");
     expect(title.plainText).toBe("a1");
     expect(app.region(tab.id)).not.toContain("연결");

@@ -11,8 +11,8 @@ import { SessionTabs } from "./session-tabs.ts";
 
 const firstId = "01a156a2-ba64-707c-bd92-fc877962e972";
 const secondId = "23ec1867-d98a-4d41-b656-d2c13806b5de";
-const firstLabel = "01a156a2-ba64…";
-const secondLabel = "23ec1867-d98a…";
+const firstLabel = "01a156a2-…";
+const secondLabel = "23ec1867-…";
 const collisionId = "01a156a2-ba65-4d41-b656-d2c13806b5de";
 const session = (id = firstId, name = "A conversation title, not the session ID"): OpenSession => ({ id, name, status: "complete", subagents: [] });
 
@@ -29,11 +29,16 @@ async function mount(initial: readonly OpenSession[] = [session()], fast: (id: s
   const get = (id: string, worktreeId = "tree") => {
     const tab = app.renderer.root.findDescendantById(`session:${worktreeId}:${id}`);
     if (!tab) throw new Error(`Missing tab ${id}`);
-    const title = tab.getChildren().find((node): node is TextRenderable => node instanceof TextRenderable);
-    if (!title) throw new Error(`Missing tab title ${id}`);
-    return { tab, title };
+    const title = app.renderer.root.findDescendantById(`${tab.id}:title`);
+    const number = app.renderer.root.findDescendantById(`${tab.id}:number`);
+    if (!(title instanceof TextRenderable) || !(number instanceof TextRenderable)) throw new Error(`Missing tab label ${id}`);
+    return { tab, title, number };
   };
-  return { ...app, tabs, selected, closed, get, render,
+  const status = (id = firstId) => {
+    const { tab, title, number } = get(id);
+    return app.captureCharFrame().split("\n")[tab.y]!.slice(number.x + number.width, title.x).trim();
+  };
+  return { ...app, tabs, selected, closed, get, status, render,
     clock,
     async close() { tabs.dispose(); await app.dispose(); },
   };
@@ -68,7 +73,7 @@ test.each(priorities)("$name 하나만 한 칸에 표시한다", async ({ entry,
   try {
     // Public snapshots determine the badge without selecting or acknowledging the session.
     const { tab, title } = app.get(firstId);
-    const prefix = app.captureCharFrame().split("\n")[tab.y]!.slice(tab.x + 1, title.x).trim();
+    const prefix = app.status();
 
     // Glyph, semantic color and reserved width must agree, including the genuinely empty state.
     if (glyph === "working") expect(spinnerFrames.some(frame => frame === prefix)).toBe(true);
@@ -78,7 +83,7 @@ test.each(priorities)("$name 하나만 한 칸에 표시한다", async ({ entry,
       expect(span.fg.toInts()).toEqual(uiTheme(app.renderer).colors[color].toInts());
     }
     expect(Bun.stringWidth(prefix)).toBe(glyph ? 1 : 0);
-    expect(title.x - tab.x).toBe(glyph ? 3 : 1);
+    expect(title.x - tab.x).toBe(glyph ? 7 : 5);
     expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
   } finally { await app.close(); }
 });
@@ -88,12 +93,12 @@ test("Fast 세션 탭만 노란 세 칸 화살표를 쓰고 프레임·모드 �
   const entries = [{ ...session(), status: "working" as const }, { ...session(secondId), status: "working" as const }];
   let fast = true;
   const app = await mount(entries, id => id === firstId && fast);
-  const prefix = (id: string) => { const { tab, title } = app.get(id); return app.captureCharFrame().split("\n")[tab.y]!.slice(tab.x + 1, title.x).trim(); };
+  const prefix = app.status;
   try {
     const { tab, title } = app.get(firstId), other = app.get(secondId).tab;
     const close = app.renderer.root.findDescendantById(`close-session:${firstId}`)!;
     const geometry = [tab.x, tab.width, title.x, close.x, other.x];
-    expect(prefix(firstId)).toBe("▶▷▷"); expect(title.x).toBe(tab.x + 5);
+    expect(prefix(firstId)).toBe("▶▷▷"); expect(title.x).toBe(tab.x + 9);
     expect(prefix(secondId)).toBe("⠋"); expect(tab.width).toBe(SESSION_TAB_WIDTH);
     const spans = app.captureSpans().lines[tab.y]!.spans;
     expect(spans.find(span => span.text.includes("▶"))!.fg.toInts()).toEqual(uiTheme(app.renderer).colors.number.toInts());
@@ -104,7 +109,7 @@ test("Fast 세션 탭만 노란 세 칸 화살표를 쓰고 프레임·모드 �
     expect(prefix(firstId)).toBe("▷▶▷"); expect([tab.x, tab.width, title.x, close.x, other.x]).toEqual(geometry);
     expect(prefix(secondId)).toBe("⠙");
     fast = false; app.tabs.update("tree", entries, firstId, true); await app.render();
-    expect(prefix(firstId)).toBe("⠋"); expect(title.x).toBe(tab.x + 3);
+    expect(prefix(firstId)).toBe("⠋"); expect(title.x).toBe(tab.x + 7);
     expect([tab.width, close.x, other.x]).toEqual([geometry[1]!, geometry[3]!, geometry[4]!]);
     fast = true; app.tabs.update("tree", entries, firstId, true); app.resize(12, 6); await app.render();
     expect(Bun.stringWidth(title.plainText)).toBeLessThanOrEqual(title.width);
@@ -119,10 +124,7 @@ test.each([completed, failed, stopped, cancelled])("빠른 $outcome 결과는 �
   const glyph = result.outcome === "error" ? "\uF06A" : result.outcome === "unfinished" ? "?" : icons.bell;
   const readGlyph = result.outcome === "complete" ? icons.pass : result.outcome === "cancelled" ? "●" : glyph;
   const finished: OpenSession = { ...session(), status: result.outcome === "error" ? "failure" : result.outcome === "complete" ? "complete" : null, result, attention: result };
-  const prefix = () => {
-    const { tab, title } = app.get(firstId);
-    return app.captureCharFrame().split("\n")[tab.y]!.slice(tab.x + 1, title.x).trim();
-  };
+  const prefix = app.status;
   try {
     app.clock.advance(120); app.tabs.update("tree", [finished], firstId, true); await app.render();
     expect(prefix()).toBe(glyph);
@@ -143,17 +145,14 @@ test.each([false, true])("Fast %s 실행을 직접 취소하면 스피너 대신
   // A user cancellation has no new unread result, even if it settles before the spinner minimum.
   const app = await mount([{ ...session(), status: "working" }], () => fast);
   const interrupted: OpenSession = { ...session(), status: null, result: { ...cancelled, cancellation: "user" } };
-  const prefix = () => {
-    const { tab, title } = app.get(firstId);
-    return app.captureCharFrame().split("\n")[tab.y]!.slice(tab.x + 1, title.x).trim();
-  };
+  const prefix = app.status;
   try {
     // Normal and Fast loading both yield their entire animation slot immediately to the settled badge.
     app.clock.advance(120); app.tabs.update("tree", [interrupted], firstId, true); await app.render();
 
     expect(prefix()).toBe("●");
     const { tab, title } = app.get(firstId);
-    expect(title.x).toBe(tab.x + 3);
+    expect(title.x).toBe(tab.x + 7);
     const dot = app.captureSpans().lines[tab.y]!.spans.find(span => span.text.includes("●"))!;
     expect(dot.fg.toInts()).toEqual(uiTheme(app.renderer).colors.muted.toInts());
     expect(app.clock.pendingTimerCount).toBe(0);
@@ -171,10 +170,7 @@ test("실행 중 숨긴 미확인 벨은 화면 복귀와 직접 취소 뒤에�
   const pending: OpenSession = { ...session(), result: completed, attention: completed };
   const working: OpenSession = { ...session(), status: "working", attention: completed };
   const app = await mount([pending]);
-  const prefix = () => {
-    const { tab, title } = app.get(firstId);
-    return app.captureCharFrame().split("\n")[tab.y]!.slice(tab.x + 1, title.x).trim();
-  };
+  const prefix = app.status;
   try {
     expect(prefix()).toBe(icons.bell);
     app.tabs.update("tree", [working], firstId, true); await app.render();
@@ -198,20 +194,20 @@ test("상태 아이콘이 없는 탭은 왼쪽 상태 칸과 간격을 빼고 �
     // 좁은 탭에서도 상태가 없으면 UUID를 표시할 공간을 두 칸 더 확보한다.
     app.resize(12, 6); await app.render();
     const { tab, title } = app.get(firstId), close = app.renderer.root.findDescendantById(`close-session:${firstId}`)!;
-    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe("01a156a…");
+    expect(title.x).toBe(tab.x + 5); expect(title.plainText).toBe("01a…");
     expect(tab.width).toBe(12);
     expect(close.x).toBe(title.x + title.width + 1); expect(close.x + close.width).toBe(tab.x + tab.width - 1);
 
     // An unread completion reserves a badge; acknowledging it replaces the bell with a success check.
     app.tabs.update("tree", [{ ...session(), result: completed, attention: completed }], firstId, true); await app.render();
-    expect(title.x).toBe(tab.x + 3); expect(title.plainText).toEndWith("…");
+    expect(title.x).toBe(tab.x + 7); expect(title.plainText).toEndWith("…");
     expect(close.x + close.width).toBeLessThanOrEqual(app.tabs.list.viewport.x + app.tabs.list.viewport.width);
     app.tabs.update("tree", [{ ...session(), result: completed }], firstId, true); await app.render();
-    expect(app.captureCharFrame()).toContain(icons.pass); expect(title.x).toBe(tab.x + 3);
+    expect(app.captureCharFrame()).toContain(icons.pass); expect(title.x).toBe(tab.x + 7);
 
     // Only a snapshot with no result removes the badge and restores the extra UUID space.
     app.tabs.update("tree", [unknown], firstId, true); await app.render();
-    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe("01a156a…");
+    expect(title.x).toBe(tab.x + 5); expect(title.plainText).toBe("01a…");
   } finally { await app.close(); }
 });
 
@@ -224,7 +220,7 @@ test("미확정으로 바뀐 탭은 스피너 최소 시간 뒤 상태 칸을 �
     app.clock.advance(379); await app.render(); expect(title.x).toBe(titleX); expect(title.plainText).toEndWith("…");
     // 스피너가 끝나면 추가 snapshot 없이 원래 UUID의 앞부분을 두 칸 더 표시한다.
     app.clock.advance(1); await app.render();
-    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe("01a156a…");
+    expect(title.x).toBe(tab.x + 5); expect(title.plainText).toBe("01a…");
     expect(tab.width).toBe(width); expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
   } finally { await app.close(); }
 });
@@ -236,7 +232,7 @@ test("숨겼다가 돌아온 미확정 탭은 취소된 스피너 공간을 다�
     app.tabs.update("tree", [unknown], firstId, false); app.clock.advance(500);
     app.tabs.update("tree", [unknown], firstId, true); await app.render();
     const { tab, title } = app.get(firstId);
-    expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstLabel);
+    expect(title.x).toBe(tab.x + 5); expect(title.plainText).toBe(firstLabel);
     expect(tab.width).toBe(SESSION_TAB_WIDTH);
   } finally { await app.close(); }
 });
@@ -306,7 +302,7 @@ test("UUID는 가용 폭에 맞춰 끝을 말줄임하고 다시 넓히면 표�
   const app = await mount();
   try {
     // 작은 창을 거쳐도 원본 UUID를 잃지 않고 프레임의 가용 폭만 반영한다.
-    for (const [width, expected] of [[12, "01a156a…"], [10, "01a15…"], [100, firstLabel]] as const) {
+    for (const [width, expected] of [[12, "01a…"], [10, "0…"], [100, firstLabel]] as const) {
       app.resize(width, 6); await app.render();
       const { tab, title } = app.get(firstId), text = title.plainText;
 
@@ -324,8 +320,8 @@ test("UUID는 가용 폭에 맞춰 끝을 말줄임하고 다시 넓히면 표�
 });
 
 test.each([
-  { id: "01a156a2-ca64-707c-bd92-fc877962e972", first: firstLabel, other: "01a156a2-ca64…" },
-  { id: collisionId, first: firstLabel, other: "01a156a2-ba65…" },
+  { id: "01a156a2-ca64-707c-bd92-fc877962e972", first: firstLabel, other: firstLabel },
+  { id: collisionId, first: firstLabel, other: firstLabel },
   { id: "01a156a2-ba64-707c-bd92-fc877962e973", first: firstLabel, other: firstLabel },
 ])("접두사가 겹치는 $id 탭도 같은 UUID 끝 말줄임 규칙만 적용한다", async ({ id, first, other }) => {
   // 충돌 위치가 8자리 바로 뒤부터 마지막 자리까지인 세션 쌍을 준비한다.
@@ -355,7 +351,7 @@ test("비슷한 UUID 탭을 추가·제거해도 기존 라벨과 폭을 유지�
     // 기존 인스턴스와 UUID 라벨을 유지하면서 선택한 탭을 다시 드러낸다.
     expect(app.get(firstId).tab).toBe(firstTab);
     expect(app.get(firstId).title.plainText).toBe(firstLabel);
-    expect(app.get(collisionId).title.plainText).toBe("01a156a2-ba65…");
+    expect(app.get(collisionId).title.plainText).toBe(firstLabel);
     expect(app.get(secondId).title.plainText).toBe(secondLabel);
     const selectedTab = app.get(secondId).tab, viewport = app.tabs.list.viewport;
     expect(selectedTab.x).toBeGreaterThanOrEqual(viewport.x);
@@ -377,12 +373,12 @@ test("워크트리를 전환해도 같은 UUID와 프레임 폭에는 같은 라
     app.tabs.update("other-tree", [session(collisionId)], collisionId, true); await app.render();
 
     // 세션 수와 무관하게 전체 UUID의 동일한 앞부분을 표시한다.
-    expect(app.get(collisionId, "other-tree").title.plainText).toBe("01a156a2-ba65…");
+    expect(app.get(collisionId, "other-tree").title.plainText).toBe(firstLabel);
     expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
   } finally { await app.close(); }
 });
 
-test.each(["a1", "12345678", "12345678901234"])("가용 폭에 들어가는 %s 세션 ID는 말줄임 없이 전부 표시한다", async id => {
+test.each(["a1", "12345678", "1234567890"])("가용 폭에 들어가는 %s 세션 ID는 말줄임 없이 전부 표시한다", async id => {
   // 기존 짧은 식별자는 패딩하거나 다른 이름으로 바꿀 필요가 없다.
   const app = await mount([session(id)]);
   try {
@@ -391,6 +387,35 @@ test.each(["a1", "12345678", "12345678901234"])("가용 폭에 들어가는 %s �
 
     // 원래 ID가 그대로 사용자에게 보인다.
     expect(app.get(id).title.plainText).toBe(id);
+  } finally { await app.close(); }
+});
+
+test("열 번째 이후 세션도 번호를 표시하고 닫기·재정렬·워크트리 변경 시 현재 순서로 다시 매긴다", async () => {
+  // 세션 ID의 숫자가 아닌 현재 워크트리의 표시 순서를 번호로 사용한다.
+  const entries = Array.from({ length: 11 }, (_, index) => session(`session-${index + 20}`));
+  const app = await mount(entries);
+  try {
+    // 가로 스크롤된 마지막 탭에도 두 자리 번호를 제목과 별개로 표시한다.
+    app.resize(30, 6); app.tabs.update("tree", entries, entries[10]!.id, true); await app.render();
+
+    const last = app.get(entries[10]!.id);
+    expect(last.number.plainText).toBe("11."); expect(last.title.plainText).toBe("session-…");
+    expect(last.tab.x).toBeGreaterThanOrEqual(app.tabs.list.viewport.x);
+    expect(last.tab.x + last.tab.width).toBeLessThanOrEqual(app.tabs.list.viewport.x + app.tabs.list.viewport.width);
+
+    // 앞선 탭이 닫히고 기존 탭 순서가 바뀌어도 ID와 인스턴스는 보존한다.
+    const reordered = [entries[10]!, ...entries.slice(1, 10)];
+    app.tabs.update("tree", reordered, entries[10]!.id, true); await app.render();
+
+    expect(app.get(entries[10]!.id).tab).toBe(last.tab);
+    expect(app.get(entries[10]!.id).number.plainText).toBe("1.");
+    expect(app.get(entries[1]!.id).number.plainText).toBe("2.");
+    expect(app.get(entries[9]!.id).number.plainText).toBe("10.");
+    expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
+
+    // 다른 워크트리의 첫 탭은 이전 워크트리 번호를 이어받지 않는다.
+    app.tabs.update("other-tree", [entries[9]!], entries[9]!.id, true); await app.render();
+    expect(app.get(entries[9]!.id, "other-tree").number.plainText).toBe("1.");
   } finally { await app.close(); }
 });
 

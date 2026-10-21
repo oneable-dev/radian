@@ -203,18 +203,18 @@ test("Stopped 탭은 벨보다 물음표 하나를 우선 표시하고 읽음과
     await app.render();
     const tab = app.get("session:demo:main:a2"), region = () => app.captureCharFrame().split("\n")[tab.y]!.slice(tab.x, tab.x + tab.width);
 
-    expect(region()).toBe(" ? a2           × ");
+    expect(region()).toBe("│ 2. ? a2       × ");
     expect(app.selection.worktree?.sessions.find(session => session.id === "a2")?.attention?.id).toBe("stopped");
     const colorAt = (column: number) => {
       let x = 0; return app.captureSpans().lines[tab.y]!.spans.find(span => { x += span.width; return x > column; })!.fg.toInts();
     };
-    expect(colorAt(tab.x + 1)).toEqual(uiTheme(app.renderer).colors.warning.toInts());
+    expect(colorAt(tab.x + 5)).toEqual(uiTheme(app.renderer).colors.warning.toInts());
     app.selection.replaceSnapshot(app.selection.snapshot.map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => ({ ...tree, sessions: tree.sessions.map(session => {
       if (session.id !== "a2") return session;
       const { attention: _attention, ...next } = session; return next;
     }) })) })));
     await app.render();
-    expect(region()).toBe(" ? a2           × ");
+    expect(region()).toBe("│ 2. ? a2       × ");
   } finally { await app.close(); }
 });
 
