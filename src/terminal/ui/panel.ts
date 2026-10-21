@@ -5,6 +5,7 @@ import type { PtyFrame, TerminalInfo } from "../../runtime/protocol.ts";
 import type { Worktree } from "../../workspace/model.ts";
 import { TerminalSurface, type PtyAttachment } from "../../ui/embedded-terminal/surface.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
+import { EmptyState } from "../../ui/empty-state.ts";
 import type { TerminalTheme } from "../../ui/embedded-terminal/theme.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
@@ -27,6 +28,7 @@ export class TerminalPanel {
   private readonly messageRow: BoxRenderable;
   private readonly viewport: BoxRenderable;
   private readonly spinner: LoadingSpinner;
+  private readonly emptyState: EmptyState;
   private readonly reconnectButton: BoxRenderable;
   private readonly tabButtons = new Map<string, SessionTab>();
   private readonly creating = new Set<string>();
@@ -51,7 +53,7 @@ export class TerminalPanel {
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: TerminalActions | undefined,
     private readonly button: ButtonFactory, private readonly notice: (message: string) => void,
-    private readonly selectionChanged: (worktreeId: string, id: string | null) => void, private readonly changed: () => void, private readonly unavailable?: string, private readonly terminalTheme?: TerminalTheme) {
+    private readonly selectionChanged: (worktreeId: string, id: string | null) => void, private readonly changed: () => void, private readonly unavailable?: string, private readonly terminalTheme?: TerminalTheme, private readonly creationHint: () => string = () => "") {
     this.root = new BoxRenderable(renderer, { id: "terminal-view", flexGrow: 1, minHeight: 0, flexDirection: "column", visible: false, focusable: true });
     const toolbar = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.tabs = new ScrollBoxRenderable(renderer, { height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0, scrollX: true, scrollY: false,
@@ -70,6 +72,8 @@ export class TerminalPanel {
     activity.add(this.spinner.root); toolbar.add(activity);
     status.add(this.message);
     this.viewport = new BoxRenderable(renderer, { id: "terminal-viewport", flexGrow: 1, minHeight: 0, flexDirection: "column" });
+    this.emptyState = new EmptyState(renderer, "terminal-empty-state"); this.emptyState.root.visible = false;
+    this.viewport.add(this.emptyState.root);
     this.root.add(toolbar); this.root.add(status); this.root.add(this.viewport);
     bindPanelSpacing(renderer, this.root);
     this.root.once(RenderableEvents.DESTROYED, () => this.stopTitles());
@@ -100,18 +104,24 @@ export class TerminalPanel {
     this.paintTabs();
     if (!this.actions) this.setMessage(this.unavailable ?? "Terminal preview · no shells run in demo mode.");
     else if (!worktree) this.setMessage("Select a workspace to use terminals.");
-    else if (!selected) this.setMessage("No terminals");
+    else if (!selected) this.setMessage("");
     else if (!this.reconnectButton.visible) this.setMessage("");
     this.refreshTitles();
     // Only entering an empty view starts a shell; exit/close updates must stay empty.
     if (!same && worktree && this.actions && !this.items.length) this.defaultRequest = worktree.id;
-    this.createDefault();
+    this.createDefault(); this.updateEmptyState();
   }
   private createDefault(): void {
     const worktree = this.worktree;
     if (!worktree || this.defaultRequest !== worktree.id || this.creating.has(worktree.id)) return;
     this.defaultRequest = undefined;
     if (!this.actions?.list().some(item => item.worktreeId === worktree.id)) this.create();
+  }
+  private updateEmptyState(): void {
+    if (this.disposed || this.root.isDestroyed) return;
+    const worktree = this.worktree, key = this.creationHint();
+    this.emptyState.update({ icon: ">_", title: "No terminals", ...(key ? { action: { key, label: "New terminal" } } : {}) });
+    this.emptyState.root.visible = Boolean(this.root.visible && this.actions && worktree && !this.selected && !this.creating.has(worktree.id));
   }
   private paintTabs(): void {
     const key = JSON.stringify([this.selected, this.items.map((item) => [item.id, this.processName(item), item.exited])]);
@@ -194,7 +204,7 @@ export class TerminalPanel {
     if (!worktree || !actions || this.creating.has(worktree.id)) return;
     const intent = this.intent, owner = this.renderer.currentFocusedRenderable;
     const current = () => !this.disposed && !this.root.isDestroyed && this.root.visible && this.worktree?.id === worktree.id && this.intent === intent;
-    this.creating.add(worktree.id); this.spinner.start();
+    this.creating.add(worktree.id); this.updateEmptyState(); this.spinner.start();
     let handedOff = false;
     void (async () => {
       await this.laidOut();
@@ -208,7 +218,7 @@ export class TerminalPanel {
       this.selectionChanged(worktree.id, result.value);
       this.show(worktree, result.value); this.activate(result.value, focus); handedOff = true;
     })().catch((error: unknown) => { if (current()) this.failure(error); else reportUnexpected(error, "terminal creation"); })
-      .finally(() => { this.creating.delete(worktree.id); if (!handedOff && current()) this.spinner.stop(); this.createDefault(); });
+      .finally(() => { this.creating.delete(worktree.id); if (!handedOff && current()) this.spinner.stop(); this.createDefault(); this.updateEmptyState(); });
   }
   closeSelected(): void { if (this.selected) this.close(this.selected); }
   private close(id: string): void {
@@ -306,7 +316,7 @@ export class TerminalPanel {
     if (!this.root.visible) return;
     if (this.surface && !this.surface.root.isDestroyed) this.surface.root.blur();
     this.generation++; this.intent++; this.cancelLayout?.(); this.spinner.cancel(); this.stopTitles(); this.worktree = null; this.selected = undefined; this.defaultRequest = undefined;
-    if (!this.root.isDestroyed) this.root.visible = false;
+    if (!this.root.isDestroyed) { this.root.visible = false; this.emptyState.root.visible = false; }
     this.removeSurface(); this.task = this.task.then(() => this.detach()).catch((error: unknown) => { reportUnexpected(error, "terminal detach"); });
   }
   dispose(): void {

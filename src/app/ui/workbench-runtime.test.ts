@@ -48,7 +48,8 @@ async function mount() {
       await setup.mockMouse.click(x, y); await setup.renderOnce();
     },
     async newSession() {
-      setup.renderer.root.findDescendantById("agent-session-list")!.focus(); setup.mockInput.pressKey("n");
+      setup.renderer.root.findDescendantById("agent-session-list")!.focus();
+      setup.mockInput.pressKey(" ", { ctrl: true }); setup.mockInput.pressKey("n");
       const id = await creation.at(-1)!; await setup.renderOnce(); return id;
     },
     async send(text: string) {
@@ -91,7 +92,7 @@ test("실제 워크트리 UI에서 명시적으로 세션을 만들고 입력을
     expect(app.captureCharFrame()).toContain("main-worktree-marker");
     app.mockInput.pressEscape();
     await app.click(`${icons.folder} feature`);
-    expect(app.captureCharFrame()).toContain("No open sessions");
+    expect(app.captureCharFrame()).toContain("No AI sessions");
     const feature = await app.newSession();
     await app.send("read");
 
@@ -155,7 +156,7 @@ test("실행 중 닫기는 즉시 빈 UI로 전환하고 마지막 세션을 자
     expect(app.selection.sessionId).toBeNull();
     expect(app.registry.details(id)).toBeNull();
     await app.renderOnce();
-    expect(app.captureCharFrame()).toContain("No open sessions");
+    expect(app.captureCharFrame()).toContain("No AI sessions");
     await Promise.all([...app.closes, ...app.prompts.map((prompt) => prompt.done)]);
     await app.renderOnce();
 

@@ -7,12 +7,14 @@ import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
 import { ok } from "../../result.ts";
 import { icons } from "../../icons.ts";
+import { parseKeymap, type Keymap } from "../../keybindings/config.ts";
+import { expectOk } from "../../testing/results.ts";
 
-async function mount(empty = false) {
+async function mount(empty = false, keymap?: Keymap) {
   const app = await createTestRenderer({ width: 160, height: 28, kittyKeyboard: true });
   const repositories = demoWorkspace().map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree, sessions: empty ? [] : tree.sessions })) }));
   const selection = new WorkspaceSelection(repositories), created: string[] = [], lookups: string[] = [], sent: string[] = [];
-  const view = new Workbench(app.renderer, selection, { onNewSession: (id) => created.push(id), onCloseSession: (treeId, id) => {
+  const view = new Workbench(app.renderer, selection, { ...(keymap ? { keymap } : {}), onNewSession: (id) => created.push(id), onCloseSession: (treeId, id) => {
     selection.replaceSnapshot(selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id !== treeId ? tree : { ...tree, sessions: tree.sessions.filter((session) => session.id !== id) }) })));
   }, onPrompt: (_id, text) => { sent.push(text); return ok(undefined); }, initialDrafts: { a1: "preserved prompt" },
     onListHistory: async (id) => { lookups.push(id); return ok([]); },
@@ -56,7 +58,8 @@ test("탐색 커서가 아니라 활성 워크트리를 표시하고 실제 전�
 test("버튼 없이도 세션 목록의 생성 명령과 전역 History 단축키를 사용할 수 있다", async () => {
   const app = await mount();
   try {
-    app.get("agent-session-list").focus(); app.mockInput.pressKey("n"); await app.render();
+    app.get("agent-session-list").focus();
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("n"); await app.render();
     expect(app.created).toEqual(["demo:main"]);
     app.mockInput.pressKey("e", { ctrl: true }); await app.render(); const prompt = app.get("session-prompt");
     await app.history(); expect(app.get("session-history").visible).toBe(true); expect(app.lookups).toEqual(["demo:main"]);
@@ -71,7 +74,7 @@ test("빈 워크트리에서도 Tab으로 빈 세션 목록에 도달해 명시�
     const list = app.get("agent-session-list");
     for (let i = 0; i < 14 && app.renderer.currentFocusedRenderable !== list; i++) { app.mockInput.pressTab(); await app.render(); }
     expect(list.visible).toBe(true); expect(app.renderer.currentFocusedRenderable).toBe(list); expect(app.created).toEqual([]);
-    app.mockInput.pressKey("n"); await app.render(); expect(app.created).toEqual(["demo:main"]);
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("n"); await app.render(); expect(app.created).toEqual(["demo:main"]);
     await app.history(); expect(app.get("session-history").visible).toBe(true); expect(app.lookups).toEqual(["demo:main"]);
   } finally { await app.close(); }
 });
@@ -83,7 +86,30 @@ test("마지막 세션을 닫은 뒤에도 목록 포커스와 새 세션 생성
     await app.render(); const list = app.get("agent-session-list"); list.focus();
     app.mockInput.pressKey("x"); await app.render();
     expect(app.selection.worktree!.sessions).toHaveLength(0); expect(app.renderer.currentFocusedRenderable).toBe(list); expect(list.visible).toBe(true);
-    expect(app.created).toEqual([]); app.mockInput.pressKey("n"); await app.render(); expect(app.created).toEqual(["demo:main"]);
+    expect(app.created).toEqual([]);
+    expect(app.captureCharFrame()).toContain("No AI sessions");
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("n"); await app.render(); expect(app.created).toEqual(["demo:main"]);
+  } finally { await app.close(); }
+});
+
+test.each(["default", "custom", "disabled"] as const)("빈 AI 화면은 %s 생성 키만 안내하고 설정된 leader 시퀀스로 생성한다", async mode => {
+  // 빈 목록도 실제 키맵을 안내하며 기본 키나 세션을 임의로 만들어서는 안 된다.
+  const keymap = expectOk(parseKeymap(mode === "custom" ? { leader: "ctrl+b" } : mode === "disabled" ? { bindings: { "tab.new": [] } } : {}));
+  const app = await mount(true, keymap);
+  try {
+    const hint = app.get("agent-empty-state:hint");
+
+    // 빈 화면의 탐색 키와 이전 생성 별칭은 새 세션을 만들지 않는다.
+    app.mockInput.pressKey("n", { ctrl: true }); app.mockInput.pressKey("n"); await app.render();
+
+    // 안내는 키 재설정·비활성화를 반영하고 생성 요청 전까지 빈 상태를 유지한다.
+    expect(app.captureCharFrame()).toContain("No AI sessions"); expect(app.created).toEqual([]);
+    if (mode === "disabled") expect(hint.visible).toBe(false);
+    else {
+      expect(app.line("agent-empty-state:hint")).toContain(mode === "custom" ? "Ctrl+b → n" : "Ctrl+Space → n");
+      app.mockInput.pressKey(mode === "custom" ? "b" : " ", { ctrl: true }); app.mockInput.pressKey("n"); await app.render();
+      expect(app.created).toEqual(["demo:main"]);
+    }
   } finally { await app.close(); }
 });
 

@@ -16,6 +16,22 @@ test("기본 leader는 Ctrl+Space이며 Ctrl+C를 앱 종료에 할당하지 않
   expect(map.bound("ctrl+b", "prompt")).toBe(false);
 });
 
+test("세션 생성은 모든 문맥에서 leader+n만 기본으로 사용하고 Ctrl+N은 입력 소유자에 남긴다", () => {
+  // 입력·빈 화면·탭 줄에서도 공통 생성 명령은 같은 시퀀스여야 한다.
+  const map = defaultKeymap();
+
+  // 힌트와 실제 단축키 구성을 함께 확인한다.
+  for (const context of ["prompt", "terminal", "button", "none", "session-tabs", "terminal-tabs"] as const) {
+    expect(map.hints("tab.new", context)).toBe("Ctrl+Space → n");
+  }
+
+  // 별도의 생성 키는 기본에서 제거하되 기존 탭 탐색은 그대로 유지한다.
+  expect(map.hint("session.new", "session-tabs")).toBe("");
+  expect(map.bound("ctrl+n", "prompt")).toBe(false); expect(map.bound("ctrl+n", "terminal")).toBe(false);
+  expect(map.hints("session.next", "session-tabs")).toContain("Ctrl+n");
+  expect(map.hints("terminal.tab-next", "terminal-tabs")).toContain("Ctrl+n");
+});
+
 test("방향키 바인딩은 유지하되 단축키 안내에는 대체 탐색 키만 표시한다", () => {
   // 방향키가 먼저 등록된 검색과 Git에서도 대체 키를 안내해야 한다.
   const map = defaultKeymap();

@@ -34,7 +34,7 @@ test("독립 Agent 패널은 세션이 없을 때 명시적인 생성 명령만 
   try {
     app.panel.update({ ...tree, sessions: [] }, null, new Set(), true);
     await app.renderOnce();
-    expect(created).toEqual([]); expect(app.captureCharFrame()).toContain("No open sessions");
+    expect(created).toEqual([]); expect(app.captureCharFrame()).toContain("No AI sessions");
 
     // The host routes the same explicit session command used by the keyboard-only strip.
     app.panel.sessionCommand("session.new");

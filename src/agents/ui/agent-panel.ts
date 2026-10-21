@@ -1,5 +1,5 @@
 import {
-  BoxRenderable, InputRenderableEvents, ScrollBoxRenderable, TextAttributes, TextRenderable,
+  BoxRenderable, InputRenderableEvents, ScrollBoxRenderable,
   type CliRenderer, type Renderable,
 } from "@opentui/core";
 import type { ExecutionState } from "../session-registry.ts";
@@ -7,7 +7,8 @@ import type { Worktree } from "../../workspace/model.ts";
 import { CapabilityError, InputError, type ExpectedError } from "../../errors.ts";
 import { err, ok, type Result } from "../../result.ts";
 import { uiTheme } from "../../ui/theme.ts";
-import { paintText } from "../../ui/theme-styles.ts";
+import { EmptyState } from "../../ui/empty-state.ts";
+import { icons } from "../../icons.ts";
 import { TranscriptPanel, type TranscriptOptions } from "./transcript-panel.ts";
 import { TranscriptBottomButton } from "./transcript-bottom-button.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
@@ -54,9 +55,7 @@ export class AgentPanel {
   readonly root: BoxRenderable;
   readonly prompt: PromptInput;
   readonly transcriptScroll: ScrollBoxRenderable;
-  private readonly title: TextRenderable;
-  private readonly details: TextRenderable;
-  private readonly emptyPanel: BoxRenderable;
+  private readonly emptyState: EmptyState;
   private readonly sessions: SessionTabs;
   private readonly children: SubagentSummary;
   private readonly runtimePanel: BoxRenderable;
@@ -92,8 +91,6 @@ export class AgentPanel {
     this.root = new BoxRenderable(renderer, { id: id("agent-view"), onSizeChange: () => this.resizeComposer(),
       renderAfter: (buffer) => this.transcript.paintFocusGutter(buffer),
       flexGrow: 1, minHeight: 0, minWidth: 0, padding: 1, flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
-    this.title = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false, attributes: TextAttributes.BOLD });
-    this.details = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.sessions = new SessionTabs(renderer, { button, changed,
       select: (id) => { if (this.worktree) actions.onSelectSession?.(this.worktree.id, id); },
       create: () => { if (this.worktree) actions.onNewSession(this.worktree.id); },
@@ -101,10 +98,8 @@ export class AgentPanel {
       close: (id) => { if (this.worktree) actions.onCloseSession?.(this.worktree.id, id); },
       keyHint: (command, context) => transcriptOptions.keyHint?.(command, context) ?? "",
     });
-    this.emptyPanel = new BoxRenderable(renderer, { width: "100%", flexGrow: 1, minHeight: 0,
-      flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
-    this.emptyPanel.add(this.title); this.emptyPanel.add(this.details);
-    this.root.add(this.sessions.root); this.root.add(this.emptyPanel);
+    this.emptyState = new EmptyState(renderer, id("agent-empty-state"));
+    this.root.add(this.sessions.root); this.root.add(this.emptyState.root);
     this.runtimePanel = new BoxRenderable(renderer, { width: "100%", flexGrow: 1, minHeight: 0, flexDirection: "column", gap: 0 });
     this.transcript = new TranscriptPanel(renderer, { notice, changed, focusPrompt: () => this.prompt.focus(), initialScroll, saveScroll, cacheSessions: true,
       ...transcriptOptions, ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}), ...(actions.onImage ? { image: actions.onImage } : {}) });
@@ -140,10 +135,6 @@ export class AgentPanel {
     inputArea.add(this.pendingMessages.root); inputArea.add(composer); inputArea.add(this.completion.root); inputArea.add(this.sessionStatus.root);
     this.runtimePanel.add(transcriptArea); this.runtimePanel.add(statusRow); this.runtimePanel.add(inputArea); this.root.add(this.runtimePanel);
     theme.scrollbars(this.transcriptScroll);
-    theme.bindStyles(this.root, (styles) => {
-      paintText(this.title, { ...styles["ui.label"], attributes: styles["ui.label"].attributes | TextAttributes.BOLD });
-      paintText(this.details, styles["ui.muted"]);
-    });
     bindPanelSpacing(renderer, this.root);
     this.prompt.on("resize", this.resizeComposer); this.prompt.on("line-info-change", this.resizeComposer);
     renderer.on("resize", this.resize);
@@ -197,11 +188,11 @@ export class AgentPanel {
     this.root.visible = visible; this.worktree = worktree;
     this.sessions.update(worktree?.id ?? null, this.transcriptOptions.readOnly ? [] : worktree?.sessions ?? [], selectedId, visible && !this.transcriptOptions.readOnly);
     const session = worktree?.sessions.find((item) => item.id === selectedId);
-    this.title.content = session?.name ?? (worktree ? "No open sessions" : "No workspace available");
     const details = session ? this.actions.getSessionDetails?.(session.id) : null;
-    this.details.content = worktree
-      ? session ? `Workspace: ${worktree.name} · ${details ? details.error ?? details.status ?? "Ready" : "display preview only"}` : `Workspace: ${worktree.name} · create a session explicitly`
-      : "Open radian inside a Git repository.";
+    const creationKey = worktree && !session && !this.transcriptOptions.readOnly ? this.sessions.creationShortcut : "";
+    this.emptyState.update({ icon: icons.robot, title: session?.name ?? (worktree ? "No AI sessions" : "No workspace available"),
+      description: worktree ? session ? `Workspace: ${worktree.name} · ${details ? details.error ?? details.status ?? "Ready" : "display preview only"}` : "" : "Open radian inside a Git repository.",
+      ...(creationKey ? { action: { key: creationKey, label: "New session" } } : {}) });
     const sessionId = session?.id ?? null;
     const previousConversation = sessionId ? this.conversations.get(sessionId) : undefined;
     const replaced = !!details?.conversationId && previousConversation !== undefined && previousConversation !== details.conversationId;
@@ -228,7 +219,7 @@ export class AgentPanel {
     this.runStatus.update(sessionId, details, this.active);
     this.pending = details?.pendingMessages ?? [];
     this.sessionStatus.update(details?.telemetry, this.active, worktree, this.transcriptOptions.snapshotTime?.());
-    this.emptyPanel.visible = visible && !this.active;
+    this.emptyState.root.visible = visible && !this.active;
     this.children.update(session?.subagents ?? [], this.active);
     this.root.gap = 0;
     this.root.alignItems = "stretch";

@@ -40,16 +40,14 @@ async function mount() {
   };
 }
 
-test.each(["leader", "ctrl-n", "session-strip"] as const)("%s에서 새 세션을 만들면 새 탭과 입력창으로 이동하고 기존 초안을 보존한다", async source => {
+test.each(["prompt", "session-strip"] as const)("%s에서 새 세션을 만들면 새 탭과 입력창으로 이동하고 기존 초안을 보존한다", async source => {
   // Both creation entry points must target the new conversation, not the previous draft.
   const app = await mount();
   try {
     if (source === "session-strip") app.renderer.root.findDescendantById("agent-session-list")!.focus();
 
     // Creation is asynchronous, so edits made before it finishes must remain in the old session.
-    if (source === "leader") app.leader("n");
-    else if (source === "ctrl-n") app.mockInput.pressKey("n", { ctrl: true });
-    else app.mockInput.pressKey("n");
+    app.leader("n");
     expect(app.creations.map(request => request.worktreeId)).toEqual(["demo:main"]);
     expect(app.selection.sessionId).toBe("a1");
     app.input.value = "Edited while creating";
@@ -67,12 +65,27 @@ test.each(["leader", "ctrl-n", "session-strip"] as const)("%s에서 새 세션�
   } finally { await app.close(); }
 });
 
+test("프롬프트의 Ctrl+N은 새 세션을 만들거나 기존 초안을 지우지 않는다", async () => {
+  // 생성은 leader 시퀀스만 소유하며 입력 편집 키를 가로채지 않는다.
+  const app = await mount();
+  try {
+    // 작성 중인 프롬프트에 Ctrl+N을 전달한다.
+    app.mockInput.pressKey("n", { ctrl: true }); await app.render();
+
+    // 입력과 선택은 유지되고 생성 요청은 발생하지 않는다.
+    expect(app.creations).toEqual([]); expect(app.selection.sessionId).toBe("a1");
+    expect(app.input.value).toBe("Original draft"); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+  } finally { await app.close(); }
+});
+
 test("빈 워크트리에서 첫 세션을 만들면 스냅샷의 자동 선택 후에도 입력창에 포커스를 준다", async () => {
   // An empty worktree initially has only the session strip as an Agent focus target.
   const app = await mount();
   try {
     app.selection.selectWorktree("demo:empty"); app.leader("a"); await app.render();
     expect(app.selection.sessionId).toBeNull();
+    expect(app.captureCharFrame()).toContain("No AI sessions");
+    expect(app.captureCharFrame()).toContain("Ctrl+Space → n");
 
     // The snapshot arrives before the creation callback and already exposes the first session.
     app.leader("n"); await app.created(0, "first");

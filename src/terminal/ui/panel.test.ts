@@ -79,17 +79,17 @@ test("복원한 Terminal 화면에 열린 쉘이 없으면 기본 쉘 하나를 
   } finally { await app.close(); }
 });
 
-test("터미널 입력의 Ctrl+N은 새 탭을 선택하고 쉘에 제어 문자를 보내지 않는다", async () => {
+test("터미널 입력의 leader+n은 새 탭을 선택하고 쉘에 제어 문자를 보내지 않는다", async () => {
   // 기본 쉘 입력을 받고 있는 상태에서 새 터미널을 요청한다.
   const app = await mount();
   try {
     await app.showView("t"); await app.visible("Shell shell-1");
-    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).toContain("Ctrl+n New terminal");
+    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).toContain("Ctrl+Space → n New terminal");
 
     // 입력 중 생성 단축키를 누르면 두 번째 쉘이 준비된다.
-    app.mockInput.pressKey("n", { ctrl: true }); await app.visible("Shell shell-2");
+    app.leader("n"); await app.visible("Shell shell-2");
 
-    // 새 탭이 입력을 소유하고 Ctrl+N 자체는 어느 PTY에도 전달되지 않는다.
+    // 새 탭이 입력을 소유하고 leader 시퀀스는 어느 PTY에도 전달되지 않는다.
     expect(app.created).toEqual(["demo:main", "demo:main"]);
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-2");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
@@ -97,21 +97,19 @@ test("터미널 입력의 Ctrl+N은 새 탭을 선택하고 쉘에 제어 문자
   } finally { await app.close(); }
 });
 
-test("Ctrl+N을 누르고 있어도 새 터미널은 한 번만 만들고 다시 누르면 추가 생성한다", async () => {
-  // 키를 놓기 전 자동 반복이 새 쉘을 연속 생성해서는 안 된다.
+test("터미널 입력의 Ctrl+N/P는 쉘에 전달하고 새 탭을 만들지 않는다", async () => {
+  // 생성과 탐색을 분리한 뒤 PTY가 원래 readline 키를 소유한다.
   const app = await mount();
-  const raw = (text: string) => app.renderer.keyInput.processParsedKey(parseKeypress(text, { useKittyKeyboard: true })!);
   try {
     await app.showView("t"); await app.visible("Shell shell-1");
 
-    // 최초 입력 후 생성 완료까지 누르고 있다가 반복 이벤트를 전달한다.
-    raw("\x1b[110;5u"); await app.visible("Shell shell-2");
-    raw("\x1b[110;5:2u"); await app.renderOnce(); await app.renderOnce();
+    // 쉘에서 다음·이전 입력 키를 직접 누른다.
+    app.mockInput.pressKey("n", { ctrl: true }); app.mockInput.pressKey("p", { ctrl: true }); await app.renderOnce();
 
-    // 자동 반복은 무시하지만 키를 놓고 다시 누르는 독립 요청은 허용한다.
-    expect(app.created).toHaveLength(2); expect(app.inputs).toEqual([]);
-    raw("\x1b[110;5:3u"); raw("\x1b[110;5u"); await app.visible("Shell shell-3");
-    expect(app.created).toHaveLength(3); expect(app.inputs).toEqual([]);
+    // 제어 바이트를 그대로 전달하며 쉘과 선택을 추가 생성으로 바꾸지 않는다.
+    expect(app.inputs).toContain("0e"); expect(app.inputs).toContain("10");
+    expect(app.created).toEqual(["demo:main"]);
+    expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-1");
   } finally { await app.close(); }
 });
 
@@ -128,6 +126,7 @@ test("기본 터미널 생성 중 스냅샷 갱신과 생성 단축키가 겹쳐
 
     // 최초 요청 하나만 실행하고 완료된 쉘을 활성화한다.
     expect(attempts).toBe(1);
+    expect(app.renderer.root.findDescendantById("terminal-empty-state")!.visible).toBe(false);
     ready.resolve(); await app.visible("Shell shell-1");
     expect(app.created).toEqual(["demo:main"]); expect(app.inputs).toEqual([]);
   } finally { ready.resolve(); await app.close(); }
@@ -168,7 +167,7 @@ test.each(["before-layout", "during-startup"] as const)("%s에 검색을 열면 
   } finally { ready.resolve(); await app.close(); }
 });
 
-test("기본 쉘 생성 실패는 자동 재시도하지 않고 Ctrl+N으로 다시 요청할 수 있다", async () => {
+test("기본 쉘 생성 실패는 자동 재시도하지 않고 leader+n으로 다시 요청할 수 있다", async () => {
   // 첫 시작 요청만 운영 오류로 거절한다.
   const app = await mount(), create = app.actions.create; let attempts = 0;
   app.actions.create = async (tree, size) => ++attempts === 1 ? err(new PtyError("PTY_UNAVAILABLE", "Shell startup denied.")) : create(tree, size);
@@ -179,7 +178,7 @@ test("기본 쉘 생성 실패는 자동 재시도하지 않고 Ctrl+N으로 다
 
     // 빈 화면은 단축키로 복구할 수 있으며 성공한 쉘만 탭에 남는다.
     expect(attempts).toBe(1); expect(app.created).toEqual([]);
-    app.mockInput.pressKey("n", { ctrl: true }); await app.visible("Shell shell-1");
+    app.leader("n"); await app.visible("Shell shell-1");
     expect(attempts).toBe(2); expect(app.created).toEqual(["demo:main"]);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
   } finally { await app.close(); }
@@ -231,14 +230,14 @@ test.each(["arrows", "vim", "control"] as const)("터미널 탭의 %s 탐색은 
     app.mockInput.pressEnter(); await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
 
-    // 새 터미널 생성에 지정한 Ctrl+N 외의 키는 원래 쉘 입력으로 전달한다.
+    // 탭 탐색을 떠나면 같은 키도 원래 쉘 입력으로 전달한다.
     app.mockInput.pressKey("h"); app.mockInput.pressKey("l");
-    app.mockInput.pressKey("p", { ctrl: true });
+    app.mockInput.pressKey("n", { ctrl: true }); app.mockInput.pressKey("p", { ctrl: true });
     app.mockInput.pressKey("d", { ctrl: true }); app.mockInput.pressKey("u", { ctrl: true });
     app.mockInput.pressArrow("left"); app.mockInput.pressArrow("right");
     expect(app.inputs).toContain("68"); expect(app.inputs).toContain("6c");
-    expect(app.inputs).toContain("10");
-    expect(app.inputs).toContain("04"); expect(app.inputs).toContain("15"); expect(app.inputs.length).toBeGreaterThanOrEqual(7);
+    expect(app.inputs).toContain("0e"); expect(app.inputs).toContain("10");
+    expect(app.inputs).toContain("04"); expect(app.inputs).toContain("15"); expect(app.inputs.length).toBeGreaterThanOrEqual(8);
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-2");
   } finally { await app.close(); }
 });
@@ -337,7 +336,7 @@ test("빈 Terminal 진입은 첫 쉘을 만들고 워크트리별 기존 목록�
     // 첫 진입과 추가 생성 후 다른 워크트리를 방문한다.
     await app.showView("t"); await app.visible("Shell shell-1");
     expect(app.captureCharFrame()).not.toContain("+ New");
-    app.mockInput.pressKey("n", { ctrl: true }); await app.visible("Shell shell-2");
+    app.leader("n"); await app.visible("Shell shell-2");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
     await app.click("Terminal 1", true); await app.visible("Shell shell-1");
     await app.click(`${icons.folder} radian-ui`); await app.showView("t"); await app.visible("Shell shell-3");
@@ -348,6 +347,34 @@ test("빈 Terminal 진입은 첫 쉘을 만들고 워크트리별 기존 목록�
     expect(app.view.workViewPreferences.terminalSelection).toEqual({ "demo:main": "shell-1", "demo:feature": "shell-3" });
     expect(app.created).toEqual(["demo:main", "demo:main", "demo:feature"]);
     expect(app.closed).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each(["default", "custom", "disabled"] as const)("마지막 터미널을 닫은 화면은 %s 생성 키만 중앙에 안내한다", async mode => {
+  // 기본 터미널을 닫은 후에는 빈 화면과 실제 설정된 생성 경로만 남아야 한다.
+  const keymap = expectOk(parseKeymap(mode === "custom" ? { leader: "ctrl+b" } : mode === "disabled" ? { bindings: { "tab.new": [] } } : {}));
+  const app = await mount(undefined, undefined, keymap);
+  const leader = (key: string) => { app.mockInput.pressKey(mode === "custom" ? "b" : " ", { ctrl: true }); app.mockInput.pressKey(key); };
+  try {
+    leader("t"); await app.visible("Shell shell-1");
+    const close = app.renderer.root.findDescendantById("close-terminal:shell-1")!;
+
+    // 마지막 탭을 닫아 자동 생성 없는 빈 상태로 전환한다.
+    await app.mockMouse.click(close.x, close.y); await app.visible("No terminals");
+    app.mockInput.pressKey("n", { ctrl: true }); await app.renderOnce();
+
+    // 빈 본문은 공통 안내를 표시하고 Ctrl+N은 생성 별칭이 아니다.
+    const empty = app.renderer.root.findDescendantById("terminal-empty-state")!;
+    const hint = app.renderer.root.findDescendantById("terminal-empty-state:hint") as TextRenderable;
+    expect(empty.visible).toBe(true); expect(app.created).toHaveLength(1);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("terminal-view");
+    if (mode === "disabled") expect(hint.visible).toBe(false);
+    else {
+      expect(hint.plainText).toContain(mode === "custom" ? "Ctrl+b → n" : "Ctrl+Space → n");
+      expect(hint.y).toBeGreaterThan(empty.y);
+      leader("n"); await app.visible("Shell shell-2");
+      expect(app.created).toHaveLength(2); expect(empty.visible).toBe(false);
+    }
   } finally { await app.close(); }
 });
 
@@ -392,7 +419,7 @@ test("활성 하위 탭 닫기는 다음·이전·빈 상태로 이동하며 마
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBeUndefined();
 
     // 마지막 탭을 닫은 빈 화면에서도 제거된 버튼 없이 새 쉘을 요청할 수 있다.
-    app.mockInput.pressKey("n", { ctrl: true }); await app.visible("Shell shell-4");
+    app.leader("n"); await app.visible("Shell shell-4");
     expect(app.created).toHaveLength(4);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
   } finally { await app.close(); }
@@ -418,7 +445,7 @@ test("쉘이 종료된 탭은 이웃 탭으로 이동하고 마지막 종료는 
     expect(app.closed).toEqual([]);
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBeUndefined();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("terminal-view");
-    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).toContain("Ctrl+n New terminal");
+    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).toContain("Ctrl+Space → n New terminal");
 
     // 종료 직후가 아니라 빈 화면에 다시 진입할 때만 기본 쉘을 생성한다.
     await app.showView("a"); await app.showView("t"); await app.visible("Shell shell-4");
@@ -562,7 +589,7 @@ test("터미널 탭에서 Space는 해당 쉘 입력으로 진입하고 제어 �
   } finally { await app.close(); }
 });
 
-test("포커스한 마지막 터미널의 ×를 닫으면 빈 화면에 포커스를 남기고 Ctrl+N으로 복구한다", async () => {
+test("포커스한 마지막 터미널의 ×를 닫으면 빈 화면에 포커스를 남기고 leader+n으로 복구한다", async () => {
   // 공용 Close가 없어도 탭별 닫기에서 빈 화면의 입력 경로로 복귀해야 한다.
   const app = await mount();
   try {
@@ -576,7 +603,7 @@ test("포커스한 마지막 터미널의 ×를 닫으면 빈 화면에 포커�
     // 새 탭 단축키를 누르기 전까지 빈 상태와 유효한 포커스를 유지한다.
     expect(app.closed).toEqual(["shell-1"]); expect(app.created).toHaveLength(1);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("terminal-view");
-    app.mockInput.pressKey("n", { ctrl: true }); await app.visible("Shell shell-2");
+    app.leader("n"); await app.visible("Shell shell-2");
     expect(app.created).toHaveLength(2); expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
   } finally { await app.close(); }
 });

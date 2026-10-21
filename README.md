@@ -186,9 +186,9 @@ view per worktree and Agents as the initial view. There is no top-level view tab
 current view next to the Radian product name, independently of keyboard focus.
 **Ctrl+Space, then 1–9** selects the corresponding Agent session or terminal in the current worktree's
 tab order. Missing slots and numeric selection in Editor/Git do nothing; no sessions are created.
-**Ctrl+N** in Agent prompt or terminal input creates a session or terminal in the current view.
-**Ctrl+Space, then n** also creates one and does nothing in Editor/Git. In Agents, the new session is
-selected and its prompt receives focus once it appears. If you navigate elsewhere while creation is pending, the new tab opens in the background
+**Ctrl+Space, then n** creates an Agent session or terminal in the current view, including when
+no tabs remain. It does nothing in Editor/Git. In Agents, the new session is selected and its prompt
+receives focus once it appears. If you navigate elsewhere while creation is pending, the new tab opens in the background
 without taking focus. Agent and Terminal session strips remain visible and clickable.
 Tree cursor movement is only navigation; Enter or a direct worktree click commits the selection.
 Each worktree separately remembers its work view and selected Agent session. Within Agents, session
@@ -199,11 +199,15 @@ is narrower than one tab, the frame shrinks to fit and truncates its label with 
 If open sessions in the same worktree share a prefix, labels expand only within that fixed frame;
 long collisions retain the distinguishing tail after `…`. IDs of eight characters or fewer stay
 unchanged. Selection, closing and persistence still use the full ID. Session names remain unchanged for History and other
-metadata. Focus the strip and press `n` (or the configured `session.new` key) to add a session; the strip
-remains focusable when empty.
+metadata. Use the same configured `tab.new` sequence from input, the tab strip or the empty body;
+the strip remains focusable when empty. `Ctrl+N/P` navigates tabs, not session creation.
 The upper-right worktree label and the New session/History toolbar buttons are removed. Session-tab selection and History resume open the chosen session in Agents. Restoring a
 selection, filtering and background snapshots never implicitly activate another work view.
 Session creation/closing retain their existing rules and never implicitly launch an editor.
+With no open Agent sessions or terminals, a shared centered empty state shows a muted icon, a short
+`No AI sessions` / `No terminals` title and the actual configured creation shortcut. Disabled bindings
+have no fabricated default hint. Small bodies prioritize the shortcut over decorative artwork.
+An existing Agent session with no messages still shows its separate Radian logo and prompt.
 
 **Ctrl+Space, then b** toggles the workspace popup, initially closed, and focuses its search input.
 The existing `sidebar.toggle`, `focus.sidebar` and `focus.search` configuration IDs remain accepted.
@@ -808,15 +812,17 @@ lazygit, delta or difftastic. Tree-sitter workers are released when the TUI deta
 ### Terminal tabs
 
 Entering **Terminal** automatically starts one shell if the selected worktree has none.
-Existing shells and the last selected tab are reused without creating another shell. Use **Ctrl+N**
-in terminal input (or **Ctrl+Space, then n**) for additional terminals; there is no **+ New** button.
+Existing shells and the last selected tab are reused without creating another shell. Use
+**Ctrl+Space, then n** for additional terminals, from either input or the empty view; there is no
+**+ New** button.
 Each worktree has an independent list of shells; creating one selects it unless later navigation
 supersedes that request. Each tab uses the same fixed-width frame and right-aligned **×** as Agent
 sessions; there is no shared **Close** button. Closing an inactive tab leaves the active shell and
 input focus unchanged. Closing the selected tab selects its next/previous neighbor, or leaves an
 empty state with the configured new-tab shortcut.
 While a terminal tab is focused, `h/l` or `Ctrl+N/P` switches to its neighbor without leaving the
-strip. Enter or Space opens the selected terminal input. Except for **Ctrl+N**, shell input retains its native bindings.
+strip. Enter or Space opens the selected terminal input. Shell input retains native **Ctrl+N/P**
+and other program bindings; only the configured leader sequences are reserved for app actions.
 Tab labels show the foreground executable (for example `zsh`, `nvim` or `bun`), not `Terminal N`.
 The TUI reads a bounded local process snapshot while Terminal is visible, checks each shell's
 supervisor parent, and selects its actual terminal foreground group rather than a background job.
@@ -959,19 +965,19 @@ From a search input, `Ctrl+D/U` preserves the query and caret, focuses the resul
 from the current candidate. Further presses and held-key repeats continue navigating the list.
 In compact layouts this returns from preview to results. **Ctrl+C** clears only the search query,
 without closing the popup or interrupting work; an empty query is a no-op.
-Git prompt editing and embedded editors retain their native input bindings. Agent prompt and shell
-input reserve **Ctrl+N** for a new session/terminal; search, completion and focused tab strips keep
-**Ctrl+N/P** navigation.
+Agent/Git prompt editing and embedded editors/shells retain their native input bindings.
+Search, completion and focused tab strips keep **Ctrl+N/P** navigation. Creation uses the separate
+**Ctrl+Space, then n** sequence, not **Ctrl+N** or bare `n`.
 
 The default leader is **Ctrl+Space**. Press and release it, then press `c` to detach radian,
 `a`/`e`/`g`/`t` to select Agents/Editor/Git/Terminal, `b` to toggle workspace navigation,
 `w` or `f` to open workspace search, or `s` to monitor working sessions and unread results.
 `<leader> 1` through `<leader> 9` select a session in Agents or a shell in Terminal, based on the
-visible view rather than the focused control. **Ctrl+N** in Agent prompt or terminal input, or
-`<leader> n`, creates a session/shell in that view; Editor and Git ignore these commands. `<leader> x` closes the selected terminal, and `<leader> [` / `]`
+visible view rather than the focused control. `<leader> n` creates a session/shell in that view,
+including empty states; Editor and Git ignore these commands. `<leader> x` closes the selected terminal, and `<leader> [` / `]`
 select the previous/next terminal while Terminal is active. These shared actions can be rebound with
-`tab.new` and `tab.select-1` through `tab.select-9`; `terminal.new` remains available for explicit
-custom bindings but has no default binding.
+`tab.new` and `tab.select-1` through `tab.select-9`; `session.new` and `terminal.new` remain available
+for explicit custom bindings but have no default bindings.
 Ctrl+C clears drafts in Agent input; in Editor and Terminal, Neovim and shells still receive it as native input.
 If macOS reserves Ctrl+Space for input-source switching, change that system shortcut or radian's leader.
 

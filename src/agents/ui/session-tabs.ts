@@ -47,10 +47,11 @@ export class SessionTabs {
   get focusTargets(): Renderable[] {
     return this.visible ? [this.list] : [];
   }
+  get creationShortcut(): string { return this.actions.keyHint("session.new", "session-tabs") || this.actions.keyHint("tab.new", "session-tabs"); }
   get shortcuts(): readonly FooterShortcut[] {
     const hint = (id: CommandId) => this.actions.keyHint(id, "session-tabs");
     return [...(this.sessions.length ? [{ key: [hint("session.previous"), hint("session.next")].filter(Boolean).join("/"), label: "Session" }] : []),
-      { key: hint("session.new"), label: "New session" }, ...(this.actions.history ? [{ key: hint("history.show"), label: "History" }] : []), ...(this.selected ? [{ key: hint("session.close"), label: "Close session" }] : [])];
+      { key: this.creationShortcut, label: "New session" }, ...(this.actions.history ? [{ key: hint("history.show"), label: "History" }] : []), ...(this.selected ? [{ key: hint("session.close"), label: "Close session" }] : [])];
   }
 
   update(worktreeId: string | null, sessions: readonly OpenSession[], selected: string | null, visible: boolean): void {

@@ -90,9 +90,9 @@ test("닫기 키는 끝 항목의 이전 세션을 선택하고 마지막 항목
     // The same central empty state offers an explicit action, not an automatic session.
     expect(app.selection.sessionId).toBeNull();
     expect(app.selection.worktree?.sessions).toHaveLength(0);
-    expect(app.captureCharFrame()).toContain("No open sessions");
+    expect(app.captureCharFrame()).toContain("No AI sessions");
     expect(app.renderer.root.findDescendantById("agent-session-list")!.visible).toBe(true);
-    expect(app.captureCharFrame().split("\n")[23]).toContain("n New session");
+    expect(app.captureCharFrame().split("\n")[23]).toContain("Ctrl+Space → n New session");
   } finally { await app.close(); }
 });
 
@@ -122,13 +122,14 @@ test("빈 워크트리의 생성 명령은 요청만 보내며 선택이나 열�
     const before = app.selection.snapshot;
 
     // The action crosses the host callback boundary without implementing OA-5.
-    app.renderer.root.findDescendantById("agent-session-list")!.focus(); app.mockInput.pressKey("n"); await app.renderOnce();
+    app.renderer.root.findDescendantById("agent-session-list")!.focus();
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("n"); await app.renderOnce();
 
     // No runtime, automatic selection or placeholder session was manufactured.
     expect(app.requests).toEqual(["demo:empty"]);
     expect(app.selection.snapshot).toBe(before);
     expect(app.selection.sessionId).toBeNull();
-    expect(app.captureCharFrame()).toContain("No open sessions");
+    expect(app.captureCharFrame()).toContain("No AI sessions");
   } finally { await app.close(); }
 });
 

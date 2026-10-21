@@ -167,7 +167,8 @@ export class Workbench {
         if ((selected[worktreeId] ?? null) === id) return;
         if (id) selected[worktreeId] = id; else delete selected[worktreeId];
         this.saveWorkViews();
-      }, () => this.updateFooter(), actions.terminalUnavailable, actions.terminalTheme);
+      }, () => this.updateFooter(), actions.terminalUnavailable, actions.terminalTheme,
+      () => this.keymap.hint("tab.new", "button") || this.keymap.hint("terminal.new", "button"));
     this.git = new GitPanel(renderer, actions.git, (label, activate, actionLabel, variant) => this.button(label, activate, actionLabel, variant),
       (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); }, () => this.updateFooter(),
       (id, state) => {

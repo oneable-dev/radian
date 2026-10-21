@@ -68,7 +68,7 @@ test("exit 자동완성은 마지막 탭도 닫되 앱과 다른 워크트리의
     // 마지막 탭 종료는 빈 화면으로 돌아갈 뿐 Radian 전체를 종료하지 않는다.
     expect(app.submitted).toEqual([{ id: "b1", text: "/exit" }]);
     expect(app.selection.sessionId).toBeNull(); expect(app.selection.worktree?.sessions).toEqual([]);
-    expect(app.captureCharFrame()).toContain("No open sessions"); expect(app.view.root.isDestroyed).toBe(false);
+    expect(app.captureCharFrame()).toContain("No AI sessions"); expect(app.view.root.isDestroyed).toBe(false);
     expect(app.selection.snapshot[0]?.worktrees[0]?.sessions.map(session => session.id)).toEqual(["a1", "a2", "a3"]);
     expect(app.view.promptDrafts.a2).toBe("Second draft");
   } finally { await app.close(); }

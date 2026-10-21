@@ -228,13 +228,14 @@ test("비선택 세션 탭의 닫기 버튼은 현재 세션과 초안을 바꾸
   } finally { await app.close(); }
 });
 
-test("세션 생성과 닫기 키는 Workspace에서 실행되지 않고 세션 탭에서만 실행된다", async () => {
+test("생성은 leader+n으로 통일하고 탭의 닫기는 x로 유지한다", async () => {
   // The left panel no longer owns hidden active-session actions.
   const app = await mount();
   try {
     app.mockInput.pressKey("n"); app.mockInput.pressKey("x"); await app.render();
     expect(app.requests).toEqual([]);
-    app.get("agent-session-list").focus(); app.mockInput.pressKey("n"); app.mockInput.pressKey("x"); await app.render();
+    app.get("agent-session-list").focus();
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("n"); app.mockInput.pressKey("x"); await app.render();
 
     expect(app.requests).toEqual(["new:demo:main", "close:a1"]);
     expect(app.selection.sessionId).toBe("a2");
