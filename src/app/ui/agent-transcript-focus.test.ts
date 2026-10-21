@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BoxRenderable, ScrollBoxRenderable, type TerminalColors } from "@opentui/core";
+import { BoxRenderable, ScrollBoxRenderable, parseKeypress, type TerminalColors } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
@@ -134,7 +134,7 @@ test("스크롤·resize·스트리밍 중 표시줄은 보이는 섹션과 Trans
   try {
     await app.focus(); app.expectMarker(0);
 
-    app.mockInput.pressKey("d", { ctrl: true }); await app.render();
+    app.scroll.scrollBy(Math.floor(app.scroll.viewport.height / 2)); await app.render();
     expect(app.cards()[0]!.y).toBeLessThan(app.scroll.viewport.y); app.expectMarker(0);
     app.resize(60, 18); await app.render(); app.expectMarker(0);
     await app.update([{ ...long, text: long.text + "\nSTREAMED_LINE" }, sections[0]!]);
@@ -147,6 +147,40 @@ test("스크롤·resize·스트리밍 중 표시줄은 보이는 섹션과 Trans
     expect(app.background(viewport.x - 1, viewport.y + viewport.height).equals(accent)).toBe(false);
     app.mockInput.pressKey("n", { ctrl: true }); await app.render(); app.expectMarker(1);
     app.scroll.scrollTo(0); await app.render(); app.expectMarker();
+  } finally { await app.close(); }
+});
+
+test.each([120, 60])("너비 %i에서 Ctrl+D/U 반복은 선택과 표시줄을 함께 이동하고 화면 안에 유지한다", async (width) => {
+  // Repeated jumps must follow the selected section, even after scrolling is needed to reveal it.
+  const app = await mount(Array.from({ length: 60 }, (_, index) => ({ ...sections[5]!, id: `section-${index}`, text: `BODY_${index}` })), width);
+  const raw = (sequence: string) => {
+    const key = parseKeypress(sequence, { useKittyKeyboard: true });
+    if (!key) throw new Error("Invalid Kitty key");
+    app.renderer.keyInput.processParsedKey(key);
+  };
+  const expectSelected = (index: number) => {
+    expect(app.view.workViewPreferences.agentViews?.a1?.selectedId).toBe(`section-${index}`);
+    const card = app.cards()[index]!, viewport = app.scroll.viewport;
+    expect(card.y).toBeGreaterThanOrEqual(viewport.y);
+    expect(card.y + card.height).toBeLessThanOrEqual(viewport.y + viewport.height);
+    app.expectMarker(index);
+  };
+  try {
+    await app.focus();
+    const step = Math.max(1, Math.floor(app.scroll.viewport.height / 4));
+
+    app.mockInput.pressKey("d", { ctrl: true }); await app.render(); expectSelected(step);
+    raw("\x1b[100;5:2u"); await app.render(); expectSelected(2 * step);
+    raw("\x1b[100;5:2u"); await app.render(); expectSelected(3 * step);
+    raw("\x1b[100;5:3u");
+    app.mockInput.pressKey("u", { ctrl: true }); await app.render(); expectSelected(2 * step);
+    raw("\x1b[117;5:2u"); await app.render(); expectSelected(step);
+    raw("\x1b[117;5:2u"); await app.render(); expectSelected(0);
+    raw("\x1b[117;5:3u");
+
+    // Held navigation never enters text editing or changes the prompt draft.
+    expect(app.renderer.currentFocusedRenderable).toBe(app.scroll);
+    expect(app.view.promptDrafts.a1).toBe("Keep my draft");
   } finally { await app.close(); }
 });
 

@@ -143,25 +143,111 @@ test("Ctrl+D/U는 본문과 선택에서 반 viewport만 이동하고 anchor는 
   } finally { await app.close(); }
 });
 
-test("섹션 모드의 반 페이지 스크롤과 j/k 섹션 점프는 서로 독립적이다", async () => {
+test.each([120, 60])("너비 %i에서 Ctrl+D/U는 현재 선택에서 반 화면 거리의 섹션으로 이동한다", async (width) => {
+  // One-line sections have a two-row stride including their gap, not a one-row item count.
   const app = await mount(Array.from({ length: 30 }, (_, index) => ({ ...section(`body ${index}`), id: `section-${index}` })));
   try {
+    app.resize(width, 30); await app.render();
     app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
-    const top = app.scroll.scrollTop, half = Math.floor(app.scroll.viewport.height / 2);
+    const top = app.scroll.scrollTop, step = Math.max(1, Math.floor(app.scroll.viewport.height / 4));
 
     app.mockInput.pressKey("d", { ctrl: true }); await app.render();
-    expect(app.scroll.scrollTop).toBe(top + half); expect(app.state()?.selectedId).toBe("section-0");
-    app.mockInput.pressKey("u", { ctrl: true }); await app.render(); expect(app.scroll.scrollTop).toBe(top);
+    expect(app.state()?.selectedId).toBe(`section-${step}`);
+    // A jump already inside the viewport must not scroll merely to reach a fixed scroll offset.
+    expect(app.scroll.scrollTop).toBe(top);
+    app.mockInput.pressKey("d", { ctrl: true }); await app.render();
+    expect(app.state()?.selectedId).toBe(`section-${2 * step}`);
+    app.mockInput.pressKey("u", { ctrl: true }); await app.render();
+    expect(app.state()?.selectedId).toBe(`section-${step}`);
+    app.mockInput.pressKey("u", { ctrl: true }); await app.render();
+
+    // Ordinary section movement and native prompt/PTY input ownership remain unchanged.
+    expect(app.state()?.selectedId).toBe("section-0");
     app.mockInput.pressKey("j"); await app.render(); expect(app.state()?.selectedId).toBe("section-1");
     app.mockInput.pressEnter(); app.mockInput.pressEscape(); app.mockInput.pressKey("k"); await app.render();
-
     expect(app.state()?.selectedId).toBe("section-0");
-    const keymap = defaultKeymap();
-    expect(keymap.bound("ctrl+d", "prompt")).toBe(false); expect(keymap.bound("ctrl+u", "terminal")).toBe(false);
-    // Ctrl+N/P도 섹션 선택을 이동하며 본문 스크롤 점프와 혼동하지 않는다.
     app.mockInput.pressKey("n", { ctrl: true }); await app.render(); expect(app.state()?.selectedId).toBe("section-1");
     app.mockInput.pressKey("p", { ctrl: true }); await app.render(); expect(app.state()?.selectedId).toBe("section-0");
+    expect(app.prompts).toEqual([]); expect(app.view.promptDrafts.a1).toBe("unsent draft");
+    const keymap = defaultKeymap();
+    expect(keymap.bound("ctrl+d", "prompt")).toBe(false); expect(keymap.bound("ctrl+u", "terminal")).toBe(false);
     expect(keymap.bound("ctrl+n", "transcript")).toBe(true); expect(keymap.bound("ctrl+p", "transcript")).toBe(true);
+  } finally { await app.close(); }
+});
+
+test("반 페이지 섹션 점프는 접힌 카드와 펼친 본문의 실제 높이를 반영한다", async () => {
+  // A folded tool fits before the target, but its expanded body is taller than half a viewport.
+  const app = await mount([
+    { ...section("START"), id: "start" },
+    { ...section("TOOL_LINE\n".repeat(40)), id: "tool", kind: "tool", title: "read" },
+    { ...section("TARGET_LINE\n".repeat(40)), id: "target" },
+  ]);
+  try {
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
+
+    app.mockInput.pressKey("d", { ctrl: true }); await app.render();
+    expect(app.state()?.selectedId).toBe("target");
+    app.mockInput.pressKey("u", { ctrl: true }); await app.render();
+    expect(app.state()?.selectedId).toBe("start");
+    app.mockInput.pressKey("j"); app.mockInput.pressKey("o", { ctrl: true }); await app.render();
+    app.mockInput.pressKey("HOME"); app.mockInput.pressKey("d", { ctrl: true }); await app.render();
+
+    // The next oversized section is still reachable, without skipping it or stalling on the current one.
+    expect(app.state()?.selectedId).toBe("tool");
+    app.mockInput.pressKey("d", { ctrl: true }); await app.render();
+    expect(app.state()?.selectedId).toBe("target");
+    app.mockInput.pressKey("u", { ctrl: true }); await app.render();
+    expect(app.state()?.selectedId).toBe("tool");
+  } finally { await app.close(); }
+});
+
+test("반 페이지 섹션 점프는 처음·끝에서 멈추고 단일·빈 대화에서도 안전하다", async () => {
+  // Both sections exceed a viewport, so every jump must still advance by at least one section.
+  const first = { ...section("FIRST_LINE\n".repeat(80)), id: "first" };
+  const app = await mount([first, { ...section("LAST_LINE\n".repeat(80)), id: "last" }]);
+  try {
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
+
+    app.mockInput.pressKey("u", { ctrl: true }); await app.render(); expect(app.state()?.selectedId).toBe("first");
+    app.mockInput.pressKey("d", { ctrl: true }); await app.render(); expect(app.state()?.selectedId).toBe("last");
+    app.mockInput.pressKey("d", { ctrl: true }); await app.render(); expect(app.state()?.selectedId).toBe("last");
+    app.mockInput.pressKey("u", { ctrl: true }); await app.render(); expect(app.state()?.selectedId).toBe("first");
+    await app.update([first]);
+    app.mockInput.pressKey("d", { ctrl: true }); app.mockInput.pressKey("u", { ctrl: true }); await app.render();
+    expect(app.state()?.selectedId).toBe("first");
+    await app.update([]);
+    app.mockInput.pressKey("d", { ctrl: true }); app.mockInput.pressKey("u", { ctrl: true }); await app.render();
+
+    // Navigation cannot invent a selection or submit the retained draft at a boundary.
+    expect(app.state()?.selectedId).toBeNull();
+    expect(app.prompts).toEqual([]); expect(app.view.promptDrafts.a1).toBe("unsent draft");
+  } finally { await app.close(); }
+});
+
+test("반 페이지 섹션 점프와 도움말은 사용자 키 재할당을 따른다", async () => {
+  // Remapped shortcuts must change navigation and hints together, not retain hidden default actions.
+  const keymap = expectOk(parseKeymap({ bindings: {
+    "transcript.half-page-down": [{ keys: "alt+d", scope: "transcript" }],
+    "transcript.half-page-up": [{ keys: "alt+u", scope: "transcript" }],
+  } }));
+  const app = await mount(Array.from({ length: 30 }, (_, index) => ({ ...section(`body ${index}`), id: `section-${index}` })), { keymap });
+  try {
+    app.resize(180, 60); await app.render();
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
+    const step = Math.max(1, Math.floor(app.scroll.viewport.height / 4));
+
+    app.mockInput.pressKey("d", { ctrl: true }); await app.render(); expect(app.state()?.selectedId).toBe("section-0");
+    app.mockInput.pressKey("d", { meta: true }); await app.render(); expect(app.state()?.selectedId).toBe(`section-${step}`);
+    app.mockInput.pressKey("u", { meta: true }); await app.render(); expect(app.state()?.selectedId).toBe("section-0");
+    app.mockInput.pressKey("F1"); await app.render();
+
+    // Help describes section jumps with the effective bindings, while help itself remains scrollable.
+    expect(app.captureCharFrame()).toContain("Alt+d/Alt+u half-page section jump");
+    app.resize(60, 18); await app.render(); app.mockInput.pressKey("HOME"); await app.render();
+    const top = app.scroll.scrollTop;
+    app.mockInput.pressKey("d", { meta: true }); await app.render();
+    expect(app.scroll.scrollTop).toBeGreaterThan(top);
+    expect(app.state()?.selectedId).toBe("section-0");
   } finally { await app.close(); }
 });
 

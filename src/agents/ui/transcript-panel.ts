@@ -5,6 +5,7 @@ import {
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { Clipboard } from "../../ui/clipboard.ts";
+import { halfPageStep } from "../../ui/navigation.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { transcriptBackground, transcriptSpacing } from "./transcript-style.ts";
 import { TranscriptMarkdown, updateTranscriptMarkdownStyles } from "./transcript-markdown.ts";
@@ -674,6 +675,20 @@ export class TranscriptPanel {
     this.state.selectedId = id; this.state.mode = "sections"; this.state.anchor = null; delete this.state.linewise;
     this.positionIntent = true; this.pending = { reveal: true }; this.paint(); this.applyTarget(); this.save();
   }
+  private jumpSections(direction: -1 | 1, distance: number): void {
+    const row = this.selected; if (!row) return;
+    const index = this.order.indexOf(row.section.id);
+    let target = index;
+    for (let next = index + direction; next >= 0 && next < this.order.length; next += direction) {
+      const candidate = this.rows.get(this.order[next]!)!;
+      const delta = Math.abs(candidate.box.y - row.box.y);
+      // Count rendered heights/gaps, but reach at least the adjacent section across oversized cards.
+      if (delta > distance && target !== index) break;
+      target = next;
+      if (delta >= distance) break;
+    }
+    this.select(this.order[target]!);
+  }
   private toggleVisual(row: Row, linewise: boolean): void {
     const state = this.state; if (!state) return;
     const visual = state.mode === "visual";
@@ -703,8 +718,8 @@ export class TranscriptPanel {
         case "transcript.last": this.scroll.scrollTo(Infinity); break;
         case "transcript.page-up": this.scroll.scrollBy(-page); break;
         case "transcript.page-down": this.scroll.scrollBy(page); break;
-        case "transcript.half-page-up": this.scroll.scrollBy(-Math.max(1, Math.floor(this.scroll.viewport.height / 2))); break;
-        case "transcript.half-page-down": this.scroll.scrollBy(Math.max(1, Math.floor(this.scroll.viewport.height / 2))); break;
+        case "transcript.half-page-up": this.scroll.scrollBy(-halfPageStep(this.scroll.viewport.height)); break;
+        case "transcript.half-page-down": this.scroll.scrollBy(halfPageStep(this.scroll.viewport.height)); break;
       }
       this.options.changed(); return;
     }
@@ -744,8 +759,9 @@ export class TranscriptPanel {
       case "transcript.page-up": case "transcript.page-down": case "transcript.half-page-up": case "transcript.half-page-down": {
         const half = command === "transcript.half-page-up" || command === "transcript.half-page-down";
         const direction = command === "transcript.page-up" || command === "transcript.half-page-up" ? -1 : 1;
-        const distance = Math.max(1, half ? Math.floor(this.scroll.viewport.height / 2) : this.scroll.viewport.height - 1);
-        if (state.mode === "sections") { this.scrollIntent(); this.scroll.scrollBy(direction * distance); }
+        const distance = half ? halfPageStep(this.scroll.viewport.height) : Math.max(1, this.scroll.viewport.height - 1);
+        if (state.mode === "sections" && half) this.jumpSections(direction, distance);
+        else if (state.mode === "sections") { this.scrollIntent(); this.scroll.scrollBy(direction * distance); }
         else if (row) for (let i = 0; i < distance; i++) this.move(row, direction < 0 ? "transcript.up" : "transcript.down", true);
         break;
       }
@@ -821,7 +837,7 @@ export class TranscriptPanel {
     this.help.content = `Sections: ${this.hint("transcript.previous", "transcript")}/${this.hint("transcript.next", "transcript")} move · ${this.hint("transcript.enter", "transcript")} cursor in Markdown source / visible text · ${this.hint("transcript.fold", "transcript")} fold/unfold\n`
       + `Text/visual: ${this.hint("transcript.left", "transcript-text")}/${this.hint("transcript.right", "transcript-text")} characters · ${this.hint("transcript.word-next", "transcript-text")}/${this.hint("transcript.word-previous", "transcript-text")} words · ${this.hint("transcript.line-start", "transcript-text")}/${this.hint("transcript.line-end", "transcript-text")} line · ${this.hint("transcript.buffer-start", "transcript-text")}/${this.hint("transcript.buffer-end", "transcript-text")} section\n`
       + `${this.hint("transcript.visual", "transcript-text")} select (inclusive) · ${this.hint("transcript.visual-line", "transcript-text")} select logical lines · ${this.hint("transcript.copy", "transcript")} copy section/line/selection by mode · ${this.hint("transcript.copy-section", "transcript")} whole section\n`
-      + `${this.hint("transcript.half-page-down", "transcript")}/${this.hint("transcript.half-page-up", "transcript")} half page · linewise selection follows logical lines, not soft wraps\n`
+      + `${this.hint("transcript.half-page-down", "transcript")}/${this.hint("transcript.half-page-up", "transcript")} half-page section jump; Text/Visual moves the cursor · linewise selection follows logical lines, not soft wraps\n`
       + `Following resumes at the viewport bottom and pauses above it; selections protect the view.\n`
       + `Markdown: sections show formatted prose; Enter reads the original source, Esc returns to formatting.\n`
       + `Context compacted summaries start folded; click their heading or use ${this.hint("transcript.fold", "transcript")} to expand/collapse.\n`

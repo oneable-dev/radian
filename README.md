@@ -424,7 +424,8 @@ to the input without sending it. All commands are configurable in the existing k
 | Text/Visual | w/b; 0/$ or Home/End; gg/G or Ctrl+Home/End | Word, logical-line and section boundaries |
 | Text/Visual | v / V | Character selection / whole-logical-line selection; repeat the same key to stop |
 | Visual Line | j/k | Move by logical source lines, including wrapped paragraphs |
-| Sections/Text/Visual | Ctrl+D / Ctrl+U | Move down/up half the transcript viewport |
+| Sections | Ctrl+D / Ctrl+U | Jump the selected section down/up roughly half a viewport |
+| Text/Visual | Ctrl+D / Ctrl+U | Move the cursor down/up half the transcript viewport |
 | Sections/Text/Visual | y | Copy the section, current logical line, or selected range, respectively |
 | Sections/Text/Visual | Y | Copy the whole raw section, including folded details |
 | Sections | Ctrl+End | Jump to the actual bottom of the whole transcript and resume following |
@@ -440,9 +441,12 @@ current source/visible line or selection; `Y` still copies the complete raw sect
 Shared Visual bindings also apply to **Visual Line**. `V` selects whole logical lines of the active text surface,
 including their original LF/CRLF endings when present, never soft-wrap breaks or an invented EOF
 newline. `v`/`V` can switch selection kind while retaining the anchor. Both kinds survive streaming,
-resize and warm reconnect. `Ctrl+D/U` scrolls the viewport in Sections and moves the cursor in Text
-or Visual; it does not select another section. To jump between sections while reading, press `Esc`
-to return to Sections, then j/k (or gg/G). A selection first needs `Esc` to return to Text.
+resize and warm reconnect. In Sections, `Ctrl+D/U` jumps the selected section by roughly half a
+viewport, accounting for rendered section heights and gaps. Each jump advances at least one section
+when possible and reveals the new selection without scrolling unnecessarily. In Text or Visual,
+`Ctrl+D/U` still moves the cursor within the current section. To jump between sections while reading,
+press `Esc` to return to Sections, then use `Ctrl+D/U`, j/k or gg/G. A selection first needs `Esc` to
+return to Text.
 
 The former `INPUT · section/count · following` row is removed. Source/Visual/help mode and a
 `Paused` indicator appear only when relevant in the one-row footer; `Paused` refers to viewport
@@ -873,8 +877,10 @@ and programs' explicit RGB colors or Neovim colorschemes remain unchanged.
 
 `Ctrl+N/P` moves the current candidate, tab or read-only cursor by one step. In result lists,
 `Ctrl+D/U` jumps the candidate by half a viewport of items: this applies to Workspace, History,
-AI Sessions, model selection and Git lists. In History/AI Sessions previews, Git details/diffs,
-conversation text and help/notification details, `Ctrl+D/U` moves the focused body by half a viewport.
+AI Sessions, model selection and Git lists. In Transcript Sections, it jumps the selected section by
+roughly half a viewport using rendered section heights. In History/AI Sessions previews, Git
+details/diffs, conversation text and help/notification details, `Ctrl+D/U` moves the focused body by
+half a viewport.
 From a search input, `Ctrl+D/U` preserves the query and caret, focuses the results list and jumps
 from the current candidate. Further presses and held-key repeats continue navigating the list.
 In compact layouts this returns from preview to results. **Ctrl+C** clears only the search query,
