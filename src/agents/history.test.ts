@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import { appendFile, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
@@ -187,4 +187,101 @@ test("history의 경로 접근 권한 오류는 빈 목록으로 숨기지 않�
     // The UI receives a typed failure instead of an apparently empty success.
     expect(expectError(result).code).toBe("STORAGE_FAILED");
   } finally { restoreListing?.(); await chmod(blocked, 0o700).catch(() => {}); await app.cleanup(); }
+});
+
+test("목록에서 만든 파일 인덱스를 여러 Preview에 재사용하고 명시적 목록 갱신만 재탐색한다", async () => {
+  // 실제 SDK 탐색 호출 수로 반복 전체 목록 I/O가 제거됐는지 검증한다.
+  const app = await setup(); let restore: (() => void) | undefined;
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
+    const listing = spyOn(SessionManager, "list"); restore = () => listing.mockRestore();
+    const saved = expectOk(await app.history.list(app.main.id))[0]!;
+    for (let i = 0; i < 3; i++) expect(expectOk(await app.history.preview(app.main.id, saved.id)).text).toContain("read");
+    expect(expectError(await app.history.preview(app.main.id, "unknown")).code).toBe("HISTORY_UNAVAILABLE");
+    expect(listing).toHaveBeenCalledTimes(1);
+
+    // Ctrl+R/다음 열기는 목록을 다시 요청하므로 새 디스크 상태를 발견한다.
+    expectOk(await app.history.list(app.main.id)); expect(listing).toHaveBeenCalledTimes(2);
+    expectOk(await app.history.preview(app.main.id, saved.id)); expect(listing).toHaveBeenCalledTimes(2);
+  } finally { restore?.(); await app.cleanup(); }
+});
+
+test("목록 요청 없이 직접 Preview해도 한 번만 인덱스를 준비한다", async () => {
+  // 기존 read-only endpoint를 직접 사용하는 호출자도 목록 선행 없이 동작해야 한다.
+  const app = await setup(); let restore: (() => void) | undefined;
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
+    const savedId = SessionManager.open(app.registry.sessionFile(id)!).getSessionId();
+    const listing = spyOn(SessionManager, "list"); restore = () => listing.mockRestore();
+    expect(expectOk(await app.history.preview(app.main.id, savedId)).text).toContain("read");
+    expectOk(await app.history.preview(app.main.id, savedId)); expect(listing).toHaveBeenCalledTimes(1);
+  } finally { restore?.(); await app.cleanup(); }
+});
+
+test("완료된 목록 요청의 신호가 나중에 취소되어도 검증된 인덱스는 다시 탐색하지 않는다", async () => {
+  // HTTP 요청 수명과 이미 완료된 메타데이터 인덱스의 수명은 다르다.
+  const app = await setup(); let restore: (() => void) | undefined;
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
+    const listing = spyOn(SessionManager, "list"); restore = () => listing.mockRestore(); const abort = new AbortController();
+    const saved = expectOk(await app.history.list(app.main.id, abort.signal))[0]!; abort.abort();
+    expectOk(await app.history.preview(app.main.id, saved.id));
+    expect(listing).toHaveBeenCalledTimes(1);
+  } finally { restore?.(); await app.cleanup(); }
+});
+
+test("캐시된 경로의 파일이 다른 워크트리 기록으로 바뀌면 Preview를 거절한다", async () => {
+  // 파일 인덱스를 신뢰하더라도 선택 파일의 현재 헤더와 cwd는 재검증해야 한다.
+  const app = await setup();
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
+    const file = app.registry.sessionFile(id)!, saved = expectOk(await app.history.list(app.main.id))[0]!;
+    expectOk(await app.registry.close(id));
+    const lines = (await readFile(file, "utf8")).trimEnd().split("\n"), header = JSON.parse(lines[0]!);
+    lines[0] = JSON.stringify({ ...header, cwd: app.feature.path }); await writeFile(file, lines.join("\n") + "\n");
+
+    expect(expectError(await app.history.preview(app.main.id, saved.id)).code).toBe("HISTORY_UNAVAILABLE");
+    expect(app.registry.records).toEqual([]);
+  } finally { await app.cleanup(); }
+});
+
+test.each(["\0invalid", 42])("캐시된 파일 헤더의 잘못된 cwd %j는 OS 예외 대신 손상 오류로 반환한다", async cwd => {
+  // 탐색 이후 변경된 외부 JSON 값은 파일시스템 호출 전에 검증해야 한다.
+  const app = await setup();
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
+    const file = app.registry.sessionFile(id)!, saved = expectOk(await app.history.list(app.main.id))[0]!;
+    expectOk(await app.registry.close(id));
+    const lines = (await readFile(file, "utf8")).trimEnd().split("\n"), header = JSON.parse(lines[0]!);
+    lines[0] = JSON.stringify({ ...header, cwd }); await writeFile(file, lines.join("\n") + "\n");
+
+    expect(expectError(await app.history.preview(app.main.id, saved.id)).code).toBe("HISTORY_CORRUPT");
+  } finally { await app.cleanup(); }
+});
+
+test("캐시된 파일 경로가 심볼릭 링크로 교체되면 대상 파일을 Preview하지 않는다", async () => {
+  // 같은 헤더 ID를 복제해도 이전 canonical path 검증을 우회할 수 없어야 한다.
+  const app = await setup();
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
+    const file = app.registry.sessionFile(id)!, saved = expectOk(await app.history.list(app.main.id))[0]!;
+    expectOk(await app.registry.close(id)); const other = join(app.directory, "replaced.jsonl");
+    await writeFile(other, await readFile(file)); await unlink(file); await symlink(other, file);
+
+    expect(expectError(await app.history.preview(app.main.id, saved.id)).code).toBe("HISTORY_UNAVAILABLE");
+  } finally { await app.cleanup(); }
+});
+
+test("목록 조회 취소 신호를 SDK 탐색까지 전달하고 취소를 빈 성공으로 숨기지 않는다", async () => {
+  // SDK 호출 안에서 취소되는 상황을 제어하여 탐색 전후의 신호 확인만으로 통과하지 못하게 한다.
+  const app = await setup(); const started = Promise.withResolvers<void>(), finish = Promise.withResolvers<void>();
+  const abort = new AbortController(); let restore: (() => void) | undefined, received: AbortSignal | undefined;
+  try {
+    const listing = spyOn(SessionManager, "list").mockImplementation(async (_cwd, _dir, _progress, signal) => {
+      received = signal; started.resolve(); await finish.promise; signal?.throwIfAborted(); return [];
+    }); restore = () => listing.mockRestore();
+    const result = app.history.list(app.main.id, abort.signal); await started.promise; abort.abort(); finish.resolve();
+
+    expect(received === abort.signal).toBe(true); expect(expectError(await result).code).toBe("CANCELLED");
+  } finally { finish.resolve(); restore?.(); await app.cleanup(); }
 });

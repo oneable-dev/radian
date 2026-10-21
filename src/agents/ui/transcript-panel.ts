@@ -67,6 +67,7 @@ export type TranscriptOptions = {
   copy?(text: string): Promise<Result<string, ExpectedError>>;
   image?: TranscriptImageProvider;
   cacheSessions?: boolean;
+  emptyLogo?: boolean;
 };
 
 export class TranscriptPanel {
@@ -542,7 +543,7 @@ export class TranscriptPanel {
     for (const row of this.rows.values()) this.paintRow(row);
   }
   private paintLayout(): void {
-    this.empty.visible = !this.order.length && !this.help.visible;
+    this.empty.visible = this.options.emptyLogo !== false && !this.order.length && !this.help.visible;
     // Only tinted cards keep internal padding; plain prose uses the column's separation.
     const spacing = transcriptSpacing();
     this.scroll.content.gap = this.legacy ? 0 : spacing.sectionGap;

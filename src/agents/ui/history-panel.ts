@@ -1,6 +1,8 @@
 import { BoxRenderable, InputRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
 import type { HistoryItem } from "../history.ts";
 import type { HistoryPreview } from "../history-preview.ts";
+import { HistoryPreviewCache } from "../history-preview-cache.ts";
+import { singleLine } from "../../ui/text.ts";
 import type { Worktree } from "../../workspace/model.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
@@ -42,7 +44,8 @@ export class SessionHistoryPanel {
   private readonly panel: BoxRenderable;
   private readonly title: TextRenderable;
   private readonly spinner: LoadingSpinner;
-  private readonly previewSpinner: LoadingSpinner;
+  private readonly previewLabel: TextRenderable;
+  private readonly previewCache: HistoryPreviewCache;
   private readonly message: TextRenderable;
   private readonly previewPane: BoxRenderable;
   private readonly transcript: TranscriptPanel;
@@ -53,11 +56,8 @@ export class SessionHistoryPanel {
   private owner: Renderable | undefined;
   private cursor = 0;
   private generation = 0;
-  private previewRevision = 0;
   private previewIdentity: string | undefined;
-  private previewTimer: ReturnType<CliRenderer["clock"]["setTimeout"]> | undefined;
   private loadRequest: AbortController | undefined;
-  private previewRequest: AbortController | undefined;
   private resuming = false;
   private loading = false;
   private loadError: string | undefined;
@@ -89,11 +89,12 @@ export class SessionHistoryPanel {
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.list.focus() });
     this.previewPane = new BoxRenderable(renderer, { id: "history-preview-pane", width: "58%", minWidth: 0, minHeight: 0, flexDirection: "column", border: ["left"], paddingLeft: 1 });
     const previewHeading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    const label = new TextRenderable(renderer, { content: "Preview · read only", height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0, selectable: false, wrapMode: "none" });
-    this.previewSpinner = new LoadingSpinner(renderer, { id: "history-preview-loading" });
-    previewHeading.add(label); previewHeading.add(this.previewSpinner.root);
-    this.transcript = new TranscriptPanel(renderer, { initialScroll: {}, initialPosition: "start", saveScroll: () => {},
+    this.previewLabel = new TextRenderable(renderer, { content: "Preview · read only", height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0, selectable: false, wrapMode: "none" });
+    previewHeading.add(this.previewLabel);
+    this.transcript = new TranscriptPanel(renderer, { initialScroll: {}, initialPosition: "start", emptyLogo: false, saveScroll: () => {},
       focusPrompt: () => this.search.focus(), notice: actions.onError, changed: () => actions.onChange?.() });
+    this.previewCache = new HistoryPreviewCache((tree, id, signal) => actions.preview!(tree, id, signal),
+      () => this.renderPreview(), error => reportUnexpected(error, "history preview"));
     this.preview = this.transcript.scroll; this.preview.id = "history-preview";
     this.previewPane.add(previewHeading); this.previewPane.add(this.preview);
     body.add(this.list); body.add(this.previewPane);
@@ -102,9 +103,9 @@ export class SessionHistoryPanel {
     theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
       this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg; paintText(this.title, styles["ui.popupTitle"]);
-      for (const text of [this.message, label, close]) paintText(text, styles["ui.muted"]);
+      for (const text of [this.message, this.previewLabel, close]) paintText(text, styles["ui.muted"]);
       this.previewPane.borderColor = styles["ui.border"].fg;
-      for (const spinner of [this.spinner, this.previewSpinner]) paintText(spinner.root, styles["status.working"]);
+      paintText(this.spinner.root, styles["status.working"]);
       this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);
@@ -146,12 +147,11 @@ export class SessionHistoryPanel {
   }
   updateScope(worktree: Worktree | null): void { if (this.visible && this.worktree?.id !== worktree?.id) this.hide(); }
   refreshVisible(): void { if (this.visible) this.launch(() => this.refresh()); }
-  private launch(operation: () => Promise<void>, previewRevision?: number): void {
+  private launch(operation: () => Promise<void>): void {
     const pending = operation(), generation = this.generation;
     void pending.catch((error: unknown) => {
       const message = reportUnexpected(error, "history");
-      if (!this.current(generation) || (previewRevision !== undefined && previewRevision !== this.previewRevision)) return;
-      if (previewRevision !== undefined) this.previewMessage(message);
+      if (!this.current(generation)) return;
       this.failure(message, true);
     });
   }
@@ -211,9 +211,8 @@ export class SessionHistoryPanel {
     this.actions.onChange?.();
   }
   private cancelPreview(): void {
-    this.previewIdentity = undefined;
-    this.previewRevision++; this.previewRequest?.abort(); this.previewRequest = undefined; this.previewSpinner.cancel();
-    if (this.previewTimer !== undefined) this.renderer.clock.clearTimeout(this.previewTimer); this.previewTimer = undefined;
+    this.previewIdentity = undefined; this.previewCache.clear();
+    this.transcript.update(null, [], "", this.visible);
   }
   private previewMessage(message: string): void {
     this.transcript.update(null, undefined, message, this.visible);
@@ -227,25 +226,28 @@ export class SessionHistoryPanel {
   }
   private schedulePreview(): void {
     const item = this.selected, worktree = this.worktree;
-    const identity = item && worktree ? `${worktree.id}\0${item.id}` : undefined;
+    const identity = item && worktree && !this.loading ? JSON.stringify([worktree.id, item.id]) : undefined;
     if (identity && identity === this.previewIdentity) return;
-    this.cancelPreview(); this.previewIdentity = identity; this.preview.scrollTo(0);
-    this.previewMessage(this.loadError ?? (item ? "Loading preview…" : "Select a saved session"));
-    if (this.loadError || !item || !worktree) return;
+    this.previewIdentity = identity; this.preview.scrollTo(0);
+    this.previewLabel.content = item ? `Preview · ${singleLine(item.title)} · read only` : "Preview · read only";
+    if (this.loading || this.loadError || !item || !worktree) {
+      this.previewCache.unselect(); this.previewMessage(this.loadError ?? (this.loading ? "" : "Select a saved session")); return;
+    }
     if (!this.actions.preview) { this.previewMessage("Read-only preview is unavailable. Press Enter to open the session explicitly."); return; }
-    const revision = this.previewRevision, generation = this.generation;
-    this.previewTimer = this.renderer.clock.setTimeout(() => {
-      this.previewTimer = undefined;
-      this.launch(async () => {
-        const request = this.previewRequest = new AbortController(); this.previewSpinner.start();
-        let result: Result<HistoryPreview, ExpectedError>;
-        try { result = await this.actions.preview!(worktree.id, item.id, request.signal); }
-        finally { if (this.current(generation) && revision === this.previewRevision) this.previewSpinner.stop(); }
-        if (!this.current(generation) || revision !== this.previewRevision) return;
-        if (result.ok) this.showPreview(result.value);
-        else this.previewMessage(`[${result.error.code}] ${result.error.message}`);
-      }, revision);
-    }, 150);
+    this.previewCache.select(worktree.id, item.id); this.renderPreview();
+  }
+  private renderPreview(): void {
+    const item = this.selected, worktree = this.worktree;
+    if (!this.visible || this.loading || !item || !worktree) return;
+    // Responses populate their own slots; the screen only ever reads the selected slot.
+    const state = this.previewCache.read(worktree.id, item.id);
+    switch (state?.kind) {
+      case "ready": this.showPreview(state.value); break;
+      case "error": this.previewMessage(`[${state.error.code}] ${state.error.message}`); break;
+      case "unexpected": this.previewMessage(state.message); break;
+      default: this.transcript.update(null, [], "", true);
+    }
+    this.actions.onChange?.();
   }
 
   private async openSelected(): Promise<void> {

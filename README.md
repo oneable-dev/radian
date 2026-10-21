@@ -1192,9 +1192,24 @@ Ctrl+O switches between them; PageUp/PageDown scroll the preview. Preview reuses
 component, including compact inline invocations, Markdown prose, error styling and initially folded
 tool sections; Thinking remains visible just as in the live transcript.
 It shows at most the three newest sections of the saved current branch, in chronological order.
-A new unanswered prompt is not filled with the previous turn's replies; explicit skills remain name-only. This does not open a writable SDK session, load extensions or execute tools. Selection changes debounce preview requests for 150 ms;
-superseded/hidden queries are cancelled and stale responses ignored. The reader verifies the session
-header, then scans JSONL record offsets backwards in 64 KiB chunks and follows the active branch's
+A new unanswered prompt is not filled with the previous turn's replies; explicit skills remain name-only.
+This does not open a writable SDK session, load extensions or execute tools.
+
+Preview lookup has no fixed debounce or preview spinner. The selected title stays visible above a blank
+body until its data arrives; another session's content is never shown under the new selection. Each open
+popup caches plain Preview data by worktree and saved-session ID, shares in-flight requests, and renders
+only the selected entry. Returning to a cached entry does not perform another lookup. At most two queries
+run concurrently, with only the latest selected candidate queued when both slots are occupied. Earlier
+responses can fill their own cache slots but cannot overwrite a different selected session. Cached data
+is bounded to 200 entries / 8 Mi UTF-16 units of serialized text, excluding protected selected/in-flight
+entries; these are data-retention limits, not total heap measurements. The cache is a snapshot for the
+current popup: Ctrl+R or closing clears it and cancels its queries. Reopening discovers current metadata;
+there is no background polling or file watcher. Late responses cannot populate a replacement cache.
+
+The runtime reuses the ID-to-file index from metadata discovery rather than listing every saved session
+for each Preview. The selected file's canonical path, header ID and worktree binding are still checked;
+Open always rediscovers current membership and writer ownership. Cold direct Preview requests lazily
+initialize an index. The reader then scans JSONL record offsets backwards in 64 KiB chunks and follows the active branch's
 parent IDs. It stops once the recent window and required tool-call associations are available, rather
 than loading or size-rejecting the entire file. Older unneeded record bodies are not decoded or validated;
 opening a closed session still validates the complete history. Safety limits apply to individual records (16 MiB),
@@ -1202,8 +1217,9 @@ the retained association working set (32 MiB), header size (64 KiB) and lookup t
 total file size. Each returned section body is capped at 8,192 UTF-16
 units with an explicit truncation notice; the compatibility text field remains capped at 65,536 units. The title query searches all returned metadata locally; at most 200
 matching rows render at once, with a prompt to refine larger result sets. Full-message search is not
-implemented. Ctrl+R refreshes metadata (`r` also works while the list has focus). Shared loading spinners
-remain visible for at least 500 ms without delaying results or errors, and cancel on close/disposal.
+implemented. Ctrl+R refreshes metadata and Preview data (`r` also works while the list has focus).
+Only the metadata list uses a loading spinner: it remains visible for at least 500 ms without delaying
+results or errors, and cancels on close/disposal. Preview failures remain visible until refresh.
 Empty history, no matches, discovery failures, preview failures and Open failures remain distinct.
 
 Closing records and active owned-child writers cannot be opened until cleanup finishes. Completed

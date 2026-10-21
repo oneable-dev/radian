@@ -1,4 +1,4 @@
-import { open } from "node:fs/promises";
+import { open, realpath } from "node:fs/promises";
 import { CURRENT_SESSION_VERSION, migrateSessionEntries, parseSessionEntries, type SessionEntry, type SessionHeader, type FileEntry } from "@earendil-works/pi-coding-agent";
 import { CancelledError, capture, HistoryError, parseJson, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
@@ -119,7 +119,8 @@ function resolvedTools(sections: readonly TranscriptSection[], entries: readonly
 
 // Snapshot the descriptor, verify its header, then walk the append-only branch backwards.
 // There is no whole-file size limit: old turns need not be decoded or retained at all.
-export async function readHistoryPreview(path: string, worktreeId: string, id: string, signal?: AbortSignal): Promise<Result<HistoryPreview, ExpectedError>> {
+export async function readHistoryPreview(path: string, worktreeId: string, id: string, signal?: AbortSignal,
+  scope?: { readonly cwd: string; readonly requireCwd: boolean }): Promise<Result<HistoryPreview, ExpectedError>> {
   if (signal?.aborted) return err(new CancelledError());
   const deadline = Date.now() + 5000;
   const read = await capture(async () => {
@@ -141,6 +142,14 @@ export async function readHistoryPreview(path: string, worktreeId: string, id: s
       const parsedHeader = parseEntry(headerText); if (!parsedHeader.ok) return parsedHeader;
       const header = parsedHeader.value;
       if (header.type !== "session" || header.id !== id) return corrupt("Saved conversation identity changed; refresh history.");
+      // Discovery metadata is only a lookup hint. Recheck the selected file's current worktree binding.
+      if (scope) {
+        if (header.cwd !== undefined && (typeof header.cwd !== "string" || header.cwd.includes("\0"))) return corrupt("Saved conversation has an invalid worktree.");
+        if (header.cwd) {
+          const cwd = await capture(() => realpath(header.cwd)); if (!cwd.ok) return cwd;
+          if (cwd.value !== scope.cwd) return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved conversation belongs to a different worktree. Refresh history."));
+        } else if (scope.requireCwd) return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved conversation has no worktree identity. Refresh history."));
+      }
       if (header.version !== undefined && (!Number.isInteger(header.version) || header.version < 1 || header.version > CURRENT_SESSION_VERSION)) {
         return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved conversation version is not supported by preview."));
       }

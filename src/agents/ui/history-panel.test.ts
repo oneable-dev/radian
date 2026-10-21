@@ -65,9 +65,10 @@ test("History는 Agents의 검색 팝업이고 좌측에는 Workspace만 남긴�
     expect(app.captureCharFrame()).toContain("History · radian");
     expect(app.captureCharFrame()).toContain("2026-10-14 12:34"); expect(app.captureCharFrame()).toContain("4 messages");
     expect(app.selection.sessionId).toBe("a1"); expect(app.resumed).toEqual([]); expect(app.runs).toEqual([]);
-    expect(app.previews).toEqual([]);
-    app.clock.advance(150); await app.render();
+    // 첫 후보는 가짜 시계를 진행하지 않아도 조회하고 Preview에는 로딩 표시를 만들지 않는다.
     expect(app.previews).toEqual(["first"]); expect(app.captureCharFrame()).toContain("Saved answer first");
+    expect(!!app.renderer.root.findDescendantById("history-preview-loading")).toBe(false);
+    expect(app.captureCharFrame()).not.toContain("Loading preview");
   } finally { await app.close(); }
 });
 
@@ -157,7 +158,7 @@ test("목록 클릭과 Ctrl+N/P는 미리보기만 바꾸고 Enter에서 선택�
     await app.open(); await app.click("history:second");
     expect(app.resumed).toEqual([]); expect(app.selection.sessionId).toBe("a1");
     app.mockInput.pressKey("p", { ctrl: true }); app.mockInput.pressKey("n", { ctrl: true });
-    app.clock.advance(150); await app.render(); expect(app.previews).toEqual(["second"]);
+    await app.render(); expect(app.previews).toEqual(["first", "second"]);
     app.mockInput.pressEnter(); await app.waitFor(() => app.selection.sessionId === "a2"); await app.render();
     expect(app.resumed).toEqual(["demo:main/second"]); expect(app.get("session-history").visible).toBe(false);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("session-transcript");
@@ -226,7 +227,7 @@ test("빠른 결과는 즉시 표시하되 shared spinner는 500ms 유지하고 
     app.clock.advance(499); await app.render(); expect(app.get("history-loading").visible).toBe(true);
     app.clock.advance(1); await app.render(); expect(app.get("history-loading").visible).toBe(false);
     app.mockInput.pressKey("r", { ctrl: true }); await app.render(); expect(app.get("history-loading").visible).toBe(true);
-    app.mockInput.pressEscape(); await app.render(); expect(app.get("history-loading").visible).toBe(false); expect(app.get("history-preview-loading").visible).toBe(false);
+    app.mockInput.pressEscape(); await app.render(); expect(app.get("history-loading").visible).toBe(false); expect(!!app.renderer.root.findDescendantById("history-preview-loading")).toBe(false);
   } finally { await app.close(); }
 });
 
@@ -245,21 +246,62 @@ test("새 목록 조회가 이전 응답을 무시하고 현재 spinner와 결�
   } finally { first.resolve([]); second.resolve([]); await app.close(); }
 });
 
-test("선택을 빠르게 옮기면 미리보기는 trailing debounce하고 이전 응답은 취소·무시한다", async () => {
-  const pending = Promise.withResolvers<Result<HistoryPreview, ExpectedError>>(); let previous: AbortSignal | undefined;
+test("늦은 응답은 자기 세션에만 캐시하고 다시 선택하면 즉시 재사용한다", async () => {
+  // 첫 세션의 느린 응답이 두 번째 세션을 덮지 않으면서 재방문에는 유효해야 한다.
+  const pending = Promise.withResolvers<Result<HistoryPreview, ExpectedError>>();
+  const app = await mount({ preview: async (tree, id) => id === "first" ? pending.promise
+    : ok({ worktreeId: tree, id, text: "CURRENT SECOND PREVIEW", truncated: false }) });
+  try {
+    await app.open(); expect(app.previews).toEqual(["first"]);
+    app.mockInput.pressArrow("down"); await app.render();
+    expect(app.previews).toEqual(["first", "second"]);
+    pending.resolve(ok({ id: "first", worktreeId: "demo:main", text: "CACHED FIRST PREVIEW", truncated: false })); await app.render();
+
+    // 응답 순서와 무관하게 현재 선택만 표시하고, A로 돌아가도 요청을 추가하지 않는다.
+    expect(app.captureCharFrame()).toContain("CURRENT SECOND PREVIEW"); expect(app.captureCharFrame()).not.toContain("CACHED FIRST PREVIEW");
+    app.mockInput.pressKey("p", { ctrl: true }); await app.render();
+    expect(app.captureCharFrame()).toContain("CACHED FIRST PREVIEW"); expect(app.previews).toEqual(["first", "second"]);
+    expect(app.resumed).toEqual([]); expect(app.selection.sessionId).toBe("a1");
+  } finally { pending.resolve(ok({ id: "first", worktreeId: "demo:main", text: "late", truncated: false })); await app.close(); }
+});
+
+test("처음 보는 후보는 선택한 제목과 빈 본문을 표시하고 로딩 표시나 이전 내용을 남기지 않는다", async () => {
+  // 캐시 미스에 이전 세션 내용을 보여주면 현재 후보의 답변처럼 오해할 수 있다.
+  const pending = Promise.withResolvers<Result<HistoryPreview, ExpectedError>>();
+  const app = await mount({ preview: async (tree, id) => id === "second" ? pending.promise
+    : ok({ worktreeId: tree, id, text: "FIRST SESSION ANSWER", truncated: false }) });
+  try {
+    await app.open(); expect(app.captureCharFrame()).toContain("FIRST SESSION ANSWER");
+    app.mockInput.pressKey("n", { ctrl: true }); await app.render();
+
+    // 실제 I/O는 미완료여도 고정 타이머나 다른 세션의 본문을 대신 표시하지 않는다.
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("Preview · Saved keyboard"); expect(frame).not.toContain("FIRST SESSION ANSWER");
+    expect(frame).not.toContain("Loading preview"); expect(!!app.renderer.root.findDescendantById("history-preview-loading")).toBe(false);
+    expect(app.previews).toEqual(["first", "second"]);
+    pending.resolve(ok({ worktreeId: "demo:main", id: "second", text: "SECOND SESSION ANSWER", truncated: false }));
+    await app.visible("SECOND SESSION ANSWER");
+  } finally { pending.resolve(ok({ worktreeId: "demo:main", id: "second", text: "late", truncated: false })); await app.close(); }
+});
+
+test("미리보기 캐시는 새로고침과 닫기에서 비우며 이전 세대 응답은 재사용하지 않는다", async () => {
+  // 같은 saved ID라도 새로고침 이후에는 새 요청의 데이터만 사용할 수 있다.
+  const old = Promise.withResolvers<Result<HistoryPreview, ExpectedError>>();
+  const signals: (AbortSignal | undefined)[] = []; let calls = 0;
   const app = await mount({ preview: async (tree, id, signal) => {
-    if (id === "first") { previous = signal; return pending.promise; }
-    return ok({ worktreeId: tree, id, text: "CURRENT SECOND PREVIEW", truncated: false });
+    signals.push(signal); calls++;
+    return calls === 1 ? old.promise : ok({ worktreeId: tree, id, text: `NEW PREVIEW ${calls}`, truncated: false });
   } });
   try {
-    await app.open(); app.clock.advance(150); await app.render(); expect(app.previews).toEqual(["first"]);
-    app.mockInput.pressArrow("down"); app.mockInput.pressArrow("up"); app.mockInput.pressArrow("down");
-    app.clock.advance(149); await app.render(); expect(app.previews).toEqual(["first"]); expect(previous?.aborted).toBe(true);
-    app.clock.advance(1); await app.render(); expect(app.previews).toEqual(["first", "second"]);
-    pending.resolve(ok({ id: "first", worktreeId: "demo:main", text: "STALE FIRST PREVIEW", truncated: false })); await app.render();
-    expect(app.captureCharFrame()).toContain("CURRENT SECOND PREVIEW"); expect(app.captureCharFrame()).not.toContain("STALE FIRST PREVIEW");
-    expect(app.resumed).toEqual([]);
-  } finally { pending.resolve(ok({ id: "first", worktreeId: "demo:main", text: "late", truncated: false })); await app.close(); }
+    await app.open(); app.mockInput.pressKey("r", { ctrl: true }); await app.render();
+    expect(signals[0]?.aborted).toBe(true); expect(app.captureCharFrame()).toContain("NEW PREVIEW 2");
+    old.resolve(ok({ worktreeId: "demo:main", id: "first", text: "OBSOLETE PREVIEW", truncated: false })); await app.render();
+    expect(app.captureCharFrame()).not.toContain("OBSOLETE PREVIEW");
+
+    // 닫힌 모달의 본문 캐시를 다음 열기로 넘기지 않는다.
+    app.mockInput.pressEscape(); await app.render(); await app.open();
+    expect(app.captureCharFrame()).toContain("NEW PREVIEW 3"); expect(calls).toBe(3);
+  } finally { old.resolve(ok({ worktreeId: "demo:main", id: "first", text: "late", truncated: false })); await app.close(); }
 });
 
 test("좁은 창은 목록과 미리보기를 전환하고 resize 뒤 검색과 커서를 유지한다", async () => {

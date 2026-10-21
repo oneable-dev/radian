@@ -207,7 +207,7 @@ class WorkspaceRuntime {
       if (path === "/history" && request.method === "GET") {
         const worktreeId = new URL(request.url).searchParams.get("worktreeId");
         if (!worktreeId) return this.rejected(new InputError("Missing worktree for history."));
-        const history = await this.history.list(worktreeId);
+        const history = await this.history.list(worktreeId, request.signal);
         return history.ok ? Response.json(history.value) : this.rejected(history.error);
       }
       if (path !== "/command" || request.method !== "POST") return new Response("Not found", { status: 404 });
