@@ -193,10 +193,12 @@ without taking focus. Agent and Terminal session strips remain visible and click
 Tree cursor movement is only navigation; Enter or a direct worktree click commits the selection.
 Each worktree separately remembers its work view and selected Agent session. Within Agents, session
 tabs show the first eight characters of their session ID and aggregate status, with a close control.
-If open sessions in the same worktree share a prefix, only those labels expand to the shortest
-prefixes that distinguish them. IDs of eight characters or fewer stay unchanged. Narrower tabs
-truncate the label only at the end with `…`; widening the pane restores the short label. Selection,
-closing and persistence still use the full ID. Session names remain unchanged for History and other
+Agent and Terminal tabs share an 18-cell frame, including padding and the right-aligned `×` control.
+Status changes and process renames do not move neighboring tabs or their close controls. If the pane
+is narrower than one tab, the frame shrinks to fit and truncates its label with `…`.
+If open sessions in the same worktree share a prefix, labels expand only within that fixed frame;
+long collisions retain the distinguishing tail after `…`. IDs of eight characters or fewer stay
+unchanged. Selection, closing and persistence still use the full ID. Session names remain unchanged for History and other
 metadata. Focus the strip and press `n` (or the configured `session.new` key) to add a session; the strip
 remains focusable when empty.
 The upper-right worktree label and the New session/History toolbar buttons are removed. Session-tab selection and History resume open the chosen session in Agents. Restoring a
@@ -809,10 +811,12 @@ Entering **Terminal** automatically starts one shell if the selected worktree ha
 Existing shells and the last selected tab are reused without creating another shell. Use **Ctrl+N**
 in terminal input (or **Ctrl+Space, then n**) for additional terminals; there is no **+ New** button.
 Each worktree has an independent list of shells; creating one selects it unless later navigation
-supersedes that request. **Close** removes the selected tab and selects its next/previous neighbor,
-or leaves an empty state with the configured new-tab shortcut.
+supersedes that request. Each tab uses the same fixed-width frame and right-aligned **×** as Agent
+sessions; there is no shared **Close** button. Closing an inactive tab leaves the active shell and
+input focus unchanged. Closing the selected tab selects its next/previous neighbor, or leaves an
+empty state with the configured new-tab shortcut.
 While a terminal tab is focused, `h/l` or `Ctrl+N/P` switches to its neighbor without leaving the
-strip. Enter opens the selected terminal input. Except for **Ctrl+N**, shell input retains its native bindings.
+strip. Enter or Space opens the selected terminal input. Except for **Ctrl+N**, shell input retains its native bindings.
 Tab labels show the foreground executable (for example `zsh`, `nvim` or `bun`), not `Terminal N`.
 The TUI reads a bounded local process snapshot while Terminal is visible, checks each shell's
 supervisor parent, and selects its actual terminal foreground group rather than a background job.
@@ -866,7 +870,8 @@ focus or Git navigation/scroll positions. Each attached TUI has its own theme.
 
 Git's Commits/Reflog and Local/Remote/Tags tabs use underlines for active selection and
 keyboard focus, without a background fill. Top-level work-view tabs are omitted. Agent and Terminal session tabs use background emphasis without
-underlines; an unfocused active session keeps a subdued background. Other buttons retain their
+underlines through the shared `src/ui/session-tab.ts` frame; an unfocused active session keeps a
+subdued background. Other buttons retain their
 usual focus styling. Navigation uses understated separators rather than boxed controls.
 Workspace popup, Agent/Git/Terminal content and footer text use two-cell horizontal insets, reduced to one on terminals
 narrower than 80 columns. Workspace navigation never consumes permanent work-pane width.

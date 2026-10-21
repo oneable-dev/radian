@@ -3,6 +3,7 @@ import { TextAttributes, TextRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Button } from "../../ui/button.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { SESSION_TAB_WIDTH } from "../../ui/session-tab.ts";
 import type { OpenSession } from "../model.ts";
 import type { SessionResult } from "../session-attention.ts";
 import { icons, spinnerFrames } from "../../icons.ts";
@@ -150,7 +151,7 @@ test("미확정으로 바뀐 탭은 스피너 최소 시간 뒤 상태 칸을 �
     // The spinner tail ending is enough to reclaim the slot; no snapshot or focus event is required.
     app.clock.advance(1); await app.render();
     expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstLabel);
-    expect(tab.width).toBeLessThanOrEqual(width); expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
+    expect(tab.width).toBe(width); expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -162,7 +163,7 @@ test("숨겼다가 돌아온 미확정 탭은 취소된 스피너 공간을 다�
     app.tabs.update("tree", [unknown], firstId, true); await app.render();
     const { tab, title } = app.get(firstId);
     expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe(firstLabel);
-    expect(tab.width).toBe(12);
+    expect(tab.width).toBe(SESSION_TAB_WIDTH);
   } finally { await app.close(); }
 });
 
@@ -252,15 +253,15 @@ test("공간이 부족할 때만 짧은 ID 끝을 말줄임하고 다시 넓히�
 test.each([
   { id: "01a156a2-ca64-707c-bd92-fc877962e972", first: "01a156a2-b", other: "01a156a2-c" },
   { id: collisionId, first: "01a156a2-ba64", other: "01a156a2-ba65" },
-  { id: "01a156a2-ba64-707c-bd92-fc877962e973", first: firstId, other: "01a156a2-ba64-707c-bd92-fc877962e973" },
-])("접두사가 겹치는 $id 탭은 서로 구분되는 최소 길이까지 표시한다", async ({ id, first, other }) => {
+  { id: "01a156a2-ba64-707c-bd92-fc877962e973", first: "01a156a2-…e972", other: "01a156a2-…e973" },
+])("접두사가 겹치는 $id 탭은 고정 폭 안에서도 서로 구분되게 표시한다", async ({ id, first, other }) => {
   // 충돌 위치가 8자리 바로 뒤부터 마지막 자리까지인 세션 쌍을 준비한다.
   const app = await mount([session(), session(id)]);
   try {
     // 같은 워크트리의 두 세션을 함께 표시한다.
     await app.render();
 
-    // UUID의 하이픈도 포함한 실제 접두사로 구분하고 불필요한 말줄임표는 붙이지 않는다.
+    // 짧은 충돌은 접두사를 늘리고 긴 충돌은 구분되는 끝부분을 말줄임 뒤에 남긴다.
     expect(app.get(firstId).title.plainText).toBe(first);
     expect(app.get(id).title.plainText).toBe(other);
     expect(app.captureCharFrame()).toContain(first);

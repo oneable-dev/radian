@@ -1,14 +1,13 @@
-import { BoxRenderable, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
+import { BoxRenderable, ScrollBoxRenderable, type TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
 import type { OpenSession } from "../model.ts";
 import { sessionStatus } from "../status.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { uiTheme } from "../../ui/theme.ts";
-import { paintText } from "../../ui/theme-styles.ts";
-import { singleLine, truncateCells } from "../../ui/text.ts";
+import { SessionTab } from "../../ui/session-tab.ts";
 import { StatusIndicator } from "./status-indicator.ts";
 
-type Tab = { root: BoxRenderable; title: TextRenderable; status: StatusIndicator };
+type Tab = { root: BoxRenderable; title: TextRenderable; frame: SessionTab; status: StatusIndicator };
 type Actions = {
   select(id: string): void;
   create(): void;
@@ -67,21 +66,16 @@ export class SessionTabs {
     for (const [index, session] of sessions.entries()) {
       let tab = this.tabs.get(session.id);
       if (!tab) {
-        const root = new BoxRenderable(this.renderer, { id: `session:${worktreeId}:${session.id}`, height: 1, flexShrink: 0,
-          flexDirection: "row", paddingX: 1, gap: 1,
-          onMouseDown: (event) => {
-            if (event.button !== 0) return;
-            event.preventDefault(); event.stopPropagation(); this.list.focus(); this.actions.select(session.id);
-          } });
-        const title = new TextRenderable(this.renderer, { height: 1, minWidth: 1, wrapMode: "none", selectable: false });
         const status = new StatusIndicator(this.renderer, () => {
           const current = this.tabs.get(session.id); if (!current) return;
           this.setTitle(current, session.id); this.reveal = true; this.renderer.requestRender();
         });
-        const close = this.actions.button("×", () => { this.list.focus(); this.actions.close(session.id); }, "Close session");
-        close.id = `close-session:${session.id}`; close.paddingX = 0;
-        root.add(status.root); root.add(title); root.add(close); this.list.add(root);
-        tab = { root, title, status }; this.tabs.set(session.id, tab);
+        const frame = new SessionTab(this.renderer, { id: `session:${worktreeId}:${session.id}`,
+          closeId: `close-session:${session.id}`, closeLabel: "Close session", leading: status.root,
+          select: () => { this.list.focus(); this.actions.select(session.id); },
+          close: () => { this.list.focus(); this.actions.close(session.id); }, button: this.actions.button });
+        this.list.add(frame.root);
+        tab = { root: frame.root, title: frame.title, frame, status }; this.tabs.set(session.id, tab);
       }
       const working = session.status === "working" || session.subagents.some(child => child.status === "working");
       tab.status.update(working ? "working" : sessionStatus(session), this.visible, session);
@@ -113,12 +107,12 @@ export class SessionTabs {
     // Extend the default prefix only when another open tab in this worktree shares it.
     let length = 8;
     while (length < id.length && this.sessions.some(session => session.id !== id && session.id.startsWith(id.slice(0, length)))) length++;
-    // Reclaim the entire badge and its gap when there is no execution/unread indicator.
-    const reserved = 4 + (tab.status.root.visible ? tab.status.root.width + 1 : 0);
-    const text = singleLine(id.slice(0, length)), width = Math.max(1, this.list.width > 0 ? this.list.width - reserved : Bun.stringWidth(text));
-    const content = truncateCells(text, width);
-    this.reveal ||= tab.title.plainText !== content;
-    tab.title.maxWidth = width; tab.title.content = content;
+    const previous = tab.title.plainText;
+    tab.frame.resize(this.list.width);
+    // Long colliding prefixes keep their distinguishing tail inside the fixed-width label.
+    const suffix = length > 8 ? `…${id.slice(Math.max(8, length - 4), length)}` : "…";
+    tab.frame.setLabel(id.slice(0, length), suffix);
+    this.reveal ||= tab.title.plainText !== previous;
   }
   private resizeTitles(): void {
     for (const session of this.sessions) {
@@ -126,12 +120,7 @@ export class SessionTabs {
     }
   }
   private paint(): void {
-    const styles = uiTheme(this.renderer).styles;
-    for (const [id, tab] of this.tabs) {
-      const active = id === this.selected;
-      tab.root.backgroundColor = styles[active ? this.focused ? "ui.selection" : "ui.selectionInactive" : "ui.text"].bg;
-      paintText(tab.title, styles[active ? "ui.tabActive" : "ui.tab"]);
-    }
+    for (const [id, tab] of this.tabs) tab.frame.update(id === this.selected, this.focused);
   }
   private revealSelected = (): void => {
     if (!this.reveal || !this.visible || this.disposed || this.root.isDestroyed) return;

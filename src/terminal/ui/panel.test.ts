@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
-import { parseKeypress, TextAttributes } from "@opentui/core";
+import { parseKeypress, TextAttributes, TextRenderable } from "@opentui/core";
 import { Workbench } from "../../app/ui/workbench.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -473,7 +473,115 @@ test("Terminal 세션 탭은 포커스와 활성 선택을 배경으로 구분�
   } finally { await app.close(); }
 });
 
-test("여러 하위 탭과 좁은 화면에서도 선택한 탭과 닫기 버튼만 표시한다", async () => {
+test("AI와 Terminal 탭은 프로세스명·상태와 무관하게 같은 18칸 폭과 오른쪽 닫기 위치를 쓴다", async () => {
+  // 기존 AI 탭의 기하와 짧고 긴 터미널 이름을 같은 작업 영역에서 비교한다.
+  const clock = new ManualClock(), app = await mount(undefined, clock);
+  const agent = app.renderer.root.findDescendantById("session:demo:main:a1")!;
+  const agentWidth = agent.width;
+  app.actions.titles = async items => ok(Object.fromEntries(items.map((item, index) => [item.id, index === 0 ? "zsh" : "프로세스👩‍💻-very-long-name"])));
+  try {
+    // 이름 길이가 서로 다른 두 터미널을 만들고 좁은 창으로 전환한다.
+    await app.showView("t"); await app.visible("Shell shell-1");
+    app.leader("n"); await app.visible("Shell shell-2"); await app.renderOnce();
+    const first = app.renderer.root.findDescendantById("terminal-session:shell-1")!;
+    const second = app.renderer.root.findDescendantById("terminal-session:shell-2")!;
+    const title = second.getChildren().find((node): node is TextRenderable => node instanceof TextRenderable)!;
+    app.resize(60, 12); await app.renderOnce(); await app.renderOnce();
+
+    // 고정 경계와 닫기 위치는 일치하고 긴 Unicode 이름만 안전하게 말줄임한다.
+    expect(agentWidth).toBe(18); expect(first.width).toBe(agentWidth); expect(second.width).toBe(agentWidth);
+    expect(second.x).toBe(first.x + first.width + 1);
+    for (const [id, tab] of [["shell-1", first], ["shell-2", second]] as const) {
+      const close = app.renderer.root.findDescendantById(`close-terminal:${id}`)!;
+      expect(close.width).toBe(1); expect(close.x + close.width).toBe(tab.x + tab.width - 1);
+    }
+    expect(title.plainText).toEndWith("…"); expect(title.plainText).not.toContain("\uFFFD");
+    expect(app.created).toHaveLength(2); expect(app.closed).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("비선택 터미널의 ×는 활성 쉘·연결·입력 포커스를 바꾸지 않고 그 탭만 닫는다", async () => {
+  // 두 번째 쉘이 입력을 받고 있는 동안 첫 번째 탭을 닫는다.
+  const app = await mount();
+  try {
+    await app.showView("t"); await app.visible("Shell shell-1");
+    app.leader("n"); await app.visible("Shell shell-2");
+    const terminal = app.renderer.root.findDescendantById("shell-terminal")!, detaches = [...app.detaches];
+    const close = app.renderer.root.findDescendantById("close-terminal:shell-1")!;
+
+    // 비활성 탭의 닫기를 직접 클릭한다.
+    await app.mockMouse.click(close.x, close.y); await app.renderOnce(); await app.renderOnce();
+
+    // 닫기 클릭은 선택 클릭이나 PTY 입력으로 전파되지 않는다.
+    expect(app.closed).toEqual(["shell-1"]);
+    expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-2");
+    expect(app.renderer.root.findDescendantById("terminal-tab:shell-1")).toBeUndefined();
+    expect(app.renderer.root.findDescendantById("shell-terminal")).toBe(terminal);
+    expect(app.renderer.currentFocusedRenderable).toBe(terminal);
+    expect(app.detaches).toEqual(detaches); expect(app.inputs).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("비선택 터미널의 닫기가 거절되면 오류만 알리고 활성 입력과 연결을 보존한다", async () => {
+  // 닫기 경계가 운영 오류로 거절되어도 다른 쉘은 계속 입력을 받아야 한다.
+  const app = await mount();
+  try {
+    await app.showView("t"); await app.visible("Shell shell-1");
+    app.leader("n"); await app.visible("Shell shell-2");
+    const terminal = app.renderer.root.findDescendantById("shell-terminal")!;
+    const close = app.renderer.root.findDescendantById("close-terminal:shell-1")!;
+    app.actions.close = async () => err(new PtyError("PTY_BUSY", "Cleanup was rejected."));
+
+    // 활성 쉘이 아닌 첫 번째 탭의 닫기를 요청한다.
+    await app.mockMouse.click(close.x, close.y); await app.visible("Cleanup was rejected.");
+
+    // 거절된 탭과 활성 연결은 모두 남고 오류 알림만 추가된다.
+    expect(app.renderer.root.findDescendantById("terminal-tab:shell-1")).toBeDefined();
+    expect(app.renderer.root.findDescendantById("shell-terminal")).toBe(terminal);
+    expect(app.renderer.currentFocusedRenderable).toBe(terminal);
+    expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-2");
+    app.mockInput.pressKey("h"); expect(app.inputs).toContain("68"); expect(app.closed).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("터미널 탭에서 Space는 해당 쉘 입력으로 진입하고 제어 문자를 보내지 않는다", async () => {
+  // 탐색 포커스는 활성 터미널과 다른 탭에도 머물 수 있다.
+  const app = await mount();
+  try {
+    await app.showView("t"); await app.visible("Shell shell-1");
+    app.leader("n"); await app.visible("Shell shell-2");
+    app.renderer.root.findDescendantById("terminal-session:shell-1")!.focus();
+
+    // 공통 프레임이 버튼에서 바뀌어도 Space 활성화를 유지한다.
+    app.mockInput.pressKey(" "); await app.visible("Shell shell-1");
+
+    // 선택된 입력만 포커스를 받고 앱의 활성화 키는 PTY로 전달되지 않는다.
+    expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-1");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
+    expect(app.inputs).toEqual([]); expect(app.created).toHaveLength(2);
+  } finally { await app.close(); }
+});
+
+test("포커스한 마지막 터미널의 ×를 닫으면 빈 화면에 포커스를 남기고 Ctrl+N으로 복구한다", async () => {
+  // 공용 Close가 없어도 탭별 닫기에서 빈 화면의 입력 경로로 복귀해야 한다.
+  const app = await mount();
+  try {
+    await app.showView("t"); await app.visible("Shell shell-1");
+    app.renderer.root.findDescendantById("terminal-session:shell-1")!.focus();
+    const close = app.renderer.root.findDescendantById("close-terminal:shell-1")!;
+
+    // 마지막 탭을 닫은 뒤에는 자동 대체 쉘을 만들지 않는다.
+    await app.mockMouse.click(close.x, close.y); await app.visible("No terminals");
+
+    // 새 탭 단축키를 누르기 전까지 빈 상태와 유효한 포커스를 유지한다.
+    expect(app.closed).toEqual(["shell-1"]); expect(app.created).toHaveLength(1);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("terminal-view");
+    app.mockInput.pressKey("n", { ctrl: true }); await app.visible("Shell shell-2");
+    expect(app.created).toHaveLength(2); expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
+  } finally { await app.close(); }
+});
+
+test("여러 하위 탭과 좁은 화면에서도 선택한 탭과 탭별 ×만 표시한다", async () => {
   const app = await mount();
   try {
     await app.showView("t"); await app.visible("Shell shell-1");
@@ -485,7 +593,12 @@ test("여러 하위 탭과 좁은 화면에서도 선택한 탭과 닫기 버튼
     expect(selectedTab.bg.toInts()).toEqual(uiTheme(app.renderer).colors.surface.toInts());
     app.resize(60, 12); await app.renderOnce(); await app.renderOnce();
     const row = app.captureCharFrame().split("\n").find((line) => line.includes("Terminal 6"))!;
-    expect(row).toContain("Terminal 6"); expect(row).not.toContain("+ New"); expect(row).toContain("Close");
+    expect(row).toContain("Terminal 6"); expect(row).not.toContain("+ New"); expect(row).not.toContain("Close"); expect(row).toContain("×");
+    const tab = app.renderer.root.findDescendantById("terminal-session:shell-6")!;
+    const close = app.renderer.root.findDescendantById("close-terminal:shell-6")!;
+    expect(tab.width).toBe(18);
+    expect(close.x + close.width).toBe(tab.x + tab.width - 1);
+    expect(close.x + close.width).toBeLessThanOrEqual(app.renderer.width);
   } finally { await app.close(); }
 });
 

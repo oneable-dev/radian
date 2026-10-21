@@ -134,14 +134,15 @@ test("세션 상태는 같은 칸에 표시하고 미확정은 빈 상태 공간
     expect(text[0]).toBe(" ");
     expect(glyphs).toContain(text[1]!);
     expect(glyphs).toContain(text.slice(0, position).trim());
-    expect(text.slice(position + title.length)).toBe(" × ");
+    expect(text.slice(position + title.length).trim()).toBe("×");
+    expect(app.get(id).width).toBe(18);
   };
   try {
     // Initial rendering and tab focus use the same edge gutters and leading status cell.
     for (const focused of [false, true]) {
       if (focused) { app.get("agent-session-list").focus(); await app.render(); }
       ordered("session:demo:main:a1", "a1", spinnerFrames);
-      expect(app.region("session:demo:main:a2")).toBe(" a2 × ");
+      expect(app.region("session:demo:main:a2")).toBe(" a2             × ");
       ordered("session:demo:main:a3", "a3", [icons.error]);
     }
 
@@ -149,7 +150,7 @@ test("세션 상태는 같은 칸에 표시하고 미확정은 빈 상태 공간
     await app.click(`${icons.folder} radian-ui`);
     for (const focused of [false, true]) {
       if (focused) { app.get("agent-session-list").focus(); await app.render(); }
-      expect(app.region("session:demo:feature:b1")).toBe(" b1 × ");
+      expect(app.region("session:demo:feature:b1")).toBe(" b1             × ");
     }
     expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
@@ -192,17 +193,17 @@ test.each([["완료", "complete", ""], ["실패", "failure", icons.error], ["미
       })) })));
       await app.render();
       const prefix = () => app.region(tab.id).slice(0, app.region(tab.id).indexOf("a1")).trim();
-      if (status === "failure") expect(app.region(tab.id)).toBe(` ${glyph} a1 × `);
+      if (status === "failure") expect(app.region(tab.id)).toBe(` ${glyph} a1           × `);
       else expect(spinnerFrames.some(frame => frame === prefix())).toBe(true);
       app.clock.advance(379); await app.render();
-      if (status === "failure") expect(app.region(tab.id)).toBe(` ${glyph} a1 × `);
+      if (status === "failure") expect(app.region(tab.id)).toBe(` ${glyph} a1           × `);
       else expect(spinnerFrames.some(frame => frame === prefix())).toBe(true);
       app.clock.advance(1); await app.render();
 
-      // Only the now-empty indicator collapses; real outcomes retain their stable badge placement.
+      // The badge collapses into label space without moving the tab boundary or close control.
       if (status !== "failure") {
-        expect(app.region(tab.id)).toBe(" a1 × ");
-        expect([tab.x, tab.width, title.x, close.x]).toEqual([geometry[0]!, geometry[1]! - 2, geometry[2]! - 2, geometry[3]! - 2]);
+        expect(app.region(tab.id)).toBe(" a1             × ");
+        expect([tab.x, tab.width, title.x, close.x]).toEqual([geometry[0]!, geometry[1]!, geometry[2]! - 2, geometry[3]!]);
       } else {
         expect(app.region(tab.id)[1]).toBe(glyph); expect(app.region(tab.id)[2]).toBe(" ");
         expect([tab.x, tab.width, title.x, close.x]).toEqual(geometry);

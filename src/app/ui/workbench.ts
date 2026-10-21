@@ -508,7 +508,7 @@ export class Workbench {
       case "agent.paste": case "agent.newline": case "agent.clear": return this.agent.active;
       case "agent.interrupt": return this.agent.canInterrupt;
       case "agent.inspect": return this.agent.active && this.agent.prompt.canInspect;
-      case "button.activate": return !!this.renderer.currentFocusedRenderable && this.buttonActions.has(this.renderer.currentFocusedRenderable);
+      case "button.activate": return this.terminals.tabsFocused || (!!this.renderer.currentFocusedRenderable && this.buttonActions.has(this.renderer.currentFocusedRenderable));
       default: return true;
     }
   }
@@ -593,7 +593,11 @@ export class Workbench {
       case "agent.inspect": this.agent.prompt.inspectAtCursor(); break;
       case "agent.paste": void this.agent.prompt.pasteClipboard().catch((error: unknown) => this.setNotice(reportUnexpected(error, "clipboard read"))); break;
       case "agent.send": void this.agent.submitPrompt().catch((error: unknown) => this.setNotice(reportUnexpected(error, "prompt submission"))); break;
-      case "button.activate": { const focused = this.renderer.currentFocusedRenderable; if (focused) this.buttonActions.get(focused)?.(); break; }
+      case "button.activate": {
+        if (this.terminals.tabsFocused) this.terminals.openFocusedTab();
+        else { const focused = this.renderer.currentFocusedRenderable; if (focused) this.buttonActions.get(focused)?.(); }
+        break;
+      }
     }
   }
   private moveFocus(direction: 1 | -1): void {

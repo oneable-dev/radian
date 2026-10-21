@@ -12,7 +12,8 @@ async function mount(longSessionIds = false) {
   const app = await createTestRenderer({width: 120, height: 24, kittyKeyboard: true});
   const items: TerminalInfo[] = Array.from({length: 8}, (_, i)=>({id:`fixture-${i}`, worktreeId:"demo:main", title:`long-process-name-${i}`, pid:100+i, shellPid:200+i, exited:false, exitCode:null}));
   const repositories = demoWorkspace().map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
-    sessions: tree.sessions.map((session) => ({ ...session, id: longSessionIds ? `session-identifier-for-overflow-${session.id}` : session.id })),
+    sessions: tree.sessions.flatMap(session => longSessionIds
+      ? Array.from({ length: 3 }, (_, index) => ({ ...session, id: `session-identifier-for-overflow-${session.id}-${index}` })) : [session]),
   })) }));
   const view = new Workbench(app.renderer, new WorkspaceSelection(repositories), {onNewSession:()=>{},onCloseSession:()=>{},onPrompt:()=>ok(undefined),
     getSessionDetails:()=>({status:null,output:"",error:null,sections:[{id:"u",kind:"user",title:"You",text:"Original task",status:"complete"}]}),
@@ -42,7 +43,7 @@ test("높이가 달라져도 탭·검색·항목 간격을 유지하고 작은 �
 test("Agent와 Terminal 탭의 가로바는 resize 후에도 숨고 선택된 탭으로의 좌우 이동은 유지한다",async()=>{
   const app=await mount(true);
   try {
-    // Long session IDs, not display names or removed toolbar buttons, produce real overflow.
+    // Enough fixed-width tabs, rather than long labels or removed toolbar buttons, produce real overflow.
     app.resize(80,24);await app.render();
     const agent=app.get("agent-session-list") as ScrollBoxRenderable;
     expect(agent.scrollWidth).toBeGreaterThan(agent.viewport.width);
