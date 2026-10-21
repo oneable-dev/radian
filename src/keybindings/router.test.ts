@@ -68,7 +68,7 @@ test("kitty release는 문자 재생을 중복하지 않고 명령 소비 후 na
   } finally { await app.close(); }
 });
 
-test.each([["search", "search.clear"], ["prompt", "agent.clear"], ["git-prompt", "git.clear"]] as const)("%s 입력 지우기의 held Ctrl+C는 포커스 이동 뒤 쉘 인터럽트로 재생되지 않는다", async (context, clearCommand) => {
+test.each([["search", "search.clear"], ["prompt", "agent.clear"], ["git-prompt", "git.clear"], ["git-search", "git.search-clear"]] as const)("%s 입력 지우기의 held Ctrl+C는 포커스 이동 뒤 쉘 인터럽트로 재생되지 않는다", async (context, clearCommand) => {
   // 앱 입력에서 시작한 지우기와 나중에 쉘에서 새로 누른 인터럽트를 구분한다.
   const app = await createTestRenderer({ width: 60, height: 8, kittyKeyboard: true, exitOnCtrlC: false });
   const input = new InputRenderable(app.renderer, { width: 60 }); input.value = "candidate"; app.renderer.root.add(input);

@@ -1,19 +1,20 @@
 import { expect, spyOn, test } from "bun:test";
-import { CodeRenderable, DiffRenderable, ScrollBoxRenderable, TextAttributes, TextRenderable, type ClipboardRepresentation, type Renderable, type TerminalColors } from "@opentui/core";
+import { CodeRenderable, DiffRenderable, ScrollBoxRenderable, parseKeypress, TextAttributes, TextRenderable, type ClipboardRepresentation, type Renderable, type TerminalColors } from "@opentui/core";
 import { uiTheme } from "../../ui/theme.ts";
 import { blendColors } from "../../ui/color.ts";
 import { Button } from "../../ui/button.ts";
 import { PromptInput } from "../../ui/prompt-input.ts";
 import { Clipboard } from "../../ui/clipboard.ts";
+import { SearchInput } from "../../ui/search-input.ts";
 import { createTestRenderer, ManualClock, MockTreeSitterClient } from "@opentui/core/testing";
 import { Workbench } from "../../app/ui/workbench.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
 import { icons } from "../../icons.ts";
 import type { GitActions } from "./panel.ts";
-import type { GitCommit, GitComparison, GitSnapshot, GitSource } from "../model.ts";
+import { initialGitState, type GitCommit, type GitComparison, type GitDetails, type GitFile, type GitSnapshot, type GitSource } from "../model.ts";
 import type { WorkViewPreferences } from "../../runtime/protocol.ts";
-import { ClipboardError, InputError, type ExpectedError } from "../../errors.ts";
+import { ClipboardError, GitError, InputError, type ExpectedError } from "../../errors.ts";
 import { err, ok, type Result } from "../../result.ts";
 
 const commit: GitCommit = { oid: "a".repeat(40), parents: ["b".repeat(40)], subject: "Update login", author: "Ada", date: "2026-10-15" };
@@ -87,11 +88,206 @@ async function mount(options: { actions?: Partial<GitActions>; initial?: WorkVie
     codes: () => walk(get("git-diff")).filter((node): node is CodeRenderable => node instanceof CodeRenderable),
     async chooseCommit() { await click("Update login"); await app.waitFor(() => view.workViewPreferences.gitViews?.["demo:main"]?.selected === commit.oid); },
     async openChanges() { get("git-history").focus(); app.mockInput.pressEnter(); await app.renderOnce(); await app.renderOnce(); },
+    async openRefs() { get("git-history").focus(); app.mockInput.pressKey("b"); await app.renderOnce(); await app.renderOnce(); },
+    async openReflog() { get("git-history").focus(); app.mockInput.pressKey("r", { ctrl: true }); await app.renderOnce(); await app.renderOnce(); },
     async openWorkingTree() { await click("Working tree"); get("git-history").focus(); app.mockInput.pressEnter(); await app.renderOnce(); await app.renderOnce(); },
     async ask(text: string) { app.mockInput.pressKey("a"); await app.renderOnce(); await app.mockInput.typeText(text); app.mockInput.pressEnter(); await app.waitFor(() => requests.length > 0); await app.renderOnce(); },
     async close() { view.dispose(); await app.dispose(); await highlighter.destroy(); },
   };
 }
+
+test("Reflog preview는 이벤트와 커밋 시각을 구분하고 목록에 없는 커밋을 Changes로 연 뒤 메인 선택을 복원한다", async () => {
+  // 모든 ref에서 사라진 커밋이 reflog에만 남아 있는 상황을 모델링한다.
+  const lost: GitCommit = { ...commit, oid: "c".repeat(40), parents: [rootCommit.oid], subject: "Lost change", date: "2026-10-10" };
+  const details: GitDetails = { commit: lost, message: "Complete lost commit message", branches: [],
+    files: [{ kind: "commit", status: "M", path: "lost.txt", commit: lost }] };
+  const data = snapshot(); data.reflog = [{ oid: lost.oid, selector: "HEAD@{1}", date: "2026-10-21 14:32:00 +0900", subject: "commit: Lost change" }];
+  const lookedUp: string[] = [], compared: GitFile[] = [];
+  const app = await mount({ source: { load: async () => ok(data),
+    details: async selected => ok({ commit: selected, message: "Main details", files: [], branches: [] }),
+    lookup: async oid => { lookedUp.push(oid); return ok(details); },
+    compare: async file => { compared.push(file); return ok({ before: "old lost content\n", after: "only in lost commit\n", beforeLabel: "parent:lost.txt", afterLabel: "commit:lost.txt" }); },
+  } });
+  try {
+    await app.chooseCommit(); await app.waitForFrame(frame => frame.includes("Main details"));
+    const before = structuredClone(app.view.workViewPreferences.gitViews?.["demo:main"]);
+
+    await app.openReflog(); await app.waitForFrame(frame => frame.includes("Complete lost commit message"));
+    const preview = app.get("git-reflog-preview-text"); if (!(preview instanceof TextRenderable)) throw new Error("Missing reflog preview");
+    expect(preview.plainText).toContain("Occurred: 2026-10-21"); expect(preview.plainText).toContain("Date: 2026-10-10");
+    expect(preview.plainText).toContain("Target commit"); expect(lookedUp).toEqual([lost.oid]);
+    app.mockInput.pressEnter(); await app.waitForFrame(frame => frame.includes("only in lost commit"));
+
+    expect(app.get("git-browser").visible).toBe(false); expect(app.get("git-changes").visible).toBe(true);
+    expect(compared[0]?.commit).toEqual(lost); expect(app.captureCharFrame()).toContain("ccccccc · Lost change");
+    const saved = app.view.workViewPreferences.gitViews?.["demo:main"];
+    expect(saved?.selected).toBe(before?.selected); expect(saved?.file).toBe(before?.file); expect(saved?.diff).toBe(false);
+    app.mockInput.pressEscape(); await app.renderOnce();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-history"); expect(app.captureCharFrame()).toContain("Main details");
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid);
+    expect(app.view.promptDrafts.a1).toBe("existing Agent draft"); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Reflog preview가 로딩 중이어도 Enter 의도를 유지해 준비된 대상 커밋을 연다", async () => {
+  // 메타데이터가 도착하기 전에 Enter를 눌렀다는 이유로 정상적인 선택을 버리면 안 된다.
+  const target = { ...commit, oid: "c".repeat(40), subject: "Delayed target" }, data = snapshot();
+  data.reflog = [{ oid: target.oid, selector: "HEAD@{0}", date: "2026-10-21", subject: "delayed event" }];
+  const pending = Promise.withResolvers<Result<GitDetails, ExpectedError>>();
+  const app = await mount({ source: { load: async () => ok(data), lookup: () => pending.promise,
+    details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }), compare: async () => ok(comparison()) } });
+  try {
+    await app.openReflog(); app.mockInput.pressEnter(); await app.renderOnce(); expect(app.get("git-changes").visible).toBe(false);
+
+    pending.resolve(ok({ commit: target, message: "Delayed full message", files: [], branches: [] }));
+    await app.waitFor(() => app.get("git-changes").visible); await app.renderOnce();
+
+    expect(app.get("git-browser").visible).toBe(false); expect(app.captureCharFrame()).toContain("ccccccc · Delayed target");
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBeNull(); expect(app.requests).toEqual([]);
+  } finally { pending.resolve(ok({ commit: target, message: "cleanup", files: [], branches: [] })); await app.close(); }
+});
+
+test("Reflog의 늦은 preview는 새 이벤트를 덮지 않고 같은 커밋의 다른 이벤트는 조회를 재사용한다", async () => {
+  // 서로 다른 이벤트가 같은 커밋을 가리키는 경우에도 이벤트 설명은 각각 유지한다.
+  const slow: GitCommit = { ...commit, oid: "c".repeat(40) }, fresh: GitCommit = { ...commit, oid: "d".repeat(40) };
+  const data = snapshot(); data.reflog = [slow, fresh, fresh].map((target, index) => ({ oid: target.oid, selector: `HEAD@{${index}}`, date: "2026-10-21", subject: `event ${index}` }));
+  const pending = Promise.withResolvers<Result<GitDetails, ExpectedError>>(); let previousSignal: AbortSignal | undefined;
+  const reads: string[] = [];
+  const app = await mount({ source: { load: async () => ok(data), details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }),
+    compare: async () => ok(comparison()), lookup: async (oid, signal) => {
+      reads.push(oid); if (oid === slow.oid) { previousSignal = signal; return pending.promise; }
+      return ok({ commit: fresh, message: "Fresh target", files: [], branches: [] });
+    },
+  } });
+  try {
+    await app.openReflog(); app.mockInput.pressKey("n", { ctrl: true }); await app.waitForFrame(frame => frame.includes("Fresh target"));
+    pending.resolve(ok({ commit: slow, message: "Stale target", files: [], branches: [] })); await app.renderOnce(); await app.renderOnce();
+    app.mockInput.pressKey("n", { ctrl: true }); await app.renderOnce();
+
+    const preview = app.get("git-reflog-preview-text"); if (!(preview instanceof TextRenderable)) throw new Error("Missing reflog preview");
+    expect(previousSignal?.aborted).toBe(true); expect(preview.plainText).toContain("Event HEAD@{2}"); expect(preview.plainText).toContain("event 2");
+    expect(preview.plainText).toContain("Fresh target"); expect(preview.plainText).not.toContain("Stale target");
+    expect(reads).toEqual([slow.oid, fresh.oid]); expect(app.requests).toEqual([]);
+  } finally { pending.resolve(ok({ commit: slow, message: "cleanup", files: [], branches: [] })); await app.close(); }
+});
+
+test("preview 로딩 중 Enter 후 닫으면 늦은 응답으로 Changes를 열지 않고 로딩 타이머도 정리한다", async () => {
+  // 읽기 요청의 완료와 사용자가 닫은 모달의 재등장은 별개의 동작이다.
+  const target = { ...commit, oid: "c".repeat(40) }, data = snapshot(); data.reflog = [{ oid: target.oid, selector: "HEAD@{0}", date: "2026-10-21", subject: "lost event" }];
+  const pending = Promise.withResolvers<Result<GitDetails, ExpectedError>>(); let signal: AbortSignal | undefined;
+  const app = await mount({ source: { load: async () => ok(data), details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }),
+    compare: async () => ok(comparison()), lookup: (_oid, current) => { signal = current; return pending.promise; },
+  } });
+  try {
+    await app.openReflog(); expect(app.get("git-browser-loading").visible).toBe(true);
+
+    app.mockInput.pressEnter(); app.mockInput.pressEscape(); await app.renderOnce();
+    pending.resolve(ok({ commit: target, message: "Late target", files: [], branches: [] })); await app.renderOnce(); await app.renderOnce();
+
+    expect(signal?.aborted).toBe(true); expect(app.get("git-browser").visible).toBe(false); expect(app.get("git-changes").visible).toBe(false);
+    expect(app.get("git-browser-loading").visible).toBe(false); expect(app.renderer.currentFocusedRenderable?.id).toBe("git-history");
+    expect(app.requests).toEqual([]);
+  } finally { pending.resolve(ok({ commit: target, message: "cleanup", files: [], branches: [] })); await app.close(); }
+});
+
+test.each([160, 60])("%d열 Reflog 조회 실패는 오류를 표시하고 Enter로 빈 상세를 열지 않으며 r로 재시도한다", async width => {
+  // 실패한 커밋을 정상적인 빈 변경으로 취급하면 복구할 대상을 잘못 이해하게 된다.
+  const target = { ...commit, oid: "c".repeat(40) }, data = snapshot(); data.reflog = [{ oid: target.oid, selector: "HEAD@{0}", date: "2026-10-21", subject: "lost event" }];
+  let reads = 0;
+  const app = await mount({ source: { load: async () => ok(data), details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }),
+    compare: async () => ok(comparison()), lookup: async () => ++reads === 1 ? err(new GitError("GIT_QUERY_FAILED", "Lookup rejected"))
+      : ok({ commit: target, message: "Recovered preview", files: [], branches: [] }),
+  } });
+  try {
+    app.resize(width, 32); await app.renderOnce(); await app.openReflog(); await app.waitForFrame(frame => frame.includes("Lookup rejected"));
+    app.mockInput.pressEnter(); await app.renderOnce(); expect(app.get("git-changes").visible).toBe(false);
+
+    app.get("git-browser-list").focus(); app.mockInput.pressKey("r");
+    await app.waitFor(() => { const text = app.get("git-reflog-preview-text"); return text instanceof TextRenderable && text.plainText.includes("Recovered preview"); });
+    if (width < 100) app.mockInput.pressKey("o", { ctrl: true }); await app.renderOnce();
+
+    expect(reads).toBe(2); expect(app.get("git-browser").visible).toBe(true); expect(app.get("git-changes").visible).toBe(false);
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each(["refs", "reflog"] as const)("%s 검색은 hjklay를 문자로 입력하고 Ctrl+C는 빈 검색에서도 모달과 Agent 초안을 보존한다", async mode => {
+  // 공통 검색 필드에 Git 액션 문자를 입력해도 Copy나 Ask가 실행되면 안 된다.
+  const data = snapshot(); data.refs.push({ kind: "local", name: "feature/hjklay", ref: "refs/heads/feature/hjklay", oid: commit.oid });
+  data.reflog[0] = { ...data.reflog[0]!, subject: "commit: hjklay" };
+  const app = await mount({ source: { load: async () => ok(data), details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }), compare: async () => ok(comparison()) } });
+  try {
+    if (mode === "refs") await app.openRefs(); else await app.openReflog();
+    await app.mockInput.typeText("hjklay"); await app.renderOnce();
+    const input = app.get("git-browser-search"); if (!(input instanceof SearchInput)) throw new Error("Missing Git search");
+    const cursor = input.cursorOffset;
+
+    app.mockInput.pressKey("l", { ctrl: true }); await app.renderOnce();
+    expect(input.value).toBe("hjklay"); expect(input.cursorOffset).toBe(cursor); expect(app.get("git-ask").visible).toBe(false); expect(app.copies).toEqual([]);
+    app.mockInput.pressCtrlC(); await app.renderOnce(); const selected = app.view.workViewPreferences.gitViews?.["demo:main"];
+    app.mockInput.pressCtrlC(); await app.renderOnce();
+
+    expect(input.value).toBe(""); expect(app.get("git-browser").visible).toBe(true); expect(app.renderer.isDestroyed).toBe(false);
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.refSelected).toBe(selected?.refSelected);
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.reflogSelected).toBe(selected?.reflogSelected);
+    expect(app.view.promptDrafts.a1).toBe("existing Agent draft"); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each((["refs", "reflog"] as const).flatMap(mode => [160, 60].map(width => ({ mode, width }))))("$mode · $width 열 검색 점프는 query·caret를 보존하고 반복 입력도 현재 후보에서 계속 이동한다", async ({ mode, width }) => {
+  // 좁은 Reflog의 preview에서 검색으로 돌아온 경우에도 결과를 먼저 펼쳐 점프한다.
+  const data = snapshot(); data.refs = Array.from({ length: 40 }, (_, index) => ({ kind: "local", name: `candidate-${index}`, ref: `refs/heads/candidate-${index}`, oid: commit.oid }));
+  data.reflog = Array.from({ length: 40 }, (_, index) => ({ oid: commit.oid, selector: `HEAD@{${index}}`, subject: `candidate event ${index}`, date: "2026-10-21" }));
+  const app = await mount({ source: { load: async () => ok(data), details: async selected => ok({ commit: selected, message: "Preview body", files: [], branches: [] }), compare: async () => ok(comparison()) } });
+  const raw = (value: string) => { const parsed = parseKeypress(value, { useKittyKeyboard: true }); if (!parsed) throw new Error("Invalid Kitty key"); app.renderer.keyInput.processParsedKey(parsed); };
+  try {
+    app.resize(width, 32); await app.renderOnce(); if (mode === "refs") await app.openRefs(); else await app.openReflog();
+    await app.mockInput.typeText("candidate"); for (let index = 0; index < 10; index++) app.mockInput.pressKey("n", { ctrl: true }); await app.renderOnce();
+    const input = app.get("git-browser-search"), list = app.get("git-browser-list") as ScrollBoxRenderable;
+    if (!(input instanceof SearchInput)) throw new Error("Missing Git search"); input.cursorOffset = 2;
+    const step = Math.max(1, Math.floor(list.viewport.height / 2));
+    if (mode === "reflog" && width < 100) { app.mockInput.pressKey("o", { ctrl: true }); await app.renderOnce(); input.focus(); await app.renderOnce(); expect(list.visible).toBe(false); }
+
+    raw("\x1b[100;5u"); await app.renderOnce(); raw("\x1b[100;5:2u"); await app.renderOnce(); raw("\x1b[100;5:3u");
+
+    expect(list.visible).toBe(true); expect(app.renderer.currentFocusedRenderable).toBe(list); expect(input.value).toBe("candidate"); expect(input.cursorOffset).toBe(2);
+    const key = mode === "refs" ? `refs/heads/candidate-${10 + 2 * step}` : `HEAD@{${10 + 2 * step}}`;
+    expect(mode === "refs" ? app.view.workViewPreferences.gitViews?.["demo:main"]?.refSelected : app.view.workViewPreferences.gitViews?.["demo:main"]?.reflogSelected).toBe(key);
+    const row = app.get(`git-browser-list:${key}`); expect(row.y).toBeGreaterThanOrEqual(list.viewport.y); expect(row.y + row.height).toBeLessThanOrEqual(list.viewport.y + list.viewport.height);
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each([160, 60])("%d열 Reflog preview는 본문을 반 페이지 스크롤하고 Tab 포커스가 모달 안에서 순환한다", async width => {
+  // preview의 스크롤 키가 이벤트 후보 이동이나 검색 편집으로 전달되면 안 된다.
+  const app = await mount({ source: { load: async () => ok(snapshot()), compare: async () => ok(comparison()),
+    details: async selected => ok({ commit: selected, message: Array.from({ length: 80 }, (_, index) => `Preview line ${index}`).join("\n"), files: [], branches: [] }) } });
+  try {
+    app.resize(width, 32); await app.renderOnce(); await app.openReflog(); app.mockInput.pressKey("o", { ctrl: true }); await app.renderOnce();
+    const preview = app.get("git-reflog-preview") as ScrollBoxRenderable, selected = app.view.workViewPreferences.gitViews?.["demo:main"]?.reflogSelected;
+    expect(app.renderer.currentFocusedRenderable).toBe(preview);
+
+    app.mockInput.pressKey("d", { ctrl: true }); await app.renderOnce(); expect(preview.scrollTop).toBe(Math.max(1, Math.floor(preview.viewport.height / 2)));
+    app.mockInput.pressKey("u", { ctrl: true }); await app.renderOnce(); expect(preview.scrollTop).toBe(0);
+    app.mockInput.pressTab(); await app.renderOnce(); expect(app.renderer.currentFocusedRenderable?.id).toBe("git-browser-search");
+    app.mockInput.pressTab(); await app.renderOnce(); expect(app.renderer.currentFocusedRenderable?.id).toBe("git-browser-list");
+    app.mockInput.pressTab(); await app.renderOnce(); expect(app.renderer.currentFocusedRenderable).toBe(preview);
+
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.reflogSelected).toBe(selected); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("과거 Reflog·Refs preference도 새 UI에서는 모달을 재생하지 않고 Commits로 복원한다", async () => {
+  // 레거시 wire 필드를 읽되 제거된 탭이나 모달 상태를 새 접속에 강제로 재생하지 않는다.
+  const app = await mount({ initial: { active: { "demo:main": "git" }, agentScroll: {},
+    gitViews: { "demo:main": { ...initialGitState(), tab: "reflog", right: "refs", selected: commit.oid } } } });
+  try {
+    expect(app.get("git-browser").visible).toBe(false); expect(app.get("git-toolbar").visible).toBe(false);
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.tab).toBe("commits");
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.right).toBe("commit");
+    expect(app.get("git-history").y).toBe(app.get("git-view").y); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
 
 test("ref 라벨은 그래프 왼쪽에서 노드와 연결되고 그래프와 메시지는 같은 색의 띠로 이어진다", async () => {
   // 같은 커밋의 로컬 브랜치·원격 브랜치·태그를 하나의 라벨로 요약한다.
@@ -249,7 +445,7 @@ test("커밋 상세를 열고 닫아도 예약된 왼쪽 너비와 그래프 행
     expect(app.get("git-changes").visible).toBe(false);
 
     // 상세가 사라져도 해당 공간을 비워 두고 그래프는 움직이지 않는다.
-    app.get("git-toolbar").getChildren()[0]!.focus(); await app.renderOnce();
+    app.get("git-history").blur(); await app.renderOnce();
     expect(card.visible).toBe(false); expect(graph.x).toBe(reserved); expect([row.y, row.height]).toEqual(position);
     expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
@@ -274,7 +470,7 @@ test.each(["arrows", "vim", "control"] as const)("Working tree와 커밋을 %s�
         expect(app.get("git-history:__working_tree__:graph").x).toBe(graphX);
         expect(app.get("git-history:__working_tree__:label").x).toBe(messageX);
       }
-      app.get("git-toolbar").getChildren()[0]!.focus(); await app.renderOnce();
+      app.get("git-history").blur(); await app.renderOnce();
       expect(app.get("git-details-card").visible).toBe(false); expect(app.get(`git-history:${commit.oid}:graph`).x).toBe(graphX);
     }
     expect(app.requests).toEqual([]);
@@ -859,36 +1055,61 @@ test("Git 상세와 양쪽 diff의 Ctrl+D/U는 포커스한 본문을 반 페이
   } finally { await app.close(); }
 });
 
-test.each(["arrows", "vim", "control"] as const)("Git 뷰와 Refs 종류 탭은 %s로 전환하고 탭 포커스를 유지한다", async navigation => {
-  // 메인 뷰와 Refs 팝업의 종류 탭은 같은 가로 탐색 계약을 갖는다.
+test.each(["arrows", "vim", "control"] as const)("Refs는 %s 탐색을 지원하고 검색어·caret를 유지한 채 Enter에서만 필터를 적용한다", async navigation => {
+  // 검색 입력과 결과 목록은 동일한 후보 커서를 공유한다.
   const app = await mount();
-  const controls = (node: Renderable): Button[] => [...(node instanceof Button ? [node] : []), ...node.getChildren().flatMap(controls)];
-  const control = (label: string) => {
-    const found = controls(app.get("git-view")).find(button => button.getChildren().some(child => child instanceof TextRenderable && child.plainText === label));
-    if (!found) throw new Error(`Missing Git tab ${label}`);
-    return found;
-  };
-  const move = (next: boolean) => navigation === "arrows" ? app.mockInput.pressArrow(next ? "right" : "left")
-    : navigation === "control" ? app.mockInput.pressKey(next ? "n" : "p", { ctrl: true }) : app.mockInput.pressKey(next ? "l" : "h");
-  const state = () => app.view.workViewPreferences.gitViews?.["demo:main"];
+  const move = (next: boolean) => navigation === "arrows" ? app.mockInput.pressArrow(next ? "down" : "up")
+    : navigation === "control" ? app.mockInput.pressKey(next ? "n" : "p", { ctrl: true }) : app.mockInput.pressKey(next ? "j" : "k");
   try {
-    control("Commits").focus(); await app.renderOnce();
+    await app.openRefs(); await app.mockInput.typeText("main"); await app.renderOnce();
+    const input = app.get("git-browser-search"); if (!(input instanceof SearchInput)) throw new Error("Missing Git search");
+    input.cursorOffset = 2;
 
-    // 가로 이동이 목록 탐색이나 새 Git 조회로 새지 않아야 한다.
-    move(true); await app.renderOnce();
-    expect(state()?.tab).toBe("reflog"); expect(app.renderer.currentFocusedRenderable).toBe(control("Reflog"));
-    move(false); await app.renderOnce();
-    expect(state()?.tab).toBe("commits"); expect(app.renderer.currentFocusedRenderable).toBe(control("Commits"));
-    await app.clickIn("git-toolbar", "Refs");
-    expect(state()?.right).toBe("refs"); expect(app.renderer.currentFocusedRenderable).toBe(app.get("git-refs"));
-    control("Local").focus(); move(true); move(true); move(false); await app.renderOnce();
+    app.mockInput.pressKey("n", { ctrl: true }); await app.renderOnce();
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.refSelected).toBe("refs/remotes/origin/main");
+    app.mockInput.pressKey("p", { ctrl: true }); app.mockInput.pressTab(); await app.renderOnce();
+    move(true); await app.renderOnce(); move(false); await app.renderOnce();
 
-    expect(state()?.refs).toBe("remote"); expect(app.renderer.currentFocusedRenderable).toBe(control("Remote"));
-    expect(state()?.reference).toBeNull(); expect(app.loads).toEqual(["all"]); expect(app.requests).toEqual([]);
-    const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
-    expect(footer).toContain("h/l Tabs"); expect(footer).not.toMatch(/[←→]/u);
-    app.mockInput.pressEnter(); await app.renderOnce();
-    expect(state()?.refs).toBe("remote"); expect(app.requests).toEqual([]);
+    expect(input.value).toBe("main"); expect(input.cursorOffset).toBe(2);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-browser-list");
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.reference).toBeNull(); expect(app.loads).toEqual(["all"]);
+    app.mockInput.pressEnter(); await app.waitFor(() => app.loads.includes("refs/heads/main")); await app.renderOnce();
+    expect(app.get("git-browser").visible).toBe(false); expect(app.captureCharFrame()).toContain("Ref: main");
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Reflog 검색은 이벤트·해시·시각을 찾고 일치하지 않는 검색의 Enter는 아무것도 열지 않는다", async () => {
+  // 검색은 원래 이벤트 목록을 탐색할 뿐 메인 커밋 선택을 바꾸지 않는다.
+  const data = snapshot(); data.reflog = [
+    { oid: commit.oid, selector: "HEAD@{0}", date: "2026-10-21 14:32:00 +0900", subject: "reset: moving to HEAD~2" },
+    { oid: rootCommit.oid, selector: "HEAD@{1}", date: "2026-10-20 10:00:00 +0900", subject: "checkout: moving from main to feature/topic" },
+  ];
+  const app = await mount({ source: { load: async () => ok(data), compare: async () => ok(comparison()),
+    details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }) } });
+  try {
+    await app.openReflog(); const input = app.get("git-browser-search"); if (!(input instanceof SearchInput)) throw new Error("Missing Git search");
+
+    for (const query of ["checkout main", rootCommit.oid.slice(0, 12), "2026-10-20", "HEAD@{1}"]) {
+      input.value = query; await app.renderOnce(); expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.reflogSelected).toBe("HEAD@{1}");
+    }
+    input.value = "no such event"; await app.renderOnce(); app.mockInput.pressEnter(); await app.renderOnce();
+
+    expect(app.captureCharFrame()).toContain("No matches"); expect(app.get("git-browser").visible).toBe(true); expect(app.get("git-changes").visible).toBe(false);
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBeNull(); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Refs 모달의 닫기 아이콘은 검색을 적용하지 않고 메인 커밋으로 복귀한다", async () => {
+  // 마우스 닫기도 Esc와 같은 비파괴적 닫기를 제공한다.
+  const app = await mount();
+  try {
+    await app.chooseCommit(); await app.openRefs(); await app.mockInput.typeText("origin"); await app.renderOnce();
+
+    await app.clickIn("git-browser-panel", "×");
+
+    expect(app.get("git-browser").visible).toBe(false); expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.reference).toBeNull();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-history"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -908,62 +1129,28 @@ test("Git의 Agent 요청도 여러 줄·접힌 원문·이미지 참조를 같�
   }finally{await app.close();}
 });
 
-test.each([false, true])("밝기 %j에서도 Git의 모든 뷰·필터 탭은 포커스 배경 없이 밑줄만 표시한다", async (light) => {
-  // 실제 Git 데이터와 Workbench 버튼 factory를 사용해 세 묶음의 탭을 함께 검증한다.
+test.each([false, true])("밝기 %j에서도 검색 포커스 중 후보를 강조하고 Ask 버튼의 기존 외관을 유지한다", async light => {
+  // 검색 입력에 포커스가 있어도 선택 후보의 배경은 명확하게 남아야 한다.
   const app = await mount();
   const controls = (node: Renderable): Button[] => [...(node instanceof Button ? [node] : []), ...node.getChildren().flatMap(controls)];
-  const control = (name: string) => {
-    const found = controls(app.get("git-view")).find((button) => button.getChildren().some((child) => child instanceof TextRenderable && child.plainText === name));
-    if (!found) throw new Error(`Missing Git control ${name}`);
-    return found;
-  };
-  const cell = (name: string) => {
-    const button = control(name), label = button.getChildren()[0]!; let x = 0;
-    return app.captureSpans().lines[label.y]!.spans.find((span) => { x += span.width; return x > label.x; })!;
-  };
-  const expectTab = (name: string) => {
-    const button = control(name), spans = app.captureSpans().lines[button.y]!.spans;
-    expect(cell(name).attributes & TextAttributes.UNDERLINE).not.toBe(0);
-    for (let x = button.x; x < button.x + button.width; x++) {
-      let end = 0; const span = spans.find((item) => { end += item.width; return end > x; })!;
-      expect(span.bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
-    }
-  };
   try {
     uiTheme(app.renderer).configure({ palette: [], defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
       cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null });
-    await app.renderOnce();
-    const loads = app.loads.length;
+    await app.openRefs(); await app.mockInput.typeText("main"); await app.renderOnce();
 
-    // 화면이나 필터를 확정하지 않은 포커스 이동에도 일관된 밑줄을 표시한다.
-    for (const name of ["Commits", "Reflog"]) {
-      control(name).focus(); await app.renderOnce(); expectTab(name);
-    }
-    expect(cell("Commits").attributes & TextAttributes.BOLD).not.toBe(0);
-    expect(cell("Reflog").attributes & TextAttributes.BOLD).toBe(0);
-    expect(app.loads.length).toBe(loads);
-
-    // Refs 안의 Local/Remote/Tags도 같은 탭 스타일을 쓰고 기존 선택 동작은 보존한다.
-    await app.clickIn("git-toolbar", "Refs");
-    for (const name of ["Local", "Remote", "Tags"]) {
-      control(name).focus(); await app.renderOnce(); expectTab(name);
-    }
-    await app.clickIn("git-refs-popup", "Remote"); app.get("git-refs").focus(); await app.renderOnce();
-    expectTab("Remote"); expect(cell("Remote").attributes & TextAttributes.BOLD).not.toBe(0);
-    expect(cell("Local").attributes & TextAttributes.BOLD).toBe(0);
-
-    // 실행 버튼은 탭이 아니므로 기존 포커스 배경을 유지하고 아무 요청도 전송하지 않는다.
-    app.mockInput.pressEscape(); await app.renderOnce(); await app.chooseCommit();
-    app.get("git-history").focus(); app.mockInput.pressKey("a"); await app.renderOnce();
-    expect(app.get("git-ask").visible).toBe(true);
-    control("Cancel").focus(); await app.renderOnce();
-    expect(cell("Cancel").bg.toInts()).toEqual(uiTheme(app.renderer).colors.selected.toInts());
-    expect(cell("Cancel").attributes & TextAttributes.UNDERLINE).toBe(0);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-browser-search");
+    expect(app.spanIn("git-browser-list", `${icons.branch} main`).bg.toInts()).not.toEqual(uiTheme(app.renderer).colors.panel.toInts());
+    expect(app.spanIn("git-browser-list", `${icons.branch} main`).attributes & TextAttributes.UNDERLINE).toBe(0);
+    app.mockInput.pressEscape(); await app.renderOnce(); await app.chooseCommit(); app.mockInput.pressKey("a"); await app.renderOnce();
+    const cancel = controls(app.get("git-view")).find(button => button.getChildren().some(child => child instanceof TextRenderable && child.plainText === "Cancel"));
+    if (!cancel) throw new Error("Missing Cancel button"); cancel.focus(); await app.renderOnce();
+    let x = 0; const span = app.captureSpans().lines[cancel.y]!.spans.find(item => { x += item.width; return x > cancel.x; })!;
+    expect(span.bg.toInts()).toEqual(uiTheme(app.renderer).colors.selected.toInts());
     expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("Refresh 버튼 없이 r로 새로고침하고 spinner는 탭과 같은 행에서 최소 500ms 표시한다", async () => {
+test("헤더나 Refresh 버튼 없이 r로 새로고침하고 spinner는 레이아웃을 밀지 않고 최소 500ms 표시한다", async () => {
   // Keep refresh pending at the query boundary and drive animation with the renderer clock.
   const clock = new ManualClock(); let reads = 0;
   const pending = Promise.withResolvers<Result<GitSnapshot, ExpectedError>>();
@@ -973,24 +1160,22 @@ test("Refresh 버튼 없이 r로 새로고침하고 spinner는 탭과 같은 행
   } });
   try {
     clock.advance(500); await app.renderOnce();
-    const toolbar = app.get("git-toolbar"), spinner = app.get("git-loading"), tab = toolbar.getChildren()[0]!;
-    const toolbarText = () => app.captureCharFrame().split("\n")[toolbar.y]!.slice(toolbar.x, toolbar.x + toolbar.width);
-    expect(toolbarText()).not.toContain("Refresh");
-    expect(spinner.visible).toBe(false);
-    const position = [spinner.x, spinner.y, toolbar.height];
+    const toolbar = app.get("git-toolbar"), spinner = app.get("git-loading"), list = app.get("git-history");
+    const glyph = () => app.captureCharFrame().split("\n")[spinner.y]!.slice(spinner.x, spinner.x + 1);
+    expect(toolbar.visible).toBe(false); expect(spinner.visible).toBe(false);
+    const position = [spinner.x, spinner.y, list.height, list.y];
 
     // The scoped key still performs a real source reload, not just a visual animation.
     app.get("git-history").focus(); app.mockInput.pressKey("r"); await app.renderOnce();
     expect(reads).toBe(2); expect(spinner.visible).toBe(true);
-    expect([spinner.y, spinner.height]).toEqual([tab.y, tab.height]);
-    expect(toolbarText()).toContain("⠋");
+    expect(spinner.y).toBe(list.y); expect(glyph()).toBe("⠋");
     expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("r Refresh");
     clock.advance(80); await app.renderOnce();
-    expect(toolbarText()).toContain("⠙");
+    expect(glyph()).toBe("⠙");
     pending.resolve(ok(snapshot())); await app.renderOnce(); await app.renderOnce();
     clock.advance(419); await app.renderOnce(); expect(spinner.visible).toBe(true);
     clock.advance(1); await app.renderOnce(); expect(spinner.visible).toBe(false);
-    expect([spinner.x, spinner.y, toolbar.height]).toEqual(position);
+    expect([spinner.x, spinner.y, list.height, list.y]).toEqual(position);
     expect(app.requests).toEqual([]);
   } finally { pending.resolve(ok(snapshot())); await app.close(); }
 });
@@ -1026,8 +1211,8 @@ test("Git 목록은 전체 너비를 쓰고 Changes 팝업은 좁은 화면에�
       app.resize(width, height); await app.renderOnce(); await app.renderOnce();
       const panel = app.get("git-view"), list = app.get("git-history");
       expect(list.y + list.height).toBe(app.get("work-panel").y + app.get("work-panel").height);
-      expect(list.y).toBe(panel.y + 2);
-      expect(list.width).toBe(app.get("git-toolbar").width);
+      expect(list.y).toBe(panel.y);
+      expect(list.width).toBe(panel.width - (width < 80 ? 2 : 4));
       expect(app.get("git-changes").visible).toBe(false);
       expect(app.captureCharFrame()).not.toContain("Changed files");
     }
@@ -1097,20 +1282,19 @@ test("Changes의 Tab은 파일과 diff만 순환하고 Esc는 커밋과 왼쪽 �
   } finally { await app.close(); }
 });
 
-test("Refs 팝업의 종류 탭과 목록은 왼쪽 시작선과 한 줄 여백을 유지한다", async () => {
-  // 우측 패널을 제거해도 기존 브랜치·태그 필터와 표시 간격을 유지한다.
+test("Refs는 종류 탭 대신 그룹과 검색 결과를 표시하고 작은 화면에서도 결과를 유지한다", async () => {
+  // 종류를 전환하지 않고도 모든 ref를 검색할 수 있어야 한다.
   const app = await mount();
   try {
-    await app.clickIn("git-toolbar", "Refs"); await app.clickIn("git-refs-popup", "Remote");
+    await app.openRefs(); expect(app.captureCharFrame()).toContain("All refs");
+    await app.mockInput.typeText("origin"); await app.renderOnce();
 
-    // 창 크기가 달라져도 종류 탭 아래에 실제 빈 행을 하나만 둔다.
     for (const [width, height] of [[160, 32], [79, 18], [80, 18], [60, 12], [160, 32]] as const) {
       app.resize(width, height); await app.renderOnce(); await app.renderOnce();
-      const tabs = app.positionIn("git-refs-popup", "Local"), list = app.get("git-refs");
-      expect(list.y).toBe(tabs.y + 2); expect(list.x).toBe(tabs.x);
-      expect(app.positionIn("git-refs", `${icons.branch} origin/main`).x).toBe(tabs.x);
-      expect(app.captureCharFrame().split("\n")[tabs.y + 1]!.slice(list.x, list.x + list.width).trim()).toBe("");
-      expect(app.captureCharFrame()).not.toContain("All refs");
+      const list = app.get("git-browser-list"), group = app.positionIn("git-browser-list", "Remote");
+      expect(list.height).toBeGreaterThan(1); expect(app.positionIn("git-browser-list", `${icons.branch} origin/main`).x).toBe(group.x);
+      expect(app.get("git-reflog-preview-pane").visible).toBe(false);
+      expect(app.renderer.currentFocusedRenderable?.id).toBe("git-browser-search");
     }
     expect(app.requests).toEqual([]);
   } finally { await app.close(); }
@@ -1132,41 +1316,42 @@ test("Changes의 파일 제목과 첫 파일 사이에는 화면 높이에 관�
   } finally { await app.close(); }
 });
 
-test("Refs 종류 탭에서 Esc를 눌러도 커밋 선택과 초안을 유지하며 목록으로 돌아간다", async () => {
-  // 목록과 종류 탭 어디에 있든 닫기는 같은 팝업을 대상으로 한다.
+test.each(["search", "list"] as const)("Refs %s에서 Esc는 필터 적용 없이 커밋 선택과 초안을 보존한다", async focus => {
+  // 후보 이동과 필터 적용은 별개이며 검색 중 닫아도 메인 선택은 그대로 남는다.
   const app = await mount();
   try {
-    await app.chooseCommit(); await app.clickIn("git-toolbar", "Refs"); await app.clickIn("git-refs-popup", "Local");
+    await app.chooseCommit(); await app.openRefs(); await app.mockInput.typeText("origin");
+    if (focus === "list") app.mockInput.pressTab(); await app.renderOnce();
 
     app.mockInput.pressEscape(); await app.renderOnce();
 
-    expect(app.get("git-refs-popup").visible).toBe(false);
+    expect(app.get("git-browser").visible).toBe(false); expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.reference).toBeNull();
     expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("git-history");
-    expect(app.captureCharFrame()).not.toContain("Changed files");
     expect(app.view.promptDrafts.a1).toBe("existing Agent draft"); expect(app.loads).toEqual(["all"]);
     expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
   } finally { await app.close(); }
 });
 
-test.each(["list", "button"] as const)("Refs 필터를 고른 뒤 %s의 Esc는 팝업만 닫고 다음 Esc에서 전체 커밋으로 돌아간다", async (focus) => {
-  // 필터 적용과 팝업 닫기는 별개이며 checkout은 발생하지 않는다.
+test.each(["all", "escape"] as const)("Refs의 Enter는 필터를 적용해 닫고 %s 동작은 전체 커밋으로 복귀한다", async clear => {
+  // 전체 보기와 메인의 Esc 모두 checkout 없이 조회 필터만 해제한다.
   const app = await mount();
   try {
-    await app.clickIn("git-toolbar", "Refs"); await app.clickIn("git-refs-popup", "Remote"); await app.clickIn("git-refs", "origin/main");
-    await app.waitFor(() => app.loads.includes("refs/remotes/origin/main"));
-    if (focus === "button") await app.clickIn("git-refs-popup", "Local");
+    await app.openRefs(); await app.mockInput.typeText("origin/main"); app.mockInput.pressEnter();
+    await app.waitFor(() => app.loads.includes("refs/remotes/origin/main")); await app.renderOnce();
+    expect(app.get("git-browser").visible).toBe(false); expect(app.captureCharFrame()).toContain("Ref: origin/main");
 
-    app.mockInput.pressEscape(); await app.renderOnce();
-    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.reference).toBe("refs/remotes/origin/main");
-    app.mockInput.pressEscape(); await app.waitFor(() => app.loads.at(-1) === "all"); await app.renderOnce();
+    if (clear === "all") { await app.openRefs(); app.mockInput.pressTab(); app.mockInput.pressKey("HOME"); app.mockInput.pressEnter(); }
+    else {
+      await app.openRefs(); app.mockInput.pressEscape(); await app.renderOnce();
+      expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.reference).toBe("refs/remotes/origin/main");
+      app.mockInput.pressEscape();
+    }
+    await app.waitFor(() => app.loads.at(-1) === "all"); await app.renderOnce();
 
-    const state = app.view.workViewPreferences.gitViews?.["demo:main"];
-    expect(state?.reference).toBeNull(); expect(state?.right).toBe("commit"); expect(state?.diff).toBe(false);
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-history");
-    expect(app.captureCharFrame()).toContain("Working tree");
-    expect(app.view.promptDrafts.a1).toBe("existing Agent draft");
-    expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.reference).toBeNull(); expect(app.get("git-toolbar").visible).toBe(false);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-history"); expect(app.captureCharFrame()).toContain("Working tree");
+    expect(app.view.promptDrafts.a1).toBe("existing Agent draft"); expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -1174,9 +1359,9 @@ test("필터된 diff의 Esc는 먼저 diff만 닫고 다음 Esc에서 ref 필터
   // Going back one level must not unexpectedly discard the ref being reviewed.
   const app = await mount();
   try {
-    await app.clickIn("git-toolbar", "Refs"); await app.clickIn("git-refs-popup", "Remote"); await app.clickIn("git-refs", "origin/main");
+    await app.openRefs(); await app.mockInput.typeText("origin/main"); app.mockInput.pressEnter();
     await app.waitFor(() => app.loads.includes("refs/remotes/origin/main"));
-    app.mockInput.pressEscape(); await app.renderOnce(); await app.chooseCommit(); await app.openChanges();
+    await app.renderOnce(); await app.chooseCommit(); await app.openChanges();
     await app.waitForFrame((frame) => frame.includes("const line00")); app.get("git-diff").focus(); await app.renderOnce();
     expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("Esc Close");
     expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("Esc Commits");
@@ -1191,22 +1376,19 @@ test("필터된 diff의 Esc는 먼저 diff만 닫고 다음 Esc에서 ref 필터
   } finally { await app.close(); }
 });
 
-test("Commits와 Reflog는 우측 상세 없이 목록만 표시하고 Refs는 Commits 상단에서 연다", async () => {
-  // 커밋을 고르는 메인 화면에는 변경 파일이나 상세 내용이 상시 노출되지 않는다.
+test("메인은 탭 없이 Commits로 시작하고 Refs와 Reflog는 footer 단축키의 모달로 연다", async () => {
+  // 모달을 여는 동안 메인 커밋 선택과 기본 화면 정체성을 바꾸지 않는다.
   const app = await mount();
   try {
-    const tab = (label: string) => app.captureSpans().lines.flatMap(line => line.spans).find(span => span.text === label)!;
-    expect(app.captureCharFrame()).toMatch(/Commits\s+Reflog/);
-    expect(app.positionIn("git-toolbar", "Refs")).toBeDefined();
-    expect(tab("Commits").attributes & TextAttributes.UNDERLINE).not.toBe(0);
-    expect(app.captureCharFrame()).not.toContain("Changed files");
+    expect(app.get("git-toolbar").visible).toBe(false); expect(app.get("git-history").y).toBe(app.get("git-view").y);
+    const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
+    expect(footer).toContain("b Refs"); expect(footer).toContain("Ctrl+r Reflog");
 
-    // Reflog도 같은 전체 너비 목록과 기존 이벤트 동작을 유지한다.
-    await app.click("Reflog");
+    await app.chooseCommit(); await app.openReflog();
 
-    expect(tab("Reflog").attributes & TextAttributes.UNDERLINE).not.toBe(0);
-    expect(tab("Commits").attributes & TextAttributes.UNDERLINE).toBe(0);
-    expect(app.captureCharFrame()).toContain("HEAD@{0}"); expect(app.captureCharFrame()).not.toContain("Changed files");
+    expect(app.get("git-browser").visible).toBe(true); expect(app.captureCharFrame()).toContain("HEAD@{0}");
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.tab).toBe("commits");
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid);
     expect(app.get("git-changes").visible).toBe(false); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
@@ -1215,7 +1397,7 @@ test("Commits의 ref·그래프·연결선은 같은 색을 쓰고 메시지는 
   // A visible graph and ref label expose accidental whole-row coloring.
   const app = await mount();
   try {
-    await app.chooseCommit(); app.get("git-toolbar").getChildren()[0]!.focus(); await app.renderOnce(); await app.renderOnce();
+    await app.chooseCommit(); app.get("git-history").blur(); await app.renderOnce(); await app.renderOnce();
     const before = app.captureCharFrame();
 
     // Repaint the mounted list in both dark and light terminal palettes.
@@ -1244,12 +1426,12 @@ test("Reflog는 해시만 강조하고 selector와 메시지는 기본 텍스트
   // Reflog has no graph, so its hash needs an explicit semantic color.
   const app = await mount();
   try {
-    await app.click("Reflog");
+    await app.openReflog();
 
     const colors = uiTheme(app.renderer).colors;
-    expect(app.spanIn("git-history", "aaaaaaa").fg.toInts()).toEqual(colors.warning.toInts());
-    expect(app.spanIn("git-history", "HEAD@{0}").fg.toInts()).toEqual(colors.text.toInts());
-    expect(app.spanIn("git-history", "commit: Update login").fg.toInts()).toEqual(colors.text.toInts());
+    expect(app.spanIn("git-browser-list", "aaaaaaa").fg.toInts()).toEqual(colors.warning.toInts());
+    expect(app.spanIn("git-browser-list", "HEAD@{0}").fg.toInts()).toEqual(colors.text.toInts());
+    expect(app.spanIn("git-browser-list", "commit: Update login").fg.toInts()).toEqual(colors.text.toInts());
     expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
@@ -1358,25 +1540,37 @@ test("Refs는 브랜치·태그 아이콘을 표시하고 현재 브랜치만 �
   const data = snapshot(); data.refs.push({ kind: "local", name: "feature/topic", ref: "refs/heads/feature/topic", oid: commit.oid });
   const app = await mount({ source: { load: async () => ok(data), details: async () => ok({ commit, message: commit.subject, files: [], branches: [] }), compare: async () => ok(comparison()) } });
   try {
-    await app.clickIn("git-toolbar", "Refs");
+    await app.openRefs();
     const colors = uiTheme(app.renderer).colors;
-    expect(app.positionIn("git-refs", `${icons.branch} main`).x).toBe(app.positionIn("git-refs", `${icons.branch} feature/topic`).x);
-    expect(app.spanIn("git-refs", `${icons.branch} main`).fg.toInts()).toEqual(colors.accent.toInts());
-    expect(app.spanIn("git-refs", "main").fg.toInts()).toEqual(colors.accent.toInts());
-    expect(app.spanIn("git-refs", `${icons.branch} feature/topic`).fg.toInts()).toEqual(colors.text.toInts());
+    expect(app.positionIn("git-browser-list", `${icons.branch} main`).x).toBe(app.positionIn("git-browser-list", `${icons.branch} feature/topic`).x);
+    expect(app.spanIn("git-browser-list", `${icons.branch} main`).fg.toInts()).toEqual(colors.accent.toInts());
+    expect(app.spanIn("git-browser-list", "main").fg.toInts()).toEqual(colors.accent.toInts());
+    expect(app.spanIn("git-browser-list", `${icons.branch} feature/topic`).fg.toInts()).toEqual(colors.text.toInts());
     expect(app.captureCharFrame()).not.toContain("✓ main");
 
-    // Selecting a different ref changes the query, not which branch gets HEAD coloring.
-    await app.clickIn("git-refs", "feature/topic");
-    expect(app.spanIn("git-refs", `${icons.branch} main`).fg.toInts()).toEqual(colors.accent.toInts());
-    expect(app.spanIn("git-refs", `${icons.branch} feature/topic`).fg.toInts()).toEqual(colors.text.toInts());
+    // 후보 선택은 현재 브랜치의 강조나 실제 필터를 바꾸지 않는다.
+    await app.clickIn("git-browser-list", "feature/topic");
+    expect(app.spanIn("git-browser-list", `${icons.branch} main`).fg.toInts()).toEqual(colors.accent.toInts());
+    expect(app.spanIn("git-browser-list", `${icons.branch} feature/topic`).fg.toInts()).toEqual(colors.text.toInts());
     app.mockInput.pressKey("y"); await app.waitFor(() => app.copies.length === 1);
-    expect(app.copies).toEqual(["feature/topic"]);
-    await app.clickIn("git-refs-popup", "Remote");
-    expect(app.spanIn("git-refs", `${icons.branch} origin/main`).fg.toInts()).toEqual(colors.text.toInts());
-    await app.clickIn("git-refs-popup", "Tags");
-    expect(app.spanIn("git-refs", `${icons.tag} v1`).fg.toInts()).toEqual(colors.text.toInts());
+    expect(app.copies).toEqual(["feature/topic"]); expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.reference).toBeNull();
+    expect(app.spanIn("git-browser-list", `${icons.branch} origin/main`).fg.toInts()).toEqual(colors.text.toInts());
+    expect(app.spanIn("git-browser-list", `${icons.tag} v1`).fg.toInts()).toEqual(colors.text.toInts());
     expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Refs의 Ask에서 버튼으로 포커스를 옮긴 뒤 Esc는 Ask만 닫고 후보로 돌아간다", async () => {
+  // 중첩된 입력의 닫기가 바깥 모달이나 메인 필터를 닫으면 안 된다.
+  const app = await mount();
+  try {
+    await app.openRefs(); await app.clickIn("git-browser-list", "origin/main"); app.mockInput.pressKey("a"); await app.renderOnce();
+
+    app.mockInput.pressTab(); await app.renderOnce(); app.mockInput.pressEscape(); await app.renderOnce();
+
+    expect(app.get("git-ask").visible).toBe(false); expect(app.get("git-browser").visible).toBe(true);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-browser-list");
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.reference).toBeNull(); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -1384,8 +1578,7 @@ test("Refs의 Local/Remote/Tags는 이름만 첨부·복사하고 Enter는 조�
   // Reference selection never changes the working branch or includes a tip hash.
   const app = await mount();
   try {
-    await app.click("Refs"); await app.click("Remote"); await app.clickIn("git-refs", "origin/main");
-    await app.waitFor(() => app.loads.includes("refs/remotes/origin/main"));
+    await app.openRefs(); await app.clickIn("git-browser-list", "origin/main");
     app.mockInput.pressKey("y"); await app.waitFor(() => app.copies.length > 0);
 
     await app.ask("compare this branch");
@@ -1393,8 +1586,10 @@ test("Refs의 Local/Remote/Tags는 이름만 첨부·복사하고 Enter는 조�
     expect(app.copies[0]).toBe("origin/main");
     expect(app.requests[0]!.text).toContain(JSON.stringify("origin/main"));
     expect(app.requests[0]!.text).not.toContain(rootCommit.oid);
-    await app.click("Tags"); await app.clickIn("git-refs", "v1"); app.mockInput.pressKey("y"); await app.waitFor(() => app.copies.length === 2);
-    expect(app.copies[1]).toBe("v1");
+    await app.clickIn("git-browser-list", "v1"); app.mockInput.pressKey("y"); await app.waitFor(() => app.copies.length === 2);
+    expect(app.copies[1]).toBe("v1"); expect(app.loads).toEqual(["all"]);
+    app.mockInput.pressEnter(); await app.waitFor(() => app.loads.includes("refs/tags/v1"));
+    expect(app.get("git-browser").visible).toBe(false);
   } finally { await app.close(); }
 });
 
@@ -1493,7 +1688,7 @@ test("Reflog의 a는 이벤트 상세를 보내고 y는 전체 대상 해시를 
   // Reflog uses the full-width history without resurrecting the right panel.
   const app = await mount();
   try {
-    await app.click("Reflog"); app.mockInput.pressKey("y"); await app.waitFor(() => app.copies.length > 0);
+    await app.openReflog(); app.get("git-browser-list").focus(); app.mockInput.pressKey("y"); await app.waitFor(() => app.copies.length > 0);
 
     await app.ask("explain this event");
 
@@ -1612,7 +1807,7 @@ test("좁은 화면의 diff와 Reflog 전환은 기존 선택과 하단 푸터�
     await app.chooseCommit(); await app.openChanges(); await app.waitForFrame((frame) => frame.includes("const line00"));
 
     app.resize(60, 12); await app.renderOnce(); app.resize(160, 32); await app.renderOnce();
-    app.mockInput.pressEscape(); await app.renderOnce(); await app.click("Reflog");
+    app.mockInput.pressEscape(); await app.renderOnce(); await app.openReflog();
 
     expect(app.get("git-changes").visible).toBe(false); expect(app.captureCharFrame()).toContain("Radian 0.0.0");
     expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid);

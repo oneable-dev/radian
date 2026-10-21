@@ -22,11 +22,14 @@ export type GitComparison = { before: string; after: string; beforeLabel: string
 export type GitSource = {
   load(reference: string | null, limit: number, signal: AbortSignal): Promise<Result<GitSnapshot, ExpectedError>>;
   details(commit: GitCommit, signal: AbortSignal): Promise<Result<GitDetails, ExpectedError>>;
+  // Optional for snapshot-only adapters; repositories support commits reachable only through reflog.
+  lookup?(oid: string, signal: AbortSignal): Promise<Result<GitDetails, ExpectedError>>;
   compare(file: GitFile, signal: AbortSignal): Promise<Result<GitComparison, ExpectedError>>;
 };
 
 // Persist only view identity/positions, never file contents or requests to replay.
 export type GitViewState = {
+  // Legacy navigation fields remain wire-compatible; the UI always restores to Commits.
   tab: "commits" | "reflog";
   right: "commit" | "refs";
   refs: "local" | "remote" | "tag";

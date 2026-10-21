@@ -8,7 +8,7 @@ const commandFor = (context: KeyContext, key: string): CommandId | undefined => 
 
 test.each([
   ["workspace", "workspace"], ["history", "history"], ["monitor", "monitor"], ["model", "model"],
-  ["dialog", "dialog"], ["git", "git"], ["transcript", "transcript"], ["transcript-text", "transcript"], ["transcript-visual", "transcript"],
+  ["dialog", "dialog"], ["git", "git"], ["git-search", "git"], ["transcript", "transcript"], ["transcript-text", "transcript"], ["transcript-visual", "transcript"],
 ] as const)("%s의 Ctrl+D/U는 %s 반 페이지 명령에 연결한다", (context, family) => {
   // 목록과 본문 모두 키 이름은 같지만 각 화면의 소유자가 동작을 결정한다.
   const down = commandFor(context, "ctrl+d"), up = commandFor(context, "ctrl+u");
@@ -23,7 +23,7 @@ test.each([
   ["monitor", "monitor.previous", "monitor.next"], ["monitor-search", "monitor.previous", "monitor.next"],
   ["model", "model.previous", "model.next"], ["model-search", "model.previous", "model.next"],
   ["model-effort", "model.effort-less", "model.effort-more"], ["dialog", "dialog.previous", "dialog.next"],
-  ["git", "git.previous", "git.next"], ["git-tabs", "git.tab-previous", "git.tab-next"],
+  ["git", "git.previous", "git.next"], ["git-search", "git.previous", "git.next"],
   ["terminal-tabs", "terminal.tab-previous", "terminal.tab-next"], ["session-tabs", "session.previous", "session.next"],
   ["transcript", "transcript.previous", "transcript.next"], ["transcript-text", "transcript.up", "transcript.down"],
   ["transcript-visual", "transcript.up", "transcript.down"],
@@ -49,6 +49,27 @@ test.each([["search", "workspace"], ["history-search", "history"], ["monitor-sea
   expect(down).toBe(`${family}.half-page-down`); expect(up).toBe(`${family}.half-page-up`);
   expect(commandFor(context, "ctrl+c")).toBe("search.clear"); expect(commandFor(context, "ctrl+l")).toBeUndefined();
   expect(defaultKeymap().hints("search.clear", context)).toBe("Ctrl+c");
+});
+
+test("Git 검색은 기본 탐색·지우기를 제공하고 일반 문자는 입력에 남긴다", () => {
+  // Git 모달의 키는 메인 탐색 및 Agent prompt와 소유권을 나눠야 한다.
+  const map = defaultKeymap();
+
+  expect(commandFor("git-search", "ctrl+n")).toBe("git.next"); expect(commandFor("git-search", "ctrl+p")).toBe("git.previous");
+  expect(commandFor("git-search", "ctrl+c")).toBe("git.search-clear"); expect(commandFor("git-search", "ctrl+l")).toBeUndefined();
+  for (const key of ["h", "j", "k", "l", "a", "y", "b"]) expect(commandFor("git-search", key)).toBeUndefined();
+  expect(commandFor("git", "b")).toBe("git.refs"); expect(commandFor("git", "ctrl+r")).toBe("git.reflog"); expect(commandFor("git", "r")).toBe("git.refresh");
+  expect(map.hint("git.search-clear", "git-search")).toBe("Ctrl+c");
+});
+
+test("Git 모달 진입·검색 지우기 키의 사용자 재설정은 기본 바인딩을 대체한다", () => {
+  // 모달이 직접 키를 가로채면 사용자 keymap의 재설정을 존중할 수 없다.
+  const map = expectOk(parseKeymap({ bindings: { "git.refs": [{ keys: "v", scope: "git" }],
+    "git.reflog": [{ keys: "shift+r", scope: "git" }], "git.search-clear": [{ keys: "ctrl+g", scope: "git-search" }] } }));
+
+  expect(map.bound("b", "git")).toBe(false); expect(map.bound("ctrl+r", "git")).toBe(false); expect(map.bound("ctrl+c", "git-search")).toBe(false);
+  expect(map.hint("git.refs", "git")).toBe("v"); expect(map.hint("git.reflog", "git")).toBe("Shift+r");
+  expect(map.hint("git.search-clear", "git-search")).toBe("Ctrl+g");
 });
 
 test("Transcript의 Shift+G는 섹션에서 최신 출력으로 이동하고 본문에서는 섹션 끝으로 이동한다", () => {

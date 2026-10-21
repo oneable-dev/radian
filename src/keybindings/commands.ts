@@ -1,4 +1,4 @@
-export const contexts = ["workspace", "search", "history", "history-search", "monitor", "monitor-search", "dashboard", "dashboard-tabs", "model", "model-search", "model-effort", "session-tabs", "terminal-tabs", "git-tabs", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "dialog", "none"] as const;
+export const contexts = ["workspace", "search", "history", "history-search", "monitor", "monitor-search", "dashboard", "dashboard-tabs", "model", "model-search", "model-effort", "session-tabs", "terminal-tabs", "git-tabs", "git-search", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "dialog", "none"] as const;
 export type KeyContext = typeof contexts[number];
 export type KeyScope = KeyContext | "global" | "app" | "pty";
 export type BindingInput = { keys: string; scope: KeyScope };
@@ -158,6 +158,11 @@ export const defaultBindings = {
   "transcript.half-page-down": transcriptKeys("ctrl+d"),
   "transcript.page-up": transcriptKeys("pageup"),
   "transcript.page-down": transcriptKeys("pagedown"),
+  "git.refs": [key("b", "git")],
+  "git.reflog": [key("ctrl+r", "git")],
+  "git.search": [key("/", "git")],
+  "git.search-clear": [key("ctrl+c", "git-search"), key("ctrl+c", "git")],
+  "git.preview": [key("ctrl+o", "git"), key("ctrl+o", "git-search")],
   "git.ask": [key("a", "git")],
   "git.copy": [key("y", "git")],
   "git.submit": [key("enter", "git-prompt")],
@@ -166,20 +171,21 @@ export const defaultBindings = {
   "git.paste": [key("ctrl+v", "git-prompt")],
   "git.inspect": [key("ctrl+o", "git-prompt")],
   "git.cancel": [key("escape", "git-prompt")],
-  "git.open": [key("enter", "git")],
-  "git.back": [key("escape", "git"), key("escape", "git-tabs"), key("escape", "button")],
-  "git.tab-previous": [key("h", "git-tabs"), key("left", "git-tabs"), key("ctrl+p", "git-tabs")],
-  "git.tab-next": [key("l", "git-tabs"), key("right", "git-tabs"), key("ctrl+n", "git-tabs")],
+  "git.open": [key("enter", "git"), key("enter", "git-search")],
+  "git.back": [key("escape", "git"), key("escape", "git-search"), key("escape", "git-tabs"), key("escape", "button")],
+  // Kept as unbound command IDs so old keymap files remain readable after removing Git tabs.
+  "git.tab-previous": [],
+  "git.tab-next": [],
   "git.refresh": [key("r", "git")],
   "git.more": [key("plus", "git")],
-  "git.previous": [key("up", "git"), key("k", "git"), key("ctrl+p", "git")],
-  "git.next": [key("down", "git"), key("j", "git"), key("ctrl+n", "git")],
+  "git.previous": [key("up", "git"), key("k", "git"), key("ctrl+p", "git"), key("up", "git-search"), key("ctrl+p", "git-search")],
+  "git.next": [key("down", "git"), key("j", "git"), key("ctrl+n", "git"), key("down", "git-search"), key("ctrl+n", "git-search")],
   "git.first": [key("home", "git")],
   "git.last": [key("end", "git")],
   "git.page-up": [key("pageup", "git")],
   "git.page-down": [key("pagedown", "git")],
-  "git.half-page-up": [key("ctrl+u", "git")],
-  "git.half-page-down": [key("ctrl+d", "git")],
+  "git.half-page-up": [key("ctrl+u", "git"), key("ctrl+u", "git-search")],
+  "git.half-page-down": [key("ctrl+d", "git"), key("ctrl+d", "git-search")],
   "git.left": [key("h", "git"), key("left", "git")],
   "git.right": [key("l", "git"), key("right", "git")],
   "button.activate": [key("enter", "button"), key("space", "button"), key("enter", "terminal-tabs"), key("space", "terminal-tabs"), key("enter", "git-tabs"), key("space", "git-tabs")],

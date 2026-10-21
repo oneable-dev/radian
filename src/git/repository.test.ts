@@ -92,6 +92,40 @@ test("커밋 상세는 --points-at으로 해당 커밋을 직접 가리키는 �
   } finally { await app.cleanup(); }
 });
 
+test("reflog에만 남은 커밋도 해시로 조회하고 원래 부모 기준으로 변경을 비교한다", async () => {
+  // reset 이후 모든 ref에서 사라졌지만 reflog에는 남아 있는 커밋을 준비한다.
+  const app = await fixture();
+  try {
+    await writeFile(join(app.cwd, "sample.txt"), "before\n"); await app.commit("Initial");
+    const parent = (await app.git("rev-parse", "HEAD")).trim();
+    await writeFile(join(app.cwd, "sample.txt"), "after\n"); await app.commit("Lost change\n\nComplete lost commit message");
+    const lost = (await app.git("rev-parse", "HEAD")).trim(); await app.git("reset", "--hard", parent);
+
+    const snapshot = expectOk(await app.source.load(null, 300, app.signal));
+    const details = expectOk(await app.source.lookup(lost, app.signal));
+    const comparison = expectOk(await app.source.compare(details.files[0]!, app.signal));
+
+    expect(snapshot.commits.some(commit => commit.oid === lost)).toBe(false); expect(snapshot.reflog.some(event => event.oid === lost)).toBe(true);
+    expect(details.commit).toMatchObject({ oid: lost, parents: [parent], subject: "Lost change", author: "Radian Test" });
+    expect(details.message).toContain("Complete lost commit message"); expect(details.branches).toEqual([]);
+    expect(comparison.before).toBe("before\n"); expect(comparison.after).toBe("after\n");
+  } finally { await app.cleanup(); }
+});
+
+test("해시 조회의 잘못된 입력·취소·없는 커밋은 실패 Result로 구분한다", async () => {
+  // 사용자 입력이나 취소를 유효한 빈 커밋으로 바꾸면 안 된다.
+  const app = await fixture();
+  try {
+    const abort = new AbortController(); abort.abort();
+
+    const invalid = await app.source.lookup("HEAD~1", app.signal), cancelled = await app.source.lookup("a".repeat(40), abort.signal);
+    const missing = await app.source.lookup("f".repeat(40), app.signal);
+
+    expect(expectError(invalid).code).toBe("GIT_PROTOCOL_ERROR"); expect(expectError(cancelled).code).toBe("CANCELLED");
+    expect(expectError(missing).code).toBe("GIT_QUERY_FAILED");
+  } finally { await app.cleanup(); }
+});
+
 test("브랜치 ref 조회가 취소되거나 커밋이 없으면 빈 브랜치 성공 대신 실패를 반환한다", async () => {
   // 실제 조회 경계에서도 미조회·취소·존재하지 않는 커밋을 빈 ref 결과와 구분한다.
   const app = await fixture();

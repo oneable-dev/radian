@@ -234,7 +234,9 @@ Every worktree remembers its active tab. Agent retains its selected session, dra
 scroll position and section/cursor/folding state; Neovim retains its actual files, cursor, editing mode and unsaved buffers in the
 detached runtime. Terminal retains its shell list, selected shell and log viewport. All four views
 restore on TUI reconnect while that runtime remains alive.
-Git restores its internal tabs, ref filter, selected commit/file, comparison and scroll positions.
+Git restores its ref filter, selected commit/file, comparison and scroll positions into the Commits
+main view. Refs/Reflog modals and their search queries are transient; legacy tab fields remain readable
+but do not reopen a removed tab or popup.
 Only view identities/positions are stored in the additive `gitViews` preference, not file contents
 or requests to replay. Git data is read again on a fresh TUI attachment. Demo mode remains display-only.
 See **Native Git** below for the supported operations and resource limits.
@@ -783,11 +785,35 @@ is finished to enable this feature; opening the dashboard never restarts it auto
 
 ### Native Git
 
-Git has **Commits / Reflog** navigation. Both use a full-width history list without a permanent right
-panel. The **Refs** button above Commits opens a separate Local / Remote / Tags popup. Selecting a ref
-filters history, never checks it out. Esc closes the Refs popup; a further Esc clears the history
-filter. Workspace navigation remains available through the shared popup; Git does not duplicate
-worktree navigation or provide submodules.
+Git opens directly into the full-width **Commits** main view, without Commits/Reflog/Refs tabs or a
+permanent right panel. **b** opens the searchable Refs modal; **Ctrl+R** opens searchable Reflog with a
+read-only target-commit preview. **r** remains Refresh. All bindings can be overridden and appear in the
+footer. Workspace navigation stays in its shared popup; Git does not duplicate worktree navigation or
+provide submodules.
+
+Refs searches local branches, remote-tracking branches and tags together, grouped by kind rather
+than separated into tabs. Candidate navigation never changes the checked-out branch or applies a
+filter. Enter applies the selected ref filter and closes the modal; **All refs** clears it. The main
+view shows the active ref filter. Esc closes a modal without discarding an applied filter; Esc in the
+main view clears that filter.
+
+Reflog lists event time, selector, short hash and event message. Its local text search matches event
+messages, branch names in those messages, hashes, selectors and timestamps. The preview separates
+**Occurred** event time from the target commit's author date and shows its full metadata/message,
+not a file diff or an inferred reset/checkout transition. Preview lookups are cancellable and cache
+up to 16 recent results by target hash, while different events keep their own descriptions. Enter
+closes Reflog and opens the target commit's Changes popup, even when that commit is only reachable
+through reflog and absent from the filtered/bounded main graph. Closing that popup restores the
+previous main selection and reading position. Unsupported, missing or pruned targets show an explicit
+error rather than an empty successful comparison.
+
+Both modals use the shared SearchInput. Ctrl+N/P navigates candidates from either search or results;
+j/k also navigates results. Ctrl+D/U from search preserves query/caret, reveals and focuses results,
+and jumps the candidate cursor by half a viewport; held repeats continue from that cursor. Ctrl+C
+clears only the query, including from results, and is a no-op when empty; Ctrl+L is not an alias.
+Search treats unmodified h/j/k/l/a/y as text. Reflog preview is beside the list on wide terminals;
+Ctrl+O toggles list/preview on compact terminals, and Tab/Shift+Tab cycle through the modal's regions.
+Ctrl+D/U scrolls the preview body while that body owns focus.
 
 Commits places ref labels in a dedicated left column, connected to their commit nodes. Multiple refs
 share one caption with a +N count; long captions are truncated on terminal-cell boundaries. A stronger
@@ -833,9 +859,9 @@ Git-specific actions are scoped to Git browsing controls and can be rebound in t
 | Commit history row | Commit hash only | Full hash |
 | Commit details | Not available (read-only) | Not available; drag text to copy |
 | Changed file / entire Diff | Relative path and historical revision/change identity | Relative path |
-| Local / Remote branch | Name only; no automatic tip hash | Name, including remote prefix |
-| Tag | Name only | Name |
-| Reflog | Event details and target hash | Full target hash |
+| Local / Remote branch result | Name only; no automatic tip hash | Name, including remote prefix |
+| Tag result | Name only | Name |
+| Reflog event result | Event details and target hash | Full target hash |
 
 `a` freezes the chosen context and opens a small prompt with a session selector. The default is the
 last selected session in that worktree; New session creates one only when Send is pressed. Enter
@@ -851,15 +877,11 @@ without writing an unrelated remote host clipboard. OSC52 is reported as a **req
 confirmed clipboard contents; unsupported/failed delivery is reported explicitly. Real SSH terminal
 acceptance depends on the terminal/multiplexer configuration and is not assumed from dispatch alone.
 
-When a Git tab strip is focused, `h/l` or `Ctrl+N/P` selects its neighboring tab and keeps focus in
-that strip. This applies to Commits/Reflog and Local/Remote/Tags without filtering or mutating a
-Git reference.
-
 `j/k` or `Ctrl+N/P` navigate, Enter opens the selected commit or focuses a selected file's diff,
 r refreshes, + loads another 300 commits, Home/End jump, and PgUp/PgDn scroll. Refresh is keyboard-only;
-its shared spinner stays vertically centered beside the tabs in a reserved cell, with the same
-minimum-visible policy and no toolbar layout shift. The changes popup has its own spinner, canceled
-when it closes. Diff `j/k` or `Ctrl+N/P` scroll both columns vertically, and `h/l` scroll them horizontally. History is bounded to
+the main spinner overlays a reserved upper-right cell without adding a navigation row or shifting
+history. Browser and Changes popups own their own spinners, canceled when hidden, with the same
+minimum-visible policy and no delayed result/error handling. Diff `j/k` or `Ctrl+N/P` scroll both columns vertically, and `h/l` scroll them horizontally. History is bounded to
 3,000 commits per ref filter. Text preview is bounded to 1 MiB per version and 20,000 combined lines;
 Git command output is bounded to 4 MiB with a 10-second query timeout. Exceeding a preview/computation
 limit, binary content, gitlinks and unmerged files produce an explicit notice rather than a partial
@@ -936,8 +958,8 @@ footer and diff backgrounds are derived from those colors for both light and dar
 Reported palette changes repaint the UI without restarting the runtime or losing prompt drafts,
 focus or Git navigation/scroll positions. Each attached TUI has its own theme.
 
-Git's Commits/Reflog and Local/Remote/Tags tabs use underlines for active selection and
-keyboard focus, without a background fill. Top-level work-view tabs are omitted. Agent and Terminal session tabs use background emphasis without
+Git has no view or ref-kind tab strips; its searchable modal candidates keep a visible selection even
+while search owns input focus. Top-level work-view tabs are omitted. Agent and Terminal session tabs use background emphasis without
 underlines through the shared `src/ui/session-tab.ts` frame; an unfocused active session keeps a
 subdued background. Other buttons retain their
 usual focus styling. Navigation uses understated separators rather than boxed controls.

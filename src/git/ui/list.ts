@@ -158,5 +158,5 @@ export class GitList {
       : Math.max(0, Math.min(items.length - 1, current + (direction === "previous" ? -count : count)));
     this.select(items[next]!.key);
   }
-  open(): void { if (this.selected) this.activate(this.selected); }
+  open(): void { if (this.selected && this.items.some(item => item.key === this.selected && !item.disabled)) this.activate(this.selected); }
 }

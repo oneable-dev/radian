@@ -368,7 +368,7 @@ export class Workbench {
           ...(this.agent.canInterrupt ? [hint("agent.interrupt", "Interrupt")] : []),
           ...(this.agent.prompt.value ? [hint("agent.clear", "Clear")] : []),
           hint("focus.transcript", "Transcript"), hint("sidebar.toggle", "Workspace"), hint("tab.new", "New session"), hint("dashboard.show", "Dashboard")];
-    } else if (context === "git" || context === "git-tabs" || context === "git-prompt" || this.git.available("git.back")) shortcuts = this.git.shortcuts;
+    } else if (context === "git" || context === "git-tabs" || context === "git-search" || context === "git-prompt" || this.git.available("git.back")) shortcuts = this.git.shortcuts;
     else if (focused) {
       const label = this.buttonHints.get(focused);
       if (focused.visible && label) shortcuts = [{ key: this.keymap.hints("button.activate", "button"), label }];
@@ -633,9 +633,7 @@ export class Workbench {
       targets[(index + direction + targets.length) % targets.length]?.focus(); return;
     }
     if (this.git.modal && !this.monitor.visible && !this.sidebar.visible) {
-      const targets = this.git.focusTargets;
-      const index = targets.indexOf(this.renderer.currentFocusedRenderable!);
-      targets[(index + direction + targets.length) % targets.length]?.focus(); return;
+      this.git.moveFocus(direction); return;
     }
     if (this.monitor.visible || this.sidebar.visible) {
       const targets = this.monitor.visible ? this.monitor.focusTargets : [this.search, this.tree];

@@ -138,6 +138,15 @@ export class GitRepository implements GitSource {
     return ok({ commits: commits.value, refs: refs.value, files: files.value, reflog, head: branch!.trim(), headOid });
   }
 
+  async lookup(oid: string, signal: AbortSignal): Promise<Result<GitDetails, ExpectedError>> {
+    if (!oidPattern.test(oid)) return protocol("Invalid commit identity.");
+    const record = await this.run(["log", "-z", "--no-show-signature", "-1", "--format=%H%x00%P%x00%s%x00%an%x00%aI", "--end-of-options", oid], signal);
+    if (!record.ok) return record;
+    const commits = parseCommits(record.value); if (!commits.ok) return commits;
+    if (commits.value.length !== 1) return protocol("Expected one target commit.");
+    return this.details(commits.value[0]!, signal);
+  }
+
   async details(commit: GitCommit, signal: AbortSignal): Promise<Result<GitDetails, ExpectedError>> {
     if (!oidPattern.test(commit.oid)) return protocol("Invalid commit identity.");
     const [message, names, references] = await Promise.all([
