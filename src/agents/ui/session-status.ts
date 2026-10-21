@@ -6,6 +6,7 @@ import { ProviderIcon } from "../../ui/provider-icon.ts";
 import type { UsageWindow } from "../../usage/model.ts";
 import type { Worktree } from "../../workspace/model.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
+import { icons } from "../../icons.ts";
 
 type Meter = { label: string; percent: number | null; value: string };
 const cellWidth = (text: string) => Bun.stringWidth(text);
@@ -13,15 +14,21 @@ const percentage = (value: number | null) => value === null ? "-" : `${Math.roun
 const clampPercent = (value: number) => Math.max(0, Math.min(100, value));
 type WorkspaceScope = Pick<Worktree, "name" | "branch">;
 
-function scopeLabel(scope: WorkspaceScope, width: number): string {
+function scopeChunks(scope: WorkspaceScope, width: number, styles: UiStyles): TextChunk[] {
   const name = singleLine(scope.name), branch = singleLine(scope.branch ?? "detached");
-  const full = `${name} · ${branch}`;
-  if (cellWidth(full) <= width) return full;
-  const separator = width >= 9 ? " · " : "@";
-  const budget = Math.max(0, width - cellWidth(separator));
+  const open = "[ ", worktreePrefix = `${icons.folder} `, separator = " · ", branchPrefix = `${icons.branch} `, close = " ]";
+  const budget = width - cellWidth(open + worktreePrefix + separator + branchPrefix + close);
+  // Keep the group intact, with at least an ellipsis for each name, or hide it entirely.
+  if (budget < 2) return [];
   const branchWidth = Math.min(cellWidth(branch), Math.ceil(budget / 2));
-  const prefix = truncateCells(name, budget - branchWidth);
-  return prefix + separator + truncateCells(branch, budget - cellWidth(prefix));
+  const label = truncateCells(name, budget - branchWidth);
+  return [
+    styleChunk(open, styles["ui.muted"]),
+    styleChunk(worktreePrefix + label, styles["ui.label"]),
+    styleChunk(separator, styles["ui.muted"]),
+    styleChunk(branchPrefix + truncateCells(branch, budget - cellWidth(label)), styles["git.currentRef"]),
+    styleChunk(close, styles["ui.muted"]),
+  ];
 }
 
 function resetTime(resetsAt: number | null, now: number): string {
@@ -123,9 +130,10 @@ export class SessionStatus {
     // gets at most a third of the row and shrinks on grapheme boundaries when space is tight.
     const minimumMeters = cellWidth(`${contextMeter.label} ${contextMeter.value}`) + cellWidth(`${usage.label} ${usage.value}`) + 2;
     const scopeWidth = Math.max(0, Math.min(Math.floor(totalWidth / 3), totalWidth - minimumMeters - 2));
-    const scope = this.worktree && scopeWidth >= 3 ? scopeLabel(this.worktree, scopeWidth) : "";
-    this.scopeText.visible = scope.length > 0; this.scopeText.content = scope; this.scopeText.width = cellWidth(scope); paintText(this.scopeText, styles["ui.muted"]);
-    const scopePrefix = scope ? cellWidth(scope) + 2 : 0, width = totalWidth - scopePrefix;
+    const scope = this.worktree ? scopeChunks(this.worktree, scopeWidth, styles) : [];
+    const scopeSize = scope.reduce((size, part) => size + cellWidth(part.text), 0);
+    this.scopeText.visible = scopeSize > 0; this.scopeText.content = new StyledText(scope); this.scopeText.width = scopeSize; paintText(this.scopeText, styles["ui.muted"]);
+    const scopePrefix = scopeSize ? scopeSize + 2 : 0, width = totalWidth - scopePrefix;
     const details = window && countdown ? [`${usage.value} ${countdown}`, `${usage.value} ${countdown.replaceAll(" ", "")}`, usage.value] : [usage.value];
     const model = telemetry?.model ?? "model —", effort = telemetry?.effort ?? "—";
     const fast = telemetry?.fast === true ? "on" : telemetry?.fast === false ? "off" : "—";

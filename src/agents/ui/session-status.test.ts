@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import type { TerminalColors } from "@opentui/core";
+import type { TerminalColors, TextRenderable } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench } from "../../app/ui/workbench.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
@@ -9,6 +9,7 @@ import type { SessionTelemetry } from "../telemetry.ts";
 import type { ProviderUsage } from "../../usage/model.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { icons } from "../../icons.ts";
+import { SessionStatus } from "./session-status.ts";
 
 const unavailable = (): ProviderUsage => ({ provider: "openai", status: "unavailable", windows: [], updatedAt: null, errorCode: null });
 const sample = (): SessionTelemetry => ({ provider: "openai-codex", model: "gpt-5.5", effort: "high", fast: true,
@@ -64,6 +65,48 @@ test("프롬프트 아래에 위아래 한 줄 여백을 두고 context·usage�
     await app.mockMouse.click(icon.x, icon.y); await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable).toBe(prompt); expect(app.view.promptDrafts.a1).toBe("keep this draft");
   } finally { await app.close(); }
+});
+
+test("워크트리·브랜치를 괄호로 묶고 테마 변경에도 구분점·이름·브랜치의 색상 위계를 유지한다", async () => {
+  // The location is passive metadata, not a button or a separate background badge.
+  const app = await mount();
+  const span = (text: string) => app.captureSpans().lines[app.row.y]!.spans.find((value) => value.text.includes(text))!;
+  try {
+    for (const light of [false, true]) {
+      // Changing the terminal palette must repaint every part without a workspace switch.
+      app.renderer.emit("palette", palette(light)); await app.renderOnce();
+
+      // Only the current branch is accented; brackets and the dot stay muted on the panel.
+      const colors = uiTheme(app.renderer).colors;
+      expect(app.line()).toContain(`[ ${icons.folder} radian · ${icons.branch} main ]`);
+      for (const text of ["[ ", " · ", " ]"]) expect(span(text).fg.toInts()).toEqual(colors.muted.toInts());
+      for (const text of [icons.folder, "radian"]) expect(span(text).fg.toInts()).toEqual(colors.text.toInts());
+      for (const text of [icons.branch, "main"]) expect(span(text).fg.toInts()).toEqual(colors.accent.toInts());
+      for (const text of ["[ ", icons.folder, "radian", icons.branch, " ]"]) expect(span(text).bg.toInts()).toEqual(colors.panel.toInts());
+    }
+  } finally { await app.close(); }
+});
+
+test("워크트리 그룹 전체를 담을 수 없으면 숨기고 넓히면 복원하며 사용량 비율은 유지한다", async () => {
+  // A standalone status row also covers widths too small for the full workbench layout.
+  const app = await createTestRenderer({ width: 60, height: 5 });
+  const status = new SessionStatus(app.renderer); app.renderer.root.add(status.root);
+  status.update(sample(), true, { name: "radian", branch: "main" });
+  const scope = status.root.findDescendantById("session-worktree-context") as TextRenderable;
+  try {
+    for (const [width, visible] of [[60, true], [40, true], [36, false], [30, false], [60, true]] as const) {
+      // Shrinking and restoring the row must never leave orphan brackets or hide known percentages.
+      app.resize(width, 5); await app.renderOnce();
+
+      expect(scope.visible).toBe(visible); expect(Bun.stringWidth(scope.plainText)).toBeLessThanOrEqual(scope.width);
+      if (visible) {
+        expect(scope.plainText.startsWith(`[ ${icons.folder} `)).toBe(true); expect(scope.plainText.endsWith(" ]")).toBe(true);
+        expect(scope.plainText).toContain(` · ${icons.branch} `);
+      } else expect(scope.plainText).toBe("");
+      const line = app.captureCharFrame().split("\n")[scope.y]!;
+      expect(line).toContain("64%"); expect(line).toContain("18% used");
+    }
+  } finally { status.dispose(); await app.dispose(); }
 });
 
 test("입력 배경은 패널 양끝을 채우고 입력 내용은 실행 상태·모델 줄과 같은 내부 여백에 정렬한다", async () => {
@@ -200,7 +243,8 @@ test("fast의 전체·축약 표시는 상태와 관계없이 소문자로 통�
   try {
     expect(app.line()).toContain("fast on"); expect(app.line()).not.toContain("Fast");
 
-    app.resize(70, 24); await app.renderOnce();
+    // Leave room for both location icons while still exercising the compact identity.
+    app.resize(72, 24); await app.renderOnce();
     expect(app.line()).toContain("gpt-5.5 high f+");
     await app.set({ ...sample(), fast: false }); expect(app.line()).toContain("gpt-5.5 high f−");
     await app.set({ ...sample(), fast: null }); expect(app.line()).toContain("gpt-5.5 high f?");

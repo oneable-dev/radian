@@ -6,6 +6,7 @@ import { Workbench } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
 import { ok } from "../../result.ts";
+import { icons } from "../../icons.ts";
 
 async function mount(empty = false) {
   const app = await createTestRenderer({ width: 160, height: 28, kittyKeyboard: true });
@@ -31,7 +32,7 @@ test("상단 오른쪽의 워크트리·생성·History 버튼은 없고 선택�
     expect(app.renderer.root.findDescendantById("work-view-tabs")).toBeUndefined();
     expect(app.line("agent-session-tabs")).not.toContain("New session"); expect(app.line("agent-session-tabs")).not.toContain("History");
     expect(app.renderer.root.findDescendantById("agent-history-button")).toBeUndefined();
-    expect(app.line("session-worktree-context")).toBe("radian · main");
+    expect(app.line("session-worktree-context")).toBe(`[ ${icons.folder} radian · ${icons.branch} main ]`);
     const scope = app.get("session-worktree-context"), status = app.get("session-status"), composer = app.get("agent-composer");
     expect(scope.y).toBe(status.y + 1); expect(status.y).toBe(composer.y + composer.height); expect(status.height).toBe(3);
     expect(app.created).toEqual([]); expect(app.lookups).toEqual([]); expect(app.sent).toEqual([]);
@@ -42,10 +43,10 @@ test("탐색 커서가 아니라 활성 워크트리를 표시하고 실제 전�
   const app = await mount();
   try {
     app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab();
-    app.mockInput.pressKey("j"); await app.render(); expect(app.line("session-worktree-context")).toBe("radian · main");
+    app.mockInput.pressKey("j"); await app.render(); expect(app.line("session-worktree-context")).toBe(`[ ${icons.folder} radian · ${icons.branch} main ]`);
     app.mockInput.pressEnter(); await app.render(); expect(app.line("session-worktree-context")).toContain("radian-ui");
     app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id !== "demo:feature" ? tree : { ...tree, branch: "fix/status" }) })));
-    await app.render(); expect(app.line("session-worktree-context")).toBe("radian-ui · fix/status");
+    await app.render(); expect(app.line("session-worktree-context")).toBe(`[ ${icons.folder} radian-ui · ${icons.branch} fix/status ]`);
     app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id !== "demo:feature" ? tree : { ...tree, branch: null }) })));
     await app.render(); expect(app.line("session-worktree-context")).toContain("detached");
     expect(app.view.promptDrafts.a1).toBe("preserved prompt"); expect(app.sent).toEqual([]);
@@ -94,6 +95,7 @@ test("긴 한글·emoji 워크트리와 브랜치는 원문을 바꾸지 않고 
     app.resize(100, 24); await app.render();
     const scope = app.get("session-worktree-context") as TextRenderable, text = scope.plainText;
     expect(scope.height).toBe(1); expect(Bun.stringWidth(text)).toBeLessThanOrEqual(scope.width); expect(text).toContain("…"); expect(text).not.toContain("\uFFFD");
+    expect(text.startsWith(`[ ${icons.folder} `)).toBe(true); expect(text.endsWith(" ]")).toBe(true); expect(text).toContain(` · ${icons.branch} `);
     expect(app.selection.worktree?.name).toBe(name); expect(app.selection.worktree?.branch).toBe(branch);
     expect(app.view.promptDrafts.a1).toBe("preserved prompt"); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
@@ -107,10 +109,12 @@ test("작은 화면의 범위 표시는 모델·미터와 겹치지 않고 수�
       app.resize(width, 24); await app.render();
       const scope = app.get("session-worktree-context"), status = app.get("session-status"), row = app.get("session-status-line");
       expect(scope.visible).toBe(true); expect(scope.x + scope.width).toBeLessThanOrEqual(status.x + status.width);
+      const text = (scope as TextRenderable).plainText;
+      expect(text.startsWith(`[ ${icons.folder} `)).toBe(true); expect(text.endsWith(" ]")).toBe(true); expect(text).toContain(` · ${icons.branch} `);
       expect(scope.y).toBe(row.y); expect(app.line("session-status-line")).toContain("64%"); expect(app.line("session-status-line")).toContain("18% used");
       expect(status.height).toBe(3); expect(status.y + status.height).toBeLessThanOrEqual(app.get("app-footer").y);
       expect(app.renderer.currentFocusedRenderable).toBe(prompt); expect(prompt.value).toBe("preserved prompt");
     }
-    expect(app.line("session-worktree-context")).toBe("radian · main"); expect(app.sent).toEqual([]);
+    expect(app.line("session-worktree-context")).toBe(`[ ${icons.folder} radian · ${icons.branch} main ]`); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
