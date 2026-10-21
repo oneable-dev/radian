@@ -354,8 +354,8 @@ export class AgentPanel {
       if (!model.ok) { this.notice(`[${model.error.code}] ${model.error.message} · prompt retained`); return; }
       const history = parseHistoryCommand(submission.text);
       if (!history.ok) { this.notice(`[${history.error.code}] ${history.error.message} · prompt retained`); return; }
-      // Popups and new tabs must not reset the outgoing conversation's reading position.
-      if (!model.value && !history.value && control.value?.action !== "new-tab" && control.value?.action !== "reload") this.transcript.followLatest();
+      // Non-conversation actions must not reset the outgoing conversation's reading position.
+      if (!model.value && !history.value && control.value?.action !== "new-tab" && control.value?.action !== "exit" && control.value?.action !== "reload") this.transcript.followLatest();
       let result: Result<void, ExpectedError>;
       if (history.value) {
         if (submission.images.length) result = err(new InputError("/history does not accept image attachments. Input was retained."));

@@ -556,6 +556,13 @@ The Agent prompt completes and executes these host commands instead of sending t
   A preparation failure leaves the previous execution intact. Extension cancellation and session
   lifecycle hooks are respected. This is the former `/new` behavior; it resets the current conversation,
   not saved history.
+- **`/exit`** closes the **current session tab**, using the same close path as the tab's `×` /
+  `session.close` action. It stops that session's Agent and owned subagents and cancels its pending
+  input. The saved conversation remains in History; modified files are not rolled back. Other tabs,
+  editors and terminal shells keep running. Closing the last tab shows the empty Agent view, not an
+  application exit. As with the close button, the tab disappears when closing starts while execution
+  cleanup finishes in the background. The `session-exit` capability is required; older services reject
+  the command without sending a model prompt or automatically restarting.
 - **`/reload`** reloads the current session's actual SDK extensions, prompt templates and Skills, then
   replaces its command/Skill catalog and refreshes that worktree's UI file index. It preserves the tab,
   saved conversation, transcript, model/effort and Fast selection; it does not restart the runtime.
@@ -572,7 +579,7 @@ The Agent prompt completes and executes these host commands instead of sending t
   must be idle: running/queued input, compaction and owned work cause an explicit busy rejection,
   without interruption. Empty or too-small context is rejected without a model request.
 
-These commands do not accept image attachments; `/new`, `/clear` and `/reload` take no arguments. Rejected commands retain
+These commands do not accept image attachments; `/new`, `/clear`, `/exit` and `/reload` take no arguments. Rejected commands retain
 input. Accepted long-running actions report progress; acknowledgement is not completion. A valid
 compaction failure belongs to that conversation rather than a second global error notification.
 `/clear` resets that tab's transcript navigation. `/new` and `/reload` preserve the outgoing tab's

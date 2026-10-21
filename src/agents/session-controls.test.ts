@@ -2,11 +2,11 @@ import { expect, test } from "bun:test";
 import { parseSessionControl, sessionControlCommands } from "./session-controls.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 
-test("완성 목록은 새 탭·대화 초기화·리로드·압축 명령을 실행 파서와 같은 의미로 안내한다", () => {
+test("완성 목록은 새 탭·대화 초기화·종료·리로드·압축 명령을 실행 파서와 같은 의미로 안내한다", () => {
   // Host-reserved commands must not be shadowed by SDK commands with different meanings.
   const names = sessionControlCommands.map((item) => item.value);
   const actions = names.map((name) => expectOk(parseSessionControl(`/${name}`))?.action);
-  expect(names).toEqual(["new", "clear", "reload", "compact"]); expect(actions).toEqual(["new-tab", "clear", "reload", "compact"]);
+  expect(names).toEqual(["new", "clear", "exit", "reload", "compact"]); expect(actions).toEqual(["new-tab", "clear", "exit", "reload", "compact"]);
   expect(sessionControlCommands.find((item) => item.value === "new")?.description).toContain("new session tab");
   expect(sessionControlCommands.find((item) => item.value === "clear")?.description).toContain("History");
 });
@@ -20,7 +20,15 @@ test.each(["/clear", "/clear  ", "/clear\n"])("clear는 현재 탭의 대화 교
   expect(expectOk(parseSessionControl(text))).toEqual({ action: "clear" });
 });
 
-test.each(["new", "clear", "reload"])("%s의 추가 입력은 버리지 않고 명시적으로 거부한다", (command) => {
+test.each(["/exit", "/exit  ", "/exit\n"])("exit는 현재 세션과 탭 종료로 해석한다: %j", (text) => {
+  // 뒤쪽 공백이 있더라도 대화 초기화와 구분된 종료 명령으로 인식한다.
+  const result = parseSessionControl(text);
+
+  // 인식한 명령은 SDK나 모델로 전달하지 않는다.
+  expect(expectOk(result)).toEqual({ action: "exit" });
+});
+
+test.each(["new", "clear", "exit", "reload"])("%s의 추가 입력은 버리지 않고 명시적으로 거부한다", (command) => {
   const result = parseSessionControl(`/${command} implement auth`);
   expect(expectError(result).code).toBe("INVALID_INPUT");
   expect(expectError(result).message).toBe(`Usage: /${command} (no arguments).`);
@@ -38,6 +46,6 @@ test("압축의 여러 줄 지시는 내부 내용을 잘라내거나 단일 줄
   expect(expectOk(parseSessionControl(`/compact ${instructions}`))).toEqual({ action: "compact", instructions });
 });
 
-test.each(["compact", "/compact-more", "/newspaper", "/clearance", "/skill:strategic-compact", "Please use /new"])("일반 입력과 다른 자원 명령은 가로채지 않는다: %j", (text) => {
+test.each(["compact", "/compact-more", "/newspaper", "/clearance", "/exit-now", "/skill:strategic-compact", "Please use /new"])("일반 입력과 다른 자원 명령은 가로채지 않는다: %j", (text) => {
   expect(expectOk(parseSessionControl(text))).toBeNull();
 });

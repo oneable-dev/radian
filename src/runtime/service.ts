@@ -143,7 +143,7 @@ class WorkspaceRuntime {
       }))],
     })) }));
     const details = Object.fromEntries([...this.registry.records, ...failed].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "session-exit", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention"], repositoryId: this.repositoryId,
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || [this.discoveryWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
@@ -355,11 +355,13 @@ class WorkspaceRuntime {
   }
 
   private async sessionControl(id: string, control: SessionControl, expectedConversation?: string): Promise<Result<string | null, ExpectedError>> {
-    if (this.failedRecovery.has(id)) return err(new SessionError("SESSION_NOT_OPEN", "This session needs recovery first."));
-    const state = this.registry.details(id);
+    const failed = this.failedRecovery.get(id);
+    if (failed && control.action !== "exit") return err(new SessionError("SESSION_NOT_OPEN", "This session needs recovery first."));
+    const state = failed?.state ?? this.registry.details(id);
     if (!state) return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
     if (control.action !== "compact" && !expectedConversation) return err(new SessionError("SESSION_CONFLICT", "Current conversation identity is required. No command was accepted."));
     if (expectedConversation && state.conversationId !== expectedConversation) return err(new SessionError("SESSION_CONFLICT", "This tab changed conversations. No command was accepted."));
+    if (control.action === "exit") return this.command({ type: "close", sessionId: id });
     if (control.action === "new-tab") return this.registry.newTab(id);
     if (control.action === "reload") {
       const result = await this.registry.reload(id);

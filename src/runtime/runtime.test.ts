@@ -178,9 +178,12 @@ test("clear IPC는 현재 탭만 새 대화로 바꾸고 취소 이력·다른 �
     // A delayed operation for the old conversation must not run in the replacement.
     for (const command of [{ type: "prompt", sessionId: id, text: "/clear" },
       { type: "prompt", sessionId: id, text: "/new" },
+      { type: "prompt", sessionId: id, text: "/exit" },
+      { type: "prompt", sessionId: id, conversationId: previous, text: "/exit" },
       { type: "prompt", sessionId: id, conversationId: previous, text: "stale prompt" },
       { type: "session-control", action: "clear", sessionId: id, conversationId: previous },
       { type: "session-control", action: "new-tab", sessionId: id, conversationId: previous },
+      { type: "session-control", action: "exit", sessionId: id, conversationId: previous },
       { type: "session-control", action: "new", sessionId: id, conversationId: previous }]) {
       const response = await fetch("http://localhost/command", { unix: app.paths.socket, method: "POST", body: JSON.stringify(command), headers: { "X-Radian-Instance": instance } });
       const body = await response.json();
@@ -195,6 +198,38 @@ test("clear IPC는 현재 탭만 새 대화로 바꾸고 취소 이력·다른 �
     expect(legacy.ok).toBe(true);
     await observed(client, (state) => state.details[id]?.conversationId !== current);
     expect(client.snapshot.repositories[0]!.worktrees.find((item) => item.id === tree.id)!.sessions.map((session) => session.id)).toEqual([id, other]);
+  } finally { await app.cleanup(); }
+});
+
+test("exit IPC는 인수·이미지를 거절하고 마지막 탭 종료 후에도 서비스를 유지한다", async () => {
+  // 실제 런타임에 하나의 빈 탭만 만들고 종료 전 입력 검증을 확인한다.
+  const app = await setup();
+  try {
+    const client = await app.connect(), worktreeId = app.repository.worktrees[0]!.id;
+    const id = expectOk(await client.create(worktreeId)), conversationId = client.snapshot.details[id]!.conversationId!;
+    const pid = client.snapshot.pid, instance = client.snapshot.instance;
+    for (const command of [
+      { type: "prompt", sessionId: id, conversationId, text: "/exit later" },
+      { type: "prompt", sessionId: id, conversationId, text: "/exit", images: ["/fixture.png"] },
+      { type: "session-control", sessionId: id, conversationId, action: "exit", instructions: "later" },
+    ]) {
+      const response = await fetch("http://localhost/command", { unix: app.paths.socket, method: "POST", headers: { "X-Radian-Instance": instance },
+        body: JSON.stringify(command) });
+      const body = await response.json();
+      if (!Value.Check(replySchema, body) || body.ok || typeof body.error === "string") throw new Error("Expected invalid exit rejection");
+      expect(body.error.code).toBe("INVALID_INPUT");
+    }
+    expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions.map(session => session.id)).toEqual([id]);
+    expect(client.snapshot.details[id]?.sections).toEqual([]);
+
+    // 유효한 종료 명령은 마지막 탭만 닫는다.
+    expectOk(await client.prompt(id, "/exit"));
+    await observed(client, state => !state.details[id] && state.closingCount === 0);
+
+    // 빈 화면은 앱 종료가 아니며 같은 프로세스에서 새 세션을 만들 수 있다.
+    expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions).toEqual([]);
+    const next = expectOk(await client.create(worktreeId));
+    expect(next).not.toBe(id); expect(client.snapshot.pid).toBe(pid); expect(client.snapshot.instance).toBe(instance);
   } finally { await app.cleanup(); }
 });
 
@@ -292,7 +327,7 @@ test("31초 유휴 상태에도 이벤트 연결을 유지하고 같은 서비�
   } finally { await app.cleanup(); }
 }, 45000);
 
-test("IPC 닫기는 UI에서 먼저 제거하고 소속 자식만 취소하며 다른 세션과 저장 기록은 유지한다", async () => {
+test.each(["close", "exit", "raw-exit"] as const)("%s IPC 닫기는 소속 자식만 취소하며 다른 세션과 저장 기록은 유지한다", async (action) => {
   // Parent/child and an unrelated slow run coexist in one detached SDK service.
   const app = await setup();
   try {
@@ -303,16 +338,31 @@ test("IPC 닫기는 UI에서 먼저 제거하고 소속 자식만 취소하며 �
     await observed(client, (state) => !!state.repositories[0]?.worktrees[0]?.sessions[0]?.subagents[0] && progress(state.details[other]?.output) >= 1);
     await until(async () => !!(await app.manifest()).records.find((record) => record.id === parent)?.sessionFile);
     const file = (await app.manifest()).records.find((record) => record.id === parent)!.sessionFile!;
+    const conversation = client.snapshot.details[parent]!.conversationId!, pid = client.snapshot.pid, instance = client.snapshot.instance;
+    expect(client.snapshot.capabilities).toContain("session-exit");
+    expect(expectOk(await client.complete(parent, { kind: "command", query: "exit" })).items.map(item => item.value)).toEqual(["exit"]);
 
-    // Client projection changes synchronously, before the service's acknowledgement arrives.
-    const closing = client.closeSession(parent);
-    expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions).toEqual([]);
-    await closing;
+    // Both typed controls and raw prompts reuse the close button's lifecycle.
+    if (action === "close") {
+      const closing = client.closeSession(parent);
+      expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions).toEqual([]);
+      expectOk(await closing);
+    } else if (action === "exit") expectOk(await client.prompt(parent, "/exit"));
+    else {
+      const response = await fetch("http://localhost/command", { unix: app.paths.socket, method: "POST", headers: { "X-Radian-Instance": instance },
+        body: JSON.stringify({ type: "prompt", sessionId: parent, conversationId: conversation, text: "/exit" }) });
+      expect(response.ok).toBe(true);
+    }
     await observed(client, (state) => !state.details[parent] && state.closingCount === 0);
 
     // Explicit close cancels its family, unlike detaching a UI, and does not erase conversation files.
     expect(client.snapshot.details[other]?.status).toBe("working");
+    expect(client.snapshot.pid).toBe(pid); expect(client.snapshot.instance).toBe(instance);
+    expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions).toEqual([]);
     expect(await Bun.file(file).exists()).toBe(true);
+    const worktreeId = app.repository.worktrees[0]!.id;
+    expect(expectOk(await client.listHistory(worktreeId)).find(item => item.id === conversation)?.openSessionId).toBeNull();
+    expect(expectOk(await client.previewHistory(worktreeId, conversation)).text).not.toContain("/exit");
     expect((await app.manifest()).records.map((record) => record.id)).toEqual([other]);
   } finally { await app.cleanup(); }
 }, 20000);
@@ -472,7 +522,7 @@ test("동시에 접속해도 데몬 하나만 실행되고 강제 종료 후 sta
   } finally { await app.cleanup(); }
 }, 20000);
 
-test("손상된 저장 기록은 복원 오류로 표시하고 빈 세션으로 덮어쓰거나 열린 항목을 잃지 않는다", async () => {
+test.each(["close", "exit"] as const)("%s: 손상된 저장 기록은 덮어쓰지 않고 복원 오류를 표시하며 명시적으로 닫을 수 있다", async (action) => {
   // The corrupted file belongs only to this isolated SDK fixture.
   const app = await setup();
   try {
@@ -491,7 +541,7 @@ test("손상된 저장 기록은 복원 오류로 표시하고 빈 세션으로 
     expect(restored.snapshot.details[id]?.status).toBe("failure");
     expect(restored.snapshot.details[id]?.error).toContain("Could not restore");
     expect(await readFile(file, "utf8")).toBe("corrupt conversation\n");
-    await restored.closeSession(id);
+    expectOk(await (action === "exit" ? restored.prompt(id, "/exit") : restored.closeSession(id)));
     await observed(restored, (state) => !state.details[id]);
     expect(await readFile(file, "utf8")).toBe("corrupt conversation\n");
   } finally { await app.cleanup(); }

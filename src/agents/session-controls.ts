@@ -2,10 +2,11 @@ import type { CompletionItem } from "./completion.ts";
 import { InputError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 
-export type SessionControl = { action: "new-tab" } | { action: "clear" } | { action: "reload" } | { action: "compact"; instructions?: string };
+export type SessionControl = { action: "new-tab" } | { action: "clear" } | { action: "exit" } | { action: "reload" } | { action: "compact"; instructions?: string };
 export const sessionControlCommands: readonly CompletionItem[] = [
   { kind: "command", value: "new", description: "Create a new session tab in this worktree; keep existing tabs and running work" },
   { kind: "command", value: "clear", description: "Reset this tab's conversation; keep the previous conversation in History" },
+  { kind: "command", value: "exit", description: "Close this session tab and stop its owned work; keep the conversation in History" },
   { kind: "command", value: "reload", description: "Reload this session's commands, templates and skills, and refresh file suggestions" },
   { kind: "command", value: "compact", description: "Summarize this session's model context: /compact [instructions]. May use model tokens" },
 ];
@@ -16,7 +17,7 @@ export function parseSessionControl(text: string): Result<SessionControl | null,
   const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/u.exec(text);
   if (!match || !sessionControlCommands.some((item) => item.value === match[1])) return ok(null);
   const instructions = match[2]?.trim();
-  if (match[1] === "new" || match[1] === "clear" || match[1] === "reload") return instructions
+  if (match[1] === "new" || match[1] === "clear" || match[1] === "exit" || match[1] === "reload") return instructions
     ? err(new InputError(`Usage: /${match[1]} (no arguments).`)) : ok({ action: match[1] === "new" ? "new-tab" : match[1] });
   return ok({ action: "compact", ...(instructions ? { instructions } : {}) });
 }

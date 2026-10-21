@@ -364,7 +364,7 @@ export class RuntimeClient {
     if (control.value) {
       if (images.length) return err(new InputError(`/${control.value.action === "new-tab" ? "new" : control.value.action} does not accept image attachments. Input was retained.`));
       if (control.value.action === "new-tab") { const result = await this.newTab(sessionId); return result.ok ? ok(undefined) : result; }
-      const capability = control.value.action === "reload" ? "resource-reload" : control.value.action === "clear" ? "session-tab-commands" : "session-controls";
+      const capability = control.value.action === "exit" ? "session-exit" : control.value.action === "reload" ? "resource-reload" : control.value.action === "clear" ? "session-tab-commands" : "session-controls";
       if (!this.state.capabilities?.includes(capability)) return err(new CapabilityError("Running service predates this session command. Finish work and restart it explicitly when ready. No prompt was sent."));
       if (!conversationId) return err(new ProtocolError("Current conversation identity is unavailable. Reconnect before retrying. No command was sent."));
       const revision = this.state.details[sessionId]?.resourceRevision ?? 0;

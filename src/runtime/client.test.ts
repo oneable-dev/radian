@@ -76,12 +76,12 @@ test("여러 세션의 큰 상태가 8MiB를 넘어도 대화·초안·History �
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("구버전의 new·clear·compact는 모델 프롬프트나 자동 재시작으로 우회하지 않는다", async () => {
+test("구버전의 new·clear·exit·compact는 모델 프롬프트나 자동 재시작으로 우회하지 않는다", async () => {
   // The old service would treat an unknown slash command as paid model input.
   const fetchMock = stubFetch(async () => { throw new Error("Must not transmit unsupported session commands"); });
   const client = new RuntimeClient(paths, snapshot());
   try {
-    for (const text of ["/new", "/clear", "/compact", "/compact preserve this plan"]) {
+    for (const text of ["/new", "/clear", "/exit", "/compact", "/compact preserve this plan"]) {
       expect(expectError(await client.prompt("session", text)).code).toBe("UNSUPPORTED_CAPABILITY");
     }
     expect(fetchMock).not.toHaveBeenCalled();
@@ -147,9 +147,27 @@ test("중단은 capability와 현재 대화 ID를 확인하고 정확한 세션�
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("clear·compact·일반 입력은 현재 대화 ID를 지정하고 첨부·추가 인수는 전송하지 않는다", async () => {
+test("exit는 기존 탭 capability만 있거나 현재 대화 ID가 없으면 종료 요청을 보내지 않는다", async () => {
+  // 기존 new·clear 지원만으로 새 종료 명령까지 지원한다고 가정하지 않는다.
+  const state = { ...snapshot(), capabilities: ["session-controls", "session-tab-commands"] };
+  const fetchMock = stubFetch(async () => { throw new Error("Unfenced exit must not transmit"); });
+  const client = new RuntimeClient(paths, state);
+  try {
+    // 종료 capability와 대화 식별자를 각각 확인한다.
+    const unsupported = await client.prompt("session", "/exit");
+    state.capabilities.push("session-exit");
+    const missingConversation = await client.prompt("session", "/exit");
+
+    // 구버전 서비스나 교체된 대화를 무조건 닫는 요청으로 우회하지 않는다.
+    expect(expectError(unsupported).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(expectError(missingConversation).code).toBe("PROTOCOL_ERROR");
+    expect(fetchMock).not.toHaveBeenCalled();
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
+
+test("clear·exit·compact·일반 입력은 현재 대화 ID를 지정하고 첨부·추가 인수는 전송하지 않는다", async () => {
   // A stable tab ID alone cannot fence an operation after /clear replaces its conversation.
-  const state: RuntimeSnapshot = { ...snapshot(), capabilities: ["session-controls", "session-tab-commands", "prompt-images"],
+  const state: RuntimeSnapshot = { ...snapshot(), capabilities: ["session-controls", "session-tab-commands", "session-exit", "prompt-images"],
     details: { session: { conversationId: "conversation-1", status: null, output: "", error: null } } };
   const sent: unknown[] = [];
   const fetchMock = stubFetch(async (_input, options) => { sent.push(JSON.parse(String(options?.body))); return Response.json({ ok: true, value: null }); });
@@ -158,16 +176,20 @@ test("clear·compact·일반 입력은 현재 대화 ID를 지정하고 첨부·
     expectOk(await client.prompt("session", "/compact keep the plan"));
     expectOk(await client.prompt("session", "/clear"));
     expectOk(await client.prompt("session", "ordinary prompt"));
+    expectOk(await client.prompt("session", "/exit"));
     expect(expectError(await client.prompt("session", "/new not supported")).code).toBe("INVALID_INPUT");
     expect(expectError(await client.prompt("session", "/new", ["/image.png"])).code).toBe("INVALID_INPUT");
     expect(expectError(await client.prompt("session", "/clear extra")).code).toBe("INVALID_INPUT");
     expect(expectError(await client.prompt("session", "/clear", ["/image.png"])).code).toBe("INVALID_INPUT");
     expect(expectError(await client.prompt("session", "/compact", ["/image.png"])).code).toBe("INVALID_INPUT");
+    expect(expectError(await client.prompt("session", "/exit extra")).code).toBe("INVALID_INPUT");
+    expect(expectError(await client.prompt("session", "/exit", ["/image.png"])).code).toBe("INVALID_INPUT");
 
     expect(sent).toEqual([
       { type: "session-control", sessionId: "session", conversationId: "conversation-1", action: "compact", instructions: "keep the plan" },
       { type: "session-control", sessionId: "session", conversationId: "conversation-1", action: "clear" },
       { type: "prompt", sessionId: "session", conversationId: "conversation-1", text: "ordinary prompt" },
+      { type: "session-control", sessionId: "session", conversationId: "conversation-1", action: "exit" },
     ]);
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
