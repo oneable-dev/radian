@@ -7,7 +7,7 @@ import { demoWorkspace } from "../../workspace/demo.ts";
 import type { TranscriptSection } from "../../agents/transcript.ts";
 import type { ExpectedError } from "../../errors.ts";
 import { ok, type Result } from "../../result.ts";
-import { defaultKeymap, parseKeymap, type Keymap } from "../../keybindings/config.ts";
+import { parseKeymap, type Keymap } from "../../keybindings/config.ts";
 import { expectOk } from "../../testing/results.ts";
 import { uiTheme } from "../../ui/theme.ts";
 
@@ -94,7 +94,7 @@ test.each([false, true])("밝기 %j에서도 하단 복귀 버튼은 기존 여�
 
     // 위로 스크롤하면 클릭 가능한 표시가 나타나며, 오른쪽 클릭은 이동 명령이 아니다.
     await app.mockMouse.scroll(app.scroll.x + 3, app.scroll.y + 3, "up"); await app.settled();
-    expect(app.captureCharFrame()).toContain("↓ Back to bottom · g → e");
+    expect(app.captureCharFrame()).toContain("↓ Back to bottom · Shift+g");
     const button = app.renderer.root.findDescendantById("transcript-bottom-button");
     if (!button) throw new Error("Missing back-to-bottom button");
     const viewport = app.scroll.viewport;
@@ -130,8 +130,12 @@ test("하단 복귀 버튼은 재지정한 바인딩을 표시하고 같은 키�
   const keymap = expectOk(parseKeymap({ bindings: { "transcript.latest": [{ keys: "alt+z", scope: "transcript" }] } }));
   const app = await mount({ paused: true, keymap });
   try {
+    await app.update([...history, section("tail", "LATE_OUTPUT\n".repeat(70))]);
     app.mockInput.pressKey("t", { ctrl: true }); await app.settled();
     expect(app.captureCharFrame()).toContain("↓ Back to bottom · Alt+z");
+    app.mockInput.pressKey("g", { shift: true }); await app.settled();
+    expect(app.state()?.selectedId).toBe("history");
+    expect(app.state()?.follow).toBe(false); expect(app.scroll.scrollTop).toBeLessThan(bottom(app.scroll));
 
     // 표시한 단축키와 실제 이동 명령이 일치하며 바닥에서는 버튼이 사라진다.
     app.mockInput.pressKey("z", { meta: true }); await app.settled();
@@ -281,15 +285,23 @@ test("숨은 스크롤 모델의 위치가 맨 아래에 도달해도 자동 추
   } finally { await app.close(); }
 });
 
-test("섹션 모드 Ctrl+End는 긴 마지막 섹션의 실제 끝으로 가되 프롬프트·PTY 키는 건드리지 않는다", async () => {
+test.each(["shift+g", "ctrl+end", "g e"] as const)("섹션 모드 %s는 긴 마지막 섹션의 실제 끝으로 이동하고 자동 추적을 재개한다", async (key) => {
+  // Selecting the final section alone cannot reveal its end when it exceeds the viewport.
   const app = await mount({ paused: true });
   try {
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("END", { ctrl: true }); await app.settled();
+    app.mockInput.pressKey("t", { ctrl: true }); await app.settled();
+
+    if (key === "shift+g") app.mockInput.pressKey("g", { shift: true });
+    else if (key === "ctrl+end") app.mockInput.pressKey("END", { ctrl: true });
+    else { app.mockInput.pressKey("g"); app.mockInput.pressKey("e"); }
+    await app.settled();
+
+    // The actual final line is visible, and future output continues following without another key.
     expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.state()?.follow).toBe(true);
     expect(app.captureCharFrame()).toContain("OLD-LINE-69");
-    const keymap = defaultKeymap();
-    for (const context of ["prompt", "editor", "terminal"] as const) expect(keymap.bound("ctrl+end", context)).toBe(false);
-    expect(keymap.bindings.some((binding) => binding.command === "transcript.buffer-end" && binding.scope === "transcript-text" && binding.keys.join(" ") === "ctrl+end")).toBe(true);
+    await app.update([...history, section("tail", "RESUMED_LATEST_OUTPUT")]);
+    expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.state()?.follow).toBe(true);
+    expect(app.state()?.selectedId).toBe("tail"); expect(app.captureCharFrame()).toContain("RESUMED_LATEST_OUTPUT");
   } finally { await app.close(); }
 });
 

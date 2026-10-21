@@ -417,7 +417,7 @@ to the input without sending it. All commands are configurable in the existing k
 
 | Mode | Default keys | Action |
 | --- | --- | --- |
-| Sections | j/k or arrows; Home/End or gg/G | Previous/next or first/last section |
+| Sections | j/k or Ctrl+N/P; Home/gg and End | Previous/next or first/last section |
 | Sections | Enter | Read Markdown source, folded heading/summary, or literal body with the cursor |
 | Sections/Text/Visual | Ctrl+O (also za); zm/zr | Toggle the selected section; fold/unfold all |
 | Text/Visual | h/j/k/l or arrows | Grapheme/visual-line cursor movement |
@@ -428,7 +428,7 @@ to the input without sending it. All commands are configurable in the existing k
 | Text/Visual | Ctrl+D / Ctrl+U | Move the cursor down/up half the transcript viewport |
 | Sections/Text/Visual | y | Copy the section, current logical line, or selected range, respectively |
 | Sections/Text/Visual | Y | Copy the whole raw section, including folded details |
-| Sections | Ctrl+End | Jump to the actual bottom of the whole transcript and resume following |
+| Sections | G (Shift+g) or Ctrl+End | Jump to the actual bottom of the whole transcript and resume following |
 | Sections/Text/Visual | ge | Jump to the latest output and resume following |
 | Sections/Text/Visual | PgUp/PgDn; F1 | Page; open/close scrollable keyboard help |
 | Visual/Text/Sections | Esc | Return to Text, Sections, then Input |
@@ -445,7 +445,7 @@ resize and warm reconnect. In Sections, `Ctrl+D/U` jumps the selected section by
 viewport, accounting for rendered section heights and gaps. Each jump advances at least one section
 when possible and reveals the new selection without scrolling unnecessarily. In Text or Visual,
 `Ctrl+D/U` still moves the cursor within the current section. To jump between sections while reading,
-press `Esc` to return to Sections, then use `Ctrl+D/U`, j/k or gg/G. A selection first needs `Esc` to
+press `Esc` to return to Sections, then use `Ctrl+D/U`, j/k, gg or End. A selection first needs `Esc` to
 return to Text.
 
 The former `INPUT · section/count · following` row is removed. Source/Visual/help mode and a
@@ -459,16 +459,18 @@ keeps the bottom on resize and when returning from another work view.
 
 Above the bottom, a centered `↓ Back to bottom` button uses an existing blank row above the work
 status or in the composer's top inset. It never adds blank rows, covers transcript content or moves
-the input. It shows the effective `transcript.latest` shortcut (default `g → e`); clicking resumes
+the input. It shows the effective `transcript.latest` shortcut (default `Shift+g` in Sections and
+`g → e` in Text/Visual); clicking resumes
 following without sending a prompt or taking input focus. It is hidden at the bottom, in help
 and whenever no existing blank row is available.
 
 Character/line selections and native mouse selections temporarily protect their viewport. Once
 selection is cleared, following resumes only if the viewport is still at the bottom. Auto-following
 does not replace a source-mode section, cursor or selection. Help and the read-only History preview
-remain independent of live transcript following. `Ctrl+End` in Sections and `ge` explicitly jump to
-the whole transcript bottom; `End`/`Shift+G` in Sections still select the last section, and source-mode
-`Ctrl+End` still moves to the end of the current section.
+remain independent of live transcript following. `G` (`Shift+g`) or `Ctrl+End` in Sections, and `ge`
+in any transcript mode, explicitly jump to the whole transcript bottom and resume following. `End`
+in Sections still selects the last section; `Shift+g` and `Ctrl+End` in Text/Visual still move to the
+end of the current section.
 
 A new prompt submission explicitly moves to the bottom without stealing Input focus. Merely editing
 an unsent draft or inserting completion text does not discard a reading position above the bottom.

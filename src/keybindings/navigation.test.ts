@@ -51,6 +51,26 @@ test.each([["search", "workspace"], ["history-search", "history"], ["monitor-sea
   expect(defaultKeymap().hints("search.clear", context)).toBe("Ctrl+c");
 });
 
+test("Transcript의 Shift+G는 섹션에서 최신 출력으로 이동하고 본문에서는 섹션 끝으로 이동한다", () => {
+  // The same Vim key has a different owner in section navigation and read-only source navigation.
+  const map = defaultKeymap();
+
+  // Sections advertise the new bottom shortcut while text/visual keep their source cursor bindings.
+  expect(commandFor("transcript", "shift+g")).toBe("transcript.latest");
+  expect(commandFor("transcript", "end")).toBe("transcript.last");
+  expect(commandFor("transcript", "ctrl+end")).toBe("transcript.latest");
+  for (const context of ["transcript-text", "transcript-visual"] as const) {
+    expect(commandFor(context, "shift+g")).toBe("transcript.buffer-end");
+    expect(commandFor(context, "ctrl+end")).toBe("transcript.buffer-end");
+    expect(map.hint("transcript.latest", context)).toBe("g → e");
+  }
+  expect(map.hint("transcript.latest", "transcript")).toBe("Shift+g");
+  for (const context of ["prompt", "prompt-completion", "editor", "terminal"] as const) {
+    expect(map.bound("shift+g", context)).toBe(false);
+    expect(map.bound("ctrl+end", context)).toBe(false);
+  }
+});
+
 test("Agent와 Git 프롬프트의 Ctrl+C는 각각 초안을 지우고 사용자 키 재설정을 존중한다", () => {
   // 공용 입력기가 키를 직접 가로채면 사용자 설정으로 기본 지우기를 교체할 수 없게 된다.
   const map = expectOk(parseKeymap({ bindings: { "git.clear": [{ keys: "ctrl+g", scope: "git-prompt" }] } }));
