@@ -123,20 +123,24 @@ test.each(["cancelled", "unfinished", "error"] as const)("스피너 없는 %s �
   } finally { await app.close(); }
 });
 
-test.each([false, true])("취소 문구는 테마 밝기 %s에서도 warning 색이고 시간은 회색·요청은 본문색이다", async (light) => {
+test.each([false, true])("테마 밝기 %s에서도 취소는 회색이고 미완료 중단·실패는 오류색이다", async (light) => {
+  // Semantic palette roles must keep intentional cancellation neutral without changing time or request colors.
   const app = await mount(), theme = uiTheme(app.renderer);
   try {
-    // Host palette roles, not hardcoded product colors, define the cancellation presentation.
     theme.configure({ palette: [], defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
       cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null });
 
-    app.status.update("a", { status: null, output: "", error: null, sections: [user("Task"), settled("cancelled")] }, true); await app.render();
+    // Render each terminal outcome independently of the aggregate session status.
+    for (const [outcome, label, color] of [["cancelled", "Cancelled", "muted"], ["unfinished", "Stopped", "error"], ["error", "Failed", "error"]] as const) {
+      app.status.update("a", { status: null, output: "", error: null, sections: [user("Task"), settled(outcome)] }, true); await app.render();
 
-    const spans = app.captureSpans().lines[app.node().y]!.spans;
-    expect(spans.find(span => span.text.includes("Cancelled"))!.fg.toInts()).toEqual(theme.colors.warning.toInts());
-    expect(spans.find(span => span.text.includes("(1s)"))!.fg.toInts()).toEqual(theme.colors.muted.toInts());
-    expect(spans.find(span => span.text.includes("Task"))!.fg.toInts()).toEqual(theme.colors.text.toInts());
-    expect(app.node().x).toBe(app.status.root.x);
+      // Failed and unfinished work share error red; only cancellation and elapsed time use neutral gray.
+      const spans = app.captureSpans().lines[app.node().y]!.spans;
+      expect(spans.find(span => span.text.includes(label))!.fg.toInts()).toEqual(theme.colors[color].toInts());
+      if (outcome === "cancelled") expect(spans.find(span => span.text.includes("(1s)"))!.fg.toInts()).toEqual(theme.colors.muted.toInts());
+      expect(spans.find(span => span.text.includes("Task"))!.fg.toInts()).toEqual(theme.colors.text.toInts());
+      expect(app.node().x).toBe(app.status.root.x);
+    }
   } finally { await app.close(); }
 });
 

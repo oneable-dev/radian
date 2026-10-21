@@ -8,6 +8,8 @@ export const icons = {
   pass: "\uEAB2", // nf-cod-check
   bell: "\uF0F3", // nf-fa-bell; filled unread indicator
   error: "\uEA76", // nf-cod-close
+  failure: "\uF06A", // nf-fa-circle_exclamation; distinct from close controls
+  cancelled: "\u25CF", // Unicode black circle; neutral cancelled result
   unknown: "\uEAD9", // nf-cod-dash; unreported/aborted, not a confirmed idle state
   robot: "\uEC20", // nf-cod-robot
   model: "\u{F167A}", // nf-md-robot_outline; distinct from the empty-state robot

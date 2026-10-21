@@ -25,9 +25,9 @@ function display(state: ExecutionState | null | undefined): Display {
   const outcome = state?.result?.outcome ?? completion?.outcome;
   const assistant = turn.findLast((item) => item.kind === "assistant" || item.kind === "notice" && item.status === "cancelled"
     && (item.title === "Agent error" || !item.text));
-  if (outcome === "cancelled" || !outcome && assistant?.status === "cancelled") return { label: "Cancelled", detail, color: "status.warning",
+  if (outcome === "cancelled" || !outcome && assistant?.status === "cancelled") return { label: "Cancelled", detail, color: "ui.muted",
     ...(summary ? { request: summary } : {}), ...(completion ? { durationMs: completion.durationMs } : {}) };
-  if (outcome === "unfinished" || !outcome && assistant?.status === "unfinished") return { label: "Stopped", detail, color: "status.warning" };
+  if (outcome === "unfinished" || !outcome && assistant?.status === "unfinished") return { label: "Stopped", detail, color: "status.error" };
   if (outcome === "error" || state?.error) return { label: "Failed", detail: state?.error ? `: ${singleLine(state.error)}` : detail, color: "status.error" };
   return { label: "", detail: "", color: "status.unknown" };
 }

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { TextAttributes, TextRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Button } from "../../ui/button.ts";
-import { uiTheme } from "../../ui/theme.ts";
+import { uiTheme, type UiColors } from "../../ui/theme.ts";
 import { SESSION_TAB_WIDTH } from "../../ui/session-tab.ts";
 import type { OpenSession } from "../model.ts";
 import type { SessionResult } from "../session-attention.ts";
@@ -44,27 +44,39 @@ const failed: SessionResult = { id: "failed", outcome: "error", completedAt: 100
 const stopped: SessionResult = { id: "stopped", outcome: "unfinished", completedAt: 1000 };
 const cancelled: SessionResult = { id: "cancelled", outcome: "cancelled", completedAt: 1000 };
 const priorities = [
-  { name: "실행 중에는 이전 미확인 벨보다 스피너", entry: { ...session(), status: "working", attention: completed }, glyph: "working" },
+  { name: "실행 중에는 이전 미확인 벨보다 스피너", entry: { ...session(), status: "working", attention: completed }, glyph: "working", color: "accent" },
   { name: "자식이 실행 중이면 실패·중단·벨보다 스피너", entry: { ...session(), status: "failure", result: stopped, attention: stopped,
-    subagents: [{ id: "busy", name: "Busy", status: "working" }, { id: "failed", name: "Failed", status: "failure" }] }, glyph: "working" },
-  { name: "실패는 미확인 벨보다 오류", entry: { ...session(), status: "failure", result: failed, attention: failed }, glyph: icons.error },
-  { name: "자식 실패는 중단·미확인 벨보다 오류", entry: { ...session(), status: null, result: stopped, attention: stopped,
-    subagents: [{ id: "failed", name: "Failed", status: "failure" }] }, glyph: icons.error },
-  { name: "중단은 미확인 벨보다 물음표", entry: { ...session(), status: null, result: stopped, attention: stopped }, glyph: "?" },
-  { name: "완료 미확인은 체크 없이 채워진 벨", entry: { ...session(), result: completed, attention: completed }, glyph: "\uF0F3" },
-  { name: "원인 불명 취소 미확인은 채워진 벨", entry: { ...session(), status: null, result: cancelled, attention: cancelled }, glyph: "\uF0F3" },
-  { name: "읽은 완료는 상태 아이콘 없음", entry: { ...session(), result: completed }, glyph: "" },
-] satisfies { name: string; entry: OpenSession; glyph: string }[];
+    subagents: [{ id: "busy", name: "Busy", status: "working" }, { id: "failed", name: "Failed", status: "failure" }] }, glyph: "working", color: "accent" },
+  { name: "실패는 미확인 벨보다 원 안 느낌표", entry: { ...session(), status: "failure", result: failed, attention: failed }, glyph: "\uF06A", color: "error" },
+  { name: "실패 결과는 상태가 미확정이어도 원 안 느낌표", entry: { ...session(), status: null, result: failed }, glyph: "\uF06A", color: "error" },
+  { name: "자식 실패는 중단·미확인 벨보다 원 안 느낌표", entry: { ...session(), status: null, result: stopped, attention: stopped,
+    subagents: [{ id: "failed", name: "Failed", status: "failure" }] }, glyph: "\uF06A", color: "error" },
+  { name: "중단은 미확인 벨보다 빨간 물음표", entry: { ...session(), status: null, result: stopped, attention: stopped }, glyph: "?", color: "error" },
+  { name: "완료 미확인은 체크 없이 채워진 벨", entry: { ...session(), result: completed, attention: completed }, glyph: "\uF0F3", color: "attention" },
+  { name: "원인 불명 취소 미확인은 채워진 벨", entry: { ...session(), status: null, result: cancelled, attention: cancelled }, glyph: "\uF0F3", color: "attention" },
+  { name: "읽은 정상 완료는 초록 체크", entry: { ...session(), result: completed }, glyph: icons.pass, color: "success" },
+  { name: "읽은 취소는 회색 점", entry: { ...session(), status: null, result: cancelled }, glyph: "●", color: "muted" },
+  { name: "직접 취소는 회색 점", entry: { ...session(), status: null, result: { ...cancelled, cancellation: "user" } }, glyph: "●", color: "muted" },
+  { name: "세션 종료에 의한 취소도 회색 점", entry: { ...session(), status: null, result: { ...cancelled, cancellation: "lifecycle" } }, glyph: "●", color: "muted" },
+  { name: "완료 상태여도 결과가 없으면 아이콘 없음", entry: session(), glyph: "", color: "muted" },
+  { name: "상태와 결과가 모두 없으면 아이콘 없음", entry: { ...session(), status: null }, glyph: "", color: "muted" },
+] satisfies { name: string; entry: OpenSession; glyph: string; color: keyof UiColors }[];
 
-test.each(priorities)("$name 하나만 한 칸에 표시한다", async ({ entry, glyph }) => {
+test.each(priorities)("$name 하나만 한 칸에 표시한다", async ({ entry, glyph, color }) => {
   // Multiple execution and unread conditions must compete for one status cell, not add badges.
   const app = await mount([entry]);
   try {
+    // Public snapshots determine the badge without selecting or acknowledging the session.
     const { tab, title } = app.get(firstId);
     const prefix = app.captureCharFrame().split("\n")[tab.y]!.slice(tab.x + 1, title.x).trim();
 
+    // Glyph, semantic color and reserved width must agree, including the genuinely empty state.
     if (glyph === "working") expect(spinnerFrames.some(frame => frame === prefix)).toBe(true);
     else expect(prefix).toBe(glyph);
+    if (glyph) {
+      const span = app.captureSpans().lines[tab.y]!.spans.find(span => span.text.includes(prefix))!;
+      expect(span.fg.toInts()).toEqual(uiTheme(app.renderer).colors[color].toInts());
+    }
     expect(Bun.stringWidth(prefix)).toBe(glyph ? 1 : 0);
     expect(title.x - tab.x).toBe(glyph ? 3 : 1);
     expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
@@ -101,11 +113,12 @@ test("Fast 세션 탭만 노란 세 칸 화살표를 쓰고 프레임·모드 �
   } finally { await app.close(); }
 });
 
-test.each([completed, failed, stopped])("빠른 $outcome 결과는 스피너와 겹치지 않고 읽음 뒤 잔상이 돌아오지 않는다", async result => {
+test.each([completed, failed, stopped, cancelled])("빠른 $outcome 결과는 스피너와 겹치지 않고 읽음 뒤 잔상이 돌아오지 않는다", async result => {
   // Settling before 500 ms must neither show two icons nor revive loading after acknowledgement.
   const app = await mount([{ ...session(), status: "working", attention: completed }]);
-  const glyph = result.outcome === "error" ? icons.error : result.outcome === "unfinished" ? "?" : icons.bell;
-  const finished: OpenSession = { ...session(), status: result.outcome === "error" ? "failure" : result.outcome === "unfinished" ? null : "complete", result, attention: result };
+  const glyph = result.outcome === "error" ? "\uF06A" : result.outcome === "unfinished" ? "?" : icons.bell;
+  const readGlyph = result.outcome === "complete" ? icons.pass : result.outcome === "cancelled" ? "●" : glyph;
+  const finished: OpenSession = { ...session(), status: result.outcome === "error" ? "failure" : result.outcome === "complete" ? "complete" : null, result, attention: result };
   const prefix = () => {
     const { tab, title } = app.get(firstId);
     return app.captureCharFrame().split("\n")[tab.y]!.slice(tab.x + 1, title.x).trim();
@@ -114,15 +127,42 @@ test.each([completed, failed, stopped])("빠른 $outcome 결과는 스피너와 
     app.clock.advance(120); app.tabs.update("tree", [finished], firstId, true); await app.render();
     expect(prefix()).toBe(glyph);
 
-    // Reading affects only the bell; failure/stopped state remains and loading does not return.
+    // Acknowledgement reveals success/cancellation while failure and stopped badges stay visible.
     const { attention: _attention, ...read } = finished;
     app.tabs.update("tree", [read], firstId, true); await app.render();
-    expect(prefix()).toBe(result.outcome === "complete" ? "" : glyph);
+    expect(prefix()).toBe(readGlyph);
     app.clock.advance(380); await app.render();
 
-    expect(prefix()).toBe(result.outcome === "complete" ? "" : glyph);
+    expect(prefix()).toBe(readGlyph);
     expect(read.result).toBe(result); expect(finished.attention).toBe(result);
     expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each([false, true])("Fast %s 실행을 직접 취소하면 스피너 대신 회색 점을 유지한다", async fast => {
+  // A user cancellation has no new unread result, even if it settles before the spinner minimum.
+  const app = await mount([{ ...session(), status: "working" }], () => fast);
+  const interrupted: OpenSession = { ...session(), status: null, result: { ...cancelled, cancellation: "user" } };
+  const prefix = () => {
+    const { tab, title } = app.get(firstId);
+    return app.captureCharFrame().split("\n")[tab.y]!.slice(tab.x + 1, title.x).trim();
+  };
+  try {
+    // Normal and Fast loading both yield their entire animation slot immediately to the settled badge.
+    app.clock.advance(120); app.tabs.update("tree", [interrupted], firstId, true); await app.render();
+
+    expect(prefix()).toBe("●");
+    const { tab, title } = app.get(firstId);
+    expect(title.x).toBe(tab.x + 3);
+    const dot = app.captureSpans().lines[tab.y]!.spans.find(span => span.text.includes("●"))!;
+    expect(dot.fg.toInts()).toEqual(uiTheme(app.renderer).colors.muted.toInts());
+    expect(app.clock.pendingTimerCount).toBe(0);
+
+    // Late timer ticks and hiding the screen cannot erase the dot or restore the old spinner.
+    app.clock.advance(380); await app.render(); expect(prefix()).toBe("●");
+    app.tabs.update("tree", [interrupted], firstId, false); await app.render();
+    app.tabs.update("tree", [interrupted], firstId, true); await app.render();
+    expect(prefix()).toBe("●"); expect(app.clock.pendingTimerCount).toBe(0);
   } finally { await app.close(); }
 });
 
@@ -162,10 +202,14 @@ test("상태 아이콘이 없는 탭은 왼쪽 상태 칸과 간격을 빼고 �
     expect(tab.width).toBe(12);
     expect(close.x).toBe(title.x + title.width + 1); expect(close.x + close.width).toBe(tab.x + tab.width - 1);
 
-    // An unread result, not successful completion alone, restores the notification badge.
-    app.tabs.update("tree", [{ ...session(), attention: { id: "unread", outcome: "complete", completedAt: 1000 } }], firstId, true); await app.render();
+    // An unread completion reserves a badge; acknowledging it replaces the bell with a success check.
+    app.tabs.update("tree", [{ ...session(), result: completed, attention: completed }], firstId, true); await app.render();
     expect(title.x).toBe(tab.x + 3); expect(title.plainText).toEndWith("…");
     expect(close.x + close.width).toBeLessThanOrEqual(app.tabs.list.viewport.x + app.tabs.list.viewport.width);
+    app.tabs.update("tree", [{ ...session(), result: completed }], firstId, true); await app.render();
+    expect(app.captureCharFrame()).toContain(icons.pass); expect(title.x).toBe(tab.x + 3);
+
+    // Only a snapshot with no result removes the badge and restores the extra UUID space.
     app.tabs.update("tree", [unknown], firstId, true); await app.render();
     expect(title.x).toBe(tab.x + 1); expect(title.plainText).toBe("01a156a…");
   } finally { await app.close(); }

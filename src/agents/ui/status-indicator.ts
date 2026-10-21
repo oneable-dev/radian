@@ -5,7 +5,23 @@ import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText, type StyleGroup } from "../../ui/theme-styles.ts";
 
-// One presentation slot: working > failure > stopped > unread. Fast loading uses three fixed cells.
+type Indicator = { icon: string; color: StyleGroup };
+
+function display(status: AgentStatus | null, session?: Pick<OpenSession, "result" | "attention">): Indicator {
+  const result = session?.result;
+  if (status === "working") return { icon: "", color: "status.working" };
+  if (status === "failure" || result?.outcome === "error") return { icon: icons.failure, color: "status.error" };
+  if (result?.outcome === "unfinished") return { icon: "?", color: "status.error" };
+  // Keep older unread results visible when a newer run is intentionally cancelled.
+  if (session?.attention) return { icon: icons.bell, color: "status.attention" };
+  switch (result?.outcome) {
+    case "complete": return { icon: icons.pass, color: "status.success" };
+    case "cancelled": return { icon: icons.cancelled, color: "ui.muted" };
+    default: return { icon: "", color: "status.unknown" };
+  }
+}
+
+// One slot: working > failure > stopped > unread > settled result. Fast loading uses three fixed cells.
 export class StatusIndicator {
   readonly root: BoxRenderable;
   private readonly spinner: LoadingSpinner;
@@ -33,10 +49,8 @@ export class StatusIndicator {
     const changed = status !== this.status || visible !== this.visible;
     this.status = status; this.visible = visible;
     this.spinner.setFast(fast); this.animation.width = this.spinner.columns;
-    const stopped = session?.result?.outcome === "unfinished";
-    const icon = status === "working" ? "" : status === "failure" ? icons.error : stopped ? "?" : session?.attention ? icons.bell : "";
-    this.iconStyle = status === "failure" ? "status.error" : stopped ? "status.warning" : "status.attention";
-    this.hasIcon = icon !== ""; this.icon.content = icon;
+    const { icon, color } = display(status, session);
+    this.iconStyle = color; this.hasIcon = icon !== ""; this.icon.content = icon;
     // A settled badge supersedes the spinner tail immediately. Cancelling the hidden
     // animation also prevents it from returning when a completed result is acknowledged.
     if (!visible || this.hasIcon) this.spinner.cancel();
