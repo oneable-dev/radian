@@ -1,11 +1,11 @@
 import {
   BoxRenderable, EditBufferRenderable, ScrollBoxRenderable, SyntaxStyle, TextAttributes, TextRenderable,
-  type CliRenderer, type KeyEvent, type PasteEvent, type Renderable,
+  type CliRenderer, type KeyEvent, type OptimizedBuffer, type PasteEvent, type Renderable,
 } from "@opentui/core";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { Clipboard } from "../../ui/clipboard.ts";
-import { blendColors, uiTheme } from "../../ui/theme.ts";
+import { uiTheme } from "../../ui/theme.ts";
 import { transcriptBackground, transcriptSpacing } from "./transcript-style.ts";
 import { TranscriptMarkdown, updateTranscriptMarkdownStyles } from "./transcript-markdown.ts";
 import { paintText, syntaxDefinition } from "../../ui/theme-styles.ts";
@@ -482,15 +482,14 @@ export class TranscriptPanel {
     }
     row.error.visible = !cancelled && !skill && !folded && !!section.error;
     row.error.content = section.error ?? ""; row.error.fg = styles["status.error"].fg; row.error.attributes = styles["status.error"].attributes; row.error.bg = background;
-    const headingBackground = selected && !plain ? blendColors(background, styles["ui.selection"].bg ?? background, this.focused ? 0.7 : 0.35) : background;
-    row.heading.backgroundColor = row.header.backgroundColor = headingBackground;
+    row.heading.backgroundColor = row.header.backgroundColor = background;
     row.header.textColor = styles[section.kind === "thinking" ? "ui.muted" : section.kind === "tool" && (section.title === "bash" || section.title === "Shell") ? "transcript.toolHeader" : "ui.text"].fg;
     row.header.cursorColor = styles["ui.focusBorder"].fg;
     row.header.selectionBg = styles["transcript.selection"].bg; row.header.selectionFg = styles["transcript.selection"].fg;
     this.highlightHeader(row);
     const bodyStyle = styles[section.kind === "thinking" ? "transcript.thinking" : "ui.text"];
     row.body.textColor = bodyStyle.fg; row.body.attributes = bodyStyle.attributes;
-    row.bodyRow.backgroundColor = row.body.backgroundColor = skill ? headingBackground : background;
+    row.bodyRow.backgroundColor = row.body.backgroundColor = background;
     row.skillTag.bg = row.body.backgroundColor; row.skillTag.fg = styles["transcript.skill"].fg; row.skillTag.attributes = styles["transcript.skill"].attributes;
     row.body.cursorColor = styles["ui.focusBorder"].fg;
     const selectionStyle = styles[this.legacy ? "ui.selection" : "transcript.selection"];
@@ -537,6 +536,15 @@ export class TranscriptPanel {
     this.reconcileSelection();
     this.pending = this.state?.follow && !this.positionIntent ? { position: Infinity } : this.viewportAnchor();
   };
+  // The owning pane paints its outer inset; the scroll viewport clips that cell away.
+  paintFocusGutter(buffer: OptimizedBuffer): void {
+    if (this.disposed || !this.visible || !this.scroll.visible || this.help.visible || !this.focused) return;
+    const row = this.selected, viewport = this.scroll.viewport;
+    if (!row || !row.box.visible || viewport.width < 1 || viewport.height < 1) return;
+    const top = Math.max(row.box.screenY, viewport.screenY);
+    const bottom = Math.min(row.box.screenY + row.box.height, viewport.screenY + viewport.height);
+    if (bottom > top) buffer.fillRect(viewport.screenX - 1, top, 1, bottom - top, this.theme.styles["ui.focusBorder"].fg);
+  }
   private paint(): void {
     this.paintLayout();
     for (const row of this.rows.values()) this.paintRow(row);
