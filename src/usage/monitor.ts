@@ -1,6 +1,6 @@
 import { CancelledError, UsageError, reportUnexpected, type ExpectedError } from "../errors.ts";
 import { err, type Result } from "../result.ts";
-import type { ProviderUsage, UsageAccount, UsageResolver, UsageSubscription, UsageWindow } from "./model.ts";
+import type { ProviderUsage, UsageAccount, UsageRefreshMode, UsageResolver, UsageSubscription, UsageWindow } from "./model.ts";
 
 type Timer = ReturnType<typeof setTimeout> | number;
 type Clock = { now(): number; setTimeout(callback: () => void, delay: number): Timer; clearTimeout(timer: Timer): void };
@@ -11,7 +11,8 @@ const empty = (provider: string, status: ProviderUsage["status"] = "loading", er
   ({ provider, status, windows: [], updatedAt: null, errorCode });
 const failed = (previous: ProviderUsage, error: ExpectedError): ProviderUsage =>
   ({ ...previous, status: "error", errorCode: error instanceof UsageError ? error.code : "USAGE_QUERY_FAILED" });
-type RetryState = { failures: number; retryAt: number };
+type RefreshMode = "cached" | UsageRefreshMode;
+type RetryState = { failures: number; retryAt: number; retryAfterAt: number };
 type AccountCache = { snapshot: ProviderUsage; attemptedAt: number; retry?: RetryState; pending?: Promise<ProviderUsage> };
 
 // One runtime owns polling and account-keyed deduplication; UI instances only consume snapshots.
@@ -57,7 +58,7 @@ export class UsageMonitor {
         }
         return provider === null ? empty("", "unavailable") : this.snapshots.get(provider) ?? empty(provider);
       },
-      refresh: () => { if (!disposed && provider !== null) void this.refresh(provider, true); },
+      refresh: (mode = "automatic") => { if (!disposed && provider !== null) void this.refresh(provider, mode); },
       dispose: () => { if (disposed) return; disposed = true; remove(); this.schedule(); },
     };
   }
@@ -66,7 +67,7 @@ export class UsageMonitor {
     this.generations.set(provider, (this.generations.get(provider) ?? 0) + 1);
     this.pending.delete(provider); this.accountKeys.delete(provider); this.providerRetries.delete(provider);
     this.publish(provider, empty(provider));
-    if (this.watchers.has(provider)) void this.refresh(provider, true);
+    if (this.watchers.has(provider)) void this.refresh(provider, "automatic");
   }
 
   setActive(active: boolean): void {
@@ -76,13 +77,13 @@ export class UsageMonitor {
     this.schedule();
   }
 
-  private refresh(provider: string, force = false): Promise<void> {
+  private refresh(provider: string, mode: RefreshMode = "cached"): Promise<void> {
     if (this.stopped) return Promise.resolve();
     const existing = this.pending.get(provider); if (existing) return existing;
-    if (this.clock.now() < this.retryAt(provider)) return Promise.resolve();
+    if (this.clock.now() < this.retryAt(provider, mode)) return Promise.resolve();
     // Defer callbacks until registration/reading a snapshot has finished, avoiding recursive publication.
     const generation = this.generations.get(provider) ?? 0;
-    const task = Promise.resolve().then(() => this.perform(provider, force, generation)).catch((error: unknown) => {
+    const task = Promise.resolve().then(() => this.perform(provider, mode, generation)).catch((error: unknown) => {
       reportUnexpected(error, "usage refresh");
       if ((this.generations.get(provider) ?? 0) === generation) this.fail(provider, new UsageError("USAGE_QUERY_FAILED", "Unexpected usage refresh failure."));
     }).finally(() => {
@@ -92,7 +93,7 @@ export class UsageMonitor {
     this.pending.set(provider, task); this.jobs.add(task); return task;
   }
 
-  private async perform(provider: string, force: boolean, generation: number): Promise<void> {
+  private async perform(provider: string, mode: RefreshMode, generation: number): Promise<void> {
     if (this.stopped || (this.generations.get(provider) ?? 0) !== generation) return;
     const controller = new AbortController(); this.controllers.add(controller);
     const timeout = this.clock.setTimeout(() => controller.abort(new UsageError("USAGE_TIMEOUT", "Usage lookup timed out.")), 10000);
@@ -101,7 +102,7 @@ export class UsageMonitor {
       aborted = () => resolve(err(controller.signal.reason instanceof UsageError ? controller.signal.reason : new CancelledError()));
       controller.signal.addEventListener("abort", aborted, { once: true });
     });
-    const lookup = this.lookup(provider, force, controller.signal, generation).catch((error: unknown): Result<ProviderUsage, ExpectedError> => {
+    const lookup = this.lookup(provider, mode, controller.signal, generation).catch((error: unknown): Result<ProviderUsage, ExpectedError> => {
       // This is the background host boundary, not ordinary provider/input error classification.
       reportUnexpected(error, "usage source");
       return err(new UsageError("USAGE_QUERY_FAILED", "Unexpected usage lookup failure."));
@@ -117,7 +118,7 @@ export class UsageMonitor {
     }
   }
 
-  private async lookup(provider: string, force: boolean, signal: AbortSignal, generation: number): Promise<Result<ProviderUsage, ExpectedError>> {
+  private async lookup(provider: string, mode: RefreshMode, signal: AbortSignal, generation: number): Promise<Result<ProviderUsage, ExpectedError>> {
     if (this.stopped || signal.aborted) return err(new CancelledError());
     const resolved = await this.resolve(provider, signal);
     if (this.stopped || signal.aborted || (this.generations.get(provider) ?? 0) !== generation) return err(new CancelledError());
@@ -132,7 +133,9 @@ export class UsageMonitor {
     if (cached?.pending) return { ok: true, value: await cached.pending };
     const now = this.clock.now();
     const expired = cached?.snapshot.windows.some((window) => window.resetsAt !== null && window.resetsAt <= now);
-    if (cached && (now < (cached.retry?.retryAt ?? 0) || !expired && now - cached.attemptedAt < (force ? 2000 : intervalMs))) {
+    const retryAt = mode === "manual" ? cached?.retry?.retryAfterAt : cached?.retry?.retryAt;
+    const cacheMs = mode === "manual" ? 0 : mode === "automatic" ? 2000 : intervalMs;
+    if (cached && (now < (retryAt ?? 0) || !expired && now - cached.attemptedAt < cacheMs)) {
       return { ok: true, value: cached.snapshot };
     }
     const entry: AccountCache = cached ?? { snapshot: empty(account.provider), attemptedAt: now };
@@ -170,7 +173,8 @@ export class UsageMonitor {
     const base = Math.min(maxBackoffMs, intervalMs * 2 ** (failures - 1));
     const delay = Math.min(maxBackoffMs, Math.round(base * (1 + this.random() * 0.1)));
     const retryAfter = error instanceof UsageError ? error.retryAfterMs ?? 0 : 0;
-    return { failures, retryAt: this.clock.now() + Math.max(delay, retryAfter) };
+    const now = this.clock.now();
+    return { failures, retryAt: now + Math.max(delay, retryAfter), retryAfterAt: retryAfter > 0 ? now + retryAfter : 0 };
   }
 
   private fail(provider: string, error: ExpectedError): void {
@@ -178,9 +182,11 @@ export class UsageMonitor {
     this.publish(provider, failed(this.snapshots.get(provider) ?? empty(provider), error));
   }
 
-  private retryAt(provider: string): number {
+  private retryAt(provider: string, mode: RefreshMode = "cached"): number {
     const key = this.accountKeys.get(provider), account = key === undefined ? undefined : this.accounts.get(key);
-    return Math.max(this.providerRetries.get(provider)?.retryAt ?? 0, account?.retry?.retryAt ?? 0);
+    // Explicit reloads bypass our backoff, never a server-imposed Retry-After deadline.
+    const deadline = (retry: RetryState | undefined) => (mode === "manual" ? retry?.retryAfterAt : retry?.retryAt) ?? 0;
+    return Math.max(deadline(this.providerRetries.get(provider)), deadline(account?.retry));
   }
 
   private nextRefreshAt(provider: string, now: number): number {
@@ -212,7 +218,7 @@ export class UsageMonitor {
       this.timer = undefined;
       const now = this.clock.now();
       if (this.nextPollAt !== null && this.nextPollAt <= now) this.nextPollAt = now + intervalMs;
-      for (const { provider, at } of scheduled) if (at <= now && this.watchers.has(provider)) void this.refresh(provider, true);
+      for (const { provider, at } of scheduled) if (at <= now && this.watchers.has(provider)) void this.refresh(provider, "automatic");
       // Skipping a lookup during backoff must not terminate periodic polling.
       this.schedule();
     }, delay);

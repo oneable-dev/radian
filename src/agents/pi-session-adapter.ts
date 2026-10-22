@@ -308,7 +308,7 @@ export class PiSessionExecutor implements SessionExecutor {
         return err(new AgentRunError("Some resources could not reload. Resources may have changed; the previous completion catalog was retained. Inspect runtime.log before retrying.", { cause: errors }));
       }
       const catalog = sessionCommands(this.session);
-      this.telemetry.refreshUsage();
+      this.telemetry.refreshUsage("manual");
       this.commandCatalog = catalog; this.resourceRevision++;
       return ok(undefined);
     })().finally(() => { this.controlling = false; this.runs.delete(task); this.emit(); });

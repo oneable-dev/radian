@@ -2,7 +2,7 @@ import { estimateTokens, type AgentSession } from "@earendil-works/pi-coding-age
 import { getCurrentSystemMessage, type Api, type Model } from "@earendil-works/pi-ai";
 import type { SessionTelemetry, WeeklyQuota } from "./telemetry.ts";
 import type { UsageMonitor } from "../usage/monitor.ts";
-import type { UsageSubscription } from "../usage/model.ts";
+import type { UsageRefreshMode, UsageSubscription } from "../usage/model.ts";
 import type { FastMode } from "./fast-mode.ts";
 
 const weekMinutes = 7 * 24 * 60;
@@ -127,7 +127,7 @@ export class PiSessionTelemetry {
 
   invalidateAccount(): void { this.requestScope = null; this.weekly = null; this.fast = null; this.changed(); }
 
-  refreshUsage(): void { this.read(); this.usage?.refresh(); }
+  refreshUsage(mode: UsageRefreshMode = "automatic"): void { this.read(); this.usage?.refresh(mode); }
 
   dispose(): void {
     this.usage?.dispose(); this.unsubscribeFast?.();

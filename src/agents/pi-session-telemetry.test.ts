@@ -1,7 +1,8 @@
 import { expect, spyOn, test } from "bun:test";
 import { ManualClock } from "@opentui/core/testing";
 import { UsageMonitor } from "../usage/monitor.ts";
-import { ok } from "../result.ts";
+import { err, ok } from "../result.ts";
+import { UsageError } from "../errors.ts";
 import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream, type Api, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -158,6 +159,32 @@ test("SDK 세션은 프롬프트 전에도 usage를 받고 작업이 최종 완�
     clock.advance(2500); expectOk(await app.executor.prompt("ordinary model request")); await settle();
 
     expect(prompts).toBe(1); expect(lookups).toBe(2);
+  } finally { await app.close(); await usage.stop(); }
+});
+
+test.each(["인증", "사용량"] as const)("/reload만 %s backoff를 우회하고 작업 완료 갱신은 기존 대기를 지킨다", async stage => {
+  // 실제 SDK 세션의 관리 명령과 작업 완료 이벤트가 서로 다른 갱신 정책을 사용해야 한다.
+  const clock = new ManualClock(); let lookups = 0, prompts = 0;
+  const succeeds = () => ++lookups > 1;
+  const failure = err(new UsageError("USAGE_QUERY_FAILED", "Temporary failure"));
+  const usage = new UsageMonitor(async () => stage === "인증" && !succeeds() ? failure
+    : ok({ key: "account", provider: "fixture", load: async () => stage === "사용량" && !succeeds() ? failure
+      : ok([{ id: "weekly", usedPercent: 42, periodMs: 604800000, resetsAt: 604800000 }]) }), clock, () => 0);
+  const app = await mount(async () => { prompts++; }, [], usage);
+  const settle = async () => { for (let i = 0; i < 70; i++) await Promise.resolve(); };
+  try {
+    expect(app.executor.state.telemetry?.usage?.status).toBe("loading"); await settle();
+    expect(app.executor.state.telemetry?.usage?.status).toBe("error"); expect(lookups).toBe(1);
+
+    // 같은 시각에 작업이 완료되어도 자동 갱신은 실패 대기를 우회하지 않는다.
+    expectOk(await app.executor.prompt("ordinary work")); await settle(); expect(lookups).toBe(1);
+    const before = app.session.messages.length;
+    expectOk(await app.executor.reload()); await settle();
+
+    // 리로드만 즉시 usage를 복구하며 추가 모델 요청이나 대화 메시지는 만들지 않는다.
+    expect(lookups).toBe(2); expect(app.executor.state.telemetry?.usage?.status).toBe("ready");
+    expect(app.executor.state.telemetry?.usage?.windows[0]?.usedPercent).toBe(42);
+    expect(prompts).toBe(1); expect(app.session.messages).toHaveLength(before);
   } finally { await app.close(); await usage.stop(); }
 });
 

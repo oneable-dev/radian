@@ -766,6 +766,9 @@ final `agent_settled` events request fresh usage; short bursts and simultaneous 
 While any TUI is attached, the runtime normally polls every 60 seconds and at returned reset deadlines.
 Failures retry with exponential backoff (60, 120, 240 seconds, capped at 5 minutes), with up to 10% jitter
 within that cap. A longer `Retry-After` takes precedence, and successful lookups reset the backoff.
+A successful `/reload` also requests fresh usage immediately, bypassing local backoff and cached results.
+Server-provided `Retry-After` deadlines and in-flight request sharing still apply; a failed manual lookup
+continues the existing failure count rather than resetting it.
 Retry deadlines remain scheduled even when a regular poll falls inside the waiting period.
 Account identity is checked during each lookup; external login changes are picked up on the next lookup.
 Each worktree has its own SDK model runtime and usage monitor. Sessions in that worktree share

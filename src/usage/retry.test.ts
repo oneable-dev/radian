@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { ManualClock } from "@opentui/core/testing";
 import { UsageError } from "../errors.ts";
-import { err, ok } from "../result.ts";
+import { err, ok, type Result } from "../result.ts";
 import { UsageMonitor } from "./monitor.ts";
 import type { UsageResolver, UsageWindow } from "./model.ts";
 
@@ -109,6 +109,88 @@ test("재시도에 jitter를 적용하고 UI가 분리되면 대기 타이머를
     // 화면이 없는 동안은 조회하지 않고 재접속하면 이미 지난 backoff를 즉시 재시도한다.
     expect(calls).toBe(4); expect(subscription.read("fixture").status).toBe("ready");
   } finally { subscription.dispose(); await monitor.stop(); }
+});
+
+for (const stage of ["인증", "사용량"] as const) {
+  test(`수동 갱신은 ${stage} 단계의 backoff와 실패 캐시를 즉시 우회하고 자동 갱신은 대기를 유지한다`, async () => {
+    // 첫 실패 직후에는 일반 갱신뿐 아니라 짧은 캐시 재사용도 수동 복구를 막아서는 안 된다.
+    const clock = new ManualClock(); let calls = 0;
+    const failure = err(new UsageError("USAGE_QUERY_FAILED", "Offline"));
+    const succeeds = () => ++calls > 1;
+    const monitor = new UsageMonitor(async () => stage === "인증" && !succeeds() ? failure
+      : ok({ provider: "fixture", key: "account", load: async () => stage === "사용량" && !succeeds() ? failure : ok(windows(42)) }), clock, () => 0);
+    const subscription = monitor.watch(() => {});
+    try {
+      subscription.read("fixture"); monitor.setActive(true); await settle();
+
+      // 일반 완료 이벤트는 기존 대기를 지키지만 명시적 수동 갱신은 같은 시각에 바로 요청한다.
+      subscription.refresh(); await settle(); expect(calls).toBe(1);
+      subscription.refresh("manual"); await settle();
+
+      expect(calls).toBe(2); expect(subscription.read("fixture").status).toBe("ready");
+      expect(subscription.read("fixture").windows).toEqual(windows(42));
+      clock.advance(60000); await settle(); expect(calls).toBe(3);
+    } finally { subscription.dispose(); await monitor.stop(); }
+  });
+
+  test(`수동 ${stage} 갱신도 서버 Retry-After는 지키되 서버 대기가 끝나면 로컬 backoff를 우회한다`, async () => {
+    // 서버는 30초를 지정하고 앱의 첫 backoff는 60초여서 두 대기 조건을 구분할 수 있다.
+    const clock = new ManualClock(); let calls = 0;
+    const failure = err(new UsageError("USAGE_RATE_LIMITED", "Limited", 30000));
+    const succeeds = () => ++calls > 1;
+    const monitor = new UsageMonitor(async () => stage === "인증" && !succeeds() ? failure
+      : ok({ provider: "fixture", key: "account", load: async () => stage === "사용량" && !succeeds() ? failure : ok(windows(42)) }), clock, () => 0);
+    const subscription = monitor.watch(() => {});
+    try {
+      subscription.read("fixture"); monitor.setActive(true); await settle();
+
+      // 수동 갱신도 서버가 명시한 최소 시각 전에는 요청을 보내지 않는다.
+      subscription.refresh("manual"); await settle(); expect(calls).toBe(1);
+      clock.advance(29999); subscription.refresh("manual"); await settle(); expect(calls).toBe(1);
+      clock.advance(1); subscription.refresh(); await settle(); expect(calls).toBe(1);
+      subscription.refresh("manual"); await settle();
+
+      expect(calls).toBe(2); expect(subscription.read("fixture").status).toBe("ready");
+    } finally { subscription.dispose(); await monitor.stop(); }
+  });
+}
+
+test("수동 재시도가 다시 실패해도 실패 횟수를 초기화하지 않고 늘어난 backoff에서 자동 복구한다", async () => {
+  // 성공 없이 수동으로 대기만 우회했을 때 다음 자동 대기가 120초로 늘어나야 한다.
+  const clock = new ManualClock(); let calls = 0;
+  const monitor = new UsageMonitor(async () => ++calls <= 2 ? err(new UsageError("USAGE_AUTH_REQUIRED", "Unavailable"))
+    : ok({ provider: "fixture", key: "account", load: async () => ok(windows()) }), clock, () => 0);
+  const subscription = monitor.watch(() => {});
+  try {
+    subscription.read("fixture"); monitor.setActive(true); await settle();
+
+    // 수동 실패 직후 자동 이벤트와 첫 60초 주기가 backoff를 초기화하거나 우회하지 않는다.
+    subscription.refresh("manual"); await settle(); expect(calls).toBe(2);
+    clock.advance(60000); subscription.refresh(); await settle(); expect(calls).toBe(2);
+    clock.advance(59999); await settle(); expect(calls).toBe(2);
+    clock.advance(1); await settle();
+
+    expect(calls).toBe(3); expect(subscription.read("fixture").status).toBe("ready");
+  } finally { subscription.dispose(); await monitor.stop(); }
+});
+
+test("여러 구독의 수동 갱신도 진행 중인 계정 조회 하나를 공유한다", async () => {
+  // 첫 실패 후의 수동 요청을 보류해 여러 제공자 별칭의 요청이 겹치도록 한다.
+  const clock = new ManualClock(), gate = Promise.withResolvers<Result<readonly UsageWindow[], UsageError>>(); let calls = 0;
+  const monitor = new UsageMonitor(async () => ok({ provider: "fixture", key: "shared", load: async () => ++calls === 1
+    ? err(new UsageError("USAGE_QUERY_FAILED", "Offline")) : gate.promise }), clock, () => 0);
+  const a = monitor.watch(() => {}), b = monitor.watch(() => {});
+  try {
+    a.read("one"); b.read("two"); await settle(); expect(calls).toBe(1);
+
+    // 같은 제공자의 중복 호출과 서로 다른 별칭의 호출 모두 한 네트워크 조회에 합류한다.
+    a.refresh("manual"); b.refresh("manual"); await settle();
+    a.refresh("manual"); b.refresh("manual"); await settle(); expect(calls).toBe(2);
+    gate.resolve(ok(windows(42))); await settle();
+
+    expect(a.read("one").windows).toEqual(windows(42));
+    expect(b.read("two").windows).toEqual(windows(42)); expect(calls).toBe(2);
+  } finally { gate.resolve(ok([])); a.dispose(); b.dispose(); await monitor.stop(); }
 });
 
 test("다른 계정의 첫 조회가 실패하면 이전 계정의 성공값을 복구용으로 재사용하지 않는다", async () => {
