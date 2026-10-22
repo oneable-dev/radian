@@ -1570,10 +1570,11 @@ queries models or starts cold repository services. It projects in-memory session
 time and renders only the selected preview. Full-snapshot transport/parsing remains an existing
 cost, separate from this summary projection.
 
-**Enter** opens the actual session in Agents and reveals its latest output. A foreground Agent
-conversation acknowledges a pending result only while its latest output is actually visible, not
-while scrolled into older output, covered by a popup or in another work view. Merely restoring a
-selection, browsing preview or receiving a background snapshot does not acknowledge it.
+**Enter** opens the actual session in Agents, reveals its latest output and focuses the input so you
+can continue the conversation immediately. A foreground Agent conversation acknowledges a pending
+result only while its latest output is actually visible, not while scrolled into older output,
+covered by a popup or in another work view. Merely restoring a selection, browsing preview or
+receiving a background snapshot does not acknowledge it.
 
 Completion, failure, unfinished (`Stopped`) and unknown-origin cancellation create unread results.
 Explicit user interruption and lifecycle shutdown do not create another alert or erase a previous

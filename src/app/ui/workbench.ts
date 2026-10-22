@@ -147,7 +147,7 @@ export class Workbench {
     this.dialog = new TextDialog(renderer, () => this.updateFooter(), () => this.focusNavigation(), actions.onCopyTranscript);
     this.monitor = new SessionMonitor(renderer, {
       details: id => actions.getSessionDetails?.(id) ?? null,
-      open: (tree, id) => { this.activateSession(tree, id); this.agent.focusLatest(); },
+      open: (tree, id) => { this.activateSession(tree, id); this.agent.focusLatest("prompt"); },
       changed: () => this.updateFooter(), fallback: () => this.focusNavigation(), notice: text => { if (actions.onNotice) actions.onNotice(text); else this.setNotice(text); },
       ...(actions.getMonitoringNotice ? { warning: actions.getMonitoringNotice } : {}),
       keyHint: (command, context) => this.keymap.hint(command, context),

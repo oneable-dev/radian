@@ -163,6 +163,47 @@ test("모니터 Preview와 후보 이동은 읽음 처리하지 않고 Enter로 
   } finally { await app.close(); }
 });
 
+test.each(["search", "list"] as const)("모니터 %s에서 세션을 열면 최신 출력을 보여주고 입력창에서 바로 초안을 이어 쓴다", async focus => {
+  // A saved older viewport must not prevent opening the latest result or restoring its draft.
+  const app = await fixture({
+    initialDrafts: { a1: "KEEP_DRAFT", b1: "NEXT_DRAFT" },
+    initialWorkViews: { active: {}, agentScroll: { b1: 0 }, agentViews: {
+      b1: { selectedId: "request", folded: {}, cursors: {}, mode: "sections", anchor: null, follow: false },
+    } },
+  });
+  try {
+    app.states.b1 = { ...app.states.b1!, sections: [
+      { id: "request", kind: "user", title: "You", text: "OLDER_CONTENT\n".repeat(80), status: "complete" },
+      { id: "answer", kind: "assistant", title: "Agent", text: "LATEST_RESULT", status: "complete" },
+    ] };
+
+    // Both search and list confirmation must hand keyboard ownership to the selected session's input.
+    app.leader("s"); await app.mockInput.typeText("auth");
+    if (focus === "list") app.mockInput.pressTab();
+    await app.render();
+    app.mockInput.pressEnter(); await app.render();
+
+    // Showing the latest result still acknowledges it without requiring transcript focus.
+    const scroll = app.get("session-transcript") as ScrollBoxRenderable;
+    expect(app.selection.sessionId).toBe("b1");
+    expect(app.get("session-monitor").visible).toBe(false);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
+    expect(app.captureCharFrame()).toContain("LATEST_RESULT");
+    expect(scroll.scrollHeight).toBeGreaterThan(scroll.viewport.height);
+    expect(scroll.scrollTop).toBe(Math.max(0, scroll.scrollHeight - scroll.viewport.height));
+    expect(app.view.workViewPreferences.agentViews?.b1?.follow).toBe(true);
+    expect(app.acknowledged).toEqual(["result-b"]);
+    expect(app.submitted).toEqual([]);
+
+    // Navigation letters remain literal input, and neither session loses its draft.
+    await app.mockInput.typeText(" hjkl"); await app.render();
+
+    expect(app.view.promptDrafts).toEqual({ a1: "KEEP_DRAFT", b1: "NEXT_DRAFT hjkl" });
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
+    expect(app.submitted).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("모니터는 실시간 요약 갱신에도 선택과 목록 노드를 유지하고 닫힌 동안 Preview를 조회하지 않는다", async () => {
   // 스트리밍 중 후보 목록의 구성은 바뀌지 않고 선택한 대화 내용만 바뀐다.
   const app = await fixture();

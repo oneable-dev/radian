@@ -158,7 +158,10 @@ export class AgentPanel {
   }
   get active(): boolean { return this.runtimePanel.visible; }
   get resultVisible(): boolean { return this.active && this.transcript.latestVisible; }
-  focusLatest(): void { this.transcript.followLatest(); this.focusTranscript(); }
+  focusLatest(target: "prompt" | "transcript" = "transcript"): void {
+    this.transcript.followLatest();
+    if (target === "prompt") this.prompt.focus(); else this.focusTranscript();
+  }
   get sessionId(): string | null { return this.promptSessionId; }
   get canSubmit(): boolean { return !this.transcriptOptions.readOnly && Boolean(this.promptSessionId && this.prompt.value.trim() && !this.prompt.pending && !this.submitting.has(this.promptSessionId)); }
   get canInterrupt(): boolean {
