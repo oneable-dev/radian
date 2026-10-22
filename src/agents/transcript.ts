@@ -1,6 +1,6 @@
 import { parseSkillBlock, type AgentSession, type AgentSessionEvent, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { parseRunCompletion, runCompletionEntryType, systemRunClock, type RunClock, type RunCompletion } from "./run-completion.ts";
-import { summarizeRequest, type RequestSummary } from "./request-summary.ts";
+import { requestDisplayText, summarizeRequest, type RequestSummary } from "./request-summary.ts";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { imageNamesEntryType, TranscriptImages, type TranscriptImage } from "./transcript-images.ts";
 
@@ -180,8 +180,7 @@ export class SessionTranscript {
         case "user": {
           const images = typeof message.content === "string" ? [] : message.content.filter((part) => part.type === "image");
           const prose = typeof message.content === "string" ? message.content : message.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("");
-          const clean = (text: string) => images.length ? text.replace(/[ \t]*\[Image #\d+\][ \t]*/gu, " ").trim() : text;
-          const text = clean(prose), skill = parseSkillBlock(text), start = sections.length;
+          const text = requestDisplayText(prose, images.length), skill = parseSkillBlock(text), start = sections.length;
           if (!skill) {
             if (text || !images.length) sections.push({ id, kind: "user", title: "You", text, status: "complete", request: summarizeRequest(prose, images.length) });
           } else {

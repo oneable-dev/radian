@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import type { TerminalColors } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import type { ExecutionState } from "../session-registry.ts";
-import type { TranscriptSection } from "../transcript.ts";
+import { SessionTranscript, type TranscriptSection } from "../transcript.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { RunStatus } from "./run-status.ts";
 
@@ -91,6 +91,25 @@ test("Working 요청도 한 줄 말줄임하며 실제 첨부 배지 공간은 �
     expect(app.text()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toContain("…  [2 images] [3 files]");
     expect(Bun.stringWidth(app.caption())).toBeLessThanOrEqual(50);
     expect(app.captureCharFrame().split("\n")[2]?.trim()).toBe(""); expect(request.text).toBe("Original full prompt");
+  } finally { await app.close(); }
+});
+
+test("Working은 이미지 내부 안내 없이 입력값과 기존 이미지·파일 개수만 표시한다", async () => {
+  // 실제 SDK 메시지에서 나온 섹션으로 작업 상태의 표시 경로를 확인한다.
+  const app = await mount(120), transcript = new SessionTranscript([]);
+  const text = '이거 두 개 확인해봐 [Image #1] [Image #2] @"/tmp/a.ts" @"/tmp/b.ts"\n\n[Image: original 3000x4000, displayed at 1500x2000. Multiply coordinates by 2.00 to map to original image.]';
+  transcript.handle({ type: "message_end", message: { role: "user", timestamp: 1, content: [{ type: "text", text },
+    { type: "image", mimeType: "image/png", data: "one" }, { type: "image", mimeType: "image/png", data: "two" }] } });
+  try {
+    // 두 줄과 높이가 부족한 한 줄 상태 모두 같은 표시 정책을 따른다.
+    app.status.update("a", working(transcript.sections), true); await app.render();
+    expect(app.caption()).toBe("“이거 두 개 확인해봐”  [2 images] [2 files]");
+    app.status.fitRows(1); await app.render();
+
+    // 한 줄로 전환해도 안내문 대신 입력값과 첨부 집계를 유지한다.
+    expect(app.text()).toContain("“이거 두 개 확인해봐”  [2 images] [2 files]");
+    expect(app.captureCharFrame()).not.toContain("Image:");
+    expect(app.captureCharFrame()).not.toContain("Multiply coordinates");
   } finally { await app.close(); }
 });
 

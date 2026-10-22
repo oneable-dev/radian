@@ -11,6 +11,18 @@ export const requestSummarySchema = Type.Object({
 }, { additionalProperties: false });
 export type RequestSummary = Static<typeof requestSummarySchema>;
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const dimensionHint = String.raw`\[Image: original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by \d+\.\d{2} to map to original image\.\]`;
+const conversionHint = String.raw`\[Image converted from [^\s[\]]+ to image\/(?:png|jpeg|gif|webp)\.\]`;
+const imageHint = `(?:${dimensionHint}|${conversionHint})`;
+const appendedImageHints = new RegExp(String.raw`\r?\n\r?\n${imageHint}(?:\r?\n${imageHint})*\s*$`, "u");
+
+// Hide only known SDK suffix hints and rich-input labels when real images exist.
+// This is display-only: preserve the original message and its model-facing hints.
+export function requestDisplayText(text: string, images: number): string {
+  if (!images) return text;
+  return text.replace(appendedImageHints, "")
+    .replace(/[ \t]*(?:\[Image #\d+\][ \t]*)+(\r?\n)?/gu, (_labels, newline: string | undefined) => newline ?? " ").trim();
+}
 
 // Bound this derived display metadata, never the original SDK user message.
 function preview(text: string): string {
@@ -30,7 +42,7 @@ export function summarizeRequest(text: string, images: number): RequestSummary {
   // filenames, fenced code examples, image extensions and opaque image bytes do not.
   const references = /^ {0,3}(`{3,}|~{3,})[^\n]*|(^|\s)@("(?:[^"\\\x00-\x1f]|\\.)*")(?=\s|$)/gmu;
   let fence: string | undefined;
-  let prose = text.replace(references, (match: string, marker: string | undefined, space: string | undefined, encoded: string | undefined) => {
+  const prose = text.replace(references, (match: string, marker: string | undefined, space: string | undefined, encoded: string | undefined) => {
     if (marker !== undefined) {
       if (!fence) fence = marker;
       else if (marker[0] === fence[0] && marker.length >= fence.length && !match.trimStart().slice(marker.length).trim()) fence = undefined;
@@ -42,10 +54,7 @@ export function summarizeRequest(text: string, images: number): RequestSummary {
     files++; fileName = files === 1 ? preview(basename(parsed.value)) : undefined;
     return space ?? "";
   });
-  // These are Radian's rich-input labels, not evidence that an image was sent.
-  // Remove them only when the SDK message really contains image content blocks.
-  if (images > 0) prose = prose.replace(/\[Image #\d+\]/gu, "");
-  return { text: preview(prose), images, files, ...(fileName ? { fileName } : {}) };
+  return { text: preview(requestDisplayText(prose, images)), images, files, ...(fileName ? { fileName } : {}) };
 }
 
 export function sameRequestSummary(a: RequestSummary | undefined, b: RequestSummary | undefined): boolean {

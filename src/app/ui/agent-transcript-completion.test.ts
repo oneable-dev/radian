@@ -4,7 +4,7 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
-import type { TranscriptSection } from "../../agents/transcript.ts";
+import { SessionTranscript, type TranscriptSection } from "../../agents/transcript.ts";
 import type { RunCompletion } from "../../agents/run-completion.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { summarizeRequest } from "../../agents/request-summary.ts";
@@ -183,6 +183,31 @@ test("완료 요청의 아랫줄은 이미지·파일 배지를 보존하고 긴
 
     await app.update([{ ...user, text: "[Image: image/png]", request: { text: "", images: 1, files: 0 } }, answer(completion)]);
     expect(footer.plainText.split("\n")[1]).toBe("[1 image]");
+  } finally { await app.close(); }
+});
+
+test("사용자 섹션과 완료 요청은 이미지 내부 안내를 숨기고 입력과 첨부 개수를 보존한다", async () => {
+  // 화면에 투영되기 전 SDK 메시지에는 원본 입력과 이미지 처리 안내가 함께 들어 있다.
+  const transcript = new SessionTranscript([]);
+  const input = '이거 두 개 확인해봐 [Image #1] [Image #2] @"/tmp/a.ts" @"/tmp/b.ts"';
+  transcript.handle({ type: "message_end", message: { role: "user", timestamp: 1, content: [
+    { type: "text", text: `${input}\n\n[Image converted from image/heic to image/png.]\n[Image: original 3000x4000, displayed at 1500x2000. Multiply coordinates by 2.00 to map to original image.]` },
+    { type: "image", mimeType: "image/png", data: "one" }, { type: "image", mimeType: "image/png", data: "two" },
+  ] } });
+
+  // 실제 섹션과 완료 푸터를 렌더하고 사용자 섹션을 복사한다.
+  const app = await mount([...transcript.sections, answer(completion)]);
+  try {
+    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); app.mockInput.pressKey("y"); await app.render();
+
+    // 화면과 복사 내용에 내부 안내는 없고 기존 이미지 섹션과 배지는 남는다.
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("이거 두 개 확인해봐");
+    expect(frame).toContain("[read] clipboard-1.png"); expect(frame).toContain("[read] clipboard-2.png");
+    expect(frame).toContain("“이거 두 개 확인해봐”  [2 images] [2 files]");
+    expect(frame).not.toContain("[Image"); expect(frame).not.toContain("Multiply coordinates");
+    expect(app.copies).toEqual(['이거 두 개 확인해봐 @"/tmp/a.ts" @"/tmp/b.ts"']);
+    expect(app.view.promptDrafts.a1).toBe("Keep this draft");
   } finally { await app.close(); }
 });
 
