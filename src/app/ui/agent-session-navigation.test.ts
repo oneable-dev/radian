@@ -296,12 +296,13 @@ test("snapshot의 세션 순서가 바뀌어도 ID 선택과 탭 인스턴스를
   } finally { await app.close(); }
 });
 
-test("좁은 화면의 Workspace 푸터도 Enter 확정 안내를 우선 표시한다", async () => {
-  // Essential confirmation must fit before optional first/last navigation hints.
+test("좁은 Workspace는 기본 확정 안내 없이도 탐색과 Enter 확정을 유지한다", async () => {
+  // 기본 조작 대신 Help만 남겨도 워크트리 전환 의미는 바뀌지 않는다.
   const app = await mount();
   try {
     app.resize(60, 12); await app.render(); await app.openWorkspaces();
-    expect(app.captureCharFrame().split("\n")[11]).toContain("Enter Open worktree");
+    expect(app.captureCharFrame().split("\n")[11]).not.toContain("<CR>");
+    expect(app.captureCharFrame().split("\n")[11]).toContain("<F1>");
     app.mockInput.pressKey("j"); await app.render();
     expect(app.selection.worktree?.id).toBe("demo:main");
     app.mockInput.pressEnter(); await app.render();

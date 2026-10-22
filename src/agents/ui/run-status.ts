@@ -63,7 +63,7 @@ export class RunStatus {
   private sampledAt = 0;
   private timing: ExecutionState["runTiming"];
 
-  constructor(private readonly renderer: CliRenderer, private readonly interruptKey: () => string = () => "esc",
+  constructor(private readonly renderer: CliRenderer, private readonly interruptKey: () => string = () => "<Esc>",
     private readonly beforeResize: () => void = () => {}) {
     this.root = new BoxRenderable(renderer, { id: "agent-run-status", width: "auto", height: 1, minWidth: 0,
       flexGrow: 1, flexShrink: 1, flexDirection: "column", onSizeChange: () => this.paint() });
@@ -123,7 +123,7 @@ export class RunStatus {
     if (rows !== this.rowCount) { this.beforeResize(); this.rowCount = rows; this.root.height = rows; }
     const seconds = Math.floor((this.elapsed + Math.max(0, this.renderer.clock.now() - this.sampledAt)) / 1000);
     const elapsed = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-    const key = this.running ? this.interruptKey().toLowerCase() : "";
+    const key = this.running ? this.interruptKey() : "";
     const duration = this.running ? elapsed : this.current.durationMs === undefined ? "" : formatRunDuration(this.current.durationMs);
     const timedLabel = duration ? `${this.current.label} (${duration}` : this.current.label;
     const requestReserve = !split && request ? request.images || request.files ? 28 : 12 : 0;

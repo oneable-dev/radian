@@ -40,14 +40,14 @@ test("작업 상태 아래에 대기 안내·단축키를 한 줄로 묶고 들�
     const frame = app.captureCharFrame(), lines = frame.split("\n");
     const pending = app.get("agent-pending-messages"), status = app.get("agent-run-status"), composer = app.get("agent-composer");
     const row = (y: number) => lines[y]!.slice(pending.x, pending.x + pending.width).trimEnd();
-    expect(row(status.y)).toContain("Working (12s · esc to interrupt)");
+    expect(row(status.y)).toContain("Working (12s · <Esc> to interrupt)");
     expect(row(status.y + 1)).toBe("“Current request”"); expect(status.height).toBe(2);
-    expect(row(pending.y)).toBe("• Messages will be sent after the current response and tools finish (press esc to interrupt and send immediately)");
+    expect(row(pending.y)).toBe("• Messages will be sent after the current response and tools finish (press <Esc> to interrupt and send immediately)");
     expect(row(pending.y + 1)).toBe("  ↳ Add tests"); expect(row(pending.y + 2)).toBe("  ↳ Do not edit README");
     expect(row(pending.y + 3)).toBe(""); expect(frame).not.toContain("Queued");
     expect(pending.y).toBe(status.y + status.height + 1);
     expect(composer.y).toBe(pending.y + 4);
-    const hints = app.captureSpans().lines.flatMap((line) => line.spans).filter((span) => span.text === "esc");
+    const hints = app.captureSpans().lines.flatMap((line) => line.spans).filter((span) => span.text === "<Esc>");
     expect(hints).toHaveLength(2); for (const span of hints) expect(span.attributes & TextAttributes.BOLD).not.toBe(0);
     expect(app.sent).toEqual([]);
 
@@ -102,7 +102,7 @@ test("작은 화면의 긴 대기 목록도 입력창과 하단 상태·푸터�
     expect(app.prompt.height).toBeGreaterThan(0); expect(app.interrupted).toEqual([]);
 
     app.resize(150, 30); await app.render();
-    expect(app.captureCharFrame()).toContain("• Messages will be sent after the current response and tools finish (press esc to interrupt and send immediately)");
+    expect(app.captureCharFrame()).toContain("• Messages will be sent after the current response and tools finish (press <Esc> to interrupt and send immediately)");
     expect(app.captureCharFrame()).toContain("↳ Pending 0");
   } finally { await app.close(); }
 });

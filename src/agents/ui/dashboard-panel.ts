@@ -3,6 +3,7 @@ import type { DashboardCategory, DashboardMetric, DashboardPeriod, DashboardSnap
 import type { Result } from "../../result.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
+import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
@@ -107,7 +108,7 @@ export class DashboardPanel {
   get shortcuts(): readonly FooterShortcut[] {
     return ([ ["dashboard.previous", this.focusedStrip() ? "Previous" : "Up"], ["dashboard.next", this.focusedStrip() ? "Next" : "Down"],
       ["focus.next", "Section"], ["dashboard.half-page-down", "½ page"], ["dashboard.refresh", "Refresh"], ["dashboard.dismiss", "Close"] ] as const)
-      .map(([command, label]) => ({ key: this.actions.keyHint(command, this.context), label }));
+      .map(([command, label]) => ({ key: footerKeyHint(command, this.context, this.actions.keyHint(command, this.context)), label }));
   }
   show(): void {
     if (this.disposed) return;

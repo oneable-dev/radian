@@ -355,7 +355,7 @@ test("구형 runtime의 미리보기도 접힌 뒤 식별하고 원문을 복사
   try {
     await app.transcript(); app.mockInput.pressKey("z"); app.mockInput.pressKey("a"); await app.copy();
 
-    expect(app.captureCharFrame()).toContain("[Transcript] (Ctrl+o to expand)");
+    expect(app.captureCharFrame()).toContain("[Transcript] (<C-o> to expand)");
     expect(app.captureCharFrame()).toContain("legacy preview");
     expect(app.captureCharFrame()).not.toContain("legacy first");
     expect(app.copied).toEqual([text]);

@@ -3,6 +3,7 @@ import type { Repository } from "../../workspace/model.ts";
 import type { ExecutionState } from "../session-registry.ts";
 import { monitoredSessions, type MonitoredSession } from "../session-monitor.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
+import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
@@ -91,7 +92,7 @@ export class SessionMonitor {
   get context(): KeyContext { return this.search.focused ? "monitor-search" : "monitor"; }
   get focusTargets(): Renderable[] { return [this.search, ...(this.list.visible ? [this.list] : []), ...(this.previewPane.visible ? [this.transcript.scroll] : [])]; }
   get shortcuts(): readonly FooterShortcut[] {
-    const hint = (command: CommandId, label: string) => ({ key: this.actions.keyHint(command, this.context), label });
+    const hint = (command: CommandId, label: string) => ({ key: footerKeyHint(command, this.context, this.actions.keyHint(command, this.context)), label });
     return [...(this.items.length ? [hint("monitor.open", "Open")] : []), hint("monitor.dismiss", "Close"), hint("monitor.next", "Next"), hint("monitor.previous", "Previous"), hint("monitor.half-page-down", "½ page"), hint("monitor.preview", "Preview"), hint("monitor.page-down", "Page")];
   }
 

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
-import { Workbench } from "./workbench.ts";
+import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
 import type { HistoryItem } from "../../agents/history.ts";
@@ -10,7 +10,7 @@ import { ok } from "../../result.ts";
 const saved = (id: string, unavailableReason: string | null = null): HistoryItem => ({ id, title: id, worktreeId: "demo:main",
   modified: "2026-10-15T00:00:00.000Z", messageCount: 1, openSessionId: null, unavailableReason });
 
-async function mount(list: () => Promise<readonly HistoryItem[]> = async () => []) {
+async function mount(list: () => Promise<readonly HistoryItem[]> = async () => [], actions: Partial<WorkbenchActions> = {}) {
   const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
   const initialFocusListeners = app.renderer.listenerCount("focused_renderable");
   const selection = new WorkspaceSelection(demoWorkspace());
@@ -22,6 +22,7 @@ async function mount(list: () => Promise<readonly HistoryItem[]> = async () => [
     getSessionDetails: () => ({ status, output: "Transcript", error: null }),
     onListHistory: async () => ok(await list()),
     onResumeSession: async (_tree, id) => { calls.push(`resume:${id}`); return ok("a1"); },
+    ...actions,
   });
   await app.renderOnce();
   return { ...app, selection, calls, view, initialFocusListeners,
@@ -59,46 +60,69 @@ test("기본 화면은 고정 범례나 안내 행 없이 푸터 바로 위까�
   } finally { await app.close(); }
 });
 
-test("트리에서 검색창으로 포커스를 옮기면 해당 영역의 단축키만 바뀌고 실제 입력은 유지한다", async () => {
-  // Context comes from actual renderer focus, including existing global focus shortcuts.
+test.each([120, 60])("너비 %i의 프롬프트는 기본 조작 안내 없이도 줄바꿈·중단·전송을 유지한다", async width => {
+  // 실제 중단 기능이 제공되는 실행에서도 푸터 폭과 무관하게 안내를 생략한다.
+  let interruptions = 0;
+  const app = await mount(undefined, { onInterrupt: async () => { interruptions++; return ok(undefined); } });
+  try {
+    app.resize(width, 24); app.mockInput.pressKey("e", { ctrl: true });
+    await app.mockInput.typeText("first"); app.mockInput.pressEnter({ shift: true });
+    await app.mockInput.typeText("second"); await app.renderOnce();
+
+    // 기본 조작을 숨겨도 원래 입력 의미와 작업 중 전송 경로는 유지한다.
+    for (const state of ["complete", "working"] as const) {
+      app.setStatus(state); await app.renderOnce();
+      expect(app.footerLine()).not.toMatch(/Run|Queue|New line|Interrupt|<C-[cnp]>/u);
+      expect(app.footerLine()).toContain("<F1>");
+      expect(app.view.promptDrafts.a1).toBe("first\nsecond");
+    }
+    app.mockInput.pressEscape(); await app.renderOnce();
+    expect(interruptions).toBe(1); expect(app.view.promptDrafts.a1).toBe("first\nsecond");
+    app.mockInput.pressEnter(); await app.waitFor(() => app.view.promptDrafts.a1 === undefined);
+
+    // 중단은 초안을 보존하고 Enter 한 번만 실제 전송 요청을 만든다.
+    expect(app.calls).toEqual(["prompt:first\nsecond"]);
+  } finally { await app.close(); }
+});
+
+test("트리와 검색창은 기본 조작 안내를 생략해도 포커스 이동과 문자 입력을 유지한다", async () => {
+  // 목록과 검색 사이를 오가도 숨긴 탐색 안내가 다시 나타나서는 안 된다.
   const app = await mount();
   try {
     app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab(); await app.renderOnce();
-    expect(app.footerLine()).toContain("Enter Open worktree");
-    expect(app.footerLine()).not.toContain("Close session");
-    expect(app.footerLine()).toContain("Ctrl+d ½ page");
+    expect(app.footerLine()).not.toMatch(/<CR>|Navigate|½ page|Close|First\/last/u);
+    expect(app.footerLine()).toContain("<F1> Help");
 
     app.mockInput.pressKey("f", { ctrl: true }); await app.renderOnce();
     await app.mockInput.typeText("nxq"); await app.renderOnce();
 
-    expect(app.footerLine()).toContain("Enter Open");
-    expect(app.footerLine()).toContain("Esc Close");
+    expect(app.footerLine()).not.toMatch(/<CR>|<Esc>|<C-[np]>|Navigate/u);
     expect(app.footerLine()).not.toContain("New session");
     expect(app.calls).toEqual([]);
     app.mockInput.pressCtrlC(); app.mockInput.pressTab(); await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree");
-    expect(app.footerLine()).toContain("Enter Open worktree");
+    expect(app.footerLine()).toContain("<F1> Help");
   } finally { await app.close(); }
 });
 
-test("History 명령·조회 중 목록·사용 가능한 기록에 따라 표시되는 키가 달라진다", async () => {
-  // Metadata arrives after focus reaches the list; this is not a new model/session action.
+test("History는 기본 탐색 대신 Preview와 Refresh만 안내하고 조회와 선택은 유지한다", async () => {
+  // 메타데이터가 늦게 도착해도 기본 열기·탐색 안내를 되살리지 않는다.
   const pending = Promise.withResolvers<readonly HistoryItem[]>();
   const app = await mount(() => pending.promise);
   try {
     await app.openHistory();
-    expect(app.footerLine()).toContain("Ctrl+r Refresh");
+    expect(app.footerLine()).toContain("<C-r> Refresh");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("history-search");
-    expect(app.footerLine()).not.toContain("Enter Open");
+    expect(app.footerLine()).not.toContain("<CR> Open");
 
     pending.resolve([saved("Available saved"), saved("Busy saved", "Still closing")]); await app.visible("Available saved");
 
-    expect(app.footerLine()).toContain("Enter Open");
+    expect(app.footerLine()).toContain("<C-o> Preview");
     app.mockInput.pressTab(); await app.renderOnce();
-    expect(app.footerLine()).toContain("k Previous");
+    expect(app.footerLine()).not.toMatch(/<CR>|Previous|Next|½ page|<Esc>/u);
     expect(app.footerLine()).not.toContain("New session");
     app.mockInput.pressArrow("down"); await app.renderOnce();
-    expect(app.footerLine()).not.toContain("Enter Open");
+    expect(app.footerLine()).not.toContain("<CR> Open");
     app.mockInput.pressEnter(); await app.renderOnce();
     expect(app.calls).toEqual([]);
     expect(app.captureCharFrame()).toContain("Still closing");
@@ -106,25 +130,26 @@ test("History 명령·조회 중 목록·사용 가능한 기록에 따라 표�
 });
 
 test("프롬프트의 실행 가능 여부와 별도 오류 알림은 단축키 안내·초안·선택을 보존한다", async () => {
-  // Busy input uses the same submission path, with a Queue hint instead of Run.
+  // 전송 상태가 달라도 기본 초안 지우기는 생략하고 앱 고유 이동만 안내한다.
   const app = await mount();
   try {
     app.mockInput.pressKey("e", { ctrl: true }); await app.renderOnce();
-    expect(app.footerLine()).toContain("Ctrl+Space → b Workspace");
-    expect(app.footerLine()).not.toContain("Enter Run");
+    expect(app.footerLine()).toContain("<leader>b Workspace");
+    expect(app.footerLine()).not.toContain("<CR> Run");
     await app.mockInput.typeText("hello"); await app.renderOnce();
-    expect(app.footerLine()).toContain("Enter Run");
+    expect(app.footerLine()).not.toContain("<C-c> Clear");
+    expect(app.footerLine()).not.toContain("<CR> Run");
 
     app.setStatus("working"); await app.renderOnce();
-    expect(app.footerLine()).toContain("Enter Queue");
+    expect(app.footerLine()).not.toMatch(/Run|Queue|New line|Interrupt/u);
     app.mockInput.pressEnter();
     await app.waitFor(() => app.view.promptDrafts.a1 === undefined); await app.renderOnce();
 
     expect(app.calls).toEqual(["prompt:hello"]);
-    expect(app.footerLine()).toContain("Ctrl+Space → b Workspace");
+    expect(app.footerLine()).toContain("<leader>b Workspace");
     expect(app.view.promptDrafts.a1).toBeUndefined();
     expect(app.selection.sessionId).toBe("a1");
-    expect(app.footerLine()).not.toContain("Enter Run");
+    expect(app.footerLine()).not.toContain("<CR> Run");
   } finally { await app.close(); }
 });
 
@@ -145,7 +170,7 @@ test("패널이 숨겨지는 좁은 화면에서도 푸터와 알림은 하단�
     expect(app.selection.sessionId).toBe("a1");
     expect(app.calls).toEqual([]);
     app.resize(120, 24); await app.renderOnce();
-    expect(app.footerLine()).toContain("Ctrl+t Transcript");
+    expect(app.footerLine()).toContain("<C-t> Transcript");
   } finally { await app.close(); }
 });
 

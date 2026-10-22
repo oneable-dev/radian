@@ -85,7 +85,7 @@ test("빈 워크트리에서 첫 세션을 만들면 스냅샷의 자동 선택 
     app.selection.selectWorktree("demo:empty"); app.leader("a"); await app.render();
     expect(app.selection.sessionId).toBeNull();
     expect(app.captureCharFrame()).toContain("No AI sessions");
-    expect(app.captureCharFrame()).toContain("Ctrl+Space → n");
+    expect(app.captureCharFrame()).toContain("<leader>n");
 
     // The snapshot arrives before the creation callback and already exposes the first session.
     app.leader("n"); await app.created(0, "first");

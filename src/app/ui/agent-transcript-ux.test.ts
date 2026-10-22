@@ -242,7 +242,7 @@ test("반 페이지 섹션 점프와 도움말은 사용자 키 재할당을 따
     app.mockInput.pressKey("F1"); await app.render();
 
     // Help describes section jumps with the effective bindings, while help itself remains scrollable.
-    expect(app.captureCharFrame()).toContain("Alt+d/Alt+u half-page section jump");
+    expect(app.captureCharFrame()).toContain("<M-d>/<M-u> half-page section jump");
     app.resize(60, 18); await app.render(); app.mockInput.pressKey("HOME"); await app.render();
     const top = app.scroll.scrollTop;
     app.mockInput.pressKey("d", { meta: true }); await app.render();
@@ -352,7 +352,7 @@ test("모든 섹션에서 화살표·역할·상태 제목을 빼고 도구와 �
     // 제목 전용 행 없이 접힌 도구에는 실행 대상과 실제 키맵 안내가 함께 보인다.
     const frame = app.captureCharFrame().split("\n").slice(app.scroll.y, app.scroll.y + app.scroll.height).join("\n");
     expect(frame).toContain("USER_CONTENT"); expect(frame).toContain("ANSWER_CONTENT");
-    expect(frame).toContain("[read] /tmp/example.ts:7 (Ctrl+o to expand)");
+    expect(frame).toContain("[read] /tmp/example.ts:7 (<C-o> to expand)");
     expect(frame).toContain("[skill] commit-changes");
     expect(frame).not.toMatch(/[▾▸›]|You ·|Agent ·|Thinking ·| · complete/);
     expect(frame).not.toContain("TOOL_CONTENT"); expect(frame).toContain("THINK_CONTENT");
@@ -382,7 +382,7 @@ test("도구의 timeout만 바뀌어도 인라인 요약을 갱신하고 안내�
     await app.update([{ ...data, timeoutSeconds: 30 }]);
     // 본문이나 상태가 그대로여도 제한 변경을 누락하지 않는다.
     const frame = app.captureCharFrame();
-    expect(frame).toContain("(timeout 30s) (Ctrl+o to expand)"); expect(frame).not.toContain("timeout 120s");
+    expect(frame).toContain("(timeout 30s) (<C-o> to expand)"); expect(frame).not.toContain("timeout 120s");
     const spans = app.captureSpans().lines.flatMap((line) => line.spans);
     const hint = spans.find((item) => item.text.includes("timeout 30s"));
     expect(hint?.fg.toInts()).toEqual(uiTheme(app.renderer).colors.muted.toInts());
@@ -520,11 +520,11 @@ test("접힌 섹션 Enter는 요약 커서를 표시하고 Ctrl+O만 접힘 상�
   try {
     // Enter must focus the visible heading, not reveal or navigate the hidden body.
     app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("Enter Text");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<CR> Text");
     app.mockInput.pressEnter(); await app.render();
     expect(app.state()?.mode).toBe("text"); expect(app.captureCharFrame()).not.toContain("FOLDED_DETAIL");
     const heading = app.body(), cursor = app.renderer.getCursorState();
-    expect(heading.plainText).toBe("[read] (Ctrl+o to expand)");
+    expect(heading.plainText).toBe("[read] (<C-o> to expand)");
     expect(cursor.visible).toBe(true);
     // Terminal cursor coordinates are one-based; renderable bounds are zero-based.
     expect(cursor.x).toBe(heading.x + heading.visualCursor.visualCol + 1);
@@ -565,16 +565,16 @@ test("접기 재할당은 안내에도 반영되고 Ctrl+O는 입력 첨부 확�
     app.mockInput.pressKey("o", { ctrl: true }); app.mockInput.pressEnter(); await app.render();
     expect(app.captureCharFrame()).not.toContain("CUSTOM_FOLD_DETAIL");
     expect(app.state()?.mode).toBe("text");
-    expect(app.body().plainText).toBe("[read] (Alt+x to expand)");
+    expect(app.body().plainText).toBe("[read] (<M-x> to expand)");
     app.mockInput.pressEscape(); await app.render();
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("Alt+x");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<M-x>");
 
     app.mockInput.pressKey("x", { meta: true }); await app.render();
 
     expect(app.captureCharFrame()).toContain("CUSTOM_FOLD_DETAIL");
     const defaults = defaultKeymap();
-    for (const context of ["transcript", "transcript-text", "transcript-visual"] as const) expect(defaults.hint("transcript.fold", context)).toBe("Ctrl+o");
-    expect(defaults.hint("agent.inspect", "prompt")).toBe("Ctrl+o");
+    for (const context of ["transcript", "transcript-text", "transcript-visual"] as const) expect(defaults.hint("transcript.fold", context)).toBe("<C-o>");
+    expect(defaults.hint("agent.inspect", "prompt")).toBe("<C-o>");
     for (const context of ["editor", "terminal"] as const) expect(defaults.bound("ctrl+o", context)).toBe(false);
     expect(app.prompts).toEqual([]);
   } finally { await app.close(); }
@@ -594,16 +594,16 @@ test("접힌 요약과 펼친 본문의 커서는 독립적으로 유지되고 �
 
     app.mockInput.pressKey("o", { ctrl: true }); app.mockInput.pressEnter(); await app.render();
 
-    expect(app.body().plainText).toBe("[read] (Ctrl+o to expand)"); expect(app.body().cursorOffset).toBe(2);
+    expect(app.body().plainText).toBe("[read] (<C-o> to expand)"); expect(app.body().cursorOffset).toBe(2);
     expect(app.state()?.cursors.message).toBe(4); expect(app.captureCharFrame()).not.toContain("HIDDEN_BODY");
-    await app.copy(); expect(app.copies).toEqual(["[read] (Ctrl+o to expand)"]);
+    await app.copy(); expect(app.copies).toEqual(["[read] (<C-o> to expand)"]);
     app.mockInput.pressKey("y", { shift: true }); await app.render(); expect(app.copies.at(-1)).toBe(text);
   } finally { await app.close(); }
   const next = await mount(data, { initialWorkViews: preferences! });
   try {
     next.mockInput.pressKey("t", { ctrl: true }); await next.render();
 
-    expect(next.body().plainText).toBe("[read] (Ctrl+o to expand)"); expect(next.body().cursorOffset).toBe(2);
+    expect(next.body().plainText).toBe("[read] (<C-o> to expand)"); expect(next.body().cursorOffset).toBe(2);
     expect(next.renderer.getCursorState().visible).toBe(true); expect(next.captureCharFrame()).not.toContain("HIDDEN_BODY");
     next.mockInput.pressKey("o", { ctrl: true }); next.mockInput.pressEnter(); await next.render();
     expect(next.body().plainText).toBe(text); expect(next.body().cursorOffset).toBe(4);
@@ -615,12 +615,12 @@ test("접힌 오류 요약도 커서와 줄 선택으로 복사할 수 있지만
   const app = await mount([{ ...section(text), kind: "tool", title: "read", status: "error", error: "Permission denied" }]);
   try {
     await app.enter();
-    expect(app.body().plainText).toBe("[read] (Ctrl+o to expand)\n\nPermission denied");
+    expect(app.body().plainText).toBe("[read] (<C-o> to expand)\n\nPermission denied");
     expect(app.captureCharFrame()).not.toContain("HIDDEN_STACK_TRACE");
 
     app.mockInput.pressKey("v", { shift: true }); app.mockInput.pressKey("j"); app.mockInput.pressKey("j"); await app.copy();
 
-    expect(app.copies).toEqual(["[read] (Ctrl+o to expand)\n\nPermission denied"]);
+    expect(app.copies).toEqual(["[read] (<C-o> to expand)\n\nPermission denied"]);
     expect(app.captureCharFrame()).not.toContain("HIDDEN_STACK_TRACE");
     app.mockInput.pressKey("y", { shift: true }); await app.render(); expect(app.copies.at(-1)).toBe(text);
     expect(app.prompts).toEqual([]);
@@ -648,12 +648,12 @@ test("화살표 없이 인라인 요약을 클릭해 선택한 섹션도 Enter�
   const app = await mount([section("first"), { ...section("HIDDEN_CLICK_BODY"), id: "folded", kind: "tool", title: "read" }]);
   try {
     app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
-    const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes("[read] (Ctrl+o to expand)"));
+    const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes("[read] (<C-o> to expand)"));
     const x = lines[y]!.indexOf("[read]");
 
     await app.mockMouse.click(x, y); await app.render(); app.mockInput.pressEnter(); await app.render();
 
-    expect(app.state()?.selectedId).toBe("folded"); expect(app.body().plainText).toBe("[read] (Ctrl+o to expand)");
+    expect(app.state()?.selectedId).toBe("folded"); expect(app.body().plainText).toBe("[read] (<C-o> to expand)");
     expect(app.renderer.getCursorState().visible).toBe(true); expect(app.captureCharFrame()).not.toContain("HIDDEN_CLICK_BODY");
   } finally { await app.close(); }
 });

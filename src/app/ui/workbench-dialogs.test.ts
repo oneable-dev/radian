@@ -28,7 +28,7 @@ test("도움말은 현재 문맥과 공통 키를 보여주고 닫으면 입력 
     app.mockInput.pressKey("F1"); await app.render();
     expect(app.get("text-dialog").visible).toBe(true); expect(app.captureCharFrame()).toContain("Current context: prompt");
     app.mockInput.pressKey("y"); await app.render();
-    expect(app.copies[0]).toContain("Application shortcuts"); expect(app.copies[0]).toContain("Shift+Enter"); expect(app.copies[0]).toContain("Ctrl+Space → b");
+    expect(app.copies[0]).toContain("Application shortcuts"); expect(app.copies[0]).toContain("<S-CR>"); expect(app.copies[0]).toContain("<leader>b");
 
     // 다른 영역의 전역 포커스 명령도 열린 모달 뒤의 편집기를 조작하지 않는다.
     app.mockInput.pressKey("f", {ctrl: true}); await app.render();
@@ -42,8 +42,10 @@ test("도움말은 현재 문맥과 공통 키를 보여주고 닫으면 입력 
 test("푸터의 도움말 클릭은 원래 포커스를 기억하고 작은 화면에서도 진입점을 남긴다", async () => {
   const app = await mount();
   try {
+    // 좁은 화면에서도 축약된 도움말 키가 Neovim 표기를 유지한다.
     app.resize(60,16); await app.render();
     expect(app.get("footer-help").visible).toBe(true);
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<F1>");
     await app.click("footer-help");
     expect(app.get("text-dialog").visible).toBe(true);
     app.mockInput.pressEscape(); await app.render();
@@ -71,11 +73,14 @@ test("알림이 있을 때만 한 줄을 예약하며 상세는 잘리지 않은
 });
 
 test("도움말은 사용자 재할당을 반영하고 모달 밖의 비동기 포커스 복원을 차단한다", async () => {
-  const keymap = expectOk(parseKeymap({bindings: {"app.help": [{keys: "f2", scope: "app"}], "app.detach": ["<leader> q"]}}));
+  const keymap = expectOk(parseKeymap({leader: "ctrl+b", bindings: {"app.help": [{keys: "f2", scope: "app"}], "app.detach": ["<leader> q"]}}));
   const app = await mount({keymap, onDetach: () => {}});
   try {
+    // 재설정한 실제 키는 별도로 안내하고 명령 목록은 논리적 리더를 유지한다.
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<F2> Help");
     app.mockInput.pressKey("F2"); await app.render(); app.mockInput.pressKey("y"); await app.render();
-    expect(app.copies[0]).toContain("Ctrl+Space → q"); expect(app.copies[0]).not.toContain("Ctrl+Space → c");
+    expect(app.copies[0]).toContain("<leader>: <C-b>");
+    expect(app.copies[0]).toContain("<leader>q"); expect(app.copies[0]).not.toContain("<leader>c");
     app.prompt.focus(); await app.render();
 
     expect(app.renderer.currentFocusedRenderable?.id).toBe("text-dialog-scroll");

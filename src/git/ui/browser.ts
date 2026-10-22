@@ -2,6 +2,7 @@ import { BoxRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderab
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
+import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { SearchInput } from "../../ui/search-input.ts";
 import { fuzzyMatch } from "../../ui/fuzzy-match.ts";
@@ -105,7 +106,7 @@ export class GitBrowser {
   }
   get selectionRegion(): Renderable[] { return [this.list.root.viewport, ...(this.previewPane.visible ? [this.preview.viewport] : [])]; }
   get shortcuts(): FooterShortcut[] {
-    const hint = (command: CommandId, label: string) => ({ key: this.actions.hint(command, this.context), label });
+    const hint = (command: CommandId, label: string) => ({ key: footerKeyHint(command, this.context, this.actions.hint(command, this.context)), label });
     const target = this.selectionContext;
     return [...(this.canOpen ? [hint("git.open", this.kind === "refs" ? "Filter" : "Open commit")] : []), hint("git.back", "Close"),
       ...(target ? [hint("git.ask", this.kind === "refs" ? "Ask ref" : "Ask event"), hint("git.copy", this.kind === "refs" ? "Copy name" : "Copy hash")] : []),

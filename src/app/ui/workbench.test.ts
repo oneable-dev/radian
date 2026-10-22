@@ -92,7 +92,7 @@ test("닫기 키는 끝 항목의 이전 세션을 선택하고 마지막 항목
     expect(app.selection.worktree?.sessions).toHaveLength(0);
     expect(app.captureCharFrame()).toContain("No AI sessions");
     expect(app.renderer.root.findDescendantById("agent-session-list")!.visible).toBe(true);
-    expect(app.captureCharFrame().split("\n")[23]).toContain("Ctrl+Space → n New session");
+    expect(app.captureCharFrame().split("\n")[23]).toContain("<leader>n New session");
   } finally { await app.close(); }
 });
 

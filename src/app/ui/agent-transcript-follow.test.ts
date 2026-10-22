@@ -94,7 +94,7 @@ test.each([false, true])("밝기 %j에서도 하단 복귀 버튼은 기존 여�
 
     // 위로 스크롤하면 클릭 가능한 표시가 나타나며, 오른쪽 클릭은 이동 명령이 아니다.
     await app.mockMouse.scroll(app.scroll.x + 3, app.scroll.y + 3, "up"); await app.settled();
-    expect(app.captureCharFrame()).toContain("↓ Back to bottom · Shift+g");
+    expect(app.captureCharFrame()).toContain("↓ Back to bottom · G");
     const button = app.renderer.root.findDescendantById("transcript-bottom-button");
     if (!button) throw new Error("Missing back-to-bottom button");
     const viewport = app.scroll.viewport;
@@ -132,7 +132,7 @@ test("하단 복귀 버튼은 재지정한 바인딩을 표시하고 같은 키�
   try {
     await app.update([...history, section("tail", "LATE_OUTPUT\n".repeat(70))]);
     app.mockInput.pressKey("t", { ctrl: true }); await app.settled();
-    expect(app.captureCharFrame()).toContain("↓ Back to bottom · Alt+z");
+    expect(app.captureCharFrame()).toContain("↓ Back to bottom · <M-z>");
     app.mockInput.pressKey("g", { shift: true }); await app.settled();
     expect(app.state()?.selectedId).toBe("history");
     expect(app.state()?.follow).toBe(false); expect(app.scroll.scrollTop).toBeLessThan(bottom(app.scroll));

@@ -10,9 +10,9 @@ const user = (text: string, id = "request"): TranscriptSection => ({ id, kind: "
 const working = (sections: readonly TranscriptSection[]): ExecutionState => ({ status: "working", output: "", error: null, sections });
 const settled = (outcome: "complete" | "cancelled" | "unfinished" | "error"): TranscriptSection => ({ id: "answer", kind: "assistant", title: "Agent", text: "Output", status: "complete",
   completion: { startedAt: 1800000000000, completedAt: 1800000001000, durationMs: 1000, outcome } });
-async function mount(width = 70) {
+async function mount(width = 70, interruptKey?: () => string) {
   const clock = new ManualClock(), app = await createTestRenderer({ width, height: 4, kittyKeyboard: true, clock });
-  const status = new RunStatus(app.renderer); app.renderer.root.add(status.root);
+  const status = new RunStatus(app.renderer, interruptKey); app.renderer.root.add(status.root);
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
   const node = () => app.renderer.root.findDescendantById("agent-run-status-text")!;
   const captionNode = () => app.renderer.root.findDescendantById("agent-run-request")!;
@@ -28,13 +28,25 @@ test("Working 다음 줄에 실제 최근 요청을 표시하고 도구 출력·
     const latest = user("  Implement\nthe search\t carefully.  ", "latest");
     const state = working([user("Old request", "old"), latest, { id: "tool", kind: "tool", title: "bash", text: "DO NOT USE TOOL OUTPUT", status: "running" }]);
     app.status.update("a", state, true); await app.render();
-    expect(app.text()).toBe("Working (0s · esc to interrupt)"); expect(app.caption()).toBe("“Implement the search carefully.”");
+    expect(app.text()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toBe("“Implement the search carefully.”");
     expect(app.spinner().visible).toBe(true); expect(app.status.rows).toBe(2);
     expect(app.captionNode().y).toBe(app.node().y + 1); expect(app.captionNode().x).toBe(app.spinner().x);
 
     app.status.update("a", { ...state, sections: [...state.sections!, settled("complete")] }, true); await app.render();
-    expect(app.text()).toBe("Working (0s · esc to interrupt)"); expect(app.caption()).toBe("“Implement the search carefully.”");
+    expect(app.text()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toBe("“Implement the search carefully.”");
     expect(latest.text).toBe("  Implement\nthe search\t carefully.  ");
+  } finally { await app.close(); }
+});
+
+test.each(["<C-x>", "<S-Tab>"])("실행 상태는 설정된 중단 키 %s의 Neovim 표기를 유지한다", async key => {
+  // 중단 키는 이미 포맷된 안내이므로 수식키의 대문자를 바꾸면 안 된다.
+  const app = await mount(70, () => key);
+  try {
+    // 실행 중 상태를 표시해 실제 작업 안내에도 같은 표기가 전달되는지 확인한다.
+    app.status.update("a", working([user("Task")]), true); await app.render();
+
+    // 기본 키가 아닌 사용자 설정도 그대로 안내하고 입력 설정은 변경하지 않는다.
+    expect(app.text()).toBe(`Working (0s · ${key} to interrupt)`);
   } finally { await app.close(); }
 });
 
@@ -48,12 +60,12 @@ test("압축 중에는 이전 요청 대신 전용 문구와 움직이는 스피
 
     // 압축이 진행되는 동안에도 공통 스피너의 프레임은 계속 바뀐다.
     app.clock.advance(80); app.status.update("a", compacting, true); await app.render();
-    expect(app.text()).toBe("Compacting context (0s · esc to interrupt)"); expect(app.spinner().visible).toBe(true);
+    expect(app.text()).toBe("Compacting context (0s · <Esc> to interrupt)"); expect(app.spinner().visible).toBe(true);
     expect(app.captureCharFrame()).not.toBe(first); expect(app.text()).not.toContain("Previous delivered request");
 
     // 압축 이후 일반 실행으로 돌아오면 같은 요청과 스피너를 이어서 표시한다.
     app.status.update("a", state, true); await app.render();
-    expect(app.text()).toBe("Working (0s · esc to interrupt)"); expect(app.caption()).toBe("“Previous delivered request”"); expect(app.spinner().visible).toBe(true);
+    expect(app.text()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toBe("“Previous delivered request”"); expect(app.spinner().visible).toBe(true);
   } finally { await app.close(); }
 });
 
@@ -76,7 +88,7 @@ test("Working 요청도 한 줄 말줄임하며 실제 첨부 배지 공간은 �
   try {
     const request = { ...user("Original full prompt"), request: { text: "A long original prompt ".repeat(20), images: 2, files: 3 } };
     app.status.update("a", working([request]), true); await app.render();
-    expect(app.text()).toBe("Working (0s · esc to interrupt)"); expect(app.caption()).toContain("…  [2 images] [3 files]");
+    expect(app.text()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toContain("…  [2 images] [3 files]");
     expect(Bun.stringWidth(app.caption())).toBeLessThanOrEqual(50);
     expect(app.captureCharFrame().split("\n")[2]?.trim()).toBe(""); expect(request.text).toBe("Original full prompt");
   } finally { await app.close(); }
@@ -184,7 +196,7 @@ test("한글·결합 문자·emoji는 grapheme 경계와 셀 너비로 자르고
     expect(app.caption()).not.toContain("\uFFFD"); expect(Bun.stringWidth(app.caption())).toBeLessThanOrEqual(34);
     expect(app.captureCharFrame().split("\n")[2]!.trim()).toBe("");
     app.resize(6, 4); await app.render(); expect(Bun.stringWidth(app.text())).toBeLessThanOrEqual(4); expect(Bun.stringWidth(app.caption())).toBeLessThanOrEqual(6);
-    app.resize(70, 4); await app.render(); expect(app.text()).toBe("Working (0s · esc to interrupt)"); expect(app.caption()).toBe(`“${request.text}”`);
+    app.resize(70, 4); await app.render(); expect(app.text()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toBe(`“${request.text}”`);
   } finally { await app.close(); }
 });
 
@@ -192,8 +204,8 @@ test("스킬 호출은 내부 지침을 노출하지 않고 요청 없는 실행
   const app = await mount();
   try {
     app.status.update("a", working([{ id: "skill", kind: "notice", title: "write-good-code", skillName: "write-good-code", text: "PRIVATE INTERNAL INSTRUCTIONS", status: "complete" }]), true); await app.render();
-    expect(app.text()).toBe("Working (0s · esc to interrupt)"); expect(app.caption()).toBe("“/skill:write-good-code”"); expect(app.captureCharFrame()).not.toContain("PRIVATE INTERNAL INSTRUCTIONS");
-    app.status.update("a", { status: "working", output: "Legacy output", error: null }, true); await app.render(); expect(app.text()).toBe("Working (0s · esc to interrupt)");
+    expect(app.text()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toBe("“/skill:write-good-code”"); expect(app.captureCharFrame()).not.toContain("PRIVATE INTERNAL INSTRUCTIONS");
+    app.status.update("a", { status: "working", output: "Legacy output", error: null }, true); await app.render(); expect(app.text()).toBe("Working (0s · <Esc> to interrupt)");
     app.status.update("a", { status: null, output: "Legacy output", error: null }, true); await app.render(); expect(app.text()).toBe("");
   } finally { await app.close(); }
 });
@@ -218,15 +230,15 @@ test("실행 시간은 런타임 관측값에서 이어지고 반복 스냅샷·
   const state = { ...working([user("Long job")]), runTiming: { startedAt: 1000, elapsedMs: 12000 } };
   try {
     app.status.update("a", state, true); await app.render();
-    expect(app.text()).toContain("Working (12s · esc to interrupt)");
+    expect(app.text()).toContain("Working (12s · <Esc> to interrupt)");
 
     // Equal snapshots must not restart the locally interpolated timer.
     app.clock.advance(2000); app.status.update("a", state, true); await app.render();
-    expect(app.text()).toContain("Working (14s · esc to interrupt)");
+    expect(app.text()).toContain("Working (14s · <Esc> to interrupt)");
     app.status.update("a", state, false); app.clock.advance(2000);
     app.status.update("a", { ...state, runTiming: { startedAt: 1000, elapsedMs: 16000 } }, true); await app.render();
 
-    expect(app.text()).toContain("Working (16s · esc to interrupt)");
+    expect(app.text()).toContain("Working (16s · <Esc> to interrupt)");
     app.status.update("a", { ...state, status: "complete" }, true); app.clock.advance(1000); await app.render();
     expect(app.text()).toBe("");
   } finally { await app.close(); }
@@ -291,7 +303,7 @@ test("Fast에서만 노란 화살표와 Working shimmer를 표시하고 시간·
     expect(first).not.toEqual(base); expect(colorAt(3)).toEqual(base);
     app.clock.advance(350); await app.render();
     expect(colorAt(0)).toEqual(base); expect(colorAt(3)).not.toEqual(base);
-    expect(app.caption()).toBe(caption); expect(app.text()).toBe("Working (0s · esc to interrupt)");
+    expect(app.caption()).toBe(caption); expect(app.text()).toBe("Working (0s · <Esc> to interrupt)");
     expect([app.node().x, app.node().y, app.captionNode().x, app.status.root.height]).toEqual(geometry);
     app.clock.advance(1150); await app.render(); expect(colorAt(0)).toEqual(first);
     const timers = app.clock.pendingTimerCount;

@@ -112,7 +112,7 @@ export class AgentPanel {
     this.transcriptScroll.verticalScrollBar.visible = false;
     this.bottomButton = new TranscriptBottomButton(renderer, () => { renderer.clearSelection(); this.transcript.followLatest(); });
     this.runtimePanel.add(this.bottomButton);
-    const interruptKey = () => transcriptOptions.readOnly ? "" : transcriptOptions.keyHint?.("agent.interrupt", "prompt") ?? "esc";
+    const interruptKey = () => transcriptOptions.readOnly ? "" : transcriptOptions.keyHint?.("agent.interrupt", "prompt") ?? "<Esc>";
     this.runStatus = new RunStatus(renderer, interruptKey, () => this.transcript.prepareLayoutChange());
     this.pendingMessages = new PendingMessages(renderer, interruptKey);
     const transcriptArea = this.transcriptArea = new BoxRenderable(renderer, { id: id("agent-transcript-area"), width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "column", overflow: "hidden" });

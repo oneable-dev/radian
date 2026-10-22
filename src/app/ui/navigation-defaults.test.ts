@@ -81,7 +81,7 @@ test.each(navigationCases)("$surface 모달의 $focus 포커스에서 $navigatio
     expect(app.view.promptDrafts.a1).toBe(surface === "model" ? undefined : "KEEP_DRAFT");
     const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
     expect(footer).not.toMatch(/[↑↓←]/u);
-    expect(footer).toContain(focus === "search" ? "Ctrl+p Previous" : "k Previous");
+    expect(footer).not.toMatch(/Previous|Next|<C-[np]>|½ page/u);
     app.mockInput.pressEnter(); await app.render();
 
     if (surface === "model") expect(app.models).toEqual(["two"]);

@@ -10,6 +10,7 @@ import type { Result } from "../../result.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
+import { footerKeyHint } from "../../keybindings/footer.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { AgentPanel } from "./agent-panel.ts";
@@ -124,7 +125,7 @@ export class SessionHistoryPanel {
   get context(): KeyContext { return this.search.focused ? "history-search" : "history"; }
   get focusTargets(): Renderable[] { return [this.search, ...(this.list.visible ? [this.list] : []), ...(this.previewPane.visible ? [this.preview] : [])]; }
   get shortcuts(): readonly FooterShortcut[] {
-    const hint = (command: Extract<CommandId, `history.${string}`>, label: string) => ({ key: this.actions.keyHint(command, this.context), label });
+    const hint = (command: Extract<CommandId, `history.${string}`>, label: string) => ({ key: footerKeyHint(command, this.context, this.actions.keyHint(command, this.context)), label });
     return [...(this.selected && !this.selected.unavailableReason && this.actions.resume && !this.resuming && !this.loading ? [hint("history.open", "Open")] : []),
       hint("history.dismiss", "Close"), hint("history.preview", "Preview"), hint("history.previous", "Previous"), hint("history.next", "Next"), hint("history.refresh", "Refresh"), hint("history.half-page-down", "½ page")].filter((item) => item.key);
   }
@@ -263,7 +264,7 @@ export class SessionHistoryPanel {
     if (this.loading || this.loadError || !item || !worktree) {
       this.previewCache.unselect(); this.previewMessage(this.loadError ?? (this.loading ? "" : "Select a saved session")); return;
     }
-    if (!this.actions.preview) { this.previewMessage("Read-only preview is unavailable. Press Enter to open the session explicitly."); return; }
+    if (!this.actions.preview) { this.previewMessage("Read-only preview is unavailable. Press <CR> to open the session explicitly."); return; }
     this.previewCache.select(worktree.id, item.id); this.renderPreview();
   }
   private renderPreview(): void {

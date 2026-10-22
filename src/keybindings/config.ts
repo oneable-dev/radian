@@ -5,7 +5,7 @@ import { capture, InputError, parseJson, StorageError, type ExpectedError } from
 import { err, ok, type Result } from "../result.ts";
 import { commandIds, contexts, defaultBindings, inScope, isCommand, type CommandId, type KeyContext, type KeyScope } from "./commands.ts";
 
-export type Binding = { command: CommandId; keys: readonly string[]; scope: KeyScope };
+export type Binding = { command: CommandId; keys: readonly string[]; displayKeys: readonly string[]; scope: KeyScope };
 const aliases: Record<string, string> = { enter: "return", esc: "escape", pgup: "pageup", pgdn: "pagedown", " ": "space", "+": "plus" };
 const named = new Set(["space", "plus", "return", "escape", "tab", "backspace", "delete", "insert", "home", "end", "up", "down", "left", "right", "pageup", "pagedown"]);
 const scopes = new Set<string>([...contexts, "global", "app", "pty"]);
@@ -31,8 +31,24 @@ export function keyToken(key: { name: string; ctrl: boolean; meta: boolean; opti
   const name = aliases[key.name.toLowerCase()] ?? key.name.toLowerCase();
   return [key.ctrl && "ctrl", (key.meta || key.option) && "alt", key.shift && "shift", key.super && "super", name].filter(Boolean).join("+");
 }
-const labels: Record<string, string> = { ctrl: "Ctrl", alt: "Alt", shift: "Shift", super: "Super", space: "Space", plus: "+", return: "Enter", escape: "Esc", tab: "Tab", up: "↑", down: "↓", left: "←", right: "→", home: "Home", end: "End", pageup: "PgUp", pagedown: "PgDn", backspace: "Backspace", delete: "Delete", insert: "Insert" };
-export function formatKeys(keys: readonly string[]): string { return keys.map((key) => key.split("+").map((part) => labels[part] ?? (/^f\d+$/u.test(part) ? part.toUpperCase() : part)).join("+")).join(" → "); }
+const labels: Record<string, string> = {
+  space: "Space", return: "CR", escape: "Esc", tab: "Tab", backspace: "BS", delete: "Del", insert: "Insert",
+  home: "Home", end: "End", up: "Up", down: "Down", left: "Left", right: "Right", pageup: "PageUp", pagedown: "PageDown",
+  "<": "lt", "|": "Bar", "\\": "Bslash",
+};
+const modifierLabels: Record<string, string> = { ctrl: "C", alt: "M", shift: "S", super: "D" };
+export function formatKeys(keys: readonly string[]): string {
+  return keys.map((key) => {
+    if (key === "<leader>") return key;
+    const parts = key.split("+"), name = parts.pop()!;
+    const special = labels[name] ?? (/^f\d+$/u.test(name) ? name.toUpperCase() : undefined);
+    const label = special ?? (name === "plus" ? "+" : name);
+    if (!parts.length) return special ? `<${label}>` : label;
+    // Printable shifted letters are ordinary uppercase mappings in Neovim (G, V, Y).
+    if (parts.length === 1 && parts[0] === "shift" && /^[a-z]$/u.test(name)) return name.toUpperCase();
+    return `<${[...parts.map((part) => modifierLabels[part]), label].join("-")}>`;
+  }).join("");
+}
 
 // Bare arrows are implicit navigation; modified keys and sequences still need hints.
 export function isImplicitArrowBinding(binding: Binding): boolean {
@@ -44,10 +60,10 @@ export class Keymap {
   bound(firstKey: string, context: KeyContext): boolean { return this.bindings.some((binding) => binding.keys[0] === firstKey && inScope(binding.scope, context)); }
   hint(command: CommandId, context: KeyContext): string {
     const match = this.bindings.find((binding) => binding.command === command && inScope(binding.scope, context) && !isImplicitArrowBinding(binding));
-    return match ? formatKeys(match.keys) : "";
+    return match ? formatKeys(match.displayKeys) : "";
   }
   hints(command: CommandId, context: KeyContext): string {
-    return this.bindings.filter((binding) => binding.command === command && inScope(binding.scope, context) && !isImplicitArrowBinding(binding)).map((binding) => formatKeys(binding.keys)).join("/");
+    return this.bindings.filter((binding) => binding.command === command && inScope(binding.scope, context) && !isImplicitArrowBinding(binding)).map((binding) => formatKeys(binding.displayKeys)).join("/");
   }
 }
 function object(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
@@ -70,9 +86,12 @@ export function parseKeymap(value: unknown): Result<Keymap, InputError> {
       if (!object(input) || Object.keys(input).some((key) => !["keys", "scope"].includes(key)) || typeof input.keys !== "string") return invalid(`${command} has an invalid binding.`);
       const scope = input.scope ?? "global";
       if (typeof scope !== "string" || !scopes.has(scope)) return invalid(`${command} has an unknown scope.`);
-      const keys = sequence(input.keys, leader); if (!keys) return invalid(`${command} has an invalid key sequence.`);
+      const displayKeys = sequence(input.keys, ["<leader>"]); if (!displayKeys) return invalid(`${command} has an invalid key sequence.`);
+      // Keep logical leader tokens for hints; only routing and conflict checks use expanded keys.
+      const keys = displayKeys.flatMap((key) => key === "<leader>" ? leader : [key]);
+      if (keys.length > 8) return invalid(`${command} has an invalid key sequence.`);
       // Membership above validates the runtime scope before it enters the typed keymap.
-      bindings.push({ command, keys, scope: scope as KeyScope });
+      bindings.push({ command, keys, displayKeys, scope: scope as KeyScope });
     }
   }
   for (const [index, a] of bindings.entries()) for (const b of bindings.slice(index + 1)) {

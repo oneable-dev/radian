@@ -31,6 +31,24 @@ test.each(["\x00", "\x1b[32;5u"])("legacy/kitty Ctrl+Space 다음 c는 앱 명�
   } finally { await app.close(); }
 });
 
+test.each([
+  { leader: "ctrl+b", input: ["\x02"] },
+  { leader: "space r", input: [" ", "r"] },
+])("리더를 $leader 설정으로 바꾸어도 논리적 안내와 실제 입력은 같은 명령을 실행한다", async ({ leader, input }) => {
+  // space prefix는 기본 버튼의 space 바인딩과 겹치지 않도록 설정한다.
+  const keymap = expectOk(parseKeymap({ leader, bindings: { "button.activate": [] } }));
+  const app = await mount(keymap);
+  try {
+    // 안내에 표시된 논리적 리더를 설정된 실제 키들로 입력한다.
+    for (const key of input) app.raw(key);
+    app.mockInput.pressKey("c");
+
+    // 명령은 한 번만 실행되고 리더 입력은 편집 중인 초안으로 누출되지 않는다.
+    expect(keymap.hint("app.detach", "prompt")).toBe("<leader>c");
+    expect(app.commands).toEqual(["app.detach"]); expect(app.a.value).toBe("");
+  } finally { await app.close(); }
+});
+
 test("불일치와 timeout은 원래 문자 입력을 순서대로 한 번 복원한다", async () => {
   const app = await mount(printableLeader());
   try {

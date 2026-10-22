@@ -10,6 +10,7 @@ import { fileKey, initialGitState, type GitComparison, type GitDetails, type Git
 import { fullFilePatch } from "../patch.ts";
 import type { Worktree } from "../../workspace/model.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
+import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { GitList, type GitListItem } from "./list.ts";
 import { GitBrowser, type GitBrowserKind } from "./browser.ts";
@@ -321,7 +322,7 @@ export class GitPanel {
   }
   get shortcuts(): FooterShortcut[] {
     const context = this.keyContext() ?? "button";
-    const hint = (command: CommandId, label: string) => ({ key: this.hint(command, context), label });
+    const hint = (command: CommandId, label: string) => ({ key: footerKeyHint(command, context, this.hint(command, context)), label });
     if (context === "git-prompt") return [hint("git.submit", "Send"), hint("git.newline", "New line"), ...(this.prompt.value ? [hint("git.clear", "Clear")] : []), ...(this.prompt.canInspect ? [hint("git.inspect", "Inspect")] : []), hint("git.cancel", "Cancel")];
     if (this.dialog.visible) return [hint("git.back", "Cancel"), hint("focus.next", "Control")];
     if (this.browser.visible) return this.browser.shortcuts;

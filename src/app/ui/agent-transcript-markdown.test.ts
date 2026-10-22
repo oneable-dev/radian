@@ -75,7 +75,7 @@ test("Enter는 원문 커서·줄 선택으로 전환하고 Esc는 Markdown 표�
   try {
     await app.settled(); await app.focus();
     app.mockInput.pressKey("y"); await app.render(); expect(app.copies).toEqual([source]);
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("Enter Source");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<CR> Source");
     app.mockInput.pressEnter(); await app.render();
     expect(app.body().plainText).toBe(source.replaceAll("\r\n", "\n"));
     expect(app.markdown().visible).toBe(false); expect(app.captureCharFrame()).toContain("Markdown source");

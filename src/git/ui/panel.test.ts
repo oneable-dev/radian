@@ -1363,8 +1363,8 @@ test("필터된 diff의 Esc는 먼저 diff만 닫고 다음 Esc에서 ref 필터
     await app.waitFor(() => app.loads.includes("refs/remotes/origin/main"));
     await app.renderOnce(); await app.chooseCommit(); await app.openChanges();
     await app.waitForFrame((frame) => frame.includes("const line00")); app.get("git-diff").focus(); await app.renderOnce();
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("Esc Close");
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("Esc Commits");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("<Esc> Close");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("<Esc> Commits");
 
     app.mockInput.pressEscape(); await app.renderOnce();
     expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.reference).toBe("refs/remotes/origin/main");
@@ -1382,7 +1382,7 @@ test("메인은 탭 없이 Commits로 시작하고 Refs와 Reflog는 footer 단�
   try {
     expect(app.get("git-toolbar").visible).toBe(false); expect(app.get("git-history").y).toBe(app.get("git-view").y);
     const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
-    expect(footer).toContain("b Refs"); expect(footer).toContain("Ctrl+r Reflog");
+    expect(footer).toContain("b Refs"); expect(footer).toContain("<C-r> Reflog");
 
     await app.chooseCommit(); await app.openReflog();
 
@@ -1526,7 +1526,8 @@ test("Commit details는 y와 a 액션 없이 읽기와 드래그 복사만 제�
     app.mockInput.pressKey("y"); app.mockInput.pressKey("a"); await app.renderOnce();
     const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
     expect(app.get("git-ask").visible).toBe(false); expect(footer).not.toContain("Ask"); expect(footer).not.toContain("Copy");
-    expect(footer).toContain("Tab Pane"); expect(footer).toContain("Esc Back");
+    expect(footer).not.toContain("<Tab> Pane"); expect(footer).not.toContain("<Esc> Back");
+    expect(footer).toContain("Help");
     const { x, y } = app.positionIn("git-details", "Author: Ada");
     await app.mockMouse.drag(x + 8, y, x + 10, y); await app.waitFor(() => app.copies.length > 0);
 

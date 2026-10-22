@@ -197,16 +197,16 @@ test("빈 워크스페이스 검색창의 Ctrl+D/U도 현재 후보에서 목록
   } finally { await app.close(); }
 });
 
-test("검색창 안내는 결과 목록으로 이어지는 반 페이지 점프 키를 표시한다", async () => {
-  // 검색 입력에서도 점프를 시작할 수 있으므로 실제 동작하는 키를 안내한다.
+test("검색창은 기본 후보 탐색과 반 페이지 점프를 푸터에서 생략한다", async () => {
+  // 실제 점프 동작은 앞선 상호작용 시나리오로 유지하고 기본 안내만 숨긴다.
   const app = await mount("workspace");
   try {
     await app.mockInput.typeText("candidate"); await app.render();
 
     const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
 
-    expect(footer).toContain("Ctrl+p/Ctrl+n Navigate");
-    expect(footer).toContain("Ctrl+d ½ page");
+    expect(footer).not.toMatch(/<C-[npd]>|Navigate|½ page/u);
+    expect(footer).toContain("Help");
   } finally { await app.close(); }
 });
 

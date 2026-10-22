@@ -3,6 +3,7 @@ import {
   type CliRenderer, type KeyEvent, type OptimizedBuffer, type PasteEvent, type Renderable,
 } from "@opentui/core";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
+import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { Clipboard } from "../../ui/clipboard.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
@@ -164,7 +165,7 @@ export class TranscriptPanel {
   private hint(command: CommandId, context = this.keyContext() ?? "transcript"): string { return this.options.keyHint?.(command, context) ?? ""; }
   get shortcuts(): readonly FooterShortcut[] {
     const context = this.keyContext(); if (!context) return [];
-    const hint = (command: CommandId, label: string): FooterShortcut => ({ key: this.hint(command, context), label });
+    const hint = (command: CommandId, label: string): FooterShortcut => ({ key: footerKeyHint(command, context, this.hint(command, context)), label });
     if (this.help.visible) return [hint("transcript.next", "Scroll help"), hint("transcript.page-down", "Page"), hint("transcript.back", "Close help")];
     return context === "transcript" ? [hint("transcript.next", "Section"),
       hint("transcript.enter", this.selected?.markdown && !this.folded(this.selected) ? "Source" : "Text"),
@@ -839,7 +840,7 @@ export class TranscriptPanel {
       + `${this.hint("transcript.visual", "transcript-text")} select (inclusive) · ${this.hint("transcript.visual-line", "transcript-text")} select logical lines · ${this.hint("transcript.copy", "transcript")} copy section/line/selection by mode · ${this.hint("transcript.copy-section", "transcript")} whole section\n`
       + `${this.hint("transcript.half-page-down", "transcript")}/${this.hint("transcript.half-page-up", "transcript")} half-page section jump; Text/Visual moves the cursor · linewise selection follows logical lines, not soft wraps\n`
       + `Following resumes at the viewport bottom and pauses above it; selections protect the view.\n`
-      + `Markdown: sections show formatted prose; Enter reads the original source, Esc returns to formatting.\n`
+      + `Markdown: sections show formatted prose; <CR> reads the original source, <Esc> returns to formatting.\n`
       + `Context compacted summaries start folded; click their heading or use ${this.hint("transcript.fold", "transcript")} to expand/collapse.\n`
       + `Image attachments show [read] filename, start folded, and preview on header click or ${this.hint("transcript.fold", "transcript")}.\n`
       + `Thinking is always visible as gray italic text and never folds.\n`

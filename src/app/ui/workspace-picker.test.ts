@@ -125,18 +125,19 @@ test("열린 팝업의 검색 포커스 이동은 입력을 보존하고 선택 
   } finally { await app.close(); }
 });
 
-test("워크스페이스 안내는 방향키 대신 포커스별 대체 탐색 키를 표시한다", async () => {
-  // 방향키는 기본 동작이므로 안내 공간은 검색창의 Ctrl+N/P와 목록의 j/k에 사용한다.
+test("워크스페이스 안내는 검색과 결과 포커스 모두에서 기본 탐색 키를 생략한다", async () => {
+  // Ctrl+N/P와 j/k는 계속 동작하지만 푸터에 반복 안내하지 않는다.
   const app = await fixture();
   const footer = () => app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
   try {
     app.leader("b"); await app.render();
 
-    expect(footer()).toContain("Ctrl+p/Ctrl+n Navigate");
+    expect(footer()).not.toMatch(/Navigate|<C-[np]>/u);
     expect(footer()).not.toMatch(/[↑↓]/u);
     app.mockInput.pressTab(); await app.render();
 
-    expect(footer()).toContain("k/j Navigate"); expect(footer()).not.toMatch(/[↑↓]/u);
+    expect(footer()).not.toContain("k/j Navigate"); expect(footer()).not.toMatch(/[↑↓]/u);
+    expect(footer()).toContain("Help");
   } finally { await app.close(); }
 });
 

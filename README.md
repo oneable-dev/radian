@@ -770,7 +770,7 @@ The resource tabs show horizontal bars with exact values:
 
 Tab/Shift+Tab moves between filters, chart metric, resource tabs and the read-only body. Tab strips
 support Ctrl+N/P and h/l; the body supports Ctrl+N/P, j/k, Home/End and Ctrl+D/U half-page scrolling.
-Configured alternatives appear in the footer; bare arrow-key hints are omitted. Use r or Ctrl+R to
+Changed bindings appear in the footer; routine default navigation is kept in Help. Use r or Ctrl+R to
 refresh. Lookups run on open, filter changes and explicit refresh, not on every rendered frame.
 
 Statistics come from bounded, read-only scans of the discovered SDK session files, including closed
@@ -1065,6 +1065,13 @@ for explicit custom bindings but have no default bindings.
 Ctrl+C clears drafts in Agent input; in Editor and Terminal, Neovim and shells still receive it as native input.
 If macOS reserves Ctrl+Space for input-source switching, change that system shortcut or radian's leader.
 
+Shortcut hints use Neovim notation (`<CR>`, `<C-n>`, `<S-Tab>`, `<Esc>`). Sequential keys are
+concatenated without separators (`<leader>b`, `gg`, `za`), and shifted letters appear as uppercase
+characters (`G`, `V`, `Y`). Alt/Meta uses `<M-…>` and Super/Command uses `<D-…>`.
+Application help shows the current physical leader separately (for example, `<leader>: <C-Space>`).
+Explicit key sequences without `<leader>` keep their literal labels, even when they match the
+current leader. This is display-only: configuration still uses `ctrl+n`, `shift+tab` and `<leader> n`.
+
 Keybindings are read from the unified `keybindings` section at TUI startup. Without that section,
 `$XDG_CONFIG_HOME/radian/keybindings.json` (defaulting to `~/.config/radian/keybindings.json`) remains
 supported; `--keybindings PATH` overrides that section. Reopen only the TUI to apply these edits;
@@ -1110,6 +1117,11 @@ Errors and notices remain separate above it. A subtle background gradient starts
 edge, including the product text's inset, and fades
 the terminal's accent into the footer surface toward the right. It follows palette changes and optional theme overrides. Keys are highlighted separately
 from their descriptions. Tree, search, History, buttons and prompt contexts update on actual focus/state changes; unrelated/global shortcuts are not appended.
+The footer prioritizes app-specific actions and Help. Routine default navigation, open/close, focus,
+scrolling, draft/search clearing (`<C-c>`) and Vim selection hints stay in full Help rather than occupying the footer; changed bindings
+remain visible. Send/Run/Queue, newline and Agent interrupt hints are omitted even when rebound.
+Native Editor normal-mode and Terminal interrupt hints are also omitted. These presentation rules
+never disable the underlying bindings or remove them from application Help.
 Application bindings such as `Ctrl+f`, `Ctrl+e` and `Tab` still work outside Neovim input focus;
 the configured leader detach command works in every input context. See the input ownership rules above.
 

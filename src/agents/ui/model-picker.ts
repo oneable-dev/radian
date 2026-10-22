@@ -3,6 +3,7 @@ import type { ModelCatalog, ModelEffort, ModelIdentity } from "../model-selectio
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
+import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { singleLine } from "../../ui/text.ts";
@@ -101,7 +102,7 @@ export class ModelPicker {
   }
   get shortcuts(): readonly FooterShortcut[] {
     return ([ ["model.select", "Apply"], ["model.dismiss", "Cancel"], ["model.search", "Search"], ["focus.next", "Model/effort"], ["model.previous", "Previous"], ["model.next", "Next"], ["model.half-page-down", "½ page"], ["model.effort-less", "Less effort"], ["model.effort-more", "More effort"] ] as const)
-      .map(([command, label]) => ({ key: this.actions.keyHint(command, this.context), label,
+      .map(([command, label]) => ({ key: footerKeyHint(command, this.context, this.actions.keyHint(command, this.context)), label,
         ...(command === "model.select" ? { disabled: this.loading || this.applying || this.selectedEffort === undefined } : {}) }));
   }
 

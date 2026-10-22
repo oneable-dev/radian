@@ -370,7 +370,8 @@ test("좁은 창은 목록과 미리보기를 전환하고 resize 뒤 검색과 
     await app.open(); await app.mockInput.typeText("keyboard"); app.clock.advance(150); await app.render();
     app.resize(60, 12); await app.render();
     expect(app.get("history-list").visible).toBe(true); expect(app.get("history-preview-pane").visible).toBe(false);
-    expect(app.captureCharFrame().split("\n")[11]).toContain("Esc Close");
+    expect(app.captureCharFrame().split("\n")[11]).not.toContain("<Esc> Close");
+    expect(app.captureCharFrame().split("\n")[11]).toContain("<C-o> Preview");
     expect(app.view.workViewPreferences.active["demo:main"] ?? "agent").toBe("agent");
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
     expect(app.get("history-list").visible).toBe(false); expect(app.get("history-preview-pane").visible).toBe(true);
@@ -396,7 +397,7 @@ test("빈 목록·검색 결과 없음·조회 오류를 구분하고 커스텀 
     list: async () => { calls++; if (calls === 1) throw new HistoryError("HISTORY_UNAVAILABLE", "Lookup failed"); return calls === 2 ? [] : [saved("restored", "Restored history")]; } });
   try {
     app.resize(160, 24); await app.render();
-    await app.open(); await app.visible("History error:"); expect(app.captureCharFrame()).toContain("Ctrl+g Refresh");
+    await app.open(); await app.visible("History error:"); expect(app.captureCharFrame()).toContain("<C-g> Refresh");
     app.mockInput.pressKey("r", { ctrl: true }); await app.render(); expect(calls).toBe(1);
     app.mockInput.pressKey("g", { ctrl: true }); await app.visible("No saved sessions");
     app.view.refreshHistory(); await app.visible("Restored history");

@@ -108,7 +108,7 @@ test.each(["default", "custom", "disabled"] as const)("빈 AI 화면은 %s 생�
     expect(app.captureCharFrame()).toContain("No AI sessions"); expect(app.created).toEqual([]);
     if (mode === "disabled") expect(hint.visible).toBe(false);
     else {
-      expect(app.line("agent-empty-state:hint")).toContain(mode === "custom" ? "Ctrl+b → n" : "Ctrl+Space → n");
+      expect(app.line("agent-empty-state:hint")).toContain("<leader>n");
       app.mockInput.pressKey(mode === "custom" ? "b" : " ", { ctrl: true }); app.mockInput.pressKey("n"); await app.render();
       expect(app.created).toEqual(["demo:main"]);
     }

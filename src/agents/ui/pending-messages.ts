@@ -48,7 +48,7 @@ export class PendingMessages {
   private paint(): void {
     if (this.root.isDestroyed || !this.heading || !this.scroll) return;
     const styles = uiTheme(this.renderer).styles, width = this.root.width;
-    const key = this.interruptKey().toLowerCase();
+    const key = this.interruptKey();
     let title = "Messages will be sent after the current response and tools finish";
     let beforeKey = " (press ", afterKey = " to interrupt and send immediately)";
     const fits = () => Bun.stringWidth(`• ${title}${key ? beforeKey + key + afterKey : ""}`) <= width;

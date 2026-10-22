@@ -496,7 +496,7 @@ test.each(["/", "$", "@"] as const)("%s 자동완성에서 방향키는 입력 �
     expect(app.captureCharFrame()).toContain("→ candidate-b");
     expect(app.input.value).toBe(trigger); expect(app.input.cursorOffset).toBe(cursor);
     expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.sent).toEqual([]);
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("Ctrl+n Next");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("<C-n> Next");
     app.mockInput.pressTab(); await app.render();
 
     expect(app.input.value).toBe(trigger === "@" ? "[File #1] " : `${trigger}candidate-b `);
@@ -527,10 +527,10 @@ test("Ctrl+N/P로 후보를 고르고 Tab은 자동완성만 하며 Enter는 선
   const app = await mount();
   try {
     await app.type("/");
-    expect(app.captureCharFrame()).toContain("Ctrl+n Next");
-    expect(app.captureCharFrame()).toContain("Tab Insert");
-    expect(app.captureCharFrame()).toContain("Enter Queue");
-    expect(app.captureCharFrame()).not.toContain("Tab/Enter");
+    expect(app.captureCharFrame()).not.toContain("<C-n> Next");
+    expect(app.captureCharFrame()).toContain("<Tab> Insert");
+    expect(app.captureCharFrame()).not.toContain("<CR> Queue");
+    expect(app.captureCharFrame()).not.toContain("<Tab>/<CR>");
     app.mockInput.pressKey("n", { ctrl: true }); await app.render();
     app.mockInput.pressKey("p", { ctrl: true }); await app.render();
     app.mockInput.pressTab(); await app.render();

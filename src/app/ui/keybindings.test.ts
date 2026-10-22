@@ -43,7 +43,7 @@ test("사용자 키맵은 트리 명령·비활성화·푸터와 leader 뷰 전�
   try {
     await app.renderOnce(); const footer = () => app.captureCharFrame().split("\n")[23]!;
     app.mockInput.pressKey("b", { ctrl: true }); app.mockInput.pressKey("w"); app.mockInput.pressTab(); await app.renderOnce();
-    expect(footer()).toContain("Enter Open worktree"); expect(footer()).not.toContain("New session");
+    expect(footer()).not.toContain("<CR> Open worktree"); expect(footer()).not.toContain("New session");
     app.mockInput.pressEscape(); await app.renderOnce();
     app.renderer.root.findDescendantById("agent-session-list")!.focus(); await app.renderOnce();
     expect(footer()).toContain("s New session"); expect(footer()).not.toContain("x Close session");

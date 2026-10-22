@@ -27,7 +27,7 @@ export function keymapHelp(keymap: Keymap, context: KeyContext, available: (comm
         || binding.command === "app.help" || binding.command === "focus.next" || binding.command === "focus.previous";
       if (common !== global || !inScope(binding.scope, context) || !available(binding.command) || isImplicitArrowBinding(binding)) continue;
       const keys = groups.get(binding.command) ?? [];
-      const key = formatKeys(binding.keys);
+      const key = formatKeys(binding.displayKeys);
       if (!keys.includes(key)) keys.push(key);
       groups.set(binding.command, keys);
     }
@@ -40,5 +40,5 @@ export function keymapHelp(keymap: Keymap, context: KeyContext, available: (comm
       return width < 28 ? key + " ".repeat(28 - width) + description : `${key}\n  ${description}`;
     }).join("\n") || "No additional bindings in this context.";
   };
-  return `Current context: ${context}\n\n${rows(false)}\n\nApplication shortcuts\n\n${rows(true)}\n\nInput ownership\n\nEnter sends the current Agent input, even with suggestions open; Tab inserts the selected completion. Shift+Enter inserts a newline (Alt+Enter is an alternative). Paste never sends automatically.\n\nUnbound input, mouse and paste in Editor/Terminal belong to the embedded program. F1 stays native there. The configured application leader remains available.\n\nThe active keybindings are shown above, including user overrides. Read-only details use j/k and PgUp/PgDn; Esc returns to the previous focus.`;
+  return `Current context: ${context}\n<leader>: ${formatKeys(keymap.leader)}\n\n${rows(false)}\n\nApplication shortcuts\n\n${rows(true)}\n\nInput ownership\n\n<CR> sends the current Agent input, even with suggestions open; <Tab> inserts the selected completion. <S-CR> inserts a newline (<M-CR> is an alternative). Paste never sends automatically.\n\nUnbound input, mouse and paste in Editor/Terminal belong to the embedded program. <F1> stays native there. The configured application leader remains available.\n\nThe active keybindings are shown above, including user overrides. Read-only details use j/k and <PageUp>/<PageDown>; <Esc> returns to the previous focus.`;
 }

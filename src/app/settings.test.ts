@@ -26,7 +26,8 @@ test("통합 설정은 영역별 검증과 설정 파일 기준의 상대 워크
 
     // UI·탐색·런타임 정책은 형식만 공유하고 각 영역의 기존 동작을 유지한다.
     expect(settings.path).toBe(app.settings); expect(settings.theme.accent).toBe("#123456");
-    expect(settings.keymap.hint("app.detach", "none")).toBe("Ctrl+b → c");
+    expect(settings.keymap.leader).toEqual(["ctrl+b"]);
+    expect(settings.keymap.hint("app.detach", "none")).toBe("<leader>c");
     expect(settings.workspace).toEqual({ roots: [join(app.root, "repos")], maxDepth: 2 }); expect(settings.sessions.retentionDays).toBe(7);
   } finally { await app.close(); }
 });
@@ -43,7 +44,8 @@ test("명시한 개별 파일 옵션은 통합 설정보다 우선하고 없는 
     const settings = expectOk(await loadSettings({ theme }));
 
     // 통합 설정을 쓰더라도 기존 사용자 설정이 조용히 사라지지 않는다.
-    expect(settings.theme.accent).toBe("#ABCDEF"); expect(settings.keymap.hint("app.detach", "none")).toBe("Ctrl+b → c");
+    expect(settings.theme.accent).toBe("#ABCDEF"); expect(settings.keymap.leader).toEqual(["ctrl+b"]);
+    expect(settings.keymap.hint("app.detach", "none")).toBe("<leader>c");
     expect(settings.workspace.roots).toEqual([join(app.root, "legacy")]); expect(settings.sessions.retentionDays).toBeNull();
   } finally { await app.close(); }
 });

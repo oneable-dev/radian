@@ -84,7 +84,7 @@ test("터미널 입력의 leader+n은 새 탭을 선택하고 쉘에 제어 문�
   const app = await mount();
   try {
     await app.showView("t"); await app.visible("Shell shell-1");
-    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).toContain("Ctrl+Space → n New terminal");
+    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).toContain("<leader>n New terminal");
 
     // 입력 중 생성 단축키를 누르면 두 번째 쉘이 준비된다.
     app.leader("n"); await app.visible("Shell shell-2");
@@ -197,10 +197,10 @@ test.each(["disabled", "rebound"] as const)("새 탭 단축키가 %s이면 기�
     // 기본 키는 native 입력으로 돌아가고 안내에는 실제 키만 표시한다.
     expect(app.inputs).toContain("0e"); expect(app.created).toHaveLength(1);
     const footer = app.captureCharFrame().trimEnd().split("\n").at(-1)!;
-    expect(footer).not.toContain("Ctrl+n");
+    expect(footer).not.toContain("<C-n>");
     if (mode === "disabled") expect(footer).not.toContain("New terminal");
     else {
-      expect(footer).toContain("Alt+n New terminal");
+      expect(footer).toContain("<M-n> New terminal");
       app.mockInput.pressKey("n", { meta: true }); await app.visible("Shell shell-2");
       expect(app.created).toHaveLength(2);
     }
@@ -226,7 +226,8 @@ test.each(["arrows", "vim", "control"] as const)("터미널 탭의 %s 탐색은 
     expect(app.renderer.currentFocusedRenderable).toBe(tab("shell-2"));
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-2");
     expect(app.inputs).toEqual([]); expect(app.created).toHaveLength(3); expect(app.closed).toEqual([]);
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("h/l Terminal");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("h/l Terminal");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<leader>n New terminal");
     app.mockInput.pressEnter(); await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
 
@@ -373,7 +374,7 @@ test.each(["default", "custom", "disabled"] as const)("마지막 터미널을 �
     expect(app.renderer.currentFocusedRenderable?.id).toBe("terminal-view");
     if (mode === "disabled") expect(hint.visible).toBe(false);
     else {
-      expect(hint.plainText).toContain(mode === "custom" ? "Ctrl+b → n" : "Ctrl+Space → n");
+      expect(hint.plainText).toContain("<leader>n");
       expect(hint.y).toBeGreaterThan(empty.y);
       leader("n"); await app.visible("Shell shell-2");
       expect(app.created).toHaveLength(2); expect(empty.visible).toBe(false);
@@ -472,7 +473,7 @@ test("쉘이 종료된 탭은 이웃 탭으로 이동하고 마지막 종료는 
     expect(app.closed).toEqual([]);
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBeUndefined();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("terminal-view");
-    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).toContain("Ctrl+Space → n New terminal");
+    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).toContain("<leader>n New terminal");
 
     // 종료 직후가 아니라 빈 화면에 다시 진입할 때만 기본 쉘을 생성한다.
     await app.showView("a"); await app.showView("t"); await app.visible("Shell shell-4");

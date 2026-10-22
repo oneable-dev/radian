@@ -22,6 +22,7 @@ import { Footer, type FooterShortcut } from "../../ui/footer.ts";
 import { TextDialog } from "../../ui/text-dialog.ts";
 import { SearchInput } from "../../ui/search-input.ts";
 import { keymapHelp } from "../../keybindings/help.ts";
+import { footerKeyHint } from "../../keybindings/footer.ts";
 import { Button, type ButtonVariant } from "../../ui/button.ts";
 import { panelSpacing } from "../../ui/spacing.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
@@ -330,10 +331,11 @@ export class Workbench {
     const focused = this.renderer.currentFocusedRenderable;
     let shortcuts: readonly FooterShortcut[] = [];
     const context = this.keyContext();
-    const hint = (command: CommandId, label: string): FooterShortcut => ({ key: this.keymap.hint(command, context), label });
-    const pair = (a: CommandId, b: CommandId, label: string): FooterShortcut => ({ key: [this.keymap.hint(a, context), this.keymap.hint(b, context)].filter(Boolean).join("/"), label });
+    const key = (command: CommandId) => footerKeyHint(command, context, this.keymap.hint(command, context));
+    const hint = (command: CommandId, label: string): FooterShortcut => ({ key: key(command), label });
+    const pair = (a: CommandId, b: CommandId, label: string): FooterShortcut => ({ key: [key(a), key(b)].filter(Boolean).join("/"), label });
     const help = this.keymap.bindings.find((binding) => binding.command === "app.help" && binding.keys.length === 1 && inScope(binding.scope, context));
-    this.footer.setHelpHint(help ? formatKeys(help.keys) : this.keymap.hint("app.help", context));
+    this.footer.setHelpHint(help ? formatKeys(help.displayKeys) : this.keymap.hint("app.help", context));
     if (this.dialog.visible) shortcuts = [hint("dialog.copy", "Copy"), hint("dialog.half-page-down", "½ page"), hint("dialog.dismiss", "Close")];
     else if (this.dashboard.visible) shortcuts = this.dashboard.shortcuts;
     else if (this.models.visible) shortcuts = this.models.shortcuts;
@@ -345,10 +347,9 @@ export class Workbench {
       pair("workspace.previous", "workspace.next", "Navigate"), hint("workspace.dismiss", "Close"),
       hint("workspace.half-page-down", "½ page"), pair("workspace.first", "workspace.last", "First/last"),
     ];
-    else if (focused && focused === this.editor?.input) shortcuts = [hint("focus.sidebar", "Workspaces"), ...(!this.keymap.bound("escape", "editor") ? [{ key: "Esc", label: "Normal mode" }] : [])];
+    else if (focused && focused === this.editor?.input) shortcuts = [hint("focus.sidebar", "Workspaces")];
     else if (this.terminals.tabsFocused) shortcuts = [pair("terminal.tab-previous", "terminal.tab-next", "Terminal"), hint("button.activate", "Open"), hint("tab.new", "New terminal"), hint("terminal.close", "Close")];
     else if (focused && focused === this.terminals?.input) shortcuts = [
-      ...(!this.keymap.bound("ctrl+c", "terminal") ? [{ key: "Ctrl+C", label: "Interrupt" }] : []),
       hint("tab.new", "New terminal"), ...(this.terminals.canScroll ? [pair("terminal.scroll-up", "terminal.scroll-down", "Scroll")] : []), hint("focus.sidebar", "Workspaces"),
     ];
     else if (this.terminals.root.visible && this.commandAvailable("tab.new")) shortcuts = [hint("tab.new", "New terminal")];
@@ -371,7 +372,7 @@ export class Workbench {
     } else if (context === "git" || context === "git-tabs" || context === "git-search" || context === "git-prompt" || this.git.available("git.back")) shortcuts = this.git.shortcuts;
     else if (focused) {
       const label = this.buttonHints.get(focused);
-      if (focused.visible && label) shortcuts = [{ key: this.keymap.hints("button.activate", "button"), label }];
+      if (focused.visible && label) shortcuts = [{ key: footerKeyHint("button.activate", "button", this.keymap.hints("button.activate", "button")), label }];
     }
     this.footer.setView({ agent: "Agents", editor: "Editor", git: "Git", terminal: "Terminal" }[this.displayedWorkView]);
     this.footer.setContext(this.agent.active && !this.dialog.visible && !this.history.visible && !this.models.visible && !this.dashboard.visible && !this.monitor?.visible && !this.sidebar.visible ? this.agent.transcriptStatus : "");

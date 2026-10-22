@@ -2,6 +2,7 @@ import { BoxRenderable, ScrollBoxRenderable, type TextRenderable, type CliRender
 import type { OpenSession } from "../model.ts";
 import { sessionStatus } from "../status.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
+import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { SessionTab } from "../../ui/session-tab.ts";
@@ -50,7 +51,7 @@ export class SessionTabs {
   }
   get creationShortcut(): string { return this.actions.keyHint("session.new", "session-tabs") || this.actions.keyHint("tab.new", "session-tabs"); }
   get shortcuts(): readonly FooterShortcut[] {
-    const hint = (id: CommandId) => this.actions.keyHint(id, "session-tabs");
+    const hint = (id: CommandId) => footerKeyHint(id, "session-tabs", this.actions.keyHint(id, "session-tabs"));
     return [...(this.sessions.length ? [{ key: [hint("session.previous"), hint("session.next")].filter(Boolean).join("/"), label: "Session" }] : []),
       { key: this.creationShortcut, label: "New session" }, ...(this.actions.history ? [{ key: hint("history.show"), label: "History" }] : []), ...(this.selected ? [{ key: hint("session.close"), label: "Close session" }] : [])];
   }

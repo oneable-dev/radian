@@ -85,7 +85,7 @@ export class Footer {
     const inset = horizontalInset(this.bar.width), width = Math.max(0, this.bar.width - inset * 2);
     const helpLabel = this.helpHint ? `${this.helpHint} Help` : "Help";
     // Keep the help entry discoverable; its full configured key is inside the popup on narrow screens.
-    const compactHelp = this.bar.width < 80 ? /^f\d+$/iu.test(this.helpHint) ? this.helpHint.toUpperCase() : "?" : helpLabel;
+    const compactHelp = this.bar.width < 80 ? /^<F\d+>$/u.test(this.helpHint) ? this.helpHint : "?" : helpLabel;
     const helpWidth = this.actions ? Bun.stringWidth(compactHelp) + 2 : 0;
     const view = singleLine(this.viewText);
     const identityLimit = view ? Math.max(0, width - (this.actions ? helpWidth + 2 : 0)) : width;

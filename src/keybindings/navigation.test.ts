@@ -48,7 +48,7 @@ test.each([["search", "workspace"], ["history-search", "history"], ["monitor-sea
 
   expect(down).toBe(`${family}.half-page-down`); expect(up).toBe(`${family}.half-page-up`);
   expect(commandFor(context, "ctrl+c")).toBe("search.clear"); expect(commandFor(context, "ctrl+l")).toBeUndefined();
-  expect(defaultKeymap().hints("search.clear", context)).toBe("Ctrl+c");
+  expect(defaultKeymap().hints("search.clear", context)).toBe("<C-c>");
 });
 
 test("Git 검색은 기본 탐색·지우기를 제공하고 일반 문자는 입력에 남긴다", () => {
@@ -59,7 +59,7 @@ test("Git 검색은 기본 탐색·지우기를 제공하고 일반 문자는 �
   expect(commandFor("git-search", "ctrl+c")).toBe("git.search-clear"); expect(commandFor("git-search", "ctrl+l")).toBeUndefined();
   for (const key of ["h", "j", "k", "l", "a", "y", "b"]) expect(commandFor("git-search", key)).toBeUndefined();
   expect(commandFor("git", "b")).toBe("git.refs"); expect(commandFor("git", "ctrl+r")).toBe("git.reflog"); expect(commandFor("git", "r")).toBe("git.refresh");
-  expect(map.hint("git.search-clear", "git-search")).toBe("Ctrl+c");
+  expect(map.hint("git.search-clear", "git-search")).toBe("<C-c>");
 });
 
 test("Git 모달 진입·검색 지우기 키의 사용자 재설정은 기본 바인딩을 대체한다", () => {
@@ -68,8 +68,8 @@ test("Git 모달 진입·검색 지우기 키의 사용자 재설정은 기본 �
     "git.reflog": [{ keys: "shift+r", scope: "git" }], "git.search-clear": [{ keys: "ctrl+g", scope: "git-search" }] } }));
 
   expect(map.bound("b", "git")).toBe(false); expect(map.bound("ctrl+r", "git")).toBe(false); expect(map.bound("ctrl+c", "git-search")).toBe(false);
-  expect(map.hint("git.refs", "git")).toBe("v"); expect(map.hint("git.reflog", "git")).toBe("Shift+r");
-  expect(map.hint("git.search-clear", "git-search")).toBe("Ctrl+g");
+  expect(map.hint("git.refs", "git")).toBe("v"); expect(map.hint("git.reflog", "git")).toBe("R");
+  expect(map.hint("git.search-clear", "git-search")).toBe("<C-g>");
 });
 
 test("Transcript의 Shift+G는 섹션에서 최신 출력으로 이동하고 본문에서는 섹션 끝으로 이동한다", () => {
@@ -83,9 +83,9 @@ test("Transcript의 Shift+G는 섹션에서 최신 출력으로 이동하고 본
   for (const context of ["transcript-text", "transcript-visual"] as const) {
     expect(commandFor(context, "shift+g")).toBe("transcript.buffer-end");
     expect(commandFor(context, "ctrl+end")).toBe("transcript.buffer-end");
-    expect(map.hint("transcript.latest", context)).toBe("g → e");
+    expect(map.hint("transcript.latest", context)).toBe("ge");
   }
-  expect(map.hint("transcript.latest", "transcript")).toBe("Shift+g");
+  expect(map.hint("transcript.latest", "transcript")).toBe("G");
   for (const context of ["prompt", "prompt-completion", "editor", "terminal"] as const) {
     expect(map.bound("shift+g", context)).toBe(false);
     expect(map.bound("ctrl+end", context)).toBe(false);
@@ -98,7 +98,7 @@ test("Agent와 Git 프롬프트의 Ctrl+C는 각각 초안을 지우고 사용�
 
   // 두 기본 경로를 동일한 지우기 동작에 연결하되 명시적 재설정은 기본 바인딩을 대체한다.
   expect(commandFor("prompt", "ctrl+c")).toBe("agent.clear"); expect(commandFor("git-prompt", "ctrl+c")).toBe("git.clear");
-  expect(map.bound("ctrl+c", "git-prompt")).toBe(false); expect(map.hint("git.clear", "git-prompt")).toBe("Ctrl+g");
+  expect(map.bound("ctrl+c", "git-prompt")).toBe(false); expect(map.hint("git.clear", "git-prompt")).toBe("<C-g>");
 });
 
 test("워크스페이스 검색 지우기와 사용자 점프 재설정은 기본 점프와 충돌하지 않는다", () => {
@@ -106,6 +106,6 @@ test("워크스페이스 검색 지우기와 사용자 점프 재설정은 기�
   const map = expectOk(parseKeymap({ bindings: { "workspace.half-page-down": [{ keys: "ctrl+y", scope: "workspace" }] } }));
 
   expect(commandFor("search", "ctrl+u")).toBe("workspace.half-page-up");
-  expect(map.hint("workspace.half-page-down", "workspace")).toBe("Ctrl+y");
+  expect(map.hint("workspace.half-page-down", "workspace")).toBe("<C-y>");
   expect(map.bound("ctrl+d", "workspace")).toBe(false); expect(map.bound("ctrl+d", "search")).toBe(false);
 });

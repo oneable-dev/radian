@@ -4,7 +4,7 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { uiTheme } from "../../ui/theme.ts";
 import { PendingMessages } from "./pending-messages.ts";
 
-async function mount(width = 120, key = "esc") {
+async function mount(width = 120, key = "<Esc>") {
   const app = await createTestRenderer({ width, height: 8 });
   const pending = new PendingMessages(app.renderer, () => key);
   app.renderer.root.add(pending.root);
@@ -20,10 +20,11 @@ test("너비가 바뀌어도 안내와 중단 도움말은 한 줄이며 메시�
   try {
     app.pending.update(messages, true, 4); await app.render();
     for (const [width, heading] of [
-      [120, "• Messages will be sent after the current response and tools finish (press esc to interrupt and send immediately)"],
-      [76, "• Messages waiting to be sent (press esc to interrupt and send immediately)"],
-      [44, "• Messages waiting (esc: interrupt & send)"],
-      [120, "• Messages will be sent after the current response and tools finish (press esc to interrupt and send immediately)"],
+      [120, "• Messages will be sent after the current response and tools finish (press <Esc> to interrupt and send immediately)"],
+      [78, "• Messages waiting to be sent (press <Esc> to interrupt and send immediately)"],
+      [76, "• Messages waiting (<Esc>: interrupt & send)"],
+      [44, "• Messages waiting (<Esc>: interrupt & send)"],
+      [120, "• Messages will be sent after the current response and tools finish (press <Esc> to interrupt and send immediately)"],
     ] as const) {
       // 리사이즈는 대기 메시지를 다시 받지 않아도 현재 너비에 맞춰 안내를 갱신해야 한다.
       app.resize(width, 8); await app.render();
@@ -37,19 +38,19 @@ test("너비가 바뀌어도 안내와 중단 도움말은 한 줄이며 메시�
 
 test("대기 안내와 메시지는 기본 글자색이고 도움말·연결 기호는 흐리게 표시하며 설정된 중단 키만 강조한다", async () => {
   // 기본 Esc가 아닌 사용자 단축키도 같은 안내와 강조 규칙을 따라야 한다.
-  const app = await mount(130, "Ctrl+X");
+  const app = await mount(130, "<C-x>");
   try {
     app.pending.update([{ text: "Review changes", images: 0, files: 0 }], true, 3); await app.render();
 
     // 제목·도움말·연결 기호의 대비를 실제 렌더링된 터미널 span으로 확인한다.
     const colors = uiTheme(app.renderer).colors, lines = app.captureSpans().lines;
     const heading = lines[0]!.spans, message = lines[1]!.spans;
-    expect(app.rows()[0]).toEndWith("(press ctrl+x to interrupt and send immediately)");
+    expect(app.rows()[0]).toEndWith("(press <C-x> to interrupt and send immediately)");
     expect(heading.find(span => span.text.includes("Messages"))!.fg.toInts()).toEqual(colors.text.toInts());
     expect(heading.find(span => span.text.includes("to interrupt"))!.fg.toInts()).toEqual(colors.muted.toInts());
     expect(message.find(span => span.text.includes("↳"))!.fg.toInts()).toEqual(colors.muted.toInts());
     expect(message.find(span => span.text.includes("Review changes"))!.fg.toInts()).toEqual(colors.text.toInts());
-    expect(heading.filter(span => span.attributes & TextAttributes.BOLD).map(span => span.text)).toEqual(["ctrl+x"]);
+    expect(heading.filter(span => span.attributes & TextAttributes.BOLD).map(span => span.text)).toEqual(["<C-x>"]);
   } finally { await app.close(); }
 });
 
