@@ -15,6 +15,7 @@ import type { TranscriptImageData } from "./transcript-images.ts";
 import { modelCommand, parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "./model-selection.ts";
 import { historyCommand, parseHistoryCommand } from "./history-command.ts";
 import { dashboardCommand, parseDashboardCommand } from "./dashboard-command.ts";
+import { accountsCommand, parseAccountsCommand } from "../accounts/model.ts";
 import { needsAttention, type SessionResult } from "./session-attention.ts";
 import { sessionRecordKey, type SessionLifecycle, type SessionSnapshotInfo } from "./session-snapshot.ts";
 
@@ -43,6 +44,7 @@ export type SessionExecutor = {
 };
 export type SessionContext = {
   readonly cwd: string;
+  readonly worktreeId?: string;
   readonly sessionFile?: string;
   readonly previousSessionFile?: string;
   readonly startReason?: "new";
@@ -232,7 +234,7 @@ export class SessionRegistry {
     if (this.entries.has(id)) return err(new SessionError("SESSION_CONFLICT", "This open-session ID already exists."));
     if (requestedFile) this.fileOwners.set(requestedFile, id);
     const generation = crypto.randomUUID();
-    const ready = capture(() => this.factory({ cwd: worktree.path, role: "main", ...(requestedFile ? { sessionFile: requestedFile } : {}),
+    const ready = capture(() => this.factory({ cwd: worktree.path, worktreeId: worktree.id, role: "main", ...(requestedFile ? { sessionFile: requestedFile } : {}),
       spawnSubagent: (name, task, signal) => this.spawnSubagent(id, name, task, signal, generation) }));
     const entry: OpenExecution = { id, name: identity?.name ?? `Session ${id.slice(0, 8)}`, role: "main", worktree, ready, generation,
       phase: "creating", children: new Map(), managed: identity?.managed ?? !requestedFile, ...(requestedFile ? { fileKey: requestedFile } : {}) };
@@ -293,7 +295,7 @@ export class SessionRegistry {
     if (entry.replacing || entry.executor?.savedSessionId !== conversationId) return err(new SessionError("SESSION_CONFLICT", "Conversation changed while loading completion resources."));
     const executor = entry.executor!;
     const controls = [...sessionControlCommands.filter(item => item.value === "compact" ? !!executor.compact : item.value === "reload" ? !!executor.reload : true),
-      ...(executor.models && executor.selectModel ? [modelCommand] : []), historyCommand, dashboardCommand];
+      ...(executor.models && executor.selectModel ? [modelCommand] : []), historyCommand, dashboardCommand, accountsCommand];
     const extra = executor.commands?.() ?? [];
     return ok({ conversationId, revision: executor.state.resourceRevision ?? 0,
       items: [...controls, ...extra.filter(item => !controls.some(control => control.value === item.value))] });
@@ -335,6 +337,8 @@ export class SessionRegistry {
     if (dashboard.value) return err(new CapabilityError("Use /dashboard in the Agent input to open usage statistics. No model prompt was sent."));
     const history = parseHistoryCommand(text); if (!history.ok) return history;
     if (history.value) return err(new CapabilityError("Use /history in the Agent input to open saved session history. No model prompt was sent."));
+    const accounts = parseAccountsCommand(text); if (!accounts.ok) return accounts;
+    if (accounts.value) return err(new CapabilityError("Use /accounts in the Agent input to manage accounts. No model prompt was sent."));
     const model = parseModelCommand(text); if (!model.ok) return model;
     if (model.value) return err(new CapabilityError("Use /model in the Agent input to open the model picker. No model prompt was sent."));
     const selected = this.requireOpen(id);
@@ -394,7 +398,7 @@ export class SessionRegistry {
     if (this.shuttingDown || previous.phase !== "open") return err(new CancelledError("Session replacement was cancelled by shutdown."));
     const generation = crypto.randomUUID();
     const previousSessionFile = previous.executor?.sessionFile;
-    const ready = capture(() => this.factory({ cwd: previous.worktree.path, role: "main", startReason: "new", ...(previousSessionFile ? { previousSessionFile } : {}),
+    const ready = capture(() => this.factory({ cwd: previous.worktree.path, worktreeId: previous.worktree.id, role: "main", startReason: "new", ...(previousSessionFile ? { previousSessionFile } : {}),
       spawnSubagent: (name, task, signal) => this.spawnSubagent(previous.id, name, task, signal, generation) }));
     const created = await ready; if (!created.ok) return created;
     const next = created.value;
@@ -470,7 +474,7 @@ export class SessionRegistry {
     const owner = selected.value;
     if (generation && generation !== owner.generation) return err(new SessionError("SESSION_CONFLICT", "The originating conversation is no longer active in this tab."));
     if (owner.replacing) return err(new SessionError("SESSION_BUSY", "This conversation is being replaced."));
-    const ready = capture(() => this.factory({ cwd: owner.worktree.path, role: "subagent",
+    const ready = capture(() => this.factory({ cwd: owner.worktree.path, worktreeId: owner.worktree.id, role: "subagent",
       spawnSubagent: async () => err(new InputError("Nested delegation is not enabled.")) }));
     const child: Execution = { id: crypto.randomUUID(), name, role: "subagent", ready, worktree: owner.worktree, managed: true };
     owner.children.set(child.id, child); this.emit();

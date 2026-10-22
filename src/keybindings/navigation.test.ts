@@ -7,7 +7,7 @@ const commandFor = (context: KeyContext, key: string): CommandId | undefined => 
   binding.keys.length === 1 && binding.keys[0] === key && inScope(binding.scope, context))?.command;
 
 test.each([
-  ["workspace", "workspace"], ["history", "history"], ["monitor", "monitor"], ["model", "model"],
+  ["workspace", "workspace"], ["history", "history"], ["monitor", "monitor"], ["model", "model"], ["accounts", "accounts"],
   ["dialog", "dialog"], ["git", "git"], ["git-search", "git"], ["transcript", "transcript"], ["transcript-text", "transcript"], ["transcript-visual", "transcript"],
 ] as const)("%s의 Ctrl+D/U는 %s 반 페이지 명령에 연결한다", (context, family) => {
   // 목록과 본문 모두 키 이름은 같지만 각 화면의 소유자가 동작을 결정한다.
@@ -22,6 +22,7 @@ test.each([
   ["history", "history.previous", "history.next"], ["history-search", "history.previous", "history.next"],
   ["monitor", "monitor.previous", "monitor.next"], ["monitor-search", "monitor.previous", "monitor.next"],
   ["model", "model.previous", "model.next"], ["model-search", "model.previous", "model.next"],
+  ["accounts", "accounts.previous", "accounts.next"], ["accounts-search", "accounts.previous", "accounts.next"],
   ["model-effort", "model.effort-less", "model.effort-more"], ["dialog", "dialog.previous", "dialog.next"],
   ["git", "git.previous", "git.next"], ["git-search", "git.previous", "git.next"],
   ["terminal-tabs", "terminal.tab-previous", "terminal.tab-next"], ["session-tabs", "session.previous", "session.next"],
@@ -42,7 +43,7 @@ test.each(["editor", "terminal", "prompt", "prompt-completion"] as const)("%s의
   expect(map.bound("ctrl+d", context)).toBe(false); expect(map.bound("ctrl+u", context)).toBe(false);
 });
 
-test.each([["search", "workspace"], ["history-search", "history"], ["monitor-search", "monitor"], ["model-search", "model"]] as const)("%s의 Ctrl+D/U는 %s 결과 목록의 점프로 연결하고 Ctrl+C로 검색을 지운다", (context, family) => {
+test.each([["search", "workspace"], ["history-search", "history"], ["monitor-search", "monitor"], ["model-search", "model"], ["accounts-search", "accounts"]] as const)("%s의 Ctrl+D/U는 %s 결과 목록의 점프로 연결하고 Ctrl+C로 검색을 지운다", (context, family) => {
   // 검색 입력을 편집하지 않고 소유한 결과 목록의 반 페이지 동작으로 전달한다.
   const down = commandFor(context, "ctrl+d"), up = commandFor(context, "ctrl+u");
 

@@ -589,6 +589,31 @@ is automatically restarted.
 
 The Agent prompt completes and executes these host commands instead of sending them to the model:
 
+- **`/accounts`** opens native account management. Accounts and credentials are shared by the
+  daemon; each **worktree** selects its own account per provider. Adding an account never changes
+  existing selections. Choose a provider and an SDK-supported OAuth or API-key method, then give
+  the account a label. OAuth opens the browser and always displays the URL with copy/reopen controls;
+  device codes and manual-code prompts are shown when the provider requests them. API keys and
+  authorization-code input are masked and never enter Agent drafts or conversation history.
+  **/** searches, **Ctrl+N/P** moves candidates in either focus, **j/k** navigates results, and
+  **Ctrl+D/U** jumps half a list viewport. **Ctrl+C** clears only the search query. **Enter** applies
+  a selection to this worktree, **x** opens local-account deletion confirmation, and **Ctrl+R**
+  refreshes the account list. **Esc** goes back or cancels login and restores input focus.
+  Already-sent model requests finish with their original credentials; subsequent calls, including
+  calls after tools in the same Agent run, use the new selection. Conversations and models are retained.
+  A selected account must be changed in every affected worktree before it can be deleted. Deletion
+  removes only Radian's local credential, not the provider account, remote authorization or history.
+  **Pi default** explicitly uses the existing Pi credentials/environment without copying credentials.
+  Missing named accounts fail closed, never silently falling back to environment authentication.
+  Named credentials and selections are stored atomically in the daemon's private `accounts.json`
+  (directory mode `0700`, file mode `0600`; this is not an encrypted vault). OAuth receives a stable
+  installation ID. If token rotation succeeds but saving fails, Radian keeps the refreshed token in
+  memory and displays a storage warning: repair storage before restarting the daemon. A known remote
+  OAuth account cannot be added again under a second label, avoiding competing refresh owners.
+  The legacy `pi-accounts`
+  extension is excluded before import on startup and `/reload`, without modifying Pi CLI settings
+  or importing its tokens. The `accounts` service capability is required; older services must be
+  explicitly restarted after existing jobs finish. The command accepts no arguments or images.
 - **`/model`** opens a model-and-effort popup for the **current session**. Models come from Pi's
   authenticated chat-model catalog, including configured and extension-provided models. The list starts
   focused: use **j/k** to move, **h/l** to change effort, and **Tab/Shift+Tab** to move between the list
@@ -739,7 +764,9 @@ A session starts its first lookup without waiting for a prompt. Reconnection, pr
 final `agent_settled` events request fresh usage; short bursts and simultaneous sessions share work.
 While any TUI is attached, the runtime polls every 60 seconds and at returned reset deadlines. Account
 identity is checked during each lookup; external login changes are picked up on the next lookup.
-The cache is shared by matching accounts within one workspace runtime, not across separate runtimes.
+Each worktree has its own SDK model runtime and usage monitor. Sessions in that worktree share
+account-keyed lookups; separate worktrees do not share usage caches. Explicit account selection
+invalidates usage immediately, and late responses from the previous account cannot republish its quota.
 Detaching all TUIs stops periodic polling. Shutdown aborts lookups and invalidates late responses.
 
 The countdown is calculated locally and ticks every minute or at its reset deadline, without HTTP requests.

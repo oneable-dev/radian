@@ -125,6 +125,8 @@ export class PiSessionTelemetry {
       ...(this.usage ? { usage: this.usage.read(model?.provider ?? null) } : {}) };
   }
 
+  invalidateAccount(): void { this.requestScope = null; this.weekly = null; this.fast = null; this.changed(); }
+
   refreshUsage(): void { this.read(); this.usage?.refresh(); }
 
   dispose(): void {

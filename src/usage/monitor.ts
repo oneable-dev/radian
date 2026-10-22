@@ -58,6 +58,13 @@ export class UsageMonitor {
     };
   }
 
+  invalidate(provider: string): void {
+    this.generations.set(provider, (this.generations.get(provider) ?? 0) + 1);
+    this.pending.delete(provider); this.accountKeys.delete(provider); this.providerRetryAt.delete(provider);
+    this.publish(provider, empty(provider));
+    if (this.watchers.has(provider)) void this.refresh(provider, true);
+  }
+
   setActive(active: boolean): void {
     if (this.active === active || this.stopped) return;
     this.active = active; this.nextPollAt = active ? this.clock.now() + intervalMs : null;
@@ -73,7 +80,7 @@ export class UsageMonitor {
     const generation = this.generations.get(provider) ?? 0;
     const task = Promise.resolve().then(() => this.perform(provider, force, generation)).catch((error: unknown) => {
       reportUnexpected(error, "usage refresh");
-      this.publish(provider, empty(provider, "error", "USAGE_QUERY_FAILED"));
+      if ((this.generations.get(provider) ?? 0) === generation) this.publish(provider, empty(provider, "error", "USAGE_QUERY_FAILED"));
     }).finally(() => {
       if (this.pending.get(provider) === task) this.pending.delete(provider);
       this.jobs.delete(task); this.schedule();

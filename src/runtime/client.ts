@@ -18,6 +18,7 @@ import { NdjsonDecoder } from "./frames.ts";
 import { parseSessionControl } from "../agents/session-controls.ts";
 import { parseHistoryCommand } from "../agents/history-command.ts";
 import { parseDashboardCommand } from "../agents/dashboard-command.ts";
+import { accountRequestSchema, accountReplySchema, parseAccountsCommand, type AccountRequest, type AccountReply } from "../accounts/model.ts";
 import { modelCatalogQuerySchema, modelCatalogSchema, modelEffortSchema, modelIdentitySchema, parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "../agents/model-selection.ts";
 
 import { maximumPreviewImageBytes, transcriptImageQuerySchema } from "../agents/transcript-images.ts";
@@ -226,6 +227,24 @@ export class RuntimeClient {
     const opened = await this.waitForOpen(result.value, "Session creation");
     return opened.ok ? ok(result.value) : opened;
   }
+  async accounts(request: AccountRequest, signal?: AbortSignal): Promise<Result<AccountReply, ExpectedError>> {
+    if (this.detaching || this.failure) return err(this.connectionClosed());
+    if (!this.state.capabilities?.includes("accounts")) return err(new CapabilityError("Running service predates account management. Finish work and explicitly restart it; no service was restarted."));
+    if (!Value.Check(accountRequestSchema, request)) return err(new InputError("Malformed account request."));
+    if (signal?.aborted) return err(new CancelledError());
+    const instance = this.state.instance, epoch = this.connectionEpoch;
+    const abort = AbortSignal.any([this.streamAbort.signal, AbortSignal.timeout(35000), ...(signal ? [signal] : [])]);
+    const attempted = await capture(() => transport(this.paths, "/accounts", { method: "POST", headers: { "Content-Type": "application/json", "X-Radian-Instance": instance }, body: JSON.stringify(request), signal: abort }));
+    if (!attempted.ok) return attempted;
+    if (!attempted.value.ok) return attempted.value;
+    const response = attempted.value.value, decoded = await capture(() => readJson(response)); if (!decoded.ok) return decoded;
+    if (!decoded.value.ok) return decoded.value;
+    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance) return err(new CancelledError("Account reply belongs to an outdated connection. Check account state before retrying a change."));
+    const body = decoded.value.value;
+    if (!response.ok) return Value.Check(replySchema, body) && !body.ok ? err(remoteError(body.error)) : err(new ProtocolError("Malformed account failure response."));
+    return Value.Check(accountReplySchema, body) ? ok(body) : err(new ProtocolError("Malformed account response."));
+  }
+
   async models(sessionId: string, conversationId: string, signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>> {
     if (this.detaching || this.failure) return err(this.connectionClosed());
     if (!this.state.capabilities?.includes("model-selection")) return err(new CapabilityError("Running service predates model selection. Finish work and explicitly restart it when ready; no service was restarted."));
@@ -433,6 +452,8 @@ export class RuntimeClient {
     return present.ok ? ok(id) : present;
   }
   async prompt(sessionId: string, text: string, images: readonly string[] = []): Promise<Result<void, ExpectedError>> {
+    const accounts = parseAccountsCommand(text); if (!accounts.ok) return accounts;
+    if (accounts.value) return err(new CapabilityError("Use /accounts in the Agent input to manage accounts. No prompt was sent."));
     const dashboard = parseDashboardCommand(text); if (!dashboard.ok) return dashboard;
     if (dashboard.value) return err(new CapabilityError("Use /dashboard in the Agent input to open usage statistics. No prompt was sent."));
     const history = parseHistoryCommand(text); if (!history.ok) return history;

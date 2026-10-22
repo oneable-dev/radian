@@ -3,11 +3,8 @@ import { loadSessionSettings } from "../app/settings.ts";
 import { RetentionScheduler } from "./session-retention.ts";
 import { Value } from "typebox/value";
 import { completionCatalogQuerySchema, completionQuerySchema } from "./completion-protocol.ts";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { UsageMonitor } from "../usage/monitor.ts";
-import { openAiUsageResolver } from "../usage/providers/openai.ts";
 import { join } from "node:path";
-import { CancelledError, collectCleanup, InputError, ProtocolError, SessionError, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
+import { CancelledError, collectCleanup, InputError, ProtocolError, SessionError, parseJson, reportUnexpected, withCleanup, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { SessionRegistry, type SessionRecord } from "../agents/session-registry.ts";
 import { sessionRecordKey } from "../agents/session-snapshot.ts";
@@ -22,7 +19,9 @@ import { discoverRepository } from "../workspace/discovery.ts";
 import type { Repository } from "../workspace/model.ts";
 import { RepositoryCatalog } from "../workspace/catalog.ts";
 import { RepositoryWatcher } from "../workspace/repository-watcher.ts";
-import { privateDirectory, RuntimeStore, runtimePaths } from "./storage.ts";
+import { daemonPaths, privateDirectory, RuntimeStore, runtimePaths } from "./storage.ts";
+import { AccountManager } from "../accounts/manager.ts";
+import { accountRequestSchema } from "../accounts/model.ts";
 import { EditorSessions } from "../editor/sessions.ts";
 import { TerminalSessions } from "../terminal/sessions.ts";
 import { snapshotEvents } from "./events.ts";
@@ -31,24 +30,26 @@ import { emptyPreferences, errorStatus, historyPreviewQuerySchema, maxFrameBytes
   type RuntimeCommand, type RuntimeManifest, type RuntimePreferences, type RuntimeSnapshot } from "./protocol.ts";
 
 // Repository execution is an in-process resource of the shared daemon, never another service.
-export async function openRepositoryRuntime(repositoryId: string, offline: boolean, instance: string, stateRoot?: string, configPath?: string): Promise<Result<WorkspaceRuntime, ExpectedError>> {
+export async function openRepositoryRuntime(repositoryId: string, offline: boolean, instance: string, stateRoot?: string, configPath?: string, sharedAccounts?: AccountManager): Promise<Result<WorkspaceRuntime, ExpectedError>> {
   const settings = await loadSessionSettings(configPath); if (!settings.ok) return settings;
   const discovered = await discoverRepository(repositoryId); if (!discovered.ok) return discovered;
   const repository = discovered.value, paths = runtimePaths(repository.id, offline, stateRoot), store = new RuntimeStore(paths);
   const loaded = await store.load(repository.id); if (!loaded.ok) return loaded;
   const manifest = loaded.value, catalog = new RepositoryCatalog(mergeRepositories(repository, manifest));
   const options = offline ? await offlineRuntime(join(paths.directory, "offline-agent")) : undefined;
-  const modelRuntime = options?.modelRuntime ?? await ModelRuntime.create();
-  const usage = offline ? undefined : new UsageMonitor(openAiUsageResolver(modelRuntime));
+  const openedAccounts = sharedAccounts ? ok(sharedAccounts) : await AccountManager.open(daemonPaths(offline, stateRoot).directory, { offline });
+  if (!openedAccounts.ok) return openedAccounts;
+  const accounts = openedAccounts.value;
+  const modelRuntime = options?.modelRuntime;
   let runtime: WorkspaceRuntime | undefined;
   let ready = false;
   return withCleanup(async () => {
     const requestedSessionDir = options?.sessionDir ?? join(paths.directory, "sdk-sessions");
     await privateDirectory(requestedSessionDir);
     const sessionDir = await realpath(requestedSessionDir);
-    const registry = new SessionRegistry(catalog, piSessionFactory({ ...options, sessionDir, modelRuntime, ...(usage ? { usageMonitor: usage } : {}) }));
+    const registry = new SessionRegistry(catalog, piSessionFactory({ ...options, sessionDir, ...(modelRuntime ? { modelRuntime } : {}), ...(!offline ? { accounts } : {}) }));
     runtime = new WorkspaceRuntime(instance, registry, catalog, repository, offline, store, manifest?.preferences ?? emptyPreferences,
-      new SessionHistory(catalog, registry, sessionDir, store, !offline), paths.directory, usage, settings.value.exists ? settings.value.path : configPath);
+      new SessionHistory(catalog, registry, sessionDir, store, !offline), paths.directory, settings.value.exists ? settings.value.path : configPath, accounts, !sharedAccounts);
     await runtime.restore(manifest?.records ?? [], manifest?.repositories ?? []);
     await runtime.watchRepository();
     runtime.startRetention();
@@ -57,7 +58,7 @@ export async function openRepositoryRuntime(repositoryId: string, offline: boole
   }, async () => {
     if (ready) return;
     if (runtime) { const stopped = await runtime.stop(); if (!stopped.ok) throw stopped.error; }
-    else await usage?.stop();
+    else if (!sharedAccounts) { const stopped = await accounts.stop(); if (!stopped.ok) throw stopped.error; }
   });
 }
 
@@ -84,7 +85,7 @@ export class WorkspaceRuntime {
 
   constructor(readonly instance: string, private readonly registry: SessionRegistry, private readonly catalog: RepositoryCatalog, private repository: Repository,
     private readonly offline: boolean, private readonly store: RuntimeStore, preferences: RuntimePreferences, private readonly history: SessionHistory,
-    supervisorDirectory: string, private readonly usage?: UsageMonitor, private readonly configPath?: string) {
+    supervisorDirectory: string, private readonly configPath?: string, private readonly accounts?: AccountManager, private readonly ownsAccounts = false) {
     this.preferences = preferences;
     this.editors = new EditorSessions(catalog, () => this.changed(), { clean: offline });
     this.terminals = new TerminalSessions(catalog, () => this.changed(), supervisorDirectory, offline, (task) => this.observe(task));
@@ -92,7 +93,7 @@ export class WorkspaceRuntime {
   }
 
   subscribe(listener: () => void): () => void { this.subscribers.add(listener); return () => this.subscribers.delete(listener); }
-  setObserved(active: boolean): void { this.usage?.setActive(active); }
+  setObserved(active: boolean): void { this.accounts?.setActive(active, this.instance); }
 
   startRetention(): void {
     let configuredFile = this.configPath, retentionDays: number | null = 30;
@@ -176,10 +177,10 @@ export class WorkspaceRuntime {
   get snapshot(): RuntimeSnapshot {
     const repositories = this.repositories;
     const details = Object.fromEntries([...this.registry.records, ...this.failedRecovery.values()].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["shared-daemon", "repository-runtime", "history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "session-exit", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention", "agent-dashboard"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["shared-daemon", "repository-runtime", "history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "session-exit", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention", "agent-dashboard", "accounts"], repositoryId: this.repositoryId,
       ...(this.retentionStatus ? { sessionRetention: this.retentionStatus } : {}),
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
-      preferences: this.preferences, notice: this.persistenceError || [this.discoveryWarning, this.retentionWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
+      preferences: this.preferences, notice: this.persistenceError || [this.accounts?.warning, this.discoveryWarning, this.retentionWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
   }
 
@@ -187,6 +188,17 @@ export class WorkspaceRuntime {
     try {
       const path = new URL(request.url).pathname;
       const expectedInstance = request.headers.get("X-Radian-Instance");
+      if (path === "/accounts" && request.method === "POST") {
+        if (!this.accounts || expectedInstance !== this.instance) return this.rejected(new ProtocolError("Account management requires the current runtime instance."));
+        const text = await request.text();
+        if (Buffer.byteLength(text) > maxFrameBytes) return this.rejected(new InputError("Account request is too large."));
+        const parsed = parseJson(text, "account request"); if (!parsed.ok) return this.rejected(parsed.error);
+        if (!Value.Check(accountRequestSchema, parsed.value)) return this.rejected(new InputError("Malformed account request."));
+        const command = parsed.value;
+        if (!this.repository.worktrees.some(tree => tree.id === command.worktreeId)) return this.rejected(new InputError("Worktree does not belong to this repository."));
+        const result = await this.accounts.handle(command, request.signal);
+        return result.ok ? Response.json(result.value) : this.rejected(result.error);
+      }
       if (expectedInstance && expectedInstance !== this.instance) return this.rejected(new ProtocolError("Runtime instance changed; refresh the connection before retrying. No action was accepted."));
       if (path === "/snapshot" && request.method === "GET") return Response.json(this.snapshot);
       if (path === "/events" && request.method === "GET") return this.events();
@@ -433,8 +445,8 @@ export class WorkspaceRuntime {
 
   private events(): Response {
     return snapshotEvents(() => this.snapshot, (send) => {
-      this.subscribers.add(send); this.usage?.setActive(true);
-      return () => { this.subscribers.delete(send); this.usage?.setActive(this.subscribers.size > 0); };
+      this.subscribers.add(send); this.setObserved(true);
+      return () => { this.subscribers.delete(send); this.setObserved(this.subscribers.size > 0); };
     });
   }
 
@@ -472,7 +484,7 @@ export class WorkspaceRuntime {
 
   async stop(): Promise<Result<void, ExpectedError>> {
     if (this.stopped) return ok(undefined);
-    this.stopped = true;
+    this.stopped = true; this.setObserved(false);
     await this.retention?.stop();
     if (this.checkpointTimer) clearTimeout(this.checkpointTimer);
     this.unsubscribe();
@@ -481,7 +493,7 @@ export class WorkspaceRuntime {
       repositories: this.repositories, records: [...this.registry.checkpointRecords, ...this.failedRecovery.values()], preferences: this.preferences };
     const stopped = await collectCleanup([this.watcher ? this.watcher.stop().then(() => ok(undefined)) : Promise.resolve(ok(undefined)),
       this.checkpoint(manifest), this.registry.shutdown(), this.editors.stop(), this.terminals.stop(),
-      this.usage ? this.usage.stop().then(() => ok(undefined)) : Promise.resolve(ok(undefined))], "Checkpoint or runtime shutdown failed.");
+      this.ownsAccounts && this.accounts ? this.accounts.stop() : Promise.resolve(ok(undefined))], "Checkpoint or runtime shutdown failed.");
     const openIntent = new Set(manifest.records.filter(record => record.lifecycle !== "closed").map(sessionRecordKey));
     const finished = this.registry.checkpointRecords.filter(record => !openIntent.has(sessionRecordKey(record)));
     if (!finished.length) return stopped;

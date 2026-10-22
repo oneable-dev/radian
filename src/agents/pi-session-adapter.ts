@@ -1,5 +1,5 @@
 import {
-  createAgentSession, DefaultResourceLoader, defineTool, getAgentDir, ModelRuntime, parseSkillBlock,
+  createAgentSession, defineTool, getAgentDir, ModelRuntime, parseSkillBlock,
   SessionManager, SettingsManager, type AgentSession, type AgentSessionEvent, type ExtensionError,
 } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel, getSupportedThinkingLevels, modelsAreEqual, ModelsError, Type, type ImageContent } from "@earendil-works/pi-ai";
@@ -24,6 +24,10 @@ import { expandSkillInvocation } from "./completion.ts";
 import { parseSessionControl } from "./session-controls.ts";
 import { parseHistoryCommand } from "./history-command.ts";
 import { parseDashboardCommand } from "./dashboard-command.ts";
+import type { AccountManager } from "../accounts/manager.ts";
+import { parseAccountsCommand } from "../accounts/model.ts";
+import { bindAccountSession } from "../accounts/session.ts";
+import { sessionResourceLoader } from "./resource-loader.ts";
 
 type QueuedUserMessage = Extract<ReturnType<AgentSession["agent"]["peekQueuedMessages"]>[number], { role: "user" }>;
 
@@ -35,6 +39,7 @@ export type PiSessionOptions = {
   streamFn?: AgentSession["agent"]["streamFunction"];
   settings?: Partial<ReturnType<SettingsManager["getSettings"]>>;
   usageMonitor?: UsageMonitor;
+  accounts?: AccountManager;
   imageLoader?: (paths: readonly string[]) => Promise<Result<ImageContent[], ExpectedError>>;
 };
 
@@ -43,16 +48,18 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
   return async (context) => {
     if (!(await stat(context.cwd)).isDirectory()) throw new InputError("Session working directory is not a directory.");
     const agentDir = options.agentDir ?? getAgentDir();
-    runtime ??= options.modelRuntime ? Promise.resolve(options.modelRuntime) : ModelRuntime.create({
+    const worktreeId = context.worktreeId ?? context.cwd;
+    const workspace = options.accounts ? await options.accounts.workspace(worktreeId) : undefined;
+    runtime ??= workspace ? Promise.resolve(workspace.runtime) : options.modelRuntime ? Promise.resolve(options.modelRuntime) : ModelRuntime.create({
       authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json"),
     });
-    const modelRuntime = await runtime;
+    const modelRuntime = workspace?.runtime ?? await runtime;
     const settingsManager = options.streamFn ? SettingsManager.inMemory({
       retry: { enabled: false }, compaction: { enabled: false },
     }) : SettingsManager.create(context.cwd, agentDir);
     const fast = new FastMode();
     const compaction = new ManualCompaction();
-    const resourceLoader = new DefaultResourceLoader({
+    const resourceLoader = sessionResourceLoader({
       cwd: context.cwd, agentDir, settingsManager, noThemes: true, extensionFactories: [fast.extension, compaction.extension],
       ...(options.streamFn ? { noSkills: true, noContextFiles: true, noPromptTemplates: true } : {}),
     });
@@ -70,6 +77,11 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       ...(context.role === "main" ? { customTools: [subagentTool(context)] } : {}),
     });
     let adopted = false;
+    const releaseTransport = options.accounts && !options.streamFn ? bindAccountSession(options.accounts, worktreeId, session) : () => {};
+    let executor: PiSessionExecutor | undefined;
+    const accountChanged = (provider: string) => executor?.credentialsChanged(provider);
+    workspace?.listeners.add(accountChanged);
+    const releaseAccounts = () => { workspace?.listeners.delete(accountChanged); releaseTransport(); };
     return withCleanup(async () => {
       await mkdir(session.sessionManager.getSessionDir(), { recursive: true });
       if (options.streamFn) session.agent.streamFunction = options.streamFn;
@@ -79,11 +91,12 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         waitForIdle: () => session.waitForIdle(), newSession: unsupportedSessionAction, fork: unsupportedSessionAction,
         switchSession: unsupportedSessionAction, navigateTree: unsupportedSessionAction, reload: unsupportedSessionAction,
       } });
-      const executor = new PiSessionExecutor(session, options.usageMonitor, diagnostics, fast, options.imageLoader, compaction,
-        () => settingsManager.applyOverrides({ ...options.settings, cacheWarming: "off" }));
+      executor = new PiSessionExecutor(session, workspace?.usage ?? options.usageMonitor, diagnostics, fast, options.imageLoader, compaction,
+        () => settingsManager.applyOverrides({ ...options.settings, cacheWarming: "off" }), releaseAccounts,
+        options.accounts ? signal => options.accounts!.refreshModels(worktreeId, signal) : undefined);
       adopted = true;
       return executor;
-    }, async () => { if (!adopted) session.dispose(); });
+    }, async () => { if (!adopted) { session.dispose(); releaseAccounts(); } });
   };
 }
 
@@ -132,7 +145,7 @@ export class PiSessionExecutor implements SessionExecutor {
   private request: RequestSummary | undefined;
   private result: SessionResult | undefined;
 
-  constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode, private readonly imageLoader = loadPromptImages, private readonly compaction = new ManualCompaction(), private readonly reloadSettings: () => void = () => {}) {
+  constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode, private readonly imageLoader = loadPromptImages, private readonly compaction = new ManualCompaction(), private readonly reloadSettings: () => void = () => {}, private readonly releaseAccounts: () => void = () => {}, private readonly refreshAccountModels?: (signal?: AbortSignal) => Promise<Result<void, ExpectedError>>) {
     this.status = this.finalStatus(false);
     this.commandCatalog = sessionCommands(session);
     this.transcript = new SessionTranscript(session.sessionManager.getBranch());
@@ -145,12 +158,17 @@ export class PiSessionExecutor implements SessionExecutor {
     this.unsubscribe = session.subscribe((event) => this.handleEvent(event));
   }
 
+  credentialsChanged(provider: string): void {
+    if (this.session.model?.provider !== provider) return;
+    this.telemetry.invalidateAccount(); this.emit();
+  }
   commands() { return this.commandCatalog; }
   imageData(id: string) { return this.transcript.imageData(id); }
 
   async models(signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>> {
     if (signal?.aborted) return err(new CancelledError());
     if (this.closing || this.disposed) return err(new SessionError("SESSION_NOT_OPEN", "Session is closing."));
+    const refreshed = await this.refreshAccountModels?.(signal); if (refreshed && !refreshed.ok) return refreshed;
     const loaded = await modelOperation(() => this.session.modelRuntime.getAvailable(undefined, signal ? { signal } : {}));
     if (!loaded.ok) return loaded;
     if (signal?.aborted) return err(new CancelledError());
@@ -311,6 +329,8 @@ export class PiSessionExecutor implements SessionExecutor {
     if (dashboard.value) return Promise.resolve(err(new CapabilityError("Use /dashboard in the Agent input to open usage statistics. No model prompt was sent.")));
     const control = parseSessionControl(text); if (!control.ok) return Promise.resolve(control);
     if (control.value) return Promise.resolve(err(new CapabilityError("Use Radian's host session controls for this command. No model prompt was sent.")));
+    const accounts = parseAccountsCommand(text); if (!accounts.ok) return Promise.resolve(accounts);
+    if (accounts.value) return Promise.resolve(err(new CapabilityError("Use /accounts in the Agent input to manage accounts. No model prompt was sent.")));
     const model = parseModelCommand(text); if (!model.ok) return Promise.resolve(model);
     if (model.value) return Promise.resolve(err(new CapabilityError("Use /model in the Agent input to open the model picker. No model prompt was sent.")));
     const history = parseHistoryCommand(text); if (!history.ok) return Promise.resolve(history);
@@ -448,7 +468,7 @@ export class PiSessionExecutor implements SessionExecutor {
         if (this.interruptTask) await this.interruptTask;
         await this.session.extensionRunner.emit({ type: "session_shutdown", reason });
       }, async () => {
-        this.telemetry.dispose(); this.session.dispose(); this.unsubscribe(); this.listeners.clear(); this.disposed = true;
+        this.telemetry.dispose(); this.session.dispose(); this.releaseAccounts(); this.unsubscribe(); this.listeners.clear(); this.disposed = true;
       });
     }).then((result) => { if (!result.ok) this.closeTask = undefined; return result; });
     this.closeTask = task; void task.catch(() => { this.closeTask = undefined; }); return task;

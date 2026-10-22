@@ -176,10 +176,10 @@ export function wireError(error: ExpectedError, outcome: WireError["outcome"] = 
 export function errorStatus(error: ExpectedError): number {
   switch (error.code) {
     case "INVALID_INPUT": return 400;
-    case "SESSION_NOT_OPEN": case "HISTORY_UNAVAILABLE": case "EDITOR_NOT_OPEN": case "PTY_NOT_OPEN": return 404;
-    case "SESSION_BUSY": case "SESSION_CONFLICT": case "CANCELLED": case "EDITOR_BUSY": case "PTY_BUSY": return 409;
+    case "ACCOUNT_NOT_FOUND": case "SESSION_NOT_OPEN": case "HISTORY_UNAVAILABLE": case "EDITOR_NOT_OPEN": case "PTY_NOT_OPEN": return 404;
+    case "ACCOUNT_IN_USE": case "ACCOUNT_CONFLICT": case "SESSION_BUSY": case "SESSION_CONFLICT": case "CANCELLED": case "EDITOR_BUSY": case "PTY_BUSY": return 409;
     case "RUNTIME_STOPPING": case "RUNTIME_ABSENT": case "CONNECTION_FAILED": case "CONNECTION_TIMEOUT": return 503;
-    case "UNSUPPORTED_CAPABILITY": case "MODEL_UNAVAILABLE": case "PROTOCOL_ERROR": case "EDITOR_UNAVAILABLE": case "PTY_UNAVAILABLE": return 422;
+    case "ACCOUNT_LOGIN_FAILED": case "BROWSER_UNAVAILABLE": case "UNSUPPORTED_CAPABILITY": case "MODEL_UNAVAILABLE": case "PROTOCOL_ERROR": case "EDITOR_UNAVAILABLE": case "PTY_UNAVAILABLE": return 422;
     default: return 500;
   }
 }

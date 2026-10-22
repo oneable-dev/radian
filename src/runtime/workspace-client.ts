@@ -10,7 +10,7 @@ import { runtimePaths, RuntimeStore } from "./storage.ts";
 import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
 
 // Repository-scoped channels share a daemon process; identity fencing and PTY leases stay local.
-export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "newTab" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "activate" | "image" | "models" | "selectModel" | "catalog" | "acknowledge" | "dashboard">>;
+export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "newTab" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "activate" | "image" | "models" | "selectModel" | "catalog" | "acknowledge" | "dashboard" | "accounts">>;
 type Connector = (repository: Repository, cwd: string, options: ConnectOptions) => Promise<Result<RepositoryClient | null, ExpectedError>>;
 type Entry = { repository: Repository; preferences: RuntimePreferences; connectionVersion: number; client?: RepositoryClient; unsubscribe?: () => void;
   watcher?: RepositoryWatcher; discoveryWarning?: string; legacy?: boolean;
@@ -215,6 +215,11 @@ export class WorkspaceClient {
     const entry = this.sessionOwner(args[0]); if (!entry.ok) return entry;
     const client = entry.value.client;
     return client?.image ? client.image(...args) : err(new CapabilityError("This repository connection does not provide image previews."));
+  }
+  async accounts(request: Parameters<RuntimeClient["accounts"]>[0], signal?: AbortSignal): ReturnType<RuntimeClient["accounts"]> {
+    const entry = this.worktreeOwner(request.worktreeId); if (!entry.ok) return entry;
+    const client = await this.ensure(entry.value); if (!client.ok) return client;
+    return client.value.accounts ? client.value.accounts(request, signal) : err(new CapabilityError("This repository connection does not support account management."));
   }
   async models(...args: Parameters<RuntimeClient["models"]>): ReturnType<RuntimeClient["models"]> {
     const entry = this.sessionOwner(args[0]); if (!entry.ok) return entry;

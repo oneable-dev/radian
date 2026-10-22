@@ -2,7 +2,7 @@ import { EmbeddedTerminalRenderable, KeyEvent, type CliRenderer, type Renderable
 import { inScope, type CommandId, type KeyContext } from "./commands.ts";
 import { keyToken, type Binding, type Keymap } from "./config.ts";
 
-const oneShot = new Set<CommandId>(["tab.new", "input.ignore", "search.clear", "monitor.open", "monitor.dismiss", "dashboard.show", "dashboard.dismiss", "dashboard.refresh", "workspace.dismiss", "workspace.open", "focus.results", "agent.send", "agent.clear", "git.clear", "git.search-clear", "git.refs", "git.reflog", "git.open", "git.back", "git.preview", "completion.accept", "completion.dismiss", "history.open", "history.dismiss", "model.select", "model.dismiss", "model.search", "dialog.dismiss", "dialog.activate", "dialog.copy", "app.help", "agent.inspect", "git.inspect"]);
+const oneShot = new Set<CommandId>(["accounts.choose", "accounts.dismiss", "accounts.delete", "accounts.browser", "accounts.copy-url", "accounts.copy-code", "accounts.search", "tab.new", "input.ignore", "search.clear", "monitor.open", "monitor.dismiss", "dashboard.show", "dashboard.dismiss", "dashboard.refresh", "workspace.dismiss", "workspace.open", "focus.results", "agent.send", "agent.clear", "git.clear", "git.search-clear", "git.refs", "git.reflog", "git.open", "git.back", "git.preview", "completion.accept", "completion.dismiss", "history.open", "history.dismiss", "model.select", "model.dismiss", "model.search", "dialog.dismiss", "dialog.activate", "dialog.copy", "app.help", "agent.inspect", "git.inspect"]);
 type Pending = { owner: Renderable | null; events: KeyEvent[]; keys: string[]; held: Set<string>; candidates: readonly Binding[] };
 export class KeyRouter {
   private pending: Pending | undefined;

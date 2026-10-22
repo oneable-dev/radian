@@ -26,6 +26,7 @@ import type { TranscriptImageProvider } from "../transcript-images.ts";
 import { PendingMessages } from "./pending-messages.ts";
 import { parseSessionControl } from "../session-controls.ts";
 import { parseModelCommand } from "../model-selection.ts";
+import { parseAccountsCommand } from "../../accounts/model.ts";
 import { parseHistoryCommand } from "../history-command.ts";
 import { parseDashboardCommand } from "../dashboard-command.ts";
 
@@ -35,6 +36,7 @@ export type AgentActions = {
   onHistory?: () => void;
   onShowDashboard?: () => void;
   onModel?: (sessionId: string) => Result<void, ExpectedError>;
+  onAccounts?: () => Result<void, ExpectedError>;
   onSelectSession?: (worktreeId: string, sessionId: string) => void;
   onCloseSession?: (worktreeId: string, sessionId: string) => void;
   onPrompt?: (sessionId: string, text: string, images?: readonly string[]) => Result<void, ExpectedError> | Promise<Result<void, ExpectedError>>;
@@ -351,6 +353,8 @@ export class AgentPanel {
       const sent = fingerprint(draft);
       const control = parseSessionControl(submission.text);
       if (!control.ok) { this.notice(`[${control.error.code}] ${control.error.message} · prompt retained`); return; }
+      const accounts = parseAccountsCommand(submission.text);
+      if (!accounts.ok) { this.notice(`[${accounts.error.code}] ${accounts.error.message} · prompt retained`); return; }
       const model = parseModelCommand(submission.text);
       if (!model.ok) { this.notice(`[${model.error.code}] ${model.error.message} · prompt retained`); return; }
       const history = parseHistoryCommand(submission.text);
@@ -358,9 +362,12 @@ export class AgentPanel {
       const dashboard = parseDashboardCommand(submission.text);
       if (!dashboard.ok) { this.notice(`[${dashboard.error.code}] ${dashboard.error.message} · prompt retained`); return; }
       // Non-conversation actions must not reset the outgoing conversation's reading position.
-      if (!model.value && !history.value && !dashboard.value && control.value?.action !== "new-tab" && control.value?.action !== "exit" && control.value?.action !== "reload") this.transcript.followLatest();
+      if (!accounts.value && !model.value && !history.value && !dashboard.value && control.value?.action !== "new-tab" && control.value?.action !== "exit" && control.value?.action !== "reload") this.transcript.followLatest();
       let result: Result<void, ExpectedError>;
-      if (dashboard.value) {
+      if (accounts.value) {
+        result = submission.images.length ? err(new InputError("/accounts does not accept image attachments. Input was retained."))
+          : this.actions.onAccounts?.() ?? err(new CapabilityError("Account management is unavailable in this view. No prompt was sent."));
+      } else if (dashboard.value) {
         if (submission.images.length) result = err(new InputError("/dashboard does not accept image attachments. Input was retained."));
         else if (!this.actions.onShowDashboard) result = err(new CapabilityError("Dashboard is unavailable in this view. No prompt was sent."));
         else { this.actions.onShowDashboard(); result = ok(undefined); }

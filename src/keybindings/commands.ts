@@ -1,10 +1,10 @@
-export const contexts = ["workspace", "search", "history", "history-search", "monitor", "monitor-search", "dashboard", "dashboard-tabs", "model", "model-search", "model-effort", "session-tabs", "terminal-tabs", "git-tabs", "git-search", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "dialog", "none"] as const;
+export const contexts = ["workspace", "search", "history", "history-search", "monitor", "monitor-search", "dashboard", "dashboard-tabs", "model", "model-search", "model-effort", "accounts", "accounts-search", "accounts-input", "session-tabs", "terminal-tabs", "git-tabs", "git-search", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "editor", "terminal", "git", "git-prompt", "dialog", "none"] as const;
 export type KeyContext = typeof contexts[number];
 export type KeyScope = KeyContext | "global" | "app" | "pty";
 export type BindingInput = { keys: string; scope: KeyScope };
 const key = (keys: string, scope: KeyScope = "global"): BindingInput => ({ keys, scope });
 
-const searchContexts = ["search", "history-search", "monitor-search", "model-search"] as const;
+const searchContexts = ["search", "history-search", "monitor-search", "model-search", "accounts-search"] as const;
 const transcriptContexts = ["transcript", "transcript-text", "transcript-visual"] as const;
 const transcriptKeys = (keys: string): BindingInput[] => transcriptContexts.map((scope) => key(keys, scope));
 const textKeys = (...keys: string[]): BindingInput[] => keys.flatMap((keys) => [key(keys, "transcript-text"), key(keys, "transcript-visual")]);
@@ -107,6 +107,18 @@ export const defaultBindings = {
   "history.next": [key("j", "history"), key("down", "history"), key("ctrl+n", "history"), key("down", "history-search"), key("ctrl+n", "history-search")],
   "history.first": [key("home", "history")],
   "history.last": [key("end", "history")],
+  "accounts.dismiss": [key("escape", "accounts"), key("escape", "accounts-search"), key("escape", "accounts-input")],
+  "accounts.choose": [key("enter", "accounts"), key("enter", "accounts-search"), key("enter", "accounts-input")],
+  "accounts.search": [key("/", "accounts")],
+  "accounts.refresh": [key("ctrl+r", "accounts"), key("ctrl+r", "accounts-search")],
+  "accounts.previous": [key("k", "accounts"), key("up", "accounts"), key("ctrl+p", "accounts"), key("up", "accounts-search"), key("ctrl+p", "accounts-search")],
+  "accounts.next": [key("j", "accounts"), key("down", "accounts"), key("ctrl+n", "accounts"), key("down", "accounts-search"), key("ctrl+n", "accounts-search")],
+  "accounts.half-page-up": [key("ctrl+u", "accounts"), key("ctrl+u", "accounts-search")],
+  "accounts.half-page-down": [key("ctrl+d", "accounts"), key("ctrl+d", "accounts-search")],
+  "accounts.delete": [key("x", "accounts")],
+  "accounts.browser": [key("o", "accounts")],
+  "accounts.copy-url": [key("y", "accounts")],
+  "accounts.copy-code": [key("shift+y", "accounts")],
   "model.dismiss": [key("escape", "model"), key("escape", "model-search"), key("escape", "model-effort")],
   "model.select": [key("enter", "model"), key("enter", "model-search"), key("enter", "model-effort")],
   "model.refresh": [key("ctrl+r", "model"), key("ctrl+r", "model-search"), key("ctrl+r", "model-effort")],

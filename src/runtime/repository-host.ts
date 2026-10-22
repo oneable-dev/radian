@@ -7,6 +7,7 @@ import { acquireRuntime, privateDirectory, RuntimeStore, type RuntimePaths } fro
 import { snapshotEvents } from "./events.ts";
 import { emptyPreferences, errorStatus, maxFrameBytes, parseCommand, protocolVersion, wireError, type RuntimeManifest, type RuntimeSnapshot } from "./protocol.ts";
 import type { WorkspaceRuntime } from "./service.ts";
+import type { AccountManager } from "../accounts/manager.ts";
 
 export function rejected(error: ExpectedError): Response {
   return Response.json({ ok: false, error: wireError(error) }, { status: errorStatus(error) });
@@ -28,12 +29,12 @@ export class RepositoryHost {
 
   private constructor(private repository: Repository, readonly paths: RuntimePaths, private manifest: RuntimeManifest,
     private readonly offline: boolean, private readonly stateRoot: string | undefined, readonly config: string | undefined,
-    private readonly release: () => Promise<void>, private readonly requestStop: () => void, private readonly activated: () => Promise<Result<void, ExpectedError>>) {
+    private readonly release: () => Promise<void>, private readonly requestStop: () => void, private readonly activated: () => Promise<Result<void, ExpectedError>>, private readonly accounts?: AccountManager) {
     this.store = new RuntimeStore(paths);
   }
 
   static async open(repository: Repository, paths: RuntimePaths, offline: boolean, stateRoot: string | undefined, config: string | undefined,
-    requestStop: () => void, activated: () => Promise<Result<void, ExpectedError>>): Promise<Result<RepositoryHost, ExpectedError>> {
+    requestStop: () => void, activated: () => Promise<Result<void, ExpectedError>>, accounts?: AccountManager): Promise<Result<RepositoryHost, ExpectedError>> {
     const prepared = await capture(async () => { await privateDirectory(paths.directory); return acquireRuntime(paths); });
     if (!prepared.ok) return prepared;
     const release = prepared.value;
@@ -42,7 +43,7 @@ export class RepositoryHost {
     return withCleanup(async () => {
       const loaded = await new RuntimeStore(paths).load(repository.id); if (!loaded.ok) return loaded;
       const manifest = loaded.value ?? { version: protocolVersion, repositoryId: repository.id, repositories: [repository], records: [], preferences: structuredClone(emptyPreferences) };
-      host = new RepositoryHost(repository, paths, manifest, offline, stateRoot, config, release, requestStop, activated);
+      host = new RepositoryHost(repository, paths, manifest, offline, stateRoot, config, release, requestStop, activated, accounts);
       host.watcher = new RepositoryWatcher(repository, result => {
         if (host!.stopped) return;
         if (result.ok) { host!.repository = result.value; host!.warning = ""; }
@@ -87,7 +88,7 @@ export class RepositoryHost {
   private async openRuntime(): Promise<Result<void, ExpectedError>> {
     const { openRepositoryRuntime } = await import("./service.ts");
     const saved = await this.saving; if (!saved.ok) return saved;
-    const initialized = await capture(() => openRepositoryRuntime(this.repository.id, this.offline, this.instance, this.stateRoot, this.config));
+    const initialized = await capture(() => openRepositoryRuntime(this.repository.id, this.offline, this.instance, this.stateRoot, this.config, this.accounts));
     if (!initialized.ok) return initialized;
     const opened = initialized.value; if (!opened.ok) return opened;
     this.runtime = opened.value;
@@ -137,7 +138,7 @@ export class RepositoryHost {
         }
       }
       // Unknown paths must not allocate an SDK or start a process.
-      if (!["/command", "/dashboard", "/history", "/history/preview", "/models", "/completions", "/completion-catalog", "/images", "/editor/events", "/terminal/events"].includes(path)) return new Response("Not found", { status: 404 });
+      if (!["/command", "/accounts", "/dashboard", "/history", "/history/preview", "/models", "/completions", "/completion-catalog", "/images", "/editor/events", "/terminal/events"].includes(path)) return new Response("Not found", { status: 404 });
       const activated = await this.activate(); if (!activated.ok) return rejected(activated.error);
       return this.runtime!.fetch(request);
     } catch (error) {

@@ -7,6 +7,7 @@ import { discoverRepository } from "../workspace/discovery.ts";
 import { acquireRuntime, daemonPaths, privateDirectory, runtimePaths, type RuntimePaths } from "./storage.ts";
 import { daemonRegistrySchema, repositoryRegistrationSchema, type DaemonRegistry, type RepositoryRegistration } from "./daemon-protocol.ts";
 import { RepositoryHost, rejected } from "./repository-host.ts";
+import { AccountManager } from "../accounts/manager.ts";
 import { emptyPreferences, maxFrameBytes, parseCommand, protocolVersion, type RuntimeSnapshot } from "./protocol.ts";
 
 type Entry = { registration: RepositoryRegistration; host: RepositoryHost };
@@ -45,11 +46,14 @@ class SharedDaemon {
   private saving: Promise<Result<void, ExpectedError>> = Promise.resolve(ok(undefined));
   private stopped = false;
   private loaded = false;
+  private accounts: AccountManager | undefined;
   private warning = "";
 
   constructor(private readonly paths: RuntimePaths, private readonly offline: boolean, private readonly stateRoot: string | undefined) {}
 
   async load(): Promise<Result<void, ExpectedError>> {
+    const accounts = await AccountManager.open(this.paths.directory, { offline: this.offline }); if (!accounts.ok) return accounts;
+    this.accounts = accounts.value;
     const read = await capture(() => readFile(this.paths.manifest, "utf8"));
     if (!read.ok) {
       if (read.error instanceof StorageError && read.error.systemCode === "ENOENT") { this.loaded = true; return ok(undefined); }
@@ -102,7 +106,7 @@ class SharedDaemon {
     if (discovered.value.id !== registration.repositoryId) return err(new ProtocolError("Repository registration identity does not match its Git common directory."));
     const canonical = { ...registration, cwd: discovered.value.id };
     const opened = await RepositoryHost.open(discovered.value, runtimePaths(registration.repositoryId, this.offline, this.stateRoot), this.offline,
-      this.stateRoot, registration.config, () => this.onStop(), () => this.persist());
+      this.stateRoot, registration.config, () => this.onStop(), () => this.persist(), this.accounts);
     if (!opened.ok) return opened;
     this.entries.set(registration.repositoryId, { registration: canonical, host: opened.value });
     return opened;
@@ -165,6 +169,8 @@ class SharedDaemon {
     await Promise.allSettled(this.pending.values());
     // Persist active intent before any repository releases its resources.
     const saved = this.loaded ? await this.persist() : ok(undefined);
-    return collectCleanup([Promise.resolve(saved), ...[...this.entries.values()].map(entry => entry.host.stop())], "Shared daemon shutdown failed.");
+    const stopped = await collectCleanup([Promise.resolve(saved), ...[...this.entries.values()].map(entry => entry.host.stop())], "Shared daemon shutdown failed.");
+    const accounts = this.accounts ? await this.accounts.stop() : ok(undefined);
+    return collectCleanup([Promise.resolve(stopped), Promise.resolve(accounts)], "Shared daemon account shutdown failed.");
   }
 }
