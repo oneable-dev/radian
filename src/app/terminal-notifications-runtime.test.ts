@@ -31,13 +31,16 @@ test("실제 서비스의 완료가 연결된 CLI의 화면·터미널 알림으
         cwd: fixture.main, env: { ...process.env, TERM: "xterm-ghostty", TERM_PROGRAM: "ghostty", XDG_CONFIG_HOME: join(fixture.directory, "config") },
         terminal: { cols: 120, rows: 24, name: "xterm-ghostty", data: (_terminal, bytes) => {
           raw += decoder.decode(bytes, { stream: true });
-          // Workspace navigation is now an on-demand popup; the footer and composer prove the TUI is mounted.
-          if (raw.includes("New line") && raw.includes("Transcript")) ready.resolve();
+          // 기본 단축키 안내가 아니라 앱·작업 뷰·세션 상태 표시로 화면 준비를 확인한다.
+          const screen = Bun.stripANSI(raw);
+          if (screen.includes("Radian") && screen.includes("Agents") && screen.includes("context")) ready.resolve();
           if (raw.includes("\x1b]777;notify;Radian · Task completed;") && raw.includes("Completed")) notified.resolve();
         } },
       });
       // unknown 포커스의 실제 TUI에 서비스의 새 최종 결과를 전달한다.
       await ready.promise;
+      // 숨긴 줄바꿈 안내를 되살리지 않고도 실제 요청과 알림 검증까지 진행한다.
+      expect(Bun.stripANSI(raw)).not.toContain("New line");
       expectOk(await client.prompt(id, "read"));
       await observed;
       child.terminal?.write("\x00c");

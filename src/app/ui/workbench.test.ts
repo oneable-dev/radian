@@ -200,7 +200,7 @@ test("종류 아이콘은 왼쪽에 두고 부모·자식의 합산 상태는 �
     expect(app.tabFrame("a2")).not.toContain(workspaceIcons.complete);
     app.renderer.root.findDescendantById("agent-session-list")!.focus(); app.mockInput.pressKey("END");
     await app.renderOnce(); await app.renderOnce();
-    expect(app.tabFrame("a3")).toContain(workspaceIcons.failure);
+    expect(app.tabFrame("a3")).toContain(icons.failure);
     await app.clickText(`${icons.folder} radian-ui`);
     expect(app.tabFrame("b1")).toBe("│ 1. b1         × ");
   } finally { await app.close(); }
@@ -228,7 +228,7 @@ test("History 팝업 뒤에서 바뀐 실패 상태도 닫은 뒤 선택과 무�
     await app.openWorkspaces();
     expect(app.treeFrame()).toContain(`${workspaceIcons.worktree} radian`);
     await app.clickText(`${icons.folder} radian`);
-    expect(app.tabFrame("a1")).toContain(workspaceIcons.failure);
+    expect(app.tabFrame("a1")).toContain(icons.failure);
   } finally { await app.close(); }
 });
 
@@ -397,8 +397,8 @@ test("검색 중 주입한 snapshot은 현재 검색어로 갱신되고 숨겨�
     app.mockInput.pressCtrlC();
     await app.renderOnce();
 
-    // Clearing renders current aggregate state without moving the selection or input focus.
-    expect(app.tabFrame("a1")).toContain(workspaceIcons.failure);
+    // 검색을 지워도 선택과 포커스를 유지하며 세션 전용 실패 아이콘을 표시한다.
+    expect(app.tabFrame("a1")).toContain(icons.failure);
     expect(app.treeFrame()).toContain(`${icons.branch} feature/workspace`);
     expect(app.renderer.currentFocusedRenderable).toBe(input);
     expect(app.selection.sessionId).toBe("a1");

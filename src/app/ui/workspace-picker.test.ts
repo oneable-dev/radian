@@ -252,13 +252,15 @@ test("Stopped 탭은 벨보다 물음표 하나를 우선 표시하고 읽음과
     const colorAt = (column: number) => {
       let x = 0; return app.captureSpans().lines[tab.y]!.spans.find(span => { x += span.width; return x > column; })!.fg.toInts();
     };
-    expect(colorAt(tab.x + 5)).toEqual(uiTheme(app.renderer).colors.warning.toInts());
+    expect(colorAt(tab.x + 5)).toEqual(uiTheme(app.renderer).colors.error.toInts());
     app.selection.replaceSnapshot(app.selection.snapshot.map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => ({ ...tree, sessions: tree.sessions.map(session => {
       if (session.id !== "a2") return session;
       const { attention: _attention, ...next } = session; return next;
     }) })) })));
     await app.render();
+    // 읽음 처리 이후에도 중단 결과의 물음표와 오류색을 유지한다.
     expect(region()).toBe("│ 2. ? a2       × ");
+    expect(colorAt(tab.x + 5)).toEqual(uiTheme(app.renderer).colors.error.toInts());
   } finally { await app.close(); }
 });
 

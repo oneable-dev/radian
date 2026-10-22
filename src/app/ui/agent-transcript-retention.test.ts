@@ -58,7 +58,7 @@ test("다른 세션의 출력과 상태만 바뀌면 현재 대화는 갱신하�
     // 현재 대화는 그대로 두면서 B 탭의 실패 표시는 놓치지 않는다.
     expect(updates).not.toHaveBeenCalled();
     expect(app.markdown("a history") === markdown).toBe(true);
-    expect(app.captureCharFrame()).toContain(icons.error);
+    expect(app.captureCharFrame()).toContain(icons.failure);
     expect(app.captureCharFrame()).not.toContain("b background output");
   } finally { updates.mockRestore(); await app.close(); }
 });
