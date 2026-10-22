@@ -53,6 +53,61 @@ test("계정을 추가하면 전역 목록에 나타나지만 기존 선택과 P
   expect(JSON.stringify(other)).not.toContain('"key"'); expect((await stat(join(directory, "accounts.json"))).mode & 0o777).toBe(0o600);
 });
 
+test("계정 목록은 인증된 기존 연결과 로그인 가능한 제공자를 구분한다", async () => {
+  // 지원하는 제공자라도 인증 정보가 없으면 전환할 계정이 아니다.
+  const { manager, defaults } = await fixture();
+  const before = await manager.catalog("one");
+  expect(before.existingAccounts?.find(account => account.provider === "fixture")).toBeUndefined();
+  expect(before.providers.find(provider => provider.id === "fixture")).toBeDefined();
+
+  // 기존 저장소에 인증을 등록하면 목록 조회에서 이를 발견한다.
+  await defaults.modify("fixture", async () => ({ type: "api_key", key: "private-existing-key" }));
+  const connected = await manager.catalog("one");
+
+  // 클라이언트에는 인증 종류만 전달하고 토큰이나 인증 복사본은 전달하지 않는다.
+  expect(connected.existingAccounts).toContainEqual({ provider: "fixture", name: "Fixture", type: "api_key" });
+  expect(connected.accounts).toEqual([]); expect(JSON.stringify(connected)).not.toContain("private-existing-key");
+});
+
+test("기존 연결 확인이 실패해도 저장된 계정을 유지하고 비밀정보 없는 경고를 반환한다", async () => {
+  // 제공자의 인증 확인만 실패하도록 하여 정상 계정의 전환을 막지 않아야 한다.
+  const failing = provider(), { manager } = await fixture([failing]);
+  const account = await add(manager, "saved-account");
+  failing.auth.apiKey!.check = async () => { throw new Error("private-provider-response"); };
+
+  const listed = await manager.catalog("one");
+
+  // 확인하지 못한 연결을 로그인된 것처럼 만들거나 조용히 누락하지 않는다.
+  expect(listed.accounts.map(account => account.id)).toContain(account.id);
+  expect(listed.existingAccounts?.find(account => account.provider === "fixture")).toBeUndefined();
+  expect(listed.warning).toContain("could not be checked"); expect(JSON.stringify(listed)).not.toContain("private-provider-response");
+});
+
+test("환경변수 인증도 실제 설정된 동안만 기존 계정 목록에 나타난다", async () => {
+  // 다른 테스트나 사용자 환경의 키와 겹치지 않는 제공자 인증을 사용한다.
+  const variable = "RADIAN_TEST_ACCOUNT_KEY", previous = process.env[variable], ambient = provider();
+  ambient.auth.apiKey!.resolve = async ({ ctx, credential }) => {
+    const key = credential?.key || await ctx.env(variable);
+    return key ? { auth: { apiKey: key } } : undefined;
+  };
+  delete process.env[variable];
+  try {
+    const { manager } = await fixture([ambient]);
+    expect((await manager.catalog("one")).existingAccounts?.find(account => account.provider === "fixture")).toBeUndefined();
+
+    // 앱을 다시 시작하지 않고 환경 인증을 설정하고 해제한다.
+    process.env[variable] = "private-environment-key";
+    const connected = await manager.catalog("one");
+    delete process.env[variable];
+    const disconnected = await manager.catalog("one");
+
+    // 목록은 지원 제공자나 오래된 인증 캐시가 아니라 현재의 인증 설정을 반영한다.
+    expect(connected.existingAccounts).toContainEqual({ provider: "fixture", name: "Fixture", type: "api_key" });
+    expect(JSON.stringify(connected)).not.toContain("private-environment-key");
+    expect(disconnected.existingAccounts?.find(account => account.provider === "fixture")).toBeUndefined();
+  } finally { if (previous === undefined) delete process.env[variable]; else process.env[variable] = previous; }
+});
+
 test("작업 공간별 선택은 인증을 격리하며 저장 후 다시 열어도 유지한다", async () => {
   // 두 계정은 같은 제공자이지만 서로 다른 키를 사용한다.
   const { manager, directory } = await fixture(); const a = await add(manager, "key-a"), b = await add(manager, "key-b");
@@ -207,6 +262,9 @@ test("Pi 기본 OAuth는 목록 조회에서 갱신하지 않고 실제 인증 �
   const { manager, defaults } = await fixture([oauth]);
   await defaults.modify("fixture", async () => ({ type: "oauth", access: "pi-old", refresh: "pi-refresh", expires: 0 }));
 
+  // 만료된 OAuth도 목록 조회에서는 토큰을 회전하지 않고 연결 정보만 표시한다.
+  const listed = await manager.catalog("one");
+  expect(listed.existingAccounts).toContainEqual({ provider: "fixture", name: "Fixture", type: "oauth" });
   const one = await manager.workspace("one"), two = await manager.workspace("two"); expect(refreshed).toBe(0);
   const auth = await Promise.all([one.runtime.getAuth("fixture"), two.runtime.getAuth("fixture")]);
 

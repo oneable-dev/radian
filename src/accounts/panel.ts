@@ -147,7 +147,8 @@ export class AccountsPanel {
     if (request.type === "answer" && this.flow?.id !== request.flowId) return;
     if (!result.ok) { this.message.content = `[${result.error.code}] ${result.error.message}`; return; }
     if (result.value.kind === "catalog") {
-      this.catalog = result.value.catalog; this.main(); if (result.value.warning) this.message.content = result.value.warning;
+      this.catalog = result.value.catalog; this.main();
+      const warning = [result.value.warning, this.catalog.warning].filter(Boolean).join(" · "); if (warning) this.message.content = warning;
     } else {
       this.accept(result.value.login);
       if (request.type === "login") this.launch(() => this.watch());
@@ -164,20 +165,26 @@ export class AccountsPanel {
   private main(): void {
     const catalog = this.catalog, worktreeId = this.worktreeId; if (!catalog || !worktreeId) return;
     this.flow = undefined; this.promptId = undefined;
-    const entries: Candidate[] = [{ id: "add", label: "+ Add account", detail: "Shared by all worktrees; adding does not change any selection", choose: () => this.providers() }];
-    const providers = new Map(catalog.providers.map(provider => [provider.id, provider.name]));
-    for (const account of catalog.accounts) if (!providers.has(account.provider)) providers.set(account.provider, account.provider);
-    for (const [provider, name] of [...providers].sort((a, b) => a[1].localeCompare(b[1]))) {
+    const entries: Candidate[] = [{ id: "add", label: "+ Add account", detail: "Sign in to another account", choose: () => this.providers() }];
+    const names = new Map(catalog.providers.map(provider => [provider.id, provider.name]));
+    const existing = new Map((catalog.existingAccounts ?? []).map(account => [account.provider, account]));
+    for (const account of existing.values()) names.set(account.provider, account.name);
+    const providers = new Set([...existing.keys(), ...catalog.accounts.map(account => account.provider)]);
+    for (const provider of [...providers].sort((a, b) => (names.get(a) ?? a).localeCompare(names.get(b) ?? b))) {
+      const name = names.get(provider) ?? provider;
       const choose = (accountId: string | null) => this.launch(() => this.perform({ type: "select", worktreeId, provider, accountId, revision: catalog.revision }));
-      entries.push({ id: `default:${provider}`, label: `${name} · Pi default${catalog.selections[provider] ? "" : " [Selected]"}`, detail: "Use Pi credentials / environment explicitly", choose: () => choose(null) });
+      const connection = existing.get(provider);
+      if (connection) entries.push({ id: `existing:${provider}`, label: `${name} · ${connection.type === "oauth" ? "Existing login" : "Existing API key"}${catalog.selections[provider] ? "" : " [Active]"}`,
+        detail: `${connection.type === "oauth" ? "OAuth" : "API key"} · already connected`, choose: () => choose(null) });
       for (const account of catalog.accounts.filter(account => account.provider === provider)) entries.push({ id: account.id, accountId: account.id,
-        label: `${name} · ${account.label}${catalog.selections[provider] === account.id ? " [Selected]" : ""}`, detail: `${account.type === "oauth" ? "OAuth" : "API key"} · selected by ${account.usedBy.length} worktree(s)`, choose: () => choose(account.id) });
+        label: `${name} · ${account.label}${catalog.selections[provider] === account.id ? " [Active]" : ""}`, detail: `${account.type === "oauth" ? "OAuth" : "API key"} · used by ${account.usedBy.length} worktree(s)`, choose: () => choose(account.id) });
     }
-    this.menu("accounts", "Accounts · shared accounts / worktree selection", "Enter selects authentication for this worktree only. Additions are shared; running responses are not interrupted.", entries);
+    this.menu("accounts", "Accounts", providers.size ? "Enter switches accounts for this worktree. Use Add account to sign in to another account."
+      : "No connected accounts. Choose Add account to sign in.", entries);
   }
   private providers(): void {
-    this.menu("providers", "Add account · provider", "Only SDK-supported interactive methods are offered.", (this.catalog?.providers ?? []).map(provider => ({ id: provider.id, label: provider.name, detail: provider.id, choose: () => {
-      this.provider = provider; this.menu("methods", `Add account · ${singleLine(provider.name)}`, "Choose authentication. OAuth does not require a separate API key.", provider.methods.map(method => ({ id: method.id, label: method.name, detail: method.id, choose: () => {
+    this.menu("providers", "Add account · provider", "Choose a service to sign in.", (this.catalog?.providers ?? []).map(provider => ({ id: provider.id, label: provider.name, detail: provider.id, choose: () => {
+      this.provider = provider; this.menu("methods", `Add account · ${singleLine(provider.name)}`, "Choose how to sign in. OAuth does not require a separate API key.", provider.methods.map(method => ({ id: method.id, label: method.name, detail: method.id, choose: () => {
         this.method = method.id; this.menu("label", "Add account · name", "Enter a label for the shared account, or press Enter to use the provider name.", []);
         this.search.field.visible = this.list.visible = false; this.input.visible = true; this.input.placeholder = "Account label"; this.input.maxLength = 128; this.input.focus();
       } })));
@@ -243,9 +250,9 @@ export class AccountsPanel {
     const account = catalog.accounts.find(account => account.id === accountId); if (!account) return;
     this.menu("delete", "Delete local account?", `Remove ${singleLine(account.label)} and its saved credential from Radian. This does not delete the service account or conversations.`, [
       { id: "cancel", label: "Keep account", detail: "", choose: () => this.main() },
-      { id: "delete", label: "Delete local account", detail: "Selected accounts must be switched in every worktree first.", choose: () => this.launch(() => this.perform({ type: "delete", worktreeId, accountId, revision: catalog.revision })) },
+      { id: "delete", label: "Delete local account", detail: "Switch any worktrees using this account to another connected account first.", choose: () => this.launch(() => this.perform({ type: "delete", worktreeId, accountId, revision: catalog.revision })) },
     ]);
-    if (account.usedBy.length) { this.details.visible = true; this.body.content = `Selected by these worktrees:\n${account.usedBy.map(id => singleLine(id)).join("\n")}\n\nSwitch them to another account or Pi default before deleting.`; }
+    if (account.usedBy.length) { this.details.visible = true; this.body.content = `Used by these worktrees:\n${account.usedBy.map(id => singleLine(id)).join("\n")}\n\nSwitch them to another connected account before deleting.`; }
   }
   private get url(): string | undefined { return this.flow?.events.findLast(event => event.url)?.url; }
   private get code(): string | undefined { return this.flow?.events.findLast(event => event.code)?.code; }

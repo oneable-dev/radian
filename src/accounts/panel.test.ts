@@ -40,6 +40,76 @@ test("accounts 명령은 네이티브 팝업을 열고 모델 프롬프트 없�
   } finally { await app.close(); }
 });
 
+test("첫 계정 목록은 저장된 계정만 보여주고 미인증 제공자는 계정 추가 안에서 보여준다", async () => {
+  // 로그인하지 않은 제공자도 계정 추가에서는 선택할 수 있어야 한다.
+  const app = await mount({ onAccountsRequest: async request => ok({ kind: "catalog", catalog: { ...catalog, worktreeId: request.worktreeId,
+    providers: [...catalog.providers, { id: "other", name: "Other Service", methods: [{ id: "oauth", name: "Sign in" }] }] } }) });
+  try {
+    // 계정 전환 화면에는 인증되지 않은 기본 선택지를 만들지 않는다.
+    await app.open();
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("Fixture · Personal"); expect(frame).not.toContain("Other Service");
+    expect(frame).not.toContain("Pi default"); expect(frame).not.toContain("[Active]");
+
+    // 새 계정을 추가할 때만 전체 로그인 제공자를 보여준다.
+    app.mockInput.pressEnter(); await app.render();
+    expect(app.captureCharFrame()).toContain("Other Service"); expect(app.captureCharFrame()).toContain("Fixture");
+    expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("연결된 계정이 없으면 가짜 선택 상태 대신 계정 추가를 안내한다", async () => {
+  // 지원 제공자는 있지만 저장된 인증은 없는 초기 상태다.
+  const app = await mount({ onAccountsRequest: async request => ok({ kind: "catalog", catalog: { ...catalog, accounts: [], worktreeId: request.worktreeId } }) });
+  try {
+    await app.open();
+
+    // 아직 로그인하지 않은 제공자를 사용 중인 계정으로 표시하지 않는다.
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("No connected accounts"); expect(frame).toContain("+ Add account");
+    expect(frame).not.toContain("Fixture"); expect(frame).not.toContain("[Selected]"); expect(frame).not.toContain("[Active]");
+    app.mockInput.pressEnter(); await app.render(); expect(app.captureCharFrame()).toContain("Fixture");
+  } finally { await app.close(); }
+});
+
+test.each(["oauth", "api_key"] as const)("기존 %s 인증이 확인된 계정으로 Pi 용어 없이 전환한다", async type => {
+  // 저장된 계정과 이미 연결된 외부 인증은 같은 제공자의 전환 대상이다.
+  const connected: AccountsCatalog = { ...structuredClone(catalog), selections: { fixture: "named" },
+    existingAccounts: [{ provider: "fixture", name: "Fixture", type }] };
+  const calls: AccountRequest[] = [];
+  const app = await mount({ onAccountsRequest: async request => {
+    calls.push(request); if (request.type === "select" && request.accountId === null) delete connected.selections[request.provider];
+    return ok({ kind: "catalog", catalog: { ...connected, worktreeId: request.worktreeId } });
+  } });
+  try {
+    await app.open(); expect(app.captureCharFrame()).toContain("Personal [Active]");
+
+    // 실제 인증이 확인된 기존 계정을 검색해서 전환한다.
+    app.mockInput.pressKey("/"); await app.render(); await app.mockInput.typeText(type === "oauth" ? "Existing login" : "Existing API key"); await app.render();
+    app.mockInput.pressEnter(); await app.render();
+
+    // 계정 추가 없이 인증 경로를 전환하고 현재 사용 계정만 표시한다.
+    expect(calls.find(request => request.type === "select")).toMatchObject({ provider: "fixture", accountId: null, worktreeId: app.selection.worktree!.id });
+    const frame = app.captureCharFrame();
+    expect(frame).toContain(`${type === "oauth" ? "Existing login" : "Existing API key"} [Active]`);
+    expect(frame).not.toContain("Personal [Active]"); expect(frame).not.toContain("Pi default"); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("기존 연결 확인이 불완전하면 저장된 계정과 조회 경고를 함께 보여준다", async () => {
+  // 연결 확인 실패를 인증 없는 기본 계정으로 대체하지 않는다.
+  const app = await mount({ onAccountsRequest: async request => ok({ kind: "catalog", catalog: { ...catalog, worktreeId: request.worktreeId,
+    warning: "Some existing connections could not be checked. Refresh to retry." } }) });
+  try {
+    await app.open();
+
+    // 저장된 계정은 계속 선택할 수 있으며 목록이 불완전하다는 사실을 표시한다.
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("Fixture · Personal"); expect(frame).toContain("could not be checked");
+    expect(frame).not.toContain("Existing login"); expect(frame).not.toContain("Pi default");
+  } finally { await app.close(); }
+});
+
 test("accounts 팝업 아래 GPT 아이콘은 같은 확대 크기를 유지하며 배경과 함께 어두워진다", async () => {
   // 실제 상태 줄과 계정 팝업을 연결하고 터미널 이미지 전송만 대체한다.
   const app = await mount({ getSessionDetails: () => ({ status: "complete", output: "Retained answer", error: null,

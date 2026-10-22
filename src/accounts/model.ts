@@ -4,10 +4,13 @@ import { InputError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 
 const id = Type.String({ minLength: 1, maxLength: 4096 });
-export const accountInfoSchema = Type.Object({ id, provider: id, label: Type.String(), type: Type.Union([Type.Literal("api_key"), Type.Literal("oauth")]), usedBy: Type.Array(id) });
+const authType = Type.Union([Type.Literal("api_key"), Type.Literal("oauth")]);
+export const accountInfoSchema = Type.Object({ id, provider: id, label: Type.String(), type: authType, usedBy: Type.Array(id) });
 export type AccountInfo = Static<typeof accountInfoSchema>;
 export const accountsCatalogSchema = Type.Object({ revision: Type.Integer({ minimum: 0 }), worktreeId: id,
   accounts: Type.Array(accountInfoSchema), selections: Type.Record(Type.String(), id),
+  existingAccounts: Type.Optional(Type.Array(Type.Object({ provider: id, name: Type.String(), type: authType }))),
+  warning: Type.Optional(Type.String()),
   providers: Type.Array(Type.Object({ id, name: Type.String(), methods: Type.Array(Type.Object({ id: Type.Union([Type.Literal("api_key"), Type.Literal("oauth")]), name: Type.String() })) })),
 });
 export type AccountsCatalog = Static<typeof accountsCatalogSchema>;
@@ -33,7 +36,7 @@ export const accountReplySchema = Type.Union([
   Type.Object({ kind: Type.Literal("login"), login: loginViewSchema }),
 ]);
 export type AccountReply = Static<typeof accountReplySchema>;
-export const accountsCommand: CompletionItem = { kind: "command", value: "accounts", description: "Manage shared accounts and select authentication for this worktree" };
+export const accountsCommand: CompletionItem = { kind: "command", value: "accounts", description: "Switch accounts or sign in to a new account" };
 export function parseAccountsCommand(text: string): Result<boolean, InputError> {
   const command = text.trim();
   if (!/^\/accounts(?:\s|$)/u.test(command)) return ok(false);

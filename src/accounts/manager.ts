@@ -90,9 +90,25 @@ export class AccountManager {
     return { id: account.id, provider: account.provider, label: account.label, type: account.credential.type,
       usedBy: Object.entries(this.state.selections).filter(([, providers]) => providers[account.provider] === account.id).map(([worktree]) => worktree) };
   }
+  private async existingAccount(provider: Provider): Promise<Result<NonNullable<AccountsCatalog["existingAccounts"]>[number] | undefined, ExpectedError>> {
+    let auth: Awaited<ReturnType<ModelRuntime["checkAuth"]>>;
+    try { auth = await this.defaults.checkAuth(provider.id); }
+    catch (error) {
+      const expected = knownError(error); if (expected) return err(expected);
+      if (error instanceof ModelsError) return err(new AccountError("ACCOUNT_LOGIN_FAILED", "Could not check an existing account connection.", { cause: error }));
+      throw error;
+    }
+    return ok(auth ? { provider: provider.id, name: provider.name, type: auth.type } : undefined);
+  }
   async catalog(worktreeId: string): Promise<AccountsCatalog> {
     const { runtime } = await this.workspace(worktreeId);
-    return { revision: this.state.revision, worktreeId, selections: { ...this.state.selections[worktreeId] }, accounts: this.state.accounts.map(account => this.info(account)),
+    // Availability checks discover configured credentials without refreshing OAuth tokens.
+    // Supported login providers belong to Add account, not the connected-account list.
+    const connections = await Promise.all(this.defaults.getProviders().map(provider => this.existingAccount(provider)));
+    const existingAccounts = connections.flatMap(result => result.ok && result.value ? [result.value] : []);
+    const incomplete = connections.some(result => !result.ok);
+    return { revision: this.state.revision, worktreeId, selections: { ...this.state.selections[worktreeId] }, accounts: this.state.accounts.map(account => this.info(account)), existingAccounts,
+      ...(incomplete ? { warning: "Some existing connections could not be checked. Refresh to retry; saved accounts are still available." } : {}),
       providers: runtime.getProviders().map(provider => ({ id: provider.id, name: provider.name, methods: [
         ...(provider.auth.oauth ? [{ id: "oauth" as const, name: provider.auth.oauth.loginLabel ?? provider.auth.oauth.name }] : []),
         ...(provider.auth.apiKey?.login ? [{ id: "api_key" as const, name: provider.auth.apiKey.name }] : []),
@@ -108,7 +124,7 @@ export class AccountManager {
     try { auth = await this.defaults.getAuth(provider, options); }
     catch (error) {
       if (options?.signal?.aborted) throw new CancelledError();
-      if (externalAuthFailure(error)) throw new AccountError("ACCOUNT_LOGIN_FAILED", "Could not resolve Pi default authentication. Check the provider login.", { cause: error });
+      if (externalAuthFailure(error)) throw new AccountError("ACCOUNT_LOGIN_FAILED", "Could not resolve the existing account connection. Check the provider login.", { cause: error });
       throw error;
     }
     const latest = await read();
@@ -142,7 +158,7 @@ export class AccountManager {
           }
           if (!next || JSON.stringify(next) === JSON.stringify(current)) return current;
           if (!Value.Check(credentialSchema, next)) throw new AccountError("ACCOUNT_LOGIN_FAILED", "The provider returned an unsupported refreshed credential.");
-          if (!id) throw new CapabilityError("Pi default credentials are managed by Pi. Add a named Radian account instead.");
+          if (!id) throw new CapabilityError("Existing credentials are managed outside Radian. Add an account instead.");
           const saved = await this.serialize(async () => {
             this.account(id, provider);
             const state = structuredClone(this.state); state.accounts.find(account => account.id === id)!.credential = next; state.revision++;
@@ -236,7 +252,7 @@ export class AccountManager {
       if (request.revision !== this.state.revision) return err(new AccountError("ACCOUNT_CONFLICT", "Accounts changed. Refresh before deleting an account."));
       const account = this.state.accounts.find(account => account.id === request.accountId);
       if (!account) return err(new AccountError("ACCOUNT_NOT_FOUND", "That account no longer exists."));
-      if (this.info(account).usedBy.length) return err(new AccountError("ACCOUNT_IN_USE", "This account is selected by a worktree. Select another account or Pi default in every affected worktree before deleting it."));
+      if (this.info(account).usedBy.length) return err(new AccountError("ACCOUNT_IN_USE", "This account is used by a worktree. Switch every affected worktree to another connected account before deleting it."));
       const state = structuredClone(this.state); state.accounts = state.accounts.filter(account => account.id !== account.id); state.revision++;
       return this.commit(state);
     }));
