@@ -107,6 +107,36 @@ test.each(surfaces)("%s 검색은 공용 입력의 여백·포커스 배경을 �
   } finally { await app.close(); }
 });
 
+test.each(["history", "monitor"] as const)("%s 모달은 검색을 왼쪽 목록 너비로 제한하고 미리보기를 검색 높이부터 표시한다", async surface => {
+  // 검색과 미리보기가 함께 있는 모달에서도 현재 대화와 검색 캐럿은 독립적이다.
+  const app = await mount(surface);
+  try {
+    await app.mockInput.typeText("candidate"); app.mockInput.pressArrow("left"); await app.render();
+    const input = app.input as SearchInput, value = input.value, cursor = input.cursorOffset;
+
+    // 분할 화면과 단일 패널 화면을 왕복해 실제 터미널 셀 배치를 확인한다.
+    for (const width of [140, 100, 99, 60, 140]) {
+      app.resize(width, 30); await app.render();
+      const field = input.field, preview = app.get(`${surface}-preview-pane`), message = app.get(`${surface}-message`);
+
+      // 검색과 결과 안내는 목록 열에만 속하고 미리보기는 그 높이까지 모두 사용한다.
+      expect(field.x).toBe(app.list.x); expect(field.width).toBe(app.list.width);
+      expect(message.x).toBe(app.list.x);
+      expect(preview.visible).toBe(width >= 100);
+      if (preview.visible) {
+        expect(field.x + field.width).toBe(preview.x);
+        expect(preview.y).toBe(field.y);
+        expect(preview.y + preview.height).toBe(app.list.y + app.list.height);
+        const lines = app.captureCharFrame().split("\n");
+        expect(lines[field.y]![preview.x]).toBe("│"); expect(lines[message.y]![preview.x]).toBe("│");
+      }
+      expect(input.value).toBe(value); expect(input.cursorOffset).toBe(cursor);
+      expect(app.renderer.currentFocusedRenderable).toBe(input);
+    }
+    expect(app.view.promptDrafts["session-0"]).toBe("KEEP_AGENT_DRAFT"); expect(app.opened).toEqual([]); expect(app.submitted).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test.each(surfaces)("%s 목록의 Ctrl+D/U는 반 페이지 후보를 왕복하며 Enter 전에는 확정하지 않는다", async surface => {
   // 실제 목록 높이와 행 간격에 맞춰 한 번에 여러 후보를 이동한다.
   const app = await mount(surface);

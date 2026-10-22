@@ -34,6 +34,8 @@ export class SessionMonitor {
   readonly search: SearchInput;
   readonly list: ScrollBoxRenderable;
   private readonly panel: BoxRenderable;
+  private readonly body: BoxRenderable;
+  private readonly candidates: BoxRenderable;
   private readonly message: TextRenderable;
   private readonly previewPane: BoxRenderable;
   private readonly transcript: TranscriptPanel;
@@ -64,8 +66,9 @@ export class SessionMonitor {
     heading.add(title); heading.add(this.spinner.root); heading.add(close);
     this.search = new SearchInput(renderer, { id: "monitor-search", placeholder: "Search tasks, repositories or worktrees…" });
     this.message = new TextRenderable(renderer, { id: "monitor-message", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
-    const body = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "row" });
-    this.list = new ScrollBoxRenderable(renderer, { id: "monitor-list", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
+    this.body = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "row" });
+    this.candidates = new BoxRenderable(renderer, { width: "42%", minHeight: 0, minWidth: 0, flexDirection: "column", overflow: "hidden" });
+    this.list = new ScrollBoxRenderable(renderer, { id: "monitor-list", width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.list.focus() });
     this.previewPane = new BoxRenderable(renderer, { id: "monitor-preview-pane", width: "58%", minWidth: 0, minHeight: 0, flexDirection: "column", border: ["left"], paddingLeft: 1 });
     const label = new TextRenderable(renderer, { content: "Live preview · read only", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
@@ -73,8 +76,9 @@ export class SessionMonitor {
       focusPrompt: () => this.search.focus(), notice: actions.notice, changed: actions.changed });
     this.transcript.scroll.id = "monitor-preview";
     this.previewPane.add(label); this.previewPane.add(this.transcript.scroll);
-    body.add(this.list); body.add(this.previewPane);
-    this.panel.add(heading); this.panel.add(this.search.field); this.panel.add(this.message); this.panel.add(body); this.root.add(this.panel);
+    this.candidates.add(this.search.field); this.candidates.add(this.message); this.candidates.add(this.list);
+    this.body.add(this.candidates); this.body.add(this.previewPane);
+    this.panel.add(heading); this.panel.add(this.body); this.root.add(this.panel);
     const theme = uiTheme(renderer);
     theme.scrollbars(this.list); theme.scrollbars(this.transcript.scroll);
     theme.bindStyles(this.root, styles => {
@@ -201,7 +205,7 @@ export class SessionMonitor {
     else if (command === "monitor.half-page-up" || command === "monitor.half-page-down") {
       const direction = command === "monitor.half-page-up" ? -1 : 1;
       if (this.transcript.focused) { this.transcript.scroll.scrollBy(direction * halfPageStep(this.transcript.scroll.viewport.height)); return; }
-      const height = this.list.visible ? this.list.viewport.height : this.list.parent?.height ?? this.list.viewport.height;
+      const height = this.list.visible ? this.list.viewport.height : this.body.height - this.search.field.height - this.message.height;
       if (this.search.focused) {
         if (this.compactPreview) { this.compactPreview = false; this.resize(); }
         this.list.focus();
@@ -217,7 +221,9 @@ export class SessionMonitor {
     this.panel.width = width; this.panel.height = height; this.panel.left = Math.floor((this.renderer.width - width) / 2); this.panel.top = Math.floor((this.renderer.height - height) / 2);
     const wide = this.renderer.width >= 100;
     this.list.visible = wide || !this.compactPreview; this.previewPane.visible = wide || this.compactPreview;
-    this.list.width = wide ? "42%" : "100%"; this.previewPane.width = wide ? "58%" : "100%";
+    this.body.flexDirection = wide ? "row" : "column";
+    this.candidates.width = wide ? "42%" : "100%"; this.candidates.flexGrow = this.list.visible ? 1 : 0;
+    this.previewPane.width = wide ? "58%" : "100%"; this.previewPane.flexGrow = wide ? 0 : 1;
     this.previewPane.border = wide ? ["left"] : false; this.previewPane.paddingLeft = wide ? 1 : 0;
     if (this.visible && (this.transcript.focused && !this.previewPane.visible || this.list.focused && !this.list.visible)) this.search.focus();
     this.preview(); this.actions.changed();

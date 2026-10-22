@@ -35,6 +35,8 @@ export class GitBrowser {
   readonly list: GitList;
   readonly preview: ScrollBoxRenderable;
   private readonly panel: BoxRenderable;
+  private readonly body: BoxRenderable;
+  private readonly candidates: BoxRenderable;
   private readonly title: TextRenderable;
   private readonly message: TextRenderable;
   private readonly previewPane: BoxRenderable;
@@ -69,15 +71,19 @@ export class GitBrowser {
     heading.add(close);
     this.search = new SearchInput(renderer, { id: "git-browser-search", placeholder: "Search refs…" });
     this.message = new TextRenderable(renderer, { id: "git-browser-status", height: 1, flexShrink: 0, selectable: false, wrapMode: "none", truncate: true });
-    const body = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "row" });
+    this.body = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "row" });
+    this.candidates = new BoxRenderable(renderer, { width: "100%", minHeight: 0, minWidth: 0, flexDirection: "column", overflow: "hidden" });
     this.list = new GitList(renderer, "git-browser-list", key => this.choose(key), () => this.open(), false);
+    this.list.root.width = "100%";
     this.previewPane = new BoxRenderable(renderer, { id: "git-reflog-preview-pane", width: "48%", minWidth: 0, minHeight: 0,
       flexDirection: "column", border: ["left"], paddingLeft: 1 });
     this.preview = new ScrollBoxRenderable(renderer, { id: "git-reflog-preview", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       onMouseDown: () => this.preview.focus() });
     this.previewText = new TextRenderable(renderer, { id: "git-reflog-preview-text", width: "100%", wrapMode: "word", selectable: true });
-    this.preview.add(this.previewText); this.previewPane.add(this.preview); body.add(this.list.root); body.add(this.previewPane);
-    this.panel.add(heading); this.panel.add(this.search.field); this.panel.add(this.message); this.panel.add(body); this.root.add(this.panel);
+    this.preview.add(this.previewText); this.previewPane.add(this.preview);
+    this.candidates.add(this.search.field); this.candidates.add(this.message); this.candidates.add(this.list.root);
+    this.body.add(this.candidates); this.body.add(this.previewPane);
+    this.panel.add(heading); this.panel.add(this.body); this.root.add(this.panel);
     const theme = uiTheme(renderer); theme.scrollbars(this.preview);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
@@ -222,7 +228,7 @@ export class GitBrowser {
       else if (command === "git.last") this.preview.scrollTo(Number.MAX_SAFE_INTEGER);
       else this.preview.scrollBy((down ? 1 : -1) * (half ? halfPageStep(this.preview.viewport.height) : command === "git.page-up" || command === "git.page-down" ? Math.max(1, this.preview.viewport.height - 1) : 1));
     } else if (half) {
-      const height = this.list.root.visible ? this.list.root.viewport.height : this.list.root.parent?.height ?? this.list.root.viewport.height;
+      const height = this.list.root.visible ? this.list.root.viewport.height : this.body.height - this.search.field.height - this.message.height;
       if (this.search.focused) { this.compactPreview = false; this.resize(); this.list.root.focus(); }
       this.list.move(down ? "next" : "previous", halfPageStep(height));
     } else if (command === "git.first" || command === "git.last") this.list.move(command === "git.first" ? "first" : "last");
@@ -255,7 +261,9 @@ export class GitBrowser {
     this.search.fit(Math.max(1, height - 8));
     const wide = this.renderer.width >= 100, reflog = this.kind === "reflog";
     this.list.root.visible = !reflog || wide || !this.compactPreview; this.previewPane.visible = reflog && (wide || this.compactPreview);
-    this.list.root.width = reflog && wide ? "52%" : "100%"; this.previewPane.width = wide ? "48%" : "100%";
+    this.body.flexDirection = wide ? "row" : "column";
+    this.candidates.width = reflog && wide ? "52%" : "100%"; this.candidates.flexGrow = this.list.root.visible ? 1 : 0;
+    this.previewPane.width = wide ? "48%" : "100%"; this.previewPane.flexGrow = wide ? 0 : 1;
     this.previewPane.border = wide ? ["left"] : false; this.previewPane.paddingLeft = wide ? 1 : 0;
   };
   dispose(): void {

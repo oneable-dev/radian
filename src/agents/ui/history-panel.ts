@@ -37,6 +37,8 @@ export class SessionHistoryPanel {
   readonly list: ScrollBoxRenderable;
   readonly preview: ScrollBoxRenderable;
   private readonly panel: BoxRenderable;
+  private readonly body: BoxRenderable;
+  private readonly candidates: BoxRenderable;
   private readonly title: TextRenderable;
   private readonly spinner: LoadingSpinner;
   private readonly previewLabel: TextRenderable;
@@ -81,8 +83,9 @@ export class SessionHistoryPanel {
       onMouseDown: (event) => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.hide(); } } }); heading.add(close);
     this.search = new SearchInput(renderer, { id: "history-search", placeholder: "Search session titles…" });
     this.message = new TextRenderable(renderer, { id: "history-message", content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
-    const body = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "row" });
-    this.list = new ScrollBoxRenderable(renderer, { id: "history-list", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
+    this.body = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "row" });
+    this.candidates = new BoxRenderable(renderer, { width: "42%", minHeight: 0, minWidth: 0, flexDirection: "column", overflow: "hidden" });
+    this.list = new ScrollBoxRenderable(renderer, { id: "history-list", width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.list.focus() });
     this.previewPane = new BoxRenderable(renderer, { id: "history-preview-pane", width: "58%", minWidth: 0, minHeight: 0, flexDirection: "column", border: ["left"], paddingLeft: 1 });
     const previewHeading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
@@ -97,8 +100,9 @@ export class SessionHistoryPanel {
       () => this.renderPreview(), error => reportUnexpected(error, "history preview"));
     this.preview = this.session.transcriptScroll; this.preview.id = "history-preview";
     this.previewPane.add(previewHeading); this.previewPane.add(this.session.root);
-    body.add(this.list); body.add(this.previewPane);
-    this.panel.add(heading); this.panel.add(this.search.field); this.panel.add(this.message); this.panel.add(body); this.root.add(this.panel);
+    this.candidates.add(this.search.field); this.candidates.add(this.message); this.candidates.add(this.list);
+    this.body.add(this.candidates); this.body.add(this.previewPane);
+    this.panel.add(heading); this.panel.add(this.body); this.root.add(this.panel);
     theme.scrollbars(this.list); theme.scrollbars(this.preview);
     theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
@@ -306,7 +310,7 @@ export class SessionHistoryPanel {
     else if (command === "history.half-page-up" || command === "history.half-page-down") {
       const direction = command === "history.half-page-up" ? -1 : 1;
       if (this.session.transcriptFocused) { this.preview.scrollBy(direction * halfPageStep(this.preview.viewport.height)); return; }
-      const height = this.list.visible ? this.list.viewport.height : this.list.parent?.height ?? this.list.viewport.height;
+      const height = this.list.visible ? this.list.viewport.height : this.body.height - this.search.field.height - this.message.height;
       if (this.search.focused) {
         if (this.compactPreview) { this.compactPreview = false; this.resize(); }
         this.list.focus();
@@ -324,8 +328,10 @@ export class SessionHistoryPanel {
     this.panel.width = width; this.panel.height = height; this.panel.left = Math.floor((this.renderer.width - width) / 2); this.panel.top = Math.floor((this.renderer.height - height) / 2);
     const wide = this.renderer.width >= 100;
     this.list.visible = wide || !this.compactPreview; this.previewPane.visible = wide || this.compactPreview;
-    this.list.width = wide ? "42%" : "100%";
-    this.previewPane.width = wide ? "58%" : "100%";
+    this.body.flexDirection = wide ? "row" : "column";
+    this.candidates.width = wide ? "42%" : "100%";
+    this.candidates.flexGrow = this.list.visible ? 1 : 0;
+    this.previewPane.width = wide ? "58%" : "100%"; this.previewPane.flexGrow = wide ? 0 : 1;
     this.previewPane.border = wide ? ["left"] : false; this.previewPane.paddingLeft = wide ? 1 : 0;
     if (this.visible && ((this.session.root.hasFocusedDescendant && !this.previewPane.visible) || (this.list.focused && !this.list.visible))) this.search.focus();
     if (this.visible) this.renderPreview();

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
-import { InputRenderable, ScrollBoxRenderable } from "@opentui/core";
+import { InputRenderable, ScrollBoxRenderable, TextRenderable } from "@opentui/core";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -288,7 +288,10 @@ test("모니터 후보가 많으면 렌더링 한도를 알리고 검색으로 �
     app.selection.replaceSnapshot(app.selection.snapshot.map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => tree.id === "demo:main" ? { ...tree, sessions: [...tree.sessions, ...sessions] } : tree) })));
 
     app.leader("s"); await app.render();
-    expect(app.captureCharFrame()).toContain("Showing first 200 of 252 sessions; refine search");
+    // 안내도 왼쪽 열에 맞춰 잘리므로 표시된 개수와 전체 안내 내용을 함께 확인한다.
+    expect(app.captureCharFrame()).toContain("Showing first 200 of 252 sessions");
+    const message = app.get("monitor-message"); if (!(message instanceof TextRenderable)) throw new Error("Missing monitor summary");
+    expect(message.plainText).toBe("Showing first 200 of 252 sessions; refine search");
     expect(app.renderer.root.findDescendantById("monitor:bulk-249")).toBeUndefined();
     await app.mockInput.typeText("special last"); await app.render();
 

@@ -96,6 +96,38 @@ async function mount(options: { actions?: Partial<GitActions>; initial?: WorkVie
   };
 }
 
+test.each(["refs", "reflog"] as const)("Git %s 모달은 검색을 목록 너비에 맞추고 분할 미리보기에 전체 본문 높이를 준다", async mode => {
+  // 미리보기가 없는 Refs는 전체 너비 검색을 유지하고 Reflog만 두 열로 나뉜다.
+  const app = await mount();
+  try {
+    if (mode === "refs") await app.openRefs(); else await app.openReflog();
+    const input = app.get("git-browser-search"); if (!(input instanceof SearchInput)) throw new Error("Missing Git search");
+    await app.mockInput.typeText(mode === "refs" ? "main" : "login"); app.mockInput.pressArrow("left"); await app.renderOnce();
+    const value = input.value, cursor = input.cursorOffset;
+
+    // 브레이크포인트를 양방향으로 지나도 검색은 선택한 레이아웃의 목록 열에 맞춘다.
+    for (const width of [160, 100, 99, 60, 160]) {
+      app.resize(width, 32); await app.renderOnce(); await app.renderOnce();
+      const field = input.field, list = app.get("git-browser-list"), preview = app.get("git-reflog-preview-pane"), message = app.get("git-browser-status");
+
+      // 오른쪽 미리보기 위에 검색이나 결과 안내가 가로질러 그려지면 안 된다.
+      expect(field.x).toBe(list.x); expect(field.width).toBe(list.width);
+      expect(message.x).toBe(list.x);
+      expect(preview.visible).toBe(mode === "reflog" && width >= 100);
+      if (preview.visible) {
+        expect(field.x + field.width).toBe(preview.x);
+        expect(preview.y).toBe(field.y);
+        expect(preview.y + preview.height).toBe(list.y + list.height);
+        const lines = app.captureCharFrame().split("\n");
+        expect(lines[field.y]![preview.x]).toBe("│"); expect(lines[message.y]![preview.x]).toBe("│");
+      }
+      expect(input.value).toBe(value); expect(input.cursorOffset).toBe(cursor);
+      expect(app.renderer.currentFocusedRenderable).toBe(input);
+    }
+    expect(app.view.promptDrafts.a1).toBe("existing Agent draft"); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("Reflog preview는 이벤트와 커밋 시각을 구분하고 목록에 없는 커밋을 Changes로 연 뒤 메인 선택을 복원한다", async () => {
   // 모든 ref에서 사라진 커밋이 reflog에만 남아 있는 상황을 모델링한다.
   const lost: GitCommit = { ...commit, oid: "c".repeat(40), parents: [rootCommit.oid], subject: "Lost change", date: "2026-10-10" };
