@@ -166,9 +166,7 @@ export class PromptInput extends TextareaRenderable {
     const mark = this.atCursor(); if (!mark) return;
     const part: unknown = this.extmarks.getMetadataFor(mark.id);
     if (!Value.Check(promptPartSchema, part)) throw new Error("Prompt attachment metadata was lost.");
-    const generation = this.generation;
-    this.inspect({ title: promptPartLabel(part), text: part.kind === "paste" ? part.text : `${part.kind === "image" ? "Image" : "File"} reference\n\n${part.path}`,
-      remove: () => { if (generation === this.generation && !this.disposed && this.extmarks.get(mark.id)) this.batch(() => { this.cursorOffset = mark.end; this.setSelection(mark.start, mark.end); this.editorView.deleteSelectedText(); }); } });
+    this.inspect({ title: promptPartLabel(part), text: part.kind === "paste" ? part.text : `${part.kind === "image" ? "Image" : "File"} reference\n\n${part.path}` });
   }
   private atCursor() {
     const marks = this.extmarks.getAllForTypeId(this.tokenType);

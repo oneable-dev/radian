@@ -14,6 +14,7 @@ test.each([
   ["git.search-clear", "git-search"], ["search.clear", "search"],
   ["history.open", "history"], ["history.dismiss", "history-search"], ["monitor.page-down", "monitor"],
   ["dashboard.next", "dashboard-tabs"], ["model.next", "model-search"],
+  ["accounts.dismiss", "accounts-input"], ["accounts.next", "accounts-search"],
   ["session.next", "session-tabs"], ["terminal.tab-previous", "terminal-tabs"], ["terminal.scroll-up", "terminal"],
   ["transcript.next", "transcript"], ["transcript.right", "transcript-text"], ["transcript.visual", "transcript-text"],
   ["transcript.visual-line", "transcript-text"], ["transcript.copy", "transcript-visual"],
@@ -70,7 +71,8 @@ test.each([
   ["completion.accept", "prompt-completion"],
   ["transcript.enter", "transcript"], ["transcript.fold", "transcript"], ["transcript.copy", "transcript-text"],
   ["history.preview", "history"], ["model.select", "model"], ["model.effort-more", "model"],
-  ["git.open", "git"], ["git.refs", "git"], ["git.reflog", "git"], ["git.preview", "git-search"],
+  ["git.open", "git"], ["git.refs", "git"], ["git.reflog", "git"], ["git.preview", "git-search"], ["git.change-session", "git-prompt"],
+  ["accounts.browser", "accounts"], ["accounts.copy-url", "accounts"], ["accounts.copy-code", "accounts"],
 ] satisfies [CommandId, KeyContext][])("%s의 앱 고유 동작은 %s 푸터에 유지한다", (command, context) => {
   // 같은 Enter나 Ctrl 키라도 단순한 탐색이 아닌 기능은 발견할 수 있어야 한다.
   const key = defaults.hint(command, context);

@@ -72,12 +72,14 @@ test("최대 세 알림만 쌓고 대기 중인 실패 알림은 표시된 뒤�
   } finally { await app.close(); }
 });
 
-test("닫기와 카드 클릭을 구분하고 카드 바깥의 입력을 가로채지 않는다", async () => {
-  // The overlay has no full-screen backdrop and its close control is not a focus target.
+test("알림은 닫기 버튼 없이 만료되고 카드 바깥의 입력을 가로채지 않는다", async () => {
+  // 수동 닫기 UI 없이도 알림은 입력 포커스를 보존하며 자동 만료된다.
   const app = await fixture();
   try {
     app.stack.show(notification("one")); await app.render();
-    const close = app.get("dismiss-toast:one"); await app.mockMouse.click(close.x, close.y); await app.render();
+    expect(app.renderer.root.findDescendantById("dismiss-toast:one")).toBeUndefined();
+    expect(app.captureCharFrame()).not.toContain("×");
+    app.clock.advance(5000); await app.render();
     expect(app.stack.root.visible).toBe(false); expect(app.opened).toEqual([]); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
 
     app.stack.show(notification("two")); await app.render();

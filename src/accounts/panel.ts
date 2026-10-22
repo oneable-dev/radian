@@ -3,7 +3,6 @@ import { type AccountReply, type AccountRequest, type AccountsCatalog, type Logi
 import { SecretInput } from "./secret-input.ts";
 import { openLoginUrl } from "./browser.ts";
 import { Clipboard } from "../ui/clipboard.ts";
-import { Button } from "../ui/button.ts";
 import { SearchInput } from "../ui/search-input.ts";
 import { LoadingSpinner } from "../ui/loading-spinner.ts";
 import { halfPageStep } from "../ui/navigation.ts";
@@ -39,9 +38,6 @@ export class AccountsPanel {
   private readonly input: InputRenderable;
   private readonly secret: SecretInput;
   private readonly spinner: LoadingSpinner;
-  private readonly browser: Button;
-  private readonly copyUrl: Button;
-  private readonly copyCode: Button;
   private readonly clipboard: Clipboard;
   private readonly rows: BoxRenderable[] = [];
   private readonly opened = new Set<string>();
@@ -82,15 +78,7 @@ export class AccountsPanel {
     this.body = new TextRenderable(renderer, { id: "accounts-login-body", width: "100%", wrapMode: "char", selectable: true }); this.details.add(this.body);
     this.input = new InputRenderable(renderer, { id: "accounts-input", width: "100%", visible: false, maxLength: 65536 });
     this.secret = new SecretInput(renderer); this.secret.visible = false;
-    const controls = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    const submit = new Button(renderer, "Continue", () => this.choose()); submit.id = "accounts-continue";
-    const close = new Button(renderer, "Back / Cancel", () => this.back()); close.id = "accounts-cancel";
-    this.browser = new Button(renderer, "Open browser", () => this.launch(() => this.openBrowser())); this.browser.id = "accounts-browser";
-    this.copyUrl = new Button(renderer, "Copy URL", () => this.launch(() => this.copy(false))); this.copyUrl.id = "accounts-copy-url";
-    this.copyCode = new Button(renderer, "Copy code", () => this.launch(() => this.copy(true))); this.copyCode.id = "accounts-copy-code";
-    controls.add(submit); controls.add(close); controls.add(this.browser); controls.add(this.copyUrl); controls.add(this.copyCode);
-    this.panel.add(header); this.panel.add(this.search.field); this.panel.add(this.message); this.panel.add(this.list); this.panel.add(this.details); this.panel.add(this.input); this.panel.add(this.secret); this.panel.add(controls); this.root.add(this.panel);
-    this.browser.visible = this.copyUrl.visible = this.copyCode.visible = false;
+    this.panel.add(header); this.panel.add(this.search.field); this.panel.add(this.message); this.panel.add(this.list); this.panel.add(this.details); this.panel.add(this.input); this.panel.add(this.secret); this.root.add(this.panel);
     theme.scrollbars(this.list); theme.scrollbars(this.details); theme.input(this.input);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
@@ -103,8 +91,11 @@ export class AccountsPanel {
   get context(): KeyContext { return this.secret.focused || this.input.focused ? "accounts-input" : this.search.focused ? "accounts-search" : "accounts"; }
   get focusTargets(): Renderable[] { return [this.search, this.list, this.details, this.input, this.secret].filter(node => node.visible && (node !== this.search || this.search.field.visible)); }
   get shortcuts(): readonly FooterShortcut[] {
-    return ([ ["accounts.choose", "Continue"], ["accounts.dismiss", "Back / Cancel"], ["accounts.search", "Search"], ["accounts.previous", "Previous"], ["accounts.next", "Next"], ["accounts.half-page-down", "½ page"], ["accounts.delete", "Delete account"], ["accounts.browser", "Open browser"], ["accounts.copy-url", "Copy URL"] ] as const)
-      .filter(([command]) => command !== "accounts.delete" || this.stage === "accounts")
+    return ([ ["accounts.choose", "Continue"], ["accounts.dismiss", "Back / Cancel"], ["accounts.search", "Search"], ["accounts.previous", "Previous"], ["accounts.next", "Next"], ["accounts.half-page-down", "½ page"], ["accounts.delete", "Delete account"], ["accounts.browser", "Open browser"], ["accounts.copy-url", "Copy URL"], ["accounts.copy-code", "Copy code"] ] as const)
+      .filter(([command]) => command !== "accounts.choose" || !this.busy && (this.stage === "label" || this.stage === "login" && !!this.flow?.prompt || this.list.visible && this.filtered.length > 0))
+      .filter(([command]) => command !== "accounts.search" || this.search.field.visible)
+      .filter(([command]) => command !== "accounts.delete" || this.stage === "accounts" && !!this.filtered[this.cursor]?.accountId)
+      .filter(([command]) => command !== "accounts.copy-code" || !!this.code)
       .filter(([command]) => !["accounts.browser", "accounts.copy-url"].includes(command) || !!this.url)
       .map(([command, label]) => ({ key: footerKeyHint(command, this.context, this.actions.keyHint(command, this.context)), label }));
   }
@@ -159,7 +150,7 @@ export class AccountsPanel {
   private menu(stage: Stage, title: string, message: string, candidates: Candidate[]): void {
     this.stage = stage; this.title.content = title; this.message.content = message; this.candidates = candidates; this.cursor = 0;
     this.secret.clear(); this.secret.visible = this.input.visible = false; this.input.value = "";
-    this.details.visible = false; this.body.content = ""; this.browser.visible = this.copyUrl.visible = this.copyCode.visible = false;
+    this.details.visible = false; this.body.content = "";
     this.search.field.visible = true; this.list.visible = true; this.search.clear(); this.filter(); this.list.focus();
   }
   private main(): void {
@@ -203,7 +194,6 @@ export class AccountsPanel {
     }
     this.stage = "login"; this.title.content = `Add account · ${singleLine(this.provider?.name ?? "provider")}`;
     this.details.visible = true; this.body.content = login.events.map(event => [event.message, event.url, event.code ? `Code: ${event.code}` : undefined].filter(Boolean).join("\n")).join("\n\n");
-    this.browser.visible = this.copyUrl.visible = !!this.url; this.copyCode.visible = !!this.code;
     const prompt = login.prompt;
     this.message.content = prompt?.message ?? "Waiting for browser authentication… You can always copy or reopen the URL.";
     if (first || prompt?.id !== this.promptId) {
@@ -310,7 +300,7 @@ export class AccountsPanel {
   private resize = (): void => {
     if (this.disposed || this.root.isDestroyed) return;
     const width = Math.max(1, Math.min(106, this.renderer.width - 4)), height = Math.max(1, Math.min(30, this.renderer.height - 2));
-    this.search.fit(height - 7); this.panel.width = width; this.panel.height = height;
+    this.search.fit(height - 6); this.panel.width = width; this.panel.height = height;
     this.panel.left = Math.floor((this.renderer.width - width) / 2); this.panel.top = Math.floor((this.renderer.height - height) / 2);
   };
   dispose(): void {

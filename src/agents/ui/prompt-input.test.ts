@@ -202,14 +202,20 @@ test("Backspace는 접힌 붙여넣기 전체를 삭제하고 undo는 원문까�
   } finally { await app.close(); }
 });
 
-test("내용 확인 후 삭제는 해당 항목만 제거하고 나머지 첨부는 유지한다", async () => {
+test("첨부 상세는 조회만 하고 Backspace는 해당 항목만 제거한다", async () => {
+  // 상세 조회는 입력의 첨부와 커서를 바꾸지 않아야 한다.
   const app = await mount();
   try {
     app.input.attachFile("/tmp/one.txt"); app.input.attachFile("/tmp/two.png");
-    app.input.inspectAtCursor();
-    expect(app.details[0]!.title).toBe("[Image #1]"); expect(app.details[0]!.text).toContain("/tmp/two.png");
-    app.details[0]!.remove!();
+    const draft = app.input.draft;
 
+    // 삭제 액션 없이 원문만 조회하고 입력창에서 일반 삭제를 수행한다.
+    app.input.inspectAtCursor();
+    expect(app.details[0]).toEqual({ title: "[Image #1]", text: "Image reference\n\n/tmp/two.png" });
+    expect(app.input.draft).toEqual(draft);
+    app.mockInput.pressBackspace();
+
+    // 선택한 첨부만 사라지고 나머지 파일 참조는 유지된다.
     expect(app.input.value).toBe("[File #1]"); expect(app.input.submission.images).toEqual([]);
     expect(app.input.submission.text).toBe('@"/tmp/one.txt"');
   } finally { await app.close(); }

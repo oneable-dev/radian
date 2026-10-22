@@ -36,7 +36,6 @@ export class ModelPicker {
   private readonly effortButtons = new Map<ModelEffort, Button>();
   private readonly effortDrafts = new Map<string, ModelEffort>();
   private effortSignature = "";
-  private readonly apply: Button;
   private readonly panel: BoxRenderable;
   private readonly message: TextRenderable;
   private readonly spinner: LoadingSpinner;
@@ -64,9 +63,7 @@ export class ModelPicker {
     const title = new TextRenderable(renderer, { content: "Model & effort · current session", height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });
     this.spinner = new LoadingSpinner(renderer, { id: "model-loading" });
     const activity = new BoxRenderable(renderer, { height: 1, width: 1, flexShrink: 0 }); activity.add(this.spinner.root);
-    const close = new TextRenderable(renderer, { content: "×", height: 1, width: 1, selectable: false,
-      onMouseDown: event => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.hide(); } } });
-    heading.add(title); heading.add(activity); heading.add(close);
+    heading.add(title); heading.add(activity);
     this.search = new SearchInput(renderer, { id: "model-search", placeholder: "Search model or provider…" });
     this.message = new TextRenderable(renderer, { id: "model-message", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.list = new ScrollBoxRenderable(renderer, { id: "model-list", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
@@ -75,16 +72,12 @@ export class ModelPicker {
     this.effortLabel = new TextRenderable(renderer, { id: "model-effort-label", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.effortOptions = new BoxRenderable(renderer, { id: "model-effort-options", width: "100%", flexShrink: 0, flexDirection: "row", flexWrap: "wrap" });
     this.effort.add(this.effortLabel); this.effort.add(this.effortOptions);
-    const controls = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    this.apply = new Button(renderer, "Apply", () => this.launch(() => this.choose())); this.apply.id = "model-apply";
-    const cancel = new Button(renderer, "Cancel", () => this.hide()); cancel.id = "model-cancel";
-    controls.add(this.apply); controls.add(cancel);
-    this.panel.add(heading); this.panel.add(this.search.field); this.panel.add(this.message); this.panel.add(this.list); this.panel.add(this.effort); this.panel.add(controls); this.root.add(this.panel);
+    this.panel.add(heading); this.panel.add(this.search.field); this.panel.add(this.message); this.panel.add(this.list); this.panel.add(this.effort); this.root.add(this.panel);
     theme.scrollbars(this.list);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
       this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
-      paintText(title, styles["ui.popupTitle"]); paintText(close, styles["ui.muted"]); paintText(this.message, styles["ui.muted"]); paintText(this.spinner.root, styles["status.working"]);
+      paintText(title, styles["ui.popupTitle"]); paintText(this.message, styles["ui.muted"]); paintText(this.spinner.root, styles["status.working"]);
       this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);
@@ -204,7 +197,6 @@ export class ModelPicker {
     for (const [level, button] of this.effortButtons) { button.active = level === selected; button.setLabel(level === selected ? `[${level}]` : level); }
     const styles = uiTheme(this.renderer).styles;
     this.effort.backgroundColor = styles[this.effort.focused || this.effort.hasFocusedDescendant ? "ui.selectionInactive" : "ui.popup"].bg;
-    this.apply.active = !this.loading && !this.applying && selected !== undefined;
     if (!editable && (this.effort.focused || this.effort.hasFocusedDescendant)) this.list.focus();
   }
   private setEffort(level: ModelEffort): void {
@@ -254,7 +246,7 @@ export class ModelPicker {
   private resize = (): void => {
     if (this.disposed || this.root.isDestroyed) return;
     const width = Math.max(1, Math.min(100, this.renderer.width - 4)), height = Math.max(1, Math.min(24, this.renderer.height - 2));
-    this.search.fit(height - 8);
+    this.search.fit(height - 7);
     this.panel.width = width; this.panel.height = height;
     this.panel.left = Math.floor((this.renderer.width - width) / 2); this.panel.top = Math.floor((this.renderer.height - height) / 2);
   };

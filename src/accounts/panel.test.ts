@@ -199,7 +199,7 @@ test("API 키 입력은 화면·대화 초안에 평문을 남기지 않고 SDK 
   } finally { waiting.resolve(err(new CancelledError())); await app.close(); }
 });
 
-test("OAuth 브라우저 자동 열기가 실패해도 URL과 기기 코드를 표시하고 복사·취소를 제공한다", async () => {
+test("OAuth는 작은 화면에서도 버튼 없이 브라우저·URL·코드 커맨드와 취소를 제공한다", async () => {
   // 자동 열기 실패와 수동 인증을 위한 URL·코드를 제공한다.
   const calls: AccountRequest[] = [], opened: string[] = [], copied: string[] = [], waiting = Promise.withResolvers<Result<AccountReply, ExpectedError>>();
   const flow: LoginView = { id: "oauth", revision: 1, status: "pending", events: [{ message: "Open the URL", url: "https://example.test/device", code: "ABCD-EFGH" }] };
@@ -216,7 +216,18 @@ test("OAuth 브라우저 자동 열기가 실패해도 URL과 기기 코드를 �
 
     // URL은 자동 열기 성공 여부와 관계없이 화면에 남아 수동 인증할 수 있다.
     expect(opened).toEqual(["https://example.test/device"]); expect(app.captureCharFrame()).toContain("https://example.test/device"); expect(app.captureCharFrame()).toContain("ABCD-EFGH");
-    const copy = app.get("accounts-copy-url"); await app.mockMouse.click(copy.x + 1, copy.y); await app.render(); expect(copied).toEqual(["https://example.test/device"]);
+    // 좁은 화면에서도 본문과 단축키만으로 인증 동작을 수행한다.
+    app.resize(60, 16); await app.render();
+    for (const id of ["accounts-continue", "accounts-cancel", "accounts-browser", "accounts-copy-url", "accounts-copy-code"]) expect(app.renderer.root.findDescendantById(id)).toBeUndefined();
+    expect(app.captureCharFrame()).toContain("ABCD-EFGH");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-login-details");
+    app.mockInput.pressKey("y"); await app.render();
+    app.mockInput.pressKey("y", { shift: true }); await app.render();
+    app.mockInput.pressKey("o"); await app.render();
+
+    // 실제 인증을 실행하지 않고 복사·재열기 경계와 안전한 취소를 확인한다.
+    expect(copied).toEqual(["https://example.test/device", "ABCD-EFGH"]);
+    expect(opened).toEqual(["https://example.test/device", "https://example.test/device"]);
     app.mockInput.pressEscape(); await app.render(); expect(calls.some(request => request.type === "cancel" && request.flowId === "oauth")).toBe(true);
     expect(app.captureCharFrame()).not.toContain("ABCD-EFGH"); expect(app.sent).toEqual([]);
   } finally { waiting.resolve(err(new CancelledError())); await app.close(); }

@@ -86,7 +86,8 @@ test("도움말은 사용자 재할당을 반영하고 모달 밖의 비동기 �
     expect(app.renderer.currentFocusedRenderable?.id).toBe("text-dialog-scroll");
     const visited = new Set<string>();
     for(let i=0;i<6;i++) { app.mockInput.pressTab(); await app.render(); visited.add(app.renderer.currentFocusedRenderable?.id ?? "none"); }
-    expect([...visited].every((id)=>id.startsWith("text-dialog"))).toBe(true);
+    expect([...visited]).toEqual(["text-dialog-scroll"]);
+    for (const id of ["text-dialog-copy", "text-dialog-close", "text-dialog-remove"]) expect(app.renderer.root.findDescendantById(id)).toBeUndefined();
     app.mockInput.pressEscape(); await app.render(); expect(app.renderer.currentFocusedRenderable).toBe(app.prompt);
   } finally {await app.close();}
 });

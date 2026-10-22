@@ -57,9 +57,7 @@ export class DashboardPanel {
     const header = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     const title = new TextRenderable(renderer, { content: "Agent Dashboard", height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });
     this.spinner = new LoadingSpinner(renderer, { id: "dashboard-loading" });
-    const close = new TextRenderable(renderer, { content: "×", width: 1, height: 1, selectable: false,
-      onMouseDown: event => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.hide(); } } });
-    header.add(title); header.add(this.spinner.root); header.add(close); this.panel.add(header);
+    header.add(title); header.add(this.spinner.root); this.panel.add(header);
     this.period = this.strip("dashboard-period", ["Today", "7 days", "30 days"], () => this.reload()); this.period.index = 1;
     this.project = this.strip("dashboard-project", ["All projects"], () => this.reload(), true);
     this.panel.add(this.period.root); this.panel.add(this.project.root);
@@ -77,7 +75,7 @@ export class DashboardPanel {
     theme.scrollbars(this.scroll);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
-      paintText(title, styles["ui.popupTitle"]); paintText(close, styles["ui.muted"]); paintText(this.spinner.root, styles["status.working"]);
+      paintText(title, styles["ui.popupTitle"]); paintText(this.spinner.root, styles["status.working"]);
       paintText(this.message, styles["ui.muted"]); paintText(this.graph, styles["metadata.meter"]); paintText(this.ranking, styles["ui.label"]); paintText(this.notes, styles["ui.muted"]);
       this.paint();
     });

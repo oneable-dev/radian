@@ -16,6 +16,8 @@ import { initialGitState, type GitCommit, type GitComparison, type GitDetails, t
 import type { WorkViewPreferences } from "../../runtime/protocol.ts";
 import { ClipboardError, GitError, InputError, type ExpectedError } from "../../errors.ts";
 import { err, ok, type Result } from "../../result.ts";
+import { parseKeymap, type Keymap } from "../../keybindings/config.ts";
+import { expectOk } from "../../testing/results.ts";
 
 const commit: GitCommit = { oid: "a".repeat(40), parents: ["b".repeat(40)], subject: "Update login", author: "Ada", date: "2026-10-15" };
 const rootCommit: GitCommit = { ...commit, oid: "b".repeat(40), parents: [], subject: "Initial login" };
@@ -31,7 +33,7 @@ const comparison = (): GitComparison => {
   return { before, after: before.replace("line30 = 30", "line30 = 300"), beforeLabel: "HEAD:src/login.ts", afterLabel: "worktree:src/login.ts" };
 };
 
-async function mount(options: { actions?: Partial<GitActions>; initial?: WorkViewPreferences; source?: GitSource; clock?: ManualClock } = {}) {
+async function mount(options: { actions?: Partial<GitActions>; initial?: WorkViewPreferences; source?: GitSource; clock?: ManualClock; keymap?: Keymap } = {}) {
   const app = await createTestRenderer({ width: 160, height: 32, kittyKeyboard: true, ...(options.clock ? { clock: options.clock } : {}) });
   const selection = new WorkspaceSelection(demoWorkspace());
   const copies: string[] = [], requests: { id: string; text: string }[] = [], loads: string[] = [], creations: string[] = [];
@@ -50,7 +52,7 @@ async function mount(options: { actions?: Partial<GitActions>; initial?: WorkVie
     copy: async (text) => { copies.push(text); return ok("Copied to clipboard"); }, ...options.actions,
   };
   const view = new Workbench(app.renderer, selection, {
-    onNewSession: () => {}, onCloseSession: () => {}, onPrompt: git.prompt, git,
+    onNewSession: () => {}, onCloseSession: () => {}, onPrompt: git.prompt, git, ...(options.keymap ? { keymap: options.keymap } : {}),
     initialWorkViews: options.initial ?? { active: {}, agentScroll: {} }, initialDrafts: { a1: "existing Agent draft" },
     getSessionDetails: () => ({ status: "working", output: "Existing agent run", error: null }),
   });
@@ -1132,13 +1134,16 @@ test("Reflog 검색은 이벤트·해시·시각을 찾고 일치하지 않는 �
   } finally { await app.close(); }
 });
 
-test("Refs 모달의 닫기 아이콘은 검색을 적용하지 않고 메인 커밋으로 복귀한다", async () => {
-  // 마우스 닫기도 Esc와 같은 비파괴적 닫기를 제공한다.
+test("Refs는 닫기 아이콘 없이 Esc로 검색을 버리고 메인 커밋으로 복귀한다", async () => {
+  // 팝업의 비파괴적 닫기는 별도 아이콘 대신 커맨드가 담당한다.
   const app = await mount();
   try {
     await app.chooseCommit(); await app.openRefs(); await app.mockInput.typeText("origin"); await app.renderOnce();
 
-    await app.clickIn("git-browser-panel", "×");
+    const panel = app.get("git-browser-panel");
+    expect(app.captureCharFrame().split("\n")[panel.y + 1]).not.toContain("×");
+    expect(app.renderer.root.findDescendantById("git-browser-close")).toBeUndefined();
+    app.mockInput.pressEscape(); await app.renderOnce();
 
     expect(app.get("git-browser").visible).toBe(false); expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.reference).toBeNull();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("git-history"); expect(app.requests).toEqual([]);
@@ -1161,7 +1166,7 @@ test("Git의 Agent 요청도 여러 줄·접힌 원문·이미지 참조를 같�
   }finally{await app.close();}
 });
 
-test.each([false, true])("밝기 %j에서도 검색 포커스 중 후보를 강조하고 Ask 버튼의 기존 외관을 유지한다", async light => {
+test.each([false, true])("밝기 %j에서도 검색 후보를 강조하고 Ask는 버튼 없이 입력에 집중한다", async light => {
   // 검색 입력에 포커스가 있어도 선택 후보의 배경은 명확하게 남아야 한다.
   const app = await mount();
   const controls = (node: Renderable): Button[] => [...(node instanceof Button ? [node] : []), ...node.getChildren().flatMap(controls)];
@@ -1174,10 +1179,11 @@ test.each([false, true])("밝기 %j에서도 검색 포커스 중 후보를 강�
     expect(app.spanIn("git-browser-list", `${icons.branch} main`).bg.toInts()).not.toEqual(uiTheme(app.renderer).colors.panel.toInts());
     expect(app.spanIn("git-browser-list", `${icons.branch} main`).attributes & TextAttributes.UNDERLINE).toBe(0);
     app.mockInput.pressEscape(); await app.renderOnce(); await app.chooseCommit(); app.mockInput.pressKey("a"); await app.renderOnce();
-    const cancel = controls(app.get("git-view")).find(button => button.getChildren().some(child => child instanceof TextRenderable && child.plainText === "Cancel"));
-    if (!cancel) throw new Error("Missing Cancel button"); cancel.focus(); await app.renderOnce();
-    let x = 0; const span = app.captureSpans().lines[cancel.y]!.spans.find(item => { x += item.width; return x > cancel.x; })!;
-    expect(span.bg.toInts()).toEqual(uiTheme(app.renderer).colors.selected.toInts());
+    expect(controls(app.get("git-ask"))).toEqual([]);
+    app.mockInput.pressTab(); await app.renderOnce();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-prompt");
+    app.mockInput.pressEscape(); await app.renderOnce();
+    expect(app.get("git-ask").visible).toBe(false);
     expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
   } finally { await app.close(); }
 });
@@ -1593,7 +1599,7 @@ test("Refs는 브랜치·태그 아이콘을 표시하고 현재 브랜치만 �
   } finally { await app.close(); }
 });
 
-test("Refs의 Ask에서 버튼으로 포커스를 옮긴 뒤 Esc는 Ask만 닫고 후보로 돌아간다", async () => {
+test("Refs의 Ask는 Tab을 입력 안에 가두고 Esc로 후보에 돌아간다", async () => {
   // 중첩된 입력의 닫기가 바깥 모달이나 메인 필터를 닫으면 안 된다.
   const app = await mount();
   try {
@@ -1701,12 +1707,62 @@ test("Git 상태는 worktree 왕복과 새 UI 복원 뒤에도 선택·diff·스
   } finally { await restored.close(); }
 });
 
-test("전송 거절은 Git 프롬프트를 보존하고 새 세션은 명시적 Send에서만 생성한다", async () => {
+test.each([false, true])("Git 전송 대상 커맨드는 재지정 %j에서도 입력을 보존하고 선택한 세션으로만 전송한다", async overridden => {
+  // 입력창의 글자 키는 보존하고 전송 대상은 독립적인 설정 가능 커맨드로 변경한다.
+  const keymap = expectOk(parseKeymap({ bindings: overridden ? { "git.change-session": [{ keys: "alt+s", scope: "git-prompt" }] } : {} }));
+  const app = await mount({ keymap });
+  try {
+    await app.chooseCommit(); app.mockInput.pressKey("a"); await app.renderOnce();
+    const input = app.get("git-prompt"); if (!(input instanceof PromptInput)) throw new Error("Missing Git prompt");
+    await app.mockInput.typeText("explain hjklay"); app.mockInput.pressArrow("left");
+    const value = input.value, caret = input.cursorOffset;
+
+    // 기본 키를 길게 눌러도 한 번만 전환하고 재지정도 초안·커서를 보존한다.
+    if (overridden) app.mockInput.pressKey("s", { meta: true });
+    else for (const event of ["\x1b[115;5u", "\x1b[115;5:2u", "\x1b[115;5:3u"]) {
+      const parsed = parseKeypress(event, { useKittyKeyboard: true }); if (!parsed) throw new Error("Invalid Kitty key");
+      app.renderer.keyInput.processParsedKey(parsed);
+    }
+    await app.renderOnce();
+    expect(input.value).toBe(value); expect(input.cursorOffset).toBe(caret);
+    expect(app.renderer.currentFocusedRenderable).toBe(input);
+    const footer = app.captureCharFrame().split("\n").find(line => line.includes("Radian"))!;
+    expect(footer).toContain(`${overridden ? "<M-s>" : "<C-s>"} Change session`);
+    expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
+    app.mockInput.pressEnter(); await app.waitFor(() => app.requests.length === 1);
+
+    // 대상 선택만으로는 실행하지 않고 명시적 전송에서만 두 번째 세션에 전달한다.
+    expect(app.requests[0]?.id).toBe("a2"); expect(app.requests[0]?.text).toContain(value);
+    expect(app.view.promptDrafts.a1).toBe("existing Agent draft");
+  } finally { await app.close(); }
+});
+
+test("Git 요청이 전송 중이면 대상 변경 커맨드를 소비하고 재시도 대상을 보존한다", async () => {
+  // 첫 요청의 수락 여부가 정해지기 전에는 전송 대상을 바꾸면 안 된다.
+  const pending = Promise.withResolvers<Result<void, ExpectedError>>(), targets: string[] = [];
+  const app = await mount({ actions: { prompt: id => { targets.push(id); return pending.promise; } } });
+  try {
+    await app.chooseCommit(); app.mockInput.pressKey("a"); await app.renderOnce();
+    await app.mockInput.typeText("Retained request"); app.mockInput.pressEnter(); await app.waitFor(() => targets.length === 1);
+
+    // 전송 중 누른 키는 문자 입력으로도 새 대상으로도 반영되지 않는다.
+    app.mockInput.pressKey("s", { ctrl: true }); await app.renderOnce();
+    pending.resolve(err(new InputError("Retry request"))); await app.waitForFrame(frame => frame.includes("Retry request"));
+    const input = app.get("git-prompt"); if (!(input instanceof PromptInput)) throw new Error("Missing Git prompt");
+    expect(input.value).toBe("Retained request");
+    app.mockInput.pressEnter(); await app.waitFor(() => targets.length === 2);
+
+    // 거절 후 다시 전송해도 처음 선택한 세션을 사용한다.
+    expect(targets).toEqual(["a1", "a1"]); expect(app.creations).toEqual([]);
+  } finally { pending.resolve(err(new InputError("cleanup"))); await app.close(); }
+});
+
+test("전송 대상 커맨드는 새 세션을 즉시 만들지 않고 전송 거절은 초안을 보존한다", async () => {
   // The session selector includes an explicit New session choice, never implicit creation on browse.
   const app = await mount({ actions: { prompt: () => err(new InputError("Request rejected")) } });
   try {
     await app.chooseCommit(); app.mockInput.pressKey("a"); await app.renderOnce();
-    for (let i = 0; i < 3; i++) await app.click("Change session");
+    for (let i = 0; i < 3; i++) { app.mockInput.pressKey("s", { ctrl: true }); await app.renderOnce(); }
     expect(app.creations).toEqual([]); expect(app.captureCharFrame()).toContain("New session");
 
     app.get("git-prompt").focus(); await app.mockInput.typeText("keep this ay"); app.mockInput.pressEnter();

@@ -9,7 +9,7 @@ import { icons } from "../../icons.ts";
 
 type Timer = ReturnType<CliRenderer["clock"]["setTimeout"]>;
 type Toast = { notification: SessionNotification; root: BoxRenderable; heading: TextRenderable; task: TextRenderable; location: TextRenderable;
-  close: TextRenderable; expiry: Timer; animation?: Timer };
+  expiry: Timer; animation?: Timer };
 const labels = { complete: "Completed", error: "Failed", unfinished: "Stopped", cancelled: "Cancelled" } satisfies Record<SessionResult["outcome"], string>;
 const colors = { complete: "status.success", error: "status.error", unfinished: "status.warning", cancelled: "status.warning" } as const satisfies Record<SessionResult["outcome"], StyleGroup>;
 
@@ -72,13 +72,11 @@ export class SessionNotificationStack {
       }, onMouseScroll: event => event.stopPropagation() });
     const header = new BoxRenderable(this.renderer, { width: "100%", height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     const heading = new TextRenderable(this.renderer, { height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });
-    const close = new TextRenderable(this.renderer, { id: `dismiss-toast:${notification.id}`, content: "×", width: 1, height: 1, selectable: false,
-      onMouseDown: event => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.dismiss(notification.id); } } });
     const task = new TextRenderable(this.renderer, { height: 1, width: "100%", wrapMode: "none", selectable: false });
     const location = new TextRenderable(this.renderer, { height: 1, width: "100%", wrapMode: "none", selectable: false });
-    header.add(heading); header.add(close); root.add(header); root.add(task); root.add(location); this.root.add(root);
+    header.add(heading); root.add(header); root.add(task); root.add(location); this.root.add(root);
     const expiry = this.renderer.clock.setTimeout(() => this.dismiss(notification.id), notification.result.outcome === "complete" ? 5000 : 8000);
-    const toast: Toast = { notification, root, heading, task, location, close, expiry };
+    const toast: Toast = { notification, root, heading, task, location, expiry };
     this.visible.push(toast); this.paint(toast);
     const started = this.renderer.clock.now();
     toast.animation = this.renderer.clock.setInterval(() => {
@@ -93,11 +91,11 @@ export class SessionNotificationStack {
     toast.root.backgroundColor = styles["ui.popup"].bg;
     toast.root.borderColor = status.fg;
     paintText(toast.heading, status); paintText(toast.task, styles["ui.label"]);
-    paintText(toast.location, styles["ui.muted"]); paintText(toast.close, styles["ui.muted"]);
+    paintText(toast.location, styles["ui.muted"]);
     // Layout getters still describe the previous frame when a card first arrives.
     const width = Math.max(0, Math.min(52, this.renderer.width - 2) - 4), { result, durationMs } = toast.notification;
     const elapsed = durationMs === undefined ? "" : ` · ${formatRunDuration(durationMs)}`;
-    toast.heading.content = truncateCells(labels[result.outcome] + elapsed, Math.max(0, width - 2));
+    toast.heading.content = truncateCells(labels[result.outcome] + elapsed, width);
     toast.task.content = truncateCells(excerpt(result.request?.text || "AI session"), width);
     const worktree = excerpt(toast.notification.worktree), branch = excerpt(toast.notification.branch ?? "detached HEAD");
     toast.location.content = truncateCells(`${icons.folder} ${worktree} / ${icons.branch} ${branch}`, width);

@@ -61,9 +61,7 @@ export class SessionMonitor {
     const heading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     const title = new TextRenderable(renderer, { content: "AI Sessions", height: 1, flexGrow: 1, wrapMode: "none", selectable: false });
     this.spinner = new LoadingSpinner(renderer, { id: "monitor-loading" });
-    const close = new TextRenderable(renderer, { content: "×", width: 1, height: 1, selectable: false,
-      onMouseDown: event => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.hide(); } } });
-    heading.add(title); heading.add(this.spinner.root); heading.add(close);
+    heading.add(title); heading.add(this.spinner.root);
     this.search = new SearchInput(renderer, { id: "monitor-search", placeholder: "Search tasks, repositories or worktrees…" });
     this.message = new TextRenderable(renderer, { id: "monitor-message", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.body = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "row" });
@@ -85,7 +83,7 @@ export class SessionMonitor {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
       this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
       this.previewPane.borderColor = styles["ui.border"].fg;
-      paintText(title, styles["ui.popupTitle"]); paintText(label, styles["ui.muted"]); paintText(close, styles["ui.muted"]);
+      paintText(title, styles["ui.popupTitle"]); paintText(label, styles["ui.muted"]);
       paintText(this.message, styles["ui.muted"]); paintText(this.spinner.root, styles["status.working"]); this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);

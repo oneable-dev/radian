@@ -66,16 +66,21 @@ test("큰 모델 목록에서도 현재 모델을 맨 위에 표시하고 처음
   } finally { await app.close(); }
 });
 
-test("모델 행 클릭은 미리 선택만 하고 Apply를 눌러야 한 번만 적용한다", async () => {
+test("모델 행 클릭은 미리 선택만 하고 버튼 없이 Enter로 적용한다", async () => {
   const app = await mount();
   try {
     await app.open();
     const row = app.get('model:["other","target"]');
 
-    // 모델 클릭만으로는 적용하지 않고 effort를 확인한 뒤 Apply로 확정한다.
+    // 모델 클릭만으로는 적용하지 않고 effort를 확인한 뒤 커맨드로 확정한다.
     await app.mockMouse.click(row.x + 2, row.y); await app.render();
     expect(app.changes).toEqual([]); expect(app.get("model-picker").visible).toBe(true);
-    const apply = app.get("model-apply"); await app.mockMouse.click(apply.x + 1, apply.y); await app.render();
+    // 별도 액션 행이나 닫기 아이콘 없이 선택과 적용을 구분한다.
+    expect(app.renderer.root.findDescendantById("model-apply")).toBeUndefined();
+    expect(app.renderer.root.findDescendantById("model-cancel")).toBeUndefined();
+    const panel = app.get("model-dialog");
+    expect(app.captureCharFrame().split("\n")[panel.y + 1]).not.toContain("×");
+    app.mockInput.pressEnter(); await app.render();
     expect(app.changes).toEqual([{ id: "a1", conversation: "first", model: { provider: "other", id: "target" }, effort: "off" }]);
     expect(app.get("model-picker").visible).toBe(false); expect(app.sent).toEqual([]);
   } finally { await app.close(); }

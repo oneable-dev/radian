@@ -62,13 +62,13 @@ test.each(["agent", "editor", "git", "terminal"] as const)("%s 화면에서도 �
   } finally { await app.close(); }
 });
 
-test("팝업을 닫거나 만료시켜도 벨은 유지하고 같은 결과를 다시 표시하지 않는다", async () => {
-  // A toast's lifetime must not be confused with the runtime's shared unread state.
+test("닫기 버튼 없는 팝업이 만료돼도 벨을 유지하고 같은 결과를 다시 표시하지 않는다", async () => {
+  // 알림의 표시 수명은 런타임의 읽지 않은 결과 상태와 독립적이다.
   const app = await fixture();
   try {
     app.complete(); await app.render();
-    const close = app.toast().findDescendantById('dismiss-toast:["two","two","new-result"]')!;
-    await app.mockMouse.click(close.x, close.y); await app.render();
+    expect(app.toast().findDescendantById('dismiss-toast:["two","two","new-result"]')).toBeUndefined();
+    app.clock.advance(5000); await app.render();
     app.publish("two", app.state("two")); await app.render();
     expect(app.get("session-notifications").visible).toBe(false); expect(app.acknowledged).toEqual([]);
     expect(app.state("two").attention?.id).toBe("new-result");

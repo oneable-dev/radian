@@ -186,7 +186,7 @@ export class Workbench {
         this.saveWorkViews();
       }, () => this.updateFooter(), actions.terminalUnavailable, actions.terminalTheme,
       () => this.keymap.hint("tab.new", "button") || this.keymap.hint("terminal.new", "button"));
-    this.git = new GitPanel(renderer, actions.git, (label, activate, actionLabel, variant) => this.button(label, activate, actionLabel, variant),
+    this.git = new GitPanel(renderer, actions.git,
       (message) => { if (actions.onNotice) actions.onNotice(message); else this.setNotice(message); }, () => this.updateFooter(),
       (id, state) => {
         const views = this.workViews.gitViews ??= {};
@@ -638,7 +638,7 @@ export class Workbench {
     }
   }
   private moveFocus(direction: 1 | -1): void {
-    if (this.dialog.visible) { this.dialog.moveFocus(direction); return; }
+    if (this.dialog.visible) { this.dialog.moveFocus(); return; }
     if (this.dashboard.visible) {
       const targets = this.dashboard.focusTargets, index = targets.indexOf(this.renderer.currentFocusedRenderable!);
       targets[(index + direction + targets.length) % targets.length]?.focus(); return;

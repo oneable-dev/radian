@@ -276,8 +276,9 @@ sequences; its original data is retained. Images appear as `[Image #1]`, files a
 These are atomic editor items, not text sent in place of the source. Arrow movement, deletion,
 undo/redo, session switching and saved drafts preserve their source data. Literal typed labels
 without attachment metadata remain ordinary text. **Ctrl+O** at an item opens read-only source
-information, with Copy and Remove actions. Pasted text shows its original contents; image/file
-items show their source references, not rendered image thumbnails.
+information. Use **y** to copy and **Esc** to return to the input; remove an item with ordinary
+input deletion such as Backspace, not from the details popup. Pasted text shows its original
+contents; image/file items show their source references, not rendered image thumbnails.
 
 Paste absolute/`~/`/`./`/`../` paths, quoted or escaped file drops, or local `file://` URLs to attach
 files. File completion inserts the same numbered items. File parts become explicit absolute path
@@ -625,9 +626,10 @@ The Agent prompt completes and executes these host commands instead of sending t
   focused: use **j/k** to move, **h/l** to change effort, and **Tab/Shift+Tab** to move between the list
   and editable effort controls. Arrow keys remain available. Press **/** to search by model name, ID
   or provider; while searching, hjkl are literal input and **Ctrl+N/P** navigate matches.
-  Model and effort clicks only stage choices. **Enter** or **Apply** commits the pair in one operation;
-  **Esc** or **Cancel** discards unsubmitted choices. The current model is marked and only SDK-supported
-  effort levels are offered, using Pi's clamped preview of the session's current effort. Models without
+  Model and effort clicks only stage choices. **Enter** commits the pair in one operation;
+  **Esc** discards unsubmitted choices. The popup has no close icon or action-button row. The current
+  model is marked and only SDK-supported effort levels are offered, using Pi's clamped preview of the
+  session's current effort. Models without
   reasoning show a read-only `off` effort. The current model can stay selected while changing effort only.
   Changes preserve the conversation, update input telemetry together and use Pi's SDK lifecycle. Both
   settings are saved in that conversation for resume, never as global defaults or another tab's settings.
@@ -910,9 +912,12 @@ Git-specific actions are scoped to Git browsing controls and can be rebound in t
 | Tag result | Name only | Name |
 | Reflog event result | Event details and target hash | Full target hash |
 
-`a` freezes the chosen context and opens a small prompt with a session selector. The default is the
-last selected session in that worktree; New session creates one only when Send is pressed. Enter
-submits through the same runtime path as Agent input, including SDK steering when busy. Esc cancels.
+`a` freezes the chosen context and opens a small prompt showing its target session. The default is the
+last selected session in that worktree. **Ctrl+S** (`git.change-session`, configurable) cycles through
+that worktree's sessions and **New session** without modifying the prompt or creating a session.
+Enter submits through the same runtime path as Agent input, including SDK steering when busy;
+New session creates one only on submission. Esc cancels. There are no session-change, Send or Cancel
+buttons; Tab keeps focus in the prompt.
 The existing Agent draft is untouched, and sending keeps Git visible. No extra execution-status or
 Agent-navigation panel is added. Prompt typing treats a/y as ordinary text; A/Y actions do not exist.
 
@@ -1152,6 +1157,18 @@ interpreted as commands, and kitty key-release events do not duplicate replayed 
 control radian commands, not Neovim's own configuration or shell editing bindings. Configured but
 currently unavailable commands are consumed without executing, never replayed as accidental edits.
 
+### Command-first popups
+
+App-owned popups use titles and content without top-right close icons or bottom action-button rows.
+Use the configured commands to activate, submit, copy or close; necessary state choices such as model
+effort remain in the content. Esc cancels unsubmitted choices, not accepted runtime operations.
+Tab traversal stays within the popup's search, results, previews and editable content. Contextual
+shortcuts and full Help come from the active keymap; they do not reserve a second popup footer.
+Accounts uses **o** to open the login browser, **y** to copy its URL and **Y** to copy a device code
+when the read-only login details have focus. In text fields those letters remain literal input;
+use Tab to focus details first. Passive result notifications also omit close icons and expire normally.
+Session-tab close controls and non-popup application controls are unchanged.
+
 ### Common footer
 
 The work pane and navigation popups share one full-width footer. Its single text row places
@@ -1218,8 +1235,8 @@ time when available. At most three fit on screen; smaller terminals show fewer, 
 queued until space is available. Completion cards expire after five seconds and other result cards
 after eight seconds of display. The overlay never changes keyboard focus or reserves workspace
 layout space. Click a card to open that conversation's latest output; a closed or replaced
-conversation is not opened. The close control and automatic expiry only dismiss the popup, never
-the runtime-owned unread bell. Reading the actual result uses the existing acknowledgement path.
+conversation is not opened. Automatic expiry only dismisses the popup, never the runtime-owned
+unread bell. Reading the actual result uses the existing acknowledgement path.
 Successful session tabs still have no check icon.
 
 Initial attachment, newly loaded history and reconnection establish a baseline rather than

@@ -79,8 +79,6 @@ export class SessionHistoryPanel {
     this.spinner = new LoadingSpinner(renderer, { id: "history-loading" });
     heading.add(this.title);
     const activity = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0 }); activity.add(this.spinner.root); heading.add(activity);
-    const close = new TextRenderable(renderer, { content: "×", width: 1, height: 1, selectable: false,
-      onMouseDown: (event) => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.hide(); } } }); heading.add(close);
     this.search = new SearchInput(renderer, { id: "history-search", placeholder: "Search session titles…" });
     this.message = new TextRenderable(renderer, { id: "history-message", content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.body = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "row" });
@@ -107,7 +105,7 @@ export class SessionHistoryPanel {
     theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
       this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg; paintText(this.title, styles["ui.popupTitle"]);
-      for (const text of [this.message, this.previewLabel, close]) paintText(text, styles["ui.muted"]);
+      for (const text of [this.message, this.previewLabel]) paintText(text, styles["ui.muted"]);
       this.previewPane.borderColor = styles["ui.border"].fg;
       this.session.root.backgroundColor = styles["ui.text"].bg;
       paintText(this.spinner.root, styles["status.working"]);

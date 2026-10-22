@@ -14,6 +14,7 @@ const routine = new Set<CommandId>([
   "history.open", "history.dismiss", "history.previous", "history.next", "history.half-page-down",
   "monitor.open", "monitor.dismiss", "monitor.previous", "monitor.next", "monitor.half-page-down", "monitor.page-down",
   "model.dismiss", "model.previous", "model.next", "model.half-page-down",
+  "accounts.dismiss", "accounts.previous", "accounts.next", "accounts.half-page-down",
   "dashboard.dismiss", "dashboard.previous", "dashboard.next", "dashboard.half-page-down",
   "transcript.next", "transcript.right", "transcript.visual", "transcript.visual-line", "transcript.half-page-down", "transcript.page-down", "transcript.back", "transcript.help",
   "git.back", "git.cancel", "git.previous", "git.next", "git.half-page-down",

@@ -15,6 +15,7 @@ const labels: Partial<Record<CommandId, string>> = {
   "agent.send": "Send input (steer at the next eligible turn when busy)", "agent.newline": "Insert a newline without sending", "agent.paste": "Paste text, images or files from the clipboard", "agent.inspect": "Inspect the attachment at the cursor",
   "git.refs": "Search refs and filter commit history", "git.reflog": "Search reflog events and preview target commits",
   "git.search": "Focus Git search", "git.search-clear": "Clear the Git search query", "git.preview": "Focus or toggle reflog preview",
+  "git.change-session": "Cycle the Git request target through this worktree's sessions and New session",
   "git.submit": "Send input with the frozen Git context", "git.newline": "Insert a newline without sending", "git.clear": "Clear the current prompt", "git.paste": "Paste from the clipboard", "git.inspect": "Inspect the attachment at the cursor",
   "history.show": "Open saved session history", "transcript.help": "Open conversation navigation help",
   "dashboard.show": "Open Agent usage dashboard", "dashboard.dismiss": "Close Agent dashboard", "dashboard.refresh": "Refresh saved statistics",

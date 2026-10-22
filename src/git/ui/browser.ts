@@ -66,9 +66,6 @@ export class GitBrowser {
     this.title = new TextRenderable(renderer, { height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0, selectable: false, truncate: true }); heading.add(this.title);
     this.spinner = new LoadingSpinner(renderer, { id: "git-browser-loading" });
     const activity = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0 }); activity.add(this.spinner.root); heading.add(activity);
-    const close = new TextRenderable(renderer, { id: "git-browser-close", content: "×", width: 1, height: 1, selectable: false,
-      onMouseDown: event => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.actions.close(); } } });
-    heading.add(close);
     this.search = new SearchInput(renderer, { id: "git-browser-search", placeholder: "Search refs…" });
     this.message = new TextRenderable(renderer, { id: "git-browser-status", height: 1, flexShrink: 0, selectable: false, wrapMode: "none", truncate: true });
     this.body = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "row" });
@@ -87,7 +84,7 @@ export class GitBrowser {
     const theme = uiTheme(renderer); theme.scrollbars(this.preview);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
-      this.previewPane.borderColor = styles["ui.border"].fg; paintText(this.title, styles["ui.popupTitle"]); paintText(this.message, styles["ui.muted"]); paintText(close, styles["ui.muted"]);
+      this.previewPane.borderColor = styles["ui.border"].fg; paintText(this.title, styles["ui.popupTitle"]); paintText(this.message, styles["ui.muted"]);
       paintText(this.spinner.root, styles["status.working"]); paintText(this.previewText, styles["ui.label"]);
       this.previewText.selectionBg = styles["ui.selection"].bg; this.previewText.selectionFg = styles["ui.selection"].fg;
     });

@@ -2,13 +2,12 @@ import { BoxRenderable, RenderableEvents, ScrollBoxRenderable, TextRenderable, t
 import type { CommandId } from "../keybindings/commands.ts";
 import { reportUnexpected, type ExpectedError } from "../errors.ts";
 import type { Result } from "../result.ts";
-import { Button } from "./button.ts";
 import { halfPageStep } from "./navigation.ts";
 import { Clipboard } from "./clipboard.ts";
 import { uiTheme } from "./theme.ts";
 import { paintText } from "./theme-styles.ts";
 
-export type DialogContent = { title: string; text: string; copy?: boolean; remove?: () => void };
+export type DialogContent = { title: string; text: string; copy?: boolean };
 
 // Read-only details/help share focus and cleanup behavior, not feature-specific state.
 export class TextDialog {
@@ -18,9 +17,6 @@ export class TextDialog {
   private readonly title: TextRenderable;
   private readonly body: TextRenderable;
   private readonly status: TextRenderable;
-  private readonly copyButton: Button;
-  private readonly closeButton: Button;
-  private readonly removeButton: Button;
   private readonly clipboard: Clipboard;
   private content: DialogContent | undefined;
   private owner: Renderable | undefined;
@@ -42,12 +38,7 @@ export class TextDialog {
     this.body = new TextRenderable(renderer, { id: "text-dialog-body", width: "100%", wrapMode: "word", selectable: true });
     this.scroll.add(this.body);
     this.status = new TextRenderable(renderer, { id: "text-dialog-status", height: 1, flexShrink: 0, wrapMode: "none", selectable: false, visible: false });
-    const controls = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    this.copyButton = new Button(renderer, "Copy", () => this.copy()); this.copyButton.id = "text-dialog-copy";
-    this.removeButton = new Button(renderer, "Remove", () => this.remove()); this.removeButton.id = "text-dialog-remove";
-    this.closeButton = new Button(renderer, "Close", () => this.hide()); this.closeButton.id = "text-dialog-close";
-    controls.add(this.copyButton); controls.add(this.removeButton); controls.add(this.closeButton);
-    this.panel.add(this.title); this.panel.add(this.scroll); this.panel.add(this.status); this.panel.add(controls); this.root.add(this.panel);
+    this.panel.add(this.title); this.panel.add(this.scroll); this.panel.add(this.status); this.root.add(this.panel);
     theme.scrollbars(this.scroll);
     theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
@@ -59,13 +50,11 @@ export class TextDialog {
   }
 
   get visible(): boolean { return !this.disposed && !this.root.isDestroyed && this.root.visible; }
-  get focusTargets(): Renderable[] { return [this.scroll, this.copyButton, this.removeButton, this.closeButton].filter((node) => node.visible); }
   show(content: DialogContent): void {
     if (this.disposed || this.root.isDestroyed) return;
     if (!this.visible) this.owner = this.renderer.currentFocusedRenderable ?? undefined;
     this.revision++; this.content = content;
     this.title.content = content.title; this.body.content = content.text;
-    this.copyButton.visible = content.copy !== false; this.removeButton.visible = Boolean(content.remove);
     this.status.visible = false; this.root.visible = true; this.resize(); this.scroll.scrollTo(0); this.scroll.focus(); this.changed();
   }
   hide(): void {
@@ -81,10 +70,7 @@ export class TextDialog {
     if (!restored) this.fallback();
     this.changed();
   }
-  moveFocus(direction: 1 | -1): void {
-    const targets = this.focusTargets, index = targets.indexOf(this.renderer.currentFocusedRenderable!);
-    targets[(index + direction + targets.length) % targets.length]?.focus();
-  }
+  moveFocus(): void { this.scroll.focus(); }
   command(command: CommandId): void {
     if (!this.visible) return;
     const page = Math.max(1, this.scroll.viewport.height - 1);
@@ -99,14 +85,8 @@ export class TextDialog {
       case "dialog.half-page-down": this.scroll.scrollBy(halfPageStep(this.scroll.viewport.height)); break;
       case "dialog.first": this.scroll.scrollTo(0); break;
       case "dialog.last": this.scroll.scrollTo(Infinity); break;
-      case "dialog.activate":
-        if (this.copyButton.focused) this.copy();
-        else if (this.removeButton.focused) this.remove();
-        else if (this.closeButton.focused) this.hide();
-        break;
     }
   }
-  private remove(): void { const remove = this.content?.remove; this.hide(); remove?.(); }
   private copy(): void {
     const content = this.content, revision = this.revision;
     if (!content || content.copy === false) return;

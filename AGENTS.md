@@ -1,10 +1,21 @@
 Use English for repository documentation and commit messages.
 
+## Neovim-style interaction and UI
+
+- Design Radian as a command-first, keyboard-driven workbench inspired by Neovim. This applies to actions, workflows, popups and visual presentation, not only navigation keys. Do not merely add Vim motions to a mouse-oriented UI.
+- Make app-owned actions available as named, configurable commands in the shared keymap. Prefer mnemonic context-local keys and leader-prefixed global commands. Reuse familiar Neovim motions and key sequences when their meaning fits; do not invent shortcuts independently in each widget. Mouse interaction may supplement commands, not replace them.
+- Prefer compact panes, searchable lists, text status lines and transient previews over desktop-style dialog chrome and toolbars. Make focus, selection, scope and pending state visible without adding redundant controls.
+- Keep app-owned popups to their title and content. Do not add top-right `×` close controls or bottom action-button rows such as Apply, Cancel, Close, Copy or Continue. Invoke those actions through commands. In-content choices such as model effort levels and filter tabs may remain when they communicate editable state.
+- When removing a button, preserve necessary behavior through an explicit command. Remove redundant convenience actions rather than adding commands solely to preserve every existing button.
+- Keep interactions predictable across surfaces: browsing previews does not commit changes, Enter explicitly activates or submits where appropriate, and Esc backs out or cancels unsubmitted choices. Closing a surface must not imply rollback of an already accepted action.
+- Derive help and contextual hints from the actual configured keymap and use Neovim-style notation such as `<leader>`, `<C-x>`, `<CR>` and `<Esc>`. Keep routine default navigation hints in full Help rather than cluttering the footer; retain relevant app-specific actions and user overrides.
+- Neovim-inspired does not mean forcing modal editing into every input. Preserve literal text entry, explicit user overrides, and native input ownership in embedded editors and terminals. Follow the detailed input and navigation rules below.
+
 ## UI feedback
 
 - Use `LoadingSpinner` from `src/ui/loading-spinner.ts` for loading indicators across the UI. It keeps the animation visible for at least 500 ms without delaying results or errors. Call `cancel()` when the owning screen is hidden; destroying its renderable also clears its timers.
 
-## Keyboard navigation
+## Keyboard input and navigation
 
 - Arrow keys and `Ctrl+N/P` are required defaults throughout app-owned navigable UI. `Ctrl+N` moves down/next and `Ctrl+P` moves up/previous as appropriate to the surface. Keep both input styles available; `Ctrl+N/P` is not merely a fallback when Vim keys are unavailable.
 - Additionally support the applicable `h/j/k/l` navigation keys wherever practical. Do not force them where they conflict with text input, existing key semantics or native input ownership.

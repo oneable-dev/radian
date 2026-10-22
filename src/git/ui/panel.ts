@@ -19,7 +19,6 @@ import { icons } from "../../icons.ts";
 import { codeStyles, paintText, styleBackground, type StyleGroup } from "../../ui/theme-styles.ts";
 import { GitClipboard } from "./clipboard.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
-import type { ButtonFactory } from "../../ui/button.ts";
 import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import { PromptInput } from "../../ui/prompt-input.ts";
@@ -71,9 +70,7 @@ export class GitPanel {
   private readonly dialog: BoxRenderable;
   private readonly dialogContext: TextRenderable;
   private readonly targetText: TextRenderable;
-  private readonly targetButton: BoxRenderable;
   private readonly prompt: PromptInput;
-  private readonly dialogButtons: Renderable[] = [];
   private readonly clipboard: GitClipboard;
   private readonly caches = new Map<string, Cache>();
   private readonly requests = new Set<AbortController>();
@@ -93,7 +90,7 @@ export class GitPanel {
   private detailsLayout: { key: string; width: number; height: number; viewport: number; top: number } | undefined;
   private pointer: { x: number; y: number; moved: boolean } | undefined;
 
-  constructor(private readonly renderer: CliRenderer, private readonly actions: GitActions | undefined, button: ButtonFactory,
+  constructor(private readonly renderer: CliRenderer, private readonly actions: GitActions | undefined,
     private readonly notice: (message: string) => void, private readonly changed: () => void,
     private readonly saved: (id: string, state: GitViewState) => void, private readonly initial: Readonly<Record<string, GitViewState>>,
     private readonly hint: (command: CommandId, context: KeyContext) => string, private readonly inspect?: (content: DialogContent) => void) {
@@ -167,17 +164,11 @@ export class GitPanel {
       zIndex: 100, border: true, borderColor: gitColors.accent, backgroundColor: gitColors.panel, paddingX: 1, flexDirection: "column", visible: false });
     this.dialog.add(this.text("Ask Agent · selected Git context", "ui.popupTitle"));
     this.dialogContext = new TextRenderable(renderer, { content: "", height: 2, wrapMode: "word", fg: gitColors.text, selectable: false }); this.dialog.add(this.dialogContext);
-    const targetRow = this.row();
-    this.targetText = this.text("Session: "); targetRow.add(this.targetText);
-    this.targetButton = button("Change session", () => this.cycleSession(), "Choose session"); targetRow.add(this.targetButton); this.dialog.add(targetRow);
+    this.targetText = this.text("Session: "); this.dialog.add(this.targetText);
     this.prompt = new PromptInput(renderer, notice, (content) => inspect?.(content), { id: "git-prompt" });
     this.dialog.add(this.prompt.field);
     this.prompt.on(InputRenderableEvents.INPUT, this.resizeAsk); this.prompt.on("resize", this.resizeAsk); this.prompt.on("line-info-change", this.resizeAsk);
-    const dialogControls = this.row();
-    const send = button("Send", () => this.launch(() => this.submit()), "Send Git context");
-    const cancel = button("Cancel", () => this.closeAsk(), "Cancel request");
-    this.dialogButtons.push(this.targetButton, this.prompt, send, cancel); dialogControls.add(send); dialogControls.add(cancel);
-    this.dialog.add(dialogControls); this.root.add(this.dialog);
+    this.root.add(this.dialog);
     bindPanelSpacing(renderer, this.root);
     renderer.on("selection", this.selectionFinished); renderer.on("focused_renderable", this.keepFocus);
     for (const box of [this.history.root, this.files.root]) {
@@ -290,7 +281,7 @@ export class GitPanel {
   private get selectedFiles(): GitFile[] { return this.cache?.external?.details.files ?? (this.cache?.state.selected ? this.cache.details?.files ?? [] : this.cache?.data?.files ?? []); }
   private get selectedFile(): GitFile | undefined { return this.selectedFiles.find((file) => fileKey(file) === this.cache?.state.file); }
   get focusTargets(): Renderable[] {
-    if (this.dialog.visible) return this.dialogButtons;
+    if (this.dialog.visible) return [this.prompt];
     if (this.changes.visible) return [this.files.root, this.diffFocus];
     if (this.browser.visible) return this.browser.focusTargets;
     return [this.history.root, ...(this.detailsCard.visible ? [this.details] : [])];
@@ -323,8 +314,7 @@ export class GitPanel {
   get shortcuts(): FooterShortcut[] {
     const context = this.keyContext() ?? "button";
     const hint = (command: CommandId, label: string) => ({ key: footerKeyHint(command, context, this.hint(command, context)), label });
-    if (context === "git-prompt") return [hint("git.submit", "Send"), hint("git.newline", "New line"), ...(this.prompt.value ? [hint("git.clear", "Clear")] : []), ...(this.prompt.canInspect ? [hint("git.inspect", "Inspect")] : []), hint("git.cancel", "Cancel")];
-    if (this.dialog.visible) return [hint("git.back", "Cancel"), hint("focus.next", "Control")];
+    if (context === "git-prompt") return [hint("git.submit", "Send"), hint("git.change-session", "Change session"), hint("git.newline", "New line"), ...(this.prompt.value ? [hint("git.clear", "Clear")] : []), ...(this.prompt.canInspect ? [hint("git.inspect", "Inspect")] : []), hint("git.cancel", "Cancel")];
     if (this.browser.visible) return this.browser.shortcuts;
     const target = this.context;
     return [...(!this.modal ? [hint("git.refs", "Refs"), hint("git.reflog", "Reflog")] : []), ...(target ? [hint("git.ask", `Ask ${target.label.split(" ")[0]!.toLowerCase()}`), hint("git.copy", target.label.startsWith("File") ? "Copy path" : target.label.startsWith("Branch") || target.label.startsWith("Tag") ? "Copy name" : "Copy hash")] : []),
@@ -628,6 +618,7 @@ export class GitPanel {
       case "git.ask": this.openAsk(); return;
       case "git.copy": { const context = this.context; if (context) this.copy(context.copy); return; }
       case "git.submit": this.launch(() => this.submit()); return;
+      case "git.change-session": this.cycleSession(); return;
       case "git.newline": this.prompt.newLine(); return;
       case "git.clear": this.prompt.clear(); return;
       case "git.paste": this.launch(() => this.prompt.pasteClipboard()); return;
@@ -680,6 +671,7 @@ export class GitPanel {
     if (command === "git.left" || command === "git.right") return within(this.renderer.currentFocusedRenderable, this.diffFocus);
     if (command === "git.ask" || command === "git.copy") return !!this.context;
     if (command === "git.submit") return !!this.ask && !this.ask.sending && !this.prompt.pending && !!this.prompt.value.trim();
+    if (command === "git.change-session") return !!this.ask && !this.ask.sending;
     if (command === "git.newline" || command === "git.paste" || command === "git.clear") return !!this.ask;
     if (command === "git.inspect") return !!this.ask && !!this.inspect && this.prompt.canInspect;
     if (command === "git.cancel") return !!this.ask;
@@ -696,12 +688,12 @@ export class GitPanel {
   private cycleSession(): void {
     if (!this.ask || this.ask.sending) return;
     const choices = [...(this.worktree?.sessions ?? []).map((session) => session.id), null];
-    this.ask.session = choices[(choices.indexOf(this.ask.session) + 1) % choices.length]!; this.updateTarget();
+    this.ask.session = choices[(choices.indexOf(this.ask.session) + 1) % choices.length]!; this.updateTarget(); this.changed();
   }
   private updateTarget(): void {
     if (!this.ask) return;
     const session = this.worktree?.sessions.find((item) => item.id === this.ask!.session);
-    this.targetText.content = `Session: ${session ? display(session.name) : this.ask.session ? this.ask.session : "New session (create on Send)"}`;
+    this.targetText.content = `Session: ${session ? display(session.name) : this.ask.session ? this.ask.session : "New session (create on submit)"}`;
   }
   private closeAsk(restoreFocus = true): void {
     const ask = this.ask; this.ask = undefined; this.dialog.visible = false; this.prompt.cancelPaste();
@@ -742,9 +734,9 @@ export class GitPanel {
   };
   private resizeAsk = (): void => {
     if (this.disposed || !this.dialog?.visible || this.prompt.isDestroyed) return;
-    // Heading, context, target, controls and the dialog border consume seven rows.
-    const input = this.prompt.fit(this.root.height - 7);
-    const height = Math.min(this.root.height, 7 + input.height);
+    // Heading, context, target and the dialog border consume six rows.
+    const input = this.prompt.fit(this.root.height - 6);
+    const height = Math.min(this.root.height, 6 + input.height);
     if (this.dialog.height !== height) this.dialog.height = height;
     this.changed();
   };
