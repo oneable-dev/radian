@@ -39,7 +39,7 @@ async function fixture(options: Partial<WorkbenchActions> = {}) {
     async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("워크스페이스 팝업은 작업 너비를 바꾸지 않고 퍼지 검색 후 Enter에서만 전환한다", async () => {
+test("워크스페이스 팝업은 작업 너비를 바꾸지 않고 포함 검색 후 Enter에서만 전환한다", async () => {
   // 영구 사이드바 없이 현재 세션과 초안이 열린 상태에서 시작한다.
   const app = await fixture();
   try {
@@ -48,6 +48,8 @@ test("워크스페이스 팝업은 작업 너비를 바꾸지 않고 퍼지 검�
 
     app.mockInput.pressKey("f", { ctrl: true }); await app.render();
     await app.mockInput.typeText("rdui"); await app.render();
+    expect(app.captureCharFrame()).toContain("No matching workspaces");
+    (app.get("workspace-search") as InputRenderable).value = "-ui"; await app.render();
     expect(app.selection.worktree?.id).toBe("demo:main"); expect(pane.width).toBe(width);
     expect(app.captureCharFrame()).toContain("radian-ui");
     app.mockInput.pressEnter(); await app.render();
@@ -108,12 +110,12 @@ test("열린 팝업의 검색 포커스 이동은 입력을 보존하고 선택 
   // 검색 중 포커스를 되돌리는 동작과 새 검색 세션을 시작하는 동작을 구분한다.
   const app = await fixture();
   try {
-    app.leader("b"); await app.mockInput.typeText("rdui"); await app.render();
+    app.leader("b"); await app.mockInput.typeText("-ui"); await app.render();
     const input = app.get("workspace-search") as InputRenderable;
     app.mockInput.pressTab(); app.mockInput.pressKey("f", { ctrl: true }); await app.render();
 
     // 이미 열린 팝업에서는 포커스를 옮겨도 검색어를 지우지 않는다.
-    expect(input.value).toBe("rdui"); expect(app.renderer.currentFocusedRenderable).toBe(input);
+    expect(input.value).toBe("-ui"); expect(app.renderer.currentFocusedRenderable).toBe(input);
     app.mockInput.pressEnter(); await app.render();
     expect(app.selection.worktree?.id).toBe("demo:feature");
     expect(app.get("workspace-picker").visible).toBe(false);
@@ -288,7 +290,7 @@ test("모니터 후보가 많으면 렌더링 한도를 알리고 검색으로 �
     app.leader("s"); await app.render();
     expect(app.captureCharFrame()).toContain("Showing first 200 of 252 sessions; refine search");
     expect(app.renderer.root.findDescendantById("monitor:bulk-249")).toBeUndefined();
-    await app.mockInput.typeText("lastspecial"); await app.render();
+    await app.mockInput.typeText("special last"); await app.render();
 
     expect(app.get("monitor:bulk-249")).toBeDefined(); expect(app.captureCharFrame()).toContain("Last special task"); expect(app.acknowledged).toEqual([]);
   } finally { await app.close(); }

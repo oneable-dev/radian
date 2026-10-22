@@ -33,6 +33,10 @@ test("초기 준비 후 명령·스킬·파일 검색과 화면 갱신은 같은
       expect(expectOk(provider.read!("session", { kind: "file", query: "last-file" })!).items[0]?.value).toBe("last-file.ts");
     }
 
+    // Cached executable catalogs use prefixes while files still accept basename fragments.
+    expect(expectOk(provider.read!("session", { kind: "command", query: "mand-149" })!).items).toEqual([]);
+    expect(expectOk(provider.read!("session", { kind: "skill", query: "code" })!).items).toEqual([]);
+    expect(expectOk(provider.read!("session", { kind: "file", query: "file.ts" })!).items.map(item => item.value)).toEqual(["last-file.ts"]);
     expect(requests).toBe(1); expect(unexpected).toEqual([]);
     expect(expectError(await provider("session", { kind: "command", query: "" }, AbortSignal.abort())).code).toBe("CANCELLED");
     expect(expectOk(provider.read!("session", { kind: "command", query: "review" })!).items).toEqual([]);

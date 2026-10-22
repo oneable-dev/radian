@@ -198,15 +198,22 @@ test("공유 스냅샷 preview는 저장된 실행 상태와 당시 context·usa
   } finally { await app.close(); }
 });
 
-test("검색은 fuzzy·한글을 지원하고 hjkl과 r은 검색 입력으로 남긴다", async () => {
+test("검색은 정규화한 단어별 포함 검색을 적용하고 hjkl과 r을 입력 문자로 유지한다", async () => {
+  // Titles include separated Korean words and ordinary navigation letters.
   const app = await mount({ list: async () => [saved("a", "Layout review"), saved("b", "키보드 검색"), saved("c", "hjkl refresh")] });
   try {
     await app.open();
-    await app.mockInput.typeText("lyt rvw"); await app.render();
+    await app.mockInput.typeText("ＬＡＹ review"); await app.render();
     expect(app.captureCharFrame()).toContain("Layout review"); expect(app.captureCharFrame()).not.toContain("키보드 검색");
     const search = app.get("history-search") as InputRenderable;
-    search.value = "키검"; await app.render(); expect(app.captureCharFrame()).toContain("키보드 검색");
+    search.value = "보드 검색"; await app.render(); expect(app.captureCharFrame()).toContain("키보드 검색");
+    search.value = "키검"; await app.render(); expect(app.captureCharFrame()).toContain("No matching sessions");
+    search.value = "lyt rvw"; await app.render(); expect(app.captureCharFrame()).toContain("No matching sessions");
+
+    // Ordinary letters stay in search instead of executing list navigation or refresh.
     search.value = ""; await app.mockInput.typeText("hjkl r"); await app.render();
+
+    // Search changes must never open a session or send a model request.
     expect(search.value).toBe("hjkl r"); expect(app.captureCharFrame()).toContain("hjkl refresh");
     expect(app.resumed).toEqual([]); expect(app.runs).toEqual([]);
   } finally { await app.close(); }

@@ -105,6 +105,25 @@ test("j/k와 h/l로 모델·effort를 미리 고르고 Tab 영역 이동 후 한
   } finally { await app.close(); }
 });
 
+test.each([
+  ["model ＯＴＨＥＲ", "Target model"],
+  ["ＲＩＧＩＮＡＬ fixture", "Original model [Current]"],
+  ["model missing", "No matching models"],
+  ["tgt", "No matching models"],
+] as const)("모델 검색어 %s는 모든 단어를 포함하는 후보만 표시한다", async (query, expected) => {
+  // Provider, name and ID are searchable metadata, not model execution inputs.
+  const app = await mount();
+  try {
+    await app.open(); app.mockInput.pressKey("/"); await app.render();
+
+    await app.mockInput.typeText(query); await app.render();
+
+    // Search accepts normalized substrings without changing the session model.
+    expect(app.captureCharFrame()).toContain(expected);
+    expect(app.changes).toEqual([]); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("검색 창의 hjkl은 검색 문자이고 Ctrl+N/P만 목록을 이동한다", async () => {
   const app = await mount();
   try {

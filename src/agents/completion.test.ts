@@ -35,6 +35,41 @@ test("명령어와 공백·따옴표가 있는 경로는 실행 없이 완성할
   expect(file.cursor).toBe(file.text.length);
 });
 
+test.each(["command", "template", "skill"] as const)("%s 자동완성은 정규화한 접두사만 매칭하고 중간 문자열·퍼지 매칭을 거부한다", (kind) => {
+  // Executable resources must not appear just because their name contains the token.
+  const items = ["Review-code", "code-review"].map(value => ({ kind, value, description: "Review" }));
+
+  const prefix = filterCompletions(items, "ＲＥＶ");
+  const middle = filterCompletions(items, "view");
+  const fuzzy = filterCompletions(items, "rvc");
+
+  // Normalization affects matching, not the name inserted into the prompt.
+  expect(prefix.items.map(item => item.value)).toEqual(["Review-code"]);
+  expect(middle.items).toEqual([]); expect(fuzzy.items).toEqual([]);
+});
+
+test("파일 자동완성은 중간 경로를 포함 검색하고 접두사 후보를 먼저 표시한다", () => {
+  // File mentions may start from a basename rather than the worktree-relative path.
+  const items = ["src/review.ts", "review.ts", "src/r-e-v.ts"].map(value => ({ kind: "file" as const, value, description: "" }));
+
+  const result = filterCompletions(items, "ＲＥＶ");
+
+  // Keep original paths and do not admit fuzzy-only candidates.
+  expect(result.items.map(item => item.value)).toEqual(["review.ts", "src/review.ts"]);
+});
+
+test("파일 자동완성의 공백은 AND 구분자가 아니라 경로의 일부로 유지한다", () => {
+  // Quoted paths distinguish one literal space from separated search terms.
+  const items = ["src/문서 file.ts", "src/문서 other file.ts"].map(value => ({ kind: "file" as const, value, description: "" }));
+
+  const result = filterCompletions(items, "문서 file");
+  const doubled = filterCompletions(items, "문서  file");
+
+  // A gap in a filename must not be synthesized or collapsed by the matcher.
+  expect(result.items.map(item => item.value)).toEqual(["src/문서 file.ts"]);
+  expect(doubled.items).toEqual([]);
+});
+
 test("필터는 대소문자를 구분하지 않고 접두사 일치를 우선하며 잘린 목록을 명시한다", () => {
   // The server bounds the wire response instead of returning an unmarked partial list.
   const items = ["xMCP", "mcp", ...Array.from({ length: 110 }, (_, index) => `mcp-${index}`)].map((value) => ({ kind: "command" as const, value, description: "" }));

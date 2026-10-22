@@ -1,3 +1,5 @@
+import { createPrefixMatcher, createSubstringMatcher } from "../search.ts";
+
 export type CompletionQuery = { readonly kind: "command" | "skill" | "file"; readonly query: string };
 export type CompletionCatalog = { readonly conversationId: string; readonly revision: number; readonly items: readonly CompletionItem[] };
 export type CompletionItem = { readonly kind: "command" | "skill" | "template" | "file"; readonly value: string; readonly description: string };
@@ -66,9 +68,9 @@ export function filterCatalog(items: readonly CompletionItem[], query: Completio
 }
 
 export function filterCompletions(items: readonly CompletionItem[], query: string): CompletionResult {
-  const needle = query.toLowerCase();
-  const matches = items.filter((item) => item.value.toLowerCase().includes(needle));
-  matches.sort((a, b) => Number(b.value.toLowerCase().startsWith(needle)) - Number(a.value.toLowerCase().startsWith(needle))
+  const prefix = createPrefixMatcher(query), substring = createSubstringMatcher(query);
+  const matches = items.filter(item => item.kind === "file" ? substring(item.value) : prefix(item.value));
+  matches.sort((a, b) => Number(prefix(b.value)) - Number(prefix(a.value))
     || (a.value < b.value ? -1 : a.value > b.value ? 1 : 0));
   return { items: matches.slice(0, completionLimit), truncated: matches.length > completionLimit };
 }

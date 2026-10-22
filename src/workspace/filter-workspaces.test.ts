@@ -23,6 +23,7 @@ for (const [query, expected] of [
   ["cKoUt", ["tree-a"]],
   ["TURE/seA", ["tree-a"]],
   ["GLU", ["tree-c"]],
+  ["  ＳＥＡＲＣＨ feature  ", ["tree-a"]],
 ] satisfies [string, string[]][]) {
   test(`검색어 ${query}는 이름과 브랜치의 대소문자를 무시한 부분 일치를 사용한다`, () => {
     // Repository names, folder names and branch names have distinct values.
@@ -48,6 +49,16 @@ for (const query of ["only-session-label", "only-subagent-label", "/tmp/", "deta
     expect(result).toEqual([]);
   });
 }
+
+test.each(["ckot", "checkout search"])("검색어 %s는 모든 단어가 같은 필드에 연속으로 포함되지 않으면 제외한다", (query) => {
+  // Checkout-One and feature/Search belong to the same tree but are separate search fields.
+  const input = fixture();
+
+  const result = filterWorkspaces(input, query);
+
+  // Neither scattered letters nor combining terms across fields may admit this worktree.
+  expect(result).toEqual([]);
+});
 
 test("레포명 일치는 빈 워크트리를 포함한 모든 하위 항목을 보존한다", () => {
   // Atlas owns a populated worktree and a detached empty worktree.

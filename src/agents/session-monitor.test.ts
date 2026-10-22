@@ -21,13 +21,15 @@ test("모니터는 모든 저장소의 실행 중·미확인 세션만 모으고
   expect(items[2]?.repository).toBe("Backend");
 });
 
-test("모니터 검색은 요청과 워크스페이스 요약만 퍼지 매칭하고 원본 선택을 바꾸지 않는다", () => {
-  // 서로 다른 필드의 단어를 조합해 검색할 수 있다.
+test("모니터 검색은 요청과 워크스페이스 필드에 단어별 포함 검색을 적용하고 퍼지 매칭을 거부한다", () => {
+  // A query may combine contiguous substrings from different summary fields.
   const input = repositories([{ ...session("opaque-id", "working"), request: { text: "Fix authentication", images: 0, files: 0 } }]);
 
-  const items = monitoredSessions(input, "fxauth rad ftr");
+  const items = monitoredSessions(input, "  ＡＵＴＨ rad feature  ");
 
+  // Filtering must neither match scattered letters nor alter the source sessions.
   expect(items.map(item => item.session.id)).toEqual(["opaque-id"]);
+  expect(monitoredSessions(input, "fxauth rad ftr")).toEqual([]);
   expect(monitoredSessions(input, "unrelated")).toEqual([]);
   expect(input[0]?.worktrees[0]?.sessions).toHaveLength(1);
 });

@@ -309,6 +309,9 @@ suggestions only in the first token at the beginning of the prompt. `$` opens a 
 in that same leading position; Skills do not appear in `/` suggestions. `@` opens file suggestions at
 the beginning of any whitespace-delimited token, including in the middle of a sentence; email
 addresses do not trigger it. Matching uses the text before the cursor, not just the end of the draft.
+Commands, templates and Skills require a contiguous name prefix; file paths accept a contiguous
+substring and rank prefix matches first. Matching is Unicode-normalized and case-insensitive,
+without changing inserted names or paths. Spaces inside a quoted file query remain literal.
 
 Already-connected SDK sessions prefetch a full command/Skill catalog, not a 100-item search page.
 File indexes are shared by worktree within the attached UI and prepared in the background. Cold
@@ -1448,7 +1451,8 @@ Its scope is the active worktree, not the workspace popup's candidate cursor. Th
 names (falling back to the first prompt or `Untitled session`), last activity and message count,
 newest first, including in shared offline directories.
 
-Type a fuzzy title query, including Unicode text. Arrows or Ctrl+N/P move the candidate cursor without
+Type a title query, including Unicode text. Every whitespace-separated term must occur as a
+contiguous substring; scattered letters do not match. Arrows or Ctrl+N/P move the candidate cursor without
 changing the live session; normal letters, including hjkl and r, remain search text. `Tab`/`Shift+Tab`
 cycle within the popup. The list additionally supports j/k and Home/End. `Enter` opens the selected
 context in Agents, or selects its existing open tab, without copying/forking the SDK file or sending a
@@ -1540,12 +1544,23 @@ Only a missing/refused endpoint triggers service bootstrap, not permission error
 Older daemon string errors are explicitly tagged `LEGACY_REMOTE_ERROR`; existing services are
 not automatically restarted to upgrade error handling.
 
+### Search matching
+
+App-owned search uses shared, UI-independent matching with NFKC Unicode normalization and
+case-insensitive comparison. It does not use fuzzy matching. Commands, prompt templates and Skills
+match name prefixes. File completion matches literal path substrings, preserving query whitespace.
+Workspace, History, session monitor, model, Refs and Reflog searches require every whitespace-separated
+term as a contiguous substring, regardless of term order. Empty general queries show all eligible
+candidates. Each feature retains its searchable fields, domain ordering, selection and display limits;
+matching never rewrites original names or paths.
+
 ### Workspace search
 
 Open the workspace popup with `Ctrl+f` outside a PTY or leader w/f/b from any view.
-Results update while typing, deleting or pasting. Matching is normalized, case-insensitive ordered
-fuzzy matching over repository names, worktree folder names and actual branch names. Repository
-matches retain their worktrees. Session/subagent titles, paths and history are not searched.
+Results update while typing, deleting or pasting. Matching is normalized, case-insensitive substring
+search over repository names, worktree folder names and actual branch names. Every query term must
+match within the same name or branch field. Repository matches retain their worktrees.
+Session/subagent titles, paths and history are not searched.
 `Ctrl+N/P` move candidates in both search and tree focus without changing the active workspace;
 Tab switches to the tree for j/k and Home/End. `/` returns from the tree to search. **Enter from either surface opens the candidate.**
 `Ctrl+C` clears the query; it never closes the popup or interrupts the Agent.

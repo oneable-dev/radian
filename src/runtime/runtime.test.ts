@@ -119,6 +119,9 @@ test("자동완성 IPC는 선택 세션의 SDK 명령과 워크트리 파일만 
     expect(client.snapshot.capabilities).toContain("prompt-completion");
     const commands = expectOk(await client.complete(id, { kind: "command", query: "lookup-probe" }));
     expect(commands.items.map((item) => item.value)).toEqual(["lookup-probe"]);
+    // IPC and prepared UI catalogs must enforce the same normalized prefix rule.
+    expect(expectOk(await client.complete(id, { kind: "command", query: "ＬＯＯＫＵＰ－ＰＲＯＢＥ" })).items.map(item => item.value)).toEqual(["lookup-probe"]);
+    expect(expectOk(await client.complete(id, { kind: "command", query: "probe" })).items).toEqual([]);
     const files = expectOk(await client.complete(id, { kind: "file", query: "only.ts" }));
     expect(files.items.map((item) => item.value)).toEqual(["main-only.ts"]);
     expectOk(await client.prompt(id, "/lookup-probe"));

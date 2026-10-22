@@ -12,6 +12,7 @@ import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { Button } from "../../ui/button.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
+import { createTextMatcher } from "../../search.ts";
 
 type Scope = { sessionId: string; conversationId: string };
 export type ModelPickerActions = {
@@ -153,11 +154,8 @@ export class ModelPicker {
   private filter = (): void => {
     if (!this.visible) return;
     const selected = this.filtered[this.cursor] ?? this.catalog?.current;
-    const words = this.search.value.normalize("NFKC").toLowerCase().trim().split(/\s+/u);
-    const matches = this.catalog?.models.filter(model => {
-      const text = `${model.name} ${model.provider}/${model.id}`.normalize("NFKC").toLowerCase();
-      return words.every(word => text.includes(word));
-    }) ?? [];
+    const matchesText = createTextMatcher(this.search.value);
+    const matches = this.catalog?.models.filter(model => matchesText(`${model.name} ${model.provider}/${model.id}`)) ?? [];
     // Keep the current model visible even when a large provider catalog needs display bounds.
     const current = matches.find(model => sameModel(this.catalog?.current, model));
     this.filtered = current ? [current, ...matches.filter(model => model !== current).slice(0, 199)] : matches.slice(0, 200);

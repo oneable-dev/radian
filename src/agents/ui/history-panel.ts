@@ -17,6 +17,7 @@ import { AgentPanel } from "./agent-panel.ts";
 import type { ExecutionState, SessionRecord } from "../session-registry.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import type { TranscriptSection } from "../transcript.ts";
+import { createTextMatcher } from "../../search.ts";
 
 export type HistoryActions = {
   list?: (worktreeId: string, signal?: AbortSignal) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
@@ -28,15 +29,6 @@ export type HistoryActions = {
   onChange?: () => void;
   keyHint: (command: Extract<CommandId, `history.${string}`>, context: KeyContext) => string;
 };
-
-function matches(title: string, query: string): boolean {
-  const text = title.normalize("NFKC").toLowerCase();
-  return query.normalize("NFKC").toLowerCase().trim().split(/\s+/).every((word) => {
-    let offset = 0;
-    for (const char of word) { const at = text.indexOf(char, offset); if (at < 0) return false; offset = at + char.length; }
-    return true;
-  });
-}
 
 // The popup owns only a query and a candidate cursor. Canonical session selection changes on Open.
 export class SessionHistoryPanel {
@@ -195,7 +187,8 @@ export class SessionHistoryPanel {
   private filter = (): void => {
     if (!this.visible) return;
     const selected = this.selected?.id;
-    const matchesQuery = this.items.filter((item) => matches(item.title, this.search.value));
+    const matches = createTextMatcher(this.search.value);
+    const matchesQuery = this.items.filter(item => matches(item.title));
     this.filtered = matchesQuery.slice(0, 200);
     this.cursor = Math.max(0, this.filtered.findIndex((item) => item.id === selected));
     for (const row of this.rows) row.destroyRecursively(); this.rows.length = 0;

@@ -36,6 +36,22 @@ async function mount(provider: CompletionProvider = async (_id, query) => ok(fil
   };
 }
 
+test("명령어 자동완성은 중간 문자열을 제외하고 접두사 후보만 표시한다", async () => {
+  // The menu contains mcp, whose suffix must not become an executable candidate.
+  const app = await mount();
+  try {
+    await app.type("/cp");
+
+    // Editing within the same menu must immediately apply the prefix policy.
+    expect(app.captureCharFrame()).toContain("No matches");
+    app.input.value = "/mc"; await app.complete();
+
+    // Candidate discovery preserves the draft and does not submit a command.
+    expect(app.captureCharFrame()).toContain("Command mcp");
+    expect(app.input.value).toBe("/mc"); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test.each(["/", "$", "@"] as const)("준비된 %s 목록은 시계 대기·로딩·추가 조회 없이 바로 표시한다", async (trigger) => {
   // 캐시가 준비된 후에는 서버나 파일시스템을 다시 조회할 이유가 없다.
   const items: readonly CompletionItem[] = [

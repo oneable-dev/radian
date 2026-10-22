@@ -5,7 +5,7 @@ import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { SearchInput } from "../../ui/search-input.ts";
-import { fuzzyMatch } from "../../ui/fuzzy-match.ts";
+import { createTextMatcher } from "../../search.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
@@ -135,20 +135,18 @@ export class GitBrowser {
   private filter = (): void => {
     if (!this.visible) return;
     this.openAfterLoad = undefined;
-    const query = this.search.value, rows: GitListItem[] = [];
+    const matches = createTextMatcher(this.search.value), rows: GitListItem[] = [];
     if (this.kind === "refs") {
-      if (!query.trim() || fuzzyMatch("All refs", query)) rows.push({ key: allRefs, label: "All refs" });
+      if (matches("All refs")) rows.push({ key: allRefs, label: "All refs" });
       for (const [kind, label] of [["local", "Local"], ["remote", "Remote"], ["tag", "Tags"]] as const) {
-        const refs = this.snapshot?.refs.filter(ref => ref.kind === kind && fuzzyMatch(ref.name, query)) ?? [];
+        const refs = this.snapshot?.refs.filter(ref => ref.kind === kind && matches(ref.name)) ?? [];
         if (refs.length) rows.push({ key: `heading:${kind}`, label, disabled: true, gapBefore: rows.length > 0 });
         for (const ref of refs) rows.push({ key: ref.ref, label: display(`${ref.kind === "tag" ? icons.tag : icons.branch} ${ref.name}`),
           color: ref.kind === "local" && ref.name === this.snapshot?.head ? "git.currentRef" : "ui.label" });
       }
     } else {
-      const words = query.normalize("NFKC").toLowerCase().trim().split(/\s+/u).filter(Boolean);
       for (const event of this.snapshot?.reflog ?? []) {
-        const text = `${event.selector} ${event.oid} ${event.subject} ${event.date}`.normalize("NFKC").toLowerCase();
-        if (words.every(word => text.includes(word))) rows.push({ key: event.selector, label: [
+        if (matches(`${event.selector} ${event.oid} ${event.subject} ${event.date}`)) rows.push({ key: event.selector, label: [
           { text: display(`${event.date.slice(0, 16)}  ${event.selector}  `) }, { text: event.oid.slice(0, 7), color: "git.hash" }, { text: display(`  ${event.subject}`) },
         ] });
       }
