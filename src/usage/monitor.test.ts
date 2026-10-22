@@ -129,7 +129,7 @@ test("미지원 제공자는 값을 꾸미지 않으며 예상하지 못한 결�
 test("인증 실패도 반복 완료 이벤트마다 재시도하지 않고 다음 주기에 복구한다", async () => {
   const clock = new ManualClock(); let calls = 0;
   const monitor = new UsageMonitor(async () => ++calls === 1 ? err(new UsageError("USAGE_AUTH_REQUIRED", "Login unavailable"))
-    : ok({ key: "account", provider: "acme", load: async () => ok(windows(30)) }), clock);
+    : ok({ key: "account", provider: "acme", load: async () => ok(windows(30)) }), clock, () => 0);
   const subscription = monitor.watch(() => {});
   try {
     subscription.read("agent"); monitor.setActive(true); await settle();
@@ -161,7 +161,7 @@ test("인증 단계가 지연돼도 조회 제한 시간이 지나면 오류 상
 test("시간 초과된 조회가 늦게 완료돼도 다음 조회의 캐시와 요청 소유권을 바꾸지 않는다", async () => {
   const clock = new ManualClock(); let calls = 0;
   const old = Promise.withResolvers<Result<readonly UsageWindow[], UsageError>>();
-  const monitor = new UsageMonitor(async () => ok({ key: "account", provider: "acme", load: async () => ++calls === 1 ? old.promise : ok(windows(80)) }), clock);
+  const monitor = new UsageMonitor(async () => ok({ key: "account", provider: "acme", load: async () => ++calls === 1 ? old.promise : ok(windows(80)) }), clock, () => 0);
   const subscription = monitor.watch(() => {});
   try {
     subscription.read("agent"); monitor.setActive(true); await settle();

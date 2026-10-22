@@ -763,18 +763,25 @@ format and availability are not guaranteed. Usage lookup itself is read-only and
 
 A session starts its first lookup without waiting for a prompt. Reconnection, provider selection and
 final `agent_settled` events request fresh usage; short bursts and simultaneous sessions share work.
-While any TUI is attached, the runtime polls every 60 seconds and at returned reset deadlines. Account
-identity is checked during each lookup; external login changes are picked up on the next lookup.
+While any TUI is attached, the runtime normally polls every 60 seconds and at returned reset deadlines.
+Failures retry with exponential backoff (60, 120, 240 seconds, capped at 5 minutes), with up to 10% jitter
+within that cap. A longer `Retry-After` takes precedence, and successful lookups reset the backoff.
+Retry deadlines remain scheduled even when a regular poll falls inside the waiting period.
+Account identity is checked during each lookup; external login changes are picked up on the next lookup.
 Each worktree has its own SDK model runtime and usage monitor. Sessions in that worktree share
 account-keyed lookups; separate worktrees do not share usage caches. Explicit account selection
 invalidates usage immediately, and late responses from the previous account cannot republish its quota.
 Detaching all TUIs stops periodic polling. Shutdown aborts lookups and invalidates late responses.
 
 The countdown is calculated locally and ticks every minute or at its reset deadline, without HTTP requests.
-Resetting a window triggers another lookup, never an invented 0%/100%. Missing, unsupported or failed
-usage shows the provider icon and **-**, without a bar or fake countdown; typed failure codes remain in
-the snapshot for diagnostics. Credentials and private account/cache identifiers are never sent to the
-TUI or saved in its preferences. Restoring history always uses live usage rather than saved quotas.
+Resetting a window triggers another lookup, never an invented 0%/100%. While recovering from a failed
+lookup, the last successful, unexpired account bar stays visible in muted gray with a gray spinner;
+its percentage, unit and countdown stay hidden throughout backoff and retries. The first lookup also
+shows the spinner, without inventing a bar when no successful value exists. Success immediately restores
+the current percentage and normal bar colors. Hidden views and static history snapshots do not animate.
+Missing or unsupported usage shows the provider icon and **-**, without a bar or fake countdown.
+Typed failure codes and the last successful timestamp remain in the snapshot for diagnostics.
+Credentials and private account/cache identifiers are never sent to the TUI or saved in its preferences. Restoring history always uses live usage rather than saved quotas.
 Earlier telemetry snapshots with only `weekly` remain readable and are converted to `used` for display.
 Finish existing jobs before explicitly restarting an old runtime to load the new usage source.
 

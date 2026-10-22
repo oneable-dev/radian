@@ -6,9 +6,13 @@ type Timer = ReturnType<typeof setTimeout> | number;
 type Clock = { now(): number; setTimeout(callback: () => void, delay: number): Timer; clearTimeout(timer: Timer): void };
 const systemClock: Clock = { now: Date.now, setTimeout: (callback, delay) => setTimeout(callback, delay), clearTimeout };
 const intervalMs = 60000;
+const maxBackoffMs = 300000;
 const empty = (provider: string, status: ProviderUsage["status"] = "loading", errorCode: ProviderUsage["errorCode"] = null): ProviderUsage =>
   ({ provider, status, windows: [], updatedAt: null, errorCode });
-type AccountCache = { snapshot: ProviderUsage; attemptedAt: number; retryAt: number; pending?: Promise<ProviderUsage> };
+const failed = (previous: ProviderUsage, error: ExpectedError): ProviderUsage =>
+  ({ ...previous, status: "error", errorCode: error instanceof UsageError ? error.code : "USAGE_QUERY_FAILED" });
+type RetryState = { failures: number; retryAt: number };
+type AccountCache = { snapshot: ProviderUsage; attemptedAt: number; retry?: RetryState; pending?: Promise<ProviderUsage> };
 
 // One runtime owns polling and account-keyed deduplication; UI instances only consume snapshots.
 export class UsageMonitor {
@@ -19,14 +23,14 @@ export class UsageMonitor {
   private readonly pending = new Map<string, Promise<void>>();
   private readonly jobs = new Set<Promise<void>>();
   private readonly generations = new Map<string, number>();
-  private readonly providerRetryAt = new Map<string, number>();
+  private readonly providerRetries = new Map<string, RetryState>();
   private readonly controllers = new Set<AbortController>();
   private timer: Timer | undefined;
   private active = false;
   private nextPollAt: number | null = null;
   private stopped = false;
 
-  constructor(private readonly resolve: UsageResolver, private readonly clock: Clock = systemClock) {}
+  constructor(private readonly resolve: UsageResolver, private readonly clock: Clock = systemClock, private readonly random: () => number = Math.random) {}
 
   watch(changed: () => void): UsageSubscription {
     let provider: string | null = null, disposed = false;
@@ -37,7 +41,7 @@ export class UsageMonitor {
       if (!callbacks?.size) {
         this.watchers.delete(provider); this.snapshots.delete(provider); this.accountKeys.delete(provider);
         this.generations.set(provider, (this.generations.get(provider) ?? 0) + 1);
-        this.pending.delete(provider); this.providerRetryAt.delete(provider);
+        this.pending.delete(provider); this.providerRetries.delete(provider);
       }
     };
     return {
@@ -60,7 +64,7 @@ export class UsageMonitor {
 
   invalidate(provider: string): void {
     this.generations.set(provider, (this.generations.get(provider) ?? 0) + 1);
-    this.pending.delete(provider); this.accountKeys.delete(provider); this.providerRetryAt.delete(provider);
+    this.pending.delete(provider); this.accountKeys.delete(provider); this.providerRetries.delete(provider);
     this.publish(provider, empty(provider));
     if (this.watchers.has(provider)) void this.refresh(provider, true);
   }
@@ -75,12 +79,12 @@ export class UsageMonitor {
   private refresh(provider: string, force = false): Promise<void> {
     if (this.stopped) return Promise.resolve();
     const existing = this.pending.get(provider); if (existing) return existing;
-    if (this.clock.now() < (this.providerRetryAt.get(provider) ?? 0)) return Promise.resolve();
+    if (this.clock.now() < this.retryAt(provider)) return Promise.resolve();
     // Defer callbacks until registration/reading a snapshot has finished, avoiding recursive publication.
     const generation = this.generations.get(provider) ?? 0;
     const task = Promise.resolve().then(() => this.perform(provider, force, generation)).catch((error: unknown) => {
       reportUnexpected(error, "usage refresh");
-      if ((this.generations.get(provider) ?? 0) === generation) this.publish(provider, empty(provider, "error", "USAGE_QUERY_FAILED"));
+      if ((this.generations.get(provider) ?? 0) === generation) this.fail(provider, new UsageError("USAGE_QUERY_FAILED", "Unexpected usage refresh failure."));
     }).finally(() => {
       if (this.pending.get(provider) === task) this.pending.delete(provider);
       this.jobs.delete(task); this.schedule();
@@ -105,12 +109,8 @@ export class UsageMonitor {
     try {
       const result = await Promise.race([lookup, abort]);
       if (this.stopped || (this.generations.get(provider) ?? 0) !== generation) return;
-      if (result.ok) { this.providerRetryAt.delete(provider); this.publish(provider, result.value); }
-      else if (!(result.error instanceof CancelledError)) {
-        this.providerRetryAt.set(provider, this.clock.now() + Math.max(intervalMs, result.error instanceof UsageError ? result.error.retryAfterMs ?? 0 : 0));
-        const code = result.error instanceof UsageError ? result.error.code : "USAGE_QUERY_FAILED";
-        this.publish(provider, empty(provider, "error", code));
-      }
+      if (result.ok) { this.providerRetries.delete(provider); this.publish(provider, result.value); }
+      else if (!(result.error instanceof CancelledError)) this.fail(provider, result.error);
     } finally {
       this.clock.clearTimeout(timeout); this.controllers.delete(controller);
       if (aborted) controller.signal.removeEventListener("abort", aborted);
@@ -121,7 +121,7 @@ export class UsageMonitor {
     if (this.stopped || signal.aborted) return err(new CancelledError());
     const resolved = await this.resolve(provider, signal);
     if (this.stopped || signal.aborted || (this.generations.get(provider) ?? 0) !== generation) return err(new CancelledError());
-    if (!resolved.ok) { this.accountKeys.delete(provider); return resolved; }
+    if (!resolved.ok) return resolved;
     const account = resolved.value;
     if (!account) { this.accountKeys.delete(provider); return { ok: true, value: empty(provider, "unavailable") }; }
     if (this.accountKeys.get(provider) !== account.key) {
@@ -132,22 +132,23 @@ export class UsageMonitor {
     if (cached?.pending) return { ok: true, value: await cached.pending };
     const now = this.clock.now();
     const expired = cached?.snapshot.windows.some((window) => window.resetsAt !== null && window.resetsAt <= now);
-    if (cached && (now < cached.retryAt || !expired && now - cached.attemptedAt < (force ? 2000 : intervalMs))) {
+    if (cached && (now < (cached.retry?.retryAt ?? 0) || !expired && now - cached.attemptedAt < (force ? 2000 : intervalMs))) {
       return { ok: true, value: cached.snapshot };
     }
-    const entry: AccountCache = cached ?? { snapshot: empty(account.provider), attemptedAt: now, retryAt: 0 };
+    const entry: AccountCache = cached ?? { snapshot: empty(account.provider), attemptedAt: now };
     entry.attemptedAt = now;
     const releasePending = () => { if (entry.pending === job) delete entry.pending; };
-    const job = this.load(account, signal).then(({ snapshot, retryAt }) => {
+    const job = this.load(account, signal, entry).then(({ snapshot, retry }) => {
       if (!this.stopped && !signal.aborted && entry.pending === job) {
-        entry.snapshot = snapshot; entry.retryAt = retryAt;
+        entry.snapshot = snapshot;
+        if (retry) entry.retry = retry; else delete entry.retry;
         for (const [name, key] of this.accountKeys) if (key === account.key) this.publish(name, snapshot);
       }
       return snapshot;
     }).catch((error: unknown) => {
       if (!this.stopped && !signal.aborted && entry.pending === job) {
-        entry.snapshot = empty(account.provider, "error", "USAGE_QUERY_FAILED");
-        entry.retryAt = this.clock.now() + intervalMs;
+        const failure = new UsageError("USAGE_QUERY_FAILED", "Unexpected account usage failure.");
+        entry.snapshot = failed(entry.snapshot, failure); entry.retry = this.backoff(entry.retry, failure);
       }
       throw error;
     }).finally(() => { releasePending(); signal.removeEventListener("abort", releasePending); });
@@ -157,15 +158,37 @@ export class UsageMonitor {
     return { ok: true, value: await job };
   }
 
-  private async load(account: UsageAccount, signal: AbortSignal): Promise<{ snapshot: ProviderUsage; retryAt: number }> {
+  private async load(account: UsageAccount, signal: AbortSignal, previous: AccountCache): Promise<{ snapshot: ProviderUsage; retry?: RetryState }> {
     const result = await account.load(signal);
-    if (!result.ok) {
-      const usageError = result.error instanceof UsageError ? result.error : undefined;
-      return { snapshot: empty(account.provider, "error", usageError?.code ?? "USAGE_QUERY_FAILED"),
-        retryAt: this.clock.now() + Math.max(intervalMs, usageError?.retryAfterMs ?? 0) };
-    }
+    if (!result.ok) return { snapshot: failed(previous.snapshot, result.error), retry: this.backoff(previous.retry, result.error) };
     return { snapshot: { provider: account.provider, status: result.value.length ? "ready" : "unavailable", windows: result.value,
-      updatedAt: this.clock.now(), errorCode: null }, retryAt: 0 };
+      updatedAt: this.clock.now(), errorCode: null } };
+  }
+
+  private backoff(previous: RetryState | undefined, error: ExpectedError): RetryState {
+    const failures = Math.min((previous?.failures ?? 0) + 1, 4);
+    const base = Math.min(maxBackoffMs, intervalMs * 2 ** (failures - 1));
+    const delay = Math.min(maxBackoffMs, Math.round(base * (1 + this.random() * 0.1)));
+    const retryAfter = error instanceof UsageError ? error.retryAfterMs ?? 0 : 0;
+    return { failures, retryAt: this.clock.now() + Math.max(delay, retryAfter) };
+  }
+
+  private fail(provider: string, error: ExpectedError): void {
+    this.providerRetries.set(provider, this.backoff(this.providerRetries.get(provider), error));
+    this.publish(provider, failed(this.snapshots.get(provider) ?? empty(provider), error));
+  }
+
+  private retryAt(provider: string): number {
+    const key = this.accountKeys.get(provider), account = key === undefined ? undefined : this.accounts.get(key);
+    return Math.max(this.providerRetries.get(provider)?.retryAt ?? 0, account?.retry?.retryAt ?? 0);
+  }
+
+  private nextRefreshAt(provider: string, now: number): number {
+    const retryAt = this.retryAt(provider);
+    if (retryAt) return retryAt;
+    const resets = (this.snapshots.get(provider)?.windows ?? [])
+      .flatMap((window: UsageWindow) => window.resetsAt !== null && window.resetsAt > now ? [window.resetsAt] : []);
+    return Math.min(this.nextPollAt ?? now + intervalMs, ...resets);
   }
 
   private publish(provider: string, snapshot: ProviderUsage): void {
@@ -181,13 +204,17 @@ export class UsageMonitor {
     if (this.stopped || !this.active || !this.watchers.size) { this.nextPollAt = null; return; }
     const now = this.clock.now();
     this.nextPollAt ??= now + intervalMs;
-    const resets = [...this.snapshots.values()].flatMap((snapshot) => snapshot.windows)
-      .flatMap((window: UsageWindow) => window.resetsAt !== null && window.resetsAt > now ? [window.resetsAt - now] : []);
-    const delay = Math.max(1000, Math.min(this.nextPollAt - now, ...resets));
+    const scheduled = [...this.watchers.keys()].filter(provider => !this.pending.has(provider))
+      .map(provider => ({ provider, at: this.nextRefreshAt(provider, now) }));
+    if (!scheduled.length) return; // Pending lookups own their timeout and reschedule on settlement.
+    const delay = Math.max(1000, Math.min(2147483647, ...scheduled.map(({ at }) => at - now)));
     this.timer = this.clock.setTimeout(() => {
       this.timer = undefined;
-      if (this.nextPollAt !== null && this.nextPollAt <= this.clock.now()) this.nextPollAt = this.clock.now() + intervalMs;
-      for (const provider of this.watchers.keys()) void this.refresh(provider, true);
+      const now = this.clock.now();
+      if (this.nextPollAt !== null && this.nextPollAt <= now) this.nextPollAt = now + intervalMs;
+      for (const { provider, at } of scheduled) if (at <= now && this.watchers.has(provider)) void this.refresh(provider, true);
+      // Skipping a lookup during backoff must not terminate periodic polling.
+      this.schedule();
     }, delay);
   }
 

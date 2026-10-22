@@ -12,6 +12,7 @@ export type UsageWindow = {
 export type ProviderUsage = {
   readonly provider: string;
   readonly status: "loading" | "ready" | "unavailable" | "error";
+  // Errors retain the last successful account windows and timestamp for a muted recovery display.
   readonly windows: readonly UsageWindow[];
   readonly updatedAt: number | null;
   readonly errorCode: UsageErrorCode | null;

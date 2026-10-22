@@ -8,7 +8,7 @@ import { ok } from "../../result.ts";
 import type { SessionTelemetry } from "../telemetry.ts";
 import type { ProviderUsage } from "../../usage/model.ts";
 import { uiTheme } from "../../ui/theme.ts";
-import { icons } from "../../icons.ts";
+import { icons, spinnerFrames } from "../../icons.ts";
 import { SessionStatus } from "./session-status.ts";
 
 const unavailable = (): ProviderUsage => ({ provider: "openai", status: "unavailable", windows: [], updatedAt: null, errorCode: null });
@@ -331,16 +331,100 @@ test("압축 후 추정 컨텍스트도 별도 표식 없이 현재 모델 한�
   } finally { await app.close(); }
 });
 
-test("usage가 없거나 조회 중·실패이면 context 바만 유지하고 사용률 바나 시간을 꾸미지 않는다", async () => {
+test("미지원 usage는 context 바만 유지하고 사용률 바나 시간을 꾸미지 않는다", async () => {
+  // 조회를 지원하지 않는 제공자는 복구 스피너를 계속 돌려서는 안 된다.
   const app = await mount();
   try {
-    for (const status of ["loading", "unavailable", "error"] as const) {
-      await app.set({ ...sample(), usage: { ...unavailable(), status } });
+    await app.set({ ...sample(), usage: unavailable() });
 
-      expect(app.line()).toMatch(/context ▉+ 64% left/);
-      expect(app.line().slice(app.line().indexOf(icons.openai)).trim().replace(/\s+/g, " ")).toBe(`${icons.openai} chatgpt -`);
-    }
+    // 미지원 상태는 오류 재시도와 달리 정적인 미확정 표시를 유지한다.
+    expect(app.line()).toMatch(/context ▉+ 64% left/);
+    expect(app.line().slice(app.line().indexOf(icons.openai)).trim().replace(/\s+/g, " ")).toBe(`${icons.openai} chatgpt -`);
   } finally { await app.close(); }
+});
+
+test("usage 복구 중에는 마지막 채움의 회색 바와 스피너만 표시하고 성공하면 새 값을 복원한다", async () => {
+  // 마지막 18% 성공값이 남아 있는 세션에서 사용량만 실패한 상태를 준비한다.
+  const clock = new ManualClock(), data = sample(), app = await mount(data, clock, true);
+  const spinner = () => app.renderer.root.findDescendantById("usage-loading") as TextRenderable;
+  const spanAt = (column: number) => { let x = 0; return app.captureSpans().lines[app.row.y]!.spans.find(span => { x += span.width; return x > column; })!; };
+  try {
+    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("keep recovery draft");
+    for (const light of [false, true]) {
+      // Backoff 중의 상태 재전송과 테마 변경은 스피너나 마지막 바를 초기화하지 않는다.
+      await app.set({ ...data, usage: { ...data.usage!, status: "error", errorCode: "USAGE_TIMEOUT" } });
+      app.renderer.emit("palette", palette(light)); await app.renderOnce();
+      const usage = app.line().slice(app.line().indexOf(icons.openai));
+      const start = Bun.stringWidth(app.line().slice(0, app.line().indexOf("chatgpt ") + "chatgpt ".length));
+      const styles = uiTheme(app.renderer).styles;
+
+      // 마지막 채움은 보존하되 수치·단위·카운트다운은 숨기고 context는 정상 색으로 남긴다.
+      expect(usage).toContain("▉▉▉▉▉▉▉▉"); expect(usage).not.toMatch(/18%|used|1h|-/);
+      expect(spanAt(start).fg.toInts()).toEqual(styles["ui.muted"].fg.toInts());
+      expect(spanAt(start + 7).fg.equals(spanAt(start).fg)).toBe(false);
+      expect(spinner().visible).toBe(true); expect(spinnerFrames.some(frame => frame === spinner().plainText)).toBe(true);
+      expect(spanAt(spinner().x).fg.toInts()).toEqual(styles["ui.muted"].fg.toInts());
+      expect(app.line()).toContain("64% left");
+      const before = spinner().plainText;
+      clock.advance(80); await app.renderOnce(); expect(spinner().plainText).not.toBe(before);
+    }
+    clock.advance(60000); await app.renderOnce(); expect(spinner().visible).toBe(true);
+    await app.set({ ...data, usage: { ...data.usage!, windows: [{ ...data.usage!.windows[0]!, usedPercent: 42 }] } });
+
+    // 복구는 새 값을 즉시 표시하고 입력 초안이나 포커스를 건드리지 않는다.
+    expect(app.line()).toContain("42% used"); expect(spinner().visible).toBe(false);
+    expect(app.view.promptDrafts.a1).toBe("keep recovery draft");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
+  } finally { await app.close(); }
+});
+
+test("첫 사용량 조회와 실패 후 대기는 이전 값이 없어도 스피너를 표시하고 성공값을 지연하지 않는다", async () => {
+  // 앱을 막 켠 상태에는 보존할 사용량이 없으므로 가짜 퍼센트나 채움을 만들지 않는다.
+  const clock = new ManualClock(), app = await createTestRenderer({ width: 100, height: 5, clock });
+  const status = new SessionStatus(app.renderer); app.renderer.root.add(status.root);
+  const data = sample(), spinner = () => status.root.findDescendantById("usage-loading") as TextRenderable;
+  try {
+    for (const state of ["loading", "error"] as const) {
+      status.update({ ...data, usage: { ...unavailable(), status: state } }, true); await app.renderOnce();
+
+      // 최초 실패도 재시도 대상이며 미지원 상태와 다르게 스피너가 유지된다.
+      const line = app.captureCharFrame().split("\n")[spinner().y]!;
+      expect(spinner().visible).toBe(true);
+      expect(line.slice(line.indexOf(icons.openai))).not.toMatch(/▉|%|used|-/);
+    }
+    status.update(data, true); await app.renderOnce();
+
+    // 공통 스피너의 최소 표시 시간 동안에도 새 성공값은 즉시 표시하고 겹치지 않는다.
+    expect(app.captureCharFrame()).toContain("18% used 1h 0m");
+    expect(spinner().visible).toBe(true);
+    clock.advance(500); await app.renderOnce();
+    expect(spinner().visible).toBe(false);
+    // 스피너 숨김으로 예약된 렌더 프레임까지 소비한 뒤 애니메이션 누수를 확인한다.
+    clock.advance(20); await app.renderOnce(); expect(clock.pendingTimerCount).toBe(0);
+  } finally { status.dispose(); await app.dispose(); }
+});
+
+test("복구 중 리셋된 usage 창을 숨기고 화면·정적 이력·폐기에서는 스피너 타이머를 정리한다", async () => {
+  // 만료된 성공값을 가진 오류 상태는 과거 채움을 현재 한도로 재사용해서는 안 된다.
+  const clock = new ManualClock(), app = await createTestRenderer({ width: 100, height: 5, clock });
+  const status = new SessionStatus(app.renderer); app.renderer.root.add(status.root);
+  const data = sample(), now = Date.now();
+  const failed: SessionTelemetry = { ...data, usage: { ...data.usage!, status: "error", errorCode: "USAGE_QUERY_FAILED",
+    windows: [{ ...data.usage!.windows[0]!, resetsAt: now - 1 }] } };
+  try {
+    status.update(failed, true); await app.renderOnce(); clock.advance(20); await app.renderOnce();
+    const line = app.captureCharFrame().split("\n")[status.root.y + 1]!;
+    expect(line.slice(line.indexOf(icons.openai))).not.toContain("▉");
+    expect(clock.pendingTimerCount).toBe(1);
+
+    // 화면 변경의 렌더 프레임을 소비하면 복구 애니메이션 외의 타이머가 남지 않는다.
+    status.update(failed, false); clock.advance(20); await app.renderOnce(); expect(clock.pendingTimerCount).toBe(0);
+    status.update(failed, true, null, now); await app.renderOnce(); clock.advance(20); await app.renderOnce(); expect(clock.pendingTimerCount).toBe(0);
+    status.update(failed, true); await app.renderOnce(); clock.advance(20); await app.renderOnce(); expect(clock.pendingTimerCount).toBe(1);
+    status.dispose(); clock.advance(20); await app.renderOnce();
+
+    expect(clock.pendingTimerCount).toBe(0);
+  } finally { status.dispose(); await app.dispose(); }
 });
 
 test("실제 사용량 0%와 context 잔량 0%는 미확정 값과 다른 빈 바를 표시한다", async () => {

@@ -3,12 +3,13 @@ import type { SessionTelemetry } from "../telemetry.ts";
 import { blendColors, uiTheme, type UiColors } from "../../ui/theme.ts";
 import { paintText, styleChunk, type StyleGroup, type UiStyles } from "../../ui/theme-styles.ts";
 import { ProviderIcon } from "../../ui/provider-icon.ts";
+import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import type { UsageWindow } from "../../usage/model.ts";
 import type { Worktree } from "../../workspace/model.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
 import { icons } from "../../icons.ts";
 
-type Meter = { label: string; percent: number | null; value: string };
+type Meter = { label: string; percent: number | null; value: string; muted?: boolean };
 const cellWidth = (text: string) => Bun.stringWidth(text);
 const percentage = (value: number | null) => value === null ? "-" : `${Math.round(value)}%`;
 const clampPercent = (value: number) => Math.max(0, Math.min(100, value));
@@ -46,7 +47,7 @@ function resetTime(resetsAt: number | null, now: number): string {
 function usageWindow(telemetry: SessionTelemetry | null, now: number): UsageWindow | null {
   const usage = telemetry?.usage;
   if (usage !== undefined) {
-    if (usage.status !== "ready") return null;
+    if (usage.status !== "ready" && usage.status !== "error") return null;
     // The compact view follows the longest returned window, rather than a provider-specific weekly slot.
     return usage.windows.filter((window) => window.resetsAt === null || window.resetsAt > now)
       .toSorted((a, b) => (b.periodMs ?? 0) - (a.periodMs ?? 0))[0] ?? null;
@@ -58,18 +59,20 @@ function usageWindow(telemetry: SessionTelemetry | null, now: number): UsageWind
 }
 
 function meterChunks(meter: Meter, width: number, colors: UiColors, styles: UiStyles): TextChunk[] {
-  const chunks: TextChunk[] = [styleChunk(`${meter.label} `, styles["ui.label"])];
+  const labelStyle = styles[meter.muted ? "ui.muted" : "ui.label"];
+  const chunks: TextChunk[] = [styleChunk(`${meter.label} `, labelStyle)];
   if (width && meter.percent !== null) {
     const filled = Math.round(meter.percent * width / 100);
-    const empty = blendColors(colors.panel, styles["ui.label"].fg, 0.2);
+    const empty = blendColors(colors.panel, labelStyle.fg, 0.2);
     for (let cell = 0; cell < width; cell++) {
       // Fixed seven-eighths blocks keep uniform gaps; fill only changes their color, not their shape or background.
       chunks.push({ ...styleChunk("▉", styles["metadata.meter"]),
-        fg: cell < filled ? blendColors(colors.panel, styles["metadata.meter"].fg, 1 - 0.45 * cell / Math.max(1, width - 1)) : empty });
+        fg: cell >= filled ? empty : meter.muted ? styles["ui.muted"].fg
+          : blendColors(colors.panel, styles["metadata.meter"].fg, 1 - 0.45 * cell / Math.max(1, width - 1)) });
     }
     chunks.push(styleChunk(" ", styles["ui.muted"]));
   }
-  chunks.push(styleChunk(meter.value, styles[meter.percent === null ? "ui.muted" : "ui.label"]));
+  chunks.push(styleChunk(meter.value, styles[meter.muted || meter.percent === null ? "ui.muted" : "ui.label"]));
   return chunks;
 }
 
@@ -80,6 +83,8 @@ export class SessionStatus {
   private readonly scopeText: TextRenderable;
   private worktree: WorkspaceScope | null = null;
   private readonly providerIcon: ProviderIcon;
+  private readonly spinner: LoadingSpinner;
+  private recovering = false;
   private telemetry: SessionTelemetry | null = null;
   private capturedAt: number | undefined;
   private expiry: ReturnType<typeof setTimeout> | undefined;
@@ -90,18 +95,27 @@ export class SessionStatus {
   constructor(private readonly renderer: CliRenderer) {
     this.root = new BoxRenderable(renderer, { id: "session-status", width: "100%", height: 3, paddingY: 1, flexShrink: 0,
       onSizeChange: () => this.paint() });
-    const row = new BoxRenderable(renderer, { id: "session-status-line", width: "100%", height: 1, flexShrink: 0, flexDirection: "row", gap: 2 });
+    const row = new BoxRenderable(renderer, { id: "session-status-line", width: "100%", height: 1, flexShrink: 0, flexDirection: "row", gap: 2,
+      renderBefore: () => this.paint() });
     this.root.add(row);
     this.scopeText = new TextRenderable(renderer, { id: "session-worktree-context", height: 1, flexShrink: 0, wrapMode: "none", selectable: false, visible: false });
     this.text = new TextRenderable(renderer, { width: "auto", flexGrow: 1, flexShrink: 1, minWidth: 0, height: 1, wrapMode: "none", selectable: false });
     row.add(this.scopeText); row.add(this.text);
     this.providerIcon = new ProviderIcon(renderer); row.add(this.providerIcon);
+    this.spinner = new LoadingSpinner(renderer, { id: "usage-loading" });
+    this.spinner.root.position = "absolute"; this.spinner.root.right = 0; this.spinner.root.top = 0; row.add(this.spinner.root);
     uiTheme(renderer).bind(this.root, () => { this.lastPaint = ""; this.paint(); });
     this.root.once(RenderableEvents.DESTROYED, () => this.dispose());
   }
 
   update(telemetry: SessionTelemetry | undefined, visible: boolean, worktree: WorkspaceScope | null = null, capturedAt?: number): void {
+    if (this.disposed) return;
     this.telemetry = telemetry ?? null; this.worktree = worktree; this.capturedAt = capturedAt; this.visible = visible; this.root.visible = visible;
+    const recovering = telemetry?.usage?.status === "loading" || telemetry?.usage?.status === "error";
+    if (!visible || capturedAt !== undefined) this.spinner.cancel();
+    else if (recovering && !this.recovering) this.spinner.start();
+    else if (!recovering && this.recovering) this.spinner.stop();
+    this.recovering = visible && capturedAt === undefined && recovering;
     this.cancelExpiry(); this.paint(); this.scheduleTick();
   }
 
@@ -115,22 +129,27 @@ export class SessionStatus {
   private paint(): void {
     if (this.disposed || !this.visible || !this.root || this.root.isDestroyed) return;
     const theme = uiTheme(this.renderer), colors = theme.colors, styles = theme.styles;
-    this.root.backgroundColor = styles["ui.text"].bg; this.text.bg = styles["ui.text"].bg;
-    const totalWidth = Math.max(0, this.root.width), now = this.capturedAt ?? Date.now();
     const telemetry = this.telemetry;
+    const recovering = telemetry?.usage?.status === "loading" || telemetry?.usage?.status === "error";
+    const spinning = this.spinner.root.visible;
+    // Reserve a separate slot for the shared spinner's minimum-visible tail without delaying new values.
+    const spinnerWidth = spinning ? recovering ? 1 : 2 : 0;
+    const totalWidth = Math.max(0, this.root.width - spinnerWidth), now = this.capturedAt ?? Date.now();
     const context = telemetry?.context;
     const window = usageWindow(telemetry, now);
     const countdown = resetTime(window?.resetsAt ?? null, now);
     const provider = telemetry?.usage?.provider ?? telemetry?.provider;
     const hasIcon = this.providerIcon.setProvider(provider), providerName = providerLabel(provider, telemetry?.provider);
-    const signature = JSON.stringify([totalWidth, this.worktree?.name, this.worktree?.branch, telemetry, window?.id, countdown]);
+    const signature = JSON.stringify([totalWidth, spinning, this.worktree?.name, this.worktree?.branch, telemetry, window?.id, countdown]);
     if (signature === this.lastPaint) return;
     this.lastPaint = signature;
+    this.root.backgroundColor = styles["ui.text"].bg; this.text.bg = styles["ui.text"].bg;
+    paintText(this.spinner.root, styles["ui.muted"]);
     const remaining = context?.usedTokens !== null && context?.usedTokens !== undefined && context.maxTokens > 0
       ? clampPercent((1 - context.usedTokens / context.maxTokens) * 100) : null;
     const contextMeter: Meter = { label: "context", percent: remaining, value: remaining === null ? "-" : `${percentage(remaining)} left` };
-    const usage: Meter = { label: hasIcon ? "  " : "usage", percent: window?.usedPercent ?? null,
-      value: window ? `${percentage(window.usedPercent)} used` : "-" };
+    const usage: Meter = { label: hasIcon ? "  " : "usage", percent: window?.usedPercent ?? null, muted: recovering,
+      value: recovering ? this.capturedAt === undefined ? "" : "-" : window ? `${percentage(window.usedPercent)} used` : "-" };
     const presentations = [
       [{ ...contextMeter, label: `${icons.context} context` }, { ...usage, label: providerName ? `   ${providerName}` : usage.label }],
       [contextMeter, usage],
@@ -143,7 +162,7 @@ export class SessionStatus {
     const scopeSize = scope.reduce((size, part) => size + cellWidth(part.text), 0);
     this.scopeText.visible = scopeSize > 0; this.scopeText.content = new StyledText(scope); this.scopeText.width = scopeSize; paintText(this.scopeText, styles["ui.muted"]);
     const scopePrefix = scopeSize ? scopeSize + 2 : 0, width = totalWidth - scopePrefix;
-    const details = window && countdown ? [`${usage.value} ${countdown}`, `${usage.value} ${countdown.replaceAll(" ", "")}`, usage.value] : [usage.value];
+    const details = !recovering && window && countdown ? [`${usage.value} ${countdown}`, `${usage.value} ${countdown.replaceAll(" ", "")}`, usage.value] : [usage.value];
     const model = telemetry?.model ?? "model —", effort = telemetry?.effort ?? "—";
     const fast = telemetry?.fast === true ? "on" : telemetry?.fast === false ? "off" : "—";
     const chunk = (text: string, group: StyleGroup): TextChunk => styleChunk(text, styles[group]);
@@ -186,6 +205,6 @@ export class SessionStatus {
   private cancelExpiry(): void { if (this.expiry !== undefined) clearTimeout(this.expiry); this.expiry = undefined; }
   dispose(): void {
     if (this.disposed) return;
-    this.disposed = true; this.visible = false; this.cancelExpiry(); this.providerIcon.destroy();
+    this.disposed = true; this.visible = false; this.cancelExpiry(); this.spinner.cancel(); this.providerIcon.destroy();
   }
 }

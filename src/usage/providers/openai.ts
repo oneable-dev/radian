@@ -47,6 +47,14 @@ export function parseOpenAiUsage(value: unknown): Result<readonly UsageWindow[],
   return ok(windows);
 }
 
+function retryAfterMs(header: string | null): number {
+  if (!header?.trim()) return 60000;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return seconds > 0 && Number.isSafeInteger(seconds * 1000) ? seconds * 1000 : 60000;
+  const deadline = Date.parse(header);
+  return Number.isFinite(deadline) ? Math.max(0, deadline - Date.now()) : 60000;
+}
+
 async function load(auth: AuthResult, id: string, signal: AbortSignal, fetcher: Fetch): Promise<Result<readonly UsageWindow[], ExpectedError>> {
   let response: Response;
   try {
@@ -62,11 +70,8 @@ async function load(auth: AuthResult, id: string, signal: AbortSignal, fetcher: 
   if (!response.ok) {
     await response.body?.cancel();
     if (response.status === 401 || response.status === 403) return err(new UsageError("USAGE_AUTH_REQUIRED", "Account usage access was denied. Check the provider login."));
-    if (response.status === 429) {
-      const seconds = Number(response.headers.get("retry-after"));
-      return err(new UsageError("USAGE_RATE_LIMITED", "Account usage lookup is rate limited.",
-        Number.isFinite(seconds) && seconds > 0 ? Math.min(3600000, seconds * 1000) : 60000));
-    }
+    if (response.status === 429) return err(new UsageError("USAGE_RATE_LIMITED", "Account usage lookup is rate limited.",
+      retryAfterMs(response.headers.get("retry-after"))));
     return err(new UsageError("USAGE_QUERY_FAILED", `Account usage lookup returned HTTP ${response.status}.`));
   }
   let text: string;

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { ModelsError } from "@earendil-works/pi-ai";
 import { UsageError } from "../../errors.ts";
 import { expectError, expectOk } from "../../testing/results.ts";
@@ -81,6 +81,25 @@ for (const [status, code] of [[401, "USAGE_AUTH_REQUIRED"], [429, "USAGE_RATE_LI
     if (status === 429) expect(failure instanceof UsageError && failure.retryAfterMs).toBe(120000);
   });
 }
+
+test.each([
+  ["7200", 7200000],
+  ["Wed, 21 Oct 2026 12:02:00 GMT", 120000],
+  ["invalid", 60000],
+] as const)("Retry-After %s는 대기시간 %dms로 전달하고 긴 제한을 앞당기지 않는다", async (header, expected) => {
+  // Retry-After는 초 단위와 HTTP 날짜 형식 모두 서버가 정한 최소 대기시간이다.
+  const now = spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 9, 21, 12));
+  const resolver = openAiUsageResolver(auth(), async () => new Response(null, { status: 429, headers: { "retry-after": header } }));
+  try {
+    const account = expectOk(await resolver("openai-codex", signal()))!;
+
+    // 파싱한 대기시간이 모니터에 손실 없이 전달되어야 backoff보다 긴 제한도 지킬 수 있다.
+    const failure = expectError(await account.load(signal()));
+
+    expect(failure).toBeInstanceOf(UsageError);
+    expect(failure instanceof UsageError && failure.retryAfterMs).toBe(expected);
+  } finally { now.mockRestore(); }
+});
 
 test("네트워크 실패와 잘못된 JSON을 빈 사용량 성공으로 바꾸지 않는다", async () => {
   const network = openAiUsageResolver(auth(), async () => { throw new TypeError("network fixture"); });
