@@ -1,6 +1,7 @@
-import { expect, test } from "bun:test";
-import { InputRenderable } from "@opentui/core";
-import { createTestRenderer, ManualClock } from "@opentui/core/testing";
+import { expect, spyOn, test } from "bun:test";
+import { InputRenderable, OptimizedBuffer } from "@opentui/core";
+import { createTestRenderer, ManualClock, setRendererCapabilities } from "@opentui/core/testing";
+import { icons } from "../icons.ts";
 import { Workbench, type WorkbenchActions } from "../app/ui/workbench.ts";
 import { WorkspaceSelection } from "../app/workspace-selection.ts";
 import { demoWorkspace } from "../workspace/demo.ts";
@@ -37,6 +38,33 @@ test("accounts 명령은 네이티브 팝업을 열고 모델 프롬프트 없�
     expect(app.sent).toEqual([]); expect(app.prompt.value).toBe("");
     app.mockInput.pressEscape(); await app.render(); expect(app.renderer.currentFocusedRenderable).toBe(app.prompt);
   } finally { await app.close(); }
+});
+
+test("accounts 팝업 아래 GPT 아이콘은 같은 확대 크기를 유지하며 배경과 함께 어두워진다", async () => {
+  // 실제 상태 줄과 계정 팝업을 연결하고 터미널 이미지 전송만 대체한다.
+  const app = await mount({ getSessionDetails: () => ({ status: "complete", output: "Retained answer", error: null,
+    telemetry: { provider: "openai-codex", model: "gpt-fixture", effort: "high", fast: false, weekly: null, context: { usedTokens: 74000, maxTokens: 200000 },
+      usage: { provider: "openai", status: "ready", windows: [{ id: "weekly", usedPercent: 73, periodMs: 604800000, resetsAt: Date.now() + 5 * 86400000 }], updatedAt: Date.now(), errorCode: null } } }) });
+  const draw = spyOn(OptimizedBuffer.prototype, "drawImage").mockReturnValue(true);
+  setRendererCapabilities(app.renderer, { kitty_graphics: true, image_protocol: "kitty" });
+  Object.defineProperty(app.renderer, "resolution", { configurable: true, get: () => ({ width: app.renderer.terminalWidth * 10, height: app.renderer.terminalHeight * 20 }) });
+  try {
+    app.resize(120, 48); await app.render(); expect(draw).toHaveBeenCalled();
+    const original = draw.mock.calls.at(-1)!, pixels = original[0].raw().data.slice(), geometry = original.slice(3, 7);
+
+    // 상태 줄이 팝업 본문 밖의 반투명 배경 아래에 남는 큰 화면을 사용한다.
+    await app.open(); await app.render();
+    const icon = app.get("usage-provider-icon");
+    expect(app.captureCharFrame().split("\n")[icon.y]).not.toContain(icons.openai);
+    expect(app.captureCharFrame().split("\n")[icon.y]).toContain("73% used");
+    const dimmed = draw.mock.calls.at(-1)!;
+    expect(dimmed.slice(3, 7)).toEqual(geometry); expect(dimmed[0].raw().data).not.toEqual(pixels);
+
+    // 취소는 사용량이나 대화를 바꾸지 않고 이미지 표현만 복원한다.
+    app.mockInput.pressEscape(); await app.render();
+    expect(draw.mock.calls.at(-1)![0].raw().data).toEqual(pixels);
+    expect(app.captureCharFrame().split("\n")[icon.y]).not.toContain(icons.openai); expect(app.sent).toEqual([]);
+  } finally { draw.mockRestore(); Reflect.deleteProperty(app.renderer, "resolution"); await app.close(); }
 });
 
 test("계정 검색은 Ctrl+N/P와 반 페이지 이동을 지원하고 검색어·커서를 보존한다", async () => {

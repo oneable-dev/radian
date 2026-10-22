@@ -52,28 +52,28 @@ test("그래픽 지원 터미널에서는 실제 잉크 너비가 글자 셀의 
     expect(paint.protocol).toBe("kitty"); expect(paint.width).toBe(2); expect(paint.height).toBe(1);
     expect(paint.pixelWidth).toBe(20); expect(paint.pixelHeight).toBe(20);
     let min = paint.imageWidth, max = -1;
-    for (let index = 0; index < paint.pixels.length / 4; index++) if (paint.pixels[index * 4 + 3]) {
+    const background = paint.pixels.slice(0, 3);
+    for (let index = 0; index < paint.pixels.length / 4; index++) if (paint.pixels[index * 4] !== background[0] || paint.pixels[index * 4 + 1] !== background[1] || paint.pixels[index * 4 + 2] !== background[2]) {
       min = Math.min(min, index % paint.imageWidth); max = Math.max(max, index % paint.imageWidth);
     }
     const inkPixels = (max - min + 1) / paint.imageWidth * paint.pixelWidth;
     expect(inkPixels / 10).toBeCloseTo(1.5, 2);
     expect(Math.max(...paint.pixels.filter((_, index) => index % 4 === 3))).toBe(255);
-    const first = paint.pixels.findIndex((_, index) => index % 4 === 3 && paint.pixels[index]! > 0) - 3;
-    expect(Array.from(paint.pixels.slice(first, first + 3))).toEqual(uiTheme(app.renderer).colors.text.toInts().slice(0, 3));
+    const foreground = uiTheme(app.renderer).colors.text.toInts().slice(0, 3);
+    expect(paint.pixels.some((_, index) => index % 4 === 0 && foreground.every((color, offset) => paint.pixels[index + offset] === color))).toBe(true);
 
     app.renderer.emit("palette", { palette: [], defaultForeground: "#112233", defaultBackground: "#FAFAF6",
       cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null,
       highlightForeground: null, highlightBackground: null });
     await app.renderOnce();
     const retinted = paints.at(-1)!;
-    const colored = retinted.pixels.findIndex((_, index) => index % 4 === 3 && retinted.pixels[index]! > 0) - 3;
-    expect(Array.from(retinted.pixels.slice(colored, colored + 3))).toEqual([17, 34, 51]);
+    expect(retinted.pixels.some((_, index) => index % 4 === 0 && [17, 34, 51].every((color, offset) => retinted.pixels[index + offset] === color))).toBe(true);
 
     // Replacing a provider and destroying its owner must not leak renderer subscriptions or buffers.
-    const before = app.renderer.listenerCount("capabilities"), frames = app.renderer.listenerCount("frame");
+    const before = app.renderer.listenerCount("capabilities");
     app.icon.setProvider("anthropic"); await app.renderOnce(); app.icon.destroy();
     expect(app.renderer.listenerCount("capabilities")).toBe(before - 1);
-    expect(app.renderer.listenerCount("frame")).toBe(frames - 1);
+    const destroyedPaints = paints.length; await app.renderOnce(); expect(paints).toHaveLength(destroyedPaints);
   } finally {
     draw.mockRestore(); Reflect.deleteProperty(app.renderer, "capabilities"); Reflect.deleteProperty(app.renderer, "resolution"); await app.close();
   }

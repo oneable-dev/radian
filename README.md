@@ -728,8 +728,9 @@ countdown before dropping either resource percentage. Theme changes preserve the
 
 Provider logos reserve two columns. On terminals reporting Kitty/Sixel graphics and pixel resolution,
 OpenTUI renders a font-derived, theme-tinted image with approximately 1.5x the ordinary glyph width,
-within the same row. Other terminals retain a bold Nerd Font glyph; individual character scaling is
-not assumed. No terminal font settings are changed. Asset attribution is in
+within the same row. Popup backdrops change the logo's colors without changing its image size;
+model, effort, fast and context symbols retain their ordinary font scale. Other terminals retain a
+bold Nerd Font glyph; individual character scaling is not assumed. No terminal font settings are changed. Asset attribution is in
 `src/ui/provider-icon-data.LICENSE`.
 
 Context comes from Pi's usage estimate and model limit. When Pi reports unknown usage after

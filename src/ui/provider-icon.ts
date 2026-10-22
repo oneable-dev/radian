@@ -1,6 +1,6 @@
 import {
-  ImageError, NativeImage, Renderable, resolveImageRenderProtocol,
-  type CliRenderer, type OptimizedBuffer,
+  ImageError, NativeImage, OptimizedBuffer, RGBA, Renderable, resolveImageRenderProtocol,
+  type CliRenderer,
 } from "@opentui/core";
 import { icons } from "../icons.ts";
 import { err, ok, type Result } from "../result.ts";
@@ -8,6 +8,7 @@ import { uiTheme } from "./theme.ts";
 import { styleBackground, type UiStyle } from "./theme-styles.ts";
 import { providerIconMask, providerIconSize, type ProviderIconName } from "./provider-icon-data.ts";
 
+const decoder = new TextDecoder();
 const recoverable = new Set<ImageError["code"]>(["unsupported-feature", "unsupported-format", "unsupported-color-space", "memory-limit", "out-of-memory", "busy"]);
 function imageOperation<T>(operation: () => T): Result<T, ImageError> {
   try { return ok(operation()); }
@@ -22,7 +23,6 @@ export class ProviderIcon extends Renderable {
   private image: NativeImage | null = null;
   private imageSignature = "";
   private failed = false;
-  private resolutionKey = "";
 
   constructor(private readonly renderer: CliRenderer) {
     super(renderer, { id: "usage-provider-icon", position: "absolute", left: 0, top: 0, width: 2, height: 1, visible: false });
@@ -30,7 +30,7 @@ export class ProviderIcon extends Renderable {
     this.style = uiTheme(renderer).styles["branding.provider"];
     uiTheme(renderer).bindStyles(this, (styles) => { this.style = styles["branding.provider"]; this.requestRender(); });
     renderer.on("capabilities", this.retryGraphics); renderer.on("resize", this.retryGraphics);
-    renderer.on("frame", this.checkResolution);
+    renderer.addPostProcessFn(this.paintImage);
   }
 
   setProvider(provider: string | null | undefined): boolean {
@@ -42,52 +42,73 @@ export class ProviderIcon extends Renderable {
   }
 
   private retryGraphics = (): void => { if (!this.isDestroyed) { this.failed = false; this.requestRender(); } };
-  private checkResolution = (): void => {
-    if (this.isDestroyed) return;
-    const resolution = this.renderer.resolution;
-    const key = `${resolution?.width}/${resolution?.height}/${this.renderer.terminalWidth}/${this.renderer.terminalHeight}`;
-    // Pixel replies request a renderer frame but do not emit resize; invalidate this host-painted node once.
-    if (key !== this.resolutionKey) { this.resolutionKey = key; this.requestRender(); }
-  };
 
   protected override renderSelf(buffer: OptimizedBuffer): void {
     if (this.isDestroyed || !this.name || this.width < 2 || this.height < 1) return;
-    const x = this.screenX, y = this.screenY;
-    buffer.fillRect(x, y, 2, 1, styleBackground(this.style));
-    const resolution = this.renderer.resolution;
-    const protocol = resolveImageRenderProtocol("auto", this.renderer.capabilities, resolution !== null);
-    if (!uiTheme(this.renderer).monochrome && !this.failed && resolution && (protocol === "kitty" || protocol === "sixel")) {
-      const pixelWidth = Math.round(2 * resolution.width / this.renderer.terminalWidth);
-      const pixelHeight = Math.round(resolution.height / this.renderer.terminalHeight);
-      if (Number.isFinite(pixelWidth) && Number.isFinite(pixelHeight) && pixelWidth > 0 && pixelHeight >= pixelWidth * 0.75) {
-        const image = this.getImage(Math.max(48, Math.min(256, Math.round(providerIconSize * pixelHeight / pixelWidth))));
-        let failure: ImageError | undefined;
-        if (image.ok) {
-          const painted = imageOperation(() => buffer.drawImage(image.value, x, y, 2, 1, pixelWidth, pixelHeight, 0, 0, image.value.width, image.value.height, protocol));
-          if (painted.ok && painted.value) return;
-          if (!painted.ok) failure = painted.error;
-        } else failure = image.error;
-        this.failed = true;
-        if (failure) console.warn(`[radian:provider-icon:${failure.code}] Graphics unavailable; using a font glyph.`);
-      }
-    }
-    // Plain terminals retain an aligned, readable logo without unsupported escape sequences.
-    buffer.drawText(this.glyph, x, y, this.style.fg, styleBackground(this.style), this.style.attributes);
+    // The glyph is both the ordinary-terminal fallback and a visibility/color probe. Native
+    // composition dims it through translucent backdrops and removes it under opaque popups.
+    buffer.fillRect(this.screenX, this.screenY, 2, 1, styleBackground(this.style));
+    buffer.drawText(this.glyph, this.screenX, this.screenY, this.style.fg, styleBackground(this.style), this.style.attributes);
   }
 
-  private getImage(height: number): Result<NativeImage, ImageError> {
-    const color = this.style.fg.toInts();
-    const signature = `${this.name}/${height}/${color.join(",")}`;
+  private paintImage = (buffer: OptimizedBuffer): void => {
+    if (this.isDestroyed || this.renderer.isDestroyed || !this.name || this.failed || uiTheme(this.renderer).monochrome || this.width < 2 || this.height < 1) return;
+    for (let node: Renderable | null = this; node; node = node.parent) if (!node.visible) return;
+    const resolution = this.renderer.resolution;
+    const protocol = resolveImageRenderProtocol("auto", this.renderer.capabilities, resolution !== null);
+    if (!resolution || protocol !== "kitty" && protocol !== "sixel") return;
+    const pixelWidth = Math.round(2 * resolution.width / this.renderer.terminalWidth);
+    const pixelHeight = Math.round(resolution.height / this.renderer.terminalHeight);
+    if (!Number.isFinite(pixelWidth) || !Number.isFinite(pixelHeight) || pixelWidth <= 0 || pixelHeight < pixelWidth * 0.75) return;
+    const x = this.screenX, y = this.screenY;
+    if (x < 0 || y < 0 || x + 2 > buffer.width || y >= buffer.height) return;
+
+    // Resolve text with the checked API: native cell graphemes are opaque pooled IDs, not
+    // Unicode codepoints. Never paint an image over a popup that has replaced the logo.
+    const line = decoder.decode(buffer.getRealCharBytes(true)).split("\n")[y] ?? "";
+    let match = line.indexOf(this.glyph);
+    while (match >= 0 && Bun.stringWidth(line.slice(0, match)) < x) match = line.indexOf(this.glyph, match + this.glyph.length);
+    if (match < 0 || Bun.stringWidth(line.slice(0, match)) !== x) return;
+    const colors = buffer.withBuffers(({ char, fg, bg, width }) => {
+      const cell = y * width + x, offset = cell * 4;
+      if (char[cell + 1] !== 32) return undefined;
+      // Own the copied colors before ending the native lease or mutating the frame.
+      const foreground = RGBA.fromArray(fg.slice(offset, offset + 4)), background = RGBA.fromArray(bg.slice(offset, offset + 4));
+      if (!background.equals(RGBA.fromArray(bg.slice(offset + 4, offset + 8)))) return undefined;
+      return { foreground, background };
+    });
+    if (!colors) return;
+
+    const image = this.getImage(Math.max(48, Math.min(256, Math.round(providerIconSize * pixelHeight / pixelWidth))), colors.foreground, colors.background);
+    let failure: ImageError | undefined;
+    if (image.ok) {
+      // Paint AFTER popup composition with the resulting colors already baked in. The opaque
+      // image keeps exactly the same geometry and cannot turn into a black alpha-overlay slot.
+      buffer.fillRect(x, y, 2, 1, colors.background);
+      const painted = imageOperation(() => buffer.drawImage(image.value, x, y, 2, 1, pixelWidth, pixelHeight, 0, 0, image.value.width, image.value.height, protocol));
+      if (painted.ok && painted.value) return;
+      buffer.drawText(this.glyph, x, y, colors.foreground, colors.background, this.style.attributes);
+      if (!painted.ok) failure = painted.error;
+    } else failure = image.error;
+    this.failed = true;
+    if (failure) console.warn(`[radian:provider-icon:${failure.code}] Graphics unavailable; using a font glyph.`);
+  };
+
+  private getImage(height: number, foreground: RGBA, background: RGBA): Result<NativeImage, ImageError> {
+    const color = foreground.toInts(), fill = background.toInts();
+    const signature = `${this.name}/${height}/${color.join(",")}/${fill.join(",")}`;
     if (this.image && signature === this.imageSignature) return ok(this.image);
     const size = providerIconSize, mask = providerIconMask(this.name!);
     const pixels = new Uint8Array(size * height * 4), offset = Math.floor((height - size) / 2);
-    for (let row = 0; row < size; row++) {
-      const target = row + offset; if (target < 0 || target >= height) continue;
+    for (let row = 0; row < height; row++) {
+      const source = row - offset;
       for (let column = 0; column < size; column++) {
-        const alpha = mask[row * size + column]!; if (!alpha) continue;
-        const index = (target * size + column) * 4;
-        pixels[index] = color[0]; pixels[index + 1] = color[1]; pixels[index + 2] = color[2];
-        pixels[index + 3] = Math.round(alpha * color[3] / 255);
+        const alpha = source >= 0 && source < size ? mask[source * size + column]! / 255 * color[3] / 255 : 0;
+        const index = (row * size + column) * 4;
+        pixels[index] = Math.round(fill[0] + (color[0] - fill[0]) * alpha);
+        pixels[index + 1] = Math.round(fill[1] + (color[1] - fill[1]) * alpha);
+        pixels[index + 2] = Math.round(fill[2] + (color[2] - fill[2]) * alpha);
+        pixels[index + 3] = 255;
       }
     }
     const created = imageOperation(() => NativeImage.fromRgba(pixels, size, height, size * 4, { owner: this.renderer.nativeScene.resourceContext }));
@@ -99,7 +120,7 @@ export class ProviderIcon extends Renderable {
 
   protected override destroySelf(): void {
     this.renderer.off("capabilities", this.retryGraphics); this.renderer.off("resize", this.retryGraphics);
-    this.renderer.off("frame", this.checkResolution);
+    this.renderer.removePostProcessFn(this.paintImage);
     const image = this.image; this.image = null;
     this.runCleanup((run) => { run(() => image?.dispose()); run(() => super.destroySelf()); });
   }
