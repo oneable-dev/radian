@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="docs/assets/radian-banner.svg" alt="Radian" width="720" height="180">
+  <img src="assets/radian-banner.svg" alt="Radian" width="720" height="180">
 </h1>
 
 <p align="center">
@@ -15,8 +15,8 @@
 </p>
 
 <p align="center">
-  <a href="package.json"><img src="https://img.shields.io/badge/Bun-%E2%89%A51.4.3-7DD3FC?style=flat-square" alt="Bun ≥ 1.4.3"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-7DD3FC?style=flat-square" alt="MIT license"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/Bun-%E2%89%A51.4.3-E6C384?style=flat-square" alt="Bun ≥ 1.4.3"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-E6C384?style=flat-square" alt="MIT license"></a>
 </p>
 
 <!-- Release media: add a real Agent-view screenshot here, followed by a short
