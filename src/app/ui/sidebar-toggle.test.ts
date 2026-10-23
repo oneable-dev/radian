@@ -1,3 +1,4 @@
+import { openWorkspaceSearch } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { InputRenderable, ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
@@ -53,15 +54,15 @@ test("팝업 취소는 원래 입력 커서와 대화 스크롤을 보존한다"
   } finally { await app.close(); }
 });
 
-test("닫힌 팝업은 Tab 대상에서 제외되고 기존 검색·탐색 명령으로 다시 열린다", async () => {
-  // 숨겨진 네비게이션에 키 입력이 들어가지 않도록 실제 focus traversal을 확인한다.
+test("Closed popups leave Tab traversal and reopen through the workspace toggle", async () => {
+  // Verify real focus traversal excludes hidden navigation from input.
   const app = await mount();
   try {
     for (let i = 0; i < 8; i++) { app.mockInput.pressTab(); await app.render(); expect(["workspace-search", "workspace-tree"]).not.toContain(app.renderer.currentFocusedRenderable?.id ?? ""); }
 
-    app.leader("w"); await app.render();
+    app.leader("b"); await app.render();
     expect(app.get("workspace-picker").visible).toBe(true); expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-search");
-    app.mockInput.pressEscape(); await app.render(); app.mockInput.pressKey("f", { ctrl: true }); await app.render();
+    app.mockInput.pressEscape(); await app.render(); openWorkspaceSearch(app); await app.render();
 
     expect(app.get("workspace-picker").visible).toBe(true); expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-search");
   } finally { await app.close(); }

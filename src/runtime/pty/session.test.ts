@@ -57,7 +57,24 @@ test("재출력 대기 중 종료도 이전 실행 화면에 가려지지 않고
   } finally { await app.close(); }
 });
 
-test("일반 셸 PTY는 재출력을 기다리지 않고 기존 리사이즈 동작을 유지한다", async () => {
+test("Output reads validate lease ownership and isolate snapshots from later output", async () => {
+  // Reading enforces the same connection ownership checks as writing.
+  const app = await mount(false);
+  try {
+    const rejected = await app.session.read("stale-lease");
+    expect(rejected.ok).toBe(false); if (!rejected.ok) expect(rejected.error.code).toBe("PTY_BUSY");
+    const before = app.session.frame(), snapshot = expectOk(await app.session.read("fixture-lease"));
+    expect(snapshot.text).toContain("OLD-OUTPUT"); expect(app.session.frame()).toEqual(before);
+
+    app.session.process.send({ type: "paint" });
+    await until(() => app.session.frame().ansi.includes("NEW-OUTPUT"));
+
+    expect(snapshot.text).not.toContain("NEW-OUTPUT");
+    expect(expectOk(await app.session.read("fixture-lease")).text).toContain("NEW-OUTPUT");
+  } finally { await app.close(); }
+});
+
+test("Ordinary shell PTYs preserve immediate resize behavior without awaiting repaint", async () => {
   const app = await mount(false);
   try {
     await app.session.resize(40, 2, "fixture-lease");

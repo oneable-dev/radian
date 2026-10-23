@@ -40,14 +40,14 @@ async function mount() {
   };
 }
 
-test.each(["prompt", "session-strip"] as const)("%s에서 새 세션을 만들면 새 탭과 입력창으로 이동하고 기존 초안을 보존한다", async source => {
+test.each(["prompt", "session-strip"] as const)("Creating sessions from %s selects new tabs and input while preserving existing drafts", async source => {
   // Both creation entry points must target the new conversation, not the previous draft.
   const app = await mount();
   try {
     if (source === "session-strip") app.renderer.root.findDescendantById("agent-session-list")!.focus();
 
     // Creation is asynchronous, so edits made before it finishes must remain in the old session.
-    app.leader("n");
+    app.leader("c");
     expect(app.creations.map(request => request.worktreeId)).toEqual(["demo:main"]);
     expect(app.selection.sessionId).toBe("a1");
     app.input.value = "Edited while creating";
@@ -78,17 +78,17 @@ test("프롬프트의 Ctrl+N은 새 세션을 만들거나 기존 초안을 지�
   } finally { await app.close(); }
 });
 
-test("빈 워크트리에서 첫 세션을 만들면 스냅샷의 자동 선택 후에도 입력창에 포커스를 준다", async () => {
+test("First-session creation in empty worktrees focuses input even after snapshot auto-selection", async () => {
   // An empty worktree initially has only the session strip as an Agent focus target.
   const app = await mount();
   try {
     app.selection.selectWorktree("demo:empty"); app.leader("a"); await app.render();
     expect(app.selection.sessionId).toBeNull();
     expect(app.captureCharFrame()).toContain("No AI sessions");
-    expect(app.captureCharFrame()).toContain("<leader>n");
+    expect(app.captureCharFrame()).toContain("<leader>c");
 
     // The snapshot arrives before the creation callback and already exposes the first session.
-    app.leader("n"); await app.created(0, "first");
+    app.leader("c"); await app.created(0, "first");
 
     // Initial snapshot selection must not be mistaken for navigation away from the request.
     expect(app.selection.sessionId).toBe("first");
@@ -97,16 +97,17 @@ test("빈 워크트리에서 첫 세션을 만들면 스냅샷의 자동 선택 
   } finally { await app.close(); }
 });
 
-test.each(["session", "worktree", "editor", "popup", "focus"] as const)("세션 생성 대기 중 %s로 이동하면 늦은 생성이 선택과 포커스를 빼앗지 않는다", async target => {
+test.each(["session", "worktree", "editor", "popup", "focus", "tab-roundtrip"] as const)("Moving to %s while creating sessions prevents late creation from stealing selection or focus", async target => {
   // The creation request belongs to the original view and keyboard owner.
   const app = await mount();
   try {
-    app.leader("n");
+    app.leader("c");
     switch (target) {
       case "session": app.selection.selectSession("demo:main", "a2"); break;
+      case "tab-roundtrip": app.leader("n"); app.leader("p"); break;
       case "worktree": app.selection.selectWorktree("demo:feature"); break;
       case "editor": app.leader("e"); break;
-      case "popup": app.leader("w"); break;
+      case "popup": app.leader("b"); break;
       case "focus": app.renderer.root.findDescendantById("agent-session-list")!.focus(); break;
     }
     await app.render();
@@ -124,11 +125,11 @@ test.each(["session", "worktree", "editor", "popup", "focus"] as const)("세션 
   } finally { await app.close(); }
 });
 
-test("연속 생성 요청은 먼저 끝난 이전 요청이 아니라 마지막 요청의 새 세션을 선택한다", async () => {
+test("Consecutive creations select the latest request's new session, not the first completed response", async () => {
   // Repeated shortcuts can leave multiple independent runtime creations in flight.
   const app = await mount();
   try {
-    app.leader("n"); app.leader("n");
+    app.leader("c"); app.leader("c");
 
     // The earlier request completes first, before the latest request has its session ID.
     await app.created(0, "earlier");

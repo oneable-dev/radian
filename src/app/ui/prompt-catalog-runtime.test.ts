@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -16,8 +17,8 @@ async function until(check: () => Promise<boolean> | boolean) {
   while (!await check()) { if (Date.now() > deadline) throw new Error("Catalog runtime observation timed out"); await Bun.sleep(15); }
 }
 
-test("실제 UI·IPC·SDK는 전체 카탈로그를 재사용하고 리로드·파일 이동·달러 호출을 함께 처리한다", async () => {
-  // 사용자 런타임과 외부 모델 대신 고유 워크트리·Unix 소켓·오프라인 SDK를 사용한다.
+test("Real UI/IPC/SDK reuse full catalogs across reload, file moves, and dollar invocation", async () => {
+  // Use isolated worktrees, Unix sockets, and offline SDK instead of user runtimes/models.
   const fixture = await createWorktreeFixture();
   const options = { offline: true, stateRoot: join(fixture.directory, "state"), entry: join(import.meta.dir, "..", "..", "index.ts") };
   const paths = runtimePaths(fixture.repository.id, true, options.stateRoot);
@@ -51,7 +52,7 @@ test("실제 UI·IPC·SDK는 전체 카탈로그를 재사용하고 리로드·�
         return result.ok && text === "/reload" ? completions.refresh(sessionId) : result;
       }, getSessionDetails: sessionId => runtime.snapshot.details[sessionId] ?? null });
     unsubscribe = runtime.subscribe(() => selection.replaceSnapshot(runtime.snapshot.repositories));
-    selection.selectSession(main.id, id); await renderer.renderOnce(); renderer.mockInput.pressKey("e", { ctrl: true });
+    selection.selectSession(main.id, id); await renderer.renderOnce(); pressLeader(renderer, "a");
     const input = renderer.renderer.root.findDescendantById("session-prompt");
     if (!(input instanceof PromptInput)) throw new Error("Missing prompt");
     const visible = (text: string) => until(async () => { await renderer.renderOnce(); return renderer.captureCharFrame().includes(text); });

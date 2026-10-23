@@ -22,7 +22,9 @@ bun run start
 
 The app discovers Git repositories under the configured workspace roots (by default `~/projects`
 and `~/.dotfiles`). Workspace navigation is a centered, searchable **popup**, not a permanent sidebar.
-Open it with **Ctrl+f** outside embedded programs, or **Ctrl+Space, then w/f/b** from any work view.
+Open or close it with **Ctrl+Space, then b** from any work view; opening focuses search.
+From the results list, **/** focuses search again. Ctrl+F, leader-f/w and Ctrl+] have no default
+workspace bindings; their named commands remain available for explicit user configuration.
 It contains repositories and worktrees only, without a preview pane. Folder and branch occupy two
 aligned lines in one selectable item and share horizontal scrolling. Metadata updates preserve the
 query, cursor and scroll position. Failures have a fixed error slot; navigation does not animate.
@@ -34,11 +36,11 @@ Opening or closing the popup never changes the work pane or PTY dimensions.
 **Ctrl+Space, then s** opens a separate session monitor with a History-style live preview.
 Neither popup adds a top-level entry button or a global notification counter.
 Open sessions remain tabs within Agents; focus that strip to use `h/l` (or left/right),
-Home/End, `n` for new and `x` for close.
+Home/End and `x` for close. Use `<leader>c` to create a tab.
 The session prompt owns input by default; `Enter` submits, `Shift+Enter` or `Alt+Enter` inserts a newline,
 and `Ctrl+C` clears the draft without interrupting work. `Esc` interrupts the selected Agent;
 when messages are waiting, it interrupts and submits them together immediately.
-`Ctrl+Space`, then `c`, **detaches the TUI only**. Agents and subagents keep running in a separate local service.
+`Ctrl+Space`, then `d`, **detaches the TUI only**. Agents and subagents keep running in a separate local service.
 These are default application bindings; see [Keybindings](#keybindings) to customize them.
 
 ```sh
@@ -199,7 +201,7 @@ view per worktree and Agents as the initial view. There is no top-level view tab
 current view next to the Radian product name, independently of keyboard focus.
 **Ctrl+Space, then 1–9** selects the corresponding Agent session or terminal in the current worktree's
 tab order. Missing slots and numeric selection in Editor/Git do nothing; no sessions are created.
-**Ctrl+Space, then n** creates an Agent session or terminal in the current view, including when
+**Ctrl+Space, then c** creates an Agent session or terminal in the current view, including when
 no tabs remain. It does nothing in Editor/Git. In Agents, the new session is selected and its prompt
 receives focus once it appears. If you navigate elsewhere while creation is pending, the new tab opens in the background
 without taking focus. Agent and Terminal session strips remain visible and clickable.
@@ -260,9 +262,8 @@ is still detached, and input stays disabled until a fresh exclusive attachment i
 Selecting an already connected Editor focuses it without opening or reconnecting again.
 
 While the embedded terminal is focused, Neovim receives Tab, Esc, Ctrl+f/e, mouse and paste.
-**Ctrl+]** opens the workspace popup; outside the editor, existing application focus keys
-and Tab/Shift+Tab traversal work. **Ctrl+C is native input**, not an application detach binding.
-Use the configured detach sequence (default **Ctrl+Space, then c**). The footer follows the actual
+**Leader, then b** opens the workspace popup; outside the editor, Tab/Shift+Tab traversal works. **Ctrl+C is native input**, not an application detach binding.
+Use the configured detach sequence (default **Ctrl+Space, then d**). The footer follows the actual
 focused control and effective keymap. Opening, switching and resizing do not
 send a prompt to an agent or run a Git mutation. Entering Git may perform read-only queries.
 
@@ -476,16 +477,19 @@ control or expandable instructions. The tag is decorative; copying still copies 
 They are excluded from individual and all-section folding, but the name remains navigable/selectable/copyable. Arguments following the invocation remain a separate
 user message. A generic `read` of `SKILL.md` stays a tool call; filenames alone do not identify a skill.
 
-The configured transcript focus command enters Agent output navigation. **Esc** returns through
-Visual, Text and Sections to the input. Bare **i/a** are text-object prefixes, not input-focus shortcuts.
-The named focus commands and all reading bindings remain configurable in the shared keymap:
+**Leader, then [** enters output navigation in both Agents and Terminal (`output.read`). In Agents,
+**Esc** returns through Visual, Text and Sections to the input. The final Sections-to-Input step
+explicitly exits reading: it reveals the latest output and resumes following, keeping the unsent draft
+and prompt caret unchanged. Intermediate back steps preserve the reading position. The unbound `focus.prompt` command can be configured to focus
+the Agent input without sending the draft. Bare **i** is not an input-focus shortcut. There are no
+default Ctrl+T/Ctrl+E or leader-o aliases. All commands remain configurable:
 
 | Mode | Default keys | Action |
 | --- | --- | --- |
 | Sections | j/k or Ctrl+N/P; Home/gg and End | Previous/next or first/last section |
 | Sections | Enter | Read formatted prose, folded heading/summary, or literal body with the cursor |
 | Sections/Text/Visual | Ctrl+O (also za); zm/zr | Toggle the selected section; fold/unfold all |
-| Text/Visual | h/j/k/l or arrows | Grapheme/visual-line cursor movement |
+| Text/Visual | h/j/k/l or arrows | Grapheme/visual-line cursor movement; Text up/down crosses visible headings and adjacent sections |
 | Text/Visual | w/b/e; W/B/E; 0/^/$ or Home/End; gg/G or Ctrl+Home/End | Word/WORD, logical-line and section boundaries |
 | Text/Visual | f/F/t/T, then a character; ; / , | Find/till on the logical line; repeat/reverse the last find |
 | Visual / yank pending | i / a, then w/W/p or a quote/bracket | Select/yank an inner or surrounding text object |
@@ -497,12 +501,14 @@ The named focus commands and all reading bindings remain configurable in the sha
 | Visual Line | j/k | Move by logical source lines, including wrapped paragraphs |
 | Sections | Ctrl+D / Ctrl+U | Jump the selected section down/up roughly half a viewport |
 | Text/Visual | Ctrl+D / Ctrl+U | Move the cursor down/up half the transcript viewport |
+| Sections | Ctrl+F / Ctrl+B; PgDn/PgUp | Select a section about a full viewport away |
+| Text/Visual | Ctrl+F / Ctrl+B; PgDn/PgUp | Move the reading cursor about a full viewport |
 | Sections / Visual | y | Copy the section or selected range |
 | Text | y + motion/object; yy | Yank a range; copy the current logical line including its real newline |
 | Sections/Text/Visual | Y | Copy the whole raw section, including folded details |
 | Sections | G (Shift+g) or Ctrl+End | Jump to the actual bottom of the whole transcript and resume following |
 | Sections/Text/Visual | ge | Jump to the latest output and resume following |
-| Sections/Text/Visual | PgUp/PgDn; F1 | Page; open/close scrollable keyboard help |
+| Sections/Text/Visual | F1 | Open/close scrollable keyboard help |
 | Visual/Text/Sections | Esc | Return to Text, Sections, then Input |
 
 **Enter never changes folding or Markdown formatting**. It enters text navigation over the visible
@@ -511,15 +517,19 @@ and native table grids remain rendered; entering or leaving cursor mode does not
 The decorative skill tag is not part of selectable text. In Text, `y` starts a pending yank and does not
 copy until a motion/object or a second `y` completes it. In Visual it copies the selection; in Sections
 it copies the raw section. `Y` always copies the complete raw section, even when
-folded. Heading and body cursor positions are retained independently. Formatted reading uses native
+folded. Heading and body cursor positions are retained independently. Folding/unfolding keeps Text
+mode: collapsing focuses the heading, reopening restores the body cursor. A Visual selection is
+cancelled when its text is hidden, but the reader remains in Text mode. Formatted reading uses native
 visible text and layout rather than treating source offsets as display positions. Old source-mode
 cursors/selections are reset when formatting changes their coordinate space; new rendered positions
 are retained across resize, streaming, session switches and reconnect.
 
 #### Read-only Vim composition
 
-Text/Visual motions, text objects and searches operate on the **current reading section** (the visible
-heading when folded, otherwise the displayed body), never hidden details or other messages. Lowercase
+In Text mode, vertical cursor movement crosses the visible header/body boundary and then adjacent
+sections; it never navigates hidden folded details. Other motions, yank operators, text objects and
+searches operate on the **current reading surface** (heading or displayed body). Visual selections
+remain within that surface rather than inventing offsets across separate buffers. Lowercase
 words group Unicode letters/numbers/underscore separately from punctuation; uppercase WORDs group
 all non-whitespace characters. `viw` selects the entire word even from its middle, while `vaw` includes
 adjacent whitespace. Objects also include paragraphs (`p`), single/double/backtick quotes, and nested
@@ -562,12 +572,14 @@ the prompt or embedded programs.
 Shared Visual bindings also apply to **Visual Line**. `V` selects whole logical lines of the active text
 surface, never inserting soft-wrap breaks or an invented EOF newline. Literal text retains its original
 LF/CRLF endings; formatted selections copy the displayed text, not hidden Markdown delimiters. `v`/`V` can switch selection kind while retaining the anchor. Both kinds survive streaming,
-resize and warm reconnect. In Sections, `Ctrl+D/U` jumps the selected section by roughly half a
-viewport, accounting for rendered section heights and gaps. Each jump advances at least one section
-when possible and reveals the new selection without scrolling unnecessarily. In Text or Visual,
-`Ctrl+D/U` still moves the cursor within the current section. To jump between sections while reading,
-press `Esc` to return to Sections, then use `Ctrl+D/U`, j/k, gg or End. A selection first needs `Esc` to
-return to Text.
+resize and warm reconnect. In Sections, `Ctrl+D/U` jumps by half a viewport and `Ctrl+F/B` (also
+PgDn/PgUp) by a full viewport. For viewport height H, distances are max(1, floor(H/2)) and max(1, H-1)
+terminal rows. The destination is the furthest section start within that distance, counting actual
+rendered heights and gaps. At least the adjacent section is reached when possible, even across a
+very tall expanded card. These commands move selection rather than only scrolling the viewport.
+In Text, the same keys move the reading cursor, crossing visible headings and adjacent sections;
+Visual movement stays within the selected surface so its anchor remains valid. Esc returns to Text,
+then Sections when explicit section navigation is wanted.
 
 The former `INPUT · section/count · following` row is removed. Text/Visual/search/help mode and a
 `Paused` indicator appear only when relevant in the one-row footer; `Paused` refers to viewport
@@ -576,7 +588,9 @@ returning to the bottom by wheel or paging resumes it automatically. Live Agent 
 their vertical scrollbar and reclaim its column without disabling wheel or keyboard navigation.
 History previews use the same hidden-scrollbar policy. Merely focusing the transcript does not pause it. Content growth and asynchronous Markdown layout preserve the pre-growth
 bottom intent rather than treating the increased scroll range as user navigation. Following also
-keeps the bottom on resize and when returning from another work view.
+keeps the bottom on resize and when returning from another work view. Explicitly exiting the reader
+with the final Esc resumes following; merely focusing the prompt, cancelling a popup, or wheel-reading
+while input already owns focus does not silently reset a deliberately paused viewport.
 
 Above the bottom, a centered `↓ Back to bottom` button uses an existing blank row above the work
 status or in the composer's top inset. It never adds blank rows, covers transcript content or moves
@@ -586,7 +600,8 @@ following without sending a prompt or taking input focus. It is hidden at the bo
 and whenever no existing blank row is available.
 
 Character/line selections and native mouse selections temporarily protect their viewport. Once
-selection is cleared, following resumes only if the viewport is still at the bottom. Auto-following
+selection is cleared during reading, following resumes only if the viewport is still at the bottom.
+The final reader-exit Esc releases any remaining owned selection and explicitly resumes live output. Auto-following
 does not replace the section, cursor or selection being read. Help and the read-only History preview
 remain independent of live transcript following. `G` (`Shift+g`) or `Ctrl+End` in Sections, and `ge`
 in any transcript mode, explicitly jump to the whole transcript bottom and resume following. `End`
@@ -860,8 +875,8 @@ Finish existing jobs before explicitly restarting an old runtime to load the new
 
 ### Agent Dashboard
 
-Open **/dashboard** from the Agent input, or press **Ctrl+Space d** (the configured leader followed
-by `d`). Opening it never sends a model prompt or interrupts work. Esc restores the previous focus
+Open **/dashboard** from the Agent input, or press **Ctrl+Space u** (the configured leader followed
+by `u`). Opening it never sends a model prompt or interrupts work. Esc restores the previous focus
 and preserves drafts. The shortcut is configurable as `dashboard.show`.
 
 The dashboard shows only **total tokens**, **recorded runs**, and **total run time** above a daily
@@ -1011,7 +1026,7 @@ lazygit, delta or difftastic. Tree-sitter workers are released when the TUI deta
 
 Entering **Terminal** automatically starts one shell if the selected worktree has none.
 Existing shells and the last selected tab are reused without creating another shell. Use
-**Ctrl+Space, then n** for additional terminals, from either input or the empty view; there is no
+**Ctrl+Space, then c** for additional terminals, from either input or the empty view; there is no
 **+ New** button.
 Each worktree has an independent list of shells; creating one selects it unless later navigation
 supersedes that request. Each tab uses the same fixed-width frame and right-aligned **×** as Agent
@@ -1052,7 +1067,7 @@ history according to its user configuration.
 screen and retained scrollback. Shells and jobs keep running; new output does not replace the text
 being selected. The footer shows **NORMAL**, **VISUAL** or **VISUAL LINE** and `frozen output`.
 Use h/j/k/l, arrows or Ctrl+N/P to move, w/b for words, 0/$ for line bounds, gg/G for buffer bounds,
-and Ctrl+U/D or PgUp/PgDn for half/full pages. **v/V** selects characters/logical lines; **y** copies
+and Ctrl+U/D or Ctrl+B/F (also PgUp/PgDn) for half/full pages. **v/V** selects characters/logical lines; **y** copies
 the selection or current line, returning to Normal after accepted clipboard delivery. Copy failures
 retain the selection. Soft-wrapped terminal lines are joined rather than copied as artificial newlines.
 Esc cancels Visual selection, then returns from Normal to shell input; **i** returns from Normal directly.
@@ -1182,18 +1197,22 @@ In compact layouts this returns from preview to results. **Ctrl+C** clears only 
 without closing the popup or interrupting work; an empty query is a no-op.
 Agent/Git prompt editing and embedded editors/shells retain their native input bindings.
 Search, completion and focused tab strips keep **Ctrl+N/P** navigation. Creation uses the separate
-**Ctrl+Space, then n** sequence, not **Ctrl+N** or bare `n`.
+**Ctrl+Space, then c** sequence, not **Ctrl+N** or bare `n`.
 
-The default leader is **Ctrl+Space**. Press and release it, then press `c` to detach radian,
+The default leader is **Ctrl+Space**. Press and release it, then press `d` to detach radian or `u` to open the usage dashboard,
 `a`/`e`/`g`/`t` to select Agents/Editor/Git/Terminal, `b` to toggle workspace navigation,
-`w` or `f` to open workspace search, or `s` to monitor working sessions and unread results.
+or `s` to monitor working sessions and unread results. Opening workspace navigation focuses search;
+from its results list, `/` returns to search without changing the query.
 `<leader> 1` through `<leader> 9` select a session in Agents or a shell in Terminal, based on the
-visible view rather than the focused control. `<leader> n` creates a session/shell in that view,
-including empty states; Editor and Git ignore these commands. `<leader> x` closes the selected terminal.
-`<leader> [` enters Agent/Terminal output navigation through `output.read`; use focused tab-strip
-navigation or leader-1 through leader-9 to switch tabs, not the removed previous/next-terminal defaults.
+visible view rather than the focused control. `<leader> c` creates a session/shell in that view,
+including empty states. `<leader> n` / `<leader> p` select the next/previous tab in the same worktree
+and view, wrapping at either end. They never create a tab, switch work views, or navigate behind a popup;
+Editor and Git ignore these Agent/Terminal tab commands. Ordinary focused-strip h/l and Ctrl+N/P
+navigation stays in the strip. `<leader> x` closes the selected terminal.
+`<leader> [` enters Agent/Terminal output navigation through `output.read`. Input focus has no default
+leader-p binding; Esc returns through the active navigation modes to input.
 These shared actions can be rebound with
-`tab.new` and `tab.select-1` through `tab.select-9`; `session.new` and `terminal.new` remain available
+`tab.new`, `tab.next`, `tab.previous` and `tab.select-1` through `tab.select-9`; `session.new` and `terminal.new` remain available
 for explicit custom bindings but have no default bindings.
 Ctrl+C clears drafts in Agent input; in Editor and Terminal, Neovim and shells still receive it as native input.
 If macOS reserves Ctrl+Space for input-source switching, change that system shortcut or radian's leader.
@@ -1215,7 +1234,7 @@ the runtime and its processes do not need restarting.
   "leader": "ctrl+space",
   "timeoutMs": 1000,
   "bindings": {
-    "app.detach": ["<leader> c"],
+    "app.detach": ["<leader> d"],
     "view.editor": ["<leader> e"],
     "session.new": [{ "keys": "s", "scope": "session-tabs" }]
   }
@@ -1230,7 +1249,9 @@ Use explicit `shift+c` for uppercase C. A string binding is global; an object ca
 `[]` disables it. Command IDs/defaults are defined in `src/keybindings/commands.ts`.
 Unknown commands, invalid keys and overlapping/prefix bindings are errors rather than silent fallbacks.
 For example, a printable Space leader conflicts with the default button Space activation unless that
-binding is changed. Missing default files use defaults; missing explicitly requested files are errors.
+binding is changed. An explicit leader starting with Ctrl+B or Ctrl+F takes precedence over the optional
+default page chord; PageUp/Down remain available. Explicit conflicting command overrides still fail.
+Missing default files use defaults; missing explicitly requested files are errors.
 
 Incomplete/mismatched sequences are returned once, in order, to their original input target. Focus
 changes flush the old prefix to the old target, never the newly selected terminal. Paste is never
@@ -1267,7 +1288,7 @@ scrolling, draft/search clearing (`<C-c>`) and Vim selection hints stay in full 
 remain visible. Send/Run/Queue, newline and Agent interrupt hints are omitted even when rebound.
 Native Editor normal-mode and Terminal interrupt hints are also omitted. These presentation rules
 never disable the underlying bindings or remove them from application Help.
-Application bindings such as `Ctrl+f`, `<leader>p` and `Tab` still work outside Neovim input focus;
+Application bindings such as `<leader>b`, `<leader>[` and `Tab` still work outside Neovim input focus;
 the configured leader detach command works in every input context. See the input ownership rules above.
 
 The status-icon legend and routine live-service banner are not shown. Errors and service notices
@@ -1292,8 +1313,8 @@ restores them when space permits. The help entry remains discoverable even when 
 hints do not fit (shown as F1 or ? at narrow widths). Active completion uses the configurable
 `completion.next`, `completion.previous`, `completion.accept` and `completion.dismiss` commands.
 Default Tab focus traversal excludes `prompt-completion`; overriding Tab globally requires rebinding
-or disabling the conflicting completion acceptance binding. Input editing, Ctrl+F/E focus shortcuts,
-and Neovim/shell input ownership are otherwise unchanged.
+or disabling the conflicting completion acceptance binding. Input editing and Neovim/shell input
+ownership are otherwise unchanged; global Ctrl+F/E focus shortcuts are unbound by default.
 `src/ui/footer.ts` is a reusable presentation component; it does not own keyboard handlers,
 workspace selection, or agent execution.
 
@@ -1698,7 +1719,8 @@ matching never rewrites original names or paths.
 
 ### Workspace search
 
-Open the workspace popup with `Ctrl+f` outside a PTY or leader w/f/b from any view.
+Toggle the workspace popup with `<leader>b` from any view. Opening focuses search; `/` returns
+from results to search. There are no additional default workspace-entry aliases.
 Results update while typing, deleting or pasting. Matching is normalized, case-insensitive substring
 search over repository names, worktree folder names and actual branch names. Every query term must
 match within the same name or branch field. Repository matches retain their worktrees.

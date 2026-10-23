@@ -1,3 +1,4 @@
+import { openWorkspaceSearch, pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { InputRenderable, ScrollBoxRenderable, TextRenderable } from "@opentui/core";
@@ -39,14 +40,14 @@ async function fixture(options: Partial<WorkbenchActions> = {}) {
     async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("워크스페이스 팝업은 작업 너비를 바꾸지 않고 포함 검색 후 Enter에서만 전환한다", async () => {
-  // 영구 사이드바 없이 현재 세션과 초안이 열린 상태에서 시작한다.
+test("Workspace popups preserve work width and switch only on Enter after substring search", async () => {
+  // Start with current sessions and drafts open without a permanent sidebar.
   const app = await fixture();
   try {
     const pane = app.get("work-panel"), width = pane.width, prompt = app.get("session-prompt");
     expect(width).toBe(120); expect(app.get("workspace-picker").visible).toBe(false);
 
-    app.mockInput.pressKey("f", { ctrl: true }); await app.render();
+    openWorkspaceSearch(app); await app.render();
     await app.mockInput.typeText("rdui"); await app.render();
     expect(app.captureCharFrame()).toContain("No matching workspaces");
     (app.get("workspace-search") as InputRenderable).value = "-ui"; await app.render();
@@ -106,13 +107,13 @@ test.each([
   } finally { await app.close(); }
 });
 
-test("열린 팝업의 검색 포커스 이동은 입력을 보존하고 선택 후 다시 열 때만 초기화한다", async () => {
-  // 검색 중 포커스를 되돌리는 동작과 새 검색 세션을 시작하는 동작을 구분한다.
+test("Search focus changes preserve open-popup input and only reopening after selection resets it", async () => {
+  // Distinguish restoring search focus from starting new search sessions.
   const app = await fixture();
   try {
     app.leader("b"); await app.mockInput.typeText("-ui"); await app.render();
     const input = app.get("workspace-search") as InputRenderable;
-    app.mockInput.pressTab(); app.mockInput.pressKey("f", { ctrl: true }); await app.render();
+    app.mockInput.pressTab(); openWorkspaceSearch(app); await app.render();
 
     // 이미 열린 팝업에서는 포커스를 옮겨도 검색어를 지우지 않는다.
     expect(input.value).toBe("-ui"); expect(app.renderer.currentFocusedRenderable).toBe(input);
@@ -264,8 +265,8 @@ test("Stopped 탭은 벨보다 물음표 하나를 우선 표시하고 읽음과
   } finally { await app.close(); }
 });
 
-test("백그라운드와 과거 대화 위치에서는 읽음 처리하지 않고 결과가 실제 보일 때 확인한다", async () => {
-  // 미확인 세션으로 선택만 복원된 상태는 사용자가 결과를 읽었다는 증거가 아니다.
+test("Background and historical positions acknowledge only when results actually become visible", async () => {
+  // Restored selection alone does not prove users read unread results.
   const app = await fixture();
   try {
     app.renderer.emit("blur"); app.selection.selectSession("demo:feature", "b1"); await app.render();
@@ -276,7 +277,7 @@ test("백그라운드와 과거 대화 위치에서는 읽음 처리하지 않�
     app.renderer.emit("focus"); await app.render();
     expect(app.acknowledged).toEqual([]);
 
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("g"); app.mockInput.pressKey("e"); await app.render();
+    pressLeader(app, "["); app.mockInput.pressKey("g"); app.mockInput.pressKey("e"); await app.render();
 
     expect(app.acknowledged).toEqual(["result-b"]);
   } finally { await app.close(); }
@@ -301,12 +302,12 @@ test("모니터 후보가 많으면 렌더링 한도를 알리고 검색으로 �
   } finally { await app.close(); }
 });
 
-test("저장소가 없는 화면에서 팝업을 취소하면 숨은 검색창 대신 도움말로 포커스를 복귀한다", async () => {
-  // 복귀할 세션이나 PTY가 없을 때도 숨겨진 입력에 키가 남으면 안 된다.
+test("Cancelling repository-free popups restores Help instead of hidden search focus", async () => {
+  // With no session or PTY to restore, keys must not remain in hidden inputs.
   const app = await createTestRenderer({ width: 60, height: 12, kittyKeyboard: true });
   const view = new Workbench(app.renderer, new WorkspaceSelection([]), { onNewSession() {}, onCloseSession() {} });
   try {
-    await app.renderOnce(); app.mockInput.pressKey("f", { ctrl: true }); await app.renderOnce();
+    await app.renderOnce(); openWorkspaceSearch(app); await app.renderOnce();
     app.mockInput.pressEscape(); await app.renderOnce();
 
     expect(app.renderer.root.findDescendantById("workspace-picker")!.visible).toBe(false);

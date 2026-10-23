@@ -101,8 +101,8 @@ including their linked worktrees. If your projects live elsewhere, set your
 The default `<leader>` is `<C-Space>`: press and release Ctrl+Space, then press the
 next key.
 
-1. Press `<leader>f` to find a repository or worktree, then `<CR>` to open it.
-2. In Agents, press `<leader>n` to create a session.
+1. Press `<leader>b` to find a repository or worktree, then `<CR>` to open it.
+2. In Agents, press `<leader>c` to create a session.
 3. Run `/accounts` to add and select a provider account, or reuse existing Pi
    authentication. Adding an account does not activate it; select it explicitly.
 4. Run `/model` to choose the session's model and supported reasoning effort.
@@ -117,7 +117,7 @@ shell work. Press `<leader>a` to return to Agents.
 
 ### Leave without stopping work
 
-Press `<leader>c` to detach only the interface. Run `bun run start` again from the
+Press `<leader>d` to detach only the interface. Run `bun run start` again from the
 Radian checkout to reconnect to the same live runtime.
 
 To inspect or explicitly stop the shared runtime:
@@ -139,18 +139,24 @@ unless you configure another sequence.
 | Keys | Action |
 | --- | --- |
 | `<leader>a` / `e` / `g` / `t` | Select Agents / Editor / Git / Terminal. |
-| `<leader>f` | Search repositories and worktrees. |
-| `<leader>n` | Create an agent session or terminal in the current view. |
+| `<leader>b` | Toggle workspace search; `/` focuses search from the results. |
+| `<leader>c` | Create an agent session or terminal in the current view. |
+| `<leader>n` / `<leader>p` | Next / previous tab in Agents or Terminal, wrapping at either end. |
+| `<leader>u` | Open the Agent usage dashboard. |
 | `<leader>1` … `<leader>9` | Select an agent session or terminal tab by position. |
 | `<leader>h` | Open saved agent history for the current worktree. |
 | `<leader>s` | Monitor agent sessions. |
 | `<leader>[` | Read and select output in Agents or Terminal. |
-| `<leader>c` | Detach the interface; keep the runtime running. |
+| `<leader>d` | Detach the interface; keep the runtime running. |
 | `<leader>?` | Open keyboard help. |
 
 App-owned lists support `<C-n>` / `<C-p>` for next/previous and `<C-d>` / `<C-u>` for
-half-page navigation. Search inputs keep `h/j/k/l` as literal text; results lists
-support applicable Vim motions. Embedded Neovim and shells retain their native
+half-page navigation. In Transcript Sections, `<C-d/u>` and `<C-f/b>` select sections
+roughly half/full a viewport away; Text mode moves its cursor through headings and bodies.
+Folding preserves Text mode and restores the body's cursor when reopened. The final `<Esc>` from
+Sections exits reading, reveals the latest output and resumes following without sending the draft.
+Intermediate back steps and ordinary focus/popup round-trips preserve reading positions.
+Search inputs keep `h/j/k/l` as literal text; results lists support applicable Vim motions. Embedded Neovim and shells retain their native
 input behavior except for configured application shortcuts.
 
 In the Agent prompt, `<C-c>` clears the draft; it does not interrupt work. `<Esc>`

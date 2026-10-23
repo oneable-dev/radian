@@ -1,3 +1,4 @@
+import { openWorkspaceSearch } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { PromptInput } from "../../agents/ui/prompt-input.ts";
 import { createTestRenderer } from "@opentui/core/testing";
@@ -7,7 +8,7 @@ import type { Repository } from "../../workspace/model.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { Workbench } from "./workbench.ts";
 
-test("연결 전 다른 레포의 초안을 지우지 않고 연결 뒤 저장된 세션과 입력을 복원한다", async () => {
+test("Delayed connections preserve other-repository drafts and restore saved sessions/input", async () => {
   const setup = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
   const repositories: Repository[] = ["A", "B"].map((name) => ({ id: name, name: `${name}-repo`, worktrees: [{ id: `tree-${name}`, path: `/${name}`, name: `${name}-folder`, branch: "main",
     sessions: name === "A" ? [{ id: "a1", name: "A session", status: null, subagents: [] }] : [] }] }));
@@ -25,7 +26,7 @@ test("연결 전 다른 레포의 초안을 지우지 않고 연결 뒤 저장�
     selection.replaceSnapshot(repositories.map((repo) => repo.id !== "B" ? repo : { ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
       sessions: ["b1", "b2"].map((id) => ({ id, name: id, status: null, subagents: [] })) })) }), { "tree-B": "b2" });
     await setup.renderOnce();
-    setup.mockInput.pressKey("f", { ctrl: true }); await setup.renderOnce();
+    openWorkspaceSearch(setup); await setup.renderOnce();
     const lines = setup.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes(`${icons.folder} B-folder`));
     await setup.mockMouse.click(lines[y]!.indexOf("B-folder"), y); await setup.renderOnce();
 

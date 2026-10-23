@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, spyOn, test } from "bun:test";
 import type { TerminalColors, TextRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
@@ -37,11 +38,11 @@ const palette = (light: boolean): TerminalColors => ({ palette: ["#000000", "#CC
   defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
   cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null });
 
-test("프롬프트 아래에 위아래 한 줄 여백을 두고 context·usage를 구분해 표시한다", async () => {
+test("Status below prompts has one-row outer spacing and separates context from usage", async () => {
   // The session has 64% context remaining, while its account has used 18% of the selected allowance.
   const app = await mount();
   try {
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("keep this draft"); await app.renderOnce();
+    pressLeader(app, "a"); await app.mockInput.typeText("keep this draft"); await app.renderOnce();
 
     const prompt = app.renderer.root.findDescendantById("session-prompt")!, composer = app.renderer.root.findDescendantById("agent-composer")!;
     // The telemetry has its own one-row gutters, separate from the prompt's internal padding.
@@ -248,10 +249,10 @@ test("context는 used와 같은 본문색이고 모델·effort·Fast는 테마 �
   } finally { await app.close(); }
 });
 
-test("좁은 화면은 바·설정·시간을 축약해 두 비율과 초안을 보존하고 넓히면 복원한다", async () => {
+test("Narrow layouts compact bars, settings, and time while preserving ratios and drafts for restoration", async () => {
   const app = await mount();
   try {
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("resize draft");
+    pressLeader(app, "a"); await app.mockInput.typeText("resize draft");
     for (const [width, height, gap] of [[100, 20, 1], [60, 12, 1], [140, 24, 1]] as const) {
       app.resize(width, height); await app.renderOnce();
 
@@ -343,13 +344,13 @@ test("미지원 usage는 context 바만 유지하고 사용률 바나 시간을 
   } finally { await app.close(); }
 });
 
-test("usage 복구 중에는 마지막 채움의 회색 바와 스피너만 표시하고 성공하면 새 값을 복원한다", async () => {
-  // 마지막 18% 성공값이 남아 있는 세션에서 사용량만 실패한 상태를 준비한다.
+test("Usage recovery shows only gray last-fill bars and spinners until fresh success", async () => {
+  // Start with usage failure after the session's last successful value of 18%.
   const clock = new ManualClock(), data = sample(), app = await mount(data, clock, true);
   const spinner = () => app.renderer.root.findDescendantById("usage-loading") as TextRenderable;
   const spanAt = (column: number) => { let x = 0; return app.captureSpans().lines[app.row.y]!.spans.find(span => { x += span.width; return x > column; })!; };
   try {
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("keep recovery draft");
+    pressLeader(app, "a"); await app.mockInput.typeText("keep recovery draft");
     for (const light of [false, true]) {
       // Backoff 중의 상태 재전송과 테마 변경은 스피너나 마지막 바를 초기화하지 않는다.
       await app.set({ ...data, usage: { ...data.usage!, status: "error", errorCode: "USAGE_TIMEOUT" } });

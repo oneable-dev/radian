@@ -1,3 +1,4 @@
+import { openWorkspaceSearch } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { ScrollBoxRenderable, TextRenderable, type Renderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
@@ -20,7 +21,7 @@ async function mount() {
     onPrompt: () => { actions.push("prompt"); return ok(undefined); }, initialDrafts: { a1: "preserved draft" },
     getSessionDetails: () => ({ status: "working", error: null, output: "", sections: [{ id: "request", kind: "user", title: "You", text: "Actual work", status: "complete" }] }) });
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
-  app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab(); await render();
+  openWorkspaceSearch(app); app.mockInput.pressTab(); await render();
   const item = app.renderer.root.findDescendantById("worktree:demo:main")!;
   const content = item.findDescendantById("worktree:demo:main:label")!;
   const lines = () => app.captureCharFrame().split("\n").slice(content.y, content.y + 2).map((line) => line.slice(item.x + 1, item.x + item.width - 1));
@@ -104,13 +105,13 @@ test("가로 위치는 snapshot 갱신에 유지되고 짧은 이름이나 넓�
   } finally { await app.close(); }
 });
 
-test("가로 스크롤 뒤에도 브랜치 줄 클릭은 워크트리 하나를 열고 세로 휠은 목록으로 전달한다", async () => {
+test("After horizontal scrolling, branch clicks open one worktree and vertical wheel reaches lists", async () => {
   const app = await mount();
   try {
     await app.mockMouse.scroll(app.item.x + 6, app.label().y + 1, "right"); await app.render();
     await app.mockMouse.click(app.item.x + 6, app.label().y + 1); await app.render();
     expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
-    app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab(); await app.render();
+    openWorkspaceSearch(app); app.mockInput.pressTab(); await app.render();
     expect(app.item.height).toBe(4); expect(app.view.promptDrafts.a1).toBe("preserved draft"); expect(app.actions).toEqual([]);
     app.resize(60, 12); await app.render();
     const tree = app.renderer.root.findDescendantById("workspace-tree")! as ScrollBoxRenderable, top = tree.scrollTop;

@@ -1,3 +1,4 @@
+import { openWorkspaceSearch } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { InputRenderable, type TerminalColors } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
@@ -13,7 +14,7 @@ async function mount() {
   const view = new Workbench(app.renderer, selection, { onNewSession: () => requests.push("new"), onCloseSession: () => requests.push("close"),
     onPrompt: () => { requests.push("prompt"); return ok(undefined); }, initialDrafts: { a1: "keep agent draft" } });
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
-  app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab(); await render();
+  openWorkspaceSearch(app); app.mockInput.pressTab(); await render();
   const get = (id: string) => { const node = app.renderer.root.findDescendantById(id); if (!node) throw new Error(`Missing ${id}`); return node; };
   const input = get("workspace-search"); if (!(input instanceof InputRenderable)) throw new Error("Missing workspace input.");
   const cell = (x: number, y: number) => { let column = 0; return app.captureSpans().lines[y]!.spans.find(span => { column += span.width; return column > x; })!; };
@@ -69,11 +70,11 @@ test.each([false, true])("밝기 %j에서도 검색 여백 클릭으로 포커�
   } finally { await app.close(); }
 });
 
-test("리사이즈는 검색어·커서·초안을 보존하고 작은 화면에서도 팝업을 터미널 안에 배치한다", async () => {
-  // 긴 검색 입력의 편집 위치가 resize로 초기화되면 안 된다.
+test("Resize preserves query, caret, and drafts while fitting popups within compact terminals", async () => {
+  // Resize must not reset editing positions in long queries.
   const app = await mount();
   try {
-    app.mockInput.pressKey("f", { ctrl: true }); await app.mockInput.typeText("workspace-query-".repeat(6)); app.mockInput.pressArrow("left"); await app.render();
+    openWorkspaceSearch(app); await app.mockInput.typeText("workspace-query-".repeat(6)); app.mockInput.pressArrow("left"); await app.render();
     const value = app.input.value, cursor = app.input.cursorOffset;
 
     app.resize(60, 12); await app.render();
@@ -86,14 +87,14 @@ test("리사이즈는 검색어·커서·초안을 보존하고 작은 화면에
   } finally { await app.close(); }
 });
 
-test("팝업을 취소하고 다시 열면 검색어와 커서를 초기화하고 Agent 초안은 유지한다", async () => {
-  // 팝업 검색어는 일시적인 필터이며 Agent 초안과 달리 재열기 시 복원하지 않는다.
+test("Cancelling and reopening resets search query/caret while preserving Agent drafts", async () => {
+  // Popup queries are transient filters, unlike restored Agent drafts.
   const app = await mount();
   try {
-    app.mockInput.pressKey("f", { ctrl: true }); await app.mockInput.typeText("feature"); app.mockInput.pressArrow("left"); await app.render();
+    openWorkspaceSearch(app); await app.mockInput.typeText("feature"); app.mockInput.pressArrow("left"); await app.render();
 
-    // 후보를 확정하지 않고 닫은 뒤 새로운 검색을 시작한다.
-    app.mockInput.pressEscape(); await app.render(); app.mockInput.pressKey("f", { ctrl: true }); await app.render();
+    // Close without committing candidates, then start another search.
+    app.mockInput.pressEscape(); await app.render(); openWorkspaceSearch(app); await app.render();
 
     // 새 검색은 비어 있지만 활성 워크스페이스와 대화 초안에는 영향을 주지 않는다.
     expect(app.get("workspace-picker").visible).toBe(true); expect(app.input.value).toBe(""); expect(app.input.cursorOffset).toBe(0);

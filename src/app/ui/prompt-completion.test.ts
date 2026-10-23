@@ -1,3 +1,4 @@
+import { openWorkspaceSearch, pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { parseKeypress, ScrollBoxRenderable } from "@opentui/core";
 import { resolve } from "node:path";
@@ -25,7 +26,7 @@ async function mount(provider: CompletionProvider = async (_id, query) => ok(fil
     getSessionDetails: () => ({ status: "working", output, error: null }),
   });
   const render = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); await app.renderOnce(); await app.renderOnce(); };
-  await render(); app.mockInput.pressKey("e", { ctrl: true }); await render();
+  await render(); pressLeader(app, "a"); await render();
   const input = app.renderer.root.findDescendantById("session-prompt") as PromptInput;
   const complete = async () => { await render(); clock.advance(150); await render(); };
   return { ...app, clock, selection, view, input, sent, render, complete,
@@ -347,12 +348,12 @@ test("재조회 중 기존 후보의 높이·선택·푸터를 유지하고 이�
   } finally { await app.close(); }
 });
 
-test.each(["escape", "blur", "session", "dispose", "renderer"] as const)("%s는 debounce 대기 타이머를 취소해 늦은 조회를 시작하지 않는다", async (action) => {
+test.each(["escape", "blur", "session", "dispose", "renderer"] as const)("%s cancels debounce timers so delayed queries never start", async (action) => {
   let calls = 0; const app = await mount(async () => { calls++; return ok({ items: commandItems, truncated: false }); });
   try {
     app.mockInput.pressKey("/"); await app.render(); expect(calls).toBe(0);
     if (action === "escape") app.mockInput.pressEscape();
-    if (action === "blur") app.mockInput.pressKey("f", { ctrl: true });
+    if (action === "blur") openWorkspaceSearch(app);
     if (action === "session") app.selection.selectSession("demo:feature", "b1");
     if (action === "dispose") app.view.dispose();
     if (action === "renderer") app.renderer.destroy();
@@ -447,7 +448,7 @@ test("명령 재조회 중 Enter는 최신 결과를 기다리고 같은 선택 
   } finally { pending.resolve(ok({ items: [item], truncated: false })); await app.close(); }
 });
 
-test.each(["edit", "dismiss", "session", "blur", "dispose", "changed-selection"] as const)("명령 재조회 중 Enter 이후 %s이면 늦은 결과로 명령을 실행하지 않는다", async (action) => {
+test.each(["edit", "dismiss", "session", "blur", "dispose", "changed-selection"] as const)("%s after Enter during command refresh prevents late execution", async (action) => {
   const pending = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>();
   const item = { kind: "command" as const, value: "compact", description: "Compact context" };
   const app = await mount(async (_id, query) => query.query === "com" ? pending.promise : ok({ items: [item], truncated: false }));
@@ -458,7 +459,7 @@ test.each(["edit", "dismiss", "session", "blur", "dispose", "changed-selection"]
     if (action === "edit") app.mockInput.pressKey("x");
     if (action === "dismiss") app.mockInput.pressEscape();
     if (action === "session") app.selection.selectSession("demo:feature", "b1");
-    if (action === "blur") app.mockInput.pressKey("f", { ctrl: true });
+    if (action === "blur") openWorkspaceSearch(app);
     if (action === "dispose") app.view.dispose();
     pending.resolve(ok({ items: action === "changed-selection" ? [{ ...item, value: "compare" }] : [item], truncated: false }));
     await app.render();

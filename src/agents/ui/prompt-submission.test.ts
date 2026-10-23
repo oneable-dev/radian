@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "../../app/ui/workbench.ts";
@@ -14,7 +15,7 @@ async function mount(onPrompt: NonNullable<WorkbenchActions["onPrompt"]>) {
     getSessionDetails: () => ({ status: "working", output: "Existing run", error: null }),
   });
   await app.renderOnce();
-  app.mockInput.pressKey("e", { ctrl: true });
+  pressLeader(app, "a");
   return { ...app, selection, view, async close() { view.dispose(); await app.dispose(); } };
 }
 

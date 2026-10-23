@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { ScrollBoxRenderable, TextRenderable } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
@@ -43,12 +44,12 @@ function expectLogo(app: Awaited<ReturnType<typeof mount>>): void {
   expect(app.logoFrame()).toBe(app.mark.plainText);
 }
 
-test("첫 빈 세션은 안내·Ready 대신 대화 영역 중앙에 로고만 표시하고 초안을 전송하지 않는다", async () => {
+test("Initial empty sessions show only centered logos without guidance, Ready, or draft submission", async () => {
   // A new session has no transcript, child activity or runtime work to report.
   const app = await mount();
   try {
     // Typing an unsent draft must not dismiss the empty conversation's branding.
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("unsent draft"); await app.render();
+    pressLeader(app, "a"); await app.mockInput.typeText("unsent draft"); await app.render();
 
     // The mark is centered in the usable transcript viewport, with no idle status gutter.
     const { mark, scroll: { viewport } } = app;
@@ -63,14 +64,14 @@ test("첫 빈 세션은 안내·Ready 대신 대화 영역 중앙에 로고만 �
   } finally { await app.close(); }
 });
 
-test("세부 상태가 아직 없거나 구형 빈 출력만 있어도 가짜 Transcript 안내를 만들지 않는다", async () => {
+test("Missing details and legacy empty output never invent Transcript guidance", async () => {
   // Details can arrive after session selection, or omit structured sections on an older runtime.
   const app = await mount(null);
   try {
     // Entering the transcript cannot select a fabricated legacy notice in either snapshot.
     for (const state of [null, { status: null, output: "", error: null }] as const) {
       await app.update(state);
-      app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressEnter(); await app.render();
+      pressLeader(app, "["); app.mockInput.pressEnter(); await app.render();
 
       expect(app.renderer.currentFocusedRenderable).toBe(app.scroll);
       expectLogo(app);
@@ -81,14 +82,14 @@ test("세부 상태가 아직 없거나 구형 빈 출력만 있어도 가짜 Tr
   } finally { await app.close(); }
 });
 
-test("첫 메시지는 로고를 대체하고 새 대화와 세션 왕복은 빈 화면 및 초안을 복원한다", async () => {
+test("First messages replace logos and new conversations/session round-trips restore empty screens and drafts", async () => {
   // An existing session is available alongside the new session without sharing its draft or content.
   const app = await mount();
   try {
     app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
       sessions: [...tree.sessions, { id: "existing", name: "Existing session", status: "complete" as const, subagents: [] }],
     })) })));
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("keep this draft"); await app.render();
+    pressLeader(app, "a"); await app.mockInput.typeText("keep this draft"); await app.render();
 
     // A delivered request replaces branding immediately, before any assistant answer exists.
     await app.update({ ...conversation(), status: "working", sections: conversation().sections!.slice(0, 1) });
@@ -106,12 +107,12 @@ test("첫 메시지는 로고를 대체하고 새 대화와 세션 왕복은 빈
   } finally { await app.close(); }
 });
 
-test("빈 대화의 도움말은 로고를 가리지 않고 닫으면 로고와 입력 포커스로 돌아간다", async () => {
+test("Empty-conversation help leaves logos visible and restores logo/input focus on close", async () => {
   // Help remains available even though there are no transcript sections to select.
   const app = await mount();
   try {
     // Open the real transcript help through keyboard navigation, then dismiss it.
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("F1"); await app.render();
+    pressLeader(app, "["); app.mockInput.pressKey("F1"); await app.render();
     expect(app.transcriptFrame()).toContain("Sections:"); expect(app.get("radian-logo").visible).toBe(false);
     app.mockInput.pressEscape(); await app.render();
 

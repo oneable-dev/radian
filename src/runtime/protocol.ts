@@ -79,6 +79,9 @@ export const ptyFrameSchema = Type.Object({ ...ptyInfoSchema.properties,
   scrollback: Type.Optional(Type.Object({ offset: Type.Integer({ minimum: 0 }), available: Type.Integer({ minimum: 0 }), enabled: Type.Boolean() })),
 });
 export type PtyFrame = Static<typeof ptyFrameSchema>;
+export const terminalTextSchema = Type.Object({ text: Type.String({ maxLength: maxFrameBytes / 2 }),
+  cursor: Type.Object({ row: Type.Integer({ minimum: 0 }), column: Type.Integer({ minimum: 0 }) }) });
+export type TerminalText = Static<typeof terminalTextSchema>;
 export const editorFrameSchema = ptyFrameSchema;
 export type EditorFrame = PtyFrame;
 export const preferencesSchema = Type.Object({
@@ -140,6 +143,7 @@ export const commandSchema = Type.Union([
   Type.Object({ type: Type.Literal("terminal-input"), terminalId: id, lease: id, data: inputBytes }),
   Type.Object({ type: Type.Literal("terminal-resize"), terminalId: id, lease: id, ...size }),
   Type.Object({ type: Type.Literal("terminal-scroll"), terminalId: id, lease: id, lines: Type.Integer({ minimum: -10000, maximum: 10000 }) }),
+  Type.Object({ type: Type.Literal("terminal-read"), terminalId: id, lease: id }),
   Type.Object({ type: Type.Literal("create"), worktreeId: id }),
   Type.Object({ type: Type.Literal("resume"), worktreeId: id, savedId: id }),
   Type.Object({ type: Type.Literal("close"), sessionId: id }),

@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { EditBufferRenderable } from "@opentui/core";
@@ -16,7 +17,7 @@ async function until(check: () => boolean | Promise<boolean>): Promise<void> {
   while (!await check()) { if (Date.now() > deadline) throw new Error("Transcript runtime observation timed out"); await Bun.sleep(10); }
 }
 
-test("실제 SDK·IPC 섹션의 접힘·선택·커서는 TUI 재접속 후 같은 실행과 원문으로 복원된다", async () => {
+test("Real SDK/IPC folding, selection, and cursors restore the same run and source after TUI reconnection", async () => {
   // The daemon, SDK read tool, wire validation and native rendering are real; only copying is stubbed.
   const fixture = await createWorktreeFixture();
   const options = { offline: true, stateRoot: join(fixture.directory, "state"), entry: join(import.meta.dir, "..", "..", "index.ts") };
@@ -69,7 +70,7 @@ test("실제 SDK·IPC 섹션의 접힘·선택·커서는 TUI 재접속 후 같�
     const file = manifest.records.find((record) => record.id === id)!.sessionFile!;
     const originalHistory = await Bun.file(file).text();
 
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME");
+    pressLeader(app, "["); app.mockInput.pressKey("HOME");
     for (let index = 0; index < toolIndex; index++) app.mockInput.pressKey("j");
     app.mockInput.pressKey("o", { ctrl: true });
     app.mockInput.pressEnter(); app.mockInput.pressKey("v"); app.mockInput.pressKey("l"); app.mockInput.pressKey("y"); await app.render();
@@ -81,7 +82,7 @@ test("실제 SDK·IPC 섹션의 접힘·선택·커서는 TUI 재접속 후 같�
     await app.close(); app = undefined;
 
     // A new UI uses serialized preferences and the same live SDK section IDs, not prior renderables.
-    app = await mount(); app.mockInput.pressKey("t", { ctrl: true }); await app.render();
+    app = await mount(); pressLeader(app, "["); await app.render();
 
     expect(app.client.snapshot.pid).toBe(pid);
     expect(app.id).toBe(id);
@@ -97,7 +98,7 @@ test("실제 SDK·IPC 섹션의 접힘·선택·커서는 TUI 재접속 후 같�
     app.mockInput.pressKey("o", { ctrl: true }); app.mockInput.pressEnter(); app.mockInput.pressKey("l"); await app.render();
     expect(app.view.workViewPreferences.agentViews?.[id]?.headingCursors?.[sections[toolIndex]!.id]).toBe(1);
     await app.close(); app = undefined;
-    app = await mount(); app.mockInput.pressKey("t", { ctrl: true }); await app.render();
+    app = await mount(); pressLeader(app, "["); await app.render();
 
     const heading = app.renderer.currentFocusedRenderable as EditBufferRenderable;
     expect(heading.plainText.startsWith("[read] ")).toBe(true); expect(heading.plainText).not.toContain(" · complete"); expect(heading.cursorOffset).toBe(1);

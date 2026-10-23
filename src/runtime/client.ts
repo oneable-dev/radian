@@ -511,7 +511,7 @@ export class RuntimeClient {
         case "input": return binding.send({ type: "editor-input", editorId: id, lease: request.lease, data: request.data });
         case "resize": return binding.send({ type: "editor-resize", editorId: id, lease: request.lease, cols: request.cols, rows: request.rows });
         case "detach": return binding.send({ type: "editor-detach", editorId: id, lease: request.lease });
-        case "scroll": return Promise.resolve(err(new CapabilityError("Editor does not provide shell scrollback.")));
+        case "scroll": case "read": return Promise.resolve(err(new CapabilityError("Editor does not provide shell scrollback.")));
       }
     }, onFrame, onFailure, binding.instance);
     return this.attachPty(editor);
@@ -538,6 +538,9 @@ export class RuntimeClient {
         case "input": return binding.send({ type: "terminal-input", terminalId: id, lease: request.lease, data: request.data });
         case "resize": return binding.send({ type: "terminal-resize", terminalId: id, lease: request.lease, cols: request.cols, rows: request.rows });
         case "scroll": return binding.send({ type: "terminal-scroll", terminalId: id, lease: request.lease, lines: request.lines });
+        case "read": return this.state.capabilities?.includes("terminal-copy-mode")
+          ? binding.send({ type: "terminal-read", terminalId: id, lease: request.lease })
+          : Promise.resolve(err(new CapabilityError("Running service predates terminal copy mode. Save work and explicitly restart it when ready; no service was restarted.")));
         case "detach": return binding.send({ type: "terminal-detach", terminalId: id, lease: request.lease });
       }
     }, onFrame, onFailure, binding.instance));

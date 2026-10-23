@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, spyOn, test } from "bun:test";
 import { BoxRenderable, CodeRenderable, EditBufferRenderable, InputRenderable, MarkdownRenderable, ScrollBoxRenderable, parseKeypress, type Renderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
@@ -273,13 +274,13 @@ test("기존 입력이 사라졌다면 숨은 검색창 대신 표시된 탐색 
   } finally { await app.close(); }
 });
 
-test("팝업은 Tab 포커스·전역 명령·배경 클릭을 가두고 sidebar 접기 상태를 유지한다", async () => {
+test("Popups trap Tab focus, global commands, and background clicks while preserving sidebar folding", async () => {
   const app = await mount();
   try {
     expect(app.get("workspace-picker").visible).toBe(false);
     await app.open(); const dialog = app.get("history-dialog");
     for (let i = 0; i < 9; i++) { app.mockInput.pressTab(); await app.render(); expect(["history-search", "history-list", "history-preview"]).toContain(app.renderer.currentFocusedRenderable!.id); }
-    app.leader("e"); app.leader("b"); app.mockInput.pressKey("e", { ctrl: true }); await app.render();
+    app.leader("e"); app.leader("b"); pressLeader(app, "a"); await app.render();
     expect(app.get("agent-view").visible).toBe(true); expect(app.get("workspace-sidebar").visible).toBe(false);
     await app.mockMouse.click(0, 0); await app.render(); expect(app.get("session-history").visible).toBe(true);
     expect(dialog.x).toBeGreaterThan(0); expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.runs).toEqual([]);

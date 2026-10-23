@@ -1,3 +1,4 @@
+import { openWorkspaceSearch } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
@@ -14,7 +15,7 @@ async function mount(repositories = demoWorkspace(), size: { width?: number; hei
   const view = new Workbench(app.renderer, selection, { onNewSession: () => requests.push("new"), onCloseSession: () => requests.push("close"),
     onPrompt: () => { requests.push("prompt"); return ok(undefined); }, getSessionDetails: () => ({ status: "complete", output: "Transcript", error: null }), initialDrafts: { a1: "main draft" } });
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
-  app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab(); await render();
+  openWorkspaceSearch(app); app.mockInput.pressTab(); await render();
   const get = (id: string) => app.renderer.root.findDescendantById(id)!;
   const line = (id: string, offset = 0) => { const node = get(id), label = get(`${id}:label`); return app.captureCharFrame().split("\n")[label.y + offset]!.slice(node.x, node.x + node.width); };
   const cell = (x: number, y: number) => { let column = 0; return app.captureSpans().lines[y]!.spans.find(span => { column += span.width; return column > x; })!; };

@@ -14,8 +14,8 @@ async function fixture() {
     async close() { if (previous === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = previous; await rm(directory, { recursive: true, force: true }); } };
 }
 
-test("통합 설정은 영역별 검증과 설정 파일 기준의 상대 워크스페이스 경로를 사용한다", async () => {
-  // 통합 설정이 있으면 같은 영역의 잘못된 레거시 파일은 읽지 않는다.
+test("Unified settings validate each section and resolve workspace paths relative to config files", async () => {
+  // Unified sections override corrupt legacy files for the same scope.
   const app = await fixture();
   try {
     await app.file("theme.json", { invalid: true }); await app.file("keybindings.json", { invalid: true }); await app.file("workspace.json", { invalid: true });
@@ -27,13 +27,13 @@ test("통합 설정은 영역별 검증과 설정 파일 기준의 상대 워크
     // UI·탐색·런타임 정책은 형식만 공유하고 각 영역의 기존 동작을 유지한다.
     expect(settings.path).toBe(app.settings); expect(settings.theme.accent).toBe("#123456");
     expect(settings.keymap.leader).toEqual(["ctrl+b"]);
-    expect(settings.keymap.hint("app.detach", "none")).toBe("<leader>c");
+    expect(settings.keymap.hint("app.detach", "none")).toBe("<leader>d");
     expect(settings.workspace).toEqual({ roots: [join(app.root, "repos")], maxDepth: 2 }); expect(settings.sessions.retentionDays).toBe(7);
   } finally { await app.close(); }
 });
 
-test("명시한 개별 파일 옵션은 통합 설정보다 우선하고 없는 영역만 레거시 파일로 보완한다", async () => {
-  // 테마는 CLI에서 고르고 단축키와 탐색 경로는 기존 파일을 유지한다.
+test("Explicit file options override unified settings and legacy files fill only missing sections", async () => {
+  // Select themes through CLI while retaining legacy bindings and discovery paths.
   const app = await fixture();
   try {
     await app.file("settings.json", { theme: { accent: "#111111" }, sessions: { retentionDays: null } });
@@ -45,7 +45,7 @@ test("명시한 개별 파일 옵션은 통합 설정보다 우선하고 없는 
 
     // 통합 설정을 쓰더라도 기존 사용자 설정이 조용히 사라지지 않는다.
     expect(settings.theme.accent).toBe("#ABCDEF"); expect(settings.keymap.leader).toEqual(["ctrl+b"]);
-    expect(settings.keymap.hint("app.detach", "none")).toBe("<leader>c");
+    expect(settings.keymap.hint("app.detach", "none")).toBe("<leader>d");
     expect(settings.workspace.roots).toEqual([join(app.root, "legacy")]); expect(settings.sessions.retentionDays).toBeNull();
   } finally { await app.close(); }
 });

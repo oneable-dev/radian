@@ -1,8 +1,9 @@
 import { Terminal as Screen } from "@xterm/headless";
 import { terminalScreen } from "./screen.ts";
+import { terminalText } from "./text.ts";
 import { capture, PtyError, type ExpectedError } from "../../errors.ts";
 import { err, ok, type Result } from "../../result.ts";
-import type { PtyFrame, PtyInfo } from "../protocol.ts";
+import { maxFrameBytes, type PtyFrame, type PtyInfo, type TerminalText } from "../protocol.ts";
 import { snapshotEvents } from "../events.ts";
 
 export type PtyLaunch = {
@@ -111,6 +112,13 @@ export class PtySession {
     const focusEvent = data.length === 3 && data[0] === 27 && data[1] === 91 && (data[2] === 73 || data[2] === 79);
     if (!focusEvent && this.screen.buffer.active.viewportY !== this.screen.buffer.active.baseY) { this.screen.scrollToBottom(); this.invalidate(); }
     this.terminal.write(data);
+  }
+  async read(lease: string): Promise<Result<TerminalText, PtyError>> {
+    await new Promise<void>((resolve) => this.screen.write("", resolve));
+    if (this.lease !== lease) return err(new PtyError("PTY_BUSY", "Terminal attachment changed before reading output."));
+    const text = terminalText(this.screen);
+    if (Buffer.byteLength(JSON.stringify(text)) > maxFrameBytes / 2) return err(new PtyError("PTY_UNAVAILABLE", "Terminal output exceeds the copy-mode snapshot limit."));
+    return ok(text);
   }
   async scroll(lines: number, lease: string): Promise<void> {
     await new Promise<void>((resolve) => this.screen.write("", resolve));

@@ -47,7 +47,7 @@ async function mount(initial?: WorkViewPreferences, clock?: ManualClock, keymap?
     },
     async click(text: string, right = false) {
       if (text.startsWith(icons.folder) && !app.renderer.root.findDescendantById("workspace-sidebar")!.visible) {
-        app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("w"); await app.renderOnce(); await app.renderOnce();
+        app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("b"); await app.renderOnce(); await app.renderOnce();
       }
       const lines = app.captureCharFrame().split("\n");
       const start = right ? app.renderer.root.findDescendantById("work-panel")!.x : 0;
@@ -79,15 +79,15 @@ test("복원한 Terminal 화면에 열린 쉘이 없으면 기본 쉘 하나를 
   } finally { await app.close(); }
 });
 
-test("터미널 입력의 leader+n은 새 탭을 선택하고 쉘에 제어 문자를 보내지 않는다", async () => {
-  // 기본 쉘 입력을 받고 있는 상태에서 새 터미널을 요청한다.
+test("Terminal leader+c selects new tabs without sending shell control characters", async () => {
+  // Request another terminal while the default shell owns input.
   const app = await mount();
   try {
     await app.showView("t"); await app.visible("Shell shell-1");
-    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).toContain("<leader>n New terminal");
+    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).toContain("<leader>c New terminal");
 
-    // 입력 중 생성 단축키를 누르면 두 번째 쉘이 준비된다.
-    app.leader("n"); await app.visible("Shell shell-2");
+    // Creation shortcuts during input prepare a second shell.
+    app.leader("c"); await app.visible("Shell shell-2");
 
     // 새 탭이 입력을 소유하고 leader 시퀀스는 어느 PTY에도 전달되지 않는다.
     expect(app.created).toEqual(["demo:main", "demo:main"]);
@@ -113,15 +113,15 @@ test("터미널 입력의 Ctrl+N/P는 쉘에 전달하고 새 탭을 만들지 �
   } finally { await app.close(); }
 });
 
-test("기본 터미널 생성 중 스냅샷 갱신과 생성 단축키가 겹쳐도 중복 생성하지 않는다", async () => {
-  // 쉘 시작이 느린 경계에서 첫 생성 요청을 보류한다.
+test("Snapshots and creation shortcuts during default startup never duplicate terminals", async () => {
+  // Delay the first request at slow shell startup boundaries.
   const app = await mount(), ready = Promise.withResolvers<void>();
   const create = app.actions.create; let attempts = 0;
   app.actions.create = async (tree, size) => { attempts++; await ready.promise; return create(tree, size); };
   try {
     // 같은 화면을 다시 그리고 명시적 생성도 요청한다.
     await app.showView("t"); app.selection.replaceSnapshot(app.selection.snapshot);
-    app.leader("t"); app.leader("n"); app.mockInput.pressKey("n", { ctrl: true });
+    app.leader("t"); app.leader("c"); app.mockInput.pressKey("n", { ctrl: true });
     await app.renderOnce(); await app.renderOnce();
 
     // 최초 요청 하나만 실행하고 완료된 쉘을 활성화한다.
@@ -146,8 +146,8 @@ test("쉘 시작 전에 Terminal을 나갔다 바로 돌아와도 기본 쉘 하
   } finally { await app.close(); }
 });
 
-test.each(["before-layout", "during-startup"] as const)("%s에 검색을 열면 늦은 기본 쉘 생성이 검색 포커스와 쿼리를 빼앗지 않는다", async timing => {
-  // 시작 응답을 보류한 상태에서 사용자 검색 입력을 허용한다.
+test.each(["before-layout", "during-startup"] as const)("Search opened at %s retains query/focus through late default-shell creation", async timing => {
+  // Allow search input while startup responses remain pending.
   const app = await mount(), ready = Promise.withResolvers<void>();
   const create = app.actions.create;
   app.actions.create = async (tree, size) => { await ready.promise; return create(tree, size); };
@@ -155,8 +155,8 @@ test.each(["before-layout", "during-startup"] as const)("%s에 검색을 열면 
     app.leader("t");
     if (timing === "during-startup") { await app.renderOnce(); await app.renderOnce(); }
 
-    // 생성 완료 전에 워크스페이스 검색으로 이동한다.
-    app.leader("w"); await app.mockInput.typeText("feature"); await app.renderOnce();
+    // Enter workspace search before creation completes.
+    app.leader("b"); await app.mockInput.typeText("feature"); await app.renderOnce();
     const focused = app.renderer.currentFocusedRenderable;
     ready.resolve(); await app.visible("Shell shell-1");
 
@@ -167,8 +167,8 @@ test.each(["before-layout", "during-startup"] as const)("%s에 검색을 열면 
   } finally { ready.resolve(); await app.close(); }
 });
 
-test("기본 쉘 생성 실패는 자동 재시도하지 않고 leader+n으로 다시 요청할 수 있다", async () => {
-  // 첫 시작 요청만 운영 오류로 거절한다.
+test("Default-shell failures never auto-retry and leader+c explicitly requests recovery", async () => {
+  // Reject only the first startup with an operational error.
   const app = await mount(), create = app.actions.create; let attempts = 0;
   app.actions.create = async (tree, size) => ++attempts === 1 ? err(new PtyError("PTY_UNAVAILABLE", "Shell startup denied.")) : create(tree, size);
   try {
@@ -178,7 +178,7 @@ test("기본 쉘 생성 실패는 자동 재시도하지 않고 leader+n으로 �
 
     // 빈 화면은 단축키로 복구할 수 있으며 성공한 쉘만 탭에 남는다.
     expect(attempts).toBe(1); expect(app.created).toEqual([]);
-    app.leader("n"); await app.visible("Shell shell-1");
+    app.leader("c"); await app.visible("Shell shell-1");
     expect(attempts).toBe(2); expect(app.created).toEqual(["demo:main"]);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
   } finally { await app.close(); }
@@ -207,15 +207,15 @@ test.each(["disabled", "rebound"] as const)("새 탭 단축키가 %s이면 기�
   } finally { await app.close(); }
 });
 
-test.each(["arrows", "vim", "control"] as const)("터미널 탭의 %s 탐색은 포커스한 탭을 기준으로 전환하고 쉘에 키를 보내지 않는다", async navigation => {
-  // 활성 터미널과 포커스한 비활성 탭이 달라도 포커스 위치를 기준으로 이동한다.
+test.each(["arrows", "vim", "control"] as const)("Terminal-tab %s navigation starts from focused tabs without forwarding shell input", async navigation => {
+  // Navigate from focused inactive tabs, even when active terminals differ.
   const app = await mount();
   const tab = (id: string) => app.renderer.root.findDescendantById(`terminal-tab:${id}`)!.getChildren()[0]!;
   const move = (next: boolean) => navigation === "arrows" ? app.mockInput.pressArrow(next ? "right" : "left")
     : navigation === "control" ? app.mockInput.pressKey(next ? "n" : "p", { ctrl: true }) : app.mockInput.pressKey(next ? "l" : "h");
   try {
     await app.createTerminal(); await app.visible("Shell shell-1");
-    app.leader("n"); await app.visible("Shell shell-2"); app.leader("n"); await app.visible("Shell shell-3");
+    app.leader("c"); await app.visible("Shell shell-2"); app.leader("c"); await app.visible("Shell shell-3");
     tab("shell-1").focus(); await app.renderOnce();
 
     // 연결 완료가 탐색 중인 탭에서 PTY로 포커스를 빼앗지 않아야 한다.
@@ -227,7 +227,7 @@ test.each(["arrows", "vim", "control"] as const)("터미널 탭의 %s 탐색은 
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-2");
     expect(app.inputs).toEqual([]); expect(app.created).toHaveLength(3); expect(app.closed).toEqual([]);
     expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("h/l Terminal");
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<leader>n New terminal");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<leader>c New terminal");
     app.mockInput.pressEnter(); await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
 
@@ -333,14 +333,14 @@ test("프로세스 이름 조회 실패는 명시적으로 알리지만 터미�
   } finally { await app.close(); }
 });
 
-test("빈 Terminal 진입은 첫 쉘을 만들고 워크트리별 기존 목록과 마지막 선택을 복원한다", async () => {
-  // 워크트리마다 처음 진입할 때만 기본 쉘이 필요하다.
+test("Empty Terminal entry creates first shells and restores per-worktree lists/last selections", async () => {
+  // Default shells are needed only on each worktree's initial entry.
   const app = await mount();
   try {
     // 첫 진입과 추가 생성 후 다른 워크트리를 방문한다.
     await app.showView("t"); await app.visible("Shell shell-1");
     expect(app.captureCharFrame()).not.toContain("+ New");
-    app.leader("n"); await app.visible("Shell shell-2");
+    app.leader("c"); await app.visible("Shell shell-2");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
     await app.click("Terminal 1", true); await app.visible("Shell shell-1");
     await app.click(`${icons.folder} radian-ui`); await app.showView("t"); await app.visible("Shell shell-3");
@@ -354,8 +354,8 @@ test("빈 Terminal 진입은 첫 쉘을 만들고 워크트리별 기존 목록�
   } finally { await app.close(); }
 });
 
-test.each(["default", "custom", "disabled"] as const)("마지막 터미널을 닫은 화면은 %s 생성 키만 중앙에 안내한다", async mode => {
-  // 기본 터미널을 닫은 후에는 빈 화면과 실제 설정된 생성 경로만 남아야 한다.
+test.each(["default", "custom", "disabled"] as const)("Final-terminal closure shows only %s creation keys centered in empty views", async mode => {
+  // Closing defaults leaves only empty views and actually configured creation paths.
   const keymap = expectOk(parseKeymap(mode === "custom" ? { leader: "ctrl+b" } : mode === "disabled" ? { bindings: { "tab.new": [] } } : {}));
   const app = await mount(undefined, undefined, keymap);
   const leader = (key: string) => { app.mockInput.pressKey(mode === "custom" ? "b" : " ", { ctrl: true }); app.mockInput.pressKey(key); };
@@ -374,22 +374,22 @@ test.each(["default", "custom", "disabled"] as const)("마지막 터미널을 �
     expect(app.renderer.currentFocusedRenderable?.id).toBe("terminal-view");
     if (mode === "disabled") expect(hint.visible).toBe(false);
     else {
-      expect(hint.plainText).toContain("<leader>n");
+      expect(hint.plainText).toContain("<leader>c");
       expect(hint.y).toBeGreaterThan(empty.y);
-      leader("n"); await app.visible("Shell shell-2");
+      leader("c"); await app.visible("Shell shell-2");
       expect(app.created).toHaveLength(2); expect(empty.visible).toBe(false);
     }
   } finally { await app.close(); }
 });
 
-test("숫자 단축키는 Terminal의 현재 워크트리 순서로만 선택하고 없는 탭을 생성하지 않는다", async () => {
+test("Number shortcuts select current-worktree Terminal order without creating missing tabs", async () => {
   const app = await mount();
   try {
     // 첫 진입의 기본 쉘 외에는 존재하지 않는 숫자를 선택해도 생성하지 않는다.
     await app.showView("t"); await app.visible("Shell shell-1");
     app.leader("9"); await app.renderOnce();
     expect(app.created).toEqual(["demo:main"]);
-    app.leader("n"); await app.visible("Shell shell-2");
+    app.leader("c"); await app.visible("Shell shell-2");
     const creations = [...app.created];
 
     app.leader("1"); await app.visible("Shell shell-1");
@@ -409,13 +409,13 @@ test("숫자 단축키는 Terminal의 현재 워크트리 순서로만 선택하
   } finally { await app.close(); }
 });
 
-test("앞선 터미널을 닫으면 번호를 다시 매기고 표시 번호로 전환해도 PTY에 키를 보내지 않는다", async () => {
-  // 프로세스명과 내부 ID가 달라도 화면의 번호는 현재 탭 위치를 뜻한다.
+test("Closing earlier terminals renumbers tabs and numeric switching sends no PTY keys", async () => {
+  // Display numbers represent current positions, not process names or internal IDs.
   const app = await mount();
   const number = (id: string) => (app.renderer.root.findDescendantById(`terminal-session:${id}:number`) as TextRenderable).plainText;
   try {
     await app.showView("t"); await app.visible("Shell shell-1");
-    app.leader("n"); await app.visible("Shell shell-2"); app.leader("n"); await app.visible("Shell shell-3");
+    app.leader("c"); await app.visible("Shell shell-2"); app.leader("c"); await app.visible("Shell shell-3");
     expect(number("shell-1")).toBe("1."); expect(number("shell-2")).toBe("2."); expect(number("shell-3")).toBe("3.");
     const terminal = app.renderer.root.findDescendantById("shell-terminal")!;
     const tab = app.renderer.root.findDescendantById("terminal-session:shell-2")!;
@@ -433,10 +433,10 @@ test("앞선 터미널을 닫으면 번호를 다시 매기고 표시 번호로 
   } finally { await app.close(); }
 });
 
-test("활성 하위 탭 닫기는 다음·이전·빈 상태로 이동하며 마지막 탭을 자동 생성하지 않는다", async () => {
+test("Closing active subtabs selects next, previous, or empty state without final-tab recreation", async () => {
   const app = await mount();
   try {
-    await app.createTerminal(); await app.visible("Shell shell-1"); app.leader("n"); await app.visible("Shell shell-2"); app.leader("n"); await app.visible("Shell shell-3");
+    await app.createTerminal(); await app.visible("Shell shell-1"); app.leader("c"); await app.visible("Shell shell-2"); app.leader("c"); await app.visible("Shell shell-3");
     await app.click("Terminal 2", true); await app.visible("Shell shell-2");
     app.leader("x"); await app.visible("Shell shell-3");
     app.leader("x"); await app.visible("Shell shell-1");
@@ -446,20 +446,20 @@ test("활성 하위 탭 닫기는 다음·이전·빈 상태로 이동하며 마
     expect(app.created).toHaveLength(3); expect(app.view.workViewPreferences.active["demo:main"]).toBe("terminal");
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBeUndefined();
 
-    // 마지막 탭을 닫은 빈 화면에서도 제거된 버튼 없이 새 쉘을 요청할 수 있다.
-    app.leader("n"); await app.visible("Shell shell-4");
+    // Empty final-tab views can request new shells without removed buttons.
+    app.leader("c"); await app.visible("Shell shell-4");
     expect(app.created).toHaveLength(4);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
   } finally { await app.close(); }
 });
 
-test("쉘이 종료된 탭은 이웃 탭으로 이동하고 마지막 종료는 새 터미널 없이 빈 화면을 남긴다", async () => {
-  // 서버가 종료된 탭을 목록에서 제거하는 동안 현재 터미널 입력에 포커스가 있다.
+test("Shell-exited tabs select neighbors and final exits leave empty views without replacements", async () => {
+  // Keep current terminal input focused while servers remove exited tabs.
   const app = await mount();
   try {
     await app.createTerminal(); await app.visible("Shell shell-1");
-    app.leader("n"); await app.visible("Shell shell-2");
-    app.leader("n"); await app.visible("Shell shell-3");
+    app.leader("c"); await app.visible("Shell shell-2");
+    app.leader("c"); await app.visible("Shell shell-3");
     await app.click("Terminal 2", true);
 
     // 가운데 탭의 자연 종료는 다음 이웃을, 마지막 탭의 종료는 이전 이웃을 고른다.
@@ -473,7 +473,7 @@ test("쉘이 종료된 탭은 이웃 탭으로 이동하고 마지막 종료는 
     expect(app.closed).toEqual([]);
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBeUndefined();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("terminal-view");
-    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).toContain("<leader>n New terminal");
+    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).toContain("<leader>c New terminal");
 
     // 종료 직후가 아니라 빈 화면에 다시 진입할 때만 기본 쉘을 생성한다.
     await app.showView("a"); await app.showView("t"); await app.visible("Shell shell-4");
@@ -481,28 +481,28 @@ test("쉘이 종료된 탭은 이웃 탭으로 이동하고 마지막 종료는 
   } finally { await app.close(); }
 });
 
-test("Ctrl+C는 native 입력이고 leader는 앱 분리·탭 전환·로그 스크롤을 제어한다", async () => {
+test("Ctrl+C stays native while leaders control detach, tab switching, and log scrolling", async () => {
   const app = await mount();
   try {
-    await app.createTerminal(); await app.visible("Shell shell-1"); app.leader("n"); await app.visible("Shell shell-2");
-    app.leader("["); await app.visible("Shell shell-1");
+    await app.createTerminal(); await app.visible("Shell shell-1"); app.leader("c"); await app.visible("Shell shell-2");
+    app.leader("1"); await app.visible("Shell shell-1");
     app.mockInput.pressCtrlC();
     const page = app.renderer.root.findDescendantById("shell-terminal")!.height - 1;
     app.renderer.keyInput.processParsedKey(parseKeypress("\x1b[5;2~")!); await app.visible(`log ${page}`);
     expect(app.inputs).toContain("03"); expect(app.commands).toEqual([]);
     await app.mockMouse.scroll(70, 10, "up"); await app.visible(`log ${page + 3}`);
     expect(app.captureCharFrame()).not.toContain(" · running");
-    app.leader("c"); expect(app.commands).toEqual(["detach"]);
+    app.leader("d"); expect(app.commands).toEqual(["detach"]);
     expect(app.closed).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("Terminal 세션 탭은 포커스와 활성 선택을 배경으로 구분하고 밑줄은 표시하지 않는다", async () => {
-  // 실제 VT 연결은 fixture로 유지하면서 두 터미널의 선택·포커스를 따로 움직인다.
+test("Terminal tabs distinguish focus/active selection through backgrounds without underlines", async () => {
+  // Keep real VT connections as fixtures while moving selection/focus independently.
   const app = await mount();
   try {
     await app.createTerminal(); await app.visible("Shell shell-1");
-    app.leader("n"); await app.visible("Shell shell-2"); await app.renderOnce();
+    app.leader("c"); await app.visible("Shell shell-2"); await app.renderOnce();
     const first = app.renderer.root.findDescendantById("terminal-tab:shell-1")!.getChildren()[0]!;
     const second = app.renderer.root.findDescendantById("terminal-tab:shell-2")!.getChildren()[0]!;
     const cell = (tab: typeof first) => {
@@ -528,8 +528,8 @@ test("Terminal 세션 탭은 포커스와 활성 선택을 배경으로 구분�
   } finally { await app.close(); }
 });
 
-test("AI와 Terminal 탭은 프로세스명·상태와 무관하게 같은 18칸 폭과 오른쪽 닫기 위치를 쓴다", async () => {
-  // 기존 AI 탭의 기하와 짧고 긴 터미널 이름을 같은 작업 영역에서 비교한다.
+test("AI/Terminal tabs share 18-cell frames and right close positions regardless of names/status", async () => {
+  // Compare AI geometry with short/long terminal names in the same work area.
   const clock = new ManualClock(), app = await mount(undefined, clock);
   const agent = app.renderer.root.findDescendantById("session:demo:main:a1")!;
   const agentWidth = agent.width;
@@ -537,7 +537,7 @@ test("AI와 Terminal 탭은 프로세스명·상태와 무관하게 같은 18칸
   try {
     // 이름 길이가 서로 다른 두 터미널을 만들고 좁은 창으로 전환한다.
     await app.showView("t"); await app.visible("Shell shell-1");
-    app.leader("n"); await app.visible("Shell shell-2"); await app.renderOnce();
+    app.leader("c"); await app.visible("Shell shell-2"); await app.renderOnce();
     const first = app.renderer.root.findDescendantById("terminal-session:shell-1")!;
     const second = app.renderer.root.findDescendantById("terminal-session:shell-2")!;
     const title = app.renderer.root.findDescendantById(`${second.id}:title`) as TextRenderable;
@@ -555,12 +555,12 @@ test("AI와 Terminal 탭은 프로세스명·상태와 무관하게 같은 18칸
   } finally { await app.close(); }
 });
 
-test("비선택 터미널의 ×는 활성 쉘·연결·입력 포커스를 바꾸지 않고 그 탭만 닫는다", async () => {
-  // 두 번째 쉘이 입력을 받고 있는 동안 첫 번째 탭을 닫는다.
+test("Unselected terminal close buttons affect only their tab without changing active shell, connection, or focus", async () => {
+  // Close the first shell while the second owns input.
   const app = await mount();
   try {
     await app.showView("t"); await app.visible("Shell shell-1");
-    app.leader("n"); await app.visible("Shell shell-2");
+    app.leader("c"); await app.visible("Shell shell-2");
     const terminal = app.renderer.root.findDescendantById("shell-terminal")!, detaches = [...app.detaches];
     const close = app.renderer.root.findDescendantById("close-terminal:shell-1")!;
 
@@ -577,12 +577,12 @@ test("비선택 터미널의 ×는 활성 쉘·연결·입력 포커스를 바�
   } finally { await app.close(); }
 });
 
-test("비선택 터미널의 닫기가 거절되면 오류만 알리고 활성 입력과 연결을 보존한다", async () => {
-  // 닫기 경계가 운영 오류로 거절되어도 다른 쉘은 계속 입력을 받아야 한다.
+test("Rejected inactive-terminal closure notifies while preserving active input/connections", async () => {
+  // Operational close failures must leave other shells editable.
   const app = await mount();
   try {
     await app.showView("t"); await app.visible("Shell shell-1");
-    app.leader("n"); await app.visible("Shell shell-2");
+    app.leader("c"); await app.visible("Shell shell-2");
     const terminal = app.renderer.root.findDescendantById("shell-terminal")!;
     const close = app.renderer.root.findDescendantById("close-terminal:shell-1")!;
     app.actions.close = async () => err(new PtyError("PTY_BUSY", "Cleanup was rejected."));
@@ -599,12 +599,12 @@ test("비선택 터미널의 닫기가 거절되면 오류만 알리고 활성 �
   } finally { await app.close(); }
 });
 
-test("터미널 탭에서 Space는 해당 쉘 입력으로 진입하고 제어 문자를 보내지 않는다", async () => {
-  // 탐색 포커스는 활성 터미널과 다른 탭에도 머물 수 있다.
+test("Terminal-tab Space enters shell input without forwarding control characters", async () => {
+  // Navigation focus can rest on tabs other than active terminals.
   const app = await mount();
   try {
     await app.showView("t"); await app.visible("Shell shell-1");
-    app.leader("n"); await app.visible("Shell shell-2");
+    app.leader("c"); await app.visible("Shell shell-2");
     app.renderer.root.findDescendantById("terminal-session:shell-1")!.focus();
 
     // 공통 프레임이 버튼에서 바뀌어도 Space 활성화를 유지한다.
@@ -617,8 +617,8 @@ test("터미널 탭에서 Space는 해당 쉘 입력으로 진입하고 제어 �
   } finally { await app.close(); }
 });
 
-test("포커스한 마지막 터미널의 ×를 닫으면 빈 화면에 포커스를 남기고 leader+n으로 복구한다", async () => {
-  // 공용 Close가 없어도 탭별 닫기에서 빈 화면의 입력 경로로 복귀해야 한다.
+test("Closing focused final terminals leaves valid empty focus and leader+c recovers", async () => {
+  // Per-tab closure must restore empty-state input routing without shared Close commands.
   const app = await mount();
   try {
     await app.showView("t"); await app.visible("Shell shell-1");
@@ -631,16 +631,16 @@ test("포커스한 마지막 터미널의 ×를 닫으면 빈 화면에 포커�
     // 새 탭 단축키를 누르기 전까지 빈 상태와 유효한 포커스를 유지한다.
     expect(app.closed).toEqual(["shell-1"]); expect(app.created).toHaveLength(1);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("terminal-view");
-    app.leader("n"); await app.visible("Shell shell-2");
+    app.leader("c"); await app.visible("Shell shell-2");
     expect(app.created).toHaveLength(2); expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
   } finally { await app.close(); }
 });
 
-test("여러 하위 탭과 좁은 화면에서도 선택한 탭과 탭별 ×만 표시한다", async () => {
+test("Multiple subtabs and compact layouts show only selected tabs with per-tab close buttons", async () => {
   const app = await mount();
   try {
     await app.showView("t"); await app.visible("Shell shell-1");
-    for (let i = 2; i <= 6; i++) { app.leader("n"); await app.visible(`Shell shell-${i}`); }
+    for (let i = 2; i <= 6; i++) { app.leader("c"); await app.visible(`Shell shell-${i}`); }
     await app.renderOnce();
     expect(app.captureCharFrame()).toContain("Terminal 6");
     const selectedTab = app.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text === "Terminal 6")!;

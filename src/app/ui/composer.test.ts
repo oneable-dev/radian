@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, spyOn, test } from "bun:test";
 import { ScrollBoxRenderable, type ClipboardRepresentation } from "@opentui/core";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -27,7 +28,7 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     onDraftChange: (_legacy, drafts) => saved.push(structuredClone(drafts)), onCopyTranscript: async (text) => { copies.push(text); return ok("Copied fixture"); }, ...actions });
   const get = (id: string) => { const node = app.renderer.root.findDescendantById(id); if (!node) throw new Error(`Missing ${id}`); return node; };
   const render = async () => { for (let i=0;i<8;i++) await Promise.resolve(); await app.renderOnce(); await app.renderOnce(); };
-  await render(); app.mockInput.pressKey("e", {ctrl:true}); await render();
+  await render(); pressLeader(app, "a"); await render();
   const input = get("session-prompt"); if (!(input instanceof PromptInput)) throw new Error("Missing prompt editor.");
   return { ...app, clock, view, input, selection, sent, saved, copies, get, render,
     async click(id: string) { const node = get(id); await app.mockMouse.click(node.x + 1, node.y); await render(); },
@@ -41,7 +42,7 @@ test.each([
   { width: 60, height: 18, paused: true, status: "complete" },
   { width: 120, height: 30, paused: false, status: "working" },
   { width: 60, height: 18, paused: false, status: "working" },
-] as const)("붙여넣기 로딩은 반복해도 Transcript 높이·스크롤·입력 너비를 바꾸지 않는다: %j", async ({ width, height, paused, status }) => {
+] as const)("Repeated paste loading preserves transcript height, scroll, and input width: %j", async ({ width, height, paused, status }) => {
   // Use an owned image-file URL so the real attachment path runs without changing the OS clipboard or user cache.
   const directory = await mkdtemp(join(tmpdir(), "radian-paste-layout-")), image = join(directory, "image.png");
   await writeFile(image, tinyPng());
@@ -59,8 +60,8 @@ test.each([
     const scroll = app.get("session-transcript"), composer = app.get("agent-composer"), spinner = app.get("prompt-paste-loading");
     if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing native transcript viewport");
     if (paused) {
-      app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
-      scroll.scrollTo(10); await app.render(); app.mockInput.pressKey("e", { ctrl: true }); await app.render();
+      pressLeader(app, "["); app.mockInput.pressKey("HOME"); await app.render();
+      scroll.scrollTo(10); await app.render(); pressLeader(app, "a"); await app.render();
       expect(app.view.workViewPreferences.agentViews?.a1?.follow).toBe(false);
     }
     const geometry = () => [scroll.y, scroll.height, scroll.scrollTop, composer.y, composer.height, app.input.width,
@@ -243,7 +244,7 @@ test("항목 상세는 원문을 보여주고 닫을 때 초안·커서·포커�
   } finally { await app.close(); }
 });
 
-test("작은 창의 여러 줄 입력·실행 상태·알림·완성 후보가 함께 있어도 footer를 침범하지 않는다", async () => {
+test("Compact multiline input, activity, notifications, and completion never overlap footers", async () => {
   const app=await mount({onComplete:async()=>ok({items:[{kind:"file",value:"context.txt",description:"Context file"}],truncated:false})});
   try {
     // Removing the view strip gives back two rows; use the same constrained content budget.
@@ -261,7 +262,7 @@ test("작은 창의 여러 줄 입력·실행 상태·알림·완성 후보가 �
     expect(row.y-status.y).toBe(1);expect(status.y+status.height-row.y-row.height).toBe(1);
     for(const y of [row.y-1,row.y+1])expect(frame[y]!.slice(status.x,status.x+status.width).trim()).toBe("");
     expect(app.input.value).toBe("prefix\n@");expect(app.sent).toEqual([]);
-    app.mockInput.pressKey("t",{ctrl:true});await app.render();
+    pressLeader(app, "[");await app.render();
     expect(menu.visible).toBe(false);expect(app.get("session-transcript").visible).toBe(true);
     expect(app.renderer.currentFocusedRenderable).not.toBe(app.input);expect(app.input.value).toBe("prefix\n@");
   }finally{await app.close();}

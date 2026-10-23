@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { BoxRenderable, ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
@@ -50,7 +51,7 @@ const sections: TranscriptSection[] = [
   { id: "skill", kind: "notice", title: "Skill", text: "review-code", skillName: "review-code", status: "complete" },
 ];
 
-test.each([120, 60])("너비 %i에서 도구·답변·압축 안내·프롬프트 사이에 보이는 간격은 모두 한 줄이다", async (width) => {
+test.each([120, 60])("At width %i, tools, answers, compaction notices, and prompts have one visible row between them", async (width) => {
   // A long conversation puts the final folded compaction card at the actual viewport bottom.
   const history: TranscriptSection[] = [
     { id: "history", kind: "assistant", title: "Agent", text: "EARLIER_CONTENT\n".repeat(40), status: "complete" },
@@ -75,7 +76,7 @@ test.each([120, 60])("너비 %i에서 도구·답변·압축 안내·프롬프�
     app.resize(width, 30); await app.render(); expectVisibleGaps();
     expect(app.captureCharFrame()).not.toContain("COMPACT_SUMMARY");
     // Expanding, folding and resizing the last notice must retain the bottom gutter while following.
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("END"); app.mockInput.pressKey("o", { ctrl: true });
+    pressLeader(app, "["); app.mockInput.pressKey("END"); app.mockInput.pressKey("o", { ctrl: true });
     await app.render(); expectVisibleGaps(); expect(app.captureCharFrame()).toContain("COMPACT_SUMMARY");
     app.resize(width, 24); await app.render(); expectVisibleGaps();
     app.mockInput.pressKey("o", { ctrl: true }); await app.render(); expectVisibleGaps();
@@ -86,7 +87,7 @@ test.each([120, 60])("너비 %i에서 도구·답변·압축 안내·프롬프�
   } finally { await app.close(); }
 });
 
-test.each([120, 60])("너비 %i에서 Transcript는 섹션 사이와 상단만 띄우고 하단 구역 여백은 중복하지 않는다", async (width) => {
+test.each([120, 60])("At width %i, transcripts space only tops and sections without duplicating bottom gaps", async (width) => {
   // Different section types share one spacing owner, including initially folded images and tools.
   const mixed: readonly TranscriptSection[] = [...sections, { id: "image", kind: "notice", title: "read", text: "clipboard-1.png", status: "complete",
     image: { id: "a".repeat(64), name: "clipboard-1.png", mimeType: "image/png", byteLength: 80 } }];
@@ -106,7 +107,7 @@ test.each([120, 60])("너비 %i에서 Transcript는 섹션 사이와 상단만 �
   try {
     app.resize(width, 30); await app.render(); expectGaps();
     // Folding and resizing change card heights, never the space between them.
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME");
+    pressLeader(app, "["); app.mockInput.pressKey("HOME");
     app.mockInput.pressKey("z"); app.mockInput.pressKey("r"); await app.render(); expectGaps();
     app.resize(width, 18); await app.render(); expectGaps();
     app.mockInput.pressKey("z"); app.mockInput.pressKey("m"); await app.render(); expectGaps();
@@ -120,8 +121,8 @@ test.each([120, 60])("너비 %i에서 Transcript는 섹션 사이와 상단만 �
   } finally { await app.close(); }
 });
 
-test.each(["assistant", "thinking"] as const)("%s 오류는 섹션 경계·본문·완료 정보 사이를 한 줄씩 띄운다", async (kind) => {
-  // 헤더 없는 본문에 뒤늦게 오류가 생기면 섹션 간격과 내부 간격이 중복되지 않아야 한다.
+test.each(["assistant", "thinking"] as const)("%s errors retain one-row spacing between sections, bodies, and completion metadata", async (kind) => {
+  // Late errors on headerless bodies must not duplicate section and inner gaps.
   const tool: TranscriptSection = { id: "edit", kind: "tool", title: "edit", text: "HIDDEN_RESULT", status: "complete" };
   const prose: TranscriptSection = { id: "prose", kind, title: kind, text: "**PROSE_BODY**", status: "streaming" };
   const failed: TranscriptSection = { ...prose, status: "error", error: "ECONNRESET: The socket connection was closed unexpectedly. ERROR_END" };
@@ -145,7 +146,7 @@ test.each(["assistant", "thinking"] as const)("%s 오류는 섹션 경계·본�
     await app.update([tool, failed]);
     for (const width of [120, 60, 120]) {
       app.resize(width, 30); await app.render(); expectErrorGaps();
-      app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("END"); app.mockInput.pressEnter();
+      pressLeader(app, "["); app.mockInput.pressKey("END"); app.mockInput.pressEnter();
       await app.render(); expectErrorGaps();
       app.mockInput.pressEscape(); await app.render(); expectErrorGaps();
     }
@@ -199,12 +200,12 @@ test.each(sections)("$kind 섹션은 작은 화면에서도 색상 카드와 평
   } finally { await app.close(); }
 });
 
-test("도구를 펼치거나 접고 요약 원문에 진입해도 대칭 여백과 정확한 복사를 유지한다", async () => {
+test("Tool folding and summary-source entry preserve symmetric padding and exact copying", async () => {
   const source = "Arguments:\n{}\n\nResult:\nTOOL_RESULT";
   const app = await mount({ id: "tool", kind: "tool", title: "read", text: source, status: "error", error: "Permission denied" });
   try {
     // Keyboard readers switch between the summary and full source, not decorative padding.
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME");
+    pressLeader(app, "["); app.mockInput.pressKey("HOME");
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
     expectVerticalInsets(app.card);
     expect(app.captureCharFrame()).toContain("TOOL_RESULT");
@@ -223,7 +224,7 @@ test("도구를 펼치거나 접고 요약 원문에 진입해도 대칭 여백�
   } finally { await app.close(); }
 });
 
-test.each([120, 60])("너비 %i의 접힌·펼친 명령 오류 위에는 빈 줄을 정확히 하나 둔다", async (width) => {
+test.each([120, 60])("At width %i, folded and expanded command errors have exactly one blank row above", async (width) => {
   // A multiline command exposes the boundary between its last visual line and the error summary.
   const app = await mount({ id: "failed-command", kind: "tool", title: "bash", command: "printf 'Header output'\nfalse",
     text: "RAW_TOOL_RESULT", status: "error", error: "Command exited with code 1" });
@@ -244,7 +245,7 @@ test.each([120, 60])("너비 %i의 접힌·펼친 명령 오류 위에는 빈 �
 
     // Folding, expansion and repainting must use the same one-row error separation.
     expectErrorGap(); expect(app.captureCharFrame()).not.toContain("RAW_TOOL_RESULT");
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME");
+    pressLeader(app, "["); app.mockInput.pressKey("HOME");
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
     expectErrorGap(); expect(app.captureCharFrame()).toContain("RAW_TOOL_RESULT");
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();

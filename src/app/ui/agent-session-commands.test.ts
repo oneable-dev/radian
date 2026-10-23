@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
@@ -48,16 +49,16 @@ async function mount(creation: Promise<Result<string, ExpectedError>> = Promise.
   const input = app.renderer.root.findDescendantById("session-prompt"), scroll = app.renderer.root.findDescendantById("session-transcript");
   if (!(input instanceof PromptInput) || !(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing prompt/transcript");
   return { ...app, view, selection, input, scroll, details, sent, createdFrom, render,
-    async submit(text: string) { app.mockInput.pressKey("e", { ctrl: true }); input.value = text; app.mockInput.pressEnter(); await render(); },
+    async submit(text: string) { pressLeader(app, "a"); input.value = text; app.mockInput.pressEnter(); await render(); },
     async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("new는 새 탭을 선택하고 기존 탭의 대화·실행·읽기 위치·선택을 유지한다", async () => {
+test("new selects new tabs while preserving existing conversation, runs, reading positions, and selection", async () => {
   const app = await mount();
   try {
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); app.mockInput.pressEnter();
+    pressLeader(app, "["); app.mockInput.pressKey("HOME"); app.mockInput.pressEnter();
     app.mockInput.pressKey("v"); app.mockInput.pressKey("l"); await app.render();
-    app.scroll.scrollTo(10); await app.render(); app.mockInput.pressKey("e", { ctrl: true }); await app.render();
+    app.scroll.scrollTo(10); await app.render(); pressLeader(app, "a"); await app.render();
     const oldView = structuredClone(app.view.workViewPreferences.agentViews?.a1), top = app.scroll.scrollTop, original = app.details.a1;
 
     await app.submit("/new");

@@ -9,6 +9,7 @@ export type Binding = { command: CommandId; keys: readonly string[]; displayKeys
 const aliases: Record<string, string> = { enter: "return", esc: "escape", pgup: "pageup", pgdn: "pagedown", " ": "space", "+": "plus" };
 const named = new Set(["space", "plus", "return", "escape", "tab", "backspace", "delete", "insert", "home", "end", "up", "down", "left", "right", "pageup", "pagedown"]);
 const scopes = new Set<string>([...contexts, "global", "app", "pty"]);
+const pageCommands = new Set<CommandId>(["transcript.page-up", "transcript.page-down", "terminal.copy-page-up", "terminal.copy-page-down"]);
 
 function chord(value: string): string | null {
   const parts = value.toLowerCase().split("+");
@@ -90,6 +91,10 @@ export function parseKeymap(value: unknown): Result<Keymap, InputError> {
       // Keep logical leader tokens for hints; only routing and conflict checks use expanded keys.
       const keys = displayKeys.flatMap((key) => key === "<leader>" ? leader : [key]);
       if (keys.length > 8) return invalid(`${command} has an invalid key sequence.`);
+      // An explicit leader owns its prefix over optional default Ctrl+B/F paging.
+      // PageUp/Down stay available; explicit command overrides still report conflicts.
+      if (!Object.hasOwn(overrides, command) && pageCommands.has(command) && keys.length === 1
+        && ["ctrl+b", "ctrl+f"].includes(keys[0]!) && keys[0] === leader[0]) continue;
       // Membership above validates the runtime scope before it enters the typed keymap.
       bindings.push({ command, keys, displayKeys, scope: scope as KeyScope });
     }

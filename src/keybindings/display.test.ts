@@ -38,18 +38,18 @@ test.each([
   expect(label).toBe(expected);
 });
 
-test.each([["ctrl+space", "<C-Space>"], ["ctrl+b", "<C-b>"], ["space r", "<Space>r"]])("리더가 %s여도 안내는 논리적 리더를 유지하고 도움말은 실제 키를 알려 준다", (leader, leaderLabel) => {
-  // space로 시작하는 리더는 기본 버튼의 space 입력을 비활성화해야 한다.
+test.each([["ctrl+space", "<C-Space>"], ["ctrl+b", "<C-b>"], ["space r", "<Space>r"]])("Leader %s keeps logical command hints while help explains actual keys", (leader, leaderLabel) => {
+  // Space-prefixed leaders must disable default button Space activation.
   const map = expectOk(parseKeymap({ leader, bindings: { "button.activate": [] } }));
 
   // 푸터와 도움말이 사용하는 공개 조회 경로를 함께 확인한다.
   const hint = map.hint("tab.new", "terminal"), hints = map.hints("app.detach", "terminal");
   const help = keymapHelp(map, "terminal", () => true);
 
-  // 리더 재설정은 명령 안내를 바꾸지 않고 실제 입력 키 설명만 바꾼다.
-  expect(hint).toBe("<leader>n"); expect(hints).toBe("<leader>c");
+  // Leader overrides change physical-key explanations, not logical command hints.
+  expect(hint).toBe("<leader>c"); expect(hints).toBe("<leader>d");
   expect(help).toContain(`<leader>: ${leaderLabel}`);
-  expect(help).toContain("<leader>n"); expect(help).toContain("<leader>c");
+  expect(help).toContain("<leader>c"); expect(help).toContain("<leader>d");
   expect(help).toContain("<S-CR>"); expect(help).toContain("<Esc>");
   expect(help).not.toMatch(/ctrl\+|shift\+|alt\+| → /u);
 });

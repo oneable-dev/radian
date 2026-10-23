@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { CodeRenderable, EditBufferRenderable, ScrollBoxRenderable, type Renderable } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
@@ -38,15 +39,15 @@ async function mount(options: { paused?: boolean; completed?: boolean; keymap?: 
   const scroll = app.renderer.root.findDescendantById("session-transcript"); if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript");
   return { ...app, view, selection, scroll, sent, render, settled,
     state(id = selection.sessionId ?? "a1") { return view.workViewPreferences.agentViews?.[id]; },
-    async prompt(text: string) { app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText(text); app.mockInput.pressEnter(); await settled(); },
+    async prompt(text: string) { pressLeader(app, "a"); await app.mockInput.typeText(text); app.mockInput.pressEnter(); await settled(); },
     async update(next: readonly TranscriptSection[], id = selection.sessionId ?? "a1") { data[id] = next; selection.replaceSnapshot(snapshot()); await settled(); },
     async close() { view.dispose(); await app.dispose(); },
   };
 }
 const bottom = (scroll: ScrollBoxRenderable) => Math.max(0, scroll.scrollHeight - scroll.viewport.height);
 
-test("긴 AI 대화는 세로 스크롤바 없이 전체 너비를 쓰고 휠·키보드 탐색을 유지한다", async () => {
-  // 실제로 넘치는 대화에서 바를 숨겨도 별도의 빈 열이 남아서는 안 된다.
+test("Long AI conversations use full width without vertical scrollbars while retaining wheel and keyboard navigation", async () => {
+  // Overflowing conversations must not retain an empty scrollbar column.
   const app = await mount();
   const verify = () => {
     expect(app.scroll.scrollHeight).toBeGreaterThan(app.scroll.viewport.height);
@@ -55,7 +56,7 @@ test("긴 AI 대화는 세로 스크롤바 없이 전체 너비를 쓰고 휠·�
   };
   try {
     verify();
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("Unsent scrollbar draft"); await app.settled();
+    pressLeader(app, "a"); await app.mockInput.typeText("Unsent scrollbar draft"); await app.settled();
 
     // 오른쪽 끝도 본문이므로 휠을 받을 수 있고 새 결과는 읽던 위치를 밀지 않는다.
     await app.mockMouse.scroll(app.scroll.viewport.x + app.scroll.viewport.width - 1, app.scroll.y + 3, "up"); await app.settled();
@@ -63,7 +64,7 @@ test("긴 AI 대화는 세로 스크롤바 없이 전체 너비를 쓰고 휠·�
     expect(position).toBeLessThan(bottom(app.scroll)); expect(app.state()?.follow).toBe(false);
     await app.update([...history, section("new", "SCROLLBAR_FREE_TAIL")]);
     expect(app.scroll.scrollTop).toBe(position); expect(app.state()?.follow).toBe(false);
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("END", { ctrl: true }); await app.settled();
+    pressLeader(app, "["); app.mockInput.pressKey("END", { ctrl: true }); await app.settled();
     expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
     expect(app.captureCharFrame()).toContain("SCROLLBAR_FREE_TAIL");
 
@@ -79,13 +80,13 @@ test("긴 AI 대화는 세로 스크롤바 없이 전체 너비를 쓰고 휠·�
   } finally { await app.close(); }
 });
 
-test.each([false, true])("밝기 %j에서도 하단 복귀 버튼은 기존 여백에만 표시하고 본문·상태 행·입력창을 가리지 않는다", async (light) => {
-  // 긴 대화를 따라가는 화면에서 버튼이 나타나도 본문·입력창의 크기는 바뀌지 않아야 한다.
+test.each([false, true])("At brightness %j, return-to-bottom controls use existing gaps without covering body, status, or input", async (light) => {
+  // Showing controls must not resize body or input in following conversations.
   const app = await mount();
   try {
     uiTheme(app.renderer).configure({ palette: [], defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
       cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null });
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("Unsent draft"); await app.settled();
+    pressLeader(app, "a"); await app.mockInput.typeText("Unsent draft"); await app.settled();
     const composer = app.renderer.root.findDescendantById("agent-composer")!;
     const prompt = app.renderer.root.findDescendantById("session-prompt")!;
     const status = app.renderer.root.findDescendantById("transcript-status-row")!;
@@ -125,13 +126,13 @@ test.each([false, true])("밝기 %j에서도 하단 복귀 버튼은 기존 여�
   } finally { await app.close(); }
 });
 
-test("하단 복귀 버튼은 재지정한 바인딩을 표시하고 같은 키로 따라가기를 재개한다", async () => {
-  // 기본 키 대신 섹션 모드 전용 단축키가 설정된 과거 대화를 연다.
+test("Return-to-bottom controls display remapped bindings and resume following with the same keys", async () => {
+  // Open history with custom section-mode navigation rather than default bindings.
   const keymap = expectOk(parseKeymap({ bindings: { "transcript.latest": [{ keys: "alt+z", scope: "transcript" }] } }));
   const app = await mount({ paused: true, keymap });
   try {
     await app.update([...history, section("tail", "LATE_OUTPUT\n".repeat(70))]);
-    app.mockInput.pressKey("t", { ctrl: true }); await app.settled();
+    pressLeader(app, "["); await app.settled();
     expect(app.captureCharFrame()).toContain("↓ Back to bottom · <M-z>");
     app.mockInput.pressKey("g", { shift: true }); await app.settled();
     expect(app.state()?.selectedId).toBe("history");
@@ -161,12 +162,12 @@ test("하단 이동 키를 비활성화해도 버튼은 잘못된 키 안내 없
   } finally { await app.close(); }
 });
 
-test("도움말·다른 화면·빈 대화·짧은 대화에서는 하단 복귀 버튼을 표시하지 않는다", async () => {
-  // 과거 대화에는 표시하되, 같은 viewport를 사용하는 도움말에는 표시하지 않아야 한다.
+test("Help, other screens, empty conversations, and short conversations hide return-to-bottom controls", async () => {
+  // Show controls for historical conversations, not help sharing the viewport.
   const app = await mount({ paused: true });
   try {
     expect(app.captureCharFrame()).toContain("Back to bottom");
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("F1"); await app.settled();
+    pressLeader(app, "["); app.mockInput.pressKey("F1"); await app.settled();
     expect(app.captureCharFrame()).not.toContain("Back to bottom");
     app.mockInput.pressKey("F1"); await app.settled();
     expect(app.captureCharFrame()).toContain("Back to bottom");
@@ -184,12 +185,12 @@ test("도움말·다른 화면·빈 대화·짧은 대화에서는 하단 복귀
   } finally { await app.close(); }
 });
 
-test("원문을 읽을 때 커서는 복귀 버튼에 가려지지 않고 클릭은 선택을 해제해 최신 출력으로 이동한다", async () => {
-  // 첫 섹션 아래에도 내용이 있어 원문의 마지막 화면 행을 읽어도 아직 맨 아래가 아니다.
+test("Reading cursors stay clear of return controls and clicking clears selection to follow latest output", async () => {
+  // Additional sections mean the final source-screen row is not the conversation bottom.
   const app = await mount();
   try {
     await app.update([...history, section("later", "LATER_SECTION\n".repeat(30))]);
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); app.mockInput.pressEnter(); await app.settled();
+    pressLeader(app, "["); app.mockInput.pressKey("HOME"); app.mockInput.pressEnter(); await app.settled();
     const body = app.renderer.currentFocusedRenderable;
     if (!(body instanceof EditBufferRenderable)) throw new Error("Missing source reader");
 
@@ -229,8 +230,8 @@ test("좁은 창에서도 기존 여백에 버튼을 중앙 정렬하고 여백�
   } finally { await app.close(); }
 });
 
-test("실행 상태 행이 없으면 입력창의 기존 위쪽 여백에만 복귀 버튼을 표시한다", async () => {
-  // 완료된 세션에는 실행·서브에이전트 상태 행이 없어도 입력창 자체의 빈 윗줄이 남아 있다.
+test("Absent run-status rows place return controls only in existing gaps above input", async () => {
+  // Completed sessions retain the input's blank top row without run or subagent status.
   const app = await mount({ paused: true, completed: true });
   try {
     const status = app.renderer.root.findDescendantById("transcript-status-row")!;
@@ -244,7 +245,7 @@ test("실행 상태 행이 없으면 입력창의 기존 위쪽 여백에만 복
     expect(button.y).toBeLessThanOrEqual(composer.y);
     expect(button.y).toBe(app.scroll.viewport.y + app.scroll.viewport.height);
     expect(button.y + button.height).toBeLessThanOrEqual(prompt.y);
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("Kept draft"); await app.settled();
+    pressLeader(app, "a"); await app.mockInput.typeText("Kept draft"); await app.settled();
     await app.mockMouse.click(button.x, button.y); await app.settled();
     expect(app.state()?.follow).toBe(true); expect(app.captureCharFrame()).not.toContain("Back to bottom");
     expect([app.scroll.viewport.height, app.scroll.scrollHeight, composer.y, prompt.y]).toEqual(geometry);
@@ -252,10 +253,10 @@ test("실행 상태 행이 없으면 입력창의 기존 위쪽 여백에만 복
   } finally { await app.close(); }
 });
 
-test("맨 아래에서는 대화 영역에 포커스를 옮겨도 자동 추적을 유지한다", async () => {
+test("Moving transcript focus at bottom preserves automatic following", async () => {
   const app = await mount();
   try {
-    app.mockInput.pressKey("t", { ctrl: true }); await app.settled();
+    pressLeader(app, "["); await app.settled();
     expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
     await app.update([...history, section("new", "FOCUSED_BOTTOM_TAIL")]);
     expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.captureCharFrame()).toContain("FOCUSED_BOTTOM_TAIL");
@@ -285,11 +286,11 @@ test("숨은 스크롤 모델의 위치가 맨 아래에 도달해도 자동 추
   } finally { await app.close(); }
 });
 
-test.each(["shift+g", "ctrl+end", "g e"] as const)("섹션 모드 %s는 긴 마지막 섹션의 실제 끝으로 이동하고 자동 추적을 재개한다", async (key) => {
+test.each(["shift+g", "ctrl+end", "g e"] as const)("Section-mode %s reaches the actual end of long final sections and resumes following", async (key) => {
   // Selecting the final section alone cannot reveal its end when it exceeds the viewport.
   const app = await mount({ paused: true });
   try {
-    app.mockInput.pressKey("t", { ctrl: true }); await app.settled();
+    pressLeader(app, "["); await app.settled();
 
     if (key === "shift+g") app.mockInput.pressKey("g", { shift: true });
     else if (key === "ctrl+end") app.mockInput.pressKey("END", { ctrl: true });
@@ -305,10 +306,10 @@ test.each(["shift+g", "ctrl+end", "g e"] as const)("섹션 모드 %s는 긴 마�
   } finally { await app.close(); }
 });
 
-test("맨 아래 원문 선택 중에는 추적을 멈추고 선택을 해제하면 커서·섹션을 유지하며 재개한다", async () => {
+test("Source selection at bottom pauses following and clearing resumes with cursor and section intact", async () => {
   const app = await mount();
   try {
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressEnter();
+    pressLeader(app, "["); app.mockInput.pressEnter();
     app.mockInput.pressKey("END", { ctrl: true }); await app.settled();
     // Source Ctrl+End is the section end; scroll the remaining section spacing to the viewport bottom.
     app.scroll.scrollTo(bottom(app.scroll)); await app.settled();
@@ -324,10 +325,10 @@ test("맨 아래 원문 선택 중에는 추적을 멈추고 선택을 해제하
   } finally { await app.close(); }
 });
 
-test("선택 중 새 내용이 쌓이면 선택 해제만으로 점프하지 않고 다시 하단에 도달해야 재개한다", async () => {
+test("New content during selection requires reaching bottom again rather than jumping on clear", async () => {
   const app = await mount();
   try {
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressEnter(); app.mockInput.pressKey("END", { ctrl: true }); await app.settled();
+    pressLeader(app, "["); app.mockInput.pressEnter(); app.mockInput.pressKey("END", { ctrl: true }); await app.settled();
     app.scroll.scrollTo(bottom(app.scroll)); await app.settled(); expect(app.state()?.follow).toBe(true);
     app.mockInput.pressKey("v", { shift: true }); await app.settled();
     const position = app.scroll.scrollTop;
@@ -429,23 +430,23 @@ test("Markdown 없는 도구 화면도 resize와 화면 왕복 후 추가 이벤
   } finally { await app.close(); }
 });
 
-test("프롬프트 초안만 작성하는 동안에는 과거 읽기 위치와 선택 모드를 바꾸지 않는다", async () => {
+test("Editing prompt drafts alone preserves historical reading positions and selection modes", async () => {
   const app = await mount({ paused: true });
   try {
     const position = app.scroll.scrollTop;
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("Unsent draft"); await app.settled();
+    pressLeader(app, "a"); await app.mockInput.typeText("Unsent draft"); await app.settled();
     expect(app.sent).toEqual([]); expect(app.state()?.follow).toBe(false); expect(app.scroll.scrollTop).toBe(position);
     expect(app.view.promptDrafts.a1).toBe("Unsent draft");
   } finally { await app.close(); }
 });
 
-test("다른 세션으로 이동한 뒤 이전 전송이 수락돼도 현재 세션의 스크롤과 포커스를 바꾸지 않는다", async () => {
+test("Late submission acceptance after session switching preserves current scroll and focus", async () => {
   const gate = Promise.withResolvers<Result<void, ExpectedError>>();
   const app = await mount({ onPrompt: () => gate.promise });
   try {
     await app.prompt("Request in A");
     app.selection.selectSession("demo:feature", "b1"); await app.settled();
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.settled();
+    pressLeader(app, "["); app.mockInput.pressKey("HOME"); await app.settled();
     const position = app.scroll.scrollTop;
     gate.resolve(ok(undefined)); await app.settled();
     expect(app.selection.sessionId).toBe("b1"); expect(app.state()?.follow).toBe(false); expect(app.scroll.scrollTop).toBe(position);
@@ -453,12 +454,12 @@ test("다른 세션으로 이동한 뒤 이전 전송이 수락돼도 현재 세
   } finally { gate.resolve(ok(undefined)); await app.close(); }
 });
 
-test("전송 후 다시 과거를 읽기 시작했다면 늦은 수락이나 출력이 따라가기를 재개하지 않는다", async () => {
+test("Late acceptance and output never resume following after users restart historical reading", async () => {
   const gate = Promise.withResolvers<Result<void, ExpectedError>>();
   const app = await mount({ paused: true, onPrompt: () => gate.promise });
   try {
     await app.prompt("Pending request"); expect(app.state()?.follow).toBe(true);
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.settled();
+    pressLeader(app, "["); app.mockInput.pressKey("HOME"); await app.settled();
     const position = app.scroll.scrollTop;
     gate.resolve(ok(undefined)); await app.update([...history, section("late", "LATE_RESPONSE\n".repeat(40))]);
     expect(app.state()?.follow).toBe(false); expect(app.scroll.scrollTop).toBe(position);

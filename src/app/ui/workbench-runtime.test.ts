@@ -1,3 +1,4 @@
+import { openWorkspaceSearch, pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
 import { join } from "node:path";
@@ -40,7 +41,7 @@ async function mount() {
   await setup.renderOnce();
   return { ...setup, ...fixture, registry, selection, creation, prompts, closes, view,
     async click(text: string) {
-      if (text.startsWith(icons.folder)) { setup.mockInput.pressKey("f", { ctrl: true }); setup.mockInput.pressCtrlC(); await setup.renderOnce(); }
+      if (text.startsWith(icons.folder)) { openWorkspaceSearch(setup); setup.mockInput.pressCtrlC(); await setup.renderOnce(); }
       const lines = setup.captureCharFrame().split("\n");
       const y = lines.findIndex((line) => line.includes(text));
       const x = lines[y]?.indexOf(text) ?? -1;
@@ -49,11 +50,11 @@ async function mount() {
     },
     async newSession() {
       setup.renderer.root.findDescendantById("agent-session-list")!.focus();
-      setup.mockInput.pressKey(" ", { ctrl: true }); setup.mockInput.pressKey("n");
+      setup.mockInput.pressKey(" ", { ctrl: true }); setup.mockInput.pressKey("c");
       const id = await creation.at(-1)!; await setup.renderOnce(); return id;
     },
     async send(text: string) {
-      setup.mockInput.pressKey("e", { ctrl: true }); await setup.mockInput.typeText(text);
+      pressLeader(setup, "a"); await setup.mockInput.typeText(text);
       setup.mockInput.pressEnter(); await prompts.at(-1)!.done; await setup.renderOnce();
     },
     async closeApp() { unsubscribe(); view.dispose(); await registry.shutdown(); await setup.dispose(); await fixture.cleanup(); },
@@ -103,19 +104,19 @@ test("실제 워크트리 UI에서 명시적으로 세션을 만들고 입력을
   } finally { await app.closeApp(); }
 });
 
-test("워크트리별 입력 초안과 포커스는 비선택 SDK 갱신과 검색에도 유지된다", async () => {
+test("Per-worktree drafts/focus survive background SDK updates and searches", async () => {
   // Two open sessions each have an independent unfinished input draft.
   const app = await mount();
   try {
     const main = await app.newSession();
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("main draft");
+    pressLeader(app, "a"); await app.mockInput.typeText("main draft");
     app.mockInput.pressEscape();
     await app.click(`${icons.folder} feature`);
     const feature = await app.newSession();
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("feature draft");
+    pressLeader(app, "a"); await app.mockInput.typeText("feature draft");
     app.mockInput.pressEscape();
     await app.click(`${icons.folder} main`);
-    app.mockInput.pressKey("e", { ctrl: true });
+    pressLeader(app, "a");
     const input = app.renderer.currentFocusedRenderable;
 
     // Hidden SDK updates must not reset the selected session's persistent input or cursor.
@@ -124,7 +125,7 @@ test("워크트리별 입력 초안과 포커스는 비선택 SDK 갱신과 검�
     await app.renderOnce();
     expect(app.captureCharFrame()).toContain("main draf");
     expect(app.renderer.currentFocusedRenderable).toBe(input);
-    app.mockInput.pressKey("f", { ctrl: true }); await app.mockInput.typeText("feature/probe");
+    openWorkspaceSearch(app); await app.mockInput.typeText("feature/probe");
     await app.renderOnce();
 
     // Search hides the selected main row but does not retarget its draft or create a run.
@@ -137,7 +138,7 @@ test("워크트리별 입력 초안과 포커스는 비선택 SDK 갱신과 검�
   } finally { await app.closeApp(); }
 });
 
-test("실행 중 닫기는 즉시 빈 UI로 전환하고 마지막 세션을 자동 생성하지 않는다", async () => {
+test("Closing active runs immediately shows empty UI without recreating final sessions", async () => {
   // An actual SDK child stays active until the user closes its owner.
   const app = await mount();
   try {
@@ -146,7 +147,7 @@ test("실행 중 닫기는 즉시 빈 UI로 전환하고 마지막 세션을 자
     const unsubscribe = app.registry.subscribe(() => {
       if (app.selection.worktree?.sessions[0]?.subagents[0]?.status === "working") childStarted.resolve();
     });
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("delegate");
+    pressLeader(app, "a"); await app.mockInput.typeText("delegate");
     app.mockInput.pressEnter(); await childStarted.promise; unsubscribe();
     app.mockInput.pressEscape();
 
@@ -168,12 +169,12 @@ test("실행 중 닫기는 즉시 빈 UI로 전환하고 마지막 세션을 자
   } finally { await app.closeApp(); }
 });
 
-test("실행 중 추가 입력도 수락하고 n/x/q는 프롬프트 문자로 처리한다", async () => {
+test("Active runs accept more input while n/x/q remain prompt characters", async () => {
   // A slow scripted response creates a real active SDK run without a paid model request.
   const app = await mount();
   try {
     const id = await app.newSession();
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("slow"); app.mockInput.pressEnter();
+    pressLeader(app, "a"); await app.mockInput.typeText("slow"); app.mockInput.pressEnter();
 
     await app.prompts[0]!.accepted;
     // A second Enter admits a steer without interrupting the current response.
@@ -191,12 +192,12 @@ test("실행 중 추가 입력도 수락하고 n/x/q는 프롬프트 문자로 �
   } finally { await app.closeApp(); }
 });
 
-test("터미널 renderer가 먼저 종료돼도 입력 초안을 읽고 늦은 SDK 갱신을 안전하게 처리한다", async () => {
+test("Renderer-first shutdown reads drafts and safely handles late SDK updates", async () => {
   // Ctrl+C can destroy native edit buffers before the host's final cleanup executes.
   const app = await mount();
   try {
     const id = await app.newSession();
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("persist this draft");
+    pressLeader(app, "a"); await app.mockInput.typeText("persist this draft");
 
     // Teardown is initiated by the renderer, not the view, while the SDK owner remains alive.
     app.renderer.destroy(); await app.renderer.closed;

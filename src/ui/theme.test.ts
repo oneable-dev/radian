@@ -1,3 +1,4 @@
+import { openWorkspaceSearch } from "../testing/keys.ts";
 import { expect, spyOn, test } from "bun:test";
 import { BoxRenderable, NativeSession, type RGBA, type TerminalColors } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
@@ -68,7 +69,7 @@ test("화면 전체가 터미널 기본색과 ANSI 팔레트를 사용하고 밝
   } finally { await app.close(); }
 });
 
-test("포커스가 사이드바에서 보더 없는 입력창으로 이동해도 선택과 초안을 유지한다", async () => {
+test("Sidebar-to-borderless-input focus preserves selection and drafts", async () => {
   // Both a selected session and an existing draft remain owned by the same Agent view.
   const app = await mount();
   const sidebar = app.renderer.root.findDescendantById("workspace-sidebar")!;
@@ -80,7 +81,7 @@ test("포커스가 사이드바에서 보더 없는 입력창으로 이동해도
   };
   try {
     const colors = uiTheme(app.renderer).colors;
-    app.mockInput.pressKey("f", { ctrl: true }); await app.renderOnce();
+    openWorkspaceSearch(app); await app.renderOnce();
     expect(border(sidebar).equals(colors.accent)).toBe(true);
 
     // Focusing an input must not activate another tab, select a session or send its draft.

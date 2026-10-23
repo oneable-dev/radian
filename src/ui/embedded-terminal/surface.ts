@@ -1,5 +1,7 @@
 import { EmbeddedTerminalRenderable, type CliRenderer } from "@opentui/core";
-import type { PtyFrame } from "../../runtime/protocol.ts";
+import type { PtyFrame, TerminalText } from "../../runtime/protocol.ts";
+import type { ExpectedError } from "../../errors.ts";
+import type { Result } from "../../result.ts";
 import type { TerminalTheme } from "./theme.ts";
 
 export type PtyAttachment = {
@@ -7,6 +9,7 @@ export type PtyAttachment = {
   resize(cols: number, rows: number): void;
   disconnect(): Promise<void>;
   scroll?(lines: number): void;
+  read?(): Promise<Result<TerminalText, ExpectedError>>;
 };
 
 // A presentation/input adapter only. Owners decide what to launch, which tab is

@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { EditBufferRenderable, ScrollBoxRenderable, TextAttributes, type TerminalColors } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
@@ -28,7 +29,7 @@ async function mount(initial: TranscriptSection[], actions: Partial<WorkbenchAct
   const scroll = app.renderer.root.findDescendantById("session-transcript");
   if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript viewport");
   return { ...app, view, copies, prompts, scroll, render,
-    async enter() { app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); app.mockInput.pressEnter(); await render(); },
+    async enter() { pressLeader(app, "["); app.mockInput.pressKey("HOME"); app.mockInput.pressEnter(); await render(); },
     body() { const body = app.renderer.currentFocusedRenderable; if (!(body instanceof EditBufferRenderable)) throw new Error("Missing focused text"); return body; },
     state() { return view.workViewPreferences.agentViews?.a1; },
     async copy() { app.mockInput.pressKey("y"); await render(); },
@@ -96,7 +97,7 @@ test("v와 V 전환은 기존 anchor를 유지하고 V를 다시 누르면 읽�
   } finally { await app.close(); }
 });
 
-test("스트리밍으로 늘어난 줄 선택은 새 UI 복원 후에도 linewise 종류와 범위를 유지한다", async () => {
+test("Streaming line selections restore linewise kinds and ranges in new UIs", async () => {
   let preferences: WorkViewPreferences | undefined;
   const app = await mount([section("first\nsecond")], { onWorkViewsChange: (state) => { preferences = state; } });
   try {
@@ -107,7 +108,7 @@ test("스트리밍으로 늘어난 줄 선택은 새 UI 복원 후에도 linewis
   } finally { await app.close(); }
   const next = await mount([section("first\nsecond plus stream")], { initialWorkViews: preferences! });
   try {
-    next.mockInput.pressKey("t", { ctrl: true }); await next.render();
+    pressLeader(next, "["); await next.render();
     expect(next.captureCharFrame()).toContain("VISUAL LINE");
     await next.copy();
 
@@ -144,12 +145,12 @@ test("Ctrl+D/U는 본문과 선택에서 반 viewport만 이동하고 anchor는 
   } finally { await app.close(); }
 });
 
-test.each([120, 60])("너비 %i에서 Ctrl+D/U는 현재 선택에서 반 화면 거리의 섹션으로 이동한다", async (width) => {
+test.each([120, 60])("At width %i, Ctrl+D/U selects sections half a screen from current selection", async (width) => {
   // One-line sections have a two-row stride including their gap, not a one-row item count.
   const app = await mount(Array.from({ length: 30 }, (_, index) => ({ ...section(`body ${index}`), id: `section-${index}` })));
   try {
     app.resize(width, 30); await app.render();
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
+    pressLeader(app, "["); app.mockInput.pressKey("HOME"); await app.render();
     const top = app.scroll.scrollTop, step = Math.max(1, Math.floor(app.scroll.viewport.height / 4));
 
     app.mockInput.pressKey("d", { ctrl: true }); await app.render();
@@ -176,7 +177,7 @@ test.each([120, 60])("너비 %i에서 Ctrl+D/U는 현재 선택에서 반 화면
   } finally { await app.close(); }
 });
 
-test("반 페이지 섹션 점프는 접힌 카드와 펼친 본문의 실제 높이를 반영한다", async () => {
+test("Half-page section jumps use actual folded-card and expanded-body heights", async () => {
   // A folded tool fits before the target, but its expanded body is taller than half a viewport.
   const app = await mount([
     { ...section("START"), id: "start" },
@@ -184,7 +185,7 @@ test("반 페이지 섹션 점프는 접힌 카드와 펼친 본문의 실제 �
     { ...section("TARGET_LINE\n".repeat(40)), id: "target" },
   ]);
   try {
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
+    pressLeader(app, "["); app.mockInput.pressKey("HOME"); await app.render();
 
     app.mockInput.pressKey("d", { ctrl: true }); await app.render();
     expect(app.state()?.selectedId).toBe("target");
@@ -202,12 +203,12 @@ test("반 페이지 섹션 점프는 접힌 카드와 펼친 본문의 실제 �
   } finally { await app.close(); }
 });
 
-test("반 페이지 섹션 점프는 처음·끝에서 멈추고 단일·빈 대화에서도 안전하다", async () => {
+test("Half-page section jumps clamp safely at ends and in single/empty conversations", async () => {
   // Both sections exceed a viewport, so every jump must still advance by at least one section.
   const first = { ...section("FIRST_LINE\n".repeat(80)), id: "first" };
   const app = await mount([first, { ...section("LAST_LINE\n".repeat(80)), id: "last" }]);
   try {
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
+    pressLeader(app, "["); app.mockInput.pressKey("HOME"); await app.render();
 
     app.mockInput.pressKey("u", { ctrl: true }); await app.render(); expect(app.state()?.selectedId).toBe("first");
     app.mockInput.pressKey("d", { ctrl: true }); await app.render(); expect(app.state()?.selectedId).toBe("last");
@@ -225,7 +226,7 @@ test("반 페이지 섹션 점프는 처음·끝에서 멈추고 단일·빈 대
   } finally { await app.close(); }
 });
 
-test("반 페이지 섹션 점프와 도움말은 사용자 키 재할당을 따른다", async () => {
+test("Half-page section jumps and help follow user key overrides", async () => {
   // Remapped shortcuts must change navigation and hints together, not retain hidden default actions.
   const keymap = expectOk(parseKeymap({ bindings: {
     "transcript.half-page-down": [{ keys: "alt+d", scope: "transcript" }],
@@ -234,7 +235,7 @@ test("반 페이지 섹션 점프와 도움말은 사용자 키 재할당을 따
   const app = await mount(Array.from({ length: 30 }, (_, index) => ({ ...section(`body ${index}`), id: `section-${index}` })), { keymap });
   try {
     app.resize(180, 60); await app.render();
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
+    pressLeader(app, "["); app.mockInput.pressKey("HOME"); await app.render();
     const step = Math.max(1, Math.floor(app.scroll.viewport.height / 4));
 
     app.mockInput.pressKey("d", { ctrl: true }); await app.render(); expect(app.state()?.selectedId).toBe("section-0");
@@ -282,8 +283,8 @@ test("Thinking은 저장된 접힘 설정이 있어도 본문을 표시하고 �
   } finally { await app.close(); }
 });
 
-test("구버전 Thinking 헤더 선택은 해제하되 별도로 저장한 본문 커서는 복원한다", async () => {
-  // 사라진 헤더의 선택 좌표를 Thinking 본문에 잘못 적용해서는 안 된다.
+test("Legacy Thinking header selections clear while independent body cursors restore", async () => {
+  // Removed-header selection coordinates must not apply to Thinking bodies.
   const app = await mount([{ ...section("THINK_RESTORED_BODY"), kind: "thinking", title: "Thinking" }], {
     initialWorkViews: { active: {}, agentScroll: {}, agentViews: { a1: {
       selectedId: "message", folded: { message: true }, cursors: { message: 4 }, headingCursors: { message: 2 },
@@ -291,8 +292,8 @@ test("구버전 Thinking 헤더 선택은 해제하되 별도로 저장한 본�
     } } },
   });
   try {
-    app.mockInput.pressKey("t", { ctrl: true }); await app.render();
-    // 읽던 본문 위치는 보존하고 이전 헤더의 시각 선택만 정리한다.
+    pressLeader(app, "["); await app.render();
+    // Preserve body reading positions while clearing only legacy header Visual selections.
     expect(app.body().plainText).toBe("THINK_RESTORED_BODY"); expect(app.body().cursorOffset).toBe(4);
     expect(app.state()?.mode).toBe("text"); expect(app.state()?.anchor).toBeNull();
     expect(app.state()?.linewise).toBeUndefined(); expect(app.body().hasSelection()).toBe(false);
@@ -338,8 +339,8 @@ test("Thinking 스트리밍·선택·resize 중에도 본문은 보이고 접기
   } finally { await app.close(); }
 });
 
-test("모든 섹션에서 화살표·역할·상태 제목을 빼고 도구와 스킬은 인라인으로 표시한다", async () => {
-  // 역할 제목 대신 실제 내용과 실행 대상을 읽을 수 있는 섹션들을 준비한다.
+test("All sections omit arrows and role/status titles while tools and skills display inline", async () => {
+  // Prepare readable content and execution targets instead of role headings.
   const app = await mount([
     { ...section("USER_CONTENT"), id: "user", kind: "user", title: "You" },
     { ...section("THINK_CONTENT"), id: "thinking", kind: "thinking", title: "Thinking" },
@@ -349,8 +350,8 @@ test("모든 섹션에서 화살표·역할·상태 제목을 빼고 도구와 �
   ]);
   try {
     app.resize(140, 60);
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
-    // 제목 전용 행 없이 접힌 도구에는 실행 대상과 실제 키맵 안내가 함께 보인다.
+    pressLeader(app, "["); app.mockInput.pressKey("HOME"); await app.render();
+    // Folded tools show execution targets and configured hints without title-only rows.
     const frame = app.captureCharFrame().split("\n").slice(app.scroll.y, app.scroll.y + app.scroll.height).join("\n");
     expect(frame).toContain("USER_CONTENT"); expect(frame).toContain("ANSWER_CONTENT");
     expect(frame).toContain("[read] /tmp/example.ts:7 (<C-o> to expand)");
@@ -360,11 +361,11 @@ test("모든 섹션에서 화살표·역할·상태 제목을 빼고 도구와 �
   } finally { await app.close(); }
 });
 
-test("bash 명령 끝에는 경과 시간이 아닌 지정한 timeout을 표시한다", async () => {
-  // 여러 줄 명령과 timeout을 가진 도구도 별도의 역할·상태 제목을 만들지 않는다.
+test("Bash commands append configured timeout rather than elapsed time", async () => {
+  // Multiline commands with timeouts must not create separate role/status titles.
   const app = await mount([{ ...section("Arguments:\n{}\n\nResult:\nCOMMAND_RESULT"), kind: "tool", title: "bash", command: "printf '한글'\nprintf done", timeoutSeconds: 120 }]);
   try {
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME");
+    pressLeader(app, "["); app.mockInput.pressKey("HOME");
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
     // 펼친 명령의 마지막 줄에 설정된 제한을 붙이며 출력과 원문 복사도 보존한다.
     const frame = app.captureCharFrame();
@@ -391,7 +392,7 @@ test("도구의 timeout만 바뀌어도 인라인 요약을 갱신하고 안내�
   } finally { await app.close(); }
 });
 
-test("Agent와 Thinking은 제목·배경·들여쓰기 없이 표시하고 나머지 블록은 테마에 맞춰 구분한다", async () => {
+test("Agent and Thinking omit titles, backgrounds, and indentation while other blocks use themed distinctions", async () => {
   const app = await mount([
     { ...section("USER_BODY"), id: "user", kind: "user", title: "You" },
     { ...section("THINK_BODY"), id: "thinking", kind: "thinking", title: "Thinking" },
@@ -413,7 +414,7 @@ test("Agent와 Thinking은 제목·배경·들여쓰기 없이 표시하고 나�
   try {
     // A tall viewport exposes all section surfaces and the empty rows between cards.
     app.resize(140, 60); uiTheme(app.renderer).configure(palette(false));
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); app.mockInput.pressKey("z"); app.mockInput.pressKey("r"); await app.render();
+    pressLeader(app, "["); app.mockInput.pressKey("HOME"); app.mockInput.pressKey("z"); app.mockInput.pressKey("r"); await app.render();
     const texts = ["USER_BODY", "THINK_BODY", "TOOL_BODY", "AGENT_BODY"];
     const dark = texts.map((text) => span(text).bg.toInts().join(","));
     expect(new Set(dark).size).toBe(3);
@@ -515,12 +516,12 @@ test.each([false, true])("문자 선택도 혼합된 LF·CRLF 원문을 정방�
   } finally { await app.close(); }
 });
 
-test("접힌 섹션 Enter는 요약 커서를 표시하고 Ctrl+O만 접힘 상태를 전환한다", async () => {
+test("Enter on folded sections shows summary cursors and only Ctrl+O toggles folding", async () => {
   const text = "FOLDED_DETAIL\nsecond line";
   const app = await mount([{ ...section(text), kind: "tool", title: "read" }]);
   try {
     // Enter must focus the visible heading, not reveal or navigate the hidden body.
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
+    pressLeader(app, "["); app.mockInput.pressKey("HOME"); await app.render();
     expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<CR> Text");
     app.mockInput.pressEnter(); await app.render();
     expect(app.state()?.mode).toBe("text"); expect(app.captureCharFrame()).not.toContain("FOLDED_DETAIL");
@@ -539,30 +540,31 @@ test("접힌 섹션 Enter는 요약 커서를 표시하고 Ctrl+O만 접힘 상�
     app.mockInput.pressEnter(); await app.render(); expect(app.state()?.folded.message).toBe(false);
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
 
-    expect(app.state()?.mode).toBe("sections"); expect(app.state()?.folded.message).toBe(true);
+    expect(app.state()?.mode).toBe("text"); expect(app.state()?.folded.message).toBe(true);
+    expect(app.body().plainText).toContain("read");
     expect(app.captureCharFrame()).not.toContain("FOLDED_DETAIL"); expect(app.prompts).toEqual([]);
   } finally { await app.close(); }
 });
 
-test.each([false, true])("Ctrl+O는 문자·줄 선택 중에도 안전하게 접고 섹션 탐색으로 복귀한다: %j", async (linewise) => {
+test.each([false, true])("Ctrl+O safely folds during character/line selection and preserves Text navigation: %j", async (linewise) => {
   const app = await mount([section("SELECTED_DETAIL\nnext")]);
   try {
     await app.enter(); app.mockInput.pressKey("v", { shift: linewise });
 
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
 
-    expect(app.state()?.mode).toBe("sections"); expect(app.state()?.folded.message).toBe(true);
+    expect(app.state()?.mode).toBe("text"); expect(app.state()?.folded.message).toBe(true);
     expect(app.state()?.anchor).toBeNull(); expect(app.state()?.linewise).toBeUndefined();
     expect(app.captureCharFrame()).not.toContain("SELECTED_DETAIL");
     expect(app.view.promptDrafts.a1).toBe("unsent draft"); expect(app.prompts).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("접기 재할당은 안내에도 반영되고 Ctrl+O는 입력 첨부 확인과 PTY 소유권을 구분한다", async () => {
+test("Fold overrides update hints while Ctrl+O respects input attachment and PTY ownership", async () => {
   const keymap = expectOk(parseKeymap({ bindings: { "transcript.fold": [{ keys: "alt+x", scope: "transcript" }] } }));
   const app = await mount([{ ...section("CUSTOM_FOLD_DETAIL"), kind: "tool", title: "read" }], { keymap });
   try {
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME");
+    pressLeader(app, "["); app.mockInput.pressKey("HOME");
     app.mockInput.pressKey("o", { ctrl: true }); app.mockInput.pressEnter(); await app.render();
     expect(app.captureCharFrame()).not.toContain("CUSTOM_FOLD_DETAIL");
     expect(app.state()?.mode).toBe("text");
@@ -581,7 +583,7 @@ test("접기 재할당은 안내에도 반영되고 Ctrl+O는 입력 첨부 확�
   } finally { await app.close(); }
 });
 
-test("접힌 요약과 펼친 본문의 커서는 독립적으로 유지되고 새 UI에서도 요약 커서를 복원한다", async () => {
+test("Folded-summary and expanded-body cursors stay independent and summary cursors restore in new UIs", async () => {
   const text = "HIDDEN_BODY\nmore details";
   const data: TranscriptSection[] = [{ ...section(text), kind: "tool", title: "read" }];
   let preferences: WorkViewPreferences | undefined;
@@ -602,7 +604,7 @@ test("접힌 요약과 펼친 본문의 커서는 독립적으로 유지되고 �
   } finally { await app.close(); }
   const next = await mount(data, { initialWorkViews: preferences! });
   try {
-    next.mockInput.pressKey("t", { ctrl: true }); await next.render();
+    pressLeader(next, "["); await next.render();
 
     expect(next.body().plainText).toBe("[read] (<C-o> to expand)"); expect(next.body().cursorOffset).toBe(2);
     expect(next.renderer.getCursorState().visible).toBe(true); expect(next.captureCharFrame()).not.toContain("HIDDEN_BODY");
@@ -645,10 +647,10 @@ test("접힌 헤더의 선택은 도구 진행·resize·도움말 왕복에서�
   } finally { await app.close(); }
 });
 
-test("화살표 없이 인라인 요약을 클릭해 선택한 섹션도 Enter로 커서에 진입한다", async () => {
+test("Clicking arrow-free inline summaries selects sections and Enter enters cursor mode", async () => {
   const app = await mount([section("first"), { ...section("HIDDEN_CLICK_BODY"), id: "folded", kind: "tool", title: "read" }]);
   try {
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
+    pressLeader(app, "["); app.mockInput.pressKey("HOME"); await app.render();
     const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes("[read] (<C-o> to expand)"));
     const x = lines[y]!.indexOf("[read]");
 

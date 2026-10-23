@@ -1,3 +1,4 @@
+import { openWorkspaceSearch, pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import type { TextRenderable } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
@@ -43,10 +44,10 @@ test("상단 오른쪽의 워크트리·생성·History 버튼은 없고 선택�
   } finally { await app.close(); }
 });
 
-test("탐색 커서가 아니라 활성 워크트리를 표시하고 실제 전환·브랜치 갱신·detached 상태를 반영한다", async () => {
+test("Scope displays active worktrees, not browsing cursors, and reflects switching, branch updates, and detached state", async () => {
   const app = await mount();
   try {
-    app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab();
+    openWorkspaceSearch(app); app.mockInput.pressTab();
     app.mockInput.pressKey("j"); await app.render(); expect(app.line("session-worktree-context")).toBe(`[ ${icons.folder} radian · ${icons.branch} main ]`);
     app.mockInput.pressEnter(); await app.render(); expect(app.line("session-worktree-context")).toContain("radian-ui");
     app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id !== "demo:feature" ? tree : { ...tree, branch: "fix/status" }) })));
@@ -57,31 +58,31 @@ test("탐색 커서가 아니라 활성 워크트리를 표시하고 실제 전�
   } finally { await app.close(); }
 });
 
-test("버튼 없이도 세션 목록의 생성 명령과 전역 History 단축키를 사용할 수 있다", async () => {
+test("Creation commands and global History shortcuts remain available without buttons", async () => {
   const app = await mount();
   try {
     app.get("agent-session-list").focus();
-    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("n"); await app.render();
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("c"); await app.render();
     expect(app.created).toEqual(["demo:main"]);
-    app.mockInput.pressKey("e", { ctrl: true }); await app.render(); const prompt = app.get("session-prompt");
+    pressLeader(app, "a"); await app.render(); const prompt = app.get("session-prompt");
     await app.history(); expect(app.get("session-history").visible).toBe(true); expect(app.lookups).toEqual(["demo:main"]);
     app.mockInput.pressEscape(); await app.render();
     expect(app.renderer.currentFocusedRenderable).toBe(prompt); expect(app.view.promptDrafts.a1).toBe("preserved prompt"); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("빈 워크트리에서도 Tab으로 빈 세션 목록에 도달해 명시적으로 생성한다", async () => {
+test("Tab reaches empty session lists for explicit creation even in empty worktrees", async () => {
   const app = await mount(true);
   try {
     const list = app.get("agent-session-list");
     for (let i = 0; i < 14 && app.renderer.currentFocusedRenderable !== list; i++) { app.mockInput.pressTab(); await app.render(); }
     expect(list.visible).toBe(true); expect(app.renderer.currentFocusedRenderable).toBe(list); expect(app.created).toEqual([]);
-    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("n"); await app.render(); expect(app.created).toEqual(["demo:main"]);
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("c"); await app.render(); expect(app.created).toEqual(["demo:main"]);
     await app.history(); expect(app.get("session-history").visible).toBe(true); expect(app.lookups).toEqual(["demo:main"]);
   } finally { await app.close(); }
 });
 
-test("마지막 세션을 닫은 뒤에도 목록 포커스와 새 세션 생성 명령은 유지한다", async () => {
+test("Closing final sessions retains list focus and session creation commands", async () => {
   const app = await mount();
   try {
     app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id !== "demo:main" ? tree : { ...tree, sessions: tree.sessions.slice(0, 1) }) })));
@@ -90,12 +91,12 @@ test("마지막 세션을 닫은 뒤에도 목록 포커스와 새 세션 생성
     expect(app.selection.worktree!.sessions).toHaveLength(0); expect(app.renderer.currentFocusedRenderable).toBe(list); expect(list.visible).toBe(true);
     expect(app.created).toEqual([]);
     expect(app.captureCharFrame()).toContain("No AI sessions");
-    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("n"); await app.render(); expect(app.created).toEqual(["demo:main"]);
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("c"); await app.render(); expect(app.created).toEqual(["demo:main"]);
   } finally { await app.close(); }
 });
 
-test.each(["default", "custom", "disabled"] as const)("빈 AI 화면은 %s 생성 키만 안내하고 설정된 leader 시퀀스로 생성한다", async mode => {
-  // 빈 목록도 실제 키맵을 안내하며 기본 키나 세션을 임의로 만들어서는 안 된다.
+test.each(["default", "custom", "disabled"] as const)("Empty AI views show only %s creation keys and create via configured leader sequences", async mode => {
+  // Empty lists reflect actual keymaps without inventing defaults or sessions.
   const keymap = expectOk(parseKeymap(mode === "custom" ? { leader: "ctrl+b" } : mode === "disabled" ? { bindings: { "tab.new": [] } } : {}));
   const app = await mount(true, keymap);
   try {
@@ -108,8 +109,8 @@ test.each(["default", "custom", "disabled"] as const)("빈 AI 화면은 %s 생�
     expect(app.captureCharFrame()).toContain("No AI sessions"); expect(app.created).toEqual([]);
     if (mode === "disabled") expect(hint.visible).toBe(false);
     else {
-      expect(app.line("agent-empty-state:hint")).toContain("<leader>n");
-      app.mockInput.pressKey(mode === "custom" ? "b" : " ", { ctrl: true }); app.mockInput.pressKey("n"); await app.render();
+      expect(app.line("agent-empty-state:hint")).toContain("<leader>c");
+      app.mockInput.pressKey(mode === "custom" ? "b" : " ", { ctrl: true }); app.mockInput.pressKey("c"); await app.render();
       expect(app.created).toEqual(["demo:main"]);
     }
   } finally { await app.close(); }
@@ -129,10 +130,10 @@ test("긴 한글·emoji 워크트리와 브랜치는 원문을 바꾸지 않고 
   } finally { await app.close(); }
 });
 
-test("작은 화면의 범위 표시는 모델·미터와 겹치지 않고 수동 초안·입력 포커스 및 상태 여백을 유지한다", async () => {
+test("Compact scope displays avoid model/meters while preserving drafts, input focus, and status gaps", async () => {
   const app = await mount();
   try {
-    app.mockInput.pressKey("e", { ctrl: true }); await app.render(); const prompt = app.get("session-prompt") as PromptInput;
+    pressLeader(app, "a"); await app.render(); const prompt = app.get("session-prompt") as PromptInput;
     for (const width of [160, 100, 60, 160]) {
       app.resize(width, 24); await app.render();
       const scope = app.get("session-worktree-context"), status = app.get("session-status"), row = app.get("session-status-line");

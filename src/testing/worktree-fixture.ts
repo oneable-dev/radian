@@ -36,9 +36,9 @@ if (import.meta.main) {
   console.log(`Created an isolated repository and linked worktree:\n${fixture.directory}\n`);
   const launch = `bun ${JSON.stringify(entry)} --test-runtime --state-dir ${JSON.stringify(join(fixture.directory, "state"))}`;
   console.log(`cd ${JSON.stringify(fixture.main)}\n${launch}`);
-  console.log("\nUse New session in each worktree. Default Ctrl+e focuses the Agent prompt; Enter submits.");
+  console.log("\nUse leader+c for a new tab in each worktree. Leader+[ reads output; Esc returns toward input; Enter submits.");
   console.log("Scripted commands: slow (10s stream), read (workspace marker), write (probe file), delegate (owned slow child).");
-  console.log("Default leader: Ctrl+Space. Then t creates a terminal, x closes it, c detaches the TUI. Ctrl+C interrupts the native program.");
+  console.log("Default leader: Ctrl+Space. Then t opens Terminal, c creates a tab, n/p cycles tabs, x closes it, d detaches the TUI. Ctrl+C interrupts the native program.");
   console.log("Shell commands are real, not sandboxed. Test runtime uses clean shell/Neovim configuration.");
   console.log(`Save editor work, detach, then stop this test service before deleting the fixture:\n${launch} --stop-runtime\nrm -rf ${JSON.stringify(fixture.directory)}`);
 }

@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { BoxRenderable, ScrollBoxRenderable, type TextRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
@@ -68,10 +69,10 @@ test.each([120, 60])("너비 %i에서 실행·완료·하위 에이전트 전환
   } finally { await app.close(); }
 });
 
-test("과거 대화를 읽는 중 상태 행이 사라져도 읽던 첫 줄·스크롤·입력 포커스를 보존한다", async () => {
+test("Removing status rows preserves the first visible historical line, scroll, and input focus", async () => {
   const app = await mount();
   try {
-    app.mockInput.pressKey("e", { ctrl: true }); app.scroll.scrollTo(12); await app.render();
+    pressLeader(app, "a"); app.scroll.scrollTo(12); await app.render();
     const top = app.scroll.scrollTop, focus = app.renderer.currentFocusedRenderable;
     const first = () => app.captureCharFrame().split("\n").slice(app.scroll.viewport.y, app.scroll.viewport.y + app.scroll.viewport.height).join("\n").match(/OLDER_LINE_\d+/u)?.[0];
     const before = first();
@@ -87,7 +88,7 @@ test("과거 대화를 읽는 중 상태 행이 사라져도 읽던 첫 줄·스
   } finally { await app.close(); }
 });
 
-test.each([120, 60])("너비 %i의 두 줄 Working은 하단 복귀 버튼과 겹치지 않고 읽기 위치·초안을 보존한다", async width => {
+test.each([120, 60])("At width %i, two-line Working avoids return-to-bottom controls and preserves reading positions and drafts", async width => {
   // Request captions add an occupied status row, never a blank slot for the floating button.
   const app = await mount(true);
   const first = () => app.captureCharFrame().split("\n").slice(app.scroll.viewport.y, app.scroll.viewport.y + app.scroll.viewport.height).join("\n").match(/OLDER_LINE_\d+/u)?.[0];
@@ -102,7 +103,7 @@ test.each([120, 60])("너비 %i의 두 줄 Working은 하단 복귀 버튼과 �
   };
   try {
     app.resize(width, 30); await app.render();
-    app.mockInput.pressKey("e", { ctrl: true }); app.scroll.scrollTo(12); await app.render();
+    pressLeader(app, "a"); app.scroll.scrollTo(12); await app.render();
     const before = first(), top = app.scroll.scrollTop;
     expect(before).toBeDefined(); verify();
 
@@ -126,10 +127,10 @@ test.each([120, 60])("너비 %i의 두 줄 Working은 하단 복귀 버튼과 �
   } finally { await app.close(); }
 });
 
-test.each([120, 60])("너비 %i에서 자동완성·입력·하단 정보 사이에는 구역 gap을 추가하지 않는다", async (width) => {
+test.each([120, 60])("At width %i, completion, input, and bottom information add no extra section gaps", async (width) => {
   const app = await mount();
   try {
-    app.resize(width, 24); app.mockInput.pressKey("e", { ctrl: true });
+    app.resize(width, 24); pressLeader(app, "a");
     await app.mockInput.typeText(" @"); await app.render(); app.clock.advance(150); await app.render();
     const composer = app.get("agent-composer"), menu = app.get("prompt-completions"), metadata = app.get("session-status");
 

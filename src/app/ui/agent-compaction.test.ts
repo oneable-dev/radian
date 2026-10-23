@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Workbench } from "./workbench.ts";
@@ -31,7 +32,7 @@ async function mount(initial: ExecutionState = { status: "complete", output: "",
   return { ...app, clock, selection, view, copied, sent, render, get,
     state: () => view.workViewPreferences.agentViews?.[selection.sessionId ?? ""],
     async update(state: ExecutionState) { current = state; selection.replaceSnapshot(selection.snapshot); await render(); },
-    async transcript() { app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); app.mockInput.pressKey("j"); app.mockInput.pressKey("j"); await render(); },
+    async transcript() { pressLeader(app, "["); app.mockInput.pressKey("HOME"); app.mockInput.pressKey("j"); app.mockInput.pressKey("j"); await render(); },
     async clickSummary() {
       const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes("[Context compacted]"));
       if (y < 0) throw new Error(`Missing compaction heading\n${app.captureCharFrame()}`);
@@ -41,13 +42,13 @@ async function mount(initial: ExecutionState = { status: "complete", output: "",
   };
 }
 
-test("압축 중 스피너와 전용 상태를 보이고 완료 시 접힌 요약만 남기며 초안·포커스를 보존한다", async () => {
-  // 기존 요청이 남아 있는 같은 대화에서 수동 압축이 진행되는 상태를 준비한다.
+test("Compaction shows dedicated spinners and status, then folded summaries while preserving drafts and focus", async () => {
+  // Prepare manual compaction in a conversation retaining its previous request.
   const compacting = { status: "working" as const, activity: "compacting" as const, output: "", error: null, sections: history() };
   const app = await mount(compacting);
   try {
     const status = app.get("agent-run-status-text"), prompt = app.get("session-prompt");
-    app.mockInput.pressKey("e", { ctrl: true }); await app.render();
+    pressLeader(app, "a"); await app.render();
     const label = () => app.captureCharFrame().split("\n")[status.y]!.slice(status.x, status.x + status.width).trimEnd();
     expect(label()).toBe("Compacting context (0s · <Esc> to interrupt)"); expect(app.get("agent-run-loading").visible).toBe(true);
     const first = app.captureCharFrame(); app.clock.advance(80); await app.render();

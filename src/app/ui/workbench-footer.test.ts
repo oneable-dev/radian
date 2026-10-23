@@ -1,3 +1,4 @@
+import { openWorkspaceSearch, pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
@@ -60,12 +61,12 @@ test("기본 화면은 고정 범례나 안내 행 없이 푸터 바로 위까�
   } finally { await app.close(); }
 });
 
-test.each([120, 60])("너비 %i의 프롬프트는 기본 조작 안내 없이도 줄바꿈·중단·전송을 유지한다", async width => {
-  // 실제 중단 기능이 제공되는 실행에서도 푸터 폭과 무관하게 안내를 생략한다.
+test.each([120, 60])("Width %i prompts retain newline, interrupt, and submit behavior without default hints", async width => {
+  // Omit hints regardless of footer width even for runs supporting interruption.
   let interruptions = 0;
   const app = await mount(undefined, { onInterrupt: async () => { interruptions++; return ok(undefined); } });
   try {
-    app.resize(width, 24); app.mockInput.pressKey("e", { ctrl: true });
+    app.resize(width, 24); pressLeader(app, "a");
     await app.mockInput.typeText("first"); app.mockInput.pressEnter({ shift: true });
     await app.mockInput.typeText("second"); await app.renderOnce();
 
@@ -85,15 +86,15 @@ test.each([120, 60])("너비 %i의 프롬프트는 기본 조작 안내 없이�
   } finally { await app.close(); }
 });
 
-test("트리와 검색창은 기본 조작 안내를 생략해도 포커스 이동과 문자 입력을 유지한다", async () => {
-  // 목록과 검색 사이를 오가도 숨긴 탐색 안내가 다시 나타나서는 안 된다.
+test("Trees and search retain focus navigation and literal typing without default hints", async () => {
+  // Moving between lists and search must not resurrect hidden navigation hints.
   const app = await mount();
   try {
-    app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab(); await app.renderOnce();
+    openWorkspaceSearch(app); app.mockInput.pressTab(); await app.renderOnce();
     expect(app.footerLine()).not.toMatch(/<CR>|Navigate|½ page|Close|First\/last/u);
     expect(app.footerLine()).toContain("<F1> Help");
 
-    app.mockInput.pressKey("f", { ctrl: true }); await app.renderOnce();
+    openWorkspaceSearch(app); await app.renderOnce();
     await app.mockInput.typeText("nxq"); await app.renderOnce();
 
     expect(app.footerLine()).not.toMatch(/<CR>|<Esc>|<C-[np]>|Navigate/u);
@@ -129,11 +130,11 @@ test("History는 기본 탐색 대신 Preview와 Refresh만 안내하고 조회�
   } finally { await app.close(); }
 });
 
-test("프롬프트의 실행 가능 여부와 별도 오류 알림은 단축키 안내·초안·선택을 보존한다", async () => {
-  // 전송 상태가 달라도 기본 초안 지우기는 생략하고 앱 고유 이동만 안내한다.
+test("Prompt availability and separate errors preserve hints, drafts, and selection", async () => {
+  // Omit default draft clearing while retaining app-specific movement hints in every send state.
   const app = await mount();
   try {
-    app.mockInput.pressKey("e", { ctrl: true }); await app.renderOnce();
+    pressLeader(app, "a"); await app.renderOnce();
     expect(app.footerLine()).toContain("<leader>b Workspace");
     expect(app.footerLine()).not.toContain("<CR> Run");
     await app.mockInput.typeText("hello"); await app.renderOnce();
@@ -153,7 +154,7 @@ test("프롬프트의 실행 가능 여부와 별도 오류 알림은 단축키 
   } finally { await app.close(); }
 });
 
-test("패널이 숨겨지는 좁은 화면에서도 푸터와 알림은 하단에 남고 클릭은 선택을 바꾸지 않는다", async () => {
+test("Compact hidden-panel layouts keep footer/notifications at bottom and clicks preserve selection", async () => {
   // Responsive layout may hide the inspector, but the common footer remains outside every panel.
   const app = await mount();
   try {
@@ -170,7 +171,7 @@ test("패널이 숨겨지는 좁은 화면에서도 푸터와 알림은 하단�
     expect(app.selection.sessionId).toBe("a1");
     expect(app.calls).toEqual([]);
     app.resize(120, 24); await app.renderOnce();
-    expect(app.footerLine()).toContain("<C-t> Transcript");
+    expect(app.footerLine()).toContain("<leader>[ Transcript");
   } finally { await app.close(); }
 });
 
@@ -190,7 +191,7 @@ test("프롬프트와 상태는 사이드바 공간 없이 전체 작업 영역�
   } finally { await app.close(); }
 });
 
-test("일반 화면의 넉넉한 여백은 좁은 화면에서 줄어들고 복원 시 초안과 함께 돌아온다", async () => {
+test("Regular layout padding shrinks in compact screens and restores alongside drafts", async () => {
   // Content and branding share a two-cell inset, without moving the gradient away from the edge.
   const app = await mount();
   const transcript = app.renderer.root.findDescendantById("session-transcript")!;
@@ -204,7 +205,7 @@ test("일반 화면의 넉넉한 여백은 좁은 화면에서 줄어들고 복�
     expect(app.footerLine().indexOf("Radian")).toBe(2);
 
     // Shrinking the real renderer reduces insets rather than clipping the active input.
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("keep this draft");
+    pressLeader(app, "a"); await app.mockInput.typeText("keep this draft");
     app.resize(60, 12); await app.renderOnce();
 
     expect(transcript.x).toBe(1);
@@ -225,11 +226,11 @@ test("일반 화면의 넉넉한 여백은 좁은 화면에서 줄어들고 복�
   } finally { await app.close(); }
 });
 
-test("낮은 터미널에서도 Agent 상태와 입력창은 한 줄 푸터를 침범하지 않는다", async () => {
+test("Short terminals keep Agent status/input clear of single-row footers", async () => {
   // Height changes retain the same composer treatment and keep usable input above the footer.
   const app = await mount();
   try {
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("compact draft");
+    pressLeader(app, "a"); await app.mockInput.typeText("compact draft");
 
     // Resizing while typing must preserve the active draft and fit every control above the footer.
     app.resize(60, 12); await app.renderOnce();

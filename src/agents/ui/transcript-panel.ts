@@ -169,15 +169,17 @@ export class TranscriptPanel {
 
   private get state(): TranscriptViewState | undefined { return this.sessionId ? this.views[this.sessionId] : undefined; }
   private get selected(): Row | undefined { return this.state?.selectedId ? this.rows.get(this.state.selectedId) : undefined; }
-  private reader(row: Row): TranscriptBody { return this.folded(row) || row.section.image ? row.header : row.body; }
+  private reader(row: Row): TranscriptBody {
+    return this.folded(row) || row.section.image || this.selected === row && this.state?.readingHeading && row.heading.visible ? row.header : row.body;
+  }
   private readerText(row: Row): string {
-    if (this.folded(row) || row.section.image) return row.header.plainText;
+    if (this.reader(row) === row.header) return row.header.plainText;
     if (!row.body.formatted || row.body.plainText === row.section.text.replaceAll("\r\n", "\n")) return row.section.text;
     return row.body.plainText;
   }
   private rememberCursor(row: Row): void {
     const state = this.state; if (!state) return;
-    if (this.folded(row) || row.section.image) (state.headingCursors ??= {})[row.section.id] = row.header.cursorOffset;
+    if (this.reader(row) === row.header) (state.headingCursors ??= {})[row.section.id] = row.header.cursorOffset;
     else state.cursors[row.section.id] = row.body.cursorOffset;
   }
   get focused(): boolean {
@@ -282,7 +284,7 @@ export class TranscriptPanel {
         normalized = state.selectedId !== null;
         const initialIndex = this.options.initialPosition === "start" ? 0 : this.order.length - 1;
         state.selectedId = this.order[previousIndex < 0 ? initialIndex : Math.min(previousIndex, this.order.length - 1)] ?? null;
-        state.mode = "sections"; state.anchor = null; delete state.linewise;
+        state.mode = "sections"; state.anchor = null; delete state.linewise; delete state.readingHeading;
       }
       if (state?.follow && !this.help.visible && !this.positionIntent) {
         // Viewport following must not replace the section/cursor being read.
@@ -395,6 +397,7 @@ export class TranscriptPanel {
         const state = this.state;
         if (!state || this.disposed || !this.isCurrentRow(row)) return;
         state.selectedId = section.id;
+        if (reader === header) state.readingHeading = true; else delete state.readingHeading;
         if (state.mode === "sections") state.mode = "text";
         this.save(); this.paint(); this.options.changed();
       });
@@ -528,7 +531,7 @@ export class TranscriptPanel {
     if (row.header.plainText !== headingText) {
       const cursor = row.header.cursorOffset;
       row.header.setText(headingText); row.header.cursorOffset = cursor;
-      if (selected && folded) this.applySelection(row);
+      if (selected && this.reader(row) === row.header) this.applySelection(row);
     }
     row.error.visible = !cancelled && !skill && !folded && !!section.error;
     row.error.content = section.error ?? ""; row.error.fg = styles["status.error"].fg; row.error.attributes = styles["status.error"].attributes; row.error.bg = background;
@@ -736,7 +739,7 @@ export class TranscriptPanel {
     this.cancelPending();
     const state = this.state; if (!state || this.disposed) return;
     if (this.selected && state.mode !== "sections") this.rememberCursor(this.selected);
-    state.mode = "sections"; state.anchor = null; delete state.linewise;
+    state.mode = "sections"; state.anchor = null; delete state.linewise; delete state.readingHeading;
     state.selectedId = this.order.at(-1) ?? null; state.follow = true; this.help.visible = false;
     this.positionIntent = false; this.selectionHeldFor = null;
     for (const row of this.rows.values()) { row.header.clearSelection(); row.body.clearSelection(); }
@@ -760,7 +763,7 @@ export class TranscriptPanel {
       const row = this.selected;
       if (row.markdown && !this.folded(row)) this.syncReader(row);
       const reader = this.reader(row);
-      reader.cursorOffset = this.folded(row) || row.section.image ? this.state?.headingCursors?.[row.section.id] ?? 0 : this.state?.cursors[row.section.id] ?? 0;
+      reader.cursorOffset = reader === row.header ? this.state?.headingCursors?.[row.section.id] ?? 0 : this.state?.cursors[row.section.id] ?? 0;
       this.applySelection(row);
       reader.focus();
     } else this.scroll.focus();
@@ -769,7 +772,7 @@ export class TranscriptPanel {
     this.cancelPending(); this.vimModel = undefined;
     if (!this.state || !this.rows.has(id)) return;
     if (this.selected) this.reader(this.selected).clearSelection();
-    this.state.selectedId = id; this.state.mode = "sections"; this.state.anchor = null; delete this.state.linewise;
+    this.state.selectedId = id; this.state.mode = "sections"; this.state.anchor = null; delete this.state.linewise; delete this.state.readingHeading;
     this.positionIntent = true; this.pending = { reveal: true }; this.paint(); this.applyTarget(); this.save();
   }
   private jumpSections(direction: -1 | 1, distance: number): void {
@@ -856,8 +859,13 @@ export class TranscriptPanel {
         break;
       case "transcript.back":
         if (state.mode === "visual") { state.mode = "text"; state.anchor = null; delete state.linewise; if (row) this.reader(row).clearSelection(); }
-        else if (state.mode === "text") { state.mode = "sections"; this.positionIntent = true; this.scroll.focus(); this.pending = { reveal: true }; }
-        else { this.help.visible = false; this.options.focusPrompt(); }
+        else if (state.mode === "text") { state.mode = "sections"; delete state.readingHeading; this.positionIntent = true; this.scroll.focus(); this.pending = { reveal: true }; }
+        else {
+          // This is an explicit reader exit, not a popup/focus round-trip or wheel pause.
+          // Finish reading at live output instead of leaving a clipped, paused tail behind.
+          if (this.hasSelection()) this.renderer.clearSelection();
+          this.followLatest(); this.options.focusPrompt();
+        }
         break;
       case "transcript.fold": case "transcript.fold-all": case "transcript.unfold-all": {
         const targets = command === "transcript.fold" ? row ? [row] : [] : [...this.rows.values()];
@@ -865,8 +873,12 @@ export class TranscriptPanel {
         if (row && state.mode !== "sections") this.rememberCursor(row);
         for (const target of targets) if (this.foldable(target) && target.section.text) state.folded[target.section.id] = command === "transcript.fold" ? !this.folded(target) : command === "transcript.fold-all";
         if (row && previouslyFolded !== this.folded(row)) {
-          state.mode = "sections"; state.anchor = null; delete state.linewise;
-          row.header.clearSelection(); row.body.clearSelection(); this.scroll.focus();
+          const reading = state.mode !== "sections";
+          state.anchor = null; delete state.linewise; delete state.readingHeading;
+          row.header.clearSelection(); row.body.clearSelection(); this.clearFormattedSelection();
+          if (reading) {
+            state.mode = "text"; this.paint(); this.restoreFocus();
+          } else this.scroll.focus();
         }
         this.positionIntent = true; this.pending = { reveal: true }; break;
       }
@@ -884,14 +896,36 @@ export class TranscriptPanel {
         const half = command === "transcript.half-page-up" || command === "transcript.half-page-down";
         const direction = command === "transcript.page-up" || command === "transcript.half-page-up" ? -1 : 1;
         const distance = half ? halfPageStep(this.scroll.viewport.height) : Math.max(1, this.scroll.viewport.height - 1);
-        if (state.mode === "sections" && half) this.jumpSections(direction, distance);
-        else if (state.mode === "sections") { this.scrollIntent(); this.scroll.scrollBy(direction * distance); }
-        else if (row) for (let i = 0; i < distance; i++) this.move(row, direction < 0 ? "transcript.up" : "transcript.down", true);
+        if (state.mode === "sections") this.jumpSections(direction, distance);
+        else if (row) for (let i = 0; i < distance; i++) this.move(this.selected ?? row, direction < 0 ? "transcript.up" : "transcript.down", true);
         break;
       }
       default: if (row) this.move(row, command);
     }
     this.reconcileSelection(); this.paint(); this.applyTarget(); this.save(); this.options.changed();
+  }
+  private crossReadingBoundary(row: Row, reader: TranscriptBody, direction: -1 | 1): boolean {
+    if (this.state?.mode !== "text") return false;
+    let target = row, heading: boolean;
+    if (direction < 0 && reader === row.body && row.heading.visible) heading = true;
+    else if (direction > 0 && reader === row.header && !this.folded(row) && !row.section.image) heading = false;
+    else {
+      const next = this.order[this.order.indexOf(row.section.id) + direction];
+      if (!next) return false;
+      target = this.rows.get(next)!;
+      heading = this.folded(target) || !!target.section.image || direction > 0 && target.heading.visible;
+    }
+    this.rememberCursor(row); this.cancelPending(); this.vimModel = undefined;
+    const state = this.state!;
+    state.selectedId = target.section.id;
+    if (heading) state.readingHeading = true; else delete state.readingHeading;
+    this.positionIntent = true; this.pending = { reveal: true };
+    this.paint();
+    if (target.markdown && !heading && !this.folded(target)) this.syncReader(target);
+    const body = this.reader(target);
+    if (direction < 0) body.gotoBufferEnd(); else body.gotoBufferHome();
+    body.focus(); this.rememberCursor(target);
+    return true;
   }
   private move(row: Row, command: CommandId, visualRows = false): void {
     const body = this.reader(row);
@@ -903,10 +937,12 @@ export class TranscriptPanel {
       case "transcript.left": body.moveCursorLeft(); break;
       case "transcript.right": body.moveCursorRight(); break;
       case "transcript.up": case "transcript.down": {
+        const before = body.cursorOffset;
         if (this.state?.mode === "visual" && this.state.linewise && !visualRows) {
           const { row: current, col } = body.logicalCursor;
           body.setCursor(Math.max(0, Math.min(body.lineCount - 1, current + (command === "transcript.up" ? -1 : 1))), col);
         } else if (command === "transcript.up") body.moveCursorUp(); else body.moveCursorDown();
+        if (body.cursorOffset === before && this.crossReadingBoundary(row, body, command === "transcript.up" ? -1 : 1)) return;
         break;
       }
       case "transcript.word-next": body.moveWordForward(); break;
@@ -1027,8 +1063,10 @@ export class TranscriptPanel {
       case "yank": this.copy(false, effect.range); break;
       case "native":
         for (let index = 0; index < effect.count; index++) {
-          const before = reader.cursorOffset; this.move(row, effect.motion === "up" ? "transcript.up" : "transcript.down");
-          if (reader.cursorOffset === before) break;
+          const current: Row | undefined = this.selected; if (!current) break;
+          const body = this.reader(current), before = body.cursorOffset;
+          this.move(current, effect.motion === "up" ? "transcript.up" : "transcript.down");
+          if (this.selected === current && this.reader(current) === body && body.cursorOffset === before) break;
         }
         break;
       case "move":
@@ -1112,7 +1150,8 @@ export class TranscriptPanel {
       + `${this.hint("transcript.back", "transcript-text")} cancels unfinished commands first.\n`
       + `${textHint("transcript.find-forward")}/${textHint("transcript.find-backward")}/${textHint("transcript.till-forward")}/${textHint("transcript.till-backward")} + character finds within the logical line; ${textHint("transcript.find-repeat")}/${textHint("transcript.find-reverse")} repeat/reverse.\n`
       + `${textHint("transcript.search-forward")}/${textHint("transcript.search-backward")} literal search in the current reading section; ${this.hint("transcript.search-submit", "transcript-search")} accepts, ${this.hint("transcript.search-cancel", "transcript-search")} cancels, ${this.hint("transcript.search-clear", "transcript-search")} clears only the query. ${textHint("transcript.search-next")}/${textHint("transcript.search-previous")} repeat; ${textHint("transcript.search-word-forward")}/${textHint("transcript.search-word-backward")} search whole word.\n`
-      + `${this.hint("transcript.half-page-down", "transcript")}/${this.hint("transcript.half-page-up", "transcript")} half-page section jump; Text/Visual moves the cursor · linewise selection follows logical lines, not soft wraps\n`
+      + `${this.hint("transcript.half-page-down", "transcript")}/${this.hint("transcript.half-page-up", "transcript")} half-page section jump; ${this.hint("transcript.page-down", "transcript")}/${this.hint("transcript.page-up", "transcript")} full-page section jump. Text/Visual moves the cursor.\n`
+      + `Text up/down crosses visible headings and adjacent sections; Visual selections stay within the active text surface. Folding keeps Text mode and restores each surface's cursor.\n`
       + `Following resumes at the viewport bottom and pauses above it; selections protect the view.\n`
       + `Markdown stays formatted while reading and selecting; copy lines/selections as displayed, or copy the whole raw section.\n`
       + `Context compacted summaries start folded; click their heading or use ${this.hint("transcript.fold", "transcript")} to expand/collapse.\n`

@@ -1,3 +1,4 @@
+import { openWorkspaceSearch } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
@@ -26,7 +27,7 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     },
     async click(text: string) {
       if (text.startsWith(icons.folder) && !app.renderer.root.findDescendantById("workspace-sidebar")!.visible) {
-        app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("w");
+        app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("b");
         await app.renderOnce(); await app.renderOnce();
       }
       const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes(text));
@@ -130,30 +131,30 @@ test("숫자는 현재 Agents 화면의 세션 순서로 선택하고 초안·�
   } finally { await app.close(); }
 });
 
-test("Editor와 Git에서 숫자·생성 단축키는 화면이나 세션을 바꾸지 않고 PTY에도 보내지 않는다", async () => {
+test("Editor/Git number and creation keys neither switch screens/sessions nor reach PTYs", async () => {
   // A configured but unavailable app command is consumed rather than replayed as native edits.
   const editor = editorFixture(), app = await mount({ editor: editor.actions });
   try {
     await app.showView("e"); await app.visible("Editor buffer");
-    app.leader("2"); app.leader("n"); await app.renderOnce();
+    app.leader("2"); app.leader("c"); await app.renderOnce();
     expect(app.view.workViewPreferences.active["demo:main"]).toBe("editor");
     expect(editor.inputs).toEqual([]);
     expect(app.selection.sessionId).toBe("a1");
 
     await app.showView("g");
-    app.leader("1"); app.leader("n"); await app.renderOnce();
+    app.leader("1"); app.leader("c"); await app.renderOnce();
     expect(app.view.workViewPreferences.active["demo:main"]).toBe("git");
     expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("공통 생성 단축키는 빈 Agents에서도 현재 워크트리에 세션을 명시적으로 생성한다", async () => {
+test("Common creation explicitly creates current-worktree sessions even in empty Agents", async () => {
   const created: string[] = [], app = await mount({ onNewSession: (id) => { created.push(id); } });
   try {
     // Merely changing views never creates a session; only the explicit new-tab command does.
     app.selection.selectWorktree("demo:empty"); await app.showView("a");
     expect(created).toEqual([]);
-    app.leader("n"); await app.renderOnce();
+    app.leader("c"); await app.renderOnce();
     expect(created).toEqual(["demo:empty"]);
     expect(app.selection.worktree?.sessions).toEqual([]);
     expect(app.requests).toEqual([]);
@@ -196,11 +197,11 @@ test("세션 탭은 Agents 안에서만 선택하고 다른 워크트리의 마�
   } finally { await app.close(); }
 });
 
-test("검색과 백그라운드 snapshot은 Git 화면을 강제로 Agent로 바꾸지 않는다", async () => {
+test("Search and background snapshots never force Git screens into Agent", async () => {
   const app = await mount();
   try {
     await app.showView("g");
-    app.mockInput.pressKey("f", { ctrl: true }); await app.mockInput.typeText("feature/workspace");
+    openWorkspaceSearch(app); await app.mockInput.typeText("feature/workspace");
     app.selection.replaceSnapshot(demoWorkspace()); await app.renderOnce();
     app.mockInput.pressEscape(); await app.renderOnce();
 
@@ -231,7 +232,7 @@ test("명시적으로 스크롤한 Agent 위치와 초안은 탭 왕복과 UI �
   } finally { await next.close(); }
 });
 
-test("Editor에 포커스가 있으면 Neovim 키를 전달하고 Ctrl+]로 앱 탐색에 복귀한다", async () => {
+test("Focused Editor forwards Neovim keys and leader+b opens workspace navigation", async () => {
   // Only the process boundary is replaced; native OpenTUI VT/key handling remains real.
   const editor = editorFixture(), app = await mount({ editor: editor.actions });
   try {
@@ -241,12 +242,12 @@ test("Editor에 포커스가 있으면 Neovim 키를 전달하고 Ctrl+]로 앱 
     app.mockInput.pressEscape(); await app.renderOnce();
     expect(editor.inputs.join("")).toContain("\t"); expect(editor.inputs.join("")).toContain("\x06"); expect(editor.inputs.join("")).toContain("\x05");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("editor-terminal:demo:main");
-    expect(app.captureCharFrame().split("\n")[23]).toContain("<C-]> Workspaces");
+    expect(app.captureCharFrame().split("\n")[23]).toContain("<leader>b Workspaces");
 
-    app.mockInput.pressKey("]", { ctrl: true }); await app.renderOnce();
+    app.leader("b"); await app.renderOnce();
 
     expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-search");
-    expect(editor.inputs.join("")).not.toContain("\x1d");
+    expect(editor.inputs.join("")).not.toContain("\x00");
     expect(editor.opens).toEqual([]); // Existing editor metadata requires attachment, not another open.
   } finally { await app.close(); }
 });

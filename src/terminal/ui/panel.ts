@@ -1,5 +1,7 @@
 import { BoxRenderable, RenderableEvents, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
-import { ExpectedError, reportUnexpected } from "../../errors.ts";
+import { CapabilityError, ExpectedError, reportUnexpected } from "../../errors.ts";
+import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
+import { TerminalCopyMode } from "./copy-mode.ts";
 import type { Result } from "../../result.ts";
 import type { PtyFrame, TerminalInfo } from "../../runtime/protocol.ts";
 import type { Worktree } from "../../workspace/model.ts";
@@ -43,6 +45,7 @@ export class TerminalPanel {
   private disposed = false;
   private connection: PtyAttachment | undefined;
   private surface: TerminalSurface | undefined;
+  private copyMode: TerminalCopyMode | undefined;
   private task: Promise<void> = Promise.resolve();
   private cancelLayout: (() => void) | undefined;
   private readonly processNames = new Map<string, string>();
@@ -53,7 +56,7 @@ export class TerminalPanel {
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: TerminalActions | undefined,
     private readonly button: ButtonFactory, private readonly notice: (message: string) => void,
-    private readonly selectionChanged: (worktreeId: string, id: string | null) => void, private readonly changed: () => void, private readonly unavailable?: string, private readonly terminalTheme?: TerminalTheme, private readonly creationHint: () => string = () => "") {
+    private readonly selectionChanged: (worktreeId: string, id: string | null) => void, private readonly changed: () => void, private readonly unavailable?: string, private readonly terminalTheme?: TerminalTheme, private readonly creationHint: () => string = () => "", private readonly copyText?: (text: string) => Promise<Result<string, ExpectedError>>) {
     this.root = new BoxRenderable(renderer, { id: "terminal-view", flexGrow: 1, minHeight: 0, flexDirection: "column", visible: false, focusable: true });
     const toolbar = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.tabs = new ScrollBoxRenderable(renderer, { height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0, scrollX: true, scrollY: false,
@@ -79,7 +82,23 @@ export class TerminalPanel {
     this.root.once(RenderableEvents.DESTROYED, () => this.stopTitles());
     renderer.on("frame", this.revealSelected);
   }
-  get input(): Renderable | undefined { return this.surface?.root; }
+  get input(): Renderable | undefined { return this.copyMode?.active ? this.copyMode.root : this.surface?.root; }
+  get copyContext(): KeyContext | null { return this.copyMode?.context ?? null; }
+  get copyStatus(): string { return this.copyMode?.status ?? ""; }
+  get canRead(): boolean { return this.root.visible && !!this.connection && !!this.surface; }
+  readOutput(): void {
+    if (this.copyMode?.active) { this.copyMode.root.focus(); return; }
+    const connection = this.connection;
+    if (!connection || !this.surface || !this.copyMode) return;
+    const read = connection.read?.bind(connection);
+    if (!read) {
+      const error = new CapabilityError("Terminal copy mode is unavailable in this attachment.");
+      this.notice(`[${error.code}] ${error.message}`); return;
+    }
+    this.surface.acceptsInput = false;
+    this.copyMode.open(read);
+  }
+  copyCommand(command: CommandId): void { this.copyMode?.command(command); }
   get canClose(): boolean { return !!this.selected && !!this.actions; }
   get canScroll(): boolean { return this.surface?.canScroll ?? false; }
   get tabsFocused(): boolean { return this.root.visible && [...this.tabButtons.values()].some(tab => tab.root.focused); }
@@ -96,11 +115,11 @@ export class TerminalPanel {
     this.worktree = worktree; this.root.visible = true;
     this.items = this.actions?.list().filter((item) => item.worktreeId === worktree?.id) ?? [];
     const selected = this.items.find((item) => item.id === remembered)?.id ?? this.items[Math.max(0, Math.min(oldIndex, this.items.length - 1))]?.id;
-    const focus = Boolean(this.surface?.root.focused || this.root.focused);
+    const focus = Boolean(this.input?.focused || this.root.focused);
     if (!same || selected !== this.selected) this.activate(selected, focus);
     if (worktree && selected !== remembered) this.selectionChanged(worktree.id, selected ?? null);
     const info = this.items.find((item) => item.id === selected);
-    if (this.surface) this.surface.acceptsInput = !info?.exited;
+    if (this.surface) this.surface.acceptsInput = !info?.exited && !this.copyMode?.active;
     this.paintTabs();
     if (!this.actions) this.setMessage(this.unavailable ?? "Terminal preview · no shells run in demo mode.");
     else if (!worktree) this.setMessage("Select a workspace to use terminals.");
@@ -246,9 +265,18 @@ export class TerminalPanel {
     this.task = this.task.then(async () => {
       await this.detach(); if (!this.current(generation)) return;
       const surface = new TerminalSurface(this.renderer, "shell-terminal", this.terminalTheme); this.surface = surface; this.viewport.add(surface.root);
+      this.copyMode = new TerminalCopyMode(this.renderer, { notice: this.notice, changed: this.changed,
+        input: (focus) => {
+          surface.acceptsInput = !this.items.find(item => item.id === id)?.exited;
+          if (surface.scrollOffset) surface.scroll(10000);
+          if (focus) surface.root.focus();
+        },
+        busy: (pending) => { if (pending) this.spinner.start(); else this.spinner.stop(); },
+        ...(this.copyText ? { copy: this.copyText } : {}) });
+      this.viewport.add(this.copyMode.root);
       const attached = await this.actions!.attach(id, (frame) => {
         if (!this.current(generation) || surface.root.isDestroyed) return;
-        surface.display(frame); surface.acceptsInput = !frame.exited;
+        surface.display(frame); surface.acceptsInput = !frame.exited && !this.copyMode?.active;
         this.setMessage(frame.exited ? `Terminal exited (${frame.exitCode ?? "signal"})` : "");
         this.changed();
       }, (error) => { if (this.current(generation)) this.failure(error); });
@@ -311,7 +339,7 @@ export class TerminalPanel {
       this.cancelLayout = done; this.renderer.once("frame", done); this.renderer.requestRender();
     });
   }
-  private removeSurface(): void { this.surface?.dispose(); this.surface = undefined; }
+  private removeSurface(): void { this.copyMode?.dispose(); this.copyMode = undefined; this.surface?.dispose(); this.surface = undefined; }
   private async detach(): Promise<void> { const connection = this.connection; this.connection = undefined; await connection?.disconnect(); }
   hide(): void {
     if (!this.root.visible) return;

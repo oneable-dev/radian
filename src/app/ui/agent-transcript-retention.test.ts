@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, spyOn, test } from "bun:test";
 import { EditBufferRenderable, MarkdownRenderable, ScrollBoxRenderable, type Renderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
@@ -80,12 +81,12 @@ test("현재 응답 한 섹션만 스트리밍되면 바뀌지 않은 과거 대
   } finally { updates.mockRestore(); await app.close(); }
 });
 
-test("세션 왕복은 기존 Markdown과 원문 버퍼를 재사용하고 각 초안과 선택을 보존한다", async () => {
-  // 두 세션이 같은 섹션 ID를 사용해도 A의 선택 범위는 A에만 속한다.
+test("Session round-trips reuse Markdown/source buffers while preserving drafts and selections", async () => {
+  // Identical section IDs across sessions must not share A's selection.
   const app = await mount();
   try {
     const markdown = app.markdown("a history");
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); app.mockInput.pressEnter();
+    pressLeader(app, "["); app.mockInput.pressKey("HOME"); app.mockInput.pressEnter();
     app.mockInput.pressKey("l"); app.mockInput.pressKey("v"); await app.render();
     const reader = app.renderer.currentFocusedRenderable;
     if (!(reader instanceof EditBufferRenderable)) throw new Error("Missing source reader");
@@ -182,13 +183,13 @@ test("세션 보관 상한을 넘으면 가장 오래 안 본 대화를 해제�
   expect(third?.isDestroyed).toBe(true);
 });
 
-test.each([["최신 출력 따라가기", false], ["과거 읽기", true]] as const)("보관 중 대화가 성장해도 재진입 시 %s의 스크롤 의도를 보존한다", async (_label, paused) => {
-  // 같은 대화에서도 최신 출력을 따르는 사용자와 과거를 읽는 사용자를 구분한다.
+test.each([["following latest output", false], ["reading history", true]] as const)("Growing retained conversations preserve %s scroll intent on return", async (_label, paused) => {
+  // Distinguish following latest output from reading historical content.
   const app = await mount();
   try {
     const history: TranscriptSection = { id: "history", kind: "user", title: "You", text: "Earlier line\n".repeat(80), status: "complete" };
     await app.update("a", { sections: [history] });
-    if (paused) { app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render(); }
+    if (paused) { pressLeader(app, "["); app.mockInput.pressKey("HOME"); await app.render(); }
     const position = app.scroll.scrollTop;
     await app.select("b");
     await app.update("a", { sections: [history, prose("new", "BACKGROUND_TAIL\n".repeat(30))] });

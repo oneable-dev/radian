@@ -1,3 +1,4 @@
+import { openWorkspaceSearch, pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
@@ -16,12 +17,12 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     initialDrafts: {a1: "untouched draft"}, onCopyTranscript: async (text) => { copies.push(text); return ok("Copied fixture"); }, ...actions});
   const render = async () => { for(let i=0;i<8;i++) await Promise.resolve(); await app.renderOnce(); await app.renderOnce(); };
   const get = (id: string) => { const node = app.renderer.root.findDescendantById(id); if (!node) throw new Error(`Missing ${id}`); return node; };
-  await render(); app.mockInput.pressKey("e", {ctrl: true}); await render();
+  await render(); pressLeader(app, "a"); await render();
   const prompt = get("session-prompt") as PromptInput;
   return {...app, view, selection, sent, copies, prompt, render, get, async click(id: string) { const n=get(id); await app.mockMouse.click(n.x+1,n.y); await render(); }, async close() {view.dispose(); await app.dispose();}};
 }
 
-test("도움말은 현재 문맥과 공통 키를 보여주고 닫으면 입력 초안·커서·포커스를 복원한다", async () => {
+test("Help shows contextual/shared keys and restores input draft, caret, and focus on close", async () => {
   const app = await mount();
   try {
     app.mockInput.pressArrow("left"); const cursor = app.prompt.cursorOffset;
@@ -30,8 +31,8 @@ test("도움말은 현재 문맥과 공통 키를 보여주고 닫으면 입력 
     app.mockInput.pressKey("y"); await app.render();
     expect(app.copies[0]).toContain("Application shortcuts"); expect(app.copies[0]).toContain("<S-CR>"); expect(app.copies[0]).toContain("<leader>b");
 
-    // 다른 영역의 전역 포커스 명령도 열린 모달 뒤의 편집기를 조작하지 않는다.
-    app.mockInput.pressKey("f", {ctrl: true}); await app.render();
+    // Global focus commands elsewhere must not manipulate editors behind open modals.
+    openWorkspaceSearch(app); await app.render();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("text-dialog-scroll");
     app.mockInput.pressEscape(); await app.render();
     expect(app.renderer.currentFocusedRenderable).toBe(app.prompt); expect(app.prompt.cursorOffset).toBe(cursor);
@@ -72,7 +73,7 @@ test("알림이 있을 때만 한 줄을 예약하며 상세는 잘리지 않은
   } finally {await app.close();}
 });
 
-test("도움말은 사용자 재할당을 반영하고 모달 밖의 비동기 포커스 복원을 차단한다", async () => {
+test("Help reflects overrides and blocks asynchronous focus restoration outside modals", async () => {
   const keymap = expectOk(parseKeymap({leader: "ctrl+b", bindings: {"app.help": [{keys: "f2", scope: "app"}], "app.detach": ["<leader> q"]}}));
   const app = await mount({keymap, onDetach: () => {}});
   try {
@@ -80,7 +81,7 @@ test("도움말은 사용자 재할당을 반영하고 모달 밖의 비동기 �
     expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<F2> Help");
     app.mockInput.pressKey("F2"); await app.render(); app.mockInput.pressKey("y"); await app.render();
     expect(app.copies[0]).toContain("<leader>: <C-b>");
-    expect(app.copies[0]).toContain("<leader>q"); expect(app.copies[0]).not.toContain("<leader>c");
+    expect(app.copies[0]).toContain("<leader>q"); expect(app.copies[0]).not.toContain("<leader>d");
     app.prompt.focus(); await app.render();
 
     expect(app.renderer.currentFocusedRenderable?.id).toBe("text-dialog-scroll");

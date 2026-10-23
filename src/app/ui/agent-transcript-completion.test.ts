@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { CodeRenderable, TextRenderable, type Renderable } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
@@ -35,8 +36,8 @@ async function mount(initial: TranscriptSection[]) {
   };
 }
 
-test("정착된 요청의 마지막 답변 바로 아래에만 시간·완료 시각을 중립 회색으로 표시한다", async () => {
-  // 응답 종료 후에도 최종 settled 메타데이터 전에는 완료를 추측하지 않는다.
+test("Only settled requests show gray duration and completion time beneath their final answer", async () => {
+  // Never infer completion before final settled metadata arrives.
   const app = await mount([answer()]);
   try {
     expect(app.captureCharFrame()).not.toContain("Worked for");
@@ -49,7 +50,7 @@ test("정착된 요청의 마지막 답변 바로 아래에만 시간·완료 �
     const span = app.captureSpans().lines[footerY]!.spans.find((span) => span.text.includes("Worked for"))!;
     const [r, g, b] = span.fg.toInts(); expect(r).toBe(g); expect(g).toBe(b);
     expect(span.bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("END"); app.mockInput.pressKey("y"); await app.render();
+    pressLeader(app, "["); app.mockInput.pressKey("END"); app.mockInput.pressKey("y"); await app.render();
     expect(app.copies).toEqual(["**FINAL_ANSWER**"]); expect(app.view.promptDrafts.a1).toBe("Keep this draft"); expect(app.runs).toEqual([]);
   } finally { await app.close(); }
 });
@@ -186,8 +187,8 @@ test("완료 요청의 아랫줄은 이미지·파일 배지를 보존하고 긴
   } finally { await app.close(); }
 });
 
-test("사용자 섹션과 완료 요청은 이미지 내부 안내를 숨기고 입력과 첨부 개수를 보존한다", async () => {
-  // 화면에 투영되기 전 SDK 메시지에는 원본 입력과 이미지 처리 안내가 함께 들어 있다.
+test("User sections and completion requests hide internal image guidance while preserving input and counts", async () => {
+  // SDK messages contain original input and image-processing guidance before projection.
   const transcript = new SessionTranscript([]);
   const input = '이거 두 개 확인해봐 [Image #1] [Image #2] @"/tmp/a.ts" @"/tmp/b.ts"';
   transcript.handle({ type: "message_end", message: { role: "user", timestamp: 1, content: [
@@ -198,7 +199,7 @@ test("사용자 섹션과 완료 요청은 이미지 내부 안내를 숨기고 
   // 실제 섹션과 완료 푸터를 렌더하고 사용자 섹션을 복사한다.
   const app = await mount([...transcript.sections, answer(completion)]);
   try {
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); app.mockInput.pressKey("y"); await app.render();
+    pressLeader(app, "["); app.mockInput.pressKey("HOME"); app.mockInput.pressKey("y"); await app.render();
 
     // 화면과 복사 내용에 내부 안내는 없고 기존 이미지 섹션과 배지는 남는다.
     const frame = app.captureCharFrame();

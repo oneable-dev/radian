@@ -177,7 +177,7 @@ export class WorkspaceRuntime {
   get snapshot(): RuntimeSnapshot {
     const repositories = this.repositories;
     const details = Object.fromEntries([...this.registry.records, ...this.failedRecovery.values()].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["shared-daemon", "repository-runtime", "history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "session-exit", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention", "agent-dashboard", "accounts"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["shared-daemon", "repository-runtime", "history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "terminal-copy-mode", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "session-exit", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention", "agent-dashboard", "accounts"], repositoryId: this.repositoryId,
       ...(this.retentionStatus ? { sessionRetention: this.retentionStatus } : {}),
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       preferences: this.preferences, notice: this.persistenceError || [this.accounts?.warning, this.discoveryWarning, this.retentionWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
@@ -275,7 +275,7 @@ export class WorkspaceRuntime {
       if (!result.ok) return this.rejected(result.error);
       // Commands above have already been accepted. A checkpoint failure is NOT a rejected action.
       // Keystrokes/resize affect the live editor only, never the manifest or a replay log.
-      const transient = ["editor-input", "editor-resize", "editor-detach", "terminal-input", "terminal-resize", "terminal-scroll", "terminal-detach"].includes(command.value.type);
+      const transient = ["editor-input", "editor-resize", "editor-detach", "terminal-input", "terminal-resize", "terminal-scroll", "terminal-read", "terminal-detach"].includes(command.value.type);
       const checkpoint = transient ? ok(undefined) : await this.checkpoint();
       return Response.json({ ok: true, value: result.value, ...(!checkpoint.ok ? { warnings: [wireError(checkpoint.error)] } : {}) });
     } catch (error) {
@@ -390,6 +390,10 @@ export class WorkspaceRuntime {
       case "terminal-resize": {
         const result = await this.terminals.resize(command.terminalId, command.lease, command.cols, command.rows);
         return result.ok ? ok(null) : result;
+      }
+      case "terminal-read": {
+        const result = await this.terminals.read(command.terminalId, command.lease);
+        return result.ok ? ok(JSON.stringify(result.value)) : result;
       }
       case "terminal-scroll": {
         const result = await this.terminals.scroll(command.terminalId, command.lease, command.lines);

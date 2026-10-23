@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { BoxRenderable, ScrollBoxRenderable, parseKeypress, type TerminalColors } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
@@ -48,13 +49,13 @@ async function mount(initial: readonly TranscriptSection[] = sections, width = 1
     }
   };
   return { ...app, view, scroll, cards, background, expectMarker, render,
-    async focus() { app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await render(); },
+    async focus() { pressLeader(app, "["); app.mockInput.pressKey("HOME"); await render(); },
     async update(next: readonly TranscriptSection[]) { current = next; selection.replaceSnapshot(demoWorkspace()); await render(); },
     async close() { view.dispose(); await app.dispose(); },
   };
 }
 
-test.each([120, 60])("너비 %i에서 포커스는 본문 위치·배경을 유지하고 왼쪽 바깥 여백 한 칸으로만 표시한다", async (width) => {
+test.each([120, 60])("At width %i, focus preserves body geometry/background and uses only a one-cell outer marker", async (width) => {
   // Plain prose and tinted cards must keep their own backgrounds, even for selected headers and skills.
   const app = await mount(sections, width);
   try {
@@ -76,7 +77,7 @@ test.each([120, 60])("너비 %i에서 포커스는 본문 위치·배경을 유�
     app.mockInput.pressArrow("up"); await app.render(); app.expectMarker(3);
     app.mockInput.pressKey("k"); await app.render(); app.expectMarker(2);
 
-    app.mockInput.pressKey("e", { ctrl: true }); await app.render(); app.expectMarker();
+    pressLeader(app, "a"); await app.render(); app.expectMarker();
 
     // Neither active nor inactive section selection may leave a background tint behind.
     expect(backgrounds()).toEqual(beforeBackgrounds);
@@ -85,15 +86,15 @@ test.each([120, 60])("너비 %i에서 포커스는 본문 위치·배경을 유�
   } finally { await app.close(); }
 });
 
-test("입력 포커스·도움말·빈 Transcript에는 섹션 표시줄이 남지 않는다", async () => {
+test("Input focus, help, and empty transcripts leave no section focus marker", async () => {
   // A selected section remains remembered when focus leaves the transcript.
   const app = await mount();
   try {
     await app.focus(); app.expectMarker(0);
 
-    app.mockInput.pressKey("e", { ctrl: true }); await app.render();
+    pressLeader(app, "a"); await app.render();
     app.expectMarker();
-    app.mockInput.pressKey("t", { ctrl: true }); await app.render(); app.expectMarker(0);
+    pressLeader(app, "["); await app.render(); app.expectMarker(0);
     app.mockInput.pressKey("F1"); await app.render(); app.expectMarker();
     app.mockInput.pressKey("F1"); await app.render(); app.expectMarker(0);
     await app.update([]);

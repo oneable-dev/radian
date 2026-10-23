@@ -6,6 +6,7 @@ export const transcriptViewSchema = Type.Object({
   folded: Type.Record(Type.String(), Type.Boolean()),
   cursors: Type.Record(Type.String(), offset),
   headingCursors: Type.Optional(Type.Record(Type.String(), offset)),
+  readingHeading: Type.Optional(Type.Boolean()),
   // Distinguish displayed-text offsets from cursors saved by the old source reader.
   renderedCursors: Type.Optional(Type.Record(Type.String(), Type.Boolean())),
   mode: Type.Union([Type.Literal("sections"), Type.Literal("text"), Type.Literal("visual")]),

@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { InputRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
@@ -183,8 +184,8 @@ test("model 인수 오류는 팝업이나 유료 프롬프트로 우회하지 �
   } finally { await app.close(); }
 });
 
-test("팝업에서 Esc는 모델 변경이나 실행 중단 없이 닫고 원래 입력창으로 돌아간다", async () => {
-  // 검색과 목록 포커스는 팝업 안에 머물고 실행 중인 배경의 Esc 명령은 실행되지 않는다.
+test("Popup Esc closes and restores input without changing models or interrupting execution", async () => {
+  // Search and list focus remain inside popups; background interrupt Esc never runs.
   const interrupted: string[] = [];
   const app = await mount({ getSessionDetails: () => ({ conversationId: "first", status: "working", output: "Running work", error: null }),
     onInterrupt: async id => { interrupted.push(id); return ok(undefined); } });
@@ -192,7 +193,7 @@ test("팝업에서 Esc는 모델 변경이나 실행 중단 없이 닫고 원래
     await app.open();
     app.mockInput.pressTab(); await app.render(); expect(app.renderer.currentFocusedRenderable?.id).toBe("model-effort");
     app.mockInput.pressTab(); await app.render(); expect(app.renderer.currentFocusedRenderable?.id).toBe("model-list");
-    app.mockInput.pressKey("e", { ctrl: true }); await app.render(); expect(app.renderer.currentFocusedRenderable?.id).toBe("model-list");
+    pressLeader(app, "a"); await app.render(); expect(app.renderer.currentFocusedRenderable?.id).toBe("model-list");
 
     app.mockInput.pressEscape(); await app.render();
     expect(app.get("model-picker").visible).toBe(false); expect(app.renderer.currentFocusedRenderable).toBe(app.prompt);

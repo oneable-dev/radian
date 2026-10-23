@@ -8,8 +8,9 @@ const routine = new Set<CommandId>([
   "agent.clear", "git.clear", "git.search-clear", "search.clear", "transcript.search-clear", "transcript.search-cancel",
   "dialog.dismiss", "dialog.half-page-down",
   "workspace.open", "workspace.dismiss", "workspace.previous", "workspace.next", "workspace.first", "workspace.last", "workspace.half-page-down",
-  "session.previous", "session.next",
+  "session.previous", "session.next", "tab.previous", "tab.next",
   "terminal.tab-previous", "terminal.tab-next", "terminal.scroll-up", "terminal.scroll-down",
+  "terminal.copy-right", "terminal.copy-visual", "terminal.copy-visual-line", "terminal.copy-half-page-down", "terminal.copy-back",
   "completion.next", "completion.previous", "completion.dismiss",
   "history.open", "history.dismiss", "history.previous", "history.next", "history.half-page-down",
   "monitor.open", "monitor.dismiss", "monitor.previous", "monitor.next", "monitor.half-page-down", "monitor.page-down",
@@ -24,7 +25,7 @@ const routine = new Set<CommandId>([
 // send, newline and interrupt hints are deliberately omitted even when rebound.
 export function footerKeyHint(command: CommandId, context: KeyContext, key: string): string {
   if (omitted.has(command)) return "";
-  const conventional = routine.has(command) || command === "transcript.copy" && context === "transcript-visual";
+  const conventional = routine.has(command) || command === "transcript.copy" && context === "transcript-visual" || command === "terminal.copy-yank" && context === "terminal-visual";
   if (!conventional) return key;
   return key === defaults.hint(command, context) || key === defaults.hints(command, context) ? "" : key;
 }

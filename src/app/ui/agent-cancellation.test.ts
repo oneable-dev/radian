@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench } from "./workbench.ts";
@@ -39,7 +40,7 @@ async function mount(state: ExecutionState) {
     async close() { view.dispose(); await app.dispose(); } };
 }
 
-test.each([false, true])("부분 응답 %s인 취소는 입력창 위에만 시간을 표시하고 오류 카드와 대화 푸터를 만들지 않는다", async (partial) => {
+test.each([false, true])("Cancellation with partial %s responses shows duration only above input without error cards or transcript footers", async (partial) => {
   // Use the real SDK-event projection so the screenshot's empty aborted response is covered too.
   const app = await mount(cancelled(partial));
   try {
@@ -63,7 +64,7 @@ test.each([false, true])("부분 응답 %s인 취소는 입력창 위에만 시�
     expect(app.captureCharFrame()).toContain("Cancelled (1s)");
     expect(app.transcript()).not.toContain("Cancelled after");
     if (partial) {
-      app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("END"); app.mockInput.pressKey("y"); await app.render();
+      pressLeader(app, "["); app.mockInput.pressKey("END"); app.mockInput.pressKey("y"); await app.render();
       expect(app.copies).toEqual(["Partial response kept"]);
     }
   } finally { await app.close(); }

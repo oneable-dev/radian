@@ -1,3 +1,4 @@
+import { openWorkspaceSearch } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { CodeRenderable, ScrollBoxRenderable, type Renderable } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
@@ -41,7 +42,7 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
       await app.renderOnce(); await app.renderOnce();
     },
     async click(label: string, right = false) {
-      if (label.startsWith(icons.folder)) { app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressCtrlC(); await app.renderOnce(); await app.renderOnce(); }
+      if (label.startsWith(icons.folder)) { openWorkspaceSearch(app); app.mockInput.pressCtrlC(); await app.renderOnce(); await app.renderOnce(); }
       const text = app.captureCharFrame().split("\n"), offset = right ? 36 : 0;
       const y = text.findIndex((line) => line.indexOf(label, offset) >= 0), x = text[y]?.indexOf(label, offset) ?? -1;
       if (x < 0) throw new Error(`Missing ${label}\n${app.captureCharFrame()}`);

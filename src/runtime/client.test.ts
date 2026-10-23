@@ -604,7 +604,32 @@ test("PTY 입력 응답 대기 중 분리해도 재연결은 즉시 중단하고
   } finally { acknowledgement.resolve(Response.json({ ok: true, value: null })); await client.disconnect(); fetchMock.mockRestore(); jest.useRealTimers(); }
 });
 
-test("PTY 첫 헤더 대기 중 분리는 취소 Result로 끝나며 명령을 보내지 않는다", async () => {
+test.each(["supported", "unsupported", "malformed"] as const)("%s terminal reads validate capabilities/responses while preserving shell input after failures", async mode => {
+  // Replace only transport to verify actual capability checks and snapshot decoding.
+  const state = snapshot(); state.capabilities = ["terminal-tabs", ...(mode === "unsupported" ? [] : ["terminal-copy-mode"])];
+  const commands: string[] = [];
+  const fetchMock = stubFetch(async (input, options) => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/events") return events(state, options?.signal).response;
+    if (path === "/terminal/events") return events({ id: "shell", worktreeId: "tree", pid: 123, exited: false, exitCode: null, cols: 80, rows: 24, revision: 0, ansi: "" }, options?.signal).response;
+    const command = JSON.parse(String(options?.body)); commands.push(command.type);
+    return Response.json({ ok: true, value: command.type === "terminal-read" ? mode === "malformed" ? "{bad json" : JSON.stringify({ text: "old output", cursor: { row: 0, column: 0 } }) : null });
+  });
+  const client = new RuntimeClient(paths, state), failures: unknown[] = [];
+  try {
+    expectOk(await client.attach()); const terminal = expectOk(await client.attachTerminal("shell", () => {}, error => failures.push(error)));
+
+    const result = await terminal.read();
+    if (mode === "supported") expect(expectOk(result).text).toBe("old output");
+    else expect(expectError(result).code).toBe(mode === "unsupported" ? "UNSUPPORTED_CAPABILITY" : "PROTOCOL_ERROR");
+    terminal.input(encoder.encode("still interactive")); await settle();
+
+    expect(commands.includes("terminal-read")).toBe(mode !== "unsupported"); expect(commands).toContain("terminal-input");
+    expect(failures).toEqual([]); expect(client.connected).toBe(true);
+  } finally { await client.disconnect(); fetchMock.mockRestore(); }
+});
+
+test("Detach while awaiting first PTY headers returns cancellation without sending commands", async () => {
   const state = snapshot(); state.capabilities = ["terminal-tabs"];
   const commands: string[] = [];
   const fetchMock = stubFetch(async (input, options) => {

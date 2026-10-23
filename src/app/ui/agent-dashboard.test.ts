@@ -31,7 +31,7 @@ async function mount(options: Partial<WorkbenchActions> = {}, width = 120, heigh
   if (!(input instanceof PromptInput)) throw new Error("Missing prompt"); input.focus();
   const get = (id: string) => { const node = app.renderer.root.findDescendantById(id); if (!node) throw new Error(`Missing ${id}`); return node; };
   return { ...app, view, input, lookups, sent, render, get,
-    async open() { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("d"); await render(); },
+    async open() { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("u"); await render(); },
     async close() { view.dispose(); await app.dispose(); } };
 }
 

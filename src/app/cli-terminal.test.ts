@@ -11,7 +11,7 @@ async function terminalRun(args:string[],directory:string,extra:NodeJS.ProcessEn
   const child=Bun.spawn([process.execPath,entry,...args],{cwd:directory,env,
     terminal:{cols:120,rows:24,name:env.TERM ?? "xterm-256color",data:(terminal,bytes)=>{
       raw+=new TextDecoder().decode(bytes);
-      if(raw.includes("Workspace")&&!detached){ready=true;detached=true;terminal.write("\x00c");}
+      if(raw.includes("Workspace")&&!detached){ready=true;detached=true;terminal.write("\x00d");}
     }}});
   const timer=setTimeout(()=>{timedOut=true;child.kill("SIGTERM");},8000);
   try {const code=await child.exited;return{code,raw,ready,timedOut};}

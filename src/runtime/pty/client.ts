@@ -1,7 +1,7 @@
 import { Value } from "typebox/value";
 import { ConnectionError, InputError, parseJson, ProtocolError, reportUnexpected, type ExpectedError } from "../../errors.ts";
 import { err, ok, type Result } from "../../result.ts";
-import { ptyFrameSchema, maxFrameBytes, replySchema, type PtyFrame } from "../protocol.ts";
+import { ptyFrameSchema, maxFrameBytes, replySchema, terminalTextSchema, type PtyFrame, type TerminalText } from "../protocol.ts";
 import type { RuntimePaths } from "../storage.ts";
 import { connectionError, readJson, remoteError, transport } from "../transport.ts";
 
@@ -9,7 +9,8 @@ export type PtyRequest =
   | { type: "input"; lease: string; data: string }
   | { type: "resize"; lease: string; cols: number; rows: number }
   | { type: "detach"; lease: string }
-  | { type: "scroll"; lease: string; lines: number };
+  | { type: "scroll"; lease: string; lines: number }
+  | { type: "read"; lease: string };
 type Send = (command: PtyRequest) => Promise<Result<unknown, ExpectedError>>;
 export class PtyConnection {
   readonly lease = crypto.randomUUID();
@@ -69,6 +70,16 @@ export class PtyConnection {
   }
   scroll(lines: number): void {
     this.enqueue({ type: "scroll", lease: this.lease, lines: Math.max(-10000, Math.min(10000, Math.round(lines))) }, 0);
+  }
+  async read(): Promise<Result<TerminalText, ExpectedError>> {
+    await this.pending;
+    if (this.failed || this.closing) return err(new ConnectionError("CONNECTION_FAILED", "Terminal is disconnected; output was not read."));
+    const result = await this.send({ type: "read", lease: this.lease });
+    if (!result.ok) return result;
+    if (this.failed || this.closing) return err(new ConnectionError("CONNECTION_FAILED", "Terminal changed while reading output."));
+    if (typeof result.value !== "string") return err(new ProtocolError("Missing terminal output snapshot."));
+    const parsed = parseJson(result.value, "terminal output"); if (!parsed.ok) return err(new ProtocolError(parsed.error.message));
+    return Value.Check(terminalTextSchema, parsed.value) ? ok(parsed.value) : err(new ProtocolError("Malformed terminal output snapshot."));
   }
   private enqueue(command: PtyRequest, bytes: number): void {
     if (this.failed || this.closing) return;

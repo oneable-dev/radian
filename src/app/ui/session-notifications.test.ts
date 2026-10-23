@@ -1,3 +1,4 @@
+import { openWorkspaceSearch } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import type { ExecutionState } from "../../agents/session-registry.ts";
@@ -82,11 +83,11 @@ test("닫기 버튼 없는 팝업이 만료돼도 벨을 유지하고 같은 결
   } finally { await app.close(); }
 });
 
-test("팝업 클릭은 열린 탐색창을 닫고 해당 세션의 최신 결과로 이동한 뒤 기존 경로로 읽음 처리한다", async () => {
+test("Popup clicks close pickers, jump to latest session results, and acknowledge through existing paths", async () => {
   // The workspace picker may be open when a notification arrives above it.
   const app = await fixture("terminal");
   try {
-    app.mockInput.pressKey("f", { ctrl: true }); await app.render();
+    openWorkspaceSearch(app); await app.render();
     expect(app.get("workspace-picker").visible).toBe(true);
     app.complete("unfinished"); await app.render();
     const toast = app.toast(); await app.mockMouse.click(toast.x + 2, toast.y + 2); await app.render();

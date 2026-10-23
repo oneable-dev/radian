@@ -1,3 +1,4 @@
+import { openWorkspaceSearch, pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { TextRenderable } from "@opentui/core";
@@ -50,9 +51,9 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
         return text;
       }).join("\n");
     },
-    async openWorkspaces() { app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressTab(); await render(); },
+    async openWorkspaces() { openWorkspaceSearch(app); app.mockInput.pressTab(); await render(); },
     async click(label: string) {
-      if (label.startsWith(icons.folder)) { app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressCtrlC(); await render(); }
+      if (label.startsWith(icons.folder)) { openWorkspaceSearch(app); app.mockInput.pressCtrlC(); await render(); }
       const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes(label));
       const x = lines[y]?.indexOf(label) ?? -1;
       if (x < 0) throw new Error(`Missing ${label}\n${app.captureCharFrame()}`);
@@ -107,13 +108,13 @@ test("방향키와 Home/End도 탐색만 하고 실제 선택은 Enter로 확정
   } finally { await app.close(); }
 });
 
-test("Agents 세션 탭의 h/l 전환은 각 초안을 보존하고 프롬프트의 hjklnx는 일반 입력이다", async () => {
+test("Agent tab h/l navigation preserves drafts while prompt hjklnx remains literal", async () => {
   // Session navigation is scoped to its strip, never to the editor or prompt input.
   const app = await mount();
   try {
     app.get("agent-session-list").focus(); app.mockInput.pressKey("l"); await app.render();
     expect(app.selection.sessionId).toBe("a2");
-    app.mockInput.pressKey("e", { ctrl: true }); await app.mockInput.typeText("hjklnx");
+    pressLeader(app, "a"); await app.mockInput.typeText("hjklnx");
     await app.click("a1");
 
     expect(app.selection.sessionId).toBe("a1");
@@ -231,25 +232,25 @@ test("비선택 세션 탭의 닫기 버튼은 현재 세션과 초안을 바꾸
   } finally { await app.close(); }
 });
 
-test("생성은 leader+n으로 통일하고 탭의 닫기는 x로 유지한다", async () => {
+test("Creation consistently uses leader+n while tab closure keeps x", async () => {
   // The left panel no longer owns hidden active-session actions.
   const app = await mount();
   try {
     app.mockInput.pressKey("n"); app.mockInput.pressKey("x"); await app.render();
     expect(app.requests).toEqual([]);
     app.get("agent-session-list").focus();
-    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("n"); app.mockInput.pressKey("x"); await app.render();
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("c"); app.mockInput.pressKey("x"); await app.render();
 
     expect(app.requests).toEqual(["new:demo:main", "close:a1"]);
     expect(app.selection.sessionId).toBe("a2");
   } finally { await app.close(); }
 });
 
-test("서브에이전트는 선택한 세션의 실행 상태 행에만 집계하고 상태 변화는 탭과 화면 좌표를 유지한다", async () => {
+test("Subagents aggregate only in selected-session activity rows and status changes preserve tab geometry", async () => {
   // A1 has a running child; A2 has none. Updating status must not recreate keyed tabs.
   const app = await mount();
   try {
-    app.mockInput.pressKey("e", { ctrl: true }); await app.render();
+    pressLeader(app, "a"); await app.render();
     const tab = app.get("session:demo:main:a1"), input = app.get("agent-composer"), row = app.get("transcript-status-row");
     const geometry = [tab.x, tab.y, tab.width, input.y, row.y, row.height];
     expect(app.region("transcript-status-row")).not.toContain("Completed");

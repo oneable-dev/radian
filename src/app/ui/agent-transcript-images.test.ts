@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { EditBufferRenderable, ImageRenderable, TextRenderable, type Renderable, type TerminalCapabilities } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
@@ -127,14 +128,14 @@ test("세션 왕복은 대화 버퍼만 재사용하고 이미지는 새 요청�
   } finally { first.resolve(ok(tinyPng())); second.resolve(ok(tinyPng())); await app.close(); }
 });
 
-test("전체 펼치기는 동시 이미지 수를 제한하고 접으면 대기하던 이미지를 활성화한다", async () => {
+test("Expand-all limits concurrent images and collapsing activates waiting previews", async () => {
   let calls = 0, active = 0, maximum = 0;
   const app = await mount(async (_session, _id, signal) => {
     calls++; active++; maximum = Math.max(maximum, active);
     signal.addEventListener("abort", () => { active--; }, { once: true }); return ok(tinyPng());
   }, true, 9);
   try {
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME");
+    pressLeader(app, "["); app.mockInput.pressKey("HOME");
     app.mockInput.pressKey("z"); app.mockInput.pressKey("r"); await app.render();
 
     expect(calls).toBe(8); expect(maximum).toBe(8);

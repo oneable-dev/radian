@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { EditBufferRenderable, ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
@@ -31,7 +32,7 @@ async function mount(initial = sections(), actions: Partial<WorkbenchActions> = 
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
   await render();
   return { ...app, view, selection, copied, sent, render,
-    async transcript() { app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await render(); },
+    async transcript() { pressLeader(app, "["); app.mockInput.pressKey("HOME"); await render(); },
     async update(next: TranscriptSection[]) { current = next; selection.replaceSnapshot(demoWorkspace()); await render(); },
     state() { return view.workViewPreferences.agentViews?.[selection.sessionId ?? ""]; },
     async copy() { app.mockInput.pressKey("y"); await Promise.resolve(); await render(); },
@@ -160,7 +161,7 @@ test("복사 실패는 선택을 보존하고 안정적인 오류 코드로 알�
   } finally { await app.close(); }
 });
 
-test("직렬화한 탐색 설정으로 새 UI에서도 접힘·선택·커서를 복원한다", async () => {
+test("Serialized navigation restores folding, selections, and cursors in new UIs", async () => {
   let preferences: WorkViewPreferences | undefined;
   const app = await mount(undefined, { onWorkViewsChange: (next) => { preferences = next; } });
   try {
@@ -171,7 +172,7 @@ test("직렬화한 탐색 설정으로 새 UI에서도 접힘·선택·커서를
   } finally { await app.close(); }
   const next = await mount(undefined, { initialWorkViews: preferences! });
   try {
-    next.mockInput.pressKey("t", { ctrl: true }); await next.render();
+    pressLeader(next, "["); await next.render();
 
     expect(next.state()?.selectedId).toBe("tool");
     expect(next.state()?.mode).toBe("text");
@@ -330,14 +331,14 @@ test("단어·줄·섹션 경계 이동으로 원문 전체를 선택하며 달�
   } finally { await app.close(); }
 });
 
-test("따라가기 상태에서는 새 섹션을 선택하고 실제로 위로 스크롤하면 선택을 고정한다", async () => {
+test("Following selects new sections while actual upward scrolling fixes selection", async () => {
   const app = await mount();
   try {
     await app.update([...sections(), { id: "latest", kind: "assistant", title: "Agent", text: "LATEST SECTION\n\n".repeat(20), status: "streaming" }]);
     expect(app.state()?.selectedId).toBe("latest");
     expect(app.state()?.follow).toBe(true);
 
-    app.mockInput.pressKey("t", { ctrl: true }); await app.render();
+    pressLeader(app, "["); await app.render();
     const area = app.renderer.root.findDescendantById("session-transcript")! as ScrollBoxRenderable;
     const previous = area.scrollTop; expect(previous).toBeGreaterThan(0);
     await app.mockMouse.scroll(area.x + 2, area.y + 2, "up"); await app.render();

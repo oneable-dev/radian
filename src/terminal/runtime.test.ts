@@ -122,7 +122,7 @@ test("TUI가 분리된 동안 shell exit도 탭과 supervisor를 자동 정리�
   } finally { await app.cleanup(); }
 }, 20000);
 
-test("이전 로그와 스크롤 위치는 재접속 뒤 복원되며 입력 시 현재 화면으로 돌아온다", async () => {
+test("Prior logs and scroll restore after reconnect and input returns to live screens", async () => {
   const app = await setup();
   try {
     const client = await app.connect();
@@ -134,12 +134,18 @@ test("이전 로그와 스크롤 위치는 재접속 뒤 복원되며 입력 시
     const historical = first.frame.ansi;
     expect(first.frame.scrollback!.available).toBe(5000);
     expect(historical).not.toContain("log-5199");
+    // Copy mode reads the bounded full buffer without scrolling the live attachment.
+    const text = expectOk(await first.connection.read());
+    expect(text.text).toContain("log-5199"); expect(text.text).not.toContain("log-0000");
+    expect(first.frame.scrollback?.offset).toBe(40);
     await client.disconnect();
 
     const next = await app.connect(), restored = await watch(next, id);
     expect(restored.frame.scrollback?.offset).toBe(40); expect(restored.frame.ansi).toBe(historical);
     restored.input("printf 'back-to-live\\n'\r"); await restored.seen("back-to-live");
     expect(restored.frame.scrollback?.offset).toBe(0);
+    expect(text.text).not.toContain("back-to-live");
+    expect(expectOk(await restored.connection.read()).text).toContain("back-to-live");
   } finally { await app.cleanup(); }
 }, 20000);
 

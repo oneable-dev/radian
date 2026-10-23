@@ -2,7 +2,7 @@ import { basename } from "node:path";
 import { capture, collectCleanup, InputError, knownError, PtyError, reportUnexpected, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { repositorySnapshot, type RepositorySource } from "../workspace/catalog.ts";
-import type { TerminalInfo } from "../runtime/protocol.ts";
+import type { TerminalInfo, TerminalText } from "../runtime/protocol.ts";
 import { OwnedProcesses } from "./owned-processes.ts";
 import { PtySession } from "../runtime/pty/session.ts";
 import { ShellHandshake, shellHandshake, shellSupervisorSource } from "./shell-supervisor.ts";
@@ -86,6 +86,10 @@ export class TerminalSessions {
   async scroll(id: string, lease: string, lines: number): Promise<Result<void, ExpectedError>> {
     const owned = this.owned(id, lease); if (!owned.ok) return owned;
     return capture(() => owned.value.scroll(lines, lease));
+  }
+  async read(id: string, lease: string): Promise<Result<TerminalText, ExpectedError>> {
+    const owned = this.owned(id, lease); if (!owned.ok) return owned;
+    return owned.value.read(lease);
   }
   private open(id: string): Result<TerminalRecord, PtyError> {
     const record = this.records.get(id);

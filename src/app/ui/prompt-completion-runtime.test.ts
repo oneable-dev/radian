@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -15,7 +16,7 @@ async function until(check: () => Promise<boolean> | boolean) {
   while (!await check()) { if (Date.now() > deadline) throw new Error("Completion runtime observation timed out"); await Bun.sleep(15); }
 }
 
-test("실제 UI·Unix IPC·SDK에서 Tab은 삽입만 하고 Enter는 선택된 명령을 완성해 바로 실행한다", async () => {
+test("Real UI/Unix IPC/SDK Tab only inserts while Enter completes and executes selected commands", async () => {
   // Real native rendering and a separate offline SDK process; no external provider or user service is touched.
   const fixture = await createWorktreeFixture();
   const options = { offline: true, stateRoot: join(fixture.directory, "state"), entry: join(import.meta.dir, "..", "..", "index.ts") };
@@ -38,7 +39,7 @@ test("실제 UI·Unix IPC·SDK에서 Tab은 삽입만 하고 Enter는 선택된 
   const visible = (text: string) => until(async () => { await app.renderOnce(); return app.captureCharFrame().includes(text); });
   try {
     await until(() => selection.snapshot[0]?.worktrees.some((tree) => tree.sessions.some((session) => session.id === id)) ?? false);
-    selection.selectSession(main.id, id); await app.renderOnce(); app.mockInput.pressKey("e", { ctrl: true });
+    selection.selectSession(main.id, id); await app.renderOnce(); pressLeader(app, "a");
     const input = app.renderer.root.findDescendantById("session-prompt") as PromptInput;
     await app.mockInput.typeText("@work"); await visible("workspace.txt");
     app.mockInput.pressTab(); await app.renderOnce();

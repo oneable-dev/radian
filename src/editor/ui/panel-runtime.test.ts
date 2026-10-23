@@ -15,7 +15,7 @@ async function until(check: () => boolean | Promise<boolean>) {
   while (!await check()) { if (Date.now() > deadline) throw new Error("UI/runtime observation timed out"); await Bun.sleep(15); }
 }
 
-test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재접속을 native 화면으로 검증한다", async () => {
+test("Real native Neovim verifies input, resize, worktree round-trips, and full TUI reconnection", async () => {
   // Real Bun daemon/PTY, clean Neovim, native OpenTUI VT and isolated worktrees; no model requests.
   const fixture = await createWorktreeFixture();
   const options = { offline: true, stateRoot: join(fixture.directory, "state"), entry: join(import.meta.dir, "..", "..", "index.ts") };
@@ -47,7 +47,7 @@ test("실제 Neovim 입력과 리사이즈·워크트리 왕복·전체 TUI 재�
         app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey(key); await app.renderOnce();
       },
       async click(text: string) {
-        if (text.startsWith(icons.folder)) { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("w"); app.mockInput.pressCtrlC(); await app.renderOnce(); await app.renderOnce(); }
+        if (text.startsWith(icons.folder)) { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("b"); app.mockInput.pressCtrlC(); await app.renderOnce(); await app.renderOnce(); }
         const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes(text)), x = lines[y]?.indexOf(text) ?? -1;
         if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
         await app.mockMouse.click(x, y); await app.renderOnce();

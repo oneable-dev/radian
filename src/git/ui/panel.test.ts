@@ -1,3 +1,4 @@
+import { openWorkspaceSearch } from "../../testing/keys.ts";
 import { expect, spyOn, test } from "bun:test";
 import { CodeRenderable, DiffRenderable, ScrollBoxRenderable, parseKeypress, TextAttributes, TextRenderable, type ClipboardRepresentation, type Renderable, type TerminalColors } from "@opentui/core";
 import { uiTheme } from "../../ui/theme.ts";
@@ -60,7 +61,7 @@ async function mount(options: { actions?: Partial<GitActions>; initial?: WorkVie
   const get = (id: string) => { const result = walk(app.renderer.root).find((node) => node.id === id); if (!result) throw new Error(`Missing ${id}`); return result; };
   await app.renderOnce();
   const click = async (text: string) => {
-    if (text.startsWith(icons.folder)) { app.mockInput.pressKey("f", { ctrl: true }); app.mockInput.pressCtrlC(); await app.renderOnce(); }
+    if (text.startsWith(icons.folder)) { openWorkspaceSearch(app); app.mockInput.pressCtrlC(); await app.renderOnce(); }
     const lines = app.captureCharFrame().split("\n"); const y = lines.findIndex((line) => line.includes(text)), x = lines[y]?.indexOf(text) ?? -1;
     if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
     await app.mockMouse.click(x + Math.min(1, text.length - 1), y); await app.renderOnce();
@@ -941,13 +942,13 @@ test("비교 실패는 팝업 안에 표시하고 새로고침으로 재시도�
   } finally { await app.close(); }
 });
 
-test("Changes 위의 검색창은 입력과 지우기·Tab 포커스를 소유하고 커밋 팝업은 유지한다", async () => {
-  // 앱 전역 검색은 Git 팝업보다 위에 있으므로 Git의 포커스 경계에 가로막히면 안 된다.
+test("Search above Changes owns typing, clearing, and Tab while preserving commit popups", async () => {
+  // Global search overlays Git popups and must bypass their focus traps.
   const app = await mount();
   try {
     await app.chooseCommit(); await app.openChanges();
 
-    app.mockInput.pressKey("f", { ctrl: true }); await app.renderOnce(); await app.mockInput.typeText("radian-ui"); await app.renderOnce();
+    openWorkspaceSearch(app); await app.renderOnce(); await app.mockInput.typeText("radian-ui"); await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-search");
     app.mockInput.pressCtrlC(); await app.renderOnce(); app.mockInput.pressCtrlC(); await app.renderOnce();
     app.mockInput.pressTab(); await app.renderOnce();

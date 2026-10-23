@@ -68,14 +68,14 @@ test.each([
 });
 
 test.each([
-  ["sidebar.toggle", "prompt"], ["tab.new", "terminal"], ["focus.transcript", "prompt"],
+  ["sidebar.toggle", "prompt"], ["tab.new", "terminal"], ["output.read", "prompt"],
   ["completion.accept", "prompt-completion"], ["transcript.search-submit", "transcript-search"],
   ["transcript.enter", "transcript"], ["transcript.fold", "transcript"], ["transcript.copy", "transcript-text"],
   ["history.preview", "history"], ["model.select", "model"], ["model.effort-more", "model"],
   ["git.open", "git"], ["git.refs", "git"], ["git.reflog", "git"], ["git.preview", "git-search"], ["git.change-session", "git-prompt"],
   ["accounts.browser", "accounts"], ["accounts.copy-url", "accounts"], ["accounts.copy-code", "accounts"],
-] satisfies [CommandId, KeyContext][])("%s의 앱 고유 동작은 %s 푸터에 유지한다", (command, context) => {
-  // 같은 Enter나 Ctrl 키라도 단순한 탐색이 아닌 기능은 발견할 수 있어야 한다.
+] satisfies [CommandId, KeyContext][])("%s app-specific actions remain in %s footers", (command, context) => {
+  // Non-navigation actions stay discoverable even with identical Enter/Ctrl keys.
   const key = defaults.hint(command, context);
 
   // 명령 의미를 기준으로 정책을 적용해 물리 키만 보고 일괄 숨기지 않는다.

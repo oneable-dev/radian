@@ -1,3 +1,4 @@
+import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { ScrollBoxRenderable } from "@opentui/core";
 import { PromptInput } from "../../agents/ui/prompt-input.ts";
@@ -33,7 +34,7 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
   return { ...app, clock, view, selection, states, sent, render, get, status, caption, update, async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("프롬프트 위에 실제 요청과 실행 스피너를 표시하고 상단 Request·모드·섹션 개수는 제거한다", async () => {
+test("Actual requests and spinners appear above prompts without top Request, mode, or section counts", async () => {
   const app = await mount();
   try {
     const row = app.get("agent-run-status"), scroll = app.get("session-transcript"), prompt = app.get("session-prompt");
@@ -52,7 +53,7 @@ test("프롬프트 위에 실제 요청과 실행 스피너를 표시하고 상�
     expect(app.captureCharFrame()).not.toMatch(/(?:INPUT|TRANSCRIPT) · \d+\/\d+|Request Implement/);
 
     // Reading old output must not move the running-request anchor or overwrite the draft.
-    app.mockInput.pressKey("t", { ctrl: true }); scroll.scrollTo(20); await app.render();
+    pressLeader(app, "["); scroll.scrollTo(20); await app.render();
     const focus = app.renderer.currentFocusedRenderable, top = scroll.scrollTop;
     const sections = app.states.a1!.sections!;
     app.states.a1 = { ...app.states.a1!, sections: [sections[0]!, answer(`${sections[1]!.text}\nNEW STREAM OUTPUT`)] };
@@ -87,7 +88,7 @@ test("세션·워크트리 전환은 요청과 실행 상태를 함께 복원하
   } finally { await app.close(); }
 });
 
-test("정상 완료는 스피너 최소 시간이 끝나면 상태 행을 비우고 읽던 위치·입력 포커스를 보존한다", async () => {
+test("Normal completion clears status after spinner minimums while preserving reading positions and input focus", async () => {
   const app = await mount();
   try {
     // No owned child or paste indicator should keep an otherwise empty status row open.
@@ -95,9 +96,9 @@ test("정상 완료는 스피너 최소 시간이 끝나면 상태 행을 비우
       sessions: tree.sessions.map((session) => ({ ...session, subagents: [] })),
     })) })));
     const scroll = app.get("session-transcript"); if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript");
-    app.mockInput.pressKey("t", { ctrl: true }); scroll.scrollTo(20); await app.render();
+    pressLeader(app, "["); scroll.scrollTo(20); await app.render();
     const top = scroll.scrollTop, prompt = app.get("session-prompt");
-    app.mockInput.pressKey("e", { ctrl: true }); await app.render(); const promptY = prompt.y;
+    pressLeader(app, "a"); await app.render(); const promptY = prompt.y;
     app.clock.advance(100);
     app.states.a1 = { ...app.states.a1!, status: "complete" }; await app.update();
     expect(app.status()).toBe(""); expect(app.get("agent-run-loading").visible).toBe(true);
@@ -110,13 +111,13 @@ test("정상 완료는 스피너 최소 시간이 끝나면 상태 행을 비우
   } finally { await app.close(); }
 });
 
-test("초안·거절·설정 명령은 작업 요청을 바꾸지 않고 실제 대화에 추가된 요청만 갱신한다", async () => {
+test("Drafts, rejections, and settings commands update requests only when actual conversations gain input", async () => {
   let response: Result<void, ExpectedError> = ok(undefined);
   const sent: string[] = [];
   const app = await mount({ onPrompt: (_id, text) => { sent.push(text); return response; } });
   try {
     const prompt = app.get("session-prompt"); if (!(prompt instanceof PromptInput)) throw new Error("Missing prompt.");
-    app.mockInput.pressKey("e", { ctrl: true }); prompt.value = "";
+    pressLeader(app, "a"); prompt.value = "";
     await app.mockInput.typeText("/fast status"); app.mockInput.pressEnter(); await app.render();
     expect(app.status()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toBe("“Implement workspace search”");
     response = err(new InputError("Request rejected"));
@@ -143,7 +144,7 @@ test("요청 없는 실행은 내용을 추측하지 않고 긴 요청은 작은
   } finally { await app.close(); }
 });
 
-test("clear 교체는 같은 탭과 다른 초안을 유지하고 이전 요청·스피너·읽기 상태를 제거한다", async () => {
+test("clear preserves tabs and other drafts while removing old requests, spinners, and navigation state", async () => {
   const app = await mount({ onPrompt: () => {
     app.states.a1 = { conversationId: "fresh", status: null, output: "", error: null, sections: [] };
     app.selection.replaceSnapshot(app.selection.snapshot); return ok(undefined);
@@ -152,8 +153,8 @@ test("clear 교체는 같은 탭과 다른 초안을 유지하고 이전 요청�
     app.states.a1 = { ...app.states.a1!, conversationId: "previous" }; await app.update();
     const tab = app.get("session:demo:main:a1"), tabStrip = app.get("agent-session-list"), count = tabStrip.getChildren().length;
     const prompt = app.get("session-prompt"); if (!(prompt instanceof PromptInput)) throw new Error("Missing input");
-    app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await app.render();
-    app.mockInput.pressKey("e", { ctrl: true }); prompt.value = "/clear"; app.mockInput.pressEnter(); await app.render();
+    pressLeader(app, "["); app.mockInput.pressKey("HOME"); await app.render();
+    pressLeader(app, "a"); prompt.value = "/clear"; app.mockInput.pressEnter(); await app.render();
 
     expect(app.selection.sessionId).toBe("a1"); expect(tabStrip.getChildren()).toHaveLength(count); expect(app.get("session:demo:main:a1")).toBe(tab);
     expect(app.status()).toBe(""); expect(app.get("agent-run-loading").visible).toBe(false); expect(app.captureCharFrame()).not.toContain("PROGRESS-99");
@@ -163,13 +164,13 @@ test("clear 교체는 같은 탭과 다른 초안을 유지하고 이전 요청�
   } finally { await app.close(); }
 });
 
-test("대화 교체 snapshot과 늦은 수락이 새 초안을 지우거나 작업 요청으로 오인하지 않는다", async () => {
+test("Replacement snapshots and late acceptance never clear new drafts or misidentify work requests", async () => {
   const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
   const app = await mount({ onPrompt: () => accepted.promise });
   try {
     app.states.a1 = { ...app.states.a1!, conversationId: "previous" }; await app.update();
     const prompt = app.get("session-prompt"); if (!(prompt instanceof PromptInput)) throw new Error("Missing input");
-    app.mockInput.pressKey("e", { ctrl: true }); prompt.value = "/clear"; app.mockInput.pressEnter(); await app.render();
+    pressLeader(app, "a"); prompt.value = "/clear"; app.mockInput.pressEnter(); await app.render();
     app.states.a1 = { conversationId: "fresh", status: null, output: "", error: null, sections: [] }; await app.update();
     prompt.value = "next conversation draft"; accepted.resolve(ok(undefined)); await app.render();
 

@@ -6,8 +6,8 @@ import { connectRuntime, fetchSnapshot, type RuntimeClient } from "../runtime/cl
 import { pidAlive } from "../runtime/storage.ts";
 
 // The PTY captures notification bytes rather than displaying OS notifications.
-test("실제 서비스의 완료가 연결된 CLI의 화면·터미널 알림으로 전달되고 정상 detach한다", async () => {
-  // 실제 Git·SDK·IPC·TUI를 연결하고 모델 응답만 offline fixture로 대체한다.
+test("Real service completion reaches connected CLI UI and terminal notifications before clean detach", async () => {
+  // Connect real Git, SDK, IPC, and TUI; replace only model responses with offline fixtures.
   const fixture = await createWorktreeFixture(), entry = join(import.meta.dir, "..", "index.ts");
   const stateRoot = join(fixture.directory, "state");
   let client: RuntimeClient | undefined;
@@ -43,7 +43,7 @@ test("실제 서비스의 완료가 연결된 CLI의 화면·터미널 알림으
       expect(Bun.stripANSI(raw)).not.toContain("New line");
       expectOk(await client.prompt(id, "read"));
       await observed;
-      child.terminal?.write("\x00c");
+      child.terminal?.write("\x00d");
       const code = await child.exited;
 
       // The real service drives both the in-app card and native delivery without changing detach ownership.

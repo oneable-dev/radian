@@ -5,25 +5,45 @@ import { tmpdir } from "node:os";
 import { defaultKeymap, loadKeymap, parseKeymap } from "./config.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 
-test("기본 leader는 Ctrl+Space이며 Ctrl+C를 앱 종료에 할당하지 않는다", () => {
+test("Default leader is Ctrl+Space and Ctrl+C never quits the app", () => {
   const map = defaultKeymap();
   expect(map.leader).toEqual(["ctrl+space"]);
-  expect(map.hint("app.detach", "terminal")).toBe("<leader>c");
+  expect(map.hint("app.detach", "terminal")).toBe("<leader>d");
   expect(map.bindings.some((binding) => binding.command === "app.detach" && binding.keys.includes("ctrl+c"))).toBe(false);
-  expect(map.hint("focus.search", "editor")).toBe("<leader>f");
-  expect(map.hint("focus.search", "search")).toBe("<C-f>");
+  expect(map.hint("focus.search", "editor")).toBe("");
+  expect(map.hint("focus.search", "search")).toBe("");
   expect(map.hint("sidebar.toggle", "workspace")).toBe("<leader>b");
   expect(map.hint("sidebar.toggle", "editor")).toBe("<leader>b");
   expect(map.bound("ctrl+b", "prompt")).toBe(false);
 });
 
-test("세션 생성은 모든 문맥에서 leader+n만 기본으로 사용하고 Ctrl+N은 입력 소유자에 남긴다", () => {
-  // 입력·빈 화면·탭 줄에서도 공통 생성 명령은 같은 시퀀스여야 한다.
+test("Workspace defaults use only leader+b and reading surfaces own Ctrl+F/B", () => {
+  const map = defaultKeymap();
+  for (const context of ["prompt", "editor", "terminal", "transcript", "transcript-text", "workspace", "search"] as const) {
+    expect(map.hint("sidebar.toggle", context)).toBe("<leader>b");
+    expect(map.hints("focus.search", context)).toBe(""); expect(map.hints("focus.sidebar", context)).toBe("");
+  }
+  expect(map.bound("ctrl+f", "prompt")).toBe(false); expect(map.bound("ctrl+f", "terminal")).toBe(false);
+  expect(map.hint("transcript.page-down", "transcript")).toBe("<C-f>");
+  expect(map.hint("transcript.page-up", "transcript-text")).toBe("<C-b>");
+  expect(map.hint("terminal.copy-page-down", "terminal-copy")).toBe("<C-f>");
+});
+
+test.each(["ctrl+b", "ctrl+f"])("An explicit %s leader wins optional default page chords without losing PageUp/Down", leader => {
+  const map = expectOk(parseKeymap({ leader }));
+  const command = leader === "ctrl+b" ? "transcript.page-up" : "transcript.page-down";
+  expect(map.hints(command, "transcript")).toBe(leader === "ctrl+b" ? "<PageUp>" : "<PageDown>");
+  expect(map.hint("sidebar.toggle", "transcript")).toBe("<leader>b");
+  expect(expectError(parseKeymap({ leader, bindings: { [command]: [{ keys: leader, scope: "transcript" }] } })).code).toBe("INVALID_INPUT");
+});
+
+test("Session creation defaults only to leader+c in all contexts while Ctrl+N stays input-owned", () => {
+  // Input, empty views, and tab strips share the same creation sequence.
   const map = defaultKeymap();
 
-  // 힌트와 실제 단축키 구성을 함께 확인한다.
+  // Verify hints alongside actual binding configuration.
   for (const context of ["prompt", "terminal", "button", "none", "session-tabs", "terminal-tabs"] as const) {
-    expect(map.hints("tab.new", context)).toBe("<leader>n");
+    expect(map.hints("tab.new", context)).toBe("<leader>c");
   }
 
   // 별도의 생성 키는 기본에서 제거하되 기존 탭 탐색은 그대로 유지한다.
@@ -33,8 +53,34 @@ test("세션 생성은 모든 문맥에서 leader+n만 기본으로 사용하고
   expect(map.hints("terminal.tab-next", "terminal-tabs")).toContain("<C-n>");
 });
 
-test("방향키 바인딩은 유지하되 단축키 안내에는 대체 탐색 키만 표시한다", () => {
-  // 방향키가 먼저 등록된 검색과 Git에서도 대체 키를 안내해야 한다.
+test("Output navigation uses only leader+[ and removes auxiliary input-return/terminal-toggle defaults", () => {
+  // Enter app output navigation through the same command on every screen.
+  const map = defaultKeymap();
+
+  for (const context of ["prompt", "terminal"] as const) {
+    expect(map.hints("output.read", context)).toBe("<leader>[");
+    expect(map.bound("ctrl+t", context)).toBe(false); expect(map.bound("ctrl+e", context)).toBe(false);
+  }
+
+  expect(map.hints("focus.transcript", "prompt")).toBe("");
+  expect(map.hints("terminal.previous", "terminal")).toBe(""); expect(map.hints("terminal.next", "terminal")).toBe("");
+  expect(map.bindings.some(binding => binding.displayKeys.join(" ") === "<leader> o")).toBe(false);
+});
+
+test("Creation, detach, usage, and tab defaults never collide and input focus has no default binding", () => {
+  // Shared actions receive one leader sequence per command regardless of input context.
+  const map = defaultKeymap();
+
+  for (const context of ["prompt", "terminal", "session-tabs", "terminal-tabs", "transcript", "terminal-copy"] as const) {
+    expect(map.hints("tab.new", context)).toBe("<leader>c");
+    expect(map.hints("tab.next", context)).toBe("<leader>n"); expect(map.hints("tab.previous", context)).toBe("<leader>p");
+    expect(map.hints("app.detach", context)).toBe("<leader>d"); expect(map.hints("dashboard.show", context)).toBe("<leader>u");
+    expect(map.hints("focus.prompt", context)).toBe("");
+  }
+});
+
+test("Arrow bindings remain active while hints show alternative navigation keys only", () => {
+  // Search and Git register arrows first but must hint their alternatives.
   const map = defaultKeymap();
 
   // 안내용 조회는 실제 입력 라우팅에 쓰이는 바인딩을 변경하지 않는다.
@@ -102,13 +148,13 @@ test.each([
   expect(expectError(parseKeymap(config)).code).toBe("INVALID_INPUT");
 });
 
-test("명시한 설정 파일을 읽고 파일 누락과 손상된 JSON을 구분한다", async () => {
+test("Explicit config reads distinguish missing files from malformed JSON", async () => {
   const directory = await mkdtemp(join(tmpdir(), "radian-keys-")); const path = join(directory, "keys.json");
   try {
     expect(expectError(await loadKeymap(path)).code).toBe("STORAGE_FAILED");
     await writeFile(path, "{"); expect(expectError(await loadKeymap(path)).code).toBe("INVALID_INPUT");
     await writeFile(path, JSON.stringify({ leader: "ctrl+b" }));
     const map = expectOk(await loadKeymap(path));
-    expect(map.leader).toEqual(["ctrl+b"]); expect(map.hint("app.detach", "none")).toBe("<leader>c");
+    expect(map.leader).toEqual(["ctrl+b"]); expect(map.hint("app.detach", "none")).toBe("<leader>d");
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

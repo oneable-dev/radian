@@ -1,3 +1,4 @@
+import { openWorkspaceSearch } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { InputRenderable, ScrollBoxRenderable, parseKeypress } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
@@ -43,7 +44,7 @@ async function mount(surface: Surface) {
   if (surface === "model") {
     const prompt = get("session-prompt") as InputRenderable;
     prompt.focus(); prompt.value = "/model"; await render(); clock.advance(150); await render(); app.mockInput.pressEnter(); await render(); app.mockInput.pressKey("/");
-  } else if (surface === "workspace") app.mockInput.pressKey("f", { ctrl: true });
+  } else if (surface === "workspace") openWorkspaceSearch(app);
   else { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey(surface === "history" ? "h" : "s"); }
   await render();
   const input = get(surface === "workspace" ? "workspace-search" : `${surface}-search`) as InputRenderable;
@@ -52,8 +53,8 @@ async function mount(surface: Surface) {
     async close() { view.dispose(); await app.dispose(); } };
 }
 
-test.each(surfaces)("%s 검색 팝업을 닫고 다시 열면 이전 검색어 없이 새 입력을 받는다", async surface => {
-  // 같은 검색 입력 인스턴스를 재사용해도 팝업의 검색어는 초안으로 보존하지 않는다.
+test.each(surfaces)("Reopening %s search popups starts fresh input without old queries", async surface => {
+  // Reusing input instances must not preserve popup queries as drafts.
   const app = await mount(surface);
   try {
     await app.mockInput.typeText("candidate-1"); await app.render();
@@ -64,7 +65,7 @@ test.each(surfaces)("%s 검색 팝업을 닫고 다시 열면 이전 검색어 �
       const prompt = app.get("session-prompt") as InputRenderable;
       prompt.focus(); prompt.value = "/model"; await app.render(); app.clock.advance(150); await app.render();
       app.mockInput.pressEnter(); await app.render(); app.mockInput.pressKey("/");
-    } else if (surface === "workspace") app.mockInput.pressKey("f", { ctrl: true });
+    } else if (surface === "workspace") openWorkspaceSearch(app);
     else { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey(surface === "history" ? "h" : "s"); }
     await app.render();
 

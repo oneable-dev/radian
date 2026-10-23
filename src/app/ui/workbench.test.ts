@@ -1,3 +1,4 @@
+import { openWorkspaceSearch } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -23,11 +24,11 @@ async function mount(repositories: readonly Repository[] = demoWorkspace(), opti
   await setup.renderOnce();
   return {
     ...setup, selection, requests, view,
-    async openWorkspaces() { setup.mockInput.pressKey("f", { ctrl: true }); await setup.renderOnce(); },
+    async openWorkspaces() { openWorkspaceSearch(setup); await setup.renderOnce(); },
     async openHistory() { setup.mockInput.pressKey(" ", { ctrl: true }); setup.mockInput.pressKey("h"); await setup.renderOnce(); },
     async clickText(text: string): Promise<void> {
       if (text.startsWith(icons.folder) || text === "radian-empty" || text.startsWith("Search")) {
-        setup.mockInput.pressKey("f", { ctrl: true }); setup.mockInput.pressCtrlC(); await setup.renderOnce();
+        openWorkspaceSearch(setup); setup.mockInput.pressCtrlC(); await setup.renderOnce();
       } else if (setup.renderer.root.findDescendantById("workspace-picker")!.visible) { setup.mockInput.pressEscape(); await setup.renderOnce(); }
       const lines = setup.captureCharFrame().split("\n");
       const y = lines.findIndex((line) => line.includes(text));
@@ -47,7 +48,7 @@ async function mount(repositories: readonly Repository[] = demoWorkspace(), opti
         .map((line) => line.slice(tree.x, tree.x + tree.width)).join("\n");
     },
     async searchFor(query: string): Promise<void> {
-      setup.mockInput.pressKey("f", { ctrl: true });
+      openWorkspaceSearch(setup);
       setup.mockInput.pressCtrlC();
       await setup.renderOnce();
       await setup.mockInput.typeText(query);
@@ -72,7 +73,7 @@ test("마우스로 세션과 워크트리를 선택하면 마지막 선택과 �
   } finally { await app.close(); }
 });
 
-test("닫기 키는 끝 항목의 이전 세션을 선택하고 마지막 항목에서는 빈 화면을 표시한다", async () => {
+test("Close keys choose previous sessions at the end and empty screens for final entries", async () => {
   // The close callback reports metadata removal, not a real agent shutdown.
   const app = await mount();
   try {
@@ -92,7 +93,7 @@ test("닫기 키는 끝 항목의 이전 세션을 선택하고 마지막 항목
     expect(app.selection.worktree?.sessions).toHaveLength(0);
     expect(app.captureCharFrame()).toContain("No AI sessions");
     expect(app.renderer.root.findDescendantById("agent-session-list")!.visible).toBe(true);
-    expect(app.captureCharFrame().split("\n")[23]).toContain("<leader>n New session");
+    expect(app.captureCharFrame().split("\n")[23]).toContain("<leader>c New session");
   } finally { await app.close(); }
 });
 
@@ -114,7 +115,7 @@ test("행의 닫기 액션은 부모 세션을 잘못 선택하지 않는다", a
   } finally { await app.close(); }
 });
 
-test("빈 워크트리의 생성 명령은 요청만 보내며 선택이나 열린 목록을 조작하지 않는다", async () => {
+test("Empty-worktree creation sends requests without manipulating selection or open lists", async () => {
   // No sessions exist in the empty worktree before the user requests creation.
   const app = await mount();
   try {
@@ -123,7 +124,7 @@ test("빈 워크트리의 생성 명령은 요청만 보내며 선택이나 열�
 
     // The action crosses the host callback boundary without implementing OA-5.
     app.renderer.root.findDescendantById("agent-session-list")!.focus();
-    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("n"); await app.renderOnce();
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("c"); await app.renderOnce();
 
     // No runtime, automatic selection or placeholder session was manufactured.
     expect(app.requests).toEqual(["demo:empty"]);
@@ -471,12 +472,12 @@ test("작은 터미널로 크기를 바꿔도 검색어와 포커스를 유지�
   } finally { await app.close(); }
 });
 
-test("레거시 Esc의 20ms 구분 시간이 지나면 팝업을 닫고 다시 연 입력의 첫 글자를 보존한다", async () => {
+test("Legacy Esc closes popups after the 20ms distinction window and preserves reopened input's first character", async () => {
   // A bare Escape is ambiguous with Alt-key input until Core's parser timeout.
   const clock = new ManualClock();
   const app = await mount(demoWorkspace(), { kittyKeyboard: false, clock });
   try {
-    app.mockInput.pressKey("f", { ctrl: true });
+    openWorkspaceSearch(app);
     await app.mockInput.typeText("missing");
     await app.renderOnce();
     expect(app.captureCharFrame()).toContain("No matching workspaces");
