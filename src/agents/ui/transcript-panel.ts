@@ -1,8 +1,9 @@
 import {
-  BoxRenderable, EditBufferRenderable, ScrollBoxRenderable, SyntaxStyle, TextAttributes, TextRenderable,
-  type CliRenderer, type KeyEvent, type OptimizedBuffer, type PasteEvent, type Renderable,
+  BoxRenderable, InputRenderable, InputRenderableEvents, ScrollBoxRenderable, SyntaxStyle, TextAttributes, TextRenderable,
+  type CliRenderer, type KeyEvent, type MouseEvent, type OptimizedBuffer, type Renderable,
 } from "@opentui/core";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
+import { keyToken, type Keymap } from "../../keybindings/config.ts";
 import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { Clipboard } from "../../ui/clipboard.ts";
@@ -21,13 +22,13 @@ import { formatRequestCaption, requestForSection } from "./request-caption.ts";
 import { RadianLogo } from "../../ui/radian-logo.ts";
 import { maximumPreviewImageBytes, type TranscriptImageProvider } from "../transcript-images.ts";
 import { TranscriptImagePreview } from "./transcript-image.ts";
+import { validateBrowserUrl, openBrowserUrl } from "../../browser.ts";
+import { transcriptLinkAt } from "../transcript-links.ts";
 
-// Reuse native grapheme-aware cursor/selection/layout, but never install editing or
-// paste handlers. Unbound keys (including a timed-out keymap prefix) are inert.
-class TranscriptBody extends EditBufferRenderable {
-  handleKeyPress(_key: KeyEvent): boolean { return true; }
-  handlePaste(_event: PasteEvent): void {}
-}
+import { TranscriptBody } from "./transcript-reader.ts";
+import { VimText, type VimRange } from "../transcript-vim-text.ts";
+import { TranscriptVim, type VimContext, type VimEffect } from "../transcript-vim.ts";
+import { transcriptVimAction, vimCharacter, vimPendingHint } from "./transcript-vim-bindings.ts";
 type Row = { section: TranscriptSection; request: RequestSummary | undefined; box: BoxRenderable; heading: BoxRenderable;
   header: TranscriptBody; error: TextRenderable; bodyRow: BoxRenderable; skillTag: TextRenderable; body: TranscriptBody;
   markdown: TranscriptMarkdown | undefined; markdownKind: "assistant" | "thinking" | undefined; completion: TextRenderable; completionWidth: number; preview?: TranscriptImagePreview };
@@ -38,6 +39,7 @@ const maximumCachedSections = 600;
 const maximumCachedTextBytes = 2 * 1024 * 1024;
 
 type Target = { position: number } | { id: string; offset: number } | { reveal: true };
+type LinkPress = { x: number; y: number; sessionId: string | null; url: string | null; reader: TranscriptBody | undefined; source: string | undefined };
 function sameSection(a: TranscriptSection, b: TranscriptSection): boolean {
   return a === b || a.id === b.id && a.text === b.text && a.title === b.title && a.kind === b.kind
     && a.status === b.status && a.error === b.error && a.summary === b.summary && a.skillName === b.skillName
@@ -67,6 +69,7 @@ export type TranscriptOptions = {
   saveView?(id: string, state: TranscriptViewState): void;
   keyHint?(command: CommandId, context: KeyContext): string;
   copy?(text: string): Promise<Result<string, ExpectedError>>;
+  openUrl?(url: string): Promise<Result<void, ExpectedError>>;
   image?: TranscriptImageProvider;
   cacheSessions?: boolean;
   emptyLogo?: boolean;
@@ -76,6 +79,12 @@ export class TranscriptPanel {
   readonly scroll: ScrollBoxRenderable;
   private readonly help: TextRenderable;
   private readonly empty: RadianLogo;
+  private readonly vim = new TranscriptVim();
+  private vimModel: VimText | undefined;
+  private readonly searchLine: BoxRenderable;
+  private readonly searchInput: InputRenderable;
+  private readonly searchPrefix: TextRenderable;
+  private searchDirection: 1 | -1 = 1;
   private helpPosition = 0;
   private helpFollow = false;
   private rows = new Map<string, Row>();
@@ -87,6 +96,9 @@ export class TranscriptPanel {
   private readonly views: Record<string, TranscriptViewState>;
   private readonly positions: Record<string, number>;
   private readonly clipboard: Clipboard;
+  private linkPress: LinkPress | undefined;
+  private formattedSelection: ReturnType<CliRenderer["getSelection"]> = null;
+  private formattedSelectionKey = "";
   private sessionId: string | null = null;
   private readonly conversations = new Map<string, string>();
   private visible = false;
@@ -113,7 +125,9 @@ export class TranscriptPanel {
     this.proseSyntax = SyntaxStyle.create(renderer.nativeScene!); this.thinkingSyntax = SyntaxStyle.create(renderer.nativeScene!);
     this.scroll = new ScrollBoxRenderable(renderer, { id: "session-transcript", flexGrow: 1, minHeight: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, renderBefore: this.finishLayout,
+      onMouseDown: this.linkDown, onMouseUp: this.linkUp, onMouseDrag: () => { this.linkPress = undefined; },
       onMouseScroll: (event) => {
+        this.linkPress = undefined;
         if (event.modifiers.shift || this.help.visible) return;
         if (event.scroll?.direction === "down" && this.atBottom()) this.syncFollowingFromPosition();
         else if (event.scroll?.direction === "down" || event.scroll?.direction === "up" && this.scroll.scrollTop > 0) this.scrollIntent();
@@ -125,10 +139,20 @@ export class TranscriptPanel {
     this.scroll.add(this.help);
     // Viewport decorations must not become scrollable or selectable transcript content.
     this.scroll.viewport.add(this.empty);
+    this.searchLine = new BoxRenderable(renderer, { id: "transcript-search-line", position: "absolute", left: 0, bottom: 0, width: "100%", height: 1,
+      flexDirection: "row", visible: false, zIndex: 20,
+      onMouseDown: event => { event.stopPropagation(); if (event.button === 0) { event.preventDefault(); this.searchInput.focus(); } } });
+    this.searchPrefix = new TextRenderable(renderer, { width: 1, height: 1, selectable: false, content: "/" });
+    this.searchInput = new InputRenderable(renderer, { id: "transcript-search", flexGrow: 1, minWidth: 0, maxLength: 4096, placeholder: "Search current section" });
+    this.searchLine.add(this.searchPrefix); this.searchLine.add(this.searchInput); this.scroll.viewport.add(this.searchLine);
+    this.theme.input(this.searchInput, "ui.input", "ui.inputFocused");
+    this.theme.bindStyles(this.searchLine, styles => { this.searchLine.backgroundColor = styles["ui.inputFocused"].bg; paintText(this.searchPrefix, styles["ui.inputFocused"]); });
+    this.searchInput.on(InputRenderableEvents.INPUT, () => this.options.changed());
     this.scroll.verticalScrollBar.on("change", this.rememberScroll);
     this.scroll.content.on("resize", this.applyTarget);
     this.scroll.viewport.on("resize", this.resize);
     renderer.on("focused_renderable", this.focusChanged);
+    renderer.keyInput.on("paste", this.readPaste);
     renderer.on("resize", this.resize);
     renderer.addPostProcessFn(this.reflowCompletions);
     this.theme.scrollbars(this.scroll);
@@ -146,7 +170,11 @@ export class TranscriptPanel {
   private get state(): TranscriptViewState | undefined { return this.sessionId ? this.views[this.sessionId] : undefined; }
   private get selected(): Row | undefined { return this.state?.selectedId ? this.rows.get(this.state.selectedId) : undefined; }
   private reader(row: Row): TranscriptBody { return this.folded(row) || row.section.image ? row.header : row.body; }
-  private readerText(row: Row): string { return this.folded(row) || row.section.image ? row.header.plainText : row.section.text; }
+  private readerText(row: Row): string {
+    if (this.folded(row) || row.section.image) return row.header.plainText;
+    if (!row.body.formatted || row.body.plainText === row.section.text.replaceAll("\r\n", "\n")) return row.section.text;
+    return row.body.plainText;
+  }
   private rememberCursor(row: Row): void {
     const state = this.state; if (!state) return;
     if (this.folded(row) || row.section.image) (state.headingCursors ??= {})[row.section.id] = row.header.cursorOffset;
@@ -154,11 +182,12 @@ export class TranscriptPanel {
   }
   get focused(): boolean {
     const focused = this.renderer.currentFocusedRenderable;
-    return focused === this.scroll || !!focused && this.readers.has(focused);
+    return focused === this.scroll || this.searchLine.visible && focused === this.searchInput || !!focused && this.readers.has(focused);
   }
-  get focusTarget(): Renderable { return !this.help.visible && this.state?.mode !== "sections" && this.selected ? this.reader(this.selected) : this.scroll; }
+  get focusTarget(): Renderable { return this.searchLine.visible ? this.searchInput : !this.help.visible && this.state?.mode !== "sections" && this.selected ? this.reader(this.selected) : this.scroll; }
   keyContext(): KeyContext | null {
     if (!this.visible || !this.focused) return null;
+    if (this.searchLine.visible) return "transcript-search";
     if (this.help.visible) return "transcript";
     return this.state?.mode === "visual" ? "transcript-visual" : this.state?.mode === "text" ? "transcript-text" : "transcript";
   }
@@ -166,14 +195,15 @@ export class TranscriptPanel {
   get shortcuts(): readonly FooterShortcut[] {
     const context = this.keyContext(); if (!context) return [];
     const hint = (command: CommandId, label: string): FooterShortcut => ({ key: footerKeyHint(command, context, this.hint(command, context)), label });
+    if (context === "transcript-search") return [hint("transcript.search-submit", "Find"), hint("transcript.search-clear", "Clear"), hint("transcript.search-cancel", "Cancel")];
     if (this.help.visible) return [hint("transcript.next", "Scroll help"), hint("transcript.page-down", "Page"), hint("transcript.back", "Close help")];
     return context === "transcript" ? [hint("transcript.next", "Section"),
-      hint("transcript.enter", this.selected?.markdown && !this.folded(this.selected) ? "Source" : "Text"),
+      hint("transcript.enter", "Text"),
       ...(this.foldable(this.selected) ? [hint("transcript.fold", "Fold")] : []),
       hint("transcript.copy", "Copy section"), hint("transcript.half-page-down", "½ page"), hint("transcript.help", "Help"), hint("transcript.back", "Input")]
       : [hint("transcript.right", "Cursor"), hint("transcript.visual", "Select"), hint("transcript.visual-line", "Lines"),
-        hint("transcript.copy", context === "transcript-visual" ? this.state?.linewise ? "Copy lines" : "Copy selection" : "Copy line"),
-        hint("transcript.half-page-down", "½ page"), hint("transcript.help", "Help"), hint("transcript.back", "Back")];
+        hint("transcript.copy", context === "transcript-visual" ? this.state?.linewise ? "Copy lines" : "Copy selection" : "Yank motion"),
+        hint("transcript.open-link", "Open link"), hint("transcript.half-page-down", "½ page"), hint("transcript.help", "Help"), hint("transcript.back", "Back")];
   }
 
   update(id: string | null, sections: readonly TranscriptSection[] | undefined, output: string, visible: boolean, conversationId?: string): void {
@@ -188,6 +218,7 @@ export class TranscriptPanel {
     }
     const switched = id !== this.sessionId || replaced, returning = visible && !this.visible;
     const visibilityChanged = visible !== this.visible, hadFocus = this.focused;
+    if (switched || !visible) { this.linkPress = undefined; this.clearFormattedSelection(); this.cancelPending(); this.vimModel = undefined; }
     if (switched) {
       this.positionIntent = false; this.selectionHeldFor = null; this.geometry = undefined;
       this.switchRows(id, replaced, hadFocus);
@@ -229,7 +260,7 @@ export class TranscriptPanel {
         const previousText = row.section.text;
         row.section = section; row.request = request;
         if (section.completion) request = undefined;
-        if (previousText !== section.text) this.replaceBody(row, section.text);
+        if (previousText !== section.text) this.replaceBody(row, section.text, previousText);
         if (state && section.kind === "thinking" && Object.hasOwn(state.folded, section.id)) {
           // Old heading selections cannot be applied to the now always-visible body.
           if (state.folded[section.id] && state.selectedId === section.id && state.mode === "visual") {
@@ -254,7 +285,7 @@ export class TranscriptPanel {
         state.mode = "sections"; state.anchor = null; delete state.linewise;
       }
       if (state?.follow && !this.help.visible && !this.positionIntent) {
-        // Viewport following must not replace the section/source cursor being read.
+        // Viewport following must not replace the section/cursor being read.
         if (state.mode === "sections") {
           const latest = this.order.at(-1) ?? null;
           normalized ||= state.selectedId !== latest; state.selectedId = latest;
@@ -264,6 +295,7 @@ export class TranscriptPanel {
     }
     if (state && !state.selectedId) state.selectedId = this.order.at(-1) ?? null;
     if (previousSelected !== state?.selectedId) {
+      this.cancelPending(); this.vimModel = undefined;
       const previous = previousSelected ? this.rows.get(previousSelected) : undefined;
       if (previous) dirty.add(previous);
       if (this.selected) dirty.add(this.selected);
@@ -373,7 +405,12 @@ export class TranscriptPanel {
     this.theme.bind(box, () => this.paintRow(row));
     return row;
   }
-  private replaceBody(row: Row, text: string): void {
+  private replaceBody(row: Row, text: string, previous: string): void {
+    if (this.selected === row) {
+      if (!text.startsWith(previous)) this.vim.cancel();
+      this.vimModel = undefined;
+    }
+    if (row.body.formatted) return;
     const cursor = row.body.cursorOffset;
     row.body.setText(text); row.body.cursorOffset = cursor;
     if (this.state?.selectedId === row.section.id) this.applySelection(row);
@@ -448,23 +485,33 @@ export class TranscriptPanel {
     row.heading.visible = !cancelled && !skill && (folded || !this.legacy && (section.kind === "tool" || section.kind === "notice"));
     const markdownKind = !this.legacy && !skill && (section.kind === "assistant" || section.kind === "thinking") ? section.kind : undefined;
     if (row.markdownKind !== markdownKind) {
+      if (this.selected === row) this.vim.cancel();
+      if (row.markdown && row.bodyRow.parent === row.markdown.root) { row.markdown.root.remove(row.bodyRow); row.box.add(row.bodyRow); }
       row.markdown?.root.destroyRecursively(); row.markdown = undefined; row.markdownKind = markdownKind;
       if (markdownKind) {
         row.markdown = new TranscriptMarkdown(this.renderer, markdownKind === "thinking" ? this.thinkingSyntax : this.proseSyntax, markdownKind === "thinking",
           () => { if (this.isCurrentRow(row)) this.markdownChanging(); },
           (message) => { if (this.isCurrentRow(row)) this.options.notice(message); });
+        row.box.remove(row.bodyRow); row.markdown.root.add(row.bodyRow);
         row.box.remove(row.completion); row.box.add(row.markdown.root); row.box.add(row.completion);
         row.markdown.root.on("resize", () => {
           if (this.isCurrentRow(row) && this.visible && !this.help.visible && this.state?.follow && !this.positionIntent && !this.hasSelection()) { this.pending = { position: Infinity }; this.applyTarget(); }
         });
       }
     }
-    const source = selected && this.state?.mode !== "sections";
+    const reading = selected && this.state?.mode !== "sections";
     if (row.markdown) {
       row.markdown.update(section.text, section.status === "streaming");
-      row.markdown.root.visible = !folded && !source;
+      row.markdown.root.visible = !folded;
+      row.bodyRow.position = "absolute"; row.bodyRow.zIndex = -1;
+      row.bodyRow.left = 0; row.bodyRow.top = 0;
+      row.bodyRow.height = Math.max(1, row.markdown.root.height);
+      if (reading && !folded && !row.body.formatted) this.syncReader(row);
+    } else {
+      if (row.body.formatted) { row.body.clearProjection(); row.body.setText(section.text); }
+      row.bodyRow.position = "relative"; row.bodyRow.zIndex = 0; row.bodyRow.top = 0; row.bodyRow.height = "auto";
     }
-    row.bodyRow.visible = row.body.visible = !cancelled && !section.image && !folded && (!row.markdown || source);
+    row.bodyRow.visible = row.body.visible = !cancelled && !section.image && !folded && (!row.markdown || reading);
     const preview = section.image && !folded && this.visible && !this.help.visible;
     if (preview) {
       if (!row.preview) {
@@ -474,7 +521,8 @@ export class TranscriptPanel {
       }
       this.updatePreview(row);
     } else if (row.preview) { row.preview.dispose(); row.preview.root.destroyRecursively(); this.imagePreviews.delete(row); delete row.preview; }
-    row.body.height = skill ? 1 : "auto"; row.body.wrapMode = skill ? "none" : "word";
+    row.body.height = row.markdown ? Math.max(1, row.markdown.root.height) : skill ? 1 : "auto";
+    row.body.wrapMode = row.markdown || skill ? "none" : "word";
     row.skillTag.visible = skill;
     const headingText = this.headingText(section, folded);
     if (row.header.plainText !== headingText) {
@@ -520,7 +568,48 @@ export class TranscriptPanel {
       this.updatePreview(row);
       if (row.section.completion && row.completion.width !== row.completionWidth) { this.prepareLayoutChange(); this.paintCompletion(row); }
     }
+    const row = this.selected;
+    if (!row?.markdown || this.folded(row) || this.help.visible || this.state?.mode === "sections") { this.clearFormattedSelection(); return; }
+    this.syncReader(row);
+    row.bodyRow.top = 0;
+    row.bodyRow.height = row.body.height = Math.max(1, row.markdown.root.height);
+    this.syncFormattedSelection(row);
+    if (row.body.focused) {
+      const cursor = row.body.visualCursor, x = row.markdown.root.x + cursor.visualCol, y = row.markdown.root.y + cursor.visualRow;
+      const viewport = this.scroll.viewport;
+      this.renderer.setCursorStyle({ style: "block", blinking: false }); this.renderer.setCursorColor(row.body.cursorColor);
+      this.renderer.setCursorPosition(x + 1, y + 1, x >= viewport.x && x < viewport.x + viewport.width && y >= viewport.y && y < viewport.y + viewport.height);
+    }
   };
+  private syncReader(row: Row): void {
+    if (!row.markdown?.read(row.body)) return;
+    const state = this.state;
+    if (state && (row.body.plainText || !row.section.text.trim()) && !state.renderedCursors?.[row.section.id]) {
+      // Old source offsets can point at hidden syntax. Do not apply them to a
+      // different coordinate space, especially an old visual-selection anchor.
+      if (row.body.plainText !== row.section.text.replaceAll("\r\n", "\n")) {
+        delete state.cursors[row.section.id]; row.body.cursorOffset = 0;
+        if (state.selectedId === row.section.id && state.mode === "visual") { state.mode = "text"; state.anchor = null; delete state.linewise; }
+      }
+      (state.renderedCursors ??= {})[row.section.id] = true;
+    }
+    this.applySelection(row);
+  }
+  private clearFormattedSelection(): void {
+    if (this.formattedSelection && this.renderer.getSelection() === this.formattedSelection) this.renderer.clearSelection();
+    this.formattedSelection = null; this.formattedSelectionKey = "";
+  }
+  private syncFormattedSelection(row: Row): void {
+    const selection = row.body.getSelection(), root = row.markdown!.root;
+    if (!selection || this.state?.mode !== "visual" || !row.body.focused && !this.searchLine.visible) { this.clearFormattedSelection(); return; }
+    const start = row.body.pointAt(Math.min(selection.start, selection.end)), end = row.body.pointAt(Math.max(selection.start, selection.end) - 1);
+    if (!start || !end) return;
+    const key = JSON.stringify([root.num, row.body.displayRevision, root.x, root.y, start, end]);
+    if (key === this.formattedSelectionKey && this.renderer.getSelection() === this.formattedSelection) return;
+    this.renderer.startSelection(root, root.x + start.x, root.y + start.y);
+    this.renderer.updateSelection(root, root.x + end.x, root.y + end.y, { finishDragging: true });
+    this.formattedSelection = this.renderer.getSelection(); this.formattedSelectionKey = key;
+  }
   private updatePreview(row: Row): void {
     if (!row.preview || !row.section.image) return;
     let count = 0, bytes = 0;
@@ -572,11 +661,13 @@ export class TranscriptPanel {
     const labels: string[] = [];
     if (this.focused) {
       if (this.help.visible) labels.push("HELP");
+      else if (this.searchLine.visible) labels.push("SEARCH · section");
       else if (this.state?.mode === "visual") labels.push(this.state.linewise ? "VISUAL LINE" : "VISUAL");
       else if (this.state?.mode === "text") labels.push("TEXT");
     }
+    if (this.vim.status && this.focused && !this.help.visible) labels.push(vimPendingHint(this.vim.status,
+      command => this.hint(command, this.state?.mode === "visual" ? "transcript-visual" : "transcript-text")));
     if (this.state && !this.state.follow && !this.help.visible) labels.push("Paused");
-    if (this.focused && !this.help.visible && this.selected?.markdown && !this.folded(this.selected) && this.state?.mode !== "sections") labels.push("Markdown source");
     if (this.focused && this.legacy) labels.push("legacy preview");
     return labels.join(" · ");
   }
@@ -588,6 +679,7 @@ export class TranscriptPanel {
   }
   private focusChanged = (): void => {
     if (this.disposed || this.syncing || !this.visible) return;
+    if (!this.focused) this.cancelPending();
     this.paint(); this.refreshStatus();
   };
   private resize = (): void => {
@@ -641,13 +733,14 @@ export class TranscriptPanel {
   };
 
   followLatest(): void {
+    this.cancelPending();
     const state = this.state; if (!state || this.disposed) return;
     if (this.selected && state.mode !== "sections") this.rememberCursor(this.selected);
     state.mode = "sections"; state.anchor = null; delete state.linewise;
     state.selectedId = this.order.at(-1) ?? null; state.follow = true; this.help.visible = false;
     this.positionIntent = false; this.selectionHeldFor = null;
     for (const row of this.rows.values()) { row.header.clearSelection(); row.body.clearSelection(); }
-    // Submitting from Input must not steal focus. A hidden source cursor, if any,
+    // Submitting from Input must not steal focus. A hidden reading cursor, if any,
     // returns to section focus without triggering the normal user-navigation pause.
     this.syncing = true;
     try { if (this.focused) this.scroll.focus(); }
@@ -664,13 +757,16 @@ export class TranscriptPanel {
   }
   private restoreFocus(): void {
     if (!this.help.visible && this.state?.mode !== "sections" && this.selected) {
-      const row = this.selected, reader = this.reader(row);
+      const row = this.selected;
+      if (row.markdown && !this.folded(row)) this.syncReader(row);
+      const reader = this.reader(row);
       reader.cursorOffset = this.folded(row) || row.section.image ? this.state?.headingCursors?.[row.section.id] ?? 0 : this.state?.cursors[row.section.id] ?? 0;
       this.applySelection(row);
       reader.focus();
     } else this.scroll.focus();
   }
   private select(id: string): void {
+    this.cancelPending(); this.vimModel = undefined;
     if (!this.state || !this.rows.has(id)) return;
     if (this.selected) this.reader(this.selected).clearSelection();
     this.state.selectedId = id; this.state.mode = "sections"; this.state.anchor = null; delete this.state.linewise;
@@ -703,11 +799,34 @@ export class TranscriptPanel {
   }
   available(command: CommandId): boolean {
     if (!this.visible || !this.sessionId) return false;
+    if (this.searchLine.visible) return ["transcript.search-submit", "transcript.search-cancel", "transcript.search-clear"].includes(command);
+    if (["transcript.search-submit", "transcript.search-cancel", "transcript.search-clear"].includes(command)) return false;
     if (command === "transcript.fold" && !this.foldable(this.selected)) return false;
+    if (command === "transcript.open-link" && (this.help.visible || this.state?.mode === "sections")) return false;
     return this.help.visible || command === "transcript.help" || command === "transcript.back" || !!this.selected;
   }
-  command(command: CommandId): void {
+  command(command: CommandId, key?: KeyEvent): void {
     const state = this.state; if (!state || !this.available(command)) return;
+    if (this.searchLine.visible) {
+      if (command === "transcript.search-clear") { this.searchInput.value = ""; this.options.changed(); return; }
+      const query = this.searchInput.value, context = this.vimContext();
+      this.searchLine.visible = false; this.restoreFocus();
+      if (command === "transcript.search-submit" && context) this.applyVim(this.vim.submitSearch(query, this.searchDirection, context));
+      else { this.vim.cancel(); this.save(); this.options.changed(); }
+      return;
+    }
+    if (!this.help.visible && state.mode !== "sections" && this.selected) {
+      if (command === "transcript.back" && this.vim.pending) { this.vim.cancel(); this.save(); this.options.changed(); return; }
+      if (command === "transcript.count" || command === "transcript.line-start" && key && keyToken(key) === "0" && this.vim.hasCount) {
+        this.vim.digit(key ? vimCharacter(key) ?? "" : ""); this.save(); this.options.changed(); return;
+      }
+      if (command === "transcript.copy" && state.mode === "text" && !this.vim.pending && (this.reader(this.selected).hasSelection() || this.mouseSelectionText() !== null)) {
+        this.copy(false); this.save(); this.options.changed(); return;
+      }
+      const action = transcriptVimAction(command), context = this.vimContext();
+      if (action && context) { this.applyVim(this.vim.command(action, context)); return; }
+    }
+    this.vim.cancel();
     if (this.help.visible && command !== "transcript.help") {
       const page = Math.max(1, this.scroll.viewport.height - 1);
       if (command !== "transcript.back") this.pending = null;
@@ -755,6 +874,10 @@ export class TranscriptPanel {
         if (row) this.toggleVisual(row, command === "transcript.visual-line");
         break;
       case "transcript.copy": case "transcript.copy-section": this.copy(command === "transcript.copy-section"); break;
+      case "transcript.open-link": {
+        if (row) this.openCursorLink(this.reader(row), true);
+        return;
+      }
       case "transcript.latest": this.followLatest(); return;
       case "transcript.help": this.toggleHelp(); break;
       case "transcript.page-up": case "transcript.page-down": case "transcript.half-page-up": case "transcript.half-page-down": {
@@ -772,6 +895,7 @@ export class TranscriptPanel {
   }
   private move(row: Row, command: CommandId, visualRows = false): void {
     const body = this.reader(row);
+    if (command !== "transcript.up" && command !== "transcript.down") body.resetVerticalGoal();
     // Native editor shortcuts collapse an existing selection before moving. This
     // reader owns its visual anchor, so move the cursor first, then reapply it.
     body.clearSelection();
@@ -788,6 +912,14 @@ export class TranscriptPanel {
       case "transcript.word-next": body.moveWordForward(); break;
       case "transcript.word-previous": body.moveWordBackward(); break;
       case "transcript.line-start": body.gotoLineStart(); break;
+      case "transcript.line-first-nonblank": {
+        const row = body.logicalCursor.row, line = body.plainText.split("\n")[row] ?? "";
+        const leading = /^[ \t]*/u.exec(line)![0];
+        body.setCursor(row, body.editBuffer.measureText(leading));
+        // Vim's ^ stops on the last blank when a nonempty line is all whitespace.
+        if (line && leading.length === line.length) body.moveCursorLeft();
+        break;
+      }
       case "transcript.line-end": body.gotoLineTextEnd(); break;
       case "transcript.buffer-start": body.gotoBufferHome(); break;
       case "transcript.buffer-end": body.gotoBufferEnd(); break;
@@ -806,12 +938,13 @@ export class TranscriptPanel {
     const original = source.split("\n");
     return text.replace(/\r?\n/g, () => original[line++]?.endsWith("\r") ? "\r\n" : "\n");
   }
-  private copy(whole: boolean): void {
+  private copy(whole: boolean, range?: VimRange): void {
     const row = this.selected, state = this.state;
     if (!row || !state) return;
     const reader = this.reader(row), visibleText = this.readerText(row);
-    const text = whole || state.mode === "sections" ? row.section.text : state.mode === "visual" || reader.hasSelection() ? this.selectedText(row)
-      : visibleText.split("\n")[reader.logicalCursor.row] ?? "";
+    const mouseText = !whole && !range && state.mode !== "sections" ? this.mouseSelectionText() : null;
+    const text = range ? this.copyRange(row, range) : whole || state.mode === "sections" ? row.section.text : state.mode === "visual" || reader.hasSelection() ? this.selectedText(row)
+      : mouseText ?? visibleText.split("\n")[reader.logicalCursor.row] ?? "";
     if (!text) { this.options.notice("No text to copy"); return; }
     const sessionId = this.sessionId, selectedId = state.selectedId, anchor = state.anchor, cursor = reader.cursorOffset;
     const linewise = state.linewise, source = row.section.text;
@@ -826,6 +959,135 @@ export class TranscriptPanel {
       }
     }).catch((error: unknown) => { const message = reportUnexpected(error, "transcript copy"); if (!this.disposed) this.options.notice(message); });
   }
+  private mouseSelectionText(): string | null {
+    const selection = this.renderer.getSelection();
+    if (!selection?.isActive || selection === this.formattedSelection || !selection.selectedRenderables.length) return null;
+    const owned = selection.selectedRenderables.every(renderable => {
+      for (let node: Renderable | null = renderable; node; node = node.parent) if (node === this.scroll.content) return true;
+      return false;
+    });
+    return owned ? selection.getSelectedText() || null : null;
+  }
+  private vimContext(): VimContext | null {
+    const row = this.selected; if (!row || !this.state || this.state.mode === "sections") return null;
+    const reader = this.reader(row), panel = this;
+    // Prefixes and native visual-row motion need no document segmentation/copy.
+    return {
+      get model() {
+        const text = reader.plainText;
+        if (panel.vimModel?.text !== text) panel.vimModel = new VimText(text);
+        return panel.vimModel;
+      },
+      get cursor() { return reader.getTextRange(0, reader.cursorOffset).length; },
+      visual: this.state.mode === "visual",
+    };
+  }
+  captureKey(key: KeyEvent, keymap: Keymap): boolean {
+    const context = this.keyContext();
+    if (!context || context === "transcript-search" || context === "transcript" || this.help.visible) return false;
+    if (this.vim.awaitingCharacter) {
+      const character = vimCharacter(key), state = this.vimContext();
+      if (character !== null && state) { this.applyVim(this.vim.character(character, state)); return true; }
+      if (key.name === "escape") return false;
+      this.vim.cancel(); this.save(); this.options.changed();
+      // Preserve configured global controls, but consume unbound cancel/edit keys
+      // through release so repeats cannot edit a subsequently focused prompt.
+      return !keymap.bound(keyToken(key), context);
+    }
+    if (this.vim.pending && !keymap.bound(keyToken(key), context)) {
+      const digit = this.vim.hasCount ? vimCharacter(key) : null;
+      if (digit !== null && /^[0-9]$/u.test(digit)) this.vim.digit(digit);
+      else this.vim.cancel();
+      this.save(); this.options.changed(); return true;
+    }
+    return false;
+  }
+  private readPaste = (): void => {
+    const context = this.keyContext();
+    if (context === "transcript-text" || context === "transcript-visual") { this.vim.cancel(); this.save(); this.options.changed(); }
+  };
+  cancelPending(): void {
+    this.vim.cancel(); this.searchLine.visible = false;
+    if (!this.disposed) this.refreshStatus();
+  }
+  private applyVim(effect: VimEffect): void {
+    const row = this.selected, state = this.state;
+    if (!row || !state) return;
+    const reader = this.reader(row), context = this.vimContext(); if (!context) return;
+    const offset = (position: number) => reader.editBuffer.measureText(reader.plainText.slice(0, position));
+    if (effect.type === "move" || effect.type === "native" || effect.type === "select") reader.focus();
+    switch (effect.type) {
+      case "none": break;
+      case "notice": this.options.notice(effect.message); break;
+      case "search":
+        this.rememberCursor(row);
+        this.searchDirection = effect.direction; this.searchPrefix.content = effect.direction === 1 ? "/" : "?";
+        this.searchInput.value = ""; this.searchLine.visible = true; this.searchInput.focus(); break;
+      case "copy-selection": this.copy(false); break;
+      case "yank": this.copy(false, effect.range); break;
+      case "native":
+        for (let index = 0; index < effect.count; index++) {
+          const before = reader.cursorOffset; this.move(row, effect.motion === "up" ? "transcript.up" : "transcript.down");
+          if (reader.cursorOffset === before) break;
+        }
+        break;
+      case "move":
+        reader.clearSelection(); reader.resetVerticalGoal(); reader.cursorOffset = offset(effect.position);
+        this.applySelection(row); this.positionIntent = true; this.pending = { reveal: true }; break;
+      case "select":
+        if (effect.range.end <= effect.range.start) { this.options.notice("No text in object"); break; }
+        state.mode = "visual"; state.anchor = offset(effect.range.start);
+        if (effect.range.linewise) state.linewise = true; else delete state.linewise;
+        reader.clearSelection(); reader.cursorOffset = offset(context.model.previousCharacter(effect.range.end));
+        this.applySelection(row); this.positionIntent = true; this.pending = { reveal: true }; break;
+    }
+    this.reconcileSelection(); this.paint(); this.applyTarget(); this.save(); this.options.changed();
+  }
+  private copyRange(row: Row, range: VimRange): string {
+    const reader = this.reader(row), text = reader.plainText.slice(range.start, range.end), source = this.readerText(row);
+    if (!source.includes("\r\n")) return text;
+    let line = reader.plainText.slice(0, range.start).split("\n").length - 1;
+    const original = source.split("\n");
+    return text.replace(/\n/gu, () => original[line++]?.endsWith("\r") ? "\r\n" : "\n");
+  }
+  private linkDown = (event: MouseEvent): void => {
+    this.cancelPending(); this.linkPress = undefined;
+    if (!this.visible || this.help.visible || event.button !== 0 || event.modifiers.ctrl || event.modifiers.alt || event.modifiers.shift) return;
+    const url = this.renderer.getLinkAt(event.x, event.y);
+    const reader = event.target instanceof TranscriptBody ? event.target : undefined;
+    if (url || reader) this.linkPress = { x: event.x, y: event.y, sessionId: this.sessionId, url, reader, source: reader?.plainText };
+  };
+  private linkUp = (event: MouseEvent): void => {
+    const press = this.linkPress; this.linkPress = undefined;
+    if (!press || !this.visible || this.help.visible || event.button !== 0 || event.x !== press.x || event.y !== press.y
+      || event.modifiers.ctrl || event.modifiers.alt || event.modifiers.shift || press.sessionId !== this.sessionId) return;
+    if (press.url) {
+      if (this.renderer.getLinkAt(event.x, event.y) === press.url) void this.openLink(press.url).catch(this.linkFailure);
+      return;
+    }
+    const reader = press.reader, row = this.selected;
+    if (!reader || reader.isDestroyed || reader !== event.target || reader.plainText !== press.source || !row || this.reader(row) !== reader) return;
+    // A native cursor clamps clicks beyond EOL. Do not treat blank margins as links.
+    const cursor = reader.visualCursor;
+    if (event.x !== reader.x + cursor.visualCol || event.y !== reader.y + cursor.visualRow) return;
+    this.openCursorLink(reader, false);
+  };
+  private linkFailure = (error: unknown): void => {
+    const message = reportUnexpected(error, "transcript link");
+    if (!this.disposed) this.options.notice(message);
+  };
+  private openCursorLink(reader: TranscriptBody, notify: boolean): void {
+    const offset = reader.getTextRange(0, reader.cursorOffset).length;
+    const url = reader.linkAtCursor() ?? transcriptLinkAt(reader.plainText, offset);
+    if (url) void this.openLink(url).catch(this.linkFailure);
+    else if (notify) this.options.notice("No HTTP(S) link under the cursor");
+  }
+  private async openLink(url: string): Promise<void> {
+    const checked = validateBrowserUrl(url);
+    if (!checked.ok) { this.options.notice(`[${checked.error.code}] ${checked.error.message}`); return; }
+    const result = await (this.options.openUrl ?? openBrowserUrl)(checked.value);
+    if (!this.disposed && !result.ok) this.options.notice(`[${result.error.code}] ${result.error.message}`);
+  }
   private toggleHelp(): void {
     if (this.help.visible) {
       this.help.visible = false; this.paint();
@@ -835,12 +1097,24 @@ export class TranscriptPanel {
     this.helpPosition = this.scroll.scrollTop; this.helpFollow = this.state?.follow ?? false;
     this.setFollowing(false); this.positionIntent = false;
     this.help.visible = true;
-    this.help.content = `Sections: ${this.hint("transcript.previous", "transcript")}/${this.hint("transcript.next", "transcript")} move · ${this.hint("transcript.enter", "transcript")} cursor in Markdown source / visible text · ${this.hint("transcript.fold", "transcript")} fold/unfold\n`
-      + `Text/visual: ${this.hint("transcript.left", "transcript-text")}/${this.hint("transcript.right", "transcript-text")} characters · ${this.hint("transcript.word-next", "transcript-text")}/${this.hint("transcript.word-previous", "transcript-text")} words · ${this.hint("transcript.line-start", "transcript-text")}/${this.hint("transcript.line-end", "transcript-text")} line · ${this.hint("transcript.buffer-start", "transcript-text")}/${this.hint("transcript.buffer-end", "transcript-text")} section\n`
-      + `${this.hint("transcript.visual", "transcript-text")} select (inclusive) · ${this.hint("transcript.visual-line", "transcript-text")} select logical lines · ${this.hint("transcript.copy", "transcript")} copy section/line/selection by mode · ${this.hint("transcript.copy-section", "transcript")} whole section\n`
+    const textHint = (command: CommandId) => this.hint(command, "transcript-text");
+    const wordCommands = ["transcript.word-next", "transcript.word-previous", "transcript.word-end", "transcript.big-word-next", "transcript.big-word-previous", "transcript.big-word-end"] as const;
+    const wordKeys = wordCommands.map(textHint).filter(Boolean).join("/");
+    const yank = textHint("transcript.copy"), inner = textHint("transcript.inner-object"), around = textHint("transcript.around-object"), count = textHint("transcript.count");
+    this.help.content = `Sections: ${this.hint("transcript.previous", "transcript")}/${this.hint("transcript.next", "transcript")} move · ${this.hint("transcript.enter", "transcript")} cursor in formatted / visible text · ${this.hint("transcript.fold", "transcript")} fold/unfold\n`
+      + `Text/visual: ${this.hint("transcript.left", "transcript-text")}/${this.hint("transcript.right", "transcript-text")} characters · ${wordKeys} words · ${this.hint("transcript.line-start", "transcript-text")}/${this.hint("transcript.line-first-nonblank", "transcript-text")}/${this.hint("transcript.line-end", "transcript-text")} line start/first nonblank/end · ${this.hint("transcript.buffer-start", "transcript-text")}/${this.hint("transcript.buffer-end", "transcript-text")} section\n`
+      + `${this.hint("transcript.open-link", "transcript-text")} open HTTP(S) link under the cursor in the default browser; click a rendered link to open it.\n`
+      + `${this.hint("transcript.visual", "transcript-text")} select (inclusive) · ${this.hint("transcript.visual-line", "transcript-text")} select logical lines · ${this.hint("transcript.copy", "transcript")} copy section/selection; in Text starts a yank operator · ${this.hint("transcript.copy-section", "transcript")} raw whole section\n`
+      + (yank ? `${yank}${yank} yank logical line (real newline only); combine ${yank} with a motion/object. ` : "")
+      + (inner ? `${inner}w inner word, ${inner}W WORD, ${inner}p paragraph; ${inner} followed by a quote/bracket selects its inside. ` : "")
+      + (around ? `${around} selects the same objects including surrounding whitespace/delimiters.\n` : "\n")
+      + (count ? `${count}… starts a count before motions or on either side of yank (maximum 9999). ` : "Numeric count input is unbound. ")
+      + `${this.hint("transcript.back", "transcript-text")} cancels unfinished commands first.\n`
+      + `${textHint("transcript.find-forward")}/${textHint("transcript.find-backward")}/${textHint("transcript.till-forward")}/${textHint("transcript.till-backward")} + character finds within the logical line; ${textHint("transcript.find-repeat")}/${textHint("transcript.find-reverse")} repeat/reverse.\n`
+      + `${textHint("transcript.search-forward")}/${textHint("transcript.search-backward")} literal search in the current reading section; ${this.hint("transcript.search-submit", "transcript-search")} accepts, ${this.hint("transcript.search-cancel", "transcript-search")} cancels, ${this.hint("transcript.search-clear", "transcript-search")} clears only the query. ${textHint("transcript.search-next")}/${textHint("transcript.search-previous")} repeat; ${textHint("transcript.search-word-forward")}/${textHint("transcript.search-word-backward")} search whole word.\n`
       + `${this.hint("transcript.half-page-down", "transcript")}/${this.hint("transcript.half-page-up", "transcript")} half-page section jump; Text/Visual moves the cursor · linewise selection follows logical lines, not soft wraps\n`
       + `Following resumes at the viewport bottom and pauses above it; selections protect the view.\n`
-      + `Markdown: sections show formatted prose; <CR> reads the original source, <Esc> returns to formatting.\n`
+      + `Markdown stays formatted while reading and selecting; copy lines/selections as displayed, or copy the whole raw section.\n`
       + `Context compacted summaries start folded; click their heading or use ${this.hint("transcript.fold", "transcript")} to expand/collapse.\n`
       + `Image attachments show [read] filename, start folded, and preview on header click or ${this.hint("transcript.fold", "transcript")}.\n`
       + `Thinking is always visible as gray italic text and never folds.\n`
@@ -907,9 +1181,11 @@ export class TranscriptPanel {
   };
   dispose(): void {
     if (this.disposed) return;
-    this.rememberScroll(); this.disposed = true;
+    this.rememberScroll(); this.disposed = true; this.vimModel = undefined;
     this.renderer.off("focused_renderable", this.focusChanged);
+    this.renderer.keyInput.off("paste", this.readPaste);
     this.renderer.off("resize", this.resize);
+    this.clearFormattedSelection();
     this.renderer.removePostProcessFn(this.reflowCompletions);
     this.scroll.verticalScrollBar.off("change", this.rememberScroll);
     this.scroll.content.off("resize", this.applyTarget); this.scroll.viewport.off("resize", this.resize);

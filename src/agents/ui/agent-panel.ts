@@ -1,6 +1,6 @@
 import {
   BoxRenderable, InputRenderableEvents, ScrollBoxRenderable,
-  type CliRenderer, type Renderable,
+  type CliRenderer, type KeyEvent, type Renderable,
 } from "@opentui/core";
 import type { ExecutionState } from "../session-registry.ts";
 import type { Worktree } from "../../workspace/model.ts";
@@ -12,6 +12,7 @@ import { icons } from "../../icons.ts";
 import { TranscriptPanel, type TranscriptOptions } from "./transcript-panel.ts";
 import { TranscriptBottomButton } from "./transcript-bottom-button.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
+import type { Keymap } from "../../keybindings/config.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
 import { SessionStatus } from "./session-status.ts";
@@ -47,6 +48,7 @@ export type AgentActions = {
   initialInputDrafts?: Readonly<Record<string, PromptDraft>>;
   onInspectInput?: (content: DialogContent) => void;
   onCopyTranscript?: (text: string) => Promise<Result<string, ExpectedError>>;
+  onOpenTranscriptUrl?: TranscriptOptions["openUrl"];
   onComplete?: CompletionProvider;
   onImage?: TranscriptImageProvider;
 };
@@ -107,7 +109,8 @@ export class AgentPanel {
     this.root.add(this.sessions.root); this.root.add(this.emptyState.root);
     this.runtimePanel = new BoxRenderable(renderer, { width: "100%", flexGrow: 1, minHeight: 0, flexDirection: "column", gap: 0 });
     this.transcript = new TranscriptPanel(renderer, { notice, changed, focusPrompt: () => this.prompt.focus(), initialScroll, saveScroll, cacheSessions: true,
-      ...transcriptOptions, ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}), ...(actions.onImage ? { image: actions.onImage } : {}) });
+      ...transcriptOptions, ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}),
+      ...(actions.onOpenTranscriptUrl ? { openUrl: actions.onOpenTranscriptUrl } : {}), ...(actions.onImage ? { image: actions.onImage } : {}) });
     this.transcriptScroll = this.transcript.scroll;
     this.transcriptScroll.id = id("session-transcript");
     // Hide the session scroll thumb; wheel, keys and the shared scroll model stay active.
@@ -184,7 +187,9 @@ export class AgentPanel {
   focusTranscript(): void { this.completion.hide(); if (this.transcriptScroll.visible) this.transcript.focus(); }
   get transcriptFocused(): boolean { return this.transcript.focused; }
   transcriptAvailable(command: CommandId): boolean { return this.active && this.transcript.available(command); }
-  transcriptCommand(command: CommandId): void { this.transcript.command(command); }
+  transcriptCommand(command: CommandId, key?: KeyEvent): void { this.transcript.command(command, key); }
+  transcriptCaptureKey(key: KeyEvent, keymap: Keymap): boolean { return this.transcript.captureKey(key, keymap); }
+  cancelTranscriptPending(): void { this.transcript.cancelPending(); }
   get focusTargets(): Renderable[] {
     return this.root.visible ? [...this.sessions.focusTargets, ...(this.active ? [this.prompt, ...(this.transcriptScroll.visible ? [this.transcript.focusTarget] : [])] : [])] : [];
   }

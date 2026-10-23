@@ -476,9 +476,9 @@ control or expandable instructions. The tag is decorative; copying still copies 
 They are excluded from individual and all-section folding, but the name remains navigable/selectable/copyable. Arguments following the invocation remain a separate
 user message. A generic `read` of `SKILL.md` stays a tool call; filenames alone do not identify a skill.
 
-**Leader, then [** enters output navigation in both Agents and Terminal (`output.read`). In Agents,
-**Esc** returns through Visual, Text and Sections to the input; **i** returns directly from Sections/Text
-without sending the draft. There are no default Ctrl+T/Ctrl+E or leader-o aliases. All commands remain configurable:
+The configured transcript focus command enters Agent output navigation. **Esc** returns through
+Visual, Text and Sections to the input. Bare **i/a** are text-object prefixes, not input-focus shortcuts.
+The named focus commands and all reading bindings remain configurable in the shared keymap:
 
 | Mode | Default keys | Action |
 | --- | --- | --- |
@@ -486,29 +486,67 @@ without sending the draft. There are no default Ctrl+T/Ctrl+E or leader-o aliase
 | Sections | Enter | Read formatted prose, folded heading/summary, or literal body with the cursor |
 | Sections/Text/Visual | Ctrl+O (also za); zm/zr | Toggle the selected section; fold/unfold all |
 | Text/Visual | h/j/k/l or arrows | Grapheme/visual-line cursor movement |
-| Text/Visual | w/b; 0/$ or Home/End; gg/G or Ctrl+Home/End | Word, logical-line and section boundaries |
+| Text/Visual | w/b/e; W/B/E; 0/^/$ or Home/End; gg/G or Ctrl+Home/End | Word/WORD, logical-line and section boundaries |
+| Text/Visual | f/F/t/T, then a character; ; / , | Find/till on the logical line; repeat/reverse the last find |
+| Visual / yank pending | i / a, then w/W/p or a quote/bracket | Select/yank an inner or surrounding text object |
+| Text/Visual | 1–9, then more digits and a motion | Repeat a motion; counts on either side of y multiply |
+| Text/Visual | / / ?; n / N; * / # | Literal section search, repeat/reverse, or whole-word search |
+| Search input | Enter / Esc / Ctrl+C | Accept, cancel without moving, or clear only the query |
 | Text/Visual | v / V | Character selection / whole-logical-line selection; repeat the same key to stop |
 | Text/Visual | gx | Open the HTTP(S) link under the cursor in the system default browser |
 | Visual Line | j/k | Move by logical source lines, including wrapped paragraphs |
 | Sections | Ctrl+D / Ctrl+U | Jump the selected section down/up roughly half a viewport |
 | Text/Visual | Ctrl+D / Ctrl+U | Move the cursor down/up half the transcript viewport |
-| Sections/Text/Visual | y | Copy the section, current logical line, or selected range, respectively |
+| Sections / Visual | y | Copy the section or selected range |
+| Text | y + motion/object; yy | Yank a range; copy the current logical line including its real newline |
 | Sections/Text/Visual | Y | Copy the whole raw section, including folded details |
 | Sections | G (Shift+g) or Ctrl+End | Jump to the actual bottom of the whole transcript and resume following |
 | Sections/Text/Visual | ge | Jump to the latest output and resume following |
 | Sections/Text/Visual | PgUp/PgDn; F1 | Page; open/close scrollable keyboard help |
 | Visual/Text/Sections | Esc | Return to Text, Sections, then Input |
-| Sections/Text | i | Return to input |
 
 **Enter never changes folding or Markdown formatting**. It enters text navigation over the visible
 heading/summary, formatted prose, or literal body. Headings, emphasis, code highlighting, links, lists
 and native table grids remain rendered; entering or leaving cursor mode does not replace their layout.
-The decorative skill tag is not part of selectable text. `y` copies the displayed logical line or
-selection; in Sections it copies the raw section. `Y` always copies the complete raw section, even when
+The decorative skill tag is not part of selectable text. In Text, `y` starts a pending yank and does not
+copy until a motion/object or a second `y` completes it. In Visual it copies the selection; in Sections
+it copies the raw section. `Y` always copies the complete raw section, even when
 folded. Heading and body cursor positions are retained independently. Formatted reading uses native
 visible text and layout rather than treating source offsets as display positions. Old source-mode
 cursors/selections are reset when formatting changes their coordinate space; new rendered positions
 are retained across resize, streaming, session switches and reconnect.
+
+#### Read-only Vim composition
+
+Text/Visual motions, text objects and searches operate on the **current reading section** (the visible
+heading when folded, otherwise the displayed body), never hidden details or other messages. Lowercase
+words group Unicode letters/numbers/underscore separately from punctuation; uppercase WORDs group
+all non-whitespace characters. `viw` selects the entire word even from its middle, while `vaw` includes
+adjacent whitespace. Objects also include paragraphs (`p`), single/double/backtick quotes, and nested
+`()`, `[]`, `{}`, `<>` pairs (`b`/`B` alias parentheses/braces). Inner objects exclude delimiters; around
+objects include them and, for words/quotes, surrounding whitespace. Inner word counts include whitespace
+runs (`2iw` selects a word plus following whitespace; `3iw` also includes the next word); around-word
+counts cover words instead. Counts extend paragraphs or select an enclosing pair. `3w`, `5j`, `y3w`, `3yw`, `2y2w`, `yy`, `ye`, `y$`, `yiw` and `yi"` compose
+rather than replaying independent shortcuts. A standalone `0` means line start; after a count digit it
+extends the count. Counts clamp to 9,999. Explicit `3gg`/`3G` select a line; uncounted `G` keeps Radian's
+section-end behavior. Operator ranges preserve Vim's inclusive/exclusive rules, so `yw` does not copy
+the first character of the following word and its last step stops at EOL rather than the next line.
+
+Pending counts, yanks and character arguments appear in the footer. Esc cancels them before backing
+out of the reader; unsupported arguments, paste, non-append content changes, session changes or leaving
+the surface do not replay them as edits. Ordinary streaming appends preserve unfinished read commands. Character arguments remain literal even when they are normally motion keys.
+The operator and prefix commands are configurable in the shared keymap; object names and character
+arguments are data. Yanks use the existing system clipboard boundary, preserve the reading cursor,
+and retain source LF/CRLF when the reading surface is literal. No EOF newline is invented.
+
+`/` and `?` open a one-line, literal (not Vim-regexp) search input. Typing does not move the reading
+cursor or submit the Agent draft. Enter accepts and wraps to a match in the chosen direction; Esc
+cancels without moving, and Ctrl+C clears only this query, including when already empty. Empty Enter
+reuses the previous query. `n` follows the original search direction and `N` reverses it without
+changing that direction; `*`/`#` search the nearest whole keyword forward/backward rather than matching
+word prefixes. Searches and finds support counts and yank composition. Insert/append, deletion,
+change, replacement, paste, undo, registers, macros, Ex commands and Vim-regexp syntax are deliberately
+not implemented. This is a read-only command vocabulary, not an embedded editable Vim instance.
 
 `gx` (`transcript.open-link`) opens the URL under the read-only cursor, including an inline Markdown
 link's displayed label, including table cells. Click a rendered link or a URL in literal text to open the same target;
@@ -531,7 +569,7 @@ when possible and reveals the new selection without scrolling unnecessarily. In 
 press `Esc` to return to Sections, then use `Ctrl+D/U`, j/k, gg or End. A selection first needs `Esc` to
 return to Text.
 
-The former `INPUT · section/count · following` row is removed. Source/Visual/help mode and a
+The former `INPUT · section/count · following` row is removed. Text/Visual/search/help mode and a
 `Paused` indicator appear only when relevant in the one-row footer; `Paused` refers to viewport
 following, never agent execution. Following is based on the viewport: at the bottom it follows new output; moving above the bottom pauses it;
 returning to the bottom by wheel or paging resumes it automatically. Live Agent transcripts hide
@@ -1188,7 +1226,7 @@ Spaces separate sequential keys (`"space r"` is a two-key leader); `+` combines 
 Use explicit `shift+c` for uppercase C. A string binding is global; an object can specify `scope`:
 `global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `history-search`, `monitor`, `monitor-search`, `session-tabs`, `terminal-tabs`, `git-tabs`,
 `prompt`, `prompt-completion`, `button`, `transcript` (section navigation), `transcript-text`,
-`transcript-visual`, `editor`, `terminal`, `terminal-copy`, `terminal-visual`, `git`, `git-prompt`, `dialog`, or `none`. An override replaces that command's defaults;
+`transcript-visual`, `transcript-search`, `editor`, `terminal`, `terminal-copy`, `terminal-visual`, `git`, `git-prompt`, `dialog`, or `none`. An override replaces that command's defaults;
 `[]` disables it. Command IDs/defaults are defined in `src/keybindings/commands.ts`.
 Unknown commands, invalid keys and overlapping/prefix bindings are errors rather than silent fallbacks.
 For example, a printable Space leader conflicts with the default button Space activation unless that

@@ -6,6 +6,8 @@ export const transcriptViewSchema = Type.Object({
   folded: Type.Record(Type.String(), Type.Boolean()),
   cursors: Type.Record(Type.String(), offset),
   headingCursors: Type.Optional(Type.Record(Type.String(), offset)),
+  // Distinguish displayed-text offsets from cursors saved by the old source reader.
+  renderedCursors: Type.Optional(Type.Record(Type.String(), Type.Boolean())),
   mode: Type.Union([Type.Literal("sections"), Type.Literal("text"), Type.Literal("visual")]),
   anchor: Type.Union([offset, Type.Null()]),
   // Keep the existing visual wire mode readable by runtimes without linewise selection.

@@ -8,7 +8,7 @@ import { expectError, expectOk } from "../testing/results.ts";
 test("Agent 탐색 설정은 기존 workViews 형식을 유지하면서 직렬화·복원한다", () => {
   const preferences = structuredClone(emptyPreferences);
   const state = { ...emptyTranscriptView(), selectedId: "message:0", mode: "visual" as const, anchor: 0, linewise: true,
-    folded: { thinking: false, "message:0": true }, cursors: { "message:0": 4 }, headingCursors: { "message:0": 2 }, follow: false };
+    folded: { thinking: false, "message:0": true }, cursors: { "message:0": 4 }, headingCursors: { "message:0": 2 }, renderedCursors: { "message:0": true }, follow: false };
 
   // Persist through the same boundary used by TUI detach/reconnect, not a UI object reference.
   saveWorkViews(preferences, { active: { tree: "agent" }, agentScroll: { session: 42 }, agentViews: { session: state } });
@@ -21,6 +21,7 @@ test("Agent 탐색 설정은 기존 workViews 형식을 유지하면서 직렬�
   expect(preferences.workViews).toEqual({ active: { tree: "agent" }, agentScroll: { session: 42 } });
   expect(restored.agentViews?.session).toEqual(state);
   expect(restored.agentViews?.session?.linewise).toBe(true);
+  expect(restored.agentViews?.session?.renderedCursors?.["message:0"]).toBe(true);
   restored.agentViews!.session!.cursors["message:0"] = 99;
   restored.agentViews!.session!.headingCursors!["message:0"] = 88;
   expect(preferences.agentViews?.session?.cursors["message:0"]).toBe(4);

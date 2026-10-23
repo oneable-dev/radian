@@ -32,6 +32,7 @@ async function mount(initial: TranscriptSection[], actions: Partial<WorkbenchAct
     body() { const body = app.renderer.currentFocusedRenderable; if (!(body instanceof EditBufferRenderable)) throw new Error("Missing focused text"); return body; },
     state() { return view.workViewPreferences.agentViews?.a1; },
     async copy() { app.mockInput.pressKey("y"); await render(); },
+    async copyLine() { app.mockInput.pressKey("y"); app.mockInput.pressKey("y"); await render(); },
     async update(next: TranscriptSection[]) { current = next; selection.replaceSnapshot(demoWorkspace()); await render(); },
     async close() { view.dispose(); await app.dispose(); },
   };
@@ -277,7 +278,7 @@ test("Thinking은 저장된 접힘 설정이 있어도 본문을 표시하고 �
     expect(app.state()?.folded.message).toBeUndefined(); expect(app.state()?.folded.tool).toBe(true);
     expect(frame).not.toContain("TOOL_HIDDEN");
     app.mockInput.pressEnter(); expect(app.body().plainText).toBe("THINK_ALWAYS_VISIBLE");
-    await app.copy(); expect(app.copies).toEqual(["THINK_ALWAYS_VISIBLE"]);
+    await app.copyLine(); expect(app.copies).toEqual(["THINK_ALWAYS_VISIBLE"]);
   } finally { await app.close(); }
 });
 
@@ -596,7 +597,7 @@ test("접힌 요약과 펼친 본문의 커서는 독립적으로 유지되고 �
 
     expect(app.body().plainText).toBe("[read] (<C-o> to expand)"); expect(app.body().cursorOffset).toBe(2);
     expect(app.state()?.cursors.message).toBe(4); expect(app.captureCharFrame()).not.toContain("HIDDEN_BODY");
-    await app.copy(); expect(app.copies).toEqual(["[read] (<C-o> to expand)"]);
+    await app.copyLine(); expect(app.copies).toEqual(["[read] (<C-o> to expand)"]);
     app.mockInput.pressKey("y", { shift: true }); await app.render(); expect(app.copies.at(-1)).toBe(text);
   } finally { await app.close(); }
   const next = await mount(data, { initialWorkViews: preferences! });

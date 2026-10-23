@@ -12,6 +12,7 @@ test.each([
   ["completion.next", "prompt-completion"], ["completion.previous", "prompt-completion"], ["completion.dismiss", "prompt-completion"],
   ["agent.clear", "prompt"], ["agent.clear", "prompt-completion"], ["git.clear", "git-prompt"],
   ["git.search-clear", "git-search"], ["search.clear", "search"],
+  ["transcript.search-clear", "transcript-search"], ["transcript.search-cancel", "transcript-search"],
   ["history.open", "history"], ["history.dismiss", "history-search"], ["monitor.page-down", "monitor"],
   ["dashboard.next", "dashboard-tabs"], ["model.next", "model-search"],
   ["accounts.dismiss", "accounts-input"], ["accounts.next", "accounts-search"],
@@ -68,7 +69,7 @@ test.each([
 
 test.each([
   ["sidebar.toggle", "prompt"], ["tab.new", "terminal"], ["focus.transcript", "prompt"],
-  ["completion.accept", "prompt-completion"],
+  ["completion.accept", "prompt-completion"], ["transcript.search-submit", "transcript-search"],
   ["transcript.enter", "transcript"], ["transcript.fold", "transcript"], ["transcript.copy", "transcript-text"],
   ["history.preview", "history"], ["model.select", "model"], ["model.effort-more", "model"],
   ["git.open", "git"], ["git.refs", "git"], ["git.reflog", "git"], ["git.preview", "git-search"], ["git.change-session", "git-prompt"],

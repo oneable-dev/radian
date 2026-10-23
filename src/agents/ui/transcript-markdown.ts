@@ -1,7 +1,8 @@
-import { CodeRenderable, MarkdownRenderable, RenderableEvents, SyntaxStyle, TextBufferRenderable, type CliRenderer, type Renderable, type StyleDefinitionInput } from "@opentui/core";
+import { CodeRenderable, MarkdownRenderable, RenderableEvents, SyntaxStyle, TextBufferRenderable, TextTableRenderable, type CliRenderer, type Renderable, type StyleDefinitionInput } from "@opentui/core";
 import { reportUnexpected } from "../../errors.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { codeStyles, syntaxDefinition, type UiStyles } from "../../ui/theme-styles.ts";
+import { TranscriptBody, TranscriptTable } from "./transcript-reader.ts";
 
 function descendants(root: Renderable): Renderable[] {
   return root.getChildren().flatMap((child) => [child, ...descendants(child)]);
@@ -25,8 +26,8 @@ export function updateTranscriptMarkdownStyles(syntax: SyntaxStyle, styles: UiSt
   for (const name of ["markup.link", "markup.link.url", "markup.link.label"]) register(name, syntaxDefinition(styles["markup.link"]));
 }
 
-// Markdown owns the display only. The panel retains a separate read-only source
-// buffer for exact Vim cursor offsets, logical-line selection and raw copying.
+// Markdown always owns the display. The reader projects native visible text and
+// layout into a read-only navigation buffer without exposing Markdown source.
 export class TranscriptMarkdown {
   readonly root: MarkdownRenderable;
   private revision = 0;
@@ -35,13 +36,27 @@ export class TranscriptMarkdown {
   private streaming = true;
   private styles: UiStyles;
 
-  constructor(renderer: CliRenderer, syntax: SyntaxStyle, private readonly thinking: boolean, private readonly changing: () => void, private readonly notice: (message: string) => void) {
+  constructor(private readonly renderer: CliRenderer, syntax: SyntaxStyle, private readonly thinking: boolean, private readonly changing: () => void, private readonly notice: (message: string) => void) {
     const theme = uiTheme(renderer); this.styles = theme.styles;
     this.root = new MarkdownRenderable(renderer, { width: "100%", minWidth: 0, minHeight: 1, flexShrink: 0,
       syntaxStyle: syntax, streaming: true, conceal: true, concealCode: false, internalBlockMode: "top-level",
       tableOptions: { style: "grid", widthMode: "content", wrapMode: "word", cellPaddingX: 1, cellPaddingY: 0 },
+      renderNode: (token, context) => {
+        if (token.type !== "table") return undefined;
+        const original = context.defaultRender();
+        if (!(original instanceof TextTableRenderable)) return original;
+        const selection = theme.styles["transcript.selection"];
+        const table = new TranscriptTable(renderer, { width: "100%", flexShrink: 0, content: original.content, selectable: original.selectable,
+          columnWidthMode: original.columnWidthMode, columnFitter: original.columnFitter, wrapMode: original.wrapMode,
+          cellPaddingX: original.cellPaddingX, cellPaddingY: original.cellPaddingY, columnGap: original.columnGap,
+          showBorders: original.showBorders, border: original.border, outerBorder: original.outerBorder,
+          borderStyle: original.borderStyle, borderColor: original.borderColor, fg: original.fg,
+          ...(selection.bg ? { selectionBg: selection.bg } : {}), selectionFg: selection.fg });
+        original.destroyRecursively(); return table;
+      },
       renderBefore: () => this.paintLeaves(theme.styles), renderAfter: () => this.settle(),
     });
+    this.root.selectable = true;
     this.root.once(RenderableEvents.DESTROYED, () => { this.revision++; });
     theme.bindStyles(this.root, (styles) => {
       this.changing(); this.styles = styles;
@@ -60,9 +75,16 @@ export class TranscriptMarkdown {
     this.root.streaming = true; this.root.content = source; this.paintLeaves(this.styles);
   }
 
+  read(body: TranscriptBody): boolean {
+    return body.project(this.renderer, this.root,
+      descendants(this.root).filter((node): node is TextBufferRenderable | TranscriptTable => node instanceof TextBufferRenderable || node instanceof TranscriptTable),
+      this.source.includes("]") || /https?:/iu.test(this.source), this.source);
+  }
+
   private paintLeaves(styles: UiStyles): void {
     for (const child of descendants(this.root)) if (child instanceof TextBufferRenderable) {
       child.attributes = this.thinking ? styles["transcript.thinking"].attributes : styles["ui.text"].attributes;
+      child.selectionBg = styles["transcript.selection"].bg; child.selectionFg = styles["transcript.selection"].fg;
       if (this.thinking) child.fg = styles["transcript.thinking"].fg;
       if (child instanceof CodeRenderable) {
         child.wrapMode = "word";

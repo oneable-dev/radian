@@ -1,3 +1,4 @@
+import { pressLeader, pressTranscriptRead } from "../../testing/transcript-keys.ts";
 import { expect, test } from "bun:test";
 import { CodeRenderable, EditBufferRenderable, MarkdownRenderable, TextAttributes, type Renderable, type TerminalColors } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
@@ -7,6 +8,7 @@ import { demoWorkspace } from "../../workspace/demo.ts";
 import type { TranscriptSection } from "../../agents/transcript.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { ok } from "../../result.ts";
+import type { WorkViewPreferences } from "../../runtime/protocol.ts";
 
 const prose = (text: string, kind: "assistant" | "thinking" = "assistant", streaming = false): TranscriptSection => ({ id: "prose", kind, title: kind, text, status: streaming ? "streaming" : "complete" });
 function descendants(root: Renderable): Renderable[] { return root.getChildren().flatMap((child) => [child, ...descendants(child)]); }
@@ -31,8 +33,13 @@ async function mount(sections: TranscriptSection[], actions: Partial<WorkbenchAc
   await render();
   return { ...app, view, copies, sent, render, settled,
     markdown() { return descendants(app.renderer.root).find((node): node is MarkdownRenderable => node instanceof MarkdownRenderable)!; },
+    position(text: string) {
+      const lines = app.captureCharFrame().split("\n"), y = lines.findIndex(line => line.includes(text));
+      if (y < 0) throw new Error(`Missing ${text}`);
+      return { x: Bun.stringWidth(lines[y]!.slice(0, lines[y]!.indexOf(text))), y };
+    },
     body() { const node = app.renderer.currentFocusedRenderable; if (!(node instanceof EditBufferRenderable)) throw new Error("Missing source cursor"); return node; },
-    async focus() { app.mockInput.pressKey("t", { ctrl: true }); app.mockInput.pressKey("HOME"); await render(); },
+    async focus() { pressTranscriptRead(app, actions.keymap); app.mockInput.pressKey("HOME"); await render(); },
     async update(next: TranscriptSection[]) { current = next; selection.replaceSnapshot(demoWorkspace()); await render(); },
     async close() { view.dispose(); await app.dispose(); },
   };
@@ -68,20 +75,27 @@ test.each(["**FIRST_FRAME_TEXT**", "```typescript\nconst FIRST_FRAME_TEXT = 1;\n
   } finally { await app.close(); }
 });
 
-test("Enter는 원문 커서·줄 선택으로 전환하고 Esc는 Markdown 표시로 복귀한다", async () => {
-  // 보이는 문법을 제거한 위치를 원문 커서 위치로 오해하지 않도록 원문 읽기를 분리한다.
+test("Enter로 커서를 표시해도 Markdown 화면·높이를 유지하고 보이는 줄과 원문 전체를 구분해 복사한다", async () => {
+  // 원문 문법은 숨겨 두되 전체 원문 복사 기능은 그대로 보존한다.
   const source = "## Heading\r\n\r\n**한글 👨‍👩‍👧‍👦**\r\nlast";
   const app = await mount([prose(source)]);
   try {
     await app.settled(); await app.focus();
     app.mockInput.pressKey("y"); await app.render(); expect(app.copies).toEqual([source]);
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<CR> Source");
+    const height = app.markdown().height;
+    const markdownFrame = () => app.captureCharFrame().split("\n").slice(app.markdown().y, app.markdown().y + height).join("\n");
+    const before = markdownFrame();
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<CR> Text");
+
+    // 읽기 모드 진입은 표시 버퍼 교체나 Markdown 문법 노출을 일으키지 않는다.
     app.mockInput.pressEnter(); await app.render();
-    expect(app.body().plainText).toBe(source.replaceAll("\r\n", "\n"));
-    expect(app.markdown().visible).toBe(false); expect(app.captureCharFrame()).toContain("Markdown source");
+
+    expect(app.body().plainText).toBe("Heading\n\n한글 👨‍👩‍👧‍👦\nlast");
+    expect(app.markdown().visible).toBe(true); expect(app.markdown().height).toBe(height);
+    expect(markdownFrame()).toBe(before);
+    expect(app.renderer.getCursorState().visible).toBe(true);
     app.mockInput.pressKey("v", { shift: true }); app.mockInput.pressKey("y"); await app.render();
-    // 원문 줄 복사는 CRLF와 Markdown 표식을 보존하고 전송을 발생시키지 않는다.
-    expect(app.copies.at(-1)).toBe("## Heading\r\n");
+    expect(app.copies.at(-1)).toBe("Heading\n");
     app.mockInput.pressEscape(); await app.settled();
     expect(app.markdown().visible).toBe(true); expect(app.captureCharFrame()).not.toContain("## Heading");
     app.mockInput.pressKey("y", { shift: true }); await app.render(); expect(app.copies.at(-1)).toBe(source);
@@ -142,18 +156,18 @@ test("잘린 미리보기처럼 종료 문법이 없는 완료 메시지도 내�
   } finally { await app.close(); }
 });
 
-test("Markdown 스트리밍 중 원문 선택·resize·왕복은 Unicode 선택과 초안을 보존한다", async () => {
+test("Markdown 스트리밍 중 표시된 글자의 선택·resize·왕복은 Unicode 선택과 초안을 보존한다", async () => {
   const source = "**한글 👨‍👩‍👧‍👦**\nnext";
   const app = await mount([prose(source, "assistant", true)]);
   try {
-    await app.focus(); app.mockInput.pressEnter(); app.mockInput.pressKey("l"); app.mockInput.pressKey("l");
+    await app.focus(); app.mockInput.pressEnter();
     app.mockInput.pressKey("v"); app.mockInput.pressKey("l"); await app.render();
     expect(app.body().getSelectedText()).toBe("한글");
     await app.update([prose(source + " plus streamed", "assistant", true)]);
     app.resize(70, 16); await app.render(); app.mockInput.pressKey("y"); await app.render();
     expect(app.copies).toEqual(["한글"]); expect(app.view.promptDrafts.a1).toBe("Keep this draft");
     app.mockInput.pressEscape(); await app.settled(); expect(app.markdown().visible).toBe(true);
-    app.mockInput.pressEnter(); await app.render(); expect(app.body().cursorOffset).toBe(4);
+    app.mockInput.pressEnter(); await app.render(); expect(app.body().cursorOffset).toBe(2);
   } finally { await app.close(); }
 });
 
@@ -224,6 +238,161 @@ test("카드 배경을 해제하면 재정의된 본문 배경을 상속한다",
     const span = app.captureSpans().lines.flatMap(line => line.spans).find(span => span.text.includes("CARD_SURFACE"))!;
     expect(span.bg.toInts().slice(0, 3)).toEqual([17, 34, 51]);
     expect(app.view.promptDrafts.a1).toBe("Keep this draft"); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("표 셀 위의 커서와 문자 선택은 표 테두리·스타일을 유지하고 보이는 한글을 복사한다", async () => {
+  // 표는 원문 파이프 문법이 아닌 실제 네이티브 표 레이아웃으로 탐색한다.
+  const opened: string[] = [];
+  const app = await mount([prose("## Table\n\n| Name | Value |\n|---|---|\n| [표한글](https://example.invalid/table) | ready |")], {
+    onOpenTranscriptUrl: async url => { opened.push(url); return ok(undefined); },
+  });
+  try {
+    await app.settled(); await app.focus(); app.mockInput.pressEnter(); await app.render();
+    const body = app.body(), offset = body.plainText.indexOf("표한글");
+    expect(offset).toBeGreaterThanOrEqual(0);
+
+    // 화면에 표시된 셀로 이동하고 인접한 두 글자를 선택한다.
+    body.cursorOffset = body.editBuffer.measureText(body.plainText.slice(0, offset)); await app.render();
+    const target = app.position("표한글"), cursor = app.renderer.getCursorState();
+    app.mockInput.pressKey("g"); app.mockInput.pressKey("x"); await app.waitFor(() => opened.length === 1);
+    expect(opened).toEqual(["https://example.invalid/table"]);
+    app.mockInput.pressKey("v"); app.mockInput.pressKey("l"); await app.render();
+
+    expect(cursor.x).toBe(target.x + 1); expect(cursor.y).toBe(target.y + 1); expect(cursor.visible).toBe(true);
+    expect(app.renderer.getSelection()?.getSelectedText()).toBe("표한");
+    expect(app.captureCharFrame()).toMatch(/┌─+┬─+┐/u); expect(app.markdown().visible).toBe(true);
+    app.resize(90, 28);
+    await app.update([prose("## Table\n\n| Name | Value |\n|---|---|\n| [표한글](https://example.invalid/table) | ready |\n| added | streaming |")]);
+    await app.settled();
+    expect(body.getSelectedText()).toBe("표한"); expect(app.renderer.getSelection()?.getSelectedText()).toBe("표한");
+    app.mockInput.pressKey("y"); await app.render(); expect(app.copies.at(-1)).toBe("표한");
+    expect(app.captureCharFrame()).not.toContain("|---|---|"); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("강조된 긴 문장은 화면 행으로 이동하지만 줄 선택은 자동 줄바꿈을 복사하지 않는다", async () => {
+  // 네이티브 표시 행과 논리 문장 줄은 서로 다른 좌표 체계이다.
+  const line = "한글 é 👨‍👩‍👧‍👦 " + "wrapped words ".repeat(20).trimEnd();
+  const app = await mount([prose(`**${line}**\nnext`)]);
+  try {
+    app.resize(60, 20); await app.settled(); await app.focus(); app.mockInput.pressEnter(); await app.render();
+    const first = app.renderer.getCursorState();
+
+    // Ctrl+N/P는 표시된 줄을 이동하고 V는 실제 논리 줄 전체를 선택한다.
+    app.mockInput.pressKey("n", { ctrl: true }); await app.render();
+    expect(app.renderer.getCursorState().y).toBe(first.y + 1); expect(app.body().logicalCursor.row).toBe(0);
+    app.mockInput.pressKey("p", { ctrl: true }); app.mockInput.pressKey("v", { shift: true });
+    app.resize(48, 20); await app.render(); app.mockInput.pressKey("y"); await app.render();
+
+    expect(app.copies.at(-1)).toBe(line + "\n");
+    expect(app.markdown().visible).toBe(true); expect(app.captureCharFrame()).not.toContain("**한글");
+    expect(app.view.promptDrafts.a1).toBe("Keep this draft");
+  } finally { await app.close(); }
+});
+
+test("짧은 표시 줄을 지나는 세로 이동은 원래 열을 기억하고 가로 이동은 목표 열을 갱신한다", async () => {
+  // Markdown 기호가 아닌 표시된 열을 기준으로 Neovim식 세로 이동을 유지한다.
+  const app = await mount([prose("**abcdefghij**\nx\nabcdefghij")]);
+  try {
+    await app.settled(); await app.focus(); app.mockInput.pressEnter(); await app.render();
+    for (let index = 0; index < 8; index++) app.mockInput.pressKey("l");
+
+    // 짧은 중간 줄에서 열이 잘려도 다음 긴 줄에서는 원래 열로 돌아간다.
+    app.mockInput.pressKey("n", { ctrl: true }); app.mockInput.pressKey("n", { ctrl: true }); await app.render();
+
+    expect(app.body().logicalCursor.row).toBe(2); expect(app.body().logicalCursor.col).toBe(8);
+    app.mockInput.pressKey("h"); app.mockInput.pressKey("p", { ctrl: true }); app.mockInput.pressKey("p", { ctrl: true }); await app.render();
+    expect(app.body().logicalCursor.row).toBe(0); expect(app.body().logicalCursor.col).toBe(7);
+    expect(app.markdown().visible).toBe(true);
+  } finally { await app.close(); }
+});
+
+test.each([{ key: "^", shift: false }, { key: "6", shift: true }])("$key 첫 비공백 이동은 한글·탭과 공백뿐인 줄에서도 Vim 위치를 따른다", async ({ key, shift }) => {
+  // 코드 블록의 선행 공백은 Markdown 문법이 아니라 표시되는 원문 내용이다.
+  const first = " \t  한글 value", blank = " \t  ";
+  const app = await mount([prose(`\`\`\`text\n${first}\n${blank}\nnext\n\`\`\``)]);
+  try {
+    await app.settled(); await app.focus(); app.mockInput.pressEnter(); await app.render();
+    const body = app.body(), leading = " \t  "; app.mockInput.pressKey("END");
+
+    // 첫 비공백 이동은 0과 구분되고, 선택 중에는 원래 anchor를 유지한다.
+    app.mockInput.pressKey(key, { shift }); await app.render();
+    expect(body.logicalCursor.col).toBe(body.editBuffer.measureText(leading));
+    expect(app.renderer.getCursorState().x).toBe(app.position("한글").x + 1);
+    app.mockInput.pressKey("0"); app.mockInput.pressKey("v"); app.mockInput.pressKey(key, { shift }); await app.render();
+
+    expect(body.getSelectedText()).toBe(leading + "한");
+    app.mockInput.pressEscape(); app.mockInput.pressKey("j"); app.mockInput.pressKey(key, { shift }); await app.render();
+    expect(body.logicalCursor.row).toBe(1); expect(body.logicalCursor.col).toBe(body.editBuffer.measureText(blank.slice(0, -1)));
+    expect(app.markdown().visible).toBe(true); expect(app.view.promptDrafts.a1).toBe("Keep this draft");
+  } finally { await app.close(); }
+});
+
+test("Transcript의 i는 섹션·본문·선택에서 입력창으로 돌아가지 않고 프롬프트의 i는 문자로 입력한다", async () => {
+  // 읽기 표면의 i를 입력창 복귀로 예약하지 않고 명시적인 전역 포커스 명령은 유지한다.
+  const app = await mount([prose("**문서**")]);
+  try {
+    await app.settled(); await app.focus(); const sections = app.renderer.currentFocusedRenderable;
+
+    app.mockInput.pressKey("i"); await app.render(); expect(app.renderer.currentFocusedRenderable?.id).toBe(sections?.id);
+    app.mockInput.pressEnter(); await app.render(); const body = app.body();
+    app.mockInput.pressKey("i"); app.mockInput.pressKey("v"); app.mockInput.pressKey("i"); await app.render();
+
+    expect(app.renderer.currentFocusedRenderable).toBe(body); expect(body.plainText).toBe("문서");
+    expect(app.view.promptDrafts.a1).toBe("Keep this draft"); expect(app.sent).toEqual([]);
+    pressLeader(app, "a"); app.mockInput.pressKey("i"); await app.render();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt"); expect(app.view.promptDrafts.a1).toBe("Keep this drafti");
+  } finally { await app.close(); }
+});
+
+test("네이티브 Markdown의 코드 블록과 강조는 커서·선택 모드에서도 같은 스타일로 표시한다", async () => {
+  // 코드 안의 별표는 리터럴이며 일반 본문의 별표만 문법으로 숨겨야 한다.
+  const app = await mount([prose("## Styled\n\n**BOLD_VALUE**\n\n```text\nCODE **literal**\n```")]);
+  try {
+    await app.settled(); await app.focus(); const height = app.markdown().height;
+
+    app.mockInput.pressEnter(); app.mockInput.pressKey("v"); await app.render();
+
+    const spans = app.captureSpans().lines.flatMap(line => line.spans);
+    expect(spans.find(span => span.text.includes("BOLD_VALUE"))!.attributes & TextAttributes.BOLD).toBe(TextAttributes.BOLD);
+    expect(app.captureCharFrame()).toContain("CODE **literal**"); expect(app.captureCharFrame()).not.toContain("**BOLD_VALUE**");
+    expect(app.captureCharFrame()).not.toContain("```text"); expect(app.markdown().height).toBe(height);
+  } finally { await app.close(); }
+});
+
+test("다시 연결한 화면에서도 렌더링된 글자 기준 커서와 선택을 복원한다", async () => {
+  // 새 좌표 체계로 저장한 선택은 원문 문법의 오프셋으로 재해석하면 안 된다.
+  const source = "## Saved\n\n**한글** after", app = await mount([prose(source)]);
+  let preferences: WorkViewPreferences;
+  try {
+    await app.settled(); await app.focus(); app.mockInput.pressEnter(); await app.render();
+    const body = app.body(); body.cursorOffset = body.editBuffer.measureText(body.plainText.slice(0, body.plainText.indexOf("한글")));
+    app.mockInput.pressKey("v"); app.mockInput.pressKey("l"); await app.render();
+    preferences = structuredClone(app.view.workViewPreferences);
+  } finally { await app.close(); }
+  const next = await mount([prose(source)], { initialWorkViews: preferences! });
+  try {
+    // 새 UI에서 읽기 포커스를 복원해도 Markdown을 풀지 않는다.
+    await next.settled(); pressTranscriptRead(next); await next.render();
+
+    expect(next.body().getSelectedText()).toBe("한글"); expect(next.markdown().visible).toBe(true);
+    expect(next.captureCharFrame()).not.toContain("**한글**"); expect(next.renderer.getCursorState().visible).toBe(true);
+    next.mockInput.pressKey("y"); await next.render(); expect(next.copies.at(-1)).toBe("한글");
+  } finally { await next.close(); }
+});
+
+test("이전 원문 모드의 선택 오프셋은 새 표시 텍스트에 잘못 적용하지 않는다", async () => {
+  // 버전 표시가 없는 원문 선택은 숨겨진 Markdown 표식을 포함할 수 있다.
+  const app = await mount([prose("**한글** after")], { initialWorkViews: { active: {}, agentScroll: {}, agentViews: {
+    a1: { selectedId: "prose", folded: {}, cursors: { prose: 4 }, mode: "visual", anchor: 2, follow: false },
+  } } });
+  try {
+    await app.settled(); pressTranscriptRead(app); await app.render();
+
+    expect(app.body().plainText).toBe("한글 after"); expect(app.body().cursorOffset).toBe(0);
+    expect(app.body().hasSelection()).toBe(false); expect(app.captureCharFrame()).toContain("TEXT");
+    expect(app.markdown().visible).toBe(true);
   } finally { await app.close(); }
 });
 

@@ -1,6 +1,6 @@
 import {
   BorderChars, BoxRenderable, InputRenderableEvents, ScrollBoxRenderable, StyledText, TextAttributes, TextRenderable,
-  type CliRenderer, type Renderable,
+  type CliRenderer, type KeyEvent, type Renderable,
 } from "@opentui/core";
 import packageInfo from "../../../package.json";
 import { workspaceRows, type WorkspaceRow } from "./workspace-rows.ts";
@@ -207,7 +207,8 @@ export class Workbench {
     this.notifications = new SessionNotificationStack(renderer, notification => this.openNotification(notification));
     this.root.add(this.notifications.root);
     renderer.root.add(this.root);
-    this.router = new KeyRouter(renderer, this.keymap, () => this.keyContext(), (command) => this.commandAvailable(command), (command) => this.command(command));
+    this.router = new KeyRouter(renderer, this.keymap, () => this.keyContext(), (command) => this.commandAvailable(command), (command, key) => this.command(command, key),
+      key => this.keyContext().startsWith("transcript") && this.agent.transcriptCaptureKey(key, this.keymap));
     renderer.on("resize", this.resize);
     renderer.on("focused_renderable", this.updateFooter);
     renderer.addPostProcessFn(this.settleRows); renderer.addPostProcessFn(this.acknowledgeVisible);
@@ -546,7 +547,8 @@ export class Workbench {
       default: return true;
     }
   }
-  private command(command: CommandId): void {
+  private command(command: CommandId, key?: KeyEvent): void {
+    if (!command.startsWith("transcript.")) this.agent.cancelTranscriptPending();
     this.foreground = true;
     if (command === "dashboard.show") { this.dashboard.show(); return; }
     if (command.startsWith("dashboard.")) { this.dashboard.command(command); return; }
@@ -576,7 +578,7 @@ export class Workbench {
     if (command.startsWith("completion.")) { this.agent.completionCommand(command); return; }
     if (command.startsWith("session.")) { this.agent.sessionCommand(command); return; }
     if (command.startsWith("git.")) { this.git.command(command); return; }
-    if (command.startsWith("transcript.")) { this.agent.transcriptCommand(command); return; }
+    if (command.startsWith("transcript.")) { this.agent.transcriptCommand(command, key); return; }
     switch (command) {
       case "app.detach": this.actions.onDetach?.(); break;
       case "sidebar.toggle": this.toggleSidebar(); break;

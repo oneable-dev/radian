@@ -5,7 +5,7 @@ const defaults = defaultKeymap();
 const omitted = new Set<CommandId>(["agent.send", "agent.newline", "agent.interrupt", "git.submit", "git.newline"]);
 const routine = new Set<CommandId>([
   "focus.next", "focus.results", "button.activate",
-  "agent.clear", "git.clear", "git.search-clear", "search.clear",
+  "agent.clear", "git.clear", "git.search-clear", "search.clear", "transcript.search-clear", "transcript.search-cancel",
   "dialog.dismiss", "dialog.half-page-down",
   "workspace.open", "workspace.dismiss", "workspace.previous", "workspace.next", "workspace.first", "workspace.last", "workspace.half-page-down",
   "session.previous", "session.next",

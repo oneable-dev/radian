@@ -35,6 +35,7 @@ async function mount(initial = sections(), actions: Partial<WorkbenchActions> = 
     async update(next: TranscriptSection[]) { current = next; selection.replaceSnapshot(demoWorkspace()); await render(); },
     state() { return view.workViewPreferences.agentViews?.[selection.sessionId ?? ""]; },
     async copy() { app.mockInput.pressKey("y"); await Promise.resolve(); await render(); },
+    async copyLine() { app.mockInput.pressKey("y"); app.mockInput.pressKey("y"); await Promise.resolve(); await render(); },
     async close() { view.dispose(); await app.dispose(); },
   };
 }
@@ -88,9 +89,9 @@ test.each([0, 1, 2, 3])("모든 텍스트 종류에서 본문 커서와 줄 복�
   try {
     await app.transcript(); for (let i = 0; i < index; i++) app.mockInput.pressKey("j");
     if (sections()[index]!.kind === "tool") app.mockInput.pressKey("o", { ctrl: true });
-    app.mockInput.pressEnter(); app.mockInput.pressKey("HOME"); await app.copy();
+    app.mockInput.pressEnter(); app.mockInput.pressKey("HOME"); await app.copyLine();
 
-    expect(app.copied).toEqual([sections()[index]!.text.split("\n")[0]!]);
+    expect(app.copied).toEqual([sections()[index]!.text.split("\n")[0]! + "\n"]);
     expect(app.captureCharFrame()).toContain("TEXT");
     expect(app.sent).toEqual([]);
   } finally { await app.close(); }
@@ -314,8 +315,8 @@ test("단어·줄·섹션 경계 이동으로 원문 전체를 선택하며 달�
     const body = app.renderer.currentFocusedRenderable as EditBufferRenderable;
     app.mockInput.pressKey("w"); expect(body.cursorOffset).toBe(6);
     app.mockInput.pressKey("b"); expect(body.cursorOffset).toBe(0);
-    app.mockInput.pressKey("$"); expect(body.logicalCursor.col).toBe(10);
-    app.mockInput.pressKey("g", { shift: true }); await app.copy(); expect(app.copied.at(-1)).toBe("last");
+    app.mockInput.pressKey("$"); expect(body.logicalCursor.col).toBe(9);
+    app.mockInput.pressKey("g", { shift: true }); await app.copyLine(); expect(app.copied.at(-1)).toBe("last");
 
     app.mockInput.pressKey("g"); app.mockInput.pressKey("g"); app.mockInput.pressKey("v"); app.mockInput.pressKey("g", { shift: true });
     await app.copy();
