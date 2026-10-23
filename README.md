@@ -1,9 +1,7 @@
+<!-- GitHub theme fragments follow site appearance even when it differs from the system theme. -->
 <h1 align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/radian-banner-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/radian-banner.png">
-    <img src="assets/radian-banner.png" alt="Radian" width="720" height="180">
-  </picture>
+  <a href="assets/radian-banner-dark.png#gh-dark-mode-only"><img src="assets/radian-banner-dark.png" alt="Radian" width="720" height="180"></a>
+  <a href="assets/radian-banner.png#gh-light-mode-only"><img src="assets/radian-banner.png" alt="Radian" width="720" height="180"></a>
 </h1>
 
 <p align="center">
@@ -19,20 +17,10 @@
 </p>
 
 <p align="center">
-  <a href="package.json">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/Bun-%E2%89%A51.4.3-6E7681?style=flat-square&amp;labelColor=30363D">
-      <source media="(prefers-color-scheme: light)" srcset="https://img.shields.io/badge/Bun-%E2%89%A51.4.3-D0D7DE?style=flat-square&amp;labelColor=EAEEF2">
-      <img src="https://img.shields.io/badge/Bun-%E2%89%A51.4.3-D0D7DE?style=flat-square&amp;labelColor=EAEEF2" alt="Bun ≥ 1.4.3">
-    </picture>
-  </a>
-  <a href="LICENSE">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/license-MIT-6E7681?style=flat-square&amp;labelColor=30363D">
-      <source media="(prefers-color-scheme: light)" srcset="https://img.shields.io/badge/license-MIT-D0D7DE?style=flat-square&amp;labelColor=EAEEF2">
-      <img src="https://img.shields.io/badge/license-MIT-D0D7DE?style=flat-square&amp;labelColor=EAEEF2" alt="MIT license">
-    </picture>
-  </a>
+  <a href="package.json#gh-dark-mode-only"><img src="https://img.shields.io/badge/Bun-%E2%89%A51.4.3-6E7681?style=flat-square&amp;labelColor=30363D" alt="Bun ≥ 1.4.3"></a>
+  <a href="package.json#gh-light-mode-only"><img src="https://img.shields.io/badge/Bun-%E2%89%A51.4.3-D0D7DE?style=flat-square&amp;labelColor=EAEEF2" alt="Bun ≥ 1.4.3"></a>
+  <a href="LICENSE#gh-dark-mode-only"><img src="https://img.shields.io/badge/license-MIT-6E7681?style=flat-square&amp;labelColor=30363D" alt="MIT license"></a>
+  <a href="LICENSE#gh-light-mode-only"><img src="https://img.shields.io/badge/license-MIT-D0D7DE?style=flat-square&amp;labelColor=EAEEF2" alt="MIT license"></a>
 </p>
 
 <!-- Release media: add a real Agent-view screenshot here, followed by a short
