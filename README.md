@@ -1,5 +1,9 @@
 <h1 align="center">
-  <img src="assets/radian-banner.png" alt="Radian" width="720" height="180">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/radian-banner-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/radian-banner.png">
+    <img src="assets/radian-banner.png" alt="Radian" width="720" height="180">
+  </picture>
 </h1>
 
 <p align="center">
