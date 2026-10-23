@@ -46,7 +46,7 @@ test("Session creation defaults only to leader+c in all contexts while Ctrl+N st
     expect(map.hints("tab.new", context)).toBe("<leader>c");
   }
 
-  // 별도의 생성 키는 기본에서 제거하되 기존 탭 탐색은 그대로 유지한다.
+  // Remove separate creation defaults while retaining tab navigation.
   expect(map.hint("session.new", "session-tabs")).toBe("");
   expect(map.bound("ctrl+n", "prompt")).toBe(false); expect(map.bound("ctrl+n", "terminal")).toBe(false);
   expect(map.hints("session.next", "session-tabs")).toContain("<C-n>");
@@ -83,7 +83,7 @@ test("Arrow bindings remain active while hints show alternative navigation keys 
   // Search and Git register arrows first but must hint their alternatives.
   const map = defaultKeymap();
 
-  // 안내용 조회는 실제 입력 라우팅에 쓰이는 바인딩을 변경하지 않는다.
+  // Hint queries never change bindings used by actual routing.
   const searchHints = [map.hint("workspace.previous", "search"), map.hint("workspace.next", "search")];
   const listHints = map.hints("workspace.previous", "workspace");
 
@@ -92,14 +92,14 @@ test("Arrow bindings remain active while hints show alternative navigation keys 
   expect(map.bound("up", "search")).toBe(true); expect(map.bound("down", "workspace")).toBe(true);
 });
 
-test("방향키만 재지정하면 안내는 생략하되 수정키와 시퀀스는 그대로 안내한다", () => {
-  // 사용자 재지정은 존중하며 Ctrl+방향키나 leader 시퀀스까지 숨기지 않는다.
+test("Arrow-only overrides omit hints while modified arrows and sequences remain visible", () => {
+  // Honor overrides without hiding Ctrl+arrows or leader sequences.
   const map = expectOk(parseKeymap({ bindings: {
     "workspace.previous": [{ keys: "up", scope: "workspace" }],
     "workspace.next": [{ keys: "down", scope: "workspace" }, { keys: "ctrl+down", scope: "workspace" }, { keys: "<leader> down", scope: "workspace" }],
   } }));
 
-  // 방향키만 있는 명령에 존재하지 않는 기본 대체 키를 안내해서는 안 된다.
+  // Arrow-only commands must not hint nonexistent default alternatives.
   const previous = map.hint("workspace.previous", "workspace"), next = map.hints("workspace.next", "workspace");
 
   expect(previous).toBe(""); expect(map.hints("workspace.previous", "workspace")).toBe("");
@@ -107,7 +107,7 @@ test("방향키만 재지정하면 안내는 생략하되 수정키와 시퀀스
   expect(map.bound("up", "workspace")).toBe(true); expect(map.bound("ctrl+p", "workspace")).toBe(false);
 });
 
-test("화면 문자와 내부 탭 숫자·생성 키는 별도로 재지정하거나 비활성화할 수 있다", () => {
+test("View letters and internal tab numbers/creation keys can be independently remapped or disabled", () => {
   // Shared tab commands must participate in the same validation and override path as views.
   const map = expectOk(parseKeymap({ leader: "ctrl+b", bindings: {
     "tab.select-2": ["<leader> z"], "tab.new": [], "view.editor": ["<leader> v"],
@@ -121,7 +121,7 @@ test("화면 문자와 내부 탭 숫자·생성 키는 별도로 재지정하�
   expect(map.hint("terminal.new", "terminal")).toBe("");
 });
 
-test("Enter는 후보를 반영하는 전송 경로로 보내고 Tab은 삽입 전용 경로로 보낸다", () => {
+test("Enter routes through completion-aware submission while Tab routes only through insertion", () => {
   const map = defaultKeymap();
 
   expect(map.hints("agent.send", "prompt")).toBe("<CR>");
@@ -129,7 +129,7 @@ test("Enter는 후보를 반영하는 전송 경로로 보내고 Tab은 삽입 �
   expect(map.hints("completion.accept", "prompt-completion")).toBe("<Tab>");
 });
 
-test("키 설정은 scoped 기본값을 바꾸거나 비활성화하고 실제 힌트에 반영한다", () => {
+test("Key settings override or disable scoped defaults and update actual hints", () => {
   const map = expectOk(parseKeymap({ leader: "ctrl+b", bindings: {
     "session.new": [{ keys: "s", scope: "workspace" }], "session.close": [],
     "app.detach": ["<leader> q"],
@@ -144,7 +144,7 @@ test.each([
   { leader: "" }, { leader: "ctrl+unknown" }, { timeoutMs: 0 }, { bindings: { "unknown.action": [] } },
   { bindings: { "app.detach": null } }, { bindings: { "app.detach": [{ keys: "x", scope: "unknown" }] } },
   { bindings: { "app.detach": ["ctrl+f"] } }, { bindings: { "app.detach": ["ctrl+space"] } },
-])("잘못된 설정과 겹치는 prefix는 조용한 기본값 복구 대신 오류를 반환한다: %j", (config) => {
+])("Invalid settings and overlapping prefixes return errors instead of silently restoring defaults: %j", (config) => {
   expect(expectError(parseKeymap(config)).code).toBe("INVALID_INPUT");
 });
 

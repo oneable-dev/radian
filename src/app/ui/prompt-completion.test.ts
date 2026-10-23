@@ -37,7 +37,7 @@ async function mount(provider: CompletionProvider = async (_id, query) => ok(fil
   };
 }
 
-test("명령어 자동완성은 중간 문자열을 제외하고 접두사 후보만 표시한다", async () => {
+test("Command completion shows prefix matches only, excluding middle substrings", async () => {
   // The menu contains mcp, whose suffix must not become an executable candidate.
   const app = await mount();
   try {
@@ -53,8 +53,8 @@ test("명령어 자동완성은 중간 문자열을 제외하고 접두사 후�
   } finally { await app.close(); }
 });
 
-test.each(["/", "$", "@"] as const)("준비된 %s 목록은 시계 대기·로딩·추가 조회 없이 바로 표시한다", async (trigger) => {
-  // 캐시가 준비된 후에는 서버나 파일시스템을 다시 조회할 이유가 없다.
+test.each(["/", "$", "@"] as const)("Prepared %s catalogs display immediately without clock waits, loading, or extra queries", async (trigger) => {
+  // Prepared caches need no further server or filesystem reads.
   const items: readonly CompletionItem[] = [
     { kind: "command", value: "compact", description: "Compact context" },
     { kind: "skill", value: "skill:review-code", description: "Review code" },
@@ -66,7 +66,7 @@ test.each(["/", "$", "@"] as const)("준비된 %s 목록은 시계 대기·로�
   });
   const app = await mount(provider);
   try {
-    // 타이머를 진행시키지 않아도 첫 입력이 현재 종류의 후보를 즉시 표시한다.
+    // Initial typing displays current-kind candidates without advancing timers.
     await app.mockInput.typeText(trigger); await app.render();
 
     const expected = trigger === "/" ? "compact" : trigger === "$" ? "review-code" : "docs/reference.ts";
@@ -85,8 +85,8 @@ test.each([
   { trigger: "/", width: 120 }, { trigger: "@", width: 120 }, { trigger: "$", width: 120 },
   { trigger: "/", width: 80 }, { trigger: "@", width: 80 }, { trigger: "$", width: 80 },
   { trigger: "/", width: 60 }, { trigger: "@", width: 60 }, { trigger: "$", width: 60 },
-] as const)("%j에서 완성 화살표는 입력 시작 열과 일치하고 선택 이동 후에도 유지된다", async ({ trigger, width }) => {
-  // 메뉴 종류와 패널 여백이 달라도 입력 시작보다 한 칸 더 들여쓰지 않아야 한다.
+] as const)("At %j, completion arrows align with input origins across selection changes", async ({ trigger, width }) => {
+  // Menu kinds and panel padding must not add extra input indentation.
   const items: readonly CompletionItem[] = [
     { kind: "command", value: "clear", description: "Clear conversation" }, { kind: "command", value: "compact", description: "Compact context" },
     { kind: "skill", value: "skill:review-code", description: "Review code" }, { kind: "skill", value: "skill:write-tests", description: "Write tests" },
@@ -102,7 +102,7 @@ test.each([
     return Bun.stringWidth(line.slice(0, line.indexOf("→ ")));
   };
   try {
-    // 입력과 메뉴를 같은 화면에서 실제 렌더링한 뒤 다음 후보로 선택을 옮긴다.
+    // Render input and menu together before selecting the next candidate.
     app.resize(width, 24); await app.render();
     await app.mockInput.typeText(trigger); await app.render();
     const first = app.renderer.root.findDescendantById("completion-option-0")!;
@@ -116,8 +116,8 @@ test.each([
   } finally { await app.close(); }
 });
 
-test("같은 검색어의 감시 갱신은 새 후보를 반영하면서 선택한 항목을 유지한다", async () => {
-  // 파일 감시나 리로드 이벤트는 입력을 다시 치지 않아도 열린 목록을 갱신해야 한다.
+test("Watcher refreshes update candidates for unchanged queries while retaining selected items", async () => {
+  // Watcher and reload events refresh open menus without retyping.
   let items: readonly CompletionItem[] = ["command-a", "command-b"].map(value => ({ kind: "command", value, description: "Command" }));
   let changed: (() => void) | undefined;
   const provider: CompletionProvider = Object.assign(async () => ok({ items, truncated: false }), {
@@ -128,7 +128,7 @@ test("같은 검색어의 감시 갱신은 새 후보를 반영하면서 선택�
   try {
     await app.mockInput.typeText("/"); await app.render(); app.mockInput.pressKey("n", { ctrl: true }); await app.render();
 
-    // 앞쪽에 새 항목이 들어와도 인덱스가 아니라 항목 이름으로 선택을 보존한다.
+    // Preserve selections by item name, not index, when earlier items appear.
     items = [{ kind: "command", value: "command-0", description: "New" }, ...items]; changed?.(); await app.render();
 
     expect(app.captureCharFrame()).toContain("→ command-b"); expect(app.menu().height).toBe(3);
@@ -137,8 +137,8 @@ test("같은 검색어의 감시 갱신은 새 후보를 반영하면서 선택�
   } finally { await app.close(); expect(changed).toBeUndefined(); }
 });
 
-test("캐시 재로딩 중 Enter는 이전 카탈로그의 명령을 실행하지 않는다", async () => {
-  // 리로드 알림과 새 목록 도착 사이에도 이전 후보를 최신 후보로 간주하지 않아야 한다.
+test("Enter during cache reload never executes stale catalog commands", async () => {
+  // Old candidates are not current between invalidation and replacement arrival.
   const pending = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>();
   let ready = true, changed: (() => void) | undefined;
   let items: readonly CompletionItem[] = [{ kind: "command", value: "compact", description: "Old command" }];
@@ -150,7 +150,7 @@ test("캐시 재로딩 중 Enter는 이전 카탈로그의 명령을 실행하�
   try {
     await app.mockInput.typeText("/co"); await app.render();
 
-    // 캐시가 무효화된 상태에서 Enter를 눌러도 이전 명령으로 즉시 전송하지 않는다.
+    // Enter on invalidated caches never immediately submits old commands.
     ready = false; changed?.(); await app.render(); app.mockInput.pressEnter(); await app.render();
     expect(app.sent).toEqual([]);
     items = [{ kind: "command", value: "compare", description: "New command" }]; ready = true;
@@ -161,8 +161,8 @@ test("캐시 재로딩 중 Enter는 이전 카탈로그의 명령을 실행하�
   } finally { pending.resolve(ok({ items: [], truncated: false })); await app.close(); }
 });
 
-test("스킬은 슬래시 추천에서 제외하고 달러에서만 선택한다", async () => {
-  // 이전 단일 카탈로그 공급자도 UI에서 명령과 스킬을 섞어 노출하지 않는다.
+test("Skills are excluded from slash suggestions and selectable only through dollar syntax", async () => {
+  // Legacy single-catalog providers must not mix commands and skills in UI.
   const app = await mount(async () => ok({ items: [
     { kind: "command", value: "compact", description: "Compact context" },
     { kind: "skill", value: "skill:review-code", description: "Review fixture" },
@@ -171,7 +171,7 @@ test("스킬은 슬래시 추천에서 제외하고 달러에서만 선택한다
     await app.type("/");
     expect(app.captureCharFrame()).toContain("→ compact"); expect(app.captureCharFrame()).not.toContain("Review fixture");
 
-    // 달러 선택은 기존 스킬을 제거하지 않고 별도 입구로만 노출한다.
+    // Dollar selection exposes a separate entry point without removing existing skills.
     app.input.value = "$rev"; await app.complete();
     expect(app.captureCharFrame()).toContain("→ review-code"); expect(app.captureCharFrame()).not.toContain("Compact context");
     app.mockInput.pressEnter(); await app.render();
@@ -180,8 +180,8 @@ test("스킬은 슬래시 추천에서 제외하고 달러에서만 선택한다
   } finally { await app.close(); }
 });
 
-test("슬래시 목록은 닫혀 있을 때 공간이 없고 조회 상태와 결과 수에 맞춰 높이를 바꾼다", async () => {
-  // 많은 후보·한 후보·빈 결과·오류가 모두 같은 입력 아래 공간을 동적으로 사용한다.
+test("Closed slash menus use no space and open heights track lookup state and result counts", async () => {
+  // Many, single, empty, and failed results dynamically use the same input-adjacent space.
   const items = [
     { kind: "command" as const, value: "compact", description: "Compact context" },
     { kind: "command" as const, value: "model", description: "Select model" },
@@ -194,7 +194,7 @@ test("슬래시 목록은 닫혀 있을 때 공간이 없고 조회 상태와 �
     const metadata = app.renderer.root.findDescendantById("session-status")!;
     expect(app.menu().visible).toBe(false); expect(metadata.y).toBe(composer.y + composer.height);
 
-    // 슬래시를 누르면 로딩 한 줄부터 시작해 실제 후보 다섯 줄과 하단 위치 표시로 확장한다.
+    // Slash starts with one loading row, then expands to five candidates and position hints.
     app.mockInput.pressKey("/"); await app.render();
     expect(app.menu().height).toBe(1);
     app.clock.advance(150); await app.render();
@@ -205,7 +205,7 @@ test("슬래시 목록은 닫혀 있을 때 공간이 없고 조회 상태와 �
     expect(lines()[0]).toContain("→ compact"); expect(lines().at(-1)).toContain("(1/94)");
     expect(lines().join("\n")).not.toContain("Commands · SDK resources");
 
-    // 검색을 좁히거나 결과가 없어지면 사용하지 않는 후보 행을 즉시 돌려준다.
+    // Narrowed and empty searches immediately reclaim unused candidate rows.
     app.input.value = "/model"; await app.complete();
     expect(menu.height).toBe(1); expect(lines()[0]).toContain("→ model");
     app.input.value = "/nomatch"; await app.complete();
@@ -214,14 +214,14 @@ test("슬래시 목록은 닫혀 있을 때 공간이 없고 조회 상태와 �
     expect(menu.height).toBe(1); expect(lines()[0]).toContain("Lookup failed");
     app.mockInput.pressEscape(); await app.render();
 
-    // 닫힌 목록은 빈 행을 남기지 않고 원래 입력 위치와 대화 높이를 복원한다.
+    // Closed menus leave no blank rows and restore input/conversation heights.
     expect(menu.visible).toBe(false); expect(metadata.y).toBe(composer.y + composer.height); expect(geometry()).toEqual(closed);
     expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
 
-test.each([false, true])("완성 목록은 명령과 설명을 셀 너비로 정렬하고 선택은 화살표와 글자색으로 표시한다: light=%j", async (light) => {
-  // 한글·결합 이모지가 있는 명령도 설명 열과 클릭 대상이 다른 행과 일치해야 한다.
+test.each([false, true])("Completion aligns commands/descriptions by cells and marks selection with arrows and text colors: light=%j", async (light) => {
+  // Korean and combined emoji commands retain aligned descriptions and click targets.
   const items = [
     { kind: "template" as const, value: "guide:문서👩🏽‍💻", description: "Document guide" },
     { kind: "command" as const, value: "model", description: "Select model" },
@@ -235,7 +235,7 @@ test.each([false, true])("완성 목록은 명령과 설명을 셀 너비로 정
     uiTheme(app.renderer).configure({ palette: [], defaultForeground: light ? "#202020" : "#EEEEEE", defaultBackground: light ? "#FFFFFF" : "#101010",
       cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null });
 
-    // 두 후보는 별도 제목이나 빈 행 없이 바로 입력창 아래에 배치된다.
+    // Place both candidates directly below input without titles or empty rows.
     await app.type("/"); app.clock.advance(500); await app.render();
 
     const menu = app.menu(), lines = app.captureCharFrame().split("\n"), first = lines[menu.y]!, second = lines[menu.y + 1]!;
@@ -247,27 +247,27 @@ test.each([false, true])("완성 목록은 명령과 설명을 셀 너비로 정
     expect(cell(descriptionX, menu.y + 1).fg.toInts()).toEqual(colors.muted.toInts());
     for (const y of [menu.y, menu.y + 1]) expect(cell(descriptionX, y).bg.toInts()).toEqual(colors.panel.toInts());
 
-    // 후보 클릭은 삽입만 하고 입력 포커스와 기존 전송 계약을 유지한다.
+    // Clicking only inserts and preserves input focus and submission contracts.
     await app.mockMouse.click(menu.x + 4, menu.y + 1); await app.render();
     expect(app.input.value).toBe("/model "); expect(app.menu().visible).toBe(false);
     expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("많은 후보는 창 크기에 맞춰 줄이고 선택 위치를 스크롤하며 닫을 때 공간을 반환한다", async () => {
-  // 화면에 다 들어가지 않는 후보는 전체 목록을 유지한 채 보이는 행만 제한한다.
+test("Large completion lists resize visible rows, scroll selection, and reclaim space on close", async () => {
+  // Limit visible rows without truncating the underlying candidate catalog.
   const items = Array.from({ length: 20 }, (_, i) => ({ kind: "command" as const, value: `command-${i}`, description: "Command description" }));
   const app = await mount(async () => ok({ items, truncated: true }));
   try {
     await app.type("/");
 
-    // 첫 페이지를 넘긴 선택은 마지막 보이는 후보와 하단 위치 표시로 함께 이동한다.
+    // Off-page selections move visible candidates and position hints together.
     for (let i = 0; i < 7; i++) app.mockInput.pressKey("n", { ctrl: true });
     await app.render();
     const page = () => app.captureCharFrame().split("\n").slice(app.menu().y, app.menu().y + app.menu().height).join("\n");
     expect(page()).toContain("→ command-7"); expect(page()).toContain("(8/20+)");
 
-    // 작은 창에서도 입력·정보·푸터를 덮지 않고 선택과 초안은 그대로 보존한다.
+    // Compact layouts preserve selection/drafts without covering input, information, or footer.
     app.resize(60, 11); await app.render();
     const footer = app.renderer.root.findDescendantById("app-footer")!;
     expect(page()).toContain("→ command-7"); expect(app.menu().y + app.menu().height).toBeLessThanOrEqual(footer.y);
@@ -282,8 +282,8 @@ test("많은 후보는 창 크기에 맞춰 줄이고 선택 위치를 스크롤
   } finally { await app.close(); }
 });
 
-test("과거 대화를 읽는 중 목록 높이가 바뀌어도 첫 줄·스크롤·입력 포커스를 보존한다", async () => {
-  // 큰 후보 목록의 확장·축소는 대화 뷰포트만 조정하고 사용자의 읽기 위치를 이동시키면 안 된다.
+test("Completion height changes preserve historical first rows, scroll, and input focus", async () => {
+  // Expanding menus adjusts only transcript viewports, not reading positions.
   const items = Array.from({ length: 20 }, (_, i) => ({ kind: "command" as const, value: `command-${i}`, description: "Command" }));
   const app = await mount(async (_id, query) => ok(filterCompletions(items, query.query)));
   try {
@@ -295,7 +295,7 @@ test("과거 대화를 읽는 중 목록 높이가 바뀌어도 첫 줄·스크�
     const before = first(), top = scroll.scrollTop;
     expect(before).toBeDefined(); expect(app.view.workViewPreferences.agentViews?.a1?.follow).toBe(false);
 
-    // 넓은 목록에서 한 후보로 좁히고 닫아도 같은 기록을 계속 읽을 수 있다.
+    // Narrowing to one candidate and closing retain the same visible history.
     await app.type("/");
     expect(app.menu().height).toBe(6); expect(first()).toBe(before); expect(scroll.scrollTop).toBe(top);
     app.input.value = "/command-19"; await app.complete();
@@ -307,7 +307,7 @@ test("과거 대화를 읽는 중 목록 높이가 바뀌어도 첫 줄·스크�
   } finally { await app.close(); }
 });
 
-test("빠른 입력은 마지막 변경 150ms 뒤 한 번만 조회하고 커서와 입력은 즉시 반영한다", async () => {
+test("Rapid input queries once 150ms after the final edit while input/caret update immediately", async () => {
   const queries: string[] = [];
   const app = await mount(async (_id, query) => { queries.push(query.query); return ok({ items: fileItems, truncated: false }); });
   try {
@@ -321,7 +321,7 @@ test("빠른 입력은 마지막 변경 150ms 뒤 한 번만 조회하고 커서
   } finally { await app.close(); }
 });
 
-test("재조회 중 기존 후보의 높이·선택·푸터를 유지하고 이전 검색 결과는 확정하지 않는다", async () => {
+test("Refresh preserves existing candidate height, selection, and footer without committing stale results", async () => {
   const pending: ReturnType<typeof Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>>[] = [];
   const items = Array.from({ length: 10 }, (_, index) => ({ kind: "file" as const, value: `abcdef-${index}.ts`, description: "File" }));
   const app = await mount(async () => { const gate = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>(); pending.push(gate); return gate.promise; });
@@ -364,8 +364,8 @@ test.each(["escape", "blur", "session", "dispose", "renderer"] as const)("%s can
   } finally { await app.close(); }
 });
 
-test("로딩 표시가 끝나도 후보의 열 위치와 높이를 바꾸지 않는다", async () => {
-  // 빠른 조회의 스피너 꼬리는 후보를 지연하거나 별도 상태 행을 유지하지 않아야 한다.
+test("Loading completion never changes candidate columns or heights", async () => {
+  // Fast lookup spinner tails neither delay candidates nor retain separate status rows.
   const app = await mount();
   try {
     await app.type("@");
@@ -373,14 +373,14 @@ test("로딩 표시가 끝나도 후보의 열 위치와 높이를 바꾸지 않
     const before = position();
     expect(before[1]).toBeGreaterThan(0); expect(app.menu().height).toBe(2);
 
-    // 공유 로딩 표시의 최소 시간이 지나면 기존 후보의 제자리에서 표시만 사라진다.
+    // After shared minimum duration, remove only indicators in place.
     app.clock.advance(500); await app.render();
 
     expect(position()).toEqual(before); expect(app.captureCharFrame()).toContain("src/main.ts");
   } finally { await app.close(); }
 });
 
-test("빈 결과와 조회 오류도 열린 목록의 높이와 입력 위치를 바꾸지 않는다", async () => {
+test("Empty results and lookup errors preserve open-menu height and input position", async () => {
   let failure = false;
   const app = await mount(async () => failure ? err(new CapabilityError("Lookup failed")) : ok({ items: [], truncated: false }));
   try {
@@ -393,7 +393,7 @@ test("빈 결과와 조회 오류도 열린 목록의 높이와 입력 위치를
   } finally { await app.close(); }
 });
 
-test("슬래시는 입력 맨 앞에서만 명령을 제안하고 이메일이 아닌 중간 @는 파일을 제안한다", async () => {
+test("Slash suggests commands only at input start and non-email inline @ suggests files", async () => {
   // The real input and router stay active; only read-only discovery is replaced.
   const app = await mount();
   try {
@@ -405,7 +405,7 @@ test("슬래시는 입력 맨 앞에서만 명령을 제안하고 이메일이 �
   } finally { await app.close(); }
 });
 
-test.each(["command", "template", "skill"] as const)("Enter 한 번으로 선택된 %s 후보를 완성하고 즉시 전송한다", async (kind) => {
+test.each(["command", "template", "skill"] as const)("One Enter completes and immediately submits the selected %s candidate", async (kind) => {
   // The selected resource, not the incomplete token, is the intended command.
   const value = kind === "skill" ? "skill:compact-guide" : "compact";
   const app = await mount(async () => ok({ items: [{ kind, value, description: "Selected resource" }], truncated: false }));
@@ -420,7 +420,7 @@ test.each(["command", "template", "skill"] as const)("Enter 한 번으로 선택
   } finally { await app.close(); }
 });
 
-test("Enter는 첫 후보가 아닌 현재 선택 후보를 실행하고 명령 뒤 인수도 보존한다", async () => {
+test("Enter executes current selections rather than first candidates and preserves trailing arguments", async () => {
   const app = await mount(async () => ok({ items: ["compact", "compare"].map(value => ({ kind: "command" as const, value, description: value })), truncated: false }));
   try {
     app.input.value = "/com keep these instructions";
@@ -433,7 +433,7 @@ test("Enter는 첫 후보가 아닌 현재 선택 후보를 실행하고 명령 
   } finally { await app.close(); }
 });
 
-test("명령 재조회 중 Enter는 최신 결과를 기다리고 같은 선택 후보를 한 번만 전송한다", async () => {
+test("Enter during command refresh waits for latest results and submits the same selection once", async () => {
   const pending = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>();
   const item = { kind: "command" as const, value: "compact", description: "Compact context" };
   const app = await mount(async (_id, query) => query.query === "com" ? pending.promise : ok({ items: [item], truncated: false }));
@@ -469,7 +469,7 @@ test.each(["edit", "dismiss", "session", "blur", "dispose", "changed-selection"]
   } finally { pending.resolve(ok({ items: [item], truncated: false })); await app.close(); }
 });
 
-test.each(["empty", "error"] as const)("명령 재조회가 %s로 끝나면 대기 중인 Enter가 미완성 명령을 대신 전송하지 않는다", async (outcome) => {
+test.each(["empty", "error"] as const)("Command refresh ending in %s never lets pending Enter submit incomplete commands", async (outcome) => {
   const pending = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>> | ReturnType<typeof err<CapabilityError>>>();
   const item = { kind: "command" as const, value: "compact", description: "Compact context" };
   const app = await mount(async (_id, query) => query.query === "com" ? pending.promise : ok({ items: [item], truncated: false }));
@@ -484,7 +484,7 @@ test.each(["empty", "error"] as const)("명령 재조회가 %s로 끝나면 대�
   } finally { pending.resolve(ok({ items: [], truncated: false })); await app.close(); }
 });
 
-test("선택 명령이 거절돼도 held Enter 반복은 재전송하지 않고 완성된 초안을 유지한다", async () => {
+test("Rejected selections consume held Enter repeats without resending and retain completed drafts", async () => {
   const app = await mount(async () => ok({ items: [{ kind: "command", value: "compact", description: "Compact context" }], truncated: false }),
     () => err(new InputError("Command rejected")));
   const raw = (text: string) => { const key = parseKeypress(text, { useKittyKeyboard: true }); if (!key) throw new Error("Invalid key fixture"); app.renderer.keyInput.processParsedKey(key); };
@@ -498,8 +498,8 @@ test("선택 명령이 거절돼도 held Enter 반복은 재전송하지 않고 
   } finally { await app.close(); }
 });
 
-test.each(["/", "$", "@"] as const)("%s 자동완성에서 방향키는 입력 커서 대신 후보를 이동한다", async trigger => {
-  // 입력 포커스는 유지하면서 세 종류의 후보 목록 모두 기본 방향키를 지원한다.
+test.each(["/", "$", "@"] as const)("%s completion arrows move candidates instead of input carets", async trigger => {
+  // All three candidate menus support default arrows while retaining input focus.
   const kind = trigger === "/" ? "command" : trigger === "$" ? "skill" : "file";
   const items: CompletionItem[] = ["candidate-a", "candidate-b", "candidate-c"].map(value => ({ kind, value, description: "Candidate" }));
   const app = await mount(async () => ok({ items, truncated: false }));
@@ -507,7 +507,7 @@ test.each(["/", "$", "@"] as const)("%s 자동완성에서 방향키는 입력 �
     await app.type(trigger);
     const cursor = app.input.cursorOffset;
 
-    // 두 칸 내려갔다 한 칸 올라가 이전과 다음 방향키를 모두 검증한다.
+    // Move down twice and up once to verify both arrow directions.
     app.mockInput.pressArrow("down"); app.mockInput.pressArrow("down"); app.mockInput.pressArrow("up"); await app.render();
 
     expect(app.captureCharFrame()).toContain("→ candidate-b");
@@ -521,8 +521,8 @@ test.each(["/", "$", "@"] as const)("%s 자동완성에서 방향키는 입력 �
   } finally { await app.close(); }
 });
 
-test("자동완성을 닫으면 방향키와 hjkl은 다시 원래 입력 편집에 사용한다", async () => {
-  // 여러 줄 입력에서 메뉴를 닫은 뒤에는 방향키를 후보 탐색용으로 계속 소비하면 안 된다.
+test("Closing completion restores ordinary arrow editing and literal hjkl", async () => {
+  // Dismissed multiline menus must stop consuming arrows as candidate navigation.
   const app = await mount();
   try {
     await app.mockInput.pasteBracketedText("first line\n@"); await app.complete();
@@ -530,7 +530,7 @@ test("자동완성을 닫으면 방향키와 hjkl은 다시 원래 입력 편집
     app.mockInput.pressEscape(); await app.render();
     const cursor = app.input.cursorOffset;
 
-    // Esc 후 같은 입력창에서 커서를 위로 옮기고 Vim 문자를 실제 텍스트로 입력한다.
+    // After Esc, move the caret up in the same input and type literal Vim characters.
     app.mockInput.pressArrow("up"); await app.render();
     expect(app.input.cursorOffset).toBeLessThan(cursor);
     await app.mockInput.typeText("hjkl"); await app.render();
@@ -540,7 +540,7 @@ test("자동완성을 닫으면 방향키와 hjkl은 다시 원래 입력 편집
   } finally { await app.close(); }
 });
 
-test("Ctrl+N/P로 후보를 고르고 Tab은 자동완성만 하며 Enter는 선택한 명령을 즉시 전송한다", async () => {
+test("Ctrl+N/P selects candidates, Tab only completes, and Enter immediately submits selected commands", async () => {
   const app = await mount();
   try {
     await app.type("/");
@@ -565,7 +565,7 @@ test("Ctrl+N/P로 후보를 고르고 Tab은 자동완성만 하며 Enter는 선
   } finally { await app.close(); }
 });
 
-test("kitty Tab을 누르고 있어도 후보 삽입 뒤 반복 입력이 포커스 이동으로 바뀌지 않는다", async () => {
+test("Held kitty Tab repeats never become focus traversal after insertion", async () => {
   const app = await mount();
   const raw = (text: string) => { const key = parseKeypress(text, { useKittyKeyboard: true }); if (!key) throw new Error("Invalid key fixture"); app.renderer.keyInput.processParsedKey(key); };
   try {
@@ -577,7 +577,7 @@ test("kitty Tab을 누르고 있어도 후보 삽입 뒤 반복 입력이 포커
   } finally { await app.close(); }
 });
 
-test("kitty Enter의 반복 입력도 선택 명령을 중복 전송하지 않는다", async () => {
+test("Repeated kitty Enter never duplicates selected command submissions", async () => {
   const app = await mount();
   const raw = (text: string) => { const key = parseKeypress(text, { useKittyKeyboard: true }); if (!key) throw new Error("Invalid key fixture"); app.renderer.keyInput.processParsedKey(key); };
   try {
@@ -590,7 +590,7 @@ test("kitty Enter의 반복 입력도 선택 명령을 중복 전송하지 않�
   } finally { await app.close(); }
 });
 
-test.each([["/mc", "/mcp"], ["@src/", "@src/"]])("Enter는 명령 후보 %s만 완성하며 파일 후보는 자동 삽입하지 않는다", async (draft, submitted) => {
+test.each([["/mc", "/mcp"], ["@src/", "@src/"]])("Enter completes only %s command candidates and never auto-inserts file candidates", async (draft, submitted) => {
   const app = await mount();
   try {
     // Command execution uses the focused slash resource; file attachment remains a Tab action.
@@ -603,7 +603,7 @@ test.each([["/mc", "/mcp"], ["@src/", "@src/"]])("Enter는 명령 후보 %s만 �
   } finally { await app.close(); }
 });
 
-test("트리거와 Enter가 같은 입력 묶음에 도착해도 후보가 아닌 실제 입력만 즉시 전송한다", async () => {
+test("Triggers and Enter in one input batch immediately submit actual input, not candidates", async () => {
   const app = await mount();
   try {
     // Submission is independent of the completion debounce and its queued render.
@@ -614,7 +614,7 @@ test("트리거와 Enter가 같은 입력 묶음에 도착해도 후보가 아�
   } finally { await app.close(); }
 });
 
-test.each(["/", "@"])("트리거 %s와 Tab이 같은 입력 묶음에 도착하면 전송하거나 포커스를 옮기지 않는다", async (trigger) => {
+test.each(["/", "@"])("Trigger %s and Tab in one input batch neither submit nor move focus", async (trigger) => {
   const app = await mount();
   try {
     // Tab waits for fresh candidates instead of sending a partially typed command or reference.
@@ -627,7 +627,7 @@ test.each(["/", "@"])("트리거 %s와 Tab이 같은 입력 묶음에 도착하�
   } finally { await app.close(); }
 });
 
-test.each(["pending", "empty", "error"] as const)("후보 조회가 %s 상태여도 Enter는 입력한 명령을 한 번만 전송한다", async (state) => {
+test.each(["pending", "empty", "error"] as const)("Enter submits typed commands once even when lookup is %s", async (state) => {
   const pending = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>();
   const app = await mount(async () => state === "pending" ? pending.promise
     : state === "error" ? err(new CapabilityError("Lookup unavailable")) : ok({ items: [], truncated: false }));
@@ -643,7 +643,7 @@ test.each(["pending", "empty", "error"] as const)("후보 조회가 %s 상태여
   } finally { pending.resolve(ok({ items: commandItems, truncated: false })); await app.close(); }
 });
 
-test("Esc는 후보 목록만 닫고 hjkl은 입력 문자로 남으며 기존 초안을 전송하지 않는다", async () => {
+test("Esc closes only candidates while hjkl stays literal and existing drafts remain unsubmitted", async () => {
   const app = await mount();
   try {
     await app.type("/"); app.mockInput.pressEscape(); await app.render();
@@ -658,7 +658,7 @@ test("Esc는 후보 목록만 닫고 hjkl은 입력 문자로 남으며 기존 �
   } finally { await app.close(); }
 });
 
-test("한글·이모지 뒤의 토큰 중간에서도 전체 경로만 바꾸고 뒤의 요청과 native 커서를 보존한다", async () => {
+test("Completion inside tokens after Korean/emoji replaces full paths while preserving trailing requests and native caret", async () => {
   const app = await mount();
   try {
     const text = "한글 👩‍💻 @src/old.ts 뒤의 요청";
@@ -675,7 +675,7 @@ test("한글·이모지 뒤의 토큰 중간에서도 전체 경로만 바꾸고
   } finally { await app.close(); }
 });
 
-test("조회 중 Tab은 전송하지 않고 실패를 빈 목록으로 숨기지 않으며 초안과 포커스를 유지한다", async () => {
+test("Tab during lookup never submits, failures stay explicit, and drafts/focus persist", async () => {
   const pending = Promise.withResolvers<ReturnType<typeof err<CapabilityError>>>();
   const app = await mount(async () => pending.promise);
   try {
@@ -688,7 +688,7 @@ test("조회 중 Tab은 전송하지 않고 실패를 빈 목록으로 숨기지
   } finally { await app.close(); }
 });
 
-test("다른 세션으로 이동한 뒤 도착한 이전 후보는 무시하고 각 세션 초안을 보존한다", async () => {
+test("Stale candidates after session switching are ignored while each draft survives", async () => {
   const pending: { id: string; signal: AbortSignal; gate: ReturnType<typeof Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>> }[] = [];
   const app = await mount(async (id, _query, signal) => {
     const gate = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>(); pending.push({ id, signal, gate }); return gate.promise;
@@ -706,7 +706,7 @@ test("다른 세션으로 이동한 뒤 도착한 이전 후보는 무시하고 
   } finally { await app.close(); }
 });
 
-test("renderer가 먼저 종료되면 진행 중 후보 조회를 취소하고 늦은 응답은 native 버퍼를 접근하지 않는다", async () => {
+test("Renderer-first shutdown cancels lookups and late responses never access native buffers", async () => {
   const gate = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>(); let signal: AbortSignal | undefined;
   const app = await mount(async (_id, _query, abort) => { signal = abort; return gate.promise; });
   try {
@@ -718,7 +718,7 @@ test("renderer가 먼저 종료되면 진행 중 후보 조회를 취소하고 �
   } finally { await app.close(); }
 });
 
-test("스트리밍과 좁은 화면에서도 후보는 입력창 아래와 푸터 사이에 있고 선택을 유지한다", async () => {
+test("Streaming and compact layouts retain selection with candidates between input and footer", async () => {
   let queries = 0;
   const app = await mount(async (_id, query) => { queries++; return ok(filterCompletions(commandItems, query.query)); });
   try {

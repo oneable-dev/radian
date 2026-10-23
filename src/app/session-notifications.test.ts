@@ -37,7 +37,7 @@ function fixture(source = new Source()) {
   return { source, sent, notifications };
 }
 
-test.each(["complete", "error", "unfinished", "cancelled"] as const)("다른 저장소의 새 %s 결과를 읽음 여부와 무관하게 한 번만 전달한다", outcome => {
+test.each(["complete", "error", "unfinished", "cancelled"] as const)("New %s results from other repositories deliver once regardless of acknowledgement", outcome => {
   // The selected repository is unrelated to delivery; the other session already exists at attachment.
   const app = fixture(), finished = settled(result("new", outcome));
   try {
@@ -54,7 +54,7 @@ test.each(["complete", "error", "unfinished", "cancelled"] as const)("다른 저
   } finally { app.notifications.dispose(); }
 });
 
-test.each(["feature/auth", null])("브랜치가 %s인 워크트리의 이름과 브랜치를 새 알림에 전달한다", branch => {
+test.each(["feature/auth", null])("New notifications include names and branches for worktrees with branch %s", branch => {
   // A worktree name need not match its repository or branch, and detached HEAD has no branch.
   const source = new Source();
   source.snapshot = { ...source.snapshot, repositories: source.snapshot.repositories.map(repo => ({ ...repo,
@@ -70,7 +70,7 @@ test.each(["feature/auth", null])("브랜치가 %s인 워크트리의 이름과 
   } finally { app.notifications.dispose(); }
 });
 
-test.each(["user", "lifecycle"] as const)("%s 취소는 기존 벨을 보존하면서 새 팝업을 만들지 않는다", cancellation => {
+test.each(["user", "lifecycle"] as const)("%s cancellation preserves existing bells without creating popups", cancellation => {
   // A previous unread result can survive deliberate cancellation of a later run.
   const source = new Source(), old = result("old"); source.publish("two", settled(old));
   const app = fixture(source);
@@ -82,7 +82,7 @@ test.each(["user", "lifecycle"] as const)("%s 취소는 기존 벨을 보존하�
   } finally { app.notifications.dispose(); }
 });
 
-test("벨이 켜진 채 다음 실행이 시작·완료돼도 각 새 결과를 구분한다", () => {
+test("New runs remain distinct when starting and completing with an existing bell", () => {
   // Boolean unread transitions would miss the second completion or replay the first on restart.
   const app = fixture(), first = result("first"), second = result("second");
   try {
@@ -94,7 +94,7 @@ test("벨이 켜진 채 다음 실행이 시작·완료돼도 각 새 결과를 
   } finally { app.notifications.dispose(); }
 });
 
-test("다음 실행이 이미 시작된 snapshot에서도 보존된 새 미확인 결과를 전달한다", () => {
+test("Snapshots already running the next request still deliver preserved unread results", () => {
   // Full snapshots can coalesce completion with the next agent_start, which clears result.
   const app = fixture();
   try {
@@ -105,7 +105,7 @@ test("다음 실행이 이미 시작된 snapshot에서도 보존된 새 미확�
   } finally { app.notifications.dispose(); }
 });
 
-test("초기 기록·대화 교체·재연결은 팝업을 재생하지 않고 이후 새 결과만 전달한다", () => {
+test("Initial history, conversation replacement, and reconnection never replay old popups", () => {
   // A restored bell is persistent unread state, not a fresh transient delivery.
   const source = new Source(); source.publish("two", settled(result("history")));
   const app = fixture(source);
@@ -122,7 +122,7 @@ test("초기 기록·대화 교체·재연결은 팝업을 재생하지 않고 �
   } finally { app.notifications.dispose(); }
 });
 
-test("개별 메시지·도구·자식 상태 변화와 저장 경고는 새 팝업이 아니다", () => {
+test("Individual messages, tools, child state, and persistence warnings never create popups", () => {
   // Only identified main-session results count, not transient failure/status changes.
   const app = fixture();
   try {
@@ -138,7 +138,7 @@ test("개별 메시지·도구·자식 상태 변화와 저장 경고는 새 팝
   } finally { app.notifications.dispose(); }
 });
 
-test("발송 콜백의 동기 snapshot 갱신과 dispose 뒤에도 같은 결과를 재생하지 않는다", () => {
+test("Synchronous callback snapshots and disposal never replay the same result", () => {
   // Commit observation before invoking UI callbacks that can publish acknowledgements.
   const source = new Source(), sent: SessionNotification[] = [];
   const notifications = new SessionNotifications(source, notification => { sent.push(notification); source.changed(); });

@@ -39,7 +39,7 @@ test.each([
   const keymap = expectOk(parseKeymap({ leader, bindings: { "button.activate": [] } }));
   const app = await mount(keymap);
   try {
-    // 안내에 표시된 논리적 리더를 설정된 실제 키들로 입력한다.
+    // Enter logical leaders using their configured physical keys.
     for (const key of input) app.raw(key);
     app.mockInput.pressKey("d");
 
@@ -49,7 +49,7 @@ test.each([
   } finally { await app.close(); }
 });
 
-test("불일치와 timeout은 원래 문자 입력을 순서대로 한 번 복원한다", async () => {
+test("Mismatches and timeouts restore original literal input once in order", async () => {
   const app = await mount(printableLeader());
   try {
     await app.mockInput.typeText(" rz"); expect(app.a.value).toBe(" rz");
@@ -59,7 +59,7 @@ test("불일치와 timeout은 원래 문자 입력을 순서대로 한 번 복�
   } finally { await app.close(); }
 });
 
-test("붙여넣기는 leader 문자열을 포함해도 앱 명령을 실행하지 않는다", async () => {
+test("Pastes never execute app commands even with leader text", async () => {
   const app = await mount(printableLeader());
   try {
     app.mockInput.pressKey(" ");
@@ -68,7 +68,7 @@ test("붙여넣기는 leader 문자열을 포함해도 앱 명령을 실행하�
   } finally { await app.close(); }
 });
 
-test("prefix 도중 포커스 변경은 이전 입력 대상에만 버퍼를 반환한다", async () => {
+test("Focus changes during prefixes return buffers only to original input owners", async () => {
   const app = await mount(printableLeader());
   try {
     await app.mockInput.typeText(" r"); app.b.focus(); await app.mockInput.typeText("new"); app.clock.advance(1000);
@@ -86,8 +86,8 @@ test("Kitty release never duplicates replay or leaks consumed commands to native
   } finally { await app.close(); }
 });
 
-test.each([["search", "search.clear"], ["prompt", "agent.clear"], ["git-prompt", "git.clear"], ["git-search", "git.search-clear"]] as const)("%s 입력 지우기의 held Ctrl+C는 포커스 이동 뒤 쉘 인터럽트로 재생되지 않는다", async (context, clearCommand) => {
-  // 앱 입력에서 시작한 지우기와 나중에 쉘에서 새로 누른 인터럽트를 구분한다.
+test.each([["search", "search.clear"], ["prompt", "agent.clear"], ["git-prompt", "git.clear"], ["git-search", "git.search-clear"]] as const)("%s held Ctrl+C clearing never replays as shell interruption after focus changes", async (context, clearCommand) => {
+  // Distinguish clearing started in app inputs from fresh shell interrupts.
   const app = await createTestRenderer({ width: 60, height: 8, kittyKeyboard: true, exitOnCtrlC: false });
   const input = new InputRenderable(app.renderer, { width: 60 }); input.value = "candidate"; app.renderer.root.add(input);
   const surface = new TerminalSurface(app.renderer, "search-clear-terminal"); app.renderer.root.add(surface.root);

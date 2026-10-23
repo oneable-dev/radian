@@ -9,7 +9,7 @@ const telemetry: SessionTelemetry = { provider: "openai-codex", model: "gpt-5.5"
   context: { usedTokens: null, maxTokens: 200000 }, weekly: { remainingPercent: 82, observedAt: 1800000000000, resetsAt: 1800003600000 } };
 const snapshot = (value: unknown) => ({ ...legacy, details: { session: { ...legacy.details.session, telemetry: value } } });
 
-test("텔레메트리는 선택적 wire 필드이며 미확정 값과 소수 잔량을 직렬화한다", () => {
+test("Telemetry is optional on the wire and serializes unknown values and fractional remaining usage", () => {
   // Old runtimes lack telemetry entirely; a new runtime can report unknown context after compaction.
   const stored = JSON.parse(JSON.stringify(snapshot({ ...telemetry, weekly: { ...telemetry.weekly, remainingPercent: 82.5 } })));
 
@@ -22,7 +22,7 @@ test("텔레메트리는 선택적 wire 필드이며 미확정 값과 소수 잔
   expect(fresh.details.session?.telemetry?.weekly?.remainingPercent).toBe(82.5);
 });
 
-test("제공자 공통 usage의 사용률·기간·리셋·오류 상태는 wire를 왕복한다", () => {
+test("Provider-neutral usage ratios, windows, resets, and errors round-trip over the wire", () => {
   const usage: NonNullable<SessionTelemetry["usage"]> = { provider: "acme", status: "ready", windows: [{ id: "quota", usedPercent: 10, periodMs: 604800000, resetsAt: 1800003600000 }],
     updatedAt: 1800000000000, errorCode: null };
 
@@ -33,7 +33,7 @@ test("제공자 공통 usage의 사용률·기간·리셋·오류 상태는 wire
   expect(expectError(parseSnapshot(snapshot({ ...telemetry, usage: { ...usage, errorCode: "INVENTED_ERROR" } }))).code).toBe("PROTOCOL_ERROR");
 });
 
-test("잘못된 잔량·토큰·타임스탬프는 IPC 경계에서 typed 프로토콜 오류로 거부한다", () => {
+test("Invalid remaining values, tokens, and timestamps return typed IPC protocol errors", () => {
   // A private local endpoint still receives untyped JSON, not a trusted SDK object.
   const invalid = [
     { ...telemetry, weekly: { ...telemetry.weekly, remainingPercent: 101 } },

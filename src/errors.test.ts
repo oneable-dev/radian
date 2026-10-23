@@ -12,7 +12,7 @@ const paths = runtimePaths("/fixture/.git", true, "/tmp/radian-result-unit-test"
 const snapshot = (): RuntimeSnapshot => ({ version: protocolVersion, pid: process.pid, instance: "test", repositoryId: "/fixture/.git", mode: "offline",
   repositories: [], details: {}, closingCount: 0, preferences: structuredClone(emptyPreferences), notice: "", capabilities: ["typed-errors", "history"] });
 
-test("예상 파일 오류는 custom error Result에 원인과 코드를 보존한다", async () => {
+test("Expected file failures retain causes and codes in custom error Results", async () => {
   // An OS error has a stable code; its human message is not a classification key.
   const original = Object.assign(new Error("permission text may vary"), { code: "EACCES" });
 
@@ -25,7 +25,7 @@ test("예상 파일 오류는 custom error Result에 원인과 코드를 보존�
   expect(error.cause).toBe(original);
 });
 
-test("예상하지 못한 TypeError는 Result 실패나 서비스 부재로 숨기지 않는다", async () => {
+test("Unexpected TypeErrors never become failure Results or service absence", async () => {
   // A programming defect is distinct from a missing Unix socket.
   const original = new TypeError("unexpected defect");
   const fetchMock = spyOn(globalThis, "fetch").mockRejectedValue(original);
@@ -40,7 +40,7 @@ test("예상하지 못한 TypeError는 Result 실패나 서비스 부재로 숨�
 });
 
 for (const [code, expected] of [["ENOENT", null], ["ECONNREFUSED", null], ["EACCES", "CONNECTION_FAILED"], ["ETIMEDOUT", "CONNECTION_TIMEOUT"]] as const) {
-  test(`snapshot 조회의 ${code}는 부재와 연결 실패를 구분한다`, async () => {
+  test(`Snapshot lookup ${code} distinguishes absence from connection failure`, async () => {
     // Only absent/refused endpoints authorize bootstrap; permissions/timeouts must not do so.
     const failure = Object.assign(new Error("same message"), { code });
     const fetchMock = spyOn(globalThis, "fetch").mockRejectedValue(failure);
@@ -59,7 +59,7 @@ for (const [code, expected] of [["ENOENT", null], ["ECONNREFUSED", null], ["EACC
   });
 }
 
-test("IPC 오류 코드는 클라이언트까지 보존되고 legacy 문자열은 임의로 분류하지 않는다", async () => {
+test("IPC codes survive to clients without arbitrary classification of legacy strings", async () => {
   // A remote session conflict and an old daemon string error have different guarantees.
   const fetchMock = spyOn(globalThis, "fetch");
   const client = new RuntimeClient(paths, snapshot());
@@ -76,7 +76,7 @@ test("IPC 오류 코드는 클라이언트까지 보존되고 legacy 문자열�
   } finally { fetchMock.mockRestore(); await client.disconnect(); }
 });
 
-test("변경 요청 timeout은 작업 취소나 rollback 성공을 뜻하지 않는다", async () => {
+test("Mutation timeouts imply neither cancellation nor successful rollback", async () => {
   // A request might have been accepted before the acknowledgement was lost.
   const fetchMock = spyOn(globalThis, "fetch").mockRejectedValue(new DOMException("expired", "TimeoutError"));
   const client = new RuntimeClient(paths, snapshot());
@@ -89,7 +89,7 @@ test("변경 요청 timeout은 작업 취소나 rollback 성공을 뜻하지 않
   } finally { fetchMock.mockRestore(); await client.disconnect(); }
 });
 
-test("저장 경고가 있는 수락 응답은 실패 Result로 바뀌지 않고 사용자 경고를 유지한다", async () => {
+test("Accepted responses with persistence warnings stay successful and preserve warnings", async () => {
   // Persistence failed after execution was accepted; retrying would be unsafe.
   const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ ok: true, value: null,
     warnings: [{ code: "STORAGE_FAILED", message: "Checkpoint unavailable", outcome: "rejected" }] }));
@@ -103,7 +103,7 @@ test("저장 경고가 있는 수락 응답은 실패 Result로 바뀌지 않고
   } finally { fetchMock.mockRestore(); await client.disconnect(); }
 });
 
-test("작업과 정리가 모두 실패하면 원래 오류와 cleanup 오류를 함께 보존한다", async () => {
+test("Operation and cleanup failures preserve both original and cleanup errors", async () => {
   // Cleanup cannot replace an unexpected defect's stack with a second generic message.
   const original = new TypeError("original defect"); const cleanup = new StorageError("cleanup failed");
 
@@ -114,7 +114,7 @@ test("작업과 정리가 모두 실패하면 원래 오류와 cleanup 오류를
   expect(failure.errors).toEqual([original, cleanup]);
 });
 
-test("여러 예상 종료 실패는 CleanupError Result로 집계하고 내부 버그는 예외로 전파한다", async () => {
+test("Expected shutdown failures aggregate into CleanupError Results while bugs remain exceptions", async () => {
   // Every owned cleanup is awaited, regardless of earlier failures.
   const a = new StorageError("a"), b = new SessionError("SESSION_CONFLICT", "b");
   const unexpected = new TypeError("cleanup defect");
@@ -128,7 +128,7 @@ test("여러 예상 종료 실패는 CleanupError Result로 집계하고 내부 
   await expect(collectCleanup([Promise.reject(unexpected)], "close failed")).rejects.toBeInstanceOf(AggregateError);
 });
 
-test("파싱·도메인 거절·외부 장애는 서로 다른 오류 코드와 HTTP 상태를 갖는다", () => {
+test("Parsing, domain rejection, and external failures have distinct codes and HTTP statuses", () => {
   // Invalid syntax is not the same failure as a busy session or storage outage.
   const parsed = parseCommand("{ invalid");
 
@@ -142,7 +142,7 @@ test("파싱·도메인 거절·외부 장애는 서로 다른 오류 코드와 
   expect(errorStatus(new StorageError("disk"))).toBe(500);
 });
 
-test("registry의 예상 실패는 reject하지 않고 typed Result로 호출자가 분기할 수 있다", async () => {
+test("Expected registry failures return typed Results rather than rejecting", async () => {
   // A session ID is user/runtime state, so absence is an ordinary domain outcome.
   const registry = new SessionRegistry(demoWorkspace(), async () => { throw new Error("factory must not run"); });
 
@@ -153,7 +153,7 @@ test("registry의 예상 실패는 reject하지 않고 typed Result로 호출자
   expectOk(await registry.shutdown());
 });
 
-test("factory 내부 버그는 예상 생성 실패로 바꾸지 않고 동일 예외로 전파한다", async () => {
+test("Factory bugs propagate identical exceptions instead of becoming expected creation failures", async () => {
   // No executor was constructed, so cleanup must release only the reservation.
   const defect = new TypeError("factory defect");
   const registry = new SessionRegistry(demoWorkspace(), async () => { throw defect; });

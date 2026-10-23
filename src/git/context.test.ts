@@ -7,7 +7,7 @@ import { expectOk } from "../testing/results.ts";
 
 const commit: GitCommit = { oid: "a".repeat(40), parents: ["b".repeat(40)], subject: "Subject", author: "Writer", date: "2026-10-15" };
 
-test("커밋 문맥은 해시만 포함하고 상세 문맥은 전체 메시지와 태그를 보존한다", () => {
+test("Commit context includes only hashes while details preserve full messages and tags", () => {
   // Focus changes context scope without silently attaching an entire diff.
   const details = { commit, message: "Subject\n\nFull commit body\n", files: [], branches: [] };
 
@@ -19,8 +19,8 @@ test("커밋 문맥은 해시만 포함하고 상세 문맥은 전체 메시지�
   expect(panel.copy).toBe(commit.oid);
 });
 
-test("커밋 상세는 해당 커밋의 HEAD·로컬/원격 브랜치·태그를 모두 포함한다", () => {
-  // 같은 커밋에 여러 ref가 있고 다른 커밋의 ref도 조회된 상태를 준비한다.
+test("Commit details include matching HEAD, local/remote branches, and tags", () => {
+  // Prepare multiple refs on one commit alongside refs targeting another commit.
   const refs = [
     { kind: "local" as const, name: "main", ref: "refs/heads/main", oid: commit.oid },
     { kind: "local" as const, name: "feature/topic", ref: "refs/heads/feature/topic", oid: commit.oid },
@@ -29,7 +29,7 @@ test("커밋 상세는 해당 커밋의 HEAD·로컬/원격 브랜치·태그를
     { kind: "tag" as const, name: "unrelated", ref: "refs/tags/unrelated", oid: "b".repeat(40) },
   ];
 
-  // 화면 요약 대신 전체 메시지와 정확한 ref 대상이 상세 문맥에 남아야 한다.
+  // Details retain full messages and exact ref targets instead of screen summaries.
   const text = describeCommit({ commit, message: "Subject\n\nComplete message\n", branches: refs.filter(ref => ref.kind !== "tag") }, refs, { head: "main", headOid: commit.oid });
 
   expect(text).toContain(`Commit ${commit.oid}`); expect(text).toContain("Author: Writer"); expect(text).toContain("Date: 2026-10-15");
@@ -38,8 +38,8 @@ test("커밋 상세는 해당 커밋의 HEAD·로컬/원격 브랜치·태그를
   expect(text).not.toContain("unrelated");
 });
 
-test("detached HEAD는 브랜치처럼 표시하지 않고 다른 커밋 상세에는 HEAD를 붙이지 않는다", () => {
-  // 브랜치 없이 커밋을 직접 가리키는 HEAD와 다른 커밋의 상세를 구분한다.
+test("Detached HEAD never appears as a branch and unrelated details omit HEAD", () => {
+  // Distinguish branchless HEAD targets from other commit details.
   const details = { commit, message: "Subject", files: [], branches: [] };
 
   const detached = describeCommit(details, [], { head: "", headOid: commit.oid });
@@ -49,8 +49,8 @@ test("detached HEAD는 브랜치처럼 표시하지 않고 다른 커밋 상세�
   expect(other).not.toContain("HEAD"); expect(other).toContain(`Commit ${commit.oid}`);
 });
 
-test("커밋에 ref가 없어도 브랜치·원격·태그 항목을 숨기지 않고 빈 값을 명시한다", () => {
-  // 직접 가리키는 브랜치가 없는 커밋도 값을 조회하지 못한 것과 구분할 수 있어야 한다.
+test("Refless commits retain branch, remote, and tag fields with explicit empty values", () => {
+  // No directly pointing branches differs from an unavailable lookup.
   const details = { commit, message: "Subject", files: [], branches: [] };
 
   const text = describeCommit(details, []);
@@ -61,8 +61,8 @@ test("커밋에 ref가 없어도 브랜치·원격·태그 항목을 숨기지 �
   expect(text).not.toContain("HEAD");
 });
 
-test("브랜치 ref를 아직 조회하지 않은 상세는 빈 결과로 표시하지 않는다", () => {
-  // 새 조회 응답이 오기 전에 이전 snapshot이나 미조회 상태로 빈 결과를 가정하면 안 된다.
+test("Unqueried branch refs never appear as empty results", () => {
+  // Old snapshots or pending lookups must not imply empty refs before fresh responses.
   const refs = [{ kind: "local" as const, name: "main", ref: "refs/heads/main", oid: commit.oid }];
 
   const text = describeCommit({ commit, message: "Loading commit details…" }, refs);
@@ -71,7 +71,7 @@ test("브랜치 ref를 아직 조회하지 않은 상세는 빈 결과로 표시
   expect(text).not.toContain("Branches: —"); expect(text).toContain("Tags: —");
 });
 
-test("파일과 Diff는 동일한 경로 문맥이며 과거 revision과 연결된다", () => {
+test("Files and diffs share path context linked to historical revisions", () => {
   // Historical file identity must not be confused with a current working-tree path.
   const file = { kind: "commit" as const, status: "M", path: "src/example.ts", commit };
 
@@ -82,7 +82,7 @@ test("파일과 Diff는 동일한 경로 문맥이며 과거 revision과 연결�
   expect(gitPrompt("review", context)).not.toContain("Subject");
 });
 
-test("브랜치 이름에는 tip 해시를 자동 첨부하지 않고 Reflog는 이벤트를 포함한다", () => {
+test("Branch names never automatically append tip hashes and reflogs include events", () => {
   // Names and event context are intentional, distinct attachment scopes.
   const branch = { kind: "remote" as const, name: "origin/feature", ref: "refs/remotes/origin/feature", oid: commit.oid };
 
@@ -93,7 +93,7 @@ test("브랜치 이름에는 tip 해시를 자동 첨부하지 않고 Reflog는 
   expect(event.text).toContain("HEAD@{1}"); expect(event.text).toContain("checkout"); expect(event.copy).toBe(commit.oid);
 });
 
-test("전체 파일 patch는 변경과 멀리 떨어진 줄과 동일 파일도 포함한다", () => {
+test("Full-file patches include distant changes and unchanged files", () => {
   // A default hunk-only patch would omit both ends of this file.
   const before = Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n") + "\n";
   const after = before.replace("line 50\n", "changed 50\n");
@@ -105,7 +105,7 @@ test("전체 파일 patch는 변경과 멀리 떨어진 줄과 동일 파일도 
   expect(equal).toContain(" line 99\n"); expect(equal).not.toContain("+line 99");
 });
 
-test("그래프는 merge의 두 부모와 합류 레인을 보존한다", () => {
+test("Graphs preserve merge parents and joining lanes", () => {
   // A diamond history exercises lane splitting and convergence rather than a linear list.
   const make = (oid: string, parents: string[]) => ({ ...commit, oid, parents });
 

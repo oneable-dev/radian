@@ -22,7 +22,7 @@ async function mount(waitForResizeOutput: boolean) {
   return { session, async close() { await reader.cancel(); expectOk(await session.dispose()); } };
 }
 
-test("Editor용 PTY는 리사이즈 수락만으로 치수가 바뀐 미완성 화면을 게시하지 않는다", async () => {
+test("Editor PTY resize acceptance never publishes dimension-changed incomplete screens", async () => {
   const app = await mount(true);
   try {
     const before = app.session.frame();
@@ -36,7 +36,7 @@ test("Editor용 PTY는 리사이즈 수락만으로 치수가 바뀐 미완성 �
   } finally { await app.close(); }
 });
 
-test("연속 리사이즈도 최초 화면을 유지하다 마지막 치수의 실제 출력으로 교체한다", async () => {
+test("Consecutive resizes retain initial screens until actual output at final dimensions arrives", async () => {
   const app = await mount(true);
   try {
     const before = app.session.frame();
@@ -48,7 +48,7 @@ test("연속 리사이즈도 최초 화면을 유지하다 마지막 치수의 �
   } finally { await app.close(); }
 });
 
-test("재출력 대기 중 종료도 이전 실행 화면에 가려지지 않고 최종 상태로 게시한다", async () => {
+test("Exit while awaiting repaint publishes final state despite retained old screens", async () => {
   const app = await mount(true);
   try {
     await app.session.resize(40, 2, "fixture-lease");

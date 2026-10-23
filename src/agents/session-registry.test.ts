@@ -46,7 +46,7 @@ function setup() {
   } };
 }
 
-test("워크트리 전환과 비선택 실행의 갱신은 기존 실행 핸들을 종료하거나 다시 만들지 않는다", async () => {
+test("Worktree switching and background updates never close or recreate existing run handles", async () => {
   // Registry snapshots, not view selection, own the executor instances.
   const app = setup();
   try {
@@ -68,7 +68,7 @@ test("워크트리 전환과 비선택 실행의 갱신은 기존 실행 핸들�
   } finally { await app.cleanup(); }
 });
 
-test("닫기는 즉시 표시 항목을 제거하고 종료 완료까지 핸들을 보관하며 중복 요청을 합친다", async () => {
+test("Closing hides entries immediately, retains handles through cleanup, and coalesces duplicates", async () => {
   // Cleanup is deliberately blocked so optimistic UI behavior is independently observable.
   const app = setup();
   try {
@@ -97,22 +97,22 @@ test("닫기는 즉시 표시 항목을 제거하고 종료 완료까지 핸들�
   } finally { await app.cleanup(); }
 });
 
-test("닫힌 스냅샷은 최종 대화와 종료 전 상태줄을 보존하고 저장 확인 전까지 유지한다", async () => {
-  // 종료 과정이 Fast 관측값을 비워도 History에는 종료 전 화면 상태가 남아야 한다.
+test("Closed snapshots preserve final conversations and pre-close status until persistence acknowledgement", async () => {
+  // History retains pre-close presentation even if cleanup clears Fast telemetry.
   const app = setup();
   try {
     const id = expectOk(await app.registry.create("demo:main")), executor = app.executors[0]!;
     const telemetry = { provider: "fixture", model: "model", effort: "high", fast: true, context: null, weekly: null };
     executor.update({ status: "working", output: "Before close", error: null, telemetry });
 
-    // 첫 저장이 진행 중인 동안 정리가 끝나 더 최신의 닫힌 스냅샷이 생긴다.
+    // Cleanup produces a newer closed snapshot while the first save is pending.
     const closing = app.registry.close(id), firstCheckpoint = app.registry.checkpointRecords;
     await executor.closeStarted.promise;
     executor.update({ status: "complete", output: "Final settled output", error: null });
     executor.finishClose.resolve(); expectOk(await closing);
     app.registry.acknowledgeCheckpoint(firstCheckpoint);
 
-    // 늦은 첫 저장의 확인으로 최종 스냅샷을 제거하지 않고 닫힌 대화는 실행하지 않는다.
+    // A late save acknowledgement cannot delete the final snapshot or execute closed conversations.
     const final = app.registry.checkpointRecords;
     expect(final).toHaveLength(1); expect(final[0]).toMatchObject({ lifecycle: "closed", state: { output: "Final settled output", telemetry } });
     expect(app.registry.sessionSnapshot("demo:main", executor.savedSessionId)).toBe(final[0]);
@@ -122,8 +122,8 @@ test("닫힌 스냅샷은 최종 대화와 종료 전 상태줄을 보존하고 
   } finally { await app.cleanup(); }
 });
 
-test("재개하면 closedAt을 비우고 재닫힘 시각을 갱신하며 정리 예약은 새 SDK writer를 막는다", async () => {
-  // 같은 SDK 대화를 재개할 때 생성일이나 과거 닫힘 시각을 재사용하지 않는다.
+test("Resume clears closedAt, reclosing refreshes it, and cleanup reservations block new SDK writers", async () => {
+  // Resuming the same SDK conversation must not reuse creation or previous close times.
   const directory = await mkdtemp(join(tmpdir(), "radian-retention-registry-")), path = join(directory, "saved.jsonl");
   await writeFile(path, JSON.stringify({ type: "session" }) + "\n"); const file = await realpath(path);
   const repositories = demoWorkspace(); let time = 1000, factories = 0;
@@ -137,13 +137,13 @@ test("재개하면 closedAt을 비우고 재닫힘 시각을 갱신하며 정리
     const first = expectOk(await registry.create("demo:main")); expect(registry.records[0]?.managed).toBe(true);
     expectOk(await registry.close(first)); const old = registry.checkpointRecords[0]!; expect(old.closedAt).toBe(1000);
 
-    // 다른 탭으로 재개하면 만료 대상에서 빠지고 다시 닫을 때 새 기산점을 기록한다.
+    // Resuming in another tab removes expiry; closing again establishes a new retention origin.
     time = 2000; const second = expectOk(await registry.create("demo:main", file, { id: "reopened", name: "Saved", managed: true }));
     expect(registry.records[0]?.closedAt).toBeNull(); time = 3000; expectOk(await registry.close(second));
     const closed = registry.checkpointRecords[0]!;
     const info = { ...closed, lifecycle: "closed" as const, conversationId: "saved", updatedAt: 3000, title: "Saved", messageCount: 1 };
 
-    // 오래된 삭제 후보는 거절하고 유효한 정리 예약 동안은 SDK writer를 새로 만들지 못한다.
+    // Reject stale deletion candidates and block SDK writers during valid cleanup reservations.
     expect(closed.closedAt).toBe(3000);
     expect(registry.reserveSnapshotCleanup({ ...info, closedAt: 1000 }, file)).toBeNull();
     const release = registry.reserveSnapshotCleanup(info, file); if (!release) throw new Error("Missing cleanup reservation");
@@ -152,7 +152,7 @@ test("재개하면 closedAt을 비우고 재닫힘 시각을 갱신하며 정리
   } finally { clock.mockRestore(); await registry.shutdown(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("주 agent와 소속 자식의 취소를 함께 시작해 부모가 자식을 기다리는 교착을 피한다", async () => {
+test("Parent and child cancellation start together to avoid parent-waits-for-child deadlocks", async () => {
   // A child remains owned while its cleanup is blocked.
   const app = setup();
   try {
@@ -180,7 +180,7 @@ test("주 agent와 소속 자식의 취소를 함께 시작해 부모가 자식�
   } finally { await app.cleanup(); }
 });
 
-test("종료 실패는 숨겨진 핸들을 잃지 않고 재시도할 수 있으며 성공으로 처리하지 않는다", async () => {
+test("Cleanup failures retain hidden handles for retries and never report success", async () => {
   // The first cleanup attempt fails instead of acknowledging termination.
   const app = setup();
   try {
@@ -201,7 +201,7 @@ test("종료 실패는 숨겨진 핸들을 잃지 않고 재시도할 수 있으
   } finally { await app.cleanup(); }
 });
 
-test("shutdown과 생성이 겹쳐도 늦게 생성된 실행을 정리하고 열린 항목으로 되살리지 않는다", async () => {
+test("Shutdown cleans up late-created runs without resurrecting open entries", async () => {
   // Factory completion is under test control rather than a timing-dependent sleep.
   const ready = Promise.withResolvers<SessionExecutor>();
   const executor = new ControlledExecutor();
@@ -223,7 +223,7 @@ test("shutdown과 생성이 겹쳐도 늦게 생성된 실행을 정리하고 �
   expect(expectError(await registry.create("demo:main")).code).toBe("RUNTIME_STOPPING");
 });
 
-test("부모 닫기와 자식 생성이 겹치면 늦은 자식을 실행하지 않고 정리한다", async () => {
+test("Late child creation during parent closure is cleaned up without execution", async () => {
   // The parent exists while its child's factory is held at the creation boundary.
   const childReady = Promise.withResolvers<SessionExecutor>();
   const parent = new ControlledExecutor();
@@ -252,7 +252,7 @@ test("부모 닫기와 자식 생성이 겹치면 늦은 자식을 실행하지 
   await registry.shutdown();
 });
 
-test("동일 저장 파일과 심볼릭 링크의 중복 열기는 종료가 끝날 때까지 차단한다", async () => {
+test("Duplicate file and symlink opens remain blocked until cleanup completes", async () => {
   // Canonical identity, not UI IDs or spelling of the path, protects a saved history writer.
   const directory = await mkdtemp(join(tmpdir(), "radian-registry-file-"));
   const file = join(directory, "session.jsonl");
@@ -277,7 +277,7 @@ test("동일 저장 파일과 심볼릭 링크의 중복 열기는 종료가 끝
   } finally { executor.finishClose.resolve(); await registry.shutdown(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("런타임 복구는 저장된 Fast·weekly 대신 새 SDK 텔레메트리를 사용한다", async () => {
+test("Runtime recovery uses fresh SDK telemetry instead of saved Fast and weekly values", async () => {
   // A previous process's account allowance and request tier are not current measurements.
   const executor = new ControlledExecutor();
   const fresh: NonNullable<ExecutionState["telemetry"]> = { provider: "provider", model: "current-model", effort: "high", fast: null,
@@ -298,7 +298,7 @@ test("런타임 복구는 저장된 Fast·weekly 대신 새 SDK 텔레메트리�
   } finally { executor.finishClose.resolve(); await registry.shutdown(); }
 });
 
-test("생성 실패는 빈 워크트리를 유지하며 자동 재생성하지 않는다", async () => {
+test("Creation failure leaves worktrees empty without automatic recreation", async () => {
   // Factory failure is a user-visible failure, not an invented placeholder session.
   let calls = 0;
   const registry = new SessionRegistry(demoWorkspace(), async () => { calls++; throw new StorageError("factory failed"); });
@@ -313,7 +313,7 @@ test("생성 실패는 빈 워크트리를 유지하며 자동 재생성하지 �
   expect(registry.closingCount).toBe(0);
 });
 
-test("subagent 생성 실패도 부모의 표시 snapshot에 실패로 남고 미보고나 완료로 숨기지 않는다", async () => {
+test("Subagent creation failures remain visible in parent snapshots rather than becoming missing or complete", async () => {
   // A child factory failure has no executor state from which to infer its outcome.
   const parent = new ControlledExecutor();
   parent.finishClose.resolve();

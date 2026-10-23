@@ -65,14 +65,14 @@ test.each(["prompt", "session-strip"] as const)("Creating sessions from %s selec
   } finally { await app.close(); }
 });
 
-test("프롬프트의 Ctrl+N은 새 세션을 만들거나 기존 초안을 지우지 않는다", async () => {
-  // 생성은 leader 시퀀스만 소유하며 입력 편집 키를 가로채지 않는다.
+test("Prompt Ctrl+N neither creates sessions nor clears existing drafts", async () => {
+  // Only leader sequences own creation; never intercept input editing keys.
   const app = await mount();
   try {
-    // 작성 중인 프롬프트에 Ctrl+N을 전달한다.
+    // Deliver Ctrl+N to an in-progress prompt.
     app.mockInput.pressKey("n", { ctrl: true }); await app.render();
 
-    // 입력과 선택은 유지되고 생성 요청은 발생하지 않는다.
+    // Preserve input and selection without creation requests.
     expect(app.creations).toEqual([]); expect(app.selection.sessionId).toBe("a1");
     expect(app.input.value).toBe("Original draft"); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
   } finally { await app.close(); }

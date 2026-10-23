@@ -20,7 +20,7 @@ async function mount() {
         thinkingLevelMap: { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: null },
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] });
   const requested: string[] = [], efforts: (string | undefined)[] = [], base = options.streamFn!;
-  // 모델 선택은 실제 SDK를 사용하되 모델 응답만 로컬 픽스처로 대체한다.
+  // Use the real SDK for model selection, replacing only model responses with fixtures.
   const { model: _model, ...rest } = options;
   const registry = new SessionRegistry([fixture.repository], piSessionFactory({ ...rest,
     settings: { defaultProvider: "radian-offline", defaultModel: "fixture" },
@@ -29,15 +29,15 @@ async function mount() {
   return { ...fixture, registry, tree, requested, efforts, runtime, async close() { await registry.shutdown(); await fixture.cleanup(); } };
 }
 
-test("model 명령은 팝업 명령으로만 인식하고 인수를 모델 프롬프트로 보내지 않는다", () => {
-  // 모델 이름 인수나 유사 명령은 팝업 명령과 명확히 구분한다.
+test("The model command is popup-only and never sends arguments as model prompts", () => {
+  // Distinguish model-name arguments and similar commands from popup invocation.
   expect(expectOk(parseModelCommand("/model"))).toBe(true);
   expect(expectOk(parseModelCommand("/model \n"))).toBe(true);
   expect(expectOk(parseModelCommand("/models"))).toBe(false);
   expect(expectError(parseModelCommand("/model provider/model")).code).toBe("INVALID_INPUT");
 });
 
-test("선택한 모델은 현재 SDK 세션의 다음 요청·메타데이터·재개 기록에 반영되고 다른 세션과 기본값은 유지된다", async () => {
+test("Model selection updates the current SDK session's next request, metadata, and resumed history only", async () => {
   const app = await mount();
   try {
     const id = expectOk(await app.registry.create(app.tree.id)), other = expectOk(await app.registry.create(app.tree.id));
@@ -48,7 +48,7 @@ test("선택한 모델은 현재 SDK 세션의 다음 요청·메타데이터·�
     expect(JSON.stringify(catalog)).not.toContain("PRIVATE_FIXTURE_KEY"); expect(JSON.stringify(catalog)).not.toContain("127.0.0.1");
     expect(expectOk(await app.registry.complete(id, { kind: "command", query: "model" })).items.some(item => item.value === "model")).toBe(true);
 
-    // 같은 ID라도 provider가 다른 모델을 현재 세션에만 적용한다.
+    // Apply a model with the same ID but a different provider only to the current session.
     expectOk(await app.registry.selectModel(id, conversation, { provider: "other-fixture", id: "fixture" }));
     expect(app.registry.details(id)!.telemetry?.provider).toBe("other-fixture");
     expect(app.registry.details(other)!.telemetry?.provider).toBe("radian-offline");
@@ -66,8 +66,8 @@ test("선택한 모델은 현재 SDK 세션의 다음 요청·메타데이터·�
   } finally { await app.close(); }
 });
 
-test("모델과 effort는 최종 조합만 발행하며 effort만 바꿔도 다음 요청과 재개 기록에 적용된다", async () => {
-  // SDK 자동 보정은 low를 거치지만 호스트에는 사용자가 고른 high만 보여야 한다.
+test("Publish only the final model/effort pair and persist effort-only changes for requests and resume", async () => {
+  // SDK normalization passes through low; the host must show only the chosen high effort.
   const app = await mount();
   const model = { provider: "other-fixture", id: "reasoner" };
   try {
@@ -93,7 +93,7 @@ test("모델과 effort는 최종 조합만 발행하며 effort만 바꿔도 다�
     expect(changes(await readFile(file, "utf8"))).toBe(before);
     expectOk(await app.registry.prompt(id, "Second request"));
 
-    // effort는 실제 SDK 요청과 복구된 세션에 남고 새 세션의 기본값은 바뀌지 않는다.
+    // Effort persists in SDK requests and resumed sessions without changing new-session defaults.
     expect(app.efforts).toEqual(["high", "low"]);
     const record = app.registry.records.find(record => record.id === id)!;
     expectOk(await app.registry.close(id)); expectOk(await app.registry.restore(record));
@@ -102,8 +102,8 @@ test("모델과 effort는 최종 조합만 발행하며 effort만 바꿔도 다�
   } finally { await app.close(); }
 });
 
-test("SDK 모델 교체가 진행 중일 때 별도 조회도 중간 effort가 아닌 이전 조합을 읽는다", async () => {
-  // SDK 모델 교체와 명시적 effort 적용 사이를 지연시켜 다른 클라이언트의 조회를 재현한다.
+test("Concurrent reads see the previous model/effort pair during SDK model replacement", async () => {
+  // Pause between SDK model replacement and explicit effort application to simulate another reader.
   const app = await mount(), switched = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
   const original = AgentSession.prototype.setModel;
   const switching = spyOn(AgentSession.prototype, "setModel").mockImplementation(async function (this: AgentSession, model, options) {
@@ -114,7 +114,7 @@ test("SDK 모델 교체가 진행 중일 때 별도 조회도 중간 effort가 �
     const id = expectOk(await app.registry.create(app.tree.id)), conversation = app.registry.details(id)!.conversationId!;
     const pending = app.registry.selectModel(id, conversation, { provider: "other-fixture", id: "reasoner" }, "high"); await switched.promise;
 
-    // 다른 세션의 갱신이나 직접 snapshot/catalog 조회도 아직 적용되지 않은 조합을 내보내면 안 된다.
+    // Other sessions and direct snapshot/catalog queries must not expose uncommitted combinations.
     expect(app.registry.details(id)!.telemetry?.model).toBe("fixture"); expect(app.registry.details(id)!.telemetry?.effort).toBe("off");
     const during = expectOk(await app.registry.models(id, conversation));
     expect(during.current?.provider).toBe("radian-offline"); expect(during.effort).toBe("off");
@@ -124,7 +124,7 @@ test("SDK 모델 교체가 진행 중일 때 별도 조회도 중간 effort가 �
   } finally { release.resolve(); switching.mockRestore(); await app.close(); }
 });
 
-test("지원하지 않는 effort는 모델을 바꾸기 전에 거절하고 원래 조합을 보존한다", async () => {
+test("Unsupported effort is rejected before changing the model and preserves the original pair", async () => {
   const app = await mount();
   try {
     const id = expectOk(await app.registry.create(app.tree.id)), conversation = app.registry.details(id)!.conversationId!;
@@ -137,7 +137,7 @@ test("지원하지 않는 effort는 모델을 바꾸기 전에 거절하고 원�
   } finally { await app.close(); }
 });
 
-test("effort 기록 저장이 실패해도 라이브 모델·effort 적용을 성공과 저장 경고로 구분한다", async () => {
+test("Effort persistence failure distinguishes live application from persistence warnings", async () => {
   const app = await mount();
   const original = SessionManager.prototype.appendThinkingLevelChange;
   const saved = spyOn(SessionManager.prototype, "appendThinkingLevelChange").mockImplementation(function (this: SessionManager, level) {
@@ -154,7 +154,7 @@ test("effort 기록 저장이 실패해도 라이브 모델·effort 적용을 �
   } finally { saved.mockRestore(); await app.close(); }
 });
 
-test("SDK가 모델 적용 뒤 기록 저장에 실패하면 적용된 모델을 되돌렸다고 보고하지 않고 경고한다", async () => {
+test("SDK persistence failures after model application warn without claiming rollback", async () => {
   const app = await mount();
   const original = SessionManager.prototype.appendModelChange;
   const saved = spyOn(SessionManager.prototype, "appendModelChange").mockImplementation(function (this: SessionManager, provider, modelId) {
@@ -164,14 +164,14 @@ test("SDK가 모델 적용 뒤 기록 저장에 실패하면 적용된 모델을
   try {
     const id = expectOk(await app.registry.create(app.tree.id)), conversation = app.registry.details(id)!.conversationId!;
 
-    // SDK가 먼저 바꾼 라이브 모델은 수락된 결과로 유지하고 저장 경고를 별도로 전달한다.
+    // Keep the SDK-applied live model as accepted and report persistence warnings separately.
     const warning = expectOk(await app.registry.selectModel(id, conversation, { provider: "other-fixture", id: "fixture" }));
     expect(warning).toContain("STORAGE_FAILED");
     expect(app.registry.details(id)!.telemetry?.provider).toBe("other-fixture");
   } finally { saved.mockRestore(); await app.close(); }
 });
 
-test("모델 SDK의 프로그래밍 오류는 인증 오류로 숨기지 않고 원래 예외로 전달한다", async () => {
+test("Model SDK programming errors propagate unchanged instead of becoming authentication errors", async () => {
   const app = await mount();
   const defect = new TypeError("Fixture SDK programming defect");
   const lookup = spyOn(app.runtime, "getAvailable");
@@ -185,7 +185,7 @@ test("모델 SDK의 프로그래밍 오류는 인증 오류로 숨기지 않고 
   } finally { lookup.mockRestore(); await app.close(); }
 });
 
-test("실행 중·잘못된 모델·교체된 대화의 모델 선택은 기존 실행을 중단하거나 다른 대화를 변경하지 않는다", async () => {
+test("Busy, invalid, or replaced-conversation model selections preserve active runs and other conversations", async () => {
   const app = await mount();
   try {
     const id = expectOk(await app.registry.create(app.tree.id)), conversation = app.registry.details(id)!.conversationId!;
@@ -197,7 +197,7 @@ test("실행 중·잘못된 모델·교체된 대화의 모델 선택은 기존 
     const accepted = Promise.withResolvers<void>();
     const run = app.registry.prompt(id, "slow", () => accepted.resolve()); await accepted.promise;
 
-    // 실행 중에는 선택을 거절하고 원래 요청이 계속 같은 모델로 동작하게 한다.
+    // Reject selection while busy so the original request continues with its model.
     expect(expectError(await app.registry.selectModel(id, conversation, { provider: "other-fixture", id: "fixture" })).code).toBe("SESSION_BUSY");
     expect(app.registry.details(id)!.status).toBe("working"); expect(app.registry.details(id)!.telemetry?.provider).toBe("radian-offline");
     expectOk(await app.registry.interrupt(id)); await run;

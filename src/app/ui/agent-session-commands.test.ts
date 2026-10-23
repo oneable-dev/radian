@@ -74,7 +74,7 @@ test("new selects new tabs while preserving existing conversation, runs, reading
   } finally { await app.close(); }
 });
 
-test("새 탭 생성 실패는 명령·초안·원래 탭을 보존하고 대화를 모델에 보내지 않는다", async () => {
+test("New-tab failures preserve commands, drafts, and original tabs without model submission", async () => {
   const app = await mount(Promise.resolve(err(new InputError("Creation denied"))));
   try {
     await app.submit("/new");
@@ -84,7 +84,7 @@ test("새 탭 생성 실패는 명령·초안·원래 탭을 보존하고 대화
   } finally { await app.close(); }
 });
 
-test.each(["a2", "b1"])("new를 기다리다 %s로 이동하면 늦은 생성 결과가 선택·초안·포커스를 빼앗지 않는다", async (target) => {
+test.each(["a2", "b1"])("Late new results after moving to %s never steal selection, drafts, or focus", async (target) => {
   const ready = Promise.withResolvers<Result<string, ExpectedError>>();
   const app = await mount(ready.promise);
   try {
@@ -97,7 +97,7 @@ test.each(["a2", "b1"])("new를 기다리다 %s로 이동하면 늦은 생성 �
   } finally { ready.resolve(ok("created")); await app.render(); await app.close(); }
 });
 
-test("new 수락 대기 중 편집한 원래 탭 초안은 새 탭으로 이동해도 남는다", async () => {
+test("Original drafts edited while awaiting new acceptance survive switching to created tabs", async () => {
   const ready = Promise.withResolvers<Result<string, ExpectedError>>();
   const app = await mount(ready.promise);
   try {
@@ -109,7 +109,7 @@ test("new 수락 대기 중 편집한 원래 탭 초안은 새 탭으로 이동�
   } finally { ready.resolve(ok("created")); await app.render(); await app.close(); }
 });
 
-test("clear는 새 탭을 만들지 않고 현재 탭 대화와 탐색 상태만 새로 시작한다", async () => {
+test("clear resets only current conversation and navigation without creating tabs", async () => {
   const app = await mount();
   try {
     const count = app.selection.worktree!.sessions.length;

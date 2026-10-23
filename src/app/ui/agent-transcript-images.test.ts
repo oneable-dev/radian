@@ -42,7 +42,7 @@ async function mount(provider: TranscriptImageProvider = async () => ok(tinyPng(
     async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("이미지는 중복 문자열 대신 접힌 read 헤더로 시작하고 클릭·Ctrl+O로 실제 미리보기를 접고 편다", async () => {
+test("Images start as folded read headers without duplicate text and toggle previews by click or Ctrl+O", async () => {
   const signals: AbortSignal[] = [];
   const app = await mount(async (session, _id, signal) => { expect(session).toBe("a1"); signals.push(signal); return ok(tinyPng()); });
   try {
@@ -70,7 +70,7 @@ test("이미지는 중복 문자열 대신 접힌 read 헤더로 시작하고 �
   } finally { await app.close(); }
 });
 
-test("지원하지 않는 터미널은 안내만 표시하고 픽셀 정보가 늦게 도착하면 미리보기를 활성화한다", async () => {
+test("Unsupported terminals show guidance and activate previews when pixel metadata arrives", async () => {
   let calls = 0;
   const app = await mount(async () => { calls++; return ok(tinyPng()); }, false);
   try {
@@ -84,7 +84,7 @@ test("지원하지 않는 터미널은 안내만 표시하고 픽셀 정보가 �
   } finally { await app.close(); }
 });
 
-test("다른 세션으로 이동하면 이미지 조회를 취소하고 늦은 응답으로 새 화면이나 초안을 바꾸지 않는다", async () => {
+test("Session switching cancels image reads and late responses never change new screens or drafts", async () => {
   const pending = Promise.withResolvers<ReturnType<typeof ok<Uint8Array>>>(); let signal: AbortSignal | undefined;
   const app = await mount(async (_session, _id, abort) => { signal = abort; return pending.promise; });
   try {
@@ -98,8 +98,8 @@ test("다른 세션으로 이동하면 이미지 조회를 취소하고 늦은 �
   } finally { pending.resolve(ok(tinyPng())); await app.close(); }
 });
 
-test("세션 왕복은 대화 버퍼만 재사용하고 이미지는 새 요청으로 복원해 이전 응답을 무시한다", async () => {
-  // A를 다시 열었을 때 이전 이미지 요청의 늦은 응답이 새 미리보기를 차지하지 않아야 한다.
+test("Session round-trips reuse transcript buffers but reload images and ignore previous responses", async () => {
+  // Returning to A must not let its previous late image request own the new preview.
   const first = Promise.withResolvers<ReturnType<typeof ok<Uint8Array>>>();
   const second = Promise.withResolvers<ReturnType<typeof ok<Uint8Array>>>();
   const signals: AbortSignal[] = [];
@@ -110,11 +110,11 @@ test("세션 왕복은 대화 버퍼만 재사용하고 이미지는 새 요청�
     app.selection.selectSession("demo:main", "a2"); await app.render();
     expect(signals[0]?.aborted).toBe(true);
 
-    // 보관된 A에 돌아와 새 조회를 시작한 다음 취소된 조회의 응답을 먼저 전달한다.
+    // Reenter retained A, start fresh loading, then deliver the cancelled response first.
     app.selection.selectSession("demo:main", "a1"); await app.render();
     first.resolve(ok(tinyPng())); await app.render();
 
-    // 헤더 버퍼는 재사용하지만 픽셀과 요청은 재사용하지 않으며 오래된 응답은 표시하지 않는다.
+    // Reuse header buffers, not pixels or requests; never display stale responses.
     expect(app.header() === header).toBe(true);
     expect(signals).toHaveLength(2);
     expect(signals[1]?.aborted).toBe(false);
@@ -146,7 +146,7 @@ test("Expand-all limits concurrent images and collapsing activates waiting previ
   expect(active).toBe(0);
 });
 
-test("잘못된 이미지 바이트는 빈 미리보기나 숨겨진 예외 대신 디코딩 오류로 표시한다", async () => {
+test("Invalid image bytes show decoding errors instead of empty previews or hidden exceptions", async () => {
   const app = await mount(async () => ok(new Uint8Array(tinyPng().byteLength)));
   try {
     await app.clickHeader(); await app.render();

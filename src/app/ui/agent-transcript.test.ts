@@ -41,7 +41,7 @@ async function mount(initial = sections(), actions: Partial<WorkbenchActions> = 
   };
 }
 
-test("키보드만으로 섹션·본문·선택·복사를 오가도 초안을 전송하거나 대화를 수정하지 않는다", async () => {
+test("Keyboard section/body/selection/copy navigation never submits drafts or modifies conversations", async () => {
   // Only the clipboard boundary is replaced; the key router and native Unicode buffer are real.
   const app = await mount();
   try {
@@ -65,7 +65,7 @@ test("키보드만으로 섹션·본문·선택·복사를 오가도 초안을 �
   } finally { await app.close(); }
 });
 
-test("항상 보이는 Thinking과 접힌 도구도 원문 전체를 복사하고 오류 요약은 유지한다", async () => {
+test("Always-visible Thinking and folded tools copy full source while retaining error summaries", async () => {
   // Thinking remains prose; only the generic tool details start folded.
   const app = await mount();
   try {
@@ -84,7 +84,7 @@ test("항상 보이는 Thinking과 접힌 도구도 원문 전체를 복사하�
   } finally { await app.close(); }
 });
 
-test.each([0, 1, 2, 3])("모든 텍스트 종류에서 본문 커서와 줄 복사가 동작한다: %i", async (index) => {
+test.each([0, 1, 2, 3])("Body cursors and line copying work for every text kind: %i", async (index) => {
   // Ctrl+O expands details; Enter only reads already expanded text, with logical-line copying.
   const app = await mount();
   try {
@@ -98,7 +98,7 @@ test.each([0, 1, 2, 3])("모든 텍스트 종류에서 본문 커서와 줄 복�
   } finally { await app.close(); }
 });
 
-test("이모지 결합문자 선택은 resize 후에도 같은 원문을 복사한다", async () => {
+test("Emoji/combining-character selections copy identical source after resize", async () => {
   // A ZWJ family emoji and combining accent exercise cell offsets rather than JS string indices.
   const text = "👨‍👩‍👧‍👦é 한글 " + "wrapped ".repeat(20);
   const app = await mount([{ id: "unicode", kind: "assistant", title: "Agent", text, status: "complete" }]);
@@ -114,7 +114,7 @@ test("이모지 결합문자 선택은 resize 후에도 같은 원문을 복사�
   } finally { await app.close(); }
 });
 
-test("스트리밍 갱신은 선택·커서·접힘을 유지하고 최신 이동만 자동 따라가기를 재개한다", async () => {
+test("Streaming preserves selection, cursors, and folding while only latest-navigation resumes following", async () => {
   const initial = [...sections(), ...Array.from({ length: 20 }, (_, index): TranscriptSection => ({ id: `later-${index}`,
     kind: "assistant", title: "Agent", text: `later ${index}\nmore output`, status: "complete" }))];
   const app = await mount(initial);
@@ -137,7 +137,7 @@ test("스트리밍 갱신은 선택·커서·접힘을 유지하고 최신 이�
   } finally { await app.close(); }
 });
 
-test("같은 섹션의 스트리밍 본문 교체도 선택한 원문 범위를 보존한다", async () => {
+test("Replacing streaming bodies within sections preserves selected source ranges", async () => {
   const app = await mount([{ id: "stream", kind: "assistant", title: "Agent", text: "old text", status: "streaming" }]);
   try {
     await app.transcript(); app.mockInput.pressEnter(); app.mockInput.pressKey("v"); app.mockInput.pressKey("l");
@@ -150,7 +150,7 @@ test("같은 섹션의 스트리밍 본문 교체도 선택한 원문 범위를 
   } finally { await app.close(); }
 });
 
-test("복사 실패는 선택을 보존하고 안정적인 오류 코드로 알린다", async () => {
+test("Copy failures preserve selection and report stable error codes", async () => {
   const app = await mount(undefined, { onCopyTranscript: async () => err(new ClipboardError("Unavailable in test")) });
   try {
     await app.transcript(); app.mockInput.pressEnter(); app.mockInput.pressKey("v"); await app.copy();
@@ -182,7 +182,7 @@ test("Serialized navigation restores folding, selections, and cursors in new UIs
   } finally { await next.close(); }
 });
 
-test("본문 명령도 사용자 키맵을 따르고 미완성 prefix와 붙여넣기는 편집하지 않는다", async () => {
+test("Body commands respect user keymaps while pending prefixes and pastes never edit", async () => {
   // Remapped text motion must use the same routing and help metadata as the defaults.
   const keymap = expectOk(parseKeymap({ timeoutMs: 100, bindings: {
     "transcript.right": [{ keys: "s", scope: "transcript-text" }],
@@ -201,7 +201,7 @@ test("본문 명령도 사용자 키맵을 따르고 미완성 prefix와 붙여�
   } finally { await app.close(); }
 });
 
-test("앞선 섹션이 커져도 읽고 있는 본문의 화면 위치와 선택을 유지한다", async () => {
+test("Earlier section growth preserves reading-body screen positions and selections", async () => {
   const initial: TranscriptSection[] = [
     { id: "before", kind: "assistant", title: "Agent", text: "previous output", status: "streaming" },
     { id: "target", kind: "user", title: "You", text: "TARGET word", status: "complete" },
@@ -224,7 +224,7 @@ test("앞선 섹션이 커져도 읽고 있는 본문의 화면 위치와 선택
   } finally { await app.close(); }
 });
 
-test("세션 왕복은 각 세션의 본문 커서와 선택 모드를 섞지 않는다", async () => {
+test("Session round-trips keep body cursors and selection modes isolated", async () => {
   const app = await mount();
   try {
     await app.transcript(); app.mockInput.pressEnter(); app.mockInput.pressKey("l"); app.mockInput.pressKey("v"); await app.render();
@@ -242,7 +242,7 @@ test("세션 왕복은 각 세션의 본문 커서와 선택 모드를 섞지 �
   } finally { await app.close(); }
 });
 
-test("늦은 복사 수락은 이후에 바꾼 선택 범위를 해제하지 않는다", async () => {
+test("Late copy acceptance never clears subsequently changed selection ranges", async () => {
   const pending = Promise.withResolvers<ReturnType<typeof ok<string>>>();
   const app = await mount(undefined, { onCopyTranscript: () => pending.promise });
   try {
@@ -257,7 +257,7 @@ test("늦은 복사 수락은 이후에 바꾼 선택 범위를 해제하지 않
   } finally { pending.resolve(ok("Copied to clipboard")); await app.close(); }
 });
 
-test("좁은 화면의 도움말은 스크롤 가능하고 닫으면 기존 본문 탐색으로 복귀한다", async () => {
+test("Compact help scrolls and returns to existing body navigation on close", async () => {
   const app = await mount();
   try {
     await app.transcript(); app.mockInput.pressEnter(); app.mockInput.pressKey("l");
@@ -269,7 +269,7 @@ test("좁은 화면의 도움말은 스크롤 가능하고 닫으면 기존 본�
     const area = app.renderer.root.findDescendantById("session-transcript")! as ScrollBoxRenderable;
     const helpText = () => app.captureCharFrame().split("\n").slice(area.viewport.y, area.viewport.y + area.viewport.height)
       .map((line) => line.slice(area.viewport.x, area.viewport.x + area.viewport.width).trim()).join(" ");
-    // 바를 숨겨 확보한 너비에 따라 줄바꿈이 달라도 마지막 안내까지 읽을 수 있어야 한다.
+    // All guidance remains readable despite width-dependent wrapping after hiding bars.
     let tail = helpText();
     do {
       const previous = area.scrollTop;
@@ -287,7 +287,7 @@ test("좁은 화면의 도움말은 스크롤 가능하고 닫으면 기존 본�
   } finally { await app.close(); }
 });
 
-test("전체 접기 설정은 스트리밍에도 유지되며 빈 대화로 바뀌면 로고로 복귀한다", async () => {
+test("Fold-all preferences survive streaming and empty conversations restore logos", async () => {
   const app = await mount();
   try {
     await app.transcript(); app.mockInput.pressKey("z"); app.mockInput.pressKey("m"); await app.render();
@@ -308,7 +308,7 @@ test("전체 접기 설정은 스트리밍에도 유지되며 빈 대화로 바�
   } finally { await app.close(); }
 });
 
-test("단어·줄·섹션 경계 이동으로 원문 전체를 선택하며 달러 키도 실제 입력처럼 처리한다", async () => {
+test("Word, line, and section motions select full source and dollar keys follow real input", async () => {
   const text = "alpha beta\nlast";
   const app = await mount([{ id: "words", kind: "assistant", title: "Agent", text, status: "complete" }]);
   try {
@@ -351,7 +351,7 @@ test("Following selects new sections while actual upward scrolling fixes selecti
   } finally { await app.close(); }
 });
 
-test("구형 runtime의 미리보기도 접힌 뒤 식별하고 원문을 복사할 수 있다", async () => {
+test("Legacy runtime previews remain identifiable after folding and support source copying", async () => {
   const text = "legacy first\nlegacy second";
   const app = await mount(undefined, { getSessionDetails: () => ({ status: null, error: null, output: text }) });
   try {

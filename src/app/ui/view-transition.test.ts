@@ -78,8 +78,8 @@ function gitFixture(counts = { MAIN: 70, FEATURE: 70 }) {
     createSession: async () => ok("unused"), prompt: () => ok(undefined) } };
 }
 
-test("Agent 워크트리 전환은 첫 표시 프레임부터 저장된 대화 위치를 사용한다", async () => {
-  // 두 세션의 저장 위치가 다르므로 이전 viewport가 한 프레임 노출되는 회귀를 구분한다.
+test("Agent worktree transitions use saved reading positions from the first visible frame", async () => {
+  // Distinct saved positions reveal one-frame exposure of old viewports.
   const app = await mount();
   try {
     await app.scroll("session-transcript", 17);
@@ -88,7 +88,7 @@ test("Agent 워크트리 전환은 첫 표시 프레임부터 저장된 대화 �
     const feature = app.first(/FEATURE-\d{3}/); expect(feature).toBe("FEATURE-043");
     const record = app.capture(/(?:MAIN|FEATURE)-\d{3}/);
 
-    // 실제로 표시된 모든 전환 프레임을 검사하고 최종 화면만 기다려 문제를 숨기지 않는다.
+    // Inspect all visible transition frames rather than hiding bugs behind final-state waits.
     await app.click(`${icons.folder} radian`); await app.click(`${icons.folder} radian-ui`); record.stop();
 
     expect(record.frames.length).toBeGreaterThan(0);
@@ -98,8 +98,8 @@ test("Agent 워크트리 전환은 첫 표시 프레임부터 저장된 대화 �
   } finally { await app.close(); }
 });
 
-test("짧은 대화에서 긴 세션을 복원할 때 이전 스크롤 범위로 저장 위치를 잘라내지 않는다", async () => {
-  // 직전 대화는 스크롤할 수 없지만 다음 세션에는 57번째 줄을 복원해야 한다.
+test("Restoring long sessions from short conversations never clamps saved positions to old scroll ranges", async () => {
+  // The previous unscrollable conversation must not prevent restoring line 57.
   const app = await mount({ initialWorkViews: { active: {}, agentScroll: { a1: 0, b1: 57 } },
     getSessionDetails: (id) => ({ status: "complete", error: null, output: id === "a1" ? "SHORT-000" : lines("LONG") }) });
   const record = app.capture(/(?:SHORT|LONG)-\d{3}/);
@@ -110,7 +110,7 @@ test("짧은 대화에서 긴 세션을 복원할 때 이전 스크롤 범위로
     expect(new Set(record.frames.filter((frame) => frame.tree === "demo:feature").map((frame) => frame.first))).toEqual(new Set(["LONG-057"]));
     expect(app.view.workViewPreferences.agentScroll.b1).toBe(57);
 
-    // 첫 프레임 전에 선택이 다시 바뀌어도 취소된 세션의 위치는 덮어쓰지 않는다.
+    // Selection changes before first paint must not overwrite cancelled-session positions.
     app.selection.selectSession("demo:main", "a1"); app.selection.selectSession("demo:feature", "b1");
     app.selection.selectSession("demo:main", "a1"); await app.renderOnce(); await app.renderOnce();
     expect(app.first(/(?:SHORT|LONG)-\d{3}/)).toBe("SHORT-000");
@@ -118,8 +118,8 @@ test("짧은 대화에서 긴 세션을 복원할 때 이전 스크롤 범위로
   } finally { record.stop(); await app.close(); }
 });
 
-test("긴 Git 목록의 초기 복원은 로딩 placeholder나 짧은 이전 목록에 의해 제한되지 않는다", async () => {
-  // 첫 worktree의 짧은 목록으로는 다음 worktree의 저장된 48행 위치를 측정할 수 없다.
+test("Long Git list restoration never clamps to placeholders or shorter previous lists", async () => {
+  // A short first-worktree list cannot measure the next worktree's saved row 48.
   const fixture = gitFixture({ MAIN: 3, FEATURE: 70 });
   const app = await mount({ git: fixture.git, initialWorkViews: { active: {}, agentScroll: {},
     gitViews: { "demo:feature": { ...initialGitState(), historyScroll: 48 } } } });
@@ -136,8 +136,8 @@ test("긴 Git 목록의 초기 복원은 로딩 placeholder나 짧은 이전 목
   } finally { record.stop(); await app.close(); }
 });
 
-test("캐시된 Git 목록은 재조회 없이 첫 표시 프레임에 워크트리별 스크롤을 복원한다", async () => {
-  // 데이터 조회만 대역으로 제어하고 목록과 그래프의 레이아웃·paint는 실제 native UI를 사용한다.
+test("Cached Git lists restore per-worktree scroll on first paint without refetching", async () => {
+  // Stub only data reads; use real native list/graph layout and painting.
   const fixture = gitFixture(), app = await mount({ git: fixture.git });
   try {
     await app.showGit(); await app.waitForFrame((frame) => frame.includes("GITMAIN-000"));
@@ -156,8 +156,8 @@ test("캐시된 Git 목록은 재조회 없이 첫 표시 프레임에 워크트
   } finally { await app.close(); }
 });
 
-test("캐시된 Git diff는 첫 표시 프레임부터 저장 위치를 적용하고 재조회하지 않는다", async () => {
-  // 새 diff 렌더러의 초기 위치 0이 서로 다른 저장 위치보다 먼저 표시되면 안 된다.
+test("Cached Git diffs apply saved positions on first paint without refetching", async () => {
+  // New diff renderers must not show initial zero before distinct saved positions.
   const fixture = gitFixture(), app = await mount({ git: fixture.git });
   const scroll = async (position: number) => {
     const panes = walk(app.get("git-diff")).filter((node): node is CodeRenderable => node instanceof CodeRenderable);

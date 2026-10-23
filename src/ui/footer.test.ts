@@ -18,7 +18,7 @@ async function mount(width = 100, height = 8) {
   };
 }
 
-test("현재 화면은 제품명 바로 옆에서 강조하고 좁은 화면에서는 버전부터 생략한다", async () => {
+test("Current screens highlight beside product names and compact footers omit versions first", async () => {
   const app = await mount(120, 24);
   try {
     // View identity and transcript context occupy distinct slots; neither is a tab or action.
@@ -46,7 +46,7 @@ test("현재 화면은 제품명 바로 옆에서 강조하고 좁은 화면에�
   } finally { await app.dispose(); }
 });
 
-test("공통 푸터는 화면 마지막 한 줄에 있고 별도 알림은 바로 위에서 단축키를 가리지 않는다", async () => {
+test("Shared footers occupy final rows with notifications immediately above, clear of shortcuts", async () => {
   // A host supplies identity and context-specific shortcuts; the footer owns no actions.
   const app = await mount();
   try {
@@ -71,7 +71,7 @@ test("공통 푸터는 화면 마지막 한 줄에 있고 별도 알림은 바�
   } finally { await app.dispose(); }
 });
 
-test("일반 화면도 푸터는 마지막 한 줄만 사용하고 나머지 행을 본문에 돌려준다", async () => {
+test("Regular footers use only final rows and return remaining space to content", async () => {
   // Branding must not reserve an additional terminal row above the shortcut text.
   const app = await mount(100, 24);
   try {
@@ -87,7 +87,7 @@ test("일반 화면도 푸터는 마지막 한 줄만 사용하고 나머지 행
   } finally { await app.dispose(); }
 });
 
-test("세로 리사이즈 후에도 푸터는 한 줄이며 실제 알림만 바로 위 한 줄을 사용한다", async () => {
+test("Vertical resize retains single-row footers with only actual notifications directly above", async () => {
   // Width stays fixed so height-only changes cannot rely on a bar-width resize callback.
   const app = await mount(100, 24);
   try {
@@ -109,7 +109,7 @@ test("세로 리사이즈 후에도 푸터는 한 줄이며 실제 알림만 바
   } finally { await app.dispose(); }
 });
 
-test("푸터를 제거하면 세로 리사이즈 구독을 정리한다", async () => {
+test("Footer disposal cleans vertical resize subscriptions", async () => {
   const app = await mount(100, 24);
   try {
     const before = app.renderer.listenerCount("resize");
@@ -120,7 +120,7 @@ test("푸터를 제거하면 세로 리사이즈 구독을 정리한다", async 
   } finally { await app.dispose(); }
 });
 
-test("일시적으로 사용할 수 없는 단축키는 위치를 유지하고 키 색상만 비활성화한다", async () => {
+test("Temporarily unavailable shortcuts retain positions with only key colors disabled", async () => {
   const app = await mount();
   try {
     const before = app.footerLine();
@@ -132,7 +132,7 @@ test("일시적으로 사용할 수 없는 단축키는 위치를 유지하고 �
   } finally { await app.dispose(); }
 });
 
-test("좁은 폭에서는 단축키와 설명을 통째로 생략하고 resize 후 다시 표시한다", async () => {
+test("Narrow footers omit whole shortcuts/descriptions and restore them after resize", async () => {
   // Width fitting must not advertise a cut-off key/action pair or add another footer row.
   const app = await mount();
   try {
@@ -153,7 +153,7 @@ test("좁은 폭에서는 단축키와 설명을 통째로 생략하고 resize �
   } finally { await app.dispose(); }
 });
 
-test("한글 설명도 문자 수가 아닌 터미널 셀 너비로 배치한다", async () => {
+test("Korean descriptions lay out by terminal cells rather than character counts", async () => {
   // Wide characters occupy two cells and must not overlap the app identity or edge.
   const app = await mount(34);
   try {
@@ -168,7 +168,7 @@ test("한글 설명도 문자 수가 아닌 터미널 셀 너비로 배치한다
   } finally { await app.dispose(); }
 });
 
-test("푸터를 클릭해도 입력 포커스와 초안을 변경하거나 액션을 실행하지 않는다", async () => {
+test("Footer clicks preserve input focus/drafts and execute no actions", async () => {
   // The notice and shortcut bar are deliberately not interactive or focusable.
   const app = await mount();
   try {
@@ -182,7 +182,7 @@ test("푸터를 클릭해도 입력 포커스와 초안을 변경하거나 액�
   } finally { await app.dispose(); }
 });
 
-test("좌측 Radian 제품명에서 오른쪽으로 흐려지는 그라데이션은 터미널 테마와 리사이즈를 따른다", async () => {
+test("Radian's left-to-right fading gradient follows terminal themes and resize", async () => {
   // A known palette distinguishes accent-derived branding from a hardcoded product color.
   const app = await mount(100, 24);
   const palette = (light: boolean): TerminalColors => ({ palette: ["#000000", "#CC2222", "#228822", "#998800", "#2255AA", "#AA22AA", light ? "#996633" : "#117799", "#DDDDDD"],
@@ -223,7 +223,7 @@ test("좌측 Radian 제품명에서 오른쪽으로 흐려지는 그라데이션
   } finally { await app.dispose(); }
 });
 
-test("알림을 지우면 사용하던 행을 본문에 돌려주고 초안과 포커스를 유지한다", async () => {
+test("Clearing notifications returns rows to content while preserving drafts/focus", async () => {
   // Real warnings remain visible while routine empty notices consume no terminal space.
   const app = await mount();
   try {
@@ -244,7 +244,7 @@ test("알림을 지우면 사용하던 행을 본문에 돌려주고 초안과 �
   } finally { await app.dispose(); }
 });
 
-test("포커스 단축키가 없으면 앱 이름만 남기고 빈 알림 행을 접는다", async () => {
+test("No focus shortcuts leaves only app names and collapses empty notification rows", async () => {
   // Empty context must not invent global shortcuts or reserve an unused notice row.
   const app = await mount();
   try {
@@ -261,7 +261,7 @@ test("포커스 단축키가 없으면 앱 이름만 남기고 빈 알림 행을
   } finally { await app.dispose(); }
 });
 
-test("탐색·선택 상태는 단축키와 별개로 한 줄 푸터에 표시하고 실제 알림과 초안을 보존한다", async () => {
+test("Navigation/selection state occupies one footer row separately from hints while preserving notifications/drafts", async () => {
   const app = await mount(100, 24);
   try {
     app.footer.setContext("VISUAL LINE · Paused"); app.footer.setNotice("Runtime disconnected"); await app.renderOnce();

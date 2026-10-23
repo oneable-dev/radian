@@ -70,7 +70,7 @@ test("Actual requests and spinners appear above prompts without top Request, mod
   } finally { await app.close(); }
 });
 
-test("세션·워크트리 전환은 요청과 실행 상태를 함께 복원하고 이전 스피너를 다른 세션에 남기지 않는다", async () => {
+test("Session/worktree switching restores request and activity together without leaking old spinners", async () => {
   const app = await mount();
   try {
     app.selection.selectSession("demo:main", "a2"); await app.render();
@@ -130,7 +130,7 @@ test("Drafts, rejections, and settings commands update requests only when actual
   } finally { await app.close(); }
 });
 
-test("요청 없는 실행은 내용을 추측하지 않고 긴 요청은 작은 화면에서도 다음 한 줄 안에 표시한다", async () => {
+test("Request-free runs never infer content and long requests fit the next row in compact screens", async () => {
   const app = await mount();
   try {
     app.states.a1 = { status: "working", output: "Legacy output without request metadata", error: null }; await app.update();

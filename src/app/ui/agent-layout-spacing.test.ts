@@ -39,7 +39,7 @@ async function mount(withRequest = false) {
   };
 }
 
-test.each([120, 60])("너비 %i에서 실행·완료·하위 에이전트 전환에도 하단 구역 간격은 한 줄이다", async (width) => {
+test.each([120, 60])("At width %i, execution, completion, and subagent transitions retain one-row bottom spacing", async (width) => {
   // The final tinted tool card exposes duplicate gutters that plain text can conceal.
   const app = await mount();
   const expectStatusGap = () => {

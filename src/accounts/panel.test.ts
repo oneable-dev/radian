@@ -25,46 +25,46 @@ async function mount(overrides: Partial<WorkbenchActions> = {}) {
     async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("accounts 명령은 네이티브 팝업을 열고 모델 프롬프트 없이 현재 작업 공간의 선택을 변경한다", async () => {
-  // 공용 계정 목록은 선택 전에도 보이며 명령 자동완성을 제공한다.
+test("The accounts command opens a native popup and changes only the current workspace selection", async () => {
+  // Show shared accounts before selection and offer command completion.
   const app = await mount();
   try {
-    // 검색으로 이름 있는 계정을 고르면 현재 작업 공간을 대상으로만 변경한다.
+    // Searching and selecting a named account changes only the current workspace.
     await app.open("/acc"); expect(app.get("accounts-picker").visible).toBe(true);
     app.mockInput.pressKey("/"); await app.render(); await app.mockInput.typeText("Personal"); await app.render(); app.mockInput.pressEnter(); await app.render();
 
-    // 명령과 계정 선택은 모델 입력이나 대화 교체를 만들지 않는다.
+    // Commands and account selection neither prompt the model nor replace conversations.
     expect(app.requests.find(request => request.type === "select")).toEqual({ type: "select", worktreeId: app.selection.worktree!.id, provider: "fixture", accountId: "named", revision: 1 });
     expect(app.sent).toEqual([]); expect(app.prompt.value).toBe("");
     app.mockInput.pressEscape(); await app.render(); expect(app.renderer.currentFocusedRenderable).toBe(app.prompt);
   } finally { await app.close(); }
 });
 
-test("첫 계정 목록은 저장된 계정만 보여주고 미인증 제공자는 계정 추가 안에서 보여준다", async () => {
-  // 로그인하지 않은 제공자도 계정 추가에서는 선택할 수 있어야 한다.
+test("The initial account list shows saved accounts and lists unauthenticated providers only when adding", async () => {
+  // Unauthenticated providers remain available when adding an account.
   const app = await mount({ onAccountsRequest: async request => ok({ kind: "catalog", catalog: { ...catalog, worktreeId: request.worktreeId,
     providers: [...catalog.providers, { id: "other", name: "Other Service", methods: [{ id: "oauth", name: "Sign in" }] }] } }) });
   try {
-    // 계정 전환 화면에는 인증되지 않은 기본 선택지를 만들지 않는다.
+    // Do not invent unauthenticated defaults in the account switcher.
     await app.open();
     const frame = app.captureCharFrame();
     expect(frame).toContain("Fixture · Personal"); expect(frame).not.toContain("Other Service");
     expect(frame).not.toContain("Pi default"); expect(frame).not.toContain("[Active]");
 
-    // 새 계정을 추가할 때만 전체 로그인 제공자를 보여준다.
+    // Show all login providers only when adding an account.
     app.mockInput.pressEnter(); await app.render();
     expect(app.captureCharFrame()).toContain("Other Service"); expect(app.captureCharFrame()).toContain("Fixture");
     expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("연결된 계정이 없으면 가짜 선택 상태 대신 계정 추가를 안내한다", async () => {
-  // 지원 제공자는 있지만 저장된 인증은 없는 초기 상태다.
+test("No connected accounts shows an add-account hint instead of a fake selection", async () => {
+  // Start with supported providers but no saved credentials.
   const app = await mount({ onAccountsRequest: async request => ok({ kind: "catalog", catalog: { ...catalog, accounts: [], worktreeId: request.worktreeId } }) });
   try {
     await app.open();
 
-    // 아직 로그인하지 않은 제공자를 사용 중인 계정으로 표시하지 않는다.
+    // Never mark an unauthenticated provider as the active account.
     const frame = app.captureCharFrame();
     expect(frame).toContain("No connected accounts"); expect(frame).toContain("+ Add account");
     expect(frame).not.toContain("Fixture"); expect(frame).not.toContain("[Selected]"); expect(frame).not.toContain("[Active]");
@@ -72,8 +72,8 @@ test("연결된 계정이 없으면 가짜 선택 상태 대신 계정 추가를
   } finally { await app.close(); }
 });
 
-test.each(["oauth", "api_key"] as const)("기존 %s 인증이 확인된 계정으로 Pi 용어 없이 전환한다", async type => {
-  // 저장된 계정과 이미 연결된 외부 인증은 같은 제공자의 전환 대상이다.
+test.each(["oauth", "api_key"] as const)("Existing verified %s authentication is switchable without Pi terminology", async type => {
+  // Saved accounts and verified external credentials are switch targets for the same provider.
   const connected: AccountsCatalog = { ...structuredClone(catalog), selections: { fixture: "named" },
     existingAccounts: [{ provider: "fixture", name: "Fixture", type }] };
   const calls: AccountRequest[] = [];
@@ -84,11 +84,11 @@ test.each(["oauth", "api_key"] as const)("기존 %s 인증이 확인된 계정�
   try {
     await app.open(); expect(app.captureCharFrame()).toContain("Personal [Active]");
 
-    // 실제 인증이 확인된 기존 계정을 검색해서 전환한다.
+    // Search for and switch to an existing verified account.
     app.mockInput.pressKey("/"); await app.render(); await app.mockInput.typeText(type === "oauth" ? "Existing login" : "Existing API key"); await app.render();
     app.mockInput.pressEnter(); await app.render();
 
-    // 계정 추가 없이 인증 경로를 전환하고 현재 사용 계정만 표시한다.
+    // Switch authentication without adding an account; show only the active account.
     expect(calls.find(request => request.type === "select")).toMatchObject({ provider: "fixture", accountId: null, worktreeId: app.selection.worktree!.id });
     const frame = app.captureCharFrame();
     expect(frame).toContain(`${type === "oauth" ? "Existing login" : "Existing API key"} [Active]`);
@@ -96,22 +96,22 @@ test.each(["oauth", "api_key"] as const)("기존 %s 인증이 확인된 계정�
   } finally { await app.close(); }
 });
 
-test("기존 연결 확인이 불완전하면 저장된 계정과 조회 경고를 함께 보여준다", async () => {
-  // 연결 확인 실패를 인증 없는 기본 계정으로 대체하지 않는다.
+test("Incomplete connection checks show saved accounts alongside a warning", async () => {
+  // Never replace failed connection checks with an unauthenticated default.
   const app = await mount({ onAccountsRequest: async request => ok({ kind: "catalog", catalog: { ...catalog, worktreeId: request.worktreeId,
     warning: "Some existing connections could not be checked. Refresh to retry." } }) });
   try {
     await app.open();
 
-    // 저장된 계정은 계속 선택할 수 있으며 목록이 불완전하다는 사실을 표시한다.
+    // Keep saved accounts selectable while indicating the list is incomplete.
     const frame = app.captureCharFrame();
     expect(frame).toContain("Fixture · Personal"); expect(frame).toContain("could not be checked");
     expect(frame).not.toContain("Existing login"); expect(frame).not.toContain("Pi default");
   } finally { await app.close(); }
 });
 
-test("accounts 팝업 아래 GPT 아이콘은 같은 확대 크기를 유지하며 배경과 함께 어두워진다", async () => {
-  // 실제 상태 줄과 계정 팝업을 연결하고 터미널 이미지 전송만 대체한다.
+test("The GPT icon retains its scale and dims with the accounts popup backdrop", async () => {
+  // Connect the real status line and popup, replacing only terminal image transport.
   const app = await mount({ getSessionDetails: () => ({ status: "complete", output: "Retained answer", error: null,
     telemetry: { provider: "openai-codex", model: "gpt-fixture", effort: "high", fast: false, weekly: null, context: { usedTokens: 74000, maxTokens: 200000 },
       usage: { provider: "openai", status: "ready", windows: [{ id: "weekly", usedPercent: 73, periodMs: 604800000, resetsAt: Date.now() + 5 * 86400000 }], updatedAt: Date.now(), errorCode: null } } }) });
@@ -122,7 +122,7 @@ test("accounts 팝업 아래 GPT 아이콘은 같은 확대 크기를 유지하�
     app.resize(120, 48); await app.render(); expect(draw).toHaveBeenCalled();
     const original = draw.mock.calls.at(-1)!, pixels = original[0].raw().data.slice(), geometry = original.slice(3, 7);
 
-    // 상태 줄이 팝업 본문 밖의 반투명 배경 아래에 남는 큰 화면을 사용한다.
+    // Use a viewport where the status line remains beneath the translucent backdrop.
     await app.open(); await app.render();
     const icon = app.get("usage-provider-icon");
     expect(app.captureCharFrame().split("\n")[icon.y]).not.toContain(icons.openai);
@@ -130,34 +130,34 @@ test("accounts 팝업 아래 GPT 아이콘은 같은 확대 크기를 유지하�
     const dimmed = draw.mock.calls.at(-1)!;
     expect(dimmed.slice(3, 7)).toEqual(geometry); expect(dimmed[0].raw().data).not.toEqual(pixels);
 
-    // 취소는 사용량이나 대화를 바꾸지 않고 이미지 표현만 복원한다.
+    // Cancellation restores image presentation without changing usage or conversations.
     app.mockInput.pressEscape(); await app.render();
     expect(draw.mock.calls.at(-1)![0].raw().data).toEqual(pixels);
     expect(app.captureCharFrame().split("\n")[icon.y]).not.toContain(icons.openai); expect(app.sent).toEqual([]);
   } finally { draw.mockRestore(); Reflect.deleteProperty(app.renderer, "resolution"); await app.close(); }
 });
 
-test("계정 추가 목록은 내부 식별자 없이 표시 이름만 한 줄로 보여주고 원래 인증 방식으로 연결한다", async () => {
-  // 사용자에게 보이는 이름과 요청용 식별자가 다른 제공자를 준비한다.
+test("Add-account lists show display names on one line and preserve authentication methods", async () => {
+  // Prepare a provider with different display and request identifiers.
   const provider = { id: "openai-codex", name: "OpenAI Codex (legacy)", methods: [{ id: "api_key" as const, name: "API key" }, { id: "oauth" as const, name: "Sign in with ChatGPT" }] };
   const calls: AccountRequest[] = [];
   const app = await mount({ onAccountsRequest: async request => {
     calls.push(request); return ok({ kind: "catalog", catalog: { ...catalog, providers: [provider], worktreeId: request.worktreeId } });
   } });
   try {
-    // 계정 추가에서 제공자를 고를 때 표시 이름과 호환성 표시는 유지한다.
+    // Preserve display names and compatibility indicators when choosing a provider.
     await app.open(); app.mockInput.pressEnter(); await app.render();
     expect(app.captureCharFrame()).toContain("OpenAI Codex (legacy)"); expect(app.captureCharFrame()).not.toContain("openai-codex");
     expect(app.get("accounts-row:openai-codex").height).toBe(1);
     app.mockInput.pressEnter(); await app.render();
 
-    // 인증 방식도 빈 보조 행이나 내부 값을 표시하지 않는다.
+    // Authentication methods also omit empty secondary rows and internal values.
     const frame = app.captureCharFrame(), key = app.get("accounts-row:api_key"), oauth = app.get("accounts-row:oauth");
     expect(frame).toContain("API key"); expect(frame).toContain("Sign in with ChatGPT");
     expect(frame).not.toContain("api_key"); expect(frame).not.toContain("oauth");
     expect(key.height).toBe(1); expect(oauth.height).toBe(1); expect(oauth.y).toBe(key.y + 1);
 
-    // 표시를 줄여도 선택한 제공자와 인증 방식의 요청 식별자는 바뀌지 않는다.
+    // Compact presentation must not change provider or authentication request identifiers.
     app.mockInput.pressKey("n", { ctrl: true }); app.mockInput.pressEnter(); await app.render();
     app.mockInput.pressEnter(); await app.render();
     expect(calls.find(request => request.type === "login")).toMatchObject({ provider: "openai-codex", method: "oauth", label: "OpenAI Codex (legacy)" });
@@ -165,35 +165,35 @@ test("계정 추가 목록은 내부 식별자 없이 표시 이름만 한 줄�
   } finally { await app.close(); }
 });
 
-test("계정 추가에서 Esc는 이름 입력·연결 방식·제공자 목록을 한 단계씩 돌아간다", async () => {
-  // 연결을 시작하기 전 선택 화면은 팝업을 닫지 않고 이전 단계로 돌아가야 한다.
+test("Esc steps back through account name, authentication method, and provider selection", async () => {
+  // Before login starts, selections go back one step without closing the popup.
   const app = await mount();
   try {
     await app.open();
     for (let i = 0; i < 3; i++) { app.mockInput.pressEnter(); await app.render(); }
     await app.mockInput.typeText("Unsubmitted label"); await app.render();
 
-    // 이름 입력을 취소하면 현재 제공자의 연결 방식을 다시 고를 수 있다.
+    // Cancelling name entry returns to the current provider's authentication methods.
     app.mockInput.pressEscape(); await app.render();
     expect(app.captureCharFrame()).toContain("Add account · Fixture");
     expect(app.captureCharFrame()).toContain("API key"); expect(app.get("accounts-input").visible).toBe(false);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-list");
 
-    // 연결 방식의 뒤로 가기는 첫 계정 화면이 아니라 제공자 목록으로 돌아간다.
+    // Going back from methods returns to providers, not the initial account list.
     app.mockInput.pressEscape(); await app.render();
     expect(app.captureCharFrame()).toContain("Add account · provider"); expect(app.captureCharFrame()).toContain("Fixture");
     expect(app.captureCharFrame()).not.toContain("Personal"); expect(app.get("accounts-picker").visible).toBe(true);
     app.mockInput.pressEscape(); await app.render(); expect(app.captureCharFrame()).toContain("Fixture · Personal");
 
-    // 첫 화면에서만 창을 닫으며 취소한 이름으로 로그인하지 않는다.
+    // Only the initial screen closes; cancelled names never initiate login.
     app.mockInput.pressEscape(); await app.render();
     expect(app.get("accounts-picker").visible).toBe(false); expect(app.renderer.currentFocusedRenderable).toBe(app.prompt);
     expect(app.requests.some(request => request.type === "login")).toBe(false); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
 
-test.each([[120, 30], [60, 16]])("%dx%d의 한 줄 제공자 목록은 검색을 보존하며 반 화면의 후보를 이동한다", async (width, height) => {
-  // 전체 화면과 작은 화면 모두에서 스크롤이 필요한 제공자 목록을 준비한다.
+test.each([[120, 30], [60, 16]])("The %dx%d single-line provider list preserves search and jumps half a viewport", async (width, height) => {
+  // Prepare scrollable provider lists for both full and compact layouts.
   const providers = Array.from({ length: 60 }, (_, index) => ({ id: `provider-${index}`, name: `Service ${index}`, methods: catalog.providers[0]!.methods }));
   const app = await mount({ onAccountsRequest: async request => ok({ kind: "catalog", catalog: { ...catalog, providers, worktreeId: request.worktreeId } }) });
   try {
@@ -202,7 +202,7 @@ test.each([[120, 30], [60, 16]])("%dx%d의 한 줄 제공자 목록은 검색을
     const search = app.get("accounts-search") as InputRenderable, caret = search.cursorOffset;
     const jump = Math.max(1, Math.floor((app.get("accounts-list") as ScrollBoxRenderable).viewport.height / 2));
 
-    // 검색 입력에서 후보를 움직인 뒤 반복 점프와 위로 이동을 결과 목록에서 이어간다.
+    // Move from search input to results, then continue repeated jumps and upward navigation.
     app.mockInput.pressKey("n", { ctrl: true }); app.mockInput.pressKey("p", { ctrl: true });
     app.mockInput.pressKey("d", { ctrl: true }); await app.render();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-list"); expect(search.value).toBe("Service"); expect(search.cursorOffset).toBe(caret);
@@ -210,14 +210,14 @@ test.each([[120, 30], [60, 16]])("%dx%d의 한 줄 제공자 목록은 검색을
     app.mockInput.pressKey("j"); app.mockInput.pressKey("k"); app.mockInput.pressArrow("down"); app.mockInput.pressArrow("up");
     app.mockInput.pressEnter(); await app.render();
 
-    // 빈 보조 행 기준이 아닌 실제 한 줄 후보의 절반만큼 이동한 제공자가 열린다.
+    // Jump by half the visible single-line candidates, not empty secondary rows.
     expect(app.captureCharFrame()).toContain(`Add account · Service ${jump}`);
     expect(app.requests.some(request => request.type === "login")).toBe(false); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("계정 검색은 Ctrl+N/P와 반 페이지 이동을 지원하고 검색어·커서를 보존한다", async () => {
-  // 한 화면보다 많은 계정을 준비해 검색 입력과 결과 목록 사이 탐색을 검증한다.
+test("Account search supports Ctrl+N/P and half-page navigation while preserving query and caret", async () => {
+  // Use more accounts than fit in one viewport to test input/results navigation.
   const many = { ...catalog, accounts: Array.from({ length: 60 }, (_, i) => ({ ...catalog.accounts[0]!, id: `account-${i}`, label: `Account ${i}` })) };
   const calls: AccountRequest[] = [];
   const app = await mount({ onAccountsRequest: async request => { calls.push(request); return ok({ kind: "catalog", catalog: { ...many, worktreeId: request.worktreeId } }); } });
@@ -225,35 +225,35 @@ test("계정 검색은 Ctrl+N/P와 반 페이지 이동을 지원하고 검색�
     await app.open(); app.mockInput.pressKey("/"); await app.render(); await app.mockInput.typeText("Account"); await app.render();
     const search = app.get("accounts-search") as InputRenderable, caret = search.cursorOffset;
 
-    // 입력 포커스에서 후보를 옮기고 반 페이지 이동으로 결과 포커스에 인계한다.
+    // Move candidates from input focus, then hand off focus with a half-page jump.
     app.mockInput.pressKey("n", { ctrl: true }); app.mockInput.pressKey("p", { ctrl: true }); app.mockInput.pressKey("d", { ctrl: true }); await app.render();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-list"); expect(search.value).toBe("Account"); expect(search.cursorOffset).toBe(caret);
     app.mockInput.pressKey("n", { ctrl: true }); app.mockInput.pressKey("k"); app.mockInput.pressEnter(); await app.render();
 
-    // 후보 단위로 이동하며 다음 요청은 첫 후보 이후의 계정을 선택한다.
+    // Navigate by candidates; the next request selects an account after the first.
     const selected = calls.find(request => request.type === "select"); expect(selected?.type).toBe("select");
     if (selected?.type === "select") expect(selected.accountId).not.toBe("account-0");
     expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("빈 계정 검색의 Ctrl+C는 팝업을 닫지 않고 h/j/k/l을 입력 문자로 유지한다", async () => {
-  // 검색 지우기와 일반 입력은 계정 동작이나 앱 종료를 호출하지 않아야 한다.
+test("Ctrl+C on empty account search keeps the popup open and h/j/k/l literal", async () => {
+  // Clearing search and typing must not trigger account actions or app exit.
   const app = await mount();
   try {
     await app.open(); app.mockInput.pressKey("/"); await app.render();
     app.mockInput.pressKey("c", { ctrl: true }); await app.mockInput.typeText("hjkl"); await app.render();
     expect((app.get("accounts-search") as InputRenderable).value).toBe("hjkl");
 
-    // 검색만 지우며 Ctrl+L은 지우기 별칭으로 사용하지 않는다.
+    // Clear only search; Ctrl+L is not an alias.
     app.mockInput.pressKey("l", { ctrl: true }); await app.render(); expect((app.get("accounts-search") as InputRenderable).value).toBe("hjkl");
     app.mockInput.pressKey("c", { ctrl: true }); await app.render(); expect((app.get("accounts-search") as InputRenderable).value).toBe("");
     expect(app.get("accounts-picker").visible).toBe(true); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("API 키 입력은 화면·대화 초안에 평문을 남기지 않고 SDK 입력 요청에만 전달한다", async () => {
-  // 로그인 응답의 secret 요청과 상태 조회는 실제 서버 경계 대신 제한된 작업 응답을 쓴다.
+test("API key input stays masked and reaches only the SDK login request", async () => {
+  // Use bounded operation responses for secret prompts and polling instead of a server.
   const calls: AccountRequest[] = [], waiting = Promise.withResolvers<Result<AccountReply, ExpectedError>>();
   const flow: LoginView = { id: "flow", revision: 1, status: "pending", events: [], prompt: { id: "secret", type: "secret", message: "Enter API key" } };
   const app = await mount({ onAccountsRequest: async (request, signal) => {
@@ -264,22 +264,22 @@ test("API 키 입력은 화면·대화 초안에 평문을 남기지 않고 SDK 
     return ok({ kind: "catalog", catalog: { ...catalog, worktreeId: request.worktreeId } });
   } });
   try {
-    // 추가, 제공자, API 키 방식을 고른 뒤 기본 라벨을 사용한다.
+    // Choose add, provider, and API key authentication, then accept the default label.
     await app.open(); for (let i = 0; i < 4; i++) { app.mockInput.pressEnter(); await app.render(); }
     expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-secret"); await app.mockInput.typeText("sk-private-key"); await app.render();
 
-    // 실제 키 대신 마스크만 출력하고 Enter로 로그인 작업에만 전송한다.
+    // Render only a mask; Enter submits solely to the login operation.
     expect(app.captureCharFrame()).not.toContain("sk-private-key"); expect(app.captureCharFrame()).toContain("•••");
     app.mockInput.pressEnter(); await app.render(); expect(calls.find(request => request.type === "answer")).toMatchObject({ value: "sk-private-key", promptId: "secret" });
     expect(JSON.stringify(app.view.promptDrafts)).not.toContain("sk-private-key"); expect(app.sent).toEqual([]);
-    // 완료 이후 늦게 도착한 이전 poll은 비밀 입력창을 다시 열면 안 된다.
+    // Late polls after completion must not reopen secret input.
     waiting.resolve(ok({ kind: "login", login: flow })); await app.render();
     expect(app.get("accounts-secret").visible).toBe(false); expect(app.captureCharFrame()).not.toContain("Enter API key");
   } finally { waiting.resolve(err(new CancelledError())); await app.close(); }
 });
 
-test("OAuth는 작은 화면에서도 버튼 없이 브라우저·URL·코드 커맨드와 취소를 제공한다", async () => {
-  // 자동 열기 실패와 수동 인증을 위한 URL·코드를 제공한다.
+test("OAuth provides browser, URL, code, and cancel commands without buttons in compact layouts", async () => {
+  // Provide a URL and code for failed automatic opening and manual authentication.
   const calls: AccountRequest[] = [], opened: string[] = [], copied: string[] = [], waiting = Promise.withResolvers<Result<AccountReply, ExpectedError>>();
   const flow: LoginView = { id: "oauth", revision: 1, status: "pending", events: [{ message: "Open the URL", url: "https://example.test/device", code: "ABCD-EFGH" }] };
   const app = await mount({ onOpenLoginUrl: async url => { opened.push(url); return err(new BrowserError("Copy the login URL and open it manually.")); },
@@ -293,9 +293,9 @@ test("OAuth는 작은 화면에서도 버튼 없이 브라우저·URL·코드 �
     await app.open(); app.mockInput.pressEnter(); await app.render(); app.mockInput.pressEnter(); await app.render();
     app.mockInput.pressKey("j"); app.mockInput.pressEnter(); await app.render(); app.mockInput.pressEnter(); await app.render();
 
-    // URL은 자동 열기 성공 여부와 관계없이 화면에 남아 수동 인증할 수 있다.
+    // Keep the URL visible for manual authentication regardless of automatic opening.
     expect(opened).toEqual(["https://example.test/device"]); expect(app.captureCharFrame()).toContain("https://example.test/device"); expect(app.captureCharFrame()).toContain("ABCD-EFGH");
-    // 좁은 화면에서도 본문과 단축키만으로 인증 동작을 수행한다.
+    // Authentication uses only content and shortcuts, even in narrow layouts.
     app.resize(60, 16); await app.render();
     for (const id of ["accounts-continue", "accounts-cancel", "accounts-browser", "accounts-copy-url", "accounts-copy-code"]) expect(app.renderer.root.findDescendantById(id)).toBeUndefined();
     expect(app.captureCharFrame()).toContain("ABCD-EFGH");
@@ -304,7 +304,7 @@ test("OAuth는 작은 화면에서도 버튼 없이 브라우저·URL·코드 �
     app.mockInput.pressKey("y", { shift: true }); await app.render();
     app.mockInput.pressKey("o"); await app.render();
 
-    // 실제 인증을 실행하지 않고 복사·재열기 경계와 안전한 취소를 확인한다.
+    // Verify copy, reopen, and safe cancellation without real authentication.
     expect(copied).toEqual(["https://example.test/device", "ABCD-EFGH"]);
     expect(opened).toEqual(["https://example.test/device", "https://example.test/device"]);
     app.mockInput.pressEscape(); await app.render(); expect(calls.some(request => request.type === "cancel" && request.flowId === "oauth")).toBe(true);
@@ -312,8 +312,8 @@ test("OAuth는 작은 화면에서도 버튼 없이 브라우저·URL·코드 �
   } finally { waiting.resolve(err(new CancelledError())); await app.close(); }
 });
 
-test("로그인 시작 응답 전 창을 닫으면 늦은 응답의 로그인 작업을 취소하고 팝업을 다시 열지 않는다", async () => {
-  // 로그인 시작 요청은 이미 전송됐으므로 응답의 작업 ID를 받은 뒤에도 취소해야 한다.
+test("Closing before login starts cancels late operations without reopening the popup", async () => {
+  // The request was already sent; cancel once its operation ID arrives.
   const waiting = Promise.withResolvers<Result<AccountReply, ExpectedError>>(), calls: AccountRequest[] = [];
   const app = await mount({ onAccountsRequest: async request => {
     calls.push(request); if (request.type === "login") return waiting.promise;
@@ -322,7 +322,7 @@ test("로그인 시작 응답 전 창을 닫으면 늦은 응답의 로그인 �
   try {
     await app.open(); for (let i = 0; i < 4; i++) { app.mockInput.pressEnter(); await app.render(); }
 
-    // 작업 ID를 아직 모르는 상태에서 닫은 후 늦은 시작 응답이 도착한다.
+    // Close before the operation ID is known, then deliver the late response.
     app.mockInput.pressEscape(); await app.render();
     waiting.resolve(ok({ kind: "login", login: { id: "late-flow", revision: 1, status: "pending", events: [] } })); await app.render();
 
@@ -331,8 +331,8 @@ test("로그인 시작 응답 전 창을 닫으면 늦은 응답의 로그인 �
   } finally { waiting.resolve(err(new CancelledError())); await app.close(); }
 });
 
-test("계정 조회 실패는 초안을 보존하고 모델로 재전송하지 않는다", async () => {
-  // 사용 불가 오류는 호스트 화면에서 끝나야 한다.
+test("Account lookup failures preserve drafts and never resend to the model", async () => {
+  // Unavailability errors stop at the host UI boundary.
   const app = await mount({ onAccountsRequest: async () => err(new InputError("Fixture failure")) });
   try {
     await app.open(); expect(app.captureCharFrame()).toContain("Fixture failure"); expect(app.sent).toEqual([]);

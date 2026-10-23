@@ -19,7 +19,7 @@ async function mount(onPrompt: NonNullable<WorkbenchActions["onPrompt"]>) {
   return { ...app, selection, view, async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("수락 전 연속 Enter는 중복 전송하지 않고 거절된 초안을 보존한다", async () => {
+test("Repeated Enter before acceptance never duplicates submissions and rejection preserves drafts", async () => {
   // A delayed transport result makes input acceptance independent from the existing run.
   const pending = Promise.withResolvers<Result<void, ExpectedError>>();
   const sent: string[] = [];
@@ -39,7 +39,7 @@ test("수락 전 연속 Enter는 중복 전송하지 않고 거절된 초안을 
   } finally { await app.close(); }
 });
 
-test("전송 수락은 대기 중 새로 작성한 입력을 지우지 않는다", async () => {
+test("Accepted submissions never clear input written while awaiting acceptance", async () => {
   // A user can keep typing while an earlier prompt is being admitted.
   const pending = Promise.withResolvers<Result<void, ExpectedError>>();
   const app = await mount(() => pending.promise);
@@ -54,7 +54,7 @@ test("전송 수락은 대기 중 새로 작성한 입력을 지우지 않는다
   } finally { await app.close(); }
 });
 
-test("전송 결과 불확실성은 입력을 보존하고 snapshot 갱신으로 재전송하지 않는다", async () => {
+test("Uncertain submission outcomes preserve input and snapshot refreshes never resend", async () => {
   // A timeout cannot prove whether the remote runtime accepted the request.
   let calls = 0;
   const app = await mount(() => { calls++; return err(new ConnectionError("CONNECTION_TIMEOUT", "Action outcome is unknown")); });

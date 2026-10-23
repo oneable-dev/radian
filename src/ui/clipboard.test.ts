@@ -3,7 +3,7 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { Clipboard } from "./clipboard.ts";
 import { expectError } from "../testing/results.ts";
 
-test("클립보드 읽기는 실제 SDK의 MIME 검증을 통과하고 취소를 Result로 반환한다", async () => {
+test("Clipboard reads pass real SDK MIME validation and return cancellation Results", async () => {
   // The SDK validates MIME types before cancellation, so no user's clipboard is read or overwritten.
   const app = await createTestRenderer({ width: 40, height: 4 });
   const clipboard = new Clipboard(app.renderer);

@@ -30,7 +30,7 @@ async function mount() {
     async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("폴더 줄에서 가로 스크롤하면 같은 워크트리의 브랜치도 같은 오프셋으로 이동한다", async () => {
+test("Horizontal folder scrolling moves same-worktree branches by identical offsets", async () => {
   const app = await mount();
   try {
     const before = app.lines();
@@ -46,12 +46,12 @@ test("폴더 줄에서 가로 스크롤하면 같은 워크트리의 브랜치�
   } finally { await app.close(); }
 });
 
-test("고정 상태 영역 위의 가로 스크롤도 두 줄을 함께 이동시키며 상태 영역은 움직이지 않는다", async () => {
+test("Horizontal scroll over fixed status moves both rows while status stays fixed", async () => {
   const app = await mount();
   try {
     const slot = app.item.findDescendantById("worktree:demo:main:status")!;
     const body = app.item.findDescendantById("worktree:demo:main:body")!;
-    // 긴 이름의 자연 너비가 선택 배경이나 고정 상태 영역을 테두리 밖으로 밀어내면 안 된다.
+    // Natural long-name widths must not push selection backgrounds or fixed status outside borders.
     expect(body.x).toBe(app.item.x + 1); expect(body.width).toBe(app.item.width - 2);
     expect(slot.x + slot.width).toBe(app.item.x + app.item.width - 1);
     expect(slot.height).toBe(2); expect(slot.y).toBe(app.label().y);
@@ -66,7 +66,7 @@ test("고정 상태 영역 위의 가로 스크롤도 두 줄을 함께 이동�
   } finally { await app.close(); }
 });
 
-test("사이드바는 실행 중에도 애니메이션 없이 오류만 표시하고 Agent 실행 스피너는 유지한다", async () => {
+test("Sidebar shows only static errors during execution while Agent spinners remain active", async () => {
   const app = await mount();
   try {
     // The sidebar is navigation; execution feedback belongs to the Agent work surface.
@@ -90,7 +90,7 @@ test("사이드바는 실행 중에도 애니메이션 없이 오류만 표시�
   } finally { await app.close(); }
 });
 
-test("가로 위치는 snapshot 갱신에 유지되고 짧은 이름이나 넓어진 패널에서는 유효 범위로 줄인다", async () => {
+test("Horizontal offsets survive snapshots and clamp for shorter names or wider panels", async () => {
   const app = await mount();
   try {
     await app.mockMouse.scroll(app.item.x + 6, app.label().y, "right"); await app.render();
@@ -120,7 +120,7 @@ test("After horizontal scrolling, branch clicks open one worktree and vertical w
   } finally { await app.close(); }
 });
 
-test("짧은 폴더와 긴 브랜치도 하나의 뷰포트를 쓰며 한글·emoji·줄바꿈은 두 줄 안에 보존한다", async () => {
+test("Short folders and long branches share viewports with Korean, emoji, and newlines confined to two rows", async () => {
   const app = await mount();
   try {
     const rawName = "short-folder\n한글 👨‍👩‍👧‍👦 é";

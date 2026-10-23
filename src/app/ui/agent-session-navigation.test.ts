@@ -63,7 +63,7 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
   };
 }
 
-test("워크트리 커서 이동과 snapshot은 현재 화면을 바꾸지 않고 Enter만 마지막 탭을 복원한다", async () => {
+test("Worktree cursor movement and snapshots preserve screens while Enter restores the last tab", async () => {
   // A's Editor and B's Git are independent of the navigation cursor and saved Agent drafts.
   const app = await mount({ initialWorkViews: { active: { "demo:main": "editor", "demo:feature": "git" }, agentScroll: {} } });
   try {
@@ -92,7 +92,7 @@ test("워크트리 커서 이동과 snapshot은 현재 화면을 바꾸지 않�
   } finally { await app.close(); }
 });
 
-test("방향키와 Home/End도 탐색만 하고 실제 선택은 Enter로 확정한다", async () => {
+test("Arrows and Home/End browse only while Enter commits selection", async () => {
   // Arrow alternatives must obey exactly the same deferred-activation rule as j/k.
   const app = await mount();
   try {
@@ -126,8 +126,8 @@ test("Agent tab h/l navigation preserves drafts while prompt hjklnx remains lite
   } finally { await app.close(); }
 });
 
-test("세션 상태는 같은 칸에 표시하고 미확정은 빈 상태 공간 없이 ID를 표시한다", async () => {
-  // 실행·완료·실패 표시는 서로 다른 글리프를 사용해도 같은 위치에 놓인다.
+test("Session status uses the same cell and unknown states reclaim empty status space for IDs", async () => {
+  // Execution, completion, and failure glyphs differ but share coordinates.
   const app = await mount();
   const ordered = (id: string, title: string, glyphs: readonly string[]) => {
     const text = app.region(id), position = text.indexOf(title);
@@ -157,7 +157,7 @@ test("세션 상태는 같은 칸에 표시하고 미확정은 빈 상태 공간
   } finally { await app.close(); }
 });
 
-test("세션 탭은 왼쪽 보더 안쪽과 오른쪽에 한 칸 패딩을 두고 번호·상태·제목 사이 간격을 유지한다", async () => {
+test("Tabs keep one-cell inner/outer padding and spacing between numbers, status, and titles", async () => {
   // Edge padding belongs to each tab, independently of its selection or execution status.
   const app = await mount();
   try {
@@ -180,8 +180,8 @@ test("세션 탭은 왼쪽 보더 안쪽과 오른쪽에 한 칸 패딩을 두�
   } finally { await app.close(); }
 });
 
-test.each([["완료", "complete", ""], ["실패", "failure", icons.failure], ["미확정", null, ""]] as const)(
-  "실행이 %s 상태로 바뀌어도 한 아이콘만 표시하고 빈 상태 칸을 회수한다", async (_label, status, glyph) => {
+test.each([["complete", "complete", ""], ["failure", "failure", icons.failure], ["unknown", null, ""]] as const)(
+  "Transitions to %s show only one icon and reclaim empty status slots", async (_label, status, glyph) => {
     // A short run settles before the spinner's 500 ms minimum interval has elapsed.
     const app = await mount();
     try {
@@ -217,7 +217,7 @@ test.each([["완료", "complete", ""], ["실패", "failure", icons.failure], ["�
   },
 );
 
-test("비선택 세션 탭의 닫기 버튼은 현재 세션과 초안을 바꾸지 않는다", async () => {
+test("Closing unselected session tabs preserves current sessions and drafts", async () => {
   // Closing A2 must not first activate its tab or clear A1's text.
   const app = await mount();
   try {
@@ -274,7 +274,7 @@ test("Subagents aggregate only in selected-session activity rows and status chan
   } finally { await app.close(); }
 });
 
-test("snapshot의 세션 순서가 바뀌어도 ID 선택과 탭 인스턴스를 보존하고 키 이동은 표시 순서를 따른다", async () => {
+test("Snapshot reordering preserves ID selection and instances while navigation follows display order", async () => {
   // Reordering existing IDs must not rebuild the active tab or retain a stale visual order.
   const app = await mount();
   try {
@@ -297,8 +297,8 @@ test("snapshot의 세션 순서가 바뀌어도 ID 선택과 탭 인스턴스를
   } finally { await app.close(); }
 });
 
-test("좁은 Workspace는 기본 확정 안내 없이도 탐색과 Enter 확정을 유지한다", async () => {
-  // 기본 조작 대신 Help만 남겨도 워크트리 전환 의미는 바뀌지 않는다.
+test("Compact Workspace retains browsing and Enter activation without default confirmation hints", async () => {
+  // Keeping only Help instead of default navigation hints preserves worktree semantics.
   const app = await mount();
   try {
     app.resize(60, 12); await app.render(); await app.openWorkspaces();
@@ -312,7 +312,7 @@ test("좁은 Workspace는 기본 확정 안내 없이도 탐색과 Enter 확정�
   } finally { await app.close(); }
 });
 
-test("좁은 세션 탭은 긴 Unicode 이름 대신 ID를 표시하고 닫기와 상태 셀을 유지한다", async () => {
+test("Narrow tabs show IDs instead of long Unicode names while retaining close/status cells", async () => {
   // Display names may contain complex text, but tabs consistently use the stable ID.
   const app = await mount();
   try {

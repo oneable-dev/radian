@@ -73,7 +73,7 @@ test("Status below prompts has one-row outer spacing and separates context from 
   } finally { await app.close(); }
 });
 
-test("워크트리·브랜치를 괄호로 묶고 테마 변경에도 구분점·이름·브랜치의 색상 위계를 유지한다", async () => {
+test("Parenthesized worktrees and branches retain separator/name/branch color hierarchy across themes", async () => {
   // The location is passive metadata, not a button or a separate background badge.
   const app = await mount();
   const span = (text: string) => app.captureSpans().lines[app.row.y]!.spans.find((value) => value.text.includes(text))!;
@@ -93,7 +93,7 @@ test("워크트리·브랜치를 괄호로 묶고 테마 변경에도 구분점�
   } finally { await app.close(); }
 });
 
-test("워크트리 그룹 전체를 담을 수 없으면 숨기고 넓히면 복원하며 사용량 비율은 유지한다", async () => {
+test("Incomplete worktree groups hide and restore on resize without changing usage ratios", async () => {
   // A standalone status row also covers widths too small for the full workbench layout.
   const app = await createTestRenderer({ width: 60, height: 5 });
   const status = new SessionStatus(app.renderer); app.renderer.root.add(status.root);
@@ -115,7 +115,7 @@ test("워크트리 그룹 전체를 담을 수 없으면 숨기고 넓히면 복
   } finally { status.dispose(); await app.dispose(); }
 });
 
-test("입력 배경은 패널 양끝을 채우고 입력 내용은 실행 상태·모델 줄과 같은 내부 여백에 정렬한다", async () => {
+test("Input backgrounds fill panels while input aligns with run-status and model-row padding", async () => {
   // The surface reaches the pane edges; its editable content keeps the shared responsive inset.
   const app = await mount({ ...sample(), model: "gpt-6.1-sol", effort: "xhigh", fast: null,
     context: { usedTokens: 6000, maxTokens: 200000 }, usage: unavailable() });
@@ -140,7 +140,7 @@ test("입력 배경은 패널 양끝을 채우고 입력 내용은 실행 상태
   } finally { await app.close(); }
 });
 
-test("빈 입력창은 placeholder만 표시하고 포커스와 테마 변경에도 내부 배경을 바꾸지 않는다", async () => {
+test("Empty inputs show only placeholders and preserve inner backgrounds across focus and theme changes", async () => {
   // Placeholder and native caret identify the input without a border or second background stripe.
   const app = await mount();
   const composer = app.renderer.root.findDescendantById("agent-composer")!;
@@ -176,7 +176,7 @@ test("빈 입력창은 placeholder만 표시하고 포커스와 테마 변경에
   } finally { await app.close(); }
 });
 
-test("바의 채워진 부분은 테마 accent 그라데이션으로 다시 칠하고 context와 usage의 방향을 유지한다", async () => {
+test("Filled bars use theme accent gradients while retaining context and usage directions", async () => {
   const data = sample();
   const app = await mount({ ...data, context: { usedTokens: 0, maxTokens: 200000 },
     usage: { ...data.usage!, windows: [{ ...data.usage!.windows[0]!, usedPercent: 100 }] } });
@@ -198,7 +198,7 @@ test("바의 채워진 부분은 테마 accent 그라데이션으로 다시 칠�
   } finally { await app.close(); }
 });
 
-test("77%·53% 바는 굵은 세그먼트 모양을 고정하고 한 칸 단위로 채움 색을 구분한다", async () => {
+test("77% and 53% bars retain bold segment shapes with cell-level fill colors", async () => {
   // Eight segments approximate the fill; the labels must retain the exact percentages.
   const data = sample(), app = await mount({ ...data, context: { usedTokens: 46000, maxTokens: 200000 },
     usage: { ...data.usage!, windows: [{ ...data.usage!.windows[0]!, usedPercent: 53 }] } });
@@ -225,7 +225,7 @@ test("77%·53% 바는 굵은 세그먼트 모양을 고정하고 한 칸 단위�
   } finally { await app.close(); }
 });
 
-test("context는 used와 같은 본문색이고 모델·effort·Fast는 테마 역할과 상태를 따른다", async () => {
+test("Context matches used-text colors while model, effort, and Fast follow theme roles and state", async () => {
   const app = await mount();
   const span = (text: string) => app.captureSpans().lines[app.row.y]!.spans.find((value) => value.text.includes(text))!;
   const verify = (enabled: boolean) => {
@@ -271,7 +271,7 @@ test("Narrow layouts compact bars, settings, and time while preserving ratios an
   } finally { await app.close(); }
 });
 
-test("fast의 전체·축약 표시는 상태와 관계없이 소문자로 통일한다", async () => {
+test("Full and abbreviated fast labels remain lowercase in every state", async () => {
   const app = await mount();
   try {
     expect(app.line()).toContain("fast on"); expect(app.line()).not.toContain("Fast");
@@ -286,7 +286,7 @@ test("fast의 전체·축약 표시는 상태와 관계없이 소문자로 통�
   } finally { await app.close(); }
 });
 
-test("작업 중이 아닐 때 Fast 표시는 정적이고 입력창은 애니메이션이나 보더를 만들지 않는다", async () => {
+test("Idle Fast indicators stay static and inputs add neither animation nor borders", async () => {
   // Fast is session configuration; it must not animate the idle composer or passive metadata.
   const clock = new ManualClock(), app = await mount(sample(), clock, true);
   try {
@@ -306,7 +306,7 @@ test("작업 중이 아닐 때 Fast 표시는 정적이고 입력창은 애니�
   } finally { await app.close(); }
 });
 
-test("미확정 context와 미지원 usage는 바 없이 -로 표시하고 세션 사이에 섞지 않는다", async () => {
+test("Unknown context and unsupported usage show dashes without bars or cross-session leakage", async () => {
   const app = await mount();
   try {
     await app.set({ ...sample(), fast: null, context: { usedTokens: null, maxTokens: 200000 }, usage: unavailable() });
@@ -319,26 +319,26 @@ test("미확정 context와 미지원 usage는 바 없이 -로 표시하고 세�
   } finally { await app.close(); }
 });
 
-test("압축 후 추정 컨텍스트도 별도 표식 없이 현재 모델 한도의 잔량 퍼센트로 표시한다", async () => {
-  // 사용량이 미확정이면 추정값을 받되 실제 모델의 총한도로 잔량을 계산한다.
+test("Estimated post-compaction context shows remaining percentage against the current model limit without extra markers", async () => {
+  // Accept estimates when usage is unknown, but calculate remaining capacity from the actual model limit.
   const app = await mount();
   try {
-    // 87.2만 토큰 모델에서 추정 사용량 4만 토큰은 반올림한 잔량 95%이다.
+    // Estimated 40,000 tokens against an 872,000-token model rounds to 95% remaining.
     await app.set({ ...sample(), context: { usedTokens: 40000, maxTokens: 872000 } });
 
-    // 기존 바·퍼센트 형식을 유지하며 틸드나 미확정 대시를 덧붙이지 않는다.
+    // Preserve existing bar/percentage format without tildes or unknown-value dashes.
     expect(app.line()).toMatch(/context ▉{8} 95%/);
     expect(app.line()).not.toContain("~"); expect(app.line()).not.toContain("context -");
   } finally { await app.close(); }
 });
 
-test("미지원 usage는 context 바만 유지하고 사용률 바나 시간을 꾸미지 않는다", async () => {
-  // 조회를 지원하지 않는 제공자는 복구 스피너를 계속 돌려서는 안 된다.
+test("Unsupported usage retains context bars without fabricating usage bars or times", async () => {
+  // Providers without usage support must not spin recovery indicators indefinitely.
   const app = await mount();
   try {
     await app.set({ ...sample(), usage: unavailable() });
 
-    // 미지원 상태는 오류 재시도와 달리 정적인 미확정 표시를 유지한다.
+    // Unlike retry errors, unsupported states retain static unknown indicators.
     expect(app.line()).toMatch(/context ▉+ 64% left/);
     expect(app.line().slice(app.line().indexOf(icons.openai)).trim().replace(/\s+/g, " ")).toBe(`${icons.openai} chatgpt -`);
   } finally { await app.close(); }
@@ -352,14 +352,14 @@ test("Usage recovery shows only gray last-fill bars and spinners until fresh suc
   try {
     pressLeader(app, "a"); await app.mockInput.typeText("keep recovery draft");
     for (const light of [false, true]) {
-      // Backoff 중의 상태 재전송과 테마 변경은 스피너나 마지막 바를 초기화하지 않는다.
+      // Backoff snapshots and theme changes never reset spinners or last-fill bars.
       await app.set({ ...data, usage: { ...data.usage!, status: "error", errorCode: "USAGE_TIMEOUT" } });
       app.renderer.emit("palette", palette(light)); await app.renderOnce();
       const usage = app.line().slice(app.line().indexOf(icons.openai));
       const start = Bun.stringWidth(app.line().slice(0, app.line().indexOf("chatgpt ") + "chatgpt ".length));
       const styles = uiTheme(app.renderer).styles;
 
-      // 마지막 채움은 보존하되 수치·단위·카운트다운은 숨기고 context는 정상 색으로 남긴다.
+      // Retain fill but hide numbers, units, and countdowns; context keeps its normal color.
       expect(usage).toContain("▉▉▉▉▉▉▉▉"); expect(usage).not.toMatch(/18%|used|1h|-/);
       expect(spanAt(start).fg.toInts()).toEqual(styles["ui.muted"].fg.toInts());
       expect(spanAt(start + 7).fg.equals(spanAt(start).fg)).toBe(false);
@@ -372,15 +372,15 @@ test("Usage recovery shows only gray last-fill bars and spinners until fresh suc
     clock.advance(60000); await app.renderOnce(); expect(spinner().visible).toBe(true);
     await app.set({ ...data, usage: { ...data.usage!, windows: [{ ...data.usage!.windows[0]!, usedPercent: 42 }] } });
 
-    // 복구는 새 값을 즉시 표시하고 입력 초안이나 포커스를 건드리지 않는다.
+    // Recovery displays fresh values immediately without touching drafts or focus.
     expect(app.line()).toContain("42% used"); expect(spinner().visible).toBe(false);
     expect(app.view.promptDrafts.a1).toBe("keep recovery draft");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
   } finally { await app.close(); }
 });
 
-test("첫 사용량 조회와 실패 후 대기는 이전 값이 없어도 스피너를 표시하고 성공값을 지연하지 않는다", async () => {
-  // 앱을 막 켠 상태에는 보존할 사용량이 없으므로 가짜 퍼센트나 채움을 만들지 않는다.
+test("Initial usage requests and failed waits show spinners without previous values or delayed success", async () => {
+  // New apps have no historical usage; never invent percentages or fills.
   const clock = new ManualClock(), app = await createTestRenderer({ width: 100, height: 5, clock });
   const status = new SessionStatus(app.renderer); app.renderer.root.add(status.root);
   const data = sample(), spinner = () => status.root.findDescendantById("usage-loading") as TextRenderable;
@@ -388,25 +388,25 @@ test("첫 사용량 조회와 실패 후 대기는 이전 값이 없어도 스�
     for (const state of ["loading", "error"] as const) {
       status.update({ ...data, usage: { ...unavailable(), status: state } }, true); await app.renderOnce();
 
-      // 최초 실패도 재시도 대상이며 미지원 상태와 다르게 스피너가 유지된다.
+      // Initial failures also retry and retain spinners, unlike unsupported states.
       const line = app.captureCharFrame().split("\n")[spinner().y]!;
       expect(spinner().visible).toBe(true);
       expect(line.slice(line.indexOf(icons.openai))).not.toMatch(/▉|%|used|-/);
     }
     status.update(data, true); await app.renderOnce();
 
-    // 공통 스피너의 최소 표시 시간 동안에도 새 성공값은 즉시 표시하고 겹치지 않는다.
+    // Fresh success appears immediately during the shared spinner minimum without overlap.
     expect(app.captureCharFrame()).toContain("18% used 1h 0m");
     expect(spinner().visible).toBe(true);
     clock.advance(500); await app.renderOnce();
     expect(spinner().visible).toBe(false);
-    // 스피너 숨김으로 예약된 렌더 프레임까지 소비한 뒤 애니메이션 누수를 확인한다.
+    // Drain frames scheduled by spinner hiding before checking animation leaks.
     clock.advance(20); await app.renderOnce(); expect(clock.pendingTimerCount).toBe(0);
   } finally { status.dispose(); await app.dispose(); }
 });
 
-test("복구 중 리셋된 usage 창을 숨기고 화면·정적 이력·폐기에서는 스피너 타이머를 정리한다", async () => {
-  // 만료된 성공값을 가진 오류 상태는 과거 채움을 현재 한도로 재사용해서는 안 된다.
+test("Recovery hides reset usage windows and cleans spinner timers on hiding, static history, and disposal", async () => {
+  // Expired success values in error states must not become current-limit fills.
   const clock = new ManualClock(), app = await createTestRenderer({ width: 100, height: 5, clock });
   const status = new SessionStatus(app.renderer); app.renderer.root.add(status.root);
   const data = sample(), now = Date.now();
@@ -418,7 +418,7 @@ test("복구 중 리셋된 usage 창을 숨기고 화면·정적 이력·폐기�
     expect(line.slice(line.indexOf(icons.openai))).not.toContain("▉");
     expect(clock.pendingTimerCount).toBe(1);
 
-    // 화면 변경의 렌더 프레임을 소비하면 복구 애니메이션 외의 타이머가 남지 않는다.
+    // Drain screen-transition frames so only recovery animation timers could remain.
     status.update(failed, false); clock.advance(20); await app.renderOnce(); expect(clock.pendingTimerCount).toBe(0);
     status.update(failed, true, null, now); await app.renderOnce(); clock.advance(20); await app.renderOnce(); expect(clock.pendingTimerCount).toBe(0);
     status.update(failed, true); await app.renderOnce(); clock.advance(20); await app.renderOnce(); expect(clock.pendingTimerCount).toBe(1);
@@ -428,7 +428,7 @@ test("복구 중 리셋된 usage 창을 숨기고 화면·정적 이력·폐기�
   } finally { status.dispose(); await app.dispose(); }
 });
 
-test("실제 사용량 0%와 context 잔량 0%는 미확정 값과 다른 빈 바를 표시한다", async () => {
+test("Actual zero usage and zero remaining context show empty bars distinct from unknown values", async () => {
   const data = sample();
   const app = await mount({ ...data, context: { usedTokens: 200000, maxTokens: 200000 },
     usage: { ...data.usage!, windows: [{ ...data.usage!.windows[0]!, usedPercent: 0 }] } });
@@ -444,7 +444,7 @@ test("실제 사용량 0%와 context 잔량 0%는 미확정 값과 다른 빈 �
   } finally { await app.close(); }
 });
 
-test("이전 runtime의 weekly 응답도 used 기준으로 변환하고 새 제공자에는 맞는 아이콘을 사용한다", async () => {
+test("Legacy weekly responses convert to used ratios and new providers receive matching icons", async () => {
   const data = sample(); const { usage: _usage, ...legacy } = data;
   const app = await mount({ ...legacy, weekly: { remainingPercent: 82, observedAt: Date.now(), resetsAt: Date.now() + 3600000 } });
   try {
@@ -458,7 +458,7 @@ test("이전 runtime의 weekly 응답도 used 기준으로 변환하고 새 제�
   } finally { await app.close(); }
 });
 
-test("카운트다운은 로컬 시계로 갱신하고 리셋 뒤에는 새 한도를 임의로 채우지 않는다", async () => {
+test("Countdowns update from local clocks without inventing refreshed limits after reset", async () => {
   const now = 1800000000000, reset = now + (5 * 24 + 23) * 3600000;
   const clock = spyOn(Date, "now").mockReturnValue(now), scheduled = spyOn(globalThis, "setTimeout");
   const app = await mount({ ...sample(), usage: { ...sample().usage!, windows: [{ id: "period", usedPercent: 10, periodMs: 604800000, resetsAt: reset }] } });
@@ -480,7 +480,7 @@ test("카운트다운은 로컬 시계로 갱신하고 리셋 뒤에는 새 한�
   } finally { await app.close(); scheduled.mockRestore(); clock.mockRestore(); }
 });
 
-test("여러 사용량 창 중 긴 기간을 선택하고 제공자 이름이나 primary·secondary 순서에 의존하지 않는다", async () => {
+test("Usage selects the longest window regardless of provider names or primary/secondary order", async () => {
   const now = Date.now();
   const app = await mount({ ...sample(), provider: "another-provider", usage: { provider: "another-provider", status: "ready", updatedAt: now, errorCode: null,
     windows: [{ id: "first", usedPercent: 90, periodMs: 18000000, resetsAt: now + 3600000 },
@@ -493,7 +493,7 @@ test("여러 사용량 창 중 긴 기간을 선택하고 제공자 이름이나
   } finally { await app.close(); }
 });
 
-test("숨기거나 제거하면 카운트다운 타이머를 정리한다", async () => {
+test("Hiding and disposal clean countdown timers", async () => {
   const scheduled = spyOn(globalThis, "setTimeout"), cleared = spyOn(globalThis, "clearTimeout");
   const app = await mount();
   const timer = () => {

@@ -40,14 +40,14 @@ async function mount(closing: Promise<Result<void, ExpectedError>> = Promise.res
     async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("exit 제출은 현재 탭을 닫고 다음 탭의 초안과 다른 워크트리를 유지한다", async () => {
-  // 실행 중인 현재 대화와 별도 초안이 있는 다음 탭을 준비한다.
+test("exit closes the current tab while preserving the next draft and other worktrees", async () => {
+  // Prepare an active current conversation and a next tab with its own draft.
   const app = await mount();
   try {
-    // 종료 명령은 버튼 대신 Agent 입력창으로 실행한다.
+    // Execute exit through Agent input rather than a button.
     await app.submit("/exit");
 
-    // 닫힌 탭의 명령만 소비하고 살아 있는 탭의 입력과 포커스는 유지한다.
+    // Consume only the closed tab's command; preserve surviving input and focus.
     expect(app.submitted).toEqual([{ id: "a1", text: "/exit" }]);
     expect(app.selection.worktree?.sessions.map(session => session.id)).toEqual(["a2", "a3"]);
     expect(app.selection.sessionId).toBe("a2"); expect(app.input.value).toBe("Second draft");
@@ -56,16 +56,16 @@ test("exit 제출은 현재 탭을 닫고 다음 탭의 초안과 다른 워크�
   } finally { await app.close(); }
 });
 
-test("exit 자동완성은 마지막 탭도 닫되 앱과 다른 워크트리의 탭은 종료하지 않는다", async () => {
-  // 선택한 워크트리에는 하나의 세션만 남아 있다.
+test("exit completion closes the last tab without exiting the app or other worktrees", async () => {
+  // Leave only one session in the selected worktree.
   const app = await mount();
   try {
     app.selection.selectSession("demo:feature", "b1"); await app.render(); app.input.focus();
 
-    // 축약 입력을 Enter로 실행하면 완성된 호스트 명령을 제출한다.
+    // Enter on abbreviated input submits the completed host command.
     await app.submit("/ex");
 
-    // 마지막 탭 종료는 빈 화면으로 돌아갈 뿐 Radian 전체를 종료하지 않는다.
+    // Closing the final tab returns to empty state, not full Radian exit.
     expect(app.submitted).toEqual([{ id: "b1", text: "/exit" }]);
     expect(app.selection.sessionId).toBeNull(); expect(app.selection.worktree?.sessions).toEqual([]);
     expect(app.captureCharFrame()).toContain("No AI sessions"); expect(app.view.root.isDestroyed).toBe(false);
@@ -74,54 +74,54 @@ test("exit 자동완성은 마지막 탭도 닫되 앱과 다른 워크트리의
   } finally { await app.close(); }
 });
 
-test("exit의 추가 인수는 탭을 닫지 않고 오류와 원문을 유지한다", async () => {
-  // 잘못된 종료 명령이 일반 프롬프트로 전달되지 않도록 실제 입력 경로를 사용한다.
+test("exit arguments preserve the tab, error, and original input", async () => {
+  // Use real input routing so invalid exit commands never become ordinary prompts.
   const app = await mount();
   try {
-    // 종료 명령에는 인수를 허용하지 않는다.
+    // Exit commands accept no arguments.
     await app.submit("/exit later");
 
-    // 거부한 명령은 현재 탭의 입력창에 그대로 남는다.
+    // Rejected commands remain in the current tab input.
     expect(app.submitted).toEqual([]); expect(app.selection.sessionId).toBe("a1");
     expect(app.input.value).toBe("/exit later"); expect(app.captureCharFrame()).toContain("INVALID_INPUT");
   } finally { await app.close(); }
 });
 
-test("exit의 이미지 첨부는 탭을 닫지 않고 명령과 첨부를 유지한다", async () => {
-  // 종료 명령과 함께 이미지가 소비되거나 모델로 보내지면 안 된다.
+test("exit with image attachments preserves tabs, commands, and attachments", async () => {
+  // Images attached to exit must neither disappear nor reach the model.
   const app = await mount();
   try {
     app.input.value = "/exit "; app.input.attachFile("/tmp/exit-fixture.png");
     const draft = app.input.draft;
 
-    // 첨부가 있는 종료 명령을 실제 입력 경로로 제출한다.
+    // Submit an attached exit command through real input routing.
     app.mockInput.pressEnter(); await app.render();
 
-    // 유효하지 않은 명령은 종료 요청 없이 원래 입력에 남는다.
+    // Invalid commands remain in input without close requests.
     expect(app.submitted).toEqual([]); expect(app.selection.sessionId).toBe("a1");
     expect(app.input.draft).toEqual(draft); expect(app.captureCharFrame()).toContain("INVALID_INPUT");
   } finally { await app.close(); }
 });
 
-test("exit 거절은 탭과 명령·읽기 위치를 유지한다", async () => {
-  // 호스트가 종료를 수락하기 전에 거절하는 상황을 재현한다.
+test("Rejected exit preserves tabs, commands, and reading positions", async () => {
+  // Simulate host rejection before close acceptance.
   const app = await mount(Promise.resolve(err(new SessionError("SESSION_CONFLICT", "Conversation changed"))));
   try {
     app.scroll.scrollTo(10); await app.render();
     const top = app.scroll.scrollTop, navigation = structuredClone(app.view.workViewPreferences.agentViews?.a1);
 
-    // 거절된 종료 명령은 현재 대화의 탐색 상태를 바꾸면 안 된다.
+    // Rejected exit must not alter current conversation navigation.
     await app.submit("/exit");
 
-    // 원래 입력으로 재시도할 수 있고 대화나 탭은 이동하지 않는다.
+    // Original input remains retryable without changing tabs or conversations.
     expect(app.selection.sessionId).toBe("a1"); expect(app.input.value).toBe("/exit");
     expect(app.scroll.scrollTop).toBe(top); expect(app.view.workViewPreferences.agentViews?.a1).toEqual(navigation);
     expect(app.captureCharFrame()).toContain("SESSION_CONFLICT");
   } finally { await app.close(); }
 });
 
-test("exit 대기 중 다른 탭으로 이동하면 늦은 종료가 그 탭의 선택과 초안을 바꾸지 않는다", async () => {
-  // 종료 응답을 기다리는 동안 다른 탭에서 입력을 계속할 수 있다.
+test("Late exit after switching tabs preserves current selection and drafts", async () => {
+  // Continue typing in another tab while awaiting exit.
   const ready = Promise.withResolvers<Result<void, ExpectedError>>();
   const app = await mount(ready.promise);
   try {
@@ -129,10 +129,10 @@ test("exit 대기 중 다른 탭으로 이동하면 늦은 종료가 그 탭의 
     app.selection.selectSession("demo:main", "a2"); await app.render();
     app.input.value = "Edited while closing"; await app.render();
 
-    // 원래 탭의 종료를 늦게 수락한다.
+    // Accept the original tab's close request late.
     ready.resolve(ok(undefined)); await app.render();
 
-    // 종료의 영향은 요청을 보낸 탭에만 적용한다.
+    // Apply closure only to its originating tab.
     expect(app.selection.sessionId).toBe("a2"); expect(app.input.value).toBe("Edited while closing");
     expect(app.view.promptDrafts.a1).toBeUndefined(); expect(app.view.promptDrafts.a2).toBe("Edited while closing");
     expect(app.renderer.currentFocusedRenderable).toBe(app.input);

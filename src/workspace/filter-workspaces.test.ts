@@ -25,7 +25,7 @@ for (const [query, expected] of [
   ["GLU", ["tree-c"]],
   ["  ＳＥＡＲＣＨ feature  ", ["tree-a"]],
 ] satisfies [string, string[]][]) {
-  test(`검색어 ${query}는 이름과 브랜치의 대소문자를 무시한 부분 일치를 사용한다`, () => {
+  test(`Query ${query} matches name and branch substrings case-insensitively`, () => {
     // Repository names, folder names and branch names have distinct values.
     const input = fixture();
 
@@ -38,7 +38,7 @@ for (const [query, expected] of [
 }
 
 for (const query of ["only-session-label", "only-subagent-label", "/tmp/", "detached HEAD", "working", "missing"]) {
-  test(`검색어 ${query}는 세션 이름이나 검색 대상이 아닌 표시 정보에 일치하지 않는다`, () => {
+  test(`Query ${query} excludes session names and nonsearchable display metadata`, () => {
     // Agent labels, paths and the detached display label are not search fields.
     const input = fixture();
 
@@ -50,7 +50,7 @@ for (const query of ["only-session-label", "only-subagent-label", "/tmp/", "deta
   });
 }
 
-test.each(["ckot", "checkout search"])("검색어 %s는 모든 단어가 같은 필드에 연속으로 포함되지 않으면 제외한다", (query) => {
+test.each(["ckot", "checkout search"])("Query %s excludes candidates unless every word appears contiguously in the same field", (query) => {
   // Checkout-One and feature/Search belong to the same tree but are separate search fields.
   const input = fixture();
 
@@ -60,7 +60,7 @@ test.each(["ckot", "checkout search"])("검색어 %s는 모든 단어가 같은 
   expect(result).toEqual([]);
 });
 
-test("레포명 일치는 빈 워크트리를 포함한 모든 하위 항목을 보존한다", () => {
+test("Repository-name matches preserve all descendants including empty worktrees", () => {
   // Atlas owns a populated worktree and a detached empty worktree.
   const input = fixture();
 
@@ -73,7 +73,7 @@ test("레포명 일치는 빈 워크트리를 포함한 모든 하위 항목을 
   expect(result[0]?.worktrees).toHaveLength(2);
 });
 
-test("워크트리 일치는 상위 레포 및 모든 세션과 subagent를 원본 그대로 유지한다", () => {
+test("Worktree matches retain original parent repositories, sessions, and subagents", () => {
   // The session title intentionally does not match the worktree query.
   const input = fixture();
   const before = structuredClone(input);
@@ -90,7 +90,7 @@ test("워크트리 일치는 상위 레포 및 모든 세션과 subagent를 원�
   expect(input).toEqual(before);
 });
 
-test("빈 검색어는 전체 원본을 반환하고 정규식 기호도 리터럴로 검색한다", () => {
+test("Empty queries return original data and regex symbols match literally", () => {
   // Only Tools.Kit has a literal dot in its searchable metadata.
   const input = fixture();
 

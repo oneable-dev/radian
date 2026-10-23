@@ -49,25 +49,25 @@ const failed: SessionResult = { id: "failed", outcome: "error", completedAt: 100
 const stopped: SessionResult = { id: "stopped", outcome: "unfinished", completedAt: 1000 };
 const cancelled: SessionResult = { id: "cancelled", outcome: "cancelled", completedAt: 1000 };
 const priorities = [
-  { name: "실행 중에는 이전 미확인 벨보다 스피너", entry: { ...session(), status: "working", attention: completed }, glyph: "working", color: "accent" },
-  { name: "자식이 실행 중이면 실패·중단·벨보다 스피너", entry: { ...session(), status: "failure", result: stopped, attention: stopped,
+  { name: "active-run spinners over earlier unread bells", entry: { ...session(), status: "working", attention: completed }, glyph: "working", color: "accent" },
+  { name: "active-child spinners over failures, interruptions, and bells", entry: { ...session(), status: "failure", result: stopped, attention: stopped,
     subagents: [{ id: "busy", name: "Busy", status: "working" }, { id: "failed", name: "Failed", status: "failure" }] }, glyph: "working", color: "accent" },
-  { name: "실패는 미확인 벨보다 원 안 느낌표", entry: { ...session(), status: "failure", result: failed, attention: failed }, glyph: "\uF06A", color: "error" },
-  { name: "실패 결과는 상태가 미확정이어도 원 안 느낌표", entry: { ...session(), status: null, result: failed }, glyph: "\uF06A", color: "error" },
-  { name: "자식 실패는 중단·미확인 벨보다 원 안 느낌표", entry: { ...session(), status: null, result: stopped, attention: stopped,
+  { name: "failure exclamation circles over unread bells", entry: { ...session(), status: "failure", result: failed, attention: failed }, glyph: "\uF06A", color: "error" },
+  { name: "failure exclamation circles despite unknown status", entry: { ...session(), status: null, result: failed }, glyph: "\uF06A", color: "error" },
+  { name: "child-failure exclamation circles over interruptions and bells", entry: { ...session(), status: null, result: stopped, attention: stopped,
     subagents: [{ id: "failed", name: "Failed", status: "failure" }] }, glyph: "\uF06A", color: "error" },
-  { name: "중단은 미확인 벨보다 빨간 물음표", entry: { ...session(), status: null, result: stopped, attention: stopped }, glyph: "?", color: "error" },
-  { name: "완료 미확인은 체크 없이 채워진 벨", entry: { ...session(), result: completed, attention: completed }, glyph: "\uF0F3", color: "attention" },
-  { name: "원인 불명 취소 미확인은 채워진 벨", entry: { ...session(), status: null, result: cancelled, attention: cancelled }, glyph: "\uF0F3", color: "attention" },
-  { name: "읽은 정상 완료는 초록 체크", entry: { ...session(), result: completed }, glyph: icons.pass, color: "success" },
-  { name: "읽은 취소는 회색 점", entry: { ...session(), status: null, result: cancelled }, glyph: "●", color: "muted" },
-  { name: "직접 취소는 회색 점", entry: { ...session(), status: null, result: { ...cancelled, cancellation: "user" } }, glyph: "●", color: "muted" },
-  { name: "세션 종료에 의한 취소도 회색 점", entry: { ...session(), status: null, result: { ...cancelled, cancellation: "lifecycle" } }, glyph: "●", color: "muted" },
-  { name: "완료 상태여도 결과가 없으면 아이콘 없음", entry: session(), glyph: "", color: "muted" },
-  { name: "상태와 결과가 모두 없으면 아이콘 없음", entry: { ...session(), status: null }, glyph: "", color: "muted" },
+  { name: "interruption question marks over unread bells", entry: { ...session(), status: null, result: stopped, attention: stopped }, glyph: "?", color: "error" },
+  { name: "unread completion bells without checks", entry: { ...session(), result: completed, attention: completed }, glyph: "\uF0F3", color: "attention" },
+  { name: "unread unknown-cause cancellation bells", entry: { ...session(), status: null, result: cancelled, attention: cancelled }, glyph: "\uF0F3", color: "attention" },
+  { name: "acknowledged completion checks", entry: { ...session(), result: completed }, glyph: icons.pass, color: "success" },
+  { name: "acknowledged cancellation dots", entry: { ...session(), status: null, result: cancelled }, glyph: "●", color: "muted" },
+  { name: "direct cancellation dots", entry: { ...session(), status: null, result: { ...cancelled, cancellation: "user" } }, glyph: "●", color: "muted" },
+  { name: "lifecycle cancellation dots", entry: { ...session(), status: null, result: { ...cancelled, cancellation: "lifecycle" } }, glyph: "●", color: "muted" },
+  { name: "no icon for complete status without outcomes", entry: session(), glyph: "", color: "muted" },
+  { name: "no icon without status or outcomes", entry: { ...session(), status: null }, glyph: "", color: "muted" },
 ] satisfies { name: string; entry: OpenSession; glyph: string; color: keyof UiColors }[];
 
-test.each(priorities)("$name 하나만 한 칸에 표시한다", async ({ entry, glyph, color }) => {
+test.each(priorities)("Show only $name in one cell", async ({ entry, glyph, color }) => {
   // Multiple execution and unread conditions must compete for one status cell, not add badges.
   const app = await mount([entry]);
   try {
@@ -88,7 +88,7 @@ test.each(priorities)("$name 하나만 한 칸에 표시한다", async ({ entry,
   } finally { await app.close(); }
 });
 
-test("Fast 세션 탭만 노란 세 칸 화살표를 쓰고 프레임·모드 전환에도 탭과 닫기 위치를 유지한다", async () => {
+test("Only Fast tabs use yellow three-cell arrows and retain tab/close positions across frames and modes", async () => {
   // The two running tabs observe independent session-local Fast settings.
   const entries = [{ ...session(), status: "working" as const }, { ...session(secondId), status: "working" as const }];
   let fast = true;
@@ -118,7 +118,7 @@ test("Fast 세션 탭만 노란 세 칸 화살표를 쓰고 프레임·모드 �
   } finally { await app.close(); }
 });
 
-test.each([completed, failed, stopped, cancelled])("빠른 $outcome 결과는 스피너와 겹치지 않고 읽음 뒤 잔상이 돌아오지 않는다", async result => {
+test.each([completed, failed, stopped, cancelled])("Fast $outcome results never overlap spinners or reappear after acknowledgement", async result => {
   // Settling before 500 ms must neither show two icons nor revive loading after acknowledgement.
   const app = await mount([{ ...session(), status: "working", attention: completed }]);
   const glyph = result.outcome === "error" ? "\uF06A" : result.outcome === "unfinished" ? "?" : icons.bell;
@@ -141,7 +141,7 @@ test.each([completed, failed, stopped, cancelled])("빠른 $outcome 결과는 �
   } finally { await app.close(); }
 });
 
-test.each([false, true])("Fast %s 실행을 직접 취소하면 스피너 대신 회색 점을 유지한다", async fast => {
+test.each([false, true])("Direct cancellation of Fast %s runs retains gray dots instead of spinners", async fast => {
   // A user cancellation has no new unread result, even if it settles before the spinner minimum.
   const app = await mount([{ ...session(), status: "working" }], () => fast);
   const interrupted: OpenSession = { ...session(), status: null, result: { ...cancelled, cancellation: "user" } };
@@ -165,7 +165,7 @@ test.each([false, true])("Fast %s 실행을 직접 취소하면 스피너 대신
   } finally { await app.close(); }
 });
 
-test("실행 중 숨긴 미확인 벨은 화면 복귀와 직접 취소 뒤에도 지워지지 않는다", async () => {
+test("Unread bells hidden during execution survive return and direct cancellation", async () => {
   // Priority changes presentation only; restarting and hiding a busy tab must retain its unread result.
   const pending: OpenSession = { ...session(), result: completed, attention: completed };
   const working: OpenSession = { ...session(), status: "working", attention: completed };
@@ -188,10 +188,10 @@ test("실행 중 숨긴 미확인 벨은 화면 복귀와 직접 취소 뒤에�
   } finally { await app.close(); }
 });
 
-test("상태 아이콘이 없는 탭은 왼쪽 상태 칸과 간격을 빼고 확보한 너비를 ID에 사용한다", async () => {
+test("Tabs without status icons reclaim status slots and spacing for IDs", async () => {
   const unknown = { ...session(), status: null }, app = await mount([unknown]);
   try {
-    // 좁은 탭에서도 상태가 없으면 UUID를 표시할 공간을 두 칸 더 확보한다.
+    // Missing status frees two more cells for UUIDs even in narrow tabs.
     app.resize(12, 6); await app.render();
     const { tab, title } = app.get(firstId), close = app.renderer.root.findDescendantById(`close-session:${firstId}`)!;
     expect(title.x).toBe(tab.x + 5); expect(title.plainText).toBe("01a…");
@@ -211,21 +211,21 @@ test("상태 아이콘이 없는 탭은 왼쪽 상태 칸과 간격을 빼고 �
   } finally { await app.close(); }
 });
 
-test("미확정으로 바뀐 탭은 스피너 최소 시간 뒤 상태 칸을 제거하고 UUID 표시 공간을 복원한다", async () => {
+test("Unknown tabs remove status slots after spinner minimums and restore UUID space", async () => {
   const working = { ...session(), status: "working" as const }, app = await mount([working]);
   try {
     app.resize(12, 6); await app.render(); const { tab, title } = app.get(firstId);
     app.clock.advance(120); app.tabs.update("tree", [{ ...working, status: null }], firstId, true); await app.render();
     const width = tab.width, titleX = title.x;
     app.clock.advance(379); await app.render(); expect(title.x).toBe(titleX); expect(title.plainText).toEndWith("…");
-    // 스피너가 끝나면 추가 snapshot 없이 원래 UUID의 앞부분을 두 칸 더 표시한다.
+    // Spinner completion reveals two more UUID prefix cells without another snapshot.
     app.clock.advance(1); await app.render();
     expect(title.x).toBe(tab.x + 5); expect(title.plainText).toBe("01a…");
     expect(tab.width).toBe(width); expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("숨겼다가 돌아온 미확정 탭은 취소된 스피너 공간을 다시 예약하지 않는다", async () => {
+test("Returning to unknown tabs never reserves space for cancelled spinners", async () => {
   const working = { ...session(), status: "working" as const }, unknown = { ...working, status: null }, app = await mount([working]);
   try {
     app.clock.advance(120); app.tabs.update("tree", [unknown], firstId, true); await app.render();
@@ -237,7 +237,7 @@ test("숨겼다가 돌아온 미확정 탭은 취소된 스피너 공간을 다�
   } finally { await app.close(); }
 });
 
-test("앞선 탭의 상태 칸이 나타나도 선택한 탭의 ID와 닫기 버튼을 화면 안에 유지한다", async () => {
+test("Earlier tabs gaining status slots keep selected IDs and close buttons visible", async () => {
   const entries = [{ ...session("short"), status: null }, session(secondId)], app = await mount(entries);
   try {
     app.resize(20, 6); app.tabs.update("tree", entries, secondId, true); await app.render();
@@ -249,8 +249,8 @@ test("앞선 탭의 상태 칸이 나타나도 선택한 탭의 ID와 닫기 버
   } finally { await app.close(); }
 });
 
-test("Agent 세션은 포커스·선택이 바뀌어도 밑줄 없이 배경으로만 활성 항목을 구분한다", async () => {
-  // 두 세션을 준비하고 실제 strip 포커스와 선택 메타데이터를 사용한다.
+test("Agent tabs distinguish focus and selection using backgrounds, never underlines", async () => {
+  // Prepare two sessions using real strip focus and selection metadata.
   const entries = [session(), session(secondId)], app = await mount(entries);
   const cell = (id: string) => {
     const title = app.get(id).title; let x = 0;
@@ -265,14 +265,14 @@ test("Agent 세션은 포커스·선택이 바뀌어도 밑줄 없이 배경으�
     expect(cell(firstId).attributes & TextAttributes.BOLD).not.toBe(0);
     expect(cell(secondId).bg.toInts()).toEqual(colors.panel.toInts());
 
-    // 다음 세션으로 이동하면 배경만 옮기고 세션 선택 이벤트도 기존대로 전달한다.
+    // Navigation moves only backgrounds and still emits existing selection events.
     app.tabs.command("session.next"); app.tabs.update("tree", entries, secondId, true); await app.render();
     expect(app.selected).toEqual([secondId]); expect(cell(firstId).bg.toInts()).toEqual(colors.panel.toInts());
     expect(cell(secondId).bg.toInts()).toEqual(colors.selected.toInts());
     expect(cell(firstId).attributes & TextAttributes.UNDERLINE).toBe(0);
     expect(cell(secondId).attributes & TextAttributes.UNDERLINE).toBe(0);
 
-    // 포커스가 세션 줄을 떠나도 선택된 세션을 밑줄로 되돌리지 않는다.
+    // Leaving strip focus must not restore underlines on selected sessions.
     const outside = new Button(app.renderer, "Outside", () => {}); app.renderer.root.add(outside);
     outside.focus(); await app.render();
     expect(cell(secondId).bg.toInts()).toEqual(colors.surface.toInts());
@@ -280,14 +280,14 @@ test("Agent 세션은 포커스·선택이 바뀌어도 밑줄 없이 배경으�
   } finally { await app.close(); }
 });
 
-test("AI 탭은 전체 UUID를 라벨로 사용하고 고정 폭을 넘는 끝부분만 말줄임한다", async () => {
-  // 세션 이름이나 임의의 8자리 접두사 대신 전체 UUID가 라벨의 원본이다.
+test("AI tabs use full UUID labels with only fixed-width tail truncation", async () => {
+  // Full UUIDs are label sources, not names or arbitrary eight-character prefixes.
   const entry = session(), app = await mount([entry]);
   try {
-    // 큰 화면에서도 기존 18칸 프레임을 유지한 채 UUID를 표시한다.
+    // Preserve the shared 18-cell frame even on large screens.
     await app.render();
 
-    // 표시 가능한 앞부분 뒤에 말줄임표 하나만 붙이고 원본 메타데이터는 보존한다.
+    // Append one ellipsis after the visible prefix and preserve source metadata.
     expect(app.get(firstId).title.plainText).toBe(firstLabel);
     expect(app.get(firstId).tab.width).toBe(18);
     expect(app.captureCharFrame()).toContain(firstLabel);
@@ -298,15 +298,15 @@ test("AI 탭은 전체 UUID를 라벨로 사용하고 고정 폭을 넘는 끝�
   } finally { await app.close(); }
 });
 
-test("UUID는 가용 폭에 맞춰 끝을 말줄임하고 다시 넓히면 표시 가능한 앞부분을 복원한다", async () => {
+test("UUID labels truncate at available width and restore visible prefixes when expanded", async () => {
   const app = await mount();
   try {
-    // 작은 창을 거쳐도 원본 UUID를 잃지 않고 프레임의 가용 폭만 반영한다.
+    // Compact layouts retain original UUIDs and use only available frame width.
     for (const [width, expected] of [[12, "01a…"], [10, "0…"], [100, firstLabel]] as const) {
       app.resize(width, 6); await app.render();
       const { tab, title } = app.get(firstId), text = title.plainText;
 
-      // 중간이나 끝자리 식별자를 합성하지 않고 UUID의 연속된 앞부분만 표시한다.
+      // Show continuous UUID prefixes without synthesizing middle or trailing identifiers.
       expect(text).toBe(expected); expect(text.match(/…/g)).toHaveLength(1);
       expect(firstId.startsWith(text.slice(0, -1))).toBe(true);
       expect(Bun.stringWidth(text)).toBeLessThanOrEqual(title.width);
@@ -323,14 +323,14 @@ test.each([
   { id: "01a156a2-ca64-707c-bd92-fc877962e972", first: firstLabel, other: firstLabel },
   { id: collisionId, first: firstLabel, other: firstLabel },
   { id: "01a156a2-ba64-707c-bd92-fc877962e973", first: firstLabel, other: firstLabel },
-])("접두사가 겹치는 $id 탭도 같은 UUID 끝 말줄임 규칙만 적용한다", async ({ id, first, other }) => {
-  // 충돌 위치가 8자리 바로 뒤부터 마지막 자리까지인 세션 쌍을 준비한다.
+])("Overlapping-prefix $id tabs use identical UUID tail-truncation rules", async ({ id, first, other }) => {
+  // Prepare pairs diverging anywhere from just after eight characters to the final character.
   const app = await mount([session(), session(id)]);
   try {
-    // 같은 워크트리의 두 세션을 함께 표시한다.
+    // Display both sessions in the same worktree.
     await app.render();
 
-    // 주변 세션에 따라 접두사를 바꾸거나 말줄임 뒤에 식별자 끝부분을 덧붙이지 않는다.
+    // Neighboring sessions must not alter prefixes or append UUID suffixes after ellipses.
     expect(app.get(firstId).title.plainText).toBe(first);
     expect(app.get(id).title.plainText).toBe(other);
     expect(app.captureCharFrame()).toContain(first);
@@ -338,17 +338,17 @@ test.each([
   } finally { await app.close(); }
 });
 
-test("비슷한 UUID 탭을 추가·제거해도 기존 라벨과 폭을 유지하고 선택한 탭을 화면에 표시한다", async () => {
-  // 표시 가능한 UUID 길이는 다른 탭의 존재가 아니라 공통 프레임 폭으로 정한다.
+test("Adding and removing similar UUID tabs preserves labels, widths, and selected-tab visibility", async () => {
+  // UUID display length follows shared frame width, not neighboring tabs.
   const entries = [session(), session(secondId)], app = await mount(entries);
   try {
     app.resize(28, 6); app.tabs.update("tree", entries, secondId, true); await app.render();
     const firstTab = app.get(firstId).tab;
 
-    // 다른 세션의 선택은 유지한 채 접두사가 겹치는 새 탭이 생긴다.
+    // Add an overlapping-prefix tab while preserving another session's selection.
     app.tabs.update("tree", [...entries, session(collisionId)], secondId, true); await app.render();
 
-    // 기존 인스턴스와 UUID 라벨을 유지하면서 선택한 탭을 다시 드러낸다.
+    // Retain instances and UUID labels while revealing the selected tab again.
     expect(app.get(firstId).tab).toBe(firstTab);
     expect(app.get(firstId).title.plainText).toBe(firstLabel);
     expect(app.get(collisionId).title.plainText).toBe(firstLabel);
@@ -357,7 +357,7 @@ test("비슷한 UUID 탭을 추가·제거해도 기존 라벨과 폭을 유지�
     expect(selectedTab.x).toBeGreaterThanOrEqual(viewport.x);
     expect(selectedTab.x + selectedTab.width).toBeLessThanOrEqual(viewport.x + viewport.width);
 
-    // 다른 탭이 닫혀도 이미 표시 중인 UUID 길이는 달라지지 않는다.
+    // Closing another tab never changes the displayed UUID length.
     app.tabs.update("tree", entries, secondId, true); await app.render();
     expect(app.get(firstId).title.plainText).toBe(firstLabel);
     expect(app.get(secondId).title.plainText).toBe(secondLabel);
@@ -365,37 +365,37 @@ test("비슷한 UUID 탭을 추가·제거해도 기존 라벨과 폭을 유지�
   } finally { await app.close(); }
 });
 
-test("워크트리를 전환해도 같은 UUID와 프레임 폭에는 같은 라벨을 표시한다", async () => {
-  // 같은 세션을 다른 워크트리에 하나만 표시해도 라벨을 줄이지 않는다.
+test("Worktree switching shows identical UUID labels at identical frame widths", async () => {
+  // Showing a session alone in another worktree must not shorten its label.
   const app = await mount([session(), session(collisionId)]);
   try {
-    // 다른 워크트리에는 그중 한 세션만 표시한다.
+    // Display only one of the sessions in the other worktree.
     app.tabs.update("other-tree", [session(collisionId)], collisionId, true); await app.render();
 
-    // 세션 수와 무관하게 전체 UUID의 동일한 앞부분을 표시한다.
+    // Show the same full-UUID prefix regardless of session count.
     expect(app.get(collisionId, "other-tree").title.plainText).toBe(firstLabel);
     expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
   } finally { await app.close(); }
 });
 
-test.each(["a1", "12345678", "1234567890"])("가용 폭에 들어가는 %s 세션 ID는 말줄임 없이 전부 표시한다", async id => {
-  // 기존 짧은 식별자는 패딩하거나 다른 이름으로 바꿀 필요가 없다.
+test.each(["a1", "12345678", "1234567890"])("%s session IDs fitting available width display fully without ellipses", async id => {
+  // Existing short IDs need neither padding nor renaming.
   const app = await mount([session(id)]);
   try {
-    // ID 길이가 가용 폭과 같을 때도 불필요한 말줄임표를 붙이지 않는다.
+    // Exact-width IDs must not receive unnecessary ellipses.
     await app.render();
 
-    // 원래 ID가 그대로 사용자에게 보인다.
+    // The original ID remains visible unchanged.
     expect(app.get(id).title.plainText).toBe(id);
   } finally { await app.close(); }
 });
 
-test("열 번째 이후 세션도 번호를 표시하고 닫기·재정렬·워크트리 변경 시 현재 순서로 다시 매긴다", async () => {
-  // 세션 ID의 숫자가 아닌 현재 워크트리의 표시 순서를 번호로 사용한다.
+test("Tabs after the ninth show numbers and renumber by current order after close, reorder, or worktree changes", async () => {
+  // Numbers reflect current worktree display order, not digits in IDs.
   const entries = Array.from({ length: 11 }, (_, index) => session(`session-${index + 20}`));
   const app = await mount(entries);
   try {
-    // 가로 스크롤된 마지막 탭에도 두 자리 번호를 제목과 별개로 표시한다.
+    // Horizontally scrolled final tabs show two-digit numbers separately from titles.
     app.resize(30, 6); app.tabs.update("tree", entries, entries[10]!.id, true); await app.render();
 
     const last = app.get(entries[10]!.id);
@@ -403,7 +403,7 @@ test("열 번째 이후 세션도 번호를 표시하고 닫기·재정렬·워�
     expect(last.tab.x).toBeGreaterThanOrEqual(app.tabs.list.viewport.x);
     expect(last.tab.x + last.tab.width).toBeLessThanOrEqual(app.tabs.list.viewport.x + app.tabs.list.viewport.width);
 
-    // 앞선 탭이 닫히고 기존 탭 순서가 바뀌어도 ID와 인스턴스는 보존한다.
+    // Closing earlier tabs and reordering preserve IDs and instances.
     const reordered = [entries[10]!, ...entries.slice(1, 10)];
     app.tabs.update("tree", reordered, entries[10]!.id, true); await app.render();
 
@@ -413,18 +413,18 @@ test("열 번째 이후 세션도 번호를 표시하고 닫기·재정렬·워�
     expect(app.get(entries[9]!.id).number.plainText).toBe("10.");
     expect(app.selected).toEqual([]); expect(app.closed).toEqual([]);
 
-    // 다른 워크트리의 첫 탭은 이전 워크트리 번호를 이어받지 않는다.
+    // The first tab in another worktree does not inherit previous numbering.
     app.tabs.update("other-tree", [entries[9]!], entries[9]!.id, true); await app.render();
     expect(app.get(entries[9]!.id, "other-tree").number.plainText).toBe("1.");
   } finally { await app.close(); }
 });
 
-test("두 UUID가 같은 라벨로 말줄임돼도 선택·닫기는 각각의 전체 ID로 처리한다", async () => {
-  // 화면에 보이는 앞부분은 같고 마지막 문자만 다른 UUID 두 개를 준비한다.
+test("Identically truncated UUID tabs select and close using their full unique IDs", async () => {
+  // Prepare UUIDs with identical visible prefixes and different final characters.
   const otherId = "01a156a2-ba64-707c-bd92-fc877962e973";
   const entries = [session(), session(otherId, "Other conversation")], app = await mount(entries);
   try {
-    // 이름 변경과 키보드 선택 뒤에도 두 라벨은 같은 끝 말줄임 규칙을 따른다.
+    // Renaming and keyboard selection preserve identical tail-truncation rules.
     const renamed = entries.map((entry) => ({ ...entry, name: "Renamed conversation" }));
     app.tabs.update("tree", renamed, firstId, true);
     app.tabs.command("session.next");
@@ -437,12 +437,12 @@ test("두 UUID가 같은 라벨로 말줄임돼도 선택·닫기는 각각의 �
     expect(close.x + close.width).toBeLessThanOrEqual(app.tabs.list.viewport.x + app.tabs.list.viewport.width);
     await app.mockMouse.click(close.x, close.y); await app.render();
 
-    // 동일한 표시 문자열이 아닌 고유 UUID로 닫고 원래 메타데이터를 보존한다.
+    // Close by unique UUID, not identical display strings, preserving original metadata.
     expect(app.selected).toEqual([otherId]); expect(app.closed).toEqual([otherId]);
     expect(app.captureCharFrame()).not.toContain("Renamed conversation");
     expect(renamed.map((entry) => entry.id)).toEqual([firstId, otherId]);
 
-    // 첫 탭의 제목을 클릭해도 다른 UUID와 혼동하지 않는다.
+    // Clicking the first title never confuses the other UUID.
     app.tabs.update("tree", renamed, firstId, true); await app.render();
     const { tab, title } = app.get(firstId);
     expect(tab.x).toBe(app.tabs.list.viewport.x);

@@ -5,8 +5,8 @@ import { expectError, expectOk } from "../testing/results.ts";
 import { connectRuntime } from "./client.ts";
 import { pidAlive } from "./storage.ts";
 
-// 이 테스트가 만든 격리 서비스만 사용하며 사용자 인증·서비스에는 접근하지 않는다.
-test("실제 모델 선택 IPC는 대화와 인증 런타임을 지키며 명령 자체로 모델 요청을 만들지 않는다", async () => {
+// Use only isolated services created here, never user credentials or services.
+test("Real model-selection IPC preserves conversation/authentication runtimes without command-induced model requests", async () => {
   const fixture = await createWorktreeFixture();
   const connected = expectOk(await connectRuntime(fixture.repository, fixture.main, { offline: true,
     stateRoot: join(fixture.directory, "state"), entry: join(import.meta.dir, "..", "index.ts") }));
@@ -14,7 +14,7 @@ test("실제 모델 선택 IPC는 대화와 인증 런타임을 지키며 명령
   try {
     const tree = fixture.repository.worktrees.find(tree => tree.path === fixture.main)!;
     const session = expectOk(await connected.create(tree.id));
-    // 모델 목록은 세션 생성 스냅샷에 포함된 대화 ID로 조회한다.
+    // Query catalogs using conversation IDs supplied by session-creation snapshots.
     await new Promise<void>((resolve, reject) => {
       if (connected.snapshot.details[session]?.conversationId) { resolve(); return; }
       const timer = setTimeout(() => { unsubscribe(); reject(new Error("Missing session snapshot")); }, 8000);

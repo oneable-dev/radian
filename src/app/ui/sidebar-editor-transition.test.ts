@@ -28,8 +28,8 @@ async function fixture() {
     async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("Editor 위의 워크스페이스 팝업은 PTY 크기·인스턴스·연결을 바꾸지 않는다", async () => {
-  // overlay는 과거 sidebar resize 준비·확정 프로토콜을 사용할 필요가 없다.
+test("Workspace overlays above Editor preserve PTY size, instance, and connection", async () => {
+  // Overlays need no legacy sidebar resize preparation/commit protocol.
   const app = await fixture();
   try {
     const surface = app.renderer.currentFocusedRenderable!, geometry = [surface.x, surface.y, surface.width, surface.height], sizes = app.sizes.length;
@@ -43,8 +43,8 @@ test("Editor 위의 워크스페이스 팝업은 PTY 크기·인스턴스·연�
   } finally { await app.close(); }
 });
 
-test("팝업 검색과 늦은 Editor 화면은 서로 포커스·입력 소유권을 빼앗지 않는다", async () => {
-  // native 출력은 popup 뒤의 동일 surface에만 반영되어야 한다.
+test("Popup search and late Editor frames preserve each other's focus and input ownership", async () => {
+  // Native output applies only to the same surface behind the popup.
   const app = await fixture();
   try {
     app.leader("b"); await app.render(); await app.mockInput.typeText("feature");
@@ -55,8 +55,8 @@ test("팝업 검색과 늦은 Editor 화면은 서로 포커스·입력 소유�
   } finally { await app.close(); }
 });
 
-test("팝업 중 Editor 연결 실패는 검색 포커스를 유지하고 닫은 뒤 복구 안내를 제공한다", async () => {
-  // 실패가 발생해도 popup 취소가 존재하지 않는 PTY를 다시 포커스하면 안 된다.
+test("Editor connection failures during popups retain search focus and offer recovery after closing", async () => {
+  // Popup cancellation must not refocus a nonexistent PTY after failure.
   const app = await fixture();
   try {
     app.leader("b"); await app.render(); app.fail(); await app.render();

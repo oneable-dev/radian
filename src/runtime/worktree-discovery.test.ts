@@ -40,7 +40,7 @@ async function fixtureRuntime() {
   };
 }
 
-test("외부 Git 워크트리 생성은 같은 데몬에서 감지하고 세션·History·Editor·Terminal에 즉시 사용할 수 있다", async () => {
+test("External Git worktrees are detected by the same daemon and immediately support sessions, History, Editor, and Terminal", async () => {
   // The fixture owns the daemon, SDK sessions, editor and shell; user services are never restarted.
   const app = await fixtureRuntime();
   try {
@@ -91,7 +91,7 @@ test("외부 Git 워크트리 생성은 같은 데몬에서 감지하고 세션�
   } finally { await app.cleanup(); }
 }, 25000);
 
-test("삭제된 워크트리의 열린 세션은 보존하고 마지막 세션을 닫은 뒤 행을 정리한다", async () => {
+test("Deleted worktrees retain open sessions and remove rows after the final session closes", async () => {
   const app = await fixtureRuntime();
   try {
     const client = await app.connect();
@@ -111,7 +111,7 @@ test("삭제된 워크트리의 열린 세션은 보존하고 마지막 세션�
   } finally { await app.cleanup(); }
 }, 20000);
 
-test("공용 데몬은 SDK를 시작하지 않은 저장소도 감시하고 같은 프로세스에서 활성화한다", async () => {
+test("Shared daemons watch SDK-inactive repositories and activate them in the same process", async () => {
   const app = await fixtureRuntime();
   let workspace: WorkspaceClient | undefined;
   try {

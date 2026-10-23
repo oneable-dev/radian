@@ -55,7 +55,7 @@ async function mount(options: Options = {}) {
   };
 }
 
-test("History는 Agents의 검색 팝업이고 좌측에는 Workspace만 남긴다", async () => {
+test("History is an Agents search popup leaving only Workspace in the sidebar", async () => {
   // Browsing metadata is not a model/session action, and sidebar space is no longer spent on history.
   const app = await mount();
   try {
@@ -67,14 +67,14 @@ test("History는 Agents의 검색 팝업이고 좌측에는 Workspace만 남긴�
     expect(app.captureCharFrame()).toContain("History · radian");
     expect(app.captureCharFrame()).toContain("2026-10-14 12:34"); expect(app.captureCharFrame()).toContain("4 messages");
     expect(app.selection.sessionId).toBe("a1"); expect(app.resumed).toEqual([]); expect(app.runs).toEqual([]);
-    // 첫 후보는 가짜 시계를 진행하지 않아도 조회하고 Preview에는 로딩 표시를 만들지 않는다.
+    // Fetch the first candidate without advancing fake time; previews have no loading indicator.
     expect(app.previews).toEqual(["first"]); expect(app.captureCharFrame()).toContain("Saved answer first");
     expect(!!app.renderer.root.findDescendantById("history-preview-loading")).toBe(false);
     expect(app.captureCharFrame()).not.toContain("Loading preview");
   } finally { await app.close(); }
 });
 
-test("미리보기는 Agent와 같은 섹션 카드·접힘·오류 UI를 쓰며 최신 내용부터 읽기만 한다", async () => {
+test("Previews reuse Agent cards, folding, and errors and open read-only at the latest content", async () => {
   // Live and preview surfaces receive identical structured data, but must not share view state.
   const sections: TranscriptSection[] = [
     { id: "latest-q", kind: "user", title: "You", text: "Newest prompt", status: "complete" },
@@ -91,7 +91,7 @@ test("미리보기는 Agent와 같은 섹션 카드·접힘·오류 UI를 쓰며
     const live = app.get("session-transcript"), state = app.view.workViewPreferences.agentViews;
     await app.open(); app.clock.advance(150); await app.render();
     const preview = app.get("history-preview") as ScrollBoxRenderable;
-    // 미리보기의 Transcript도 실제 세션과 같은 스크롤바 표시 정책을 따른다.
+    // Preview transcripts share live-session scrollbar policy.
     if (!(live instanceof ScrollBoxRenderable)) throw new Error("Missing live transcript");
     expect(live.verticalScrollBar.visible).toBe(false); expect(preview.verticalScrollBar.visible).toBe(false);
     for (const section of sections) {
@@ -101,7 +101,7 @@ test("미리보기는 Agent와 같은 섹션 카드·접힘·오류 UI를 쓰며
       expect(shown.parent.border).toEqual(original.parent.border); expect(shown.parent.paddingLeft).toBe(original.parent.paddingLeft);
       expect(shown.visible).toBe(original.visible);
     }
-    // 새 미리보기는 실제 세션처럼 최신 답변이 보이는 위치에서 시작한다.
+    // New previews start at the latest answer like live sessions.
     expect(preview.scrollTop).toBe(Math.max(0, preview.scrollHeight - preview.viewport.height)); expect(app.captureCharFrame()).toContain("Latest reply");
     expect(app.captureCharFrame()).not.toContain("[thinking]"); expect(app.captureCharFrame()).not.toContain("DO NOT RENDER THE LEGACY STRING");
     const prompt = body(preview, "Newest prompt")!; prompt.focus();
@@ -112,8 +112,8 @@ test("미리보기는 Agent와 같은 섹션 카드·접힘·오류 UI를 쓰며
   } finally { await app.close(); }
 });
 
-test("History의 답변·Thinking도 동일한 Markdown을 표시하되 검색·원래 세션은 바꾸지 않는다", async () => {
-  // 미리보기는 별도 텍스트 변환기가 아니라 실시간 transcript와 같은 Markdown 렌더러를 쓴다.
+test("History answers and Thinking use the same Markdown without changing search or live sessions", async () => {
+  // Previews use the live transcript Markdown renderer, not a separate text converter.
   const sections: TranscriptSection[] = [
     { id: "q", kind: "user", title: "You", text: "Saved question", status: "complete" },
     { id: "a", kind: "assistant", title: "Agent", text: "### Preview title\n\n**Saved answer**", status: "complete" },
@@ -130,7 +130,7 @@ test("History의 답변·Thinking도 동일한 Markdown을 표시하되 검색·
       await Promise.all(children(preview).filter((node): node is CodeRenderable => node instanceof CodeRenderable).map((node) => node.highlightingDone));
       await app.render();
     }
-    // 표시 문법을 숨겨도 선택된 실시간 세션·초안·읽기 전용 계약을 보존한다.
+    // Hiding syntax preserves live-session selection, drafts, and read-only behavior.
     const frame = app.captureCharFrame();
     expect(children(preview).filter((node) => node instanceof MarkdownRenderable)).toHaveLength(2);
     expect(frame).toContain("Preview title"); expect(frame).toContain("Saved answer"); expect(frame).toContain("Saved thought");
@@ -140,8 +140,8 @@ test("History의 답변·Thinking도 동일한 Markdown을 표시하되 검색·
   } finally { await app.close(); }
 });
 
-test("History는 실제 세션의 Prompt·상태줄을 표시하되 입력·전송과 원래 초안을 바꾸지 않는다", async () => {
-  // 저장된 세션의 모델 정보와 취소 상태가 배경 세션과 다르게 보이는지 확인한다.
+test("History shows real prompt and status components without changing input, submission, or drafts", async () => {
+  // Verify saved model and cancellation state differ from the background session.
   const sections: TranscriptSection[] = [
     { id: "saved-q", kind: "user", title: "You", text: "Saved task", status: "complete" },
     { id: "saved-tool", kind: "tool", title: "read", text: "Recovered tool failure", status: "error", error: "Recovered tool failure" },
@@ -153,7 +153,7 @@ test("History는 실제 세션의 Prompt·상태줄을 표시하되 입력·전�
   try {
     app.resize(180, 36); await app.render();
 
-    // 미리보기에서도 같은 composer와 telemetry 컴포넌트를 배치하고 읽기 전용임을 명시한다.
+    // Reuse composer and telemetry components while explicitly marking previews read-only.
     await app.open();
     const prompt = app.get("history-preview-session-prompt") as EditBufferRenderable;
     const composer = app.get("history-preview-agent-composer") as BoxRenderable;
@@ -164,7 +164,7 @@ test("History는 실제 세션의 Prompt·상태줄을 표시하되 입력·전�
     expect(composer.border).toEqual(liveComposer.border); expect(composer.height).toBe(liveComposer.height);
     expect(app.get("history-preview-session-status").visible).toBe(true);
 
-    // 읽기 전용 입력에 키와 붙여넣기를 보내도 저장 기록이나 실제 세션 초안은 수정하지 않는다.
+    // Keys and pastes in read-only input never modify saved history or live drafts.
     prompt.focus(); await app.mockInput.typeText("must not send");
     await app.mockInput.pasteBracketedText("pasted text"); app.mockInput.pressBackspace(); await app.render();
     expect(prompt.plainText).toBe(""); expect(app.runs).toEqual([]); expect(app.resumed).toEqual([]);
@@ -176,8 +176,8 @@ test("History는 실제 세션의 Prompt·상태줄을 표시하되 입력·전�
   } finally { await app.close(); }
 });
 
-test("공유 스냅샷 preview는 저장된 실행 상태와 당시 context·usage·Fast를 같은 세션 UI에 표시한다", async () => {
-  // 현재는 이미 만료된 usage 창도 당시 화면에서는 실제 관측값이 있었다.
+test("Shared snapshot previews show saved run state, context, usage, and Fast in the same session UI", async () => {
+  // Usage windows expired now still had actual observations in the saved screen.
   const capturedAt = 1700000000000;
   const snapshot: SessionRecord = { id: "closed-tab", name: "Archived task", worktreeId: "demo:main", lifecycle: "closed", updatedAt: capturedAt,
     state: { conversationId: "first", status: "failure", error: "Saved failure", output: "",
@@ -189,17 +189,17 @@ test("공유 스냅샷 preview는 저장된 실행 상태와 당시 context·usa
   try {
     app.resize(220, 36); await app.render();
 
-    // 개별 필드를 추정해서 만드는 대신 같은 저장 record를 AgentPanel로 전달한다.
+    // Pass the same saved record to AgentPanel instead of reconstructing fields by inference.
     await app.open(); const frame = app.captureCharFrame();
 
-    // 과거 값을 현재 시계로 지우거나 실제 실행 설정으로 적용하지 않는다.
+    // Never expire historical values using today's clock or apply them to live settings.
     expect(frame).toContain("Saved snapshot answer"); expect(frame).toContain("Failed"); expect(frame).toContain("Saved failure");
     expect(frame).toContain("archived-model"); expect(frame).toContain("fast on"); expect(frame).toContain("64%"); expect(frame).toContain("43% used");
     expect(frame).toContain("saved 2023-11-14"); expect(app.selection.sessionId).toBe("a1"); expect(app.runs).toEqual([]); expect(app.resumed).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("검색은 정규화한 단어별 포함 검색을 적용하고 hjkl과 r을 입력 문자로 유지한다", async () => {
+test("Search matches normalized words while keeping hjkl and r literal", async () => {
   // Titles include separated Korean words and ordinary navigation letters.
   const app = await mount({ list: async () => [saved("a", "Layout review"), saved("b", "키보드 검색"), saved("c", "hjkl refresh")] });
   try {
@@ -220,7 +220,7 @@ test("검색은 정규화한 단어별 포함 검색을 적용하고 hjkl과 r�
   } finally { await app.close(); }
 });
 
-test("목록 클릭과 Ctrl+N/P는 미리보기만 바꾸고 Enter에서 선택한 세션을 연다", async () => {
+test("List clicks and Ctrl+N/P change only previews; Enter opens the selected session", async () => {
   const app = await mount();
   try {
     await app.open(); await app.click("history:second");
@@ -234,7 +234,7 @@ test("목록 클릭과 Ctrl+N/P는 미리보기만 바꾸고 Enter에서 선택�
   } finally { await app.close(); }
 });
 
-test("Esc는 프롬프트 커서·초안·대화 스크롤과 원래 포커스를 복원한다", async () => {
+test("Esc restores prompt caret, draft, transcript scroll, and original focus", async () => {
   const app = await mount();
   try {
     const prompt = app.get("session-prompt") as InputRenderable, transcript = app.get("session-transcript") as ScrollBoxRenderable;
@@ -248,7 +248,7 @@ test("Esc는 프롬프트 커서·초안·대화 스크롤과 원래 포커스�
   } finally { await app.close(); }
 });
 
-test("팝업을 닫은 뒤 Enter·Esc kitty 반복 입력은 배경 명령으로 바뀌지 않는다", async () => {
+test("Repeated kitty Enter/Esc events after popup closure never become background commands", async () => {
   // Native kitty repeats sometimes carry repeated=true rather than eventType=repeat.
   const app = await mount();
   const raw = (text: string) => { const key = parseKeypress(text, { useKittyKeyboard: true }); if (!key) throw new Error("Invalid kitty fixture"); app.renderer.keyInput.processParsedKey(key); };
@@ -263,7 +263,7 @@ test("팝업을 닫은 뒤 Enter·Esc kitty 반복 입력은 배경 명령으로
   } finally { await app.close(); }
 });
 
-test("기존 입력이 사라졌다면 숨은 검색창 대신 표시된 탐색 영역에 포커스를 복귀한다", async () => {
+test("Missing original inputs restore focus to visible navigation instead of hidden search", async () => {
   const app = await mount();
   try {
     app.get("session-prompt").focus(); await app.open();
@@ -288,7 +288,7 @@ test("Popups trap Tab focus, global commands, and background clicks while preser
   } finally { await app.close(); }
 });
 
-test("빠른 결과는 즉시 표시하되 shared spinner는 500ms 유지하고 숨기면 취소한다", async () => {
+test("Fast results appear immediately while shared spinners persist 500 ms and cancel when hidden", async () => {
   const app = await mount();
   try {
     await app.open(); expect(app.captureCharFrame()).toContain("Saved layout review"); expect(app.get("history-loading").visible).toBe(true);
@@ -299,7 +299,7 @@ test("빠른 결과는 즉시 표시하되 shared spinner는 500ms 유지하고 
   } finally { await app.close(); }
 });
 
-test("새 목록 조회가 이전 응답을 무시하고 현재 spinner와 결과만 갱신한다", async () => {
+test("New listings ignore old responses and update only current spinners and results", async () => {
   // The first read remains pending while an explicit refresh takes ownership of the popup.
   const first = Promise.withResolvers<readonly HistoryItem[]>(), second = Promise.withResolvers<readonly HistoryItem[]>();
   let calls = 0; const signals: (AbortSignal | undefined)[] = [];
@@ -314,8 +314,8 @@ test("새 목록 조회가 이전 응답을 무시하고 현재 spinner와 결�
   } finally { first.resolve([]); second.resolve([]); await app.close(); }
 });
 
-test("늦은 응답은 자기 세션에만 캐시하고 다시 선택하면 즉시 재사용한다", async () => {
-  // 첫 세션의 느린 응답이 두 번째 세션을 덮지 않으면서 재방문에는 유효해야 한다.
+test("Late responses cache only their own sessions and are reused immediately on reselection", async () => {
+  // A slow first response must not overwrite the second session but remains useful on revisit.
   const pending = Promise.withResolvers<Result<HistoryPreview, ExpectedError>>();
   const app = await mount({ preview: async (tree, id) => id === "first" ? pending.promise
     : ok({ worktreeId: tree, id, text: "CURRENT SECOND PREVIEW", truncated: false }) });
@@ -325,7 +325,7 @@ test("늦은 응답은 자기 세션에만 캐시하고 다시 선택하면 즉�
     expect(app.previews).toEqual(["first", "second"]);
     pending.resolve(ok({ id: "first", worktreeId: "demo:main", text: "CACHED FIRST PREVIEW", truncated: false })); await app.render();
 
-    // 응답 순서와 무관하게 현재 선택만 표시하고, A로 돌아가도 요청을 추가하지 않는다.
+    // Show only the current selection regardless of response order; revisiting A adds no request.
     expect(app.captureCharFrame()).toContain("CURRENT SECOND PREVIEW"); expect(app.captureCharFrame()).not.toContain("CACHED FIRST PREVIEW");
     app.mockInput.pressKey("p", { ctrl: true }); await app.render();
     expect(app.captureCharFrame()).toContain("CACHED FIRST PREVIEW"); expect(app.previews).toEqual(["first", "second"]);
@@ -333,8 +333,8 @@ test("늦은 응답은 자기 세션에만 캐시하고 다시 선택하면 즉�
   } finally { pending.resolve(ok({ id: "first", worktreeId: "demo:main", text: "late", truncated: false })); await app.close(); }
 });
 
-test("처음 보는 후보는 선택한 제목과 빈 본문을 표시하고 로딩 표시나 이전 내용을 남기지 않는다", async () => {
-  // 캐시 미스에 이전 세션 내용을 보여주면 현재 후보의 답변처럼 오해할 수 있다.
+test("Uncached candidates show selected titles and empty bodies without loading or stale content", async () => {
+  // Showing previous content on cache misses could misattribute another session's answer.
   const pending = Promise.withResolvers<Result<HistoryPreview, ExpectedError>>();
   const app = await mount({ preview: async (tree, id) => id === "second" ? pending.promise
     : ok({ worktreeId: tree, id, text: "FIRST SESSION ANSWER", truncated: false }) });
@@ -342,7 +342,7 @@ test("처음 보는 후보는 선택한 제목과 빈 본문을 표시하고 로
     await app.open(); expect(app.captureCharFrame()).toContain("FIRST SESSION ANSWER");
     app.mockInput.pressKey("n", { ctrl: true }); await app.render();
 
-    // 실제 I/O는 미완료여도 고정 타이머나 다른 세션의 본문을 대신 표시하지 않는다.
+    // Pending I/O must not display fixed timers or another session's body.
     const frame = app.captureCharFrame();
     expect(frame).toContain("Preview · Saved keyboard"); expect(frame).not.toContain("FIRST SESSION ANSWER");
     expect(frame).not.toContain("Loading preview"); expect(!!app.renderer.root.findDescendantById("history-preview-loading")).toBe(false);
@@ -352,8 +352,8 @@ test("처음 보는 후보는 선택한 제목과 빈 본문을 표시하고 로
   } finally { pending.resolve(ok({ worktreeId: "demo:main", id: "second", text: "late", truncated: false })); await app.close(); }
 });
 
-test("미리보기 캐시는 새로고침과 닫기에서 비우며 이전 세대 응답은 재사용하지 않는다", async () => {
-  // 같은 saved ID라도 새로고침 이후에는 새 요청의 데이터만 사용할 수 있다.
+test("Refresh and close clear preview caches and reject responses from older generations", async () => {
+  // Even identical saved IDs require fresh request data after refresh.
   const old = Promise.withResolvers<Result<HistoryPreview, ExpectedError>>();
   const signals: (AbortSignal | undefined)[] = []; let calls = 0;
   const app = await mount({ preview: async (tree, id, signal) => {
@@ -366,13 +366,13 @@ test("미리보기 캐시는 새로고침과 닫기에서 비우며 이전 세�
     old.resolve(ok({ worktreeId: "demo:main", id: "first", text: "OBSOLETE PREVIEW", truncated: false })); await app.render();
     expect(app.captureCharFrame()).not.toContain("OBSOLETE PREVIEW");
 
-    // 닫힌 모달의 본문 캐시를 다음 열기로 넘기지 않는다.
+    // Never carry closed-modal body caches into the next opening.
     app.mockInput.pressEscape(); await app.render(); await app.open();
     expect(app.captureCharFrame()).toContain("NEW PREVIEW 3"); expect(calls).toBe(3);
   } finally { old.resolve(ok({ worktreeId: "demo:main", id: "first", text: "late", truncated: false })); await app.close(); }
 });
 
-test("좁은 창은 목록과 미리보기를 전환하고 resize 뒤 검색과 커서를 유지한다", async () => {
+test("Narrow layouts switch between lists and previews while preserving search and caret on resize", async () => {
   const app = await mount();
   try {
     await app.open(); await app.mockInput.typeText("keyboard"); app.clock.advance(150); await app.render();
@@ -384,7 +384,7 @@ test("좁은 창은 목록과 미리보기를 전환하고 resize 뒤 검색과 
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
     expect(app.get("history-list").visible).toBe(false); expect(app.get("history-preview-pane").visible).toBe(true);
     expect(app.captureCharFrame()).toContain("Saved answer second");
-    // 작은 뷰포트에서도 최신 답변에서 위로 이동하면 같은 대화의 요청을 읽을 수 있다.
+    // Moving up from the latest answer reveals its request even in compact viewports.
     const preview = app.get("history-preview") as ScrollBoxRenderable, initialScroll = preview.scrollTop;
     await app.mockInput.pressKeys(["\x1b[5~"]); await app.render();
     expect(preview.scrollTop).toBeLessThan(initialScroll);
@@ -399,7 +399,7 @@ test("좁은 창은 목록과 미리보기를 전환하고 resize 뒤 검색과 
   } finally { await app.close(); }
 });
 
-test("빈 목록·검색 결과 없음·조회 오류를 구분하고 커스텀 Refresh와 연결 복구를 지원한다", async () => {
+test("Empty lists, no matches, and lookup errors stay distinct with custom Refresh and reconnection", async () => {
   let calls = 0;
   const app = await mount({ keymap: expectOk(parseKeymap({ bindings: { "history.refresh": [{ keys: "ctrl+g", scope: "history-search" }] } })),
     list: async () => { calls++; if (calls === 1) throw new HistoryError("HISTORY_UNAVAILABLE", "Lookup failed"); return calls === 2 ? [] : [saved("restored", "Restored history")]; } });
@@ -414,7 +414,7 @@ test("빈 목록·검색 결과 없음·조회 오류를 구분하고 커스텀 
   } finally { await app.close(); }
 });
 
-test("busy와 resume 오류는 팝업에 남고 기존 열린 항목은 중복 생성 없이 선택한다", async () => {
+test("Busy and resume errors stay in the popup while existing sessions select without duplication", async () => {
   const app = await mount({ list: async () => [{ ...saved("busy", "Busy history"), unavailableReason: "Still closing" }, saved("broken", "Broken history"), { ...saved("open", "Open history"), openSessionId: "a1" }],
     resume: async (_tree, id) => { if (id === "broken") throw new HistoryError("HISTORY_UNAVAILABLE", "Cannot resume"); return "a1"; } });
   try {
@@ -425,7 +425,7 @@ test("busy와 resume 오류는 팝업에 남고 기존 열린 항목은 중복 �
   } finally { await app.close(); }
 });
 
-test("미리보기 실패는 명시적으로 표시하며 검색과 Open은 계속 사용할 수 있다", async () => {
+test("Preview failures appear explicitly while search and Open remain available", async () => {
   const app = await mount({ preview: async () => ({ ok: false, error: new HistoryError("HISTORY_UNAVAILABLE", "Preview unavailable") }) });
   try {
     await app.open(); app.clock.advance(150); await app.visible("Preview unavailable");
@@ -434,7 +434,7 @@ test("미리보기 실패는 명시적으로 표시하며 검색과 Open은 계�
   } finally { await app.close(); }
 });
 
-test("팝업을 닫거나 워크트리가 바뀌면 이전 목록·미리보기 응답은 화면에 반영하지 않는다", async () => {
+test("Closing popups or changing worktrees prevents stale lists and previews from updating screens", async () => {
   const pending = Promise.withResolvers<readonly HistoryItem[]>(); let signal: AbortSignal | undefined;
   const app = await mount({ list: (_tree, current) => { signal = current; return pending.promise; } });
   try {
@@ -445,7 +445,7 @@ test("팝업을 닫거나 워크트리가 바뀌면 이전 목록·미리보기 
   } finally { pending.resolve([]); await app.close(); }
 });
 
-test("Open 처리 중 닫아도 rollback을 보고하지 않고 늦은 응답으로 선택을 바꾸지 않는다", async () => {
+test("Closing during Open never claims rollback or lets late responses change selection", async () => {
   const pending = Promise.withResolvers<string>();
   const app = await mount({ resume: () => pending.promise });
   try {
@@ -455,7 +455,7 @@ test("Open 처리 중 닫아도 rollback을 보고하지 않고 늦은 응답으
   } finally { pending.resolve("a2"); await app.close(); }
 });
 
-test("화면 제거 뒤 늦은 조회와 오류도 파괴된 native 버퍼에 쓰지 않고 타이머를 정리한다", async () => {
+test("Late responses after disposal never write destroyed native buffers and timers are cleaned", async () => {
   const pending = Promise.withResolvers<readonly HistoryItem[]>();
   const app = await mount({ list: () => pending.promise });
   const cleared = spyOn(app.clock, "clearInterval");

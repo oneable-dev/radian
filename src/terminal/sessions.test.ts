@@ -29,7 +29,7 @@ async function watch(sessions: TerminalSessions, id: string) {
   };
 }
 
-test("동일 워크트리의 쉘은 독립적이며 종료는 다른 터미널과 무관한 프로세스를 보존한다", async () => {
+test("Same-worktree shells stay independent and closing preserves other terminals/unrelated processes", async () => {
   // Only isolated clean shells and a directly owned unrelated sleep are used.
   const fixture = await createWorktreeFixture(); const sessions = new TerminalSessions([fixture.repository], () => {}, fixture.directory, true);
   const unrelated = Bun.spawn(["/bin/sleep", "30"]);
@@ -54,8 +54,8 @@ test("동일 워크트리의 쉘은 독립적이며 종료는 다른 터미널�
   }
 }, 20000);
 
-test("shell exit은 탭과 소유 작업을 자동 회수하되 다른 터미널은 보존한다", async () => {
-  // 서로 다른 탭의 실행과 종료된 탭의 background 작업을 구분한다.
+test("Shell exit reclaims tabs and owned jobs while preserving other terminals", async () => {
+  // Distinguish separate-tab runs from exited-tab background jobs.
   const fixture = await createWorktreeFixture(); const sessions = new TerminalSessions([fixture.repository], () => {}, fixture.directory, true);
   let reader: Awaited<ReturnType<typeof watch>> | undefined;
   try {
@@ -65,7 +65,7 @@ test("shell exit은 탭과 소유 작업을 자동 회수하되 다른 터미널
     const anchor = sessions.infos.find((item) => item.id === id)!.pid;
     reader = await watch(sessions, id); await reader.seen("radian$");
 
-    // 정상 종료가 아닌 exit code도 동일하게 탭을 닫고 새 쉘을 만들지 않는다.
+    // Nonzero exits also close tabs without creating replacement shells.
     reader.input("sleep 30 & echo $! > background-pid.txt; pwd > shell-cwd.txt; exit 7\r");
     await until(() => !sessions.infos.some((item) => item.id === id) && sessions.closingCount === 0 && !pidAlive(anchor));
 
@@ -74,11 +74,11 @@ test("shell exit은 탭과 소유 작업을 자동 회수하되 다른 터미널
     expect((await Bun.file(join(fixture.feature, "shell-cwd.txt")).text()).trim()).toBe(fixture.feature);
     expect(sessions.infos.map((item) => item.id)).toEqual([neighbor]);
     expect(sessions.infos[0]!.exited).toBe(false);
-    expectOk(await sessions.close(id)); // 이미 자동으로 닫힌 탭은 다시 닫아도 안전하다.
+    expectOk(await sessions.close(id)); // Closing already auto-closed tabs remains safe.
   } finally { await reader?.disconnect(); expectOk(await sessions.stop()); await fixture.cleanup(); }
 }, 15000);
 
-test("쉘 소유권 supervisor는 워크트리의 Bun preload와 dotenv를 자동 실행하지 않는다", async () => {
+test("Shell ownership supervisors never automatically execute worktree Bun preloads or dotenv", async () => {
   const fixture = await createWorktreeFixture();
   const sessions = new TerminalSessions([fixture.repository], () => {}, fixture.directory, true);
   const key = `RADIAN_SENTINEL_${crypto.randomUUID().replaceAll("-", "")}`;

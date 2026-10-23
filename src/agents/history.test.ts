@@ -28,7 +28,7 @@ async function setup(blockCleanup = false) {
     async cleanup() { gate.resolve(); await registry.shutdown(); await fixture.cleanup(); } };
 }
 
-test("SDK 저장 기록은 선택 워크트리로 한정하고 제목·활동 시간·열린 ID를 제공한다", async () => {
+test("SDK history scopes to the selected worktree and includes titles, activity times, and open IDs", async () => {
   // The shared SDK directory contains two different worktree conversations.
   const app = await setup();
   try {
@@ -48,7 +48,7 @@ test("SDK 저장 기록은 선택 워크트리로 한정하고 제목·활동 �
   } finally { await app.cleanup(); }
 });
 
-test("미리보기는 열린·닫힌 기록을 읽기만 하고 다른 워크트리 ID는 거절한다", async () => {
+test("Previews read open and closed histories without writes and reject other worktrees", async () => {
   // The offline SDK fixture owns all files; no preview may initialize an executor.
   const app = await setup();
   try {
@@ -66,7 +66,7 @@ test("미리보기는 열린·닫힌 기록을 읽기만 하고 다른 워크트
   } finally { await app.cleanup(); }
 });
 
-test("실제 SDK 기록이 4MiB를 넘어도 닫힌 세션의 최근 대화를 읽기만 한다", async () => {
+test("Closed-session previews remain read-only for real SDK histories exceeding 4 MiB", async () => {
   // Close the fixture-owned writer before extending its JSONL, then use real SDK discovery.
   const app = await setup();
   try {
@@ -89,8 +89,8 @@ test("실제 SDK 기록이 4MiB를 넘어도 닫힌 세션의 최근 대화를 �
   } finally { await app.cleanup(); }
 });
 
-test("Radian 전용 SDK 저장소와 기존 Pi 기록을 함께 조회하고 구형 기록은 읽기만 한다", async () => {
-  // 새 기록을 전용 경로로 옮겨도 기본 Pi 디렉터리의 구형 대화를 숨기면 안 된다.
+test("List both Radian SDK storage and legacy Pi histories without modifying legacy records", async () => {
+  // Moving new records to dedicated storage must not hide legacy Pi conversations.
   const app = await setup(), timestamp = new Date();
   const ownedPath = join(app.directory, "owned.jsonl"), legacyPath = join(app.directory, "legacy.jsonl");
   await writeFile(ownedPath, [
@@ -106,7 +106,7 @@ test("Radian 전용 SDK 저장소와 기존 Pi 기록을 함께 조회하고 구
   try {
     const history = new SessionHistory([app.repository], app.registry, join(app.directory, "private-sessions"), undefined, true);
 
-    // 전용 디렉터리는 cwd를 검증하고, 기본 디렉터리는 SDK가 프로젝트별로 범위를 정한다.
+    // Validate cwd in dedicated storage; the SDK scopes default directories by project.
     const items = expectOk(await history.list(app.main.id));
     const preview = expectOk(await history.preview(app.main.id, "legacy"));
 
@@ -116,7 +116,7 @@ test("Radian 전용 SDK 저장소와 기존 Pi 기록을 함께 조회하고 구
   } finally { listing.mockRestore(); await app.cleanup(); }
 });
 
-test("닫은 기록을 resume하면 동일 SDK ID·파일·대화를 사용하고 별도의 열린 UI 항목만 추가한다", async () => {
+test("Resuming closed history reuses its SDK ID, file, and conversation with a separate open UI entry", async () => {
   // The existing finalized JSONL is authoritative, not copied to a new conversation.
   const app = await setup();
   try {
@@ -141,7 +141,7 @@ test("닫은 기록을 resume하면 동일 SDK ID·파일·대화를 사용하�
   } finally { await app.cleanup(); }
 });
 
-test("다른 워크트리의 saved ID와 알 수 없는 ID는 resume하지 않는다", async () => {
+test("Resuming rejects unknown IDs and IDs belonging to other worktrees", async () => {
   // A valid main conversation must not be assigned to the feature worktree by an untyped request.
   const app = await setup();
   try {
@@ -158,7 +158,7 @@ test("다른 워크트리의 saved ID와 알 수 없는 ID는 resume하지 않�
   } finally { await app.cleanup(); }
 });
 
-test("종료 중인 저장 기록은 history에서 busy로 표시하고 두 번째 writer를 만들지 않는다", async () => {
+test("Closing saved sessions appear busy in history without creating another writer", async () => {
   // Cleanup acknowledgement is held so the hidden closing writer can be observed.
   const app = await setup(true);
   try {
@@ -177,7 +177,7 @@ test("종료 중인 저장 기록은 history에서 busy로 표시하고 두 번�
   } finally { await app.cleanup(); }
 });
 
-test("SDK 목록이 일부 손상된 줄을 건너뛰어도 resume은 원본 기록을 덮어쓰지 않는다", async () => {
+test("Resume never overwrites original history when SDK listing skips corrupt lines", async () => {
   // The SDK can list a session with a valid header and malformed trailing JSON.
   const app = await setup();
   try {
@@ -196,7 +196,7 @@ test("SDK 목록이 일부 손상된 줄을 건너뛰어도 resume은 원본 기
   } finally { await app.cleanup(); }
 });
 
-test("history의 경로 접근 권한 오류는 빈 목록으로 숨기지 않고 StorageError Result로 반환한다", async () => {
+test("History permission failures return StorageError Results rather than empty lists", async () => {
   // A saved cwd under a denied directory is different from a deleted historical worktree.
   const app = await setup();
   const blocked = join(app.directory, "blocked");
@@ -218,8 +218,8 @@ test("history의 경로 접근 권한 오류는 빈 목록으로 숨기지 않�
   } finally { restoreListing?.(); await chmod(blocked, 0o700).catch(() => {}); await app.cleanup(); }
 });
 
-test("목록에서 만든 파일 인덱스를 여러 Preview에 재사용하고 명시적 목록 갱신만 재탐색한다", async () => {
-  // 실제 SDK 탐색 호출 수로 반복 전체 목록 I/O가 제거됐는지 검증한다.
+test("Previews reuse the listing file index and rescan only on explicit refresh", async () => {
+  // Count real SDK discovery calls to detect repeated full-list I/O.
   const app = await setup(); let restore: (() => void) | undefined;
   try {
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
@@ -229,14 +229,14 @@ test("목록에서 만든 파일 인덱스를 여러 Preview에 재사용하고 
     expect(expectError(await app.history.preview(app.main.id, "unknown")).code).toBe("HISTORY_UNAVAILABLE");
     expect(listing).toHaveBeenCalledTimes(1);
 
-    // Ctrl+R/다음 열기는 목록을 다시 요청하므로 새 디스크 상태를 발견한다.
+    // Ctrl+R and reopening request a fresh list and observe disk changes.
     expectOk(await app.history.list(app.main.id)); expect(listing).toHaveBeenCalledTimes(2);
     expectOk(await app.history.preview(app.main.id, saved.id)); expect(listing).toHaveBeenCalledTimes(2);
   } finally { restore?.(); await app.cleanup(); }
 });
 
-test("목록 요청 없이 직접 Preview해도 한 번만 인덱스를 준비한다", async () => {
-  // 기존 read-only endpoint를 직접 사용하는 호출자도 목록 선행 없이 동작해야 한다.
+test("Direct previews initialize the index once without a preceding list request", async () => {
+  // Direct callers of the read-only endpoint must not require prior listing.
   const app = await setup(); let restore: (() => void) | undefined;
   try {
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
@@ -247,8 +247,8 @@ test("목록 요청 없이 직접 Preview해도 한 번만 인덱스를 준비�
   } finally { restore?.(); await app.cleanup(); }
 });
 
-test("완료된 목록 요청의 신호가 나중에 취소되어도 검증된 인덱스는 다시 탐색하지 않는다", async () => {
-  // HTTP 요청 수명과 이미 완료된 메타데이터 인덱스의 수명은 다르다.
+test("Cancelling completed list request signals does not rescan validated indexes", async () => {
+  // HTTP request lifetimes differ from completed metadata index lifetimes.
   const app = await setup(); let restore: (() => void) | undefined;
   try {
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
@@ -259,8 +259,8 @@ test("완료된 목록 요청의 신호가 나중에 취소되어도 검증된 �
   } finally { restore?.(); await app.cleanup(); }
 });
 
-test("캐시된 경로의 파일이 다른 워크트리 기록으로 바뀌면 Preview를 거절한다", async () => {
-  // 파일 인덱스를 신뢰하더라도 선택 파일의 현재 헤더와 cwd는 재검증해야 한다.
+test("Preview rejects cached files replaced by another worktree's history", async () => {
+  // Revalidate the selected file's current header and cwd despite a trusted index.
   const app = await setup();
   try {
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
@@ -274,8 +274,8 @@ test("캐시된 경로의 파일이 다른 워크트리 기록으로 바뀌면 P
   } finally { await app.cleanup(); }
 });
 
-test.each(["\0invalid", 42])("캐시된 파일 헤더의 잘못된 cwd %j는 OS 예외 대신 손상 오류로 반환한다", async cwd => {
-  // 탐색 이후 변경된 외부 JSON 값은 파일시스템 호출 전에 검증해야 한다.
+test.each(["\0invalid", 42])("Invalid cached header cwd %j returns corruption errors instead of OS exceptions", async cwd => {
+  // Validate externally changed JSON before filesystem calls.
   const app = await setup();
   try {
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
@@ -288,8 +288,8 @@ test.each(["\0invalid", 42])("캐시된 파일 헤더의 잘못된 cwd %j는 OS 
   } finally { await app.cleanup(); }
 });
 
-test("캐시된 파일 경로가 심볼릭 링크로 교체되면 대상 파일을 Preview하지 않는다", async () => {
-  // 같은 헤더 ID를 복제해도 이전 canonical path 검증을 우회할 수 없어야 한다.
+test("Preview rejects cached paths replaced by symbolic links", async () => {
+  // Copying the same header ID must not bypass canonical-path validation.
   const app = await setup();
   try {
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
@@ -301,8 +301,8 @@ test("캐시된 파일 경로가 심볼릭 링크로 교체되면 대상 파일�
   } finally { await app.cleanup(); }
 });
 
-test("목록 조회 취소 신호를 SDK 탐색까지 전달하고 취소를 빈 성공으로 숨기지 않는다", async () => {
-  // SDK 호출 안에서 취소되는 상황을 제어하여 탐색 전후의 신호 확인만으로 통과하지 못하게 한다.
+test("Listing forwards cancellation to SDK discovery instead of returning empty success", async () => {
+  // Cancel inside the SDK call so checks only before and after discovery cannot pass.
   const app = await setup(); const started = Promise.withResolvers<void>(), finish = Promise.withResolvers<void>();
   const abort = new AbortController(); let restore: (() => void) | undefined, received: AbortSignal | undefined;
   try {

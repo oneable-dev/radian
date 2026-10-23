@@ -58,21 +58,21 @@ test("Real UI/IPC/SDK reuse full catalogs across reload, file moves, and dollar 
     const visible = (text: string) => until(async () => { await renderer.renderOnce(); return renderer.captureCharFrame().includes(text); });
     await until(() => completions.provider.read?.(id, { kind: "command", query: "catalog-149" })?.ok === true);
 
-    // 100번째 뒤의 명령도 캐시에서 찾고 반복 타이핑은 조회를 늘리지 않는다.
+    // Search past the hundredth command without extra lookups during repeated typing.
     await renderer.mockInput.typeText("/catalog-149"); await visible("Catalog marker 149");
     expect(catalogs).toBe(1); expect(runtime.snapshot.details[id]?.output).toBe("");
     expect(renderer.renderer.root.findDescendantById("completion-loading")!.visible).toBe(false);
     input.value = "/catalog-14"; await renderer.renderOnce(); input.value = "/catalog-149"; await renderer.renderOnce();
     expect(catalogs).toBe(1); expect(sent).toEqual([]);
 
-    // 새 리소스는 /reload 완료 후 실제 SDK와 UI 카탈로그에 동시에 나타난다.
+    // New resources appear in real SDK and UI catalogs together after /reload.
     await mkdir(join(skills, "new-skill"));
     await writeFile(join(skills, "new-skill", "SKILL.md"), "---\nname: new-skill\ndescription: Fresh skill marker\n---\nNEW_SKILL_INSTRUCTIONS\n");
     input.value = "/reload"; await renderer.renderOnce(); renderer.mockInput.pressEnter();
     await until(async () => { await renderer.renderOnce(); return input.value === "" && runtime.snapshot.details[id]?.resourceRevision === 1; });
     expect(catalogs).toBe(2); expect(runtime.snapshot.details[id]?.conversationId).toBe(originalConversation);
     expect(runtime.snapshot.details[id]?.output).toBe("");
-    // 다른 UI의 늦은 카탈로그 명령도 서버 revision 검사로 모델 전달 전에 거절한다.
+    // Server revision checks reject another UI's stale catalog commands before model delivery.
     const stale = await fetch("http://localhost/command", { unix: paths.socket, method: "POST",
       headers: { "Content-Type": "application/json", "X-Radian-Instance": runtime.snapshot.instance },
       body: JSON.stringify({ type: "prompt", sessionId: id, conversationId: originalConversation, resourceRevision: 0, text: "/catalog-149" }) });
@@ -81,7 +81,7 @@ test("Real UI/IPC/SDK reuse full catalogs across reload, file moves, and dollar 
     renderer.mockInput.pressTab(); await renderer.renderOnce(); expect(input.value).toBe("$new-skill ");
     expect(sent).toEqual(["/reload"]);
 
-    // 파일 감시는 열린 검색어를 유지한 채 새 파일과 이동된 경로를 자동 반영한다.
+    // File watchers update new and moved paths while preserving open queries.
     input.value = "@fresh-path"; await renderer.renderOnce();
     await writeFile(join(fixture.main, "fresh-path.ts"), "file"); await visible("fresh-path.ts");
     await rename(join(fixture.main, "fresh-path.ts"), join(fixture.main, "renamed-path.ts"));
@@ -90,7 +90,7 @@ test("Real UI/IPC/SDK reuse full catalogs across reload, file moves, and dollar 
     expect(input.submission.text).toBe(`@${JSON.stringify(join(fixture.main, "renamed-path.ts"))} `);
     expect(catalogs).toBe(2); expect(sent).toEqual(["/reload"]);
 
-    // 달러 선택은 텍스트 장식이 아니라 서버의 실제 스킬 확장 경로로 전달된다.
+    // Dollar choices reach real server skill expansion, not merely display decoration.
     input.value = "$new-skill inspect this"; await renderer.renderOnce(); renderer.mockInput.pressEnter();
     await until(() => runtime.snapshot.details[id]?.status === "complete" && !!runtime.snapshot.details[id]?.sections?.some(section => section.skillName === "new-skill"));
     expect(sent).toEqual(["/reload", "$new-skill inspect this"]); expect(unexpected).toEqual([]);

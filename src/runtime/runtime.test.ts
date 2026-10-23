@@ -55,8 +55,8 @@ async function setup() {
   };
 }
 
-test("대시보드는 실제 Unix IPC로 닫힌 SDK 실행을 읽고 대화나 새 모델 실행을 만들지 않는다", async () => {
-  // 이 테스트가 소유한 별도 offline daemon만 사용한다.
+test("Dashboard Unix IPC reads closed SDK runs without conversations or new model execution", async () => {
+  // Use only the separate offline daemon owned by this test.
   const app = await setup();
   try {
     const client = await app.connect(), tree = client.snapshot.repositories.flatMap(repo => repo.worktrees).find(tree => tree.path === app.main)!;
@@ -67,16 +67,16 @@ test("대시보드는 실제 Unix IPC로 닫힌 SDK 실행을 읽고 대화나 �
     expectOk(await client.closeSession(id));
     const before = client.snapshot.repositories;
 
-    // Host 경로 허용, capability 협상, 응답 스키마와 저장 파일 집계를 함께 통과한다.
+    // Exercise host paths, capabilities, response schemas, and persisted aggregation together.
     const dashboard = expectOk(await client.dashboard(7));
 
-    // 닫힌 실행도 남고 통계 조회는 읽기 전용이다.
+    // Closed runs remain available and statistics reads stay read-only.
     expect(dashboard.totals.runs).toBe(1); expect(dashboard.daily).toHaveLength(7); expect(dashboard.warnings).toEqual([]);
     expect(client.snapshot.repositories).toEqual(before);
   } finally { await app.cleanup(); }
 });
 
-test("중단 IPC는 대기 입력 전체를 한 메시지로 전달하고 세션·초안과 다른 실행을 유지한다", async () => {
+test("Interrupt IPC merges queued input into one message while retaining sessions, drafts, and other runs", async () => {
   // This test owns an isolated daemon; interruption never targets a user runtime.
   const app = await setup();
   try {
@@ -104,7 +104,7 @@ test("중단 IPC는 대기 입력 전체를 한 메시지로 전달하고 세션
   } finally { await app.cleanup(); }
 });
 
-test("자동완성 IPC는 선택 세션의 SDK 명령과 워크트리 파일만 읽고 모델을 실행하지 않는다", async () => {
+test("Completion IPC reads only selected-session SDK commands/worktree files without models", async () => {
   const app = await setup();
   try {
     const extensions = join(app.paths.directory, "offline-agent", "extensions"); await mkdir(extensions, { recursive: true });
@@ -143,7 +143,7 @@ test("자동완성 IPC는 선택 세션의 SDK 명령과 워크트리 파일만 
   } finally { await app.cleanup(); }
 });
 
-test("new IPC는 같은 워크트리에 새 탭을 추가하고 기존 대화·대기 입력·실행을 유지한다", async () => {
+test("new IPC adds same-worktree tabs while retaining conversations, queues, and runs", async () => {
   const app = await setup();
   try {
     const client = await app.connect(), tree = app.repository.worktrees.find((item) => item.path === app.main)!;
@@ -171,7 +171,7 @@ test("new IPC는 같은 워크트리에 새 탭을 추가하고 기존 대화·�
   } finally { await app.cleanup(); }
 });
 
-test("clear IPC는 현재 탭만 새 대화로 바꾸고 취소 이력·다른 실행·편집기·셸을 보존한다", async () => {
+test("clear IPC replaces only current conversations while preserving cancellation, other runs, editors, and shells", async () => {
   // The fixture owns the daemon and native processes; no user runtime is stopped.
   const app = await setup();
   try {
@@ -226,8 +226,8 @@ test("clear IPC는 현재 탭만 새 대화로 바꾸고 취소 이력·다른 �
   } finally { await app.cleanup(); }
 });
 
-test("exit IPC는 인수·이미지를 거절하고 마지막 탭 종료 후에도 서비스를 유지한다", async () => {
-  // 실제 런타임에 하나의 빈 탭만 만들고 종료 전 입력 검증을 확인한다.
+test("exit IPC rejects arguments/images and keeps services alive after closing final tabs", async () => {
+  // Create one empty real-runtime tab and verify pre-close validation.
   const app = await setup();
   try {
     const client = await app.connect(), worktreeId = app.repository.worktrees[0]!.id;
@@ -247,18 +247,18 @@ test("exit IPC는 인수·이미지를 거절하고 마지막 탭 종료 후에�
     expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions.map(session => session.id)).toEqual([id]);
     expect(client.snapshot.details[id]?.sections).toEqual([]);
 
-    // 유효한 종료 명령은 마지막 탭만 닫는다.
+    // Valid exit closes only the final tab.
     expectOk(await client.prompt(id, "/exit"));
     await observed(client, state => !state.details[id] && state.closingCount === 0);
 
-    // 빈 화면은 앱 종료가 아니며 같은 프로세스에서 새 세션을 만들 수 있다.
+    // Empty views do not exit apps; the same process can create new sessions.
     expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions).toEqual([]);
     const next = expectOk(await client.create(worktreeId));
     expect(next).not.toBe(id); expect(client.snapshot.pid).toBe(pid); expect(client.snapshot.instance).toBe(instance);
   } finally { await app.cleanup(); }
 });
 
-test("compact IPC의 수락은 요약 완료와 구분되고 같은 대화와 전체 transcript를 유지한다", async () => {
+test("compact IPC acceptance differs from summary completion and retains conversation/transcript", async () => {
   const app = await setup();
   try {
     const client = await app.connect(), tree = app.repository.worktrees.find((item) => item.path === app.main)!;
@@ -280,7 +280,7 @@ test("compact IPC의 수락은 요약 완료와 구분되고 같은 대화와 �
   } finally { await app.cleanup(); }
 });
 
-test("별도 프로세스는 모든 UI가 분리된 동안에도 agent와 subagent를 진행하고 같은 실행에 재접속한다", async () => {
+test("Separate processes continue agents/subagents while all UIs detach and reconnect to identical runs", async () => {
   // The detached Bun process owns actual SDK instances in two real Git worktrees.
   const app = await setup();
   try {
@@ -324,7 +324,7 @@ test("별도 프로세스는 모든 UI가 분리된 동안에도 agent와 subage
   } finally { await app.cleanup(); }
 }, 20000);
 
-test("31초 유휴 상태에도 이벤트 연결을 유지하고 같은 서비스에서 history와 새 명령을 처리한다", async () => {
+test("Event connections survive 31 idle seconds and retain same-service history/commands", async () => {
   // An isolated SDK service must keep its subscription even when no state changes are emitted.
   const app = await setup();
   try {
@@ -352,7 +352,7 @@ test("31초 유휴 상태에도 이벤트 연결을 유지하고 같은 서비�
   } finally { await app.cleanup(); }
 }, 45000);
 
-test.each(["close", "exit", "raw-exit"] as const)("%s IPC 닫기는 소속 자식만 취소하며 다른 세션과 저장 기록은 유지한다", async (action) => {
+test.each(["close", "exit", "raw-exit"] as const)("%s IPC closure cancels only owned children while preserving other sessions and history", async (action) => {
   // Parent/child and an unrelated slow run coexist in one detached SDK service.
   const app = await setup();
   try {
@@ -392,7 +392,7 @@ test.each(["close", "exit", "raw-exit"] as const)("%s IPC 닫기는 소속 자�
   } finally { await app.cleanup(); }
 }, 20000);
 
-test("서비스 종료 후 재시작은 열린 ID와 기록·선택을 복원하되 중단된 실행을 자동 재전송하지 않는다", async () => {
+test("Service restart restores open IDs, history, and selections without replaying interrupted runs", async () => {
   // Finalized history, an unused item, and an in-flight response all need different recovery handling.
   const app = await setup();
   try {
@@ -422,7 +422,7 @@ test("서비스 종료 후 재시작은 열린 ID와 기록·선택을 복원하
   } finally { await app.cleanup(); }
 }, 20000);
 
-test("명시적으로 교체한 서비스에 기존 클라이언트가 재접속하며 저장 대화와 명령을 재실행하지 않는다", async () => {
+test("Existing clients reconnect to explicitly replaced services without replaying saved commands", async () => {
   // Only a test-owned daemon is restarted; the first UI client remains mounted throughout.
   const app = await setup();
   try {
@@ -451,7 +451,7 @@ test("명시적으로 교체한 서비스에 기존 클라이언트가 재접속
   } finally { await app.cleanup(); }
 }, 20000);
 
-test("runtime 구독만 끊겨도 실제 쉘을 유지하며 이전 PTY를 닫고 명시적으로 다시 연결할 수 있다", async () => {
+test("Runtime-only disconnects preserve real shells while closing old PTYs for explicit reattachment", async () => {
   // A test-owned Unix relay ends only /events; it does not restart or stop the daemon/shell.
   const app = await setup();
   const relayPaths = runtimePaths(app.repository.id, true, join(app.directory, "relay"));
@@ -499,7 +499,7 @@ test("runtime 구독만 끊겨도 실제 쉘을 유지하며 이전 PTY를 닫�
   } finally { await client?.disconnect(); await relay?.stop(true); await rm(relayPaths.socket, { force: true }); await app.cleanup(); }
 }, 20000);
 
-test("이전 runtime instance에 대한 명령과 PTY attach는 실행 전에 거절하고 이전 클라이언트는 계속 지원한다", async () => {
+test("Stale-instance commands and PTY attachments fail before execution while legacy clients remain supported", async () => {
   // A replacement endpoint must not accept delayed mutation requests for the previous owner.
   const app = await setup();
   try {
@@ -523,7 +523,7 @@ test("이전 runtime instance에 대한 명령과 PTY attach는 실행 전에 �
   } finally { await app.cleanup(); }
 });
 
-test("동시에 접속해도 데몬 하나만 실행되고 강제 종료 후 stale endpoint를 회수한다", async () => {
+test("Concurrent connections start one daemon and reclaim stale endpoints after forced termination", async () => {
   // Simultaneous clients exercise real process/endpoint ownership, not an in-memory singleton.
   const app = await setup();
   try {
@@ -547,7 +547,7 @@ test("동시에 접속해도 데몬 하나만 실행되고 강제 종료 후 sta
   } finally { await app.cleanup(); }
 }, 20000);
 
-test.each(["close", "exit"] as const)("%s: 손상된 저장 기록은 덮어쓰지 않고 복원 오류를 표시하며 명시적으로 닫을 수 있다", async (action) => {
+test.each(["close", "exit"] as const)("%s: corrupt history remains unmodified, reports restoration errors, and supports explicit closure", async (action) => {
   // The corrupted file belongs only to this isolated SDK fixture.
   const app = await setup();
   try {
@@ -572,8 +572,8 @@ test.each(["close", "exit"] as const)("%s: 손상된 저장 기록은 덮어쓰�
   } finally { await app.cleanup(); }
 }, 20000);
 
-test("공유 스냅샷의 닫힌 대화는 SDK 파일 없이도 미리보기만 제공하고 재실행하지 않는다", async () => {
-  // 복구와 미리보기가 같은 저장 형식을 읽는지 실제 IPC 경계에서 확인한다.
+test("Closed shared snapshots support previews without SDK files or reexecution", async () => {
+  // Verify recovery and previews read the same format through actual IPC.
   const app = await setup();
   try {
     await privateDirectory(app.paths.directory);
@@ -585,11 +585,11 @@ test("공유 스냅샷의 닫힌 대화는 SDK 파일 없이도 미리보기만 
         telemetry: { provider: "fixture", model: "archived-model", effort: "high", fast: true, context: { usedTokens: 72000, maxTokens: 200000 }, weekly: null } }, subagents: [] };
     expectOk(await store.save({ version: 1, repositoryId: app.repository.id, repositories: [app.repository], records: [archived], preferences: { selection: { worktreeId: tree.id, sessions: {} }, drafts: {} } }));
 
-    // 서비스 시작과 History 조회는 닫힌 대화의 executor나 SDK writer를 만들지 않는다.
+    // Startup and History reads create neither executors nor SDK writers for closed conversations.
     const client = await app.connect(), items = expectOk(await client.listHistory(tree.id));
     const preview = expectOk(await client.previewHistory(tree.id, "archived-conversation"));
 
-    // 최근 섹션 제한만 적용하고 저장된 실행 상태와 telemetry는 그대로 전달한다.
+    // Limit only recent sections while passing saved run state and telemetry unchanged.
     expect(client.snapshot.details).toEqual({}); expect(items.map(item => item.id)).toEqual(["archived-conversation"]);
     expect(preview.snapshot?.lifecycle).toBe("closed"); expect(preview.snapshot?.state.status).toBe("failure");
     expect(preview.snapshot?.state.error).toBe("Saved failure"); expect(preview.telemetry).toEqual(archived.state.telemetry);
@@ -600,8 +600,8 @@ test("공유 스냅샷의 닫힌 대화는 SDK 파일 없이도 미리보기만 
   } finally { await app.cleanup(); }
 });
 
-test("스냅샷이 없는 외부 SDK 대화만 JSONL로 미리보기를 구성하고 원본은 바꾸지 않는다", async () => {
-  // 공유 스냅샷 도입 전에 만들어진 대화도 계속 읽을 수 있어야 한다.
+test("External SDK conversations without snapshots build read-only JSONL previews", async () => {
+  // Conversations predating shared snapshots remain readable.
   const app = await setup();
   try {
     const client = await app.connect(), tree = app.repository.worktrees[0]!;
@@ -615,19 +615,19 @@ test("스냅샷이 없는 외부 SDK 대화만 JSONL로 미리보기를 구성�
     ].map(entry => JSON.stringify(entry)).join("\n") + "\n";
     await writeFile(file, bytes);
 
-    // History를 탐색할 뿐 SDK executor나 새로운 공유 스냅샷은 만들지 않는다.
+    // Browsing History creates neither SDK executors nor new shared snapshots.
     expect(expectOk(await client.listHistory(tree.id)).map(item => item.id)).toEqual(["external"]);
     const preview = expectOk(await client.previewHistory(tree.id, "external"));
 
-    // 동일 renderer에 전달할 섹션만 복원하고 새 대화나 파일을 추가하지 않는다.
+    // Restore only renderer sections without adding conversations or files.
     expect(preview.snapshot).toBeUndefined(); expect(preview.sections?.map(section => section.text)).toEqual(["External question", "External answer"]);
     expect(client.snapshot.details).toEqual({}); expect(await readFile(file, "utf8")).toBe(bytes);
     const store = new RuntimeStore(app.paths); expectOk(await store.load(app.repository.id)); expect(store.listSessions(tree.id)).toEqual([]);
   } finally { await app.cleanup(); }
 });
 
-test("서비스 재시작은 열린 세션만 복구하고 닫힌 대화의 같은 스냅샷을 History에 유지한다", async () => {
-  // 실제 SDK 대화와 다른 열린 탭을 만들어 복구 대상 필터링을 검증한다.
+test("Service restart recovers only open sessions while retaining identical closed snapshots in History", async () => {
+  // Use a real SDK conversation and another open tab to verify recovery filtering.
   const app = await setup();
   try {
     const client = await app.connect(), tree = app.repository.worktrees[0]!;
@@ -635,12 +635,12 @@ test("서비스 재시작은 열린 세션만 복구하고 닫힌 대화의 같�
     expectOk(await client.prompt(closed, "read")); await observed(client, state => state.details[closed]?.status === "complete");
     const before = client.snapshot.details[closed]!, conversation = before.conversationId!;
 
-    // 명시적으로 닫힌 세션의 저장이 끝난 뒤 런타임을 완전히 재시작한다.
+    // Fully restart after explicit closed-session persistence completes.
     expectOk(await client.closeSession(closed)); await observed(client, state => !state.details[closed] && state.closingCount === 0);
     const pid = client.snapshot.pid; expectOk(await client.stopRuntime()); await client.disconnect(); await app.stopped(pid);
     const restored = await app.connect(), preview = expectOk(await restored.previewHistory(tree.id, conversation));
 
-    // 닫힌 실행은 생성되지 않고 저장된 상태줄과 대화는 preview에서만 읽힌다.
+    // Closed runs never instantiate; saved status and conversation appear only in previews.
     expect(Object.keys(restored.snapshot.details)).toEqual([open]);
     expect(preview.snapshot?.lifecycle).toBe("closed"); expect(preview.telemetry).toEqual(before.telemetry);
     expect(preview.snapshot?.state.sections).toEqual(before.sections);
@@ -653,7 +653,7 @@ test("서비스 재시작은 열린 세션만 복구하고 닫힌 대화의 같�
   } finally { await app.cleanup(); }
 });
 
-test("IPC history는 워크트리별 SDK 기록을 열고 이미 열린 saved ID는 기존 항목을 반환한다", async () => {
+test("IPC history opens worktree-scoped SDK records and returns existing entries for open saved IDs", async () => {
   // The real daemon discovers saved SDK files in a shared offline history directory.
   const app = await setup();
   try {
@@ -707,7 +707,7 @@ test("IPC history는 워크트리별 SDK 기록을 열고 이미 열린 saved ID
   } finally { await app.cleanup(); }
 }, 20000);
 
-test("현재 실행 중인 subagent의 저장 파일은 history로 중복 실행하지 않는다", async () => {
+test("Active subagent files never execute twice through history", async () => {
   // A child is an owned writer even though its file is a valid SDK saved conversation.
   const app = await setup();
   try {
@@ -727,7 +727,7 @@ test("현재 실행 중인 subagent의 저장 파일은 history로 중복 실행
   } finally { await app.cleanup(); }
 }, 20000);
 
-test("Git preference는 실제 runtime 재접속과 구형 preference 저장에도 보존된다", async () => {
+test("Git preferences survive real reconnects and legacy preference saves", async () => {
   // The detached runtime owns the warm-reconnect state; UI caches are not enough.
   const app = await setup();
   try {
@@ -748,7 +748,7 @@ test("Git preference는 실제 runtime 재접속과 구형 preference 저장에�
   } finally { await app.cleanup(); }
 }, 20000);
 
-test("실행 수락 후 checkpoint 저장 실패는 거절 응답이 아니라 성공과 저장 경고로 반환한다", async () => {
+test("Accepted-run checkpoint failures return success with warnings instead of rejection", async () => {
   // Only this fixture's manifest is replaced with an unwritable target; user state is untouched.
   const app = await setup();
   let damaged = false;

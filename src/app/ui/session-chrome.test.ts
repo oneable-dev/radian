@@ -31,7 +31,7 @@ async function mount(empty = false, keymap?: Keymap) {
   return { ...app, selection, view, created, lookups, sent, get, render, line, history, async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("상단 오른쪽의 워크트리·생성·History 버튼은 없고 선택한 워크트리와 브랜치는 프롬프트 아래에 표시한다", async () => {
+test("Remove top-right worktree/create/History buttons and show selected worktree/branch below prompts", async () => {
   const app = await mount();
   try {
     expect(app.renderer.root.findDescendantById("work-view-tabs")).toBeUndefined();
@@ -102,10 +102,10 @@ test.each(["default", "custom", "disabled"] as const)("Empty AI views show only 
   try {
     const hint = app.get("agent-empty-state:hint");
 
-    // 빈 화면의 탐색 키와 이전 생성 별칭은 새 세션을 만들지 않는다.
+    // Navigation and old creation aliases must not create empty-screen sessions.
     app.mockInput.pressKey("n", { ctrl: true }); app.mockInput.pressKey("n"); await app.render();
 
-    // 안내는 키 재설정·비활성화를 반영하고 생성 요청 전까지 빈 상태를 유지한다.
+    // Hints reflect rebinding/disabling and remain empty until explicit requests.
     expect(app.captureCharFrame()).toContain("No AI sessions"); expect(app.created).toEqual([]);
     if (mode === "disabled") expect(hint.visible).toBe(false);
     else {
@@ -116,7 +116,7 @@ test.each(["default", "custom", "disabled"] as const)("Empty AI views show only 
   } finally { await app.close(); }
 });
 
-test("긴 한글·emoji 워크트리와 브랜치는 원문을 바꾸지 않고 같은 상태 한 줄에서 축약한다", async () => {
+test("Long Korean/emoji worktrees and branches truncate within one status row without changing source", async () => {
   const app = await mount();
   try {
     const name = "한글 👨‍👩‍👧‍👦 é very-long-worktree-name", branch = "feature/한글-👩🏽‍💻-very-long-branch";

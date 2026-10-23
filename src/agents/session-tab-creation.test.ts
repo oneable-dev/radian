@@ -11,7 +11,7 @@ function execution(id: string): SessionExecutor & { closes: number; switches: nu
     async beforeNewSession() { this.switches++; return ok(undefined); }, async close() { this.closes++; return ok(undefined); } };
 }
 
-test("newTab은 원래 워크트리에 탭을 추가하고 기존 실행·하위 작업 소유권을 교체하지 않는다", async () => {
+test("newTab adds to the original worktree without replacing active runs or child ownership", async () => {
   const contexts: SessionContext[] = [], executions: ReturnType<typeof execution>[] = [];
   const registry = new SessionRegistry(demoWorkspace(), async (context) => {
     contexts.push(context); const next = execution(`conversation-${contexts.length}`); executions.push(next); return next;
@@ -34,7 +34,7 @@ test("newTab은 원래 워크트리에 탭을 추가하고 기존 실행·하위
   } finally { expectOk(await registry.shutdown()); }
 });
 
-test("새 탭 생성 실패는 기존 탭을 중단하거나 대화 내용을 비우지 않는다", async () => {
+test("New-tab failures neither interrupt existing tabs nor clear conversations", async () => {
   const original = execution("original"); let calls = 0;
   const registry = new SessionRegistry(demoWorkspace(), async () => {
     if (++calls > 1) throw new StorageError("New tab could not be prepared", "EIO");

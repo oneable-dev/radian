@@ -1,4 +1,4 @@
-Use English for repository documentation and commit messages.
+Use English for repository documentation, source comments, test names, and commit messages. Keep non-English text only where it is needed as Unicode or localization test data.
 
 ## Neovim-style interaction and UI
 

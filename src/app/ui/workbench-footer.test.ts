@@ -41,7 +41,7 @@ async function mount(list: () => Promise<readonly HistoryItem[]> = async () => [
   };
 }
 
-test("기본 화면은 고정 범례나 안내 행 없이 푸터 바로 위까지 본문을 사용한다", async () => {
+test("Default screens use content through the footer without fixed legends or hint rows", async () => {
   // The normal screen should spend its vertical space on work, not permanent help text.
   const app = await mount();
   try {
@@ -70,7 +70,7 @@ test.each([120, 60])("Width %i prompts retain newline, interrupt, and submit beh
     await app.mockInput.typeText("first"); app.mockInput.pressEnter({ shift: true });
     await app.mockInput.typeText("second"); await app.renderOnce();
 
-    // 기본 조작을 숨겨도 원래 입력 의미와 작업 중 전송 경로는 유지한다.
+    // Hiding defaults preserves input semantics and active-work submission routing.
     for (const state of ["complete", "working"] as const) {
       app.setStatus(state); await app.renderOnce();
       expect(app.footerLine()).not.toMatch(/Run|Queue|New line|Interrupt|<C-[cnp]>/u);
@@ -81,7 +81,7 @@ test.each([120, 60])("Width %i prompts retain newline, interrupt, and submit beh
     expect(interruptions).toBe(1); expect(app.view.promptDrafts.a1).toBe("first\nsecond");
     app.mockInput.pressEnter(); await app.waitFor(() => app.view.promptDrafts.a1 === undefined);
 
-    // 중단은 초안을 보존하고 Enter 한 번만 실제 전송 요청을 만든다.
+    // Interrupt retains drafts; only one Enter creates actual submission requests.
     expect(app.calls).toEqual(["prompt:first\nsecond"]);
   } finally { await app.close(); }
 });
@@ -106,8 +106,8 @@ test("Trees and search retain focus navigation and literal typing without defaul
   } finally { await app.close(); }
 });
 
-test("History는 기본 탐색 대신 Preview와 Refresh만 안내하고 조회와 선택은 유지한다", async () => {
-  // 메타데이터가 늦게 도착해도 기본 열기·탐색 안내를 되살리지 않는다.
+test("History hints only Preview/Refresh while preserving lookup and selection", async () => {
+  // Late metadata must not restore default open/navigation hints.
   const pending = Promise.withResolvers<readonly HistoryItem[]>();
   const app = await mount(() => pending.promise);
   try {
@@ -175,7 +175,7 @@ test("Compact hidden-panel layouts keep footer/notifications at bottom and click
   } finally { await app.close(); }
 });
 
-test("프롬프트와 상태는 사이드바 공간 없이 전체 작업 영역의 왼쪽부터 배치한다", async () => {
+test("Prompts and status align to the work-area left without sidebar space", async () => {
   // Popup navigation must not reserve a divider cell or shrink Agent content.
   const app = await mount();
   try {
@@ -260,7 +260,7 @@ test("Short terminals keep Agent status/input clear of single-row footers", asyn
   } finally { await app.close(); }
 });
 
-test("포커스를 해제하거나 화면을 제거하면 오래된 단축키와 포커스 구독을 남기지 않는다", async () => {
+test("Blur and disposal leave neither stale shortcuts nor focus subscriptions", async () => {
   // Footer integration must not keep listeners alive after the view has been disposed.
   const app = await mount();
   try {

@@ -29,14 +29,14 @@ function fixture(initial?: SessionResult) {
   return { registry, executors };
 }
 
-test.each(["complete", "error", "unfinished", "cancelled"] as const)("새 %s 결과만 확인 필요로 만들고 반복 갱신으로 읽음을 되돌리지 않는다", async outcome => {
-  // 사용자 의도를 모르는 취소도 확인해야 하므로 원인 없는 결과를 준비한다.
+test.each(["complete", "error", "unfinished", "cancelled"] as const)("Only new %s results need attention and repeated updates never undo acknowledgement", async outcome => {
+  // Prepare an outcome without a cause because cancellations with unknown intent need attention.
   const app = fixture(), id = expectOk(await app.registry.create("demo:main")), executor = app.executors[0]!;
   try {
     executor.publish({ status: outcome === "error" ? "failure" : outcome === "complete" ? "complete" : null, output: "", error: null, result: result("first", outcome) });
     expect(app.registry.details(id)?.attention?.id).toBe("first");
 
-    // 같은 결과에 대한 확인은 실행 결과를 바꾸지 않고 알림만 해제한다.
+    // Acknowledgement clears only notifications, not run outcomes.
     expectOk(app.registry.acknowledge(id, executor.savedSessionId, "first"));
     executor.publish(executor.state);
     expect(app.registry.details(id)?.attention).toBeUndefined();
@@ -45,8 +45,8 @@ test.each(["complete", "error", "unfinished", "cancelled"] as const)("새 %s 결
   } finally { expectOk(await app.registry.shutdown()); }
 });
 
-test("늦은 읽음 요청과 새 작업 시작은 새 결과나 이전 미확인을 지우지 않는다", async () => {
-  // 두 작업의 완료가 확인 요청과 교차하는 상황을 만든다.
+test("Late acknowledgements and new runs preserve newer results and earlier unread state", async () => {
+  // Interleave completion of two runs with acknowledgement requests.
   const app = fixture(), id = expectOk(await app.registry.create("demo:main")), executor = app.executors[0]!;
   try {
     executor.publish({ status: "complete", output: "", error: null, result: result("first") });
@@ -54,7 +54,7 @@ test("늦은 읽음 요청과 새 작업 시작은 새 결과나 이전 미확�
     expect(app.registry.details(id)?.attention?.id).toBe("first");
     executor.publish({ status: "complete", output: "", error: null, result: result("second") });
 
-    // 첫 작업 확인이 늦게 와도 두 번째 결과가 남아야 한다.
+    // A late acknowledgement of the first run must preserve the second result.
     expectOk(app.registry.acknowledge(id, executor.savedSessionId, "first"));
     expect(app.registry.details(id)?.attention?.id).toBe("second");
     expect(expectError(app.registry.acknowledge(id, "outgoing-conversation", "second")).code).toBe("SESSION_CONFLICT");
@@ -62,8 +62,8 @@ test("늦은 읽음 요청과 새 작업 시작은 새 결과나 이전 미확�
   } finally { expectOk(await app.registry.shutdown()); }
 });
 
-test.each(["user", "lifecycle"] as const)("%s 취소는 새 알림 없이 이전 미확인 결과를 보존한다", async cancellation => {
-  // 이미 미확인 결과가 있는 세션을 다음 실행에서 의도적으로 취소한다.
+test.each(["user", "lifecycle"] as const)("%s cancellation creates no new notification and preserves earlier unread results", async cancellation => {
+  // Intentionally cancel a later run in a session with an unread result.
   const app = fixture(), id = expectOk(await app.registry.create("demo:main")), executor = app.executors[0]!;
   try {
     executor.publish({ status: "complete", output: "", error: null, result: result("previous") });
@@ -76,8 +76,8 @@ test.each(["user", "lifecycle"] as const)("%s 취소는 새 알림 없이 이전
   } finally { expectOk(await app.registry.shutdown()); }
 });
 
-test("과거 대화를 열 때는 알림을 재생하지 않고 저장된 미확인만 복원한다", async () => {
-  // 과거 결과를 가진 SDK와 런타임 체크포인트의 읽음 상태는 서로 다른 책임이다.
+test("Opening historical conversations restores saved unread state without replaying notifications", async () => {
+  // SDK history and runtime acknowledgement checkpoints have separate responsibilities.
   const app = fixture(result("history")), id = expectOk(await app.registry.create("demo:main"));
   let restored: ReturnType<typeof fixture> | undefined;
   try {
@@ -94,8 +94,8 @@ test("과거 대화를 열 때는 알림을 재생하지 않고 저장된 미확
   } finally { expectOk(await app.registry.shutdown()); if (restored) expectOk(await restored.registry.shutdown()); }
 });
 
-test("실행 중 런타임이 종료됐으면 복원 후 Stopped 결과를 확인 필요로 표시한다", async () => {
-  // 런타임 종료는 사용자가 실행을 취소한 것과 구분해야 한다.
+test("Runtime termination during execution restores Stopped as needing attention", async () => {
+  // Runtime termination differs from user-initiated cancellation.
   const app = fixture(), id = expectOk(await app.registry.create("demo:main"));
   const restored = fixture();
   try {

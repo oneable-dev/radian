@@ -33,7 +33,7 @@ class Terminal extends EventEmitter {
   }
   destroy(): void { this.isDestroyed = true; this.emit("destroy"); }
 }
-function state(completions: readonly RunCompletion[] = [], status: ExecutionState["status"] = "complete", request = "터미널 알림 기능 구현"): ExecutionState {
+function state(completions: readonly RunCompletion[] = [], status: ExecutionState["status"] = "complete", request = "Implement terminal notifications"): ExecutionState {
   return { conversationId: "conversation", status, output: "Private response", error: "Private provider error",
     sections: completions.flatMap((completion, index) => [
       { id: `request-${index}`, kind: "user", title: "You", text: request, status: "complete" },
@@ -55,32 +55,32 @@ function fixture(initial = state()) {
 }
 
 for (const focus of ["unknown", "blur", "focus"] as const) for (const outcome of ["complete", "error"] as const) {
-  test(`포커스 ${focus} 상태의 최종 ${outcome} 결과는 정책에 맞게 한 번만 알린다`, () => {
-    // 최초 이벤트가 없으면 unknown이며, OS 대신 터미널 발송 경계만 대체한다.
+  test(`Final ${outcome} results with ${focus} focus notify once according to policy`, () => {
+    // Initial focus is unknown; replace only terminal delivery, not OS behavior.
     const app = fixture();
     if (focus !== "unknown") app.terminal.emit(focus);
     const finished = completion(outcome);
     try {
-      // 같은 결과의 heartbeat와 저장 경고는 새 실행이 아니다.
+      // Heartbeats and persistence warnings for the same result are not new runs.
       app.source.publish(state([finished]));
       app.source.publish(state([{ ...finished, warning: "Timing persistence warning" }]));
       app.terminal.emit("blur"); app.source.changed();
 
-      // 포커스 중 소비한 결과는 이후 포커스를 잃어도 재생하지 않는다.
+      // Results consumed while focused must not replay after focus is lost.
       expect(app.terminal.sent).toEqual(focus === "focus" ? [] : [{
         title: outcome === "complete" ? "Radian · Task completed" : "Radian · Task failed",
-        body: "터미널 알림 기능 구현 · 42s",
+        body: "Implement terminal notifications · 42s",
       }]);
       expect(app.errors).toEqual([]);
     } finally { app.notifications.dispose(); }
   });
 }
 
-test("연결 전 기록·새로 연 대화·재연결 결과는 재생하지 않고 이후의 실행만 알린다", () => {
-  // 연결 당시 이미 완료된 기록은 알림의 시작 기준으로만 사용한다.
+test("Preconnection history, newly opened conversations, and reconnections notify only subsequent runs", () => {
+  // Existing completion history establishes the initial notification baseline only.
   const old = completion(), app = fixture(state([old]));
   try {
-    // 같은 탭에서 다른 저장 대화를 열거나 서비스를 복구해도 과거 기록이다.
+    // Opening saved conversations or recovering services still represents historical data.
     app.source.changed();
     app.source.publish({ ...state([old, completion("error", 50000)]), conversationId: "resumed" });
     app.source.recoveryVersion++;
@@ -88,14 +88,14 @@ test("연결 전 기록·새로 연 대화·재연결 결과는 재생하지 않
     app.source.publish({ ...state(restored), conversationId: "resumed" });
     expect(app.terminal.sent).toHaveLength(0);
 
-    // 새 기준 이후의 완료 결과는 working 스냅샷이 합쳐져 없어져도 감지한다.
+    // Detect completion after the baseline even if working snapshots were coalesced away.
     app.source.publish({ ...state([...restored, completion("complete", 150000)]), conversationId: "resumed" });
     expect(app.terminal.sent).toHaveLength(1);
   } finally { app.notifications.dispose(); }
 });
 
-test("다른 세션의 저장 기록을 처음 읽을 때는 알리지 않는다", () => {
-  // 기존 세션을 관찰하던 중 다른 저장 세션을 추가하는 경우를 준비한다.
+test("Initial reads of other saved sessions never notify", () => {
+  // Add another saved session while observing an existing session.
   const app = fixture();
   try {
     const repository = app.source.snapshot.repositories[0]!, tree = repository.worktrees[0]!;
@@ -104,15 +104,15 @@ test("다른 세션의 저장 기록을 처음 읽을 때는 알리지 않는다
         { id: "saved", name: "Saved session", status: "complete", subagents: [] }] }] }],
       details: { ...app.source.snapshot.details, saved: state([completion()]) } };
 
-    // 처음 보이는 완료 내역과 후속 heartbeat는 모두 과거 기록으로 소비한다.
+    // Initial completions and later heartbeats are both consumed as history.
     app.source.changed(); app.source.changed();
 
     expect(app.terminal.sent).toEqual([]);
   } finally { app.notifications.dispose(); }
 });
 
-test("모델 응답과 재시도가 끝나도 settled 전에는 알리지 않는다", () => {
-  // 실제 transcript 계약으로 최종 완료와 개별 응답 종료를 구분한다.
+test("Responses and retries never notify before final settlement", () => {
+  // Use actual transcript contracts to distinguish request completion from individual responses.
   const app = fixture(), transcript = new SessionTranscript([]);
   const assistant = fixtureMessage("openai-responses", "fixture", "fixture");
   assistant.content = [{ type: "text", text: "Private answer" }];
@@ -122,7 +122,7 @@ test("모델 응답과 재시도가 끝나도 settled 전에는 알리지 않는
     transcript.handle({ type: "message_end", message: value });
   };
   try {
-    // 재시도 가능한 중간 실패와 다음 응답은 아직 요청 전체의 완료가 아니다.
+    // Retryable failures and subsequent responses do not complete the whole request.
     transcript.handle({ type: "agent_start" });
     message({ ...assistant, stopReason: "error", errorMessage: "Retryable failure" });
     transcript.handle({ type: "agent_end", messages: [], willRetry: true }); publish();
@@ -130,7 +130,7 @@ test("모델 응답과 재시도가 끝나도 settled 전에는 알리지 않는
     transcript.handle({ type: "agent_end", messages: [], willRetry: false }); publish();
     expect(app.terminal.sent).toHaveLength(0);
 
-    // 최종 메타데이터가 생성될 때만 한 번 전송한다.
+    // Deliver once only when final metadata is created.
     transcript.handle({ type: "agent_settled", aborted: false });
     app.source.publish({ ...state(), sections: transcript.sections }); app.source.changed();
     expect(app.terminal.sent).toHaveLength(1);
@@ -138,8 +138,8 @@ test("모델 응답과 재시도가 끝나도 settled 전에는 알리지 않는
   } finally { app.notifications.dispose(); }
 });
 
-test.each(["cancelled", "unfinished"] as const)("%s 종료는 실패·완료 알림을 만들지 않는다", (outcome) => {
-  // 취소와 결과 미확정은 실패나 성공으로 분류하지 않는다.
+test.each(["cancelled", "unfinished"] as const)("%s termination never creates success or failure notifications", (outcome) => {
+  // Cancellation and unknown outcomes are neither success nor failure.
   const app = fixture();
   try {
     app.source.publish(state([completion(outcome)], null)); app.source.changed();
@@ -148,8 +148,8 @@ test.each(["cancelled", "unfinished"] as const)("%s 종료는 실패·완료 알
   } finally { app.notifications.dispose(); }
 });
 
-test("합쳐진 스냅샷의 여러 최종 실행은 각각 한 번만 알리고 자식 상태는 별도로 알리지 않는다", () => {
-  // 자식의 상태 변화는 메인 세션의 별도 완료 결과가 아니다.
+test("Coalesced final runs each notify once and child state never notifies separately", () => {
+  // Child state changes are not separate main-session completions.
   const app = fixture(), repository = app.source.snapshot.repositories[0]!, tree = repository.worktrees[0]!;
   try {
     app.source.snapshot = { ...app.source.snapshot, repositories: [{ ...repository, worktrees: [{ ...tree,
@@ -157,30 +157,30 @@ test("합쳐진 스냅샷의 여러 최종 실행은 각각 한 번만 알리고
     app.source.changed();
     expect(app.terminal.sent).toHaveLength(0);
 
-    // 스트림이 여러 완료를 한 번에 전달해도 결과마다 한 번씩 처리한다.
+    // Process each result once even when multiple completions share one snapshot.
     app.source.publish(state([completion(), completion("error", 50000)])); app.source.changed();
 
     expect(app.terminal.sent.map((item) => item.title)).toEqual(["Radian · Task completed", "Radian · Task failed"]);
   } finally { app.notifications.dispose(); }
 });
 
-test("각 완료에는 같은 실행의 마지막 요청만 연결하고 이전·미래 요청을 빌리지 않는다", () => {
-  // 여러 실행과 다음 대기 요청이 한 스냅샷에 합쳐진 경우를 준비한다.
-  const app = fixture(), first = state([completion()], "complete", "첫 번째 작업").sections!;
-  const second = state([completion("error", 50000)], "failure", "두 번째 작업").sections!.map((section) => ({ ...section, id: `second-${section.id}` }));
+test("Completion summaries use only the same run's last request, never earlier or future requests", () => {
+  // Combine multiple runs and a subsequent pending request in one snapshot.
+  const app = fixture(), first = state([completion()], "complete", "First task").sections!;
+  const second = state([completion("error", 50000)], "failure", "Second task").sections!.map((section) => ({ ...section, id: `second-${section.id}` }));
   try {
     app.source.publish({ ...state(), sections: [...first, ...second,
       { id: "background", kind: "assistant", title: "Agent", text: "Private response", status: "complete", completion: completion("complete", 100000) },
-      { id: "future", kind: "user", title: "You", text: "다음 실행의 요청", status: "complete" },
+      { id: "future", kind: "user", title: "You", text: "Request for the next run", status: "complete" },
     ] });
 
-    // 요청 없는 실행은 시간만 표시하고 다음 요청을 이전 알림에 섞지 않는다.
-    expect(app.terminal.sent.map((item) => item.body)).toEqual(["첫 번째 작업 · 42s", "두 번째 작업 · 42s", "42s"]);
+    // Request-free runs show duration only; never borrow the following request.
+    expect(app.terminal.sent.map((item) => item.body)).toEqual(["First task · 42s", "Second task · 42s", "42s"]);
   } finally { app.notifications.dispose(); }
 });
 
-test.each(["missing", "empty"] as const)("요청 요약이 %s이면 식별자나 응답 대신 시간만 표시한다", (request) => {
-  // 과거 데이터나 첨부만 있는 요청에는 표시할 작업 문구가 없을 수 있다.
+test.each(["missing", "empty"] as const)("Request summary %s shows only duration instead of identifiers or responses", (request) => {
+  // Historical or attachment-only requests may have no displayable task text.
   const app = fixture(), finished = state([completion()], "complete", "");
   try {
     app.source.publish({ ...finished, sections: request === "missing" ? finished.sections!.filter((section) => section.kind !== "user") : finished.sections! });
@@ -189,8 +189,8 @@ test.each(["missing", "empty"] as const)("요청 요약이 %s이면 식별자나
   } finally { app.notifications.dispose(); }
 });
 
-test("스킬 호출은 내부 지침 대신 호출 이름으로 요약한다", () => {
-  // 스킬 notice 본문은 사용자 작업명이 아닌 비공개 지침일 수 있다.
+test("Skill notifications summarize invocation names rather than internal instructions", () => {
+  // Skill notice bodies may contain private instructions rather than user task names.
   const app = fixture(), finished = state([completion()]);
   try {
     app.source.publish({ ...finished, sections: [
@@ -203,36 +203,36 @@ test("스킬 호출은 내부 지침 대신 호출 이름으로 요약한다", (
   } finally { app.notifications.dispose(); }
 });
 
-test("구조화된 작업 요약이 있으면 첨부 경로가 들어 있는 원문 대신 사용한다", () => {
-  // runtime이 만든 요약과 실제 대화 원문을 구분한다.
+test("Structured task summaries override source text containing attachment paths", () => {
+  // Distinguish runtime summaries from original conversation text.
   const app = fixture(), finished = state([completion()]);
   const request = { id: "request", kind: "user" as const, title: "You", text: 'Private raw request @"/private/workspace/secret.ts"', status: "complete" as const,
-    request: { text: "선택한 파일 수정", images: 0, files: 1, fileName: "secret.ts" } };
+    request: { text: "Update the selected file", images: 0, files: 1, fileName: "secret.ts" } };
   try {
     app.source.publish({ ...finished, sections: [request, ...finished.sections!.filter((section) => section.kind !== "user")] });
 
-    expect(app.terminal.sent[0]?.body).toBe("선택한 파일 수정 · 42s");
+    expect(app.terminal.sent[0]?.body).toBe("Update the selected file · 42s");
   } finally { app.notifications.dispose(); }
 });
 
-test.each([[0, "<1s"], [90000, "1m 30s"], [3604000, "1h 0m 4s"]] as const)("실행 시간 %dms를 세션 경과 시간이 아닌 %s로 표시한다", (durationMs, expected) => {
-  // 저장된 실행 시간만 사용하고 현재 시각이나 세션의 대기 시간을 더하지 않는다.
+test.each([[0, "<1s"], [90000, "1m 30s"], [3604000, "1h 0m 4s"]] as const)("Run duration %dms displays as %s rather than session age", (durationMs, expected) => {
+  // Use saved execution duration without adding current time or session idle time.
   const app = fixture();
   try {
     app.source.publish(state([{ ...completion(), durationMs }]));
 
-    expect(app.terminal.sent[0]?.body).toBe(`터미널 알림 기능 구현 · ${expected}`);
+    expect(app.terminal.sent[0]?.body).toBe(`Implement terminal notifications · ${expected}`);
   } finally { app.notifications.dispose(); }
 });
 
-test("짧은 작업 요약의 제어문자·OSC 구분자를 제거하고 시간은 보존한다", () => {
-  // 요청 요약에도 OSC 종료나 별도 제어 명령이 포함될 수 있다.
+test("Short summaries remove control characters and OSC separators while preserving duration", () => {
+  // Request summaries may contain OSC terminators or separate control sequences.
   const app = fixture();
   try {
-    app.source.publish(state([completion("error")], "failure", "\x1b[31m알림\x1b[0m;\n구현\x07 " + "작업".repeat(200) + "\x9c"));
+    app.source.publish(state([completion("error")], "failure", "\x1b[31mNotification\x1b[0m;\nimplementation\x07 " + "task".repeat(200) + "\x9c"));
 
     const sent = app.terminal.sent[0]!;
-    expect(sent.body).toStartWith("알림, 구현 ");
+    expect(sent.body).toStartWith("Notification, implementation ");
     expect(sent.body).not.toMatch(/[\x00-\x1f\x7f-\x9f;]/u);
     expect(Bun.stringWidth(sent.body)).toBeLessThanOrEqual(240);
     expect(sent.body).toEndWith("… · 42s");
@@ -241,8 +241,8 @@ test("짧은 작업 요약의 제어문자·OSC 구분자를 제거하고 시간
   } finally { app.notifications.dispose(); }
 });
 
-test.each(["dispose", "destroy"] as const)("%s 후에는 구독을 정리하고 새 알림을 보내지 않는다", (action) => {
-  // detach와 renderer 종료 모두 알림 소유권을 끝낸다.
+test.each(["dispose", "destroy"] as const)("%s cleans subscriptions and prevents future notifications", (action) => {
+  // Detach and renderer shutdown both end notification ownership.
   const app = fixture();
 
   if (action === "dispose") app.notifications.dispose(); else app.terminal.destroy();
@@ -253,8 +253,8 @@ test.each(["dispose", "destroy"] as const)("%s 후에는 구독을 정리하고 
   expect(app.terminal.sent).toEqual([]);
 });
 
-test("터미널이 알림을 지원하지 않아도 재시도하거나 실행 결과를 바꾸지 않는다", () => {
-  // false는 터미널 전달 거절이며 OS에 표시됐다는 뜻으로 취급하지 않는다.
+test("Unsupported terminals neither retry notifications nor alter outcomes", () => {
+  // False means terminal delivery rejection, not confirmed OS display.
   const app = fixture(); app.terminal.accepted = false;
   try {
     app.source.publish(state([completion()])); app.source.changed();
@@ -264,8 +264,8 @@ test("터미널이 알림을 지원하지 않아도 재시도하거나 실행 �
   } finally { app.notifications.dispose(); }
 });
 
-test("예상하지 못한 SDK 예외는 원본 그대로 UI 경계에 보고하고 같은 결과를 다시 보내지 않는다", () => {
-  // 프로그래밍 오류를 정상적인 지원 불가 결과로 숨기지 않는다.
+test("Unexpected SDK errors reach the UI unchanged without redelivering results", () => {
+  // Never disguise programming errors as ordinary unsupported outcomes.
   const app = fixture(), error = new Error("Unexpected notification failure"); app.terminal.failure = error;
   try {
     app.source.publish(state([completion()])); app.source.changed();
@@ -276,8 +276,8 @@ test("예상하지 못한 SDK 예외는 원본 그대로 UI 경계에 보고하�
   } finally { app.notifications.dispose(); }
 });
 
-test("선택되지 않은 다른 저장소의 세션도 식별자 대신 해당 작업 요약으로 알린다", () => {
-  // 포커스 정책은 선택한 세션이 아니라 이 TUI 전체의 터미널 포커스에 적용한다.
+test("Unselected sessions in other repositories notify using their task summaries instead of identifiers", () => {
+  // Focus policy applies to the entire TUI terminal, not the selected session.
   const app = fixture();
   const repository = { id: "other-repo", name: "server", worktrees: [{ id: "feature", path: "/private/server", name: "feature/api", branch: "feature/api",
     sessions: [{ id: "other-session", name: "API work", status: "working" as const, subagents: [] }] }] };
@@ -286,16 +286,16 @@ test("선택되지 않은 다른 저장소의 세션도 식별자 대신 해당 
       details: { ...app.source.snapshot.details, "other-session": state([], "working") } };
     app.source.changed();
 
-    // 다른 저장소에서만 완료가 발생해도 메인 세션과 섞이지 않는다.
-    app.source.snapshot = { ...app.source.snapshot, details: { ...app.source.snapshot.details, "other-session": state([completion()], "complete", "API 오류 수정") } };
+    // Completion in another repository stays separate from the main session.
+    app.source.snapshot = { ...app.source.snapshot, details: { ...app.source.snapshot.details, "other-session": state([completion()], "complete", "Fix API errors") } };
     app.source.changed(); app.source.changed();
 
-    expect(app.terminal.sent).toEqual([{ title: "Radian · Task completed", body: "API 오류 수정 · 42s" }]);
+    expect(app.terminal.sent).toEqual([{ title: "Radian · Task completed", body: "Fix API errors · 42s" }]);
   } finally { app.notifications.dispose(); }
 });
 
-test("Ghostty용 native 출력은 실제 OSC 777 알림을 순서 있는 출력 큐로 전달한다", async () => {
-  // OS나 실제 터미널 대신 Writable에 바이트를 수집하되 native 발송기는 대체하지 않는다.
+test("Ghostty native output delivers actual OSC 777 notifications through ordered output queues", async () => {
+  // Capture bytes in Writable instead of a real terminal without replacing native delivery.
   let raw = "";
   const sink = new Writable({ write(bytes, _encoding, done) { raw += bytes.toString(); done(); } });
   const driver = new NativeSession(sink), source = new Source(snapshot()), errors: unknown[] = [];
@@ -305,36 +305,36 @@ test("Ghostty용 native 출력은 실제 OSC 777 알림을 순서 있는 출력 
   try {
     driver.attachRenderer({ width: 40, height: 8, remote: false, environment: { TERM: "xterm-ghostty", TERM_PROGRAM: "ghostty" } });
     await driver.setupTerminal({ useAlternateScreen: false, mouse: false, kittyKeyboardFlags: 0 });
-    // Ghostty가 모드 조회에 지원 여부를 응답하면 OpenTUI가 포커스 추적을 켠다.
+    // Ghostty mode-query support responses enable OpenTUI focus tracking.
     driver.control({ kind: "capability-response", bytes: Buffer.from("\x1b[?1004;2$y") });
     await driver.idle(); expect(raw).toContain("\x1b[?1004h");
     raw = "";
     notifications = new TerminalNotifications(terminal, source, (error) => errors.push(error));
 
-    // 알림은 화면 텍스트가 아니라 Ghostty가 해석하는 OSC 제어 패킷이다.
+    // Notifications are OSC control packets interpreted by Ghostty, not screen text.
     source.publish(state([completion()])); await driver.idle();
 
-    expect(raw).toBe("\x1b]777;notify;Radian · Task completed;터미널 알림 기능 구현 · 42s\x1b\\");
+    expect(raw).toBe("\x1b]777;notify;Radian · Task completed;Implement terminal notifications · 42s\x1b\\");
     expect(errors).toEqual([]);
   } finally { notifications?.dispose(); await driver.close(); }
 });
 
-test("실제 OpenTUI 입력 파서의 포커스 신호로 발송 여부를 갱신한다", async () => {
-  // 터미널 출력 경계만 대체하고 실제 입력 파서와 renderer 이벤트를 사용한다.
+test("Real OpenTUI focus parser signals update notification delivery", async () => {
+  // Replace only terminal output while using real input parsing and renderer events.
   const app = await createTestRenderer({ width: 40, height: 8 });
   const source = new Source(snapshot()), errors: unknown[] = [];
   const send = spyOn(app.renderer, "triggerNotification").mockReturnValue(true);
   const notifications = new TerminalNotifications(app.renderer, source, (error) => errors.push(error));
   try {
-    // 터미널이 포커스를 얻은 상태의 완료는 알리지 않는다.
+    // Completion while focused never notifies.
     app.renderer.stdin.emit("data", Buffer.from("\x1b[I")); await app.renderOnce();
     source.publish(state([completion()]));
     expect(send).not.toHaveBeenCalled();
 
-    // 포커스를 잃은 뒤의 새 결과는 native 출력 API로 한 번만 전달한다.
+    // Fresh results after focus loss deliver exactly once through native output.
     app.renderer.stdin.emit("data", Buffer.from("\x1b[O")); await app.renderOnce();
     source.publish(state([completion(), completion("error", 50000)])); source.changed();
-    expect(send.mock.calls).toEqual([["터미널 알림 기능 구현 · 42s", "Radian · Task failed"]]);
+    expect(send.mock.calls).toEqual([["Implement terminal notifications · 42s", "Radian · Task failed"]]);
     expect(errors).toEqual([]);
   } finally { notifications.dispose(); send.mockRestore(); await app.dispose(); }
 });

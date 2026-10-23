@@ -25,8 +25,8 @@ function palette(light: boolean): TerminalColors {
     cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null };
 }
 
-test("검색 팝업은 중앙에 배치되고 작업 영역을 줄이지 않으며 Preview를 만들지 않는다", async () => {
-  // 상시 사이드바의 너비 대신 터미널 안에 들어오는 독립적인 overlay를 사용한다.
+test("Search popups center without reducing work areas or creating previews", async () => {
+  // Use independent terminal-contained overlays instead of permanent sidebar widths.
   const app = await mount();
   try {
     const panel = app.get("workspace-sidebar"), field = app.get("workspace-search-box");
@@ -39,8 +39,8 @@ test("검색 팝업은 중앙에 배치되고 작업 영역을 줄이지 않으�
   } finally { await app.close(); }
 });
 
-test("Tab과 Shift+Tab은 팝업 안의 검색과 결과만 순회한다", async () => {
-  // 배경 Agent 입력에 검색 내용이 새어 들어가면 안 된다.
+test("Tab and Shift+Tab cycle only popup search and results", async () => {
+  // Search input must not leak into background Agent drafts.
   const app = await mount();
   try {
     app.mockInput.pressTab({ shift: true }); await app.render();
@@ -53,8 +53,8 @@ test("Tab과 Shift+Tab은 팝업 안의 검색과 결과만 순회한다", async
   } finally { await app.close(); }
 });
 
-test.each([false, true])("밝기 %j에서도 검색 여백 클릭으로 포커스하고 검색 배경을 일관되게 표시한다", async light => {
-  // 글자가 없는 padding도 검색 입력의 클릭 영역이다.
+test.each([false, true])("At brightness %j, search padding clicks focus inputs with consistent backgrounds", async light => {
+  // Empty padding belongs to search input click targets.
   const app = await mount();
   try {
     const theme = uiTheme(app.renderer); theme.configure(palette(light)); await app.render();
@@ -96,7 +96,7 @@ test("Cancelling and reopening resets search query/caret while preserving Agent 
     // Close without committing candidates, then start another search.
     app.mockInput.pressEscape(); await app.render(); openWorkspaceSearch(app); await app.render();
 
-    // 새 검색은 비어 있지만 활성 워크스페이스와 대화 초안에는 영향을 주지 않는다.
+    // New search is empty without affecting active workspaces or conversation drafts.
     expect(app.get("workspace-picker").visible).toBe(true); expect(app.input.value).toBe(""); expect(app.input.cursorOffset).toBe(0);
     expect(app.captureCharFrame()).toContain("Search repo/worktree/branch");
     expect(app.view.promptDrafts.a1).toBe("keep agent draft");

@@ -87,7 +87,7 @@ test.each([
   } finally { pending.resolve(ok(representation)); await app.render(); read.mockRestore(); await app.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("입력 화면을 숨기면 붙여넣기 로딩을 즉시 취소하고 늦은 이미지를 삽입하지 않는다", async () => {
+test("Hiding composer screens cancels paste loading immediately and rejects late images", async () => {
   const pending = Promise.withResolvers<Result<ClipboardRepresentation, ExpectedError>>();
   let signal: AbortSignal | undefined;
   const read = spyOn(Clipboard.prototype, "read").mockImplementation((abort) => { signal = abort; return pending.promise; });
@@ -106,7 +106,7 @@ test("입력 화면을 숨기면 붙여넣기 로딩을 즉시 취소하고 늦�
   } finally { pending.resolve(ok({ mimeType: "image/png", bytes: tinyPng() })); await app.render(); read.mockRestore(); await app.close(); }
 });
 
-test.each(["", "first\nsecond"])("입력창의 상하좌우 여백과 테두리를 클릭하면 초안·커서를 유지하고 입력에 포커스한다: %j", async (draft) => {
+test.each(["", "first\nsecond"])("Clicking input padding and borders focuses input while preserving drafts and caret: %j", async (draft) => {
   // Empty and multiline drafts share the whole composer surface as their click target.
   const app = await mount();
   try {
@@ -136,7 +136,7 @@ test.each(["", "first\nsecond"])("입력창의 상하좌우 여백과 테두리�
   } finally { await app.close(); }
 });
 
-test("입력 텍스트 클릭은 native 커서 위치를 유지하고 여백의 우클릭은 포커스를 빼앗지 않는다", async () => {
+test("Input text clicks retain native caret positions and padding right-clicks preserve focus", async () => {
   // The larger hit target must not replace native text hit-testing or react to secondary clicks.
   const app = await mount();
   try {
@@ -154,10 +154,10 @@ test("입력 텍스트 클릭은 native 커서 위치를 유지하고 여백의 
   } finally { await app.close(); }
 });
 
-test("Shift Enter는 여러 줄 초안을 만들고 Enter는 줄바꿈을 보존해 한 번 전송한다", async () => {
+test("Shift Enter creates multiline drafts and Enter submits once with newlines intact", async () => {
   const app = await mount();
   try {
-    // 입력 확장은 내용에 의해서만 결정되고 전송과 줄바꿈은 다른 동작이다.
+    // Content alone determines expansion; submission and newline insertion remain distinct.
     await app.mockInput.typeText("first"); app.mockInput.pressEnter({shift:true}); await app.mockInput.typeText("second"); await app.render();
     expect(app.input.value).toBe("first\nsecond"); expect(app.sent).toEqual([]); expect(app.input.height).toBe(2);
     app.mockInput.pressEnter(); await app.render();
@@ -167,7 +167,7 @@ test("Shift Enter는 여러 줄 초안을 만들고 Enter는 줄바꿈을 보존
   } finally { await app.close(); }
 });
 
-test("완성 조회 중 명령 전송이 거절되면 조회를 취소하고 초안·커서·포커스를 보존한다", async () => {
+test("Rejected command submission cancels completion loading while preserving draft, caret, and focus", async () => {
   // Completion is optional discovery; rejection still belongs to the ordinary submission contract.
   const pending = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>();
   const sent: string[] = []; let signal: AbortSignal | undefined;
@@ -190,7 +190,7 @@ test("완성 조회 중 명령 전송이 거절되면 조회를 취소하고 초
   } finally { pending.resolve(ok({ items: [], truncated: false })); await app.close(); }
 });
 
-test("긴 붙여넣기·이미지·파일은 표시만 접고 수락 뒤 실제 데이터와 참조를 전달한다", async () => {
+test("Long pastes, images, and files collapse only visually and deliver full data/references after acceptance", async () => {
   const app = await mount();
   try {
     const text = "long original content\n".repeat(500);
@@ -205,7 +205,7 @@ test("긴 붙여넣기·이미지·파일은 표시만 접고 수락 뒤 실제 
   } finally { await app.close(); }
 });
 
-test("거절된 첨부는 남고 세션 왕복과 새 Workbench에서도 원문과 커서를 복원한다", async () => {
+test("Rejected attachments survive session round-trips and new Workbench restoration with source and caret intact", async () => {
   const app = await mount({ onPrompt: () => err(new InputError("Rejected fixture")) });
   let drafts: Record<string, PromptDraft> = {};
   try {
@@ -228,7 +228,7 @@ test("거절된 첨부는 남고 세션 왕복과 새 Workbench에서도 원문�
   } finally { await next.close(); }
 });
 
-test("항목 상세는 원문을 보여주고 닫을 때 초안·커서·포커스를 복원한다", async () => {
+test("Item details show source and restore draft, caret, and focus on close", async () => {
   const app = await mount();
   try {
     const text = "original large paste\n".repeat(100);
@@ -268,10 +268,10 @@ test("Compact multiline input, activity, notifications, and completion never ove
   }finally{await app.close();}
 });
 
-test("긴 입력은 표시 높이만 제한하고 작은 창에서도 입력·완성 목록이 footer를 침범하지 않는다", async () => {
+test("Long inputs limit display height only and compact input/completion never overlap footers", async () => {
   const app = await mount();
   try {
-    // 직접 편집 중인 텍스트는 접지 않으며 편집기 안에서 스크롤한다.
+    // Directly edited text stays expanded and scrolls inside the editor.
     app.input.value = Array.from({length: 20}, (_, i) => `line ${i}`).join("\n"); await app.render();
     expect(app.input.height).toBe(6);
     app.resize(60,12); await app.render();

@@ -42,7 +42,7 @@ async function mount() {
   return { ...app, view, selection, span, identitySpan, async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("화면 전체가 터미널 기본색과 ANSI 팔레트를 사용하고 밝은 테마로 즉시 전환한다", async () => {
+test("Full screens use terminal defaults/ANSI and immediately switch to light themes", async () => {
   // Distinct host colors expose old hardcoded panel, text and footer colors.
   const app = await mount();
   try {
@@ -97,7 +97,7 @@ test("Sidebar-to-borderless-input focus preserves selection and drafts", async (
   } finally { await app.close(); }
 });
 
-test("조회할 수 없는 터미널에서도 기본색과 ANSI 색상 의도를 유지한다", async () => {
+test("Unqueryable terminals retain default and ANSI color intent", async () => {
   const app = await createTestRenderer({ width: 20, height: 3 });
   try {
     // Null responses must not force the old application-specific dark RGB palette.
@@ -112,7 +112,7 @@ test("조회할 수 없는 터미널에서도 기본색과 ANSI 색상 의도를
   } finally { await app.dispose(); }
 });
 
-test("자체 색상 재정의만 고정하고 나머지는 이후 터미널 테마를 계속 따른다", async () => {
+test("Only explicit overrides stay fixed while other colors follow later terminal themes", async () => {
   const app = await mount();
   try {
     const theme = uiTheme(app.renderer);
@@ -129,7 +129,7 @@ test("자체 색상 재정의만 고정하고 나머지는 이후 터미널 테�
   } finally { await app.close(); }
 });
 
-test("같은 다크 모드에서 테마가 바뀌어도 알림 뒤 팔레트를 다시 조회한다", async () => {
+test("Same-dark-mode theme changes requery palettes after notifications", async () => {
   const app = await createTestRenderer({ width: 20, height: 3 });
   const foreground = "\x1b]10;rgb:eeee/eeee/eeee\x07", background = "\x1b]11;rgb:1212/1212/1212\x07";
   // Establish the renderer's existing dark mode through the actual input parser.
@@ -158,7 +158,7 @@ test("같은 다크 모드에서 테마가 바뀌어도 알림 뒤 팔레트를 
   } finally { query.mockRestore(); control.mockRestore(); await app.dispose(); }
 });
 
-test("서로 다른 터미널의 테마는 격리되고 파괴된 화면의 테마 구독은 해제된다", async () => {
+test("Terminal themes stay isolated and destroyed screens unsubscribe", async () => {
   const first = await createTestRenderer({ width: 20, height: 3 });
   const second = await createTestRenderer({ width: 20, height: 3 });
   try {

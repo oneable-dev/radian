@@ -37,7 +37,7 @@ async function setup() {
   };
 }
 
-test("실제 개발 서버는 UI 분리 중 유지되고 Ctrl+C와 명시적 탭 닫기가 소유 실행에만 작용한다", async () => {
+test("Real development servers survive UI detach and Ctrl+C/tab closure affect only owned runs", async () => {
   // Real loopback HTTP servers belong to two different isolated PTY sessions.
   const app = await setup();
   try {
@@ -96,8 +96,8 @@ test("실제 개발 서버는 UI 분리 중 유지되고 Ctrl+C와 명시적 탭
   } finally { await app.cleanup(); }
 }, 30000);
 
-test("TUI가 분리된 동안 shell exit도 탭과 supervisor를 자동 정리한다", async () => {
-  // UI가 없어도 종료 처리를 런타임이 소유해야 재접속에 빈 종료 탭이 남지 않는다.
+test("Shell exit while TUI is detached automatically cleans tabs and supervisors", async () => {
+  // Runtime owns exit handling even without UI so reconnects leave no dead tabs.
   const app = await setup();
   try {
     const client = await app.connect(), tree = app.repository.worktrees[0]!;
@@ -108,7 +108,7 @@ test("TUI가 분리된 동안 shell exit도 탭과 supervisor를 자동 정리�
     terminal.input(`while [ ! -f ${JSON.stringify(sentinel)} ]; do sleep 0.05; done; exit 0\r`);
     await client.disconnect();
 
-    // 입력 drain이 끝난 뒤 파일로 종료를 허용해 실제 분리 상태에서 exit하게 한다.
+    // Permit exit via files after input drains to ensure genuinely detached execution.
     await Bun.write(sentinel, "exit");
     await until(async () => {
       const snapshot = expectOk(await fetchSnapshot(client.paths));
@@ -149,7 +149,7 @@ test("Prior logs and scroll restore after reconnect and input returns to live sc
   } finally { await app.cleanup(); }
 }, 20000);
 
-test("서비스 재시작은 탭 선택만 복원하고 쉘이나 이전 명령을 자동 재실행하지 않는다", async () => {
+test("Service restart restores only tab selection without automatically rerunning shells or commands", async () => {
   const app = await setup();
   try {
     const client = await app.connect(), tree = app.repository.worktrees[0]!;

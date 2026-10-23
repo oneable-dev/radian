@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { demoWorkspace } from "./demo.ts";
 import { RepositoryCatalog } from "./catalog.ts";
 
-test("워크트리 목록을 교체할 때 새 메타데이터와 사용 중인 삭제 워크트리를 함께 보존한다", () => {
+test("Replacing worktree catalogs preserves fresh metadata and deleted worktrees still in use", () => {
   // An open resource still owns a removed worktree, while another removed worktree is idle.
   const original = demoWorkspace()[0]!;
   const active = original.worktrees[1]!, idle = original.worktrees[2]!;
@@ -19,7 +19,7 @@ test("워크트리 목록을 교체할 때 새 메타데이터와 사용 중인 
   expect(original.worktrees[0]!.branch).toBe("main");
 });
 
-test("마지막 리소스를 닫으면 Git에서 제거된 워크트리도 목록에서 정리한다", () => {
+test("Closing final resources removes Git-deleted worktrees from catalogs", () => {
   // The previously retained metadata must not outlive its final owner.
   const original = demoWorkspace()[0]!, active = original.worktrees[1]!;
   const discovered = { ...original, worktrees: [original.worktrees[0]!] };

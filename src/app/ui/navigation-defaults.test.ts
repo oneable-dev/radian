@@ -56,8 +56,8 @@ async function mount(surface: Surface) {
     async close() { view.dispose(); await app.dispose(); } };
 }
 
-test.each(navigationCases)("$surface 모달의 $focus 포커스에서 $navigation 탐색은 후보만 이동하고 입력·초안을 보존한다", async ({ surface, focus, navigation }) => {
-  // 세 검색 모달에 같은 세 후보를 제공해 포커스별 키 누락을 검출한다.
+test.each(navigationCases)("$surface modal $focus focus supports $navigation candidate navigation while preserving input and drafts", async ({ surface, focus, navigation }) => {
+  // Give three search modals identical candidates to detect focus-specific missing bindings.
   const app = await mount(surface);
   try {
     const input = app.get(`${surface}-search`) as InputRenderable;
@@ -68,7 +68,7 @@ test.each(navigationCases)("$surface 모달의 $focus 포커스에서 $navigatio
     if (focus === "list") app.mockInput.pressTab();
     await app.render();
 
-    // 두 칸 내려갔다 한 칸 올라가되 확정 전에는 실제 세션·모델을 바꾸지 않는다.
+    // Move down twice and up once without changing actual models/sessions before confirmation.
     const move = (next: boolean) => {
       if (navigation === "control") app.mockInput.pressKey(next ? "n" : "p", { ctrl: true });
       else if (navigation === "arrows") app.mockInput.pressArrow(next ? "down" : "up");

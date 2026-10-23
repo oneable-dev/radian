@@ -38,53 +38,53 @@ async function select(manager: AccountManager, worktreeId: string, accountId: st
   return manager.handle({ type: "select", worktreeId, provider: "fixture", accountId, revision: (await manager.catalog(worktreeId)).revision });
 }
 
-test("계정을 추가하면 전역 목록에 나타나지만 기존 선택과 Pi 기본 인증은 바뀌지 않는다", async () => {
-  // 기존 기본 인증과 별개의 새 계정을 준비한다.
+test("Adding an account updates the global list without changing selections or Pi default authentication", async () => {
+  // Prepare an account separate from the existing default credentials.
   const { manager, defaults, directory } = await fixture();
   await defaults.modify("fixture", async () => ({ type: "api_key", key: "pi-original" }));
 
-  // 한 작업 공간에서 추가한 계정을 다른 작업 공간에서도 조회한다.
+  // Accounts added in one workspace are visible in another.
   const account = await add(manager, "named-key");
   const other = await manager.catalog("two"), workspace = await manager.workspace("one");
 
-  // 자격증명은 메타데이터 응답에 없고 추가만으로 기본 계정을 덮어쓰지 않는다.
+  // Metadata excludes credentials, and adding an account does not overwrite defaults.
   expect(other.accounts.map(account => account.id)).toContain(account.id);
   expect(other.selections).toEqual({}); expect((await workspace.runtime.getAuth("fixture"))?.auth.apiKey).toBe("pi-original");
   expect(JSON.stringify(other)).not.toContain('"key"'); expect((await stat(join(directory, "accounts.json"))).mode & 0o777).toBe(0o600);
 });
 
-test("계정 목록은 인증된 기존 연결과 로그인 가능한 제공자를 구분한다", async () => {
-  // 지원하는 제공자라도 인증 정보가 없으면 전환할 계정이 아니다.
+test("Account lists distinguish authenticated connections from available providers", async () => {
+  // A supported provider without credentials is not a switchable account.
   const { manager, defaults } = await fixture();
   const before = await manager.catalog("one");
   expect(before.existingAccounts?.find(account => account.provider === "fixture")).toBeUndefined();
   expect(before.providers.find(provider => provider.id === "fixture")).toBeDefined();
 
-  // 기존 저장소에 인증을 등록하면 목록 조회에서 이를 발견한다.
+  // Discover credentials registered in the existing store.
   await defaults.modify("fixture", async () => ({ type: "api_key", key: "private-existing-key" }));
   const connected = await manager.catalog("one");
 
-  // 클라이언트에는 인증 종류만 전달하고 토큰이나 인증 복사본은 전달하지 않는다.
+  // Expose authentication types, not tokens or credential copies.
   expect(connected.existingAccounts).toContainEqual({ provider: "fixture", name: "Fixture", type: "api_key" });
   expect(connected.accounts).toEqual([]); expect(JSON.stringify(connected)).not.toContain("private-existing-key");
 });
 
-test("기존 연결 확인이 실패해도 저장된 계정을 유지하고 비밀정보 없는 경고를 반환한다", async () => {
-  // 제공자의 인증 확인만 실패하도록 하여 정상 계정의 전환을 막지 않아야 한다.
+test("Connection checks preserve saved accounts and return sanitized warnings on failure", async () => {
+  // A provider authentication check must not block switching to a valid account.
   const failing = provider(), { manager } = await fixture([failing]);
   const account = await add(manager, "saved-account");
   failing.auth.apiKey!.check = async () => { throw new Error("private-provider-response"); };
 
   const listed = await manager.catalog("one");
 
-  // 확인하지 못한 연결을 로그인된 것처럼 만들거나 조용히 누락하지 않는다.
+  // Do not present unchecked connections as authenticated or silently omit them.
   expect(listed.accounts.map(account => account.id)).toContain(account.id);
   expect(listed.existingAccounts?.find(account => account.provider === "fixture")).toBeUndefined();
   expect(listed.warning).toContain("could not be checked"); expect(JSON.stringify(listed)).not.toContain("private-provider-response");
 });
 
-test("환경변수 인증도 실제 설정된 동안만 기존 계정 목록에 나타난다", async () => {
-  // 다른 테스트나 사용자 환경의 키와 겹치지 않는 제공자 인증을 사용한다.
+test("Environment authentication appears only while configured", async () => {
+  // Use credentials that do not overlap other tests or user settings.
   const variable = "RADIAN_TEST_ACCOUNT_KEY", previous = process.env[variable], ambient = provider();
   ambient.auth.apiKey!.resolve = async ({ ctx, credential }) => {
     const key = credential?.key || await ctx.env(variable);
@@ -95,44 +95,44 @@ test("환경변수 인증도 실제 설정된 동안만 기존 계정 목록에 
     const { manager } = await fixture([ambient]);
     expect((await manager.catalog("one")).existingAccounts?.find(account => account.provider === "fixture")).toBeUndefined();
 
-    // 앱을 다시 시작하지 않고 환경 인증을 설정하고 해제한다.
+    // Set and unset environment authentication without restarting.
     process.env[variable] = "private-environment-key";
     const connected = await manager.catalog("one");
     delete process.env[variable];
     const disconnected = await manager.catalog("one");
 
-    // 목록은 지원 제공자나 오래된 인증 캐시가 아니라 현재의 인증 설정을 반영한다.
+    // Reflect current credentials, not supported providers or stale caches.
     expect(connected.existingAccounts).toContainEqual({ provider: "fixture", name: "Fixture", type: "api_key" });
     expect(JSON.stringify(connected)).not.toContain("private-environment-key");
     expect(disconnected.existingAccounts?.find(account => account.provider === "fixture")).toBeUndefined();
   } finally { if (previous === undefined) delete process.env[variable]; else process.env[variable] = previous; }
 });
 
-test("작업 공간별 선택은 인증을 격리하며 저장 후 다시 열어도 유지한다", async () => {
-  // 두 계정은 같은 제공자이지만 서로 다른 키를 사용한다.
+test("Workspace selections isolate authentication and survive reopening", async () => {
+  // Use different keys for two accounts from the same provider.
   const { manager, directory } = await fixture(); const a = await add(manager, "key-a"), b = await add(manager, "key-b");
 
-  // 각 작업 공간의 선택을 따로 저장한다.
+  // Save each workspace selection independently.
   expectOk(await select(manager, "one", a.id)); expectOk(await select(manager, "two", b.id));
   const one = await manager.workspace("one"), two = await manager.workspace("two");
   const reopened = expectOk(await AccountManager.open(directory, { offline: true, defaultCredentials: new InMemoryCredentialStore(), providers: [provider()] }));
   cleanups.push(async () => { expectOk(await reopened.stop()); });
 
-  // SDK 객체와 다음 요청의 인증 모두 작업 공간별로 구분된다.
+  // SDK objects and request authentication remain workspace-scoped.
   expect(one.runtime).not.toBe(two.runtime); expect((await one.runtime.getAuth("fixture"))?.auth.apiKey).toBe("key-a");
   expect((await two.runtime.getAuth("fixture"))?.auth.apiKey).toBe("key-b"); expect((await reopened.catalog("one")).selections.fixture).toBe(a.id);
 });
 
-test("사용 중인 계정 삭제와 오래된 변경 요청은 거절하고 명시적으로 해제한 계정만 삭제한다", async () => {
-  // 한 계정이 다른 작업 공간에서도 선택된 상황을 준비한다.
+test("Deleting active accounts and stale updates fails until explicit deselection", async () => {
+  // Select the same account in another workspace.
   const { manager } = await fixture(); const account = await add(manager, "shared"); expectOk(await select(manager, "two", account.id));
   const catalog = await manager.catalog("one");
 
-  // 사용 중 삭제와 잘못된 리비전의 변경을 시도한다.
+  // Attempt deletion while in use and an update with a stale revision.
   const used = await manager.handle({ type: "delete", worktreeId: "one", accountId: account.id, revision: catalog.revision });
   const stale = await manager.handle({ type: "select", worktreeId: "one", provider: "fixture", accountId: account.id, revision: catalog.revision - 1 });
 
-  // 다른 작업 공간을 자동 변경하지 않으며 직접 해제한 후에만 삭제할 수 있다.
+  // Never change other workspaces automatically; require explicit deselection.
   expect(expectError(used).code).toBe("ACCOUNT_IN_USE"); expect(expectError(stale).code).toBe("ACCOUNT_CONFLICT");
   expect((await manager.catalog("two")).selections.fixture).toBe(account.id);
   expectOk(await select(manager, "two", null));
@@ -140,41 +140,41 @@ test("사용 중인 계정 삭제와 오래된 변경 요청은 거절하고 명
   expect((await manager.catalog("two")).accounts).toEqual([]);
 });
 
-test("선택한 계정이 사라져도 기본 인증으로 조용히 넘어가지 않는다", async () => {
-  // 유효한 기본 키와 존재하지 않는 명시적 계정 선택이 함께 저장되어 있다.
+test("Missing selected accounts do not silently fall back to default authentication", async () => {
+  // Store valid default credentials alongside a missing explicit selection.
   const { manager, directory, defaults } = await fixture(); await defaults.modify("fixture", async () => ({ type: "api_key", key: "ambient" }));
   await writeFile(join(directory, "accounts.json"), JSON.stringify({ version: 1, revision: 1, accounts: [], selections: { one: { fixture: "missing" } } }));
   const reopened = expectOk(await AccountManager.open(directory, { offline: true, defaultCredentials: defaults, providers: [provider()] })); cleanups.push(async () => { expectOk(await reopened.stop()); });
 
-  // 작업 공간 초기화의 인증 검사가 누락된 명시적 계정을 확인한다.
+  // Workspace initialization checks the missing explicit account.
   const view = await reopened.workspace("one");
   const result = view.runtime.getAuth("fixture");
 
-  // 환경 인증 대신 명확한 인증 실패를 반환한다.
+  // Return an authentication failure instead of using environment credentials.
   await expect(result).rejects.toBeInstanceOf(Error); expect((await manager.catalog("one")).accounts).toEqual([]);
 });
 
-test("OAuth URL과 입력은 로그인 작업에만 전달하고 취소 후에는 계정을 추가하지 않는다", async () => {
-  // 제공자는 URL을 알리고 수동 코드 입력을 기다린다.
+test("OAuth URLs and input stay within login operations and cancellation adds no account", async () => {
+  // The provider emits a URL and waits for manual code input.
   const { manager, directory } = await fixture([provider(async interaction => {
     interaction.notify({ type: "auth_url", url: "https://example.test/authorize?state=private" });
     await interaction.prompt({ type: "manual_code", message: "Paste code" });
     return { type: "oauth", access: "secret-access", refresh: "secret-refresh", expires: Date.now() + 3600000 };
   })]);
 
-  // 다른 작업 공간에서는 해당 로그인 작업에 접근할 수 없고 소유자가 취소한다.
+  // Only the owning workspace can access or cancel the login.
   const view = login(expectOk(await manager.handle({ type: "login", worktreeId: "one", provider: "fixture", method: "oauth", label: "OAuth" })));
   const foreign = await manager.handle({ type: "poll", worktreeId: "two", flowId: view.id, revision: 0 });
   expectOk(await manager.handle({ type: "cancel", worktreeId: "one", flowId: view.id }));
 
-  // URL과 코드는 계정 목록이나 저장소에 들어가지 않는다.
+  // URLs and codes never enter account lists or storage.
   expect(view.events[0]?.url).toContain("state=private"); expect(expectError(foreign).code).toBe("ACCOUNT_NOT_FOUND");
   expect((await manager.catalog("one")).accounts).toEqual([]); expect(JSON.stringify(await manager.catalog("one"))).not.toContain("state=private");
   const stored = await readFile(join(directory, "accounts.json"), "utf8"); expect(stored).not.toContain("state=private"); expect(stored).not.toContain("secret-access");
 });
 
-test("동일 계정의 동시 OAuth 갱신을 한 번만 수행하고 선택 변경 중에도 원래 계정에 저장한다", async () => {
-  // 만료된 A 갱신을 지연시켜 두 작업 공간의 갱신과 B 전환을 겹친다.
+test("Concurrent OAuth refreshes run once and persist to the original account after switching", async () => {
+  // Delay A's refresh while both workspaces refresh and one switches to B.
   const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(); let refreshed = 0, next = "a";
   const oauth = provider(async () => ({ type: "oauth", access: next, refresh: `refresh-${next}`, expires: 0 }));
   oauth.auth.oauth!.refresh = async credential => { refreshed++; started.resolve(); await release.promise; return { ...credential, access: `${credential.access}-new`, expires: Date.now() + 3600000 }; };
@@ -184,40 +184,40 @@ test("동일 계정의 동시 OAuth 갱신을 한 번만 수행하고 선택 변
   expectOk(await select(manager, "one", a.id)); expectOk(await select(manager, "two", a.id));
   const one = await manager.workspace("one"), two = await manager.workspace("two");
 
-  // A 요청들이 대기하는 동안 첫 작업 공간만 B로 전환한다.
+  // Switch only the first workspace to B while A's requests wait.
   const first = one.runtime.getAuth("fixture"), second = two.runtime.getAuth("fixture"); await started.promise;
   expectOk(await select(manager, "one", b.id)); release.resolve();
   const results = await Promise.all([first, second]);
 
-  // 이미 시작한 요청은 A로 끝나며 B의 토큰과 선택은 덮어쓰지 않는다.
+  // Existing requests finish with A without overwriting B's tokens or selection.
   expect(refreshed).toBe(1); expect(results.map(result => result?.auth.apiKey)).toEqual(["a-new", "a-new"]);
   expect((await manager.catalog("one")).selections.fixture).toBe(b.id);
   const stored = JSON.parse(await readFile(join(directory, "accounts.json"), "utf8"));
   expect(stored.accounts.find((account: { id: string }) => account.id === b.id).credential.access).toBe("b");
 });
 
-test("선택 저장에 실패하면 기존 선택과 인증을 그대로 유지한다", async () => {
-  // 저장 대상만 디렉터리로 막아 원자적 rename의 실패를 재현한다.
+test("Selection persistence failures preserve existing selection and authentication", async () => {
+  // Block the destination with a directory to reproduce atomic rename failure.
   const { manager, directory } = await fixture(); const a = await add(manager, "key-a"), b = await add(manager, "key-b");
   expectOk(await select(manager, "one", a.id)); const target = join(directory, "accounts.json");
   await rm(target); await mkdir(target);
 
-  // 저장되지 않은 선택은 실행 중인 인증에도 적용하지 않는다.
+  // Do not apply an unsaved selection to active authentication.
   const changed = await select(manager, "one", b.id);
 
   expect(expectError(changed).code).toBe("STORAGE_FAILED"); expect((await manager.catalog("one")).selections.fixture).toBe(a.id);
   expect((await (await manager.workspace("one")).runtime.getAuth("fixture"))?.auth.apiKey).toBe("key-a");
 });
 
-test("OAuth 토큰 회전 후 저장 실패는 새 토큰을 메모리에 보존하고 저장 경고를 제공한다", async () => {
-  // 원격 토큰 회전은 파일 저장 실패로 취소할 수 없다.
+test("OAuth persistence failures retain rotated tokens in memory and return warnings", async () => {
+  // File persistence failure cannot undo remote token rotation.
   const oauth = provider(async () => ({ type: "oauth", access: "old", refresh: "old-refresh", expires: 0 }));
   oauth.auth.oauth!.refresh = async credential => ({ ...credential, access: "rotated", refresh: "rotated-refresh", expires: Date.now() + 3600000 });
   const { manager, directory } = await fixture([oauth]);
   const account = await finish(manager, login(expectOk(await manager.handle({ type: "login", worktreeId: "one", provider: "fixture", method: "oauth", label: "Rotating" }))));
   expectOk(await select(manager, "one", account.id)); const target = join(directory, "accounts.json"); await rm(target); await mkdir(target);
 
-  // 갱신은 사용 가능한 새 토큰을 반환하되 영속화 완료로 가장하지 않는다.
+  // Return usable new tokens without claiming successful persistence.
   const auth = await (await manager.workspace("one")).runtime.getAuth("fixture");
 
   expect(auth?.auth.apiKey).toBe("rotated"); expect(manager.warning).toContain("saving failed");
@@ -227,8 +227,8 @@ test("OAuth 토큰 회전 후 저장 실패는 새 토큰을 메모리에 보존
   expect(manager.warning).toBe(""); expect(await readFile(target, "utf8")).toContain("rotated-refresh");
 });
 
-test("동시에 로그인 창을 열어도 하나만 시작하고 빈 라벨은 거절한다", async () => {
-  // 고정 OAuth 콜백 포트와 로그인 입력의 소유권을 하나의 작업으로 제한한다.
+test("Concurrent login popups start only one operation and reject empty labels", async () => {
+  // A single operation owns the OAuth callback port and login input.
   const { manager } = await fixture();
 
   const results = await Promise.all(["one", "two"].map(worktreeId => manager.handle({ type: "login", worktreeId, provider: "fixture", method: "api_key", label: "New" })));
@@ -239,13 +239,13 @@ test("동시에 로그인 창을 열어도 하나만 시작하고 빈 라벨은 
   expect(expectError(blank).code).toBe("INVALID_INPUT");
 });
 
-test("OAuth 로그인에 필요한 설치 식별자는 재시작해도 같은 값으로 전달한다", async () => {
-  // ChatGPT 등의 OAuth가 요구하는 설치 ID는 로그인마다 달라지면 안 된다.
+test("OAuth installation identifiers remain stable across restarts", async () => {
+  // Providers such as ChatGPT require a stable installation ID.
   const ids: string[] = [], oauth = provider(async () => ({ type: "oauth", access: "token", refresh: "refresh", expires: Date.now() + 3600000 }));
   oauth.auth.oauth!.login = async (_interaction, options) => { ids.push(options!.getDeviceId!()); return { type: "oauth", access: "token", refresh: "refresh", expires: Date.now() + 3600000 }; };
   const { manager, directory } = await fixture([oauth]);
 
-  // 동일 저장소를 다시 열어 SDK 로그인 옵션을 다시 만든다.
+  // Reopen the store and recreate SDK login options.
   await finish(manager, login(expectOk(await manager.handle({ type: "login", worktreeId: "one", provider: "fixture", method: "oauth", label: "First" }))));
   const reopened = expectOk(await AccountManager.open(directory, { offline: true, defaultCredentials: new InMemoryCredentialStore(), providers: [oauth] }));
   cleanups.push(async () => { expectOk(await reopened.stop()); });
@@ -254,15 +254,15 @@ test("OAuth 로그인에 필요한 설치 식별자는 재시작해도 같은 �
   expect(ids).toHaveLength(2); expect(ids[0]).toBe(ids[1]); expect(ids[0]).toMatch(/^[0-9a-f-]{36}$/u);
 });
 
-test("Pi 기본 OAuth는 목록 조회에서 갱신하지 않고 실제 인증 요청에서 SDK 저장소에 한 번만 갱신한다", async () => {
-  // 기본 인증은 Radian 계정 파일로 복사하지 않고 기존 SDK 저장소에 남긴다.
+test("Pi default OAuth refreshes once on authentication requests, never during listing", async () => {
+  // Keep default authentication in the SDK store, not Radian account files.
   let refreshed = 0;
   const oauth = provider(async () => ({ type: "oauth", access: "unused", refresh: "unused", expires: 0 }));
   oauth.auth.oauth!.refresh = async credential => { refreshed++; return { ...credential, access: "pi-new", expires: Date.now() + 3600000 }; };
   const { manager, defaults } = await fixture([oauth]);
   await defaults.modify("fixture", async () => ({ type: "oauth", access: "pi-old", refresh: "pi-refresh", expires: 0 }));
 
-  // 만료된 OAuth도 목록 조회에서는 토큰을 회전하지 않고 연결 정보만 표시한다.
+  // Listing expired OAuth credentials reports connections without rotating tokens.
   const listed = await manager.catalog("one");
   expect(listed.existingAccounts).toContainEqual({ provider: "fixture", name: "Fixture", type: "oauth" });
   const one = await manager.workspace("one"), two = await manager.workspace("two"); expect(refreshed).toBe(0);
@@ -272,15 +272,15 @@ test("Pi 기본 OAuth는 목록 조회에서 갱신하지 않고 실제 인증 �
   expect((await defaults.read("fixture"))?.type).toBe("oauth"); expect((await manager.catalog("one")).accounts).toEqual([]);
 });
 
-test("OAuth 갱신 실패의 SDK 오류에 토큰이 있어도 모델 경계의 오류 메시지로 노출하지 않는다", async () => {
-  // 일부 SDK 제공자는 원격 오류 본문을 평문 Error에 넣으므로 해당 경계에서 가린다.
+test("OAuth refresh errors never expose SDK tokens at the model boundary", async () => {
+  // Some SDK providers embed remote response bodies in plain errors; sanitize them here.
   const oauth = provider(async () => ({ type: "oauth", access: "private-access", refresh: "private-refresh", expires: 0 }));
   oauth.auth.oauth!.refresh = async () => { throw new Error("Remote failure: private-access private-refresh"); };
   const { manager } = await fixture([oauth]);
   const account = await finish(manager, login(expectOk(await manager.handle({ type: "login", worktreeId: "one", provider: "fixture", method: "oauth", label: "Redacted" }))));
   expectOk(await select(manager, "one", account.id));
 
-  // SDK의 인증 실패는 UI·대화에 전달되는 최상위 메시지에서 비밀 값을 제거한다.
+  // Remove secrets from top-level authentication errors shown in UI and conversations.
   const view = await manager.workspace("one");
   let message = "";
   try { await view.runtime.getAuth("fixture"); } catch (error) { if (!(error instanceof Error)) throw error; message = error.message; }
@@ -288,8 +288,8 @@ test("OAuth 갱신 실패의 SDK 오류에 토큰이 있어도 모델 경계의 
   expect(message).toContain("Could not refresh"); expect(message).not.toContain("private-access"); expect(message).not.toContain("private-refresh");
 });
 
-test("동일한 원격 OAuth 계정은 다른 이름으로 중복 저장하거나 기존 선택을 덮어쓰지 않는다", async () => {
-  // SDK가 안정적인 accountId를 제공하는 계정은 두 갱신 소유자로 나누지 않는다.
+test("Duplicate remote OAuth accounts neither save under new names nor overwrite selections", async () => {
+  // Stable SDK account IDs must not acquire multiple refresh owners.
   const oauth = provider(async () => ({ type: "oauth", accountId: "remote-account", access: "access", refresh: "refresh", expires: Date.now() + 3600000 }));
   const { manager } = await fixture([oauth]);
   const account = await finish(manager, login(expectOk(await manager.handle({ type: "login", worktreeId: "one", provider: "fixture", method: "oauth", label: "Original" }))));
@@ -302,8 +302,8 @@ test("동일한 원격 OAuth 계정은 다른 이름으로 중복 저장하거�
   expect((await manager.catalog("one")).accounts).toHaveLength(1); expect((await manager.catalog("one")).selections.fixture).toBe(account.id);
 });
 
-test("제공자의 개인화된 모델 목록은 다른 계정의 저장 캐시를 재사용하지 않는다", async () => {
-  // 제공자별로만 저장하는 SDK 캐시 위에 계정별 저장 공간을 연결한다.
+test("Personalized model lists never reuse another account's persisted cache", async () => {
+  // Add account-scoped storage around the SDK's provider-scoped cache.
   const dynamic = provider(); let models: readonly Model<Api>[] = [];
   dynamic.getModels = () => models; dynamic.getAllModels = () => models;
   dynamic.refreshModels = async context => {
@@ -316,7 +316,7 @@ test("제공자의 개인화된 모델 목록은 다른 계정의 저장 캐시�
   };
   const { manager } = await fixture([dynamic]); const a = await add(manager, "A"), b = await add(manager, "B");
 
-  // A의 목록을 저장한 다음 B로 전환하고 다시 A로 돌아간다.
+  // Save A's list, switch to B, then return to A.
   expectOk(await select(manager, "one", a.id));
   await manager.request("one", runtime => runtime.refresh({ providers: ["fixture"], allowNetwork: true }));
   const view = await manager.workspace("one"); expect(view.runtime.getModels("fixture").map(model => model.id)).toEqual(["model-A"]);
@@ -325,12 +325,12 @@ test("제공자의 개인화된 모델 목록은 다른 계정의 저장 캐시�
   expect(view.runtime.getModels("fixture").map(model => model.id)).toEqual(["model-B"]);
   expectOk(await select(manager, "one", a.id));
 
-  // 모델 목록은 해당 계정의 저장된 메타데이터로만 복원된다.
+  // Restore model lists only from the matching account's metadata.
   expect(view.runtime.getModels("fixture").map(model => model.id)).toEqual(["model-A"]);
 });
 
-test("OpenRouter처럼 갱신 토큰이 빈 OAuth 자격증명도 SDK 형식을 그대로 저장한다", async () => {
-  // SDK는 만료되지 않는 OAuth 자격증명에 빈 refresh 문자열을 사용할 수 있다.
+test("OAuth credentials with empty refresh tokens preserve the SDK format", async () => {
+  // The SDK may use empty refresh strings for non-expiring OAuth credentials.
   const oauth = provider(async () => ({ type: "oauth", access: "provider-access", refresh: "", expires: Number.MAX_SAFE_INTEGER }));
   const { manager, directory } = await fixture([oauth]);
 

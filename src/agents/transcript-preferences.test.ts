@@ -5,7 +5,7 @@ import { emptyPreferences, parseCommand, parseSnapshot, preferencesSchema } from
 import { restoreWorkViews, saveWorkViews } from "../runtime/work-view-preferences.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 
-test("Agent 탐색 설정은 기존 workViews 형식을 유지하면서 직렬화·복원한다", () => {
+test("Agent navigation preferences serialize and restore without changing existing workViews format", () => {
   const preferences = structuredClone(emptyPreferences);
   const state = { ...emptyTranscriptView(), selectedId: "message:0", mode: "visual" as const, anchor: 0, linewise: true,
     folded: { thinking: false, "message:0": true }, cursors: { "message:0": 4 }, headingCursors: { "message:0": 2 }, renderedCursors: { "message:0": true }, follow: false };
@@ -28,7 +28,7 @@ test("Agent 탐색 설정은 기존 workViews 형식을 유지하면서 직렬�
   expect(preferences.agentViews?.session?.headingCursors?.["message:0"]).toBe(2);
 });
 
-test("구조화된 transcript는 선택적 wire 필드이며 잘못된 상태와 음수 커서는 거부한다", () => {
+test("Structured transcripts are optional wire fields and reject invalid states or negative cursors", () => {
   const legacy = { version: 1, pid: 123, instance: "instance", mode: "offline", repositoryId: "repo", repositories: [],
     details: { session: { status: null, output: "legacy", error: null } }, closingCount: 0, preferences: emptyPreferences, notice: "" };
 

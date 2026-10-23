@@ -4,8 +4,8 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { monochromeFrame } from "./monochrome.ts";
 import { uiTheme } from "./theme.ts";
 
-// 용도별 배경이 달라도 단색 모드에서는 선택을 식별할 수 있어야 한다.
-test("단색 모드는 메뉴·텍스트 선택의 개별 배경색도 반전 강조로 보존한다", async () => {
+// Monochrome mode must retain selection distinctions across different background roles.
+test("Monochrome menus/text selections retain individual backgrounds through inverse emphasis", async () => {
   const app = await createTestRenderer({ width: 3, height: 1 });
   const theme = uiTheme(app.renderer);
   const buffer = OptimizedBuffer.create(3, 1, "unicode", { owner: app.renderer.nativeScene! });
@@ -29,7 +29,7 @@ test("단색 모드는 메뉴·텍스트 선택의 개별 배경색도 반전 �
   } finally { buffer.destroy(); await app.dispose(); }
 });
 
-test("단색 후처리는 문자를 바꾸지 않고 기본 색상 의도와 선택의 반전 강조를 보존한다",async()=>{
+test("Monochrome postprocessing preserves characters, default-color intent, and inverse selections",async()=>{
   const app=await createTestRenderer({width:3,height:1});
   const colors=uiTheme(app.renderer).colors;
   const buffer=OptimizedBuffer.create(3,1,"unicode",{owner:app.renderer.nativeScene!});

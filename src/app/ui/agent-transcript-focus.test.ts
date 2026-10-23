@@ -105,7 +105,7 @@ test("Input focus, help, and empty transcripts leave no section focus marker", a
   } finally { await app.close(); }
 });
 
-test("도구 헤더를 클릭하고 펼치거나 본문 선택으로 들어가도 섹션 높이만큼 표시한다", async () => {
+test("Clicking and expanding tool headers or selecting bodies marks the full section height", async () => {
   // A folded tool starts with only its heading and padding visible.
   const app = await mount();
   try {
@@ -128,7 +128,7 @@ test("도구 헤더를 클릭하고 펼치거나 본문 선택으로 들어가�
   } finally { await app.close(); }
 });
 
-test("스크롤·resize·스트리밍 중 표시줄은 보이는 섹션과 Transcript 경계에만 그려진다", async () => {
+test("Scroll, resize, and streaming draw markers only inside visible transcript section boundaries", async () => {
   // A section taller than the viewport exposes both top and bottom clipping boundaries.
   const long: TranscriptSection = { ...sections[5]!, text: Array.from({ length: 80 }, (_, i) => `LONG_LINE_${i}`).join("\n"), status: "streaming" };
   const app = await mount([long, sections[0]!]);
@@ -151,7 +151,7 @@ test("스크롤·resize·스트리밍 중 표시줄은 보이는 섹션과 Trans
   } finally { await app.close(); }
 });
 
-test.each([120, 60])("너비 %i에서 Ctrl+D/U 반복은 선택과 표시줄을 함께 이동하고 화면 안에 유지한다", async (width) => {
+test.each([120, 60])("At width %i, repeated Ctrl+D/U moves selection and markers together while keeping them visible", async (width) => {
   // Repeated jumps must follow the selected section, even after scrolling is needed to reveal it.
   const app = await mount(Array.from({ length: 60 }, (_, index) => ({ ...sections[5]!, id: `section-${index}`, text: `BODY_${index}` })), width);
   const raw = (sequence: string) => {
@@ -185,7 +185,7 @@ test.each([120, 60])("너비 %i에서 Ctrl+D/U 반복은 선택과 표시줄을 
   } finally { await app.close(); }
 });
 
-test("포커스 표시줄은 테마의 ui.focusBorder 색상 변경을 즉시 따른다", async () => {
+test("Focus markers immediately follow theme ui.focusBorder changes", async () => {
   // A style override must control the marker just like other focus borders.
   const app = await mount();
   const palette: TerminalColors = { palette: [], defaultForeground: "#202020", defaultBackground: "#FAFAF6",

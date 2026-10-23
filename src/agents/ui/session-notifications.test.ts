@@ -25,7 +25,7 @@ async function fixture() {
     async close() { stack.dispose(); await app.dispose(); } };
 }
 
-test.each(["complete", "error", "unfinished", "cancelled"] as const)("새 %s 알림은 상태색·요약과 아이콘이 붙은 워크트리·브랜치를 표시하고 포커스를 보존한다", async outcome => {
+test.each(["complete", "error", "unfinished", "cancelled"] as const)("New %s notifications show status colors, summaries, and icon-labeled worktrees/branches without stealing focus", async outcome => {
   // The input owns focus, and the checkout name differs from both the repository and branch.
   const app = await fixture(), labels = { complete: "Completed", error: "Failed", unfinished: "Stopped", cancelled: "Cancelled" };
   try {
@@ -43,7 +43,7 @@ test.each(["complete", "error", "unfinished", "cancelled"] as const)("새 %s 알
   } finally { await app.close(); }
 });
 
-test("브랜치가 없는 알림은 워크트리와 detached HEAD를 아이콘으로 구분한다", async () => {
+test("Branchless notifications distinguish worktrees from detached HEAD through icons", async () => {
   // A detached checkout has no branch name to display.
   const app = await fixture();
   try {
@@ -55,7 +55,7 @@ test("브랜치가 없는 알림은 워크트리와 detached HEAD를 아이콘�
   } finally { await app.close(); }
 });
 
-test("최대 세 알림만 쌓고 대기 중인 실패 알림은 표시된 뒤부터 8초를 보장한다", async () => {
+test("At most three notifications stack and queued failures receive eight seconds after display", async () => {
   // A queued notification's lifetime must not expire while hidden behind the visible three.
   const app = await fixture();
   try {
@@ -72,8 +72,8 @@ test("최대 세 알림만 쌓고 대기 중인 실패 알림은 표시된 뒤�
   } finally { await app.close(); }
 });
 
-test("알림은 닫기 버튼 없이 만료되고 카드 바깥의 입력을 가로채지 않는다", async () => {
-  // 수동 닫기 UI 없이도 알림은 입력 포커스를 보존하며 자동 만료된다.
+test("Notifications expire without close buttons and never intercept input outside cards", async () => {
+  // Automatic expiry preserves focus without manual dismissal controls.
   const app = await fixture();
   try {
     app.stack.show(notification("one")); await app.render();
@@ -91,7 +91,7 @@ test("알림은 닫기 버튼 없이 만료되고 카드 바깥의 입력을 가
   } finally { await app.close(); }
 });
 
-test("작은 화면에 맞게 쌓임 수와 너비를 줄이고 제어문자가 포함된 긴 요약을 안전하게 줄인다", async () => {
+test("Compact screens reduce stack count and width while safely truncating summaries with control characters", async () => {
   // Narrow terminals cannot fit three five-row cards; summaries can contain untrusted terminal controls.
   const app = await fixture(), item = notification("one");
   try {
@@ -108,7 +108,7 @@ test("작은 화면에 맞게 쌓임 수와 너비를 줄이고 제어문자가 
   } finally { await app.close(); }
 });
 
-test("닫힌 세션의 대기·표시 알림을 제거하고 파괴 시 타이머를 해제한다", async () => {
+test("Closed sessions lose queued and visible notifications and disposal clears timers", async () => {
   // Closing a session or destroying the owner must prevent delayed cards and animation callbacks.
   const app = await fixture();
   try {

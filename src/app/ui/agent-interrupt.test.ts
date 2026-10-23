@@ -30,13 +30,13 @@ async function mount(width = 150) {
     async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("작업 상태 아래에 대기 안내·단축키를 한 줄로 묶고 들여쓴 메시지와 입력창을 구분한다", async () => {
-  // 런타임이 제공한 대기 목록과 전송하지 않은 초안을 같은 화면에서 구분한다.
+test("Queued hints and shortcuts share one row while indented messages remain separate from input", async () => {
+  // Distinguish runtime-owned queues from unsubmitted drafts on the same screen.
   const app = await mount(190);
   try {
     await app.mockInput.typeText("Unsent draft"); await app.render();
 
-    // 안내는 한 줄이고, 각 메시지는 그 바로 아래에 연결되며 입력창 앞에는 빈 줄이 남는다.
+    // Keep hints on one row, messages immediately below, and one blank row before input.
     const frame = app.captureCharFrame(), lines = frame.split("\n");
     const pending = app.get("agent-pending-messages"), status = app.get("agent-run-status"), composer = app.get("agent-composer");
     const row = (y: number) => lines[y]!.slice(pending.x, pending.x + pending.width).trimEnd();
@@ -51,14 +51,14 @@ test("작업 상태 아래에 대기 안내·단축키를 한 줄로 묶고 들�
     expect(hints).toHaveLength(2); for (const span of hints) expect(span.attributes & TextAttributes.BOLD).not.toBe(0);
     expect(app.sent).toEqual([]);
 
-    // Esc는 선택한 실행만 중단하고 초안이나 런타임 소유의 대기 목록을 임의로 비우지 않는다.
+    // Esc interrupts only selected runs without arbitrarily clearing drafts or runtime queues.
     app.mockInput.pressEscape(); await app.render();
     expect(app.interrupted).toEqual(["a1"]); expect(app.prompt.value).toBe("Unsent draft"); expect(app.sent).toEqual([]);
     expect(app.renderer.currentFocusedRenderable).toBe(app.prompt);
   } finally { await app.close(); }
 });
 
-test("Ctrl+C는 첨부 초안만 비우고 실행과 대기 입력에는 영향을 주지 않는다", async () => {
+test("Ctrl+C clears only attachment drafts without changing execution or queued input", async () => {
   // An attached file is part of the draft and must not survive as hidden metadata.
   const app = await mount();
   try {
@@ -72,7 +72,7 @@ test("Ctrl+C는 첨부 초안만 비우고 실행과 대기 입력에는 영향�
   } finally { await app.close(); }
 });
 
-test("자동완성의 첫 esc는 목록만 닫고 다음 esc가 실행을 중단한다", async () => {
+test("The first completion Esc closes candidates and the next interrupts execution", async () => {
   // Completion dismissal has priority over agent interruption.
   const app = await mount();
   try {
@@ -88,7 +88,7 @@ test("자동완성의 첫 esc는 목록만 닫고 다음 esc가 실행을 중단
   } finally { await app.close(); }
 });
 
-test("작은 화면의 긴 대기 목록도 입력창과 하단 상태·푸터를 침범하지 않는다", async () => {
+test("Long queues in compact layouts never overlap input, status, or footer", async () => {
   const app = await mount();
   try {
     // Queue display is bounded, while every pending item remains runtime-owned.
@@ -107,7 +107,7 @@ test("작은 화면의 긴 대기 목록도 입력창과 하단 상태·푸터�
   } finally { await app.close(); }
 });
 
-test("실행 없는 esc는 사이드바로 이동하지 않고 대기 표시는 전달 후 사라진다", async () => {
+test("Idle Esc stays out of the sidebar and queued indicators disappear after delivery", async () => {
   const app = await mount();
   try {
     // A runtime update proves delivery; merely pressing a key must not clear the queue locally.

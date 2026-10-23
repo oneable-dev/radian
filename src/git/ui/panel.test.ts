@@ -99,8 +99,8 @@ async function mount(options: { actions?: Partial<GitActions>; initial?: WorkVie
   };
 }
 
-test.each(["refs", "reflog"] as const)("Git %s 모달은 검색을 목록 너비에 맞추고 분할 미리보기에 전체 본문 높이를 준다", async mode => {
-  // 미리보기가 없는 Refs는 전체 너비 검색을 유지하고 Reflog만 두 열로 나뉜다.
+test.each(["refs", "reflog"] as const)("Git %s modals align search with lists and give split previews full content height", async mode => {
+  // Refs without previews keep full-width search; only Reflog splits into columns.
   const app = await mount();
   try {
     if (mode === "refs") await app.openRefs(); else await app.openReflog();
@@ -108,12 +108,12 @@ test.each(["refs", "reflog"] as const)("Git %s 모달은 검색을 목록 너비
     await app.mockInput.typeText(mode === "refs" ? "main" : "login"); app.mockInput.pressArrow("left"); await app.renderOnce();
     const value = input.value, cursor = input.cursorOffset;
 
-    // 브레이크포인트를 양방향으로 지나도 검색은 선택한 레이아웃의 목록 열에 맞춘다.
+    // Crossing breakpoints in both directions keeps search aligned with list columns.
     for (const width of [160, 100, 99, 60, 160]) {
       app.resize(width, 32); await app.renderOnce(); await app.renderOnce();
       const field = input.field, list = app.get("git-browser-list"), preview = app.get("git-reflog-preview-pane"), message = app.get("git-browser-status");
 
-      // 오른쪽 미리보기 위에 검색이나 결과 안내가 가로질러 그려지면 안 된다.
+      // Search and result hints must not extend over right-side previews.
       expect(field.x).toBe(list.x); expect(field.width).toBe(list.width);
       expect(message.x).toBe(list.x);
       expect(preview.visible).toBe(mode === "reflog" && width >= 100);
@@ -131,8 +131,8 @@ test.each(["refs", "reflog"] as const)("Git %s 모달은 검색을 목록 너비
   } finally { await app.close(); }
 });
 
-test("Reflog preview는 이벤트와 커밋 시각을 구분하고 목록에 없는 커밋을 Changes로 연 뒤 메인 선택을 복원한다", async () => {
-  // 모든 ref에서 사라진 커밋이 reflog에만 남아 있는 상황을 모델링한다.
+test("Reflog previews distinguish event/commit times and open absent commits in Changes before restoring main selection", async () => {
+  // Model commits absent from all refs but retained in reflog.
   const lost: GitCommit = { ...commit, oid: "c".repeat(40), parents: [rootCommit.oid], subject: "Lost change", date: "2026-10-10" };
   const details: GitDetails = { commit: lost, message: "Complete lost commit message", branches: [],
     files: [{ kind: "commit", status: "M", path: "lost.txt", commit: lost }] };
@@ -164,8 +164,8 @@ test("Reflog preview는 이벤트와 커밋 시각을 구분하고 목록에 없
   } finally { await app.close(); }
 });
 
-test("Reflog preview가 로딩 중이어도 Enter 의도를 유지해 준비된 대상 커밋을 연다", async () => {
-  // 메타데이터가 도착하기 전에 Enter를 눌렀다는 이유로 정상적인 선택을 버리면 안 된다.
+test("Enter intent survives loading Reflog previews and opens the ready target commit", async () => {
+  // Enter before metadata arrival must not discard valid selection intent.
   const target = { ...commit, oid: "c".repeat(40), subject: "Delayed target" }, data = snapshot();
   data.reflog = [{ oid: target.oid, selector: "HEAD@{0}", date: "2026-10-21", subject: "delayed event" }];
   const pending = Promise.withResolvers<Result<GitDetails, ExpectedError>>();
@@ -182,8 +182,8 @@ test("Reflog preview가 로딩 중이어도 Enter 의도를 유지해 준비된 
   } finally { pending.resolve(ok({ commit: target, message: "cleanup", files: [], branches: [] })); await app.close(); }
 });
 
-test("Reflog의 늦은 preview는 새 이벤트를 덮지 않고 같은 커밋의 다른 이벤트는 조회를 재사용한다", async () => {
-  // 서로 다른 이벤트가 같은 커밋을 가리키는 경우에도 이벤트 설명은 각각 유지한다.
+test("Late Reflog previews never overwrite new events and shared commits reuse lookups", async () => {
+  // Events pointing to the same commit retain distinct descriptions.
   const slow: GitCommit = { ...commit, oid: "c".repeat(40) }, fresh: GitCommit = { ...commit, oid: "d".repeat(40) };
   const data = snapshot(); data.reflog = [slow, fresh, fresh].map((target, index) => ({ oid: target.oid, selector: `HEAD@{${index}}`, date: "2026-10-21", subject: `event ${index}` }));
   const pending = Promise.withResolvers<Result<GitDetails, ExpectedError>>(); let previousSignal: AbortSignal | undefined;
@@ -206,8 +206,8 @@ test("Reflog의 늦은 preview는 새 이벤트를 덮지 않고 같은 커밋�
   } finally { pending.resolve(ok({ commit: slow, message: "cleanup", files: [], branches: [] })); await app.close(); }
 });
 
-test("preview 로딩 중 Enter 후 닫으면 늦은 응답으로 Changes를 열지 않고 로딩 타이머도 정리한다", async () => {
-  // 읽기 요청의 완료와 사용자가 닫은 모달의 재등장은 별개의 동작이다.
+test("Closing after Enter during preview loading prevents late Changes reopening and cleans timers", async () => {
+  // Read completion does not imply reopening user-dismissed modals.
   const target = { ...commit, oid: "c".repeat(40) }, data = snapshot(); data.reflog = [{ oid: target.oid, selector: "HEAD@{0}", date: "2026-10-21", subject: "lost event" }];
   const pending = Promise.withResolvers<Result<GitDetails, ExpectedError>>(); let signal: AbortSignal | undefined;
   const app = await mount({ source: { load: async () => ok(data), details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }),
@@ -225,8 +225,8 @@ test("preview 로딩 중 Enter 후 닫으면 늦은 응답으로 Changes를 열�
   } finally { pending.resolve(ok({ commit: target, message: "cleanup", files: [], branches: [] })); await app.close(); }
 });
 
-test.each([160, 60])("%d열 Reflog 조회 실패는 오류를 표시하고 Enter로 빈 상세를 열지 않으며 r로 재시도한다", async width => {
-  // 실패한 커밋을 정상적인 빈 변경으로 취급하면 복구할 대상을 잘못 이해하게 된다.
+test.each([160, 60])("%d-column Reflog failures show errors, block empty Enter details, and retry with r", async width => {
+  // Treating failed commits as empty changes misrepresents recovery targets.
   const target = { ...commit, oid: "c".repeat(40) }, data = snapshot(); data.reflog = [{ oid: target.oid, selector: "HEAD@{0}", date: "2026-10-21", subject: "lost event" }];
   let reads = 0;
   const app = await mount({ source: { load: async () => ok(data), details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }),
@@ -246,8 +246,8 @@ test.each([160, 60])("%d열 Reflog 조회 실패는 오류를 표시하고 Enter
   } finally { await app.close(); }
 });
 
-test.each(["refs", "reflog"] as const)("%s 검색은 hjklay를 문자로 입력하고 Ctrl+C는 빈 검색에서도 모달과 Agent 초안을 보존한다", async mode => {
-  // 공통 검색 필드에 Git 액션 문자를 입력해도 Copy나 Ask가 실행되면 안 된다.
+test.each(["refs", "reflog"] as const)("%s search keeps hjklay literal and Ctrl+C preserves modals and drafts even when empty", async mode => {
+  // Git action letters in shared search must not trigger Copy or Ask.
   const data = snapshot(); data.refs.push({ kind: "local", name: "feature/hjklay", ref: "refs/heads/feature/hjklay", oid: commit.oid });
   data.reflog[0] = { ...data.reflog[0]!, subject: "commit: hjklay" };
   const app = await mount({ source: { load: async () => ok(data), details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }), compare: async () => ok(comparison()) } });
@@ -269,8 +269,8 @@ test.each(["refs", "reflog"] as const)("%s 검색은 hjklay를 문자로 입력�
   } finally { await app.close(); }
 });
 
-test.each((["refs", "reflog"] as const).flatMap(mode => [160, 60].map(width => ({ mode, width }))))("$mode · $width 열 검색 점프는 query·caret를 보존하고 반복 입력도 현재 후보에서 계속 이동한다", async ({ mode, width }) => {
-  // 좁은 Reflog의 preview에서 검색으로 돌아온 경우에도 결과를 먼저 펼쳐 점프한다.
+test.each((["refs", "reflog"] as const).flatMap(mode => [160, 60].map(width => ({ mode, width }))))("$mode at $width columns preserves query/caret and repeated jumps continue from current candidates", async ({ mode, width }) => {
+  // Reveal results before jumping when returning from compact Reflog previews to search.
   const data = snapshot(); data.refs = Array.from({ length: 40 }, (_, index) => ({ kind: "local", name: `candidate-${index}`, ref: `refs/heads/candidate-${index}`, oid: commit.oid }));
   data.reflog = Array.from({ length: 40 }, (_, index) => ({ oid: commit.oid, selector: `HEAD@{${index}}`, subject: `candidate event ${index}`, date: "2026-10-21" }));
   const app = await mount({ source: { load: async () => ok(data), details: async selected => ok({ commit: selected, message: "Preview body", files: [], branches: [] }), compare: async () => ok(comparison()) } });
@@ -293,8 +293,8 @@ test.each((["refs", "reflog"] as const).flatMap(mode => [160, 60].map(width => (
   } finally { await app.close(); }
 });
 
-test.each([160, 60])("%d열 Reflog preview는 본문을 반 페이지 스크롤하고 Tab 포커스가 모달 안에서 순환한다", async width => {
-  // preview의 스크롤 키가 이벤트 후보 이동이나 검색 편집으로 전달되면 안 된다.
+test.each([160, 60])("%d-column Reflog previews scroll bodies by half-pages and trap Tab focus inside modals", async width => {
+  // Preview scroll keys never become event navigation or search editing.
   const app = await mount({ source: { load: async () => ok(snapshot()), compare: async () => ok(comparison()),
     details: async selected => ok({ commit: selected, message: Array.from({ length: 80 }, (_, index) => `Preview line ${index}`).join("\n"), files: [], branches: [] }) } });
   try {
@@ -312,8 +312,8 @@ test.each([160, 60])("%d열 Reflog preview는 본문을 반 페이지 스크롤�
   } finally { await app.close(); }
 });
 
-test("과거 Reflog·Refs preference도 새 UI에서는 모달을 재생하지 않고 Commits로 복원한다", async () => {
-  // 레거시 wire 필드를 읽되 제거된 탭이나 모달 상태를 새 접속에 강제로 재생하지 않는다.
+test("Legacy Reflog/Refs preferences restore Commits without replaying removed tabs or modals", async () => {
+  // Read legacy wire fields without forcing old tab/modal state on new connections.
   const app = await mount({ initial: { active: { "demo:main": "git" }, agentScroll: {},
     gitViews: { "demo:main": { ...initialGitState(), tab: "reflog", right: "refs", selected: commit.oid } } } });
   try {
@@ -324,8 +324,8 @@ test("과거 Reflog·Refs preference도 새 UI에서는 모달을 재생하지 �
   } finally { await app.close(); }
 });
 
-test("ref 라벨은 그래프 왼쪽에서 노드와 연결되고 그래프와 메시지는 같은 색의 띠로 이어진다", async () => {
-  // 같은 커밋의 로컬 브랜치·원격 브랜치·태그를 하나의 라벨로 요약한다.
+test("Left ref labels connect to graph nodes and graph/message bands share colors", async () => {
+  // Summarize local branches, remote branches, and tags on one commit label.
   const data = snapshot();
   data.refs = [{ kind: "local", name: "main", ref: "refs/heads/main", oid: commit.oid },
     { kind: "remote", name: "origin/main", ref: "refs/remotes/origin/main", oid: commit.oid },
@@ -337,7 +337,7 @@ test("ref 라벨은 그래프 왼쪽에서 노드와 연결되고 그래프와 �
     const refs = app.positionIn("git-history", `HEAD → ${icons.branch} main +2`), graph = app.get(`${prefix}:graph`);
     const link = app.get(`${prefix}:message-link`), label = app.get(`${prefix}:label`);
 
-    // 연결 장식은 메시지 자체나 커밋 부모 관계를 대체하지 않는다.
+    // Connectors never replace messages or commit parent relationships.
     expect(refs.y).toBe(graph.y); expect(refs.x).toBeLessThan(graph.x);
     expect(app.captureCharFrame().split("\n")[refs.y]!.slice(refs.x, graph.x + 2)).toMatch(new RegExp(`HEAD → ${icons.branch} main \\+2 ─+●`, "u"));
     expect(link.x).toBe(graph.x + graph.width); expect(label.x).toBe(link.x + link.width + 2);
@@ -354,8 +354,8 @@ test("ref 라벨은 그래프 왼쪽에서 노드와 연결되고 그래프와 �
   } finally { await app.close(); }
 });
 
-test.each([160, 60])("HEAD 현재 브랜치 라벨도 %d열 화면에서 이름 앞의 브랜치 아이콘을 유지한다", async width => {
-  // HEAD와 현재 브랜치를 합쳐 표시해도 다른 브랜치와 같은 아이콘이 필요하다.
+test.each([160, 60])("HEAD/current-branch labels retain leading branch icons at %d columns", async width => {
+  // Combined HEAD/current-branch labels need the same icons as other branches.
   const app = await mount();
   try {
     app.resize(width, 32); await app.renderOnce(); await app.renderOnce();
@@ -368,8 +368,8 @@ test.each([160, 60])("HEAD 현재 브랜치 라벨도 %d열 화면에서 이름 
   } finally { await app.close(); }
 });
 
-test("detached HEAD 라벨에는 존재하지 않는 현재 브랜치 아이콘을 붙이지 않는다", async () => {
-  // 브랜치 없이 커밋을 직접 checkout한 HEAD는 브랜치 라벨과 구분한다.
+test("Detached HEAD labels never invent current-branch icons", async () => {
+  // Directly checked-out HEAD without a branch differs from branch labels.
   const data = { ...snapshot(), head: "" };
   const app = await mount({ source: { load: async () => ok(data), compare: async () => ok(comparison()),
     details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }) } });
@@ -383,8 +383,8 @@ test("detached HEAD 라벨에는 존재하지 않는 현재 브랜치 아이콘�
   } finally { await app.close(); }
 });
 
-test.each([{ width: 160, light: false }, { width: 60, light: false }, { width: 160, light: true }, { width: 60, light: true }])("Working tree는 연결 띠가 없고 커밋의 띠와 메시지 사이에는 두 칸 여백을 둔다: %j", async ({ width, light }) => {
-  // 실제 셀 배경을 비교해 선택 배경을 연결 띠로 오인하거나 여백까지 색칠하는 회귀를 막는다.
+test.each([{ width: 160, light: false }, { width: 60, light: false }, { width: 160, light: true }, { width: 60, light: true }])("Working tree omits bands and commits keep two-cell gaps between bands and messages: %j", async ({ width, light }) => {
+  // Compare cell backgrounds to distinguish selection from bands and catch colored gaps.
   const app = await mount();
   const cell = (x: number, y: number) => {
     let end = 0;
@@ -401,12 +401,12 @@ test.each([{ width: 160, light: false }, { width: 60, light: false }, { width: 1
     const workingLink = app.get(`${working}:message-link`), workingLabel = app.get(`${working}:label`);
     const workingBackground = cell(workingLabel.x, workingLabel.y).bg.toInts();
 
-    // Working tree의 노드 뒤와 연결 공간은 일반 선택 배경을 그대로 사용한다.
+    // Working-tree node tails and connector space retain ordinary selection backgrounds.
     expect(cell(workingGraph.x + 2, workingGraph.y).bg.toInts()).toEqual(workingBackground);
     expect(cell(workingLink.x, workingLink.y).bg.toInts()).toEqual(workingBackground);
     expect(app.captureCharFrame()).toContain("◌"); expect(app.captureCharFrame()).toContain("┊");
 
-    // 커밋을 선택해도 연결 띠 뒤의 두 셀에는 메시지와 같은 중립 배경을 남긴다.
+    // Selected commits leave two neutral message-colored cells after bands.
     await app.chooseCommit(); await app.renderOnce();
     const prefix = `git-history:${commit.oid}`, band = app.get(`${prefix}:message-link`), label = app.get(`${prefix}:label`);
     const background = cell(label.x, label.y).bg.toInts();
@@ -418,8 +418,8 @@ test.each([{ width: 160, light: false }, { width: 60, light: false }, { width: 1
   } finally { await app.close(); }
 });
 
-test("분기 그래프의 ref 라벨과 메시지 연결은 다른 레인의 세로선과 두 부모 경로를 보존한다", async () => {
-  // merge에서 갈라졌다가 합류하는 두 레인과 그중 한 브랜치의 ref를 준비한다.
+test("Branching ref labels and message connectors preserve other lanes and both parent paths", async () => {
+  // Prepare two splitting/joining merge lanes with a ref on one branch.
   const side = { ...commit, oid: "c".repeat(40), subject: "Side commit", parents: ["d".repeat(40)] };
   const left = { ...rootCommit, parents: ["d".repeat(40)] }, base = { ...rootCommit, oid: "d".repeat(40), subject: "Base commit" };
   const data = snapshot(); data.commits = [{ ...commit, parents: [left.oid, side.oid] }, left, side, base];
@@ -436,15 +436,15 @@ test("분기 그래프의 ref 라벨과 메시지 연결은 다른 레인의 세
     expect(app.spanIn("git-history", "ccccccc").fg.equals(app.spanIn("git-history", "aaaaaaa").fg)).toBe(false);
     expect(mainGraph.x).toBe(sideGraph.x);
 
-    // 상세를 펼친 뒤에도 커밋 노드와 메시지가 각각의 원래 행에 남는다.
+    // Expanded details retain commit nodes and messages on their original rows.
     await app.click("Side commit"); await app.waitForFrame(frame => frame.includes("Branches: feature/topic"));
     expect(sideGraph.plainText).toMatch(/│──● /u); expect(app.get(`git-history:${side.oid}`).height).toBe(2);
     expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("긴 한글·이모지 ref 라벨도 셀 단위로 줄이고 추가 ref 개수를 남긴다", async () => {
-  // 문자열 길이와 터미널 셀 너비가 다른 브랜치 이름으로 연결선 정렬을 확인한다.
+test("Long Korean/emoji ref labels truncate by cells and retain additional-ref counts", async () => {
+  // Branch names with differing string/cell widths verify connector alignment.
   const data = snapshot(); data.refs = [
     { kind: "local", name: "feature/커밋🙂아주긴브랜치이름", ref: "refs/heads/feature/커밋🙂아주긴브랜치이름", oid: rootCommit.oid },
     { kind: "remote", name: "origin/topic", ref: "refs/remotes/origin/topic", oid: rootCommit.oid },
@@ -463,8 +463,8 @@ test("긴 한글·이모지 ref 라벨도 셀 단위로 줄이고 추가 ref 개
   } finally { await app.close(); }
 });
 
-test("커밋 상세를 열고 닫아도 예약된 왼쪽 너비와 그래프 행의 위치를 유지한다", async () => {
-  // 상세 카드는 그래프 레이아웃 밖에 있어 다른 커밋 행을 밀어내면 안 된다.
+test("Opening and closing commit details retains reserved left width and graph-row positions", async () => {
+  // Detail cards sit outside graph layout and must not shift other commit rows.
   const app = await mount();
   try {
     const prefix = `git-history:${commit.oid}`, row = app.get(prefix), graph = app.get(`${prefix}:graph`);
@@ -479,15 +479,15 @@ test("커밋 상세를 열고 닫아도 예약된 왼쪽 너비와 그래프 행
     expect([anchor.x, anchor.y]).toEqual([card.x + card.width - 1, row.y]);
     expect(app.get("git-changes").visible).toBe(false);
 
-    // 상세가 사라져도 해당 공간을 비워 두고 그래프는 움직이지 않는다.
+    // Disappearing details retain reserved space without graph movement.
     app.get("git-history").blur(); await app.renderOnce();
     expect(card.visible).toBe(false); expect(graph.x).toBe(reserved); expect([row.y, row.height]).toEqual(position);
     expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
-test.each(["arrows", "vim", "control"] as const)("Working tree와 커밋을 %s로 왕복해도 상세 공간을 예약해 그래프와 메시지가 흔들리지 않는다", async navigation => {
-  // 카드가 없는 Working tree에서도 카드가 생길 때와 같은 열 너비를 사용한다.
+test.each(["arrows", "vim", "control"] as const)("%s round-trips between Working tree and commits reserve details to stabilize graphs/messages", async navigation => {
+  // Cardless Working tree uses the same column width as card-bearing commits.
   const app = await mount();
   const move = (next: boolean) => navigation === "arrows" ? app.mockInput.pressArrow(next ? "down" : "up")
     : navigation === "control" ? app.mockInput.pressKey(next ? "n" : "p", { ctrl: true }) : app.mockInput.pressKey(next ? "j" : "k");
@@ -496,7 +496,7 @@ test.each(["arrows", "vim", "control"] as const)("Working tree와 커밋을 %s�
       app.resize(width, 32); app.get("git-history").focus(); app.mockInput.pressKey("HOME"); await app.renderOnce(); await app.renderOnce();
       const graphX = app.get(`git-history:${commit.oid}:graph`).x, messageX = app.get(`git-history:${commit.oid}:label`).x;
 
-      // 카드의 표시 여부만 바뀌며 메시지와 그래프의 x 좌표는 고정된다.
+      // Only card visibility changes; graph/message x coordinates stay fixed.
       for (const next of [true, false, true]) {
         move(next); await app.renderOnce(); await app.renderOnce();
         expect(app.get("git-details-card").visible).toBe(next);
@@ -512,8 +512,8 @@ test.each(["arrows", "vim", "control"] as const)("Working tree와 커밋을 %s�
   } finally { await app.close(); }
 });
 
-test("상세의 브랜치·원격·태그는 선택 커밋을 직접 가리키는 ref만 표시한다", async () => {
-  // main과 origin/main이 과거 커밋을 포함해도 tip이 다른 동안 그 상세에는 표시하면 안 된다.
+test("Detail branches, remotes, and tags show only refs directly targeting selected commits", async () => {
+  // main/origin/main containment must not show refs whose tips point elsewhere.
   const data = snapshot(); data.refs = [
     { kind: "local", name: "main", ref: "refs/heads/main", oid: commit.oid },
     { kind: "remote", name: "origin/main", ref: "refs/remotes/origin/main", oid: commit.oid },
@@ -533,15 +533,15 @@ test("상세의 브랜치·원격·태그는 선택 커밋을 직접 가리키�
     if (!(tip instanceof TextRenderable) || !(ancestor instanceof TextRenderable)) throw new Error("Missing ref labels");
     expect(tip.plainText).toContain("main"); expect(ancestor.plainText).not.toContain("main");
 
-    // 실제 tip으로 이동하면 로컬·원격 이름과 그 커밋의 태그가 다시 나타난다.
+    // Moving to actual tips restores matching local/remote names and tags.
     await app.chooseCommit(); await app.waitForFrame(frame => frame.includes("Message for Update login"));
     expect(text.plainText).toContain("Branches: main"); expect(text.plainText).toContain("Remotes: origin/main");
     expect(text.plainText).toContain("Tags: new-tag"); expect(text.plainText).not.toContain("old-tag"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("왼쪽 상세의 위치가 안정되면 화면 갱신 중 자체 렌더를 다시 요청하지 않는다", async () => {
-  // 위치 보정이 새 텍스트나 테두리를 매번 설정하면 끝없이 다음 프레임을 예약하게 된다.
+test("Stable left-detail geometry never requests additional renders during screen refresh", async () => {
+  // Resetting text or borders on every position correction would schedule endless frames.
   const clock = new ManualClock(), app = await mount({ clock });
   let cardRender: ReturnType<typeof spyOn> | undefined, anchorRender: ReturnType<typeof spyOn> | undefined;
   try {
@@ -549,7 +549,7 @@ test("왼쪽 상세의 위치가 안정되면 화면 갱신 중 자체 렌더를
     const card = app.get("git-details-card");
     cardRender = spyOn(card, "requestRender"); anchorRender = spyOn(app.get("git-details-anchor"), "requestRender");
 
-    // 다른 UI의 프레임이 발생해도 위치가 같은 카드와 연결점은 새 렌더를 요청하지 않는다.
+    // Frames from other UI must not make unchanged cards/connectors request rendering.
     await app.renderOnce(); await app.renderOnce();
 
     expect(card.visible).toBe(true); expect(app.get("git-loading").visible).toBe(false);
@@ -559,8 +559,8 @@ test("왼쪽 상세의 위치가 안정되면 화면 갱신 중 자체 렌더를
   } finally { cardRender?.mockRestore(); anchorRender?.mockRestore(); await app.close(); }
 });
 
-test("상세는 이전 높이 제한보다 긴 메시지도 내부 스크롤 없이 마지막 줄까지 펼친다", async () => {
-  // 화면에는 맞지만 이전 65% 제한에는 잘리던 메시지를 준비한다.
+test("Details fully expand messages beyond old height caps without internal scrolling", async () => {
+  // Prepare messages fitting the screen but exceeding the former 65% cap.
   const app = await mount({ source: { load: async () => ok(snapshot()), compare: async () => ok(comparison()),
     details: async selected => ok({ commit: selected, message: Array.from({ length: 15 }, (_, index) => `Expanded message ${index}`).join("\n"), files: [], branches: [] }),
   } });
@@ -577,8 +577,8 @@ test("상세는 이전 높이 제한보다 긴 메시지도 내부 스크롤 없
   } finally { await app.close(); }
 });
 
-test("화면보다 긴 상세도 완전히 펼치고 Commits 전체를 움직여 끝부분을 읽고 복사한다", async () => {
-  // 터미널 높이를 넘는 카드에 독립 스크롤바나 접근할 수 없는 잘린 본문이 생기면 안 된다.
+test("Oversized details fully expand and use shared Commits scrolling to read/copy tails", async () => {
+  // Cards taller than terminals must not gain private scrollbars or inaccessible clipped content.
   const message = Array.from({ length: 80 }, (_, index) => `Long message ${index}`).join("\n") + "\nLast detail line";
   const app = await mount({ source: { load: async () => ok(snapshot()), compare: async () => ok(comparison()),
     details: async selected => ok({ commit: selected, message, files: [], branches: [] }),
@@ -588,12 +588,12 @@ test("화면보다 긴 상세도 완전히 펼치고 Commits 전체를 움직여
     const history = app.get("git-history") as ScrollBoxRenderable, card = app.get("git-details-card"), body = app.get("git-details");
     expect(body instanceof ScrollBoxRenderable).toBe(false); expect(card.height).toBeGreaterThan(history.height);
 
-    // 카드 위의 휠도 카드 내부가 아니라 공용 viewport를 움직인다.
+    // Wheel input over cards moves shared viewports, not internal content.
     const author = app.positionIn("git-details", "Author: Ada");
     await app.mockMouse.scroll(author.x, author.y, "down"); await app.renderOnce();
     expect(history.scrollTop).toBeGreaterThan(0); expect(app.renderer.currentFocusedRenderable).toBe(body);
 
-    // End는 카드 내부가 아니라 공용 viewport를 움직이며 커밋 선택은 유지한다.
+    // End moves shared viewports while preserving commit selection.
     app.mockInput.pressKey("END"); await app.renderOnce(); await app.renderOnce();
     expect(history.scrollTop).toBeGreaterThan(0); expect(app.captureCharFrame()).toContain("Last detail line");
     expect(app.renderer.currentFocusedRenderable).toBe(body); expect(card.visible).toBe(true);
@@ -607,8 +607,8 @@ test("화면보다 긴 상세도 완전히 펼치고 Commits 전체를 움직여
   } finally { await app.close(); }
 });
 
-test("상세 카드는 중복 제목 없이 브랜치·태그 실제 값을 작성자보다 위에 표시한다", async () => {
-  // ref 요약의 +N에 가려진 브랜치와 태그 이름도 카드에는 그대로 표시해야 한다.
+test("Detail cards omit duplicate titles and show actual branches/tags above authors", async () => {
+  // Cards expose branch/tag names hidden behind ref-summary +N indicators.
   const data = snapshot(); data.refs = [
     { kind: "local", name: "main", ref: "refs/heads/main", oid: commit.oid },
     { kind: "local", name: "feature/topic", ref: "refs/heads/feature/topic", oid: commit.oid },
@@ -629,8 +629,8 @@ test("상세 카드는 중복 제목 없이 브랜치·태그 실제 값을 작�
   } finally { await app.close(); }
 });
 
-test("왼쪽 상세는 같은 커밋의 모든 ref를 표시하고 다른 커밋의 ref는 제외한다", async () => {
-  // 요약의 +N 뒤에 숨은 정보도 상세에서는 전체 원문으로 확인할 수 있어야 한다.
+test("Left details show all matching refs while excluding other commits' refs", async () => {
+  // Details expose full source hidden behind summary +N counts.
   const data = snapshot(); data.refs.push(
     { kind: "remote", name: "origin/main", ref: "refs/remotes/origin/main", oid: commit.oid },
     { kind: "tag", name: "release/current", ref: "refs/tags/release/current", oid: commit.oid });
@@ -646,8 +646,8 @@ test("왼쪽 상세는 같은 커밋의 모든 ref를 표시하고 다른 커밋
   } finally { await app.close(); }
 });
 
-test.each(["arrows", "vim", "control"] as const)("ref가 없는 커밋으로 %s 이동해도 왼쪽 상세와 연결 대상이 갱신된다", async navigation => {
-  // 브랜치 끝이 아닌 일반 커밋도 포커스하면 상세를 읽을 수 있어야 한다.
+test.each(["arrows", "vim", "control"] as const)("%s navigation to refless commits updates left details and connector targets", async navigation => {
+  // Ordinary commits away from branch tips also expose details when focused.
   const data = snapshot(); data.refs = data.refs.filter(ref => ref.oid === commit.oid);
   const app = await mount({ source: { load: async () => ok(data), compare: async () => ok(comparison()),
     details: async selected => ok({ commit: selected, message: `Message for ${selected.subject}`, files: [], branches: [] }) } });
@@ -666,8 +666,8 @@ test.each(["arrows", "vim", "control"] as const)("ref가 없는 커밋으로 %s 
   } finally { await app.close(); }
 });
 
-test("목록에서 Tab으로 상세를 읽고 Esc로 돌아와도 선택과 해시 액션은 유지한다", async () => {
-  // 읽기 전용 상세는 별도 커밋 액션이나 변경 팝업을 만들지 않는다.
+test("Tab reads details and Esc returns without losing selection or hash actions", async () => {
+  // Read-only details create neither separate commit actions nor Changes popups.
   const app = await mount();
   try {
     await app.chooseCommit(); const list = app.get("git-history") as ScrollBoxRenderable, position = list.scrollTop;
@@ -680,8 +680,8 @@ test("목록에서 Tab으로 상세를 읽고 Esc로 돌아와도 선택과 해�
   } finally { await app.close(); }
 });
 
-test("커밋을 빠르게 이동하면 늦은 상세 응답이 현재 ref 카드의 내용을 덮어쓰지 않는다", async () => {
-  // 이전 커밋의 전체 메시지가 늦게 도착해도 현재 선택과 연결점은 유지해야 한다.
+test("Rapid commit navigation prevents late details from overwriting current ref cards", async () => {
+  // Late previous messages must preserve current selection and connectors.
   const pending = Promise.withResolvers<Result<import("../model.ts").GitDetails, ExpectedError>>();
   let previousSignal: AbortSignal | undefined;
   const app = await mount({ source: { load: async () => ok(snapshot()), compare: async () => ok(comparison()),
@@ -702,8 +702,8 @@ test("커밋을 빠르게 이동하면 늦은 상세 응답이 현재 ref 카드
   } finally { pending.resolve(ok({ commit, message: "cleanup", files: [], branches: [] })); await app.close(); }
 });
 
-test("Changes를 왕복해도 왼쪽 상세의 메시지 스크롤을 유지한다", async () => {
-  // 긴 본문을 읽던 위치는 변경 파일 확인 때문에 사라지면 안 된다.
+test("Changes round-trips retain left-detail message reading positions", async () => {
+  // Inspecting changed files must not discard long-message reading positions.
   const app = await mount({ source: { load: async () => ok(snapshot()), compare: async () => ok(comparison()),
     details: async selected => ok({ commit: selected, message: Array.from({ length: 80 }, (_, index) => `Message ${index}`).join("\n"), branches: [],
       files: [{ kind: "commit", status: "M", path: "src/login.ts", commit: selected }] }) } });
@@ -721,8 +721,8 @@ test("Changes를 왕복해도 왼쪽 상세의 메시지 스크롤을 유지한�
   } finally { await app.close(); }
 });
 
-test("새 UI에서도 펼친 상세의 공용 viewport 읽기 위치를 복원한다", async () => {
-  // 상세에 별도 스크롤 상태가 없어도 전체 화면의 읽던 위치는 복원되어야 한다.
+test("New UIs restore shared viewport positions for expanded details", async () => {
+  // Shared screen positions restore even without separate detail-scroll state.
   const source: GitSource = { load: async () => ok(snapshot()), compare: async () => ok(comparison()),
     details: async selected => ok({ commit: selected, message: Array.from({ length: 80 }, (_, index) => `Restored detail ${index}`).join("\n"), files: [], branches: [] }),
   };
@@ -733,7 +733,7 @@ test("새 UI에서도 펼친 상세의 공용 viewport 읽기 위치를 복원�
     expect(app.captureCharFrame()).toContain("Restored detail 79"); retained = app.view.workViewPreferences;
   } finally { await app.close(); }
 
-  // 전체 메시지 높이가 준비되기 전에 짧은 커밋 목록으로 저장 위치를 잘라내면 안 된다.
+  // Short commit lists must not clamp saved positions before full message heights are ready.
   const restored = await mount({ source, initial: retained! });
   try {
     await restored.waitForFrame(frame => frame.includes("Restored detail 79"));
@@ -743,8 +743,8 @@ test("새 UI에서도 펼친 상세의 공용 viewport 읽기 위치를 복원�
   } finally { await restored.close(); }
 });
 
-test("Changes에서 재접속한 뒤 닫아도 긴 상세를 읽던 전체 화면 위치로 복귀한다", async () => {
-  // 새 UI의 숨은 배경 목록은 카드가 펼쳐지기 전에는 저장된 읽기 위치보다 짧을 수 있다.
+test("Closing Changes after reconnection restores shared long-detail reading positions", async () => {
+  // Hidden background lists may be shorter than saved positions before cards expand.
   const source: GitSource = { load: async () => ok(snapshot()), compare: async () => ok(comparison()),
     details: async selected => ok({ commit: selected, message: Array.from({ length: 80 }, (_, index) => `Popup return ${index}`).join("\n"), branches: [],
       files: [{ kind: "commit", status: "M", path: "src/login.ts", commit: selected }] }),
@@ -757,7 +757,7 @@ test("Changes에서 재접속한 뒤 닫아도 긴 상세를 읽던 전체 화�
     expect(retained.gitViews?.["demo:main"]?.historyScroll).toBeGreaterThan(0);
   } finally { await app.close(); }
 
-  // 팝업의 Esc가 아직 펼쳐지지 않은 배경의 0 위치로 저장 값을 덮어쓰면 안 된다.
+  // Popup Esc must not overwrite saved positions with unexpanded background zero.
   const restored = await mount({ source, initial: retained! });
   try {
     await restored.waitForFrame(frame => frame.includes("const line00")); restored.mockInput.pressEscape();
@@ -769,8 +769,8 @@ test("Changes에서 재접속한 뒤 닫아도 긴 상세를 읽던 전체 화�
   } finally { await restored.close(); }
 });
 
-test("목록 스크롤로 선택 커밋이 화면 밖으로 나가면 상세를 숨기고 숨은 본문에 포커스를 남기지 않는다", async () => {
-  // 마우스 휠로 배경 목록을 움직여도 상세 본문이 잘못된 커밋 행에 붙으면 안 된다.
+test("Scrolling selected commits offscreen hides details and removes hidden-body focus", async () => {
+  // Mouse wheel scrolling must not attach detail bodies to unrelated commit rows.
   const data = snapshot(); data.commits.push(...Array.from({ length: 40 }, (_, index) => ({ ...commit,
     oid: (index + 1).toString(16).padStart(40, "0"), subject: `Other ${index}`, parents: [] })));
   const app = await mount({ source: { load: async () => ok(data), compare: async () => ok(comparison()),
@@ -787,8 +787,8 @@ test("목록 스크롤로 선택 커밋이 화면 밖으로 나가면 상세를 
   } finally { await app.close(); }
 });
 
-test("왼쪽 상세는 좁은 화면에서도 전체 높이를 유지하고 그래프 행 높이를 바꾸지 않는다", async () => {
-  // 마지막 후보와 긴 메시지로 카드가 화면 하단을 넘어가는 경우를 확인한다.
+test("Narrow left details retain full heights without changing graph-row heights", async () => {
+  // Use final candidates and long messages whose cards extend below the viewport.
   const app = await mount();
   try {
     await app.chooseCommit(); app.mockInput.pressKey("END"); await app.renderOnce();
@@ -807,8 +807,8 @@ test("왼쪽 상세는 좁은 화면에서도 전체 높이를 유지하고 그�
   } finally { await app.close(); }
 });
 
-test.each(["arrows", "vim", "control"] as const)("Changes 파일 목록은 %s 탐색 시 diff를 갱신하고 새 파일의 스크롤을 초기화한다", async navigation => {
-  // 서로 다른 내용을 가진 두 파일로 선택과 실제 diff 대상이 일치하는지 확인한다.
+test.each(["arrows", "vim", "control"] as const)("Changes file %s navigation refreshes diffs and resets new-file scroll", async navigation => {
+  // Distinct file contents verify selection matches actual diff targets.
   const compared: string[] = [];
   const app = await mount({ source: {
     load: async () => ok(snapshot()),
@@ -825,7 +825,7 @@ test.each(["arrows", "vim", "control"] as const)("Changes 파일 목록은 %s �
     app.get("git-diff").focus(); app.mockInput.pressKey("END"); await app.renderOnce();
     expect(app.codes()[0]!.scrollY).toBeGreaterThan(0);
 
-    // 파일 목록에서 탐색하는 동안 포커스는 유지하고 비교 내용만 교체한다.
+    // File navigation preserves focus while replacing comparisons.
     app.get("git-files").focus(); move(true); await app.waitForFrame(frame => frame.includes("second.ts line 0"));
     expect(app.renderer.currentFocusedRenderable?.id).toBe("git-files");
     expect(app.codes().map(pane => pane.scrollY)).toEqual([0, 0]);
@@ -837,8 +837,8 @@ test.each(["arrows", "vim", "control"] as const)("Changes 파일 목록은 %s �
   } finally { await app.close(); }
 });
 
-test("빈 커밋의 상세는 목록에서 읽고 Changes는 빈 파일 상태만 표시한다", async () => {
-  // 빈 커밋에서도 메시지를 읽을 수 있어야 하며 파일 비교를 호출하면 안 된다.
+test("Empty-commit details remain readable in lists and Changes shows only empty-file state", async () => {
+  // Empty commits retain readable messages without file-comparison calls.
   let comparisons = 0;
   const app = await mount({ source: { load: async () => ok(snapshot()),
     details: async selected => ok({ commit: selected, message: "Empty commit explanation", files: [], branches: [] }),
@@ -858,8 +858,8 @@ test("빈 커밋의 상세는 목록에서 읽고 Changes는 빈 파일 상태�
   } finally { await app.close(); }
 });
 
-test("Changes 로딩은 결과를 지연하지 않고 스피너만 최소 표시하며 닫을 때 타이머를 정리한다", async () => {
-  // 비교 응답만 보류하고 실제 팝업의 로딩 표시와 수명을 관찰한다.
+test("Changes results appear immediately while spinners honor minimums and clean timers on close", async () => {
+  // Delay only comparisons while observing actual popup spinner lifetimes.
   const clock = new ManualClock(), pending = Promise.withResolvers<Result<GitComparison, ExpectedError>>();
   const app = await mount({ clock, source: { load: async () => ok({ ...snapshot(), files: [{ kind: "unstaged", status: "M", path: "loading.txt" }] }),
     details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }), compare: () => pending.promise,
@@ -868,7 +868,7 @@ test("Changes 로딩은 결과를 지연하지 않고 스피너만 최소 표시
     await app.openWorkingTree(); const spinner = app.get("git-changes-loading");
     expect(spinner.visible).toBe(true); expect(app.captureCharFrame()).toContain("Loading file comparison");
 
-    // 결과는 즉시 읽을 수 있지만 최소 표시 시간이 끝나기 전에는 스피너가 남는다.
+    // Results stay readable before the spinner minimum ends.
     pending.resolve(ok(comparison())); await app.renderOnce(); await app.renderOnce();
     expect(app.captureCharFrame()).toContain("const line00");
     expect(spinner.visible).toBe(true); clock.advance(499); await app.renderOnce(); expect(spinner.visible).toBe(true);
@@ -879,8 +879,8 @@ test("Changes 로딩은 결과를 지연하지 않고 스피너만 최소 표시
   } finally { pending.resolve(ok(comparison())); await app.close(); }
 });
 
-test("상세 조회 중 팝업을 닫아도 늦은 결과가 팝업이나 diff를 다시 열지 않는다", async () => {
-  // 취소를 따르지 않는 상세 소스도 사용자가 닫은 화면을 되살리면 안 된다.
+test("Closing during detail lookup prevents late popup or diff reopening", async () => {
+  // Sources ignoring cancellation still must not resurrect dismissed surfaces.
   const pending = Promise.withResolvers<Result<import("../model.ts").GitDetails, ExpectedError>>();
   let comparisons = 0;
   const app = await mount({ source: { load: async () => ok(snapshot()), details: () => pending.promise,
@@ -899,8 +899,8 @@ test("상세 조회 중 팝업을 닫아도 늦은 결과가 팝업이나 diff�
   } finally { pending.resolve(ok({ commit, message: "cleanup", files: [], branches: [] })); await app.close(); }
 });
 
-test("파일을 빠르게 바꿔도 이전 비교 응답이 새 파일의 diff를 덮어쓰지 않는다", async () => {
-  // 첫 파일 소스가 취소를 무시해도 현재 선택의 비교만 표시해야 한다.
+test("Rapid file switching prevents old comparisons from overwriting new diffs", async () => {
+  // Only current comparisons display even if first-file sources ignore cancellation.
   const pending = Promise.withResolvers<Result<GitComparison, ExpectedError>>();
   let previousSignal: AbortSignal | undefined;
   const app = await mount({ source: { load: async () => ok(snapshot()),
@@ -924,8 +924,8 @@ test("파일을 빠르게 바꿔도 이전 비교 응답이 새 파일의 diff�
   } finally { pending.resolve(ok(comparison())); await app.close(); }
 });
 
-test("비교 실패는 팝업 안에 표시하고 새로고침으로 재시도할 수 있다", async () => {
-  // 예상 가능한 조회 실패는 팝업을 닫거나 빈 파일로 가장하면 안 된다.
+test("Comparison failures stay inside popups and support refresh retries", async () => {
+  // Expected failures neither close popups nor masquerade as empty files.
   let comparisons = 0;
   const app = await mount({ source: { load: async () => ok(snapshot()),
     details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }),
@@ -959,8 +959,8 @@ test("Search above Changes owns typing, clearing, and Tab while preserving commi
   } finally { await app.close(); }
 });
 
-test("Changes를 닫은 뒤 커밋 텍스트 드래그는 숨겨진 diff 대신 목록의 텍스트를 복사한다", async () => {
-  // 숨은 코드 pane의 이전 좌표가 메인 목록의 선택을 가로채면 안 된다.
+test("After Changes closes, commit text drags copy lists rather than hidden diffs", async () => {
+  // Old hidden-code coordinates must not intercept main-list selections.
   const app = await mount();
   try {
     await app.openWorkingTree(); await app.waitForFrame(frame => frame.includes("const line00"));
@@ -973,8 +973,8 @@ test("Changes를 닫은 뒤 커밋 텍스트 드래그는 숨겨진 diff 대신 
   } finally { await app.close(); }
 });
 
-test.each([{ width: 160, light: false }, { width: 60, light: false }, { width: 160, light: true }, { width: 60, light: true }])("Agent와 Git의 공용 Prompt는 같은 외관·여백·자동 높이·지우기를 사용한다: %j", async ({ width, light }) => {
-  // 같은 원문을 각 화면에 배치해 부모가 입력 스타일을 덮어쓰는 회귀를 검출한다.
+test.each([{ width: 160, light: false }, { width: 60, light: false }, { width: 160, light: true }, { width: 60, light: true }])("Shared Agent/Git prompts use identical appearance, padding, auto-height, and clearing: %j", async ({ width, light }) => {
+  // Render identical source in each view to detect parent style overrides.
   const app = await mount();
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
   const appearance = (input: PromptInput) => ({
@@ -991,7 +991,7 @@ test.each([{ width: 160, light: false }, { width: 60, light: false }, { width: 1
     const live = app.get("session-prompt"); if (!(live instanceof PromptInput)) throw new Error("Missing Agent prompt");
     live.value = "first\nsecond"; live.focus(); await render(); const expected = appearance(live);
 
-    // Git에서도 별도 입력기를 구성하지 않고 동일한 필드를 그대로 사용한다.
+    // Git reuses the same field rather than building a separate editor.
     await app.showGit(); await app.chooseCommit(); app.mockInput.pressKey("a"); await render();
     const input = app.get("git-prompt"); if (!(input instanceof PromptInput)) throw new Error("Missing Git prompt");
     input.value = "first\nsecond"; await render();
@@ -1002,15 +1002,15 @@ test.each([{ width: 160, light: false }, { width: 60, light: false }, { width: 1
     expect(app.renderer.currentFocusedRenderable).toBe(input); expect(input.cursorOffset).toBe(3);
     app.mockInput.pressCtrlC(); await render(); app.mockInput.pressCtrlC(); await render();
 
-    // Ctrl+C는 현재 입력만 지우고 요청이나 닫기, 다른 Agent 초안 변경을 만들지 않는다.
+    // Ctrl+C clears current input only, never requests, closure, or other Agent drafts.
     expect(input.value).toBe(""); expect(input.field.height).toBe(3); expect(app.get("git-ask").visible).toBe(true);
     expect(app.renderer.currentFocusedRenderable).toBe(input); expect(app.view.promptDrafts.a1).toBe("first\nsecond");
     expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("Git의 붙여넣기 로딩도 공용 Prompt의 오른쪽 여백을 사용하고 닫으면 즉시 정리한다", async () => {
-  // OS 클립보드만 제어하고 실제 필드·키 라우팅·공용 스피너를 함께 사용한다.
+test("Git paste loading uses shared Prompt right padding and cleans immediately on close", async () => {
+  // Control only OS clipboards while using real fields, routing, and shared spinners.
   const clock = new ManualClock();
   let pending = Promise.withResolvers<Result<ClipboardRepresentation, ExpectedError>>(), signal: AbortSignal | undefined;
   const read = spyOn(Clipboard.prototype, "read").mockImplementation(current => { signal = current; return pending.promise; });
@@ -1023,7 +1023,7 @@ test("Git의 붙여넣기 로딩도 공용 Prompt의 오른쪽 여백을 사용�
     const geometry = () => [input.field.y, input.field.height, input.width, app.get("git-ask").height];
     const before = geometry();
 
-    // 읽기와 최소 표시 시간 모두 입력 너비나 대화상자 높이를 변경하지 않는다.
+    // Reads and minimum durations never change input width or dialog height.
     app.mockInput.pressKey("v", { ctrl: true }); await render();
     expect(input.pending).toBe(true); expect(input.activity.root.visible).toBe(true); expect(geometry()).toEqual(before);
     expect(input.activity.root.parent).toBe(input.field);
@@ -1035,14 +1035,14 @@ test("Git의 붙여넣기 로딩도 공용 Prompt의 오른쪽 여백을 사용�
     app.mockInput.pressKey("v", { ctrl: true }); await render(); app.mockInput.pressEscape(); await render();
     pending.resolve(ok({ mimeType: "text/plain", bytes: new TextEncoder().encode(" too late") })); await render();
 
-    // 숨긴 대화상자의 비동기 결과는 버리고 기존 입력과 Agent 초안을 보존한다.
+    // Discard hidden-dialog results while preserving existing input and Agent drafts.
     expect(signal?.aborted).toBe(true); expect(input.activity.root.visible).toBe(false); expect(input.value).toBe("draft pasted");
     expect(app.get("git-ask").visible).toBe(false); expect(app.view.promptDrafts.a1).toBe("existing Agent draft"); expect(app.requests).toEqual([]);
   } finally { pending.resolve(ok({ mimeType: "text/plain", bytes: new Uint8Array() })); read.mockRestore(); await app.close(); }
 });
 
-test("Git 커밋의 Ctrl+D/U는 선택을 반 페이지 이동하고 중간 커밋을 조회하지 않는다", async () => {
-  // 그래프의 연결선까지 포함한 실제 행 높이로 여러 후보를 한 번에 건너뛴다.
+test("Git commit Ctrl+D/U jumps selection by half-pages without querying skipped commits", async () => {
+  // Jump candidates using actual row heights including graph connectors.
   const commits = Array.from({ length: 40 }, (_, index) => ({ ...commit, oid: (index + 1).toString(16).padStart(40, "0"), subject: `Candidate ${index}`, parents: [] }));
   const data = { ...snapshot(), headOid: commits[0]!.oid, commits }, lookups: string[] = [];
   const app = await mount({ source: { load: async () => ok(data), compare: async () => ok(comparison()), details: async selected => {
@@ -1063,8 +1063,8 @@ test("Git 커밋의 Ctrl+D/U는 선택을 반 페이지 이동하고 중간 커�
   } finally { await app.close(); }
 });
 
-test("Git 상세와 양쪽 diff의 Ctrl+D/U는 포커스한 본문을 반 페이지 왕복한다", async () => {
-  // 후보 목록이 아닌 상세 본문에서는 선택을 바꾸지 않고 스크롤만 이동한다.
+test("Git details and both diffs scroll focused bodies by half-pages", async () => {
+  // Detail bodies scroll without changing candidate selection.
   const app = await mount({ source: { load: async () => ok(snapshot()), compare: async () => ok(comparison()), details: async selected => ok({
     commit: selected, message: Array.from({ length: 80 }, (_, index) => `Detail ${index}`).join("\n"), branches: [],
     files: [{ kind: "commit", status: "M", path: "src/login.ts", commit: selected }],
@@ -1090,8 +1090,8 @@ test("Git 상세와 양쪽 diff의 Ctrl+D/U는 포커스한 본문을 반 페이
   } finally { await app.close(); }
 });
 
-test.each(["arrows", "vim", "control"] as const)("Refs는 %s 탐색을 지원하고 검색어·caret를 유지한 채 Enter에서만 필터를 적용한다", async navigation => {
-  // 검색 입력과 결과 목록은 동일한 후보 커서를 공유한다.
+test.each(["arrows", "vim", "control"] as const)("Refs supports %s navigation, preserves query/caret, and applies filters only with Enter", async navigation => {
+  // Search and results share candidate cursors.
   const app = await mount();
   const move = (next: boolean) => navigation === "arrows" ? app.mockInput.pressArrow(next ? "down" : "up")
     : navigation === "control" ? app.mockInput.pressKey(next ? "n" : "p", { ctrl: true }) : app.mockInput.pressKey(next ? "j" : "k");
@@ -1114,8 +1114,8 @@ test.each(["arrows", "vim", "control"] as const)("Refs는 %s 탐색을 지원하
   } finally { await app.close(); }
 });
 
-test("Reflog 검색은 이벤트·해시·시각을 찾고 일치하지 않는 검색의 Enter는 아무것도 열지 않는다", async () => {
-  // 검색은 원래 이벤트 목록을 탐색할 뿐 메인 커밋 선택을 바꾸지 않는다.
+test("Reflog search matches events, hashes, and times while unmatched Enter opens nothing", async () => {
+  // Search browses original events without changing main commit selection.
   const data = snapshot(); data.reflog = [
     { oid: commit.oid, selector: "HEAD@{0}", date: "2026-10-21 14:32:00 +0900", subject: "reset: moving to HEAD~2" },
     { oid: rootCommit.oid, selector: "HEAD@{1}", date: "2026-10-20 10:00:00 +0900", subject: "checkout: moving from main to feature/topic" },
@@ -1135,8 +1135,8 @@ test("Reflog 검색은 이벤트·해시·시각을 찾고 일치하지 않는 �
   } finally { await app.close(); }
 });
 
-test("Refs는 닫기 아이콘 없이 Esc로 검색을 버리고 메인 커밋으로 복귀한다", async () => {
-  // 팝업의 비파괴적 닫기는 별도 아이콘 대신 커맨드가 담당한다.
+test("Refs uses Esc without close icons to discard search and return to main commits", async () => {
+  // Commands own non-destructive popup closure instead of separate icons.
   const app = await mount();
   try {
     await app.chooseCommit(); await app.openRefs(); await app.mockInput.typeText("origin"); await app.renderOnce();
@@ -1151,7 +1151,7 @@ test("Refs는 닫기 아이콘 없이 Esc로 검색을 버리고 메인 커밋�
   } finally { await app.close(); }
 });
 
-test("Git의 Agent 요청도 여러 줄·접힌 원문·이미지 참조를 같은 입력 규칙으로 전달한다", async () => {
+test("Git Agent requests preserve multiline/collapsed source and image references with shared input rules", async () => {
   const sent: {text:string;images:readonly string[]}[]=[];
   const app=await mount({actions:{prompt:(_id,text,images)=>{sent.push({text,images:images??[]});return ok(undefined);}}});
   try {
@@ -1167,8 +1167,8 @@ test("Git의 Agent 요청도 여러 줄·접힌 원문·이미지 참조를 같�
   }finally{await app.close();}
 });
 
-test.each([false, true])("밝기 %j에서도 검색 후보를 강조하고 Ask는 버튼 없이 입력에 집중한다", async light => {
-  // 검색 입력에 포커스가 있어도 선택 후보의 배경은 명확하게 남아야 한다.
+test.each([false, true])("At brightness %j, candidates stay highlighted and button-free Ask focuses input", async light => {
+  // Candidate backgrounds remain explicit while search retains input focus.
   const app = await mount();
   const controls = (node: Renderable): Button[] => [...(node instanceof Button ? [node] : []), ...node.getChildren().flatMap(controls)];
   try {
@@ -1189,7 +1189,7 @@ test.each([false, true])("밝기 %j에서도 검색 후보를 강조하고 Ask�
   } finally { await app.close(); }
 });
 
-test("헤더나 Refresh 버튼 없이 r로 새로고침하고 spinner는 레이아웃을 밀지 않고 최소 500ms 표시한다", async () => {
+test("r refreshes without headers/buttons and spinners show at least 500ms without shifting layout", async () => {
   // Keep refresh pending at the query boundary and drive animation with the renderer clock.
   const clock = new ManualClock(); let reads = 0;
   const pending = Promise.withResolvers<Result<GitSnapshot, ExpectedError>>();
@@ -1219,7 +1219,7 @@ test("헤더나 Refresh 버튼 없이 r로 새로고침하고 spinner는 레이�
   } finally { pending.resolve(ok(snapshot())); await app.close(); }
 });
 
-test("More 버튼 없이 + 키로 커밋을 300개씩 더 읽고 소진되면 추가 조회하지 않는다", async () => {
+test("+ loads commits in batches of 300 without More buttons and stops querying when exhausted", async () => {
   // Keep pagination available without adding an action beside the history tabs.
   const limits: number[] = [];
   const app = await mount({ source: {
@@ -1242,8 +1242,8 @@ test("More 버튼 없이 + 키로 커밋을 300개씩 더 읽고 소진되면 �
   } finally { await app.close(); }
 });
 
-test("Git 목록은 전체 너비를 쓰고 Changes 팝업은 좁은 화면에서도 푸터 안쪽에 맞춘다", async () => {
-  // 실제 레이아웃에서 커밋 목록에 상시 우측 패널이 남지 않아야 한다.
+test("Git lists use full width and compact Changes popups fit inside footers", async () => {
+  // Actual list layouts leave no permanent right-hand pane.
   const app = await mount();
   try {
     for (const [width, height] of [[160, 32], [60, 12], [79, 18], [80, 17], [160, 32]] as const) {
@@ -1256,7 +1256,7 @@ test("Git 목록은 전체 너비를 쓰고 Changes 팝업은 좁은 화면에�
       expect(app.captureCharFrame()).not.toContain("Changed files");
     }
 
-    // Enter로 연 팝업 안에서도 파일 목록과 두 diff의 실제 viewport가 함께 남는다.
+    // Enter-opened popups retain real file-list and both diff viewports.
     await app.openWorkingTree(); await app.waitForFrame(frame => frame.includes("const line00"));
     for (const [width, height] of [[160, 32], [60, 12], [79, 18], [80, 17], [160, 32]] as const) {
       app.resize(width, height); await app.renderOnce(); await app.renderOnce();
@@ -1273,8 +1273,8 @@ test("Git 목록은 전체 너비를 쓰고 Changes 팝업은 좁은 화면에�
   } finally { await app.close(); }
 });
 
-test("커밋 클릭은 왼쪽 상세를 펼치고 Enter는 파일 목록과 Before/After만 표시한다", async () => {
-  // 마우스로 커밋을 고른 뒤에도 해시 복사와 Ask를 바로 사용할 수 있어야 한다.
+test("Commit clicks expand left details and Enter shows only files with Before/After", async () => {
+  // Mouse commit selection preserves immediate hash-copy and Ask actions.
   const app = await mount();
   try {
     await app.chooseCommit();
@@ -1283,7 +1283,7 @@ test("커밋 클릭은 왼쪽 상세를 펼치고 Enter는 파일 목록과 Befo
     expect(app.get("git-details-card").visible).toBe(true);
     expect(app.captureCharFrame()).toContain("Author: Ada");
 
-    // 파일을 다시 열지 않아도 첫 파일 비교를 자동으로 로드한다.
+    // Load first-file comparisons automatically without reopening files.
     await app.openChanges(); await app.waitForFrame(frame => frame.includes("const line00"));
 
     const files = app.get("git-files"), diff = app.get("git-diff");
@@ -1299,14 +1299,14 @@ test("커밋 클릭은 왼쪽 상세를 펼치고 Enter는 파일 목록과 Befo
   } finally { await app.close(); }
 });
 
-test("Changes의 Tab은 파일과 diff만 순환하고 Esc는 커밋과 왼쪽 상세로 복귀한다", async () => {
-  // 팝업이 열려 있는 동안 배경 탭이나 Agent 입력으로 포커스가 새면 안 된다.
+test("Changes Tab cycles only files/diffs and Esc returns to commits with left details", async () => {
+  // Popup focus must not leak into background tabs or Agent input.
   const app = await mount();
   try {
     await app.chooseCommit(); await app.openChanges();
     const selected = app.view.workViewPreferences.gitViews?.["demo:main"]?.selected;
 
-    // 팝업에는 상세 포커스가 남지 않고 두 영역만 반복한다.
+    // No detail focus remains in popups; cycle only the two regions.
     for (const id of ["git-diff", "git-files", "git-diff", "git-files"]) {
       app.mockInput.pressTab(); await app.renderOnce(); expect(app.renderer.currentFocusedRenderable?.id).toBe(id);
     }
@@ -1321,8 +1321,8 @@ test("Changes의 Tab은 파일과 diff만 순환하고 Esc는 커밋과 왼쪽 �
   } finally { await app.close(); }
 });
 
-test("Refs는 종류 탭 대신 그룹과 검색 결과를 표시하고 작은 화면에서도 결과를 유지한다", async () => {
-  // 종류를 전환하지 않고도 모든 ref를 검색할 수 있어야 한다.
+test("Refs uses groups/search instead of kind tabs and retains compact results", async () => {
+  // All refs remain searchable without switching kinds.
   const app = await mount();
   try {
     await app.openRefs(); expect(app.captureCharFrame()).toContain("All refs");
@@ -1339,8 +1339,8 @@ test("Refs는 종류 탭 대신 그룹과 검색 결과를 표시하고 작은 �
   } finally { await app.close(); }
 });
 
-test("Changes의 파일 제목과 첫 파일 사이에는 화면 높이에 관계없이 빈 줄 하나만 그린다", async () => {
-  // 상세를 목록으로 옮긴 뒤에도 파일 제목 아래의 기존 여백을 유지한다.
+test("Changes file titles and first files have exactly one blank row at every height", async () => {
+  // Moving details into lists preserves existing space beneath file titles.
   const app = await mount({ source: { load: async () => ok(snapshot()), details: async (selected) => ok({ commit: selected,
     message: "Commit explanation\n".repeat(40), branches: [], files: [{ kind: "commit", status: "M", path: "src/only-file.ts", commit: selected }] }), compare: async () => ok(comparison()) } });
   try {
@@ -1355,8 +1355,8 @@ test("Changes의 파일 제목과 첫 파일 사이에는 화면 높이에 관�
   } finally { await app.close(); }
 });
 
-test.each(["search", "list"] as const)("Refs %s에서 Esc는 필터 적용 없이 커밋 선택과 초안을 보존한다", async focus => {
-  // 후보 이동과 필터 적용은 별개이며 검색 중 닫아도 메인 선택은 그대로 남는다.
+test.each(["search", "list"] as const)("Refs %s Esc preserves commit selection/drafts without applying filters", async focus => {
+  // Candidate browsing differs from filter application; closing retains main selection.
   const app = await mount();
   try {
     await app.chooseCommit(); await app.openRefs(); await app.mockInput.typeText("origin");
@@ -1372,8 +1372,8 @@ test.each(["search", "list"] as const)("Refs %s에서 Esc는 필터 적용 없�
   } finally { await app.close(); }
 });
 
-test.each(["all", "escape"] as const)("Refs의 Enter는 필터를 적용해 닫고 %s 동작은 전체 커밋으로 복귀한다", async clear => {
-  // 전체 보기와 메인의 Esc 모두 checkout 없이 조회 필터만 해제한다.
+test.each(["all", "escape"] as const)("Refs Enter applies filters and closes while %s returns to all commits", async clear => {
+  // Show-all and main Esc clear only query filters without checkout.
   const app = await mount();
   try {
     await app.openRefs(); await app.mockInput.typeText("origin/main"); app.mockInput.pressEnter();
@@ -1394,7 +1394,7 @@ test.each(["all", "escape"] as const)("Refs의 Enter는 필터를 적용해 닫�
   } finally { await app.close(); }
 });
 
-test("필터된 diff의 Esc는 먼저 diff만 닫고 다음 Esc에서 ref 필터를 해제한다", async () => {
+test("Filtered diff Esc closes only diffs first and clears ref filters on the next press", async () => {
   // Going back one level must not unexpectedly discard the ref being reviewed.
   const app = await mount();
   try {
@@ -1415,8 +1415,8 @@ test("필터된 diff의 Esc는 먼저 diff만 닫고 다음 Esc에서 ref 필터
   } finally { await app.close(); }
 });
 
-test("메인은 탭 없이 Commits로 시작하고 Refs와 Reflog는 footer 단축키의 모달로 연다", async () => {
-  // 모달을 여는 동안 메인 커밋 선택과 기본 화면 정체성을 바꾸지 않는다.
+test("Main starts in tabless Commits and opens Refs/Reflog through footer shortcuts", async () => {
+  // Opening modals preserves main commit selection and screen identity.
   const app = await mount();
   try {
     expect(app.get("git-toolbar").visible).toBe(false); expect(app.get("git-history").y).toBe(app.get("git-view").y);
@@ -1432,7 +1432,7 @@ test("메인은 탭 없이 Commits로 시작하고 Refs와 Reflog는 footer 단�
   } finally { await app.close(); }
 });
 
-test("Commits의 ref·그래프·연결선은 같은 색을 쓰고 메시지는 테마의 기본 텍스트색을 유지한다", async () => {
+test("Commit refs, graphs, and connectors share colors while messages use theme text colors", async () => {
   // A visible graph and ref label expose accidental whole-row coloring.
   const app = await mount();
   try {
@@ -1461,7 +1461,7 @@ test("Commits의 ref·그래프·연결선은 같은 색을 쓰고 메시지는 
   } finally { await app.close(); }
 });
 
-test("Reflog는 해시만 강조하고 selector와 메시지는 기본 텍스트색을 쓴다", async () => {
+test("Reflog highlights only hashes while selectors/messages use normal text colors", async () => {
   // Reflog has no graph, so its hash needs an explicit semantic color.
   const app = await mount();
   try {
@@ -1475,7 +1475,7 @@ test("Reflog는 해시만 강조하고 selector와 메시지는 기본 텍스트
   } finally { await app.close(); }
 });
 
-test("변경 파일 섹션 사이에는 빈 줄 하나를 두고 빈 줄은 선택이나 diff 열기의 대상이 아니다", async () => {
+test("Changed-file sections have one blank separator that cannot select or open diffs", async () => {
   // Multiple staged files distinguish section spacing from per-file spacing.
   const data = snapshot();
   data.files.unshift({ kind: "staged", status: "A", path: "new.ts" }, { kind: "staged", status: "M", path: "staged.ts" });
@@ -1508,7 +1508,7 @@ test("변경 파일 섹션 사이에는 빈 줄 하나를 두고 빈 줄은 선�
   } finally { await app.close(); }
 });
 
-test("비어 있는 변경 파일 섹션을 건너뛰어도 첫 섹션 위나 파일 사이에 여백을 더하지 않는다", async () => {
+test("Skipping empty changed-file sections adds no leading or inter-file gaps", async () => {
   // With no staged or unstaged files, untracked is the first visible section.
   const data = snapshot(); data.files = [{ kind: "untracked", status: "?", path: "first.txt" }, { kind: "untracked", status: "?", path: "second.txt" }];
   const app = await mount({ source: { load: async () => ok(data), details: async () => ok({ commit, message: commit.subject, files: [], branches: [] }), compare: async () => ok(comparison()) } });
@@ -1522,7 +1522,7 @@ test("비어 있는 변경 파일 섹션을 건너뛰어도 첫 섹션 위나 �
   } finally { await app.close(); }
 });
 
-test("Changed files는 M 글자만 강조하고 A·D·미추적 파일의 전체 색상은 유지한다", async () => {
+test("Changed files highlight only M letters while retaining full A/D/untracked colors", async () => {
   // Exercise working-tree statuses without changing repository files on disk.
   const data = snapshot();
   data.files.push({ kind: "staged", status: "A", path: "added.ts" }, { kind: "unstaged", status: "D", path: "deleted.ts" });
@@ -1539,7 +1539,7 @@ test("Changed files는 M 글자만 강조하고 A·D·미추적 파일의 전체
   } finally { await app.close(); }
 });
 
-test("커밋 목록의 a는 해시만 보내고 y는 잘리지 않은 해시를 복사한다", async () => {
+test("Commit-list a sends only hashes and y copies full untruncated hashes", async () => {
   // The graph row contains a subject and labels that must not leak into its context.
   const app = await mount();
   try {
@@ -1555,8 +1555,8 @@ test("커밋 목록의 a는 해시만 보내고 y는 잘리지 않은 해시를 
   } finally { await app.close(); }
 });
 
-test("Commit details는 y와 a 액션 없이 읽기와 드래그 복사만 제공한다", async () => {
-  // 상세에서의 문자 선택은 커밋 목록의 해시 복사·Ask와 별개의 동작이다.
+test("Commit details provide reading/drag copying without y or a actions", async () => {
+  // Detail character selection differs from list hash-copy and Ask commands.
   const app = await mount();
   try {
     await app.chooseCommit(); await app.waitForFrame(frame => frame.includes("Author: Ada"));
@@ -1575,7 +1575,7 @@ test("Commit details는 y와 a 액션 없이 읽기와 드래그 복사만 제�
   } finally { await app.close(); }
 });
 
-test("Refs는 브랜치·태그 아이콘을 표시하고 현재 브랜치만 체크 대신 강조색으로 구분한다", async () => {
+test("Refs shows branch/tag icons and distinguishes current branches with accents instead of checks", async () => {
   // Two local branches can share a tip without both being the checked-out branch.
   const data = snapshot(); data.refs.push({ kind: "local", name: "feature/topic", ref: "refs/heads/feature/topic", oid: commit.oid });
   const app = await mount({ source: { load: async () => ok(data), details: async () => ok({ commit, message: commit.subject, files: [], branches: [] }), compare: async () => ok(comparison()) } });
@@ -1588,7 +1588,7 @@ test("Refs는 브랜치·태그 아이콘을 표시하고 현재 브랜치만 �
     expect(app.spanIn("git-browser-list", `${icons.branch} feature/topic`).fg.toInts()).toEqual(colors.text.toInts());
     expect(app.captureCharFrame()).not.toContain("✓ main");
 
-    // 후보 선택은 현재 브랜치의 강조나 실제 필터를 바꾸지 않는다.
+    // Candidate selection changes neither current-branch emphasis nor active filters.
     await app.clickIn("git-browser-list", "feature/topic");
     expect(app.spanIn("git-browser-list", `${icons.branch} main`).fg.toInts()).toEqual(colors.accent.toInts());
     expect(app.spanIn("git-browser-list", `${icons.branch} feature/topic`).fg.toInts()).toEqual(colors.text.toInts());
@@ -1600,8 +1600,8 @@ test("Refs는 브랜치·태그 아이콘을 표시하고 현재 브랜치만 �
   } finally { await app.close(); }
 });
 
-test("Refs의 Ask는 Tab을 입력 안에 가두고 Esc로 후보에 돌아간다", async () => {
-  // 중첩된 입력의 닫기가 바깥 모달이나 메인 필터를 닫으면 안 된다.
+test("Refs Ask traps Tab inside input and Esc returns to candidates", async () => {
+  // Closing nested input must not close outer modals or main filters.
   const app = await mount();
   try {
     await app.openRefs(); await app.clickIn("git-browser-list", "origin/main"); app.mockInput.pressKey("a"); await app.renderOnce();
@@ -1614,7 +1614,7 @@ test("Refs의 Ask는 Tab을 입력 안에 가두고 Esc로 후보에 돌아간�
   } finally { await app.close(); }
 });
 
-test("Refs의 Local/Remote/Tags는 이름만 첨부·복사하고 Enter는 조회 필터만 바꾼다", async () => {
+test("Refs Local/Remote/Tags attach and copy only names while Enter changes query filters only", async () => {
   // Reference selection never changes the working branch or includes a tip hash.
   const app = await mount();
   try {
@@ -1633,7 +1633,7 @@ test("Refs의 Local/Remote/Tags는 이름만 첨부·복사하고 Enter는 조�
   } finally { await app.close(); }
 });
 
-test("Git diff의 h/l은 양쪽 코드의 가로 위치를 함께 움직이고 키 입력을 전송하지 않는다", async () => {
+test("Git diff h/l synchronizes horizontal positions without forwarding input", async () => {
   const longLine = `const horizontal = "${"wide content ".repeat(30)}";\n`;
   const source: GitSource = { load: async () => ok(snapshot()), details: async () => { throw new Error("Unexpected details request"); },
     compare: async () => ok({ before: longLine, after: longLine + "// after\n", beforeLabel: "before", afterLabel: "after" }) };
@@ -1647,7 +1647,7 @@ test("Git diff의 h/l은 양쪽 코드의 가로 위치를 함께 움직이고 �
   } finally { await app.close(); }
 });
 
-test("파일 선택은 팝업 오른쪽 diff를 갱신하고 양쪽을 하나의 포커스로 스크롤한다", async () => {
+test("File selection updates right-side diffs and scrolls both sides as one focus region", async () => {
   // The comparison has unchanged content far outside the modified middle line.
   const app = await mount();
   try {
@@ -1674,7 +1674,7 @@ test("파일 선택은 팝업 오른쪽 diff를 갱신하고 양쪽을 하나의
   } finally { await app.close(); }
 });
 
-test("코드 드래그는 줄 번호 없이 한쪽만 자동 복사하고 Agent 요청을 만들지 않는다", async () => {
+test("Code dragging auto-copies only one side without line numbers or Agent requests", async () => {
   // Both code panes are native renderables; only the final clipboard boundary is stubbed.
   const app = await mount();
   try {
@@ -1689,7 +1689,7 @@ test("코드 드래그는 줄 번호 없이 한쪽만 자동 복사하고 Agent 
   } finally { await app.close(); }
 });
 
-test("Git 상태는 worktree 왕복과 새 UI 복원 뒤에도 선택·diff·스크롤을 유지한다", async () => {
+test("Git selection, diffs, and scroll survive worktree round-trips and UI restoration", async () => {
   // Only view identities and positions are persisted, not file content or pending requests.
   const app = await mount(); let retained: WorkViewPreferences;
   try {
@@ -1708,8 +1708,8 @@ test("Git 상태는 worktree 왕복과 새 UI 복원 뒤에도 선택·diff·스
   } finally { await restored.close(); }
 });
 
-test.each([false, true])("Git 전송 대상 커맨드는 재지정 %j에서도 입력을 보존하고 선택한 세션으로만 전송한다", async overridden => {
-  // 입력창의 글자 키는 보존하고 전송 대상은 독립적인 설정 가능 커맨드로 변경한다.
+test.each([false, true])("Remapped %j Git target commands preserve input and send only to selected sessions", async overridden => {
+  // Keep input characters literal and expose targets as independent configurable commands.
   const keymap = expectOk(parseKeymap({ bindings: overridden ? { "git.change-session": [{ keys: "alt+s", scope: "git-prompt" }] } : {} }));
   const app = await mount({ keymap });
   try {
@@ -1718,7 +1718,7 @@ test.each([false, true])("Git 전송 대상 커맨드는 재지정 %j에서도 �
     await app.mockInput.typeText("explain hjklay"); app.mockInput.pressArrow("left");
     const value = input.value, caret = input.cursorOffset;
 
-    // 기본 키를 길게 눌러도 한 번만 전환하고 재지정도 초안·커서를 보존한다.
+    // Held defaults switch once; overrides preserve drafts and carets too.
     if (overridden) app.mockInput.pressKey("s", { meta: true });
     else for (const event of ["\x1b[115;5u", "\x1b[115;5:2u", "\x1b[115;5:3u"]) {
       const parsed = parseKeypress(event, { useKittyKeyboard: true }); if (!parsed) throw new Error("Invalid Kitty key");
@@ -1732,33 +1732,33 @@ test.each([false, true])("Git 전송 대상 커맨드는 재지정 %j에서도 �
     expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
     app.mockInput.pressEnter(); await app.waitFor(() => app.requests.length === 1);
 
-    // 대상 선택만으로는 실행하지 않고 명시적 전송에서만 두 번째 세션에 전달한다.
+    // Target selection alone never executes; explicit submission reaches the second session.
     expect(app.requests[0]?.id).toBe("a2"); expect(app.requests[0]?.text).toContain(value);
     expect(app.view.promptDrafts.a1).toBe("existing Agent draft");
   } finally { await app.close(); }
 });
 
-test("Git 요청이 전송 중이면 대상 변경 커맨드를 소비하고 재시도 대상을 보존한다", async () => {
-  // 첫 요청의 수락 여부가 정해지기 전에는 전송 대상을 바꾸면 안 된다.
+test("Target commands during Git submission are consumed while preserving retry targets", async () => {
+  // Targets cannot change before the first request's acceptance is known.
   const pending = Promise.withResolvers<Result<void, ExpectedError>>(), targets: string[] = [];
   const app = await mount({ actions: { prompt: id => { targets.push(id); return pending.promise; } } });
   try {
     await app.chooseCommit(); app.mockInput.pressKey("a"); await app.renderOnce();
     await app.mockInput.typeText("Retained request"); app.mockInput.pressEnter(); await app.waitFor(() => targets.length === 1);
 
-    // 전송 중 누른 키는 문자 입력으로도 새 대상으로도 반영되지 않는다.
+    // Keys during submission become neither input text nor new targets.
     app.mockInput.pressKey("s", { ctrl: true }); await app.renderOnce();
     pending.resolve(err(new InputError("Retry request"))); await app.waitForFrame(frame => frame.includes("Retry request"));
     const input = app.get("git-prompt"); if (!(input instanceof PromptInput)) throw new Error("Missing Git prompt");
     expect(input.value).toBe("Retained request");
     app.mockInput.pressEnter(); await app.waitFor(() => targets.length === 2);
 
-    // 거절 후 다시 전송해도 처음 선택한 세션을 사용한다.
+    // Retrying rejected submissions uses the originally selected session.
     expect(targets).toEqual(["a1", "a1"]); expect(app.creations).toEqual([]);
   } finally { pending.resolve(err(new InputError("cleanup"))); await app.close(); }
 });
 
-test("전송 대상 커맨드는 새 세션을 즉시 만들지 않고 전송 거절은 초안을 보존한다", async () => {
+test("Target commands defer session creation until submission and rejection preserves drafts", async () => {
   // The session selector includes an explicit New session choice, never implicit creation on browse.
   const app = await mount({ actions: { prompt: () => err(new InputError("Request rejected")) } });
   try {
@@ -1774,7 +1774,7 @@ test("전송 대상 커맨드는 새 세션을 즉시 만들지 않고 전송 �
   } finally { await app.close(); }
 });
 
-test("Reflog의 a는 이벤트 상세를 보내고 y는 전체 대상 해시를 복사한다", async () => {
+test("Reflog a sends event details and y copies complete target hashes", async () => {
   // Reflog uses the full-width history without resurrecting the right panel.
   const app = await mount();
   try {
@@ -1788,8 +1788,8 @@ test("Reflog의 a는 이벤트 상세를 보내고 y는 전체 대상 해시를 
   } finally { await app.close(); }
 });
 
-test("팝업의 파일명 드래그는 파일 선택이나 diff 포커스 이동 없이 부분 복사한다", async () => {
-  // 드래그는 텍스트 선택일 뿐 클릭 활성화로 처리하면 안 된다.
+test("Dragging popup filenames copies substrings without selecting files or focusing diffs", async () => {
+  // Text-selection drags must not become click activation.
   const app = await mount();
   try {
     await app.openWorkingTree();
@@ -1804,7 +1804,7 @@ test("팝업의 파일명 드래그는 파일 선택이나 diff 포커스 이동
   } finally { await app.close(); }
 });
 
-test("diff의 반대쪽까지 드래그해도 시작한 코드 영역만 복사한다", async () => {
+test("Dragging into opposite diffs copies only the originating code region", async () => {
   // A terminal-native whole-screen selection would mix both columns and line numbers.
   const app = await mount();
   try {
@@ -1818,7 +1818,7 @@ test("diff의 반대쪽까지 드래그해도 시작한 코드 영역만 복사�
   } finally { await app.close(); }
 });
 
-test("숨기면서 중단한 상세 조회는 복귀할 때 다시 읽고 이전 결과는 무시한다", async () => {
+test("Hidden interrupted detail lookups refetch on return and ignore stale results", async () => {
   // A cached commit list must not leave an aborted detail request stuck on Loading forever.
   const pending = Promise.withResolvers<Result<import("../model.ts").GitDetails, ExpectedError>>();
   let reads = 0;
@@ -1836,7 +1836,7 @@ test("숨기면서 중단한 상세 조회는 복귀할 때 다시 읽고 이전
   } finally { pending.resolve(ok({ commit, message: "cleanup", files: [], branches: [] })); await app.close(); }
 });
 
-test("지원하지 않는 클립보드는 복사 성공으로 표시하지 않는다", async () => {
+test("Unsupported clipboards never report copy success", async () => {
   // The platform boundary can explicitly reject writes even when text selection works.
   const app = await mount({ actions: { copy: async () => err(new ClipboardError("Clipboard denied")) } });
   try {
@@ -1848,7 +1848,7 @@ test("지원하지 않는 클립보드는 복사 성공으로 표시하지 않�
   } finally { await app.close(); }
 });
 
-test("Git diff의 테마 변경은 밝은 배경·구문색을 반영하고 스크롤과 요청 초안을 보존한다", async () => {
+test("Git diff themes update light backgrounds/syntax while preserving scroll and request drafts", async () => {
   // Theme updates must not reset navigation or accidentally send the open request.
   const app = await mount();
   const dark: TerminalColors = { palette: ["#000000", "#AA2222", "#228822", "#887700", "#2255AA", "#AA22AA", "#117799", "#DDDDDD"],
@@ -1890,7 +1890,7 @@ test("Git diff의 테마 변경은 밝은 배경·구문색을 반영하고 스�
   } finally { await app.close(); }
 });
 
-test("좁은 화면의 diff와 Reflog 전환은 기존 선택과 하단 푸터를 유지한다", async () => {
+test("Compact diff/Reflog transitions preserve selection and bottom footers", async () => {
   // Native layout must not assume the original Neovim viewer's minimum terminal width.
   const app = await mount();
   try {
@@ -1905,7 +1905,7 @@ test("좁은 화면의 diff와 Reflog 전환은 기존 선택과 하단 푸터�
   } finally { await app.close(); }
 });
 
-test("renderer가 먼저 종료돼도 늦은 Git 응답과 정리는 native 버퍼를 접근하지 않는다", async () => {
+test("Renderer-first shutdown prevents late Git responses and cleanup from accessing native buffers", async () => {
   // UI shutdown is independent from the lifetime of a slow read-only query.
   const pending = Promise.withResolvers<Result<import("../model.ts").GitDetails, ExpectedError>>();
   const app = await mount({ source: { load: async () => ok(snapshot()), details: () => pending.promise, compare: async () => ok(comparison()) } });
@@ -1920,7 +1920,7 @@ test("renderer가 먼저 종료돼도 늦은 Git 응답과 정리는 native 버�
   } finally { pending.resolve(ok({ commit, message: "cleanup", files: [], branches: [] })); await app.close(); }
 });
 
-test("다른 worktree 선택 뒤 늦은 조회 응답은 현재 Git 화면을 덮어쓰지 않는다", async () => {
+test("Late worktree lookups never overwrite current Git screens", async () => {
   // The first source ignores cancellation deliberately to exercise the UI generation guard.
   const pending = Promise.withResolvers<Result<GitSnapshot, ExpectedError>>();
   const app = await mount({ actions: { source: (worktree) => worktree.id === "demo:feature" ? {

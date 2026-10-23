@@ -123,7 +123,7 @@ test("Empty-conversation help leaves logos visible and restores logo/input focus
   } finally { await app.close(); }
 });
 
-test("작은 화면의 로고는 입력창을 침범하지 않고 확대·테마 변경 후에도 중앙에 남는다", async () => {
+test("Compact logos avoid input and remain centered after expansion and theme changes", async () => {
   // The terminal mark uses theme colors and must remain usable without image or font protocols.
   const app = await mount();
   try {
@@ -146,7 +146,7 @@ test("작은 화면의 로고는 입력창을 침범하지 않고 확대·테마
   } finally { await app.close(); }
 });
 
-test("메시지가 없는 실행·실패도 실제 상태를 숨기지 않는다", async () => {
+test("Message-free execution and failures never hide actual state", async () => {
   // Empty transcript content must not suppress real operational feedback.
   const app = await mount();
   try {

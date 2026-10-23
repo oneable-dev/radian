@@ -8,7 +8,7 @@ function complete(transcript: SessionTranscript, message: Message): void {
   transcript.handle({ type: "message_start", message }); transcript.handle({ type: "message_end", message });
 }
 
-test("같은 도구의 병렬 호출과 역순 결과를 호출 ID로 묶고 알 수 없는 인수를 보존한다", () => {
+test("Parallel tool calls pair reversed results by call ID and preserve unknown arguments", () => {
   // Identical tool names must not cause the second result to overwrite the first call.
   const transcript = new SessionTranscript([]);
   const assistant = fixtureMessage("openai-responses", "openai", "fixture");
@@ -31,7 +31,7 @@ test("같은 도구의 병렬 호출과 역순 결과를 호출 ID로 묶고 알
   expect(tools[1]?.error).toBe("second result"); expect(tools[1]?.text).toContain('"nested"');
 });
 
-test("스트리밍 블록은 완료까지 같은 섹션 ID를 유지하며 도구 중간 결과도 반영한다", () => {
+test("Streaming blocks retain section IDs through completion and include intermediate tool results", () => {
   const transcript = new SessionTranscript([]);
   const partial = fixtureMessage("openai-responses", "openai", "fixture");
   partial.content = [{ type: "text", text: "first" }, { type: "toolCall", id: "call", name: "bash", arguments: { command: "probe" } }];
@@ -51,7 +51,7 @@ test("스트리밍 블록은 완료까지 같은 섹션 ID를 유지하며 도�
   expect(transcript.sections[1]?.status).toBe("cancelled");
 });
 
-test("저장 대화는 최근 12개나 미리보기 길이로 잘리지 않고 원문과 저장 엔트리 ID를 복원한다", () => {
+test("Saved conversations restore full source and entry IDs without 12-section or preview truncation", () => {
   // SessionManager is in-memory; this test never writes to the user's JSONL history.
   const manager = SessionManager.inMemory("/fixture");
   const first = manager.appendMessage({ role: "user", content: "x".repeat(14000), timestamp: 1 });
@@ -64,7 +64,7 @@ test("저장 대화는 최근 12개나 미리보기 길이로 잘리지 않고 �
   expect(transcript.sections[0]?.text).toBe("x".repeat(14000));
 });
 
-test("실제 이미지 블록과 파일 참조 요약은 실시간·저장 복원에서 같고 원문과 이미지 데이터는 분리한다", () => {
+test("Live and restored image/file summaries match while keeping source text separate from image data", () => {
   const manager = SessionManager.inMemory("/fixture"), live = new SessionTranscript([]);
   const message: Message = { role: "user", timestamp: 1, content: [
     { type: "text", text: 'Inspect [Image #1] [Image #2] @"/private/workspace/panel.ts"' },
@@ -82,7 +82,7 @@ test("실제 이미지 블록과 파일 참조 요약은 실시간·저장 복�
   }
 });
 
-test("redacted Thinking은 서명을 노출하지 않고 이미지와 실패 메시지에 읽을 수 있는 대체 표시를 둔다", () => {
+test("Redacted Thinking hides signatures and provides readable image and error fallbacks", () => {
   const transcript = new SessionTranscript([]);
   const assistant = fixtureMessage("openai-responses", "openai", "fixture");
   assistant.content = [{ type: "thinking", thinking: "not visible", redacted: true, thinkingSignature: "opaque-secret" }];
@@ -97,7 +97,7 @@ test("redacted Thinking은 서명을 노출하지 않고 이미지와 실패 메
   expect(transcript.sections.at(-1)?.status).toBe("error");
 });
 
-test.each([false, true])("취소 결과는 부분 응답 %s를 보존하되 오류 카드나 중복 오류 문구를 만들지 않는다", (partial) => {
+test.each([false, true])("Cancellation preserves partial %s responses without error cards or duplicate error text", (partial) => {
   // The SDK puts cancellation text in errorMessage too; stopReason is authoritative.
   let now = 1000;
   const transcript = new SessionTranscript([], { wallTime: () => now, monotonicTime: () => now });
@@ -124,7 +124,7 @@ test.each([false, true])("취소 결과는 부분 응답 %s를 보존하되 오�
   expect(JSON.stringify(restored.sections)).not.toContain("Request was aborted");
 });
 
-test("SDK 스킬 호출은 이름만 남기고 뒤따르는 사용자 요청을 별도 섹션으로 보존한다", () => {
+test("SDK skill calls show names while preserving trailing user requests as separate sections", () => {
   // Explicit invocation metadata is authoritative; hidden instructions and paths are not display text.
   const transcript = new SessionTranscript([]);
   const text = '<skill name="write-good-code" location="/private/skills/write-good-code/SKILL.md">\nInternal skill instructions\n</skill>\n\nImplement the button';
@@ -138,7 +138,7 @@ test("SDK 스킬 호출은 이름만 남기고 뒤따르는 사용자 요청을 
   expect(JSON.stringify(transcript.sections)).not.toContain("/private/");
 });
 
-test("이미지가 있는 스킬 요청도 내부 지침이나 생성된 이미지 placeholder를 요약으로 복제하지 않는다", () => {
+test("Image skill requests never duplicate internal instructions or generated placeholders into summaries", () => {
   const transcript = new SessionTranscript([]);
   complete(transcript, { role: "user", timestamp: 1, content: [
     { type: "text", text: '<skill name="review-code" location="/private/SKILL.md">\nRead @"/private/internal.ts"\n</skill>\n\nReview [Image #1]' },
@@ -150,12 +150,12 @@ test("이미지가 있는 스킬 요청도 내부 지침이나 생성된 이미�
   expect(JSON.stringify(transcript.sections)).not.toContain("PRIVATE_IMAGE_BYTES");
 });
 
-test.each([120, 0.5, undefined, 0, -1, Infinity, "120"])("bash timeout은 명시한 유효 초 단위 값만 표시 데이터에 보존한다: %j", (timeout) => {
-  // timeout이 없는 명령이나 유효하지 않은 값에 임의 제한을 만들어 붙이지 않는다.
+test.each([120, 0.5, undefined, 0, -1, Infinity, "120"])("Bash timeout projection preserves only explicitly valid seconds: %j", (timeout) => {
+  // Never invent limits for commands with missing or invalid timeout values.
   const manager = SessionManager.inMemory("/fixture"), assistant = fixtureMessage("openai-responses", "openai", "fixture");
   assistant.content = [{ type: "toolCall", id: "shell", name: "bash", arguments: { command: "printf '한글'\nprintf done", ...(timeout !== undefined ? { timeout } : {}) } }];
   manager.appendMessage(assistant);
-  // 저장 기록과 실시간 이벤트가 동일한 명령 요약과 제한 값을 투영한다.
+  // Saved history and live events project identical command summaries and limits.
   const live = new SessionTranscript([]); complete(live, assistant);
   const restored = new SessionTranscript(manager.getBranch());
   for (const section of [live.sections[0]!, restored.sections[0]!]) {
@@ -165,32 +165,32 @@ test.each([120, 0.5, undefined, 0, -1, Infinity, "120"])("bash timeout은 명시
   }
 });
 
-test("긴 명령 미리보기는 Unicode를 깨뜨리지 않고 자르되 timeout과 원문을 보존한다", () => {
-  // UTF-16 제한 경계에 이모지가 걸려도 고립된 surrogate를 만들지 않는다.
+test("Long command previews preserve Unicode, timeouts, and original text while truncating display", () => {
+  // Emoji at UTF-16 boundaries must not produce isolated surrogates.
   const assistant = fixtureMessage("openai-responses", "openai", "fixture"), transcript = new SessionTranscript([]);
   const command = "a".repeat(4094) + "😀 tail";
   assistant.content = [{ type: "toolCall", id: "long-shell", name: "bash", arguments: { command, timeout: 120 } }];
   complete(transcript, assistant);
-  // 미리보기 제한과 실행 인수는 별도 계약이므로 원문이나 시간 제한을 잘라 버리지 않는다.
+  // Preview limits and execution arguments are separate contracts; retain source and timeout.
   expect(transcript.sections[0]?.command).toBe("a".repeat(4094) + "…");
   expect(transcript.sections[0]?.timeoutSeconds).toBe(120); expect(transcript.sections[0]?.text).toContain(command);
 });
 
-test("일반 도구는 timeout 단위를 추측하지 않고 read 대상과 시작 줄을 간결하게 보존한다", () => {
-  // 확장 도구의 timeout 필드가 밀리초인지 초인지 알 수 없으므로 Bash 계약과 혼동하지 않는다.
+test("Generic tools never infer timeout units and preserve concise read targets and start lines", () => {
+  // Extension timeout units are unknown and must not inherit Bash semantics.
   const assistant = fixtureMessage("openai-responses", "openai", "fixture"), transcript = new SessionTranscript([]);
   assistant.content = [
     { type: "toolCall", id: "read", name: "read", arguments: { path: "/fixture/SKILL.md", offset: 7 } },
     { type: "toolCall", id: "extension", name: "custom_bridge", arguments: { timeout: 120 } },
   ];
   complete(transcript, assistant);
-  // 일반 파일 읽기는 스킬 호출로 바꾸지 않으며 확장 인수 원문은 계속 남긴다.
+  // Ordinary reads remain tools, not skills, and retain original extension arguments.
   expect(transcript.sections[0]?.summary).toBe("/fixture/SKILL.md:7");
   expect(transcript.sections[0]?.skillName).toBeUndefined();
   expect(transcript.sections[1]?.timeoutSeconds).toBeUndefined(); expect(transcript.sections[1]?.summary).toContain('"timeout":120');
 });
 
-test("일반 SKILL.md 읽기를 스킬 호출로 추측하지 않고 도구 실행으로 유지한다", () => {
+test("Ordinary SKILL.md reads remain tool executions rather than inferred skill calls", () => {
   const transcript = new SessionTranscript([]);
   const assistant = fixtureMessage("openai-responses", "openai", "fixture");
   assistant.content = [{ type: "toolCall", id: "read-skill", name: "read", arguments: { path: "/fixture/SKILL.md" } }];

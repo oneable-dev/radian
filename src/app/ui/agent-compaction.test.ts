@@ -54,7 +54,7 @@ test("Compaction shows dedicated spinners and status, then folded summaries whil
     const first = app.captureCharFrame(); app.clock.advance(80); await app.render();
     expect(app.captureCharFrame()).not.toBe(first); expect(label()).not.toContain("Previous delivered request");
 
-    // 압축이 끝나면 상태 문구를 지우고 긴 요약의 본문은 기본적으로 감춘다.
+    // Clear status after compaction and hide long summary bodies by default.
     await app.update({ status: "complete", output: "", error: null, sections: [...history(), summary()] });
     app.clock.advance(420); await app.render();
 
@@ -66,14 +66,14 @@ test("Compaction shows dedicated spinners and status, then folded summaries whil
   } finally { await app.close(); }
 });
 
-test("접힌 압축 요약은 키보드로 펼치고 접으며 접힌 상태에서도 원문 전체를 복사한다", async () => {
-  // 요약 전체가 viewport보다 길어도 처음에는 한 섹션 헤더만 보여야 한다.
+test("Folded compaction summaries toggle by keyboard and copy full source while collapsed", async () => {
+  // Initially show only one section header even when the summary exceeds the viewport.
   const app = await mount();
   try {
     await app.transcript();
     expect(app.captureCharFrame()).not.toContain("COMPACTION_SUMMARY_");
 
-    // 기존 transcript 접기 단축키를 그대로 사용해 본문을 펼치고 다시 접는다.
+    // Reuse existing transcript folding shortcuts to expand and collapse bodies.
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
     expect(app.captureCharFrame()).toContain("COMPACTION_SUMMARY_0"); expect(app.state()?.folded.compaction).toBe(false);
     app.mockInput.pressKey("z"); app.mockInput.pressKey("a"); await app.render();
@@ -84,10 +84,10 @@ test("접힌 압축 요약은 키보드로 펼치고 접으며 접힌 상태에�
   } finally { await app.close(); }
 });
 
-test("압축 요약 헤더를 클릭하면 펼침·접힘을 전환하고 일반 안내 섹션은 기본 펼침을 유지한다", async () => {
+test("Clicking compaction headers toggles folding while ordinary notices stay expanded", async () => {
   const app = await mount();
   try {
-    // 마우스로 압축 헤더를 눌러도 입력을 전송하거나 본문을 수정하지 않는다.
+    // Clicking compaction headers neither submits input nor modifies content.
     await app.clickSummary();
     expect(app.captureCharFrame()).toContain("COMPACTION_SUMMARY_0"); expect(app.state()?.folded.compaction).toBe(false);
     await app.clickSummary();
@@ -100,11 +100,11 @@ test("압축 요약 헤더를 클릭하면 펼침·접힘을 전환하고 일반
   } finally { await app.close(); }
 });
 
-test("사용자가 펼친 압축 요약은 스냅샷 갱신과 새 UI 복원 뒤에도 펼침 상태를 유지한다", async () => {
+test("User-expanded compaction summaries remain expanded across snapshots and UI restoration", async () => {
   let preferences: WorkViewPreferences | undefined;
   const app = await mount();
   try {
-    // 기본 접힘보다 사용자가 명시적으로 저장한 펼침 설정이 우선한다.
+    // Explicitly saved expansion overrides default folding.
     await app.transcript(); app.mockInput.pressKey("o", { ctrl: true }); await app.render();
     await app.update({ status: "complete", output: "", error: null, sections: [...history(), summary()] });
     expect(app.state()?.folded.compaction).toBe(false);
@@ -112,7 +112,7 @@ test("사용자가 펼친 압축 요약은 스냅샷 갱신과 새 UI 복원 뒤
   } finally { await app.close(); }
   const next = await mount(undefined, preferences);
   try {
-    // 새 renderable에서도 접힘 설정은 모델 대화가 아닌 UI 환경설정으로 복원한다.
+    // New renderables restore folding from UI preferences, not model conversations.
     await next.transcript();
     expect(next.state()?.folded.compaction).toBe(false); expect(next.captureCharFrame()).toContain("COMPACTION_SUMMARY_0");
     expect(next.sent).toEqual([]);

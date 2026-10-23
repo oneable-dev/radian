@@ -6,7 +6,7 @@ import { SearchInput } from "./search-input.ts";
 import { ok, type Result } from "../result.ts";
 import type { ExpectedError } from "../errors.ts";
 
-test.each(["search", "prompt"] as const)("%s 입력 여백은 커서를 보존해 포커스하고 텍스트 클릭은 네이티브 위치를 사용한다", async kind => {
+test.each(["search", "prompt"] as const)("%s input-padding clicks preserve caret while text clicks use native positions", async kind => {
   // Both fields share padding hit testing without replacing native text clicks.
   const app = await createTestRenderer({ width: 80, height: 12 });
   const input = kind === "search" ? new SearchInput(app.renderer, { id: "query", placeholder: "Search" })
@@ -28,7 +28,7 @@ test.each(["search", "prompt"] as const)("%s 입력 여백은 커서를 보존�
   } finally { if (input instanceof PromptInput) input.dispose(); await app.dispose(); }
 });
 
-test("공용 Prompt는 내용과 가용 공간으로 높이를 맞추고 줄바꿈·리사이즈 중 원문과 커서를 보존한다", async () => {
+test("Shared prompts size from content/space while retaining source/caret through newlines and resize", async () => {
   // The input owns editor rows and padding within the parent's height budget.
   const app = await createTestRenderer({ width: 120, height: 15 });
   const input = new PromptInput(app.renderer, () => {}, () => {});
@@ -51,7 +51,7 @@ test("공용 Prompt는 내용과 가용 공간으로 높이를 맞추고 줄바�
   } finally { input.dispose(); await app.dispose(); }
 });
 
-test("빈 프롬프트는 placeholder만 표시하고 포커스·리사이즈에도 보더와 초안을 만들지 않는다", async () => {
+test("Empty prompts show only placeholders without borders or drafts across focus/resize", async () => {
   // Prompt focus is indicated by the native caret, not horizontal or vertical rails.
   const app = await createTestRenderer({ width: 320, height: 8 });
   const owner = new BoxRenderable(app.renderer, { width: "100%", height: 8, paddingX: 2 });
@@ -78,7 +78,7 @@ test("빈 프롬프트는 placeholder만 표시하고 포커스·리사이즈에
   } finally { input.dispose(); await app.dispose(); }
 });
 
-test("보더 없는 입력에서도 붙여넣기 스피너는 오른쪽 여백에서 계속 보인다", async () => {
+test("Borderless inputs keep paste spinners visible in right padding", async () => {
   // Clipboard feedback retains its dedicated gutter independently of work-status effects.
   const clock = new ManualClock(), app = await createTestRenderer({ width: 40, height: 5, clock });
   const input = new PromptInput(app.renderer, () => {}, () => {});
@@ -93,7 +93,7 @@ test("보더 없는 입력에서도 붙여넣기 스피너는 오른쪽 여백�
   } finally { input.dispose(); await app.dispose(); }
 });
 
-test.each([1, 2])("높이가 %i행뿐이어도 입력 텍스트와 커서를 보존한다", async height => {
+test.each([1, 2])("Only %i rows still preserve input text and caret", async height => {
   // Short layouts spend their last row on the editor, never decoration.
   const app = await createTestRenderer({ width: 40, height: 5 });
   const input = new PromptInput(app.renderer, () => {}, () => {});
@@ -109,7 +109,7 @@ test.each([1, 2])("높이가 %i행뿐이어도 입력 텍스트와 커서를 보
   } finally { input.dispose(); await app.dispose(); }
 });
 
-test("공용 Prompt의 부모가 숨겨지면 클립보드 읽기와 로딩 타이머를 정리하고 늦은 결과를 버린다", async () => {
+test("Hiding shared Prompt parents cleans clipboard reads/loading timers and discards late results", async () => {
   // A hidden input must not accept a late clipboard result from its previous screen.
   const clock = new ManualClock(), app = await createTestRenderer({ width: 80, height: 12, clock });
   const pending = Promise.withResolvers<Result<ClipboardRepresentation, ExpectedError>>();

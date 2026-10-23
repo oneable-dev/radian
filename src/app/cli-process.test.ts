@@ -13,7 +13,7 @@ async function run(args:string[],cwd:string,config:string,state:string) {
   try {const code=await child.exited;return{code,stdout:await stdout,stderr:await stderr};}finally{clearTimeout(timer);}
 }
 
-test("실제 --help·--version·인수 오류·비TTY 실행은 손상된 설정을 읽거나 런타임 상태를 만들지 않는다",async()=>{
+test("Real help, version, invalid arguments, and non-TTY startup never read corrupt settings or create runtime state",async()=>{
   const directory=await mkdtemp(join(tmpdir(),"radian-cli-entry-")),config=join(directory,"config"),state=join(directory,"state");
   try {
     await mkdir(join(config,"radian"),{recursive:true});
@@ -23,12 +23,12 @@ test("실제 --help·--version·인수 오류·비TTY 실행은 손상된 설정
     const invalid=await run(["--unknown"],directory,config,state);expect(invalid.code).toBe(1);expect(invalid.stderr).toContain("INVALID_INPUT");
     const pipe=await run(["--demo"],directory,config,state);expect(pipe.code).toBe(1);expect(pipe.stderr).toContain("requires a TTY");
     for(const result of [help,version,invalid,pipe])expect(result.stdout+result.stderr).not.toContain("\x1b");
-    // 정보 출력과 거절된 진입은 상태 디렉터리 자체를 만들지 않는다.
+    // Informational output and rejected entry must not create state directories.
     expect(await readdir(directory)).toEqual(["config"]);
   }finally{await rm(directory,{recursive:true,force:true});}
 },20000);
 
-test("공용 runtime 조회·종료는 비TTY와 Git 저장소 밖에서도 동작하며 없는 서비스를 시작하지 않는다",async()=>{
+test("Shared runtime status and stop work outside Git and TTY without starting absent services",async()=>{
   const fixture=await createWorktreeFixture(),state=join(fixture.directory,"state"),config=join(fixture.directory,"config");
   try {
     await mkdir(join(config,"radian"),{recursive:true});await writeFile(join(config,"radian","workspace.json"),"{broken");

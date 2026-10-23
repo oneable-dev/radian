@@ -9,7 +9,7 @@ const payload = () => ({ rate_limit: { primary_window: { used_percent: 10, limit
 const auth = (account = "account-fixture") => ({ isUsingOAuth: () => true, getAuth: async () => ({ auth: { apiKey: token(account) } }) });
 const signal = () => new AbortController().signal;
 
-test("primary에 있는 주간 한도도 기간·사용률·리셋 시각을 손실 없이 정규화한다", () => {
+test("Primary weekly limits normalize duration, usage, and resets without loss", () => {
   // Current accounts may return only a weekly primary window, not a secondary window.
   const result = expectOk(parseOpenAiUsage(payload()));
 
@@ -17,7 +17,7 @@ test("primary에 있는 주간 한도도 기간·사용률·리셋 시각을 손
   expect(expectOk(parseOpenAiUsage({ rate_limit: null }))).toEqual([]);
 });
 
-test("손상된 사용률과 기간 및 리셋 값은 typed 프로토콜 오류로 반환한다", () => {
+test("Corrupt usage ratios, durations, and resets return typed protocol errors", () => {
   const invalid = [null, {}, { rate_limit: "wrong" },
     { rate_limit: { primary_window: { used_percent: 101 } } },
     { rate_limit: { primary_window: { used_percent: -1 } } },
@@ -28,7 +28,7 @@ test("손상된 사용률과 기간 및 리셋 값은 typed 프로토콜 오류�
   for (const value of invalid) expect(expectError(parseOpenAiUsage(value)).code).toBe("USAGE_PROTOCOL_ERROR");
 });
 
-test("기존 OAuth로 고정 HTTPS endpoint만 읽고 인증·계정 식별자를 결과에 노출하지 않는다", async () => {
+test("Existing OAuth reads only fixed HTTPS endpoints and results expose no credentials/account IDs", async () => {
   let calls = 0;
   const resolver = openAiUsageResolver(auth(), async (url, options) => {
     calls++;
@@ -48,7 +48,7 @@ test("기존 OAuth로 고정 HTTPS endpoint만 읽고 인증·계정 식별자�
   expect(alias.key).toBe(account.key);
 });
 
-test("API 키와 다른 제공자는 ChatGPT 계정 endpoint로 전송하지 않는다", async () => {
+test("API keys and other providers never reach ChatGPT account endpoints", async () => {
   let resolved = 0, fetched = 0;
   const resolver = openAiUsageResolver({ isUsingOAuth: () => false, getAuth: async () => { resolved++; return { auth: { apiKey: "sk-fixture" } }; } },
     async () => { fetched++; return Response.json(payload()); });
@@ -59,7 +59,7 @@ test("API 키와 다른 제공자는 ChatGPT 계정 endpoint로 전송하지 않
   expect(resolved).toBe(0); expect(fetched).toBe(0);
 });
 
-test("다른 OAuth 서비스의 토큰은 계정 헤더가 있어도 OpenAI에 보내지 않는다", async () => {
+test("Other OAuth tokens never reach OpenAI despite account headers", async () => {
   let fetched = 0;
   const resolver = openAiUsageResolver({ isUsingOAuth: () => true,
     getAuth: async () => ({ auth: { apiKey: "opaque-other-provider-token", headers: { "ChatGPT-Account-Id": "account-fixture" } } }) },
@@ -71,7 +71,7 @@ test("다른 OAuth 서비스의 토큰은 계정 헤더가 있어도 OpenAI에 �
 });
 
 for (const [status, code] of [[401, "USAGE_AUTH_REQUIRED"], [429, "USAGE_RATE_LIMITED"], [503, "USAGE_QUERY_FAILED"]] as const) {
-  test(`HTTP ${status}는 ${code}로 구분하고 서버 응답 본문은 노출하지 않는다`, async () => {
+  test(`HTTP ${status} maps to ${code} without exposing server response bodies`, async () => {
     const resolver = openAiUsageResolver(auth(), async () => new Response("PRIVATE_PROVIDER_BODY", { status, headers: { "retry-after": "120" } }));
     const account = expectOk(await resolver("openai-codex", signal()))!;
 
@@ -86,14 +86,14 @@ test.each([
   ["7200", 7200000],
   ["Wed, 21 Oct 2026 12:02:00 GMT", 120000],
   ["invalid", 60000],
-] as const)("Retry-After %s는 대기시간 %dms로 전달하고 긴 제한을 앞당기지 않는다", async (header, expected) => {
-  // Retry-After는 초 단위와 HTTP 날짜 형식 모두 서버가 정한 최소 대기시간이다.
+] as const)("Retry-After %s propagates as %dms without shortening longer limits", async (header, expected) => {
+  // Retry-After seconds and HTTP dates both define server minimum waits.
   const now = spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 9, 21, 12));
   const resolver = openAiUsageResolver(auth(), async () => new Response(null, { status: 429, headers: { "retry-after": header } }));
   try {
     const account = expectOk(await resolver("openai-codex", signal()))!;
 
-    // 파싱한 대기시간이 모니터에 손실 없이 전달되어야 backoff보다 긴 제한도 지킬 수 있다.
+    // Preserve parsed waits through monitors, including limits longer than backoff.
     const failure = expectError(await account.load(signal()));
 
     expect(failure).toBeInstanceOf(UsageError);
@@ -101,7 +101,7 @@ test.each([
   } finally { now.mockRestore(); }
 });
 
-test("네트워크 실패와 잘못된 JSON을 빈 사용량 성공으로 바꾸지 않는다", async () => {
+test("Network failures and invalid JSON never become empty usage success", async () => {
   const network = openAiUsageResolver(auth(), async () => { throw new TypeError("network fixture"); });
   const malformed = openAiUsageResolver(auth(), async () => new Response("not json"));
   const first = expectOk(await network("openai-codex", signal()))!;
@@ -111,7 +111,7 @@ test("네트워크 실패와 잘못된 JSON을 빈 사용량 성공으로 바꾸
   expect(expectError(await second.load(signal())).code).toBe("USAGE_PROTOCOL_ERROR");
 });
 
-test("SDK 인증 실패만 분류하고 예상하지 못한 SDK 결함은 원래 예외로 남긴다", async () => {
+test("Classify only SDK authentication failures while preserving unexpected SDK exceptions", async () => {
   const defect = new TypeError("auth implementation defect");
   const expected = openAiUsageResolver({ isUsingOAuth: () => true, getAuth: async () => { throw new ModelsError("oauth", "fixture expired"); } });
   const unexpected = openAiUsageResolver({ isUsingOAuth: () => true, getAuth: async () => { throw defect; } });

@@ -10,8 +10,8 @@ function colors(background: string): TerminalColors {
     highlightForeground: null, highlightBackground: null };
 }
 
-test("도착한 VT 스냅샷은 다음 프레임의 표시 전에 반영하고 화면 전체 reset을 반복하지 않는다", async () => {
-  // 첫 표시 프레임이 빈 VT이거나 직전 스냅샷이면 사용자에게 깜빡임이 노출된다.
+test("Incoming VT snapshots apply before the next visible frame without repeated full resets", async () => {
+  // Blank or previous-snapshot first frames expose flicker to users.
   const app = await createTestRenderer({ width: 20, height: 2 });
   const surface = new TerminalSurface(app.renderer, "first-paint"); app.renderer.root.add(surface.root);
   try {
@@ -20,7 +20,7 @@ test("도착한 VT 스냅샷은 다음 프레임의 표시 전에 반영하고 �
     await app.renderOnce();
     expect(app.captureCharFrame()).toContain("FIRST-SNAPSHOT");
 
-    // 스냅샷이 없으면 같은 화면을 유지하고, 새 스냅샷도 한 프레임 뒤로 미루지 않는다.
+    // Missing snapshots retain current screens and fresh snapshots never wait an extra frame.
     await app.renderOnce(); expect(app.captureCharFrame()).toContain("FIRST-SNAPSHOT");
     surface.display({ id: "test", worktreeId: "tree", pid: 2, cols: 20, rows: 2, revision: 2,
       exited: false, exitCode: null, ansi: "\x1bcSECOND-SNAPSHOT" });
@@ -28,14 +28,14 @@ test("도착한 VT 스냅샷은 다음 프레임의 표시 전에 반영하고 �
   } finally { surface.dispose(); await app.dispose(); }
 });
 
-test("내장 터미널의 기본색과 ANSI 팔레트는 외부 테마를 따르고 명시적 RGB 배경은 보존한다", async () => {
-  // 앱 패널과 다른 외부 배경색을 사용해 불투명 검정 기본값 회귀를 구분한다.
+test("Embedded terminal defaults/ANSI follow outer themes while explicit RGB backgrounds persist", async () => {
+  // Distinct outer/panel colors reveal opaque-black default regressions.
   const app = await createTestRenderer({ width: 20, height: 2 });
   const theme = new TerminalTheme(app.renderer, colors("#123456"));
   const surface = new TerminalSurface(app.renderer, "theme-terminal", theme);
   app.renderer.root.add(surface.root);
   try {
-    // 전체 프레임 reset 뒤에도 기본색과 ANSI 빨강, 프로그램의 RGB 배경을 각각 적용한다.
+    // After full reset, apply defaults, ANSI red, and program RGB backgrounds independently.
     surface.display({ id: "test", worktreeId: "tree", pid: 2, cols: 20, rows: 2, revision: 1,
       exited: false, exitCode: null, ansi: "\x1bcA\x1b[31mB\x1b[48;2;70;80;90mC" });
     await app.renderOnce(); await app.renderOnce();
@@ -46,7 +46,7 @@ test("내장 터미널의 기본색과 ANSI 팔레트는 외부 테마를 따르
     expect(spans.find((span) => span.text === "B")!.fg.toInts().slice(0, 3)).toEqual([171, 205, 239]);
     expect(spans.find((span) => span.text === "C")!.bg.toInts().slice(0, 3)).toEqual([70, 80, 90]);
 
-    // 호스트 테마 변경은 기존 화면과 이후에 생성한 surface 모두에 반영한다.
+    // Host theme changes affect existing and subsequently created surfaces.
     app.renderer.emit("palette", colors("#654321"));
     await app.renderOnce(); await app.renderOnce();
     expect(app.captureSpans().lines[0]!.spans[0]!.bg.toInts().slice(0, 3)).toEqual([101, 67, 33]);
@@ -60,8 +60,8 @@ test("내장 터미널의 기본색과 ANSI 팔레트는 외부 테마를 따르
   } finally { surface.dispose(); theme.dispose(); await app.dispose(); }
 });
 
-test("조회되지 않은 색상은 렌더러 기본값을 유지하고 theme 정리는 구독을 해제한다", async () => {
-  // 응답하지 않는 외부 터미널은 지원되지 않는 색상을 null로 제공한다.
+test("Unknown colors retain renderer defaults and theme cleanup unsubscribes", async () => {
+  // Nonresponding outer terminals report unsupported colors as null.
   const app = await createTestRenderer({ width: 20, height: 2 });
   const theme = new TerminalTheme(app.renderer, { ...colors("#123456"), defaultBackground: null, defaultForeground: null,
     palette: [], cursorColor: null });

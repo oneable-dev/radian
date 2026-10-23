@@ -42,7 +42,7 @@ test("Only settled requests show gray duration and completion time beneath their
   try {
     expect(app.captureCharFrame()).not.toContain("Worked for");
     await app.update([answer(completion)]);
-    // 별도의 선택 가능한 섹션이나 답변 원문을 만들지 않는 보조 행이다.
+    // Supplementary rows create neither selectable sections nor answer source text.
     const frame = app.captureCharFrame(), rows = frame.split("\n");
     expect(frame).toContain("Worked for 1m 30s • Sep 19 at 10:55 AM");
     const bodyY = rows.findIndex((line) => line.includes("FINAL_ANSWER")), footerY = rows.findIndex((line) => line.includes("Worked for"));
@@ -55,7 +55,7 @@ test("Only settled requests show gray duration and completion time beneath their
   } finally { await app.close(); }
 });
 
-test.each([["error", "Failed after 1m 30s"], ["cancelled", "Cancelled (1m 30s)"], ["unfinished", "Stopped after 1m 30s"]] as const)("종료 결과를 완료 문구와 구분한다: %s", async (outcome, text) => {
+test.each([["error", "Failed after 1m 30s"], ["cancelled", "Cancelled (1m 30s)"], ["unfinished", "Stopped after 1m 30s"]] as const)("Termination wording stays distinct from completion: %s", async (outcome, text) => {
   const app = await mount([answer({ ...completion, outcome })]);
   try {
     expect(app.captureCharFrame()).toContain(text); expect(app.captureCharFrame()).not.toContain("Worked for");
@@ -66,7 +66,7 @@ test.each([["error", "Failed after 1m 30s"], ["cancelled", "Cancelled (1m 30s)"]
   } finally { await app.close(); }
 });
 
-test("다음 요청·스트리밍·resize에도 이전 완료 정보는 원래 답변에 한 번만 남는다", async () => {
+test("Later requests, streaming, and resize leave old completion once on its original answer", async () => {
   const app = await mount([answer(completion)]);
   try {
     await app.update([answer({ ...completion }), { id: "q2", kind: "user", title: "You", text: "Next request", status: "complete" },
@@ -81,7 +81,7 @@ test("다음 요청·스트리밍·resize에도 이전 완료 정보는 원래 �
   } finally { await app.close(); }
 });
 
-test("완료 줄의 요청은 해당 답변에만 연결되고 이후 요청이나 초안으로 바뀌지 않는다", async () => {
+test("Completion request rows stay tied to their answers, not later requests or drafts", async () => {
   const first: TranscriptSection = { id: "q1", kind: "user", title: "You", text: "Review tab icons", status: "complete" };
   const second: TranscriptSection = { ...first, id: "q2", text: "Adjust tab padding" };
   const app = await mount([first, answer(completion)]);
@@ -99,7 +99,7 @@ test("완료 줄의 요청은 해당 답변에만 연결되고 이후 요청이�
   } finally { await app.close(); }
 });
 
-test("새 사용자 요청 없이 시작된 다음 실행은 이전 완료 요청을 재사용하지 않는다", async () => {
+test("New runs without user requests never reuse earlier completion requests", async () => {
   const request: TranscriptSection = { id: "original", kind: "user", title: "You", text: "Original task", status: "complete" };
   const app = await mount([request, answer(completion), { ...answer(completion), id: "background", text: "BACKGROUND_RESULT" }]);
   try {
@@ -109,7 +109,7 @@ test("새 사용자 요청 없이 시작된 다음 실행은 이전 완료 요�
   } finally { await app.close(); }
 });
 
-test("숨긴 취소 경계 뒤의 독립 실행은 취소된 요청 문구를 완료 푸터에 재사용하지 않는다", async () => {
+test("Independent runs after hidden cancellation never reuse cancelled requests in completion footers", async () => {
   const request: TranscriptSection = { id: "cancelled-request", kind: "user", title: "You", text: "Cancelled request", status: "complete" };
   const marker: TranscriptSection = { id: "cancelled-boundary", kind: "notice", title: "Cancelled", text: "", status: "cancelled", completion: { ...completion, outcome: "cancelled" } };
   const app = await mount([request, marker, answer(completion)]);
@@ -122,8 +122,8 @@ test("숨긴 취소 경계 뒤의 독립 실행은 취소된 요청 문구를 �
   } finally { await app.close(); }
 });
 
-test("숨긴 취소 경계에 완료 정보만 추가돼도 뒤따르는 답변의 요청 푸터를 갱신한다", async () => {
-  // 표시되는 섹션이 모두 같아도 숨긴 경계가 실행 소유권을 바꿀 수 있다.
+test("Adding completion-only hidden cancellation boundaries updates subsequent answer footers", async () => {
+  // Hidden boundaries can change run ownership without changing visible sections.
   const request: TranscriptSection = { id: "request", kind: "user", title: "You", text: "Earlier request", status: "complete" };
   const marker: TranscriptSection = { id: "boundary", kind: "notice", title: "Cancelled", text: "", status: "cancelled" };
   const app = await mount([request, marker, answer(completion)]);
@@ -131,17 +131,17 @@ test("숨긴 취소 경계에 완료 정보만 추가돼도 뒤따르는 답변�
   try {
     expect(footer().plainText).toContain("Earlier request");
 
-    // 취소 정착 정보만 도착하고 사용자 본문과 최종 답변은 변경되지 않는다.
+    // Deliver only cancellation settlement while user bodies and final answers stay unchanged.
     await app.update([request, { ...marker, completion: { ...completion, outcome: "cancelled" } }, answer(completion)]);
 
-    // 새 실행의 푸터가 취소된 요청을 빌려 쓰지 않도록 파생 표시만 다시 계산한다.
+    // Recompute derived display so fresh runs never borrow cancelled requests.
     expect(footer().plainText).toContain("Worked for");
     expect(footer().plainText).not.toContain("Earlier request");
     expect(app.captureCharFrame()).not.toContain("[Cancelled]");
   } finally { await app.close(); }
 });
 
-test("완료 요청의 말줄임은 resize에 맞춰 갱신하고 시간·원문·초안은 보존한다", async () => {
+test("Completion request truncation updates on resize while retaining duration, source, and drafts", async () => {
   const text = "Review 👩‍💻 한글 e\u0301 tab layout and keep all original details. ".repeat(12);
   const request: TranscriptSection = { id: "long-request", kind: "user", title: "You", text, status: "complete" };
   const app = await mount([request, answer(completion)]);
@@ -159,7 +159,7 @@ test("완료 요청의 말줄임은 resize에 맞춰 갱신하고 시간·원문
   } finally { await app.close(); }
 });
 
-test("스킬 완료 줄에는 호출 이름만 표시하고 내부 지침은 요청으로 복제하지 않는다", async () => {
+test("Skill completion rows show invocation names without duplicating internal instructions", async () => {
   const skill: TranscriptSection = { id: "skill", kind: "notice", title: "Skill", text: "PRIVATE_INTERNAL_SKILL_INSTRUCTIONS", skillName: "review-code", status: "complete" };
   const app = await mount([skill, answer(completion)]);
   try {
@@ -168,7 +168,7 @@ test("스킬 완료 줄에는 호출 이름만 표시하고 내부 지침은 요
   } finally { await app.close(); }
 });
 
-test("완료 요청의 아랫줄은 이미지·파일 배지를 보존하고 긴 본문만 줄인다", async () => {
+test("Completion request subrows retain image/file badges and truncate only long text", async () => {
   const text = 'Inspect the screenshots and update the file layout. '.repeat(20) + '[Image #1] [Image #2] @"/tmp/a.ts" @"/tmp/b.ts" @"/tmp/c.ts"';
   const user: TranscriptSection = { id: "attachments", kind: "user", title: "You", text, request: summarizeRequest(text, 2), status: "complete" };
   const app = await mount([user, answer(completion)]);
@@ -190,29 +190,29 @@ test("완료 요청의 아랫줄은 이미지·파일 배지를 보존하고 긴
 test("User sections and completion requests hide internal image guidance while preserving input and counts", async () => {
   // SDK messages contain original input and image-processing guidance before projection.
   const transcript = new SessionTranscript([]);
-  const input = '이거 두 개 확인해봐 [Image #1] [Image #2] @"/tmp/a.ts" @"/tmp/b.ts"';
+  const input = 'Review both images [Image #1] [Image #2] @"/tmp/a.ts" @"/tmp/b.ts"';
   transcript.handle({ type: "message_end", message: { role: "user", timestamp: 1, content: [
     { type: "text", text: `${input}\n\n[Image converted from image/heic to image/png.]\n[Image: original 3000x4000, displayed at 1500x2000. Multiply coordinates by 2.00 to map to original image.]` },
     { type: "image", mimeType: "image/png", data: "one" }, { type: "image", mimeType: "image/png", data: "two" },
   ] } });
 
-  // 실제 섹션과 완료 푸터를 렌더하고 사용자 섹션을 복사한다.
+  // Render actual sections and completion footers, then copy the user section.
   const app = await mount([...transcript.sections, answer(completion)]);
   try {
     pressLeader(app, "["); app.mockInput.pressKey("HOME"); app.mockInput.pressKey("y"); await app.render();
 
-    // 화면과 복사 내용에 내부 안내는 없고 기존 이미지 섹션과 배지는 남는다.
+    // Screen and copied text exclude internal guidance while images and badges remain.
     const frame = app.captureCharFrame();
-    expect(frame).toContain("이거 두 개 확인해봐");
+    expect(frame).toContain("Review both images");
     expect(frame).toContain("[read] clipboard-1.png"); expect(frame).toContain("[read] clipboard-2.png");
-    expect(frame).toContain("“이거 두 개 확인해봐”  [2 images] [2 files]");
+    expect(frame).toContain("“Review both images”  [2 images] [2 files]");
     expect(frame).not.toContain("[Image"); expect(frame).not.toContain("Multiply coordinates");
-    expect(app.copies).toEqual(['이거 두 개 확인해봐 @"/tmp/a.ts" @"/tmp/b.ts"']);
+    expect(app.copies).toEqual(['Review both images @"/tmp/a.ts" @"/tmp/b.ts"']);
     expect(app.view.promptDrafts.a1).toBe("Keep this draft");
   } finally { await app.close(); }
 });
 
-test("취소 푸터를 숨겨도 완료 정보의 저장 경고는 숨기지 않는다", async () => {
+test("Hiding cancellation footers never hides completion persistence warnings", async () => {
   // An accepted cancellation with a persistence warning is neither a failed request nor silent success.
   const app = await mount([answer({ ...completion, outcome: "cancelled", warning: "[STORAGE_FAILED] Cancellation timing could not be saved." })]);
   try {
@@ -222,7 +222,7 @@ test("취소 푸터를 숨겨도 완료 정보의 저장 경고는 숨기지 않
   } finally { await app.close(); }
 });
 
-test("완료 뒤 부가 저장 경고는 요청 실패나 새 본문으로 숨기지 않고 별도로 설명한다", async () => {
+test("Post-completion persistence warnings appear separately instead of becoming failures or new bodies", async () => {
   const app = await mount([answer({ ...completion, warning: "[STORAGE_FAILED] Run finished, but saving its timing could not be confirmed." })]);
   try {
     expect(app.captureCharFrame()).toContain("Worked for 1m 30s"); expect(app.captureCharFrame()).toContain("STORAGE_FAILED");

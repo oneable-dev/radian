@@ -22,7 +22,7 @@ async function mount(options: ConstructorParameters<typeof PromptInput>[3] = {})
   return { ...app, input, notices, details, async close() { input.dispose(); await app.dispose(); } };
 }
 
-test.each(["", "/", "@"])("Ctrl+V는 입력이 %j여도 이미지 첨부를 추가하고 기존 입력과 포커스를 보존한다", async (prefix) => {
+test.each(["", "/", "@"])("Ctrl+V adds images with %j input while preserving existing input and focus", async (prefix) => {
   // Only OS clipboard contents are replaced; the real keymap, router, menu and attachment conversion stay active.
   const directory = await mkdtemp(join(tmpdir(), "radian-clipboard-keys-"));
   let reads = 0, paste: Promise<void> | undefined;
@@ -52,8 +52,8 @@ test.each(["", "/", "@"])("Ctrl+V는 입력이 %j여도 이미지 첨부를 추�
   } finally { router.dispose(); menu.dispose(); await app.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("읽기 전용 Prompt는 키·붙여넣기를 무시하고 OS 클립보드도 읽지 않는다", async () => {
-  // 미리보기에는 같은 입력 컴포넌트를 쓰지만 읽기나 파일 생성 부작용은 없어야 한다.
+test("Read-only prompts ignore keys and pastes without reading OS clipboards", async () => {
+  // Preview reuses input components without read or file-creation side effects.
   let reads = 0;
   const app = await mount({ readOnly: true, clipboard: {
     read: async () => { reads++; return ok({ mimeType: "image/png", bytes: tinyPng() }); }, dispose: async () => {},
@@ -61,19 +61,19 @@ test("읽기 전용 Prompt는 키·붙여넣기를 무시하고 OS 클립보드�
   try {
     app.input.value = "Saved draft";
 
-    // 일반 키, 네이티브 붙여넣기와 명시적 클립보드 경로를 모두 시도한다.
+    // Try ordinary keys, native paste, and explicit clipboard actions.
     await app.mockInput.typeText("edit"); app.mockInput.pressBackspace();
     app.mockInput.pressEnter(); app.mockInput.pressKey("return", { shift: true });
     await app.mockInput.pasteBracketedText("pasted edit"); app.input.pasteText("direct paste");
     await app.input.pasteClipboard(); await app.renderOnce();
 
-    // 저장된 표시값은 유지하고 첨부·로딩·OS 읽기를 만들지 않는다.
+    // Preserve saved display values without attachments, loading, or OS reads.
     expect(app.input.value).toBe("Saved draft"); expect(reads).toBe(0);
     expect(app.input.draft.tokens).toEqual([]); expect(app.input.pending).toBe(false); expect(app.input.activity.root.visible).toBe(false);
   } finally { await app.close(); }
 });
 
-test("직접 읽은 클립보드 이미지는 번호로 표시하고 초안에 유지되는 비공개 파일을 참조한다", async () => {
+test("Clipboard images display numbers and reference private files retained in drafts", async () => {
   const directory = await mkdtemp(join(tmpdir(), "radian-clipboard-ui-"));
   const app = await mount({cacheRoot: directory, clipboard: {read: async () => ok({mimeType: "image/png", bytes: tinyPng()}), dispose: async () => {}}});
   try {
@@ -86,7 +86,7 @@ test("직접 읽은 클립보드 이미지는 번호로 표시하고 초안에 �
   } finally {await app.close(); await rm(directory, {recursive:true,force:true});}
 });
 
-test("클립보드 읽기 중 세션 초안이 교체되면 늦은 이미지를 새 입력에 넣지 않는다", async () => {
+test("Late clipboard images never enter drafts replaced during reading", async () => {
   const gate = Promise.withResolvers<Result<ClipboardRepresentation, ExpectedError>>();
   const app = await mount({clipboard: {read: () => gate.promise, dispose: async () => {}}});
   try {
@@ -98,7 +98,7 @@ test("클립보드 읽기 중 세션 초안이 교체되면 늦은 이미지를 
   } finally {await app.close();}
 });
 
-test("클립보드 읽기 중 커서를 옮기면 잘못된 위치에 삽입하지 않고 재시도를 안내한다", async () => {
+test("Moving the caret during clipboard reads prevents misplaced insertion and offers retry", async () => {
   const gate = Promise.withResolvers<Result<ClipboardRepresentation, ExpectedError>>();
   const app = await mount({clipboard: {read: () => gate.promise, dispose: async () => {}}});
   try {
@@ -110,7 +110,7 @@ test("클립보드 읽기 중 커서를 옮기면 잘못된 위치에 삽입하�
   } finally {await app.close();}
 });
 
-test("초안 교체 후 undo·redo가 이전 세션의 첨부 메타데이터를 되살리지 않는다", async () => {
+test("Undo/redo after draft replacement never restores previous-session attachment metadata", async () => {
   const app = await mount();
   try {
     app.input.attachFile("/tmp/secret.png"); await app.mockInput.typeText(" old");
@@ -121,7 +121,7 @@ test("초안 교체 후 undo·redo가 이전 세션의 첨부 메타데이터를
   } finally {await app.close();}
 });
 
-test("접힌 붙여넣기 자체의 undo·redo는 표시와 원문을 함께 복원한다", async () => {
+test("Collapsed paste undo/redo restores display and source together", async () => {
   const app = await mount();
   try {
     const text = "long pasted content\n".repeat(100);
@@ -133,10 +133,10 @@ test("접힌 붙여넣기 자체의 undo·redo는 표시와 원문을 함께 복
   } finally {await app.close();}
 });
 
-test("긴 붙여넣기는 짧은 항목으로 보이지만 1,000자를 넘는 원문 전체를 전송한다", async () => {
+test("Long pastes display compactly while submitting full source exceeding 1,000 characters", async () => {
   const app = await mount();
   try {
-    // 화면 표현만 접고 실제 사용자 데이터는 보존해야 한다.
+    // Collapse only presentation; preserve actual user data.
     const text = "A".repeat(6324);
     await app.mockInput.pasteBracketedText(text); await app.renderOnce();
 
@@ -146,10 +146,10 @@ test("긴 붙여넣기는 짧은 항목으로 보이지만 1,000자를 넘는 �
   } finally { await app.close(); }
 });
 
-test("짧은 여러 줄 붙여넣기와 Shift·Alt Enter는 줄바꿈을 보존한다", async () => {
+test("Short multiline pastes and Shift/Alt Enter preserve newlines", async () => {
   const app = await mount();
   try {
-    // 줄바꿈은 키 입력이 아니라 붙여넣은 데이터의 일부다.
+    // Newlines are pasted data, not key events.
     await app.mockInput.pasteBracketedText("first\nsecond");
     app.mockInput.pressEnter({ shift: true }); await app.mockInput.typeText("third");
     app.mockInput.pressEnter({ meta: true }); await app.mockInput.typeText("fourth");
@@ -159,7 +159,7 @@ test("짧은 여러 줄 붙여넣기와 Shift·Alt Enter는 줄바꿈을 보존�
   } finally { await app.close(); }
 });
 
-test("첨부 경로는 번호로 표시하고 실제 전송에는 이미지 경로와 파일 참조를 보존한다", async () => {
+test("Attachment paths display numbers while submissions retain image paths and file references", async () => {
   const app = await mount();
   try {
     app.input.setWorkingDirectory("/workspace");
@@ -173,7 +173,7 @@ test("첨부 경로는 번호로 표시하고 실제 전송에는 이미지 경�
   } finally { await app.close(); }
 });
 
-test("첨부 앞뒤의 한글·emoji 편집과 저장·복원은 원문 위치와 커서를 보존한다", async () => {
+test("Korean/emoji edits around attachments preserve source positions and caret through save/restore", async () => {
   const app = await mount();
   try {
     const text = "원문👩🏽‍💻\n".repeat(100);
@@ -188,7 +188,7 @@ test("첨부 앞뒤의 한글·emoji 편집과 저장·복원은 원문 위치�
   } finally { await app.close(); }
 });
 
-test("Backspace는 접힌 붙여넣기 전체를 삭제하고 undo는 원문까지 복원한다", async () => {
+test("Backspace deletes whole collapsed pastes and undo restores their source", async () => {
   const app = await mount();
   try {
     const text = "large text ".repeat(200);
@@ -202,26 +202,26 @@ test("Backspace는 접힌 붙여넣기 전체를 삭제하고 undo는 원문까�
   } finally { await app.close(); }
 });
 
-test("첨부 상세는 조회만 하고 Backspace는 해당 항목만 제거한다", async () => {
-  // 상세 조회는 입력의 첨부와 커서를 바꾸지 않아야 한다.
+test("Attachment details are read-only and Backspace removes only the selected item", async () => {
+  // Viewing details must not change attachments or the input caret.
   const app = await mount();
   try {
     app.input.attachFile("/tmp/one.txt"); app.input.attachFile("/tmp/two.png");
     const draft = app.input.draft;
 
-    // 삭제 액션 없이 원문만 조회하고 입력창에서 일반 삭제를 수행한다.
+    // View source without deletion actions, then use ordinary input deletion.
     app.input.inspectAtCursor();
     expect(app.details[0]).toEqual({ title: "[Image #1]", text: "Image reference\n\n/tmp/two.png" });
     expect(app.input.draft).toEqual(draft);
     app.mockInput.pressBackspace();
 
-    // 선택한 첨부만 사라지고 나머지 파일 참조는 유지된다.
+    // Only the selected attachment disappears; remaining file references stay intact.
     expect(app.input.value).toBe("[File #1]"); expect(app.input.submission.images).toEqual([]);
     expect(app.input.submission.text).toBe('@"/tmp/one.txt"');
   } finally { await app.close(); }
 });
 
-test("완성 후보 삽입은 기존 첨부를 잃지 않고 대상 범위만 바꾼다", async () => {
+test("Completion replaces only its target range without losing attachments", async () => {
   const app = await mount();
   try {
     app.input.attachFile("/tmp/image.png"); await app.mockInput.typeText(" /mode");

@@ -13,8 +13,8 @@ test.each([
   { days: "default", policy: {}, age: 31, removed: true },
   { days: 7, policy: { retentionDays: 7 }, age: 10, removed: true },
   { days: "unlimited", policy: { retentionDays: null }, age: 100, removed: false },
-])("실제 데몬은 --config의 $days 보관 정책으로 닫힌 소유 기록만 시작 시 정리한다", async ({ policy, age, removed }) => {
-  // SDK·IPC는 실제로 사용하되 정책 적용 대상은 새 임시 저장소 안에만 만든다.
+])("Real daemons apply --config $days retention at startup only to closed owned history", async ({ policy, age, removed }) => {
+  // Use real SDK/IPC but create policy targets only in fresh temporary repositories.
   const fixture = await createWorktreeFixture();
   const options = { offline: true, stateRoot: join(fixture.directory, "state"), entry: join(import.meta.dir, "..", "index.ts"), config: join(fixture.directory, "settings.json") };
   const paths = runtimePaths(fixture.repository.id, true, options.stateRoot), tree = fixture.repository.worktrees[0]!;
@@ -34,7 +34,7 @@ test.each([
     }
     expectOk(await new RuntimeStore(paths).save({ version: 1, repositoryId: fixture.repository.id, repositories: [fixture.repository], records, preferences: structuredClone(emptyPreferences) }));
 
-    // 서로 다른 cwd에서 실행되는 데몬에도 CLI가 선택한 통합 설정 경로가 전달돼야 한다.
+    // CLI-selected unified config paths must reach daemons running under different cwd values.
     const connected = expectOk(await connectRuntime(fixture.repository, fixture.main, options)); if (!connected) throw new Error("Missing runtime"); client = connected;
     if (!client.snapshot.sessionRetention) await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => { unsubscribe(); reject(new Error("Initial retention sweep timed out")); }, 10000);
@@ -42,7 +42,7 @@ test.each([
     });
     const history = expectOk(await client.listHistory(tree.id));
 
-    // 열린 세션은 재실행만 복구하고 외부 기록은 정리하지 않으며 만료 기록만 보이지 않는다.
+    // Recover open runs only, preserve external history, and hide only expired records.
     expect(Object.keys(client.snapshot.details)).toEqual(["protected"]);
     expect(client.snapshot.sessionRetention?.retentionDays).toBe("retentionDays" in policy ? policy.retentionDays : 30);
     expect(client.snapshot.sessionRetention?.removed).toBe(removed ? 1 : 0);

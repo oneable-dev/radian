@@ -63,7 +63,7 @@ function savedOrder(manifest: RuntimeManifest, worktreeId: string): readonly str
   return manifest.repositories.flatMap(repo => repo.worktrees).find(tree => tree.id === worktreeId)!.sessions.map(session => session.id);
 }
 
-test("clear 후 재시작해도 새 대화를 가진 탭은 원래 위치를 유지한다", async () => {
+test("clear retains replaced-conversation tab positions across restart", async () => {
   // Clearing changes the conversation identity, not the tab identity or its position.
   const app = await setup();
   try {
@@ -85,7 +85,7 @@ test("clear 후 재시작해도 새 대화를 가진 탭은 원래 위치를 유
   } finally { await app.cleanup(); }
 });
 
-test("History에서 마지막에 다시 연 대화는 재시작 후에도 마지막 탭에 남는다", async () => {
+test("History conversations reopened last remain final tabs after restart", async () => {
   // A historical conversation keeps its old storage index but receives a new tab ID.
   const app = await setup();
   try {
@@ -109,7 +109,7 @@ test("History에서 마지막에 다시 연 대화는 재시작 후에도 마지
   } finally { await app.cleanup(); }
 });
 
-test("중간 탭 복원 실패와 새 탭 생성 후에도 화면·checkpoint·종료 저장의 순서를 유지한다", async () => {
+test("Failed middle-tab recovery and new creation preserve UI, checkpoint, and shutdown order", async () => {
   // A broken SDK file must remain an error tab, not move behind healthy or new tabs.
   const app = await setup();
   try {
@@ -140,7 +140,7 @@ test("중간 탭 복원 실패와 새 탭 생성 후에도 화면·checkpoint·�
   } finally { await app.cleanup(); }
 });
 
-test("미활성 저장소의 설정 저장과 종료는 저장된 탭 순서를 비우지 않는다", async () => {
+test("Inactive-repository preference saves and shutdown never clear stored tab order", async () => {
   // A cold host has an empty live catalog but still owns the previous session metadata.
   const app = await setup();
   let host: RepositoryHost | undefined, client: RuntimeClient | undefined;
@@ -169,7 +169,7 @@ test("미활성 저장소의 설정 저장과 종료는 저장된 탭 순서를 
   }
 });
 
-test.each(["legacy", "indexed"] as const)("%s 저장 데이터에 순서 정보가 없으면 기존 열린 레코드 순서를 유지한다", async format => {
+test.each(["legacy", "indexed"] as const)("%s persisted data without order metadata retains existing open-record order", async format => {
   // Older manifests and already-cleared metadata must not lose open sessions.
   const app = await setup();
   try {
@@ -189,7 +189,7 @@ test.each(["legacy", "indexed"] as const)("%s 저장 데이터에 순서 정보�
   } finally { await app.cleanup(); }
 });
 
-test("불완전한 순서 목록은 워크트리별로 적용하고 중복·닫힌 항목을 무시하며 누락된 열린 탭을 뒤에 붙인다", async () => {
+test("Partial orders apply per worktree, ignore duplicates/closed entries, and append missing open tabs", async () => {
   // Stale order metadata is only an ordering hint, never authority to reopen a conversation.
   const app = await setup();
   try {

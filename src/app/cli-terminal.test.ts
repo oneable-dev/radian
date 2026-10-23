@@ -22,7 +22,7 @@ function coloredSGR(raw:string):boolean {
     .some((code)=>code===38||code===48||code===58||code>=30&&code<=37||code>=40&&code<=47||code>=90&&code<=107));
 }
 
-test("실제 PTY의 --no-color와 NO_COLOR는 단색으로 그린 뒤 정상 detach와 터미널 복구를 마친다",async()=>{
+test("Real PTYs render monochrome with --no-color and NO_COLOR, then detach and restore terminals",async()=>{
   const directory=await mkdtemp(join(tmpdir(),"radian-cli-mono-"));
   try {
     for(const [args,env] of [[["--demo","--no-color"],{NO_COLOR:""}],[["--demo"],{NO_COLOR:"1"}]] as const) {
@@ -36,7 +36,7 @@ test("실제 PTY의 --no-color와 NO_COLOR는 단색으로 그린 뒤 정상 det
   }finally{await rm(directory,{recursive:true,force:true});}
 },30000);
 
-test("TERM=dumb는 실제 TTY에서도 UI 모드에 진입하지 않고 깨끗한 안내로 종료한다",async()=>{
+test("TERM=dumb rejects UI mode with clean guidance even on real TTYs",async()=>{
   const directory=await mkdtemp(join(tmpdir(),"radian-cli-dumb-"));
   try {
     const result=await terminalRun(["--demo"],directory,{TERM:"dumb"});

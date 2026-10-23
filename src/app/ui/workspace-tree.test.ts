@@ -22,8 +22,8 @@ async function mount(repositories = demoWorkspace(), size: { width?: number; hei
   return { ...app, selection, requests, get, line, cell, view, render, async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("워크스페이스 팝업은 저장소와 폴더·브랜치 두 줄을 표시하고 세션을 섞지 않는다", async () => {
-  // 워크트리의 브랜치는 별도 선택 항목이 아닌 같은 항목의 메타데이터다.
+test("Workspace popups show repositories plus two-row folder/branch items without sessions", async () => {
+  // Worktree branches are metadata on the same item, not separate candidates.
   const app = await mount();
   try {
     const main = app.get("worktree:demo:main"), label = app.get(`${main.id}:label`);
@@ -36,8 +36,8 @@ test("워크스페이스 팝업은 저장소와 폴더·브랜치 두 줄을 표
   } finally { await app.close(); }
 });
 
-test("키보드 이동과 백그라운드 갱신은 선택을 바꾸지 않고 Enter만 워크트리를 연다", async () => {
-  // 검색 팝업의 후보 커서는 현재 작업 세션과 독립적이다.
+test("Keyboard browsing and background updates preserve selection while only Enter opens worktrees", async () => {
+  // Popup candidate cursors are independent of current work sessions.
   const app = await mount();
   try {
     app.mockInput.pressKey("j"); await app.render();
@@ -52,8 +52,8 @@ test("키보드 이동과 백그라운드 갱신은 선택을 바꾸지 않고 E
   } finally { await app.close(); }
 });
 
-test.each(["search", "results"] as const)("%s 포커스에서 Ctrl+N/P는 화면 안 후보의 강조만 옮기고 스크롤하지 않는다", async focus => {
-  // 세 후보가 모두 보이는 목록에서는 키보드 탐색이 뷰포트를 움직일 이유가 없다.
+test.each(["search", "results"] as const)("Ctrl+N/P at %s focus moves visible highlights without scrolling", async focus => {
+  // Lists showing all three candidates need no viewport movement.
   const app = await mount();
   try {
     if (focus === "search") app.mockInput.pressTab({ shift: true });
@@ -61,7 +61,7 @@ test.each(["search", "results"] as const)("%s 포커스에서 Ctrl+N/P는 화면
     const tree = app.get("workspace-tree") as ScrollBoxRenderable, top = tree.scrollTop;
     const border = (id: string) => { const row = app.get(id); return app.captureCharFrame().split("\n")[row.y]![row.x]; };
 
-    // 검색에 포커스가 남아 있어도 다음 후보를 실제 화면에서 식별할 수 있어야 한다.
+    // Next candidates remain visibly identifiable even with search focus retained.
     app.mockInput.pressKey("n", { ctrl: true }); await app.render();
 
     expect(border("worktree:demo:feature")).toBe("┌"); expect(border("worktree:demo:main")).not.toBe("┌");
@@ -77,8 +77,8 @@ test.each(["search", "results"] as const)("%s 포커스에서 Ctrl+N/P는 화면
   } finally { await app.close(); }
 });
 
-test.each(["search", "results"] as const)("%s 포커스의 긴 목록에서도 Ctrl+N/P는 후보를 표시하며 필요한 만큼만 따라간다", async focus => {
-  // 화면 밖 후보로 이동할 때도 선택 표시 없이 목록만 스크롤하는 상태가 되면 안 된다.
+test.each(["search", "results"] as const)("Long-list Ctrl+N/P at %s focus reveals candidates with minimal scrolling", async focus => {
+  // Offscreen movement must not scroll lists without candidate highlighting.
   const repository = demoWorkspace()[0]!;
   const worktrees = Array.from({ length: 20 }, (_, index) => ({ ...repository.worktrees[0]!, id: `tree-${index}`, path: `/demo/${index}`, name: `workspace-${index}`, branch: `branch-${index}`, sessions: [] }));
   const app = await mount([{ ...repository, worktrees }], { width: 60, height: 12 });
@@ -87,7 +87,7 @@ test.each(["search", "results"] as const)("%s 포커스의 긴 목록에서도 C
     await app.render();
     const tree = app.get("workspace-tree") as ScrollBoxRenderable, theme = uiTheme(app.renderer);
 
-    // 다음/이전 후보가 이미 보이면 뷰포트를 유지하고, 벗어날 때만 그 후보를 드러낸다.
+    // Keep viewports for visible neighbors; reveal candidates only when outside.
     for (const [index, key] of [[1, "n"], [2, "n"], [3, "n"], [4, "n"], [5, "n"], [4, "p"], [3, "p"]] as const) {
       const row = app.get(`worktree:tree-${index}`), top = tree.scrollTop;
       const visible = row.y >= tree.viewport.y && row.y + row.height <= tree.viewport.y + tree.viewport.height;
@@ -104,8 +104,8 @@ test.each(["search", "results"] as const)("%s 포커스의 긴 목록에서도 C
   } finally { await app.close(); }
 });
 
-test("브랜치 줄 클릭도 같은 워크트리를 열고 팝업을 닫는다", async () => {
-  // 두 줄의 클릭 영역을 같은 워크트리로 취급한다.
+test("Branch-row clicks open the same worktree and close popups", async () => {
+  // Both row click targets belong to one worktree.
   const app = await mount();
   try {
     const feature = app.get("worktree:demo:feature"), label = app.get(`${feature.id}:label`);
@@ -117,8 +117,8 @@ test("브랜치 줄 클릭도 같은 워크트리를 열고 팝업을 닫는다"
   } finally { await app.close(); }
 });
 
-test.each([false, true])("밝기 %j에서도 팝업의 후보는 배경 대신 테두리·글자로 강조한다", async light => {
-  // 밝기 전환은 검색과 선택을 재생성하지 않아야 한다.
+test.each([false, true])("At brightness %j, popup candidates highlight with borders/text rather than backgrounds", async light => {
+  // Theme changes must not recreate searches or selections.
   const app = await mount();
   try {
     const theme = uiTheme(app.renderer);
@@ -133,8 +133,8 @@ test.each([false, true])("밝기 %j에서도 팝업의 후보는 배경 대신 �
   } finally { await app.close(); }
 });
 
-test.each([11, 12, 36])("높이 %i에서도 마지막 후보의 폴더와 브랜치를 표시하고 작업 너비를 유지한다", async height => {
-  // 모든 후보가 들어가지 않는 상황에서 실제 네이티브 viewport의 reveal을 검증한다.
+test.each([11, 12, 36])("At height %i, final candidates show folders/branches while preserving work width", async height => {
+  // Verify real native viewport reveal when not all candidates fit.
   const repository = demoWorkspace()[0]!;
   const worktrees = Array.from({ length: 20 }, (_, index) => ({ ...repository.worktrees[0]!, id: `tree-${index}`, path: `/demo/${index}`, name: `workspace-${index}`, branch: `branch-${index}`, sessions: [] }));
   const app = await mount([{ ...repository, worktrees }], { width: 60, height });
@@ -149,8 +149,8 @@ test.each([11, 12, 36])("높이 %i에서도 마지막 후보의 폴더와 브랜
   } finally { await app.close(); }
 });
 
-test("브랜치 갱신과 detached HEAD는 검색 후보를 재생성하거나 선택을 바꾸지 않는다", async () => {
-  // 파일시스템 watcher가 전달한 메타데이터 갱신도 기존 후보를 유지한다.
+test("Branch and detached HEAD updates never recreate candidates or change selection", async () => {
+  // Filesystem watcher metadata updates retain existing candidates.
   const app = await mount();
   try {
     const feature = app.get("worktree:demo:feature");

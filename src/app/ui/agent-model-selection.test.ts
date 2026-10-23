@@ -37,15 +37,15 @@ async function mount(overrides: Partial<WorkbenchActions> = {}) {
     async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("model 자동완성을 실행하면 검색 팝업을 열고 선택한 세션의 모델만 변경하며 프롬프트를 보내지 않는다", async () => {
-  // 명령은 모델 요청 대신 호스트 팝업을 열고 현재 모델을 식별해야 한다.
+test("model completion opens search and changes only the selected session's model without prompting", async () => {
+  // Commands open host popups instead of model requests and identify the current model.
   const app = await mount();
   try {
     await app.open("/mod");
     expect(app.get("model-picker").visible).toBe(true); expect(app.captureCharFrame()).toContain("Original model [Current]");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("model-list"); expect(app.sent).toEqual([]);
 
-    // 목록에서 /로 검색에 진입한 뒤 Enter를 누르면 모델과 표시된 effort를 함께 적용한다.
+    // Search with / from list focus; Enter applies both model and displayed effort.
     app.mockInput.pressKey("/"); await app.render(); await app.mockInput.typeText("other"); await app.render(); app.mockInput.pressEnter(); await app.render();
     expect(app.changes).toEqual([{ id: "a1", conversation: "first", model: { provider: "other", id: "target" }, effort: "off" }]);
     expect(app.get("model-picker").visible).toBe(false); expect(app.renderer.currentFocusedRenderable).toBe(app.prompt);
@@ -53,30 +53,30 @@ test("model 자동완성을 실행하면 검색 팝업을 열고 선택한 세�
   } finally { await app.close(); }
 });
 
-test("큰 모델 목록에서도 현재 모델을 맨 위에 표시하고 처음 Enter로 다른 모델을 오선택하지 않는다", async () => {
+test("Large model lists pin the current model first and initial Enter never selects another model accidentally", async () => {
   const many = Array.from({ length: 205 }, (_, index) => ({ ...catalog.models[1]!, id: `extra-${index}`, name: `Extra model ${index}` }));
   const app = await mount({ onListModels: async () => ok({ ...catalog, models: [...many, ...catalog.models] }) });
   try {
     await app.open();
     expect(app.captureCharFrame()).toContain("Original model [Current]");
 
-    // 표시 개수 상한 뒤에 있던 현재 모델도 초기 선택에서 빠지면 안 된다.
+    // Current models beyond the display cap must remain in initial selection.
     app.mockInput.pressEnter(); await app.render();
     expect(app.changes[0]?.model).toEqual({ provider: "fixture", id: "original" });
     expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("모델 행 클릭은 미리 선택만 하고 버튼 없이 Enter로 적용한다", async () => {
+test("Model-row clicks preview only and Enter applies without buttons", async () => {
   const app = await mount();
   try {
     await app.open();
     const row = app.get('model:["other","target"]');
 
-    // 모델 클릭만으로는 적용하지 않고 effort를 확인한 뒤 커맨드로 확정한다.
+    // Clicking only previews; inspect effort before confirming by command.
     await app.mockMouse.click(row.x + 2, row.y); await app.render();
     expect(app.changes).toEqual([]); expect(app.get("model-picker").visible).toBe(true);
-    // 별도 액션 행이나 닫기 아이콘 없이 선택과 적용을 구분한다.
+    // Separate preview from application without action rows or close icons.
     expect(app.renderer.root.findDescendantById("model-apply")).toBeUndefined();
     expect(app.renderer.root.findDescendantById("model-cancel")).toBeUndefined();
     const panel = app.get("model-dialog");
@@ -87,8 +87,8 @@ test("모델 행 클릭은 미리 선택만 하고 버튼 없이 Enter로 적용
   } finally { await app.close(); }
 });
 
-test("j/k와 h/l로 모델·effort를 미리 고르고 Tab 영역 이동 후 한 번에 적용한다", async () => {
-  // 목록에 포커스한 상태에서도 h/l로 현재 모델의 effort만 조절할 수 있다.
+test("j/k and h/l preview model/effort, then Tab and one confirmation apply both", async () => {
+  // h/l adjusts effort for the current model even while list-focused.
   const app = await mount();
   try {
     await app.open(); expect(app.renderer.currentFocusedRenderable?.id).toBe("model-list");
@@ -96,7 +96,7 @@ test("j/k와 h/l로 모델·effort를 미리 고르고 Tab 영역 이동 후 한
     app.mockInput.pressKey("j"); await app.render(); expect(app.captureCharFrame()).toContain("not supported (off)");
     app.mockInput.pressKey("k"); await app.render(); expect(app.captureCharFrame()).toContain("[medium]");
 
-    // 모델을 왕복해도 미리 고른 effort를 보존하고 방향키도 h/l과 같은 보조 입력으로 지원한다.
+    // Model round-trips preserve preview effort; arrows also work alongside h/l.
     app.mockInput.pressTab(); await app.render(); expect(app.renderer.currentFocusedRenderable?.id).toBe("model-effort");
     app.mockInput.pressKey("h"); await app.render(); expect(app.captureCharFrame()).toContain("[low]");
     app.mockInput.pressKey("l"); app.mockInput.pressArrow("right"); await app.render(); expect(app.captureCharFrame()).toContain("[high]");
@@ -116,7 +116,7 @@ test.each([
   ["ＲＩＧＩＮＡＬ fixture", "Original model [Current]"],
   ["model missing", "No matching models"],
   ["tgt", "No matching models"],
-] as const)("모델 검색어 %s는 모든 단어를 포함하는 후보만 표시한다", async (query, expected) => {
+] as const)("Model query %s shows only candidates containing every word", async (query, expected) => {
   // Provider, name and ID are searchable metadata, not model execution inputs.
   const app = await mount();
   try {
@@ -130,7 +130,7 @@ test.each([
   } finally { await app.close(); }
 });
 
-test("검색 창의 hjkl은 검색 문자이고 Ctrl+N/P만 목록을 이동한다", async () => {
+test("Search keeps hjkl literal while Ctrl+N/P moves candidates", async () => {
   const app = await mount();
   try {
     await app.open(); app.mockInput.pressKey("/"); await app.render();
@@ -147,7 +147,7 @@ test("검색 창의 hjkl은 검색 문자이고 Ctrl+N/P만 목록을 이동한�
   } finally { await app.close(); }
 });
 
-test("지원하는 effort만 표시하고 SDK가 보정한 미리 선택 값을 적용 전에 확인할 수 있다", async () => {
+test("Only supported efforts appear and normalized SDK previews are inspectable before application", async () => {
   const app = await mount({ onListModels: async () => ok({ ...catalog, models: [catalog.models[0]!,
     { ...catalog.models[1]!, reasoning: true, efforts: ["low", "medium"], effort: "medium" }] }) });
   try {
@@ -162,7 +162,7 @@ test("지원하는 effort만 표시하고 SDK가 보정한 미리 선택 값을 
   } finally { await app.close(); }
 });
 
-test("모델·effort 미리 선택을 Esc로 버리면 다시 열 때 현재 조합으로 시작한다", async () => {
+test("Esc discards model/effort previews and reopening starts from the current pair", async () => {
   const app = await mount();
   try {
     await app.open(); app.mockInput.pressKey("h"); app.mockInput.pressKey("j"); await app.render();
@@ -174,7 +174,7 @@ test("모델·effort 미리 선택을 Esc로 버리면 다시 열 때 현재 조
   } finally { await app.close(); }
 });
 
-test("model 인수 오류는 팝업이나 유료 프롬프트로 우회하지 않고 입력을 유지한다", async () => {
+test("Invalid model arguments preserve input without popup or paid prompt fallbacks", async () => {
   const app = await mount();
   try {
     await app.open("/model other/target");
@@ -201,8 +201,8 @@ test("Popup Esc closes and restores input without changing models or interruptin
   } finally { await app.close(); }
 });
 
-test("닫은 팝업의 늦은 모델 목록은 무시하고 로딩 타이머를 즉시 정리한다", async () => {
-  // 네트워크 경계만 지연시켜 팝업 수명보다 늦은 응답을 재현한다.
+test("Closed popups ignore late model lists and immediately clean loading timers", async () => {
+  // Delay only the network boundary to produce responses beyond popup lifetime.
   const gate = Promise.withResolvers<ReturnType<typeof ok<ModelCatalog>>>(); let signal: AbortSignal | undefined;
   const app = await mount({ onListModels: async (_id, _conversation, abort) => { signal = abort; return gate.promise; } });
   try {
@@ -216,7 +216,7 @@ test("닫은 팝업의 늦은 모델 목록은 무시하고 로딩 타이머를 
   } finally { gate.resolve(ok(catalog)); await app.close(); }
 });
 
-test("모델 조회 실패·검색 결과 없음·미인증 빈 목록을 구분하고 새로 조회할 수 있다", async () => {
+test("Model lookup failures, no matches, and unauthenticated empty lists stay distinct and refreshable", async () => {
   let calls = 0;
   const app = await mount({ onListModels: async () => ++calls === 1 ? err(new ModelSelectionError("Fixture login unavailable")) : ok(catalog) });
   try {
@@ -233,7 +233,7 @@ test("모델 조회 실패·검색 결과 없음·미인증 빈 목록을 구분
   finally { await empty.close(); }
 });
 
-test.each(["tab", "conversation"] as const)("선택 처리 중 %s이 바뀌면 팝업을 닫고 늦은 성공으로 포커스를 되돌리지 않는다", async (change) => {
+test.each(["tab", "conversation"] as const)("Changing %s during application closes popups without late success reclaiming focus", async (change) => {
   const gate = Promise.withResolvers<ReturnType<typeof ok<null>>>();
   const app = await mount({ onSelectModel: async () => gate.promise });
   try {
@@ -250,8 +250,8 @@ test.each(["tab", "conversation"] as const)("선택 처리 중 %s이 바뀌면 �
   } finally { gate.resolve(ok(null)); await app.close(); }
 });
 
-test("좁은 화면의 많은 effort 옵션도 줄바꿈해 화면 안에서 선택하고 적용한다", async () => {
-  // 최대 지원 범위를 가진 모델에서도 선택 버튼이 팝업 밖으로 밀려나면 안 된다.
+test("Many effort options wrap within narrow layouts and remain selectable and applicable", async () => {
+  // Even models with maximal effort options keep choices inside the popup.
   const app = await mount({ onListModels: async () => ok({ ...catalog, models: [{ ...catalog.models[0]!,
     efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] }] }) });
   try {
@@ -267,7 +267,7 @@ test("좁은 화면의 많은 effort 옵션도 줄바꿈해 화면 안에서 선
   } finally { await app.close(); }
 });
 
-test("좁은 화면에서도 모델 팝업은 화면 안에 머물고 검색한 내용을 리사이즈 후 보존한다", async () => {
+test("Model popups remain onscreen in narrow layouts and preserve searches across resize", async () => {
   const app = await mount();
   try {
     await app.open(); app.mockInput.pressKey("/"); await app.render(); await app.mockInput.typeText("target"); await app.render();

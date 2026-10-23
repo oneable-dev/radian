@@ -49,7 +49,7 @@ async function fixture(workView: WorkView = "agent") {
     async close() { notifications.dispose(); view.dispose(); await app.dispose(); } };
 }
 
-test.each(["agent", "editor", "git", "terminal"] as const)("%s 화면에서도 다른 저장소의 알림을 표시하고 선택·포커스·초안을 보존한다", async workView => {
+test.each(["agent", "editor", "git", "terminal"] as const)("%s screens show other-repository notifications while preserving selection, focus, and drafts", async workView => {
   // The other repository finishes while the current work view keeps ownership of input.
   const app = await fixture(workView), owner = app.renderer.currentFocusedRenderable;
   try {
@@ -63,8 +63,8 @@ test.each(["agent", "editor", "git", "terminal"] as const)("%s 화면에서도 �
   } finally { await app.close(); }
 });
 
-test("닫기 버튼 없는 팝업이 만료돼도 벨을 유지하고 같은 결과를 다시 표시하지 않는다", async () => {
-  // 알림의 표시 수명은 런타임의 읽지 않은 결과 상태와 독립적이다.
+test("Button-free popup expiry preserves bells without redisplaying results", async () => {
+  // Notification display lifetime is independent of runtime unread-result state.
   const app = await fixture();
   try {
     app.complete(); await app.render();
@@ -100,7 +100,7 @@ test("Popup clicks close pickers, jump to latest session results, and acknowledg
   } finally { await app.close(); }
 });
 
-test("팝업 표시 후 교체된 대화에는 이동하거나 읽음 처리하지 않는다", async () => {
+test("Replaced conversations are neither navigated to nor acknowledged by stale popups", async () => {
   // A stable tab ID can refer to a new conversation by the time a delayed toast is clicked.
   const app = await fixture();
   try {

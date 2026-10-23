@@ -16,7 +16,7 @@ async function until(check: () => Promise<boolean>) {
   while (!await check()) { if (Date.now() > deadline) throw new Error("Image runtime observation timed out"); await Bun.sleep(15); }
 }
 
-test("실제 Unix IPC는 스냅샷에 원본을 노출하지 않고 선택한 대화의 이미지만 명시적으로 조회한다", async () => {
+test("Real Unix IPC exposes no originals in snapshots and explicitly reads only selected-conversation images", async () => {
   // Seed a finalized SDK history, then start only a private offline runtime. No provider or user runtime is used.
   const fixture = await createWorktreeFixture(), options = { offline: true, stateRoot: join(fixture.directory, "state"), entry: join(import.meta.dir, "..", "index.ts") };
   const main = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;

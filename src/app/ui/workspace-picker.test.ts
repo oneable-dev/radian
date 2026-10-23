@@ -60,8 +60,8 @@ test("Workspace popups preserve work width and switch only on Enter after substr
   } finally { await app.close(); }
 });
 
-test("워크스페이스 팝업의 Esc와 Tab은 원래 포커스·선택·대화 위치를 보존한다", async () => {
-  // 취소는 탐색 중인 후보를 활성 워크스페이스로 적용하면 안 된다.
+test("Workspace popup Esc/Tab preserve original focus, selection, and conversation positions", async () => {
+  // Cancellation must not activate the browsed workspace candidate.
   const app = await fixture();
   try {
     const prompt = app.get("session-prompt"); prompt.focus();
@@ -80,8 +80,8 @@ test("워크스페이스 팝업의 Esc와 Tab은 원래 포커스·선택·대�
 test.each([
   ["search", "control"], ["workspace", "control"],
   ["search", "arrows"], ["workspace", "arrows"], ["workspace", "vim"],
-] as const)("워크스페이스 %s 포커스에서 %s 탐색은 후보만 이동하고 Enter로 확정한다", async (focus, navigation) => {
-  // 검색과 결과 목록 모두 같은 후보를 탐색하며 현재 세션과 초안은 유지한다.
+] as const)("Workspace %s focus supports %s candidate-only navigation with Enter confirmation", async (focus, navigation) => {
+  // Search and results browse identical candidates while preserving current sessions/drafts.
   const app = await fixture();
   try {
     app.leader("b"); await app.mockInput.typeText("radian");
@@ -94,7 +94,7 @@ test.each([
       else app.mockInput.pressKey(next ? "j" : "k");
     };
 
-    // 한 칸을 왕복하는 것만으로는 누락된 이전/다음 키를 구분할 수 없어 두 칸 내려간다.
+    // Move down twice; a single round-trip cannot detect missing previous/next bindings.
     move(true); move(true); move(false); await app.render();
 
     expect(app.selection.worktree?.id).toBe("demo:main");
@@ -115,21 +115,21 @@ test("Search focus changes preserve open-popup input and only reopening after se
     const input = app.get("workspace-search") as InputRenderable;
     app.mockInput.pressTab(); openWorkspaceSearch(app); await app.render();
 
-    // 이미 열린 팝업에서는 포커스를 옮겨도 검색어를 지우지 않는다.
+    // Moving focus within open popups must not clear queries.
     expect(input.value).toBe("-ui"); expect(app.renderer.currentFocusedRenderable).toBe(input);
     app.mockInput.pressEnter(); await app.render();
     expect(app.selection.worktree?.id).toBe("demo:feature");
     expect(app.get("workspace-picker").visible).toBe(false);
 
-    // 선택으로 닫은 경우도 Esc로 닫은 경우처럼 다음 검색은 비어 있어야 한다.
+    // Selection closure, like Esc closure, starts the next search empty.
     app.leader("b"); await app.render();
     expect(input.value).toBe(""); expect(app.captureCharFrame()).toContain("radian-ui");
     expect(app.view.promptDrafts.a1).toBe("KEEP_DRAFT"); expect(app.submitted).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("워크스페이스 안내는 검색과 결과 포커스 모두에서 기본 탐색 키를 생략한다", async () => {
-  // Ctrl+N/P와 j/k는 계속 동작하지만 푸터에 반복 안내하지 않는다.
+test("Workspace hints omit default navigation in both search and results focus", async () => {
+  // Ctrl+N/P and j/k keep working without repetitive footer hints.
   const app = await fixture();
   const footer = () => app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
   try {
@@ -144,8 +144,8 @@ test("워크스페이스 안내는 검색과 결과 포커스 모두에서 기�
   } finally { await app.close(); }
 });
 
-test("모니터 Preview와 후보 이동은 읽음 처리하지 않고 Enter로 연 세션만 확인한다", async () => {
-  // 다른 워크스페이스의 미확인 결과를 현재 대화와 분리한다.
+test("Monitor previews and browsing never acknowledge; only sessions opened with Enter do", async () => {
+  // Separate another workspace's unread results from the current conversation.
   const app = await fixture();
   try {
     app.leader("s"); await app.render();
@@ -166,7 +166,7 @@ test("모니터 Preview와 후보 이동은 읽음 처리하지 않고 Enter로 
   } finally { await app.close(); }
 });
 
-test.each(["search", "list"] as const)("모니터 %s에서 세션을 열면 최신 출력을 보여주고 입력창에서 바로 초안을 이어 쓴다", async focus => {
+test.each(["search", "list"] as const)("Opening sessions from monitor %s shows latest output and resumes draft input immediately", async focus => {
   // A saved older viewport must not prevent opening the latest result or restoring its draft.
   const app = await fixture({
     initialDrafts: { a1: "KEEP_DRAFT", b1: "NEXT_DRAFT" },
@@ -207,8 +207,8 @@ test.each(["search", "list"] as const)("모니터 %s에서 세션을 열면 최�
   } finally { await app.close(); }
 });
 
-test("모니터는 실시간 요약 갱신에도 선택과 목록 노드를 유지하고 닫힌 동안 Preview를 조회하지 않는다", async () => {
-  // 스트리밍 중 후보 목록의 구성은 바뀌지 않고 선택한 대화 내용만 바뀐다.
+test("Monitor updates retain selection/list nodes and never query previews while closed", async () => {
+  // Streaming changes selected conversation content, not candidate-list structure.
   const app = await fixture();
   try {
     app.leader("s"); await app.render(); const row = app.get("monitor:b1");
@@ -223,8 +223,8 @@ test("모니터는 실시간 요약 갱신에도 선택과 목록 노드를 유�
   } finally { await app.close(); }
 });
 
-test("좁은 화면의 모니터는 History처럼 목록과 Preview를 전환하고 검색 입력을 보존한다", async () => {
-  // 좁은 터미널에 두 열을 억지로 넣지 않는다.
+test("Compact monitors switch lists/previews like History while preserving search input", async () => {
+  // Never force two columns into narrow terminals.
   const app = await fixture();
   try {
     app.resize(60, 14); app.leader("s"); await app.render();
@@ -238,8 +238,8 @@ test("좁은 화면의 모니터는 History처럼 목록과 Preview를 전환하
   } finally { await app.close(); }
 });
 
-test("Stopped 탭은 벨보다 물음표 하나를 우선 표시하고 읽음과 무관하게 유지한다", async () => {
-  // Stopped는 읽음과 별개로 유지되는 실행 결과다.
+test("Stopped tabs prioritize one question mark over bells regardless of acknowledgement", async () => {
+  // Stopped is an outcome independent of unread state.
   const app = await fixture();
   try {
     const stopped = { id: "stopped", outcome: "unfinished" as const, completedAt: 2000 };
@@ -259,7 +259,7 @@ test("Stopped 탭은 벨보다 물음표 하나를 우선 표시하고 읽음과
       const { attention: _attention, ...next } = session; return next;
     }) })) })));
     await app.render();
-    // 읽음 처리 이후에도 중단 결과의 물음표와 오류색을 유지한다.
+    // Acknowledgement retains the interruption question mark and error color.
     expect(region()).toBe("│ 2. ? a2       × ");
     expect(colorAt(tab.x + 5)).toEqual(uiTheme(app.renderer).colors.error.toInts());
   } finally { await app.close(); }
@@ -283,15 +283,15 @@ test("Background and historical positions acknowledge only when results actually
   } finally { await app.close(); }
 });
 
-test("모니터 후보가 많으면 렌더링 한도를 알리고 검색으로 뒤쪽 세션에도 접근한다", async () => {
-  // 수집은 전체 요약을 대상으로 하지만 네이티브 행 생성은 History처럼 제한한다.
+test("Large monitors report rendering limits and search still reaches later sessions", async () => {
+  // Collect all summaries but limit native row creation like History.
   const app = await fixture();
   try {
     const sessions = Array.from({ length: 250 }, (_, index) => ({ id: `bulk-${index}`, name: index === 249 ? "Last special task" : `Bulk ${index}`, status: "working" as const, subagents: [] }));
     app.selection.replaceSnapshot(app.selection.snapshot.map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => tree.id === "demo:main" ? { ...tree, sessions: [...tree.sessions, ...sessions] } : tree) })));
 
     app.leader("s"); await app.render();
-    // 안내도 왼쪽 열에 맞춰 잘리므로 표시된 개수와 전체 안내 내용을 함께 확인한다.
+    // Left-column clipping requires checking displayed counts and complete hint content.
     expect(app.captureCharFrame()).toContain("Showing first 200 of 252 sessions");
     const message = app.get("monitor-message"); if (!(message instanceof TextRenderable)) throw new Error("Missing monitor summary");
     expect(message.plainText).toBe("Showing first 200 of 252 sessions; refine search");

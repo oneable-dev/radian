@@ -35,8 +35,8 @@ async function fixture() {
     } };
 }
 
-test("실제 런타임은 TUI 없이 완료된 결과를 저장하고 모든 연결에서 같은 결과를 확인한다", async () => {
-  // 실제 Git·SDK·IPC를 사용하되 모델은 격리된 offline fixture다.
+test("Real runtimes persist completions without TUI and all connections acknowledge identical results", async () => {
+  // Use real Git, SDK, and IPC with isolated offline model fixtures.
   const app = await fixture();
   try {
     const first = await app.connect(), tree = app.repository.worktrees.find(tree => tree.path === app.main)!;
@@ -47,7 +47,7 @@ test("실제 런타임은 TUI 없이 완료된 결과를 저장하고 모든 연
     const second = await app.connect();
     expect(second.snapshot.details[id]?.attention?.id).toBe(attention.id);
 
-    // 오래된 결과나 대화의 확인 요청이 최신 결과를 지우면 안 된다.
+    // Stale result/conversation acknowledgements must not erase latest results.
     expect(expectError(await second.acknowledge(id, "outgoing", attention.id)).code).toBe("SESSION_CONFLICT");
     expectOk(await second.acknowledge(id, conversation, "outdated-result"));
     expect(second.snapshot.details[id]?.attention?.id).toBe(attention.id);
@@ -63,8 +63,8 @@ test("실제 런타임은 TUI 없이 완료된 결과를 저장하고 모든 연
   } finally { await app.cleanup(); }
 }, 25000);
 
-test("서비스 재시작은 미확인을 복원하고 사용자 취소는 이전 알림을 덮어쓰지 않는다", async () => {
-  // 읽음 상태는 TUI의 임시 캐시나 과거 대화 재생에 의존하지 않는다.
+test("Service restart restores unread state and user cancellation never overwrites earlier notifications", async () => {
+  // Acknowledgement does not depend on temporary TUI caches or history replay.
   const app = await fixture();
   try {
     const first = await app.connect(), tree = app.repository.worktrees.find(tree => tree.path === app.main)!;
@@ -89,8 +89,8 @@ test("서비스 재시작은 미확인을 복원하고 사용자 취소는 이�
   } finally { await app.cleanup(); }
 }, 25000);
 
-test("읽음 메타데이터는 기존 snapshot과 호환되고 잘못된 결과·확인 명령은 경계에서 거부한다", () => {
-  // 필드가 없는 구형 서비스는 읽음 상태를 추측하지 않고 그대로 연결할 수 있다.
+test("Attention metadata remains snapshot-compatible and rejects invalid results/acknowledgements at boundaries", () => {
+  // Legacy services without fields connect without inferred acknowledgement state.
   const legacy = { version: 1, pid: 1, instance: "legacy", mode: "offline", repositoryId: "repo", repositories: [], details: { tab: { status: null, output: "", error: null } }, closingCount: 0, preferences: emptyPreferences, notice: "" };
 
   expect(expectOk(parseSnapshot(legacy)).details.tab?.attention).toBeUndefined();

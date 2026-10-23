@@ -17,7 +17,7 @@ function stubFetch(implementation: (input: Parameters<typeof fetch>[0], options?
   return spyOn(globalThis, "fetch").mockImplementation(Object.assign(implementation, { preconnect: fetch.preconnect }));
 }
 
-test("구버전 서비스와 잘못된 이미지 식별자는 조회·재시작 없이 명시적인 오류로 반환한다", async () => {
+test("Legacy services and invalid image IDs fail explicitly without queries or restarts", async () => {
   const fetchMock = stubFetch(async () => { throw new Error("Unsupported image request must not be transmitted"); });
   const old = new RuntimeClient(paths, snapshot([])), current = new RuntimeClient(paths, snapshot());
   try {
@@ -27,7 +27,7 @@ test("구버전 서비스와 잘못된 이미지 식별자는 조회·재시작 
   } finally { await old.disconnect(); await current.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("바이너리 이미지 응답은 UTF-8로 변환하지 않고 현재 인스턴스의 제한된 바이트로 읽는다", async () => {
+test("Binary images remain bounded current-instance bytes without UTF-8 conversion", async () => {
   const bytes = tinyPng(), requests: { path: string; instance: string | null }[] = [];
   const fetchMock = stubFetch(async (input, options) => {
     requests.push({ path: new URL(String(input)).pathname, instance: new Headers(options?.headers).get("X-Radian-Instance") });
@@ -40,7 +40,7 @@ test("바이너리 이미지 응답은 UTF-8로 변환하지 않고 현재 인�
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test.each([true, false])("과도한 이미지 응답은 Content-Length 유무 %s와 관계없이 중단한다", async (declared) => {
+test.each([true, false])("Oversized image responses abort regardless of Content-Length presence %s", async (declared) => {
   let cancelled = false;
   const fetchMock = stubFetch(async () => new Response(new ReadableStream({
     start(controller) { controller.enqueue(new Uint8Array(declared ? 1 : maximumPreviewImageBytes + 1)); }, cancel() { cancelled = true; },
@@ -51,7 +51,7 @@ test.each([true, false])("과도한 이미지 응답은 Content-Length 유무 %s
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("조회 중 대화가 교체되면 도착한 이미지를 새 대화의 이미지로 반환하지 않는다", async () => {
+test("Conversation replacement prevents late images from belonging to new conversations", async () => {
   const pending = Promise.withResolvers<Response>();
   const fetchMock = stubFetch(async () => pending.promise);
   const details: Record<string, ExecutionState> = { session: { conversationId: "old", status: null, output: "", error: null } };

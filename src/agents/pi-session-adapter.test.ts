@@ -83,8 +83,8 @@ async function commandExtension(directory: string) {
   }`);
 }
 
-test("history는 확장 명령보다 우선하는 완성 후보이며 raw 제출은 SDK와 모델로 전달하지 않는다", async () => {
-  // 같은 이름의 확장이 있어도 호스트 팝업 명령을 대체하면 안 된다.
+test("history completion overrides extensions and raw submission never reaches SDK or model", async () => {
+  // An extension with the same name must not replace the host popup command.
   let requests = 0;
   const app = await sdkFixture(false, options => ({ ...options, streamFn: (model, context, request) => {
     requests++; return options.streamFn!(model, context, request);
@@ -96,12 +96,12 @@ test("history는 확장 명령보다 우선하는 완성 후보이며 raw 제출
     }`);
     const id = expectOk(await app.registry.create(app.main.id)), conversation = app.registry.details(id)!.conversationId!;
 
-    // 전체 카탈로그와 서버·SDK의 직접 제출 경로를 함께 확인한다.
+    // Check the full catalog and direct server/SDK submission paths.
     const commands = expectOk(app.registry.catalog(id, conversation)).items.filter(item => item.value === "history");
     const registryResult = await app.registry.prompt(id, "/history"), sdkResult = await app.executors[0]!.prompt("/history");
     const invalid = await app.executors[0]!.prompt("/history recent");
 
-    // 확장 이름 충돌이나 팝업 없는 호출도 모델 요청을 만들지 않는다.
+    // Name collisions and calls without popups must never create model requests.
     expect(commands).toHaveLength(1); expect(commands[0]?.description).toContain("saved session history");
     expect(expectError(registryResult).code).toBe("UNSUPPORTED_CAPABILITY");
     expect(expectError(sdkResult).code).toBe("UNSUPPORTED_CAPABILITY"); expect(expectError(invalid).code).toBe("INVALID_INPUT");
@@ -109,8 +109,8 @@ test("history는 확장 명령보다 우선하는 완성 후보이며 raw 제출
   } finally { await app.cleanup(); }
 });
 
-test("리로드는 대화·모델·기존 출력을 보존하며 전체 명령·템플릿·스킬을 실제로 다시 읽는다", async () => {
-  // 실제 SDK 리소스 로더를 사용하며 모델 전송 경계만 오프라인으로 대체한다.
+test("Reload preserves conversation, model, and output while rereading commands, templates, and skills", async () => {
+  // Use the real SDK resource loader and replace only model transport offline.
   let requests = 0; const inputs: string[] = [];
   const app = await sdkFixture(false, options => ({ ...options, streamFn: (model, context, request) => {
     requests++;
@@ -133,7 +133,7 @@ test("리로드는 대화·모델·기존 출력을 보존하며 전체 명령·
     const before = app.registry.details(id)!, file = app.registry.sessionFile(id), conversation = before.conversationId!;
     expect(expectOk(app.registry.catalog(id, conversation)).items.some(item => item.value === "fresh-149")).toBe(false);
 
-    // 신규 리소스는 파일을 저장한 것만으로 카탈로그에 나타나지 않고 명시적 리로드로 적용된다.
+    // Saved resources enter the catalog only after explicit reload.
     const skill = join(skills, "reload-skill"); await mkdir(skill);
     await writeFile(join(skill, "SKILL.md"), "---\nname: reload-skill\ndescription: Reloaded skill\n---\nRELOADED_SKILL_MARKER\n");
     await writeFile(template, "---\ndescription: Updated template\n---\nUpdated template content\n");
@@ -155,7 +155,7 @@ test("리로드는 대화·모델·기존 출력을 보존하며 전체 명령·
     expect(expectOk(await app.registry.complete(id, { kind: "command", query: "reload-skill" })).items).toEqual([]);
     expect(expectOk(await app.registry.complete(id, { kind: "skill", query: "reload" })).items[0]?.value).toBe("reload-skill");
 
-    // 달러는 모델에 원문으로 보내지 않고 이미 로드된 스킬의 실제 지시문으로 확장한다.
+    // Dollar syntax expands into loaded skill instructions instead of reaching the model verbatim.
     expectOk(await app.registry.prompt(id, "$reload-skill inspect this"));
     expect(inputs.at(-1)).toContain("RELOADED_SKILL_MARKER"); expect(inputs.at(-1)).toContain("inspect this");
     expect(expectError(await app.registry.prompt(id, "$missing-skill")).code).toBe("INVALID_INPUT");
@@ -166,8 +166,8 @@ test("리로드는 대화·모델·기존 출력을 보존하며 전체 명령·
 test.each([
   ["new", false], ["new", true], ["clear", false], ["clear", true],
   ["exit", false], ["exit", true], ["reload", false], ["reload", true],
-] as const)("/%s 관리 명령은 완료 이력 %j에서도 모델 요청이나 중간 working을 만들지 않는다", async (command, seeded) => {
-  // 빈 대화와 완료된 대화 모두에서 관리 명령을 실제 SDK 경로로 실행한다.
+] as const)("/%s management commands create neither model requests nor intermediate working states with completion history %j", async (command, seeded) => {
+  // Run management commands through the real SDK for empty and completed conversations.
   let requests = 0;
   const app = await sdkFixture(false, options => ({ ...options, streamFn: (model, context, request) => {
     requests++; return options.streamFn!(model, context, request);
@@ -182,7 +182,7 @@ test.each([
         for (const session of tree.sessions) statuses.push(session.status);
     });
 
-    // UI 명령 파서 이후 호스트가 호출하는 동일한 관리 작업을 사용한다.
+    // Use the same management operation invoked by the host after UI parsing.
     switch (command) {
       case "new": expectOk(await app.registry.newTab(id)); break;
       case "clear": expectOk(await app.registry.clearSession(id)); break;
@@ -190,13 +190,13 @@ test.each([
       case "reload": expectOk(await app.registry.reload(id)); break;
     }
 
-    // 최종 상태뿐 아니라 모든 발행 스냅샷에도 가짜 실행이 없어야 한다.
+    // No published snapshot may contain a fake run, not just the final snapshot.
     expect(statuses).not.toContain("working"); expect(requests).toBe(before);
   } finally { unsubscribe(); await app.cleanup(); }
 });
 
-test("실행 중 리로드는 요청을 중단하지 않고 busy로 거부한다", async () => {
-  // 진행 중인 모델과 명령 리소스 교체는 동시에 허용하지 않는다.
+test("Reload during execution returns busy without interrupting the request", async () => {
+  // Active models and command-resource replacement cannot run concurrently.
   const app = await sdkFixture(true);
   try {
     const id = expectOk(await app.registry.create(app.main.id));
@@ -210,8 +210,8 @@ test("실행 중 리로드는 요청을 중단하지 않고 busy로 거부한다
   } finally { await app.cleanup(); }
 });
 
-test("확장 리로드가 실패하면 이전 카탈로그와 revision을 성공한 새 값으로 덮지 않는다", async () => {
-  // 잘못된 확장은 설정 실패로 보고하되 부분 적용 가능성을 숨기지 않는다.
+test("Failed extension reloads preserve previous catalogs and revisions", async () => {
+  // Report invalid extensions as configuration failures without hiding partial application.
   const app = await sdkFixture();
   try {
     await commandExtension(app.directory);
@@ -227,8 +227,8 @@ test("확장 리로드가 실패하면 이전 카탈로그와 revision을 성공
   } finally { await app.cleanup(); }
 });
 
-test("잘못된 설정 파일의 SDK 진단도 리로드 성공으로 숨기지 않는다", async () => {
-  // 파일 기반 설정을 실제로 다시 읽되 모델 요청은 전혀 시작하지 않는다.
+test("SDK diagnostics for invalid settings never become reload success", async () => {
+  // Reread file-based settings without starting model requests.
   const app = await sdkFixture(false, options => { const configured = { ...options }; delete configured.streamFn; return configured; });
   const warned = spyOn(console, "warn").mockImplementation(() => {});
   try {
@@ -243,8 +243,8 @@ test("잘못된 설정 파일의 SDK 진단도 리로드 성공으로 숨기지 
   } finally { warned.mockRestore(); await app.cleanup(); }
 });
 
-test("리로드 초기화 훅의 SDK 오류 알림도 성공으로 숨기지 않는다", async () => {
-  // SDK는 일부 훅 실패를 예외가 아니라 onError 알림으로 보고한다.
+test("SDK reload initialization error notifications never become success", async () => {
+  // Some SDK hook failures arrive through onError rather than exceptions.
   const app = await sdkFixture(), logged = spyOn(console, "error").mockImplementation(() => {}), warned = spyOn(console, "warn").mockImplementation(() => {});
   try {
     await commandExtension(app.directory);
@@ -261,8 +261,8 @@ test("리로드 초기화 훅의 SDK 오류 알림도 성공으로 숨기지 않
   } finally { logged.mockRestore(); warned.mockRestore(); await app.cleanup(); }
 });
 
-test("리로드 중 프로그래밍 결함은 같은 예외로 전파하고 카탈로그를 성공으로 교체하지 않는다", async () => {
-  // 잘못된 입력이나 SDK 리소스 진단과 호스트 프로그래밍 결함을 구분한다.
+test("Reload programming errors propagate unchanged without replacing catalogs as successful", async () => {
+  // Distinguish input/resource diagnostics from host programming errors.
   const app = await sdkFixture(); let restore: (() => void) | undefined;
   try {
     const id = expectOk(await app.registry.create(app.main.id)), marker = new TypeError("Reload programming defect");
@@ -274,7 +274,7 @@ test("리로드 중 프로그래밍 결함은 같은 예외로 전파하고 카�
   } finally { restore?.(); await app.cleanup(); }
 });
 
-test("실제 SDK는 경로 라벨이 아닌 이미지 바이트를 사용자 메시지에 전달하고 저장한다", async () => {
+test("The real SDK sends and stores image bytes rather than path labels", async () => {
   const observed: string[] = [];
   const app = await sdkFixture(false, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] },
     streamFn: (model, context, request) => {
@@ -303,7 +303,7 @@ test("실제 SDK는 경로 라벨이 아닌 이미지 바이트를 사용자 메
   } finally { await app.cleanup(); }
 });
 
-test("느린 이미지 준비 중에도 나중에 보낸 텍스트가 먼저 수락되거나 대화 순서를 바꾸지 않는다", async () => {
+test("Slow image preparation preserves input acceptance and conversation ordering", async () => {
   const preparing = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
   const admissions: string[] = [], contexts: string[][] = [];
   const app = await sdkFixture(false, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] },
@@ -320,8 +320,8 @@ test("느린 이미지 준비 중에도 나중에 보낸 텍스트가 먼저 수
     expect(contexts).toEqual([]); expect(admissions).toEqual([]);
     release.resolve(); expectOk(await first); expectOk(await second);
 
-    // SDK는 첫 모델 호출 전에 받은 steer를 함께 반영할 수 있다. 호출 횟수를
-    // 강제하지 않고 수락과 실제 사용자 메시지의 순서가 보존되는지 확인한다.
+    // The SDK may combine steering received before the first model call.
+    // Assert acceptance and actual user-message order rather than call count.
     expect(admissions).toEqual(["first", "second"]);
     // Image previews now have their own section; text order and the real attachment must both survive.
     const sections = app.registry.details(id)?.sections ?? [];
@@ -334,7 +334,7 @@ test("느린 이미지 준비 중에도 나중에 보낸 텍스트가 먼저 수
   } finally { release.resolve(); await app.cleanup(); }
 });
 
-test("이미지 steer도 현재 도구·응답을 중단하지 않고 같은 SDK 세션의 다음 입력으로 반영한다", async () => {
+test("Image steering queues in the same SDK session without interrupting active tools or responses", async () => {
   const observed: string[] = [];
   const app = await sdkFixture(true, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] },
     streamFn: (model, context, request) => {
@@ -356,7 +356,7 @@ test("이미지 steer도 현재 도구·응답을 중단하지 않고 같은 SDK
   } finally { await app.cleanup(); }
 });
 
-test("복원한 세션의 이미지 준비가 거절되면 기존 복구 경고와 저장된 출력은 사라지지 않는다", async () => {
+test("Rejected image preparation preserves restored-session warnings and saved output", async () => {
   const app = await sdkFixture(false, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] } }));
   try {
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
@@ -370,7 +370,7 @@ test("복원한 세션의 이미지 준비가 거절되면 기존 복구 경고�
   } finally { await app.cleanup(); }
 });
 
-test("이미지 미지원 모델과 첨부를 받지 않는 설정 명령은 수락 전에 거절하고 실행을 시작하지 않는다", async () => {
+test("Unsupported images and attachment-free settings commands fail before acceptance or execution", async () => {
   const plain = await sdkFixture();
   try {
     const id = expectOk(await plain.registry.create(plain.main.id)); let accepted = 0;
@@ -386,7 +386,7 @@ test("이미지 미지원 모델과 첨부를 받지 않는 설정 명령은 수
   } finally { await app.cleanup(); }
 });
 
-test("SDK 명령 목록 조회와 실행은 모델을 호출하지 않고 이전 실행 상태를 보존한다", async () => {
+test("SDK command listing and execution avoid model calls and preserve previous run state", async () => {
   const app = await sdkFixture();
   try {
     await commandExtension(app.directory);
@@ -406,8 +406,8 @@ test("SDK 명령 목록 조회와 실행은 모델을 호출하지 않고 이전
   } finally { await app.cleanup(); }
 });
 
-test("확장이 안내만 표시하고 입력을 소비하면 중간 상태에도 가짜 실행을 표시하지 않는다", async () => {
-  // 등록 명령뿐 아니라 input 훅이 소비하는 입력도 모델 실행과 구분한다.
+test("Extensions consuming input with notices never show fake intermediate runs", async () => {
+  // Distinguish input-hook consumption from model execution, not just registered commands.
   let requests = 0;
   const app = await sdkFixture(false, options => ({ ...options, streamFn: (model, context, request) => {
     requests++; return options.streamFn!(model, context, request);
@@ -426,10 +426,10 @@ test("확장이 안내만 표시하고 입력을 소비하면 중간 상태에�
     const statuses: (SessionExecutor["state"]["status"] | undefined)[] = [];
     unsubscribe = app.registry.subscribe(() => statuses.push(app.registry.details(id)?.status));
 
-    // 안내 메시지가 세션 변경 이벤트를 발행하는 순간까지 관찰한다.
+    // Observe session events emitted when notices are published.
     expectOk(await app.registry.prompt(id, "/fixture-handled"));
 
-    // 최종 상태만 복구해서는 이미 시작된 스피너의 잔여 애니메이션을 막지 못한다.
+    // Repairing only final state cannot stop the tail of an already-started spinner.
     expect(statuses.length).toBeGreaterThan(0); expect(statuses).not.toContain("working");
     expect(app.registry.details(id)?.status).toBeNull(); expect(requests).toBe(0);
     expect(app.registry.details(id)?.result).toBeUndefined();
@@ -437,8 +437,8 @@ test("확장이 안내만 표시하고 입력을 소비하면 중간 상태에�
   } finally { unsubscribe(); await app.cleanup(); }
 });
 
-test("등록된 슬래시 명령이 실제 모델 작업을 시작하면 working과 완료를 정상적으로 표시한다", async () => {
-  // 슬래시 접두어만으로 로딩을 숨기면 실제 실행을 시작하는 확장도 숨겨진다.
+test("Registered slash commands starting real model work report working and completion", async () => {
+  // Hiding all slash-prefixed loading would also hide extensions starting real work.
   const app = await sdkFixture(true);
   const settled = Promise.withResolvers<void>();
   let unsubscribe = () => {};
@@ -450,10 +450,10 @@ test("등록된 슬래시 명령이 실제 모델 작업을 시작하면 working
     const id = expectOk(await app.registry.create(app.main.id));
     unsubscribe = app.registry.subscribe(() => { if (app.registry.details(id)?.status === "complete") settled.resolve(); });
 
-    // 실제 SDK 작업이 시작한 뒤 공급자 응답만 보류한다.
+    // Start real SDK work before withholding the provider response.
     expectOk(await app.registry.prompt(id, "/fixture-run")); await app.streams.waitFor("command");
 
-    // 제어 명령과 달리 실제 작업은 시작부터 종료까지 추적되어야 한다.
+    // Unlike control commands, real work must be tracked from start to finish.
     expect(app.registry.details(id)?.status).toBe("working");
     expect(app.registry.details(id)?.runTiming).toBeDefined();
     app.streams.gates.get("command")!.finish("Command work finished"); await settled.promise;
@@ -461,8 +461,8 @@ test("등록된 슬래시 명령이 실제 모델 작업을 시작하면 working
   } finally { unsubscribe(); await app.cleanup(); }
 });
 
-test.each([true, false])("부가 완료 기록 저장 실패는 완료된 요청을 거절로 바꾸지 않고 경고로 구분한다: %j", async (expected) => {
-  // 실제 모델·도구 처리가 끝난 뒤 부가 메타데이터의 저장 경계만 실패시킨다.
+test.each([true, false])("Completion metadata persistence failures warn without rejecting finished requests: %j", async (expected) => {
+  // Fail only supplementary metadata persistence after model and tool work finishes.
   const app = await sdkFixture();
   const original = SessionManager.prototype.appendCustomEntry;
   const failure = Object.assign(new Error("Timing persistence fixture"), expected ? { code: "EIO" } : {});
@@ -474,7 +474,7 @@ test.each([true, false])("부가 완료 기록 저장 실패는 완료된 요청
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "read"));
-    // 완료와 저장 경고를 분리하고 예상 밖 버그는 원래 오류 객체와 스택으로 기록한다.
+    // Separate completion from persistence warnings and log unexpected errors with original stacks.
     expect(app.registry.details(id)?.status).toBe("complete"); expect(app.registry.details(id)?.error).toBeNull();
     const completion = app.registry.details(id)?.sections?.at(-1)?.completion;
     expect(completion?.outcome).toBe("complete");
@@ -484,7 +484,7 @@ test.each([true, false])("부가 완료 기록 저장 실패는 완료된 요청
   } finally { append.mockRestore(); log.mockRestore(); await app.cleanup(); }
 });
 
-test("SDK가 알림으로 보고한 명령 실패는 성공 수락으로 숨기지 않고 Result로 반환한다", async () => {
+test("SDK command failure notifications return failure Results instead of accepted success", async () => {
   const app = await sdkFixture(); const log = spyOn(console, "error").mockImplementation(() => {});
   try {
     await commandExtension(app.directory); const id = expectOk(await app.registry.create(app.main.id));
@@ -495,7 +495,7 @@ test("SDK가 알림으로 보고한 명령 실패는 성공 수락으로 숨기�
   } finally { log.mockRestore(); await app.cleanup(); }
 });
 
-test("모델 완료를 기다리는 명령은 완료 상태를 working으로 되돌리지 않고 닫기에도 교착하지 않는다", async () => {
+test("Commands awaiting models preserve completion state and never deadlock on close", async () => {
   const app = await sdkFixture(true);
   try {
     await commandExtension(app.directory); const id = expectOk(await app.registry.create(app.main.id));
@@ -514,7 +514,7 @@ test("모델 완료를 기다리는 명령은 완료 상태를 working으로 되
   } finally { await app.cleanup(); }
 });
 
-test("SDK 세션은 지정한 agentDir의 확장을 발견하고 등록된 도구를 실행한다", async () => {
+test("SDK sessions discover extensions in agentDir and execute registered tools", async () => {
   // Isolate extension discovery from the user's packages, credentials and external services.
   const app = await sdkFixture(false, (options) => ({ ...options, streamFn: (model, context, request) => {
     if (context.messages.at(-1)?.role !== "user") return options.streamFn!(model, context, request);
@@ -543,7 +543,7 @@ test("SDK 세션은 지정한 agentDir의 확장을 발견하고 등록된 도�
   } finally { await app.cleanup(); }
 });
 
-test("Fast 명령은 모델 호출 없이 처리되고 native Codex HTTP 요청에 priority를 실제로 적용·제거한다", async () => {
+test("Fast commands avoid model calls and apply or remove priority on native Codex HTTP requests", async () => {
   // A loopback SSE server exercises the real provider encoder without a paid model or user credentials.
   const bodies: Record<string, unknown>[] = [];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (request) => {
@@ -579,14 +579,14 @@ test("Fast 명령은 모델 호출 없이 처리되고 native Codex HTTP 요청�
       const before = app.registry.details(id);
       const unsubscribe = app.registry.subscribe(() => statuses.push(app.registry.details(id)?.status));
       try { expectOk(await app.registry.prompt(id, text)); } finally { unsubscribe(); }
-      // Fast 설정 텔레메트리는 프롬프트 위와 세션 탭의 로딩을 시작해서는 안 된다.
+      // Fast telemetry must not start prompt or session-tab loading.
       expect(statuses.length).toBeGreaterThan(0); expect(statuses).not.toContain("working");
       expect(app.registry.details(id)?.status).toBe(before?.status);
       expect(app.registry.details(id)?.result).toEqual(before?.result);
     };
     await toggle("/fast on"); await toggle("/fast status"); await toggle("/fast off"); await toggle("/fast");
     expect(bodies).toHaveLength(0);
-    // 리로드가 기존 Fast 선택·텔레메트리 구독을 지우거나 모델 요청을 만들면 안 된다.
+    // Reload preserves Fast selection and telemetry subscriptions without model requests.
     expectOk(await app.registry.reload(id));
     expect(bodies).toHaveLength(0); expect(app.registry.details(id)?.telemetry?.fast).toBe(true);
 
@@ -602,7 +602,7 @@ test("Fast 명령은 모델 호출 없이 처리되고 native Codex HTTP 요청�
   } finally { await app.cleanup(); await server.stop(true); }
 });
 
-test("실제 SDK read/write는 선택한 워크트리의 cwd를 사용하며 다른 워크트리를 변경하지 않는다", async () => {
+test("Real SDK read/write uses the selected worktree cwd without modifying other worktrees", async () => {
   // Real Git worktrees and SDK built-in tools are used; only model responses are scripted.
   const app = await sdkFixture();
   try {
@@ -630,7 +630,7 @@ test("실제 SDK read/write는 선택한 워크트리의 cwd를 사용하며 다
   } finally { await app.cleanup(); }
 });
 
-test("실제 SDK 실행 두 개가 워크트리 전환 중 유지되고 비선택 결과가 마지막 선택으로 복원된다", async () => {
+test("Two real SDK runs survive worktree switching and restore background results on selection", async () => {
   // Provider completion is held explicitly, so switching cannot accidentally occur after work ended.
   const app = await sdkFixture(true);
   try {
@@ -659,7 +659,7 @@ test("실제 SDK 실행 두 개가 워크트리 전환 중 유지되고 비선�
   } finally { await app.cleanup(); }
 });
 
-test("실제 SDK 부모와 subagent는 즉시 숨겨지고 백그라운드 종료되며 다른 세션은 계속 실행한다", async () => {
+test("SDK parents and subagents hide immediately and terminate in background without stopping other sessions", async () => {
   // The registered custom tool starts an actual owned SDK child, not a display-only fixture.
   const app = await sdkFixture(true);
   try {
@@ -693,7 +693,7 @@ test("실제 SDK 부모와 subagent는 즉시 숨겨지고 백그라운드 종�
   } finally { await app.cleanup(); }
 });
 
-test("닫은 SDK 세션을 다시 열면 동일 저장 ID와 대화 기록을 복원하고 fork하지 않는다", async () => {
+test("Reopening closed SDK sessions restores the same saved ID and history without forking", async () => {
   // A finalized user/assistant exchange has been persisted in an isolated session directory.
   const app = await sdkFixture();
   try {
@@ -721,7 +721,7 @@ test("닫은 SDK 세션을 다시 열면 동일 저장 ID와 대화 기록을 �
   } finally { await app.cleanup(); }
 });
 
-test("실행 중 SDK 입력은 현재 응답 뒤에 대기하고 세션을 교체하지 않는다", async () => {
+test("Input during SDK execution queues after the current response without replacing sessions", async () => {
   // Hold the real provider response so admission cannot be confused with completion.
   const app = await sdkFixture(true);
   try {
@@ -751,7 +751,7 @@ test("실행 중 SDK 입력은 현재 응답 뒤에 대기하고 세션을 교�
   } finally { await app.cleanup(); }
 });
 
-test("중단은 세션을 유지하고 대기 입력 전체를 줄바꿈으로 합쳐 한 번만 전달한다", async () => {
+test("Interrupt preserves sessions and merges queued input with newlines for one delivery", async () => {
   // Hold A so neither queued message can be delivered before the interrupt.
   const app = await sdkFixture(true);
   try {
@@ -780,7 +780,7 @@ test("중단은 세션을 유지하고 대기 입력 전체를 줄바꿈으로 �
   } finally { await app.cleanup(); }
 });
 
-test("대기 입력을 합쳐 재전달해도 이미지 바이트와 중복 입력 순서를 보존한다", async () => {
+test("Merging queued input preserves image bytes and duplicate-input order", async () => {
   // Two equal texts still represent two accepted messages, each with its own image.
   const app = await sdkFixture(true, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] } }));
   try {
@@ -803,7 +803,7 @@ test("대기 입력을 합쳐 재전달해도 이미지 바이트와 중복 입�
   } finally { await app.cleanup(); }
 });
 
-test("중단은 수동 compact도 취소하고 기존 대화와 세션을 보존한다", async () => {
+test("Interrupt cancels manual compaction while preserving conversation and session", async () => {
   // Only the summary request waits; ordinary conversation uses the real offline SDK path.
   let summarizing = false;
   const started = Promise.withResolvers<void>();
@@ -835,7 +835,7 @@ test("중단은 수동 compact도 취소하고 기존 대화와 세션을 보존
   } finally { await app.cleanup(); }
 });
 
-test("중단 전에 준비 중이던 미수락 이미지 입력은 뒤늦게 실행하지 않는다", async () => {
+test("Unaccepted image input still preparing at interruption never executes later", async () => {
   // Image decoding is an SDK/OS boundary that can finish after the user presses Esc.
   const loading = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
   const app = await sdkFixture(true, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] },
@@ -856,7 +856,7 @@ test("중단 전에 준비 중이던 미수락 이미지 입력은 뒤늦게 실
   } finally { release.resolve(); await app.cleanup(); }
 });
 
-test("중단은 소유한 서브에이전트의 취소 확인도 기다리고 부모 세션은 닫지 않는다", async () => {
+test("Interrupt waits for owned subagent cancellation without closing the parent session", async () => {
   const app = await sdkFixture(true);
   try {
     const id = expectOk(await app.registry.create(app.main.id));
@@ -871,7 +871,7 @@ test("중단은 소유한 서브에이전트의 취소 확인도 기다리고 �
   } finally { await app.cleanup(); }
 });
 
-test("대기 입력 없는 중단은 선택한 실행만 취소하고 다른 탭은 유지한다", async () => {
+test("Interrupt without queued input cancels only the selected run", async () => {
   // Two independent sessions prove this is not runtime shutdown or session close.
   const app = await sdkFixture(true);
   try {
@@ -889,7 +889,7 @@ test("대기 입력 없는 중단은 선택한 실행만 취소하고 다른 탭
   } finally { await app.cleanup(); }
 });
 
-test("동시에 보낸 SDK 입력은 수락 경계를 직렬화하고 실제 대기열 순서를 보존한다", async () => {
+test("Concurrent SDK submissions serialize acceptance and preserve actual queue order", async () => {
   // Startup includes asynchronous SDK preflight; no stream is active at invocation time.
   const app = await sdkFixture();
   try {
@@ -912,7 +912,7 @@ test("동시에 보낸 SDK 입력은 수락 경계를 직렬화하고 실제 대
   } finally { await app.cleanup(); }
 });
 
-test("SDK 자동 재시도 사이의 agent_end는 완료로 표시하지 않고 최종 settled 결과만 반영한다", async () => {
+test("Intermediate agent_end events during SDK retries do not report completion before final settlement", async () => {
   // The first scripted response is retryable; the second remains held until explicitly released.
   let requests = 0;
   const app = await sdkFixture(true, (options) => ({
@@ -948,7 +948,7 @@ test("SDK 자동 재시도 사이의 agent_end는 완료로 표시하지 않고 
   } finally { await app.cleanup(); }
 });
 
-test.each(["close", "interrupt"] as const)("실제 SDK bash 작업은 %s 시 취소되고 소속 shell 프로세스가 남지 않는다", async (operation) => {
+test.each(["close", "interrupt"] as const)("Real SDK bash work cancels on %s without leaving owned shell processes", async (operation) => {
   // The only spawned shell and filesystem changes belong to an isolated test worktree.
   const app = await sdkFixture(false, (options) => ({
     ...options, streamFn: (model, context, request) => {
@@ -984,7 +984,7 @@ test.each(["close", "interrupt"] as const)("실제 SDK bash 작업은 %s 시 취
   } finally { await app.cleanup(); }
 });
 
-test("별도 sessionDir를 지정하지 않아도 SDK 기록은 지정한 agentDir 내부에 저장된다", async () => {
+test("SDK history defaults to the specified agentDir when sessionDir is omitted", async () => {
   // Default SDK session-directory selection must not escape into the user's global history.
   const app = await sdkFixture(false, (options) => {
     const scoped = { ...options }; delete scoped.sessionDir; return scoped;
@@ -1000,7 +1000,7 @@ test("별도 sessionDir를 지정하지 않아도 SDK 기록은 지정한 agentD
   } finally { await app.cleanup(); }
 });
 
-test("SDK가 보고한 최종 provider 실패는 AgentRunError Result이며 취소와 구분된다", async () => {
+test("Final SDK provider failures return AgentRunError Results distinct from cancellation", async () => {
   // The SDK reports a terminal provider failure through its actual event contract, not a thrown bug.
   const app = await sdkFixture(false, (options) => ({ ...options, streamFn: (model) => {
     const stream = createAssistantMessageEventStream();
@@ -1020,8 +1020,8 @@ test("SDK가 보고한 최종 provider 실패는 AgentRunError Result이며 취�
   } finally { await app.cleanup(); }
 });
 
-test("자동 압축은 전용 활동을 알리고 압축 종료 시 일반 실행으로 복귀한 뒤 한 번만 완료한다", async () => {
-  // 낮은 압축 임계값으로 실제 SDK의 threshold 압축을 유도하고 요약 provider만 잠시 멈춘다.
+test("Automatic compaction reports dedicated activity and returns to normal execution before completing once", async () => {
+  // Trigger real SDK threshold compaction with a low limit and pause only the summary provider.
   const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
   const app = await sdkFixture(false, (options) => ({ ...options,
     settings: { compaction: { enabled: true, keepRecentTokens: 0, reserveTokens: 199900 } },
@@ -1041,7 +1041,7 @@ test("자동 압축은 전용 활동을 알리고 압축 종료 시 일반 실�
     expect(app.registry.details(id)).toMatchObject({ status: "working", activity: "compacting" });
     unsubscribe = app.registry.subscribe(() => { const state = app.registry.details(id); resumed.push(state?.status === "working" && !("activity" in state)); });
 
-    // SDK의 compaction_end 시점에는 isCompacting이 아직 true일 수 있어도 UI 활동은 끝나야 한다.
+    // UI activity must end on compaction_end even if SDK isCompacting remains true.
     release.resolve(); expectOk(await pending);
 
     expect(resumed).toContain(true); expect(app.registry.details(id)).not.toHaveProperty("activity");
@@ -1050,8 +1050,8 @@ test("자동 압축은 전용 활동을 알리고 압축 종료 시 일반 실�
   } finally { release.resolve(); unsubscribe(); await app.cleanup(); }
 });
 
-test.each(["complete", "error"] as const)("수동 압축의 전체 수명 동안 전용 활동을 유지하고 %s 종료 후 제거한다", async (outcome) => {
-  // 실제 SDK 요약 스트림만 멈춰 두어 압축 중 상태를 확정적으로 관찰한다.
+test.each(["complete", "error"] as const)("Manual compaction retains dedicated activity throughout its lifetime and clears after %s", async (outcome) => {
+  // Pause only the real SDK summary stream to observe compaction deterministically.
   const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
   let summarizing = false;
   const app = await sdkFixture(false, (options) => ({ ...options,
@@ -1078,7 +1078,7 @@ test.each(["complete", "error"] as const)("수동 압축의 전체 수명 동안
     unsubscribe = app.registry.subscribe(() => { const state = app.registry.details(id); if (state?.status === "working") observed.push("activity" in state ? String(state.activity) : "missing"); });
     summarizing = true;
 
-    // 명령 수락부터 SDK의 종료 이벤트까지 이전 요청의 Working on 상태로 되돌아가면 안 된다.
+    // Never revert to the previous request's Working on state before SDK completion.
     const pending = app.registry.compact(id);
     await Promise.race([started.promise, pending.then((result) => { expectOk(result); throw new Error("SDK compaction ended before the summary provider started."); })]);
     expect(app.registry.details(id)).toMatchObject({ status: "working", activity: "compacting", conversationId: before.conversationId });
@@ -1092,7 +1092,7 @@ test.each(["complete", "error"] as const)("수동 압축의 전체 수명 동안
   } finally { release.resolve(); unsubscribe(); await app.cleanup(); }
 });
 
-test("수동 압축은 실제 SDK 요약을 저장하면서 대화·요청 ID와 같은 탭을 보존한다", async () => {
+test("Manual compaction saves real SDK summaries while preserving conversation, request ID, and tab", async () => {
   // A small retained tail makes this offline conversation eligible without a paid model call.
   const requests: string[] = [];
   const app = await sdkFixture(false, (options) => ({ ...options,
@@ -1122,7 +1122,7 @@ test("수동 압축은 실제 SDK 요약을 저장하면서 대화·요청 ID와
   } finally { await app.cleanup(); }
 });
 
-test("빈 세션과 너무 작은 대화의 수동 압축은 모델 호출 없이 입력 오류로 거부한다", async () => {
+test("Manual compaction rejects empty or undersized conversations without model calls", async () => {
   let calls = 0;
   const app = await sdkFixture(false, (options) => ({ ...options, streamFn: (model, context, request) => {
     calls++; return options.streamFn!(model, context, request);
@@ -1139,7 +1139,7 @@ test("빈 세션과 너무 작은 대화의 수동 압축은 모델 호출 없�
   } finally { await app.cleanup(); }
 });
 
-test("실행 중 수동 압축은 원래 모델 실행을 중단하거나 입력을 대기열에 넣지 않는다", async () => {
+test("Manual compaction during execution neither interrupts the model nor queues input", async () => {
   // Hold a real SDK response so refusal can be distinguished from abort-and-restart.
   const app = await sdkFixture(true);
   try {
@@ -1154,7 +1154,7 @@ test("실행 중 수동 압축은 원래 모델 실행을 중단하거나 입력
   } finally { await app.cleanup(); }
 });
 
-test("압축 모델의 실패는 기존 대화를 유지하고 수락된 명령의 대화 안에 기록한다", async () => {
+test("Compaction model failures preserve conversation and record accepted command errors inline", async () => {
   let failSummary = false;
   const app = await sdkFixture(false, (options) => ({ ...options,
     settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
@@ -1181,7 +1181,7 @@ test("압축 모델의 실패는 기존 대화를 유지하고 수락된 명령�
   } finally { await app.cleanup(); }
 });
 
-test("압축 중 프로그래밍 결함은 일반 입력 오류로 바꾸지 않고 같은 예외로 전파한다", async () => {
+test("Compaction programming errors propagate unchanged instead of becoming input errors", async () => {
   let broken = false;
   const defect = new TypeError("Offline compaction defect", { cause: new Error("Original cause") });
   const app = await sdkFixture(false, (options) => ({ ...options,
@@ -1199,7 +1199,7 @@ test("압축 중 프로그래밍 결함은 일반 입력 오류로 바꾸지 않
   } finally { await app.cleanup(); }
 });
 
-test("newTab은 실행 중인 SDK 대화·하위 작업·저장 파일을 건드리지 않고 새 세션을 연다", async () => {
+test("newTab opens a session without touching active SDK conversations, child work, or saved files", async () => {
   const app = await sdkFixture(true);
   try {
     const id = expectOk(await app.registry.create(app.main.id));
@@ -1220,7 +1220,7 @@ test("newTab은 실행 중인 SDK 대화·하위 작업·저장 파일을 건드
   } finally { await app.cleanup(); }
 });
 
-test("clear는 현재 탭의 실행을 중단·저장한 뒤 같은 위치의 새 대화로 바꾸고 다른 탭을 유지한다", async () => {
+test("clear interrupts and saves the current tab before replacing its conversation in place", async () => {
   const app = await sdkFixture(true);
   try {
     const id = expectOk(await app.registry.create(app.main.id)), other = expectOk(await app.registry.create(app.main.id));
@@ -1248,7 +1248,7 @@ test("clear는 현재 탭의 실행을 중단·저장한 뒤 같은 위치의 �
   } finally { await app.cleanup(); }
 });
 
-test("clear는 현재 탭 소유의 하위 작업도 정리하고 원래 대화에서 취소 결과를 저장한다", async () => {
+test("clear cleans up owned child work and saves cancellation in the original conversation", async () => {
   const app = await sdkFixture(true);
   try {
     const id = expectOk(await app.registry.create(app.main.id));
@@ -1265,7 +1265,7 @@ test("clear는 현재 탭 소유의 하위 작업도 정리하고 원래 대화�
   } finally { await app.cleanup(); }
 });
 
-test("clear는 확장의 전환 취소를 존중하고 진행 중인 모델을 중단하지 않는다", async () => {
+test("clear respects extension vetoes without interrupting the active model", async () => {
   const app = await sdkFixture(true);
   try {
     const extensions = join(app.directory, "agent", "extensions"); await mkdir(extensions, { recursive: true });
@@ -1285,7 +1285,7 @@ test("clear는 확장의 전환 취소를 존중하고 진행 중인 모델을 �
   } finally { await app.cleanup(); }
 });
 
-test("clear의 SDK 시작·종료 훅은 startup이나 quit가 아니라 기존 세션 교체 이유를 받는다", async () => {
+test("clear SDK lifecycle hooks receive replacement reasons instead of startup or quit", async () => {
   const app = await sdkFixture();
   try {
     const extensions = join(app.directory, "agent", "extensions"); await mkdir(extensions, { recursive: true });

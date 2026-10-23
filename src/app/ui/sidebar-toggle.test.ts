@@ -24,8 +24,8 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("기존 leader b는 작업 영역 크기를 바꾸지 않고 워크스페이스 팝업만 토글한다", async () => {
-  // 이전 사용자 설정의 명령 ID를 유지하되 영구 패널은 만들지 않는다.
+test("Legacy leader b toggles only workspace popups without resizing work areas", async () => {
+  // Retain legacy command IDs without creating permanent panels.
   const app = await mount();
   try {
     const pane = app.get("work-panel"), tree = app.get("workspace-tree");
@@ -40,8 +40,8 @@ test("기존 leader b는 작업 영역 크기를 바꾸지 않고 워크스페�
   } finally { await app.close(); }
 });
 
-test("팝업 취소는 원래 입력 커서와 대화 스크롤을 보존한다", async () => {
-  // 팝업 개폐가 기존 Agent renderable을 재생성하면 안 된다.
+test("Popup cancellation preserves original input carets and transcript scroll", async () => {
+  // Popup open/close must not recreate existing Agent renderables.
   const app = await mount();
   try {
     const prompt = app.get("session-prompt") as InputRenderable, scroll = app.get("session-transcript") as ScrollBoxRenderable;
@@ -68,8 +68,8 @@ test("Closed popups leave Tab traversal and reopen through the workspace toggle"
   } finally { await app.close(); }
 });
 
-test("History가 열려 있으면 다른 팝업 명령은 목록·스크롤·선택을 바꾸지 않는다", async () => {
-  // 모달이 겹쳐 보이지 않는 입력 대상이 생기는 것을 막는다.
+test("While History is open, other popup commands preserve lists, scroll, and selection", async () => {
+  // Prevent overlapping modals from creating invisible input owners.
   let lookups = 0;
   const app = await mount({ onListHistory: async () => { lookups++; return ok(Array.from({ length: 30 }, (_, i) => ({ id: `saved-${i}`, title: `Saved-${i}`, worktreeId: "demo:main", modified: "2026-10-17T00:00:00Z", messageCount: 1, openSessionId: null, unavailableReason: null }))); } });
   try {
@@ -83,8 +83,8 @@ test("History가 열려 있으면 다른 팝업 명령은 목록·스크롤·선
   } finally { await app.close(); }
 });
 
-test("팝업 개폐와 연결 복구만으로 닫힌 History를 조회하지 않는다", async () => {
-  // workspace picker는 세션 파일 I/O를 수행할 이유가 없다.
+test("Popup toggles and reconnection never query closed History", async () => {
+  // Workspace pickers have no reason to perform session-file I/O.
   let lookups = 0;
   const app = await mount({ onListHistory: async () => { lookups++; return ok([]); } });
   try {
@@ -95,8 +95,8 @@ test("팝업 개폐와 연결 복구만으로 닫힌 History를 조회하지 않
   } finally { await app.close(); }
 });
 
-test("늦은 History 응답은 닫힌 팝업을 다시 열거나 선택을 바꾸지 않는다", async () => {
-  // 비동기 조회의 완료와 사용자 취소를 분리한다.
+test("Late History responses neither reopen closed popups nor change selection", async () => {
+  // Separate asynchronous completion from user cancellation.
   const pending = Promise.withResolvers<ReturnType<typeof ok<never[]>>>();
   const app = await mount({ onListHistory: () => pending.promise });
   try {
@@ -107,8 +107,8 @@ test("늦은 History 응답은 닫힌 팝업을 다시 열거나 선택을 바�
   } finally { pending.resolve(ok([])); await app.close(); }
 });
 
-test("기존 sidebar.toggle 키 재할당도 팝업 개폐에 적용된다", async () => {
-  // 설정 파일을 깨뜨리지 않고 새 화면으로 기존 명령을 연결한다.
+test("Legacy sidebar.toggle overrides apply to popup toggling", async () => {
+  // Route existing commands to new surfaces without breaking config files.
   const app = await mount({ keymap: expectOk(parseKeymap({ bindings: { "sidebar.toggle": ["alt+b"] } })) });
   try {
     app.leader("b"); await app.render(); expect(app.get("workspace-picker").visible).toBe(false);

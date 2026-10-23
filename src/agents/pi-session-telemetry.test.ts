@@ -48,7 +48,7 @@ const futureReset = () => Math.floor(Date.now() / 1000) + 3600;
 const headers = (reset: number): Record<string, string> => ({ "x-codex-secondary-used-percent": "18", "x-codex-secondary-window-minutes": "10080",
   "x-codex-secondary-reset-at": String(reset) });
 
-test("Fast는 모델 호출 전부터 off이며 명시적 명령만 상태와 실제 전송 tier를 바꾼다", async () => {
+test("Fast defaults off before model calls and changes state and transport tier only through explicit commands", async () => {
   const fast = new FastMode(); let requests = 0, outgoing: unknown;
   const app = await mount(async (request, model) => {
     requests++;
@@ -72,7 +72,7 @@ test("Fast는 모델 호출 전부터 off이며 명시적 명령만 상태와 �
   } finally { await app.close(); }
 });
 
-test.each([false, true])("이전 대화가 %s여도 Fast 명령은 중간 Working 상태나 새 모델 실행을 만들지 않는다", async seeded => {
+test.each([false, true])("Fast commands never create intermediate Working states or runs after %s conversations", async seeded => {
   // Fast only changes request configuration, including before the first model turn.
   const fast = new FastMode(); let requests = 0;
   const app = await mount(async () => { requests++; }, [], undefined, fast);
@@ -99,7 +99,7 @@ test.each([false, true])("이전 대화가 %s여도 Fast 명령은 중간 Workin
   } finally { unsubscribe(); await app.close(); }
 });
 
-test("Fast 명령 검증은 요청을 보내지 않고 모델별·세션별 상태를 분리한다", async () => {
+test("Fast validation sends no requests and isolates state by model and session", async () => {
   const fast = new FastMode(); let requests = 0;
   const app = await mount(async () => { requests++; }, [], undefined, fast);
   const other = await mount(async () => { requests++; }, [], undefined, new FastMode());
@@ -115,7 +115,7 @@ test("Fast 명령 검증은 요청을 보내지 않고 모델별·세션별 상�
   } finally { await app.close(); await other.close(); }
 });
 
-test("이미 설치된 /fast 확장은 Radian 기본 명령을 대체하고 기존 요청 변환을 유지한다", async () => {
+test("Installed /fast extensions override Radian defaults and preserve request transforms", async () => {
   let handled = false;
   const app = await mount(async (request, model) => { await request?.onPayload?.({}, model); }, [(pi) => {
     pi.registerCommand("fast", { description: "Existing Fast control", handler: async () => { handled = true; } });
@@ -130,7 +130,7 @@ test("이미 설치된 /fast 확장은 Radian 기본 명령을 대체하고 기�
   } finally { await app.close(); }
 });
 
-test("기존 요청 훅의 null 대체 값도 원본 payload로 되돌리지 않는다", async () => {
+test("Existing hooks returning null never fall back to original payloads", async () => {
   let outgoing: unknown = "not observed";
   const app = await mount(async (request, model) => { outgoing = await request?.onPayload?.({ model: model.id }, model); },
     [(pi) => { pi.on("before_provider_request", () => null); }], undefined, new FastMode());
@@ -143,7 +143,7 @@ test("기존 요청 훅의 null 대체 값도 원본 payload로 되돌리지 않
   } finally { await app.close(); }
 });
 
-test("SDK 세션은 프롬프트 전에도 usage를 받고 작업이 최종 완료되면 다시 갱신한다", async () => {
+test("SDK sessions receive usage before prompts and refresh after final completion", async () => {
   // A real SDK session observes an injected account source without making a model request for usage.
   const clock = new ManualClock(); let lookups = 0, prompts = 0;
   const usage = new UsageMonitor(async () => ok({ key: "private-account", provider: "acme", load: async () => {
@@ -162,13 +162,13 @@ test("SDK 세션은 프롬프트 전에도 usage를 받고 작업이 최종 완�
   } finally { await app.close(); await usage.stop(); }
 });
 
-test.each(["인증", "사용량"] as const)("/reload만 %s backoff를 우회하고 작업 완료 갱신은 기존 대기를 지킨다", async stage => {
-  // 실제 SDK 세션의 관리 명령과 작업 완료 이벤트가 서로 다른 갱신 정책을 사용해야 한다.
+test.each(["authentication", "usage"] as const)("Only /reload bypasses %s backoff while completion refreshes respect existing delays", async stage => {
+  // SDK management commands and completion events require different refresh policies.
   const clock = new ManualClock(); let lookups = 0, prompts = 0;
   const succeeds = () => ++lookups > 1;
   const failure = err(new UsageError("USAGE_QUERY_FAILED", "Temporary failure"));
-  const usage = new UsageMonitor(async () => stage === "인증" && !succeeds() ? failure
-    : ok({ key: "account", provider: "fixture", load: async () => stage === "사용량" && !succeeds() ? failure
+  const usage = new UsageMonitor(async () => stage === "authentication" && !succeeds() ? failure
+    : ok({ key: "account", provider: "fixture", load: async () => stage === "usage" && !succeeds() ? failure
       : ok([{ id: "weekly", usedPercent: 42, periodMs: 604800000, resetsAt: 604800000 }]) }), clock, () => 0);
   const app = await mount(async () => { prompts++; }, [], usage);
   const settle = async () => { for (let i = 0; i < 70; i++) await Promise.resolve(); };
@@ -176,19 +176,19 @@ test.each(["인증", "사용량"] as const)("/reload만 %s backoff를 우회하�
     expect(app.executor.state.telemetry?.usage?.status).toBe("loading"); await settle();
     expect(app.executor.state.telemetry?.usage?.status).toBe("error"); expect(lookups).toBe(1);
 
-    // 같은 시각에 작업이 완료되어도 자동 갱신은 실패 대기를 우회하지 않는다.
+    // Automatic refresh cannot bypass failure backoff even when work completes now.
     expectOk(await app.executor.prompt("ordinary work")); await settle(); expect(lookups).toBe(1);
     const before = app.session.messages.length;
     expectOk(await app.executor.reload()); await settle();
 
-    // 리로드만 즉시 usage를 복구하며 추가 모델 요청이나 대화 메시지는 만들지 않는다.
+    // Only reload recovers usage immediately without extra model requests or messages.
     expect(lookups).toBe(2); expect(app.executor.state.telemetry?.usage?.status).toBe("ready");
     expect(app.executor.state.telemetry?.usage?.windows[0]?.usedPercent).toBe(42);
     expect(prompts).toBe(1); expect(app.session.messages).toHaveLength(before);
   } finally { await app.close(); await usage.stop(); }
 });
 
-test("SDK 모델·effort·컨텍스트를 전달하고 Fast를 임의로 활성화하지 않는다", async () => {
+test("SDK model, effort, and context propagate without implicitly enabling Fast", async () => {
   // The real SDK supplies context accounting; only the provider boundary is scripted.
   const outgoing = { model: "model-fixture" };
   let sent: unknown;
@@ -206,8 +206,8 @@ test("SDK 모델·effort·컨텍스트를 전달하고 Fast를 임의로 활성�
   } finally { await app.close(); }
 });
 
-test("압축 직후에는 남은 컨텍스트만 로컬 추정하고 다음 정상 응답의 사용량으로 교체한다", async () => {
-  // 압축 전 사용량과 삭제된 기록을 섞지 않고 시스템·요약·유지 메시지만 합산해야 한다.
+test("Post-compaction context uses local estimates until the next normal response supplies usage", async () => {
+  // Sum only system, summary, and retained messages, not deleted history or pre-compaction usage.
   let requests = 0;
   const app = await mount(async () => { requests++; });
   const manager = app.session.sessionManager;
@@ -223,22 +223,22 @@ test("압축 직후에는 남은 컨텍스트만 로컬 추정하고 다음 정�
     manager.appendCompaction("c".repeat(8000), kept, 72000);
     expect(app.session.getContextUsage()?.tokens).toBeNull();
 
-    // SDK가 미확정 값을 반환해도 추가 모델 호출 없이 압축 후 크기를 제공한다.
+    // Provide post-compaction size without another model call when SDK usage is unknown.
     const context = app.executor.state.telemetry?.context;
 
-    // 시스템 200 + 요약 2000 + 입력 1000 + 이미지 1200 + 답변 100 토큰이다.
+    // Total: system 200 + summary 2000 + input 1000 + images 1200 + answer 100 tokens.
     expect(context).toEqual({ usedTokens: 4500, maxTokens: 200000 });
     expect(requests).toBe(0);
 
-    // 새 응답의 사용량이 확보되면 로컬 추정치나 압축 전 캐시를 유지하지 않는다.
+    // Replace local estimates and old cache once fresh response usage is available.
     expectOk(await app.executor.prompt("Continue with measured usage"));
     expect(app.executor.state.telemetry?.context).toEqual({ usedTokens: 72000, maxTokens: 200000 });
     expect(requests).toBe(1);
   } finally { await app.close(); }
 });
 
-test("추정 컨텍스트는 반복 조회에서 캐시하고 확정 메시지·내용 수정·시스템 변경 때만 갱신한다", async () => {
-  // 압축 이후 사용량을 받을 때까지 화면 갱신마다 전체 컨텍스트를 재구성하지 않아야 한다.
+test("Estimated context is cached until committed messages, content, or system prompts change", async () => {
+  // Do not rebuild all context on every render while awaiting post-compaction usage.
   const app = await mount(async () => {}), manager = app.session.sessionManager;
   manager.appendCompaction("c".repeat(400), null, 72000);
   const projection = spyOn(manager, "buildSessionProjection");
@@ -246,17 +246,17 @@ test("추정 컨텍스트는 반복 조회에서 캐시하고 확정 메시지·
     expect(app.executor.state.telemetry?.context).toEqual({ usedTokens: 100, maxTokens: 200000 });
     const reads = projection.mock.calls.length;
 
-    // 같은 대화 위치를 조회하는 스냅샷은 기존 추정치를 그대로 재사용한다.
+    // Snapshots at the same conversation position reuse estimates.
     for (let i = 0; i < 50; i++) expect(app.executor.state.telemetry?.context?.usedTokens).toBe(100);
     expect(projection.mock.calls.length).toBe(reads);
 
-    // 확정 입력과 append-only 수정은 새 대화 위치이므로 즉시 반영한다.
+    // Committed input and append-only edits change position and update immediately.
     const user = manager.appendMessage({ role: "user", content: "u".repeat(400), timestamp: 1 });
     expect(app.executor.state.telemetry?.context?.usedTokens).toBe(200);
     manager.appendContextEdit(user, { content: "u".repeat(800) });
     expect(app.executor.state.telemetry?.context?.usedTokens).toBe(300);
 
-    // 시스템 패치는 이전 내용을 누적하지 않고 현재 유효한 프롬프트로 합산한다.
+    // System patches use the current effective prompt without accumulating old content.
     manager.appendMessage({ role: "system", content: "", sections: { instruction: "s".repeat(400) }, timestamp: 2 });
     expect(app.executor.state.telemetry?.context?.usedTokens).toBe(400);
     manager.appendMessage({ role: "system", content: "", sections: { instruction: "s".repeat(800) }, timestamp: 3 });
@@ -264,14 +264,14 @@ test("추정 컨텍스트는 반복 조회에서 캐시하고 확정 메시지·
   } finally { projection.mockRestore(); await app.close(); }
 });
 
-test("실제 SDK 수동 압축이 완료되면 다음 요청 없이 컨텍스트 잔량을 다시 제공한다", async () => {
-  // 공급자 경계만 오프라인으로 대체하고 SDK의 실제 압축·체크포인트 생성을 사용한다.
+test("Real SDK manual compaction refreshes remaining context without another request", async () => {
+  // Replace only the provider boundary offline; use real SDK compaction and checkpoints.
   const app = await mount(async () => {});
   try {
     app.session.settingsManager.applyOverrides({ compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } });
     expectOk(await app.executor.prompt("Compact this conversation"));
 
-    // 수동 압축 직후 SDK 토큰 수는 null이지만 Radian은 현재 체크포인트를 추정한다.
+    // SDK token counts are null immediately after compaction; Radian estimates the checkpoint.
     expectOk(await app.executor.compact());
 
     const context = app.executor.state.telemetry?.context;
@@ -283,20 +283,20 @@ test("실제 SDK 수동 압축이 완료되면 다음 요청 없이 컨텍스트
   } finally { await app.close(); }
 });
 
-test("모델 한도가 없으면 압축 기록이 있어도 컨텍스트를 임의로 채우지 않는다", async () => {
-  // SDK 모델이 미확정인 경우에는 추정 토큰이 있어도 잔여 비율의 분모를 만들 수 없다.
+test("Missing model limits never produce invented context ratios after compaction", async () => {
+  // Estimated tokens cannot define a remaining ratio without a known model limit.
   const app = await mount(async () => {});
   app.session.sessionManager.appendCompaction("c".repeat(400), null, 72000);
   const usage = spyOn(app.session, "getContextUsage").mockReturnValue(undefined);
   try {
-    // 모델 메타데이터가 없는 상태로 읽어도 100%나 임의의 총한도로 대체하지 않는다.
+    // Missing model metadata must not become 100% or an arbitrary total.
     const context = app.executor.state.telemetry?.context;
 
     expect(context).toBeNull();
   } finally { usage.mockRestore(); await app.close(); }
 });
 
-test("확장의 기존 요청 변환과 응답 관찰을 보존하면서 Fast와 weekly 헤더를 읽는다", async () => {
+test("Fast and weekly headers preserve existing extension request transforms and response observers", async () => {
   // Priority comes from an existing extension, not the Radian status display.
   let responses = 0, events = 0, sent: unknown;
   const reset = futureReset();
@@ -326,7 +326,7 @@ test("확장의 기존 요청 변환과 응답 관찰을 보존하면서 Fast와
   } finally { await app.close(); }
 });
 
-test("WebSocket 원본 quota 이벤트에서는 primary·secondary 순서가 아닌 기간으로 weekly를 찾는다", async () => {
+test("Raw WebSocket quota events identify weekly windows by duration, not primary/secondary order", async () => {
   // A primary seven-day window and secondary five-hour window reverse the common ordering.
   const reset = futureReset();
   const app = await mount(async (request, model) => {
@@ -344,7 +344,7 @@ test("WebSocket 원본 quota 이벤트에서는 primary·secondary 순서가 아
   } finally { await app.close(); }
 });
 
-test("누락·손상·만료된 quota는 이전 잔량이나 0%로 대체하지 않고 실행은 계속한다", async () => {
+test("Missing, corrupt, or expired quotas never become stale or zero remaining usage and runs continue", async () => {
   // Optional quota failures must neither reject a valid response nor invent a full or exhausted allowance.
   const reset = futureReset();
   let responseHeaders = headers(reset);

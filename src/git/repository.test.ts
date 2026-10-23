@@ -22,7 +22,7 @@ async function fixture() {
   return { directory, cwd, git, source, signal, commit, cleanup: () => rm(directory, { recursive: true, force: true }) };
 }
 
-test("커밋이 없는 저장소도 현재 staged 및 untracked 변경을 조회한다", async () => {
+test("Unborn repositories still list staged and untracked changes", async () => {
   // An unborn HEAD is a valid working tree, not a failed log to hide.
   const app = await fixture();
   try {
@@ -38,7 +38,7 @@ test("커밋이 없는 저장소도 현재 staged 및 untracked 변경을 조회
   } finally { await app.cleanup(); }
 });
 
-test("같은 파일의 staged와 unstaged 비교는 HEAD/index/worktree를 구분한다", async () => {
+test("Staged and unstaged comparisons distinguish HEAD, index, and worktree for identical paths", async () => {
   // Three versions of one path must never be collapsed into a single ambiguous diff.
   const app = await fixture();
   try {
@@ -62,8 +62,8 @@ test("같은 파일의 staged와 unstaged 비교는 HEAD/index/worktree를 구�
   } finally { await app.cleanup(); }
 });
 
-test("커밋 상세는 --points-at으로 해당 커밋을 직접 가리키는 브랜치·원격·태그만 표시한다", async () => {
-  // 두 브랜치 tip보다 오래된 공통 조상과 관계없는 별도 root를 준비한다.
+test("Commit details use --points-at for directly targeting local/remote branches and tags", async () => {
+  // Prepare an ancestor older than two tips plus an unrelated root.
   const app = await fixture();
   try {
     await writeFile(join(app.cwd, "sample.txt"), "first\n"); await app.commit("First"); const first = (await app.git("rev-parse", "HEAD")).trim();
@@ -76,7 +76,7 @@ test("커밋 상세는 --points-at으로 해당 커밋을 직접 가리키는 �
     for (const [name, oid] of [["main", third], ["topic", second], ["unrelated", unrelated]] as const) await app.git("update-ref", `refs/remotes/origin/${name}`, oid);
     await app.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
 
-    // 조상을 포함하더라도 tip이 다르면 표시하지 않고 일치하는 ref만 반환한다.
+    // Containment alone is insufficient; return only exactly matching ref targets.
     const snapshot = expectOk(await app.source.load(null, 300, app.signal));
     const ancestor = expectOk(await app.source.details(snapshot.commits.find(commit => commit.oid === first)!, app.signal));
     const middle = expectOk(await app.source.details(snapshot.commits.find(commit => commit.oid === second)!, app.signal));
@@ -92,8 +92,8 @@ test("커밋 상세는 --points-at으로 해당 커밋을 직접 가리키는 �
   } finally { await app.cleanup(); }
 });
 
-test("reflog에만 남은 커밋도 해시로 조회하고 원래 부모 기준으로 변경을 비교한다", async () => {
-  // reset 이후 모든 ref에서 사라졌지만 reflog에는 남아 있는 커밋을 준비한다.
+test("Reflog-only commits remain hash-queryable and compare against original parents", async () => {
+  // Prepare a reset-away commit absent from every ref but retained in reflog.
   const app = await fixture();
   try {
     await writeFile(join(app.cwd, "sample.txt"), "before\n"); await app.commit("Initial");
@@ -112,8 +112,8 @@ test("reflog에만 남은 커밋도 해시로 조회하고 원래 부모 기준�
   } finally { await app.cleanup(); }
 });
 
-test("해시 조회의 잘못된 입력·취소·없는 커밋은 실패 Result로 구분한다", async () => {
-  // 사용자 입력이나 취소를 유효한 빈 커밋으로 바꾸면 안 된다.
+test("Hash queries distinguish invalid input, cancellation, and missing commits through failure Results", async () => {
+  // User errors and cancellation must not become valid empty commits.
   const app = await fixture();
   try {
     const abort = new AbortController(); abort.abort();
@@ -126,8 +126,8 @@ test("해시 조회의 잘못된 입력·취소·없는 커밋은 실패 Result�
   } finally { await app.cleanup(); }
 });
 
-test("브랜치 ref 조회가 취소되거나 커밋이 없으면 빈 브랜치 성공 대신 실패를 반환한다", async () => {
-  // 실제 조회 경계에서도 미조회·취소·존재하지 않는 커밋을 빈 ref 결과와 구분한다.
+test("Cancelled branch-ref lookup and missing commits fail rather than return empty success", async () => {
+  // Real query boundaries distinguish pending, cancelled, and missing commits from empty refs.
   const app = await fixture();
   try {
     await writeFile(join(app.cwd, "sample.txt"), "initial\n"); await app.commit("Initial");
@@ -141,7 +141,7 @@ test("브랜치 ref 조회가 취소되거나 커밋이 없으면 빈 브랜치 
   } finally { await app.cleanup(); }
 });
 
-test("rename 및 개행 경로는 원본과 새 경로를 보존하고 전체 내용을 비교한다", async () => {
+test("Renames and newline paths preserve old/new names and compare complete contents", async () => {
   // NUL parsing preserves paths that ordinary line splitting would corrupt.
   const app = await fixture();
   try {
@@ -159,7 +159,7 @@ test("rename 및 개행 경로는 원본과 새 경로를 보존하고 전체 �
   } finally { await app.cleanup(); }
 });
 
-test("staged rename 뒤 unstaged 수정은 index의 새 경로를 비교한다", async () => {
+test("Unstaged changes after staged renames compare the new index path", async () => {
   // Porcelain includes the old name for RM, but the index already owns the new name.
   const app = await fixture();
   try {
@@ -176,7 +176,7 @@ test("staged rename 뒤 unstaged 수정은 index의 새 경로를 비교한다",
   } finally { await app.cleanup(); }
 });
 
-test("커밋 파일 조회는 첫 부모와 비교하고 삭제 파일의 After는 빈 내용이다", async () => {
+test("Commit-file queries compare first parents and deleted files have empty After content", async () => {
   // Commit preview must remain historical after the working file has disappeared.
   const app = await fixture();
   try {
@@ -193,7 +193,7 @@ test("커밋 파일 조회는 첫 부모와 비교하고 삭제 파일의 After�
   } finally { await app.cleanup(); }
 });
 
-test("바이너리·큰 파일·심볼릭 링크를 조용히 잘라서 성공으로 표시하지 않는다", async () => {
+test("Binary, oversized, and symlink files never silently truncate into success", async () => {
   // All filesystem data is isolated; a symlink previews its target string, not the target file.
   const app = await fixture();
   try {
@@ -212,7 +212,7 @@ test("바이너리·큰 파일·심볼릭 링크를 조용히 잘라서 성공�
   } finally { await app.cleanup(); }
 });
 
-test("상태 파싱은 rename 레코드를 보존하고 손상된 레코드를 거절한다", () => {
+test("Status parsing preserves rename records and rejects corrupt records", () => {
   // The same renamed file can have both index and working-tree changes.
   const status = "RM new\nname\0old name\0?? loose\0";
 
@@ -224,7 +224,7 @@ test("상태 파싱은 rename 레코드를 보존하고 손상된 레코드를 �
   expect(expectError(parseStatus("R  new\0")).code).toBe("GIT_PROTOCOL_ERROR");
 });
 
-test.each(["AA", "DD", "AU", "UD", "UA", "DU", "UU"])("충돌 상태 %s는 일반 2-way 파일로 오인하지 않는다", async (status) => {
+test.each(["AA", "DD", "AU", "UD", "UA", "DU", "UU"])("Conflict status %s never becomes an ordinary two-way file", async (status) => {
   // Some unmerged statuses have no U character, so the pair is the conflict identity.
   const files = expectOk(parseStatus(`${status} conflict.txt\0`));
 
@@ -234,7 +234,7 @@ test.each(["AA", "DD", "AU", "UD", "UA", "DU", "UU"])("충돌 상태 %s는 일�
   expect(expectError(result).message).toContain("three-way");
 });
 
-test("취소된 조회는 취소 Result이고 존재하지 않는 ref는 조회 오류다", async () => {
+test("Cancelled queries return cancellation Results and missing refs return lookup errors", async () => {
   // Cancellation and a genuinely empty repository are different outcomes.
   const app = await fixture();
   try {

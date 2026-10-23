@@ -15,7 +15,7 @@ async function fixture(records: unknown[]) {
   return { path, async close() { await rm(directory, { recursive: true, force: true }); } };
 }
 
-test("미리보기는 현재 분기의 최신 SDK 섹션만 읽고 writer나 파일을 바꾸지 않는다", async () => {
+test("Previews read only the current branch's latest SDK sections without changing writers or files", async () => {
   // The previous branch and tool/thinking payload must not be mistaken for the chosen conversation.
   const app = await fixture([header, message("q", null, "user", "Original question"), message("old", "q", "assistant", [{ type: "text", text: "ABANDONED BRANCH" }]),
     message("new", "q", "user", [{ type: "text", text: "Current branch" }, { type: "image", data: "not rendered" }]),
@@ -32,7 +32,7 @@ test("미리보기는 현재 분기의 최신 SDK 섹션만 읽고 writer나 파
   } finally { opened.mockRestore(); await app.close(); }
 });
 
-test("최신 15개 섹션만 Agent와 같은 도구·오류·redaction 표현으로 반환한다", async () => {
+test("Return only the latest 15 sections using Agent tool, error, and redaction presentation", async () => {
   // Several earlier turns and intermediate blocks must not displace the latest question/answer.
   const entries: unknown[] = [header, message("old-q", null, "user", "OLD QUESTION"), message("old-a", "old-q", "assistant", [{ type: "text", text: "OLD ANSWER" }]), message("q", "old-a", "user", "Latest request")];
   let parent = "q";
@@ -53,8 +53,8 @@ test("최신 15개 섹션만 Agent와 같은 도구·오류·redaction 표현으
   } finally { await app.close(); }
 });
 
-test("최근 15개 섹션은 이전 턴까지 시간순으로 포함하고 저장된 모델·effort만 복원한다", async () => {
-  // 마지막 요청만으로는 15개가 되지 않는 여러 턴을 준비한다.
+test("The latest 15 sections span earlier turns and restore only saved model and effort", async () => {
+  // Prepare multiple turns whose final request has fewer than 15 sections.
   const entries: unknown[] = [header];
   let parent: string | null = null;
   for (let turn = 1; turn <= 9; turn++) {
@@ -72,10 +72,10 @@ test("최근 15개 섹션은 이전 턴까지 시간순으로 포함하고 저�
   try {
     const before = await readFile(app.path, "utf8");
 
-    // 최신 요청을 경계로 멈추지 않고 한정된 대화 꼬리를 읽는다.
+    // Read the bounded conversation tail without stopping at the latest request.
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
 
-    // 잘린 시작은 두 번째 답변이며 현재 계정 사용량이나 Fast 설정은 추정하지 않는다.
+    // Start at the second answer; never infer current account usage or Fast settings.
     expect(preview.sections).toHaveLength(15);
     expect(preview.sections?.[0]?.text).toBe("Answer 2"); expect(preview.sections?.at(-1)?.text).toBe("Answer 9");
     expect(preview.sections?.slice(1, 5).map(section => section.text)).toEqual(["Question 3", "Answer 3", "Question 4", "Answer 4"]);
@@ -84,39 +84,39 @@ test("최근 15개 섹션은 이전 턴까지 시간순으로 포함하고 저�
   } finally { await app.close(); }
 });
 
-test("공유 스냅샷의 미리보기 제한은 저장된 대화·실행 상태·telemetry를 수정하지 않는다", () => {
-  // 공유 저장 record는 복구에도 쓰이므로 preview를 만든다고 본문을 잘라 저장하면 안 된다.
+test("Shared snapshot preview limits never modify saved conversations, run state, or telemetry", () => {
+  // Shared records also support recovery; preview truncation must not alter persisted bodies.
   const snapshot = { id: "tab", name: "Archived", worktreeId: "tree", lifecycle: "closed" as const, updatedAt: 1000,
     state: { conversationId: "saved", status: "failure" as const, error: "Saved failure", output: "Saved output",
       sections: Array.from({ length: 20 }, (_, index) => ({ id: `s${index}`, kind: "assistant" as const, title: "Agent", text: `Answer ${index} ` + "x".repeat(9000), status: "complete" as const })),
       telemetry: { provider: "fixture", model: "model", effort: "high", fast: true, context: { usedTokens: 100, maxTokens: 1000 }, weekly: null } }, subagents: [] };
   const before = JSON.stringify(snapshot);
 
-  // 같은 record에서 IPC로 보낼 읽기 전용 projection만 만든다.
+  // Build only a read-only IPC projection from the same record.
   const preview = previewSessionSnapshot(snapshot, "saved");
 
-  // 최근 15개만 표시하고 복구용 원본이나 상태줄 정보는 손대지 않는다.
+  // Show the latest 15 sections without touching recovery data or status metadata.
   expect(preview.snapshot?.state.sections).toHaveLength(15); expect(preview.snapshot?.state.sections?.[0]?.id).toBe("s5");
   expect(preview.snapshot?.state.sections?.[0]?.text).toHaveLength(historyPreviewSectionLimit); expect(preview.truncated).toBe(true);
   expect(preview.snapshot?.state.status).toBe("failure"); expect(preview.snapshot?.state.error).toBe("Saved failure");
   expect(preview.telemetry).toEqual(snapshot.state.telemetry); expect(JSON.stringify(snapshot)).toBe(before);
 });
 
-test("저장 미리보기에도 Bash 명령·timeout을 보존하며 기존 요약 길이로 명령을 자르지 않는다", async () => {
-  // 미리보기의 512자 요약 제한과 별개로 구조화한 실행 명령을 보존한다.
+test("Saved previews preserve Bash commands and timeouts without applying summary truncation", async () => {
+  // Preserve structured commands independently of the 512-character summary limit.
   const command = "printf '한글'\n" + "printf done; ".repeat(60);
   const app = await fixture([header, message("q", null, "user", "Show command"),
     message("call", "q", "assistant", [{ type: "toolCall", id: "shell", name: "bash", arguments: { command, timeout: 120 } }])]);
   try {
     const before = await readFile(app.path, "utf8");
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
-    // 제한 시간이나 명령 복원 때문에 writer를 열거나 저장 기록을 바꾸지 않는다.
+    // Restoring commands and timeouts must not open writers or modify history.
     expect(preview.sections?.at(-1)).toMatchObject({ kind: "tool", command, timeoutSeconds: 120 });
     expect(await readFile(app.path, "utf8")).toBe(before);
   } finally { await app.close(); }
 });
 
-test("최근 대화의 완료 메타데이터를 유지하지만 새 미응답 요청에는 옛 완료를 붙이지 않는다", async () => {
+test("Recent completion metadata is retained but never attached to new unanswered requests", async () => {
   const completion = { startedAt: 1000000, completedAt: 1090000, durationMs: 90000, outcome: "complete" as const };
   const app = await fixture([header, message("q", null, "user", "Question"), message("a", "q", "assistant", [{ type: "text", text: "Answer" }]),
     { type: "custom", id: "completed", parentId: "a", timestamp: header.timestamp, customType: runCompletionEntryType, data: completion }]);
@@ -132,14 +132,14 @@ test("최근 대화의 완료 메타데이터를 유지하지만 새 미응답 �
   } finally { await app.close(); }
 });
 
-test("선택한 분기의 손상된 완료 메타데이터는 실패 Result로 명시한다", async () => {
+test("Corrupt completion metadata on the selected branch returns a failure Result", async () => {
   const app = await fixture([header, message("q", null, "user", "Question"),
     { type: "custom", id: "bad", parentId: "q", timestamp: header.timestamp, customType: runCompletionEntryType, data: { durationMs: -1 } }]);
   try { expect(expectError(await readHistoryPreview(app.path, "tree", "saved")).code).toBe("HISTORY_CORRUPT"); }
   finally { await app.close(); }
 });
 
-test("최근 대화에 새 스킬 요청을 이어서 표시하되 스킬 지침은 노출하지 않는다", async () => {
+test("Recent skill requests appear without exposing skill instructions", async () => {
   const skill = '<skill name="good-code" location="/private/SKILL.md">\nHIDDEN INSTRUCTIONS\n</skill>\n\nLatest skill request';
   const app = await fixture([header, message("q", null, "user", "OLD PROMPT"), message("a", "q", "assistant", [{ type: "text", text: "OLD ANSWER" }]), message("new", "a", "user", skill)]);
   try {
@@ -151,7 +151,7 @@ test("최근 대화에 새 스킬 요청을 이어서 표시하되 스킬 지침
   } finally { await app.close(); }
 });
 
-test("이전 SDK 기록은 메모리에서만 변환하고 원본 바이트를 보존한다", async () => {
+test("Legacy SDK records convert only in memory and preserve original bytes", async () => {
   const app = await fixture([{ ...header, version: 1 }, { type: "message", message: { role: "user", content: "Legacy question" } }, { type: "message", message: { role: "assistant", content: [{ type: "text", text: "Legacy answer" }] } }]);
   try {
     const before = await readFile(app.path, "utf8");
@@ -160,7 +160,7 @@ test("이전 SDK 기록은 메모리에서만 변환하고 원본 바이트를 �
   } finally { await app.close(); }
 });
 
-test("v2 hook 메시지도 메모리에서만 변환해 최근 섹션으로 표시한다", async () => {
+test("Version 2 hook messages convert in memory into recent sections", async () => {
   const app = await fixture([{ ...header, version: 2 }, message("q", null, "user", "Legacy question"),
     { ...message("hook", "q", "hookMessage", "Legacy visible note"), message: { role: "hookMessage", customType: "Legacy extension", content: "Legacy visible note", display: true } }]);
   try {
@@ -177,13 +177,13 @@ test.each([
   [header, message("a", "a", "user", "cycle")],
   [header, message("a", null, "user", [{ type: "text", text: 1 }])],
   [{ ...header, id: "different" }],
-])("손상된 메시지·분기·신원은 부분 성공으로 숨기지 않는다: %j", async (...records) => {
+])("Corrupt messages, branches, and identities never become partial success: %j", async (...records) => {
   const app = await fixture(records);
   try { expect(expectError(await readHistoryPreview(app.path, "tree", "saved")).code).toBe("HISTORY_CORRUPT"); }
   finally { await app.close(); }
 });
 
-test("잘못된 JSON과 빈 파일도 예상 가능한 기록 오류로 반환한다", async () => {
+test("Malformed JSON and empty files return expected history errors", async () => {
   const app = await fixture([header]);
   try {
     await writeFile(app.path, JSON.stringify(header) + "\ninvalid JSON");
@@ -192,7 +192,7 @@ test("잘못된 JSON과 빈 파일도 예상 가능한 기록 오류로 반환�
   } finally { await app.close(); }
 });
 
-test("오래된 대형 기록이 안전 제한을 넘으면 완성된 최근 턴을 잘림 표시와 함께 반환한다", async () => {
+test("Oversized legacy histories return completed recent turns with truncation indicators", async () => {
   // A large old turn must not block the small recent turn or be loaded into the preview model.
   const app = await fixture([header, message("old", null, "user", "OLD PAYLOAD " + "x".repeat(20 * 1024 * 1024)),
     message("current-q", "old", "user", "CURRENT QUESTION"),
@@ -206,7 +206,7 @@ test("오래된 대형 기록이 안전 제한을 넘으면 완성된 최근 턴
   } finally { await app.close(); }
 });
 
-test("최신 도구 결과 한 줄이 4MiB를 넘어도 섹션만 잘라 반환하고 호출 인수를 연결한다", async () => {
+test("Tool results exceeding 4 MiB truncate only sections and retain call arguments", async () => {
   // The total-file fix must also handle a large relevant record rather than just old payloads.
   const app = await fixture([header, message("q", null, "user", "Read the file"),
     message("call", "q", "assistant", [{ type: "toolCall", id: "read-call", name: "read", arguments: { path: "fixture.ts" } }]),
@@ -221,7 +221,7 @@ test("최신 도구 결과 한 줄이 4MiB를 넘어도 섹션만 잘라 반환�
   } finally { await app.close(); }
 });
 
-test("물리적으로 뒤에 있는 다른 분기는 건너뛰고 최신 분기만 표시한다", async () => {
+test("Skip physically later branches and show only the latest branch", async () => {
   const app = await fixture([header, message("root", null, "user", "Root"), message("q", "root", "user", "Current question"),
     message("other", "root", "assistant", [{ type: "text", text: "OTHER BRANCH " + "x".repeat(20 * 1024 * 1024) }]),
     message("answer", "q", "assistant", [{ type: "text", text: "Current answer" }])]);
@@ -232,7 +232,7 @@ test("물리적으로 뒤에 있는 다른 분기는 건너뛰고 최신 분기�
   } finally { await app.close(); }
 });
 
-test("호출이 없는 최근 도구 결과 때문에 큰 이전 턴까지 읽지 않는다", async () => {
+test("Orphan recent tool results do not force reading large earlier turns", async () => {
   const app = await fixture([header, message("old", null, "user", "x".repeat(20 * 1024 * 1024)), message("q", "old", "user", "Current question"),
     { ...message("result", "q", "toolResult", []), message: { role: "toolResult", toolCallId: "external-call", toolName: "read", isError: false, content: [{ type: "text", text: "Orphan result" }] } },
     message("answer", "result", "assistant", [{ type: "text", text: "Current answer" }])]);
@@ -243,7 +243,7 @@ test("호출이 없는 최근 도구 결과 때문에 큰 이전 턴까지 읽�
   } finally { await app.close(); }
 });
 
-test("도구 결과 세 개가 역순 완료돼도 호출을 찾고 Agent와 같은 섹션 순서를 유지한다", async () => {
+test("Out-of-order tool results find their calls and preserve Agent section order", async () => {
   const entries: unknown[] = [header, message("q", null, "user", "Question"), message("calls", "q", "assistant", ["a", "b", "c"].map((id) => ({ type: "toolCall", id, name: "read", arguments: { path: id } })))];
   let parent = "calls";
   for (const id of ["c", "b", "a"]) {
@@ -258,7 +258,7 @@ test("도구 결과 세 개가 역순 완료돼도 호출을 찾고 Agent와 같
   } finally { await app.close(); }
 });
 
-test("CRLF와 마지막 LF 없는 기록도 Unicode를 보존하고 진행 중 취소는 CANCELLED로 반환한다", async () => {
+test("CRLF and missing final LF preserve Unicode while active cancellation returns CANCELLED", async () => {
   const app = await fixture([header, message("q", null, "user", "한글 😀\nsecond line"), message("answer", "q", "assistant", [{ type: "text", text: "답변 👨‍👩‍👧‍👦" }])]);
   try {
     await writeFile(app.path, (await readFile(app.path, "utf8")).replace(/\n/g, "\r\n").trimEnd());
@@ -269,7 +269,7 @@ test("CRLF와 마지막 LF 없는 기록도 Unicode를 보존하고 진행 중 �
   } finally { await app.close(); }
 });
 
-test("반환 섹션은 크기 제한과 잘림 여부를 명시하고 취소를 구분한다", async () => {
+test("Returned sections report size limits, truncation, and cancellation explicitly", async () => {
   const app = await fixture([header, message("q", null, "user", "x".repeat(historyPreviewLimit + 20))]);
   try {
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));

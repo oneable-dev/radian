@@ -12,16 +12,16 @@ async function init(path: string): Promise<void> {
   if (code) throw new Error(error);
 }
 
-test("여러 루트에서 레포를 모으고 루트 밖 linked worktree까지 한 번만 표시한다", async () => {
+test("Multiple roots collect repositories and display external linked worktrees exactly once", async () => {
   const fixture = await createWorktreeFixture();
   try {
-    // projects의 중첩 레포와 별도의 숨김 dotfiles 레포를 함께 탐색한다.
+    // Discover nested projects repositories alongside separate hidden dotfiles repositories.
     const projects = join(fixture.directory, "projects"), nested = join(projects, "team", "service"), dotfiles = join(fixture.directory, ".dotfiles");
     await init(nested); await init(dotfiles);
 
     const result = expectOk(await discoverWorkspace({ roots: [projects, dotfiles, fixture.main, fixture.feature, projects], maxDepth: 4 }));
 
-    // 같은 common-dir은 합치며 linked worktree의 실제 위치를 제한하지 않는다.
+    // Merge identical common directories without restricting linked-worktree locations.
     expect(result.warnings).toEqual([]);
     expect(result.repositories).toHaveLength(3);
     expect(result.repositories.map((repo) => repo.name).sort()).toEqual([".dotfiles", "main", "service"]);
@@ -29,10 +29,10 @@ test("여러 루트에서 레포를 모으고 루트 밖 linked worktree까지 �
   } finally { await fixture.cleanup(); }
 });
 
-test("탐색 깊이와 의존성 제외 및 레포 경계를 지켜 대규모 내부 트리를 탐색하지 않는다", async () => {
+test("Discovery respects depth, dependency exclusions, and repository boundaries without scanning large internals", async () => {
   const fixture = await createWorktreeFixture();
   try {
-    // 실제 레포 내부와 의존성 디렉터리는 별도 워크스페이스 후보가 아니다.
+    // Repository internals and dependency directories are not separate workspace candidates.
     const projects = join(fixture.directory, "projects"), nested = join(projects, "team", "service");
     await init(nested); await init(join(projects, "node_modules", "dependency")); await init(join(nested, "embedded"));
     await symlink(projects, join(projects, "cycle"));
@@ -40,7 +40,7 @@ test("탐색 깊이와 의존성 제외 및 레포 경계를 지켜 대규모 �
     const shallow = expectOk(await discoverWorkspace({ roots: [projects], maxDepth: 1 }));
     const deep = expectOk(await discoverWorkspace({ roots: [projects], maxDepth: 4 }));
 
-    // 깊이 제한과 레포 경계 및 symlink 순환 때문에 중복이나 내부 레포가 생기지 않는다.
+    // Depth, repository boundaries, and symlink cycles prevent duplicate/internal repositories.
     expect(shallow.repositories).toEqual([]);
     expect(deep.repositories.map((repo) => repo.name)).toEqual(["service"]);
     expect(deep.warnings).toEqual([]);
@@ -48,16 +48,16 @@ test("탐색 깊이와 의존성 제외 및 레포 경계를 지켜 대규모 �
   } finally { await fixture.cleanup(); }
 });
 
-test("명시한 symlink 루트는 정규화하고 일부 루트가 없거나 깨져도 정상 레포를 유지한다", async () => {
+test("Explicit symlink roots canonicalize and broken/missing roots preserve valid repositories", async () => {
   const fixture = await createWorktreeFixture();
   try {
-    // 누락 루트와 잘못된 Git 메타데이터가 다른 루트를 가리지 않아야 한다.
+    // Missing roots and invalid Git metadata must not hide healthy roots.
     const alias = join(fixture.directory, "alias"), broken = join(fixture.directory, "broken");
     await symlink(fixture.main, alias); await mkdir(join(broken, ".git"), { recursive: true });
 
     const result = expectOk(await discoverWorkspace({ roots: [join(fixture.directory, "missing"), broken, alias, fixture.main], maxDepth: 4 }));
 
-    // 실패는 경로와 안정적인 코드로 전달되고 유효한 레포는 중복 없이 남는다.
+    // Failures retain paths/stable codes and valid repositories remain deduplicated.
     expect(result.repositories.map((repo) => repo.id)).toEqual([fixture.repository.id]);
     expect(result.warnings.map(({ error }) => error.code)).toEqual(["STORAGE_FAILED", "GIT_DISCOVERY_FAILED"]);
   } finally { await fixture.cleanup(); }

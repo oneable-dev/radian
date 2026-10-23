@@ -40,10 +40,10 @@ test("Help shows contextual/shared keys and restores input draft, caret, and foc
   } finally {await app.close();}
 });
 
-test("푸터의 도움말 클릭은 원래 포커스를 기억하고 작은 화면에서도 진입점을 남긴다", async () => {
+test("Footer Help clicks remember original focus and retain compact entry points", async () => {
   const app = await mount();
   try {
-    // 좁은 화면에서도 축약된 도움말 키가 Neovim 표기를 유지한다.
+    // Abbreviated Help shortcuts retain Neovim notation in compact layouts.
     app.resize(60,16); await app.render();
     expect(app.get("footer-help").visible).toBe(true);
     expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<F1>");
@@ -55,7 +55,7 @@ test("푸터의 도움말 클릭은 원래 포커스를 기억하고 작은 화�
   } finally {await app.close();}
 });
 
-test("알림이 있을 때만 한 줄을 예약하며 상세는 잘리지 않은 원문을 읽고 복사한다", async () => {
+test("Notifications reserve rows only when present and details read/copy untruncated source", async () => {
   const app = await mount();
   try {
     const footer = app.get("app-footer"); expect(footer.height).toBe(1);
@@ -77,7 +77,7 @@ test("Help reflects overrides and blocks asynchronous focus restoration outside 
   const keymap = expectOk(parseKeymap({leader: "ctrl+b", bindings: {"app.help": [{keys: "f2", scope: "app"}], "app.detach": ["<leader> q"]}}));
   const app = await mount({keymap, onDetach: () => {}});
   try {
-    // 재설정한 실제 키는 별도로 안내하고 명령 목록은 논리적 리더를 유지한다.
+    // Show actual remapped keys separately while command lists retain logical leaders.
     expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<F2> Help");
     app.mockInput.pressKey("F2"); await app.render(); app.mockInput.pressKey("y"); await app.render();
     expect(app.copies[0]).toContain("<leader>: <C-b>");

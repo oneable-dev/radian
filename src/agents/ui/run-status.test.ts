@@ -22,7 +22,7 @@ async function mount(width = 70, interruptKey?: () => string) {
     spinner: () => app.renderer.root.findDescendantById("agent-run-loading")!, async close() { status.dispose(); await app.dispose(); } };
 }
 
-test("Working 다음 줄에 실제 최근 요청을 표시하고 도구 출력·응답으로 요청을 대체하지 않는다", async () => {
+test("Working shows the actual latest request below it, never tool output or answers", async () => {
   const app = await mount();
   try {
     const latest = user("  Implement\nthe search\t carefully.  ", "latest");
@@ -38,39 +38,39 @@ test("Working 다음 줄에 실제 최근 요청을 표시하고 도구 출력·
   } finally { await app.close(); }
 });
 
-test.each(["<C-x>", "<S-Tab>"])("실행 상태는 설정된 중단 키 %s의 Neovim 표기를 유지한다", async key => {
-  // 중단 키는 이미 포맷된 안내이므로 수식키의 대문자를 바꾸면 안 된다.
+test.each(["<C-x>", "<S-Tab>"])("Run status preserves Neovim notation for configured interrupt key %s", async key => {
+  // Interrupt hints are already formatted; preserve modifier capitalization.
   const app = await mount(70, () => key);
   try {
-    // 실행 중 상태를 표시해 실제 작업 안내에도 같은 표기가 전달되는지 확인한다.
+    // Show active work to verify its hints receive identical notation.
     app.status.update("a", working([user("Task")]), true); await app.render();
 
-    // 기본 키가 아닌 사용자 설정도 그대로 안내하고 입력 설정은 변경하지 않는다.
+    // Preserve custom bindings in hints without changing input settings.
     expect(app.text()).toBe(`Working (0s · ${key} to interrupt)`);
   } finally { await app.close(); }
 });
 
-test("압축 중에는 이전 요청 대신 전용 문구와 움직이는 스피너를 표시하고 작업 재개 시 요청을 복원한다", async () => {
-  // 자동 압축은 기존 실행을 끝내거나 이전 요청을 새 요청으로 만들지 않는다.
+test("Compaction shows dedicated wording and animated spinners, restoring requests when work resumes", async () => {
+  // Automatic compaction neither finishes the active run nor creates a new request.
   const app = await mount(), state = working([user("Previous delivered request")]);
   try {
     const compacting = { ...state, activity: "compacting" as const };
     app.status.update("a", compacting, true); await app.render();
     const first = app.captureCharFrame();
 
-    // 압축이 진행되는 동안에도 공통 스피너의 프레임은 계속 바뀐다.
+    // Shared spinner frames keep advancing during compaction.
     app.clock.advance(80); app.status.update("a", compacting, true); await app.render();
     expect(app.text()).toBe("Compacting context (0s · <Esc> to interrupt)"); expect(app.spinner().visible).toBe(true);
     expect(app.captureCharFrame()).not.toBe(first); expect(app.text()).not.toContain("Previous delivered request");
 
-    // 압축 이후 일반 실행으로 돌아오면 같은 요청과 스피너를 이어서 표시한다.
+    // Normal execution resumes the same request and spinner afterward.
     app.status.update("a", state, true); await app.render();
     expect(app.text()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toBe("“Previous delivered request”"); expect(app.spinner().visible).toBe(true);
   } finally { await app.close(); }
 });
 
-test("빠른 압축 완료는 이전 요청을 다시 표시하지 않고 스피너 최소 시간만 마무리한다", async () => {
-  // 압축 결과는 즉시 보여 주되 스피너가 깜빡이며 사라지지는 않아야 한다.
+test("Fast compaction completion finishes only the spinner minimum without redisplaying old requests", async () => {
+  // Show compaction results immediately without a disappearing spinner flash.
   const app = await mount(), state = { ...working([user("Previous request")]), activity: "compacting" as const };
   try {
     app.status.update("a", state, true); await app.render(); app.clock.advance(100);
@@ -83,7 +83,7 @@ test("빠른 압축 완료는 이전 요청을 다시 표시하지 않고 스피
   } finally { await app.close(); }
 });
 
-test("Working 요청도 한 줄 말줄임하며 실제 첨부 배지 공간은 먼저 확보한다", async () => {
+test("Working requests truncate to one line after reserving attachment badges", async () => {
   const app = await mount(50);
   try {
     const request = { ...user("Original full prompt"), request: { text: "A long original prompt ".repeat(20), images: 2, files: 3 } };
@@ -94,26 +94,26 @@ test("Working 요청도 한 줄 말줄임하며 실제 첨부 배지 공간은 �
   } finally { await app.close(); }
 });
 
-test("Working은 이미지 내부 안내 없이 입력값과 기존 이미지·파일 개수만 표시한다", async () => {
-  // 실제 SDK 메시지에서 나온 섹션으로 작업 상태의 표시 경로를 확인한다.
+test("Working shows input and actual image/file counts without internal image guidance", async () => {
+  // Verify the status display using sections from real SDK messages.
   const app = await mount(120), transcript = new SessionTranscript([]);
-  const text = '이거 두 개 확인해봐 [Image #1] [Image #2] @"/tmp/a.ts" @"/tmp/b.ts"\n\n[Image: original 3000x4000, displayed at 1500x2000. Multiply coordinates by 2.00 to map to original image.]';
+  const text = 'Review both images [Image #1] [Image #2] @"/tmp/a.ts" @"/tmp/b.ts"\n\n[Image: original 3000x4000, displayed at 1500x2000. Multiply coordinates by 2.00 to map to original image.]';
   transcript.handle({ type: "message_end", message: { role: "user", timestamp: 1, content: [{ type: "text", text },
     { type: "image", mimeType: "image/png", data: "one" }, { type: "image", mimeType: "image/png", data: "two" }] } });
   try {
-    // 두 줄과 높이가 부족한 한 줄 상태 모두 같은 표시 정책을 따른다.
+    // Two-line and height-constrained one-line modes share presentation policy.
     app.status.update("a", working(transcript.sections), true); await app.render();
-    expect(app.caption()).toBe("“이거 두 개 확인해봐”  [2 images] [2 files]");
+    expect(app.caption()).toBe("“Review both images”  [2 images] [2 files]");
     app.status.fitRows(1); await app.render();
 
-    // 한 줄로 전환해도 안내문 대신 입력값과 첨부 집계를 유지한다.
-    expect(app.text()).toContain("“이거 두 개 확인해봐”  [2 images] [2 files]");
+    // One-line mode retains input and attachment totals instead of internal guidance.
+    expect(app.text()).toContain("“Review both images”  [2 images] [2 files]");
     expect(app.captureCharFrame()).not.toContain("Image:");
     expect(app.captureCharFrame()).not.toContain("Multiply coordinates");
   } finally { await app.close(); }
 });
 
-test("이미지 전용 요청의 첨부 섹션은 파일명을 작업 요청으로 오인하지 않고 이미지 개수만 표시한다", async () => {
+test("Image-only attachment sections show counts without treating filenames as work requests", async () => {
   const app = await mount();
   try {
     const attachment: TranscriptSection = { id: "attachment", kind: "notice", title: "read", text: "clipboard-1.png", status: "complete",
@@ -125,7 +125,7 @@ test("이미지 전용 요청의 첨부 섹션은 파일명을 작업 요청으�
   } finally { await app.close(); }
 });
 
-test("반복 스냅샷은 최소 시간을 다시 시작하지 않고 정상 완료 문구 없이 스피너만 마무리한다", async () => {
+test("Repeated snapshots never restart minimum spinner time or invent normal completion text", async () => {
   const app = await mount();
   try {
     const state = working([user("Short job")]); app.status.update("a", state, true); await app.render();
@@ -140,7 +140,7 @@ test("반복 스냅샷은 최소 시간을 다시 시작하지 않고 정상 완
   } finally { await app.close(); }
 });
 
-test.each(["cancelled", "unfinished", "error"] as const)("스피너 없는 %s 상태는 빈 칸 없이 본문 시작선에 맞춘다", async (outcome) => {
+test.each(["cancelled", "unfinished", "error"] as const)("Spinner-free %s states align to the body origin without blank space", async (outcome) => {
   // Static outcomes have no loading indicator whose width needs reserving.
   const app = await mount();
   try {
@@ -154,7 +154,7 @@ test.each(["cancelled", "unfinished", "error"] as const)("스피너 없는 %s �
   } finally { await app.close(); }
 });
 
-test.each([false, true])("테마 밝기 %s에서도 취소는 회색이고 미완료 중단·실패는 오류색이다", async (light) => {
+test.each([false, true])("Theme brightness %s keeps cancellation gray and unfinished/failure states in error colors", async (light) => {
   // Semantic palette roles must keep intentional cancellation neutral without changing time or request colors.
   const app = await mount(), theme = uiTheme(app.renderer);
   try {
@@ -175,7 +175,7 @@ test.each([false, true])("테마 밝기 %s에서도 취소는 회색이고 미�
   } finally { await app.close(); }
 });
 
-test("빠른 취소의 스피너 꼬리가 끝나는 즉시 자리와 간격도 사라지고 취소 시간은 고정된다", async () => {
+test("Fast cancellation removes spinner slots and spacing at tail completion while fixing cancellation time", async () => {
   const app = await mount();
   try {
     // The shared spinner keeps its minimum interval, independently of the settled result.
@@ -192,7 +192,7 @@ test("빠른 취소의 스피너 꼬리가 끝나는 즉시 자리와 간격도 
   } finally { await app.close(); }
 });
 
-test("취소·중단·실패는 완료와 구분하고 이전 요청의 완료 정보는 새 요청에 재사용하지 않는다", async () => {
+test("Cancellation, interruption, and failure differ from completion and never reuse old completion metadata", async () => {
   const app = await mount();
   try {
     for (const [outcome, label] of [["cancelled", "Cancelled (1s)"], ["unfinished", "Stopped"], ["error", "Failed"], ["complete", ""]] as const) {
@@ -206,7 +206,7 @@ test("취소·중단·실패는 완료와 구분하고 이전 요청의 완료 �
   } finally { await app.close(); }
 });
 
-test("한글·결합 문자·emoji는 grapheme 경계와 셀 너비로 자르고 원문과 다음 줄을 보존한다", async () => {
+test("Korean, combining characters, and emoji truncate by grapheme and cell width while preserving source and following rows", async () => {
   const app = await mount(34);
   try {
     const request = user("A 👨‍👩‍👧‍👦 e\u0301 한글👩🏽‍💻 " + "Z".repeat(40));
@@ -219,7 +219,7 @@ test("한글·결합 문자·emoji는 grapheme 경계와 셀 너비로 자르고
   } finally { await app.close(); }
 });
 
-test("스킬 호출은 내부 지침을 노출하지 않고 요청 없는 실행도 이름을 추측하지 않는다", async () => {
+test("Skill calls hide internal instructions and request-free runs never guess names", async () => {
   const app = await mount();
   try {
     app.status.update("a", working([{ id: "skill", kind: "notice", title: "write-good-code", skillName: "write-good-code", text: "PRIVATE INTERNAL INSTRUCTIONS", status: "complete" }]), true); await app.render();
@@ -229,7 +229,7 @@ test("스킬 호출은 내부 지침을 노출하지 않고 요청 없는 실행
   } finally { await app.close(); }
 });
 
-test.each([false, true])("종료 상태 없는 대화는 기록 형식이 %s여도 Ready나 빈 상태 행을 남기지 않는다", async (structured) => {
+test.each([false, true])("Conversations without terminal state leave neither Ready nor empty status rows in format %s", async (structured) => {
   // Retained transcript content is not evidence of active work or a terminal outcome.
   const app = await mount();
   try {
@@ -243,7 +243,7 @@ test.each([false, true])("종료 상태 없는 대화는 기록 형식이 %s여�
   } finally { await app.close(); }
 });
 
-test("실행 시간은 런타임 관측값에서 이어지고 반복 스냅샷·숨김·재연결에도 초기화되지 않는다", async () => {
+test("Elapsed time continues from runtime observations across snapshots, hiding, and reconnection", async () => {
   // A reattached UI has already missed twelve seconds of this runtime-owned run.
   const app = await mount();
   const state = { ...working([user("Long job")]), runTiming: { startedAt: 1000, elapsedMs: 12000 } };
@@ -263,7 +263,7 @@ test("실행 시간은 런타임 관측값에서 이어지고 반복 스냅샷·
   } finally { await app.close(); }
 });
 
-test("화면 숨김·대화 교체·제거는 이전 스피너를 즉시 정리하고 늦은 갱신을 무시한다", async () => {
+test("Hiding, replacing conversations, and disposal clean old spinners and ignore late updates", async () => {
   const app = await mount();
   try {
     const state = { ...working([user("Task")]), conversationId: "old" };
@@ -277,7 +277,7 @@ test("화면 숨김·대화 교체·제거는 이전 스피너를 즉시 정리�
   } finally { await app.close(); }
 });
 
-test.each([70, 28])("경과 시간은 화면 너비 %i에서도 회색으로 표시하고 Working·요청의 색은 유지한다", async (width) => {
+test.each([70, 28])("Elapsed time stays gray at width %i while Working and request colors remain intact", async (width) => {
   // Both full interrupt hints and compact labels keep elapsed time visually secondary.
   const app = await mount(width), theme = uiTheme(app.renderer);
   try {
@@ -301,7 +301,7 @@ test.each([70, 28])("경과 시간은 화면 너비 %i에서도 회색으로 표
   } finally { await app.close(); }
 });
 
-test("Fast에서만 노란 화살표와 Working shimmer를 표시하고 시간·요청은 움직이지 않는다", async () => {
+test("Only Fast shows yellow arrows and Working shimmer; time and requests stay static", async () => {
   // Fast is observed telemetry, never inferred from the model name or a user's draft.
   const app = await mount();
   const state = { ...working([user("Keep this request")]), telemetry: { provider: "openai-codex", model: "fixture", effort: "high", fast: true, context: null, weekly: null } };
@@ -335,7 +335,7 @@ test("Fast에서만 노란 화살표와 Working shimmer를 표시하고 시간·
   } finally { await app.close(); }
 });
 
-test("두 줄 Working은 높이가 부족하면 한 줄로 줄고 공간 복원 시 요약을 다음 줄에 복원한다", async () => {
+test("Working collapses to one line when height is constrained and restores the summary below when space returns", async () => {
   // Layout policy may reclaim the caption row, but must not lose the original request.
   const app = await mount();
   try {
@@ -350,7 +350,7 @@ test("두 줄 Working은 높이가 부족하면 한 줄로 줄고 공간 복원 
   } finally { await app.close(); }
 });
 
-test("Fast 화면 숨김·세션 전환·제거는 shimmer와 스피너 타이머를 정리한다", async () => {
+test("Hiding Fast screens, switching sessions, and disposal clean shimmer and spinner timers", async () => {
   // Per-session animation must not survive its owning screen or leak into a different session.
   const app = await mount();
   const state = { ...working([user("Fast request")]), telemetry: { provider: "fixture", model: "fixture", effort: "high", fast: true, context: null, weekly: null } };
@@ -369,7 +369,7 @@ test("Fast 화면 숨김·세션 전환·제거는 shimmer와 스피너 타이�
   } finally { await app.close(); }
 });
 
-test("테마 전환은 작업 상태와 실패 색상을 반영하고 고정 제품색을 사용하지 않는다", async () => {
+test("Theme switching updates working and failure colors without fixed product colors", async () => {
   const app = await mount();
   try {
     for (const light of [false, true]) {

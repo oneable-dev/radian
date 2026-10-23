@@ -51,8 +51,8 @@ async function isolated(run: (directory: string) => Promise<void>): Promise<void
   finally { await rm(directory, { recursive: true, force: true }); }
 }
 
-test("대시보드는 전체·선택 프로젝트를 집계하고 일부 서비스 미지원과 취소를 구분한다", () => isolated(async (stateRoot) => {
-  // 서로 다른 저장소의 사용량은 합칠 수 있지만 조회 실패를 0으로 숨기면 안 된다.
+test("Dashboards aggregate all/selected projects and distinguish partial unsupported services from cancellation", () => isolated(async (stateRoot) => {
+  // Repository usage can combine, but lookup failures must not become zero.
   const a = repo("a"), b = repo("b"), pa = peer(a), pb = peer(b), queried: string[] = [];
   for (const [name, client, tokens] of [["a", pa.client, 100], ["b", pb.client, 200]] as const) client.dashboard = async days => {
     queried.push(name); const data = emptyDashboard(days); data.totals.tokens = tokens; data.daily.at(-1)!.tokens = tokens;
@@ -60,13 +60,13 @@ test("대시보드는 전체·선택 프로젝트를 집계하고 일부 서비�
   };
   const workspace = expectOk(await WorkspaceClient.open([a, b], a.worktrees[0]!.path, { stateRoot, offline: true }, async repository => ok(repository.id === a.id ? pa.client : pb.client)));
   try {
-    // 전체 범위와 선택 범위는 같은 리소스를 이름별로 합산한다.
+    // Global and selected scopes aggregate identical resources by name.
     const all = expectOk(await workspace.dashboard(7)), selected = expectOk(await workspace.dashboard(7, a.id));
     expect(all.totals.tokens).toBe(300); expect(all.models).toEqual([{ name: "test/large", value: 300 }]); expect(selected.totals.tokens).toBe(100); expect(queried).toEqual(["a", "b", "a"]);
     delete pb.client.dashboard;
     const partial = expectOk(await workspace.dashboard(7));
 
-    // 부분 실패는 표시하고 취소·잘못된 프로젝트는 조회하지 않는다.
+    // Show partial failures and skip cancelled/invalid project lookups.
     expect(partial.totals.tokens).toBe(100); expect(partial.warnings).toEqual(["b: excluded [UNSUPPORTED_CAPABILITY]."]);
     const before = queried.length;
     expect(expectError(await workspace.dashboard(7, undefined, AbortSignal.abort())).code).toBe("CANCELLED");
@@ -75,7 +75,7 @@ test("대시보드는 전체·선택 프로젝트를 집계하고 일부 서비�
   } finally { await workspace.disconnect(); }
 }));
 
-test("newTab은 원래 세션의 레포에만 생성하고 새 ID의 소유권도 보존한다", () => isolated(async (stateRoot) => {
+test("newTab creates only in originating repositories and retains ownership of new IDs", () => isolated(async (stateRoot) => {
   const a = repo("a"), b = repo("b"), pa = peer(a), pb = peer(b);
   const workspace = expectOk(await WorkspaceClient.open([a, b], b.worktrees[0]!.path, { stateRoot, offline: true }, async (repository) => ok(repository.id === a.id ? pa.client : pb.client)));
   try {
@@ -87,7 +87,7 @@ test("newTab은 원래 세션의 레포에만 생성하고 새 ID의 소유권�
   } finally { await workspace.disconnect(); }
 }));
 
-test("history 미리보기는 워크트리 소유 런타임으로만 전달하고 취소 시 실행하지 않는다", () => isolated(async (stateRoot) => {
+test("History previews route only to worktree-owning runtimes and never execute when cancelled", () => isolated(async (stateRoot) => {
   // A workspace combines two already-connected peers without merging their saved-session identities.
   const a = repo("a"), b = repo("b"), pa = peer(a), pb = peer(b);
   const workspace = expectOk(await WorkspaceClient.open([a, b], b.worktrees[0]!.path, { stateRoot, offline: true }, async (repository) => ok(repository.id === a.id ? pa.client : pb.client)));
@@ -102,8 +102,8 @@ test("history 미리보기는 워크트리 소유 런타임으로만 전달하�
   } finally { await workspace.disconnect(); }
 }));
 
-test("모든 레포를 표시하되 최초 선택과 동시 작업 요청은 소유 런타임 하나만 지연 시작한다", () => isolated(async (stateRoot) => {
-  // 탐색된 레포들은 보이지만 아직 어떤 데몬도 실행되지 않았다.
+test("All repositories display while initial selection/concurrent requests lazily start only owning runtimes", () => isolated(async (stateRoot) => {
+  // Discovered repositories are visible before any daemon starts.
   const a = repo("a"), b = repo("b"), pa = peer(a), pb = peer(b);
   const started: string[] = [];
   const ready = Promise.withResolvers<void>();
@@ -117,7 +117,7 @@ test("모든 레포를 표시하되 최초 선택과 동시 작업 요청은 소
     expect(workspace.snapshot.preferences.selection.worktreeId).toBe("b");
     expect(started).toEqual([]);
 
-    // 같은 레포의 선택/생성은 하나의 시작 결과를 공유한다.
+    // Same-repository selection/creation shares one startup result.
     const selected = workspace.activate("b"), created = workspace.create("b");
     ready.resolve(); expectOk(await selected);
     const session = expectOk(await created);
@@ -129,7 +129,7 @@ test("모든 레포를 표시하되 최초 선택과 동시 작업 요청은 소
     expectError(await workspace.attachTerminal(terminal, () => {}, () => {}));
     expectOk(await workspace.closeTerminal(terminal)); expectOk(await workspace.closeSession(session));
 
-    // 아직 snapshot에 없는 생성 ID도 다른 레포로 보내지 않는다.
+    // New IDs absent from snapshots must not route to other repositories.
     expect(started).toEqual(["b"]);
     expect(pa.calls).toEqual([]);
     expect(pb.calls).toContain("prompt:b-new:read");
@@ -140,8 +140,8 @@ test("모든 레포를 표시하되 최초 선택과 동시 작업 요청은 소
   } finally { ready.resolve(); await workspace.disconnect(); }
 }));
 
-test("기존 데몬의 snapshot과 재연결은 다른 레포의 행과 연결을 덮어쓰지 않는다", () => isolated(async (stateRoot) => {
-  // 이미 실행 중인 두 데몬은 시작 없이 기존 세션에 붙는다.
+test("Existing snapshots and reconnections preserve other repository rows and connections", () => isolated(async (stateRoot) => {
+  // Two running daemons attach to existing sessions without startup.
   const a = repo("a"), b = repo("b"), pa = peer(a), pb = peer(b);
   const starts: boolean[] = [];
   const workspace = expectOk(await WorkspaceClient.open([a, b], "/outside", { stateRoot }, async (repository, _cwd, options) => {
@@ -155,7 +155,7 @@ test("기존 데몬의 snapshot과 재연결은 다른 레포의 행과 연결�
     pb.connection(false); pb.connection(true);
     expectOk(await workspace.prompt("saved-a", "status"));
 
-    // 한 데몬의 이벤트에는 다른 레포의 전체 snapshot이 포함될 필요가 없다.
+    // One daemon's events need not include complete snapshots for other repositories.
     expect(workspace.snapshot.repositories).toEqual([changed, b]);
     expect(workspace.snapshot.details["saved-a"]?.output).toBe("A");
     expect(workspace.recoveryVersion).toBe(1);
@@ -166,8 +166,8 @@ test("기존 데몬의 snapshot과 재연결은 다른 레포의 행과 연결�
   } finally { unsubscribe(); await workspace.disconnect(); }
 }));
 
-test("일부 레포의 연결 실패는 격리하고 알 수 없는 대상에 명령을 보내지 않는다", () => isolated(async (stateRoot) => {
-  // B가 오프라인이어도 A의 세션과 작업은 사용할 수 있다.
+test("Repository connection failures stay isolated and unknown targets never receive commands", () => isolated(async (stateRoot) => {
+  // A remains usable while B is offline.
   const a = repo("a"), b = repo("b"), pa = peer(a);
   const workspace = expectOk(await WorkspaceClient.open([a, b], a.worktrees[0]!.path, { stateRoot }, async (repository) => repository.id === a.id ? ok(pa.client) : err(new ConnectionError("CONNECTION_FAILED", "B unavailable"))));
   try {
@@ -175,7 +175,7 @@ test("일부 레포의 연결 실패는 격리하고 알 수 없는 대상에 �
     expectOk(await workspace.prompt(session, "read"));
     const failure = expectError(await workspace.activate("b"));
 
-    // 실패 경로는 코드로 보고되고 임의의 기본 레포로 재전송되지 않는다.
+    // Failure codes report without retrying against arbitrary default repositories.
     expect(failure.code).toBe("CONNECTION_FAILED");
     expect(workspace.snapshot.notice).toContain("b: B unavailable");
     expect(expectError(await workspace.create("missing")).code).toBe("INVALID_INPUT");
@@ -184,7 +184,7 @@ test("일부 레포의 연결 실패는 격리하고 알 수 없는 대상에 �
   } finally { await workspace.disconnect(); }
 }));
 
-test("분리 중 늦게 시작된 연결도 닫고 생성 명령이나 새 snapshot을 발행하지 않는다", () => isolated(async (stateRoot) => {
+test("Detach closes late connections without creation commands or new snapshots", () => isolated(async (stateRoot) => {
   const a = repo("a"), pa = peer(a), ready = Promise.withResolvers<void>();
   const workspace = expectOk(await WorkspaceClient.open([a], "/outside", { stateRoot }, async (_repository, _cwd, options) => {
     if (!options.start) return ok(null);
@@ -192,33 +192,33 @@ test("분리 중 늦게 시작된 연결도 닫고 생성 명령이나 새 snaps
   }));
   let changes = 0; workspace.subscribe(() => changes++);
 
-  // 런타임 연결을 기다리는 동안 TUI를 분리한다.
+  // Detach the TUI while awaiting runtime connection.
   const creating = workspace.create("a"); workspace.beginDetach(); ready.resolve();
   const error = expectError(await creating); await workspace.disconnect();
 
-  // 데몬을 중지하지 않고 이 TUI의 늦은 연결만 정리한다.
+  // Clean only this TUI's late connections without stopping daemons.
   expect(error.code).toBe("CANCELLED");
   expect(pa.calls).toEqual(["disconnect"]);
   expect(changes).toBe(0);
   expect(expectError(await workspace.activate("a")).code).toBe("CANCELLED");
 }));
 
-test("구형 저장소 서비스 전환 안내는 설정 저장이 성공해도 사라지거나 서비스를 교체하지 않는다", () => isolated(async (stateRoot) => {
-  // 공용 데몬 capability가 없는 기존 연결을 유지한다.
+test("Legacy migration hints survive successful preference saves without replacing services", () => isolated(async (stateRoot) => {
+  // Retain existing connections lacking shared-daemon capabilities.
   const a = repo("a"), pa = peer(a);
   const workspace = expectOk(await WorkspaceClient.open([a], "/outside", { stateRoot }, async () => ok(pa.client)));
   try {
-    // UI 설정 저장은 데몬 교체나 전환 완료로 취급하지 않는다.
+    // UI preference persistence implies neither daemon replacement nor migration completion.
     expectOk(await workspace.savePreferences(workspace.snapshot.preferences));
 
-    // 저장 경고가 없어져도 구형 소유권 안내는 남고 프로세스 제어 요청은 보내지 않는다.
+    // Ownership hints survive cleared warnings without process-control requests.
     expect(workspace.snapshot.notice).toContain("legacy repository process");
     expect(workspace.snapshot.notice).toContain("runtime stop --legacy");
     expect(pa.calls).toEqual([]);
   } finally { await workspace.disconnect(); }
 }));
 
-test("분리 전 최종 저장도 레포별로 나누고 한 저장 실패가 다른 레포 저장을 막지 않는다", () => isolated(async (stateRoot) => {
+test("Final detach persistence splits by repository and one failure never blocks others", () => isolated(async (stateRoot) => {
   const a = repo("a"), b = repo("b"), pa = peer(a), pb = peer(b);
   const workspace = expectOk(await WorkspaceClient.open([a, b], "/outside", { stateRoot }, async (repository) => ok(repository.id === a.id ? pa.client : pb.client)));
   try {
@@ -226,7 +226,7 @@ test("분리 전 최종 저장도 레포별로 나누고 한 저장 실패가 �
     const preferences = workspace.snapshot.preferences;
     preferences.selection = { worktreeId: "b", sessions: { a: aId, b: bId } }; preferences.drafts = { [aId]: "draft A", [bId]: "draft B" };
 
-    // 건강한 연결의 마지막 preference 쓰기는 beginDetach 뒤에도 허용한다.
+    // Healthy final preference writes remain allowed after beginDetach.
     workspace.beginDetach(); pb.failSave();
     const error = expectError(await workspace.savePreferences(preferences));
 
@@ -238,7 +238,7 @@ test("분리 전 최종 저장도 레포별로 나누고 한 저장 실패가 �
   } finally { await workspace.disconnect(); }
 }));
 
-test("레포별 저장은 순서를 유지하고 이전 저장 완료 전에 새 상태를 보내지 않는다", () => isolated(async (stateRoot) => {
+test("Per-repository writes serialize and never send new state before earlier completion", () => isolated(async (stateRoot) => {
   const a = repo("a"), pa = peer(a), gate = Promise.withResolvers<void>();
   const workspace = expectOk(await WorkspaceClient.open([a], "/outside", { stateRoot }, async () => ok(pa.client)));
   try {
@@ -247,20 +247,20 @@ test("레포별 저장은 순서를 유지하고 이전 저장 완료 전에 새
     first.drafts = { [id]: "old" }; second.drafts = { [id]: "new" };
     pa.gateSaving(gate.promise);
 
-    // 지연된 이전 쓰기 뒤에 최신 초안 저장과 분리를 연속 요청한다.
+    // Queue latest drafts and detach behind delayed older writes.
     const oldSave = workspace.savePreferences(first); await Promise.resolve();
     const newSave = workspace.savePreferences(second);
     const closing = workspace.disconnect(); await Promise.resolve();
     expect(pa.saved).toHaveLength(1);
     gate.resolve(); expectOk(await oldSave); expectOk(await newSave); await closing;
 
-    // 종료가 마지막 쓰기를 먼저 끊거나 역순으로 저장하지 않는다.
+    // Shutdown must neither interrupt final writes nor persist out of order.
     expect(pa.saved.map((preferences) => preferences.drafts[id])).toEqual(["old", "new"]);
     expect(pa.calls.at(-1)).toBe("disconnect");
   } finally { gate.resolve(); await workspace.disconnect(); }
 }));
 
-test("연결 전 보관 초안을 유지하고 그동안 바뀐 뷰 설정을 지연 연결 후 저장한다", () => isolated(async (stateRoot) => {
+test("Preconnection drafts survive and interim view changes persist after delayed attachment", () => isolated(async (stateRoot) => {
   const b = repo("b"), pb = peer(b);
   const previous = defaultPreferences();
   previous.selection = { worktreeId: "b", sessions: { b: "saved-b" } }; previous.drafts = { "saved-b": "retained" };
@@ -273,24 +273,24 @@ test("연결 전 보관 초안을 유지하고 그동안 바뀐 뷰 설정을 �
     const preferences = workspace.snapshot.preferences;
     preferences.workViews = { active: { b: "git" }, agentScroll: {} };
 
-    // 초기 화면에서 아직 없는 세션 행 때문에 보관 초안을 삭제하지 않는다.
+    // Missing initial session rows must not delete retained drafts.
     expect([...workspace.retainedSessionIds]).toEqual(["saved-b"]);
     expectOk(await workspace.savePreferences(preferences));
     expect(pb.saved).toEqual([]);
     expectOk(await workspace.activate("b"));
 
-    // 클라이언트가 생기기 전의 변경도 저장되고 실제 세션 행이 보관 책임을 넘겨받는다.
+    // Persist preclient edits and hand retention ownership to actual session rows.
     expect(pb.saved[0]?.workViews?.active).toEqual({ b: "git" });
     expect(pb.saved[0]?.drafts).toEqual({ "saved-b": "retained" });
     expect([...workspace.retainedSessionIds]).toEqual([]);
   } finally { await workspace.disconnect(); }
 }));
 
-test("초기화 결함이 발생해도 동시에 붙는 다른 레포의 늦은 연결을 모두 정리한다", () => isolated(async (stateRoot) => {
+test("Initialization bugs still clean every concurrently arriving repository connection", () => isolated(async (stateRoot) => {
   const a = repo("a"), b = repo("b"), pb = peer(b), bug = new TypeError("Fixture programming defect");
   const entered = Promise.withResolvers<void>(), gate = Promise.withResolvers<void>();
 
-  // A의 예상하지 못한 예외와 B의 늦은 연결이 겹친다.
+  // Interleave A's unexpected exception with B's delayed connection.
   const opening = WorkspaceClient.open([a, b], "/outside", { stateRoot }, async (repository) => {
     if (repository.id === a.id) throw bug;
     entered.resolve(); await gate.promise; return ok(pb.client);
@@ -298,20 +298,20 @@ test("초기화 결함이 발생해도 동시에 붙는 다른 레포의 늦은 
   const failed = opening.then(() => undefined, (error: unknown) => error);
   await entered.promise; gate.resolve();
 
-  // 결함을 입력 오류로 바꾸지 않으면서 성공한 다른 연결도 누수 없이 닫는다.
+  // Preserve original bugs while closing successful peers without leaks.
   expect(await failed).toBe(bug);
   expect(pb.calls).toEqual(["begin-detach", "disconnect"]);
 }));
 
-test("런타임 연결 뒤 설정 저장 실패는 연결 거부가 아닌 경고로 표시한다", () => isolated(async (stateRoot) => {
+test("Postconnection preference failures show warnings instead of connection rejection", () => isolated(async (stateRoot) => {
   const b = repo("b"), pb = peer(b); pb.failSave();
   const workspace = expectOk(await WorkspaceClient.open([b], "/outside", { stateRoot }, async (_repository, _cwd, options) => options.start ? ok(pb.client) : ok(null)));
   try {
-    // 연결은 성공했고 그 뒤의 preference 쓰기만 실패한다.
+    // Connection succeeds before only its preference write fails.
     expectOk(await workspace.activate("b"));
     const created = expectOk(await workspace.create("b"));
 
-    // 수락한 연결/생성을 취소했다고 보고하거나 다시 시작하지 않는다.
+    // Accepted attachment/creation must not report cancellation or restart.
     expect(created).toBe("b-new");
     expect(workspace.snapshot.notice).toContain("Runtime connected; UI preference persistence failed");
     expect(pb.calls).toEqual(["create:b"]);

@@ -6,8 +6,8 @@ import { expectError, expectOk } from "../testing/results.ts";
 import { connectRuntime } from "./client.ts";
 import { daemonPaths, pidAlive, privateDirectory } from "./storage.ts";
 
-test("실제 공용 데몬 IPC는 계정 목록을 공유하고 작업 공간 선택·명령 예약·비밀정보 경계를 유지한다", async () => {
-  // 격리한 테스트 데몬의 저장소에만 가짜 계정을 넣으며 사용자 인증에는 접근하지 않는다.
+test("Real shared daemon IPC shares account lists while preserving selections, command reservation, and secrets", async () => {
+  // Insert fake accounts only into isolated daemon storage, never user authentication.
   const fixture = await createWorktreeFixture(), stateRoot = join(fixture.directory, "account-state");
   const directory = daemonPaths(true, stateRoot).directory; await privateDirectory(directory);
   await writeFile(join(directory, "accounts.json"), JSON.stringify({ version: 1, revision: 1, selections: {}, accounts: [
@@ -23,11 +23,11 @@ test("실제 공용 데몬 IPC는 계정 목록을 공유하고 작업 공간 �
     expect(catalog.catalog.existingAccounts).toContainEqual({ provider: "openai", name: "OpenAI", type: "api_key" });
     expect(catalog.catalog.existingAccounts?.find(account => account.provider === "anthropic")).toBeUndefined();
 
-    // 한 작업 공간에서 선택한 계정을 다른 작업 공간의 선택에 전파하지 않는다.
+    // Workspace selection never propagates to other workspaces.
     expectOk(await client.accounts({ type: "select", worktreeId: one.id, provider: "openai", accountId: "account-a", revision: catalog.catalog.revision }));
     const other = expectOk(await client.accounts({ type: "list", worktreeId: two.id })); if (other.kind !== "catalog") throw new Error("Expected catalog");
 
-    // 인증 자체는 목록·스냅샷·세션 프롬프트로 노출하지 않으며 외부 작업 공간 요청도 거절한다.
+    // Lists, snapshots, and prompts expose no credentials and reject external-workspace requests.
     expect(other.catalog.accounts[0]?.id).toBe("account-a"); expect(other.catalog.selections).toEqual({});
     expect(JSON.stringify(other)).not.toContain("private-ipc-fixture-key"); expect(JSON.stringify(client.snapshot)).not.toContain("private-ipc-fixture-key");
     expect(JSON.stringify(other)).not.toContain("private-existing-ipc-key"); expect(JSON.stringify(client.snapshot)).not.toContain("private-existing-ipc-key");
@@ -37,7 +37,7 @@ test("실제 공용 데몬 IPC는 계정 목록을 공유하고 작업 공간 �
     expect(client.snapshot.details[session]?.sections?.some(section => section.kind === "user")).not.toBe(true);
     expect(expectError(await client.accounts({ type: "delete", worktreeId: two.id, accountId: "account-a", revision: other.catalog.revision })).code).toBe("ACCOUNT_IN_USE");
 
-    // 연결이 확인된 기존 계정으로도 같은 IPC 계약을 통해 돌아갈 수 있다.
+    // Verified existing accounts are also reachable through the same IPC contract.
     const switched = expectOk(await client.accounts({ type: "select", worktreeId: one.id, provider: "openai", accountId: null, revision: other.catalog.revision }));
     if (switched.kind !== "catalog") throw new Error("Expected catalog");
     expect(switched.catalog.selections).toEqual({});

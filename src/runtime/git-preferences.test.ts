@@ -5,7 +5,7 @@ import { emptyPreferences, parseCommand, preferencesSchema, type RuntimePreferen
 import { restoreWorkViews, saveWorkViews } from "./work-view-preferences.ts";
 import { expectError } from "../testing/results.ts";
 
-test("Git 보기 상태는 additive preference로 저장하고 Terminal 상태와 함께 복원한다", () => {
+test("Git state persists as additive preferences alongside Terminal state", () => {
   // Existing wire enums remain unchanged while Git identities and positions are persisted separately.
   const preferences: RuntimePreferences = structuredClone(emptyPreferences);
   const state = { ...initialGitState(), selected: "a".repeat(40), diff: true, file: "commit:src/file.ts", diffScroll: 42 };
@@ -20,7 +20,7 @@ test("Git 보기 상태는 additive preference로 저장하고 Terminal 상태�
   expect(JSON.stringify(preferences.gitViews)).not.toContain("file contents");
 });
 
-test("외부 Git preference의 잘못된 탭·limit·스크롤 값은 프로토콜에서 거절한다", () => {
+test("Invalid external Git tabs, limits, and scroll values fail protocol validation", () => {
   // Restoration must not accept unbounded output requests or negative scroll coordinates.
   for (const changed of [{ tab: "graph" }, { limit: 300000 }, { diffScroll: -1 }]) {
     const preferences = { ...structuredClone(emptyPreferences), gitViews: { main: { ...initialGitState(), ...changed } } };

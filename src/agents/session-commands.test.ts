@@ -6,7 +6,7 @@ import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsMana
 import { offlineRuntime } from "../testing/offline-runtime.ts";
 import { sessionCommands } from "./session-commands.ts";
 
-test("명령 카탈로그는 SDK 확장·템플릿·활성화된 Skill을 합치되 CLI 기본 명령은 광고하지 않는다", async () => {
+test("Command catalogs merge SDK extensions, templates, and enabled skills without advertising CLI defaults", async () => {
   // Explicit resource paths keep discovery independent from the user's installed resources.
   const directory = await mkdtemp(join(tmpdir(), "radian-command-catalog-"));
   let session: AgentSession | undefined;

@@ -16,7 +16,7 @@ async function until(check:()=>boolean|Promise<boolean>) {
   while(!await check()){if(Date.now()>deadline)throw new Error("Input draft runtime observation timed out");await Bun.sleep(15);}
 }
 
-test("잘못된 첨부 범위는 preferences 명령 경계에서 거부하고 원문을 임의로 확장하지 않는다",()=>{
+test("Invalid attachment ranges fail at preference boundaries without arbitrary source expansion",()=>{
   const preferences: RuntimePreferences={...structuredClone(emptyPreferences),drafts:{session:'@"/tmp/image.png"'},inputDrafts:{session:imageDraft("/tmp/image.png")}};
   expect(parseCommand(JSON.stringify({type:"preferences",preferences})).ok).toBe(true);
   preferences.inputDrafts!.session!.tokens[0]!.end=17;
@@ -24,7 +24,7 @@ test("잘못된 첨부 범위는 preferences 명령 경계에서 거부하고 �
   expect(expectError(parseCommand(JSON.stringify({type:"preferences",preferences}))).code).toBe("INVALID_INPUT");
 });
 
-test("여러 루트의 첨부 초안을 합쳐 표시하되 각 저장소에는 자기 세션의 원문과 메타데이터만 저장한다",()=>{
+test("Merged root drafts display together while each repository saves only owned source/metadata",()=>{
   const repository=demoWorkspace()[0]!;
   const a:RuntimePreferences={...structuredClone(emptyPreferences),drafts:{a1:'@"/tmp/a.png"'},inputDrafts:{a1:imageDraft("/tmp/a.png")}};
   const b:RuntimePreferences={...structuredClone(emptyPreferences),drafts:{foreign:'@"/tmp/b.png"'},inputDrafts:{foreign:imageDraft("/tmp/b.png")}};
@@ -36,7 +36,7 @@ test("여러 루트의 첨부 초안을 합쳐 표시하되 각 저장소에는 
   merged.inputDrafts!.a1!.value="changed";expect(a.inputDrafts!.a1!.value).toBe("Inspect [Image #1]");
 });
 
-test("실제 IPC로 저장한 첨부 초안은 재연결 후 복원되고 구버전 입력 교체가 오래된 첨부를 되살리지 않는다",async()=>{
+test("Real IPC attachment drafts restore after reconnect and legacy input replacement never revives stale attachments",async()=>{
   const fixture=await createWorktreeFixture();
   const options={offline:true,stateRoot:join(fixture.directory,"state"),entry:join(import.meta.dir,"..","index.ts")};
   const paths=runtimePaths(fixture.repository.id,true,options.stateRoot);
@@ -55,7 +55,7 @@ test("실제 IPC로 저장한 첨부 초안은 재연결 후 복원되고 구버
     const legacy=structuredClone(client.snapshot.preferences);delete legacy.inputDrafts;legacy.drafts[id]="new input from old client";
     expectOk(await client.savePreferences(legacy));await until(()=>client!.snapshot.preferences.inputDrafts?.[id]===undefined);
     expect(client.snapshot.preferences.drafts[id]).toBe("new input from old client");
-    // 수락 후 모델 실패는 세션에 남고 전역 알림으로 중복 표시하지 않는다.
+    // Accepted model failures stay in sessions without duplicate global notifications.
     expectOk(await client.prompt(id,"fail"));await until(()=>client!.snapshot.details[id]?.status==="failure");
     expect(client.snapshot.details[id]?.sections?.some(section=>section.error?.includes("Offline model failure"))).toBe(true);
     expect(client.snapshot.notice).not.toContain("Offline model failure");

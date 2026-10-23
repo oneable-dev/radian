@@ -58,7 +58,7 @@ async function mount(repositories: readonly Repository[] = demoWorkspace(), opti
   };
 }
 
-test("마우스로 세션과 워크트리를 선택하면 마지막 선택과 중앙 화면을 복원한다", async () => {
+test("Mouse selection restores last sessions and central screens for worktrees", async () => {
   // The renderer uses actual terminal mouse parsing and a display-only fixture.
   const app = await mount();
   try {
@@ -97,7 +97,7 @@ test("Close keys choose previous sessions at the end and empty screens for final
   } finally { await app.close(); }
 });
 
-test("행의 닫기 액션은 부모 세션을 잘못 선택하지 않는다", async () => {
+test("Row close actions never accidentally select parent sessions", async () => {
   // A2 is selected; the close control belongs to the preceding A1 row.
   const app = await mount();
   try {
@@ -134,7 +134,7 @@ test("Empty-worktree creation sends requests without manipulating selection or o
   } finally { await app.close(); }
 });
 
-test("History 팝업은 지원 없는 preview를 설명하고 선택을 유지한다", async () => {
+test("History explains unsupported previews while preserving selection", async () => {
   // Workspace A stays selected while the modal presents an unavailable history provider.
   const app = await mount();
   try {
@@ -147,7 +147,7 @@ test("History 팝업은 지원 없는 preview를 설명하고 선택을 유지�
   } finally { await app.close(); }
 });
 
-test("세션 탭의 End는 화면 밖 세션을 표시하고 작은 터미널에서도 선택을 유지한다", async () => {
+test("Session-tab End reveals offscreen sessions and preserves selection in compact terminals", async () => {
   // Long display-only data exceeds the viewport; no agent timers drive the UI.
   const fixture: Repository[] = [{ id: "long-repo", name: "long-repo", worktrees: [{
     id: "long-tree", path: "/demo/long", name: "long", branch: "main",
@@ -174,7 +174,7 @@ test("세션 탭의 End는 화면 밖 세션을 표시하고 작은 터미널에
   } finally { await app.close(); }
 });
 
-test("위쪽 화살표는 이전 워크트리를 가리키고 Enter를 눌러야 마지막 세션을 복원한다", async () => {
+test("Up arrows browse previous worktrees and only Enter restores their last sessions", async () => {
   const app = await mount();
   try {
     await app.clickText(`${icons.folder} radian-ui`);
@@ -188,7 +188,7 @@ test("위쪽 화살표는 이전 워크트리를 가리키고 Enter를 눌러야
   } finally { await app.close(); }
 });
 
-test("종류 아이콘은 왼쪽에 두고 부모·자식의 합산 상태는 오른쪽 세션 탭에 표시한다", async () => {
+test("Kind icons stay left while aggregated parent/child status appears in right session tabs", async () => {
   const app = await mount();
   try {
     await app.openWorkspaces();
@@ -207,7 +207,7 @@ test("종류 아이콘은 왼쪽에 두고 부모·자식의 합산 상태는 �
   } finally { await app.close(); }
 });
 
-test("History 팝업 뒤에서 바뀐 실패 상태도 닫은 뒤 선택과 무관하게 반영한다", async () => {
+test("Failures behind History update after closing regardless of selection", async () => {
   // B is selected while A1's working child is tracked in the display snapshot.
   const app = await mount();
   try {
@@ -233,7 +233,7 @@ test("History 팝업 뒤에서 바뀐 실패 상태도 닫은 뒤 선택과 무�
   } finally { await app.close(); }
 });
 
-test("Tab과 Shift+Tab은 표시된 입력 대상 사이에서 포커스를 이동한다", async () => {
+test("Tab and Shift+Tab move focus among visible input owners", async () => {
   // The tree is the initial focus target in the workspace sidebar.
   const app = await mount();
   try {
@@ -251,7 +251,7 @@ test("Tab과 Shift+Tab은 표시된 입력 대상 사이에서 포커스를 이�
   } finally { await app.close(); }
 });
 
-test("브랜치 검색은 워크트리 목록만 필터하고 오른쪽 세션과 입력 포커스를 유지한다", async () => {
+test("Branch search filters only worktree lists while preserving right sessions and input focus", async () => {
   // The search starts empty and has no connection to an agent runtime.
   const app = await mount();
   try {
@@ -275,7 +275,7 @@ test("브랜치 검색은 워크트리 목록만 필터하고 오른쪽 세션�
   } finally { await app.close(); }
 });
 
-test("q・n・x를 검색에 입력해도 종료나 세션 액션을 실행하지 않고 Ctrl+C로 결과를 복원한다", async () => {
+test("Typing q/n/x in search never quits or executes session actions and Ctrl+C restores results", async () => {
   // The original selection should remain on screen even if the query hides its row.
   const app = await mount();
   try {
@@ -300,7 +300,7 @@ test("q・n・x를 검색에 입력해도 종료나 세션 액션을 실행하�
   } finally { await app.close(); }
 });
 
-test("검색어 삭제와 붙여넣기도 결과를 갱신하고 입력 포커스를 유지한다", async () => {
+test("Search deletion and paste update results while retaining input focus", async () => {
   // Adding a trailing character makes the main branch query miss.
   const app = await mount();
   try {
@@ -325,7 +325,7 @@ test("검색어 삭제와 붙여넣기도 결과를 갱신하고 입력 포커�
   } finally { await app.close(); }
 });
 
-test("부분 일치 검색 후 키보드 탐색은 숨겨진 행 대신 표시된 결과만 선택한다", async () => {
+test("Keyboard navigation after substring filtering selects only visible results", async () => {
   // The selected main session is hidden by a partial folder-name query.
   const app = await mount();
   try {
@@ -350,7 +350,7 @@ test("부분 일치 검색 후 키보드 탐색은 숨겨진 행 대신 표시�
   } finally { await app.close(); }
 });
 
-test("필터가 적용된 트리에서 닫아도 원본 목록의 다음 세션을 선택한다", async () => {
+test("Closing filtered trees selects the next session from original lists", async () => {
   // The branch query keeps A1, A2 and A3 while another worktree remains hidden.
   const app = await mount();
   try {
@@ -370,7 +370,7 @@ test("필터가 적용된 트리에서 닫아도 원본 목록의 다음 세션�
   } finally { await app.close(); }
 });
 
-test("검색 중 주입한 snapshot은 현재 검색어로 갱신되고 숨겨진 상태는 해제 후 최신 값으로 표시한다", async () => {
+test("Snapshots during search use current queries and hidden states reveal latest values after clearing", async () => {
   // A stays selected while the UI shows only B's matching worktree.
   const app = await mount();
   try {
@@ -398,7 +398,7 @@ test("검색 중 주입한 snapshot은 현재 검색어로 갱신되고 숨겨�
     app.mockInput.pressCtrlC();
     await app.renderOnce();
 
-    // 검색을 지워도 선택과 포커스를 유지하며 세션 전용 실패 아이콘을 표시한다.
+    // Clearing search preserves selection/focus and shows session-specific failure icons.
     expect(app.tabFrame("a1")).toContain(icons.failure);
     expect(app.treeFrame()).toContain(`${icons.branch} feature/workspace`);
     expect(app.renderer.currentFocusedRenderable).toBe(input);
@@ -406,7 +406,7 @@ test("검색 중 주입한 snapshot은 현재 검색어로 갱신되고 숨겨�
   } finally { await app.close(); }
 });
 
-test("레포명 검색은 모든 워크트리를 유지하고 Tab 복귀 후에도 검색어를 계속 편집한다", async () => {
+test("Repository-name searches retain all worktrees and remain editable after Tab round-trips", async () => {
   // A partial repository-name query matches the complete demo subtree.
   const app = await mount();
   try {
@@ -429,7 +429,7 @@ test("레포명 검색은 모든 워크트리를 유지하고 Tab 복귀 후에�
   } finally { await app.close(); }
 });
 
-test("레포가 없는 화면에서도 검색 및 초기화는 세션을 생성하지 않는다", async () => {
+test("Search and reset never create sessions on repository-free screens", async () => {
   // An empty source distinguishes missing repositories from a no-match projection.
   const app = await mount([]);
   try {
@@ -449,7 +449,7 @@ test("레포가 없는 화면에서도 검색 및 초기화는 세션을 생성�
   } finally { await app.close(); }
 });
 
-test("작은 터미널로 크기를 바꿔도 검색어와 포커스를 유지하며 결과를 계속 편집한다", async () => {
+test("Compact resize preserves query/focus and allows continued result editing", async () => {
   // The focused field contains a short branch query that fits both viewport widths.
   const app = await mount();
   try {

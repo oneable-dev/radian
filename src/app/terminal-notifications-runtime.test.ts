@@ -31,15 +31,15 @@ test("Real service completion reaches connected CLI UI and terminal notification
         cwd: fixture.main, env: { ...process.env, TERM: "xterm-ghostty", TERM_PROGRAM: "ghostty", XDG_CONFIG_HOME: join(fixture.directory, "config") },
         terminal: { cols: 120, rows: 24, name: "xterm-ghostty", data: (_terminal, bytes) => {
           raw += decoder.decode(bytes, { stream: true });
-          // 기본 단축키 안내가 아니라 앱·작업 뷰·세션 상태 표시로 화면 준비를 확인한다.
+          // Detect readiness through app, work-view, and session status, not default shortcut hints.
           const screen = Bun.stripANSI(raw);
           if (screen.includes("Radian") && screen.includes("Agents") && screen.includes("context")) ready.resolve();
           if (raw.includes("\x1b]777;notify;Radian · Task completed;") && raw.includes("Completed")) notified.resolve();
         } },
       });
-      // unknown 포커스의 실제 TUI에 서비스의 새 최종 결과를 전달한다.
+      // Deliver fresh final service results to a real TUI with unknown focus.
       await ready.promise;
-      // 숨긴 줄바꿈 안내를 되살리지 않고도 실제 요청과 알림 검증까지 진행한다.
+      // Verify actual requests and notifications without restoring hidden newline hints.
       expect(Bun.stripANSI(raw)).not.toContain("New line");
       expectOk(await client.prompt(id, "read"));
       await observed;

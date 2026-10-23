@@ -16,8 +16,8 @@ const loadingGlyphs = new RegExp(`[${spinnerFrames.join("")}▶▷]`, "u");
 
 test.each([
   ["/model", "model-picker"], ["/history", "session-history"],
-] as const)("%s는 팝업만 열고 프롬프트 위와 Fast 세션 탭의 로딩을 시작하지 않는다", async (command, modalId) => {
-  // Fast가 켜진 유휴 세션에서도 조회 명령은 실행 상태를 만들면 안 된다.
+] as const)("%s opens only popups without starting prompt or Fast-tab loading", async (command, modalId) => {
+  // Query commands must not create run state even in idle Fast sessions.
   const clock = new ManualClock(), app = await createTestRenderer({ width: 120, height: 28, kittyKeyboard: true, clock });
   const repositories = demoWorkspace().map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => ({ ...tree,
     sessions: tree.sessions.map(session => ({ ...session, status: null, subagents: [] })),
@@ -39,10 +39,10 @@ test.each([
     if (!(prompt instanceof PromptInput)) throw new Error("Missing Agent input");
     prompt.focus(); prompt.value = command;
 
-    // Enter로 실행한 뒤 애니메이션 시계가 진행돼도 배경 실행 표시는 없어야 한다.
+    // Enter and subsequent animation ticks must not create background activity.
     app.mockInput.pressEnter(); await render(); clock.advance(80); await render();
 
-    // 모달 자체의 데이터 조회 로딩과 Agent 실행 로딩을 구분한다.
+    // Distinguish modal data loading from Agent run loading.
     expect(get(modalId).visible).toBe(true); expect(prompt.value).toBe(""); expect(sent).toEqual([]);
     expect(get("agent-run-loading").visible).toBe(false); expect(get("transcript-status-row").visible).toBe(false);
     const tab = get(`session:${selection.worktree!.id}:${selection.sessionId}`);

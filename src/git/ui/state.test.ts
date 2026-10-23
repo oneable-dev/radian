@@ -6,7 +6,7 @@ import { demoWorkspace } from "../../workspace/demo.ts";
 import { InputError, type ExpectedError } from "../../errors.ts";
 import { err, ok, type Result } from "../../result.ts";
 
-test("로딩 중 화면을 숨겨도 저장된 스크롤을 빈 placeholder 높이로 덮어쓰지 않는다", async () => {
+test("Hiding loading screens never overwrites saved scroll with empty placeholder heights", async () => {
   // Saved history positions belong to real content, not a one-row loading placeholder.
   const app = await createTestRenderer({ width: 120, height: 24 });
   const worktree = demoWorkspace()[0]!.worktrees[0]!;

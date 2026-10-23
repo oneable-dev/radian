@@ -25,8 +25,8 @@ async function mount() {
     async cleanup() { index.dispose(); listeners.clear(); await fixture.cleanup(); } };
 }
 
-test("파일 인덱스는 전체 목록을 준비하고 반복 입력은 I/O 없이 메모리에서 검색한다", async () => {
-  // 첫 페이지 밖의 파일과 ignored 파일을 함께 준비해 불완전한 캐시를 탐지한다.
+test("File indexes load complete catalogs and search subsequent input without I/O", async () => {
+  // Include files beyond the first page and ignored files to detect incomplete caches.
   const app = await mount();
   try {
     await mkdir(join(app.main, "files"));
@@ -43,13 +43,13 @@ test("파일 인덱스는 전체 목록을 준비하고 반복 입력은 I/O 없
   } finally { await app.cleanup(); }
 });
 
-test("파일 감시는 추가·삭제·이름 변경·디렉터리 이동을 열린 인덱스에 반영한다", async () => {
-  // 실제 운영체제 이벤트를 사용하되 UI나 사용자 저장소는 건드리지 않는다.
+test("File watchers reflect additions, deletions, renames, and directory moves", async () => {
+  // Use real OS events without touching UI or user repositories.
   const app = await mount();
   try {
     expectOk(await app.index.refresh());
 
-    // 새 경로가 생기면 목록에 나타나고 이름과 디렉터리가 바뀌면 이전 경로는 사라진다.
+    // New paths appear; renames and directory moves remove old paths.
     await mkdir(join(app.main, "before")); await writeFile(join(app.main, "before", "one.ts"), "one");
     await app.until(() => app.paths("one.ts").includes("before/one.ts"), "create");
     await rename(join(app.main, "before", "one.ts"), join(app.main, "before", "two.ts"));
@@ -66,13 +66,13 @@ test("파일 감시는 추가·삭제·이름 변경·디렉터리 이동을 열
   } finally { await app.cleanup(); }
 }, 20000);
 
-test("ignore와 Git index 변경은 재동기화하고 tracked ignored 파일은 유지한다", async () => {
-  // Git의 기존 tracked/ignore 정책을 직접 탐색의 단순 제외 규칙으로 바꾸지 않는다.
+test("Ignore and Git index changes resynchronize while retaining tracked ignored files", async () => {
+  // Preserve Git tracked/ignore semantics instead of applying naive exclusions.
   const app = await mount();
   try {
     await writeFile(join(app.main, "candidate.ts"), "candidate"); expectOk(await app.index.refresh());
 
-    // ignore 추가는 후보를 제거하지만 강제 추적된 파일은 다시 나타나야 한다.
+    // Ignore rules remove candidates, but force-tracked files must reappear.
     await writeFile(join(app.main, ".gitignore"), "candidate.ts\n");
     await app.until(() => !app.paths("candidate.ts").length);
     await app.git(app.main, ["-c", "core.fsmonitor=false", "add", "-f", "candidate.ts"]);
@@ -82,8 +82,8 @@ test("ignore와 Git index 변경은 재동기화하고 tracked ignored 파일은
   } finally { await app.cleanup(); }
 });
 
-test("포함된 Git 설정과 심볼릭 링크 대상의 excludes 변경도 재동기화한다", async () => {
-  // 사용자 전역 설정을 수정하지 않고 별도 include 파일과 링크로 같은 경계를 검증한다.
+test("Included Git config and symlinked excludes changes trigger resynchronization", async () => {
+  // Test the boundary with isolated include files and symlinks, not global user config.
   const app = await mount();
   try {
     const settings = join(app.directory, "included.gitconfig"), target = join(app.directory, "actual.ignore"), link = join(app.directory, "linked.ignore");
@@ -92,7 +92,7 @@ test("포함된 Git 설정과 심볼릭 링크 대상의 excludes 변경도 재�
     await app.git(app.main, ["config", "include.path", settings]); expectOk(await app.index.refresh());
     expect(app.paths("conditional.ts")).toEqual(["conditional.ts"]);
 
-    // 링크 이름이 그대로여도 실제 대상 파일의 변경을 감지한다.
+    // Detect target content changes even when the symlink name stays unchanged.
     await writeFile(target, "conditional.ts\n"); await app.until(() => !app.paths("conditional.ts").length, "linked excludes");
     await writeFile(settings, "[core]\n\texcludesFile = /dev/null\n");
     await app.until(() => app.paths("conditional.ts").includes("conditional.ts"), "included config");
@@ -101,8 +101,8 @@ test("포함된 Git 설정과 심볼릭 링크 대상의 excludes 변경도 재�
   } finally { await app.cleanup(); }
 });
 
-test("초기 스캔 중 들어온 재동기화 요청은 버리지 않고 다음 스캔에 반영한다", async () => {
-  // 초기 파일 목록을 얻은 직후 변경이 생겨도 완료 직전에 놓치면 안 된다.
+test("Resynchronization requested during initial scanning runs in the next scan", async () => {
+  // Changes arriving after the initial listing must not be lost before completion.
   const app = await mount(), scanned = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
   const original = discovery.listCompletionFiles; let calls = 0;
   const scan = spyOn(discovery, "listCompletionFiles").mockImplementation(async (cwd, signal) => {
@@ -122,8 +122,8 @@ test("초기 스캔 중 들어온 재동기화 요청은 버리지 않고 다음
   } finally { release.resolve(); scan.mockRestore(); await app.cleanup(); }
 });
 
-test("감시 오류는 실패로 알리고 감시 재연결과 전체 스캔으로 자동 복구한다", async () => {
-  // OS 경계에서 오류를 주입하되 실제 새 watcher와 Git 재동기화를 사용한다.
+test("Watcher errors report failure and recover through reconnection and a full scan", async () => {
+  // Inject an OS-boundary error while using real replacement watchers and Git scans.
   const app = await mount(), watching = spyOn(fs, "watch");
   try {
     expectOk(await app.index.refresh());
@@ -140,8 +140,8 @@ test("감시 오류는 실패로 알리고 감시 재연결과 전체 스캔으�
   } finally { watching.mockRestore(); await app.cleanup(); }
 });
 
-test("감시를 끝내면 조회를 취소로 구분하고 초기 탐색 실패를 빈 성공으로 바꾸지 않는다", async () => {
-  // 잘못된 저장소와 종료된 인덱스는 정상적인 빈 검색 결과가 아니다.
+test("Disposed indexes return cancellation and initial discovery failures remain errors", async () => {
+  // Invalid repositories and disposed indexes are not successful empty searches.
   const app = await mount();
   const invalid = new CompletionFileIndex(app.directory, () => {}, error => app.unexpected.push(error));
   try {

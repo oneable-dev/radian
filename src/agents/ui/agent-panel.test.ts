@@ -27,8 +27,8 @@ async function mount(actions: Partial<AgentActions> = {}, scroll: Record<string,
   return { ...app, panel, notices, saved, async close() { panel.dispose(); await app.dispose(); } };
 }
 
-test("독립 Agent 패널은 세션이 없을 때 명시적인 생성 명령만 전달한다", async () => {
-  // Workbench 없이도 빈 상태를 표시하며 패널 진입 자체는 세션을 만들지 않는다.
+test("Standalone Agent panels emit only explicit creation commands when empty", async () => {
+  // Entering an empty panel must not create sessions, even without Workbench.
   const created: string[] = [];
   const app = await mount({ onNewSession: (id) => created.push(id) });
   try {
@@ -43,8 +43,8 @@ test("독립 Agent 패널은 세션이 없을 때 명시적인 생성 명령만 
   } finally { await app.close(); }
 });
 
-test("읽기 전용 Agent 패널은 콜백이 있어도 전송·중단·세션 생성 명령을 실행하지 않는다", async () => {
-  // 호스트 콜백이 실수로 전달돼도 미리보기 모드 자체가 쓰기 동작을 차단한다.
+test("Read-only Agent panels block send, interrupt, and creation despite provided callbacks", async () => {
+  // Preview mode blocks writes even if host callbacks are passed accidentally.
   const actions: string[] = [];
   const app = await mount({ initialDrafts: { a: "Saved draft" },
     onPrompt: () => { actions.push("prompt"); return ok(undefined); },
@@ -53,17 +53,17 @@ test("읽기 전용 Agent 패널은 콜백이 있어도 전송·중단·세션 �
     getSessionDetails: () => ({ status: "working", output: "Saved output", error: null }),
   }, {}, { readOnly: true });
   try {
-    // UI 키 라우팅을 우회해도 공개 명령 경계에서 같은 정책을 적용한다.
+    // Public command boundaries enforce the same policy when UI routing is bypassed.
     await app.panel.submitPrompt(); await app.panel.interrupt(); app.panel.sessionCommand("session.new");
 
-    // 쓰기 콜백은 호출되지 않고 초안과 상태줄은 그대로 표시된다.
+    // No write callbacks run; drafts and status lines remain displayed.
     expect(actions).toEqual([]); expect(app.panel.canSubmit).toBe(false); expect(app.panel.canInterrupt).toBe(false);
     expect(app.panel.prompt.value).toBe("Saved draft"); expect(app.captureCharFrame()).not.toContain("to interrupt");
   } finally { await app.close(); }
 });
 
-test("Agent 패널의 늦은 전송 수락은 다른 세션의 초안을 지우지 않는다", async () => {
-  // A의 요청이 수락을 기다리는 동안 B로 전환할 수 있다.
+test("Late Agent submission acceptance never clears another session's draft", async () => {
+  // Switch to B while A is awaiting acceptance.
   const pending = Promise.withResolvers<Result<void, ExpectedError>>();
   const sent: { id: string; text: string }[] = [];
   const app = await mount({ onPrompt: (id, text) => { sent.push({ id, text }); return pending.promise; } });
@@ -73,7 +73,7 @@ test("Agent 패널의 늦은 전송 수락은 다른 세션의 초안을 지우�
     app.panel.update(tree, "b", openIds, true);
     await app.mockInput.typeText("second");
 
-    // A의 수락은 캡처한 A의 초안만 정리하고 현재 입력은 보존해야 한다.
+    // A's acceptance clears only captured A input and preserves current input.
     pending.resolve(ok(undefined)); await submission; await app.renderOnce();
 
     expect(sent).toEqual([{ id: "a", text: "first" }]);
@@ -83,8 +83,8 @@ test("Agent 패널의 늦은 전송 수락은 다른 세션의 초안을 지우�
   } finally { pending.resolve(ok(undefined)); await app.close(); }
 });
 
-test("독립 Agent 패널도 첫 표시 프레임부터 긴 세션의 저장 위치를 복원한다", async () => {
-  // 짧은 A의 레이아웃으로 B의 저장 위치가 잘리지 않아야 한다.
+test("Standalone Agent panels restore long-session positions from the first visible frame", async () => {
+  // A's short layout must not clamp B's saved position.
   const app = await mount({ getSessionDetails: (id) => ({ status: null, error: null,
     output: id === "a" ? "SHORT" : Array.from({ length: 100 }, (_, index) => `LONG-${String(index).padStart(3, "0")}`).join("\n") }) }, { b: 53 });
   const frames: (string | null)[] = [];
@@ -94,7 +94,7 @@ test("독립 Agent 패널도 첫 표시 프레임부터 긴 세션의 저장 위
     app.panel.update(tree, "b", openIds, true);
     await app.renderOnce(); await app.renderOnce();
 
-    // 최종 화면만이 아니라 실제 표시된 모든 전환 프레임을 확인한다.
+    // Check every visible transition frame, not only the final screen.
     expect(frames.length).toBeGreaterThan(0);
     expect(new Set(frames)).toEqual(new Set(["LONG-053"]));
     app.panel.transcriptScroll.scrollTo(57);

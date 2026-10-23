@@ -39,23 +39,23 @@ function events(value: unknown, signal?: AbortSignal | null, chunkBytes = Number
   };
 }
 
-test("raw history 명령은 구버전 서비스에도 모델 프롬프트나 다른 요청으로 전송하지 않는다", async () => {
-  // 팝업이 없는 API 호출과 구버전 서비스에서도 호스트 명령을 보호한다.
+test("Raw history never becomes model prompts or other requests even on legacy services", async () => {
+  // Protect host commands in popup-free API calls and legacy services.
   const state = snapshot(); state.capabilities = [];
   const mocked = stubFetch(async () => { throw new Error("History commands must not transmit"); });
   const client = new RuntimeClient(paths, state);
   try {
-    // 유효한 명령과 잘못된 인수 모두 전송 전에 거절한다.
+    // Reject valid commands and invalid arguments before transport.
     const history = await client.prompt("session", "/history"), invalid = await client.prompt("session", "/history recent");
 
-    // 거절 이유를 구분하고 모델 전송이나 자동 재시작은 하지 않는다.
+    // Distinguish rejection reasons without model submission or automatic restart.
     expect(expectError(history).code).toBe("UNSUPPORTED_CAPABILITY");
     expect(expectError(invalid).code).toBe("INVALID_INPUT"); expect(mocked).not.toHaveBeenCalled();
   } finally { await client.disconnect(); mocked.mockRestore(); }
 });
 
-test("여러 세션의 큰 상태가 8MiB를 넘어도 대화·초안·History 연결을 손상시키지 않는다", async () => {
-  // 실제 장애처럼 각각은 작은 섹션들이 합쳐진 9MiB 이상의 상태를 조각내 전송한다.
+test("Session state above 8 MiB preserves conversations, drafts, and History connections", async () => {
+  // Fragment real-failure-like snapshots exceeding 9 MiB from individually small sections.
   const large: RuntimeSnapshot = { ...snapshot(), preferences: { ...structuredClone(emptyPreferences), drafts: { unsent: "keep this draft" } },
     details: { conversation: { status: "working", output: "", error: null,
       sections: Array.from({ length: 2200 }, (_, index) => ({ id: `section-${index}`, kind: "assistant", title: "Agent", text: `${index}:한글👩🏽‍💻 ${"x".repeat(4096)}`, status: "complete" })) } } };
@@ -76,7 +76,7 @@ test("여러 세션의 큰 상태가 8MiB를 넘어도 대화·초안·History �
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("구버전의 new·clear·exit·compact는 모델 프롬프트나 자동 재시작으로 우회하지 않는다", async () => {
+test("Legacy new, clear, exit, and compact never fall back to model prompts or automatic restarts", async () => {
   // The old service would treat an unknown slash command as paid model input.
   const fetchMock = stubFetch(async () => { throw new Error("Must not transmit unsupported session commands"); });
   const client = new RuntimeClient(paths, snapshot());
@@ -88,7 +88,7 @@ test("구버전의 new·clear·exit·compact는 모델 프롬프트나 자동 �
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("기존 session-controls만 있는 서비스에 new·clear를 파괴적인 legacy new로 보내지 않는다", async () => {
+test("Session-controls-only services never receive destructive legacy new for new/clear", async () => {
   const state: RuntimeSnapshot = { ...snapshot(), capabilities: ["session-controls"], details: { session: { conversationId: "old", status: "working", output: "Retained", error: null } } };
   const fetchMock = stubFetch(async () => { throw new Error("Legacy replacement must not run"); });
   const client = new RuntimeClient(paths, state);
@@ -98,7 +98,7 @@ test("기존 session-controls만 있는 서비스에 new·clear를 파괴적인 
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test.each(["newTab", "create"] as const)("%s는 생성 응답보다 늦은 탭 snapshot까지 기다린 뒤 새 ID를 반환한다", async action => {
+test.each(["newTab", "create"] as const)("%s waits for tab snapshots after creation responses before returning fresh IDs", async action => {
   // The command reply can arrive before the event stream exposes the created session.
   const state: RuntimeSnapshot = { ...snapshot(), capabilities: ["session-controls", "session-tab-commands"],
     repositories: [{ id: "/fixture/.git", name: "Fixture", worktrees: [{ id: "tree", name: "Tree", path: "/fixture", branch: "main",
@@ -129,7 +129,7 @@ test.each(["newTab", "create"] as const)("%s는 생성 응답보다 늦은 탭 s
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("중단은 capability와 현재 대화 ID를 확인하고 정확한 세션에만 전송한다", async () => {
+test("Interrupt validates capabilities/current conversation IDs and targets only exact sessions", async () => {
   // An older service must not receive an unknown command or be restarted automatically.
   const details: Record<string, RuntimeSnapshot["details"][string]> = {};
   const state = { ...snapshot(), details }, sent: unknown[] = [];
@@ -147,25 +147,25 @@ test("중단은 capability와 현재 대화 ID를 확인하고 정확한 세션�
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("exit는 기존 탭 capability만 있거나 현재 대화 ID가 없으면 종료 요청을 보내지 않는다", async () => {
-  // 기존 new·clear 지원만으로 새 종료 명령까지 지원한다고 가정하지 않는다.
+test("exit sends no close requests with only old tab capabilities or missing conversation IDs", async () => {
+  // Existing new/clear support does not imply support for new exit commands.
   const state = { ...snapshot(), capabilities: ["session-controls", "session-tab-commands"] };
   const fetchMock = stubFetch(async () => { throw new Error("Unfenced exit must not transmit"); });
   const client = new RuntimeClient(paths, state);
   try {
-    // 종료 capability와 대화 식별자를 각각 확인한다.
+    // Check close capabilities and conversation IDs separately.
     const unsupported = await client.prompt("session", "/exit");
     state.capabilities.push("session-exit");
     const missingConversation = await client.prompt("session", "/exit");
 
-    // 구버전 서비스나 교체된 대화를 무조건 닫는 요청으로 우회하지 않는다.
+    // Never fall back to unconditional closure of legacy services or replaced conversations.
     expect(expectError(unsupported).code).toBe("UNSUPPORTED_CAPABILITY");
     expect(expectError(missingConversation).code).toBe("PROTOCOL_ERROR");
     expect(fetchMock).not.toHaveBeenCalled();
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("clear·exit·compact·일반 입력은 현재 대화 ID를 지정하고 첨부·추가 인수는 전송하지 않는다", async () => {
+test("clear/exit/compact and ordinary input target current conversation IDs without invalid attachments/arguments", async () => {
   // A stable tab ID alone cannot fence an operation after /clear replaces its conversation.
   const state: RuntimeSnapshot = { ...snapshot(), capabilities: ["session-controls", "session-tab-commands", "session-exit", "prompt-images"],
     details: { session: { conversationId: "conversation-1", status: null, output: "", error: null } } };
@@ -194,7 +194,7 @@ test("clear·exit·compact·일반 입력은 현재 대화 ID를 지정하고 �
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("이전 런타임의 이미지와 큰 입력은 전송·자동 재시작 없이 보존 가능한 실패로 거부한다", async () => {
+test("Legacy runtime images and large input fail preservably without sending or restarting", async () => {
   const fetchMock = stubFetch(async () => { throw new Error("Must not send unsupported input"); });
   const client = new RuntimeClient(paths, snapshot());
   try {
@@ -204,7 +204,7 @@ test("이전 런타임의 이미지와 큰 입력은 전송·자동 재시작 �
   } finally {await client.disconnect(); fetchMock.mockRestore();}
 });
 
-test("이미지 지원 런타임에는 같은 prompt 명령에 이미지 참조를 명시적으로 전송한다", async () => {
+test("Image-capable runtimes receive explicit image references in the same prompt command", async () => {
   const state = snapshot(); state.capabilities = ["prompt-images"];
   const sent: unknown[] = [];
   const fetchMock = stubFetch(async (_input, options) => {
@@ -217,7 +217,7 @@ test("이미지 지원 런타임에는 같은 prompt 명령에 이미지 참조�
   } finally {await client.disconnect(); fetchMock.mockRestore();}
 });
 
-test("이전 런타임의 /fast는 일반 모델 프롬프트로 보내지 않고 명시적으로 거부한다", async () => {
+test("Legacy runtime /fast is explicitly rejected instead of becoming model input", async () => {
   const fetchMock = stubFetch(async () => { throw new Error("Settings must not become model input"); });
   const client = new RuntimeClient(paths, snapshot());
   try {
@@ -229,7 +229,7 @@ test("이전 런타임의 /fast는 일반 모델 프롬프트로 보내지 않�
 });
 
 for (const registered of [false, true]) {
-  test(`기존 확장 /fast 등록 여부 ${registered}는 읽기 조회로 확인하고 있을 때만 명령을 보낸다`, async () => {
+  test(`Existing /fast registration ${registered} is checked read-only and commands send only when registered`, async () => {
     const state = snapshot(); state.capabilities = ["prompt-completion"];
     const requests: string[] = [];
     const fetchMock = stubFetch(async (input) => {
@@ -248,7 +248,7 @@ for (const registered of [false, true]) {
   });
 }
 
-test("이전 런타임의 자동완성은 요청이나 재시작 없이 지원 부족 Result로 안내한다", async () => {
+test("Legacy completion returns unsupported Results without requests or restarts", async () => {
   const fetchMock = stubFetch(async () => { throw new Error("Must not contact an older service"); });
   const client = new RuntimeClient(paths, snapshot());
   try {
@@ -257,8 +257,8 @@ test("이전 런타임의 자동완성은 요청이나 재시작 없이 지원 �
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("이전 서비스에는 카탈로그·리로드·달러 입력을 모델 프롬프트나 재시작으로 보내지 않는다", async () => {
-  // 새 문법을 모르는 서버에 설정 명령이 유료 모델 입력으로 전달되는 것을 막는다.
+test("Legacy services never receive catalogs, reload, or dollar syntax as prompts or restarts", async () => {
+  // Prevent settings commands from becoming paid prompts on servers lacking new syntax.
   const fetchMock = stubFetch(async () => { throw new Error("No request should be sent"); });
   const client = new RuntimeClient(paths, snapshot());
   try {
@@ -270,8 +270,8 @@ test("이전 서비스에는 카탈로그·리로드·달러 입력을 모델 �
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("전체 카탈로그는 100개를 넘어도 검증하고 잘못된 대화·응답은 거부한다", async () => {
-  // 검색 페이지 제한은 전체 카탈로그의 크기 제한이 아니며 연결 identity는 계속 검증한다.
+test("Full catalogs validate beyond 100 entries and reject wrong conversations or responses", async () => {
+  // Search-page limits do not cap full catalogs; connection identity remains validated.
   const details = { session: { conversationId: "conversation", status: null, output: "", error: null } };
   const state = { ...snapshot(), capabilities: ["completion-catalog"], details };
   let mode: "valid" | "malformed" | "replaced" = "valid";
@@ -294,7 +294,7 @@ test("전체 카탈로그는 100개를 넘어도 검증하고 잘못된 대화·
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("자동완성은 instance가 지정된 읽기 요청이며 잘못된 응답을 정상 후보로 사용하지 않는다", async () => {
+test("Completion uses instance-fenced read requests and rejects invalid candidates", async () => {
   const state = snapshot(); state.capabilities = ["prompt-completion"];
   let malformed = false; const requests: string[] = [];
   const fetchMock = stubFetch(async (input, options) => {
@@ -311,7 +311,7 @@ test("자동완성은 instance가 지정된 읽기 요청이며 잘못된 응답
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("사용자가 취소한 자동완성 fetch는 예외나 빈 성공 대신 CANCELLED를 반환한다", async () => {
+test("User-cancelled completion fetches return CANCELLED instead of exceptions or empty success", async () => {
   const state = snapshot(); state.capabilities = ["prompt-completion"];
   const fetchMock = stubFetch(async (_input, options) => new Promise((_resolve, reject) => {
     options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
@@ -324,7 +324,7 @@ test("사용자가 취소한 자동완성 fetch는 예외나 빈 성공 대신 C
 });
 
 for (const failure of ["eof", "reset"] as const) {
-  test(`이벤트 ${failure} 후 최신 snapshot으로 복구하며 변경 명령을 재전송하지 않는다`, async () => {
+  test(`Event ${failure} recovers with fresh snapshots without replaying mutations`, async () => {
     // Only the transport boundary is replaced; public client actions and stream parsing remain real.
     jest.useFakeTimers();
     const initial = snapshot(); initial.capabilities = [];
@@ -369,7 +369,7 @@ for (const failure of ["eof", "reset"] as const) {
   });
 }
 
-test("반복되는 짧은 연결은 snapshot 하나만 받아도 재시도 횟수를 무한 초기화하지 않는다", async () => {
+test("Short repeated connections never reset retry budgets indefinitely after one snapshot", async () => {
   // A peer that accepts a stream and immediately closes must not cause an endless reconnect loop.
   jest.useFakeTimers();
   const streams: ReturnType<typeof events>[] = [];
@@ -392,7 +392,7 @@ test("반복되는 짧은 연결은 snapshot 하나만 받아도 재시도 횟�
   } finally { await client.disconnect(); fetchMock.mockRestore(); jest.useRealTimers(); }
 });
 
-test("첫 snapshot을 보내지 않는 서비스도 연결 제한 시간과 재시도 예산을 따른다", async () => {
+test("Services without initial snapshots obey connection deadlines and retry budgets", async () => {
   // HTTP headers alone do not prove that a valid event subscription is ready.
   jest.useFakeTimers();
   const streams: ReturnType<typeof events>[] = [];
@@ -413,7 +413,7 @@ test("첫 snapshot을 보내지 않는 서비스도 연결 제한 시간과 재�
   } finally { await client.disconnect(); fetchMock.mockRestore(); jest.useRealTimers(); }
 });
 
-test("UI 분리 시 재접속 대기를 취소하고 추가 연결을 시작하지 않는다", async () => {
+test("UI detach cancels reconnect waits and prevents further connections", async () => {
   // Detaching is a terminal client action, unlike an accidental transport failure.
   jest.useFakeTimers();
   const stream = events(snapshot());
@@ -430,7 +430,7 @@ test("UI 분리 시 재접속 대기를 취소하고 추가 연결을 시작하�
   } finally { await client.disconnect(); fetchMock.mockRestore(); jest.useRealTimers(); }
 });
 
-test("첫 snapshot을 기다리는 중 UI를 분리해도 연결 작업과 타이머가 종료된다", async () => {
+test("Detaching while awaiting first snapshots ends connection work and timers", async () => {
   // A stalled initial handshake must not prevent the configured detach action from disposing the client.
   jest.useFakeTimers();
   const fetchMock = stubFetch(async (_input, options) => events(undefined, options?.signal).response);
@@ -447,7 +447,7 @@ test("첫 snapshot을 기다리는 중 UI를 분리해도 연결 작업과 타�
 });
 
 for (const mismatch of ["repository", "mode"] as const) {
-  test(`재접속 대상의 ${mismatch}가 다르면 명령을 허용하거나 연결을 재시도하지 않는다`, async () => {
+  test(`Reconnect target ${mismatch} mismatches block commands and retries`, async () => {
     // A replacement instance is allowed only within the original workspace identity and live/test mode.
     jest.useFakeTimers();
     const first = events(snapshot()); const other = snapshot();
@@ -467,7 +467,7 @@ for (const mismatch of ["repository", "mode"] as const) {
   });
 }
 
-test("충분히 안정된 연결 뒤의 새 단절에는 별도의 재연결 예산을 부여한다", async () => {
+test("Stable connections grant fresh reconnect budgets after later disconnects", async () => {
   // A previous brief outage should not permanently consume the budget for later independent outages.
   jest.useFakeTimers();
   const streams: ReturnType<typeof events>[] = [];
@@ -487,7 +487,7 @@ test("충분히 안정된 연결 뒤의 새 단절에는 별도의 재연결 예
   } finally { await client.disconnect(); fetchMock.mockRestore(); jest.useRealTimers(); }
 });
 
-test("이벤트 연결의 권한 실패는 재시도하지 않고 typed 오류로 반환한다", async () => {
+test("Event-connection permission failures return typed errors without retries", async () => {
   // Retrying a permission denial cannot repair ownership and must not launch another service.
   jest.useFakeTimers();
   const original = Object.assign(new Error("permission denied"), { code: "EACCES" });
@@ -502,7 +502,7 @@ test("이벤트 연결의 권한 실패는 재시도하지 않고 typed 오류�
   } finally { await client.disconnect(); fetchMock.mockRestore(); jest.useRealTimers(); }
 });
 
-test("초기 연결의 내부 버그는 같은 예외로 전파하고 재접속하지 않는다", async () => {
+test("Initial connection bugs propagate identical exceptions without reconnecting", async () => {
   // The initiating caller owns diagnostics until a client is attached successfully.
   jest.useFakeTimers();
   const defect = new TypeError("initial attachment defect");
@@ -515,7 +515,7 @@ test("초기 연결의 내부 버그는 같은 예외로 전파하고 재접속�
   } finally { await client.disconnect(); fetchMock.mockRestore(); jest.useRealTimers(); }
 });
 
-test("예상하지 못한 스트림 오류는 원인을 기록하고 자동 재시도로 숨기지 않는다", async () => {
+test("Unexpected stream errors log original causes instead of hiding behind retries", async () => {
   // An internal defect is not a transient connection error even if it occurs while reading a stream.
   jest.useFakeTimers();
   const defect = new TypeError("unexpected stream defect");
@@ -534,7 +534,7 @@ test("예상하지 못한 스트림 오류는 원인을 기록하고 자동 재�
   } finally { await client.disconnect(); log.mockRestore(); fetchMock.mockRestore(); jest.useRealTimers(); }
 });
 
-test("같은 runtime으로 복구돼도 끊긴 PTY의 대기 입력과 detach를 뒤늦게 전송하지 않는다", async () => {
+test("Recovery to identical runtimes never replays disconnected PTY input or detach", async () => {
   // One input is already in flight; later keys have not crossed the transport boundary.
   jest.useFakeTimers();
   const state = snapshot(); state.capabilities = ["history", "terminal-tabs"];
@@ -576,7 +576,7 @@ test("같은 runtime으로 복구돼도 끊긴 PTY의 대기 입력과 detach를
   } finally { acknowledgement.resolve(Response.json({ ok: true, value: null })); await client.disconnect(); fetchMock.mockRestore(); jest.useRealTimers(); }
 });
 
-test("PTY 입력 응답 대기 중 분리해도 재연결은 즉시 중단하고 마지막 preferences만 flush한다", async () => {
+test("Detach during pending PTY input stops reconnection immediately and flushes only final preferences", async () => {
   jest.useFakeTimers();
   const state = snapshot(); state.capabilities = ["terminal-tabs"];
   const acknowledgement = Promise.withResolvers<Response>();
@@ -650,7 +650,7 @@ test("Detach while awaiting first PTY headers returns cancellation without sendi
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("handshake timeout과 동시에 발생한 내부 버그도 timeout으로 숨기지 않는다", async () => {
+test("Programming bugs concurrent with handshake timeouts never become timeout errors", async () => {
   jest.useFakeTimers();
   const defect = new TypeError("defect racing timeout");
   const fetchMock = stubFetch(async (_input, options) => new Promise((_resolve, reject) => {
@@ -666,7 +666,7 @@ test("handshake timeout과 동시에 발생한 내부 버그도 timeout으로 �
   } finally { await client.disconnect(); fetchMock.mockRestore(); jest.useRealTimers(); }
 });
 
-test("하나의 스트림 안에서 instance가 바뀌면 거부하고 재시도하지 않는다", async () => {
+test("Instance changes within one stream are rejected without retries", async () => {
   jest.useFakeTimers();
   const stream = events(snapshot());
   const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(stream.response);

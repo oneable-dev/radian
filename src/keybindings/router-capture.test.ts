@@ -5,8 +5,8 @@ import { KeyRouter } from "./router.ts";
 import { parseKeymap } from "./config.ts";
 import { expectOk } from "../testing/results.ts";
 
-test("리터럴 인수 캡처는 설정된 리더 시퀀스의 뒤쪽 키를 가로채지 않고 held repeat를 소비한다", async () => {
-  // 캡처 대상 r도 리더의 일부일 때는 공유 키맵이 우선한다.
+test("Literal argument capture respects trailing leader keys and consumes held repeats", async () => {
+  // Shared keymaps take precedence when captured r belongs to a leader.
   const keymap = expectOk(parseKeymap({ leader: "space r", bindings: { "button.activate": [], "app.detach": [{ keys: "<leader> z", scope: "global" }] } }));
   const app = await createTestRenderer({ width: 60, height: 8, kittyKeyboard: true });
   const input = new InputRenderable(app.renderer, { width: 60 }); app.renderer.root.add(input); input.focus();
@@ -20,7 +20,7 @@ test("리터럴 인수 캡처는 설정된 리더 시퀀스의 뒤쪽 키를 가
     app.renderer.keyInput.processParsedKey(key);
   };
   try {
-    // 리더는 정상 실행하고 독립된 r만 인수로 소비한다.
+    // Leaders execute normally; only standalone r is consumed as an argument.
     await app.mockInput.typeText(" rz"); app.mockInput.pressKey("r");
     raw("\x1b[114;1:2u"); raw("\x1b[114;1:3u");
 

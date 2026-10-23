@@ -39,7 +39,7 @@ async function mount(initial: TranscriptSection[], actions: Partial<WorkbenchAct
   };
 }
 
-test("V는 현재 논리 줄 전체를 선택하고 아래로 확장한 원문과 실제 개행만 복사한다", async () => {
+test("V selects full logical lines and copies extended source with actual newlines only", async () => {
   // Starting inside a word must still select from the first column, unlike character selection.
   const app = await mount([section("alpha beta\n한글 👨‍👩‍👧‍👦\nlast")]);
   try {
@@ -55,7 +55,7 @@ test("V는 현재 논리 줄 전체를 선택하고 아래로 확장한 원문�
   } finally { await app.close(); }
 });
 
-test.each(["first\n\nlast", "first\n\nlast\n"])("줄 선택은 위로 확장해도 빈 줄과 EOF 개행을 정확히 보존한다: %j", async (text) => {
+test.each(["first\n\nlast", "first\n\nlast\n"])("Upward line selection preserves blank lines and EOF newlines exactly: %j", async (text) => {
   const app = await mount([section(text)]);
   try {
     await app.enter(); app.mockInput.pressKey("g", { shift: true });
@@ -66,7 +66,7 @@ test.each(["first\n\nlast", "first\n\nlast\n"])("줄 선택은 위로 확장해�
   } finally { await app.close(); }
 });
 
-test("긴 줄의 자동 줄바꿈과 resize는 Visual Line의 논리 줄 선택 범위를 바꾸지 않는다", async () => {
+test("Soft wrapping and resize never change Visual Line logical ranges", async () => {
   const line = "한글 é 👨‍👩‍👧‍👦 " + "wrapped word ".repeat(20);
   const app = await mount([section(`${line}\nnext\nlast`)]);
   try {
@@ -80,7 +80,7 @@ test("긴 줄의 자동 줄바꿈과 resize는 Visual Line의 논리 줄 선택 
   } finally { await app.close(); }
 });
 
-test("v와 V 전환은 기존 anchor를 유지하고 V를 다시 누르면 읽기 모드로 돌아간다", async () => {
+test("v/V transitions preserve anchors and repeated V returns to reading mode", async () => {
   const app = await mount([section("alpha beta\nnext")]);
   try {
     await app.enter(); app.mockInput.pressKey("w"); app.mockInput.pressKey("v"); app.mockInput.pressKey("l");
@@ -116,7 +116,7 @@ test("Streaming line selections restore linewise kinds and ranges in new UIs", a
   } finally { await next.close(); }
 });
 
-test("늦은 복사 응답은 문자 선택에서 줄 선택으로 바꾼 새 선택을 해제하지 않는다", async () => {
+test("Late copy responses never clear newer line selections replacing character selections", async () => {
   const pending = Promise.withResolvers<ReturnType<typeof ok<string>>>();
   const app = await mount([section("first\nsecond")], { onCopyTranscript: () => pending.promise });
   try {
@@ -129,7 +129,7 @@ test("늦은 복사 응답은 문자 선택에서 줄 선택으로 바꾼 새 �
   } finally { pending.resolve(ok("Copied to clipboard")); await app.close(); }
 });
 
-test("Ctrl+D/U는 본문과 선택에서 반 viewport만 이동하고 anchor는 유지한다", async () => {
+test("Ctrl+D/U moves half a viewport in bodies and selections while preserving anchors", async () => {
   const lines = Array.from({ length: 80 }, (_, index) => `line-${index}`);
   const app = await mount([section(lines.join("\n"))]);
   try {
@@ -260,8 +260,8 @@ function palette(light: boolean): TerminalColors {
     highlightForeground: null, highlightBackground: null };
 }
 
-test("Thinking은 저장된 접힘 설정이 있어도 본문을 표시하고 모든 접기 명령에서 제외한다", async () => {
-  // 구버전에서 저장한 접힘 때문에 생각 본문이 다시 사라지면 안 된다.
+test("Thinking stays visible despite saved folding and excludes all fold commands", async () => {
+  // Legacy saved folding must not hide Thinking again.
   const app = await mount([
     { ...section("THINK_ALWAYS_VISIBLE"), kind: "thinking", title: "Thinking" },
     { ...section("TOOL_HIDDEN"), id: "tool", kind: "tool", title: "read" },
@@ -272,7 +272,7 @@ test("Thinking은 저장된 접힘 설정이 있어도 본문을 표시하고 �
     await app.enter(); app.mockInput.pressEscape();
     app.mockInput.pressKey("o", { ctrl: true }); app.mockInput.pressKey("z"); app.mockInput.pressKey("a");
     app.mockInput.pressKey("z"); app.mockInput.pressKey("m"); await app.render();
-    // 도구 접기는 유지하지만 Thinking에는 레이블·안내·접힘 설정을 남기지 않는다.
+    // Retain tool folding without Thinking labels, hints, or folded preferences.
     const frame = app.captureCharFrame();
     expect(frame).toContain("THINK_ALWAYS_VISIBLE"); expect(frame).not.toContain("[thinking]");
     expect(frame.split("\n")[app.renderer.height - 1]).not.toContain(" Fold");
@@ -301,8 +301,8 @@ test("Legacy Thinking header selections clear while independent body cursors res
   } finally { await app.close(); }
 });
 
-test.each([false, true])("Thinking 본문은 대화와 같은 배경·정렬에 이탤릭과 중립 회색만 적용한다: %j", async (light) => {
-  // 색이 약간 섞인 터미널 배경과 muted override에서도 Thinking 자체는 무채색이어야 한다.
+test.each([false, true])("Thinking uses conversation backgrounds/alignment with only gray italic styling: %j", async (light) => {
+  // Thinking remains achromatic despite tinted terminal backgrounds and muted overrides.
   const app = await mount([{ ...section("THINK_VISIBLE"), kind: "thinking", title: "Thinking" }, { ...section("ANSWER_VISIBLE"), id: "answer" }]);
   try {
     uiTheme(app.renderer).configure(palette(light), { muted: "#CC2288" }); await app.render();
@@ -310,7 +310,7 @@ test.each([false, true])("Thinking 본문은 대화와 같은 배경·정렬에 
     const thinking = spans.find((span) => span.text.includes("THINK_VISIBLE"));
     const answer = spans.find((span) => span.text.includes("ANSWER_VISIBLE"));
     if (!thinking || !answer) throw new Error(`Missing prose\n${app.captureCharFrame()}`);
-    // 헤더를 펼칠 필요 없이 본문이 보이고, 선택 표시와 무관하게 회색 이탤릭을 유지한다.
+    // Bodies show without expansion and stay gray italic regardless of selection markers.
     const [r, g, b] = thinking.fg.toInts(); expect(r).toBe(g); expect(g).toBe(b);
     expect(thinking.fg.equals(answer.fg)).toBe(false);
     expect(thinking.attributes & TextAttributes.ITALIC).toBe(TextAttributes.ITALIC);
@@ -322,15 +322,15 @@ test.each([false, true])("Thinking 본문은 대화와 같은 배경·정렬에 
   } finally { await app.close(); }
 });
 
-test("Thinking 스트리밍·선택·resize 중에도 본문은 보이고 접기 키는 선택을 해제하지 않는다", async () => {
-  // 이미 표시 중인 Thinking을 선택한 상태에서 토큰이 늘어나는 경우를 보호한다.
+test("Thinking remains visible during streaming, selection, and resize and fold keys preserve selection", async () => {
+  // Protect selections while already-visible Thinking receives more tokens.
   const app = await mount([{ ...section("THINK_STREAM"), kind: "thinking", title: "Thinking", status: "streaming" }]);
   try {
     await app.enter(); app.mockInput.pressKey("v"); app.mockInput.pressKey("l");
     app.mockInput.pressKey("o", { ctrl: true });
     await app.update([{ ...section("THINK_STREAM plus more"), kind: "thinking", title: "Thinking", status: "streaming" }]);
     app.resize(60, 12); await app.render();
-    // 생각 본문은 숨기거나 태그로 교체하지 않으며 원문 선택·초안도 보존한다.
+    // Never hide or replace Thinking with tags; preserve source selection and drafts.
     expect(app.state()?.mode).toBe("visual"); expect(app.body().getSelectedText()).toBe("TH");
     expect(app.captureCharFrame()).toContain("THINK_STREAM plus more");
     expect(app.captureCharFrame()).not.toContain("[thinking]");
@@ -367,7 +367,7 @@ test("Bash commands append configured timeout rather than elapsed time", async (
   try {
     pressLeader(app, "["); app.mockInput.pressKey("HOME");
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
-    // 펼친 명령의 마지막 줄에 설정된 제한을 붙이며 출력과 원문 복사도 보존한다.
+    // Append configured limits on the last command line and preserve output/source copying.
     const frame = app.captureCharFrame();
     expect(frame).toContain("$ printf '한글'"); expect(frame).toContain("printf done (timeout 120s)");
     expect(frame).not.toContain("bash · complete"); expect(frame).toContain("COMMAND_RESULT");
@@ -375,14 +375,14 @@ test("Bash commands append configured timeout rather than elapsed time", async (
   } finally { await app.close(); }
 });
 
-test("도구의 timeout만 바뀌어도 인라인 요약을 갱신하고 안내·제한은 muted 색으로 구분한다", async () => {
-  // 다중 바이트 경로 뒤의 보조 정보도 표시 셀 단위로 색상을 적용해야 한다.
+test("Timeout-only changes refresh inline summaries and distinguish hints/limits with muted colors", async () => {
+  // Auxiliary styling after multibyte paths uses display cells.
   const data: TranscriptSection = { ...section("RAW_DETAILS"), kind: "tool", title: "bash", command: "printf '한글 👨‍👩‍👧‍👦'", timeoutSeconds: 120 };
   const app = await mount([data]);
   try {
     uiTheme(app.renderer).configure(palette(false));
     await app.update([{ ...data, timeoutSeconds: 30 }]);
-    // 본문이나 상태가 그대로여도 제한 변경을 누락하지 않는다.
+    // Preserve timeout updates even when body and status do not change.
     const frame = app.captureCharFrame();
     expect(frame).toContain("(timeout 30s) (<C-o> to expand)"); expect(frame).not.toContain("timeout 120s");
     const spans = app.captureSpans().lines.flatMap((line) => line.spans);
@@ -452,7 +452,7 @@ test("Agent and Thinking omit titles, backgrounds, and indentation while other b
   } finally { await app.close(); }
 });
 
-test("스킬은 이름만 한 줄로 표시하고 개별·전체 접기에서 제외하지만 이름 복사는 유지한다", async () => {
+test("Skills show only single-line names and exclude folding while retaining name copying", async () => {
   const name = "write-good-code";
   const app = await mount([
     { id: "skill", kind: "notice", title: name, text: name, skillName: name, status: "complete" },
@@ -478,7 +478,7 @@ test("스킬은 이름만 한 줄로 표시하고 개별·전체 접기에서 �
   } finally { await app.close(); }
 });
 
-test.each(["one\r\ntwo", "one\r\ntwo\r\n"])("줄 선택은 CRLF 원문도 개행을 바꾸지 않고 복사한다: %j", async (text) => {
+test.each(["one\r\ntwo", "one\r\ntwo\r\n"])("Line selections preserve CRLF source newlines when copying: %j", async (text) => {
   const app = await mount([section(text)]);
   try {
     await app.enter(); app.mockInput.pressKey("v", { shift: true }); app.mockInput.pressKey("j"); await app.copy();
@@ -487,7 +487,7 @@ test.each(["one\r\ntwo", "one\r\ntwo\r\n"])("줄 선택은 CRLF 원문도 개행
   } finally { await app.close(); }
 });
 
-test("줄 선택 중 팔레트가 바뀌어도 선택 범위와 원문을 보존한다", async () => {
+test("Palette changes preserve line-selection ranges and source", async () => {
   const app = await mount([section("one two\nnext\ntail")]);
   try {
     uiTheme(app.renderer).configure(palette(false));
@@ -501,7 +501,7 @@ test("줄 선택 중 팔레트가 바뀌어도 선택 범위와 원문을 보존
   } finally { await app.close(); }
 });
 
-test.each([false, true])("문자 선택도 혼합된 LF·CRLF 원문을 정방향·역방향에서 보존한다: %j", async (reverse) => {
+test.each([false, true])("Character selections preserve mixed LF/CRLF source in both directions: %j", async (reverse) => {
   const text = "first\r\nsecond\nlast\r\nfinal";
   const app = await mount([section(text)]);
   try {
@@ -613,7 +613,7 @@ test("Folded-summary and expanded-body cursors stay independent and summary curs
   } finally { await next.close(); }
 });
 
-test("접힌 오류 요약도 커서와 줄 선택으로 복사할 수 있지만 숨은 본문은 표시하지 않는다", async () => {
+test("Folded error summaries support cursor/line copying without exposing hidden bodies", async () => {
   const text = "HIDDEN_STACK_TRACE\nraw tool output";
   const app = await mount([{ ...section(text), kind: "tool", title: "read", status: "error", error: "Permission denied" }]);
   try {
@@ -630,7 +630,7 @@ test("접힌 오류 요약도 커서와 줄 선택으로 복사할 수 있지만
   } finally { await app.close(); }
 });
 
-test("접힌 헤더의 선택은 도구 진행·resize·도움말 왕복에서도 보존된다", async () => {
+test("Folded-header selections survive tool progress, resize, and help round-trips", async () => {
   const app = await mount([{ ...section("HIDDEN_PROGRESS"), kind: "tool", title: "read", status: "running", summary: "a path" }]);
   try {
     await app.enter(); app.mockInput.pressKey("v"); app.mockInput.pressKey("l");

@@ -6,8 +6,8 @@ import type { OpenSession } from "./model.ts";
 const session = (id: string, status: OpenSession["status"] = "complete"): OpenSession => ({ id, name: id, status, subagents: [] });
 const repositories = (sessions: OpenSession[]): Repository[] => [{ id: "repo", name: "Radian", worktrees: [{ id: "tree", path: "/repo", name: "feature-auth", branch: "fix/login", sessions }] }];
 
-test("모니터는 모든 저장소의 실행 중·미확인 세션만 모으고 미확인을 먼저 표시한다", () => {
-  // 실패한 하위 에이전트가 있어도 다른 하위 실행이 진행 중이면 세션을 놓치지 않는다.
+test("Monitors collect active and unread sessions across repositories and prioritize unread results", () => {
+  // Failed children must not hide sessions while other child runs remain active.
   const active = { ...session("active"), subagents: [{ id: "bad", name: "bad", status: "failure" as const }, { id: "live", name: "live", status: "working" as const }] };
   const unread = { ...session("unread"), attention: { id: "result", outcome: "unfinished" as const, completedAt: 1 }, request: { text: "Fix authentication", images: 0, files: 0 } };
   const input = repositories([session("read"), active, unread, session("cancelled", null)]);
@@ -21,7 +21,7 @@ test("모니터는 모든 저장소의 실행 중·미확인 세션만 모으고
   expect(items[2]?.repository).toBe("Backend");
 });
 
-test("모니터 검색은 요청과 워크스페이스 필드에 단어별 포함 검색을 적용하고 퍼지 매칭을 거부한다", () => {
+test("Monitor search matches words across requests and workspace fields without fuzzy matching", () => {
   // A query may combine contiguous substrings from different summary fields.
   const input = repositories([{ ...session("opaque-id", "working"), request: { text: "Fix authentication", images: 0, files: 0 } }]);
 

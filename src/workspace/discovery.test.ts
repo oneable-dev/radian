@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { discoverRepository, GitDiscoveryError, parseWorktrees } from "./discovery.ts";
 import { expectOk, expectError } from "../testing/results.ts";
 
-test("NUL 형식은 공백과 개행 경로 및 detached HEAD를 구분한다", () => {
+test("NUL records distinguish spaces, newline paths, and detached HEAD", () => {
   // NUL delimiters preserve paths that line-based parsing would corrupt.
   const data = "worktree /tmp/main tree\0HEAD abc\0branch refs/heads/main\0\0"
     + "worktree /tmp/other\nline\0HEAD def\0detached\0\0"
@@ -19,7 +19,7 @@ test("NUL 형식은 공백과 개행 경로 및 detached HEAD를 구분한다", 
   expect(trees.every((tree) => tree.sessions.length === 0)).toBe(true);
 });
 
-test("실제 임시 Git 레포의 linked worktree에서 공통 레포를 찾는다", async () => {
+test("Real temporary linked worktrees discover their common repository", async () => {
   // All Git mutation is confined to a repository owned by this test.
   const directory = await mkdtemp(join(tmpdir(), "radian-git-test-"));
   const main = join(directory, "main repository");
@@ -47,7 +47,7 @@ test("실제 임시 Git 레포의 linked worktree에서 공통 레포를 찾는�
   }
 });
 
-test("Git 레포가 아닌 경로의 오류를 빈 성공 결과로 숨기지 않는다", async () => {
+test("Non-Git paths return errors instead of empty success", async () => {
   // This temporary directory is deliberately outside any Git repository.
   const directory = await mkdtemp(join(tmpdir(), "radian-no-git-test-"));
   try {

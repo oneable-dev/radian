@@ -15,8 +15,8 @@ async function until(predicate: () => boolean | Promise<boolean>): Promise<void>
   }
 }
 
-test("두 레포는 공용 데몬 하나를 사용하고 SDK·쉘·저장 상태는 분리하며 전체 재시작 후에도 복원한다", async () => {
-  // 사용자 서비스가 아닌 두 임시 Git 레포와 오프라인 SDK만 실행한다.
+test("Two repositories share one daemon while SDK, shells, and storage stay isolated across full restart", async () => {
+  // Run only two temporary Git repositories and offline SDKs, never user services.
   const a = await createWorktreeFixture(), b = await createWorktreeFixture();
   const options = { offline: true, stateRoot: join(a.directory, "state"), entry: join(import.meta.dir, "..", "index.ts") };
   const repositories = [a.repository, b.repository];
@@ -32,7 +32,7 @@ test("두 레포는 공용 데몬 하나를 사용하고 SDK·쉘·저장 상태
     expect(aCatalog.capabilities).toContain("repository-catalog"); expect(bCatalog.capabilities).toContain("repository-catalog");
     expect(aCatalog.details).toEqual({}); expect(bCatalog.details).toEqual({});
 
-    // 하나의 데몬 안에서 A를 활성화해도 B의 SDK는 초기화하지 않는다.
+    // Activating A must not initialize B's SDK in the shared daemon.
     expectOk(await workspace.activate(aTree.id));
     const aId = expectOk(await workspace.create(aTree.id));
     expect(expectOk(await fetchSnapshot(bPaths))!.capabilities).toContain("repository-catalog");
@@ -42,7 +42,7 @@ test("두 레포는 공용 데몬 하나를 사용하고 SDK·쉘·저장 상태
     expect(workspace.snapshot.details[aId]?.output).not.toContain("isolated-repository-B");
     expect(workspace.snapshot.details[bId]?.output).not.toContain("isolated-repository-A");
 
-    // B의 PTY에 보낸 입력은 B에만 파일을 만들고 기존 lease/instance 검사를 그대로 거친다.
+    // B's PTY creates files only in B and retains existing lease/instance checks.
     const terminal = expectOk(await workspace.createTerminal(bTree.id, { cols: 80, rows: 16 }));
     const failures: unknown[] = [];
     const connection = expectOk(await workspace.attachTerminal(terminal, () => {}, (error) => failures.push(error)));
@@ -61,7 +61,7 @@ test("두 레포는 공용 데몬 하나를 사용하고 SDK·쉘·저장 상태
     expectOk(await workspace.savePreferences(preferences));
     await workspace.disconnect();
 
-    // 재접속은 같은 데몬과 쉘을 사용하고 양쪽 초안을 병합해 복원한다.
+    // Reconnection reuses daemon/shells and merges both draft sets for restoration.
     workspace = expectOk(await WorkspaceClient.open(repositories, b.main, options));
     expect(expectOk(await fetchSnapshot(aPaths))!.pid).toBe(aPid);
     expect(expectOk(await fetchSnapshot(bPaths))!.pid).toBe(bPid);
@@ -72,7 +72,7 @@ test("두 레포는 공용 데몬 하나를 사용하고 SDK·쉘·저장 상태
     expect(expectOk(await fetchSnapshot(aPaths))!.preferences.drafts).toEqual({ [aId]: "draft A" });
     expect(expectOk(await fetchSnapshot(bPaths))!.preferences.drafts).toEqual({ [bId]: "draft B" });
 
-    // 관리 명령은 cwd에 관계없이 공용 데몬과 그 안의 모든 저장소를 대상으로 한다.
+    // Management commands target shared daemons and all repositories regardless of cwd.
     const config = join(a.directory, "workspace.json");
     await writeFile(config, JSON.stringify({ roots: [a.directory, b.directory] }));
     const administrative = async (command: string): Promise<string> => {
@@ -91,7 +91,7 @@ test("두 레포는 공용 데몬 하나를 사용하고 SDK·쉘·저장 상태
     expect(pidAlive(shellPid)).toBe(false);
     await workspace.disconnect();
 
-    // 저장 경로를 옮기지 않고 기존 두 저장소의 대화와 초안을 새 공용 프로세스에서 복원한다.
+    // Restore both repositories' conversations/drafts in fresh shared processes without moving storage.
     workspace = expectOk(await WorkspaceClient.open(repositories, b.main, options));
     expectOk(await workspace.activate(aTree.id)); expectOk(await workspace.activate(bTree.id));
     expect(workspace.snapshot.details[aId]?.output).toContain("isolated-repository-A");

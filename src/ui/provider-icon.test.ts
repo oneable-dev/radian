@@ -17,7 +17,7 @@ const capabilities: TerminalCapabilities = { kitty_keyboard: false, kitty_graphi
   osc52_support: "unsupported", notifications: false, explicit_cursor_positioning: false, remote: false,
   multiplexer: "none", image_protocol: "kitty", terminal: { name: "test", version: "1", from_xtversion: false } };
 
-test("일반 터미널은 두 셀을 예약하되 지원하지 않는 그래픽 대신 굵은 Nerd Font 로고를 그린다", async () => {
+test("Ordinary terminals reserve two cells and draw bold Nerd Font logos instead of unsupported graphics", async () => {
   const app = await mount();
   try {
     await app.renderOnce();
@@ -34,7 +34,7 @@ test("일반 터미널은 두 셀을 예약하되 지원하지 않는 그래픽 
   } finally { await app.close(); }
 });
 
-test("그래픽 지원 터미널에서는 실제 잉크 너비가 글자 셀의 1.5배인 테마색 이미지를 OpenTUI로 전달한다", async () => {
+test("Graphics terminals send themed OpenTUI images with ink width 1.5 times character cells", async () => {
   const app = await mount();
   const paints: { width: number; height: number; pixelWidth: number; pixelHeight: number; pixels: Uint8Array; imageWidth: number; protocol: string }[] = [];
   const draw = spyOn(OptimizedBuffer.prototype, "drawImage").mockImplementation((image, _x, _y, width, height, pixelWidth, pixelHeight, _sx, _sy, _sw, _sh, protocol) => {
@@ -79,7 +79,7 @@ test("그래픽 지원 터미널에서는 실제 잉크 너비가 글자 셀의 
   }
 });
 
-test("픽셀 크기 응답이 늦게 와도 다음 프레임에서 확대 이미지를 활성화한다", async () => {
+test("Late pixel-size responses enable enlarged images on the next frame", async () => {
   const app = await mount(); let resolution: { width: number; height: number } | null = null;
   const draw = spyOn(OptimizedBuffer.prototype, "drawImage").mockReturnValue(true);
   Object.defineProperty(app.renderer, "capabilities", { configurable: true, get: () => capabilities });
@@ -96,7 +96,7 @@ test("픽셀 크기 응답이 늦게 와도 다음 프레임에서 확대 이미
 });
 
 for (const [status, code, fallback] of [[6, "memory-limit", true], [7, "invalid-argument", false]] as const) {
-  test(`native 이미지 ${code}는 ${fallback ? "안전한 글리프 대체" : "원래 예외 보고"}로 구분한다`, async () => {
+  test(`Native image ${code} uses ${fallback ? "safe glyph fallback" : "original exception reporting"}`, async () => {
     const app = await mount(), failure = new ImageError(status);
     const errors: Error[] = [], capture = (event: CliRendererErrorEvent) => { errors.push(event.error); };
     const allocation = spyOn(NativeImage, "fromRgba").mockImplementation(() => { throw failure; });
@@ -122,7 +122,7 @@ for (const [status, code, fallback] of [[6, "memory-limit", true], [7, "invalid-
   });
 }
 
-test("그래픽 전송을 사용할 수 없으면 같은 자리의 글리프로 안전하게 대체한다", async () => {
+test("Unavailable graphics transport safely falls back to same-position glyphs", async () => {
   const app = await mount();
   const draw = spyOn(OptimizedBuffer.prototype, "drawImage").mockReturnValue(false);
   Object.defineProperty(app.renderer, "capabilities", { configurable: true, get: () => capabilities });

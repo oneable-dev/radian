@@ -4,7 +4,7 @@ import { terminalScreen } from "./screen.ts";
 
 const write = (terminal: Terminal, text: string) => new Promise<void>((resolve) => terminal.write(text, resolve));
 
-test("줄 너비가 줄어든 화면 복원은 숨겨진 옛 셀을 출력해 첫 줄을 밀어내지 않는다", async () => {
+test("Narrow screen restoration never emits hidden old cells that shift first rows", async () => {
   // xterm can retain 84-cell backing rows after its visible width shrinks to 64.
   const original = new Terminal({ cols: 84, rows: 24, scrollback: 0, allowProposedApi: true });
   const restored = new Terminal({ cols: 64, rows: 24, scrollback: 0, allowProposedApi: true });
@@ -21,7 +21,7 @@ test("줄 너비가 줄어든 화면 복원은 숨겨진 옛 셀을 출력해 �
   } finally { original.dispose(); restored.dispose(); }
 });
 
-test("전체 화면 스냅샷은 넓은 문자·색상·스타일·입력 모드와 커서 위치를 보존한다", async () => {
+test("Full-screen snapshots preserve wide characters, colors, styles, input modes, and cursor positions", async () => {
   const original = new Terminal({ cols: 40, rows: 8, scrollback: 0, allowProposedApi: true });
   const restored = new Terminal({ cols: 40, rows: 8, scrollback: 0, allowProposedApi: true });
   try {

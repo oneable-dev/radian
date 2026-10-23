@@ -5,7 +5,7 @@ import { completeFiles } from "./completion-files.ts";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 
-test("파일 후보는 현재 워크트리의 tracked·untracked 경로만 반환하고 ignore 파일은 제외한다", async () => {
+test("File candidates include only tracked and untracked worktree paths, excluding ignored files", async () => {
   // Separate worktrees and ignored files reveal accidental repository-wide or filesystem-wide discovery.
   const app = await createWorktreeFixture();
   try {
@@ -26,7 +26,7 @@ test("파일 후보는 현재 워크트리의 tracked·untracked 경로만 반�
   } finally { await app.cleanup(); }
 });
 
-test("파일 조회 취소와 Git 조회 실패는 빈 성공 목록이 아닌 명시적 Result로 전달한다", async () => {
+test("File lookup cancellation and Git failures return explicit errors, not empty lists", async () => {
   const app = await createWorktreeFixture();
   try {
     // Both operations have deterministic outcomes without a network or a model request.

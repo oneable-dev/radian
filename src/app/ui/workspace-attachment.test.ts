@@ -14,14 +14,14 @@ test("Delayed connections preserve other-repository drafts and restore saved ses
     sessions: name === "A" ? [{ id: "a1", name: "A session", status: null, subagents: [] }] : [] }] }));
   const selection = new WorkspaceSelection(repositories);
   let cold = true;
-  // B는 아직 연결하지 않았지만 이전 TUI가 저장한 세션 초안이 있다.
+  // B is disconnected but has a session draft saved by a previous TUI.
   const view = new Workbench(setup.renderer, selection, { onNewSession: () => {}, onCloseSession: () => {}, onPrompt: async () => ok(undefined),
     initialDrafts: { a1: "draft A", b2: "retained draft B" }, getRetainedSessionIds: () => new Set(cold ? ["b2"] : []) });
   try {
     await setup.renderOnce();
     expect(view.promptDrafts.b2).toBe("retained draft B");
 
-    // B의 실제 세션 snapshot이 늦게 도착하고 사용자가 그 폴더를 연다.
+    // Open B when its actual session snapshot arrives late.
     cold = false;
     selection.replaceSnapshot(repositories.map((repo) => repo.id !== "B" ? repo : { ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
       sessions: ["b1", "b2"].map((id) => ({ id, name: id, status: null, subagents: [] })) })) }), { "tree-B": "b2" });
@@ -30,7 +30,7 @@ test("Delayed connections preserve other-repository drafts and restore saved ses
     const lines = setup.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes(`${icons.folder} B-folder`));
     await setup.mockMouse.click(lines[y]!.indexOf("B-folder"), y); await setup.renderOnce();
 
-    // 첫 세션 b1이 아니라 저장된 b2와 그 입력을 보여 주며 A의 초안도 남는다.
+    // Show saved b2 and its input, not first session b1, while retaining A's draft.
     const prompt = setup.renderer.root.findDescendantById("session-prompt");
     if (!(prompt instanceof PromptInput)) throw new Error("Missing session prompt.");
     expect(selection.sessionId).toBe("b2");

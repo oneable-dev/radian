@@ -52,7 +52,7 @@ async function setup() {
   };
 }
 
-test("워크트리별 실제 Neovim의 미저장 버퍼와 커서는 TUI 재접속 뒤에도 같은 PID로 유지된다", async () => {
+test("Real per-worktree Neovim buffers and cursors survive TUI reconnects with identical PIDs", async () => {
   // Separate worktrees and a clean Neovim avoid touching user files/configuration.
   const app = await setup();
   try {
@@ -91,7 +91,7 @@ test("워크트리별 실제 Neovim의 미저장 버퍼와 커서는 TUI 재접�
   } finally { await app.cleanup(); }
 }, 20000);
 
-test("Editor 입력은 현재 attachment만 소유하며 이전 lease와 다른 worktree에는 전달되지 않는다", async () => {
+test("Editor input belongs only to current attachments, never old leases or other worktrees", async () => {
   // One daemon editor may be observed/reconnected, but concurrent writers cannot steal it.
   const app = await setup();
   try {
@@ -113,7 +113,7 @@ test("Editor 입력은 현재 attachment만 소유하며 이전 lease와 다른 
   } finally { await app.cleanup(); }
 }, 15000);
 
-test("Neovim 종료 뒤에는 자동 재시작하지 않고 명시적 재오픈 요청을 하나로 합친다", async () => {
+test("Neovim exit disables auto-restart and coalesces explicit reopen requests", async () => {
   // Exiting Neovim is distinct from hiding its view or detaching the TUI.
   const app = await setup();
   try {
@@ -133,7 +133,7 @@ test("Neovim 종료 뒤에는 자동 재시작하지 않고 명시적 재오픈 
   } finally { await app.cleanup(); }
 }, 15000);
 
-test("알 수 없는 워크트리와 누락된 실행 파일은 예측 가능한 실패이며 프로세스를 만들지 않는다", async () => {
+test("Unknown worktrees and missing executables fail predictably without processes", async () => {
   const app = await createWorktreeFixture();
   const editors = new EditorSessions([app.repository], () => {}, { executable: "radian-nonexistent-editor" });
   try {
@@ -144,14 +144,14 @@ test("알 수 없는 워크트리와 누락된 실행 파일은 예측 가능한
   } finally { expectOk(await editors.stop()); await app.cleanup(); }
 });
 
-test("새 editor 계약은 잘못된 바이트·크기를 거절하고 이전 preferences와 호환된다", () => {
+test("Editor contracts reject invalid bytes/sizes and retain preference compatibility", () => {
   // Existing clients/manifests do not have workViews; all new fields are additive.
   expectOk(parseCommand(JSON.stringify({ type: "preferences", preferences: { selection: { worktreeId: null, sessions: {} }, drafts: {} } })));
   expect(expectError(parseCommand(JSON.stringify({ type: "editor-input", editorId: "a", lease: "b", data: "not base64!" }))).code).toBe("INVALID_INPUT");
   for (const cols of [0, 501, 4.5]) expect(expectError(parseCommand(JSON.stringify({ type: "editor-resize", editorId: "a", lease: "b", cols, rows: 24 }))).code).toBe("INVALID_INPUT");
 });
 
-test("장시간 편집 화면이 유휴 상태여도 main과 Editor IPC가 끊어지지 않는다", async () => {
+test("Long-idle editing preserves main and Editor IPC connections", async () => {
   // This exceeds Bun's real default HTTP idle timeout, unlike a mocked stream test.
   const app = await setup();
   try {

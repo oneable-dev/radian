@@ -142,7 +142,7 @@ test.each(["assistant", "thinking"] as const)("%s errors retain one-row spacing 
     for (let index = 1; index < content.length; index++) expect(content[index]!.y - content[index - 1]!.y - content[index - 1]!.height).toBe(1);
   };
   try {
-    // 오류 줄바꿈과 Markdown·원문 보기 전환 모두 같은 화면 간격을 사용한다.
+    // Error wrapping and Markdown/source switching share visible spacing.
     await app.update([tool, failed]);
     for (const width of [120, 60, 120]) {
       app.resize(width, 30); await app.render(); expectErrorGaps();
@@ -152,7 +152,7 @@ test.each(["assistant", "thinking"] as const)("%s errors retain one-row spacing 
     }
     await app.update([tool, { ...failed, completion: { startedAt: 1000, completedAt: 2000, durationMs: 1000, outcome: "error" } }]);
 
-    // 완료 정보가 추가되어도 보이는 항목 사이만 띄우고 숨겨진 오류는 빈 줄을 남기지 않는다.
+    // Completion spaces only visible items; hidden errors leave no blank rows.
     expectErrorGaps(); expect(app.captureCharFrame()).toContain("Failed after");
     await app.update([tool, prose]);
     expect(app.captureCharFrame()).not.toContain("ECONNRESET");
@@ -161,7 +161,7 @@ test.each(["assistant", "thinking"] as const)("%s errors retain one-row spacing 
   } finally { await app.close(); }
 });
 
-test("평문·구조화 출력 전환에도 gap과 섹션 여백을 중복 적용하지 않는다", async () => {
+test("Plain/structured transitions never duplicate gaps and section margins", async () => {
   const app = await mount(sections[0], sections.slice(1));
   try {
     const initial = app.cards();
@@ -176,7 +176,7 @@ test("평문·구조화 출력 전환에도 gap과 섹션 여백을 중복 적�
   } finally { await app.close(); }
 });
 
-test.each(sections)("$kind 섹션은 작은 화면에서도 색상 카드와 평문의 여백 규칙을 유지한다: $id", async (section) => {
+test.each(sections)("$kind sections retain card/plain spacing in compact layouts: $id", async (section) => {
   // Tinted surfaces keep their internal gutters; plain prose relies on the parent's gutters instead.
   const inset = section.kind === "assistant" || section.kind === "thinking" ? 0 : 1;
   const app = await mount(section);
@@ -255,7 +255,7 @@ test.each([120, 60])("At width %i, folded and expanded command errors have exact
   } finally { await app.close(); }
 });
 
-test("섹션이 없는 기존 평문 출력은 추가 카드 여백 없이 그대로 표시한다", async () => {
+test("Legacy plain output without sections displays unchanged without extra card margins", async () => {
   // Legacy output is one text surface rather than a structured transcript card.
   const app = await mount(undefined);
   try {

@@ -30,7 +30,7 @@ function changes() {
   };
 }
 
-test("실제 Git 등록 변경과 linked HEAD 변경을 감지하고 제거된 실행 시작 경로에도 의존하지 않는다", async () => {
+test("Real Git registration/linked HEAD changes detect without depending on deleted startup paths", async () => {
   // Start from a linked checkout; its .git is a file, not the directory being watched.
   const fixture = await createWorktreeFixture(), observed = changes();
   const repository = expectOk(await discoverRepository(fixture.feature));
@@ -53,7 +53,7 @@ test("실제 Git 등록 변경과 linked HEAD 변경을 감지하고 제거된 �
   } finally { await watcher.stop(); await fixture.cleanup(); }
 });
 
-test("등록 디렉터리가 없는 상태에서 첫 워크트리 생성과 디렉터리 재생성을 감지한다", async () => {
+test("Watchers detect first worktrees and registration-directory recreation when initially absent", async () => {
   const fixture = await createWorktreeFixture(), observed = changes();
   await fixture.git(fixture.main, ["worktree", "remove", "--force", fixture.feature]);
   const root = join(fixture.repository.id, "worktrees");
@@ -78,7 +78,7 @@ test("등록 디렉터리가 없는 상태에서 첫 워크트리 생성과 디�
   } finally { await watcher.stop(); await fixture.cleanup(); }
 });
 
-test("재탐색 실패는 빈 목록으로 발행하지 않고 다음 Git 이벤트에서 복구한다", async () => {
+test("Discovery failures never publish empty lists and recover on subsequent Git events", async () => {
   const fixture = await createWorktreeFixture(), observed = changes();
   let fail = true;
   const watcher = new RepositoryWatcher(fixture.repository, observed.receive, observed.unexpected, { debounceMs: 10,
@@ -98,7 +98,7 @@ test("재탐색 실패는 빈 목록으로 발행하지 않고 다음 Git 이벤
   } finally { await watcher.stop(); await fixture.cleanup(); }
 });
 
-test("탐색 중 발생한 이벤트는 직렬로 재탐색하고 종료 후 결과를 발행하지 않는다", async () => {
+test("Events during discovery serialize rescans and disposal suppresses publication", async () => {
   const fixture = await createWorktreeFixture(), observed = changes();
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
   let calls = 0, active = 0, maximum = 0;
@@ -126,7 +126,7 @@ test("탐색 중 발생한 이벤트는 직렬로 재탐색하고 종료 후 결
   } finally { release.resolve(); await watcher.stop(); await fixture.cleanup(); }
 });
 
-test("종료 시 진행 중인 Git 조회를 기다리되 늦은 결과로 닫힌 화면을 갱신하지 않는다", async () => {
+test("Disposal waits for active Git queries without late updates to closed screens", async () => {
   // The scan has started, but the caller has not yet received its changed metadata.
   const fixture = await createWorktreeFixture(), observed = changes();
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();

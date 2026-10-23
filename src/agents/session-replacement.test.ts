@@ -14,8 +14,8 @@ function executor(status: ExecutionState["status"] = "working"): SessionExecutor
   };
 }
 
-test.each([null, "complete", "failure", "working"] as const)("clear 준비 중에도 기존 %s 상태를 보존하고 명령 때문에 working을 만들지 않는다", async status => {
-  // 교체가 오래 걸려도 명령 처리 중인 상태와 실제 모델 실행 상태는 구분한다.
+test.each([null, "complete", "failure", "working"] as const)("clear preparation preserves %s state without creating command-induced working activity", async status => {
+  // Slow replacement must not confuse command processing with actual model execution.
   const original = executor(status), next = executor(null);
   const prepared = Promise.withResolvers<SessionExecutor>(), creating = Promise.withResolvers<void>();
   let calls = 0, replacement: ReturnType<SessionRegistry["clearSession"]> | undefined;
@@ -26,10 +26,10 @@ test.each([null, "complete", "failure", "working"] as const)("clear 준비 중�
   try {
     const id = expectOk(await registry.create("demo:main"));
 
-    // 새 대화 준비를 보류해 스피너가 잠깐 켜지는 중간 상태까지 확인한다.
+    // Delay new-conversation preparation to observe transient spinner states.
     replacement = registry.clearSession(id); await creating.promise;
 
-    // 실행 중이던 작업만 실행 상태를 유지하고 중복 요청 차단은 그대로 작동한다.
+    // Only existing runs remain active while duplicate-request guards stay effective.
     expect(registry.details(id)?.status).toBe(status);
     expect(registry.snapshot[0]?.worktrees[0]?.sessions[0]?.status).toBe(status);
     expect(registry.records[0]?.state.status).toBe(status);
@@ -39,7 +39,7 @@ test.each([null, "complete", "failure", "working"] as const)("clear 준비 중�
   } finally { prepared.resolve(next); if (replacement) await replacement; expectOk(await registry.shutdown()); }
 });
 
-test("새 SDK 세션 준비 실패는 원래 실행을 중단하거나 탭을 없애지 않는다", async () => {
+test("Failed SDK preparation neither interrupts the original run nor removes its tab", async () => {
   // Only the second factory call fails, before ownership is transferred or abort is requested.
   const original = executor(); let calls = 0;
   const registry = new SessionRegistry(demoWorkspace(), async () => {
@@ -58,7 +58,7 @@ test("새 SDK 세션 준비 실패는 원래 실행을 중단하거나 탭을 �
   } finally { expectOk(await registry.shutdown()); }
 });
 
-test("교체 전 대화가 보관한 하위 작업 콜백은 같은 탭의 새 대화에 작업을 만들 수 없다", async () => {
+test("Callbacks retained by replaced conversations cannot create work in the new conversation", async () => {
   const contexts: SessionContext[] = [];
   const registry = new SessionRegistry(demoWorkspace(), async (context) => { contexts.push(context); return executor(); });
   try {
@@ -72,7 +72,7 @@ test("교체 전 대화가 보관한 하위 작업 콜백은 같은 탭의 새 �
   } finally { expectOk(await registry.shutdown()); }
 });
 
-test("clear 준비 중의 중복 명령과 입력은 거부하고 shutdown은 준비된 새 핸들도 정리한다", async () => {
+test("clear rejects concurrent commands and input while shutdown also cleans prepared handles", async () => {
   const original = executor(), next = executor();
   const prepared = Promise.withResolvers<SessionExecutor>(), creating = Promise.withResolvers<void>(); let calls = 0;
   const registry = new SessionRegistry(demoWorkspace(), async () => {

@@ -23,7 +23,7 @@ async function mount(longSessionIds = false) {
   return {...app, view, render, get:(id:string)=>app.renderer.root.findDescendantById(id)!, async close(){view.dispose();await app.dispose();}};
 }
 
-test("높이가 달라져도 탭·검색·항목 간격을 유지하고 작은 창은 입력 여백보다 본문과 상태 여백을 우선한다", async()=>{
+test("Height changes preserve tabs, search, and item spacing while compact layouts prioritize input padding", async()=>{
   const app=await mount();
   try {
     let previous=0;
@@ -40,7 +40,7 @@ test("높이가 달라져도 탭·검색·항목 간격을 유지하고 작은 �
   }finally{await app.close();}
 });
 
-test("Agent와 Terminal 탭의 가로바는 resize 후에도 숨고 선택된 탭으로의 좌우 이동은 유지한다",async()=>{
+test("Agent/Terminal horizontal tab bars stay hidden after resize while selected-tab navigation remains",async()=>{
   const app=await mount(true);
   try {
     // Enough fixed-width tabs, rather than long labels or removed toolbar buttons, produce real overflow.
@@ -55,7 +55,7 @@ test("Agent와 Terminal 탭의 가로바는 resize 후에도 숨고 선택된 �
       app.resize(width,24);await app.render();tabs.scrollLeft=20;await app.render();
       expect(tabs.scrollLeft).toBe(20);expect(tabs.horizontalScrollBar.visible).toBe(false);
     }
-    // 공통 정책은 세로 스크롤이나 내장 프로그램 설정을 변경하지 않는다.
+    // Shared policy never changes vertical scrolling or embedded program settings.
     for(const area of scrolls(app.view.root))expect(area.horizontalScrollBar.visible).toBe(false);
   }finally{await app.close();}
 });

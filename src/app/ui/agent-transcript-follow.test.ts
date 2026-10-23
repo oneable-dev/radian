@@ -58,7 +58,7 @@ test("Long AI conversations use full width without vertical scrollbars while ret
     verify();
     pressLeader(app, "a"); await app.mockInput.typeText("Unsent scrollbar draft"); await app.settled();
 
-    // 오른쪽 끝도 본문이므로 휠을 받을 수 있고 새 결과는 읽던 위치를 밀지 않는다.
+    // The rightmost body column accepts wheel input and new results preserve reading positions.
     await app.mockMouse.scroll(app.scroll.viewport.x + app.scroll.viewport.width - 1, app.scroll.y + 3, "up"); await app.settled();
     const position = app.scroll.scrollTop;
     expect(position).toBeLessThan(bottom(app.scroll)); expect(app.state()?.follow).toBe(false);
@@ -68,7 +68,7 @@ test("Long AI conversations use full width without vertical scrollbars while ret
     expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
     expect(app.captureCharFrame()).toContain("SCROLLBAR_FREE_TAIL");
 
-    // 리사이즈·테마 변경·화면 왕복이 네이티브 바를 다시 활성화하면 안 된다.
+    // Resize, themes, and screen round-trips must not reenable native bars.
     app.resize(80, 18); await app.settled(); verify();
     uiTheme(app.renderer).configure({ palette: [], defaultForeground: "#202020", defaultBackground: "#FAFAF6",
       cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null,
@@ -93,7 +93,7 @@ test.each([false, true])("At brightness %j, return-to-bottom controls use existi
     const geometry = [app.scroll.height, app.scroll.viewport.height, app.scroll.scrollHeight, status.y, composer.y, prompt.y];
     expect(app.captureCharFrame()).not.toContain("Back to bottom");
 
-    // 위로 스크롤하면 클릭 가능한 표시가 나타나며, 오른쪽 클릭은 이동 명령이 아니다.
+    // Scrolling up reveals clickable controls; right-click is not navigation.
     await app.mockMouse.scroll(app.scroll.x + 3, app.scroll.y + 3, "up"); await app.settled();
     expect(app.captureCharFrame()).toContain("↓ Back to bottom · G");
     const button = app.renderer.root.findDescendantById("transcript-bottom-button");
@@ -115,7 +115,7 @@ test.each([false, true])("At brightness %j, return-to-bottom controls use existi
     await app.mockMouse.click(button.x, button.y, 2); await app.settled();
     expect(app.scroll.scrollTop).toBe(position); expect(app.state()?.follow).toBe(false);
 
-    // 왼쪽 패딩도 클릭할 수 있고, 요청 전송이나 입력 포커스 변경 없이 맨 아래로 복귀한다.
+    // Left padding is clickable and returns to bottom without prompting or changing input focus.
     await app.mockMouse.click(button.x, button.y); await app.settled();
     expect(app.scroll.scrollTop).toBe(bottom(app.scroll)); expect(app.state()?.follow).toBe(true);
     expect(app.captureCharFrame()).not.toContain("Back to bottom");
@@ -138,15 +138,15 @@ test("Return-to-bottom controls display remapped bindings and resume following w
     expect(app.state()?.selectedId).toBe("history");
     expect(app.state()?.follow).toBe(false); expect(app.scroll.scrollTop).toBeLessThan(bottom(app.scroll));
 
-    // 표시한 단축키와 실제 이동 명령이 일치하며 바닥에서는 버튼이 사라진다.
+    // Displayed shortcuts match actual commands and controls disappear at bottom.
     app.mockInput.pressKey("z", { meta: true }); await app.settled();
     expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
     expect(app.captureCharFrame()).not.toContain("Back to bottom");
   } finally { await app.close(); }
 });
 
-test("하단 이동 키를 비활성화해도 버튼은 잘못된 키 안내 없이 클릭으로 동작한다", async () => {
-  // 키맵의 빈 배열은 기본 바인딩을 없애지만 마우스 복귀 동작까지 막지는 않는다.
+test("Disabling bottom-navigation keys retains clickable controls without misleading key hints", async () => {
+  // Empty binding arrays remove shortcuts without disabling mouse return.
   const keymap = expectOk(parseKeymap({ bindings: { "transcript.latest": [] } }));
   const app = await mount({ paused: true, keymap });
   try {
@@ -155,7 +155,7 @@ test("하단 이동 키를 비활성화해도 버튼은 잘못된 키 안내 없
     const button = app.renderer.root.findDescendantById("transcript-bottom-button");
     if (!button) throw new Error("Missing back-to-bottom button");
 
-    // 단축키가 없어도 오른쪽 패딩까지 클릭 대상으로 유지한다.
+    // Right padding remains clickable without shortcuts.
     await app.mockMouse.click(button.x + button.width - 1, button.y); await app.settled();
     expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
     expect(app.captureCharFrame()).not.toContain("Back to bottom");
@@ -172,13 +172,13 @@ test("Help, other screens, empty conversations, and short conversations hide ret
     app.mockInput.pressKey("F1"); await app.settled();
     expect(app.captureCharFrame()).toContain("Back to bottom");
 
-    // 다른 작업 화면으로 왕복해도 버튼은 활성 대화와 그 스크롤 위치에만 속한다.
+    // Screen round-trips keep controls scoped to the active conversation and scroll position.
     app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("e"); await app.settled();
     expect(app.captureCharFrame()).not.toContain("Back to bottom");
     app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("a"); await app.settled();
     expect(app.captureCharFrame()).toContain("Back to bottom");
 
-    // 스크롤 범위가 없으면 자동 추적 상태와 관계없이 버튼이나 빈 고정 행을 남기지 않는다.
+    // No scroll range leaves neither controls nor fixed empty rows regardless of follow state.
     await app.update([]); expect(app.captureCharFrame()).not.toContain("Back to bottom");
     await app.update([section("short", "SHORT_REPLY")]);
     expect(app.captureCharFrame()).toContain("SHORT_REPLY"); expect(app.captureCharFrame()).not.toContain("Back to bottom");
@@ -194,7 +194,7 @@ test("Reading cursors stay clear of return controls and clicking clears selectio
     const body = app.renderer.currentFocusedRenderable;
     if (!(body instanceof EditBufferRenderable)) throw new Error("Missing source reader");
 
-    // 화면 하단까지 내려가도 원문 커서가 플로팅 영역 아래로 숨지 않는다.
+    // Source cursors never hide beneath floating controls near viewport bottoms.
     for (let i = 0; i < app.scroll.viewport.height; i++) app.mockInput.pressKey("j");
     await app.settled();
     const button = app.renderer.root.findDescendantById("transcript-bottom-button")!;
@@ -202,7 +202,7 @@ test("Reading cursors stay clear of return controls and clicking clears selectio
     expect(body.y + body.visualCursor.visualRow).toBeLessThan(button.y);
     app.mockInput.pressKey("v"); await app.settled(); expect(app.state()?.mode).toBe("visual");
 
-    // 명시적인 복귀 클릭은 보호 중인 선택을 끝내고 섹션 모드와 자동 따라가기를 복원한다.
+    // Explicit return clicks end protected selection and restore section mode and following.
     await app.mockMouse.click(button.x + 1, button.y); await app.settled();
     expect(app.state()?.mode).toBe("sections"); expect(app.state()?.follow).toBe(true);
     expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
@@ -211,8 +211,8 @@ test("Reading cursors stay clear of return controls and clicking clears selectio
   } finally { await app.close(); }
 });
 
-test("좁은 창에서도 기존 여백에 버튼을 중앙 정렬하고 여백이 없는 높이에서는 숨긴다", async () => {
-  // 멈춘 대화의 플로팅 UI는 리사이즈 후에도 스크롤 콘텐츠의 일부가 되어서는 안 된다.
+test("Narrow layouts center controls in existing gaps and hide them when height leaves no gap", async () => {
+  // Floating controls in paused conversations must not become scroll content after resize.
   const app = await mount({ paused: true });
   try {
     app.resize(60, 18); await app.settled();
@@ -223,7 +223,7 @@ test("좁은 창에서도 기존 여백에 버튼을 중앙 정렬하고 여백�
     expect(button.y).toBe(viewport.y + viewport.height);
     expect(button.width).toBeLessThanOrEqual(viewport.width);
 
-    // 기존 빈 행이 없는 화면에서는 본문이나 입력창을 덮지 않고 버튼만 숨긴다.
+    // Without existing blank rows, hide controls instead of covering body or input.
     app.resize(60, 8); await app.settled(); expect(app.captureCharFrame()).not.toContain("Back to bottom");
     app.resize(120, 26); await app.settled(); expect(app.captureCharFrame()).toContain("Back to bottom");
     expect(app.state()?.follow).toBe(false);
@@ -241,7 +241,7 @@ test("Absent run-status rows place return controls only in existing gaps above i
     const geometry = [app.scroll.viewport.height, app.scroll.scrollHeight, composer.y, prompt.y];
     expect(status.visible).toBe(false); expect(app.captureCharFrame()).toContain("Back to bottom");
 
-    // 스크롤 영역 밖의 기존 빈 행만 사용하고 입력 본문을 한 줄 더 아래로 밀지 않는다.
+    // Use existing rows outside scrolling content without pushing input down.
     expect(button.y).toBeLessThanOrEqual(composer.y);
     expect(button.y).toBe(app.scroll.viewport.y + app.scroll.viewport.height);
     expect(button.y + button.height).toBeLessThanOrEqual(prompt.y);
@@ -263,7 +263,7 @@ test("Moving transcript focus at bottom preserves automatic following", async ()
   } finally { await app.close(); }
 });
 
-test("휠로 위로 읽다가 다시 맨 아래로 내리면 별도 키 없이 자동 추적을 재개한다", async () => {
+test("Wheel-scrolling back to bottom resumes following without extra keys", async () => {
   const app = await mount();
   try {
     await app.mockMouse.scroll(app.scroll.x + 3, app.scroll.y + 3, "up"); await app.settled();
@@ -275,7 +275,7 @@ test("휠로 위로 읽다가 다시 맨 아래로 내리면 별도 키 없이 �
   } finally { await app.close(); }
 });
 
-test("숨은 스크롤 모델의 위치가 맨 아래에 도달해도 자동 추적을 재개한다", async () => {
+test("Reaching bottom through hidden scroll models resumes following", async () => {
   const app = await mount();
   try {
     app.scroll.verticalScrollBar.scrollPosition = 0; await app.settled(); expect(app.state()?.follow).toBe(false);
@@ -340,7 +340,7 @@ test("New content during selection requires reaching bottom again rather than ju
   } finally { await app.close(); }
 });
 
-test("렌더링된 Markdown의 마우스 선택도 보호하고 선택을 지우면 하단 기준으로 재개한다", async () => {
+test("Rendered Markdown mouse selections are protected and clearing resumes according to bottom position", async () => {
   const app = await mount();
   try {
     const rows = app.captureCharFrame().split("\n"), y = rows.findIndex((line) => line.includes("OLD-LINE-69"));
@@ -355,7 +355,7 @@ test("렌더링된 Markdown의 마우스 선택도 보호하고 선택을 지우
   } finally { await app.close(); }
 });
 
-test("일시정지한 과거 대화에서 새 프롬프트를 보내면 포커스를 빼앗지 않고 최신 요청부터 따라간다", async () => {
+test("New prompts in paused history follow latest requests without stealing focus", async () => {
   const app = await mount({ paused: true });
   try {
     expect(app.state()?.follow).toBe(false);
@@ -366,7 +366,7 @@ test("일시정지한 과거 대화에서 새 프롬프트를 보내면 포커�
   } finally { await app.close(); }
 });
 
-test("Markdown 응답·펼친 도구 결과·완료 행이 늘어날 때마다 최신 출력이 화면 아래에 남는다", async () => {
+test("Growing Markdown, expanded tools, and completion rows keep latest output at viewport bottom", async () => {
   const app = await mount();
   try {
     expect(app.state()?.follow).toBe(true); expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
@@ -381,7 +381,7 @@ test("Markdown 응답·펼친 도구 결과·완료 행이 늘어날 때마다 �
   } finally { await app.close(); }
 });
 
-test("자동 따라가기 중 resize나 Markdown 비동기 레이아웃 변화는 수동 탐색으로 오해하지 않는다", async () => {
+test("Resize and asynchronous Markdown layout during following never count as manual navigation", async () => {
   const app = await mount();
   try {
     app.resize(80, 18); await app.settled();
@@ -391,7 +391,7 @@ test("자동 따라가기 중 resize나 Markdown 비동기 레이아웃 변화�
   } finally { await app.close(); }
 });
 
-test("사용자가 휠로 과거를 읽으면 스트리밍은 그 위치를 보존하고 새 전송도 따라가기를 재개한다", async () => {
+test("Wheel-reading history preserves position during streaming and new submissions resume following", async () => {
   const app = await mount();
   try {
     await app.mockMouse.scroll(app.scroll.x + 3, app.scroll.y + 3, "up"); await app.settled();
@@ -404,7 +404,7 @@ test("사용자가 휠로 과거를 읽으면 스트리밍은 그 위치를 보�
   } finally { await app.close(); }
 });
 
-test("본문 오른쪽 끝에서 휠로 과거를 읽으면 대기 중인 자동 이동보다 사용자 위치를 우선한다", async () => {
+test("Right-edge wheel reading takes precedence over pending automatic scrolls", async () => {
   const app = await mount();
   try {
     const viewport = app.scroll.viewport;
@@ -416,7 +416,7 @@ test("본문 오른쪽 끝에서 휠로 과거를 읽으면 대기 중인 자동
   } finally { await app.close(); }
 });
 
-test("Markdown 없는 도구 화면도 resize와 화면 왕복 후 추가 이벤트 없이 최신 결과를 표시한다", async () => {
+test("Non-Markdown tool views restore latest results after resize and screen round-trips without extra events", async () => {
   const app = await mount();
   try {
     const tool = section("tool", "Arguments:\n{}\n\nResult:\n" + "Tool line\n".repeat(100) + "RETURN_TOOL_TAIL", "tool");

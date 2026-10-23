@@ -40,7 +40,7 @@ async function mount() {
   };
 }
 
-test("Editor는 리사이즈 전후 사방 여백 없이 전체 패널을 사용하고 PTY에 같은 크기를 전달한다", async () => {
+test("Editor fills panels without margins across resize and forwards identical PTY sizes", async () => {
   // Keep the native VT real and observe only the operating-system size boundary.
   const app = await mount();
   try {
@@ -59,7 +59,7 @@ test("Editor는 리사이즈 전후 사방 여백 없이 전체 패널을 사용
   } finally { await app.close(); }
 });
 
-test.each([[60, 12], [120, 24]])("명시적으로 Editor를 열 때도 전체 패널 크기 %dx%d를 요청한다", async (width, height) => {
+test.each([[60, 12], [120, 24]])("Explicit Editor opening requests full %dx%d panel dimensions", async (width, height) => {
   const app = await mount();
   try {
     // Starting a missing editor must use the same full-size geometry as reattachment.
@@ -72,7 +72,7 @@ test.each([[60, 12], [120, 24]])("명시적으로 Editor를 열 때도 전체 �
   } finally { await app.close(); }
 });
 
-test("캐시한 Editor 화면은 즉시 복원하지만 새 lease 수락 전의 입력은 전송하지 않는다", async () => {
+test("Cached Editor screens restore immediately but input waits for new lease acceptance", async () => {
   // The fake OS boundary holds reattachment while the native VT and key input remain real.
   const app = await mount();
   const pending = Promise.withResolvers<Awaited<ReturnType<EditorActions["attach"]>>>();
@@ -105,7 +105,7 @@ test("캐시한 Editor 화면은 즉시 복원하지만 새 lease 수락 전의 
   }
 });
 
-test("연결 실패 후 명시적 재접속은 캐시를 재사용하고 오래된 실패 알림은 새 연결을 닫지 않는다", async () => {
+test("Explicit reconnection reuses caches and stale failures never close new connections", async () => {
   // A failed connection must not satisfy the already-connected fast path.
   const app = await mount();
   try {
@@ -126,7 +126,7 @@ test("연결 실패 후 명시적 재접속은 캐시를 재사용하고 오래�
   } finally { await app.close(); }
 });
 
-test("재접속 첫 프레임 직후 실패하면 수락 Promise가 끝나도 잘못된 연결을 채택하지 않는다", async () => {
+test("Failure immediately after first reconnect frames prevents adoption despite resolved acceptance", async () => {
   // An attachment can notify failure before returning its nominally successful admission result.
   const app = await mount();
   const attach = app.actions.attach;
@@ -146,7 +146,7 @@ test("재접속 첫 프레임 직후 실패하면 수락 Promise가 끝나도 �
   } finally { await app.close(); }
 });
 
-test("종료 프레임이 snapshot보다 먼저 도착해도 명시적 열기는 새 Editor를 요청한다", async () => {
+test("Exit frames arriving before snapshots still make explicit opening request fresh Editors", async () => {
   // The terminal stream can report exit before the global snapshot catches up.
   const app = await mount();
   const open = app.actions.open;

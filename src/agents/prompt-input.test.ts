@@ -6,7 +6,7 @@ const draft = (): PromptDraft => ({ value: "검토 [File #1] [Image #1]", cursor
   tokens: [{ start: 3, end: 12, part: { kind: "file", index: 1, path: "/tmp/file.txt" } }, { start: 13, end: 23, part: { kind: "image", index: 1, path: "/tmp/image.png" } }],
   next: { file: 2, image: 2, paste: 1 } });
 
-test("첨부 표시는 실제 원문 범위와 일치해야 하고 가짜·겹친 저장 항목을 거부한다", () => {
+test("Attachment markers must match source ranges and reject fake or overlapping saved entries", () => {
   const valid = draft(); valid.cursor = valid.value.length;
   expect(validatePromptDraft(valid).ok).toBe(true);
   const overlap = structuredClone(valid); overlap.tokens[1]!.start = 4;
@@ -17,7 +17,7 @@ test("첨부 표시는 실제 원문 범위와 일치해야 하고 가짜·겹�
   expect(validatePromptDraft({ ...valid, next: { ...valid.next, image: 1 } }).ok).toBe(false);
 });
 
-test("이미지 배열 순서와 파일 참조를 유지하고 구버전 초안에도 실제 경로를 남긴다", () => {
+test("Image order and file references survive with real paths in legacy drafts", () => {
   const input = draft(); input.cursor = input.value.length;
   const original = structuredClone(input);
 
@@ -26,13 +26,13 @@ test("이미지 배열 순서와 파일 참조를 유지하고 구버전 초안�
   expect(input).toEqual(original);
 });
 
-test("길거나 여러 줄인 붙여넣기와 제어 문자는 표시만 접고 짧은 일반 문장은 접지 않는다", () => {
+test("Long or multiline pastes and control characters collapse visually while short prose remains literal", () => {
   expect(collapsedPaste("x".repeat(1023))).toBe(false); expect(collapsedPaste("x".repeat(1024))).toBe(true);
   expect(collapsedPaste("one\ntwo")).toBe(false); expect(collapsedPaste("x\n".repeat(8))).toBe(true);
   expect(collapsedPaste("\x1b[31msecret")).toBe(true); expect(collapsedPaste("one\r\ntwo")).toBe(true);
 });
 
-test("파일 드롭의 인용·이스케이프·file URI와 일반 텍스트를 구분한다", () => {
+test("File drops distinguish quoted and escaped paths, file URIs, and ordinary text", () => {
   expect(pastedFiles('"/tmp/image one.png" /tmp/a\\ b.txt', "/workspace")).toEqual([
     { kind: "image", path: "/tmp/image one.png" }, { kind: "file", path: "/tmp/a b.txt" },
   ]);

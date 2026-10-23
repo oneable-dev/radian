@@ -70,7 +70,7 @@ test.each([false, true])("Cancellation with partial %s responses shows duration 
   } finally { await app.close(); }
 });
 
-test("구버전 런타임의 취소 오류 카드도 숨기고 시간은 입력창 위에 유지한다", async () => {
+test("Legacy runtime cancellation cards stay hidden with duration above input", async () => {
   // Compatibility uses the structured cancellation status, never message-text classification.
   const state = cancelled(false), sections = state.sections!.map(section => section.status === "cancelled"
     ? { ...section, title: "Agent error", text: "Request was aborted", error: "Request was aborted" } : section);
@@ -81,7 +81,7 @@ test("구버전 런타임의 취소 오류 카드도 숨기고 시간은 입력�
   } finally { await app.close(); }
 });
 
-test("응답 없는 취소도 타이밍 저장 경고는 오류 카드 없이 보존한다", async () => {
+test("Response-free cancellation preserves timing persistence warnings without error cards", async () => {
   const state = cancelled(false), sections = state.sections!.map(section => section.completion
     ? { ...section, completion: { ...section.completion, warning: "[STORAGE_FAILED] Cancellation timing could not be saved." } } : section);
   const app = await mount({ ...state, sections });
@@ -92,7 +92,7 @@ test("응답 없는 취소도 타이밍 저장 경고는 오류 카드 없이 �
   } finally { await app.close(); }
 });
 
-test("이전 취소 기록은 새 요청의 Working 상태나 새 완료 푸터와 섞이지 않는다", async () => {
+test("Previous cancellation history never mixes with new Working states or completion footers", async () => {
   const state = cancelled(true), app = await mount(state);
   try {
     // A new delivered request starts a new status scope, not a continuation of the cancellation.

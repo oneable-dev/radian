@@ -11,7 +11,7 @@ function remove(selection: WorkspaceSelection, worktreeId: string, sessionId: st
   })));
 }
 
-test("워크트리 재선택 시 마지막으로 선택한 세션을 복원한다", () => {
+test("Reselecting worktrees restores their last selected sessions", () => {
   // Two worktrees contain different session lists.
   const selection = new WorkspaceSelection(demoWorkspace());
   const original = selection.snapshot;
@@ -26,7 +26,7 @@ test("워크트리 재선택 시 마지막으로 선택한 세션을 복원한�
   expect(selection.snapshot).toBe(original);
 });
 
-test("처음 표시한 세션도 목록 순서가 바뀐 뒤 워크트리 재방문 시 복원한다", () => {
+test("Initially displayed sessions restore after list reordering and worktree revisits", () => {
   // The first displayed selection is A1 even without an explicit session click.
   const selection = new WorkspaceSelection(demoWorkspace());
   selection.selectWorktree("demo:feature");
@@ -43,7 +43,7 @@ test("처음 표시한 세션도 목록 순서가 바뀐 뒤 워크트리 재방
 
 test.each([
   ["a2", "a3"], ["a3", "a2"], ["a1", "a2"],
-])("선택한 %s 항목 제거 시 인접 세션 %s를 선택한다", (closed, next) => {
+])("Removing selected %s entries selects adjacent session %s", (closed, next) => {
   // The fixture's display order is A1, A2, A3.
   const selection = new WorkspaceSelection(demoWorkspace());
   selection.selectSession("demo:main", closed);
@@ -55,7 +55,7 @@ test.each([
   expect(selection.sessionId).toBe(next);
 });
 
-test("비선택 워크트리의 마지막 선택 항목 제거도 복원 시 유효한 항목으로 대체한다", () => {
+test("Removing background worktrees' last selections restores valid replacements", () => {
   // A remembers A2 while B is on screen.
   const selection = new WorkspaceSelection(demoWorkspace());
   selection.selectSession("demo:main", "a2");
@@ -69,7 +69,7 @@ test("비선택 워크트리의 마지막 선택 항목 제거도 복원 시 유
   expect(selection.sessionId).toBe("a3");
 });
 
-test("마지막 항목 제거와 빈 워크트리 선택 모두 세션을 자동 생성하지 않는다", () => {
+test("Final removal and empty-worktree selection never automatically create sessions", () => {
   // Worktree B contains exactly one fixture session.
   const selection = new WorkspaceSelection(demoWorkspace());
   selection.selectWorktree("demo:feature");
@@ -85,7 +85,7 @@ test("마지막 항목 제거와 빈 워크트리 선택 모두 세션을 자동
   expect(selection.worktree?.sessions).toHaveLength(0);
 });
 
-test("Workspace 목록은 세션 데이터를 유지하면서 레포와 워크트리 행만 표시한다", () => {
+test("Workspace lists retain session data while displaying only repository/worktree rows", () => {
   // Open sessions and owned children remain available to the Agents panel.
   const fixture = demoWorkspace();
 
@@ -100,7 +100,7 @@ test("Workspace 목록은 세션 데이터를 유지하면서 레포와 워크�
   expect(fixture[0]!.worktrees[0]!.sessions[0]!.subagents[0]!.name).toBe("UI review");
 });
 
-test("없는 선택 ID는 현재 선택을 변경하지 않는다", () => {
+test("Unknown selection IDs preserve current selection", () => {
   // The first worktree has a valid selected session.
   const selection = new WorkspaceSelection(demoWorkspace());
 
@@ -113,18 +113,18 @@ test("없는 선택 ID는 현재 선택을 변경하지 않는다", () => {
   expect(selection.sessionId).toBe("a1");
 });
 
-test("지연 연결된 레포의 저장된 세션 선택은 현재 워크트리를 바꾸지 않고 복원한다", () => {
-  // 비활성 레포는 아직 런타임 연결이 없어 세션 행이 비어 있다.
+test("Late-connected repositories restore saved sessions without switching current worktrees", () => {
+  // Inactive repositories have no runtime connection and empty session rows.
   const full = demoWorkspace();
   const cold = full.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id === "demo:main" ? { ...tree, sessions: [] } : tree) }));
   const selection = new WorkspaceSelection(cold);
   selection.selectWorktree("demo:feature");
 
-  // 뒤늦은 연결은 현재 선택을 유지하면서 과거에 선택한 A2를 기억한다.
+  // Late connection retains current selection while remembering previously selected A2.
   selection.replaceSnapshot(full, { "demo:main": "a2" });
   expect(selection.worktree?.id).toBe("demo:feature");
   selection.selectWorktree("demo:main");
 
-  // 다른 레포를 열었다는 이유로 첫 세션 A1로 되돌아가지 않는다.
+  // Opening another repository must not reset selection to first session A1.
   expect(selection.sessionId).toBe("a2");
 });

@@ -36,8 +36,8 @@ test.each([
   { text: 'before "say \\"hi\\" now" after', cursor: 16, object: '"', around: false, count: 1, expected: 'say \\"hi\\" now' },
   { text: "first line\nsecond\n\nthird\n\n", cursor: 5, object: "p", around: false, count: 1, expected: "first line\nsecond\n" },
   { text: "first line\nsecond\n\nthird\n\n", cursor: 5, object: "p", around: true, count: 1, expected: "first line\nsecond\n\n" },
-])("텍스트 객체 [$object] 내부/주변 범위를 커서 중간에서도 정확히 선택한다: $expected", ({ text, cursor, object, around, count, expected }) => {
-  // 이동 범위가 아니라 커서를 포함하는 객체 전체가 선택 대상이다.
+])("Text object [$object] selects precise inner/around ranges from interior cursors: $expected", ({ text, cursor, object, around, count, expected }) => {
+  // Select the whole object containing the cursor, not a motion range.
   const model = new VimText(text);
 
   const range = model.object(cursor, object, around, count);
@@ -53,8 +53,8 @@ test.each([
   { motion: "word-end", cursor: 8, count: 1, expected: "ta" },
   { motion: "word-previous", cursor: 8, count: 1, expected: "be" },
   { motion: "line-end", cursor: 6, count: 1, expected: "beta" },
-] as const)("y + [$motion] 이동의 포함/제외 및 줄 끝 규칙을 지킨다", ({ motion, cursor, count, expected }) => {
-  // Visual의 inclusive 선택과 yank 연산자의 exclusive 범위를 혼동하지 않는다.
+] as const)("y + [$motion] follows inclusive/exclusive motion and line-end rules", ({ motion, cursor, count, expected }) => {
+  // Distinguish inclusive Visual selections from exclusive yank ranges.
   const model = new VimText("alpha beta\ngamma delta");
 
   const move = model.move(cursor, motion, count), range = model.motionRange(cursor, move);
@@ -75,8 +75,8 @@ test.each([
   { motion: "buffer-end", cursor: 0, count: 1, explicit: false, expected: 19 },
   { motion: "left", cursor: 0, count: 1, explicit: false, expected: 0 },
   { motion: "right", cursor: 11, count: 1, explicit: false, expected: 11 },
-] as const)("모션 [$motion] 구두점·WORD·논리 줄 경계와 횟수를 구분한다", ({ motion, cursor, count, explicit, expected }) => {
-  // w와 W는 구두점을 다르게 처리하고 숫자는 줄 번호에도 적용된다.
+] as const)("Motion [$motion] distinguishes punctuation, WORD, logical lines, and counts", ({ motion, cursor, count, explicit, expected }) => {
+  // w and W handle punctuation differently; counts also apply to line numbers.
   const model = new VimText("one.two next\n  last");
 
   const result = model.move(cursor, motion, count, explicit);
@@ -84,8 +84,8 @@ test.each([
   expect(result.position).toBe(expected);
 });
 
-test("w/b는 빈 줄을 한 단어로 세되 공백뿐인 줄은 건너뛴다", () => {
-  // Vim의 빈 줄 경계는 단순한 whitespace 토큰 분리와 다르다.
+test("w/b count empty lines as words but skip whitespace-only lines", () => {
+  // Vim empty-line boundaries differ from simple whitespace tokenization.
   const model = new VimText("alpha\n\nbeta"), spaced = new VimText("alpha\n   \nbeta");
 
   const first = model.move(0, "word-next"), second = model.move(0, "word-next", 2), back = model.move(7, "word-previous");
@@ -94,8 +94,8 @@ test("w/b는 빈 줄을 한 단어로 세되 공백뿐인 줄은 건너뛴다", 
   expect(spaced.move(0, "word-next").position).toBe(10); expect(model.move(4, "word-end").position).toBe(10);
 });
 
-test("viw와 yiw는 같은 객체를 사용하되 선택과 복사 효과를 분리한다", () => {
-  // 단어 중간에서 v + i + w를 눌러도 다음 단어 첫 글자가 섞이면 안 된다.
+test("viw and yiw share objects while separating selection from copying", () => {
+  // v + i + w inside a word must not include the next word's first character.
   const visual = context("alpha beta gamma", 8, true), normal = context(visual.model.text, 8), vim = new TranscriptVim();
 
   vim.command("inner", visual); const selection = vim.character("w", visual);
@@ -105,8 +105,8 @@ test("viw와 yiw는 같은 객체를 사용하되 선택과 복사 효과를 분
   expect(selected(visual.model, selection)).toBe("beta"); expect(selected(normal.model, yank)).toBe("beta"); expect(vim.pending).toBe(false);
 });
 
-test("연산자 앞뒤의 횟수는 곱하고 yy는 현재 줄부터 실제 개행까지 복사한다", () => {
-  // 2y2w는 네 단어 범위이며 커서나 텍스트를 직접 수정하지 않는다.
+test("Operator counts multiply and yy copies from the current line through its actual newline", () => {
+  // 2y2w spans four words without directly changing cursor or text.
   const state = context("one two three four five\nsecond line", 0), vim = new TranscriptVim();
 
   vim.digit("2"); vim.command("yank", state); vim.digit("2"); const words = vim.command("word-next", state);
@@ -116,8 +116,8 @@ test("연산자 앞뒤의 횟수는 곱하고 yy는 현재 줄부터 실제 개�
   expect(selected(state.model, lines)).toBe(state.model.text); expect(state.cursor).toBe(0);
 });
 
-test("정상적인 모션 횟수와 잘못된 접두어 취소는 상태를 다음 명령에 누출하지 않는다", () => {
-  // 입력하지 않은 편집 동작이나 이전 연산자가 뒤의 이동을 복사로 바꾸면 안 된다.
+test("Motion counts and invalid-prefix cancellation never leak state into later commands", () => {
+  // Unsupported edits and stale operators must not turn later motions into copying.
   const state = context("one two three four"), vim = new TranscriptVim();
 
   vim.digit("3"); const move = vim.command("word-next", state);
@@ -128,8 +128,8 @@ test("정상적인 모션 횟수와 잘못된 접두어 취소는 상태를 다�
   expect(vim.status).toBe(String(maximumVimCount)); vim.cancel(); expect(vim.status).toBe("");
 });
 
-test("스트리밍으로 결합문자가 생겨도 yank는 현재 grapheme 경계에서 시작한다", () => {
-  // pending 단계에 저장한 옛 UTF-16 인덱스는 새 결합문자 내부가 될 수 있다.
+test("Yank starts at current grapheme boundaries after combining characters stream in", () => {
+  // A pending UTF-16 index can end up inside a newly combined grapheme.
   const vim = new TranscriptVim(); vim.command("yank", context("e", 1));
   const updated = context("é tail", 2);
 
@@ -138,8 +138,8 @@ test("스트리밍으로 결합문자가 생겨도 yank는 현재 grapheme 경�
   expect(selected(updated.model, effect)).toBe(" "); expect(updated.model.text).toBe("é tail");
 });
 
-test("f/t 찾기와 세미콜론·쉼표 반복은 인접한 대상에 갇히지 않는다", () => {
-  // t의 반복은 바로 옆의 이전 대상이 아닌 다음 대상까지 진행해야 한다.
+test("f/t and semicolon/comma repeats never get stuck on adjacent targets", () => {
+  // Repeating t must advance past the adjacent previous target.
   const model = new VimText("a.b.c.d"), vim = new TranscriptVim();
 
   vim.command("till-forward", { model, cursor: 0, visual: false }); const first = vim.character(".", { model, cursor: 0, visual: false });
@@ -151,8 +151,8 @@ test("f/t 찾기와 세미콜론·쉼표 반복은 인접한 대상에 갇히지
   expect(model.find(0, { kind: "f", character: "z" })).toBeNull();
 });
 
-test("검색은 현재 위치 다음부터 양방향으로 순환하며 단어 경계를 구분한다", () => {
-  // literal 검색의 마침표와 단어 검색의 부분 일치 제한을 독립적으로 검증한다.
+test("Search wraps bidirectionally after the current position and respects word boundaries", () => {
+  // Test literal dots independently from whole-word substring restrictions.
   const model = new VimText("alpha beta alpha betamax alpha"), literal = new VimText("a.b aXb");
 
   const forward = model.search(0, "alpha", 1, 2), backward = model.search(0, "alpha", -1);
@@ -162,8 +162,8 @@ test("검색은 현재 위치 다음부터 양방향으로 순환하며 단어 �
   expect(model.search(0, "absent", 1)).toBeNull();
 });
 
-test("n/N은 검색 원래 방향을 보존하고 빈 검색은 직전 검색을 반복한다", () => {
-  // 역방향 반복을 실행해도 마지막 검색 자체의 방향을 뒤집지 않는다.
+test("n/N preserve original search direction and empty searches repeat the previous query", () => {
+  // Reverse repetition must not change the original search direction.
   const vim = new TranscriptVim(), state = context("one two one two one", 8);
 
   const first = vim.submitSearch("one", -1, state), reverse = vim.command("search-previous", state);

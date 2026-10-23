@@ -14,8 +14,8 @@ const catalog: ModelCatalog = { conversationId: "conversation", current: { provi
   { provider: "second", id: "same-id", name: "Second", contextWindow: 64000, reasoning: false, images: false, efforts: ["off"], effort: "off" },
 ] };
 
-test("모델 목록과 변경 IPC는 세션·대화·런타임 식별자를 보내고 모델을 provider와 ID로 구분한다", async () => {
-  // 실제 네트워크 대신 응답 경계만 대체하고 전송되는 프로토콜을 검증한다.
+test("Model IPC sends session/conversation/runtime IDs and distinguishes provider plus model ID", async () => {
+  // Replace only network responses while verifying actual transmitted protocols.
   const requests: { path: string; headers: Headers; body?: unknown }[] = [];
   const mocked = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof fetch>[0], options?: Parameters<typeof fetch>[1]) => {
     const url = new URL(String(input));
@@ -33,7 +33,7 @@ test("모델 목록과 변경 IPC는 세션·대화·런타임 식별자를 보�
   } finally { await client.disconnect(); mocked.mockRestore(); }
 });
 
-test("구버전 서비스나 raw model 명령은 유료 프롬프트·자동 재시작·다른 명령으로 우회하지 않는다", async () => {
+test("Legacy services and raw model commands never fall back to paid prompts, restart, or other commands", async () => {
   const snapshot = state(); snapshot.capabilities = [];
   const mocked = spyOn(globalThis, "fetch").mockImplementation(Object.assign(() => { throw new Error("Unsupported model controls must not transmit"); }, { preconnect: fetch.preconnect }));
   const client = new RuntimeClient(paths, snapshot);
@@ -46,7 +46,7 @@ test("구버전 서비스나 raw model 명령은 유료 프롬프트·자동 재
   } finally { await client.disconnect(); mocked.mockRestore(); }
 });
 
-test("모델 변경만 지원하는 이전 서비스에는 effort를 무시할 수 있는 요청을 보내지 않는다", async () => {
+test("Model-only legacy services never receive requests that could ignore effort", async () => {
   const snapshot = state(); snapshot.capabilities = ["model-selection"];
   const mocked = spyOn(globalThis, "fetch").mockImplementation(Object.assign(() => { throw new Error("Legacy service must not receive effort changes"); }, { preconnect: fetch.preconnect }));
   const client = new RuntimeClient(paths, snapshot);
@@ -57,7 +57,7 @@ test("모델 변경만 지원하는 이전 서비스에는 effort를 무시할 �
   } finally { await client.disconnect(); mocked.mockRestore(); }
 });
 
-test("모델 응답의 대화 식별자가 다르면 목록을 채택하지 않는다", async () => {
+test("Model responses with mismatched conversation identities are rejected", async () => {
   const mocked = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => Response.json({ ...catalog, conversationId: "other-conversation" }), { preconnect: fetch.preconnect }));
   const client = new RuntimeClient(paths, state());
   try {

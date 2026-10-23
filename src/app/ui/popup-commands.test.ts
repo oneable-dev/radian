@@ -24,8 +24,8 @@ const within = (node: Renderable | null, parent: Renderable): boolean => {
   return false;
 };
 
-test.each(surfaces)("$name 팝업은 닫기·액션 버튼 없이 포커스를 가두고 Esc로 입력을 복원한다", async surface => {
-  // 실제 Workbench에서 외부 조회만 대체하고 작은 화면도 같은 명령 계약을 따른다.
+test.each(surfaces)("$name popups trap focus and restore input with Esc without close/action buttons", async surface => {
+  // Use real Workbench and replace only external lookups; compact layouts share command contracts.
   const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock: new ManualClock() });
   const sent: string[] = [];
   const view = new Workbench(app.renderer, new WorkspaceSelection(demoWorkspace()), {
@@ -48,7 +48,7 @@ test.each(surfaces)("$name 팝업은 닫기·액션 버튼 없이 포커스를 �
     else app.mockInput.pressKey("F1");
     await render(); const draft = input.draft;
 
-    // 창 크기와 Tab 방향이 바뀌어도 버튼 대신 본문·검색·상태 선택만 탐색한다.
+    // Resize and Tab direction changes navigate content, search, and state choices instead of buttons.
     for (const [width, height] of [[120, 30], [60, 16]] as const) {
       app.resize(width, height); await render(); const panel = get(surface.panel);
       expect(panel.visible).toBe(true);
@@ -61,7 +61,7 @@ test.each(surfaces)("$name 팝업은 닫기·액션 버튼 없이 포커스를 �
     }
     app.mockInput.pressEscape(); await render();
 
-    // 닫기는 대화를 전송하거나 입력을 바꾸지 않고 원래 입력 소유권을 복원한다.
+    // Closing restores original input ownership without submission or editing.
     expect(app.renderer.currentFocusedRenderable).toBe(input); expect(input.draft).toEqual(draft);
     expect(get(surface.panel).parent?.visible).toBe(false); expect(sent).toEqual([]);
   } finally { view.dispose(); await app.dispose(); }

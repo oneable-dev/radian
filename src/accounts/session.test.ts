@@ -22,8 +22,8 @@ async function select(manager: AccountManager, worktreeId: string, accountId: st
   expectOk(await manager.handle({ type: "select", worktreeId, provider: "fixture", accountId, revision: (await manager.catalog(worktreeId)).revision }));
 }
 
-test("응답 중 계정 전환은 기존 요청·도구·대화를 유지하고 다음 모델 호출부터 새 인증과 연결 범위를 사용한다", async () => {
-  // 실제 SDK 세션과 파일 도구를 사용하되 모델 전송 경계만 로컬 스크립트로 대체한다.
+test("Switching accounts mid-response preserves requests, tools, and conversations until the next model call", async () => {
+  // Use real SDK sessions and file tools, replacing only model transport locally.
   const directory = await mkdtemp(join(tmpdir(), "radian-account-session-"));
   const started = Promise.withResolvers<void>(), finish = Promise.withResolvers<void>();
   const calls: { key: string | undefined; sessionId: string | undefined }[] = [];
@@ -57,13 +57,13 @@ test("응답 중 계정 전환은 기존 요청·도구·대화를 유지하고 
     executor = await piSessionFactory({ accounts: manager, agentDir: join(directory, "agent"), model, settings: { retry: { enabled: false }, compaction: { enabled: false } } })({ cwd: directory, worktreeId: "one", role: "main", spawnSubagent: async () => err(new CapabilityError("No child expected")) });
     const unsubscribe = executor.subscribe(() => { reads = executor!.state.sections?.filter(section => section.kind === "tool" && section.title.includes("read")).length ?? 0; });
 
-    // A 응답을 지연한 상태에서 첫 작업 공간만 B로 바꾼다.
+    // Delay A's response and switch only the first workspace to B.
     const pending = executor.prompt("Read workspace.txt and finish."); await started.promise;
     await select(manager, "one", b);
     expect((await (await manager.workspace("two")).runtime.getAuth("fixture"))?.auth.apiKey).toBe("key-secret-A");
     expect(executor.state.status).toBe("working"); finish.resolve(); expectOk(await pending); unsubscribe();
 
-    // 같은 작업의 다음 호출은 B이며 대화와 도구 결과, 기존 요청의 완료를 보존한다.
+    // The next call uses B while preserving conversation, tool results, and request completion.
     expect(calls.map(call => call.key)).toEqual(["key-secret-A", "key-secret-B"]); expect(calls[0]!.sessionId).not.toBe(calls[1]!.sessionId);
     expect(executor.state.sections?.some(section => section.text.includes("Retained tool result"))).toBe(true);
     expect(executor.state.sections?.some(section => section.text.includes("Finished with the new account"))).toBe(true); expect(reads).toBe(1); expect(oldQuota).toBeNull(); expect(executor.state.telemetry?.weekly?.remainingPercent).toBe(70);

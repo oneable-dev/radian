@@ -8,7 +8,7 @@ import { daemonPaths, privateDirectory, runtimePaths, RuntimeStore } from "./sto
 import { RuntimeClient } from "./client.ts";
 import { expectOk, expectError } from "../testing/results.ts";
 
-test("유효하지 않은 프로토콜 명령과 snapshot은 실행 경계에서 거부한다", () => {
+test("Invalid protocol commands and snapshots fail at execution boundaries", () => {
   // Local IPC is private but still receives untyped JSON across a process boundary.
   const malformed = [{ type: "prompt", sessionId: "id" }, { type: "close", sessionId: 3 }, { type: "unknown" }];
 
@@ -20,7 +20,7 @@ test("유효하지 않은 프로토콜 명령과 snapshot은 실행 경계에서
   expect(expectError(parseSnapshot({ version: 99 })).code).toBe("PROTOCOL_ERROR");
 });
 
-test("live/test 모드와 상태 디렉터리는 다른 endpoint를 사용하고 긴 경로도 socket 제한을 넘지 않는다", () => {
+test("Live/test modes and state directories use separate endpoints within socket path limits", () => {
   // Separate namespaces prevent a scripted client from attaching to a paid live session.
   const root = "/tmp/" + "long-directory-".repeat(30);
 
@@ -38,7 +38,7 @@ test("live/test 모드와 상태 디렉터리는 다른 endpoint를 사용하고
   expect(Buffer.byteLength(daemonPaths(false, root).socket)).toBeLessThan(100);
 });
 
-test("손상된 manifest는 빈 성공으로 바꾸거나 원본 파일을 덮어쓰지 않는다", async () => {
+test("Corrupt manifests never become empty success or overwritten source", async () => {
   // Corruption must remain diagnosable instead of silently losing the open-session list.
   const root = await mkdtemp(join(tmpdir(), "radian-store-test-"));
   const paths = runtimePaths("/repo/.git", true, root);
@@ -55,7 +55,7 @@ test("손상된 manifest는 빈 성공으로 바꾸거나 원본 파일을 덮�
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("manifest는 원자적으로 저장되고 다른 레포의 상태로 복원되지 않는다", async () => {
+test("Manifests save atomically and cannot restore another repository's state", async () => {
   // Two queued preference changes must not reorder persisted workspace state.
   const root = await mkdtemp(join(tmpdir(), "radian-store-test-"));
   const paths = runtimePaths("/repo/.git", true, root);
@@ -74,7 +74,7 @@ test("manifest는 원자적으로 저장되고 다른 레포의 상태로 복원
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("이전 실행 서비스에는 history 지원 부재를 설명하고 자동으로 종료하거나 교체하지 않는다", async () => {
+test("Legacy services report missing History support without automatic termination or replacement", async () => {
   // Protocol-v1 services may already own user jobs before the additive history capability ships.
   const client = new RuntimeClient(runtimePaths("/repo/.git", true, "/unused"), {
     version: protocolVersion, pid: process.pid, instance: "legacy", repositoryId: "/repo/.git", mode: "offline",

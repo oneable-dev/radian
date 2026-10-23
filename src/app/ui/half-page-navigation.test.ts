@@ -60,7 +60,7 @@ test.each(surfaces)("Reopening %s search popups starts fresh input without old q
     await app.mockInput.typeText("candidate-1"); await app.render();
     app.mockInput.pressEscape(); await app.render();
 
-    // 다시 여는 진입점이 달라도 검색어와 캐럿은 새 검색 상태여야 한다.
+    // All reopening entry points reset query and caret to fresh search state.
     if (surface === "model") {
       const prompt = app.get("session-prompt") as InputRenderable;
       prompt.focus(); prompt.value = "/model"; await app.render(); app.clock.advance(150); await app.render();
@@ -69,7 +69,7 @@ test.each(surfaces)("Reopening %s search popups starts fresh input without old q
     else { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey(surface === "history" ? "h" : "s"); }
     await app.render();
 
-    // 필터만 초기화하거나 예전 텍스트 뒤에 새 검색어를 붙여서는 안 된다.
+    // Do not reset only filters or append fresh input after stale text.
     expect(app.input.value).toBe(""); expect(app.input.cursorOffset).toBe(0);
     expect(app.captureCharFrame().split("\n")[app.input.y]).not.toContain("candidate-1");
     await app.mockInput.typeText("candidate-2"); await app.render();
@@ -78,8 +78,8 @@ test.each(surfaces)("Reopening %s search popups starts fresh input without old q
   } finally { await app.close(); }
 });
 
-test.each(surfaces)("%s 검색은 공용 입력의 여백·포커스 배경을 사용하고 리사이즈 후에도 커서를 보존한다", async surface => {
-  // 검색 대상은 달라도 입력 영역 전체의 모양과 클릭 계약은 같아야 한다.
+test.each(surfaces)("%s search shares padding/focus backgrounds and preserves caret after resize", async surface => {
+  // Different search targets share input geometry and click behavior.
   const app = await mount(surface);
   try {
     if (!(app.input instanceof SearchInput)) throw new Error("Missing shared search field");
@@ -91,13 +91,13 @@ test.each(surfaces)("%s 검색은 공용 입력의 여백·포커스 배경을 �
       return app.captureSpans().lines[y]!.spans.find(span => { end += span.width; return end > x; })!.bg.toInts();
     };
 
-    // 넓고 좁은 터미널에서 결과 목록으로 나갔다가 입력 여백을 눌러 돌아온다.
+    // Leave results and return through input padding in wide and narrow terminals.
     for (const width of [120, 60]) {
       app.resize(width, 30); await app.render(); app.list.focus(); await app.render();
       expect(background(field.x + 1, field.y)).toEqual(uiTheme(app.renderer).styles["ui.input"].bg!.toInts());
       await app.mockMouse.click(field.x + 1, field.y); await app.render();
 
-      // 입력은 한 줄이며 양쪽·상하 여백과 포커스 배경은 화면별 덮어쓰기 없이 일치한다.
+      // Single-line inputs share horizontal/vertical padding and focus colors without screen overrides.
       expect(field.height).toBe(3); expect(input.height).toBe(1); expect(input.y - field.y).toBe(1);
       expect(input.x - field.x).toBe(width < 80 ? 1 : 2);
       expect(field.x + field.width - input.x - input.width).toBe(width < 80 ? 1 : 2);
@@ -108,19 +108,19 @@ test.each(surfaces)("%s 검색은 공용 입력의 여백·포커스 배경을 �
   } finally { await app.close(); }
 });
 
-test.each(["history", "monitor"] as const)("%s 모달은 검색을 왼쪽 목록 너비로 제한하고 미리보기를 검색 높이부터 표시한다", async surface => {
-  // 검색과 미리보기가 함께 있는 모달에서도 현재 대화와 검색 캐럿은 독립적이다.
+test.each(["history", "monitor"] as const)("%s modals constrain search to list widths and extend previews to search-row height", async surface => {
+  // Split search/preview modals keep current conversations and search carets independent.
   const app = await mount(surface);
   try {
     await app.mockInput.typeText("candidate"); app.mockInput.pressArrow("left"); await app.render();
     const input = app.input as SearchInput, value = input.value, cursor = input.cursorOffset;
 
-    // 분할 화면과 단일 패널 화면을 왕복해 실제 터미널 셀 배치를 확인한다.
+    // Verify actual terminal-cell layouts across split and single-panel transitions.
     for (const width of [140, 100, 99, 60, 140]) {
       app.resize(width, 30); await app.render();
       const field = input.field, preview = app.get(`${surface}-preview-pane`), message = app.get(`${surface}-message`);
 
-      // 검색과 결과 안내는 목록 열에만 속하고 미리보기는 그 높이까지 모두 사용한다.
+      // Search and result hints belong only to lists; previews use their full height.
       expect(field.x).toBe(app.list.x); expect(field.width).toBe(app.list.width);
       expect(message.x).toBe(app.list.x);
       expect(preview.visible).toBe(width >= 100);
@@ -138,8 +138,8 @@ test.each(["history", "monitor"] as const)("%s 모달은 검색을 왼쪽 목록
   } finally { await app.close(); }
 });
 
-test.each(surfaces)("%s 목록의 Ctrl+D/U는 반 페이지 후보를 왕복하며 Enter 전에는 확정하지 않는다", async surface => {
-  // 실제 목록 높이와 행 간격에 맞춰 한 번에 여러 후보를 이동한다.
+test.each(surfaces)("%s list Ctrl+D/U moves half-page candidates without committing before Enter", async surface => {
+  // Jump multiple candidates using actual list height and row spacing.
   const app = await mount(surface);
   try {
     await app.mockInput.typeText("candidate"); app.mockInput.pressTab(); await app.render();
@@ -147,7 +147,7 @@ test.each(surfaces)("%s 목록의 Ctrl+D/U는 반 페이지 후보를 왕복하�
     const step = Math.max(1, Math.floor(app.list.viewport.height / (2 * stride)));
     expect(step).toBeGreaterThan(1);
 
-    // 위쪽 경계에서도 현재 후보를 유지하고 마지막 점프만 확정한다.
+    // Retain candidates at upper boundaries and commit only the final jump.
     app.mockInput.pressKey("d", { ctrl: true }); app.mockInput.pressKey("u", { ctrl: true });
     app.mockInput.pressKey("u", { ctrl: true }); app.mockInput.pressKey("d", { ctrl: true }); await app.render();
 
@@ -171,8 +171,8 @@ test.each(surfaces)("%s 목록의 Ctrl+D/U는 반 페이지 후보를 왕복하�
   } finally { await app.close(); }
 });
 
-test.each(surfaces)("%s 목록의 반 페이지 점프는 마지막 후보에서 멈추고 위로 돌아간다", async surface => {
-  // 목록 끝의 점프가 빈 선택이나 화면 밖 인덱스를 만들면 안 된다.
+test.each(surfaces)("%s half-page list jumps stop at the final candidate and return upward", async surface => {
+  // End-of-list jumps must not create empty selections or offscreen indexes.
   const app = await mount(surface);
   try {
     app.mockInput.pressTab(); await app.render();
@@ -190,8 +190,8 @@ test.each(surfaces)("%s 목록의 반 페이지 점프는 마지막 후보에서
   } finally { await app.close(); }
 });
 
-test.each(surfaces.flatMap(surface => (["d", "u"] as const).map(key => ({ surface, key }))))("$surface 검색창의 Ctrl+$key 입력은 검색어를 보존하며 목록으로 포커스를 옮겨 점프한다", async ({ surface, key }) => {
-  // 목록 중간 후보를 선택하고 입력 커서를 옮겨 문자 삭제와 필터 초기화를 모두 검출한다.
+test.each(surfaces.flatMap(surface => (["d", "u"] as const).map(key => ({ surface, key }))))("$surface search Ctrl+$key preserves queries and hands focus to lists while jumping", async ({ surface, key }) => {
+  // Select a middle candidate and move the caret to detect deletion and filter resets.
   const app = await mount(surface);
   try {
     await app.mockInput.typeText("candidate"); await app.render();
@@ -213,8 +213,8 @@ test.each(surfaces.flatMap(surface => (["d", "u"] as const).map(key => ({ surfac
   } finally { await app.close(); }
 });
 
-test("빈 워크스페이스 검색창의 Ctrl+D/U도 현재 후보에서 목록 점프를 이어간다", async () => {
-  // 검색어가 없더라도 현재 후보를 초기화하지 않고 결과 목록으로 포커스를 넘긴다.
+test("Empty workspace search Ctrl+D/U continues list jumps from the current candidate", async () => {
+  // Empty queries still transfer focus without resetting current candidates.
   const app = await mount("workspace");
   try {
     for (let index = 0; index < 6; index++) app.mockInput.pressKey("n", { ctrl: true });
@@ -228,8 +228,8 @@ test("빈 워크스페이스 검색창의 Ctrl+D/U도 현재 후보에서 목록
   } finally { await app.close(); }
 });
 
-test("검색창은 기본 후보 탐색과 반 페이지 점프를 푸터에서 생략한다", async () => {
-  // 실제 점프 동작은 앞선 상호작용 시나리오로 유지하고 기본 안내만 숨긴다.
+test("Search footers omit default candidate navigation and half-page hints", async () => {
+  // Earlier interaction scenarios retain actual jumps; hide only default hints.
   const app = await mount("workspace");
   try {
     await app.mockInput.typeText("candidate"); await app.render();
@@ -241,8 +241,8 @@ test("검색창은 기본 후보 탐색과 반 페이지 점프를 푸터에서 
   } finally { await app.close(); }
 });
 
-test.each(surfaces)("%s 검색창의 Ctrl+C는 검색어만 지우고 실행·초안·모달을 유지한다", async surface => {
-  // 실행 중인 Agent와 열린 모달 뒤의 초안을 검색 취소 동작과 분리한다.
+test.each(surfaces)("%s search Ctrl+C clears only queries while preserving runs, drafts, and modals", async surface => {
+  // Separate search cancellation from active Agents and drafts behind modals.
   const app = await mount(surface);
   try {
     await app.mockInput.typeText("candidate");
@@ -260,8 +260,8 @@ test.each(surfaces)("%s 검색창의 Ctrl+C는 검색어만 지우고 실행·�
   } finally { await app.close(); }
 });
 
-test.each(surfaces)("%s 검색창의 Ctrl+L은 검색어 지우기 별칭으로 동작하지 않는다", async surface => {
-  // 검색 초기화는 Ctrl+C만 담당하고 Ctrl+L을 호환 별칭으로 남기지 않는다.
+test.each(surfaces)("%s search Ctrl+L never aliases query clearing", async surface => {
+  // Only Ctrl+C owns search clearing; retain no Ctrl+L compatibility alias.
   const app = await mount(surface);
   try {
     await app.mockInput.typeText("candidate"); const cursor = app.input.cursorOffset;
@@ -273,8 +273,8 @@ test.each(surfaces)("%s 검색창의 Ctrl+L은 검색어 지우기 별칭으로 
   } finally { await app.close(); }
 });
 
-test("빈 검색창의 Ctrl+C는 후보와 스크롤을 초기화하지 않고 기존 선택을 유지한다", async () => {
-  // 검색어가 없는 상태에서는 전체 검색 초기화 이벤트도 필요하지 않다.
+test("Empty search Ctrl+C preserves selection without resetting candidates or scroll", async () => {
+  // Empty queries need no global search-reset events.
   const app = await mount("workspace");
   try {
     for (let index = 0; index < 6; index++) app.mockInput.pressKey("n", { ctrl: true });
@@ -288,8 +288,8 @@ test("빈 검색창의 Ctrl+C는 후보와 스크롤을 초기화하지 않고 �
   } finally { await app.close(); }
 });
 
-test.each(["d", "u"] as const)("검색창에서 누른 Ctrl+%s는 목록으로 이동한 뒤 반복 입력도 계속 점프한다", async key => {
-  // 포커스 이동이 같은 키를 중복 처리하거나 이후의 의도적인 반복 입력을 막으면 안 된다.
+test.each(["d", "u"] as const)("Search Ctrl+%s keeps jumping on repeats after focus moves to lists", async key => {
+  // Focus handoff must neither duplicate events nor block intentional later repeats.
   const app = await mount("workspace");
   const raw = (event: string) => { const parsed = parseKeypress(event, { useKittyKeyboard: true }); if (!parsed) throw new Error("Invalid Kitty key"); app.renderer.keyInput.processParsedKey(parsed); };
   const code = key === "d" ? 100 : 117;
@@ -312,8 +312,8 @@ test.each(["d", "u"] as const)("검색창에서 누른 Ctrl+%s는 목록으로 �
   } finally { await app.close(); }
 });
 
-test.each(["history", "monitor"] as const)("좁은 %s 모달의 검색 점프는 미리보기에서 결과 목록으로 돌아간다", async surface => {
-  // 좁은 화면에서 미리보기만 표시 중이어도 검색 점프의 대상은 결과 목록이다.
+test.each(["history", "monitor"] as const)("Compact %s search jumps return from previews to result lists", async surface => {
+  // Search jumps target results even when compact layouts currently show only previews.
   const app = await mount(surface);
   try {
     app.resize(60, 18); await app.render(); await app.mockInput.typeText("candidate"); await app.render();
@@ -334,8 +334,8 @@ test.each(["history", "monitor"] as const)("좁은 %s 모달의 검색 점프는
   } finally { await app.close(); }
 });
 
-test.each(surfaces)("%s 검색 결과가 없어도 점프 키는 입력을 보존하고 목록으로 포커스를 옮긴다", async surface => {
-  // 빈 결과에서 점프를 확정이나 네이티브 문자 삭제로 해석하지 않는다.
+test.each(surfaces)("%s jump keys preserve input and focus lists even without matches", async surface => {
+  // Empty-result jumps are neither activation nor native character deletion.
   const app = await mount(surface);
   try {
     await app.mockInput.typeText("no-matching-candidate"); await app.render();
@@ -348,8 +348,8 @@ test.each(surfaces)("%s 검색 결과가 없어도 점프 키는 입력을 보�
   } finally { await app.close(); }
 });
 
-test.each(["history", "monitor"] as const)("%s 미리보기의 Ctrl+D/U는 후보를 바꾸지 않고 본문만 반 페이지 이동한다", async surface => {
-  // 같은 모달 안에서도 목록과 미리보기는 포커스한 영역을 대상으로 점프한다.
+test.each(["history", "monitor"] as const)("%s preview Ctrl+D/U scrolls only bodies without changing candidates", async surface => {
+  // Lists and previews within one modal jump within their focused region.
   const app = await mount(surface);
   try {
     app.mockInput.pressKey("o", { ctrl: true }); app.clock.advance(150); await app.render();
@@ -368,8 +368,8 @@ test.each(["history", "monitor"] as const)("%s 미리보기의 Ctrl+D/U는 후�
   } finally { await app.close(); }
 });
 
-test("상세 대화상자의 Ctrl+D/U는 본문을 반 페이지 이동한다", async () => {
-  // 도움말과 알림 상세처럼 후보 선택이 없는 표면은 본문 스크롤이 점프 대상이다.
+test("Detail-dialog Ctrl+D/U scrolls bodies by half a page", async () => {
+  // Surfaces without candidates, such as help and notification details, jump within bodies.
   const app = await mount("workspace");
   try {
     app.mockInput.pressEscape(); app.view.setNotice(Array.from({ length: 100 }, (_, index) => `Details line ${index}`).join("\n")); await app.render();

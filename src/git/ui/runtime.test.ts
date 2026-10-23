@@ -13,7 +13,7 @@ import { ok, type Result } from "../../result.ts";
 import type { ExpectedError } from "../../errors.ts";
 import { Workbench } from "../../app/ui/workbench.ts";
 
-test("실제 Git 커밋의 a 요청은 같은 SDK 세션에 대기하고 Git 화면과 Agent 초안을 유지한다", async () => {
+test("Real Git commit a requests queue in the same SDK session while preserving Git views and Agent drafts", async () => {
   // Only provider output is controlled: repository, Git process, SDK queue and TUI are real.
   const fixture = await createWorktreeFixture();
   const options = await offlineRuntime(join(fixture.directory, "agent"));

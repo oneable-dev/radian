@@ -62,7 +62,7 @@ function editorFixture() {
   return { actions, inputs, opens, detaches };
 }
 
-test("상위 탭 없이 문자 단축키로 화면을 전환하고 현재 화면명을 푸터 왼쪽에 유지한다", async () => {
+test("Letter shortcuts switch views without upper tabs and retain current names in footer left", async () => {
   // The work pane has no navigation chrome; the footer identifies its displayed view.
   const app = await mount();
   try {
@@ -83,7 +83,7 @@ test("상위 탭 없이 문자 단축키로 화면을 전환하고 현재 화면
   } finally { await app.close(); }
 });
 
-test("Editor는 화면 크기에 관계없이 작업 패널 네 모서리를 채우고 푸터만 남긴다", async () => {
+test("Editor fills all four work-panel corners at every size, leaving only the footer", async () => {
   const editor = editorFixture(), app = await mount({ editor: editor.actions });
   try {
     await app.showView("e"); await app.visible("Editor buffer");
@@ -105,7 +105,7 @@ test("Editor는 화면 크기에 관계없이 작업 패널 네 모서리를 채
   } finally { await app.close(); }
 });
 
-test("숫자는 현재 Agents 화면의 세션 순서로 선택하고 초안·워크트리 범위를 유지한다", async () => {
+test("Numbers select current Agent session order while preserving drafts and worktree scope", async () => {
   // Session numbers follow the visible worktree's tab order, not the focused widget.
   const app = await mount({ initialDrafts: { a1: "first draft", a2: "second draft" } });
   try {
@@ -161,7 +161,7 @@ test("Common creation explicitly creates current-worktree sessions even in empty
   } finally { await app.close(); }
 });
 
-test("작업 화면과 푸터를 표시하고 워크트리별 Editor·Git 화면을 복원한다", async () => {
+test("Work views and footers restore per-worktree Editor/Git screens", async () => {
   // Demo mode provides navigation without launching any native editor or Git command.
   const app = await mount();
   try {
@@ -180,7 +180,7 @@ test("작업 화면과 푸터를 표시하고 워크트리별 Editor·Git 화면
   } finally { await app.close(); }
 });
 
-test("세션 탭은 Agents 안에서만 선택하고 다른 워크트리의 마지막 작업 탭은 유지한다", async () => {
+test("Session tabs select only within Agents while other worktrees retain their last work tab", async () => {
   const app = await mount({ initialDrafts: { a1: "main draft", b1: "feature draft" } });
   try {
     // Session switching is local to Agents, rather than an incidental tree action.
@@ -211,7 +211,7 @@ test("Search and background snapshots never force Git screens into Agent", async
   } finally { await app.close(); }
 });
 
-test("명시적으로 스크롤한 Agent 위치와 초안은 탭 왕복과 UI 재생성 뒤 복원된다", async () => {
+test("Explicit Agent scroll and drafts restore after tab round-trips and UI recreation", async () => {
   let retained: WorkViewPreferences | undefined;
   const app = await mount({ onWorkViewsChange: (state) => { retained = state; }, initialDrafts: { a1: "unfinished draft" } });
   let firstLine = "";
@@ -252,7 +252,7 @@ test("Focused Editor forwards Neovim keys and leader+b opens workspace navigatio
   } finally { await app.close(); }
 });
 
-test("느린 Editor 열기 응답은 새로 선택한 Git 화면이나 포커스를 덮어쓰지 않는다", async () => {
+test("Slow Editor open responses never overwrite newly selected Git screens or focus", async () => {
   const ready = Promise.withResolvers<ReturnType<typeof ok<string>>>();
   const editor = editorFixture(); editor.actions.info = () => undefined; editor.actions.open = () => ready.promise;
   const app = await mount({ editor: editor.actions });
@@ -269,7 +269,7 @@ test("느린 Editor 열기 응답은 새로 선택한 Git 화면이나 포커스
   } finally { ready.resolve(ok("demo:main")); await app.close(); }
 });
 
-test("복원할 Editor 프로세스가 없으면 자동 실행하지 않고 명시적 실패를 알린다", async () => {
+test("Missing restored Editor processes report explicit failure without automatic launch", async () => {
   const editor = editorFixture();
   editor.actions.info = () => undefined;
   editor.actions.open = async (id) => { editor.opens.push(id); return err(new EditorError("EDITOR_UNAVAILABLE", "Neovim is missing.")); };
@@ -286,7 +286,7 @@ test("복원할 Editor 프로세스가 없으면 자동 실행하지 않고 명�
   } finally { await app.close(); }
 });
 
-test("Editor 위 History 팝업은 Esc에서 같은 입력·연결로 복귀하고 PTY로 키를 보내지 않는다", async () => {
+test("History above Editor returns to the same input/connection on Esc without forwarding PTY keys", async () => {
   const editor = editorFixture(), app = await mount({ editor: editor.actions });
   try {
     await app.showView("e"); await app.visible("Editor buffer");
@@ -301,7 +301,7 @@ test("Editor 위 History 팝업은 Esc에서 같은 입력·연결로 복귀하�
   } finally { await app.close(); }
 });
 
-test("활성 Editor의 renderer가 먼저 종료돼도 늦은 프레임과 detach를 안전하게 처리한다", async () => {
+test("Renderer-first Editor shutdown safely handles late frames and detach", async () => {
   const editor = editorFixture();
   let late: ((frame: EditorFrame) => void) | undefined;
   const attach = editor.actions.attach;

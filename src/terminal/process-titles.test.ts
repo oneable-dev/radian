@@ -11,29 +11,29 @@ import { join } from "node:path";
 const item: TerminalInfo = { id: "tab", worktreeId: "tree", pid: 100, shellPid: 101, title: "Terminal 1 · zsh", exited: false, exitCode: null };
 const signal = () => new AbortController().signal;
 
-test("실제 foreground 그룹을 사용하고 background 작업이나 shell argv는 탭 이름으로 고르지 않는다", async () => {
+test("Tab titles use actual foreground groups, not background jobs or shell argv", async () => {
   // Shell foreground group points to nvim, while sleep runs in a separate background group.
   const text = "100 1 100 -1 /bin/bun\n101 100 101 200 /bin/zsh\n200 101 200 200 /usr/local/bin/nvim\n201 101 201 200 /bin/sleep\n";
   const result = await readTerminalProcessTitles([item], signal(), async () => ok(text));
   expect(expectOk(result)).toEqual({ tab: "nvim" });
 });
 
-test("foreground 작업이 끝나면 shell 이름으로 돌아가고 재사용된 shell PID는 채택하지 않는다", async () => {
+test("Foreground completion restores shell names and rejects reused shell PIDs", async () => {
   const text = "100 1 100 -1 /bin/bun\n101 100 101 101 /bin/zsh\n";
   expect(expectOk(await readTerminalProcessTitles([item], signal(), async () => ok(text)))).toEqual({ tab: "zsh" });
   expect(expectOk(await readTerminalProcessTitles([{ ...item, pid: 999 }], signal(), async () => ok(text)))).toEqual({});
 });
 
-test("shell 시작 직후의 supervisor 그룹은 내부 bun이 아니라 shell 이름을 표시한다", async () => {
+test("Initial supervisor groups show shell names rather than internal bun", async () => {
   const text = "100 1 100 100 /bin/bun\n101 100 100 100 /bin/zsh\n";
   expect(expectOk(await readTerminalProcessTitles([item], signal(), async () => ok(text)))).toEqual({ tab: "zsh" });
 });
 
-test.each(["", "101 invalid ps response", "101 100 101 101 /bin/zsh\nmalformed row"]) ("손상된 프로세스 응답은 빈 성공이나 부분 결과로 바꾸지 않는다: %j", async (text) => {
+test.each(["", "101 invalid ps response", "101 100 101 101 /bin/zsh\nmalformed row"]) ("Corrupt process responses never become empty success or partial results: %j", async (text) => {
   expect(expectError(await readTerminalProcessTitles([item], signal(), async () => ok(text))).code).toBe("PTY_UNAVAILABLE");
 });
 
-test("조회 취소와 OS 조회 실패는 Result 오류로 구분한다", async () => {
+test("Lookup cancellation and OS failures return distinct Result errors", async () => {
   const abort = new AbortController(); abort.abort(); let calls = 0;
   expect(expectError(await readTerminalProcessTitles([item], abort.signal, async () => { calls++; return ok(""); })).code).toBe("CANCELLED");
   expect(calls).toBe(0);
@@ -41,7 +41,7 @@ test("조회 취소와 OS 조회 실패는 Result 오류로 구분한다", async
   expect(expectError(await readTerminalProcessTitles([item], signal(), async () => err(failure)))).toBe(failure);
 });
 
-test("실제 PTY에서 foreground sleep과 shell 복귀를 읽고 background sleep은 선택하지 않는다", async () => {
+test("Real PTYs detect foreground sleep and shell return without choosing background sleep", async () => {
   // Only fixture-owned processes are launched; title lookup never sends an input command itself.
   const fixture = await createWorktreeFixture();
   const sessions = new TerminalSessions([fixture.repository], () => {}, fixture.directory, true);

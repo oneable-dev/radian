@@ -12,7 +12,7 @@ function stub(implementation: (input: Parameters<typeof fetch>[0], options?: Par
   return spyOn(globalThis, "fetch").mockImplementation(Object.assign(implementation, { preconnect: fetch.preconnect }));
 }
 
-test("이전 서비스는 미리보기 부족을 명시하고 조회·재시작·모델 요청을 보내지 않는다", async () => {
+test("Legacy previews report unsupported without lookups, restarts, or model requests", async () => {
   const fetchMock = stub(async () => { throw new Error("No requests allowed"); }), client = new RuntimeClient(paths, snapshot(false));
   try {
     const result = expectError(await client.previewHistory("tree", "saved"));
@@ -20,7 +20,7 @@ test("이전 서비스는 미리보기 부족을 명시하고 조회·재시작�
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("미리보기는 instance-fenced GET이고 잘못된 신원·형식은 protocol 오류로 거절한다", async () => {
+test("Preview instance-fenced GET rejects identity/format errors as protocol failures", async () => {
   const valid = { id: "saved", worktreeId: "문서/a b", text: "You\nQuestion", truncated: false,
     sections: [{ id: "q", kind: "user", title: "You", text: "Question", status: "complete" }] };
   let response: unknown = valid;
@@ -50,26 +50,26 @@ test("미리보기는 instance-fenced GET이고 잘못된 신원·형식은 prot
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("15개 섹션과 저장된 상태줄 정보는 IPC로 전달하고 잘못된 telemetry는 거절한다", async () => {
-  // 섹션 수 확장과 함께 새 상태줄 데이터도 런타임 경계에서 검증한다.
+test("Fifteen sections and saved status cross IPC while invalid telemetry fails", async () => {
+  // Validate new status metadata alongside expanded section counts at runtime boundaries.
   const valid = { id: "saved", worktreeId: "tree", text: "", truncated: false,
     sections: Array.from({ length: 15 }, (_, index) => ({ id: `s${index}`, kind: "assistant", title: "Agent", text: `Answer ${index}`, status: "complete" })),
     telemetry: { provider: "fixture", model: "saved-model", effort: "high", fast: null, context: null, weekly: null } };
   let response: unknown = valid;
   const fetchMock = stub(async () => Response.json(response)), client = new RuntimeClient(paths, snapshot());
   try {
-    // 새 미리보기 응답을 실제 클라이언트의 스키마 검사로 읽는다.
+    // Read preview responses through actual client schema checks.
     const preview = expectOk(await client.previewHistory("tree", "saved"));
 
-    // 최대 개수는 허용하되 잘못된 사용량을 정상 상태처럼 표시하지 않는다.
+    // Accept maximum counts but never display invalid usage as normal state.
     expect(preview.sections).toHaveLength(15); expect(preview.telemetry).toEqual(valid.telemetry);
     response = { ...valid, telemetry: { ...valid.telemetry, context: { usedTokens: -1, maxTokens: 1000 } } };
     expect(expectError(await client.previewHistory("tree", "saved")).code).toBe("PROTOCOL_ERROR");
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("공유 스냅샷은 요청한 대화·워크트리와 일치하고 최근 섹션 제한을 지켜야 한다", async () => {
-  // 최상위 응답 ID가 맞더라도 내부 스냅샷이 다른 세션이면 표시하면 안 된다.
+test("Shared snapshots match requested conversations/worktrees and obey recent-section limits", async () => {
+  // Correct outer IDs cannot permit mismatched inner session snapshots.
   const saved: SessionRecord = { id: "old-tab", name: "Archived", worktreeId: "tree", lifecycle: "closed", updatedAt: 1700000000000,
     state: { conversationId: "saved", status: "failure", output: "", error: "Saved failure",
       sections: [{ id: "a", kind: "assistant", title: "Agent", text: "Saved answer", status: "complete" }] }, subagents: [] };
@@ -77,10 +77,10 @@ test("공유 스냅샷은 요청한 대화·워크트리와 일치하고 최근 
   const fetchMock = stub(async () => Response.json({ id: "saved", worktreeId: "tree", text: "", truncated: false, snapshot: returned }));
   const client = new RuntimeClient(paths, snapshot());
   try {
-    // 같은 저장 record가 wire 경계에서도 상태를 유지한다.
+    // The same saved record retains state across wire boundaries.
     expect(expectOk(await client.previewHistory("tree", "saved")).snapshot).toEqual(saved);
 
-    // 잘못된 신원, 날짜와 과도한 본문은 명시적인 protocol 오류다.
+    // Wrong identity, dates, and oversized content return explicit protocol errors.
     for (const invalid of [{ ...saved, worktreeId: "other" }, { ...saved, state: { ...saved.state, conversationId: "other" } },
       { ...saved, updatedAt: 8640000000000001 },
       { ...saved, state: { ...saved.state, sections: Array.from({ length: 16 }, (_, index) => ({ ...saved.state.sections![0], id: `s${index}` })) } }]) {
@@ -89,8 +89,8 @@ test("공유 스냅샷은 요청한 대화·워크트리와 일치하고 최근 
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("구조화한 명령과 timeout은 미리보기 IPC로 보존하고 잘못된 타입·제한은 거절한다", async () => {
-  // 기존 필드를 그대로 둔 채 새 표시 메타데이터를 선택적으로 전달한다.
+test("Structured commands/timeouts survive preview IPC while invalid types/limits fail", async () => {
+  // New display metadata remains optional without changing existing fields.
   const section = { id: "tool", kind: "tool", title: "bash", text: "Arguments:\n{}\n\nResult:\nDone", status: "complete", command: "printf done", timeoutSeconds: 120 };
   let returned: unknown = section;
   const fetchMock = stub(async () => Response.json({ id: "saved", worktreeId: "tree", text: "", truncated: false, sections: [returned] }));
@@ -98,7 +98,7 @@ test("구조화한 명령과 timeout은 미리보기 IPC로 보존하고 잘못�
   try {
     const preview = expectOk(await client.previewHistory("tree", "saved"));
     expect(preview.sections?.[0]).toMatchObject({ command: "printf done", timeoutSeconds: 120 });
-    // 수치의 단위와 명령 미리보기의 크기를 보장하지 못하는 응답은 조용히 표시하지 않는다.
+    // Never silently display responses lacking valid units or bounded command previews.
     for (const invalid of [{ timeoutSeconds: 0 }, { timeoutSeconds: -1 }, { timeoutSeconds: "120" }, { command: "x".repeat(4097) }]) {
       returned = { ...section, ...invalid };
       expect(expectError(await client.previewHistory("tree", "saved")).code).toBe("PROTOCOL_ERROR");
@@ -108,7 +108,7 @@ test("구조화한 명령과 timeout은 미리보기 IPC로 보존하고 잘못�
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("요청 완료 정보는 미리보기 IPC로 보존하며 미완료·잘못된 시각은 거절한다", async () => {
+test("Completion metadata survives preview IPC while incomplete/invalid times fail", async () => {
   const completion = { startedAt: 1000000, completedAt: 1090000, durationMs: 90000, outcome: "complete" as const };
   let returned: unknown = completion;
   const fetchMock = stub(async () => Response.json({ id: "saved", worktreeId: "tree", text: "", truncated: false,
@@ -123,7 +123,7 @@ test("요청 완료 정보는 미리보기 IPC로 보존하며 미완료·잘못
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("닫힌 팝업의 목록 요청도 CANCELLED로 정리하고 다른 워크트리 목록을 거절한다", async () => {
+test("Closed-popup list requests return CANCELLED and reject other worktree lists", async () => {
   let pending = true;
   const fetchMock = stub(async (_input, options) => pending ? new Promise((_resolve, reject) => {
     options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
@@ -136,7 +136,7 @@ test("닫힌 팝업의 목록 요청도 CANCELLED로 정리하고 다른 워크�
   } finally { await client.disconnect(); fetchMock.mockRestore(); }
 });
 
-test("취소된 미리보기는 빈 성공이나 예외 대신 CANCELLED로 정리한다", async () => {
+test("Cancelled previews return CANCELLED rather than exceptions or empty success", async () => {
   const fetchMock = stub(async (_input, options) => new Promise((_resolve, reject) => {
     options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
   }));

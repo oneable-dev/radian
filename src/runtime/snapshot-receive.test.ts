@@ -13,7 +13,7 @@ function stubFetch(implementation:()=>Promise<Response>) {
   return spyOn(globalThis,"fetch").mockImplementation(Object.assign(implementation,{preconnect:fetch.preconnect}));
 }
 
-test("요청 요약이 없는 이전 snapshot과 실제 첨부 요약이 있는 새 snapshot을 함께 수신한다", () => {
+test("Receive legacy snapshots without summaries alongside new snapshots with attachment summaries", () => {
   const legacy = { id: "request", kind: "user" as const, title: "You", text: "Original full request", status: "complete" as const };
   const snapshot = { ...state(), details: { session: { status: "complete" as const, output: "", error: null, sections: [legacy] } } };
   expect(expectOk(parseSnapshot(snapshot)).details.session?.sections?.[0]?.request).toBeUndefined();
@@ -23,20 +23,20 @@ test("요청 요약이 없는 이전 snapshot과 실제 첨부 요약이 있는 
   expect(expectError(parseSnapshot({ ...snapshot, details: { session: { ...snapshot.details.session, sections: [{ ...legacy, request: { ...request, images: -1 } }] } } })).code).toBe("PROTOCOL_ERROR");
 });
 
-test("압축 활동 메타데이터는 이전 snapshot과 호환되고 알 수 없는 활동은 거부한다", () => {
-  // 기존 서비스에는 압축 활동 필드가 없으므로 필수 필드로 만들지 않는다.
+test("Compaction metadata stays backward-compatible and rejects unknown activities", () => {
+  // Existing services omit compaction activity, so fields remain optional.
   const legacy = { ...state(), details: { session: { status: "working", output: "", error: null } } };
   expect(expectOk(parseSnapshot(legacy)).details.session).not.toHaveProperty("activity");
 
-  // 새 서비스가 실제 압축 수명을 전달하면 IPC 파서가 이를 보존한다.
+  // IPC parsers preserve actual compaction lifetimes from new services.
   const current = { ...legacy, details: { session: { ...legacy.details.session, activity: "compacting" } } };
   expect(expectOk(parseSnapshot(current)).details.session).toHaveProperty("activity", "compacting");
 
-  // 잘못된 문자열은 UI가 임의로 추측하지 않도록 프로토콜 경계에서 거부한다.
+  // Reject invalid activity strings instead of letting UI guess.
   expect(expectError(parseSnapshot({ ...current, details: { session: { ...current.details.session, activity: "unknown" } } })).code).toBe("PROTOCOL_ERROR");
 });
 
-test("최초 HTTP snapshot도 여러 세션의 8MiB 이상 데이터를 온전히 읽는다",async()=>{
+test("Initial HTTP snapshots preserve multiple sessions exceeding 8 MiB",async()=>{
   const large:RuntimeSnapshot={...state(),details:Object.fromEntries(Array.from({length:4},(_,index)=>[`session-${index}`,{
     status:"complete",output:"",error:null,sections:[{id:`section-${index}`,kind:"assistant",title:"Agent",text:"x".repeat(2300000),status:"complete"}],
   }]))};
@@ -51,7 +51,7 @@ test("최초 HTTP snapshot도 여러 세션의 8MiB 이상 데이터를 온전�
   }finally{fetchMock.mockRestore();}
 });
 
-test("snapshot 전용 한도를 넘는 HTTP 응답은 본문을 버리고 프로토콜 오류로 거부한다",async()=>{
+test("HTTP snapshots beyond dedicated limits discard bodies and return protocol errors",async()=>{
   let cancelled=false;
   const fetchMock=stubFetch(async()=>new Response(new ReadableStream<Uint8Array>({
     start(controller){controller.enqueue(encoder.encode("{}"));},cancel(){cancelled=true;},
@@ -61,7 +61,7 @@ test("snapshot 전용 한도를 넘는 HTTP 응답은 본문을 버리고 프로
   }finally{fetchMock.mockRestore();}
 });
 
-test("Content-Length 없는 HTTP 응답도 실제 바이트로 제한하고 읽는 중인 스트림을 정리한다",async()=>{
+test("Responses without Content-Length enforce actual byte limits and clean active streams",async()=>{
   let cancelled=false;
   const response=new Response(new ReadableStream<Uint8Array>({start(controller){
     controller.enqueue(encoder.encode("1234567890"));controller.enqueue(encoder.encode("1234567890"));
@@ -69,7 +69,7 @@ test("Content-Length 없는 HTTP 응답도 실제 바이트로 제한하고 읽�
   expect(expectError(await readJson(response,{maximumBytes:16})).code).toBe("PROTOCOL_ERROR");expect(cancelled).toBe(true);
 });
 
-test("상태 수신 한도를 늘려도 8MiB를 넘는 명령을 보내거나 모델을 실행하지 않는다",async()=>{
+test("Larger snapshot limits never permit oversized commands or model execution",async()=>{
   const fetchMock=stubFetch(async()=>{throw new Error("Oversized command must not reach transport");});
   const client=new RuntimeClient(paths,state());
   try {
@@ -78,7 +78,7 @@ test("상태 수신 한도를 늘려도 8MiB를 넘는 명령을 보내거나 �
   }finally{await client.disconnect();fetchMock.mockRestore();}
 });
 
-test("손상된 UTF-8은 대체 문자로 바꾸지 않고 네트워크 오류와 내부 버그도 구별한다",async()=>{
+test("Invalid UTF-8 never becomes replacement characters and network failures differ from bugs",async()=>{
   expect(expectError(await readJson(new Response(Uint8Array.of(0xff)))).code).toBe("PROTOCOL_ERROR");
   const connection=Object.assign(new Error("fixture reset"),{code:"ECONNRESET"});
   const failed=(error:Error)=>new Response(new ReadableStream<Uint8Array>({start(controller){controller.error(error);}}));

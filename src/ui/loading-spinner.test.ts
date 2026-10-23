@@ -19,7 +19,7 @@ async function mount() {
   };
 }
 
-test("공통 스피너는 즉시 완료된 작업도 499ms에는 회전하고 500ms에 사라진다", async () => {
+test("Shared spinners still rotate at 499ms for immediate work and disappear at 500ms", async () => {
   // Completion may happen before the first paint; the indicator still needs a readable display interval.
   const app = await mount();
   try {
@@ -35,7 +35,7 @@ test("공통 스피너는 즉시 완료된 작업도 499ms에는 회전하고 50
   } finally { await app.dispose(); }
 });
 
-test("Fast 스피너는 고정 세 칸 안에서 노란 화살표를 오른쪽으로 순환시킨다", async () => {
+test("Fast spinners cycle yellow arrows rightward inside fixed three-cell slots", async () => {
   // Only priority work changes the shared spinner's presentation; normal loaders retain their frames.
   const app = await mount();
   try {
@@ -53,7 +53,7 @@ test("Fast 스피너는 고정 세 칸 안에서 노란 화살표를 오른쪽�
   } finally { await app.dispose(); }
 });
 
-test("일반·Fast 모드를 전환해도 최소 표시 시간과 취소 수명은 바꾸지 않는다", async () => {
+test("Normal/Fast transitions preserve minimum display duration and cancellation lifetime", async () => {
   // Changing animation style is not a new operation and cannot reset its 500ms visibility window.
   const app = await mount();
   try {
@@ -69,7 +69,7 @@ test("일반·Fast 모드를 전환해도 최소 표시 시간과 취소 수명�
   } finally { await app.dispose(); }
 });
 
-test("500ms보다 오래 걸린 작업은 완료 후 추가 대기 없이 스피너가 사라진다", async () => {
+test("Work exceeding 500ms hides spinners immediately on completion", async () => {
   // A minimum display interval is not an extra delay appended to every operation.
   const app = await mount();
   try {
@@ -82,7 +82,7 @@ test("500ms보다 오래 걸린 작업은 완료 후 추가 대기 없이 스피
   } finally { await app.dispose(); }
 });
 
-test("숨김 대기 중 새 작업이 시작되면 이전 타이머가 새 스피너를 지우지 않는다", async () => {
+test("New work during hide delays prevents old timers from clearing fresh spinners", async () => {
   // Two consecutive requests share the same view while the first indicator is still visible.
   const app = await mount();
   try {
@@ -98,7 +98,7 @@ test("숨김 대기 중 새 작업이 시작되면 이전 타이머가 새 스�
   } finally { await app.dispose(); }
 });
 
-test("완료 통지가 중복되어도 스피너의 최소 표시 시간을 불필요하게 늘리지 않는다", async () => {
+test("Duplicate completions never extend spinner minimums unnecessarily", async () => {
   // Multiple completion notifications must not create or extend a delayed-hide timer.
   const app = await mount();
   try {
@@ -110,7 +110,7 @@ test("완료 통지가 중복되어도 스피너의 최소 표시 시간을 불�
   } finally { await app.dispose(); }
 });
 
-test("화면을 떠날 때 취소하면 500ms를 기다리지 않고 숨기며 다음 작업은 다시 표시한다", async () => {
+test("Leaving screens cancels immediately without waiting 500ms and subsequent work displays again", async () => {
   // Visibility guarantees apply only while the owning screen remains visible.
   const app = await mount();
   try {
@@ -127,7 +127,7 @@ test("화면을 떠날 때 취소하면 500ms를 기다리지 않고 숨기며 �
 });
 
 for (const completed of [false, true]) {
-  test(`${completed ? "최소 표시 대기" : "작업 진행"} 중 부모 화면을 제거하면 스피너의 모든 타이머가 정리된다`, async () => {
+  test(`Removing parent screens during ${completed ? "minimum display waits" : "active work"} cleans all spinner timers`, async () => {
     // Shared components must clean up when their renderable parent is destroyed, without a host-specific hook.
     const app = await mount();
     try {
@@ -145,7 +145,7 @@ for (const completed of [false, true]) {
   });
 }
 
-test("서로 다른 UI의 스피너는 각자의 500ms 표시 시간을 독립적으로 지킨다", async () => {
+test("Independent UI spinners each honor their own 500ms minimum", async () => {
   // The shared policy must not couple independent screens or loading indicators through global state.
   const app = await mount();
   const second = new LoadingSpinner(app.renderer);
