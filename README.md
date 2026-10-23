@@ -19,8 +19,20 @@
 </p>
 
 <p align="center">
-  <a href="package.json"><img src="https://img.shields.io/badge/Bun-%E2%89%A51.4.3-E6C384?style=flat-square" alt="Bun ≥ 1.4.3"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-E6C384?style=flat-square" alt="MIT license"></a>
+  <a href="package.json">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/Bun-%E2%89%A51.4.3-6E7681?style=flat-square&amp;labelColor=30363D">
+      <source media="(prefers-color-scheme: light)" srcset="https://img.shields.io/badge/Bun-%E2%89%A51.4.3-D0D7DE?style=flat-square&amp;labelColor=EAEEF2">
+      <img src="https://img.shields.io/badge/Bun-%E2%89%A51.4.3-D0D7DE?style=flat-square&amp;labelColor=EAEEF2" alt="Bun ≥ 1.4.3">
+    </picture>
+  </a>
+  <a href="LICENSE">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/license-MIT-6E7681?style=flat-square&amp;labelColor=30363D">
+      <source media="(prefers-color-scheme: light)" srcset="https://img.shields.io/badge/license-MIT-D0D7DE?style=flat-square&amp;labelColor=EAEEF2">
+      <img src="https://img.shields.io/badge/license-MIT-D0D7DE?style=flat-square&amp;labelColor=EAEEF2" alt="MIT license">
+    </picture>
+  </a>
 </p>
 
 <!-- Release media: add a real Agent-view screenshot here, followed by a short
