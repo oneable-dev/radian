@@ -1,4 +1,6 @@
-<h1 align="center">radian</h1>
+<h1 align="center">
+  <img src="docs/assets/radian-banner.svg" alt="Radian" width="720" height="180">
+</h1>
 
 <p align="center">
   <strong>A keyboard-first AI workbench for your terminal.</strong><br>
