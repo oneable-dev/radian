@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import { InputRenderable, OptimizedBuffer } from "@opentui/core";
+import { InputRenderable, OptimizedBuffer, type ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock, setRendererCapabilities } from "@opentui/core/testing";
 import { icons } from "../icons.ts";
 import { Workbench, type WorkbenchActions } from "../app/ui/workbench.ts";
@@ -135,6 +135,85 @@ test("accounts 팝업 아래 GPT 아이콘은 같은 확대 크기를 유지하�
     expect(draw.mock.calls.at(-1)![0].raw().data).toEqual(pixels);
     expect(app.captureCharFrame().split("\n")[icon.y]).not.toContain(icons.openai); expect(app.sent).toEqual([]);
   } finally { draw.mockRestore(); Reflect.deleteProperty(app.renderer, "resolution"); await app.close(); }
+});
+
+test("계정 추가 목록은 내부 식별자 없이 표시 이름만 한 줄로 보여주고 원래 인증 방식으로 연결한다", async () => {
+  // 사용자에게 보이는 이름과 요청용 식별자가 다른 제공자를 준비한다.
+  const provider = { id: "openai-codex", name: "OpenAI Codex (legacy)", methods: [{ id: "api_key" as const, name: "API key" }, { id: "oauth" as const, name: "Sign in with ChatGPT" }] };
+  const calls: AccountRequest[] = [];
+  const app = await mount({ onAccountsRequest: async request => {
+    calls.push(request); return ok({ kind: "catalog", catalog: { ...catalog, providers: [provider], worktreeId: request.worktreeId } });
+  } });
+  try {
+    // 계정 추가에서 제공자를 고를 때 표시 이름과 호환성 표시는 유지한다.
+    await app.open(); app.mockInput.pressEnter(); await app.render();
+    expect(app.captureCharFrame()).toContain("OpenAI Codex (legacy)"); expect(app.captureCharFrame()).not.toContain("openai-codex");
+    expect(app.get("accounts-row:openai-codex").height).toBe(1);
+    app.mockInput.pressEnter(); await app.render();
+
+    // 인증 방식도 빈 보조 행이나 내부 값을 표시하지 않는다.
+    const frame = app.captureCharFrame(), key = app.get("accounts-row:api_key"), oauth = app.get("accounts-row:oauth");
+    expect(frame).toContain("API key"); expect(frame).toContain("Sign in with ChatGPT");
+    expect(frame).not.toContain("api_key"); expect(frame).not.toContain("oauth");
+    expect(key.height).toBe(1); expect(oauth.height).toBe(1); expect(oauth.y).toBe(key.y + 1);
+
+    // 표시를 줄여도 선택한 제공자와 인증 방식의 요청 식별자는 바뀌지 않는다.
+    app.mockInput.pressKey("n", { ctrl: true }); app.mockInput.pressEnter(); await app.render();
+    app.mockInput.pressEnter(); await app.render();
+    expect(calls.find(request => request.type === "login")).toMatchObject({ provider: "openai-codex", method: "oauth", label: "OpenAI Codex (legacy)" });
+    expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("계정 추가에서 Esc는 이름 입력·연결 방식·제공자 목록을 한 단계씩 돌아간다", async () => {
+  // 연결을 시작하기 전 선택 화면은 팝업을 닫지 않고 이전 단계로 돌아가야 한다.
+  const app = await mount();
+  try {
+    await app.open();
+    for (let i = 0; i < 3; i++) { app.mockInput.pressEnter(); await app.render(); }
+    await app.mockInput.typeText("Unsubmitted label"); await app.render();
+
+    // 이름 입력을 취소하면 현재 제공자의 연결 방식을 다시 고를 수 있다.
+    app.mockInput.pressEscape(); await app.render();
+    expect(app.captureCharFrame()).toContain("Add account · Fixture");
+    expect(app.captureCharFrame()).toContain("API key"); expect(app.get("accounts-input").visible).toBe(false);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-list");
+
+    // 연결 방식의 뒤로 가기는 첫 계정 화면이 아니라 제공자 목록으로 돌아간다.
+    app.mockInput.pressEscape(); await app.render();
+    expect(app.captureCharFrame()).toContain("Add account · provider"); expect(app.captureCharFrame()).toContain("Fixture");
+    expect(app.captureCharFrame()).not.toContain("Personal"); expect(app.get("accounts-picker").visible).toBe(true);
+    app.mockInput.pressEscape(); await app.render(); expect(app.captureCharFrame()).toContain("Fixture · Personal");
+
+    // 첫 화면에서만 창을 닫으며 취소한 이름으로 로그인하지 않는다.
+    app.mockInput.pressEscape(); await app.render();
+    expect(app.get("accounts-picker").visible).toBe(false); expect(app.renderer.currentFocusedRenderable).toBe(app.prompt);
+    expect(app.requests.some(request => request.type === "login")).toBe(false); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each([[120, 30], [60, 16]])("%dx%d의 한 줄 제공자 목록은 검색을 보존하며 반 화면의 후보를 이동한다", async (width, height) => {
+  // 전체 화면과 작은 화면 모두에서 스크롤이 필요한 제공자 목록을 준비한다.
+  const providers = Array.from({ length: 60 }, (_, index) => ({ id: `provider-${index}`, name: `Service ${index}`, methods: catalog.providers[0]!.methods }));
+  const app = await mount({ onAccountsRequest: async request => ok({ kind: "catalog", catalog: { ...catalog, providers, worktreeId: request.worktreeId } }) });
+  try {
+    app.resize(width, height); await app.render(); await app.open(); app.mockInput.pressEnter(); await app.render();
+    app.mockInput.pressKey("/"); await app.render(); await app.mockInput.typeText("Service"); await app.render();
+    const search = app.get("accounts-search") as InputRenderable, caret = search.cursorOffset;
+    const jump = Math.max(1, Math.floor((app.get("accounts-list") as ScrollBoxRenderable).viewport.height / 2));
+
+    // 검색 입력에서 후보를 움직인 뒤 반복 점프와 위로 이동을 결과 목록에서 이어간다.
+    app.mockInput.pressKey("n", { ctrl: true }); app.mockInput.pressKey("p", { ctrl: true });
+    app.mockInput.pressKey("d", { ctrl: true }); await app.render();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-list"); expect(search.value).toBe("Service"); expect(search.cursorOffset).toBe(caret);
+    app.mockInput.pressKey("d", { ctrl: true }); app.mockInput.pressKey("u", { ctrl: true });
+    app.mockInput.pressKey("j"); app.mockInput.pressKey("k"); app.mockInput.pressArrow("down"); app.mockInput.pressArrow("up");
+    app.mockInput.pressEnter(); await app.render();
+
+    // 빈 보조 행 기준이 아닌 실제 한 줄 후보의 절반만큼 이동한 제공자가 열린다.
+    expect(app.captureCharFrame()).toContain(`Add account · Service ${jump}`);
+    expect(app.requests.some(request => request.type === "login")).toBe(false); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
 });
 
 test("계정 검색은 Ctrl+N/P와 반 페이지 이동을 지원하고 검색어·커서를 보존한다", async () => {

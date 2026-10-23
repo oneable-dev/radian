@@ -174,11 +174,15 @@ export class AccountsPanel {
       : "No connected accounts. Choose Add account to sign in.", entries);
   }
   private providers(): void {
-    this.menu("providers", "Add account · provider", "Choose a service to sign in.", (this.catalog?.providers ?? []).map(provider => ({ id: provider.id, label: provider.name, detail: provider.id, choose: () => {
-      this.provider = provider; this.menu("methods", `Add account · ${singleLine(provider.name)}`, "Choose how to sign in. OAuth does not require a separate API key.", provider.methods.map(method => ({ id: method.id, label: method.name, detail: method.id, choose: () => {
-        this.method = method.id; this.menu("label", "Add account · name", "Enter a label for the shared account, or press Enter to use the provider name.", []);
-        this.search.field.visible = this.list.visible = false; this.input.visible = true; this.input.placeholder = "Account label"; this.input.maxLength = 128; this.input.focus();
-      } })));
+    this.menu("providers", "Add account · provider", "Choose a service to sign in.", (this.catalog?.providers ?? []).map(provider => ({
+      id: provider.id, label: provider.name, detail: "", choose: () => this.methods(provider),
+    })));
+  }
+  private methods(provider: AccountsCatalog["providers"][number]): void {
+    this.provider = provider;
+    this.menu("methods", `Add account · ${singleLine(provider.name)}`, "Choose how to sign in. OAuth does not require a separate API key.", provider.methods.map(method => ({ id: method.id, label: method.name, detail: "", choose: () => {
+      this.method = method.id; this.menu("label", "Add account · name", "Enter a label for the shared account, or press Enter to use the provider name.", []);
+      this.search.field.visible = this.list.visible = false; this.input.visible = true; this.input.placeholder = "Account label"; this.input.maxLength = 128; this.input.focus();
     } })));
   }
   private accept(login: LoginView): void {
@@ -233,7 +237,12 @@ export class AccountsPanel {
     if (this.stage === "login" && (this.secret.visible || this.input.visible)) { this.answer(this.secret.visible ? this.secret.value : this.input.value); return; }
     this.filtered[this.cursor]?.choose();
   }
-  private back(): void { if (this.stage === "accounts" || this.stage === "login" || this.busy) this.hide(); else this.main(); }
+  private back(): void {
+    if (this.stage === "accounts" || this.stage === "login" || this.busy) { this.hide(); return; }
+    if (this.stage === "methods") { this.providers(); return; }
+    if (this.stage === "label" && this.provider) { this.methods(this.provider); return; }
+    this.main();
+  }
   private remove(): void {
     const accountId = this.filtered[this.cursor]?.accountId, catalog = this.catalog, worktreeId = this.worktreeId;
     if (this.stage !== "accounts" || !accountId || !catalog || !worktreeId || this.busy) return;
@@ -256,17 +265,18 @@ export class AccountsPanel {
     const result = await (this.actions.copy?.(text) ?? this.clipboard.copy(text));
     if (this.visible && epoch === this.epoch) this.message.content = result.ok ? (code ? "Device code copied." : "Login URL copied.") : result.error.message;
   }
+  private get rowHeight(): number { return this.stage === "providers" || this.stage === "methods" ? 1 : 2; }
   private filter = (): void => {
     const matches = createTextMatcher(this.search.value), selected = this.filtered[this.cursor]?.id;
     this.filtered = this.candidates.filter(candidate => matches(`${candidate.label} ${candidate.detail}`)); this.cursor = Math.max(0, this.filtered.findIndex(candidate => candidate.id === selected));
     for (const row of this.rows) row.destroyRecursively(); this.rows.length = 0;
     this.filtered.forEach((candidate, index) => {
-      const row = new BoxRenderable(this.renderer, { id: `accounts-row:${candidate.id}`, height: 2, flexShrink: 0, flexDirection: "column", minWidth: 0,
+      const row = new BoxRenderable(this.renderer, { id: `accounts-row:${candidate.id}`, height: this.rowHeight, flexShrink: 0, flexDirection: "column", minWidth: 0,
         onMouseDown: event => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.cursor = index; this.list.focus(); this.paint(); } } });
       const label = new TextRenderable(this.renderer, { content: singleLine(candidate.label), height: 1, wrapMode: "none", selectable: false });
-      const detail = new TextRenderable(this.renderer, { content: singleLine(candidate.detail), height: 1, wrapMode: "none", selectable: false });
-      uiTheme(this.renderer).bindStyles(row, styles => { paintText(label, styles["ui.label"]); paintText(detail, styles["ui.muted"]); });
-      row.add(label); row.add(detail); this.rows.push(row); this.list.add(row);
+      const detail = this.rowHeight === 2 ? new TextRenderable(this.renderer, { content: singleLine(candidate.detail), height: 1, wrapMode: "none", selectable: false }) : undefined;
+      uiTheme(this.renderer).bindStyles(row, styles => { paintText(label, styles["ui.label"]); if (detail) paintText(detail, styles["ui.muted"]); });
+      row.add(label); if (detail) row.add(detail); this.rows.push(row); this.list.add(row);
     }); this.list.scrollTo(0); this.paint();
   };
   private paint(): void {
@@ -289,7 +299,7 @@ export class AccountsPanel {
     if (this.details.focused) { this.details.scrollBy(direction * (half ? halfPageStep(this.details.viewport.height) : 1)); return; }
     if (!this.list.visible || this.busy) return;
     if (command === "accounts.previous" || command === "accounts.next" || half) {
-      this.cursor = Math.max(0, Math.min(this.filtered.length - 1, this.cursor + direction * (half ? halfPageStep(this.list.viewport.height, 2) : 1))); this.paint();
+      this.cursor = Math.max(0, Math.min(this.filtered.length - 1, this.cursor + direction * (half ? halfPageStep(this.list.viewport.height, this.rowHeight) : 1))); this.paint();
     }
   }
   private keepFocus = (): void => {
