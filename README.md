@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="assets/radian-banner.svg" alt="Radian" width="720" height="180">
+  <img src="assets/radian-banner.png" alt="Radian" width="720" height="180">
 </h1>
 
 <p align="center">
