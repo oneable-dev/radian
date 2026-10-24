@@ -770,6 +770,36 @@ attached clients; new clients send explicit `new-tab` and `clear` actions. Finis
 restart the service explicitly when ready to upgrade.
 Neither automatic strategic-compaction suggestions nor a model-callable compaction tool is added.
 
+### Extension dialogs
+
+Configured Pi extensions can use `ctx.ui.input`, `select`, `confirm`, `notify` and `setStatus`
+through Radian's native UI. Main sessions advertise `ctx.mode === "rpc"`, not `"tui"`; owned
+subagents do not receive an interactive UI. This requires the additive `extension-ui` runtime
+capability. Finish existing jobs and explicitly restart an older service to enable it.
+
+Dialogs belong to the originating session and conversation. Select that session to answer; another
+open popup temporarily takes precedence. **Enter** explicitly submits input or a choice, and
+**Esc** cancels without touching the Agent draft. Confirmation starts on **No**. Searchable choices
+support **Ctrl+N/P** and arrows in either focus, **j/k** in results, **Ctrl+D/U** candidate jumps,
+and **Ctrl+C** query clearing. Tab moves between the body, search/results and input. The body can
+scroll independently. All actions use the shared configurable `extension.*` commands.
+
+For a configured `pi-mcp-adapter`, use **`/mcp-auth <server>`** to reuse its existing OAuth flow,
+credential store and reconnect behavior. The dialog displays the authorization URL and accepts the
+callback URL. `extension.browser` and `extension.copy-url` open/copy the displayed URL; use Help or
+the contextual hints for their configured keys. No MCP authentication is implemented separately.
+The adapter's no-argument `/mcp-auth` picker requires Pi's custom terminal UI; use an explicit server
+name in Radian. Pi custom components and extension multiline editors are not hosted and fail
+explicitly; terminal decorations/editor replacement keep their non-interactive SDK behavior.
+
+Command admission can complete before a dialog is answered; it does not imply authentication has
+finished. Responses use a separate instance-, session- and conversation-fenced operation. Dialogs
+expire after the requested timeout, capped at ten minutes (also the default), and cancel on interrupt,
+close or last-client disconnect. Cancelling a wait does not prove that a remote action was rolled back.
+Dialog state, callback answers, extension notifications and statuses are transient: Radian does not
+add them to Agent drafts, model messages, session snapshots on disk or logs. Trusted extensions still
+control their own storage and logging; an extension can explicitly persist or echo its inputs.
+
 ### Agent input status
 
 A passive row below and outside the prompt box, with one blank row above and below it, shows the

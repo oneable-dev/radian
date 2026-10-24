@@ -28,6 +28,7 @@ import type { AccountManager } from "../accounts/manager.ts";
 import { parseAccountsCommand } from "../accounts/model.ts";
 import { bindAccountSession } from "../accounts/session.ts";
 import { sessionResourceLoader } from "./resource-loader.ts";
+import { ExtensionUiBridge, type ExtensionUiResponse } from "./extension-ui.ts";
 
 type QueuedUserMessage = Extract<ReturnType<AgentSession["agent"]["peekQueuedMessages"]>[number], { role: "user" }>;
 
@@ -87,13 +88,15 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       if (options.streamFn) session.agent.streamFunction = options.streamFn;
       const diagnostics = new CommandDiagnostics();
       const unsupportedSessionAction = async (): Promise<never> => { throw new CapabilityError("Pi session replacement/reload is not hosted here. Use Radian's session controls instead."); };
-      await session.bindExtensions({ onError: diagnostics.report, commandContextActions: {
+      const ui = context.role === "main" ? new ExtensionUiBridge(session.extensionRunner.getUIContext()) : undefined;
+      await session.bindExtensions({ ...(ui ? { uiContext: ui.context, mode: "rpc" as const } : {}), onError: diagnostics.report, commandContextActions: {
         waitForIdle: () => session.waitForIdle(), newSession: unsupportedSessionAction, fork: unsupportedSessionAction,
         switchSession: unsupportedSessionAction, navigateTree: unsupportedSessionAction, reload: unsupportedSessionAction,
       } });
       executor = new PiSessionExecutor(session, workspace?.usage ?? options.usageMonitor, diagnostics, fast, options.imageLoader, compaction,
         () => settingsManager.applyOverrides({ ...options.settings, cacheWarming: "off" }), releaseAccounts,
-        options.accounts ? signal => options.accounts!.refreshModels(worktreeId, signal) : undefined);
+        options.accounts ? signal => options.accounts!.refreshModels(worktreeId, signal) : undefined, ui);
+      executor.setUiActive(context.isUiActive?.() ?? false);
       adopted = true;
       return executor;
     }, async () => { if (!adopted) { session.dispose(); releaseAccounts(); } });
@@ -133,6 +136,7 @@ export class PiSessionExecutor implements SessionExecutor {
   private disposed = false;
   private controlling = false;
   private resourceRevision = 0;
+  private uiActive = false;
   private commandCatalog: ReturnType<typeof sessionCommands>;
   private modelSelectionSnapshot: { current: ModelCatalog["current"]; effort: ModelEffort; telemetry: NonNullable<ExecutionState["telemetry"]> } | undefined;
   private compacting = false;
@@ -145,7 +149,7 @@ export class PiSessionExecutor implements SessionExecutor {
   private request: RequestSummary | undefined;
   private result: SessionResult | undefined;
 
-  constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode, private readonly imageLoader = loadPromptImages, private readonly compaction = new ManualCompaction(), private readonly reloadSettings: () => void = () => {}, private readonly releaseAccounts: () => void = () => {}, private readonly refreshAccountModels?: (signal?: AbortSignal) => Promise<Result<void, ExpectedError>>) {
+  constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode, private readonly imageLoader = loadPromptImages, private readonly compaction = new ManualCompaction(), private readonly reloadSettings: () => void = () => {}, private readonly releaseAccounts: () => void = () => {}, private readonly refreshAccountModels?: (signal?: AbortSignal) => Promise<Result<void, ExpectedError>>, private readonly ui?: ExtensionUiBridge) {
     this.status = this.finalStatus(false);
     this.commandCatalog = sessionCommands(session);
     this.transcript = new SessionTranscript(session.sessionManager.getBranch());
@@ -155,7 +159,9 @@ export class PiSessionExecutor implements SessionExecutor {
     const completion = sections.slice(Math.max(0, requestIndex)).findLast(section => section.completion)?.completion;
     if (completion) this.result = { id: crypto.randomUUID(), outcome: completion.outcome, completedAt: completion.completedAt, ...(this.request ? { request: this.request } : {}) };
     this.telemetry = new PiSessionTelemetry(session, () => this.emit(), usage, fast);
-    this.unsubscribe = session.subscribe((event) => this.handleEvent(event));
+    const stopUi = ui?.subscribe(() => this.emit());
+    const stopSession = session.subscribe((event) => this.handleEvent(event));
+    this.unsubscribe = () => { stopUi?.(); stopSession(); };
   }
 
   credentialsChanged(provider: string): void {
@@ -163,6 +169,11 @@ export class PiSessionExecutor implements SessionExecutor {
     this.telemetry.invalidateAccount(); this.emit();
   }
   commands() { return this.commandCatalog; }
+  get extensionUi() { return this.ui?.state; }
+  setUiActive(active: boolean): void { this.uiActive = active; this.ui?.setActive(active && !this.interrupting && !this.closing); }
+  answerExtensionUi(response: ExtensionUiResponse): Result<void, ExpectedError> {
+    return this.ui ? this.ui.answer(response) : err(new CapabilityError("This session does not host extension dialogs."));
+  }
   imageData(id: string) { return this.transcript.imageData(id); }
 
   async models(signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>> {
@@ -290,6 +301,7 @@ export class PiSessionExecutor implements SessionExecutor {
     const previousSettingsErrors = this.session.settingsManager.drainErrors();
     if (previousSettingsErrors.length) console.warn("[radian:settings] Earlier settings errors", previousSettingsErrors);
     this.controlling = true;
+    this.ui?.clear();
     const reported: ExtensionError[] = [];
     const stopReporting = this.diagnostics.observe(error => reported.push(error));
     const task = (async (): Promise<Result<void, ExpectedError>> => {
@@ -370,6 +382,11 @@ export class PiSessionExecutor implements SessionExecutor {
       }
       const command = registered ? this.diagnostics.begin(name) : undefined;
       let handled = false;
+      let accepted = false;
+      const accept = () => { if (!accepted && !command?.failure) { accepted = true; onAccepted?.(); } };
+      // A dialog proves the command was accepted, but admission stays serialized
+      // until its handler finishes. The client answers through a separate operation.
+      const stopDialog = command ? this.ui?.onDialog(accept) : undefined;
       // Admission, commands and handled input are not model runs. Only SDK work
       // events may publish working, including work started by an extension.
       const result = await withCleanup(() => capture(() => this.session.prompt(text, {
@@ -378,10 +395,16 @@ export class PiSessionExecutor implements SessionExecutor {
         ...(images.length ? { images: [...images] } : {}),
         preflightResult: (disposition) => {
           handled = disposition === "handled";
-          admitted.resolve(); if (!command?.failure) onAccepted?.();
+          admitted.resolve(); accept();
         },
-      })), async () => { if (command) this.diagnostics.end(command); });
-      if (command?.failure) return err(new AgentRunError(`Command /${name} failed: ${command.failure.error}. It may have changed state; inspect before retrying.`, { cause: command.failure }));
+      })), async () => { stopDialog?.(); if (command) this.diagnostics.end(command); });
+      if (command?.failure) {
+        this.ui?.cancelDialogs();
+        const error = new AgentRunError(`Command /${name} failed${accepted ? "." : `: ${command.failure.error}.`} It may have changed state; inspect before retrying.`, { cause: command.failure });
+        // Do not copy arbitrary extension error text (possibly containing credentials) into UI state.
+        if (accepted) this.ui?.context.notify(error.message, "error");
+        return err(error);
+      }
       if (!result.ok) {
         if (!this.closing) { this.status = "failure"; this.error = result.error.message; }
         return result;
@@ -412,6 +435,7 @@ export class PiSessionExecutor implements SessionExecutor {
     if (this.closing || this.disposed) return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
     if (this.interruptTask) { onAccepted?.(); return this.interruptTask; }
     this.interrupting = true; this.inputRevision++;
+    this.ui?.setActive(false);
     const admission = this.admission, runs = [...this.runs];
     this.interruptedMessages = this.queuedMessages();
     this.session.clearQueue(); this.session.abortBash();
@@ -443,7 +467,7 @@ export class PiSessionExecutor implements SessionExecutor {
         else reportUnexpected(error, "resumed agent execution");
       });
       return accepted.promise;
-    })().finally(() => { this.interrupting = false; this.interruptTask = undefined; this.emit(); });
+    })().finally(() => { this.interrupting = false; this.interruptTask = undefined; this.ui?.setActive(this.uiActive && !this.closing); this.emit(); });
     this.interruptTask = task; this.emit(); return task;
   }
 
@@ -457,6 +481,7 @@ export class PiSessionExecutor implements SessionExecutor {
     if (this.disposed) return Promise.resolve(ok(undefined));
     if (this.closeTask) return this.closeTask;
     this.closing = true;
+    this.ui?.dispose();
     const task = capture(async () => {
       this.session.clearQueue(); this.session.abortBash();
       // Commands may be waiting for this run to become idle; abort before waiting for their admission.

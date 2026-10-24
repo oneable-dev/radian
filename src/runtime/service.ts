@@ -93,7 +93,7 @@ export class WorkspaceRuntime {
   }
 
   subscribe(listener: () => void): () => void { this.subscribers.add(listener); return () => this.subscribers.delete(listener); }
-  setObserved(active: boolean): void { this.accounts?.setActive(active, this.instance); }
+  setObserved(active: boolean): void { this.accounts?.setActive(active, this.instance); this.registry.setUiActive(active); }
 
   startRetention(): void {
     let configuredFile = this.configPath, retentionDays: number | null = 30;
@@ -177,9 +177,10 @@ export class WorkspaceRuntime {
   get snapshot(): RuntimeSnapshot {
     const repositories = this.repositories;
     const details = Object.fromEntries([...this.registry.records, ...this.failedRecovery.values()].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["shared-daemon", "repository-runtime", "history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "terminal-copy-mode", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "session-exit", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention", "agent-dashboard", "accounts"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["shared-daemon", "repository-runtime", "history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "terminal-copy-mode", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "session-exit", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention", "agent-dashboard", "accounts", "extension-ui"], repositoryId: this.repositoryId,
       ...(this.retentionStatus ? { sessionRetention: this.retentionStatus } : {}),
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
+      extensionUi: this.registry.extensionUi,
       preferences: this.preferences, notice: this.persistenceError || [this.accounts?.warning, this.discoveryWarning, this.retentionWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
   }
@@ -270,12 +271,13 @@ export class WorkspaceRuntime {
       const text = await request.text();
       if (Buffer.byteLength(text) > maxFrameBytes) return this.rejected(new InputError("Command is too large."));
       const command = parseCommand(text); if (!command.ok) return this.rejected(command.error);
+      if (command.value.type === "extension-ui-response" && expectedInstance !== this.instance) return this.rejected(new ProtocolError("Extension answers require the current runtime instance identity."));
       if (this.stopped) return this.rejected(new SessionError("RUNTIME_STOPPING", "Runtime is stopping."));
       const result = await this.command(command.value);
       if (!result.ok) return this.rejected(result.error);
       // Commands above have already been accepted. A checkpoint failure is NOT a rejected action.
       // Keystrokes/resize affect the live editor only, never the manifest or a replay log.
-      const transient = ["editor-input", "editor-resize", "editor-detach", "terminal-input", "terminal-resize", "terminal-scroll", "terminal-read", "terminal-detach"].includes(command.value.type);
+      const transient = ["extension-ui-response", "editor-input", "editor-resize", "editor-detach", "terminal-input", "terminal-resize", "terminal-scroll", "terminal-read", "terminal-detach"].includes(command.value.type);
       const checkpoint = transient ? ok(undefined) : await this.checkpoint();
       return Response.json({ ok: true, value: result.value, ...(!checkpoint.ok ? { warnings: [wireError(checkpoint.error)] } : {}) });
     } catch (error) {
@@ -292,6 +294,10 @@ export class WorkspaceRuntime {
 
   private async command(command: RuntimeCommand): Promise<Result<string | null, ExpectedError>> {
     switch (command.type) {
+      case "extension-ui-response": {
+        const answered = this.registry.answerExtensionUi(command.sessionId, command.conversationId, command.response);
+        return answered.ok ? ok(null) : answered;
+      }
       case "create": {
         return this.registry.create(command.worktreeId);
       }

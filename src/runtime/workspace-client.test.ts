@@ -51,6 +51,26 @@ async function isolated(run: (directory: string) => Promise<void>): Promise<void
   finally { await rm(directory, { recursive: true, force: true }); }
 }
 
+test("Extension UI aggregates connected repositories and routes answers only to the owning session", () => isolated(async stateRoot => {
+  // UI requests are repository-scoped even when the workspace combines multiple services.
+  const a = repo("a"), b = repo("b"), pa = peer(a), pb = peer(b), answered: string[] = [];
+  pa.client.answerExtensionUi = async id => { answered.push(id); return ok(undefined); };
+  pb.client.answerExtensionUi = async () => { throw new Error("Wrong repository received an extension answer"); };
+  const workspace = expectOk(await WorkspaceClient.open([a, b], a.worktrees[0]!.path, { stateRoot }, async repository => ok(repository.id === a.id ? pa.client : pb.client)));
+  try {
+    const session = expectOk(await workspace.create("a"));
+    pa.update({ ...pa.client.snapshot, extensionUi: [{ sessionId: session, conversationId: "conversation", notifications: [], statuses: {}, dialog: { id: "request", kind: "input", title: "Callback" } }] });
+
+    expect(workspace.snapshot.extensionUi?.[0]?.dialog?.id).toBe("request");
+    expectOk(await workspace.answerExtensionUi(session, "conversation", { requestId: "request", value: "answer" }));
+    expect(expectError(await workspace.answerExtensionUi("foreign-session", "conversation", { requestId: "request", cancelled: true })).code).toBe("SESSION_NOT_OPEN");
+    pa.connection(false);
+
+    expect(answered).toEqual([session]); expect(workspace.snapshot.extensionUi).toEqual([]);
+    expect(pb.calls).toEqual([]);
+  } finally { await workspace.disconnect(); }
+}));
+
 test("Dashboards aggregate all/selected projects and distinguish partial unsupported services from cancellation", () => isolated(async (stateRoot) => {
   // Repository usage can combine, but lookup failures must not become zero.
   const a = repo("a"), b = repo("b"), pa = peer(a), pb = peer(b), queried: string[] = [];

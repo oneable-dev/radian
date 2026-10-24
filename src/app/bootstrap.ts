@@ -220,6 +220,8 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
         getMonitoringNotice: () => client.attentionNotice,
         onComplete: completions!.provider,
         onAccountsRequest: (request, signal) => client.accounts(request, signal),
+        getExtensionUi: () => client.snapshot.extensionUi ?? [],
+        onExtensionUiResponse: (id, conversation, response) => client.answerExtensionUi(id, conversation, response),
         onListModels: (id, conversationId, signal) => client.models(id, conversationId, signal),
         onSelectModel: (id, conversationId, model, effort) => client.selectModel(id, conversationId, model, effort),
         onImage: (id, imageId, signal) => client.image(id, imageId, signal),

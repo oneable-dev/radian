@@ -18,6 +18,7 @@ import { dashboardCommand, parseDashboardCommand } from "./dashboard-command.ts"
 import { accountsCommand, parseAccountsCommand } from "../accounts/model.ts";
 import { needsAttention, type SessionResult } from "./session-attention.ts";
 import { sessionRecordKey, type SessionLifecycle, type SessionSnapshotInfo } from "./session-snapshot.ts";
+import type { ExtensionUiState, ExtensionUiResponse, SessionExtensionUi } from "./extension-ui.ts";
 
 export type ExecutionState = { readonly conversationId?: string; readonly resourceRevision?: number; readonly status: AgentStatus | null; readonly activity?: "compacting"; readonly output: string; readonly error: string | null;
   readonly sections?: readonly TranscriptSection[]; readonly telemetry?: SessionTelemetry;
@@ -27,6 +28,9 @@ export type SessionExecutor = {
   readonly savedSessionId: string;
   readonly sessionFile: string | undefined;
   readonly state: ExecutionState;
+  readonly extensionUi?: ExtensionUiState | undefined;
+  answerExtensionUi?(response: ExtensionUiResponse): Result<void, ExpectedError>;
+  setUiActive?(active: boolean): void;
   commands?(): readonly CompletionItem[];
   reload?(): Promise<Result<void, ExpectedError>>;
   models?(signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>>;
@@ -49,6 +53,7 @@ export type SessionContext = {
   readonly previousSessionFile?: string;
   readonly startReason?: "new";
   readonly role: "main" | "subagent";
+  isUiActive?: () => boolean;
   spawnSubagent(name: string, task: string, signal?: AbortSignal): Promise<Result<string, ExpectedError>>;
 };
 export type SessionRecord = {
@@ -79,8 +84,27 @@ export class SessionRegistry {
   private readonly fileOwners = new Map<string, string>();
   private readonly retired = new Map<string, SessionRecord>();
   private shuttingDown = false;
+  private uiActive = false;
   private readonly replacements = new Set<Promise<Result<void, ExpectedError>>>();
   constructor(private readonly repositories: RepositorySource, private readonly factory: SessionFactory) {}
+
+  setUiActive(active: boolean): void {
+    this.uiActive = active;
+    for (const entry of this.entries.values()) entry.executor?.setUiActive?.(active);
+  }
+  get extensionUi(): SessionExtensionUi[] {
+    return [...this.entries.values()].flatMap(entry => {
+      const state = entry.phase === "open" ? entry.executor?.extensionUi : undefined;
+      return state && (state.dialog || state.notifications.length || Object.keys(state.statuses).length)
+        ? [{ sessionId: entry.id, conversationId: entry.executor!.savedSessionId, ...state }] : [];
+    });
+  }
+  answerExtensionUi(id: string, conversationId: string, response: ExtensionUiResponse): Result<void, ExpectedError> {
+    const selected = this.requireOpen(id); if (!selected.ok) return selected;
+    const entry = selected.value;
+    if (entry.replacing || entry.executor?.savedSessionId !== conversationId) return err(new SessionError("SESSION_CONFLICT", "This tab changed conversations. No extension answer was delivered."));
+    return entry.executor?.answerExtensionUi?.(response) ?? err(new CapabilityError("This session does not host extension dialogs."));
+  }
 
   get retainedWorktreeIds(): ReadonlySet<string> { return new Set([...this.entries.values()].map((entry) => entry.worktree.id)); }
 
@@ -234,7 +258,7 @@ export class SessionRegistry {
     if (this.entries.has(id)) return err(new SessionError("SESSION_CONFLICT", "This open-session ID already exists."));
     if (requestedFile) this.fileOwners.set(requestedFile, id);
     const generation = crypto.randomUUID();
-    const ready = capture(() => this.factory({ cwd: worktree.path, worktreeId: worktree.id, role: "main", ...(requestedFile ? { sessionFile: requestedFile } : {}),
+    const ready = capture(() => this.factory({ cwd: worktree.path, worktreeId: worktree.id, role: "main", isUiActive: () => this.uiActive, ...(requestedFile ? { sessionFile: requestedFile } : {}),
       spawnSubagent: (name, task, signal) => this.spawnSubagent(id, name, task, signal, generation) }));
     const entry: OpenExecution = { id, name: identity?.name ?? `Session ${id.slice(0, 8)}`, role: "main", worktree, ready, generation,
       phase: "creating", children: new Map(), managed: identity?.managed ?? !requestedFile, ...(requestedFile ? { fileKey: requestedFile } : {}) };
@@ -398,7 +422,7 @@ export class SessionRegistry {
     if (this.shuttingDown || previous.phase !== "open") return err(new CancelledError("Session replacement was cancelled by shutdown."));
     const generation = crypto.randomUUID();
     const previousSessionFile = previous.executor?.sessionFile;
-    const ready = capture(() => this.factory({ cwd: previous.worktree.path, worktreeId: previous.worktree.id, role: "main", startReason: "new", ...(previousSessionFile ? { previousSessionFile } : {}),
+    const ready = capture(() => this.factory({ cwd: previous.worktree.path, worktreeId: previous.worktree.id, role: "main", isUiActive: () => this.uiActive, startReason: "new", ...(previousSessionFile ? { previousSessionFile } : {}),
       spawnSubagent: (name, task, signal) => this.spawnSubagent(previous.id, name, task, signal, generation) }));
     const created = await ready; if (!created.ok) return created;
     const next = created.value;

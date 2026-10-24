@@ -1,0 +1,154 @@
+import { expect, test } from "bun:test";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { SessionRegistry } from "./session-registry.ts";
+import { piSessionFactory } from "./pi-session-adapter.ts";
+import { offlineRuntime } from "../testing/offline-runtime.ts";
+import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
+import { expectError, expectOk } from "../testing/results.ts";
+
+async function fixture(handler: string) {
+  const files = await createWorktreeFixture();
+  const agent = join(files.directory, "agent"), extensions = join(agent, "extensions"); await mkdir(extensions, { recursive: true });
+  await writeFile(join(extensions, "ui.ts"), `export default function(pi) {
+    pi.registerCommand("ui-fixture", { handler: async (_args, ctx) => { ${handler} } });
+  }`);
+  const options = await offlineRuntime(agent); let models = 0;
+  const registry = new SessionRegistry([files.repository], piSessionFactory({ ...options, streamFn: (...args) => { models++; return options.streamFn!(...args); } }));
+  registry.setUiActive(true);
+  const id = expectOk(await registry.create(files.repository.worktrees[0]!.id));
+  const conversation = registry.details(id)!.conversationId!;
+  const current = () => registry.extensionUi.find(state => state.sessionId === id);
+  const waitFor = (predicate: () => boolean) => {
+    if (predicate()) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => { unsubscribe(); reject(new Error("Extension UI condition timed out")); }, 2000);
+      const unsubscribe = registry.subscribe(() => { if (predicate()) { clearTimeout(timer); unsubscribe(); resolve(); } });
+    });
+  };
+  return { ...files, registry, id, conversation, current, waitFor, models: () => models,
+    answer: (response: Parameters<SessionRegistry["answerExtensionUi"]>[2]) => registry.answerExtensionUi(id, conversation, response),
+    async cleanup() { await registry.shutdown(); await files.cleanup(); } };
+}
+
+test("SDK commands admit interactive dialogs early and return select, confirm and input answers without model work", async () => {
+  // Only the extension handles synthetic credentials; it never stores or echoes them.
+  const app = await fixture(`
+    if (!ctx.hasUI || ctx.mode !== "rpc") throw new Error("Expected hosted RPC UI");
+    const selected = await ctx.ui.select("Choose a server", ["one", "two"]);
+    const confirmed = await ctx.ui.confirm("Authorize", "Allow access?");
+    const answer = await ctx.ui.input("Callback https://example.test/auth", "Paste callback");
+    ctx.ui.notify(selected === "two" && confirmed && answer === "private-callback-fixture" ? "Expected answers received" : "Wrong answers", "info");
+    ctx.ui.setStatus("fixture", "Ready");
+  `);
+  try {
+    expectOk(await app.registry.prompt(app.id, "read"));
+    const before = app.registry.details(app.id)?.sections, modelCalls = app.models();
+    const accepted = Promise.withResolvers<void>(); let complete = false;
+    const run = app.registry.prompt(app.id, "/ui-fixture", () => accepted.resolve()).then(result => { complete = true; return result; });
+    await accepted.promise;
+    expect(complete).toBe(false);
+    expect(app.current()?.dialog?.kind).toBe("select");
+
+    // Answers travel to the existing handler rather than becoming new Agent messages.
+    expectOk(app.answer({ requestId: app.current()!.dialog!.id, value: "two" }));
+    await app.waitFor(() => app.current()?.dialog?.kind === "confirm");
+    expectOk(app.answer({ requestId: app.current()!.dialog!.id, confirmed: true }));
+    await app.waitFor(() => app.current()?.dialog?.kind === "input");
+    expectOk(app.answer({ requestId: app.current()!.dialog!.id, value: "private-callback-fixture" }));
+    expectOk(await run);
+
+    // Live UI state is deliberately absent from checkpoint records and SDK history.
+    expect(app.current()?.notifications.at(-1)?.message).toBe("Expected answers received");
+    expect(app.current()?.statuses).toEqual({ fixture: "Ready" }); expect(app.models()).toBe(modelCalls);
+    expect(app.registry.details(app.id)?.sections).toEqual(before);
+    expect(JSON.stringify(app.registry.checkpointRecords)).not.toContain("https://example.test/auth");
+    const history = await readFile(app.registry.sessionFile(app.id)!, "utf8");
+    expect(history).not.toContain("private-callback-fixture"); expect(history).not.toContain("https://example.test/auth");
+  } finally { await app.cleanup(); }
+});
+
+test("Extension responses reject stale conversations, invalid choices and duplicate answers while queuing dialogs", async () => {
+  // Concurrent requests must have independent identities even within the same command.
+  const app = await fixture(`await Promise.all([ctx.ui.select("First", ["allowed"]), ctx.ui.confirm("Second", "Continue?")]);`);
+  try {
+    const run = app.registry.prompt(app.id, "/ui-fixture"); await app.waitFor(() => !!app.current()?.dialog);
+    const requestId = app.current()!.dialog!.id;
+
+    // Rejected responses must leave the original prompt pending.
+    expect(expectError(app.registry.answerExtensionUi(app.id, "old", { requestId, value: "allowed" })).code).toBe("SESSION_CONFLICT");
+    expect(expectError(app.answer({ requestId, value: "not-allowed" })).code).toBe("INVALID_INPUT");
+    expect(expectError(app.answer({ requestId, confirmed: true })).code).toBe("INVALID_INPUT");
+    expect(app.current()?.dialog?.id).toBe(requestId);
+    expectOk(app.answer({ requestId, value: "allowed" }));
+    expect(expectError(app.answer({ requestId, value: "allowed" })).code).toBe("SESSION_CONFLICT");
+    expect(app.current()?.dialog?.kind).toBe("confirm");
+    expectOk(app.answer({ requestId: app.current()!.dialog!.id, cancelled: true }));
+
+    expectOk(await run); expect(app.current()?.dialog).toBeUndefined(); expect(app.models()).toBe(0);
+  } finally { await app.cleanup(); }
+});
+
+test.each(["interrupt", "detach", "close"] as const)("%s cancels extension waits and does not leave sequential dialogs hanging", async action => {
+  // A cancelled command may still execute cleanup that calls another UI method.
+  const app = await fixture(`await ctx.ui.input("First"); await ctx.ui.input("Cleanup prompt");`);
+  try {
+    const run = app.registry.prompt(app.id, "/ui-fixture"); await app.waitFor(() => !!app.current()?.dialog);
+
+    if (action === "interrupt") expectOk(await app.registry.interrupt(app.id));
+    else if (action === "close") expectOk(await app.registry.close(app.id));
+    else app.registry.setUiActive(false);
+    await run;
+
+    expect(app.current()?.dialog).toBeUndefined(); expect(app.models()).toBe(0);
+  } finally { await app.cleanup(); }
+});
+
+test("Extension dialog timeouts return cancellation instead of retaining pending state", async () => {
+  // The SDK timeout contract also covers dialogs with an immediate deadline.
+  const app = await fixture(`const answer = await ctx.ui.input("Timed prompt", undefined, { timeout: 0 }); ctx.ui.notify(answer === undefined ? "Cancelled" : "Unexpected answer");`);
+  try {
+    expectOk(await app.registry.prompt(app.id, "/ui-fixture"));
+
+    expect(app.current()?.dialog).toBeUndefined(); expect(app.current()?.notifications.at(-1)?.message).toBe("Cancelled");
+    expect(app.models()).toBe(0);
+  } finally { await app.cleanup(); }
+});
+
+test("Command failures after dialog admission remain visible without echoing entered credentials", async () => {
+  // Once admission has returned, a later SDK failure needs a separate UI notification.
+  const app = await fixture(`const secret = await ctx.ui.input("Callback"); throw new Error("Failure with " + secret);`);
+  try {
+    const accepted = Promise.withResolvers<void>();
+    const run = app.registry.prompt(app.id, "/ui-fixture", () => accepted.resolve()); await accepted.promise;
+
+    expectOk(app.answer({ requestId: app.current()!.dialog!.id, value: "private-error-callback" }));
+    const failure = expectError(await run);
+
+    expect(failure.code).toBe("AGENT_FAILED"); expect(failure.message).not.toContain("private-error-callback");
+    expect(app.current()?.notifications.at(-1)?.level).toBe("error");
+    expect(JSON.stringify(app.registry.extensionUi)).not.toContain("private-error-callback");
+  } finally { await app.cleanup(); }
+});
+
+test("Failed commands retract abandoned dialogs instead of accepting answers for a finished handler", async () => {
+  // An extension can fail after opening a dialog without awaiting its result.
+  const app = await fixture(`void ctx.ui.input("Abandoned callback"); throw new Error("Fixture failure");`);
+  try {
+    const failure = expectError(await app.registry.prompt(app.id, "/ui-fixture"));
+
+    expect(failure.code).toBe("AGENT_FAILED"); expect(app.current()?.dialog).toBeUndefined();
+    expect(app.current()?.notifications.at(-1)?.level).toBe("error");
+  } finally { await app.cleanup(); }
+});
+
+test("Pi custom terminal components fail explicitly without pretending that Radian is a Pi TUI", async () => {
+  // Unsupported UI must not look like a successful but invisible command.
+  const app = await fixture(`await ctx.ui.custom(() => { throw new Error("Should not render"); });`);
+  try {
+    const failure = expectError(await app.registry.prompt(app.id, "/ui-fixture"));
+
+    expect(failure.code).toBe("AGENT_FAILED"); expect(failure.message).toContain("custom terminal UI");
+    expect(app.models()).toBe(0); expect(app.current()?.dialog).toBeUndefined();
+  } finally { await app.cleanup(); }
+});

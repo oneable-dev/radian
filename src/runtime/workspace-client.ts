@@ -10,12 +10,12 @@ import { runtimePaths, RuntimeStore } from "./storage.ts";
 import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
 
 // Repository-scoped channels share a daemon process; identity fencing and PTY leases stay local.
-export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "newTab" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "activate" | "image" | "models" | "selectModel" | "catalog" | "acknowledge" | "dashboard" | "accounts">>;
+export type RepositoryClient = Pick<RuntimeClient, "snapshot" | "connected" | "subscribe" | "create" | "newTab" | "prompt" | "interrupt" | "complete" | "closeSession" | "listHistory" | "previewHistory" | "resume" | "savePreferences" | "openEditor" | "attachEditor" | "createTerminal" | "attachTerminal" | "closeTerminal" | "beginDetach" | "disconnect"> & Partial<Pick<RuntimeClient, "activate" | "image" | "models" | "selectModel" | "catalog" | "acknowledge" | "dashboard" | "accounts" | "answerExtensionUi">>;
 type Connector = (repository: Repository, cwd: string, options: ConnectOptions) => Promise<Result<RepositoryClient | null, ExpectedError>>;
 type Entry = { repository: Repository; preferences: RuntimePreferences; connectionVersion: number; client?: RepositoryClient; unsubscribe?: () => void;
   watcher?: RepositoryWatcher; discoveryWarning?: string; legacy?: boolean;
   pending?: Promise<Result<RepositoryClient, ExpectedError>>; saving?: Promise<Result<void, ExpectedError>>; error?: ExpectedError; warning?: string; sessions: Set<string>; editors: Set<string>; terminals: Set<string> };
-export type WorkspaceSnapshot = Pick<RuntimeSnapshot, "repositories" | "details" | "preferences" | "closingCount" | "terminalClosingCount" | "notice" | "editors" | "terminals">;
+export type WorkspaceSnapshot = Pick<RuntimeSnapshot, "repositories" | "details" | "preferences" | "closingCount" | "terminalClosingCount" | "notice" | "editors" | "terminals" | "extensionUi">;
 
 export class WorkspaceClient {
   private readonly entries: Entry[];
@@ -93,6 +93,7 @@ export class WorkspaceClient {
       closingCount: snapshots.reduce((count, snapshot) => count + snapshot.closingCount, 0),
       terminalClosingCount: snapshots.reduce((count, snapshot) => count + (snapshot.terminalClosingCount ?? 0), 0),
       editors: snapshots.flatMap((snapshot) => snapshot.editors ?? []), terminals: snapshots.flatMap((snapshot) => snapshot.terminals ?? []),
+      extensionUi: this.detaching ? [] : this.entries.flatMap(entry => entry.client?.connected ? entry.client.snapshot.extensionUi ?? [] : []),
       notice: this.entries.flatMap((entry) => {
         const notice = entry.error?.message || entry.warning || entry.discoveryWarning || entry.client?.snapshot.notice;
         const legacy = entry.legacy ? "A legacy repository process still owns this state. It was not stopped or migrated. Finish work, save editor buffers, then use runtime stop --legacy with --runtime-cwd to migrate." : "";
@@ -220,6 +221,10 @@ export class WorkspaceClient {
     const entry = this.worktreeOwner(request.worktreeId); if (!entry.ok) return entry;
     const client = await this.ensure(entry.value); if (!client.ok) return client;
     return client.value.accounts ? client.value.accounts(request, signal) : err(new CapabilityError("This repository connection does not support account management."));
+  }
+  async answerExtensionUi(...args: Parameters<RuntimeClient["answerExtensionUi"]>): ReturnType<RuntimeClient["answerExtensionUi"]> {
+    const entry = this.sessionOwner(args[0]); if (!entry.ok) return entry;
+    return entry.value.client?.answerExtensionUi ? entry.value.client.answerExtensionUi(...args) : err(new CapabilityError("This repository connection does not host extension dialogs."));
   }
   async models(...args: Parameters<RuntimeClient["models"]>): ReturnType<RuntimeClient["models"]> {
     const entry = this.sessionOwner(args[0]); if (!entry.ok) return entry;

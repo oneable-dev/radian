@@ -13,6 +13,7 @@ import { errorCodes, usageErrorCodes, AgentRunError, ExpectedError, InputError, 
 import { err, ok, type Result } from "../result.ts";
 import { modelEffortSchema, modelIdentitySchema } from "../agents/model-selection.ts";
 import { sessionResultSchema } from "../agents/session-attention.ts";
+import { extensionUiResponseSchema, sessionExtensionUiSchema } from "../agents/extension-ui.ts";
 
 export const protocolVersion = 1;
 // Commands and PTY frames describe one operation/viewport. A workspace snapshot
@@ -101,6 +102,7 @@ export const snapshotSchema = Type.Object({
   mode: Type.Union([Type.Literal("live"), Type.Literal("offline")]), repositoryId: id,
   repositories: Type.Array(repository), details: Type.Record(Type.String(), execution),
   closingCount: Type.Integer({ minimum: 0 }), preferences: preferencesSchema, notice: Type.String(),
+  extensionUi: Type.Optional(Type.Array(sessionExtensionUiSchema)),
   editors: Type.Optional(Type.Array(editorInfoSchema)),
   terminals: Type.Optional(Type.Array(terminalInfoSchema)),
   terminalClosingCount: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -147,6 +149,7 @@ export const commandSchema = Type.Union([
   Type.Object({ type: Type.Literal("create"), worktreeId: id }),
   Type.Object({ type: Type.Literal("resume"), worktreeId: id, savedId: id }),
   Type.Object({ type: Type.Literal("close"), sessionId: id }),
+  Type.Object({ type: Type.Literal("extension-ui-response"), sessionId: id, conversationId: id, response: extensionUiResponseSchema }, { additionalProperties: false }),
   Type.Object({ type: Type.Literal("interrupt"), sessionId: id, conversationId: id }),
   Type.Object({ type: Type.Literal("acknowledge"), sessionId: id, conversationId: id, resultId: id }),
   Type.Object({ type: Type.Literal("model-select"), sessionId: id, conversationId: id, model: modelIdentitySchema, effort: Type.Optional(modelEffortSchema) }),

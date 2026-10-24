@@ -1,10 +1,12 @@
-export const contexts = ["workspace", "search", "history", "history-search", "monitor", "monitor-search", "dashboard", "dashboard-tabs", "model", "model-search", "model-effort", "accounts", "accounts-search", "accounts-input", "session-tabs", "terminal-tabs", "git-tabs", "git-search", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "transcript-search", "editor", "terminal", "terminal-copy", "terminal-visual", "git", "git-prompt", "dialog", "none"] as const;
+export const contexts = ["workspace", "search", "history", "history-search", "monitor", "monitor-search", "dashboard", "dashboard-tabs", "model", "model-search", "model-effort", "accounts", "accounts-search", "accounts-input", "extension", "extension-search", "extension-input", "extension-body", "session-tabs", "terminal-tabs", "git-tabs", "git-search", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "transcript-search", "editor", "terminal", "terminal-copy", "terminal-visual", "git", "git-prompt", "dialog", "none"] as const;
 export type KeyContext = typeof contexts[number];
 export type KeyScope = KeyContext | "global" | "app" | "pty";
 export type BindingInput = { keys: string; scope: KeyScope };
 const key = (keys: string, scope: KeyScope = "global"): BindingInput => ({ keys, scope });
 
-const searchContexts = ["search", "history-search", "monitor-search", "model-search", "accounts-search"] as const;
+const searchContexts = ["search", "history-search", "monitor-search", "model-search", "accounts-search", "extension-search"] as const;
+const extensionContexts = ["extension", "extension-search", "extension-input", "extension-body"] as const;
+const extensionListContexts = ["extension", "extension-search", "extension-body"] as const;
 const transcriptContexts = ["transcript", "transcript-text", "transcript-visual"] as const;
 const transcriptKeys = (keys: string): BindingInput[] => transcriptContexts.map((scope) => key(keys, scope));
 const textKeys = (...keys: string[]): BindingInput[] => keys.flatMap((keys) => [key(keys, "transcript-text"), key(keys, "transcript-visual")]);
@@ -129,6 +131,15 @@ export const defaultBindings = {
   "history.next": [key("j", "history"), key("down", "history"), key("ctrl+n", "history"), key("down", "history-search"), key("ctrl+n", "history-search")],
   "history.first": [key("home", "history")],
   "history.last": [key("end", "history")],
+  "extension.dismiss": extensionContexts.map(scope => key("escape", scope)),
+  "extension.submit": extensionContexts.map(scope => key("enter", scope)),
+  "extension.search": [key("/", "extension")],
+  "extension.previous": [...extensionListContexts.flatMap(scope => [key("up", scope), key("ctrl+p", scope)]), key("k", "extension"), key("k", "extension-body")],
+  "extension.next": [...extensionListContexts.flatMap(scope => [key("down", scope), key("ctrl+n", scope)]), key("j", "extension"), key("j", "extension-body")],
+  "extension.half-page-up": extensionListContexts.map(scope => key("ctrl+u", scope)),
+  "extension.half-page-down": extensionListContexts.map(scope => key("ctrl+d", scope)),
+  "extension.browser": [key("o", "extension"), key("o", "extension-body"), key("ctrl+o", "extension-input"), key("ctrl+o", "extension-search")],
+  "extension.copy-url": [key("y", "extension"), key("y", "extension-body"), key("ctrl+y", "extension-input"), key("ctrl+y", "extension-search")],
   "accounts.dismiss": [key("escape", "accounts"), key("escape", "accounts-search"), key("escape", "accounts-input")],
   "accounts.choose": [key("enter", "accounts"), key("enter", "accounts-search"), key("enter", "accounts-input")],
   "accounts.search": [key("/", "accounts")],

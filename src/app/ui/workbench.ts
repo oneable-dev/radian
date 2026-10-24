@@ -3,6 +3,7 @@ import {
   type CliRenderer, type KeyEvent, type Renderable,
 } from "@opentui/core";
 import packageInfo from "../../../package.json";
+import { stripVTControlCharacters } from "node:util";
 import { workspaceRows, type WorkspaceRow } from "./workspace-rows.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { filterWorkspaces } from "../../workspace/filter-workspaces.ts";
@@ -19,6 +20,8 @@ import { SessionNotificationStack } from "../../agents/ui/session-notifications.
 import type { SessionNotification } from "../../agents/session-notification.ts";
 import { ModelPicker, type ModelPickerActions } from "../../agents/ui/model-picker.ts";
 import { AccountsPanel, type AccountsActions } from "../../accounts/panel.ts";
+import { ExtensionDialogPanel, type ExtensionDialogActions } from "../../agents/ui/extension-dialog.ts";
+import type { SessionExtensionUi } from "../../agents/extension-ui.ts";
 import { Footer, type FooterShortcut } from "../../ui/footer.ts";
 import { TextDialog } from "../../ui/text-dialog.ts";
 import { SearchInput } from "../../ui/search-input.ts";
@@ -48,6 +51,8 @@ export type WorkbenchActions = AgentActions & {
   onListModels?: ModelPickerActions["list"];
   onSelectModel?: ModelPickerActions["select"];
   onAccountsRequest?: AccountsActions["request"];
+  getExtensionUi?: () => readonly SessionExtensionUi[];
+  onExtensionUiResponse?: ExtensionDialogActions["answer"];
   onOpenLoginUrl?: AccountsActions["openUrl"];
   onListHistory?: (worktreeId: string, signal?: AbortSignal) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
   onPreviewHistory?: (worktreeId: string, savedId: string, signal?: AbortSignal) => Promise<Result<HistoryPreview, ExpectedError>>;
@@ -89,6 +94,10 @@ export class Workbench {
   private readonly history: SessionHistoryPanel;
   private readonly models: ModelPicker;
   private readonly accounts: AccountsPanel;
+  private readonly extension: ExtensionDialogPanel;
+  private readonly extensionNotifications = new Set<string>();
+  private extensionStatus = "";
+  private extensionRefreshQueued = false;
   private readonly agent: AgentPanel;
   private readonly workPanel: BoxRenderable;
   private readonly editor: EditorPanel;
@@ -151,6 +160,11 @@ export class Workbench {
     this.accounts = new AccountsPanel(renderer, { ...(actions.onAccountsRequest ? { request: actions.onAccountsRequest } : {}), ...(actions.onOpenLoginUrl ? { openUrl: actions.onOpenLoginUrl } : {}),
       ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}),
       notice: message => this.setNotice(message), changed: () => this.updateFooter(), fallback: () => this.focusNavigation(), keyHint: (command, context) => this.keymap.hint(command, context) });
+    this.extension = new ExtensionDialogPanel(renderer, {
+      answer: (id, conversation, response) => actions.onExtensionUiResponse?.(id, conversation, response) ?? Promise.resolve(err(new CapabilityError("Extension UI is unavailable in this view."))),
+      changed: () => this.updateFooter(), fallback: () => this.focusNavigation(), notice: message => actions.onNotice ? actions.onNotice(message) : this.setNotice(message),
+      keyHint: (command, context) => this.keymap.hint(command, context),
+    });
     this.dialog = new TextDialog(renderer, () => this.updateFooter(), () => this.focusNavigation(), actions.onCopyTranscript);
     this.monitor = new SessionMonitor(renderer, {
       details: id => actions.getSessionDetails?.(id) ?? null,
@@ -203,7 +217,7 @@ export class Workbench {
     details.onMouseDown = (event) => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.showNotice(); } };
     this.footer = new Footer(renderer, `Radian ${packageInfo.version}`, { help, details }, "Radian");
     this.root.add(this.footer.root); this.root.add(this.workspacePopup); this.root.add(this.monitor.root);
-    this.root.add(this.history.root); this.root.add(this.models.root); this.root.add(this.accounts.root); this.root.add(this.dashboard.root); this.root.add(this.dialog.root);
+    this.root.add(this.history.root); this.root.add(this.models.root); this.root.add(this.accounts.root); this.root.add(this.dashboard.root); this.root.add(this.extension.root); this.root.add(this.dialog.root);
     this.notifications = new SessionNotificationStack(renderer, notification => this.openNotification(notification));
     this.root.add(this.notifications.root);
     renderer.root.add(this.root);
@@ -349,6 +363,15 @@ export class Workbench {
 
   private updateFooter = (): void => {
     if (this.disposed || !this.footer || this.root.isDestroyed) return;
+    // Closing another popup must reveal a waiting extension request even when
+    // the runtime has no further events to publish.
+    if (!this.extensionRefreshQueued) {
+      this.extensionRefreshQueued = true;
+      queueMicrotask(() => {
+        this.extensionRefreshQueued = false;
+        if (!this.disposed) this.refreshExtensionUi();
+      });
+    }
     const focused = this.renderer.currentFocusedRenderable;
     let shortcuts: readonly FooterShortcut[] = [];
     const context = this.keyContext();
@@ -357,7 +380,8 @@ export class Workbench {
     const pair = (a: CommandId, b: CommandId, label: string): FooterShortcut => ({ key: [key(a), key(b)].filter(Boolean).join("/"), label });
     const help = this.keymap.bindings.find((binding) => binding.command === "app.help" && binding.keys.length === 1 && inScope(binding.scope, context));
     this.footer.setHelpHint(help ? formatKeys(help.displayKeys) : this.keymap.hint("app.help", context));
-    if (this.dialog.visible) shortcuts = [hint("dialog.copy", "Copy"), hint("dialog.half-page-down", "½ page"), hint("dialog.dismiss", "Close")];
+    if (this.extension.visible) shortcuts = this.extension.shortcuts;
+    else if (this.dialog.visible) shortcuts = [hint("dialog.copy", "Copy"), hint("dialog.half-page-down", "½ page"), hint("dialog.dismiss", "Close")];
     else if (this.dashboard.visible) shortcuts = this.dashboard.shortcuts;
     else if (this.accounts.visible) shortcuts = this.accounts.shortcuts;
     else if (this.models.visible) shortcuts = this.models.shortcuts;
@@ -400,9 +424,9 @@ export class Workbench {
       if (focused.visible && label) shortcuts = [{ key: footerKeyHint("button.activate", "button", this.keymap.hints("button.activate", "button")), label }];
     }
     this.footer.setView({ agent: "Agents", editor: "Editor", git: "Git", terminal: "Terminal" }[this.displayedWorkView]);
-    const overlay = this.dialog.visible || this.history.visible || this.models.visible || this.accounts.visible || this.dashboard.visible || this.monitor?.visible || this.sidebar.visible;
+    const overlay = this.extension.visible || this.dialog.visible || this.history.visible || this.models.visible || this.accounts.visible || this.dashboard.visible || this.monitor?.visible || this.sidebar.visible;
     const outputStatus = this.agent.active ? this.agent.transcriptStatus : this.terminals.root.visible ? this.terminals.copyStatus : "";
-    this.footer.setContext(overlay ? "" : outputStatus);
+    this.footer.setContext(overlay ? "" : this.extensionStatus || outputStatus);
     this.footer.setShortcuts(shortcuts.filter((shortcut) => shortcut.key));
   };
 
@@ -422,10 +446,12 @@ export class Workbench {
 
   private showHelp(): void {
     const context = this.keyContext();
-    this.dialog.show({ title: "Keyboard help", text: keymapHelp(this.keymap, context, (command) => this.commandAvailable(command)) });
+    const text = keymapHelp(this.keymap, context, command => this.commandAvailable(command));
+    this.extension.suspend();
+    this.dialog.show({ title: "Keyboard help", text });
   }
   private showNotice(): void {
-    if (this.footer.noticeText.trim()) this.dialog.show({ title: "Notification details", text: this.footer.noticeText });
+    if (this.footer.noticeText.trim()) { this.extension.suspend(); this.dialog.show({ title: "Notification details", text: this.footer.noticeText }); }
   }
 
   refreshHistory(): void {
@@ -493,6 +519,7 @@ export class Workbench {
   }
 
   private keyContext(): KeyContext {
+    if (this.extension?.visible) return this.extension.context;
     if (this.dialog?.visible) return "dialog";
     if (this.accounts?.visible) return this.accounts.context;
     if (this.dashboard?.visible) return this.dashboard.context;
@@ -522,6 +549,8 @@ export class Workbench {
       const context = this.keyContext();
       return context === "search" || context.endsWith("-search");
     }
+    if (this.extension.visible) return this.extension.available(command) || command === "focus.next" || command === "focus.previous" || command === "app.detach" || command === "app.help" || command === "notice.details" && !!this.footer.noticeText.trim();
+    if (command.startsWith("extension.")) return false;
     if (this.dialog.visible) return command.startsWith("dialog.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
     if (command.startsWith("dialog.")) return false;
     if (this.accounts.visible) return command.startsWith("accounts.") || command === "focus.next" || command === "focus.previous" || command === "app.detach";
@@ -579,6 +608,7 @@ export class Workbench {
     if (command.startsWith("monitor.")) { this.monitor.command(command); return; }
     if (command === "app.help") { this.showHelp(); return; }
     if (command === "notice.details") { this.showNotice(); return; }
+    if (command.startsWith("extension.")) { this.extension.command(command); return; }
     if (command.startsWith("dialog.")) { this.dialog.command(command); return; }
     if (command.startsWith("accounts.")) { this.accounts.command(command); return; }
     if (command.startsWith("model.")) { this.models.command(command); return; }
@@ -666,6 +696,10 @@ export class Workbench {
     }
   }
   private moveFocus(direction: 1 | -1): void {
+    if (this.extension.visible) {
+      const targets = this.extension.focusTargets, index = targets.indexOf(this.renderer.currentFocusedRenderable!);
+      targets[(index + direction + targets.length) % targets.length]?.focus(); return;
+    }
     if (this.dialog.visible) { this.dialog.moveFocus(); return; }
     if (this.dashboard.visible) {
       const targets = this.dashboard.focusTargets, index = targets.indexOf(this.renderer.currentFocusedRenderable!);
@@ -820,6 +854,7 @@ export class Workbench {
     this.history.updateScope(worktree);
     this.monitor.update(this.selection.snapshot);
     for (const id of this.acknowledgements.keys()) if (!openIds.has(id)) this.acknowledgements.delete(id);
+    this.refreshExtensionUi();
     this.accounts.updateScope(this.selection.worktree?.id ?? null);
     this.models.updateScope(this.selection.sessionId, this.selection.sessionId ? this.actions.getSessionDetails?.(this.selection.sessionId)?.conversationId : undefined, workView === "agent");
     if (this.navigationKey && this.navigationKey !== this.lastScrolledKey) {
@@ -827,6 +862,23 @@ export class Workbench {
     }
     this.lastScrolledKey = this.navigationKey;
     this.updateFooter();
+  }
+
+  private refreshExtensionUi(): void {
+    const extension = this.actions.getExtensionUi?.().find(state => state.sessionId === this.selection.sessionId
+      && state.conversationId === this.actions.getSessionDetails?.(state.sessionId)?.conversationId);
+    this.extensionStatus = Object.values(extension?.statuses ?? {}).map(text => singleLine(stripVTControlCharacters(text))).join(" · ");
+    for (const notification of extension?.notifications ?? []) if (!this.extensionNotifications.has(notification.id)) {
+      this.extensionNotifications.add(notification.id);
+      const message = `Extension ${notification.level} · ${stripVTControlCharacters(notification.message)}`;
+      if (this.actions.onNotice) this.actions.onNotice(message); else this.setNotice(message);
+    }
+    if (this.extensionNotifications.size > 128) {
+      const keep = [...this.extensionNotifications].slice(-64); this.extensionNotifications.clear(); for (const id of keep) this.extensionNotifications.add(id);
+    }
+    const blocked = this.dialog.visible || this.accounts.visible || this.models.visible || this.history.visible || this.dashboard.visible || this.monitor.visible || this.sidebar.visible || this.git.modal;
+    if (blocked && extension?.dialog) this.extension.suspend();
+    else this.extension.update(extension?.dialog ? { sessionId: extension.sessionId, conversationId: extension.conversationId, dialog: extension.dialog } : undefined);
   }
 
   private repaintRows = (): void => {
@@ -871,7 +923,7 @@ export class Workbench {
     this.disposed = true;
     this.unsubscribe();
     this.notifications.dispose();
-    this.agent.dispose(); this.history.dispose(); this.monitor.dispose(); this.models.dispose(); this.accounts.dispose(); this.dashboard.dispose(); this.dialog.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
+    this.agent.dispose(); this.history.dispose(); this.monitor.dispose(); this.models.dispose(); this.accounts.dispose(); this.extension.dispose(); this.dashboard.dispose(); this.dialog.dispose(); this.editor.dispose(); this.terminals.dispose(); this.git.dispose();
     this.search.off(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.router.dispose();
     this.renderer.off("resize", this.resize);

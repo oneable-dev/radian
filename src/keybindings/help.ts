@@ -35,6 +35,8 @@ const labels: Partial<Record<CommandId, string>> = {
   "transcript.search-submit": "Accept the literal search and reveal its match",
   "transcript.search-cancel": "Cancel unsubmitted search without moving the cursor",
   "transcript.search-clear": "Clear only the transcript search query",
+  "extension.submit": "Accept the extension input or selected choice", "extension.dismiss": "Cancel the extension dialog",
+  "extension.search": "Search extension choices", "extension.browser": "Open the URL in the extension dialog", "extension.copy-url": "Copy the URL in the extension dialog",
   "dashboard.show": "Open Agent usage dashboard", "dashboard.dismiss": "Close Agent dashboard", "dashboard.refresh": "Refresh saved statistics",
 };
 export function keymapHelp(keymap: Keymap, context: KeyContext, available: (command: CommandId) => boolean): string {

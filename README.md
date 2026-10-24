@@ -215,8 +215,9 @@ implementation notes, including:
   resolution are not built into the Git view.
 - Live editor and terminal state survives interface detach, not runtime shutdown.
   Recovery does not replay shell commands or interrupted agent requests.
-- Pi skills, prompt templates, and SDK-compatible extensions can be discovered;
-  Pi's interactive CLI dialogs and custom terminal components are not embedded.
+- Pi skills, prompt templates, and SDK-compatible extensions can be discovered.
+  Basic [extension dialogs](docs/reference.md#extension-dialogs) use Radian's native UI;
+  Pi's custom terminal components and extension multiline editors are not embedded.
 - Native Windows is not currently supported by the local runtime.
 
 ## Development

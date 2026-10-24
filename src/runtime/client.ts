@@ -22,6 +22,7 @@ import { accountRequestSchema, accountReplySchema, parseAccountsCommand, type Ac
 import { modelCatalogQuerySchema, modelCatalogSchema, modelEffortSchema, modelIdentitySchema, parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "../agents/model-selection.ts";
 
 import { maximumPreviewImageBytes, transcriptImageQuerySchema } from "../agents/transcript-images.ts";
+import { extensionUiResponseSchema, type ExtensionUiResponse } from "../agents/extension-ui.ts";
 
 const reconnectDelays = [250, 500, 1000, 2000] as const;
 const streamHandshakeMs = 2000;
@@ -129,6 +130,7 @@ export class RuntimeClient {
     const details = Object.fromEntries(Object.entries(this.state.details).filter(([id]) => !this.hidden.has(id)).map(([id, state]) => [id,
       this.failure && state.status === "working" ? { ...state, status: null, error: this.failure } : state]));
     return { ...this.state, notice: this.failure || this.warning || this.state.notice, details,
+      extensionUi: this.failure || this.detaching ? [] : (this.state.extensionUi ?? []).filter(state => !this.hidden.has(state.sessionId)),
       ...(this.state.terminals ? { terminals: this.state.terminals.filter((terminal) => !this.hiddenTerminals.has(terminal.id)) } : {}),
       repositories: this.state.repositories.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
         sessions: tree.sessions.filter((session) => !this.hidden.has(session.id)).map((session) => ({ ...session,
@@ -493,6 +495,13 @@ export class RuntimeClient {
     const result = await this.command({ type: "prompt", sessionId, text, ...(images.length ? { images: [...images] } : {}),
       ...(this.state.capabilities?.includes("session-controls") && conversationId ? { conversationId } : {}),
       ...(this.state.capabilities?.includes("completion-catalog") && /^[/$]/u.test(text) ? { resourceRevision: this.state.details[sessionId]?.resourceRevision ?? 0 } : {}) });
+    return result.ok ? ok(undefined) : result;
+  }
+  async answerExtensionUi(sessionId: string, conversationId: string, response: ExtensionUiResponse): Promise<Result<void, ExpectedError>> {
+    if (!this.state.capabilities?.includes("extension-ui")) return err(new CapabilityError("Running service predates extension UI. Finish work and explicitly restart it when ready; no answer was sent."));
+    if (!Value.Check(extensionUiResponseSchema, response)) return err(new InputError("Malformed extension dialog answer."));
+    if (this.state.details[sessionId]?.conversationId !== conversationId) return err(new ProtocolError("This tab changed conversations. No extension answer was sent."));
+    const result = await this.command({ type: "extension-ui-response", sessionId, conversationId, response }, { instance: this.state.instance, epoch: this.connectionEpoch });
     return result.ok ? ok(undefined) : result;
   }
   async savePreferences(preferences: RuntimePreferences): Promise<Result<void, ExpectedError>> { const result = await this.command({ type: "preferences", preferences }); return result.ok ? ok(undefined) : result; }

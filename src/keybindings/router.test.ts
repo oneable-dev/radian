@@ -86,7 +86,7 @@ test("Kitty release never duplicates replay or leaks consumed commands to native
   } finally { await app.close(); }
 });
 
-test.each([["search", "search.clear"], ["prompt", "agent.clear"], ["git-prompt", "git.clear"], ["git-search", "git.search-clear"]] as const)("%s held Ctrl+C clearing never replays as shell interruption after focus changes", async (context, clearCommand) => {
+test.each([["search", "search.clear"], ["prompt", "agent.clear"], ["git-prompt", "git.clear"], ["git-search", "git.search-clear"], ["extension-search", "search.clear"]] as const)("%s held Ctrl+C clearing never replays as shell interruption after focus changes", async (context, clearCommand) => {
   // Distinguish clearing started in app inputs from fresh shell interrupts.
   const app = await createTestRenderer({ width: 60, height: 8, kittyKeyboard: true, exitOnCtrlC: false });
   const input = new InputRenderable(app.renderer, { width: 60 }); input.value = "candidate"; app.renderer.root.add(input);

@@ -8,6 +8,7 @@ const commandFor = (context: KeyContext, key: string): CommandId | undefined => 
 
 test.each([
   ["workspace", "workspace"], ["history", "history"], ["monitor", "monitor"], ["model", "model"], ["accounts", "accounts"],
+  ["extension", "extension"], ["extension-body", "extension"],
   ["dialog", "dialog"], ["git", "git"], ["git-search", "git"], ["transcript", "transcript"], ["transcript-text", "transcript"], ["transcript-visual", "transcript"],
 ] as const)("%s Ctrl+D/U routes to %s half-page commands", (context, family) => {
   // Lists and bodies share key names while surface owners determine behavior.
@@ -23,6 +24,7 @@ test.each([
   ["monitor", "monitor.previous", "monitor.next"], ["monitor-search", "monitor.previous", "monitor.next"],
   ["model", "model.previous", "model.next"], ["model-search", "model.previous", "model.next"],
   ["accounts", "accounts.previous", "accounts.next"], ["accounts-search", "accounts.previous", "accounts.next"],
+  ["extension", "extension.previous", "extension.next"], ["extension-search", "extension.previous", "extension.next"], ["extension-body", "extension.previous", "extension.next"],
   ["model-effort", "model.effort-less", "model.effort-more"], ["dialog", "dialog.previous", "dialog.next"],
   ["git", "git.previous", "git.next"], ["git-search", "git.previous", "git.next"],
   ["terminal-tabs", "terminal.tab-previous", "terminal.tab-next"], ["session-tabs", "session.previous", "session.next"],
@@ -36,14 +38,14 @@ test.each([
   expect(up).toBe(previous); expect(down).toBe(next);
 });
 
-test.each(["editor", "terminal", "prompt", "prompt-completion"] as const)("%s Ctrl+D/U preserves native input ownership", context => {
+test.each(["editor", "terminal", "prompt", "prompt-completion", "extension-input"] as const)("%s Ctrl+D/U preserves native input ownership", context => {
   // Search interception policy must not affect ordinary prompts or embedded programs.
   const map = defaultKeymap();
 
   expect(map.bound("ctrl+d", context)).toBe(false); expect(map.bound("ctrl+u", context)).toBe(false);
 });
 
-test.each([["search", "workspace"], ["history-search", "history"], ["monitor-search", "monitor"], ["model-search", "model"], ["accounts-search", "accounts"]] as const)("%s Ctrl+D/U jumps %s results and Ctrl+C clears search", (context, family) => {
+test.each([["search", "workspace"], ["history-search", "history"], ["monitor-search", "monitor"], ["model-search", "model"], ["accounts-search", "accounts"], ["extension-search", "extension"]] as const)("%s Ctrl+D/U jumps %s results and Ctrl+C clears search", (context, family) => {
   // Forward half-page actions to owned results without editing search text.
   const down = commandFor(context, "ctrl+d"), up = commandFor(context, "ctrl+u");
 
