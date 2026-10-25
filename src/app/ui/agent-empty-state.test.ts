@@ -28,10 +28,11 @@ async function mount(initial: ExecutionState | null = empty()) {
   const scroll = get("session-transcript"); if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript");
   const prompt = get("session-prompt"); if (!(prompt instanceof PromptInput)) throw new Error("Missing prompt");
   const mark = get("radian-logo-mark"); if (!(mark instanceof TextRenderable)) throw new Error("Missing logo");
+  const version = get("radian-logo-version"); if (!(version instanceof TextRenderable)) throw new Error("Missing logo version");
   const region = (x: number, y: number, width: number, height: number) => app.captureCharFrame().split("\n").slice(y, y + height)
     .map((line) => line.slice(x, x + width)).join("\n");
   await render();
-  return { ...app, view, states, selection, sent, render, get, scroll, prompt, mark,
+  return { ...app, view, states, selection, sent, render, get, scroll, prompt, mark, version,
     transcriptFrame: () => region(scroll.viewport.x, scroll.viewport.y, scroll.viewport.width, scroll.viewport.height),
     logoFrame: () => region(mark.x, mark.y, mark.width, mark.height),
     async update(state: ExecutionState | null) { states.first = state; selection.replaceSnapshot(selection.snapshot); await render(); },
@@ -44,18 +45,19 @@ function expectLogo(app: Awaited<ReturnType<typeof mount>>): void {
   expect(app.logoFrame()).toBe(app.mark.plainText);
 }
 
-test("Initial empty sessions show only centered logos without guidance, Ready, or draft submission", async () => {
+test("Initial empty sessions center logos and versions without guidance, Ready, or draft submission", async () => {
   // A new session has no transcript, child activity or runtime work to report.
   const app = await mount();
   try {
     // Typing an unsent draft must not dismiss the empty conversation's branding.
     pressLeader(app, "a"); await app.mockInput.typeText("unsent draft"); await app.render();
 
-    // The mark is centered in the usable transcript viewport, with no idle status gutter.
-    const { mark, scroll: { viewport } } = app;
+    // Branding and version form one centered group, outside transcript and input ownership.
+    const { mark, version, scroll: { viewport } } = app;
     expectLogo(app);
+    expect(version.visible).toBe(true);
     expect(Math.abs(mark.x + mark.width / 2 - viewport.x - viewport.width / 2)).toBeLessThanOrEqual(0.5);
-    expect(Math.abs(mark.y + mark.height / 2 - viewport.y - viewport.height / 2)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs((mark.y + version.y + version.height) / 2 - viewport.y - viewport.height / 2)).toBeLessThanOrEqual(0.5);
     expect(app.captureCharFrame()).not.toMatch(/No messages yet|Enter a prompt|Ready/);
     expect(app.get("transcript-status-row").visible).toBe(false);
     expect(app.scroll.scrollTop).toBe(0); expect(app.scroll.scrollHeight).toBeLessThanOrEqual(viewport.height);
@@ -141,7 +143,8 @@ test("Compact logos avoid input and remain centered after expansion and theme ch
 
     // Resizing restores the full centered mark, and a light theme repaints its subdued foreground.
     expectLogo(app); expect(app.mark.height).toBeGreaterThan(1); expect(app.mark.fg).not.toEqual(previousColor);
-    expect(Math.abs(app.mark.y + app.mark.height / 2 - app.scroll.viewport.y - app.scroll.viewport.height / 2)).toBeLessThanOrEqual(0.5);
+    expect(app.version.visible).toBe(true);
+    expect(Math.abs((app.mark.y + app.version.y + app.version.height) / 2 - app.scroll.viewport.y - app.scroll.viewport.height / 2)).toBeLessThanOrEqual(0.5);
     expect(app.get("transcript-status-row").visible).toBe(false); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });

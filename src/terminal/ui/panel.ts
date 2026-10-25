@@ -8,6 +8,7 @@ import type { Worktree } from "../../workspace/model.ts";
 import { TerminalSurface, type PtyAttachment } from "../../ui/embedded-terminal/surface.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { EmptyState } from "../../ui/empty-state.ts";
+import { icons } from "../../icons.ts";
 import type { TerminalTheme } from "../../ui/embedded-terminal/theme.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
@@ -141,7 +142,7 @@ export class TerminalPanel {
   private updateEmptyState(): void {
     if (this.disposed || this.root.isDestroyed) return;
     const worktree = this.worktree, key = this.creationHint();
-    this.emptyState.update({ icon: ">_", title: "No terminals", ...(key ? { action: { key, label: "New terminal" } } : {}) });
+    this.emptyState.update({ icon: icons.terminal, title: "No terminals", ...(key ? { action: { key, label: "New terminal" } } : {}) });
     this.emptyState.root.visible = Boolean(this.root.visible && this.actions && worktree && !this.selected && !this.creating.has(worktree.id));
   }
   private paintTabs(): void {

@@ -202,7 +202,7 @@ export class AgentPanel {
     const session = worktree?.sessions.find((item) => item.id === selectedId);
     const details = session ? this.actions.getSessionDetails?.(session.id) : null;
     const creationKey = worktree && !session && !this.transcriptOptions.readOnly ? this.sessions.creationShortcut : "";
-    this.emptyState.update({ icon: icons.robot, title: session?.name ?? (worktree ? "No AI sessions" : "No workspace available"),
+    this.emptyState.update({ icon: worktree ? icons.robot : icons.folder, title: session?.name ?? (worktree ? "No AI sessions" : "No workspace available"),
       description: worktree ? session ? `Workspace: ${worktree.name} · ${details ? details.error ?? details.status ?? "Ready" : "display preview only"}` : "" : "Open radian inside a Git repository.",
       ...(creationKey ? { action: { key: creationKey, label: "New session" } } : {}) });
     const sessionId = session?.id ?? null;

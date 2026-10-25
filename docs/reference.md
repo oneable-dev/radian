@@ -226,8 +226,16 @@ selection, filtering and background snapshots never implicitly activate another 
 Session creation/closing retain their existing rules and never implicitly launch an editor.
 With no open Agent sessions or terminals, a shared centered empty state shows a muted icon, a short
 `No AI sessions` / `No terminals` title and the actual configured creation shortcut. Disabled bindings
-have no fabricated default hint. Small bodies prioritize the shortcut over decorative artwork.
-An existing Agent session with no messages still shows its separate Radian logo and prompt.
+have no fabricated default hint. Agent empty states use the same outline robot as model metadata;
+missing workspaces use a folder, and Terminal uses the terminal glyph. Wide panes enlarge the original
+font artwork to an 8-column by 4-row slot, medium panes use 6 by 3, and compact panes retain the original
+single-line glyph. Kitty/Sixel terminals use the native image renderer; other terminals use a higher-resolution
+dot raster derived from the same font artwork. Monochrome mode also uses the dot raster so graphics cannot
+bypass terminal-default colors. Theme changes recolor the artwork. Icons and text share integer-cell
+centering so odd-width panes do not shift images onto a different centerline. Small bodies prioritize
+the shortcut over decoration.
+Asset attribution is in `src/ui/state-icon-data.LICENSE`.
+An existing Agent session with no messages still shows its separate Radian logo, app version and prompt.
 
 **Ctrl+Space, then b** toggles the workspace popup, initially closed, and focuses its search input.
 The existing `sidebar.toggle`, `focus.sidebar` and `focus.search` configuration IDs remain accepted.
@@ -410,9 +418,12 @@ cancels pending requests and releases native image resources. Kitty/Sixel-capabl
 image; other terminals show an explicit compatibility message. History preview shows attachment headers;
 open the saved session in Agents for image previews. Updated service code is required for descriptors
 and image reads; existing services are never automatically restarted.
-Empty conversations show a subdued, centered logo without introductory text or an idle `Ready` row.
-The temporary artwork is isolated in `src/ui/radian-logo.ts` so the finalized logo can replace it
-without changing transcript behavior. Short viewports use a compact mark; the first message replaces it.
+Empty conversations show a subdued, centered logo and app version without introductory text or an idle `Ready` row.
+The logo in `src/ui/radian-logo.ts` reuses the banner's `assets/radian.txt` wordmark and follows the
+`branding.logo` theme style. A muted `v<version>` label below it uses the same package version as the CLI;
+logo and version are centered as one group. Narrow or short viewports use `RADIAN` (or `R` below six columns).
+Space for the version never forces a smaller mark: the label hides when it would crowd the chosen artwork.
+The first message replaces the entire group.
 
 The former pinned **Request** row is removed; the original user message remains in the transcript.
 A passive work-status row above the prompt shows a shared spinner and
@@ -1898,8 +1909,8 @@ it is not a pause/resume state and is unrelated to the model's normal `stop` fin
 
 Use a Nerd Font-enabled terminal to view the glyphs. Current mappings are `nf-cod-repo`
 (U+EA62), `nf-cod-folder` (U+EA83), filled `nf-fa-bell` (U+F0F3), `nf-cod-close` (U+EA76),
-`nf-cod-dash` (U+EAD9), `nf-cod-openai` (U+EC81), and
-`nf-cod-claude` (U+EC82), from Nerd Fonts 3.5.1. Headless tests
+`nf-cod-dash` (U+EAD9), `nf-md-robot_outline` (U+F167A), `nf-cod-terminal` (U+EA85),
+`nf-cod-openai` (U+EC81), and `nf-cod-claude` (U+EC82), from Nerd Fonts 3.5.1. Headless tests
 verify code-point output, not font installation or actual terminal glyph appearance.
 
 ```sh
