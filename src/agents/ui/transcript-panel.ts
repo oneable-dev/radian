@@ -31,7 +31,7 @@ import { VimText, type VimRange } from "../transcript-vim-text.ts";
 import { TranscriptVim, type VimContext, type VimEffect } from "../transcript-vim.ts";
 import { transcriptVimAction, vimCharacter, vimPendingHint } from "./transcript-vim-bindings.ts";
 type Row = { section: TranscriptSection; request: RequestSummary | undefined; box: BoxRenderable; heading: BoxRenderable;
-  header: TranscriptBody; error: TextRenderable; bodyRow: BoxRenderable; skillTag: TextRenderable; body: TranscriptBody;
+  header: TranscriptBody; bodyRow: BoxRenderable; skillTag: TextRenderable; body: TranscriptBody;
   markdown: TranscriptMarkdown | undefined; markdownKind: "assistant" | "thinking" | undefined; completion: TextRenderable; completionWidth: number; preview?: TranscriptImagePreview };
 type CachedTranscript = { rows: Map<string, Row>; order: string[]; source: readonly TranscriptSection[]; legacy: boolean; bytes: number };
 // Bound detached native trees as well as source text, not just the number of sessions.
@@ -161,7 +161,6 @@ export class TranscriptPanel {
       const styles = this.theme.styles;
       this.headerSyntax.registerStyle("tag", syntaxDefinition(styles["transcript.skill"]));
       this.headerSyntax.registerStyle("hint", syntaxDefinition(styles["ui.muted"]));
-      this.headerSyntax.registerStyle("error", syntaxDefinition(styles["status.error"]));
       updateTranscriptMarkdownStyles(this.proseSyntax, styles, false); updateTranscriptMarkdownStyles(this.thinkingSyntax, styles, true);
       paintText(this.help, styles["ui.muted"]);
       this.paint();
@@ -383,15 +382,14 @@ export class TranscriptPanel {
     const header = new TranscriptBody(this.renderer, { width: "auto", height: "auto", flexGrow: 1, minWidth: 0, wrapMode: "word",
       cursorStyle: { style: "block", blinking: false }, scrollMargin: 0 });
     header.syntaxStyle = this.headerSyntax; heading.add(header);
-    const error = new TextRenderable(this.renderer, { width: "100%", flexShrink: 0, wrapMode: "word", selectable: false, visible: false });
     const bodyRow = new BoxRenderable(this.renderer, { width: "100%", minWidth: 0, minHeight: 1, flexShrink: 0, flexDirection: "row" });
     const skillTag = new TextRenderable(this.renderer, { width: 8, height: 1, flexShrink: 0, wrapMode: "none", selectable: false, content: "[skill] ", attributes: TextAttributes.BOLD });
     const body = new TranscriptBody(this.renderer, { width: "auto", height: "auto", minWidth: 0, minHeight: 1, flexGrow: 1, flexShrink: 0,
       wrapMode: "word", cursorStyle: { style: "block", blinking: false }, scrollMargin: 0 });
     body.setText(section.text); bodyRow.add(skillTag); bodyRow.add(body);
     const completion = new TextRenderable(this.renderer, { width: "100%", flexShrink: 0, wrapMode: "word", selectable: false, visible: false });
-    const row: Row = { section, request: undefined, box, heading, header, error, bodyRow, skillTag, body, markdown: undefined, markdownKind: undefined, completion, completionWidth: 0 };
-    box.add(heading); box.add(error); box.add(bodyRow); box.add(completion); this.scroll.add(box); this.rows.set(section.id, row);
+    const row: Row = { section, request: undefined, box, heading, header, bodyRow, skillTag, body, markdown: undefined, markdownKind: undefined, completion, completionWidth: 0 };
+    box.add(heading); box.add(bodyRow); box.add(completion); this.scroll.add(box); this.rows.set(section.id, row);
     for (const reader of [header, body]) {
       this.readers.add(reader);
       reader.on("focused", () => {
@@ -455,13 +453,12 @@ export class TranscriptPanel {
     const timeout = section.timeoutSeconds !== undefined ? ` (timeout ${section.timeoutSeconds}s)` : "";
     const key = this.hint("transcript.fold", "transcript");
     const action = folded ? "expand" : compactionNotice(section) ? "collapse" : "";
-    return label + timeout + (action && key ? ` (${key} to ${action})` : "") + (folded && section.error ? `\n\n${section.error}` : "");
+    return label + timeout + (action && key ? ` (${key} to ${action})` : "");
   }
   private highlightHeader(row: Row): void {
     row.header.clearAllHighlights();
     const width = (text: string) => row.header.editBuffer.measureText(text);
     const lines = row.header.plainText.split("\n");
-    const errorStart = this.folded(row) && row.section.error ? lines.length - row.section.error.split("\n").length : Infinity;
     for (const [lineIndex, line] of lines.entries()) {
       const mark = (start: number, end: number, style: string) => row.header.addHighlight(lineIndex, {
         start: width(line.slice(0, start)), end: width(line.slice(0, end)), styleId: this.headerSyntax.getStyleId(style)!,
@@ -469,7 +466,6 @@ export class TranscriptPanel {
       const tag = lineIndex === 0 ? /^\[[^\]\n]+\]/.exec(line) : null;
       if (tag) mark(0, tag[0].length, "tag");
       for (const hint of line.matchAll(/\((?:timeout [\d.]+s|[^()]+ to (?:expand|collapse))\)/g)) mark(hint.index, hint.index + hint[0].length, "hint");
-      if (lineIndex >= errorStart) mark(0, line.length, "error");
     }
   }
   private paintRow(row: Row): void {
@@ -484,7 +480,7 @@ export class TranscriptPanel {
     row.box.backgroundColor = background; row.box.border = false;
     row.box.paddingX = plain ? 0 : 1;
     row.box.paddingY = plain ? 0 : spacing.verticalInset;
-    // One owner separates visible content without leaving margins beside hidden headings or errors.
+    // One owner separates visible content without leaving margins beside hidden headings.
     row.box.gap = this.legacy ? 0 : spacing.bodyGap;
     row.heading.visible = !cancelled && !skill && (folded || !this.legacy && (section.kind === "tool" || section.kind === "notice"));
     const markdownKind = !this.legacy && !skill && (section.kind === "assistant" || section.kind === "thinking") ? section.kind : undefined;
@@ -534,8 +530,6 @@ export class TranscriptPanel {
       row.header.setText(headingText); row.header.cursorOffset = cursor;
       if (selected && this.reader(row) === row.header) this.applySelection(row);
     }
-    row.error.visible = !cancelled && !skill && !folded && !!section.error;
-    row.error.content = section.error ?? ""; row.error.fg = styles["status.error"].fg; row.error.attributes = styles["status.error"].attributes; row.error.bg = background;
     row.heading.backgroundColor = row.header.backgroundColor = background;
     row.header.textColor = styles[section.kind === "thinking" ? "ui.muted" : section.kind === "tool" && (section.title === "bash" || section.title === "Shell") ? "transcript.toolHeader" : "ui.text"].fg;
     row.header.cursorColor = styles["ui.focusBorder"].fg;

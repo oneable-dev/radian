@@ -613,17 +613,21 @@ test("Folded-summary and expanded-body cursors stay independent and summary curs
   } finally { await next.close(); }
 });
 
-test("Folded error summaries support cursor/line copying without exposing hidden bodies", async () => {
+test("Folded failed-tool headers support copying without exposing error summaries or hidden bodies", async () => {
+  // Failed tools retain their source while their folded headers omit error metadata.
   const text = "HIDDEN_STACK_TRACE\nraw tool output";
   const app = await mount([{ ...section(text), kind: "tool", title: "read", status: "error", error: "Permission denied" }]);
   try {
     await app.enter();
-    expect(app.body().plainText).toBe("[read] (<C-o> to expand)\n\nPermission denied");
+    expect(app.body().plainText).toBe("[read] (<C-o> to expand)");
+    expect(app.captureCharFrame()).not.toContain("Permission denied");
     expect(app.captureCharFrame()).not.toContain("HIDDEN_STACK_TRACE");
 
-    app.mockInput.pressKey("v", { shift: true }); app.mockInput.pressKey("j"); app.mockInput.pressKey("j"); await app.copy();
+    // Copying the visible line must not resurrect hidden error metadata.
+    app.mockInput.pressKey("v", { shift: true }); await app.copy();
 
-    expect(app.copies).toEqual(["[read] (<C-o> to expand)\n\nPermission denied"]);
+    // Whole-section copying still returns the unmodified tool result.
+    expect(app.copies).toEqual(["[read] (<C-o> to expand)"]);
     expect(app.captureCharFrame()).not.toContain("HIDDEN_STACK_TRACE");
     app.mockInput.pressKey("y", { shift: true }); await app.render(); expect(app.copies.at(-1)).toBe(text);
     expect(app.prompts).toEqual([]);

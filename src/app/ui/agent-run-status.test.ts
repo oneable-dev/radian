@@ -73,6 +73,25 @@ test("Actual requests and spinners appear above prompts without top Request, mod
   } finally { await app.close(); }
 });
 
+test("Failures remain above the prompt without duplicate transcript error summaries", async () => {
+  // A failed response retains its partial output and runtime-owned failure detail.
+  const app = await mount(), error = "ECONNRESET: The socket connection was closed unexpectedly.";
+  try {
+    app.states.a1 = { status: "failure", output: "", error, sections: [request("failed", "Keep working"),
+      { ...answer("PARTIAL_RESPONSE"), status: "error", error }] };
+
+    // Render the settled failure through the normal session update path.
+    await app.update();
+
+    // Only the composer status owns the error summary; the transcript retains its prose.
+    const scroll = app.get("session-transcript");
+    const transcript = app.captureCharFrame().split("\n").slice(scroll.y, scroll.y + scroll.height).join("\n");
+    expect(app.status()).toBe(`Failed: ${error}`);
+    expect(transcript).toContain("PARTIAL_RESPONSE"); expect(transcript).not.toContain("ECONNRESET");
+    expect(app.view.promptDrafts.a1).toBe("unsent next command"); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("Session/worktree switching restores request and activity together without leaking old spinners", async () => {
   const app = await mount();
   try {

@@ -65,7 +65,7 @@ test("Keyboard section/body/selection/copy navigation never submits drafts or mo
   } finally { await app.close(); }
 });
 
-test("Always-visible Thinking and folded tools copy full source while retaining error summaries", async () => {
+test("Always-visible Thinking and folded tools copy full source without inline error summaries", async () => {
   // Thinking remains prose; only the generic tool details start folded.
   const app = await mount();
   try {
@@ -78,7 +78,7 @@ test("Always-visible Thinking and folded tools copy full source while retaining 
     app.mockInput.pressKey("j"); await app.copy();
 
     expect(app.copied.at(-1)).toBe(sections()[2]!.text);
-    expect(app.captureCharFrame()).toContain("Permission denied");
+    expect(app.captureCharFrame()).not.toContain("Permission denied");
     expect(app.captureCharFrame()).not.toContain("full tool output");
     expect(app.sent).toEqual([]);
   } finally { await app.close(); }

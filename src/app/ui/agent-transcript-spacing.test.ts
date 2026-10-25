@@ -124,42 +124,39 @@ test.each([120, 60])("At width %i, transcripts space only tops and sections with
   } finally { await app.close(); }
 });
 
-test.each(["assistant", "thinking"] as const)("%s errors retain one-row spacing between sections, bodies, and completion metadata", async (kind) => {
-  // Late errors on headerless bodies must not duplicate section and inner gaps.
+test.each(["assistant", "thinking"] as const)("%s error summaries stay hidden without adding gaps around bodies and completion metadata", async (kind) => {
+  // Late error metadata must not insert summaries or empty rows into headerless prose.
   const tool: TranscriptSection = { id: "edit", kind: "tool", title: "edit", text: "HIDDEN_RESULT", status: "complete" };
   const prose: TranscriptSection = { id: "prose", kind, title: kind, text: "**PROSE_BODY**", status: "streaming" };
   const failed: TranscriptSection = { ...prose, status: "error", error: "ECONNRESET: The socket connection was closed unexpectedly. ERROR_END" };
   const app = await mount(tool, [prose]);
-  const expectErrorGaps = () => {
+  const expectBodyGaps = () => {
     const [toolCard, proseCard] = app.cards();
     const lines = app.captureCharFrame().split("\n").map((line) => line.slice(app.scroll.viewport.x, app.scroll.viewport.x + app.scroll.viewport.width));
-    const errorStart = lines.findIndex((line) => line.includes("ECONNRESET"));
-    const errorEnd = lines.findIndex((line) => line.includes("ERROR_END"));
     const body = lines.findIndex((line) => line.includes("PROSE_BODY"));
-    expect(errorStart - toolCard!.y - toolCard!.height).toBe(1);
-    expect(errorEnd).toBeGreaterThanOrEqual(errorStart);
-    expect(body - errorEnd).toBe(2);
-    // Only the outer gap becomes an outline; the inner error-to-body gap stays blank.
+    expect(lines.join("\n")).not.toContain("ECONNRESET");
+    expect(lines.join("\n")).not.toContain("ERROR_END");
+    expect(body - toolCard!.y - toolCard!.height).toBe(1);
+    // Only the existing section boundary becomes an outline when prose is selected.
     const outlined = (app.scroll.focused || app.scroll.hasFocusedDescendant) && app.view.workViewPreferences.agentViews?.a1?.selectedId === "prose";
-    expect(lines[errorStart - 1]!.trim()).toBe(outlined ? "─".repeat(app.scroll.viewport.width) : "");
-    expect(lines[body - 1]!.trim()).toBe("");
+    expect(lines[body - 1]!.trim()).toBe(outlined ? "─".repeat(app.scroll.viewport.width) : "");
     expectVerticalInsets(proseCard!, 0);
     const content = proseCard!.getChildren().filter((child) => child.visible);
     for (let index = 1; index < content.length; index++) expect(content[index]!.y - content[index - 1]!.y - content[index - 1]!.height).toBe(1);
   };
   try {
-    // Error wrapping and Markdown/source switching share visible spacing.
+    // Resizing and Markdown/source switching must keep error metadata hidden.
     await app.update([tool, failed]);
     for (const width of [120, 60, 120]) {
-      app.resize(width, 30); await app.render(); expectErrorGaps();
+      app.resize(width, 30); await app.render(); expectBodyGaps();
       pressLeader(app, "["); app.mockInput.pressKey("END"); app.mockInput.pressEnter();
-      await app.render(); expectErrorGaps();
-      app.mockInput.pressEscape(); await app.render(); expectErrorGaps();
+      await app.render(); expectBodyGaps();
+      app.mockInput.pressEscape(); await app.render(); expectBodyGaps();
     }
     await app.update([tool, { ...failed, completion: { startedAt: 1000, completedAt: 2000, durationMs: 1000, outcome: "error" } }]);
 
     // Completion spaces only visible items; hidden errors leave no blank rows.
-    expectErrorGaps(); expect(app.captureCharFrame()).toContain("Failed after");
+    expectBodyGaps(); expect(app.captureCharFrame()).toContain("Failed after");
     await app.update([tool, prose]);
     expect(app.captureCharFrame()).not.toContain("ECONNRESET");
     expectVerticalInsets(app.cards()[1]!, 0); expect(app.cards()[1]!.height).toBe(1);
@@ -223,40 +220,39 @@ test("Tool folding and summary-source entry preserve symmetric padding and exact
     expect(app.captureCharFrame()).not.toContain("TOOL_RESULT");
     app.mockInput.pressKey("y", { shift: true }); await app.render();
 
-    // Neither the added blank rows nor the error heading become part of the copied tool result.
+    // Decorative spacing never becomes part of the copied tool result.
     expect(app.copies).toEqual([source, source]);
     expect(app.view.promptDrafts.a1).toBe("Keep my draft");
     expect(app.prompts).toEqual([]);
   } finally { await app.close(); }
 });
 
-test.each([120, 60])("At width %i, folded and expanded command errors have exactly one blank row above", async (width) => {
-  // A multiline command exposes the boundary between its last visual line and the error summary.
+test.each([120, 60])("At width %i, failed commands hide inline summaries while retaining result spacing", async (width) => {
+  // A multiline command retains its result boundary without a separate error summary.
   const app = await mount({ id: "failed-command", kind: "tool", title: "bash", command: "printf 'Header output'\nfalse",
     text: "RAW_TOOL_RESULT", status: "error", error: "Command exited with code 1" });
   try {
     app.resize(width, 24); await app.render();
-    const expectErrorGap = () => {
+    const expectResultGap = () => {
       const lines = app.captureCharFrame().split("\n").map((line) => line.slice(app.card.x, app.card.x + app.card.width));
-      const error = lines.findIndex((line) => line.includes("Command exited with code 1"));
-      expect(error).toBeGreaterThan(1);
-      expect(lines[error - 1]!.trim()).toBe("");
-      expect(lines[error - 2]!.trim()).not.toBe("");
+      expect(lines.join("\n")).not.toContain("Command exited with code 1");
+      const commandEnd = lines.findIndex((line) => line.includes("false"));
+      expect(commandEnd).toBeGreaterThan(0);
       const result = lines.findIndex((line) => line.includes("RAW_TOOL_RESULT"));
       if (result >= 0) {
-        expect(result - error).toBe(2);
+        expect(result - commandEnd).toBe(2);
         expect(lines[result - 1]!.trim()).toBe("");
       }
     };
 
-    // Folding, expansion and repainting must use the same one-row error separation.
-    expectErrorGap(); expect(app.captureCharFrame()).not.toContain("RAW_TOOL_RESULT");
+    // Folding and expanding preserve the original tool result without showing summary metadata.
+    expectResultGap(); expect(app.captureCharFrame()).not.toContain("RAW_TOOL_RESULT");
     pressLeader(app, "["); app.mockInput.pressKey("HOME");
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
-    expectErrorGap(); expect(app.captureCharFrame()).toContain("RAW_TOOL_RESULT");
+    expectResultGap(); expect(app.captureCharFrame()).toContain("RAW_TOOL_RESULT");
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
 
-    expectErrorGap(); expectVerticalInsets(app.card);
+    expectResultGap(); expectVerticalInsets(app.card);
     expect(app.prompts).toEqual([]); expect(app.view.promptDrafts.a1).toBe("Keep my draft");
   } finally { await app.close(); }
 });
