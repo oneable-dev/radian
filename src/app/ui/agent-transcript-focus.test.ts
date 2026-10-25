@@ -1,6 +1,6 @@
 import { pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
-import { BoxRenderable, ScrollBoxRenderable, parseKeypress, type TerminalColors } from "@opentui/core";
+import { BoxRenderable, EditBufferRenderable, ScrollBoxRenderable, parseKeypress, type TerminalColors } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
@@ -98,6 +98,71 @@ test.each([120, 60])("At width %i, focus outlines the section without changing b
     // Neither active nor inactive section selection may leave a background tint behind.
     expect(backgrounds()).toEqual(beforeBackgrounds);
     expect(geometry()).toEqual(before);
+    expect(app.view.promptDrafts.a1).toBe("Keep my draft");
+  } finally { await app.close(); }
+});
+
+test.each([sections[0]!, sections[1]!, sections[2]!, sections[5]!])("Esc hides the $kind reading cursor in Sections and Enter restores its position", async (section) => {
+  // Plain bodies, formatted prose, and folded headers must share the same cursor lifecycle.
+  const app = await mount([section]);
+  try {
+    await app.focus();
+    app.mockInput.pressEnter(); app.mockInput.pressKey("l"); await app.render();
+    const reader = app.renderer.currentFocusedRenderable;
+    if (!(reader instanceof EditBufferRenderable)) throw new Error("Missing reading cursor");
+    const offset = reader.cursorOffset;
+    expect(offset).toBeGreaterThan(0); expect(app.renderer.getCursorState().visible).toBe(true);
+
+    // Esc cancels Visual first, then leaves Text without leaving the selected section.
+    app.mockInput.pressKey("v"); await app.render();
+    app.mockInput.pressEscape(); await app.render();
+    expect(app.renderer.currentFocusedRenderable).toBe(reader);
+    expect(reader.hasSelection()).toBe(false); expect(app.renderer.getCursorState().visible).toBe(true);
+    app.mockInput.pressEscape(); await app.render();
+
+    // Sections keeps its outline, but no text cursor, including after a resize.
+    expect(app.renderer.currentFocusedRenderable).toBe(app.scroll);
+    expect(app.view.workViewPreferences.agentViews?.a1?.mode).toBe("sections");
+    expect(app.renderer.getCursorState().visible).toBe(false); app.expectMarker(0);
+    app.resize(100, 36); await app.render();
+    expect(app.renderer.getCursorState().visible).toBe(false);
+
+    // Enter resumes reading at the remembered character without touching the prompt draft.
+    app.mockInput.pressEnter(); await app.render();
+    expect(app.renderer.currentFocusedRenderable).toBe(reader); expect(reader.cursorOffset).toBe(offset);
+    expect(app.renderer.getCursorState().visible).toBe(true); app.expectMarker(0);
+    expect(app.view.promptDrafts.a1).toBe("Keep my draft");
+  } finally { await app.close(); }
+});
+
+test("Help and non-text views release the formatted reading cursor while inputs retain their own", async () => {
+  // Formatted prose draws its cursor separately from the native editor.
+  const app = await mount([sections[5]!]);
+  try {
+    await app.focus(); app.mockInput.pressEnter(); await app.render();
+    expect(app.renderer.getCursorState().visible).toBe(true);
+
+    // Help has no cursor, and closing it restores the original reading surface.
+    app.mockInput.pressKey("F1"); await app.render();
+    expect(app.renderer.getCursorState().visible).toBe(false);
+    app.mockInput.pressEscape(); await app.render();
+    expect(app.renderer.getCursorState().visible).toBe(true);
+
+    // Search and prompt inputs must own their cursors rather than inherit a hidden reading cursor.
+    app.mockInput.pressKey("/"); await app.render();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("transcript-search");
+    expect(app.renderer.getCursorState().visible).toBe(true);
+    app.mockInput.pressEscape(); await app.render();
+    pressLeader(app, "a"); await app.render();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
+    expect(app.renderer.getCursorState().visible).toBe(true);
+
+    // An empty editor must not keep a stale cursor at the former prose position.
+    pressLeader(app, "["); await app.render();
+    expect(app.renderer.getCursorState().visible).toBe(true);
+    pressLeader(app, "e"); await app.render();
+    expect(app.view.workViewPreferences.active["demo:main"]).toBe("editor");
+    expect(app.renderer.getCursorState().visible).toBe(false); app.expectMarker();
     expect(app.view.promptDrafts.a1).toBe("Keep my draft");
   } finally { await app.close(); }
 });

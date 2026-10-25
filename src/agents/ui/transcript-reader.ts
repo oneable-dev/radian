@@ -83,6 +83,12 @@ export class TranscriptBody extends EditBufferRenderable {
   get formatted(): boolean { return this.projection !== undefined; }
   handleKeyPress(_key: KeyEvent): boolean { return true; }
   handlePaste(_event: PasteEvent): void {}
+  blur(): void {
+    if (!this.focused) return;
+    super.blur();
+    // Formatted readers position a session cursor outside native editor painting.
+    if (this.formatted) this.ctx.setCursorPosition(0, 0, false);
+  }
   protected renderSelf(buffer: OptimizedBuffer): void { if (!this.projection) super.renderSelf(buffer); }
 
   clearProjection(): void {
