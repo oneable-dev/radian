@@ -124,8 +124,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
     ? `OFFLINE SDK · scripted slow / read / write / delegate · ${detachHint} detaches`
     : "");
   const updateNotice = (): void => {
-    const closing = (client?.snapshot.closingCount ?? 0) + (client?.snapshot.terminalClosingCount ?? 0);
-    view?.setNotice([client?.snapshot.notice || defaultMessage, closing ? `Closing ${closing}` : ""].filter(Boolean).join(" · "),
+    view?.setNotice(client?.snapshot.notice || defaultMessage,
       { level: client?.snapshot.notice ? "warning" : discoveryError ? "error" : "info", source: "Runtime" });
   };
   const showFailure = (error: ExpectedError): void => { view?.notify(`[${error.code}] ${error.message}`, { level: "error", source: "Runtime" }); };

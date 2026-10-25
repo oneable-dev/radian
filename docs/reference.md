@@ -1333,9 +1333,10 @@ never disable the underlying bindings or remove them from application Help.
 Application bindings such as `<leader>b`, `<leader>[` and `Tab` still work outside Neovim input focus;
 the configured leader detach command works in every input context. See the input ownership rules above.
 
-The status-icon legend and routine live-service banner are not shown. Errors and service notices use
-the top-right notification overlay, never a separate footer row. Their arrival and expiry do not resize
-the work panels or interrupt keyboard focus.
+The status-icon legend and routine live-service banner are not shown. Warnings, errors and explicit
+action successes use the top-right notification overlay, never a separate footer row. Informational
+notices are discarded, including from Messages. Tab shutdown counts do not generate messages or toasts.
+Notification arrival and expiry do not resize the work panels or interrupt keyboard focus.
 Identity and shortcut text remain read-only. A dedicated Help entry opens a centered popup without
 changing the original draft or selection; closing it restores focus. **F1** opens application help
 in app controls; the conversation retains its existing F1 reader help. **Leader, then ?** opens the
@@ -1344,8 +1345,8 @@ The popup lists the current context first, then common application bindings, inc
 It traps Tab traversal and supports arrows/j/k, PgUp/PgDn and Esc.
 
 **Leader, then !** (`notice.details`) opens **Messages**, a searchable, newest-first list of the latest
-500 messages received during this attached UI's lifetime. General notices and observed session results
-share the record; toast expiry or session closure does not delete it. No command line or disk persistence
+500 success, warning and error messages received during this attached UI's lifetime. General notices
+and observed session results share the record; toast expiry or session closure does not delete it. No command line or disk persistence
 is added. Each record keeps its time, level, source and complete text; repeated runtime snapshots do not
 create duplicates, while separate actions with identical messages remain distinct.
 
@@ -1356,10 +1357,15 @@ when it is already empty. Enter opens the full wrapped, scrollable text. Use y i
 (Ctrl+Y while searching) to copy the original text. Esc returns from details to the list, then closes
 Messages and restores the original input focus. These actions use the shared configurable keymap.
 Messages never opens automatically; clicking a general notification explicitly opens its details.
-General notices and session results share a three-row toast layout: status, a one-line summary and
+There is no Info message category. Informational notices, including navigation misses, demo/offline
+startup context and extension `info` messages, create neither toasts nor retained Messages records.
+Success confirms an accepted action; warning
+identifies a recoverable input problem or a condition needing attention; error reports a failed action
+or unexpected fault. Clipboard/paste failures and Markdown rendering faults are not informational.
+Success, warning and error notices and session results share a three-row toast layout: status, a one-line summary and
 muted source context. General notices show their source on the last row; session results show worktree
 and branch there, with elapsed time beside the status when available. Long previews are truncated;
-Messages retains the complete text. Info/success notices expire after five seconds and warnings/errors
+Messages retains the complete text. Success notices expire after five seconds and warnings/errors
 after eight seconds.
 Toasts are temporarily hidden while Messages or a read-only details/help dialog is open, so they cannot
 obscure the text being inspected; their normal expiry timers continue independently.

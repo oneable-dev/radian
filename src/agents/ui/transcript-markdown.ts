@@ -3,6 +3,7 @@ import { reportUnexpected } from "../../errors.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { codeStyles, syntaxDefinition, type UiStyles } from "../../ui/theme-styles.ts";
 import { TranscriptBody, TranscriptTable } from "./transcript-reader.ts";
+import type { Notice } from "../../ui/messages.ts";
 
 function descendants(root: Renderable): Renderable[] {
   return root.getChildren().flatMap((child) => [child, ...descendants(child)]);
@@ -36,7 +37,7 @@ export class TranscriptMarkdown {
   private streaming = true;
   private styles: UiStyles;
 
-  constructor(private readonly renderer: CliRenderer, syntax: SyntaxStyle, private readonly thinking: boolean, private readonly changing: () => void, private readonly notice: (message: string) => void) {
+  constructor(private readonly renderer: CliRenderer, syntax: SyntaxStyle, private readonly thinking: boolean, private readonly changing: () => void, private readonly notice: Notice) {
     const theme = uiTheme(renderer); this.styles = theme.styles;
     this.root = new MarkdownRenderable(renderer, { width: "100%", minWidth: 0, minHeight: 1, flexShrink: 0,
       syntaxStyle: syntax, streaming: true, conceal: true, concealCode: false, internalBlockMode: "top-level",
@@ -104,7 +105,7 @@ export class TranscriptMarkdown {
       if (this.root.isDestroyed || revision !== this.revision) return;
       this.changing(); this.root.streaming = false;
     }).catch((error: unknown) => {
-      if (!this.root.isDestroyed && revision === this.revision) this.notice(reportUnexpected(error, "transcript markdown"));
+      if (!this.root.isDestroyed && revision === this.revision) this.notice(reportUnexpected(error, "transcript markdown"), { level: "error" });
     });
   }
 }

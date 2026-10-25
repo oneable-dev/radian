@@ -6,13 +6,14 @@ import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import { Clipboard } from "../../ui/clipboard.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import type { Notice } from "../../ui/messages.ts";
 
 class TerminalReader extends EditBufferRenderable {
   handleKeyPress(_event: KeyEvent): boolean { return true; }
   handlePaste(_event: PasteEvent): void {}
 }
 type Options = {
-  notice(message: string): void;
+  notice: Notice;
   changed(): void;
   input(focus: boolean): void;
   busy(pending: boolean): void;
@@ -53,13 +54,13 @@ export class TerminalCopyMode {
     this.options.busy(true); this.options.changed();
     void read().then(result => {
       if (this.disposed || this.generation !== generation) return;
-      if (!result.ok) { this.options.notice(`[${result.error.code}] ${result.error.message}`); this.close(); return; }
+      if (!result.ok) { this.options.notice(`[${result.error.code}] ${result.error.message}`, { level: "error", source: "Terminal" }); this.close(); return; }
       this.pending = false; this.options.busy(false);
       this.root.setText(result.value.text); this.root.setCursor(result.value.cursor.row, result.value.cursor.column);
       this.root.showCursor = true; this.options.changed();
     }).catch((error: unknown) => {
       const message = reportUnexpected(error, "terminal copy mode");
-      if (!this.disposed && this.generation === generation) { this.options.notice(message); this.close(); }
+      if (!this.disposed && this.generation === generation) { this.options.notice(message, { level: "error", source: "Terminal" }); this.close(); }
     });
   }
   command(command: CommandId): void {
@@ -116,10 +117,10 @@ export class TerminalCopyMode {
     const generation = this.generation, anchor = this.anchor, cursor = this.root.cursorOffset, linewise = this.linewise;
     void Promise.resolve().then(() => this.options.copy?.(text) ?? this.clipboard.copy(text)).then(result => {
       if (this.disposed || this.generation !== generation) return;
-      this.options.notice(result.ok ? result.value : `[${result.error.code}] ${result.error.message}`);
+      this.options.notice(result.ok ? result.value : `[${result.error.code}] ${result.error.message}`, { level: result.ok ? "success" : "error", source: "Clipboard" });
       if (result.ok && this.anchor === anchor && this.root.cursorOffset === cursor && this.linewise === linewise) { this.clearSelection(); this.options.changed(); }
     }).catch((error: unknown) => {
-      const message = reportUnexpected(error, "terminal copy"); if (!this.disposed) this.options.notice(message);
+      const message = reportUnexpected(error, "terminal copy"); if (!this.disposed) this.options.notice(message, { level: "error", source: "Clipboard" });
     });
   }
   private close(): void {

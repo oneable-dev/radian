@@ -38,6 +38,62 @@ function selected(app: Awaited<ReturnType<typeof mount>>): string {
   return visit(list) ?? "";
 }
 
+test.each([undefined, "info"] as const)("Informational notices with level %s never appear in toasts or Messages", async level => {
+  // Routine navigation feedback must not cover work or accumulate in message history.
+  const app = await mount();
+  try {
+    const prompt = app.get("session-prompt") as PromptInput, caret = prompt.cursorOffset;
+
+    // Both unclassified notices and explicitly informational notices are discarded.
+    app.view.notify("No matching text", level ? { level } : undefined); await app.render();
+
+    // Discarding information must not create a toast, move focus, or change the draft.
+    expect(app.get("session-notifications").visible).toBe(false);
+    expect(app.captureCharFrame()).not.toContain("No matching text");
+    expect(app.renderer.currentFocusedRenderable).toBe(prompt); expect(prompt.cursorOffset).toBe(caret);
+    expect(prompt.value).toBe("retained draft");
+    app.open(); await app.render(); expect(app.captureCharFrame()).toContain("No messages yet");
+    expect(app.captureCharFrame()).not.toContain("No matching text");
+  } finally { await app.close(); }
+});
+
+test.each([
+  ["success", "Completed"], ["warning", "Warning"], ["error", "Failed"],
+] as const)("%s notices still display a toast and remain in Messages", async (level, label) => {
+  // Quiet informational feedback must not suppress accepted actions, warnings, or failures.
+  const app = await mount();
+  try {
+    const prompt = app.get("session-prompt");
+
+    // A classified action result should surface immediately without stealing keyboard focus.
+    app.view.notify("Action feedback", { level, source: "Test action" }); await app.render();
+
+    // The transient notification and retained record describe the same action.
+    expect(app.get("session-notifications").visible).toBe(true);
+    expect(app.captureCharFrame()).toContain(label); expect(app.captureCharFrame()).toContain("Action feedback");
+    expect(app.renderer.currentFocusedRenderable).toBe(prompt);
+    app.open(); await app.render(); expect(selected(app)).toContain("Action feedback");
+  } finally { await app.close(); }
+});
+
+test.each(["info", "warning", "error"] as const)("Extension %s notices follow the same presentation policy", async level => {
+  // The SDK may send Info, but only actionable extension feedback belongs in the application's records.
+  const app = await mount({ getSessionDetails: () => ({ status: null, output: "Transcript", error: null, conversationId: "conversation" }),
+    getExtensionUi: () => [{ sessionId: "a1", conversationId: "conversation", statuses: {},
+      notifications: [{ id: "extension-notice", level, message: "Extension feedback" }] }] });
+  try {
+    // Inspect the connected extension's automatically delivered notification.
+    await app.render();
+
+    // Extension Info is discarded, while warnings and failures remain visible and inspectable.
+    expect(app.get("session-notifications").visible).toBe(level !== "info");
+    app.open(); await app.render();
+    if (level === "info") {
+      expect(app.captureCharFrame()).toContain("No messages yet"); expect(app.captureCharFrame()).not.toContain("Extension feedback");
+    } else expect(selected(app)).toContain("Extension feedback");
+  } finally { await app.close(); }
+});
+
 test("Expired failure notifications remain searchable with full details and restore draft/caret on close", async () => {
   // Toast lifetime must not determine whether the full failure can still be inspected.
   const app = await mount(), original = "Connection failed\n" + "Detailed cause. ".repeat(300) + "\nFINAL RECOVERY INSTRUCTION";
@@ -63,7 +119,7 @@ test.each([120, 60])("Width %i message navigation preserves literal search text 
   // Every candidate matches the query so navigation can be checked without query-dependent ambiguity.
   const app = await mount();
   try {
-    for (let index = 0; index < 30; index++) app.view.notify(`needle-${String(index).padStart(2, "0")}`);
+    for (let index = 0; index < 30; index++) app.view.notify(`needle-${String(index).padStart(2, "0")}`, { level: "warning" });
     app.clock.advance(100000); app.resize(width, 24); app.open(); await app.render();
     const search = app.get("messages-search") as SearchInput;
     await app.mockInput.typeText("needle"); app.mockInput.pressKey("n", { ctrl: true }); await app.render();
@@ -102,7 +158,7 @@ test("Runtime snapshots deduplicate notices but separate repeated actions remain
   // Repaints cannot flood history, while identical failures from two actions must not disappear.
   const app = await mount();
   try {
-    app.view.setNotice("Runtime reconnecting"); app.view.setNotice("Runtime reconnecting");
+    app.view.setNotice("Runtime reconnecting", { level: "warning" }); app.view.setNotice("Runtime reconnecting", { level: "warning" });
     app.view.notify("Action failed", { level: "error" }); app.view.notify("Action failed", { level: "error" });
     app.clock.advance(8000); app.open(); await app.render();
 
@@ -137,7 +193,7 @@ test("Held Enter/Esc never resubmits or interrupts work after message focus tran
     onInterrupt: async () => { interruptions++; return ok(undefined); } });
   const raw = (event: string) => { const key = parseKeypress(event, { useKittyKeyboard: true }); if (!key) throw new Error("Invalid Kitty key"); app.renderer.keyInput.processParsedKey(key); };
   try {
-    app.view.notify("Diagnostic"); app.open(); await app.render();
+    app.view.notify("Diagnostic", { level: "error" }); app.open(); await app.render();
     raw("\x1b[13;1u"); raw("\x1b[13;1:2u"); await app.render(); expect(app.get("text-dialog").visible).toBe(true);
     raw("\x1b[27;1u"); raw("\x1b[27;1:2u"); await app.render(); expect(app.get("messages").visible).toBe(true);
     raw("\x1b[27;1:3u"); raw("\x1b[27;1u"); raw("\x1b[27;1:2u"); await app.render();
@@ -151,7 +207,7 @@ test("Long previews stay bounded through resize while copying retains the comple
   // Native list buffers need only a viewport-wide preview, not thousands of source characters.
   const app = await mount(), original = "한글 👩🏽‍💻 diagnostic ".repeat(1000);
   try {
-    app.view.notify(original); app.open(); await app.render();
+    app.view.notify(original, { level: "error" }); app.open(); await app.render();
     for (const width of [120, 60, 120]) {
       app.resize(width, 24); await app.render();
       const preview = selected(app);
@@ -163,6 +219,6 @@ test("Long previews stay bounded through resize while copying retains the comple
     expect(app.copies).toEqual([original]); expect(app.get("session-notifications").visible).toBe(false);
     const listeners = app.renderer.listenerCount("focused_renderable"); app.get("messages").destroyRecursively();
     expect(app.renderer.listenerCount("focused_renderable")).toBe(listeners - 1);
-    app.view.notify("Late diagnostic"); await app.render();
+    app.view.notify("Late diagnostic", { level: "error" }); await app.render();
   } finally { await app.close(); }
 });

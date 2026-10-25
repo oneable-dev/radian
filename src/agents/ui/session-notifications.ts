@@ -84,7 +84,7 @@ export class SessionNotificationStack {
     const task = new TextRenderable(this.renderer, { height: 1, width: "100%", wrapMode: "none", selectable: false });
     const location = new TextRenderable(this.renderer, { height: 1, width: "100%", wrapMode: "none", selectable: false });
     header.add(heading); root.add(header); root.add(task); root.add(location); this.root.add(root);
-    const brief = "result" in notification ? notification.result.outcome === "complete" : notification.level === "success" || notification.level === "info";
+    const brief = "result" in notification ? notification.result.outcome === "complete" : notification.level === "success";
     const expiry = this.renderer.clock.setTimeout(() => this.dismiss(notification.id), brief ? 5000 : 8000);
     const toast: Toast = { notification, root, heading, task, location, expiry };
     this.visible.push(toast); this.paint(toast);

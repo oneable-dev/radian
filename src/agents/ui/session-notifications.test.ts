@@ -45,7 +45,7 @@ test.each(["complete", "error", "unfinished", "cancelled"] as const)("New %s not
 });
 
 test.each([
-  ["info", "Info", 5000], ["success", "Completed", 5000], ["warning", "Warning", 8000], ["error", "Failed", 8000],
+  ["success", "Completed", 5000], ["warning", "Warning", 8000], ["error", "Failed", 8000],
 ] as const)("General %s notifications share the result card's status, summary, and context rows", async (level, label, lifetime) => {
   // Both kinds of notification arrive while the same input retains keyboard ownership.
   const app = await fixture();

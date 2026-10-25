@@ -6,7 +6,9 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { tinyPng } from "../../testing/image.ts";
-import { ok } from "../../result.ts";
+import { err, ok } from "../../result.ts";
+import { ClipboardError } from "../../errors.ts";
+import type { NoticeOptions } from "../../ui/messages.ts";
 import type { ClipboardRepresentation } from "@opentui/core";
 import type { Result } from "../../result.ts";
 import type { ExpectedError } from "../../errors.ts";
@@ -16,10 +18,10 @@ import { defaultKeymap } from "../../keybindings/config.ts";
 
 async function mount(options: ConstructorParameters<typeof PromptInput>[3] = {}) {
   const app = await createTestRenderer({ width: 80, height: 10, kittyKeyboard: true });
-  const notices: string[] = [], details: DialogContent[] = [];
-  const input = new PromptInput(app.renderer, (message) => notices.push(message), (content) => details.push(content), options);
+  const notices: string[] = [], levels: NoticeOptions["level"][] = [], details: DialogContent[] = [];
+  const input = new PromptInput(app.renderer, (message, options) => { notices.push(message); levels.push(options?.level); }, (content) => details.push(content), options);
   app.renderer.root.add(input.field); input.focus(); await app.renderOnce();
-  return { ...app, input, notices, details, async close() { input.dispose(); await app.dispose(); } };
+  return { ...app, input, notices, levels, details, async close() { input.dispose(); await app.dispose(); } };
 }
 
 test.each(["", "/", "@"])("Ctrl+V adds images with %j input while preserving existing input and focus", async (prefix) => {
@@ -98,6 +100,38 @@ test("Late clipboard images never enter drafts replaced during reading", async (
   } finally {await app.close();}
 });
 
+test("Clipboard failures are errors rather than quiet informational notices", async () => {
+  // A failed clipboard read must remain visible after informational toasts are disabled.
+  const app = await mount({ clipboard: {
+    read: async () => err(new ClipboardError("Clipboard unavailable")), dispose: async () => {},
+  } });
+  try {
+    await app.mockInput.typeText("retained input"); await app.renderOnce();
+
+    // Request a paste whose OS boundary rejects the read.
+    await app.input.pasteClipboard();
+
+    // The draft is unchanged and the rejection is explicitly classified as an error.
+    expect(app.input.value).toBe("retained input"); expect(app.levels).toEqual(["error"]);
+    expect(app.notices[0]).toContain("CLIPBOARD_UNAVAILABLE");
+  } finally { await app.close(); }
+});
+
+test("Rejected attachment paths are warnings and preserve input", async () => {
+  // Invalid user input needs actionable feedback, not a quiet navigation record.
+  const app = await mount();
+  try {
+    app.input.value = "retained input";
+
+    // Reject a path exceeding the documented attachment boundary.
+    const accepted = app.input.attachFile("/" + "a".repeat(4096));
+
+    // The rejected action does not mutate the draft or disappear as Info.
+    expect(accepted).toBe(false); expect(app.input.value).toBe("retained input");
+    expect(app.levels).toEqual(["warning"]); expect(app.notices[0]).toContain("INVALID_INPUT");
+  } finally { await app.close(); }
+});
+
 test("Moving the caret during clipboard reads prevents misplaced insertion and offers retry", async () => {
   const gate = Promise.withResolvers<Result<ClipboardRepresentation, ExpectedError>>();
   const app = await mount({clipboard: {read: () => gate.promise, dispose: async () => {}}});
@@ -105,7 +139,7 @@ test("Moving the caret during clipboard reads prevents misplaced insertion and o
     await app.mockInput.typeText("before"); const pending = app.input.pasteClipboard();
     app.mockInput.pressArrow("left"); gate.resolve(ok({mimeType:"text/plain",bytes:new TextEncoder().encode("paste")})); await pending;
 
-    expect(app.input.value).toBe("before"); expect(app.notices[0]).toContain("paste again");
+    expect(app.input.value).toBe("before"); expect(app.notices[0]).toContain("paste again"); expect(app.levels).toEqual(["warning"]);
     expect(app.input.pending).toBe(false);
   } finally {await app.close();}
 });

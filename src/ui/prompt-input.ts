@@ -12,6 +12,7 @@ import { cacheClipboardImage, fileInput, pastedFiles } from "../agents/prompt-at
 import { collapsedPaste, expandPromptDraft, promptPartLabel, promptPartSchema, validatePromptDraft, type PromptDraft, type PromptPart, type PromptSubmission } from "../agents/prompt-input.ts";
 import type { DialogContent } from "./text-dialog.ts";
 import { InputField, type InputLayout } from "./input-field.ts";
+import type { Notice } from "./messages.ts";
 
 type Options = { clipboard?: Pick<Clipboard, "read" | "dispose">; cacheRoot?: string; readOnly?: boolean; id?: string; fieldId?: string; activityId?: string };
 
@@ -33,7 +34,7 @@ export class PromptInput extends TextareaRenderable {
   private disposed = false;
   private cwd = process.cwd();
 
-  constructor(private readonly renderer: CliRenderer, private readonly notice: (message: string) => void,
+  constructor(private readonly renderer: CliRenderer, private readonly notice: Notice,
     private readonly inspect: (content: DialogContent) => void, private readonly options: Options = {}) {
     super(renderer, { id: options.id ?? "session-prompt", width: "auto", flexGrow: 1, minWidth: 0, height: 1, flexShrink: 0, wrapMode: "word",
       placeholder: options.readOnly ? "" : "Ask to do anything",
@@ -109,7 +110,7 @@ export class PromptInput extends TextareaRenderable {
   }
   attachFile(path: string, start?: number, end?: number): boolean {
     const file = fileInput(path, this.cwd);
-    if (file.path.length > 4096 || file.path.includes("\0")) { this.notice("[INVALID_INPUT] File path exceeds the supported path boundary. Input was retained."); return false; }
+    if (file.path.length > 4096 || file.path.includes("\0")) { this.notice("[INVALID_INPUT] File path exceeds the supported path boundary. Input was retained.", { level: "warning" }); return false; }
     this.insertPart({ ...file, index: this.sequence[file.kind]++ }, start, end);
     return true;
   }
@@ -118,15 +119,15 @@ export class PromptInput extends TextareaRenderable {
     if (this.options.readOnly) return;
     let text: string;
     try { text = new TextDecoder("utf-8", { fatal: true }).decode(event.bytes); }
-    catch (error) { if (error instanceof TypeError) { this.notice("[INVALID_INPUT] Paste is not valid UTF-8. Nothing was inserted."); return; } throw error; }
+    catch (error) { if (error instanceof TypeError) { this.notice("[INVALID_INPUT] Paste is not valid UTF-8. Nothing was inserted.", { level: "warning" }); return; } throw error; }
     this.pasteText(text);
   }
   pasteText(text: string): void {
     if (this.options.readOnly || !text) return;
-    if (Buffer.byteLength(text) + Buffer.byteLength(this.legacyText) > maxFrameBytes) { this.notice("Paste exceeds the runtime payload safety limit. Nothing was inserted; input was retained."); return; }
+    if (Buffer.byteLength(text) + Buffer.byteLength(this.legacyText) > maxFrameBytes) { this.notice("Paste exceeds the runtime payload safety limit. Nothing was inserted; input was retained.", { level: "warning" }); return; }
     const files = pastedFiles(text, this.cwd);
     if (files) {
-      if (files.some((file) => file.path.length > 4096)) { this.notice("[INVALID_INPUT] A pasted file path exceeds the supported path boundary. Nothing was inserted."); return; }
+      if (files.some((file) => file.path.length > 4096)) { this.notice("[INVALID_INPUT] A pasted file path exceeds the supported path boundary. Nothing was inserted.", { level: "warning" }); return; }
       this.batch(() => { for (const file of files) { this.insertPart({ ...file, index: this.sequence[file.kind]++ }); this.insertText(" "); } });
     } else if (collapsedPaste(text)) this.insertPart({ kind: "paste", text, index: this.sequence.paste++ });
     else this.insertText(text);
@@ -138,15 +139,15 @@ export class PromptInput extends TextareaRenderable {
     try {
       const result = await this.clipboard.read(controller.signal);
       if (!this.current(generation, controller)) return;
-      if (!result.ok) { this.notice(`[${result.error.code}] ${result.error.message}`); return; }
+      if (!result.ok) { this.notice(`[${result.error.code}] ${result.error.message}`, { level: "error" }); return; }
       const { mimeType, bytes } = result.value;
       if (mimeType.startsWith("image/")) {
         const cached = await cacheClipboardImage(bytes, mimeType, this.options.cacheRoot);
         if (!this.current(generation, controller)) {
-          if (cached.ok) { const removed = await capture(() => rm(cached.value.path, { force: true })); if (!removed.ok) this.notice(`[${removed.error.code}] A cancelled clipboard cache file could not be removed.`); }
+          if (cached.ok) { const removed = await capture(() => rm(cached.value.path, { force: true })); if (!removed.ok) this.notice(`[${removed.error.code}] A cancelled clipboard cache file could not be removed.`, { level: "warning" }); }
           return;
         }
-        if (!cached.ok) { this.notice(`[${cached.error.code}] ${cached.error.message}`); return; }
+        if (!cached.ok) { this.notice(`[${cached.error.code}] ${cached.error.message}`, { level: "error" }); return; }
         this.insertPart({ ...cached.value, index: this.sequence.image++ });
       } else {
         const text = new TextDecoder().decode(bytes);
@@ -158,7 +159,7 @@ export class PromptInput extends TextareaRenderable {
   }
   private current(generation: number, controller: AbortController): boolean {
     if (this.disposed || controller.signal.aborted) return false;
-    if (generation !== this.generation || this.cursorOffset !== this.readCursor) { this.notice("Input changed while reading the clipboard. Nothing was inserted; paste again at the intended position."); return false; }
+    if (generation !== this.generation || this.cursorOffset !== this.readCursor) { this.notice("Input changed while reading the clipboard. Nothing was inserted; paste again at the intended position.", { level: "warning" }); return false; }
     return true;
   }
   get canInspect(): boolean { return this.atCursor() !== undefined; }

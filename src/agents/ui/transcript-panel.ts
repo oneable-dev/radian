@@ -495,7 +495,7 @@ export class TranscriptPanel {
       if (markdownKind) {
         row.markdown = new TranscriptMarkdown(this.renderer, markdownKind === "thinking" ? this.thinkingSyntax : this.proseSyntax, markdownKind === "thinking",
           () => { if (this.isCurrentRow(row)) this.markdownChanging(); },
-          (message) => { if (this.isCurrentRow(row)) this.options.notice(message); });
+          (message, options) => { if (this.isCurrentRow(row)) this.options.notice(message, options); });
         row.box.remove(row.bodyRow); row.markdown.root.add(row.bodyRow);
         row.box.remove(row.completion); row.box.add(row.markdown.root); row.box.add(row.completion);
         row.markdown.root.on("resize", () => {

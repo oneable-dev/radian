@@ -159,7 +159,7 @@ test("Compact hidden-panel layouts keep footer/notifications at bottom and click
   const app = await mount();
   try {
     const focus = app.renderer.currentFocusedRenderable;
-    app.view.setNotice("Runtime reconnecting"); app.resize(60, 12); await app.renderOnce();
+    app.view.setNotice("Runtime reconnecting", { level: "warning" }); app.resize(60, 12); await app.renderOnce();
 
     await app.mockMouse.click(2, 11); await app.renderOnce();
 

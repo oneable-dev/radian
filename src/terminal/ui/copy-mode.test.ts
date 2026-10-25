@@ -60,6 +60,7 @@ test("Shared terminal reading/copying preserves shell input and PTY sizes", asyn
 
     // Entry preserves size and copies only selections; notifications reuse existing rows.
     expect(app.copied).toEqual(["al"]); expect(app.inputs).toEqual([]);
+    expect(app.captureCharFrame()).toContain("Completed"); expect(app.captureCharFrame()).toContain("Copied to clipboard");
     expect(app.captureCharFrame()).toContain("NORMAL · frozen output");
     app.mockInput.pressEscape(); await app.render();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
@@ -120,6 +121,7 @@ test("Copy failures preserve selection and Esc clears selection before a later p
   try {
     await app.open(); app.mockInput.pressKey("v"); app.mockInput.pressKey("l"); app.mockInput.pressKey("y"); await app.render();
     expect(app.reader().getSelectedText()).toBe("al"); expect(app.captureCharFrame()).toContain("CLIPBOARD_UNAVAILABLE");
+    expect(app.captureCharFrame()).toContain("Failed");
     app.mockInput.pressEscape(); await app.render();
     expect(app.reader().focused).toBe(true); expect(app.reader().hasSelection()).toBe(false);
     app.mockInput.pressEscape(); await app.render();
@@ -147,7 +149,7 @@ test("Read failures report explicitly and restore ordinary shell input", async (
     await app.open(); await app.mockInput.typeText("x");
 
     expect(app.reader().visible).toBe(false); expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
-    expect(app.captureCharFrame()).toContain("PTY_BUSY"); expect(app.inputs).toContain("78");
+    expect(app.captureCharFrame()).toContain("PTY_BUSY"); expect(app.captureCharFrame()).toContain("Failed"); expect(app.inputs).toContain("78");
   } finally { await app.close(); }
 });
 

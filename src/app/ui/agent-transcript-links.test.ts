@@ -182,9 +182,13 @@ test("Non-link characters and blank URL-trailing space never open another addres
   try {
     await app.source("Before"); const { x, y } = app.position("http://localhost:3000");
 
-    await app.gx(); await app.waitForFrame(frame => frame.includes("No HTTP(S) link"));
+    await app.gx();
     await app.mockMouse.click(x + "http://localhost:3000".length + 3, y); await app.render();
 
+    // Navigation misses produce neither a notification nor a retained message.
+    expect(app.renderer.root.findDescendantById("session-notifications")?.visible).toBe(false);
+    pressLeader(app, "!"); await app.render(); expect(app.captureCharFrame()).toContain("No messages yet");
+    expect(app.captureCharFrame()).not.toContain("No HTTP(S) link");
     expect(app.opened).toEqual([]); expect(app.view.promptDrafts.a1).toBe("Keep this draft");
   } finally { await app.close(); }
 });

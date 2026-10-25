@@ -372,7 +372,7 @@ test("Detail-dialog Ctrl+D/U scrolls bodies by half a page", async () => {
   // Surfaces without candidates, such as help and notification details, jump within bodies.
   const app = await mount("workspace");
   try {
-    app.mockInput.pressEscape(); app.view.setNotice(Array.from({ length: 100 }, (_, index) => `Details line ${index}`).join("\n")); await app.render();
+    app.mockInput.pressEscape(); app.view.setNotice(Array.from({ length: 100 }, (_, index) => `Details line ${index}`).join("\n"), { level: "warning" }); await app.render();
     app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("!"); app.mockInput.pressEnter(); await app.render();
     const scroll = app.get("text-dialog-scroll") as ScrollBoxRenderable, half = Math.floor(scroll.viewport.height / 2);
 
