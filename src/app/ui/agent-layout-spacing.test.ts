@@ -96,7 +96,7 @@ test.each([120, 60])("At width %i, two-line Working avoids return-to-bottom cont
     const row = app.get("transcript-status-row"), run = app.get("agent-run-status"), caption = app.get("agent-run-request") as TextRenderable;
     const button = app.get("transcript-bottom-button"), composer = app.get("agent-composer");
     expect(row.height).toBe(2); expect(run.height).toBe(2); expect(caption.y).toBe(run.y + 1); expect(caption.x).toBe(run.x);
-    expect(caption.plainText).toContain("Request caption"); expect(caption.plainText).toEndWith("…");
+    expect(caption.plainText).toContain("Request caption"); expect(caption.plainText).toStartWith("“"); expect(caption.plainText).toEndWith("…”");
     expect(caption.height).toBe(1); expect(composer.y - row.y - row.height).toBe(1);
     expect(button.visible).toBe(true); expect(button.y).toBe(app.scroll.viewport.y + app.scroll.viewport.height);
     expect(button.y + button.height).toBeLessThanOrEqual(run.y);

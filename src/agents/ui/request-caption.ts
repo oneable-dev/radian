@@ -12,12 +12,16 @@ export function requestForSection(section: TranscriptSection | undefined): Reque
 // Work labels remain previews, not a second full-width rendering of the prompt.
 export function formatWorkRequest(request: RequestSummary, width: number, available = width): string {
   const limit = Math.max(0, Math.min(60, Math.floor(width / 2), available));
-  return formatRequestCaption({ ...request, text: request.text ? `“${request.text}”` : "" }, limit);
+  return formatRequestCaption(request, limit, true);
 }
 
-export function formatRequestCaption(request: RequestSummary, width: number): string {
+export function formatRequestCaption(request: RequestSummary, width: number, quoted = false): string {
   if (width <= 0) return "";
   const text = singleLine(request.text);
+  const formatText = (available: number): string => {
+    const excerpt = truncateCells(text, available - (quoted ? 2 : 0));
+    return quoted && excerpt ? `“${excerpt}”` : excerpt;
+  };
   const image = request.images ? `[${request.images} ${request.images === 1 ? "image" : "images"}]` : "";
   const file = request.files ? `[${request.files} ${request.files === 1 ? "file" : "files"}]` : "";
   const namedFile = request.files === 1 && request.fileName ? `[File: ${singleLine(request.fileName)}]` : file;
@@ -27,7 +31,7 @@ export function formatRequestCaption(request: RequestSummary, width: number): st
     badges = `[${[request.images ? `${request.images}I` : "", request.files ? `${request.files}F` : ""].filter(Boolean).join(" ")}]`;
     return truncateCells(badges, width);
   }
-  if (!badges) return truncateCells(text, width);
-  const excerpt = truncateCells(text, width - Bun.stringWidth(badges) - 2);
+  if (!badges) return formatText(width);
+  const excerpt = formatText(width - Bun.stringWidth(badges) - 2);
   return excerpt ? `${excerpt}  ${badges}` : badges;
 }

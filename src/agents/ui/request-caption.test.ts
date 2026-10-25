@@ -32,10 +32,33 @@ test.each([[30, 15], [80, 40], [200, 60]])("Work requests at width %i occupy at 
 
   const caption = formatWorkRequest(request, width);
 
-  // Ellipsis and quoting share the same cell budget as the excerpt.
-  expect(caption).toEndWith("…"); expect(Bun.stringWidth(caption)).toBeLessThanOrEqual(limit);
+  // Both quotes stay visible within the preview budget, even when the text is shortened.
+  expect(caption).toStartWith("“"); expect(caption).toEndWith("…”"); expect(Bun.stringWidth(caption)).toBeLessThanOrEqual(limit);
   expect(request.text).toBe(original); expect(caption).not.toContain("\uFFFD");
-  expect(Bun.stringWidth(formatWorkRequest(request, width, 7))).toBeLessThanOrEqual(7);
+  expect(formatWorkRequest(request, width, 7)).toBe("“한글…”");
+});
+
+test.each([[0, ""], [1, ""], [2, ""], [3, "“…”"], [4, "“A…”"], [5, "“ABC”"]] as const)("Work requests with %i available cells never show an unmatched quote", (available, expected) => {
+  // The preview needs room for both quotes and at least one text or ellipsis cell.
+  const request = { text: "ABC", images: 0, files: 0 };
+
+  const caption = formatWorkRequest(request, 120, available);
+
+  // Hide text rather than clipping a quote when the remaining space is too small.
+  expect(caption).toBe(expected); expect(Bun.stringWidth(caption)).toBeLessThanOrEqual(available);
+});
+
+test("Work requests reserve both quotes after attachment badges and omit empty excerpts", () => {
+  // Badges must remain outside the quoted text and retain their width priority.
+  const request = { text: "A long request", images: 2, files: 3 };
+
+  const caption = formatWorkRequest(request, 50);
+  const narrow = formatWorkRequest(request, 48);
+  const attachments = formatWorkRequest({ ...request, text: "" }, 50);
+
+  // A three-cell excerpt can show balanced quotes, but a smaller one shows only badges.
+  expect(caption).toBe("“…”  [2 images] [3 files]"); expect(Bun.stringWidth(caption)).toBe(25);
+  expect(narrow).toBe("[2 images] [3 files]"); expect(attachments).toBe(narrow);
 });
 
 test("Legacy sections use text only without inventing attachments or exposing skill instructions", () => {

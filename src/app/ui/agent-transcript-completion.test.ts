@@ -148,10 +148,10 @@ test("Completion request truncation updates on resize while retaining duration, 
   try {
     const footer = () => descendants(app.renderer.root).find((node): node is TextRenderable => node instanceof TextRenderable && node.plainText.startsWith("Worked for"))!;
     app.resize(240, 40); await app.render(); const wide = footer().plainText;
-    expect(wide.split("\n")[1]?.endsWith("…")).toBe(true);
+    expect(wide.split("\n")[1]).toStartWith("“"); expect(wide.split("\n")[1]).toEndWith("…”");
     app.resize(120, 40); await app.render(); const narrow = footer().plainText;
     expect(narrow.split("\n")[0]).toBe("Worked for 1m 30s • Sep 19 at 10:55 AM");
-    expect(narrow.split("\n")[1]).toStartWith("“Review"); expect(narrow.split("\n")[1]?.endsWith("…")).toBe(true);
+    expect(narrow.split("\n")[1]).toStartWith("“Review"); expect(narrow.split("\n")[1]).toEndWith("…”");
     expect(Bun.stringWidth(narrow.split("\n")[1]!)).toBeLessThanOrEqual(footer().width); expect(narrow.length).toBeLessThan(wide.length);
     expect(footer().height).toBe(2); expect(narrow).not.toContain("\uFFFD");
     app.resize(240, 40); await app.render(); expect(footer().plainText).toBe(wide);
@@ -178,7 +178,7 @@ test("Completion request subrows retain image/file badges and truncate only long
     const [metadata, caption] = footer.plainText.split("\n");
     expect(metadata).toBe("Worked for 1m 30s • Sep 19 at 10:55 AM");
     expect(caption).toStartWith("“Inspect");
-    expect(caption).toContain("…  [2 images] [3 files]"); expect(caption).not.toContain("/tmp/");
+    expect(caption).toContain("…”  [2 images] [3 files]"); expect(caption).not.toContain("/tmp/");
     expect(Bun.stringWidth(caption!)).toBeLessThanOrEqual(footer.width); expect(footer.height).toBe(2);
     expect(user.text).toBe(text); expect(app.view.promptDrafts.a1).toBe("Keep this draft");
 

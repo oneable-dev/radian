@@ -140,7 +140,7 @@ test("Request-free runs never infer content and long requests fit the next row i
     expect(app.status()).toBe("Working (0s · <Esc> to interrupt)");
     app.states.a1 = { status: "working", output: "", error: null, sections: [request("restored", "A long request that should stay on one line while the screen becomes narrow")] }; await app.update();
     app.resize(60, 12); await app.render();
-    expect(app.get("agent-run-status").height).toBe(2); expect(app.caption().endsWith("…")).toBe(true);
+    expect(app.get("agent-run-status").height).toBe(2); expect(app.caption()).toStartWith("“"); expect(app.caption()).toEndWith("…”");
     expect(app.get("session-transcript").height).toBeGreaterThan(0);
     expect(app.get("session-status").y + app.get("session-status").height).toBeLessThanOrEqual(app.get("app-footer").y);
     expect(app.view.promptDrafts.a1).toBe("unsent next command"); expect(app.sent).toEqual([]);

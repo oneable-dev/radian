@@ -60,7 +60,7 @@ test.each([120, 60, 200])("At width %i, per-child status expands below Working w
     const captions = [app.get("agent-run-request") as TextRenderable, ...app.captions()];
     expect(captions).toHaveLength(3);
     for (const caption of captions) {
-      expect(caption.plainText).toEndWith("…");
+      expect(caption.plainText).toStartWith("“"); expect(caption.plainText).toEndWith("…”");
       expect(Bun.stringWidth(caption.plainText)).toBeLessThanOrEqual(Math.min(60, Math.floor(app.list.width / 2)));
       expect(caption.plainText).not.toContain("\uFFFD");
     }

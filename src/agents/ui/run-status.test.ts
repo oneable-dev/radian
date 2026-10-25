@@ -88,7 +88,7 @@ test("Working requests truncate to one line after reserving attachment badges", 
   try {
     const request = { ...user("Original full prompt"), request: { text: "A long original prompt ".repeat(20), images: 2, files: 3 } };
     app.status.update("a", working([request]), true); await app.render();
-    expect(app.text()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toContain("…  [2 images] [3 files]");
+    expect(app.text()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toBe("“…”  [2 images] [3 files]");
     expect(Bun.stringWidth(app.caption())).toBeLessThanOrEqual(25);
     expect(app.captureCharFrame().split("\n")[2]?.trim()).toBe(""); expect(request.text).toBe("Original full prompt");
   } finally { await app.close(); }
@@ -211,12 +211,12 @@ test("Korean, combining characters, and emoji truncate by grapheme and cell widt
   try {
     const request = user("A 👨‍👩‍👧‍👦 e\u0301 한글👩🏽‍💻 " + "Z".repeat(40));
     app.status.update("a", working([request]), true); await app.render();
-    expect(app.caption()).toContain("👨‍👩‍👧‍👦"); expect(app.caption()).toContain("e\u0301"); expect(app.caption().endsWith("…")).toBe(true);
+    expect(app.caption()).toContain("👨‍👩‍👧‍👦"); expect(app.caption()).toContain("e\u0301"); expect(app.caption()).toStartWith("“"); expect(app.caption()).toEndWith("…”");
     expect(app.caption()).not.toContain("\uFFFD"); expect(Bun.stringWidth(app.caption())).toBeLessThanOrEqual(17);
     expect(app.captureCharFrame().split("\n")[2]!.trim()).toBe("");
     app.resize(6, 4); await app.render(); expect(Bun.stringWidth(app.text())).toBeLessThanOrEqual(4); expect(Bun.stringWidth(app.caption())).toBeLessThanOrEqual(3);
     app.resize(70, 4); await app.render(); expect(app.text()).toBe("Working (0s · <Esc> to interrupt)");
-    expect(app.caption()).toEndWith("…"); expect(Bun.stringWidth(app.caption())).toBeLessThanOrEqual(35);
+    expect(app.caption()).toEndWith("…”"); expect(Bun.stringWidth(app.caption())).toBeLessThanOrEqual(35);
     expect(request.text).toEndWith("Z".repeat(40));
   } finally { await app.close(); }
 });
