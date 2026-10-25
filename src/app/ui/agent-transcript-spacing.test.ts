@@ -195,7 +195,7 @@ test.each(sections)("$kind sections retain card/plain spacing in compact layouts
       expect(app.card.height).toBe(inset ? section.id === "notice" ? 5 : 3 : 1);
       expect(app.card.y - app.scroll.content.y).toBe(app.scroll.viewport.height > 1 ? 1 : 0);
       if (!inset) expect(app.captureCharFrame()).toContain(section.text);
-      expect(app.captureCharFrame().split("\n")[height - 1]).toContain("Radian");
+      expect(app.captureCharFrame().split("\n")[height - 1]).toContain("AGENT");
       expect(app.view.promptDrafts.a1).toBe("Keep my draft");
     }
     const frame = app.captureCharFrame().split("\n");

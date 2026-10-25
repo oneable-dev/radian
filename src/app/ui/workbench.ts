@@ -2,7 +2,6 @@ import {
   BorderChars, BoxRenderable, InputRenderableEvents, ScrollBoxRenderable, StyledText, TextAttributes, TextRenderable,
   type CliRenderer, type KeyEvent, type Renderable,
 } from "@opentui/core";
-import packageInfo from "../../../package.json";
 import { stripVTControlCharacters } from "node:util";
 import { workspaceRows, type WorkspaceRow } from "./workspace-rows.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
@@ -224,11 +223,9 @@ export class Workbench {
     panels.add(this.workPanel);
     this.root.add(panels);
     const help = this.button("Help", () => this.showHelp(), "Open help");
-    const details = this.button("Details", () => this.showNotice(), "Read notification");
     // Opening a pointer-triggered popup restores the original editor/PTY focus on close.
     help.onMouseDown = (event) => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.showHelp(); } };
-    details.onMouseDown = (event) => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.showNotice(); } };
-    this.footer = new Footer(renderer, `Radian ${packageInfo.version}`, { help, details }, "Radian");
+    this.footer = new Footer(renderer, { help });
     this.root.add(this.footer.root); this.root.add(this.workspacePopup); this.root.add(this.monitor.root);
     this.root.add(this.history.root); this.root.add(this.models.root); this.root.add(this.accounts.root); this.root.add(this.dashboard.root); this.root.add(this.extension.root); this.root.add(this.dialog.root);
     this.root.add(this.messagesPanel.root);
@@ -458,7 +455,8 @@ export class Workbench {
       const label = this.buttonHints.get(focused);
       if (focused.visible && label) shortcuts = [{ key: footerKeyHint("button.activate", "button", this.keymap.hints("button.activate", "button")), label }];
     }
-    this.footer.setView({ agent: "Agents", editor: "Editor", git: "Git", terminal: "Terminal" }[this.displayedWorkView]);
+    this.footer.setView(this.displayedWorkView === "agent" ? "AGENT" : this.displayedWorkView.toUpperCase());
+    this.footer.setWorkspace(this.selection.worktree);
     const overlay = this.messagesPanel.visible || this.extension.visible || this.dialog.visible || this.history.visible || this.models.visible || this.accounts.visible || this.dashboard.visible || this.monitor?.visible || this.sidebar.visible;
     const outputStatus = this.agent.active ? this.agent.transcriptStatus : this.terminals.root.visible ? this.terminals.copyStatus : "";
     this.footer.setContext(overlay ? "" : this.extensionStatus || outputStatus);

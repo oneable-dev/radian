@@ -31,15 +31,15 @@ async function mount(empty = false, keymap?: Keymap) {
   return { ...app, selection, view, created, lookups, sent, get, render, line, history, async close() { view.dispose(); await app.dispose(); } };
 }
 
-test("Remove top-right worktree/create/History buttons and show selected worktree/branch below prompts", async () => {
+test("Remove top-right worktree/create/History buttons and show selected worktree/branch in the footer", async () => {
   const app = await mount();
   try {
     expect(app.renderer.root.findDescendantById("work-view-tabs")).toBeUndefined();
     expect(app.line("agent-session-tabs")).not.toContain("New session"); expect(app.line("agent-session-tabs")).not.toContain("History");
     expect(app.renderer.root.findDescendantById("agent-history-button")).toBeUndefined();
-    expect(app.line("session-worktree-context")).toBe(`[ ${icons.folder} radian · ${icons.branch} main ]`);
-    const scope = app.get("session-worktree-context"), status = app.get("session-status"), composer = app.get("agent-composer");
-    expect(scope.y).toBe(status.y + 1); expect(status.y).toBe(composer.y + composer.height); expect(status.height).toBe(3);
+    expect(app.line("footer-workspace").trim()).toBe(`${icons.folder} radian · ${icons.branch} main`);
+    const scope = app.get("footer-workspace"), status = app.get("session-status"), composer = app.get("agent-composer");
+    expect(scope.y).toBe(app.get("app-footer").y); expect(status.y).toBe(composer.y + composer.height); expect(status.height).toBe(3);
     expect(app.created).toEqual([]); expect(app.lookups).toEqual([]); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
@@ -48,12 +48,12 @@ test("Scope displays active worktrees, not browsing cursors, and reflects switch
   const app = await mount();
   try {
     openWorkspaceSearch(app); app.mockInput.pressTab();
-    app.mockInput.pressKey("j"); await app.render(); expect(app.line("session-worktree-context")).toBe(`[ ${icons.folder} radian · ${icons.branch} main ]`);
-    app.mockInput.pressEnter(); await app.render(); expect(app.line("session-worktree-context")).toContain("radian-ui");
+    app.mockInput.pressKey("j"); await app.render(); expect(app.line("footer-workspace").trim()).toBe(`${icons.folder} radian · ${icons.branch} main`);
+    app.mockInput.pressEnter(); await app.render(); expect(app.line("footer-workspace")).toContain("radian-ui");
     app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id !== "demo:feature" ? tree : { ...tree, branch: "fix/status" }) })));
-    await app.render(); expect(app.line("session-worktree-context")).toBe(`[ ${icons.folder} radian-ui · ${icons.branch} fix/status ]`);
+    await app.render(); expect(app.line("footer-workspace").trim()).toBe(`${icons.folder} radian-ui · ${icons.branch} fix/status`);
     app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id !== "demo:feature" ? tree : { ...tree, branch: null }) })));
-    await app.render(); expect(app.line("session-worktree-context")).toContain("detached");
+    await app.render(); expect(app.line("footer-workspace")).toContain("detached HEAD");
     expect(app.view.promptDrafts.a1).toBe("preserved prompt"); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
@@ -120,15 +120,15 @@ test.each(["default", "custom", "disabled"] as const)("Empty AI views show only 
   } finally { await app.close(); }
 });
 
-test("Long Korean/emoji worktrees and branches truncate within one status row without changing source", async () => {
+test("Long Korean/emoji worktrees and branches truncate within one footer row without changing source", async () => {
   const app = await mount();
   try {
     const name = "한글 👨‍👩‍👧‍👦 é very-long-worktree-name", branch = "feature/한글-👩🏽‍💻-very-long-branch";
     app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id !== "demo:main" ? tree : { ...tree, name, branch }) })));
     app.resize(100, 24); await app.render();
-    const scope = app.get("session-worktree-context") as TextRenderable, text = scope.plainText;
+    const scope = app.get("footer-workspace") as TextRenderable, text = scope.plainText;
     expect(scope.height).toBe(1); expect(Bun.stringWidth(text)).toBeLessThanOrEqual(scope.width); expect(text).toContain("…"); expect(text).not.toContain("\uFFFD");
-    expect(text.startsWith(`[ ${icons.folder} `)).toBe(true); expect(text.endsWith(" ]")).toBe(true); expect(text).toContain(` · ${icons.branch} `);
+    expect(text.startsWith(` ${icons.folder} `)).toBe(true); expect(text).toContain(` ${icons.branch} `);
     expect(app.selection.worktree?.name).toBe(name); expect(app.selection.worktree?.branch).toBe(branch);
     expect(app.view.promptDrafts.a1).toBe("preserved prompt"); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
@@ -140,14 +140,15 @@ test("Compact scope displays avoid model/meters while preserving drafts, input f
     pressLeader(app, "a"); await app.render(); const prompt = app.get("session-prompt") as PromptInput;
     for (const width of [160, 100, 60, 160]) {
       app.resize(width, 24); await app.render();
-      const scope = app.get("session-worktree-context"), status = app.get("session-status"), row = app.get("session-status-line");
-      expect(scope.visible).toBe(true); expect(scope.x + scope.width).toBeLessThanOrEqual(status.x + status.width);
+      const scope = app.get("footer-workspace"), status = app.get("session-status");
+      const identity = app.get("footer-identity");
+      expect(scope.visible).toBe(true); expect(scope.x).toBe(identity.x + identity.width);
       const text = (scope as TextRenderable).plainText;
-      expect(text.startsWith(`[ ${icons.folder} `)).toBe(true); expect(text.endsWith(" ]")).toBe(true); expect(text).toContain(` · ${icons.branch} `);
-      expect(scope.y).toBe(row.y); expect(app.line("session-status-line")).toContain("64%"); expect(app.line("session-status-line")).toContain("18% used");
+      expect(text.startsWith(` ${icons.folder} `)).toBe(true); expect(text).toContain(` ${icons.branch} `);
+      expect(scope.y).toBe(app.get("app-footer").y); expect(app.line("session-status-line")).toContain("64%"); expect(app.line("session-status-line")).toContain("18% used");
       expect(status.height).toBe(3); expect(status.y + status.height).toBeLessThanOrEqual(app.get("app-footer").y);
       expect(app.renderer.currentFocusedRenderable).toBe(prompt); expect(prompt.value).toBe("preserved prompt");
     }
-    expect(app.line("session-worktree-context")).toBe(`[ ${icons.folder} radian · ${icons.branch} main ]`); expect(app.sent).toEqual([]);
+    expect(app.line("footer-workspace").trim()).toBe(`${icons.folder} radian · ${icons.branch} main`); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });

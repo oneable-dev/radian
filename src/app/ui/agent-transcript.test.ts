@@ -264,7 +264,7 @@ test("Compact help scrolls and returns to existing body navigation on close", as
     app.resize(60, 12); await app.render();
     app.mockInput.pressKey("F1"); await app.render();
     expect(app.captureCharFrame()).toContain("Sections:");
-    expect(app.captureCharFrame().split("\n")[11]).toContain("Radian");
+    expect(app.captureCharFrame().split("\n")[11]).toContain("AGENT");
     app.mockInput.pressKey("END"); await app.render();
     const area = app.renderer.root.findDescendantById("session-transcript")! as ScrollBoxRenderable;
     const helpText = () => app.captureCharFrame().split("\n").slice(area.viewport.y, area.viewport.y + area.viewport.height)

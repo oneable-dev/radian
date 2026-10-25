@@ -33,7 +33,7 @@ async function mount() {
     return value;
   };
   const identitySpan = () => {
-    const column = app.captureCharFrame().split("\n")[app.renderer.height - 1]!.indexOf("Radian");
+    const column = app.captureCharFrame().split("\n")[app.renderer.height - 1]!.indexOf("AGENT");
     let x = 0;
     const value = app.captureSpans().lines.at(-1)!.spans.find((item) => { x += item.width; return x > column; });
     if (!value) throw new Error("Missing footer identity");
@@ -49,7 +49,9 @@ test("Full screens use terminal defaults/ANSI and immediately switch to light th
     expect(rgb(app.span("Theme-sensitive transcript").fg)).toEqual([236, 236, 236]);
     expect(rgb(app.span("Theme-sensitive transcript").bg)).toEqual([20, 20, 20]);
     expect(rgb(app.span("×").fg)).toEqual([17, 119, 153]);
-    expect(rgb(app.identitySpan().fg)).toEqual([236, 236, 236]);
+    expect(rgb(app.identitySpan().fg)).toEqual([255, 255, 255]);
+    expect(app.identitySpan().fg.intent).toBe("rgb");
+    expect(rgb(app.identitySpan().bg)).toEqual([17, 119, 153]);
     const prompt = app.renderer.root.findDescendantById("session-prompt");
     if (!(prompt instanceof PromptInput)) throw new Error("Missing Agent input");
     prompt.focus(); await app.mockInput.typeText(" draft"); await app.renderOnce();
@@ -65,7 +67,9 @@ test("Full screens use terminal defaults/ANSI and immediately switch to light th
     expect(rgb(app.span("Theme-sensitive transcript").fg)).toEqual([32, 32, 32]);
     expect(rgb(app.span("Theme-sensitive transcript").bg)).toEqual([250, 250, 246]);
     expect(rgb(app.span("unsent request draft").fg)).toEqual([32, 32, 32]);
-    expect(rgb(app.identitySpan().fg)).toEqual([32, 32, 32]);
+    expect(rgb(app.identitySpan().fg)).toEqual([250, 250, 246]);
+    expect(app.identitySpan().fg.intent).toBe("rgb");
+    expect(rgb(app.identitySpan().bg)).toEqual([17, 119, 153]);
   } finally { await app.close(); }
 });
 

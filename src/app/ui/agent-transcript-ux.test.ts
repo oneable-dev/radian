@@ -76,7 +76,7 @@ test("Soft wrapping and resize never change Visual Line logical ranges", async (
     app.mockInput.pressKey("j"); await app.copy();
 
     expect(app.copies).toEqual([line + "\nnext\n"]);
-    expect(app.captureCharFrame().split("\n")[11]).toContain("Radian");
+    expect(app.captureCharFrame().split("\n")[11]).toContain("AGENT");
   } finally { await app.close(); }
 });
 
@@ -447,7 +447,7 @@ test("Agent and Thinking omit titles, backgrounds, and indentation while other b
     app.mockInput.pressEnter(); app.mockInput.pressKey("v", { shift: true }); await app.copy();
 
     expect(app.copies).toEqual(["USER_BODY"]);
-    expect(app.captureCharFrame().split("\n")[11]).toContain("Radian");
+    expect(app.captureCharFrame().split("\n")[11]).toContain("AGENT");
     expect(app.view.promptDrafts.a1).toBe("unsent draft");
   } finally { await app.close(); }
 });

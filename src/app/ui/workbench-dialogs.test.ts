@@ -147,7 +147,7 @@ test("Notifications leave footer height stable and Messages reads/copies untrunc
     const footer = app.get("app-footer"); expect(footer.height).toBe(1);
     const message = "[CONNECTION_FAILED] Temporary connection failure\n" + "Detailed cause. ".repeat(200) + "\nRecovery: reconnect after saving your work.";
     app.view.setNotice(message, { level: "error" }); await app.render();
-    expect(footer.height).toBe(1); expect(app.renderer.root.findDescendantById("footer-notice")?.visible).toBe(false);
+    expect(footer.height).toBe(1); expect(app.renderer.root.findDescendantById("footer-notice")).toBeUndefined();
     expect(app.captureCharFrame()).toContain("Temporary connection");
     expect(app.captureCharFrame()).not.toContain("Detailed cause.");
     expect(app.captureCharFrame()).toContain("AGENT / radian");

@@ -5,33 +5,12 @@ import { paintText, styleChunk, type StyleGroup, type UiStyles } from "../../ui/
 import { ProviderIcon } from "../../ui/provider-icon.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import type { UsageWindow } from "../../usage/model.ts";
-import type { Worktree } from "../../workspace/model.ts";
-import { singleLine, truncateCells } from "../../ui/text.ts";
 import { icons } from "../../icons.ts";
 
 type Meter = { label: string; percent: number | null; value: string; muted?: boolean };
 const cellWidth = (text: string) => Bun.stringWidth(text);
 const percentage = (value: number | null) => value === null ? "-" : `${Math.round(value)}%`;
 const clampPercent = (value: number) => Math.max(0, Math.min(100, value));
-type WorkspaceScope = Pick<Worktree, "name" | "branch">;
-
-function scopeChunks(scope: WorkspaceScope, width: number, styles: UiStyles): TextChunk[] {
-  const name = singleLine(scope.name), branch = singleLine(scope.branch ?? "detached");
-  const open = "[ ", worktreePrefix = `${icons.folder} `, separator = " · ", branchPrefix = `${icons.branch} `, close = " ]";
-  const budget = width - cellWidth(open + worktreePrefix + separator + branchPrefix + close);
-  // Keep the group intact, with at least an ellipsis for each name, or hide it entirely.
-  if (budget < 2) return [];
-  const branchWidth = Math.min(cellWidth(branch), Math.ceil(budget / 2));
-  const label = truncateCells(name, budget - branchWidth);
-  return [
-    styleChunk(open, styles["ui.muted"]),
-    styleChunk(worktreePrefix + label, styles["ui.label"]),
-    styleChunk(separator, styles["ui.muted"]),
-    styleChunk(branchPrefix + truncateCells(branch, budget - cellWidth(label)), styles["git.currentRef"]),
-    styleChunk(close, styles["ui.muted"]),
-  ];
-}
-
 function providerLabel(provider: string | null | undefined, sessionProvider: string | null | undefined): string | null {
   if (provider === "openai" || provider === "openai-codex") return provider === "openai-codex" || sessionProvider === "openai-codex" ? "chatgpt" : "openai";
   return provider === "anthropic" ? "claude" : null;
@@ -80,8 +59,6 @@ function meterChunks(meter: Meter, width: number, colors: UiColors, styles: UiSt
 export class SessionStatus {
   readonly root: BoxRenderable;
   private readonly text: TextRenderable;
-  private readonly scopeText: TextRenderable;
-  private worktree: WorkspaceScope | null = null;
   private readonly providerIcon: ProviderIcon;
   private readonly spinner: LoadingSpinner;
   private recovering = false;
@@ -98,9 +75,8 @@ export class SessionStatus {
     const row = new BoxRenderable(renderer, { id: "session-status-line", width: "100%", height: 1, flexShrink: 0, flexDirection: "row", gap: 2,
       renderBefore: () => this.paint() });
     this.root.add(row);
-    this.scopeText = new TextRenderable(renderer, { id: "session-worktree-context", height: 1, flexShrink: 0, wrapMode: "none", selectable: false, visible: false });
     this.text = new TextRenderable(renderer, { width: "auto", flexGrow: 1, flexShrink: 1, minWidth: 0, height: 1, wrapMode: "none", selectable: false });
-    row.add(this.scopeText); row.add(this.text);
+    row.add(this.text);
     this.providerIcon = new ProviderIcon(renderer); row.add(this.providerIcon);
     this.spinner = new LoadingSpinner(renderer, { id: "usage-loading" });
     this.spinner.root.position = "absolute"; this.spinner.root.right = 0; this.spinner.root.top = 0; row.add(this.spinner.root);
@@ -108,9 +84,9 @@ export class SessionStatus {
     this.root.once(RenderableEvents.DESTROYED, () => this.dispose());
   }
 
-  update(telemetry: SessionTelemetry | undefined, visible: boolean, worktree: WorkspaceScope | null = null, capturedAt?: number): void {
+  update(telemetry: SessionTelemetry | undefined, visible: boolean, capturedAt?: number): void {
     if (this.disposed) return;
-    this.telemetry = telemetry ?? null; this.worktree = worktree; this.capturedAt = capturedAt; this.visible = visible; this.root.visible = visible;
+    this.telemetry = telemetry ?? null; this.capturedAt = capturedAt; this.visible = visible; this.root.visible = visible;
     const recovering = telemetry?.usage?.status === "loading" || telemetry?.usage?.status === "error";
     if (!visible || capturedAt !== undefined) this.spinner.cancel();
     else if (recovering && !this.recovering) this.spinner.start();
@@ -140,7 +116,7 @@ export class SessionStatus {
     const countdown = resetTime(window?.resetsAt ?? null, now);
     const provider = telemetry?.usage?.provider ?? telemetry?.provider;
     const hasIcon = this.providerIcon.setProvider(provider), providerName = providerLabel(provider, telemetry?.provider);
-    const signature = JSON.stringify([totalWidth, spinning, this.worktree?.name, this.worktree?.branch, telemetry, window?.id, countdown]);
+    const signature = JSON.stringify([totalWidth, spinning, telemetry, window?.id, countdown]);
     if (signature === this.lastPaint) return;
     this.lastPaint = signature;
     this.root.backgroundColor = styles["ui.text"].bg; this.text.bg = styles["ui.text"].bg;
@@ -154,14 +130,7 @@ export class SessionStatus {
       [{ ...contextMeter, label: `${icons.context} context` }, { ...usage, label: providerName ? `   ${providerName}` : usage.label }],
       [contextMeter, usage],
     ] as const;
-    // Reserve known resource percentages before fitting workspace/model detail. The scope
-    // gets at most a third of the row and shrinks on grapheme boundaries when space is tight.
-    const minimumMeters = cellWidth(`${contextMeter.label} ${contextMeter.value}`) + cellWidth(`${usage.label} ${usage.value}`) + 2;
-    const scopeWidth = Math.max(0, Math.min(Math.floor(totalWidth / 3), totalWidth - minimumMeters - 2));
-    const scope = this.worktree ? scopeChunks(this.worktree, scopeWidth, styles) : [];
-    const scopeSize = scope.reduce((size, part) => size + cellWidth(part.text), 0);
-    this.scopeText.visible = scopeSize > 0; this.scopeText.content = new StyledText(scope); this.scopeText.width = scopeSize; paintText(this.scopeText, styles["ui.muted"]);
-    const scopePrefix = scopeSize ? scopeSize + 2 : 0, width = totalWidth - scopePrefix;
+    const width = totalWidth;
     const details = !recovering && window && countdown ? [`${usage.value} ${countdown}`, `${usage.value} ${countdown.replaceAll(" ", "")}`, usage.value] : [usage.value];
     const model = telemetry?.model ?? "model —", effort = telemetry?.effort ?? "—";
     const fast = telemetry?.fast === true ? "on" : telemetry?.fast === false ? "off" : "—";
@@ -190,7 +159,7 @@ export class SessionStatus {
             this.text.content = new StyledText(chunks);
             const usageWidth = cellWidth(`${meters[1]!.label} ${meters[1]!.value}`)
               + (barWidth && meters[1]!.percent !== null ? barWidth + 1 : 0);
-            this.providerIcon.left = scopePrefix + width - usageWidth; this.providerIcon.visible = hasIcon;
+            this.providerIcon.left = width - usageWidth; this.providerIcon.visible = hasIcon;
             return;
           }
         }

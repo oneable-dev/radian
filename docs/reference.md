@@ -827,10 +827,9 @@ control their own storage and logging; an extension can explicitly persist or ec
 ### Agent input status
 
 A passive row below and outside the prompt box, with one blank row above and below it, shows the
-active worktree and branch, selected model, effort and current `fast` setting, followed by
-**context remaining** and **account usage**. Worktree/branch updates follow the active workspace,
-not the sidebar cursor. Long scope labels are shortened on grapheme boundaries to at most one third
-of the row; known resource percentages take precedence in constrained space.
+selected model, effort and current `fast` setting, followed by **context remaining** and **account usage**.
+Workspace identity lives in the common footer instead of consuming this row's width. Known resource
+percentages take precedence in constrained space.
 Model, effort, fast and context have outline-robot, brain, lightning and database icons respectively.
 Both meters use the same block-bar style. Context explicitly reports the percentage `left`.
 The account meter pairs its provider logo with lowercase `chatgpt`, `openai` or `claude` when space permits;
@@ -1167,8 +1166,9 @@ while search owns input focus. Top-level work-view tabs are omitted. Agent and T
 underlines through the shared `src/ui/session-tab.ts` frame; an unfocused active session keeps a
 subdued background. Other buttons retain their
 usual focus styling. Navigation uses understated separators rather than boxed controls.
-Workspace popup, Agent/Git/Terminal content and footer text use two-cell horizontal insets, reduced to one on terminals
-narrower than 80 columns. Workspace navigation never consumes permanent work-pane width.
+Workspace popup and Agent/Git/Terminal content use two-cell horizontal insets, reduced to one on terminals
+narrower than 80 columns. The footer view badge always has one space on each side.
+Workspace navigation never consumes permanent work-pane width.
 Work views start at the top of the work pane;
 there is no reserved row for top-level view navigation. Tabs, search surfaces and item gaps no longer switch height modes. The composer
 retains its normal vertical padding unless fixed controls need that space. Work surfaces have no
@@ -1177,8 +1177,8 @@ and the terminal `… · running` line are omitted; empty, error, exit and recon
 Agent's padded telemetry, Editor, Git history/changes popups and Terminal end at the same work-pane bottom edge,
 without an unused row below them. Popup dimensions are clamped to the terminal without changing
 that viewport. Embedded programs receive the measured inner viewport rather than rendering
-beneath the padding. The footer text remains one row, with its gradient extending through the
-product text's inset to the screen's left edge.
+beneath the padding. The footer remains one row, with a solid rectangular view badge at the left edge
+followed by plain worktree and branch text.
 Keyboard focus is separate from selection: the focused workspace popup or input border uses the terminal's
 accent, while an unfocused selection stays softly highlighted. Agent input has a dedicated surface.
 These are presentation changes only; keybindings and embedded program input ownership are unchanged.
@@ -1345,16 +1345,19 @@ so underlying text stays hidden throughout the animation.
 
 ### Common footer
 
-The work pane and navigation popups share one full-width footer. Its single text row places
-`Radian`, its version and the **displayed work view** on the left (for example,
-`Radian 0.0.0 · Agents`), with shortcuts for the **currently focused control** on the right.
-The view name is subtly accented, not interactive, and does not change when focus moves elsewhere.
-Below 80 columns the version is omitted; at smaller widths the view name takes priority over branding.
-The footer occupies exactly one terminal row at every screen height, with no decorative row above it.
-Errors and notices remain separate above it. A subtle background gradient starts at the screen's left
-edge, including the product text's inset, and fades
-the terminal's accent into the footer surface toward the right. It follows palette changes and optional theme overrides. Keys are highlighted separately
-from their descriptions. Tree, search, History, buttons and prompt contexts update on actual focus/state changes; unrelated/global shortcuts are not appended.
+The work pane and navigation popups share one full-width, single-row footer. The **displayed work view**
+(`AGENT`, `EDITOR`, `GIT` or `TERMINAL`) occupies a solid accent-colored rectangle on the left; branding,
+version text and the former gradient are omitted. The view label has exactly one space on each side.
+The selected worktree and branch follow as plain text with no individual backgrounds, separated by ` · `
+and using the existing folder and branch icons. They are no longer duplicated
+in Agent telemetry. Detached worktrees show `detached HEAD`; long names truncate by terminal cells.
+The view stays visible when focus moves to another control or popup. Context and configured shortcut
+hints occupy the right side. Enabled shortcut descriptions use normal text color, not muted text;
+mode text uses explicit RGB with at least 4.5:1 contrast against its default accent background.
+The `footer.mode`, `footer.worktree` and `footer.branch` style groups
+follow terminal palettes and can be overridden independently. Keys are highlighted separately from their
+descriptions. Tree, search, History, buttons and prompt contexts update on actual focus/state changes;
+unrelated/global shortcuts are not appended.
 The footer prioritizes app-specific actions and Help. Routine default navigation, open/close, focus,
 scrolling, draft/search clearing (`<C-c>`) and Vim selection hints stay in full Help rather than occupying the footer; changed bindings
 remain visible. Send/Run/Queue, newline and Agent interrupt hints are omitted even when rebound.

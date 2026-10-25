@@ -33,7 +33,7 @@ test("Real service completion reaches connected CLI UI and terminal notification
           raw += decoder.decode(bytes, { stream: true });
           // Detect readiness through app, work-view, and session status, not default shortcut hints.
           const screen = Bun.stripANSI(raw);
-          if (screen.includes("Radian") && screen.includes("Agents") && screen.includes("context")) ready.resolve();
+          if (screen.includes("AGENT") && screen.includes("context")) ready.resolve();
           if (raw.includes("\x1b]777;notify;Radian · Task completed;") && raw.includes("Completed")) notified.resolve();
         } },
       });

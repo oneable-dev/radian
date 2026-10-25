@@ -73,43 +73,32 @@ test("Status below prompts has one-row outer spacing and separates context from 
   } finally { await app.close(); }
 });
 
-test("Parenthesized worktrees and branches retain separator/name/branch color hierarchy across themes", async () => {
-  // The location is passive metadata, not a button or a separate background badge.
+test("Worktree and branch move to the footer without duplicating session telemetry", async () => {
+  // Workspace identity belongs to the workbench, not the Agent-only model row.
   const app = await mount();
-  const span = (text: string) => app.captureSpans().lines[app.row.y]!.spans.find((value) => value.text.includes(text))!;
   try {
     for (const light of [false, true]) {
-      // Changing the terminal palette must repaint every part without a workspace switch.
       app.renderer.emit("palette", palette(light)); await app.renderOnce();
 
-      // Only the current branch is accented; brackets and the dot stay muted on the panel.
-      const colors = uiTheme(app.renderer).colors;
-      expect(app.line()).toContain(`[ ${icons.folder} radian · ${icons.branch} main ]`);
-      for (const text of ["[ ", " · ", " ]"]) expect(span(text).fg.toInts()).toEqual(colors.muted.toInts());
-      for (const text of [icons.folder, "radian"]) expect(span(text).fg.toInts()).toEqual(colors.text.toInts());
-      for (const text of [icons.branch, "main"]) expect(span(text).fg.toInts()).toEqual(colors.accent.toInts());
-      for (const text of ["[ ", icons.folder, "radian", icons.branch, " ]"]) expect(span(text).bg.toInts()).toEqual(colors.panel.toInts());
+      const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
+      expect(footer).toContain(`${icons.folder} radian`); expect(footer).toContain(`${icons.branch} main`);
+      expect(app.line()).not.toContain(icons.folder); expect(app.line()).not.toContain(icons.branch);
+      expect(app.line()).toContain("gpt-5.5"); expect(app.line()).toContain("64%");
     }
   } finally { await app.close(); }
 });
 
-test("Incomplete worktree groups hide and restore on resize without changing usage ratios", async () => {
-  // A standalone status row also covers widths too small for the full workbench layout.
+test("Narrow status rows preserve usage ratios without reserving workspace metadata", async () => {
+  // Removing the duplicated scope returns its width to known resource percentages.
   const app = await createTestRenderer({ width: 60, height: 5 });
   const status = new SessionStatus(app.renderer); app.renderer.root.add(status.root);
-  status.update(sample(), true, { name: "radian", branch: "main" });
-  const scope = status.root.findDescendantById("session-worktree-context") as TextRenderable;
+  status.update(sample(), true);
   try {
-    for (const [width, visible] of [[60, true], [50, true], [40, false], [30, false], [60, true]] as const) {
-      // Shrinking and restoring the row must never leave orphan brackets or hide known percentages.
+    for (const width of [60, 50, 40, 30, 60]) {
       app.resize(width, 5); await app.renderOnce();
 
-      expect(scope.visible).toBe(visible); expect(Bun.stringWidth(scope.plainText)).toBeLessThanOrEqual(scope.width);
-      if (visible) {
-        expect(scope.plainText.startsWith(`[ ${icons.folder} `)).toBe(true); expect(scope.plainText.endsWith(" ]")).toBe(true);
-        expect(scope.plainText).toContain(` · ${icons.branch} `);
-      } else expect(scope.plainText).toBe("");
-      const line = app.captureCharFrame().split("\n")[scope.y]!;
+      expect(status.root.findDescendantById("session-worktree-context")).toBeUndefined();
+      const line = app.captureCharFrame().split("\n")[status.root.y + 1]!;
       expect(line).toContain("64%"); expect(line).toContain("18% used");
     }
   } finally { status.dispose(); await app.dispose(); }
@@ -277,7 +266,7 @@ test("Full and abbreviated fast labels remain lowercase in every state", async (
     expect(app.line()).toContain("fast on"); expect(app.line()).not.toContain("Fast");
 
     // A compact identity keeps the robot, brain and bolt while dropping verbose labels.
-    app.resize(84, 24); await app.renderOnce();
+    app.resize(56, 24); await app.renderOnce();
     const compact = `${icons.model} gpt-5.5 ${icons.brain} high ${icons.bolt}`;
     expect(app.line()).toContain(`${compact} on`);
     await app.set({ ...sample(), fast: false }); expect(app.line()).toContain(`${compact} off`);
@@ -420,7 +409,7 @@ test("Recovery hides reset usage windows and cleans spinner timers on hiding, st
 
     // Drain screen-transition frames so only recovery animation timers could remain.
     status.update(failed, false); clock.advance(20); await app.renderOnce(); expect(clock.pendingTimerCount).toBe(0);
-    status.update(failed, true, null, now); await app.renderOnce(); clock.advance(20); await app.renderOnce(); expect(clock.pendingTimerCount).toBe(0);
+    status.update(failed, true, now); await app.renderOnce(); clock.advance(20); await app.renderOnce(); expect(clock.pendingTimerCount).toBe(0);
     status.update(failed, true); await app.renderOnce(); clock.advance(20); await app.renderOnce(); expect(clock.pendingTimerCount).toBe(1);
     status.dispose(); clock.advance(20); await app.renderOnce();
 

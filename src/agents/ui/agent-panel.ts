@@ -233,7 +233,7 @@ export class AgentPanel {
     const capturedAt = this.transcriptOptions.snapshotTime?.();
     this.runStatus.update(sessionId, details, this.active, !this.transcriptOptions.readOnly && capturedAt === undefined);
     this.pending = details?.pendingMessages ?? [];
-    this.sessionStatus.update(details?.telemetry, this.active, worktree, capturedAt);
+    this.sessionStatus.update(details?.telemetry, this.active, capturedAt);
     this.emptyState.root.visible = visible && !this.active;
     this.children.update(session?.subagents ?? [], this.active);
     this.root.gap = 0;

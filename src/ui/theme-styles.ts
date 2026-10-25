@@ -1,6 +1,6 @@
 import { RGBA, TextAttributes, type TextBufferRenderable, type TextChunk, type StyleDefinitionInput } from "@opentui/core";
 import type { UiColors } from "./theme.ts";
-import { blendColors, neutralColor } from "./color.ts";
+import { blendColors, contrastingText, neutralColor } from "./color.ts";
 import { styleGroups, type StyleGroup, type StyleOverrides } from "./theme-style-config.ts";
 export { styleGroups, type StyleGroup, type StyleOverride, type StyleOverrides } from "./theme-style-config.ts";
 
@@ -37,9 +37,12 @@ const definitions = {
   "completion.description": (c: UiColors) => style(c.muted),
   "completion.selected": (c: UiColors) => style(c.accent, c.panel),
   "footer.key": (c: UiColors) => style(c.keyword),
-  "footer.description": (c: UiColors) => style(c.muted),
+  "footer.description": (c: UiColors) => style(c.text),
   "footer.identity": (c: UiColors) => style(c.text, c.surface),
   "footer.accent": (c: UiColors) => style(c.accent),
+  "footer.mode": (c: UiColors) => style(contrastingText(c.accent, c.panel, c.text), c.accent, bold),
+  "footer.worktree": (c: UiColors) => style(c.text),
+  "footer.branch": (c: UiColors) => style(c.text),
   "status.working": (c: UiColors) => style(c.accent),
   "status.success": (c: UiColors) => style(c.success),
   "status.error": (c: UiColors) => style(c.error),

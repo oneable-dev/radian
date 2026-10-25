@@ -126,7 +126,7 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
     expect(app.editorFrame?.rows).toBe(23);
     expect(app.editorFrame?.cols).toBe(120); aligned();
     expect(app.captureCharFrame()).not.toContain("Neovim ·");
-    expect(app.captureCharFrame().split("\n")[23]).toContain("Radian 0.0.0");
+    expect(app.captureCharFrame().split("\n")[23]).toContain("EDITOR");
     app.resize(100, 28); await app.renderOnce();
     await until(() => app!.editorFrame?.rows === 27); await app.visible("unsaved-native-editor");
     expect(app.editorFrame?.rows).toBe(27);

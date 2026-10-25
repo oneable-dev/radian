@@ -52,11 +52,11 @@ test("Default screens use content through the footer without fixed legends or hi
     expect(footer.height).toBe(1);
     expect(footer.y).toBe(23);
     expect(app.captureCharFrame()).not.toContain("▂");
-    expect(app.renderer.root.findDescendantById("footer-notice")?.visible).toBe(false);
+    expect(app.renderer.root.findDescendantById("footer-notice")).toBeUndefined();
     expect(panel.y + panel.height).toBe(footer.y);
     expect(app.captureCharFrame()).not.toContain("Status not supplied");
     expect(app.captureCharFrame()).not.toContain("UI preview only");
-    expect(app.footerLine()).toContain("Radian 0.0.0");
+    expect(app.footerLine()).toContain("AGENT");
     expect(app.calls).toEqual([]);
   } finally { await app.close(); }
 });
@@ -163,7 +163,7 @@ test("Compact hidden-panel layouts keep footer/notifications at bottom and click
 
     await app.mockMouse.click(2, 11); await app.renderOnce();
 
-    expect(app.footerLine()).toContain("Radian · Agents");
+    expect(app.footerLine()).toContain("AGENT");
     expect(app.footerLine()).not.toContain("0.0.0");
     expect(app.captureCharFrame()).toContain("Runtime reconnecting");
     expect(app.renderer.root.findDescendantById("app-footer")!.height).toBe(1);
@@ -193,7 +193,7 @@ test("Prompts and status align to the work-area left without sidebar space", asy
 });
 
 test("Regular layout padding shrinks in compact screens and restores alongside drafts", async () => {
-  // Content and branding share a two-cell inset, without moving the gradient away from the edge.
+  // Content keeps responsive insets while the view badge retains symmetric one-cell padding.
   const app = await mount();
   const transcript = app.renderer.root.findDescendantById("session-transcript")!;
   const composer = app.renderer.root.findDescendantById("agent-composer")!;
@@ -203,7 +203,7 @@ test("Regular layout padding shrinks in compact screens and restores alongside d
     expect(transcript.x).toBe(2);
     expect(composer.x).toBe(0);
     expect(prompt.x - composer.x).toBe(2);
-    expect(app.footerLine().indexOf("Radian")).toBe(2);
+    expect(app.footerLine().indexOf("AGENT")).toBe(1);
 
     // Shrinking the real renderer reduces insets rather than clipping the active input.
     pressLeader(app, "a"); await app.mockInput.typeText("keep this draft");
@@ -212,7 +212,7 @@ test("Regular layout padding shrinks in compact screens and restores alongside d
     expect(transcript.x).toBe(1);
     expect(composer.x).toBe(0);
     expect(prompt.x - composer.x).toBe(1);
-    expect(app.footerLine().indexOf("Radian")).toBe(1);
+    expect(app.footerLine().indexOf("AGENT")).toBe(1);
     expect(app.renderer.currentFocusedRenderable).toBe(prompt);
 
     // The normal spacing returns without rebuilding the Agent or replacing its draft.
@@ -221,7 +221,7 @@ test("Regular layout padding shrinks in compact screens and restores alongside d
     expect(transcript.x).toBe(2);
     expect(composer.x).toBe(0);
     expect(prompt.x - composer.x).toBe(2);
-    expect(app.footerLine().indexOf("Radian")).toBe(2);
+    expect(app.footerLine().indexOf("AGENT")).toBe(1);
     expect(app.view.promptDrafts.a1).toBe("keep this draft");
     expect(app.calls).toEqual([]);
   } finally { await app.close(); }
@@ -249,7 +249,7 @@ test("Short terminals keep Agent status/input clear of single-row footers", asyn
     expect(prompt.y + prompt.height).toBeLessThanOrEqual(footer.y);
     expect(app.captureCharFrame().split("\n")[prompt.y]).toContain("compact draft");
     expect(app.captureCharFrame()).not.toContain("Status not supplied");
-    expect(app.footerLine().trimStart()).toStartWith("Radian · Agents");
+    expect(app.footerLine().trimStart()).toStartWith("AGENT");
     expect(app.selection.sessionId).toBe("a1");
     expect(app.renderer.currentFocusedRenderable).toBe(prompt);
 
@@ -266,7 +266,7 @@ test("Blur and disposal leave neither stale shortcuts nor focus subscriptions", 
   const app = await mount();
   try {
     app.renderer.currentFocusedRenderable?.blur(); await app.renderOnce();
-    expect(app.footerLine()).toContain("Radian 0.0.0");
+    expect(app.footerLine()).toContain("AGENT");
     expect(app.footerLine()).toContain("Help"); expect(app.footerLine()).not.toContain("Open worktree");
     app.view.dispose();
 

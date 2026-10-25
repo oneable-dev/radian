@@ -601,7 +601,7 @@ test("Oversized details fully expand and use shared Commits scrolling to read/co
     await app.mockMouse.drag(x, y, x + 3, y); await app.waitFor(() => app.copies.length > 0);
 
     expect(app.copies).toEqual(["Last"]); expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid);
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("Radian");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("GIT");
     // Settle the shared scroll position and the independently mounted copy notification.
     app.mockInput.pressKey("HOME"); await app.renderOnce(); await app.renderOnce(); expect(app.captureCharFrame()).toContain("Author: Ada");
     expect(app.requests).toEqual([]);
@@ -800,7 +800,7 @@ test("Narrow left details retain full heights without changing graph-row heights
       expect(card.visible).toBe(true); expect(card.y).toBeGreaterThanOrEqual(history.y);
       const text = app.get("git-detail-text"); if (!(text instanceof TextRenderable)) throw new Error("Missing details body");
       expect(card.height).toBe(text.virtualLineCount + 2);
-      expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("Radian");
+      expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("GIT");
       expect(card.x + card.width).toBeLessThanOrEqual(app.get(`git-history:${rootCommit.oid}:graph`).x);
       expect(row.height).toBe(2); expect(app.get(`git-history:${rootCommit.oid}:label`).width).toBeGreaterThan(12);
     }
@@ -1470,7 +1470,7 @@ test("Git lists use full width and compact Changes popups fit inside footers", a
       expect(app.codes()).toHaveLength(2);
       expect(app.codes().every(pane => pane.width > 0 && pane.height > 0)).toBe(true);
       expect(app.codes().every(pane => pane.y + pane.height <= popup.y + popup.height - 1)).toBe(true);
-      expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("Radian");
+      expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("GIT");
     }
     expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
   } finally { await app.close(); }
@@ -1930,7 +1930,7 @@ test.each([false, true])("Remapped %j Git target commands preserve input and sen
     await app.renderOnce();
     expect(input.value).toBe(value); expect(input.cursorOffset).toBe(caret);
     expect(app.renderer.currentFocusedRenderable).toBe(input);
-    const footer = app.captureCharFrame().split("\n").find(line => line.includes("Radian"))!;
+    const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
     expect(footer).toContain(`${overridden ? "<M-s>" : "<C-s>"} Change session`);
     expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
     app.mockInput.pressEnter(); await app.waitFor(() => app.requests.length === 1);
@@ -2102,7 +2102,7 @@ test("Compact diff/Reflog transitions preserve selection and bottom footers", as
     app.resize(60, 12); await app.renderOnce(); app.resize(160, 32); await app.renderOnce();
     app.mockInput.pressEscape(); await app.renderOnce(); await app.openReflog();
 
-    expect(app.get("git-changes").visible).toBe(false); expect(app.captureCharFrame()).toContain("Radian 0.0.0");
+    expect(app.get("git-changes").visible).toBe(false); expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("GIT");
     expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid);
     expect(app.requests).toEqual([]);
   } finally { await app.close(); }

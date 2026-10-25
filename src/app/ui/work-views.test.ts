@@ -74,7 +74,7 @@ test("Letter shortcuts switch views without upper tabs and retain current names 
       app.renderer.root.findDescendantById("footer-help")!.focus(); await app.renderOnce();
 
       const footer = app.captureCharFrame().split("\n")[23]!;
-      expect(footer.trimStart()).toStartWith(`Radian 0.0.0 · ${label}`);
+      expect(footer.trimStart()).toStartWith(key === "a" ? "AGENT" : label.toUpperCase());
       expect(app.renderer.root.findDescendantById(`${id}-view`)!.y).toBe(panel.y);
       expect(app.view.workViewPreferences.active["demo:main"]).toBe(id);
       expect(app.selection.sessionId).toBe("a1");
@@ -176,7 +176,7 @@ test("Work views and footers restore per-worktree Editor/Git screens", async () 
     expect(app.view.workViewPreferences.active).toEqual({ "demo:main": "editor", "demo:feature": "git" });
     expect(app.requests).toEqual([]);
     app.resize(60, 12); await app.renderOnce();
-    expect(app.captureCharFrame().split("\n")[11]).toContain("Radian · Git");
+    expect(app.captureCharFrame().split("\n")[11]).toContain("GIT");
   } finally { await app.close(); }
 });
 
