@@ -16,7 +16,10 @@ const answer = (text: string): TranscriptSection => ({ id: "answer", kind: "assi
 async function mount(actions: Partial<WorkbenchActions> = {}) {
   const clock = new ManualClock();
   const app = await createTestRenderer({ width: 120, height: 28, kittyKeyboard: true, clock });
-  const selection = new WorkspaceSelection(demoWorkspace());
+  // Main-run tests keep owned-child layout in its dedicated regression suite.
+  const selection = new WorkspaceSelection(demoWorkspace().map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => ({ ...tree,
+    sessions: tree.sessions.map(session => ({ ...session, subagents: [] })),
+  })) })));
   const states: Record<string, ExecutionState> = {
     a1: { status: "working", output: "", error: null, sections: [request("first", "Implement workspace search"), answer(Array.from({ length: 100 }, (_, i) => `PROGRESS-${i}`).join("\n"))] },
     a2: { status: "complete", output: "", error: null, sections: [request("second", "Review the editor changes"), answer("Completed")] },

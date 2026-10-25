@@ -417,7 +417,9 @@ The former pinned **Request** row is removed; the original user message remains 
 A passive work-status row above the prompt shows a shared spinner and
 `Working (12s · esc to interrupt) “request”`, with only `esc` in bold, using
 the latest request actually present in the selected conversation. Whitespace collapses and long
-text is clipped on grapheme/cell boundaries. Drafts, rejected input and handled commands never
+text is clipped on grapheme/cell boundaries. Work-request previews, including completion excerpts
+and child task captions, occupy at most half the pane width and never more than 60 cells.
+Drafts, rejected input and handled commands never
 replace that request. Without request metadata it shows `Working (12s · esc to interrupt)`, not a guessed title.
 Elapsed time starts at zero, uses runtime-owned timing across reconnects and advances locally while
 visible. Compacting uses `Compacting context` with the same timing and interruption hint.
@@ -1818,12 +1820,21 @@ tail before collapsing. Empty indicator cells and their gap are reclaimed for th
 cancel animations. Each tab retains its one-cell outer padding. Selection and focus never change
 the underlying execution outcome.
 
-The work-status row shows the selected session's run state and its subagent counts at the right
-edge. The counts remain independent of the parent run's settled outcome. Working, failure, complete
-and unknown counts use reserved widths; narrow panels omit less urgent counts or shorten the prefix
-without adding rows. Counts only include runtime-owned children already supplied by the snapshot,
-not arbitrary extension-managed processes. Transcript `Paused` appears in the footer, not this
-execution row. Model/context/account usage remains on the separate lower telemetry row.
+The work-status block expands vertically below the selected session's main run state and above
+the composer. Each subagent has its own name, `Working (24s)` or terminal outcome, and a short
+received-task caption when request metadata exists. Runtime timing survives reconnects; terminal
+child durations stop advancing. Children remain visible when their parent settles. The block
+preserves input drafts, focus and paused transcript anchors. Compact layouts bound child feedback
+to at most eight rows and one third of the pane height, prioritize active children and summarize
+omitted rows rather than pushing the composer off-screen.
+
+Owned SDK children provide task previews and timing directly. Pi extension async children are
+read-only observations of the versioned `subagent-async` RPC widget snapshot; workflow wrappers and
+host gates are not counted as agents. These observations do not grant Radian lifecycle ownership.
+Pi snapshots supply labels and timing, not delegated prompt text, so unavailable task captions are
+omitted rather than inferred. No terminal output or lifecycle files are scraped. Fast settings
+remain session-local and are not propagated to children. Transcript `Paused` appears in the footer,
+not this execution block. Model/context/account usage remains on the separate lower telemetry row.
 
 The SDK adapter normalizes events into display snapshots. `agent_end` alone is not completion:
 automatic retries keep the run working, and `agent_settled` plus the final outcome determine

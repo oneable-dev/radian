@@ -258,6 +258,7 @@ export class PiSessionExecutor implements SessionExecutor {
       ...(this.request ? { request: this.request } : {}), ...(this.result ? { result: this.result } : {}),
       ...(this.status === "working" && this.compacting ? { activity: "compacting" as const } : {}),
       sections: this.transcript.sections, telemetry: this.modelSelectionSnapshot?.telemetry ?? this.telemetry.read(),
+      ...(this.ui ? { externalSubagents: this.ui.subagents } : {}),
       pendingMessages: this.queuedMessages().map((message) => {
         const text = typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
         const skill = parseSkillBlock(text);
@@ -301,7 +302,7 @@ export class PiSessionExecutor implements SessionExecutor {
     const previousSettingsErrors = this.session.settingsManager.drainErrors();
     if (previousSettingsErrors.length) console.warn("[radian:settings] Earlier settings errors", previousSettingsErrors);
     this.controlling = true;
-    this.ui?.clear();
+    this.ui?.reset();
     const reported: ExtensionError[] = [];
     const stopReporting = this.diagnostics.observe(error => reported.push(error));
     const task = (async (): Promise<Result<void, ExpectedError>> => {

@@ -45,7 +45,8 @@ test("Queued hints and shortcuts share one row while indented messages remain se
     expect(row(pending.y)).toBe("• Messages will be sent after the current response and tools finish (press <Esc> to interrupt and send immediately)");
     expect(row(pending.y + 1)).toBe("  ↳ Add tests"); expect(row(pending.y + 2)).toBe("  ↳ Do not edit README");
     expect(row(pending.y + 3)).toBe(""); expect(frame).not.toContain("Queued");
-    expect(pending.y).toBe(status.y + status.height + 1);
+    const statusGroup = app.get("transcript-status-row");
+    expect(pending.y).toBe(statusGroup.y + statusGroup.height + 1);
     expect(composer.y).toBe(pending.y + 4);
     const hints = app.captureSpans().lines.flatMap((line) => line.spans).filter((span) => span.text === "<Esc>");
     expect(hints).toHaveLength(2); for (const span of hints) expect(span.attributes & TextAttributes.BOLD).not.toBe(0);

@@ -313,6 +313,25 @@ test("Creation failure leaves worktrees empty without automatic recreation", asy
   expect(registry.closingCount).toBe(0);
 });
 
+test("Observed Pi children never acquire owned handles or return as phantom workers after recovery", async () => {
+  // Extension observations may be working even though the main SDK session is settled.
+  const app = setup(), recovered = setup();
+  try {
+    const id = expectOk(await app.registry.create("demo:main"));
+    app.executors[0]!.update({ status: "complete", output: "", error: null,
+      externalSubagents: [{ id: "pi/fixture", name: "Pi reviewer", status: "working", source: "pi" }] });
+    const record = app.registry.records[0]!;
+    expect(app.registry.snapshot[0]!.worktrees[0]!.sessions[0]!.subagents).toHaveLength(1);
+
+    expectOk(await recovered.registry.restore(record));
+
+    // Only a fresh extension snapshot may restore external activity; saved observations are not executors.
+    expect(recovered.contexts.map(context => context.role)).toEqual(["main"]);
+    expect(recovered.registry.snapshot[0]!.worktrees[0]!.sessions[0]!.subagents).toEqual([]);
+    expect(app.contexts).toHaveLength(1); expect(app.registry.details(id)?.status).toBe("complete");
+  } finally { await Promise.all([app.cleanup(), recovered.cleanup()]); }
+});
+
 test("Subagent creation failures remain visible in parent snapshots rather than becoming missing or complete", async () => {
   // A child factory failure has no executor state from which to infer its outcome.
   const parent = new ControlledExecutor();

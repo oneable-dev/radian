@@ -659,6 +659,31 @@ test("Two real SDK runs survive worktree switching and restore background result
   } finally { await app.cleanup(); }
 });
 
+test("Owned SDK children retain their received task and runtime duration after completion", async () => {
+  // Delegation starts a real child session whose first input differs from its parent's request.
+  const app = await sdkFixture(true);
+  try {
+    const parent = expectOk(await app.registry.create(app.main.id));
+    const run = app.registry.prompt(parent, "delegate");
+    await app.streams.waitFor("child");
+    const children = () => app.registry.snapshot[0]!.worktrees[0]!.sessions[0]!.subagents;
+
+    // Working snapshots expose the actual child task and the runtime-owned clock.
+    expect(children()).toHaveLength(1); expect(children()[0]?.request?.text).toBe("slow");
+    expect(children()[0]?.status).toBe("working"); expect(children()[0]?.runTiming?.elapsedMs).toBeGreaterThanOrEqual(0);
+    app.streams.gates.get("child")!.finish("Child completed");
+    expectOk(await run);
+
+    // Closing the child executor must not discard the preview or restart its timer.
+    const completed = children()[0]!;
+    expect(completed.status).toBe("complete"); expect(completed.request?.text).toBe("slow");
+    expect(completed.runTiming?.elapsedMs).toBeGreaterThan(0);
+    expect(children()[0]?.runTiming).toEqual(completed.runTiming);
+    const saved = app.registry.records[0]!.subagents[0]!;
+    expect(saved.request).toEqual(completed.request); expect(saved.runTiming).toEqual(completed.runTiming);
+  } finally { await app.cleanup(); }
+});
+
 test("SDK parents and subagents hide immediately and terminate in background without stopping other sessions", async () => {
   // The registered custom tool starts an actual owned SDK child, not a display-only fixture.
   const app = await sdkFixture(true);

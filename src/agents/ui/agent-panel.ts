@@ -134,10 +134,10 @@ export class AgentPanel {
     this.sessionStatus.root.id = id("session-status");
     this.completion = new CompletionMenu(renderer, this.prompt, () => this.active ? this.promptSessionId : null, actions.onComplete,
       () => { this.resizeComposer(); changed(); }, () => this.completionRows());
-    const statusRow = this.statusRow = new BoxRenderable(renderer, { id: id("transcript-status-row"), width: "100%", height: 1, visible: false, flexShrink: 0, flexDirection: "row", gap: 1 });
+    const statusRow = this.statusRow = new BoxRenderable(renderer, { id: id("transcript-status-row"), width: "100%", height: 1, visible: false, flexShrink: 0, flexDirection: "column" });
     this.children = new SubagentSummary(renderer);
+    this.runStatus.root.width = "100%"; this.runStatus.root.flexGrow = 0; this.runStatus.root.flexShrink = 0;
     statusRow.add(this.runStatus.root); statusRow.add(this.children.root);
-    this.root.on("resize", () => this.children.resize(this.root.width));
     // Keep completion and telemetry attached to the composer; only the three outer regions use gap.
     const inputArea = new BoxRenderable(renderer, { id: id("agent-input-area"), width: "100%", minWidth: 0, minHeight: 0, flexShrink: 0, flexDirection: "column" });
     inputArea.add(this.pendingMessages.root); inputArea.add(composer); inputArea.add(this.completion.root); inputArea.add(this.sessionStatus.root);
@@ -267,9 +267,12 @@ export class AgentPanel {
     const requested = this.prompt.requestedRows;
     const menuRowsBeforeLayout = this.completion?.open ? this.completion.root.height : 0;
     const minimumControls = (this.sessions.root.visible ? 1 : 0) + this.sessionStatus.root.height + menuRowsBeforeLayout + 2;
-    this.runStatus.fitRows(Math.max(1, this.root.height - minimumControls));
+    const statusBudget = Math.max(0, this.root.height - minimumControls);
+    this.runStatus.fitRows(Math.max(1, statusBudget));
+    this.runStatus.root.visible = this.runStatus.hasContent;
+    this.children.fitRows(Math.min(8, Math.floor(this.root.height / 3), Math.max(0, statusBudget - this.runStatus.rows)));
     const showStatus = this.runStatus.hasContent || this.children.hasContent;
-    const statusRows = Math.max(this.runStatus.rows, this.children.hasContent ? 1 : 0);
+    const statusRows = this.runStatus.rows + this.children.rows;
     const controls = (this.sessions.root.visible ? 1 : 0) + this.sessionStatus.root.height + statusRows + 1 + menuRowsBeforeLayout;
     this.pendingMessages.update(this.pending ?? [], this.active, Math.min(Math.floor(this.root.height / 3), Math.max(0, this.root.height - controls)));
     const signature = JSON.stringify([this.pendingMessages.rows, this.root.height, this.prompt.width, this.prompt.height, this.composer.height, this.sessions.root.visible,

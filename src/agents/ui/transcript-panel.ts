@@ -18,7 +18,7 @@ import type { Result } from "../../result.ts";
 import type { TranscriptSection } from "../transcript.ts";
 import { emptyTranscriptView, type TranscriptViewState } from "../transcript-preferences.ts";
 import { sameRequestSummary, type RequestSummary } from "../request-summary.ts";
-import { formatRequestCaption, requestForSection } from "./request-caption.ts";
+import { formatWorkRequest, requestForSection } from "./request-caption.ts";
 import { RadianLogo } from "../../ui/radian-logo.ts";
 import { maximumPreviewImageBytes, type TranscriptImageProvider } from "../transcript-images.ts";
 import { TranscriptImagePreview } from "./transcript-image.ts";
@@ -554,7 +554,7 @@ export class TranscriptPanel {
     const completion = row.section.completion;
     row.completionWidth = row.completion.width;
     const request = row.request;
-    const caption = request ? formatRequestCaption({ ...request, text: request.text ? `“${request.text}”` : "" }, row.completion.width) : "";
+    const caption = request ? formatWorkRequest(request, row.completion.width) : "";
     const timing = completion && completion.outcome !== "cancelled" ? formatRunCompletion(completion) + (caption ? `\n${caption}` : "") : "";
     // Cancellation is shown above the prompt, but persistence warnings must remain explicit.
     const text = [timing, completion?.warning].filter(Boolean).join("\n");

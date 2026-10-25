@@ -9,6 +9,12 @@ export function requestForSection(section: TranscriptSection | undefined): Reque
   return section.request ?? { text: section.skillName !== undefined ? `/skill:${section.skillName}` : singleLine(section.text), images: 0, files: 0 };
 }
 
+// Work labels remain previews, not a second full-width rendering of the prompt.
+export function formatWorkRequest(request: RequestSummary, width: number, available = width): string {
+  const limit = Math.max(0, Math.min(60, Math.floor(width / 2), available));
+  return formatRequestCaption({ ...request, text: request.text ? `“${request.text}”` : "" }, limit);
+}
+
 export function formatRequestCaption(request: RequestSummary, width: number): string {
   if (width <= 0) return "";
   const text = singleLine(request.text);

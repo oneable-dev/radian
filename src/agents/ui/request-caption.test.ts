@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { formatRequestCaption, requestForSection } from "./request-caption.ts";
+import { formatRequestCaption, formatWorkRequest, requestForSection } from "./request-caption.ts";
 
 test("Request captions normalize to one line and reserve attachment badge width first", () => {
   const request = { text: "A long request\nwith all original details ".repeat(10), images: 2, files: 3 };
@@ -23,6 +23,19 @@ test("Narrow captions replace long filenames with counts and never exceed viewpo
 test("Korean, combining characters, and emoji truncate visually only at grapheme boundaries", () => {
   expect(formatRequestCaption({ text: "한글👩‍💻 이어지는 요청", images: 0, files: 0 }, 7)).toBe("한글👩‍💻…");
   expect(formatRequestCaption({ text: "A e\u0301 ZZZ", images: 0, files: 0 }, 4)).toBe("A e\u0301…");
+});
+
+test.each([[30, 15], [80, 40], [200, 60]])("Work requests at width %i occupy at most %i cells without altering the original input", (width, limit) => {
+  // Long Unicode input must remain a preview even on a very wide screen.
+  const request = { text: "한글👩‍💻 e\u0301 request ".repeat(40), images: 0, files: 0 };
+  const original = request.text;
+
+  const caption = formatWorkRequest(request, width);
+
+  // Ellipsis and quoting share the same cell budget as the excerpt.
+  expect(caption).toEndWith("…"); expect(Bun.stringWidth(caption)).toBeLessThanOrEqual(limit);
+  expect(request.text).toBe(original); expect(caption).not.toContain("\uFFFD");
+  expect(Bun.stringWidth(formatWorkRequest(request, width, 7))).toBeLessThanOrEqual(7);
 });
 
 test("Legacy sections use text only without inventing attachments or exposing skill instructions", () => {

@@ -6,7 +6,7 @@ import { singleLine, truncateCells } from "../../ui/text.ts";
 import { blendColors, uiTheme } from "../../ui/theme.ts";
 import { paintText, styleChunk, type StyleGroup, type UiStyles } from "../../ui/theme-styles.ts";
 import type { RequestSummary } from "../request-summary.ts";
-import { formatRequestCaption, requestForSection } from "./request-caption.ts";
+import { formatWorkRequest, requestForSection } from "./request-caption.ts";
 import { formatRunDuration } from "./run-completion.ts";
 
 type Display = { label: string; detail: string; color: StyleGroup; request?: RequestSummary; durationMs?: number };
@@ -131,8 +131,7 @@ export class RunStatus {
     const label = truncateCells(timedLabel + (duration && !showHint ? ")" : ""), width);
     const hint = showHint ? ` · ${key} to interrupt)` : "";
     const remaining = width - Bun.stringWidth(label + hint);
-    const quoted = request ? { ...request, text: request.text ? `“${request.text}”` : "" } : undefined;
-    const caption = quoted ? formatRequestCaption(quoted, split ? Math.max(0, this.root.width) : remaining - 1) : "";
+    const caption = request ? formatWorkRequest(request, this.root.width, split ? this.root.width : remaining - 1) : "";
     const statusLabel = label.slice(0, this.current.label.length), elapsedLabel = label.slice(this.current.label.length);
     this.text.content = new StyledText([
       ...(this.fast ? workingChunks(statusLabel, this.phase, styles) : [styleChunk(statusLabel, styles[this.current.color])]),

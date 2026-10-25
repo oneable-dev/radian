@@ -142,6 +142,38 @@ test("Failed commands retract abandoned dialogs instead of accepting answers for
   } finally { await app.cleanup(); }
 });
 
+test("Pi subagent RPC widgets update only their originating session while detached and clear on retraction or reload", async () => {
+  // Use the extension's real RPC widget contract, not a mocked Radian child handle.
+  const app = await fixture(`
+    if (_args === "clear") { ctx.ui.setWidget("subagent-async", undefined); return; }
+    const now = Date.now();
+    ctx.ui.setWidget("subagent-async", ["PI_SUBAGENT_ASYNC_JSON:" + JSON.stringify({
+      kind: "pi-subagents.async-status-snapshot", version: 1, generatedAt: now,
+      runs: [{ id: "pi-fixture", kind: "subagent", label: "Pi reviewer", state: "running", startedAt: now - 24000 }],
+    })]);
+  `);
+  try {
+    const worktree = app.registry.snapshot[0]!.worktrees[0]!.id;
+    const other = expectOk(await app.registry.create(worktree));
+    app.registry.setUiActive(false);
+
+    expectOk(await app.registry.prompt(app.id, "/ui-fixture"));
+
+    // Status continues independently of dialogs, UI attachment, and model turns.
+    const sessions = () => app.registry.snapshot[0]!.worktrees[0]!.sessions;
+    const children = sessions().find(session => session.id === app.id)!.subagents;
+    expect(children).toHaveLength(1); expect(children[0]).toMatchObject({ name: "Pi reviewer", status: "working", source: "pi" });
+    expect(children[0]?.runTiming?.elapsedMs).toBeGreaterThanOrEqual(24000);
+    expect(sessions().find(session => session.id === other)!.subagents).toEqual([]);
+    expect(app.models()).toBe(0);
+    expectOk(await app.registry.prompt(app.id, "/ui-fixture clear"));
+    expect(sessions().find(session => session.id === app.id)!.subagents).toEqual([]);
+    expectOk(await app.registry.prompt(app.id, "/ui-fixture"));
+    expectOk(await app.registry.reload(app.id));
+    expect(sessions().find(session => session.id === app.id)!.subagents).toEqual([]);
+  } finally { await app.cleanup(); }
+});
+
 test("Pi custom terminal components fail explicitly without pretending that Radian is a Pi TUI", async () => {
   // Unsupported UI must not look like a successful but invisible command.
   const app = await fixture(`await ctx.ui.custom(() => { throw new Error("Should not render"); });`);

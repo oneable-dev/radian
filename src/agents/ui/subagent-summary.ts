@@ -1,65 +1,128 @@
-import { BoxRenderable, StyledText, TextRenderable, type CliRenderer } from "@opentui/core";
+import { BoxRenderable, RenderableEvents, StyledText, TextRenderable, type CliRenderer } from "@opentui/core";
 import type { Subagent } from "../model.ts";
 import { icons } from "../../icons.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
+import { singleLine, truncateCells } from "../../ui/text.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText, styleChunk } from "../../ui/theme-styles.ts";
+import { formatWorkRequest } from "./request-caption.ts";
+import { formatRunDuration } from "./run-completion.ts";
 
-const count = (value: number) => (value > 99 ? "99+" : String(value)).padStart(3);
+type Row = {
+  root: BoxRenderable; branch: TextRenderable; spinner: LoadingSpinner; icon: TextRenderable;
+  heading: TextRenderable; caption: TextRenderable; child: Subagent; sampledAt: number; running: boolean;
+};
 
 export class SubagentSummary {
   readonly root: BoxRenderable;
-  private readonly label: TextRenderable;
-  private readonly counts: TextRenderable;
-  private readonly spinner: LoadingSpinner;
+  private readonly items = new Map<string, Row>();
+  private readonly more: TextRenderable;
   private children: readonly Subagent[] = [];
   private active = false;
-  private width = 0;
-  private running = false;
+  private maximumRows = 8;
+  private timer: ReturnType<CliRenderer["clock"]["setInterval"]> | undefined;
+  private disposed = false;
 
   constructor(private readonly renderer: CliRenderer) {
-    this.root = new BoxRenderable(renderer, { id: "subagent-summary", height: 1, flexShrink: 0, flexDirection: "row", visible: false });
-    this.label = new TextRenderable(renderer, { height: 1, wrapMode: "none", selectable: false });
-    this.counts = new TextRenderable(renderer, { height: 1, wrapMode: "none", selectable: false });
-    const slot = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0 });
-    this.spinner = new LoadingSpinner(renderer); slot.add(this.spinner.root);
-    this.root.add(this.label); this.root.add(slot); this.root.add(this.counts);
-    uiTheme(renderer).bindStyles(this.root, (styles) => {
-      paintText(this.label, styles["ui.muted"]); paintText(this.counts, styles["ui.label"]); paintText(this.spinner.root, styles["status.working"]);
-      this.paint();
-    });
+    this.root = new BoxRenderable(renderer, { id: "subagent-summary", width: "100%", height: 0, minWidth: 0,
+      flexShrink: 0, flexDirection: "column", visible: false, onSizeChange: () => this.paint() });
+    this.more = new TextRenderable(renderer, { height: 1, flexShrink: 0, wrapMode: "none", selectable: false, visible: false });
+    this.root.add(this.more);
+    uiTheme(renderer).bind(this.root, () => this.paint());
+    renderer.addPostProcessFn(this.paint);
+    this.root.once(RenderableEvents.DESTROYED, () => this.dispose());
   }
-  // Reserve the row before its first measured width (or while returning from a hidden zero-width pane).
-  get hasContent(): boolean { return this.active && this.children.length > 0 && (this.width === 0 || this.width >= 22); }
+  get hasContent(): boolean { return this.rows > 0; }
+  get rows(): number { return this.root.visible ? this.root.height : 0; }
 
   update(children: readonly Subagent[], active: boolean): void {
-    this.children = children; this.active = active; this.paint();
+    if (this.disposed) return;
+    this.children = children; this.active = active;
+    const ids = new Set(children.map(child => child.id));
+    for (const [id, row] of this.items) if (!ids.has(id)) { row.spinner.cancel(); row.root.destroyRecursively(); this.items.delete(id); }
+    for (const child of children) {
+      let row = this.items.get(child.id);
+      if (!row) { row = this.createRow(child); this.items.set(child.id, row); }
+      if (row.child.runTiming?.startedAt !== child.runTiming?.startedAt || row.child.runTiming?.elapsedMs !== child.runTiming?.elapsedMs
+        || row.child.status !== child.status) row.sampledAt = this.renderer.clock.now();
+      row.child = child;
+    }
+    this.paint();
   }
-  resize(width: number): void { this.width = width; this.paint(); }
-  private paint(): void {
-    if (this.root.isDestroyed) return;
-    const visible = this.hasContent && this.width > 0;
+  fitRows(available: number): void {
+    const maximum = Math.max(0, Math.floor(available));
+    if (maximum === this.maximumRows) return;
+    this.maximumRows = maximum; this.paint();
+  }
+  private createRow(child: Subagent): Row {
+    const root = new BoxRenderable(this.renderer, { width: "100%", height: 1, minWidth: 0, flexShrink: 0, flexDirection: "column" });
+    const headingRow = new BoxRenderable(this.renderer, { width: "100%", height: 1, minWidth: 0, flexShrink: 0, flexDirection: "row", gap: 1 });
+    const branch = new TextRenderable(this.renderer, { width: 2, height: 1, selectable: false });
+    const slot = new BoxRenderable(this.renderer, { width: 1, height: 1, flexShrink: 0 });
+    const spinner = new LoadingSpinner(this.renderer);
+    const icon = new TextRenderable(this.renderer, { width: 1, height: 1, selectable: false });
+    slot.add(spinner.root); slot.add(icon);
+    const heading = new TextRenderable(this.renderer, { width: "auto", height: 1, minWidth: 0, flexGrow: 1, flexShrink: 1, wrapMode: "none", selectable: false });
+    const caption = new TextRenderable(this.renderer, { height: 1, marginLeft: 5, minWidth: 0, flexShrink: 0, wrapMode: "none", selectable: false, visible: false });
+    headingRow.add(branch); headingRow.add(slot); headingRow.add(heading); root.add(headingRow); root.add(caption);
+    this.root.insertBefore(root, this.more);
+    return { root, branch, spinner, icon, heading, caption, child, sampledAt: this.renderer.clock.now(), running: false };
+  }
+  private paint = (): void => {
+    if (this.disposed || this.root.isDestroyed || !this.more) return;
+    const visible = this.active && this.children.length > 0 && this.maximumRows > 0;
     this.root.visible = visible;
-    const working = this.children.filter((child) => child.status === "working").length;
-    const complete = this.children.filter((child) => child.status === "complete").length;
-    const failure = this.children.filter((child) => child.status === "failure").length;
-    const unknown = this.children.length - working - complete - failure;
-    if (!visible) { this.spinner.cancel(); this.running = false; return; }
-    if (working && !this.running) this.spinner.start();
-    if (!working) this.spinner.stop();
-    this.running = working > 0;
-    const full = this.width >= 58, medium = this.width >= 38;
-    this.label.content = full ? "Subagents " : medium ? "Sub " : "";
-    const text = `${count(working)} ${icons.error}${count(failure)}`
-      + (medium ? ` ${icons.pass}${count(complete)}` : "") + (full ? ` ${icons.unknown}${count(unknown)}` : "");
     const styles = uiTheme(this.renderer).styles;
-    this.counts.content = new StyledText([
-      styleChunk(count(working), styles[working ? "status.working" : "status.unknown"]),
-      styleChunk(` ${icons.error}${count(failure)}`, styles[failure ? "status.error" : "status.unknown"]),
-      ...(medium ? [styleChunk(` ${icons.pass}${count(complete)}`, styles[complete ? "status.success" : "status.unknown"])] : []),
-      ...(full ? [styleChunk(` ${icons.unknown}${count(unknown)}`, styles["status.unknown"])] : []),
-    ]);
-    this.root.width = (full ? 10 : medium ? 4 : 0) + 1 + text.length;
+    // Keep active work visible even when the compact height cannot show every settled child.
+    const ordered = [...this.children.filter(child => child.status === "working"), ...this.children.filter(child => child.status !== "working")];
+    const overflowRow = ordered.length > this.maximumRows && this.maximumRows > 1;
+    const shown = visible ? ordered.slice(0, this.maximumRows - Number(overflowRow)) : [];
+    const hidden = ordered.length - shown.length;
+    let captions = Math.max(0, this.maximumRows - shown.length - Number(overflowRow)), rows = 0, ticking = false;
+    for (const row of this.items.values()) { row.root.visible = false; }
+    for (const [index, child] of shown.entries()) {
+      const row = this.items.get(child.id)!;
+      // Reordering children changes only passive status rows, never focus or input ownership.
+      if (this.root.getChildren()[index] !== row.root) this.root.add(row.root, index);
+      row.root.visible = true;
+      const working = child.status === "working";
+      if (working && !row.running) row.spinner.start();
+      else if (!working && row.running) row.spinner.stop();
+      row.running = working;
+      row.branch.content = index === shown.length - 1 && !hidden ? "└─" : "├─";
+      paintText(row.branch, styles["ui.muted"]); paintText(row.spinner.root, styles["status.working"]);
+      const color = working ? "status.working" : child.status === "complete" ? "status.success" : child.status === "failure" ? "status.error" : "status.unknown";
+      row.icon.visible = !row.spinner.root.visible;
+      row.icon.content = child.status === "complete" ? icons.pass : child.status === "failure" ? icons.failure : icons.unknown;
+      paintText(row.icon, styles[color]);
+      const phase = child.phase ? child.phase[0]!.toUpperCase() + child.phase.slice(1) : undefined;
+      const label = phase ?? (working ? "Working" : child.status === "complete" ? "Complete" : child.status === "failure" ? "Failed" : "Unknown");
+      const elapsed = child.runTiming ? child.runTiming.elapsedMs + (working ? Math.max(0, this.renderer.clock.now() - row.sampledAt) : 0) : undefined;
+      const duration = elapsed === undefined ? "" : ` (${elapsed < 1000 ? "0s" : formatRunDuration(elapsed)})`;
+      const width = Math.max(0, this.root.width - 5);
+      const suffix = ` · ${label}${duration}`;
+      const name = truncateCells(singleLine(child.name), Math.max(0, width - Bun.stringWidth(suffix)));
+      const state = truncateCells(suffix, Math.max(0, width - Bun.stringWidth(name)));
+      row.heading.content = new StyledText([styleChunk(name, styles["ui.label"]), styleChunk(state.slice(0, state.indexOf(" (") < 0 ? state.length : state.indexOf(" (")), styles[color]),
+        ...(state.includes(" (") ? [styleChunk(state.slice(state.indexOf(" (")), styles["status.elapsed"])] : [])]);
+      const caption = child.request && captions > 0 ? formatWorkRequest(child.request, this.root.width, width) : "";
+      row.caption.visible = !!caption; row.caption.content = caption; paintText(row.caption, styles["status.elapsed"]);
+      row.root.height = 1 + Number(!!caption); rows += row.root.height;
+      if (caption) captions--;
+      ticking ||= working && !!child.runTiming;
+    }
+    for (const row of this.items.values()) if (!row.root.visible) { row.spinner.cancel(); row.running = false; }
+    this.more.visible = visible && overflowRow;
+    this.more.content = truncateCells(`  … ${hidden} more subagents`, this.root.width); paintText(this.more, styles["ui.muted"]);
+    this.root.height = rows + Number(this.more.visible);
+    if (ticking && this.timer === undefined) this.timer = this.renderer.clock.setInterval(this.paint, 1000);
+    else if (!ticking && this.timer !== undefined) { this.renderer.clock.clearInterval(this.timer); this.timer = undefined; }
+  };
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true; this.renderer.removePostProcessFn(this.paint);
+    if (this.timer !== undefined) this.renderer.clock.clearInterval(this.timer);
+    this.timer = undefined;
+    for (const row of this.items.values()) row.spinner.cancel();
   }
-  dispose(): void { this.spinner.cancel(); }
 }

@@ -246,7 +246,7 @@ test("Creation consistently uses leader+n while tab closure keeps x", async () =
   } finally { await app.close(); }
 });
 
-test("Subagents aggregate only in selected-session activity rows and status changes preserve tab geometry", async () => {
+test("Subagent details belong only to the selected session and status changes preserve tab geometry", async () => {
   // A1 has a running child; A2 has none. Updating status must not recreate keyed tabs.
   const app = await mount();
   try {
@@ -254,7 +254,7 @@ test("Subagents aggregate only in selected-session activity rows and status chan
     const tab = app.get("session:demo:main:a1"), input = app.get("agent-composer"), row = app.get("transcript-status-row");
     const geometry = [tab.x, tab.y, tab.width, input.y, row.y, row.height];
     expect(app.region("transcript-status-row")).not.toContain("Completed");
-    expect(app.region("transcript-status-row")).toContain("Subagents");
+    expect(app.region("transcript-status-row")).toContain("UI review · Working");
     app.clock.advance(160); await app.render();
     expect([tab.x, tab.y, tab.width, input.y, row.y, row.height]).toEqual(geometry);
 
@@ -269,7 +269,7 @@ test("Subagents aggregate only in selected-session activity rows and status chan
     expect(app.region("session:demo:main:a1")).toContain(icons.failure);
     expect([tab.x, tab.y, tab.width, input.y, row.y, row.height]).toEqual(geometry);
     await app.click("a2");
-    expect(app.region("transcript-status-row")).not.toContain("Subagents");
+    expect(app.region("transcript-status-row")).not.toContain("UI review");
     expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });

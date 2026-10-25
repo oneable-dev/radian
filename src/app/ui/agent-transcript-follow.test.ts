@@ -109,7 +109,7 @@ test.each([false, true])("At brightness %j, return-to-bottom controls use existi
     expect(cell.fg.toInts()).toEqual(uiTheme(app.renderer).colors.accent.toInts());
     const frame = app.captureCharFrame().split("\n");
     expect(frame[viewport.y + viewport.height - 1]).toMatch(/OLD-LINE-\d+/);
-    expect(frame[button.y + 1]).toContain("Subagents");
+    expect(frame[button.y + 2]).toContain("UI review · Working");
     expect([app.scroll.height, viewport.height, app.scroll.scrollHeight, status.y, composer.y, prompt.y]).toEqual(geometry);
     const position = app.scroll.scrollTop;
     await app.mockMouse.click(button.x, button.y, 2); await app.settled();

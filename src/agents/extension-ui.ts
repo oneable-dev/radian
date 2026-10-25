@@ -2,6 +2,8 @@ import { Type, type Static } from "typebox";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
 import { CapabilityError, InputError, SessionError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
+import type { Subagent } from "./model.ts";
+import { piSubagentsFromWidget } from "./pi-subagent-status.ts";
 
 const id = Type.String({ minLength: 1, maxLength: 4096 });
 const text = Type.String({ maxLength: 65536 });
@@ -37,6 +39,8 @@ export class ExtensionUiBridge {
   private readonly dialogListeners = new Set<() => void>();
   private notifications: ExtensionUiState["notifications"] = [];
   private readonly statuses = new Map<string, string>();
+  private children: readonly Subagent[] = [];
+  private childrenObservedAt = 0;
   private active = false;
   private disposed = false;
 
@@ -57,10 +61,22 @@ export class ExtensionUiBridge {
         else if (this.statuses.has(statusKey) || this.statuses.size < 32) this.statuses.set(statusKey, value.slice(0, 65536));
         this.changed();
       },
+      setWidget: (key, content) => {
+        if (this.disposed || key !== "subagent-async") return;
+        if (content !== undefined && !Array.isArray(content)) return;
+        const result = piSubagentsFromWidget(content);
+        if (!result.ok) { console.warn(`[radian:subagents] ${result.error.code}: ${result.error.message}`); return; }
+        this.children = result.value; this.childrenObservedAt = performance.now(); this.changed();
+      },
       // RPC mode deliberately does not pretend to host Pi terminal components.
       custom: async () => { throw new CapabilityError("This extension requires Pi's custom terminal UI, which Radian does not host. Use a command accepting explicit arguments or Pi's terminal UI."); },
       editor: async () => { throw new CapabilityError("Extension multiline editors are not hosted in Radian yet. Basic input, selection and confirmation dialogs are supported."); },
     };
+  }
+  get subagents(): readonly Subagent[] {
+    const elapsed = Math.max(0, performance.now() - this.childrenObservedAt);
+    return this.children.map(child => child.status === "working" && child.runTiming
+      ? { ...child, runTiming: { ...child.runTiming, elapsedMs: child.runTiming.elapsedMs + elapsed } } : child);
   }
   get state(): ExtensionUiState {
     const dialog = this.pending.values().next().value?.dialog;
@@ -73,6 +89,7 @@ export class ExtensionUiBridge {
     if (!this.active) this.clear();
   }
   cancelDialogs(): void { for (const pending of [...this.pending.values()]) pending.finish(); }
+  reset(): void { this.children = []; this.clear(); }
   clear(): void {
     this.cancelDialogs();
     this.notifications = []; this.statuses.clear(); this.changed();
@@ -114,5 +131,5 @@ export class ExtensionUiBridge {
     this.changed(); return result.promise;
   }
   private changed(): void { for (const listener of this.listeners) listener(); }
-  dispose(): void { this.disposed = true; this.setActive(false); this.listeners.clear(); this.dialogListeners.clear(); }
+  dispose(): void { this.disposed = true; this.children = []; this.setActive(false); this.listeners.clear(); this.dialogListeners.clear(); }
 }

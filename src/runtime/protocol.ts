@@ -22,7 +22,10 @@ export const maxFrameBytes = 8 * 1024 * 1024;
 export const maxSnapshotBytes = 64 * 1024 * 1024;
 const id = Type.String({ minLength: 1, maxLength: 4096 });
 const status = Type.Union([Type.Literal("working"), Type.Literal("complete"), Type.Literal("failure"), Type.Null()]);
-const agent = Type.Object({ id, name: Type.String(), status });
+const runTiming = Type.Object({ startedAt: Type.Integer({ minimum: 0 }), elapsedMs: Type.Number({ minimum: 0 }) });
+const agent = Type.Object({ id, name: Type.String(), status, request: Type.Optional(requestSummarySchema),
+  runTiming: Type.Optional(runTiming), source: Type.Optional(Type.Literal("pi")),
+  phase: Type.Optional(Type.Union([Type.Literal("queued"), Type.Literal("paused"), Type.Literal("stopped"), Type.Literal("rejected"), Type.Literal("partial")])) });
 const session = Type.Object({ id, name: Type.String(), status, subagents: Type.Array(agent),
   request: Type.Optional(requestSummarySchema), result: Type.Optional(sessionResultSchema), attention: Type.Optional(sessionResultSchema) });
 const worktree = Type.Object({ id, path: id, name: Type.String(), branch: Type.Union([Type.String(), Type.Null()]), sessions: Type.Array(session) });
@@ -56,8 +59,8 @@ const telemetry = Type.Object({
 const execution = Type.Object({ conversationId: Type.Optional(id), resourceRevision: Type.Optional(Type.Integer({ minimum: 0 })), status, activity: Type.Optional(Type.Literal("compacting")), output: Type.String(), error: Type.Union([Type.String(), Type.Null()]),
   sections: Type.Optional(Type.Array(transcriptSection)), telemetry: Type.Optional(telemetry),
   request: Type.Optional(requestSummarySchema), result: Type.Optional(sessionResultSchema), attention: Type.Optional(sessionResultSchema),
-  pendingMessages: Type.Optional(Type.Array(requestSummarySchema)),
-  runTiming: Type.Optional(Type.Object({ startedAt: Type.Integer({ minimum: 0 }), elapsedMs: Type.Number({ minimum: 0 }) })) });
+  externalSubagents: Type.Optional(Type.Array(agent)),
+  pendingMessages: Type.Optional(Type.Array(requestSummarySchema)), runTiming: Type.Optional(runTiming) });
 export const workViewSchema = Type.Union([Type.Literal("agent"), Type.Literal("editor"), Type.Literal("git"), Type.Literal("terminal")]);
 export type WorkView = Static<typeof workViewSchema>;
 // Preserve the original three-view wire enum for existing clients/manifests.

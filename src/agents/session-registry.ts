@@ -10,7 +10,7 @@ import type { SessionTelemetry } from "./telemetry.ts";
 import { filterCatalog, type CompletionCatalog, type CompletionItem, type CompletionQuery, type CompletionResult } from "./completion.ts";
 import { completeFiles } from "./completion-files.ts";
 import { sessionControlCommands } from "./session-controls.ts";
-import type { RequestSummary } from "./request-summary.ts";
+import { summarizeRequest, type RequestSummary } from "./request-summary.ts";
 import type { TranscriptImageData } from "./transcript-images.ts";
 import { modelCommand, parseModelCommand, type ModelCatalog, type ModelEffort, type ModelIdentity } from "./model-selection.ts";
 import { historyCommand, parseHistoryCommand } from "./history-command.ts";
@@ -23,6 +23,7 @@ import type { ExtensionUiState, ExtensionUiResponse, SessionExtensionUi } from "
 export type ExecutionState = { readonly conversationId?: string; readonly resourceRevision?: number; readonly status: AgentStatus | null; readonly activity?: "compacting"; readonly output: string; readonly error: string | null;
   readonly sections?: readonly TranscriptSection[]; readonly telemetry?: SessionTelemetry;
   readonly request?: RequestSummary; readonly result?: SessionResult; readonly attention?: SessionResult;
+  readonly externalSubagents?: readonly Subagent[];
   readonly pendingMessages?: readonly RequestSummary[]; readonly runTiming?: { readonly startedAt: number; readonly elapsedMs: number } };
 export type SessionExecutor = {
   readonly savedSessionId: string;
@@ -69,6 +70,7 @@ type Execution = {
   ready: Promise<Result<SessionExecutor, ExpectedError>> | undefined;
   finishedStatus?: AgentStatus | null; fileKey?: string; executor?: SessionExecutor; unsubscribe?: () => void;
   cleanupTask?: Promise<Result<void, ExpectedError>>; failure?: string;
+  request?: RequestSummary; runTiming?: Subagent["runTiming"];
   readonly worktree?: Worktree; readonly managed?: boolean; closedAt?: number;
 };
 type OpenExecution = Execution & {
@@ -208,8 +210,13 @@ export class SessionRegistry {
     this.retired.set(sessionRecordKey(record), record); return record;
   }
   private children(entry: OpenExecution): Subagent[] {
-    return [...entry.children.values()].map((child) => ({ id: child.id, name: child.name,
-      status: child.failure ? "failure" : child.executor?.state.status ?? child.finishedStatus ?? null }));
+    const owned = [...entry.children.values()].map((child): Subagent => {
+      const state = child.executor?.state, request = state?.request ?? child.request, runTiming = state?.runTiming ?? child.runTiming;
+      return { id: child.id, name: child.name, status: child.failure ? "failure" : state?.status ?? child.finishedStatus ?? null,
+        ...(request ? { request } : {}), ...(runTiming ? { runTiming } : {}) };
+    });
+    // Pi extension children are display observations, never handles owned by this registry.
+    return [...owned, ...(entry.executor?.state.externalSubagents ?? [])];
   }
 
   async restore(record: SessionRecord): Promise<Result<void, ExpectedError>> {
@@ -240,7 +247,8 @@ export class SessionRegistry {
       status: record.state.status === "working" ? null : restored.status,
       error: record.state.status === "working" ? "Previous runtime ended during this run; submit a new prompt to continue." : restored.error,
     };
-    for (const child of record.subagents) entry.children.set(child.id, { id: child.id, name: child.name, role: "subagent", ready: undefined,
+    for (const child of record.subagents.filter(child => child.source !== "pi")) entry.children.set(child.id, { id: child.id, name: child.name, role: "subagent", ready: undefined,
+      ...(child.request ? { request: child.request } : {}), ...(child.runTiming ? { runTiming: child.runTiming } : {}),
       finishedStatus: child.status === "working" ? null : child.status });
     this.emit(); return ok(undefined);
   }
@@ -500,7 +508,8 @@ export class SessionRegistry {
     if (owner.replacing) return err(new SessionError("SESSION_BUSY", "This conversation is being replaced."));
     const ready = capture(() => this.factory({ cwd: owner.worktree.path, worktreeId: owner.worktree.id, role: "subagent",
       spawnSubagent: async () => err(new InputError("Nested delegation is not enabled.")) }));
-    const child: Execution = { id: crypto.randomUUID(), name, role: "subagent", ready, worktree: owner.worktree, managed: true };
+    const child: Execution = { id: crypto.randomUUID(), name, role: "subagent", ready, worktree: owner.worktree, managed: true,
+      request: summarizeRequest(task, 0) };
     owner.children.set(child.id, child); this.emit();
     let cancelTask: Promise<Result<void, ExpectedError>> | undefined;
     const cancel = () => {
@@ -536,7 +545,12 @@ export class SessionRegistry {
       child.fileKey = key.value; this.fileOwners.set(key.value, child.id);
     }
     child.unsubscribe = executor.subscribe(() => { if (owner.phase === "open") this.emit(); }); this.emit();
-    const run = await executor.prompt(task); if (!run.ok) return run;
+    const startedAt = Date.now(), started = performance.now();
+    child.runTiming = { startedAt, elapsedMs: 0 };
+    let run: Result<void, ExpectedError>;
+    try { run = await executor.prompt(task); }
+    finally { child.runTiming = { startedAt, elapsedMs: Math.max(0, performance.now() - started) }; }
+    if (!run.ok) return run;
     if (signal?.aborted) return err(new CancelledError());
     if (executor.state.status === "failure") return err(new AgentRunError(executor.state.error ?? "Subagent failed."));
     return ok(executor.state.output);
