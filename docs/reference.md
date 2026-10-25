@@ -1037,8 +1037,12 @@ confirmed clipboard contents; unsupported/failed delivery is reported explicitly
 acceptance depends on the terminal/multiplexer configuration and is not assumed from dispatch alone.
 
 `j/k` or `Ctrl+N/P` navigate, Enter opens the selected commit or focuses a selected file's diff,
-r refreshes, + loads another 300 commits, Home/End jump, and PgUp/PgDn scroll. Refresh is keyboard-only;
-the main spinner overlays a reserved upper-right cell without adding a navigation row or shifting
+r refreshes, + loads another 300 commits, Home/End jump, and PgUp/PgDn scroll. Git also refreshes when
+returning to its view or worktree, when focus returns from an app-owned overlay, and when the terminal
+regains focus. Cached files and the selected comparison are revalidated even if file status is unchanged;
+selection, reading position and unsubmitted Ask input are preserved. Moving between Git panes or
+scrolling does not refresh the repository; selecting another file loads only its comparison.
+The main spinner overlays a reserved upper-right cell without adding a navigation row or shifting
 history. Browser and Changes popups own their own spinners, canceled when hidden, with the same
 minimum-visible policy and no delayed result/error handling. Diff `j/k` or `Ctrl+N/P` scroll both columns vertically, and `h/l` scroll them horizontally. History is bounded to
 3,000 commits per ref filter. Text preview is bounded to 1 MiB per version and 20,000 combined lines;

@@ -77,7 +77,7 @@ export class GitPanel {
   private worktree: Worktree | null = null;
   private sessionId: string | null = null;
   private generation = 0;
-  private loadRequest?: AbortController;
+  private loadRequest: AbortController | undefined;
   private detailRequest?: AbortController;
   private diffRequest?: AbortController;
   private diff: DiffRenderable | undefined;
@@ -85,6 +85,7 @@ export class GitPanel {
   private renderedComparison: GitComparison | undefined;
   private ask: Ask | undefined;
   private disposed = false;
+  private focused = false;
   private restoring = false;
   private pendingRestore = false;
   private detailsLayout: { key: string; width: number; height: number; viewport: number; top: number } | undefined;
@@ -170,7 +171,7 @@ export class GitPanel {
     this.prompt.on(InputRenderableEvents.INPUT, this.resizeAsk); this.prompt.on("resize", this.resizeAsk); this.prompt.on("line-info-change", this.resizeAsk);
     this.root.add(this.dialog);
     bindPanelSpacing(renderer, this.root);
-    renderer.on("selection", this.selectionFinished); renderer.on("focused_renderable", this.keepFocus);
+    renderer.on("selection", this.selectionFinished); renderer.on("focused_renderable", this.keepFocus); renderer.on("focus", this.refreshOnFocus);
     for (const box of [this.history.root, this.files.root]) {
       box.verticalScrollBar.on("change", this.remember);
       box.content.on("resize", this.applyScroll); box.viewport.on("resize", this.applyScroll);
@@ -332,13 +333,11 @@ export class GitPanel {
     });
     if (this.cache) { this.cache.state.tab = "commits"; this.cache.state.right = "commit"; }
     this.pendingRestore = true; this.render();
-    if (worktree && this.actions && !this.cache?.data) this.refresh();
-    else if (this.cache?.state.selected && !this.cache.details) this.launch(() => this.loadDetails(this.cache!));
-    else if (this.cache?.state.diff && !this.cache.comparison && !this.cache.diffError && this.selectedFile) this.loadComparison();
+    if (worktree && this.actions) this.refresh();
   }
   hide(): void {
     if (!this.root.visible) return;
-    this.remember(); this.generation++;
+    this.remember(); this.generation++; this.focused = false;
     for (const request of this.requests) request.abort(); this.requests.clear(); this.spinner.cancel(); this.changesSpinner.cancel();
     if (this.root.isDestroyed) { this.ask = undefined; return; }
     if (this.ask) this.closeAsk(false);
@@ -359,9 +358,14 @@ export class GitPanel {
   }
   private current(cache: Cache, generation: number, request: AbortController): boolean { return !this.disposed && !this.root.isDestroyed && this.root.visible && this.cache === cache && this.generation === generation && !request.signal.aborted; }
   private failure(error: ExpectedError): void { if (!(error instanceof CancelledError)) this.notice(`[${error.code}] ${error.message}`); }
+  private refreshOnFocus = (): void => {
+    // Showing the view and handing it focus can occur in the same activation.
+    if (this.loadRequest && !this.loadRequest.signal.aborted) return;
+    this.refresh();
+  };
   refresh(): void {
-    const cache = this.cache; if (!cache) return;
-    this.remember(); this.loadRequest?.abort();
+    const cache = this.cache; if (!cache || this.disposed || this.root.isDestroyed || !this.root.visible) return;
+    this.remember(); this.loadRequest?.abort(); this.detailRequest?.abort(); this.diffRequest?.abort();
     const request = this.request(), generation = this.generation; this.loadRequest = request;
     this.launch(async () => {
       try {
@@ -371,15 +375,20 @@ export class GitPanel {
           cache.error = `[${result.error.code}] ${result.error.message}`; this.failure(result.error);
           this.browser.update(cache.data, cache.error); this.render(); return;
         }
+        // Navigation may have started previews against the old snapshot while loading.
+        this.detailRequest?.abort(); this.diffRequest?.abort();
         cache.error = undefined; cache.data = result.value;
         if (cache.state.selected && !result.value.commits.some((commit) => commit.oid === cache.state.selected)) cache.state.selected = null;
         cache.details = undefined; cache.comparison = undefined; cache.diffError = undefined;
         if (cache.external) { cache.external.comparison = undefined; cache.external.diffError = undefined; }
         this.browser.update(result.value);
         this.pendingRestore = true; this.render();
-        if (cache.state.selected) await this.loadDetails(cache);
+        if (cache.state.selected) this.launch(() => this.loadDetails(cache));
         else if (cache.state.diff && this.selectedFile) this.loadComparison();
-      } finally { this.finished(request); }
+      } finally {
+        if (this.loadRequest === request) this.loadRequest = undefined;
+        this.finished(request);
+      }
     });
   }
   private more(): void {
@@ -424,8 +433,9 @@ export class GitPanel {
   private chooseHistory(key: string): void {
     const cache = this.cache; if (!cache) return;
     cache.state.historyScroll = Math.max(0, Math.round(this.history.root.scrollTop));
-    if (cache.state.selected === key) return;
-    cache.state.selected = key === workingKey ? null : key; cache.state.diff = false; cache.state.file = null;
+    const selected = key === workingKey ? null : key;
+    if (cache.state.selected === selected) return;
+    cache.state.selected = selected; cache.state.diff = false; cache.state.file = null;
     cache.state.detailsScroll = 0; cache.state.filesScroll = 0;
     cache.details = undefined; cache.comparison = undefined; cache.diffError = undefined;
     this.persist(); this.render();
@@ -721,11 +731,16 @@ export class GitPanel {
       }
     } finally { ask.sending = false; if (this.ask === ask && !this.disposed) this.updateTarget(); }
   }
-  private keepFocus = (): void => {
+  private keepFocus = (focused: Renderable | null): void => {
     if (!this.root.visible || this.root.isDestroyed || this.renderer.isDestroyed || this.disposed) return;
+    // Compact panes can blur before focusing their replacement; null is not an exit.
+    if (focused) {
+      const entered = within(focused, this.root), returned = entered && !this.focused;
+      this.focused = entered;
+      if (returned) this.refreshOnFocus();
+    }
     this.updateHistoryRail();
     if (!this.modal) return;
-    const focused = this.renderer.currentFocusedRenderable;
     // App-wide search and inspectors own their focus; only guard background Git controls.
     if (!within(focused, this.root)) return;
     if (this.dialog.visible) { if (!within(focused, this.dialog)) this.prompt.focus(); return; }
@@ -771,7 +786,7 @@ export class GitPanel {
   dispose(): void {
     if (this.disposed) return;
     this.hide(); this.disposed = true;
-    this.renderer.off("selection", this.selectionFinished); this.renderer.off("focused_renderable", this.keepFocus);
+    this.renderer.off("selection", this.selectionFinished); this.renderer.off("focused_renderable", this.keepFocus); this.renderer.off("focus", this.refreshOnFocus);
     this.prompt.off(InputRenderableEvents.INPUT, this.resizeAsk); this.prompt.off("resize", this.resizeAsk); this.prompt.off("line-info-change", this.resizeAsk); this.prompt.dispose();
     this.browser.dispose();
     for (const box of [this.history.root, this.files.root]) {

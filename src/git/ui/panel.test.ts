@@ -1189,6 +1189,208 @@ test.each([false, true])("At brightness %j, candidates stay highlighted and butt
   } finally { await app.close(); }
 });
 
+test.each(["view", "worktree"] as const)("Returning to a cached Git %s reloads files and the selected comparison without losing reading position", async target => {
+  // A status-identical edit still needs a fresh comparison when the cached screen returns.
+  let data = snapshot(), revision = "before return", reads = 0, comparisons = 0;
+  const app = await mount({ source: {
+    load: async () => { reads++; return ok(structuredClone(data)); },
+    details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }),
+    compare: async () => { comparisons++; const diff = comparison(); return ok({ ...diff, after: diff.after.replace("line69 = 69", `line69 = '${revision}'`) }); },
+  } });
+  try {
+    await app.openWorkingTree(); await app.waitForFrame(frame => frame.includes("const line00"));
+    app.get("git-diff").focus(); app.mockInput.pressKey("END"); await app.renderOnce();
+    const scroll = app.codes()[0]!.scrollY;
+    expect(scroll).toBeGreaterThan(0);
+    if (target === "view") { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("a"); await app.renderOnce(); }
+    else await app.click(`${icons.folder} radian-ui`);
+    data = { ...snapshot(), files: [...snapshot().files, { kind: "untracked", status: "?", path: "fresh.txt" }] };
+    revision = "after return";
+
+    // Returning must revalidate the snapshot as well as an already cached file diff.
+    if (target === "view") await app.showGit(); else await app.click(`${icons.folder} radian`);
+    await app.waitForFrame(frame => frame.includes("after return"));
+
+    // View identities and synchronized scroll survive while external edits become visible.
+    expect(reads).toBe(2); expect(comparisons).toBe(2);
+    expect(app.captureCharFrame()).toContain("Changed files (3)"); expect(app.captureCharFrame()).toContain("fresh.txt");
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.file).toBe("unstaged:src/login.ts");
+    expect(app.codes().map(pane => pane.scrollY)).toEqual([scroll, scroll]);
+    expect(app.requests).toEqual([]); expect(app.view.promptDrafts.a1).toBe("existing Agent draft");
+  } finally { await app.close(); }
+});
+
+test.each(["terminal", "workspace"] as const)("Git %s focus return refreshes status-identical edits and preserves diff focus", async target => {
+  // Porcelain status alone cannot reveal another edit to the same modified file.
+  let revision = "original focus", reads = 0, comparisons = 0;
+  const app = await mount({ source: {
+    load: async () => { reads++; return ok(snapshot()); },
+    details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }),
+    compare: async () => { comparisons++; const diff = comparison(); return ok({ ...diff, after: diff.after.replace("line69 = 69", `line69 = '${revision}'`) }); },
+  } });
+  try {
+    await app.openWorkingTree(); await app.waitForFrame(frame => frame.includes("const line00"));
+    app.get("git-diff").focus(); app.mockInput.pressKey("END"); await app.renderOnce();
+    const scroll = app.codes()[0]!.scrollY;
+    if (target === "terminal") app.renderer.emit("blur"); else { openWorkspaceSearch(app); await app.renderOnce(); }
+    revision = "updated focus";
+
+    // Native terminal focus and app-owned overlay focus are distinct return paths.
+    if (target === "terminal") app.renderer.emit("focus"); else app.mockInput.pressEscape();
+    await app.waitForFrame(frame => frame.includes("updated focus"));
+
+    // Refresh must not move focus or reset either column to the top.
+    expect(reads).toBe(2); expect(comparisons).toBe(2);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-diff");
+    expect(app.codes().map(pane => pane.scrollY)).toEqual([scroll, scroll]);
+    expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each(["arrows", "vim", "control"] as const)("Git %s navigation reads only newly selected previews, not the repository snapshot", async navigation => {
+  // Navigation owns preview selection; it must not act as an implicit full refresh.
+  let reads = 0, details = 0, comparisons = 0;
+  const app = await mount({ source: {
+    load: async () => { reads++; return ok(snapshot()); },
+    details: async selected => { details++; return ok({ commit: selected, message: selected.subject, files: [], branches: [] }); },
+    compare: async () => { comparisons++; return ok(comparison()); },
+  } });
+  const move = (down: boolean) => navigation === "arrows" ? app.mockInput.pressArrow(down ? "down" : "up")
+    : navigation === "control" ? app.mockInput.pressKey(down ? "n" : "p", { ctrl: true }) : app.mockInput.pressKey(down ? "j" : "k");
+  try {
+    app.get("git-history").focus(); move(false); await app.renderOnce();
+    move(true); await app.waitForFrame(frame => frame.includes("Author: Ada"));
+    move(false); await app.renderOnce(); await app.openChanges();
+    await app.waitForFrame(frame => frame.includes("const line00"));
+
+    // Staying on the first file or scrolling diff bodies does not reread any Git data.
+    move(false); await app.renderOnce();
+    app.get("git-diff").focus(); move(true); await app.renderOnce();
+    expect(reads).toBe(1); expect(details).toBe(1); expect(comparisons).toBe(1);
+    app.get("git-files").focus(); move(true); await app.renderOnce(); await app.renderOnce();
+
+    // Selecting another file reads that comparison only and keeps list focus.
+    expect(reads).toBe(1); expect(details).toBe(1); expect(comparisons).toBe(2);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-files");
+
+    // A clamped move on Working tree must not discard its remembered file or cached diff.
+    app.mockInput.pressEscape(); await app.renderOnce(); move(false); await app.renderOnce();
+    app.mockInput.pressEnter(); await app.renderOnce(); await app.renderOnce();
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.file).toBe("untracked:notes.txt");
+    expect(reads).toBe(1); expect(comparisons).toBe(2); expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Overlapping focus returns share one reload and hidden Git views ignore terminal focus", async () => {
+  // A delayed focus reload must not be restarted by the accompanying focus handoff.
+  const pending = Promise.withResolvers<Result<GitSnapshot, ExpectedError>>();
+  let reads = 0, signal: AbortSignal | undefined;
+  const app = await mount({ source: {
+    load: async (_ref, _limit, current) => { reads++; if (reads === 2) { signal = current; return pending.promise; } return ok(snapshot()); },
+    details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }), compare: async () => ok(comparison()),
+  } });
+  try {
+    // Multiple return signals during the same query must not create competing reloads.
+    openWorkspaceSearch(app); await app.renderOnce();
+    app.renderer.emit("focus"); app.mockInput.pressEscape(); await app.renderOnce();
+    app.renderer.emit("focus"); await app.renderOnce();
+    expect(reads).toBe(2); expect(signal?.aborted).toBe(false);
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("a"); await app.renderOnce();
+    app.renderer.emit("focus");
+    const stale = snapshot(); stale.commits[0] = { ...commit, subject: "Hidden stale snapshot" };
+    pending.resolve(ok(stale)); await app.renderOnce();
+
+    // Hiding cancels outstanding refreshes; a later return starts a new current read.
+    expect(signal?.aborted).toBe(true); expect(reads).toBe(2);
+    await app.showGit(); await app.waitForFrame(frame => frame.includes("Update login"));
+    expect(reads).toBe(3); expect(app.captureCharFrame()).not.toContain("Hidden stale snapshot");
+    expect(app.requests).toEqual([]);
+  } finally { pending.resolve(ok(snapshot())); await app.close(); }
+});
+
+test.each(["before", "during"] as const)("Focus refresh invalidates comparisons started %s the snapshot reload", async timing => {
+  // Even sources ignoring AbortSignal must not restore stale text for the same selected file.
+  const pendingLoad = Promise.withResolvers<Result<GitSnapshot, ExpectedError>>();
+  const pendingDiff = Promise.withResolvers<Result<GitComparison, ExpectedError>>();
+  let reads = 0, comparisons = 0, signal: AbortSignal | undefined;
+  const app = await mount({ source: {
+    load: async () => ++reads === 2 ? pendingLoad.promise : ok(snapshot()),
+    details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }),
+    compare: async (_file, current) => {
+      comparisons++;
+      if (comparisons === (timing === "before" ? 1 : 2)) { signal = current; return pendingDiff.promise; }
+      return ok({ before: "Latest comparison\n", after: "Latest comparison updated\n", beforeLabel: "before", afterLabel: "after" });
+    },
+  } });
+  try {
+    await app.openWorkingTree();
+
+    // Changing selection while the snapshot is pending can start another old-snapshot preview.
+    app.renderer.emit("focus");
+    if (timing === "during") { app.mockInput.pressArrow("down"); await app.renderOnce(); }
+    pendingLoad.resolve(ok(snapshot())); await app.waitForFrame(frame => frame.includes("Latest comparison"));
+    pendingDiff.resolve(ok({ before: "Stale comparison\n", after: "Stale comparison updated\n", beforeLabel: "old", afterLabel: "old" }));
+    await app.renderOnce(); await app.renderOnce();
+
+    // Only the post-refresh preview is allowed to update the current comparison.
+    expect(signal?.aborted).toBe(true); expect(reads).toBe(2);
+    expect(comparisons).toBe(timing === "before" ? 2 : 3);
+    expect(app.captureCharFrame()).toContain("Latest comparison"); expect(app.captureCharFrame()).not.toContain("Stale comparison");
+    expect(app.requests).toEqual([]);
+  } finally { pendingLoad.resolve(ok(snapshot())); pendingDiff.resolve(ok(comparison())); await app.close(); }
+});
+
+test("Slow commit previews do not block later focus refreshes after snapshots finish", async () => {
+  // A completed snapshot is not an in-flight reload merely because its details are still pending.
+  const pending = Promise.withResolvers<Result<GitDetails, ExpectedError>>();
+  let reads = 0, details = 0, signal: AbortSignal | undefined;
+  const app = await mount({ source: {
+    load: async () => { reads++; return ok(snapshot()); },
+    details: async (selected, current) => {
+      if (++details < 3) { signal = current; return pending.promise; }
+      return ok({ commit: selected, message: "Current commit after focus", files: [], branches: [] });
+    }, compare: async () => ok(comparison()),
+  } });
+  try {
+    await app.chooseCommit(); app.renderer.emit("focus");
+    await app.waitFor(() => details === 2);
+
+    // Another actual return must revalidate the repository and replace the delayed preview.
+    app.renderer.emit("blur"); app.renderer.emit("focus");
+    await app.waitForFrame(frame => frame.includes("Current commit after focus"));
+    pending.resolve(ok({ commit, message: "Stale commit preview", files: [], branches: [] })); await app.renderOnce();
+
+    expect(reads).toBe(3); expect(signal?.aborted).toBe(true);
+    expect(app.captureCharFrame()).not.toContain("Stale commit preview");
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid);
+  } finally { pending.resolve(ok({ commit, message: "cleanup", files: [], branches: [] })); await app.close(); }
+});
+
+test("Terminal focus refresh preserves Ask input, caret, target and frozen Git context", async () => {
+  // An accepted file selection may disappear externally while its unsubmitted question remains editable.
+  let data = snapshot(), reads = 0;
+  const app = await mount({ source: {
+    load: async () => { reads++; return ok(structuredClone(data)); },
+    details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }), compare: async () => ok(comparison()),
+  } });
+  try {
+    await app.openWorkingTree(); app.mockInput.pressKey("a"); await app.renderOnce();
+    await app.mockInput.typeText("explain this file"); app.mockInput.pressArrow("left");
+    const input = app.get("git-prompt"); if (!(input instanceof PromptInput)) throw new Error("Missing Ask input");
+    const caret = input.cursorOffset;
+    data = { ...snapshot(), files: [{ kind: "untracked", status: "?", path: "replacement.txt" }] };
+
+    // Native focus refresh must not reinitialize an app-owned prompt or silently replace its attachment.
+    app.renderer.emit("blur"); app.renderer.emit("focus");
+    await app.waitForFrame(frame => frame.includes("replacement.txt"));
+
+    expect(reads).toBe(2); expect(input.value).toBe("explain this file"); expect(input.cursorOffset).toBe(caret);
+    expect(app.renderer.currentFocusedRenderable).toBe(input); expect(app.captureCharFrame()).toContain("File src/login.ts");
+    expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
+    expect(app.view.promptDrafts.a1).toBe("existing Agent draft");
+  } finally { await app.close(); }
+});
+
 test("r refreshes without headers/buttons and spinners show at least 500ms without shifting layout", async () => {
   // Keep refresh pending at the query boundary and drive animation with the renderer clock.
   const clock = new ManualClock(); let reads = 0;
