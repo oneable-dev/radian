@@ -93,7 +93,7 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       if (options.streamFn) session.agent.streamFunction = options.streamFn;
       const diagnostics = new CommandDiagnostics();
       const unsupportedSessionAction = async (): Promise<never> => { throw new CapabilityError("Pi session replacement/reload is not hosted here. Use Radian's session controls instead."); };
-      const ui = context.role === "main" ? new ExtensionUiBridge(session.extensionRunner.getUIContext()) : undefined;
+      const ui = context.role === "main" ? new ExtensionUiBridge(session.extensionRunner.getUIContext(), mcpAuth.eventBus) : undefined;
       await session.bindExtensions({ ...(ui ? { uiContext: ui.context, mode: "rpc" as const } : {}), onError: diagnostics.report, commandContextActions: {
         waitForIdle: () => session.waitForIdle(), newSession: unsupportedSessionAction, fork: unsupportedSessionAction,
         switchSession: unsupportedSessionAction, navigateTree: unsupportedSessionAction, reload: unsupportedSessionAction,
@@ -529,6 +529,7 @@ export class PiSessionExecutor implements SessionExecutor {
   }
 
   private handleEvent(event: AgentSessionEvent): void {
+    this.ui?.observeEvent(event);
     const completion = this.transcript.handle(event);
     switch (event.type) {
       case "agent_start":

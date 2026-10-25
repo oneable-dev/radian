@@ -1,9 +1,10 @@
 import { Type, type Static } from "typebox";
-import type { ExtensionUIContext, ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, EventBus, ExtensionUIContext, ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
 import { CapabilityError, InputError, SessionError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import type { Subagent } from "./model.ts";
 import { piSubagentsFromWidget } from "./pi-subagent-status.ts";
+import { PiSubagentDisplay } from "./pi-subagent-display.ts";
 
 const id = Type.String({ minLength: 1, maxLength: 4096 });
 const text = Type.String({ maxLength: 65536 });
@@ -40,11 +41,18 @@ export class ExtensionUiBridge {
   private notifications: ExtensionUiState["notifications"] = [];
   private readonly statuses = new Map<string, string>();
   private children: readonly Subagent[] = [];
+  private childWidget: readonly string[] | undefined;
+  private readonly childDisplay: PiSubagentDisplay;
   private childrenObservedAt = 0;
   private active = false;
   private disposed = false;
 
-  constructor(base: ExtensionUIContext) {
+  constructor(base: ExtensionUIContext, events?: EventBus) {
+    this.childDisplay = new PiSubagentDisplay(events, () => {
+      const result = piSubagentsFromWidget(this.childWidget, this.childDisplay.lookup);
+      if (!result.ok) { console.warn(`[radian:subagents] ${result.error.code}: ${result.error.message}`); return; }
+      this.children = result.value; this.changed();
+    });
     this.context = {
       ...base,
       select: async (title, options, opts) => await this.request({ kind: "select", title, options: [...options] }, opts) as string | undefined,
@@ -64,8 +72,9 @@ export class ExtensionUiBridge {
       setWidget: (key, content) => {
         if (this.disposed || key !== "subagent-async") return;
         if (content !== undefined && !Array.isArray(content)) return;
-        const result = piSubagentsFromWidget(content);
+        const result = piSubagentsFromWidget(content, this.childDisplay.lookup);
         if (!result.ok) { console.warn(`[radian:subagents] ${result.error.code}: ${result.error.message}`); return; }
+        this.childWidget = content ? [...content] : undefined;
         this.children = result.value; this.childrenObservedAt = performance.now(); this.changed();
       },
       // RPC mode deliberately does not pretend to host Pi terminal components.
@@ -89,7 +98,8 @@ export class ExtensionUiBridge {
     if (!this.active) this.clear();
   }
   cancelDialogs(): void { for (const pending of [...this.pending.values()]) pending.finish(); }
-  reset(): void { this.children = []; this.clear(); }
+  observeEvent(event: AgentSessionEvent): void { if (!this.disposed) this.childDisplay.handleEvent(event); }
+  reset(): void { this.children = []; this.childWidget = undefined; this.childDisplay.reset(); this.clear(); }
   clear(): void {
     this.cancelDialogs();
     this.notifications = []; this.statuses.clear(); this.changed();
@@ -131,5 +141,5 @@ export class ExtensionUiBridge {
     this.changed(); return result.promise;
   }
   private changed(): void { for (const listener of this.listeners) listener(); }
-  dispose(): void { this.disposed = true; this.children = []; this.setActive(false); this.listeners.clear(); this.dialogListeners.clear(); }
+  dispose(): void { this.disposed = true; this.children = []; this.childWidget = undefined; this.childDisplay.dispose(); this.setActive(false); this.listeners.clear(); this.dialogListeners.clear(); }
 }

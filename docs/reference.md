@@ -1870,8 +1870,9 @@ the underlying execution outcome.
 
 The work-status block expands vertically below the selected session's main run state and above
 the composer. Each subagent has its own name, `Working (24s)` or terminal outcome, and a short
-received-task caption when request metadata exists. Runtime timing survives reconnects; terminal
-child durations stop advancing. Children remain visible when their parent settles. The block
+quoted received-task caption when request metadata exists. The caption starts in the same column
+as the agent name, with no additional indent; long inputs end in an ellipsis. Runtime timing survives
+reconnects; terminal child durations stop advancing. Children remain visible when their parent settles. The block
 preserves input drafts, focus and paused transcript anchors. Compact layouts bound child feedback
 to at most eight rows and one third of the pane height, prioritize active children and summarize
 omitted rows rather than pushing the composer off-screen.
@@ -1879,8 +1880,12 @@ omitted rows rather than pushing the composer off-screen.
 Owned SDK children provide task previews and timing directly. Pi extension async children are
 read-only observations of the versioned `subagent-async` RPC widget snapshot; workflow wrappers and
 host gates are not counted as agents. These observations do not grant Radian lifecycle ownership.
-Pi snapshots supply labels and timing, not delegated prompt text, so unavailable task captions are
-omitted rather than inferred. No terminal output or lifecycle files are scraped. Fast settings
+Pi snapshots supply labels and timing, not delegated prompt text. Session-local lifecycle identity
+events supply actual agent names, replacing task labels when available. Direct `subagent` calls can
+show their authored input after an exact single-child receipt binds it to a run. These display-only
+bindings are bounded and cleared on reload. Workflow inputs remain unavailable because the current
+Pi extension redacts them; task labels and redacted prompt markers are never used as input captions.
+No terminal output or lifecycle files are scraped. Fast settings
 remain session-local and are not propagated to children. Transcript `Paused` appears in the footer,
 not this execution block. Model/context/account usage remains on the separate lower telemetry row.
 

@@ -659,6 +659,40 @@ test("Two real SDK runs survive worktree switching and restore background result
   } finally { await app.cleanup(); }
 });
 
+test("Direct Pi subagent tools expose their authored input only after an exact launch receipt", async () => {
+  // A scripted model invokes the real SDK tool boundary without starting an external child process.
+  const task = "Check the actual delegated input";
+  const app = await sdkFixture(false, options => ({ ...options, streamFn: (model, context, request) => {
+    if (context.messages.at(-1)?.role === "toolResult") return options.streamFn!(model, context, request);
+    const stream = createAssistantMessageEventStream(), message = fixtureMessage(model.api, model.provider, model.id);
+    message.content = [{ type: "toolCall", id: "launch", name: "subagent", arguments: { agent: "implementer", task } }];
+    message.stopReason = "toolUse"; stream.push({ type: "done", reason: "toolUse", message }); stream.end(); return stream;
+  } }));
+  try {
+    const extensions = join(app.directory, "agent", "extensions"); await mkdir(extensions, { recursive: true });
+    await writeFile(join(extensions, "subagent.ts"), `export default function(pi) {
+      pi.registerTool({ name: "subagent", label: "Subagent", description: "Fixture child", parameters: { type: "object", properties: { agent: { type: "string" }, task: { type: "string" } }, required: ["agent", "task"] }, execute: async (_id, args, _signal, _update, ctx) => {
+        pi.events.emit("subagent:async-started", { id: "direct", mode: "single", agent: args.agent, task: "[prompt redacted]" });
+        const now = Date.now();
+        ctx.ui.setWidget("subagent-async", ["PI_SUBAGENT_ASYNC_JSON:" + JSON.stringify({ kind: "pi-subagents.async-status-snapshot", version: 1, generatedAt: now,
+          runs: [{ id: "direct", kind: "subagent", label: args.agent, state: "running", children: [{ id: "step:0", kind: "step", label: "Test implementer response", state: "running", startedAt: now - 9000 }] }],
+        })]);
+        return { content: [{ type: "text", text: "Started" }], details: { mode: "single", asyncId: "direct" } };
+      } });
+    }`);
+    const id = expectOk(await app.registry.create(app.main.id));
+
+    expectOk(await app.registry.prompt(id, "Start the child"));
+
+    // Observed Pi work keeps its identity and input, but acquires no Radian-owned child handle.
+    const children = app.registry.snapshot[0]!.worktrees.find(tree => tree.id === app.main.id)!.sessions[0]!.subagents;
+    expect(children).toHaveLength(1);
+    expect(children[0]).toMatchObject({ name: "implementer", source: "pi", status: "working", request: { text: task, images: 0, files: 0 } });
+    expect(children[0]!.runTiming!.elapsedMs).toBeGreaterThanOrEqual(9000);
+    expect(app.executors).toHaveLength(1);
+  } finally { await app.cleanup(); }
+});
+
 test("Owned SDK children retain their received task and runtime duration after completion", async () => {
   // Delegation starts a real child session whose first input differs from its parent's request.
   const app = await sdkFixture(true);

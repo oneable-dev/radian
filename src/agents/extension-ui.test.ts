@@ -345,6 +345,39 @@ test("Pi subagent RPC widgets update only their originating session while detach
   } finally { await app.cleanup(); }
 });
 
+test("Late Pi child identity events replace task labels only in their originating session", async () => {
+  // A widget can arrive before the exact workflow-child identity is announced.
+  const app = await fixture(`
+    if (_args === "identity") {
+      pi.events.emit("subagent:child-status", { type: "subagent.child-status", version: 1, runId: "workflow", childId: "writer", status: "started", agent: "implementer", ts: Date.now() });
+      return;
+    }
+    const now = Date.now();
+    ctx.ui.setWidget("subagent-async", ["PI_SUBAGENT_ASYNC_JSON:" + JSON.stringify({
+      kind: "pi-subagents.async-status-snapshot", version: 1, generatedAt: now,
+      runs: [{ id: "workflow", kind: "workflow", label: "Workflow", state: "running", children: [
+        { id: "writer", kind: "step", label: "Test implementer response", state: "running", startedAt: now - 9000 },
+      ] }],
+    })]);
+  `);
+  try {
+    const worktree = app.registry.snapshot[0]!.worktrees[0]!.id;
+    const other = expectOk(await app.registry.create(worktree));
+    const children = (id: string) => app.registry.snapshot[0]!.worktrees[0]!.sessions.find(session => session.id === id)!.subagents;
+    app.registry.setUiActive(false);
+    expectOk(await app.registry.prompt(app.id, "/ui-fixture"));
+    const elapsed = children(app.id)[0]!.runTiming!.elapsedMs;
+
+    expectOk(await app.registry.prompt(app.id, "/ui-fixture identity"));
+
+    // Metadata enrichment must not reset elapsed time, create prompts, or cross session boundaries.
+    expect(children(app.id)[0]).toMatchObject({ name: "implementer", status: "working" });
+    expect(children(app.id)[0]!.runTiming!.elapsedMs).toBeGreaterThanOrEqual(elapsed);
+    expect(children(app.id)[0]!.request).toBeUndefined(); expect(children(other)).toEqual([]);
+    expect(app.models()).toBe(0);
+  } finally { await app.cleanup(); }
+});
+
 test("Pi custom terminal components fail explicitly without pretending that Radian is a Pi TUI", async () => {
   // Unsupported UI must not look like a successful but invisible command.
   const app = await fixture(`await ctx.ui.custom(() => { throw new Error("Should not render"); });`);

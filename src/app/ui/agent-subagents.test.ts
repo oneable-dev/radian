@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import { BoxRenderable, ScrollBoxRenderable, TextRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
+import { PiSubagentDisplay } from "../../agents/pi-subagent-display.ts";
+import { piSubagentsFromWidget } from "../../agents/pi-subagent-status.ts";
+import { expectOk } from "../../testing/results.ts";
 import { Workbench } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -69,6 +73,43 @@ test.each([120, 60, 200])("At width %i, per-child status expands below Working w
     expect(app.renderer.currentFocusedRenderable).toBe(focus); expect(focus).toBe(prompt);
     expect(app.view.promptDrafts.a1).toBe("Retained unsent draft");
   } finally { await app.close(); }
+});
+
+test("Pi agent names and quoted inputs share a starting column without an extra input indent", async () => {
+  // Four direct launches have real authored inputs independent from their task labels.
+  const app = await mount(), events = createEventBus(), display = new PiSubagentDisplay(events, () => {});
+  const names = ["implementer", "issue_writer", "reviewer", "review_fixer"];
+  try {
+    app.resize(120, 40); await app.render(); pressLeader(app, "a");
+    const focus = app.renderer.currentFocusedRenderable;
+    for (const [index, name] of names.entries()) {
+      const task = index === 0 ? "Check input" : `Received ${name} input 한글👩‍💻 e\u0301 `.repeat(10);
+      display.handleEvent({ type: "tool_execution_start", toolCallId: name, toolName: "subagent", args: { agent: name, task } });
+      events.emit("subagent:async-started", { id: name, mode: "single", agent: name, task: "[prompt redacted]" });
+      display.handleEvent({ type: "tool_execution_end", toolCallId: name, toolName: "subagent", result: { content: [], details: { mode: "single", asyncId: name } }, isError: false });
+    }
+    const widget = ["PI_SUBAGENT_ASYNC_JSON:" + JSON.stringify({ kind: "pi-subagents.async-status-snapshot", version: 1, generatedAt: 10000,
+      runs: names.map(name => ({ id: name, kind: "subagent", label: name, state: "running", children: [
+        { id: "step:0", kind: "step", label: `Test ${name} response`, state: "running", startedAt: 1000 },
+      ] })),
+    })];
+
+    await app.update(expectOk(piSubagentsFromWidget(widget, display.lookup)));
+
+    // Each input starts under its agent name, not under an additional indentation level.
+    expect(app.headings()).toEqual(names.map(name => `${name} · Working (9s)`));
+    const captions = app.captions(); expect(captions).toHaveLength(4);
+    expect(captions[0]!.plainText).toBe("“Check input”");
+    for (const [index, caption] of captions.entries()) {
+      const heading = app.rows()[index]!.getChildren()[0]!.getChildren().at(-1)!;
+      expect(caption.x).toBe(heading.x); expect(caption.plainText).toStartWith("“");
+      expect(Bun.stringWidth(caption.plainText)).toBeLessThanOrEqual(60);
+      if (index > 0) expect(caption.plainText).toEndWith("…”");
+    }
+    expect(app.captureCharFrame()).not.toContain("Test implementer response");
+    expect(app.renderer.currentFocusedRenderable).toBe(focus);
+    expect(app.view.promptDrafts.a1).toBe("Retained unsent draft");
+  } finally { display.dispose(); await app.close(); }
 });
 
 test("Child expansion and removal preserve a paused transcript anchor, caret, and input focus", async () => {
