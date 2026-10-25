@@ -21,7 +21,7 @@ async function mount(initial: readonly OpenSession[] = [session()], fast: (id: s
   const app = await createTestRenderer({ width: 100, height: 6, kittyKeyboard: true, clock });
   const selected: string[] = [], closed: string[] = [];
   const tabs = new SessionTabs(app.renderer, { select: (id) => selected.push(id), close: (id) => closed.push(id),
-    fast, create() {}, changed() {}, keyHint: () => "", button: (label, activate) => new Button(app.renderer, label, activate) });
+    fast, create() {}, keyHint: () => "", button: (label, activate) => new Button(app.renderer, label, activate) });
   app.renderer.root.add(tabs.root);
   tabs.update("tree", initial, initial[0]?.id ?? null, true);
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
@@ -264,8 +264,8 @@ test("Earlier tabs gaining status slots keep selected IDs and close buttons visi
   } finally { await app.close(); }
 });
 
-test("Agent tabs distinguish focus and selection using backgrounds, never underlines", async () => {
-  // Prepare two sessions using real strip focus and selection metadata.
+test("Agent tabs distinguish active selection without accepting strip focus or underlining titles", async () => {
+  // Two sessions share a passive strip with no keyboard focus state.
   const entries = [session(), session(secondId)], app = await mount(entries);
   const cell = (id: string) => {
     const title = app.get(id).title; let x = 0;
@@ -275,7 +275,8 @@ test("Agent tabs distinguish focus and selection using backgrounds, never underl
     app.tabs.list.focus(); await app.render();
 
     const colors = uiTheme(app.renderer).colors;
-    expect(cell(firstId).bg.toInts()).toEqual(colors.selected.toInts());
+    expect(app.tabs.list.focusable).toBe(false); expect(app.tabs.list.focused).toBe(false);
+    expect(cell(firstId).bg.toInts()).toEqual(colors.surface.toInts());
     expect(cell(firstId).attributes & TextAttributes.UNDERLINE).toBe(0);
     expect(cell(firstId).attributes & TextAttributes.BOLD).not.toBe(0);
     expect(cell(secondId).bg.toInts()).toEqual(colors.panel.toInts());
@@ -283,11 +284,11 @@ test("Agent tabs distinguish focus and selection using backgrounds, never underl
     // Navigation moves only backgrounds and still emits existing selection events.
     app.tabs.command("session.next"); app.tabs.update("tree", entries, secondId, true); await app.render();
     expect(app.selected).toEqual([secondId]); expect(cell(firstId).bg.toInts()).toEqual(colors.panel.toInts());
-    expect(cell(secondId).bg.toInts()).toEqual(colors.selected.toInts());
+    expect(cell(secondId).bg.toInts()).toEqual(colors.surface.toInts());
     expect(cell(firstId).attributes & TextAttributes.UNDERLINE).toBe(0);
     expect(cell(secondId).attributes & TextAttributes.UNDERLINE).toBe(0);
 
-    // Leaving strip focus must not restore underlines on selected sessions.
+    // Focusing another control does not change the selected tab's appearance.
     const outside = new Button(app.renderer, "Outside", () => {}); app.renderer.root.add(outside);
     outside.focus(); await app.render();
     expect(cell(secondId).bg.toInts()).toEqual(colors.surface.toInts());

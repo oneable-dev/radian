@@ -1,3 +1,4 @@
+// Legacy session-tabs/terminal-tabs scopes still parse older keymaps, but headers never receive focus.
 export const contexts = ["workspace", "search", "history", "history-search", "monitor", "monitor-search", "dashboard", "dashboard-tabs", "model", "model-search", "model-effort", "accounts", "accounts-search", "accounts-input", "extension", "extension-search", "extension-input", "extension-body", "session-tabs", "terminal-tabs", "git-tabs", "git-search", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "transcript-search", "editor", "terminal", "terminal-copy", "terminal-visual", "git", "git-prompt", "dialog", "none"] as const;
 export type KeyContext = typeof contexts[number];
 export type KeyScope = KeyContext | "global" | "app" | "pty";
@@ -46,6 +47,7 @@ export const defaultBindings = {
   "view.git": [key("<leader> g")],
   "view.terminal": [key("<leader> t")],
   "tab.new": [key("<leader> c")],
+  "tab.close": [key("<leader> x")],
   "tab.next": [key("<leader> n")],
   "tab.previous": [key("<leader> p")],
   "tab.select-1": [key("<leader> 1")],
@@ -58,11 +60,11 @@ export const defaultBindings = {
   "tab.select-8": [key("<leader> 8")],
   "tab.select-9": [key("<leader> 9")],
   "terminal.new": [],
-  "terminal.close": [key("<leader> x")],
+  "terminal.close": [],
   "terminal.previous": [],
   "terminal.next": [],
-  "terminal.tab-previous": [key("h", "terminal-tabs"), key("left", "terminal-tabs"), key("ctrl+p", "terminal-tabs")],
-  "terminal.tab-next": [key("l", "terminal-tabs"), key("right", "terminal-tabs"), key("ctrl+n", "terminal-tabs")],
+  "terminal.tab-previous": [],
+  "terminal.tab-next": [],
   "terminal.scroll-up": [key("shift+pageup", "terminal")],
   "terminal.scroll-down": [key("shift+pagedown", "terminal")],
   "terminal.copy-back": terminalCopyKeys("escape"),
@@ -85,11 +87,11 @@ export const defaultBindings = {
   "terminal.copy-half-page-up": terminalCopyKeys("ctrl+u"),
   "terminal.copy-half-page-down": terminalCopyKeys("ctrl+d"),
   "session.new": [],
-  "session.close": [key("x", "session-tabs")],
-  "session.previous": [key("h", "session-tabs"), key("left", "session-tabs"), key("ctrl+p", "session-tabs")],
-  "session.next": [key("l", "session-tabs"), key("right", "session-tabs"), key("ctrl+n", "session-tabs")],
-  "session.first": [key("home", "session-tabs")],
-  "session.last": [key("end", "session-tabs")],
+  "session.close": [],
+  "session.previous": [],
+  "session.next": [],
+  "session.first": [],
+  "session.last": [],
   "workspace.open": [key("enter", "workspace")],
   "workspace.previous": [key("k", "workspace"), key("up", "workspace"), key("ctrl+p", "workspace"), key("up", "search"), key("ctrl+p", "search")],
   "workspace.next": [key("j", "workspace"), key("down", "workspace"), key("ctrl+n", "workspace"), key("down", "search"), key("ctrl+n", "search")],
@@ -166,7 +168,7 @@ export const defaultBindings = {
   "model.half-page-down": [key("ctrl+d", "model"), key("ctrl+d", "model-search")],
   "agent.send": [key("enter", "prompt"), key("enter", "prompt-completion")],
   "agent.newline": [key("shift+enter", "prompt"), key("alt+enter", "prompt"), key("shift+enter", "prompt-completion"), key("alt+enter", "prompt-completion")],
-  "agent.interrupt": [key("escape", "prompt"), key("escape", "session-tabs")],
+  "agent.interrupt": [key("escape", "prompt")],
   "agent.clear": [key("ctrl+c", "prompt"), key("ctrl+c", "prompt-completion")],
   "agent.paste": [key("ctrl+v", "prompt"), key("ctrl+v", "prompt-completion")],
   "agent.inspect": [key("ctrl+o", "prompt")],
@@ -258,7 +260,7 @@ export const defaultBindings = {
   "git.half-page-down": [key("ctrl+d", "git"), key("ctrl+d", "git-search")],
   "git.left": [key("h", "git"), key("left", "git")],
   "git.right": [key("l", "git"), key("right", "git")],
-  "button.activate": [key("enter", "button"), key("space", "button"), key("enter", "terminal-tabs"), key("space", "terminal-tabs"), key("enter", "git-tabs"), key("space", "git-tabs")],
+  "button.activate": [key("enter", "button"), key("space", "button"), key("enter", "git-tabs"), key("space", "git-tabs")],
 } satisfies Record<string, readonly BindingInput[]>;
 export type CommandId = keyof typeof defaultBindings;
 export const commandIds = Object.keys(defaultBindings) as CommandId[];

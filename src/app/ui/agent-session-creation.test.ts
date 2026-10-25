@@ -40,11 +40,11 @@ async function mount() {
   };
 }
 
-test.each(["prompt", "session-strip"] as const)("Creating sessions from %s selects new tabs and input while preserving existing drafts", async source => {
+test.each(["prompt", "transcript"] as const)("Creating sessions from %s selects new tabs and input while preserving existing drafts", async source => {
   // Both creation entry points must target the new conversation, not the previous draft.
   const app = await mount();
   try {
-    if (source === "session-strip") app.renderer.root.findDescendantById("agent-session-list")!.focus();
+    if (source === "transcript") app.leader("[");
 
     // Creation is asynchronous, so edits made before it finishes must remain in the old session.
     app.leader("c");
@@ -79,7 +79,7 @@ test("Prompt Ctrl+N neither creates sessions nor clears existing drafts", async 
 });
 
 test("First-session creation in empty worktrees focuses input even after snapshot auto-selection", async () => {
-  // An empty worktree initially has only the session strip as an Agent focus target.
+  // An empty worktree keeps focus on its content, not on the passive session strip.
   const app = await mount();
   try {
     app.selection.selectWorktree("demo:empty"); app.leader("a"); await app.render();
@@ -108,7 +108,7 @@ test.each(["session", "worktree", "editor", "popup", "focus", "tab-roundtrip"] a
       case "worktree": app.selection.selectWorktree("demo:feature"); break;
       case "editor": app.leader("e"); break;
       case "popup": app.leader("b"); break;
-      case "focus": app.renderer.root.findDescendantById("agent-session-list")!.focus(); break;
+      case "focus": app.leader("["); break;
     }
     await app.render();
     const selected = app.selection.sessionId, tree = app.selection.worktree?.id;

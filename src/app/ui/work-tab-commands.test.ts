@@ -17,6 +17,8 @@ async function mount(viewMode: WorkView = "agent", custom = false) {
   const terminals: TerminalInfo[] = [1, 2, 3].map(index => ({ id: `shell-${index}`, worktreeId: "demo:main", title: `sh ${index}`, pid: 100 + index, shellPid: 200 + index, exited: false, exitCode: null }));
   const keymap = custom ? expectOk(parseKeymap({ leader: "ctrl+b", bindings: {
     "tab.next": [{ keys: "alt+j", scope: "global" }], "tab.previous": [{ keys: "alt+k", scope: "global" }],
+    "tab.close": [{ keys: "alt+w", scope: "global" }],
+    "focus.next": ["<leader> f"],
   } })) : undefined;
   const view = new Workbench(app.renderer, selection, {
     ...(keymap ? { keymap } : {}),
@@ -29,7 +31,12 @@ async function mount(viewMode: WorkView = "agent", custom = false) {
       }) })));
       activate?.(id);
     },
-    onCloseSession() {}, onDetach: () => requests.push("detach"), onPrompt: () => ok(undefined),
+    onCloseSession(treeId, id) {
+      requests.push(`close:${id}`);
+      selection.replaceSnapshot(selection.snapshot.map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => tree.id !== treeId ? tree : {
+        ...tree, sessions: tree.sessions.filter(session => session.id !== id),
+      }) })));
+    }, onDetach: () => requests.push("detach"), onPrompt: () => ok(undefined),
     getSessionDetails: id => ({ status: "complete", output: `Output ${id}`, error: null }),
     terminal: {
       list: () => terminals,
@@ -38,7 +45,11 @@ async function mount(viewMode: WorkView = "agent", custom = false) {
         requests.push(`create:${tree}`); terminals.push({ ...terminals[0]!, id, pid: 100 + index, shellPid: 200 + index });
         selection.replaceSnapshot(selection.snapshot); return ok(id);
       },
-      close: async () => ok(undefined),
+      close: async id => {
+        requests.push(`close:${id}`);
+        terminals.splice(terminals.findIndex(terminal => terminal.id === id), 1);
+        selection.replaceSnapshot(selection.snapshot); return ok(undefined);
+      },
       attach: async (id, receive) => {
         const terminal = terminals.find(item => item.id === id)!;
         let revision = 0;
@@ -57,6 +68,139 @@ async function mount(viewMode: WorkView = "agent", custom = false) {
     async close() { view.dispose(); await app.dispose(); },
   };
 }
+
+test.each(["agent", "terminal"] as const)("%s leader+x closes active tabs from input and output without focusing the strip", async mode => {
+  // Both work views have three tabs and an editable input target.
+  const app = await mount(mode);
+  try {
+    // Closing is scoped to the visible view, including its read-only output mode.
+    app.leader("x"); await app.render();
+    expect(app.active()).toBe(mode === "agent" ? "a2" : "shell-2");
+    app.leader("["); await app.render();
+    app.leader("x"); await app.render();
+
+    // Neither command leaks to native input or closes another view's tabs.
+    expect(app.active()).toBe(mode === "agent" ? "a3" : "shell-3");
+    expect(app.requests).toEqual(mode === "agent" ? ["close:a1", "close:a2"] : ["close:shell-1", "close:shell-2"]);
+    expect(app.inputs).toEqual([]);
+    expect(mode === "agent" ? app.terminals.length : app.selection.worktree?.sessions.length).toBe(3);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe(mode === "agent" ? "session-transcript" : "shell-terminal");
+  } finally { await app.close(); }
+});
+
+test.each(["agent", "terminal"] as const)("%s tab clicks keep input ownership and unprefixed x stays literal", async mode => {
+  // Switching tabs must not introduce a keyboard-only focus state on the tab bar.
+  const app = await mount(mode);
+  try {
+    const tab = app.renderer.root.findDescendantById(mode === "agent" ? "session:demo:main:a2" : "terminal-session:shell-2")!;
+
+    // Click an inactive tab and continue typing without another click or activation key.
+    await app.mockMouse.click(tab.x, tab.y); await app.render();
+    app.mockInput.pressKey("x"); await app.render();
+
+    // The selected tab's input, rather than its header, owns the next character.
+    expect(app.active()).toBe(mode === "agent" ? "a2" : "shell-2");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe(mode === "agent" ? "session-prompt" : "shell-terminal");
+    expect(tab.focusable).toBe(false);
+    expect(app.requests).toEqual([]);
+    if (mode === "agent") expect(app.view.promptDrafts.a2).toBe("second draftx");
+    else expect(app.inputs).toEqual(["78"]);
+  } finally { await app.close(); }
+});
+
+test.each(["agent", "terminal"] as const)("%s tab clicks preserve focus outside the work content", async mode => {
+  // A footer command can own focus independently of the visible tab.
+  const app = await mount(mode);
+  try {
+    const footer = app.renderer.root.findDescendantById("footer-help")!; footer.focus();
+    const tab = app.renderer.root.findDescendantById(mode === "agent" ? "session:demo:main:a2" : "terminal-session:shell-2")!;
+
+    // Changing the displayed tab must not activate its input when another region owns focus.
+    await app.mockMouse.click(tab.x, tab.y); await app.render();
+
+    expect(app.active()).toBe(mode === "agent" ? "a2" : "shell-2");
+    expect(app.renderer.currentFocusedRenderable).toBe(footer);
+    expect(app.requests).toEqual([]); expect(app.inputs).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each(["agent", "terminal"] as const)("%s closing the final tab retains empty content focus until explicit creation", async mode => {
+  // Closing every tab must not implicitly create a replacement or focus the header.
+  const app = await mount(mode);
+  try {
+    for (let index = 0; index < 3; index++) { app.leader("x"); await app.render(); }
+    const closed = [...app.requests];
+
+    // Closing an empty view is a consumed no-op, and creation remains explicitly available.
+    app.leader("x"); await app.render();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe(mode === "agent" ? "agent-view" : "terminal-view");
+    expect(app.captureCharFrame()).toContain(mode === "agent" ? "No AI sessions" : "No terminals");
+    expect(app.requests).toEqual(closed); expect(closed).toHaveLength(3);
+    app.leader("c"); await app.render();
+
+    expect(app.requests.at(-1)).toBe("create:demo:main");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe(mode === "agent" ? "session-prompt" : "shell-terminal");
+    expect(app.inputs).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each(["agent", "terminal"] as const)("%s held remapped close keys never cascade into another tab or its input", async mode => {
+  // A single-chord override must retain the leader sequence's one-shot close behavior.
+  const app = await mount(mode, true);
+  try {
+    app.mockInput.pressKey("w", { meta: true }); await app.render();
+
+    // Kitty repeats remain consumed until the chord's physical release.
+    for (const sequence of ["\x1b[119;3:2u", "\x1b[119;3:2u", "\x1b[119;3:3u"]) {
+      const key = parseKeypress(sequence, { useKittyKeyboard: true }); if (!key) throw new Error("Invalid Kitty key");
+      app.renderer.keyInput.processParsedKey(key);
+    }
+    await app.render();
+
+    expect(app.requests).toEqual([mode === "agent" ? "close:a1" : "close:shell-1"]);
+    expect(app.active()).toBe(mode === "agent" ? "a2" : "shell-2");
+    if (mode === "agent") expect(app.view.promptDrafts.a2).toBe("second draft");
+    expect(app.inputs).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each(["agent", "terminal"] as const)("%s focus traversal skips tabs and close controls", async mode => {
+  // An explicit global focus command can exercise traversal even inside a native PTY.
+  const app = await mount(mode, true);
+  try {
+    // Cycle through all available work-view and footer targets.
+    for (let index = 0; index < 8; index++) {
+      app.leader("f"); await app.render();
+
+      // Tab bars and their mouse-only close controls never become input owners.
+      const focused = app.renderer.currentFocusedRenderable;
+      expect(focused).toBeDefined();
+      expect(focused?.id).not.toMatch(/^(agent-session|session:|terminal-session:|close-session:|close-terminal:)/);
+    }
+    expect(app.requests).toEqual([]); expect(app.inputs).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each(["agent", "terminal"] as const)("%s remapped tab close updates execution, footer, and help", async mode => {
+  // A user override replaces the shared default in both app-owned and native inputs.
+  const app = await mount(mode, true);
+  try {
+    // Leave enough footer space so this tests rebinding rather than shortcut truncation.
+    app.resize(200, 30); await app.render();
+    expect(app.captureCharFrame()).toContain("<M-w> Close tab");
+
+    // The configured chord closes only the current tab before opening help.
+    app.mockInput.pressKey("w", { meta: true }); await app.render();
+    app.leader("?"); await app.render();
+    app.mockInput.pressKey("d", { ctrl: true }); await app.render();
+
+    // Help describes the shared command and never advertises the displaced default.
+    expect(app.requests).toEqual([mode === "agent" ? "close:a1" : "close:shell-1"]);
+    expect(app.captureCharFrame()).toContain("<M-w>");
+    expect(app.captureCharFrame()).toContain("Close the active Agent/Terminal tab");
+    expect(app.inputs).toEqual([]);
+  } finally { await app.close(); }
+});
 
 test.each(["agent", "terminal"] as const)("%s leader+n/p cycles same-screen tabs without creation or detach", async mode => {
   // Global tab navigation during input stays scoped to current-worktree tab kinds.
@@ -107,7 +251,7 @@ test("leader+u opens usage and popup c/n/p never changes underlying tabs", async
     app.leader("u"); await app.render();
     expect(app.renderer.root.findDescendantById("agent-dashboard")?.visible).toBe(true);
     const focus = app.renderer.currentFocusedRenderable;
-    for (const key of ["c", "n", "p"]) app.leader(key);
+    for (const key of ["c", "n", "p", "x"]) app.leader(key);
     await app.render();
 
     expect(app.active()).toBe("a1"); expect(app.requests).toEqual([]); expect(app.renderer.currentFocusedRenderable).toBe(focus);
@@ -119,7 +263,7 @@ test.each(["editor", "git"] as const)("Common tab creation/navigation in %s neve
   // Agent/Terminal-specific commands cannot change inactive-screen selection.
   const app = await mount(mode);
   try {
-    for (const key of ["c", "n", "p"]) app.leader(key);
+    for (const key of ["c", "n", "p", "x"]) app.leader(key);
     await app.render();
 
     expect(app.selection.sessionId).toBe("a1"); expect(app.requests).toEqual([]);

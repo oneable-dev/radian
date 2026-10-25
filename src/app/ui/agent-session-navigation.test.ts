@@ -108,11 +108,11 @@ test("Arrows and Home/End browse only while Enter commits selection", async () =
   } finally { await app.close(); }
 });
 
-test("Agent tab h/l navigation preserves drafts while prompt hjklnx remains literal", async () => {
-  // Session navigation is scoped to its strip, never to the editor or prompt input.
+test("Agent leader navigation preserves drafts while prompt hjklnx remains literal", async () => {
+  // Session navigation works directly from input without a focusable tab strip.
   const app = await mount();
   try {
-    app.get("agent-session-list").focus(); app.mockInput.pressKey("l"); await app.render();
+    pressLeader(app, "n"); await app.render();
     expect(app.selection.sessionId).toBe("a2");
     pressLeader(app, "a"); await app.mockInput.typeText("hjklnx");
     await app.click("a1");
@@ -139,20 +139,14 @@ test("Session status uses the same cell and unknown states reclaim empty status 
     expect(app.get(id).width).toBe(18);
   };
   try {
-    // Initial rendering and tab focus use the same edge gutters and leading status cell.
-    for (const focused of [false, true]) {
-      if (focused) { app.get("agent-session-list").focus(); await app.render(); }
-      ordered("session:demo:main:a1", "a1", spinnerFrames);
-      expect(app.region("session:demo:main:a2")).toBe("│ 2. a2         × ");
-      ordered("session:demo:main:a3", "a3", [icons.failure]);
-    }
+    // Passive tabs retain their edge gutters and leading status cells.
+    ordered("session:demo:main:a1", "a1", spinnerFrames);
+    expect(app.region("session:demo:main:a2")).toBe("│ 2. a2         × ");
+    ordered("session:demo:main:a3", "a3", [icons.failure]);
 
     // Unreported sessions keep the tab's outer padding, not an empty badge and its extra gap.
     await app.click(`${icons.folder} radian-ui`);
-    for (const focused of [false, true]) {
-      if (focused) { app.get("agent-session-list").focus(); await app.render(); }
-      expect(app.region("session:demo:feature:b1")).toBe("│ 1. b1         × ");
-    }
+    expect(app.region("session:demo:feature:b1")).toBe("│ 1. b1         × ");
     expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
@@ -175,7 +169,7 @@ test("Tabs keep one-cell inner/outer padding and spacing between numbers, status
       expect(app.region(tab.id).endsWith("× ")).toBe(true);
     }
     const first = app.get("session:demo:main:a1"), second = app.get("session:demo:main:a2");
-    expect(second.x).toBe(first.x + first.width + 1);
+    expect(second.x).toBe(first.x + first.width);
     expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
@@ -229,17 +223,17 @@ test("Closing unselected session tabs preserves current sessions and drafts", as
     expect((app.get("session:demo:main:a3:number") as TextRenderable).plainText).toBe("2.");
     expect(app.view.promptDrafts.a1).toBe("main draft");
     expect(app.requests).toEqual(["close:a2"]);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.get("session-prompt"));
   } finally { await app.close(); }
 });
 
-test("Creation consistently uses leader+n while tab closure keeps x", async () => {
+test("Creation and closure consistently use leader+c/x without tab focus", async () => {
   // The left panel no longer owns hidden active-session actions.
   const app = await mount();
   try {
     app.mockInput.pressKey("n"); app.mockInput.pressKey("x"); await app.render();
     expect(app.requests).toEqual([]);
-    app.get("agent-session-list").focus();
-    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("c"); app.mockInput.pressKey("x"); await app.render();
+    pressLeader(app, "c"); pressLeader(app, "x"); await app.render();
 
     expect(app.requests).toEqual(["new:demo:main", "close:a1"]);
     expect(app.selection.sessionId).toBe("a2");
@@ -289,7 +283,7 @@ test("Snapshot reordering preserves ID selection and instances while navigation 
     expect(app.get("session:demo:main:a2").x).toBeLessThan(alpha.x);
     expect((app.get(`${alpha.id}:number`) as TextRenderable).plainText).toBe("3.");
     expect((app.get("session:demo:main:a3:number") as TextRenderable).plainText).toBe("1.");
-    app.get("agent-session-list").focus(); app.mockInput.pressKey("h"); await app.render();
+    pressLeader(app, "p"); await app.render();
     expect(app.selection.sessionId).toBe("a2");
     app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("1"); await app.render();
     expect(app.selection.sessionId).toBe("a3");

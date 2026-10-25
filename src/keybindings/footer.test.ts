@@ -16,7 +16,7 @@ test.each([
   ["history.open", "history"], ["history.dismiss", "history-search"], ["monitor.page-down", "monitor"],
   ["dashboard.next", "dashboard-tabs"], ["model.next", "model-search"],
   ["accounts.dismiss", "accounts-input"], ["accounts.next", "accounts-search"],
-  ["session.next", "session-tabs"], ["terminal.tab-previous", "terminal-tabs"], ["terminal.scroll-up", "terminal"],
+  ["terminal.scroll-up", "terminal"],
   ["transcript.next", "transcript"], ["transcript.right", "transcript-text"], ["transcript.visual", "transcript-text"],
   ["transcript.visual-line", "transcript-text"], ["transcript.copy", "transcript-visual"],
   ["git.next", "git-search"], ["git.cancel", "git-prompt"], ["focus.next", "git"], ["dialog.dismiss", "dialog"],

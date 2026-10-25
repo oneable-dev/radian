@@ -27,7 +27,6 @@ test.each([
   ["extension", "extension.previous", "extension.next"], ["extension-search", "extension.previous", "extension.next"], ["extension-body", "extension.previous", "extension.next"],
   ["model-effort", "model.effort-less", "model.effort-more"], ["dialog", "dialog.previous", "dialog.next"],
   ["git", "git.previous", "git.next"], ["git-search", "git.previous", "git.next"],
-  ["terminal-tabs", "terminal.tab-previous", "terminal.tab-next"], ["session-tabs", "session.previous", "session.next"],
   ["transcript", "transcript.previous", "transcript.next"], ["transcript-text", "transcript.up", "transcript.down"],
   ["transcript-visual", "transcript.up", "transcript.down"],
 ] as const)("%s Ctrl+N/P executes the same commands as existing directional navigation", (context, previous, next) => {

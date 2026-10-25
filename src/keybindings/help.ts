@@ -12,6 +12,7 @@ const labels: Partial<Record<CommandId, string>> = {
   "terminal.copy-yank": "Copy the current line or selection", "terminal.copy-visual": "Select characters", "terminal.copy-visual-line": "Select logical lines",
   "view.agent": "Show Agents", "view.editor": "Show Editor", "view.git": "Show Git", "view.terminal": "Show Terminal",
   "tab.new": "Create a session in Agents or a shell in Terminal",
+  "tab.close": "Close the active Agent/Terminal tab",
   "tab.next": "Next Agent/Terminal tab (wrap at the end)", "tab.previous": "Previous Agent/Terminal tab (wrap at the beginning)",
   "tab.select-1": "Select tab 1", "tab.select-2": "Select tab 2", "tab.select-3": "Select tab 3",
   "tab.select-4": "Select tab 4", "tab.select-5": "Select tab 5", "tab.select-6": "Select tab 6",

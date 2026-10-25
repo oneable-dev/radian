@@ -38,7 +38,7 @@ test.each(["ctrl+b", "ctrl+f"])("An explicit %s leader wins optional default pag
 });
 
 test("Session creation defaults only to leader+c in all contexts while Ctrl+N stays input-owned", () => {
-  // Input, empty views, and tab strips share the same creation sequence.
+  // Inputs and empty content views share the same creation sequence.
   const map = defaultKeymap();
 
   // Verify hints alongside actual binding configuration.
@@ -46,11 +46,25 @@ test("Session creation defaults only to leader+c in all contexts while Ctrl+N st
     expect(map.hints("tab.new", context)).toBe("<leader>c");
   }
 
-  // Remove separate creation defaults while retaining tab navigation.
+  // Strip-local aliases remain configurable but no longer have defaults.
   expect(map.hint("session.new", "session-tabs")).toBe("");
   expect(map.bound("ctrl+n", "prompt")).toBe(false); expect(map.bound("ctrl+n", "terminal")).toBe(false);
-  expect(map.hints("session.next", "session-tabs")).toContain("<C-n>");
-  expect(map.hints("terminal.tab-next", "terminal-tabs")).toContain("<C-n>");
+  expect(map.hints("session.next", "session-tabs")).toBe("");
+  expect(map.hints("terminal.tab-next", "terminal-tabs")).toBe("");
+});
+
+test("Tab close can be remapped or disabled without resurrecting per-view defaults", () => {
+  // A shared close command must replace both previous screen-specific bindings.
+  const map = expectOk(parseKeymap({ bindings: { "tab.close": ["alt+w"] } }));
+  const disabled = expectOk(parseKeymap({ bindings: { "tab.close": [] } }));
+
+  // Both app-owned and native inputs expose the same configured action.
+  for (const context of ["prompt", "terminal", "transcript", "terminal-copy", "button"] as const) {
+    expect(map.hint("tab.close", context)).toBe("<M-w>");
+    expect(disabled.hint("tab.close", context)).toBe("");
+    expect(map.hint("session.close", context)).toBe("");
+    expect(map.hint("terminal.close", context)).toBe("");
+  }
 });
 
 test("Output navigation uses only leader+[ and removes auxiliary input-return/terminal-toggle defaults", () => {
@@ -73,6 +87,7 @@ test("Creation, detach, usage, and tab defaults never collide and input focus ha
 
   for (const context of ["prompt", "terminal", "session-tabs", "terminal-tabs", "transcript", "terminal-copy"] as const) {
     expect(map.hints("tab.new", context)).toBe("<leader>c");
+    expect(map.hints("tab.close", context)).toBe("<leader>x");
     expect(map.hints("tab.next", context)).toBe("<leader>n"); expect(map.hints("tab.previous", context)).toBe("<leader>p");
     expect(map.hints("app.detach", context)).toBe("<leader>d"); expect(map.hints("dashboard.show", context)).toBe("<leader>u");
     expect(map.hints("focus.prompt", context)).toBe("");
@@ -88,7 +103,7 @@ test("Arrow bindings remain active while hints show alternative navigation keys 
   const listHints = map.hints("workspace.previous", "workspace");
 
   expect(searchHints).toEqual(["<C-p>", "<C-n>"]); expect(listHints).toBe("k/<C-p>");
-  expect(map.hints("git.previous", "git")).toBe("k/<C-p>"); expect(map.hints("session.next", "session-tabs")).toBe("l/<C-n>");
+  expect(map.hints("git.previous", "git")).toBe("k/<C-p>"); expect(map.hints("session.next", "session-tabs")).toBe("");
   expect(map.bound("up", "search")).toBe(true); expect(map.bound("down", "workspace")).toBe(true);
 });
 

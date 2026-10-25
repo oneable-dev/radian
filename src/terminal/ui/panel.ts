@@ -58,10 +58,13 @@ export class TerminalPanel {
     private readonly button: ButtonFactory, private readonly notice: (message: string) => void,
     private readonly selectionChanged: (worktreeId: string, id: string | null) => void, private readonly changed: () => void, private readonly unavailable?: string, private readonly terminalTheme?: TerminalTheme, private readonly creationHint: () => string = () => "", private readonly copyText?: (text: string) => Promise<Result<string, ExpectedError>>) {
     this.root = new BoxRenderable(renderer, { id: "terminal-view", flexGrow: 1, minHeight: 0, flexDirection: "column", visible: false, focusable: true });
+    // Popups may restore the temporary pane target used while an attachment was pending.
+    this.root.on("focused", () => this.input?.focus());
     const toolbar = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.tabs = new ScrollBoxRenderable(renderer, { height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0, scrollX: true, scrollY: false,
       contentOptions: { flexDirection: "row", gap: 1 }, horizontalScrollbarOptions: { visible: false },
       onSizeChange: () => { this.resizeTabs(); this.pendingTabScroll = true; this.renderer.requestRender(); } });
+    this.tabs.focusable = false;
     this.reconnectButton = button("Reconnect", () => { this.intent++; this.activate(this.selected, true); }, "Reconnect terminal");
     this.reconnectButton.visible = false;
     toolbar.add(this.tabs); toolbar.add(this.reconnectButton);
@@ -101,10 +104,8 @@ export class TerminalPanel {
   copyCommand(command: CommandId): void { this.copyMode?.command(command); }
   get canClose(): boolean { return !!this.selected && !!this.actions; }
   get canScroll(): boolean { return this.surface?.canScroll ?? false; }
-  get tabsFocused(): boolean { return this.root.visible && [...this.tabButtons.values()].some(tab => tab.root.focused); }
   get focusTargets(): Renderable[] {
-    const tabs = [...this.tabButtons.values()].map(tab => tab.root);
-    const targets = [...tabs, this.reconnectButton, ...(this.input ? [this.input] : [])].filter(item => item.visible);
+    const targets = [this.reconnectButton, ...(this.input ? [this.input] : [])].filter(item => item.visible);
     return targets.length ? targets : [this.root];
   }
   show(worktree: Worktree | null, remembered?: string): void {
@@ -146,7 +147,6 @@ export class TerminalPanel {
     const key = JSON.stringify([this.selected, this.items.map((item) => [item.id, this.processName(item), item.exited])]);
     if (key === this.tabKey) return;
     this.tabKey = key;
-    const focused = this.renderer.currentFocusedRenderable;
     const ids = new Set(this.items.map((item) => item.id));
     for (const id of this.tabButtons.keys()) if (!ids.has(id)) {
       this.tabs.getChildren().find((child) => child.id === `terminal-tab:${id}`)?.destroyRecursively();
@@ -157,8 +157,8 @@ export class TerminalPanel {
       if (!tab) {
         const wrapper = new BoxRenderable(this.renderer, { id: `terminal-tab:${item.id}`, height: 1, flexShrink: 0 });
         tab = new SessionTab(this.renderer, { id: `terminal-session:${item.id}`, closeId: `close-terminal:${item.id}`,
-          closeLabel: "Close terminal", focusable: true, button: this.button,
-          select: () => { this.intent++; if (this.worktree) this.selectionChanged(this.worktree.id, item.id); this.activate(item.id, true); this.paintTabs(); },
+          closeLabel: "Close terminal", button: this.button,
+          select: () => this.select(this.items.findIndex(current => current.id === item.id), this.root.hasFocusedDescendant),
           close: () => this.close(item.id) });
         this.tabButtons.set(item.id, tab); wrapper.add(tab.root); this.tabs.add(wrapper);
       }
@@ -171,15 +171,10 @@ export class TerminalPanel {
     }
     if (this.selected) {
       this.pendingTabScroll = true; this.renderer.requestRender();
-      if (focused?.isDestroyed) this.tabButtons.get(this.selected)?.root.focus();
-    } else if (focused?.isDestroyed) this.root.focus();
+    }
   }
   private resizeTabs(): void {
     for (const tab of this.tabButtons.values()) tab.resize(this.tabs.width);
-  }
-  openFocusedTab(): void {
-    const index = this.items.findIndex(item => this.tabButtons.get(item.id)?.root.focused);
-    if (index >= 0) this.select(index);
   }
   private revealSelected = (): void => {
     if (!this.pendingTabScroll || this.disposed || this.root.isDestroyed || !this.root.visible || !this.selected) return;
@@ -187,7 +182,7 @@ export class TerminalPanel {
   };
   focus(): void {
     if (!this.root.visible || this.disposed) return;
-    const target = this.input ?? (this.reconnectButton.visible ? this.reconnectButton : this.tabButtons.get(this.selected ?? "")?.root ?? this.root);
+    const target = this.input ?? (this.reconnectButton.visible ? this.reconnectButton : this.root);
     target.focus();
     if (this.input || !this.selected) return;
     const generation = this.generation;
@@ -202,16 +197,10 @@ export class TerminalPanel {
     if (!this.root.visible || !item || !this.worktree) return;
     this.intent++;
     if (item.id === this.selected) {
-      if (focusInput) this.focus(); else this.tabButtons.get(item.id)?.root.focus();
+      if (focusInput) this.focus();
       return;
     }
     this.selectionChanged(this.worktree.id, item.id); this.activate(item.id, focusInput); this.paintTabs();
-    if (!focusInput) this.tabButtons.get(item.id)?.root.focus();
-  }
-  moveTab(direction: 1 | -1): void {
-    if (!this.tabsFocused || !this.items.length) return;
-    const index = this.items.findIndex(item => this.tabButtons.get(item.id)?.root.focused);
-    this.select(Math.max(0, Math.min(this.items.length - 1, index + direction)), false);
   }
   next(direction: 1 | -1): void {
     if (!this.items.length) return;
@@ -257,9 +246,11 @@ export class TerminalPanel {
     this.selected = id; const generation = ++this.generation;
     this.setMessage("");
     this.cancelLayout?.(); this.removeSurface(); this.reconnectButton.visible = false;
+    if (focus) this.root.focus();
+    const owner = this.renderer.currentFocusedRenderable;
     if (!id || !this.actions) {
       this.task = this.task.then(() => this.detach()).catch((error: unknown) => { reportUnexpected(error, "terminal detach"); });
-      this.spinner.cancel(); if (focus) this.root.focus(); return;
+      this.spinner.cancel(); return;
     }
     this.spinner.start();
     this.task = this.task.then(async () => {
@@ -283,7 +274,7 @@ export class TerminalPanel {
       if (!attached.ok) { if (this.current(generation)) this.failure(attached.error); return; }
       if (!this.current(generation) || surface.root.isDestroyed) { await attached.value.disconnect(); return; }
       this.connection = attached.value; surface.connect(attached.value);
-      if (focus) surface.root.focus(); this.changed();
+      if (focus && this.renderer.currentFocusedRenderable === owner) surface.root.focus(); this.changed();
     }).catch((error: unknown) => { if (this.current(generation)) this.failure(error); else reportUnexpected(error, "terminal attachment"); })
       .finally(() => { if (this.current(generation)) this.spinner.stop(); });
   }

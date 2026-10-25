@@ -207,8 +207,8 @@ test.each(["disabled", "rebound"] as const)("With %s creation shortcuts, default
   } finally { await app.close(); }
 });
 
-test.each(["arrows", "vim", "control"] as const)("Terminal-tab %s navigation starts from focused tabs without forwarding shell input", async navigation => {
-  // Navigate from focused inactive tabs, even when active terminals differ.
+test.each(["arrows", "vim", "control"] as const)("Terminal %s navigation remains native because tabs cannot take focus", async navigation => {
+  // Passive tabs cannot steal native navigation from the selected shell.
   const app = await mount();
   const tab = (id: string) => app.renderer.root.findDescendantById(`terminal-tab:${id}`)!.getChildren()[0]!;
   const move = (next: boolean) => navigation === "arrows" ? app.mockInput.pressArrow(next ? "right" : "left")
@@ -218,20 +218,17 @@ test.each(["arrows", "vim", "control"] as const)("Terminal-tab %s navigation sta
     app.leader("c"); await app.visible("Shell shell-2"); app.leader("c"); await app.visible("Shell shell-3");
     tab("shell-1").focus(); await app.renderOnce();
 
-    // Connection completion must not steal focus from tab navigation.
-    move(true); await app.visible("Shell shell-2");
-    expect(app.renderer.currentFocusedRenderable).toBe(tab("shell-2"));
-    move(true); await app.visible("Shell shell-3"); move(false); await app.visible("Shell shell-2"); await app.renderOnce();
+    // Attempted tab focus leaves both directional input styles owned by the shell.
+    move(true); move(false); await app.renderOnce();
 
-    expect(app.renderer.currentFocusedRenderable).toBe(tab("shell-2"));
-    expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-2");
-    expect(app.inputs).toEqual([]); expect(app.created).toHaveLength(3); expect(app.closed).toEqual([]);
+    expect(tab("shell-1").focusable).toBe(false);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
+    expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-3");
+    expect(app.inputs).toHaveLength(2); expect(app.created).toHaveLength(3); expect(app.closed).toEqual([]);
     expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("h/l Terminal");
     expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<leader>c New terminal");
-    app.mockInput.pressEnter(); await app.renderOnce();
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
 
-    // Leaving tab navigation returns identical keys to shell input.
+    // Other native editing and navigation chords also remain unmodified.
     app.mockInput.pressKey("h"); app.mockInput.pressKey("l");
     app.mockInput.pressKey("n", { ctrl: true }); app.mockInput.pressKey("p", { ctrl: true });
     app.mockInput.pressKey("d", { ctrl: true }); app.mockInput.pressKey("u", { ctrl: true });
@@ -239,7 +236,7 @@ test.each(["arrows", "vim", "control"] as const)("Terminal-tab %s navigation sta
     expect(app.inputs).toContain("68"); expect(app.inputs).toContain("6c");
     expect(app.inputs).toContain("0e"); expect(app.inputs).toContain("10");
     expect(app.inputs).toContain("04"); expect(app.inputs).toContain("15"); expect(app.inputs.length).toBeGreaterThanOrEqual(8);
-    expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-2");
+    expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-3");
   } finally { await app.close(); }
 });
 
@@ -497,8 +494,8 @@ test("Ctrl+C stays native while leaders control detach, tab switching, and log s
   } finally { await app.close(); }
 });
 
-test("Terminal tabs distinguish focus/active selection through backgrounds without underlines", async () => {
-  // Keep real VT connections as fixtures while moving selection/focus independently.
+test("Terminal tabs show only active selection through backgrounds without focus or underlines", async () => {
+  // Real VT connections retain input while tab headers only reflect selection.
   const app = await mount();
   try {
     await app.createTerminal(); await app.visible("Shell shell-1");
@@ -512,15 +509,17 @@ test("Terminal tabs distinguish focus/active selection through backgrounds witho
     expect(cell(second).bg.toInts()).toEqual(colors.surface.toInts());
     expect(cell(second).attributes & TextAttributes.UNDERLINE).toBe(0);
 
-    // Focusing inactive tabs changes backgrounds without switching shells.
+    // Inactive tabs cannot acquire focus or introduce a second highlight.
     first.focus(); await app.renderOnce();
-    expect(cell(first).bg.toInts()).toEqual(colors.selected.toInts());
+    expect(first.focused).toBe(false);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
+    expect(cell(first).bg.toInts()).toEqual(colors.panel.toInts());
     expect(cell(first).attributes & TextAttributes.UNDERLINE).toBe(0);
     expect(cell(second).bg.toInts()).toEqual(colors.surface.toInts());
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-2");
 
-    // Entering tabs then returning to PTYs retains active backgrounds, not underlines.
-    app.mockInput.pressEnter(); await app.visible("Shell shell-1"); await app.renderOnce();
+    // Clicking a tab transfers native input directly to its selected shell.
+    await app.mockMouse.click(first.x, first.y); await app.visible("Shell shell-1"); await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
     expect(cell(first).bg.toInts()).toEqual(colors.surface.toInts()); expect(cell(first).attributes & TextAttributes.UNDERLINE).toBe(0);
     expect(cell(second).bg.toInts()).toEqual(colors.panel.toInts()); expect(cell(second).attributes & TextAttributes.UNDERLINE).toBe(0);
@@ -599,30 +598,37 @@ test("Rejected inactive-terminal closure notifies while preserving active input/
   } finally { await app.close(); }
 });
 
-test("Terminal-tab Space enters shell input without forwarding control characters", async () => {
-  // Navigation focus can rest on tabs other than active terminals.
-  const app = await mount();
+test("Late terminal attachments after tab clicks never steal popup focus", async () => {
+  // Reattaching an existing shell may finish after the user opens a popup.
+  const app = await mount(), ready = Promise.withResolvers<void>();
   try {
     await app.showView("t"); await app.visible("Shell shell-1");
     app.leader("c"); await app.visible("Shell shell-2");
-    app.renderer.root.findDescendantById("terminal-session:shell-1")!.focus();
+    const attach = app.actions.attach;
+    app.actions.attach = async (...args) => { await ready.promise; return attach(...args); };
+    const tab = app.renderer.root.findDescendantById("terminal-session:shell-1")!;
 
-    // Preserve Space activation when shared frames stop using buttons.
-    app.mockInput.pressKey(" "); await app.visible("Shell shell-1");
+    // The click starts attachment, but subsequent workspace navigation owns focus.
+    await app.mockMouse.click(tab.x, tab.y);
+    app.leader("b"); await app.renderOnce();
+    const popup = app.renderer.currentFocusedRenderable;
+    ready.resolve(); await app.visible("Shell shell-1"); await app.renderOnce();
 
-    // Only selected input gains focus and app activation never reaches PTYs.
+    // Only closing the popup explicitly restores native input.
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-1");
+    expect(app.renderer.currentFocusedRenderable).toBe(popup);
+    expect(popup?.id).toBe("workspace-search");
+    app.mockInput.pressEscape(); await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
     expect(app.inputs).toEqual([]); expect(app.created).toHaveLength(2);
-  } finally { await app.close(); }
+  } finally { ready.resolve(); await app.close(); }
 });
 
-test("Closing focused final terminals leaves valid empty focus and leader+c recovers", async () => {
-  // Per-tab closure must restore empty-state input routing without shared Close commands.
+test("Closing final terminals leaves valid empty content focus and leader+c recovers", async () => {
+  // Closing the selected shell must retain input routing without a focusable tab.
   const app = await mount();
   try {
     await app.showView("t"); await app.visible("Shell shell-1");
-    app.renderer.root.findDescendantById("terminal-session:shell-1")!.focus();
     const close = app.renderer.root.findDescendantById("close-terminal:shell-1")!;
 
     // Final closure creates no automatic replacement shells.

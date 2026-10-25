@@ -61,7 +61,6 @@ test("Scope displays active worktrees, not browsing cursors, and reflects switch
 test("Creation commands and global History shortcuts remain available without buttons", async () => {
   const app = await mount();
   try {
-    app.get("agent-session-list").focus();
     app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("c"); await app.render();
     expect(app.created).toEqual(["demo:main"]);
     pressLeader(app, "a"); await app.render(); const prompt = app.get("session-prompt");
@@ -71,24 +70,29 @@ test("Creation commands and global History shortcuts remain available without bu
   } finally { await app.close(); }
 });
 
-test("Tab reaches empty session lists for explicit creation even in empty worktrees", async () => {
+test("Empty Agent views retain a content focus target for creation without focusing tabs", async () => {
   const app = await mount(true);
   try {
-    const list = app.get("agent-session-list");
-    for (let i = 0; i < 14 && app.renderer.currentFocusedRenderable !== list; i++) { app.mockInput.pressTab(); await app.render(); }
-    expect(list.visible).toBe(true); expect(app.renderer.currentFocusedRenderable).toBe(list); expect(app.created).toEqual([]);
+    const content = app.get("agent-view"), list = app.get("agent-session-list");
+    expect(app.renderer.currentFocusedRenderable).toBe(content);
+    for (let i = 0; i < 6; i++) {
+      app.mockInput.pressTab(); await app.render();
+      expect(list.focused).toBe(false); expect(list.hasFocusedDescendant).toBe(false);
+    }
+    expect(list.visible).toBe(true); expect(app.created).toEqual([]);
     app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("c"); await app.render(); expect(app.created).toEqual(["demo:main"]);
     await app.history(); expect(app.get("session-history").visible).toBe(true); expect(app.lookups).toEqual(["demo:main"]);
   } finally { await app.close(); }
 });
 
-test("Closing final sessions retains list focus and session creation commands", async () => {
+test("Closing final sessions focuses empty content and preserves creation commands", async () => {
   const app = await mount();
   try {
     app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id !== "demo:main" ? tree : { ...tree, sessions: tree.sessions.slice(0, 1) }) })));
-    await app.render(); const list = app.get("agent-session-list"); list.focus();
-    app.mockInput.pressKey("x"); await app.render();
-    expect(app.selection.worktree!.sessions).toHaveLength(0); expect(app.renderer.currentFocusedRenderable).toBe(list); expect(list.visible).toBe(true);
+    await app.render(); const list = app.get("agent-session-list");
+    pressLeader(app, "x"); await app.render();
+    expect(app.selection.worktree!.sessions).toHaveLength(0); expect(app.renderer.currentFocusedRenderable).toBe(app.get("agent-view")); expect(list.visible).toBe(true);
+    expect(list.hasFocusedDescendant).toBe(false);
     expect(app.created).toEqual([]);
     expect(app.captureCharFrame()).toContain("No AI sessions");
     app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("c"); await app.render(); expect(app.created).toEqual(["demo:main"]);

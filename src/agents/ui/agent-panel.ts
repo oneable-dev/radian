@@ -97,11 +97,10 @@ export class AgentPanel {
     this.root = new BoxRenderable(renderer, { id: id("agent-view"), onSizeChange: () => this.resizeComposer(),
       renderAfter: (buffer) => this.transcript.paintFocusGutter(buffer),
       flexGrow: 1, minHeight: 0, minWidth: 0, padding: 1, flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
-    this.sessions = new SessionTabs(renderer, { button, changed,
+    this.sessions = new SessionTabs(renderer, { button,
       fast: id => actions.getSessionDetails?.(id)?.telemetry?.fast === true,
       select: (id) => { if (this.worktree) actions.onSelectSession?.(this.worktree.id, id); },
       create: () => { if (this.worktree) actions.onNewSession(this.worktree.id); },
-      ...(actions.onHistory ? { history: actions.onHistory } : {}),
       close: (id) => { if (this.worktree) actions.onCloseSession?.(this.worktree.id, id); },
       keyHint: (command, context) => transcriptOptions.keyHint?.(command, context) ?? "",
     });
@@ -177,8 +176,6 @@ export class AgentPanel {
   get transcriptShortcuts(): readonly FooterShortcut[] { return this.transcript.shortcuts; }
   get transcriptStatus(): string { return this.transcript.footerStatus; }
   get completionOpen(): boolean { return this.completion.engaged; }
-  get sessionTabsFocused(): boolean { return this.root.visible && this.sessions.focused; }
-  get sessionShortcuts(): readonly FooterShortcut[] { return this.sessions.shortcuts; }
   sessionAvailable(command: CommandId): boolean { return this.root.visible && this.sessions.available(command); }
   sessionCommand(command: CommandId): void { this.sessions.command(command); }
   completionAvailable(command: CommandId): boolean { return this.active && this.completion.available(command); }
@@ -191,13 +188,14 @@ export class AgentPanel {
   transcriptCaptureKey(key: KeyEvent, keymap: Keymap): boolean { return this.transcript.captureKey(key, keymap); }
   cancelTranscriptPending(): void { this.transcript.cancelPending(); }
   get focusTargets(): Renderable[] {
-    return this.root.visible ? [...this.sessions.focusTargets, ...(this.active ? [this.prompt, ...(this.transcriptScroll.visible ? [this.transcript.focusTarget] : [])] : [])] : [];
+    if (!this.root.visible || !this.worktree) return [];
+    return this.active ? [this.prompt, ...(this.transcriptScroll.visible ? [this.transcript.focusTarget] : [])] : [this.root];
   }
 
   update(worktree: Worktree | null, selectedId: string | null, openIds: ReadonlySet<string>, visible: boolean): void {
     if (this.disposed || this.root.isDestroyed) return;
     this.rememberScroll();
-    const tabsFocused = this.sessions.containsFocus;
+    const emptyFocused = this.root.focused;
     this.root.visible = visible; this.worktree = worktree;
     this.sessions.update(worktree?.id ?? null, this.transcriptOptions.readOnly ? [] : worktree?.sessions ?? [], selectedId, visible && !this.transcriptOptions.readOnly);
     const session = worktree?.sessions.find((item) => item.id === selectedId);
@@ -228,6 +226,8 @@ export class AgentPanel {
     for (const id of this.drafts.keys()) if (!openIds.has(id)) this.drafts.delete(id);
     for (const id of this.inputDrafts.keys()) if (!openIds.has(id)) this.inputDrafts.delete(id);
     this.runtimePanel.visible = Boolean(visible && session && (this.actions.onPrompt || this.transcriptOptions.readOnly));
+    // Only empty content needs a fallback target; active pane ancestors must not intercept input clicks.
+    this.root.focusable = visible && !!worktree && !this.active;
     this.completion.prepare(sessionId, worktree?.path, openIds);
     const capturedAt = this.transcriptOptions.snapshotTime?.();
     this.runStatus.update(sessionId, details, this.active, !this.transcriptOptions.readOnly && capturedAt === undefined);
@@ -242,8 +242,10 @@ export class AgentPanel {
     const transcriptFocused = this.transcript.focused;
     this.transcript.update(sessionId, details?.sections, output, this.active, details?.conversationId);
     this.transcript.retainSessions(openIds);
-    if (replaced && this.active && transcriptFocused) this.prompt.focus();
-    if ((!this.active && (this.prompt.focused || transcriptFocused)) || (!this.sessions.root.visible && tabsFocused)) this.focusSidebar();
+    if (this.active && (emptyFocused || replaced && transcriptFocused)) this.prompt.focus();
+    if (!this.active && (this.prompt.focused || transcriptFocused)) {
+      if (visible && worktree) this.root.focus(); else this.focusSidebar();
+    }
     if (!this.active) { this.completion.hide(); this.prompt.cancelPaste(); } else this.completion.refresh();
     this.resizeComposer();
     if (switchedSession) this.publishDrafts();

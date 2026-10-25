@@ -1,9 +1,7 @@
-import { BoxRenderable, ScrollBoxRenderable, type TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
+import { BoxRenderable, ScrollBoxRenderable, type TextRenderable, type CliRenderer } from "@opentui/core";
 import type { OpenSession } from "../model.ts";
 import { sessionStatus } from "../status.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
-import { footerKeyHint } from "../../keybindings/footer.ts";
-import type { FooterShortcut } from "../../ui/footer.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { SessionTab } from "../../ui/session-tab.ts";
 import { StatusIndicator } from "./status-indicator.ts";
@@ -13,9 +11,7 @@ type Actions = {
   select(id: string): void;
   fast?(id: string): boolean;
   create(): void;
-  history?(): void;
   close(id: string): void;
-  changed(): void;
   keyHint(command: CommandId, context: KeyContext): string;
   button(label: string, activate: () => void, action: string): BoxRenderable;
 };
@@ -36,25 +32,15 @@ export class SessionTabs {
     this.list = new ScrollBoxRenderable(renderer, { id: "agent-session-list", height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0,
       scrollX: true, scrollY: false, contentOptions: { flexDirection: "row", gap: 0 }, horizontalScrollbarOptions: { visible: false },
       onSizeChange: () => { this.resizeTitles(); this.reveal = true; this.renderer.requestRender(); } });
+    // ScrollBox's constructor only enables focus; disable its inherited default explicitly.
+    this.list.focusable = false;
     this.root.add(this.list);
     uiTheme(renderer).scrollbars(this.list);
     uiTheme(renderer).bind(this.root, () => this.paint());
-    this.list.on("focused", () => { this.paint(); actions.changed(); });
-    this.list.on("blurred", () => this.paint());
     renderer.on("frame", this.revealSelected);
   }
 
-  get focused(): boolean { return this.renderer.currentFocusedRenderable === this.list; }
-  get containsFocus(): boolean { return this.root.hasFocusedDescendant; }
-  get focusTargets(): Renderable[] {
-    return this.visible ? [this.list] : [];
-  }
-  get creationShortcut(): string { return this.actions.keyHint("session.new", "session-tabs") || this.actions.keyHint("tab.new", "session-tabs"); }
-  get shortcuts(): readonly FooterShortcut[] {
-    const hint = (id: CommandId) => footerKeyHint(id, "session-tabs", this.actions.keyHint(id, "session-tabs"));
-    return [...(this.sessions.length ? [{ key: [hint("session.previous"), hint("session.next")].filter(Boolean).join("/"), label: "Session" }] : []),
-      { key: this.creationShortcut, label: "New session" }, ...(this.actions.history ? [{ key: hint("history.show"), label: "History" }] : []), ...(this.selected ? [{ key: hint("session.close"), label: "Close session" }] : [])];
-  }
+  get creationShortcut(): string { return this.actions.keyHint("tab.new", "button") || this.actions.keyHint("session.new", "button"); }
 
   update(worktreeId: string | null, sessions: readonly OpenSession[], selected: string | null, visible: boolean): void {
     if (this.disposed || this.root.isDestroyed) return;
@@ -75,8 +61,8 @@ export class SessionTabs {
         });
         const frame = new SessionTab(this.renderer, { id: `session:${worktreeId}:${session.id}`,
           closeId: `close-session:${session.id}`, closeLabel: "Close session", leading: status.root,
-          select: () => { this.list.focus(); this.actions.select(session.id); },
-          close: () => { this.list.focus(); this.actions.close(session.id); }, button: this.actions.button });
+          select: () => this.actions.select(session.id),
+          close: () => this.actions.close(session.id), button: this.actions.button });
         this.list.add(frame.root);
         tab = { root: frame.root, title: frame.title, frame, status }; this.tabs.set(session.id, tab);
       }
@@ -86,7 +72,6 @@ export class SessionTabs {
       this.setTitle(tab, session.id);
       if (this.list.getChildren()[index] !== tab.root) { this.list.add(tab.root, index); this.reveal = true; }
     }
-    // The empty strip remains a keyboard target for explicit creation after the last tab closes.
     this.list.visible = this.visible;
     this.paint();
     if (this.reveal) this.renderer.requestRender();
@@ -119,7 +104,7 @@ export class SessionTabs {
     }
   }
   private paint(): void {
-    for (const [id, tab] of this.tabs) tab.frame.update(id === this.selected, this.focused);
+    for (const [id, tab] of this.tabs) tab.frame.update(id === this.selected);
   }
   private revealSelected = (): void => {
     if (!this.reveal || !this.visible || this.disposed || this.root.isDestroyed) return;

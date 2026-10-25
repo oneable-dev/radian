@@ -49,7 +49,6 @@ async function mount() {
       await setup.mockMouse.click(x, y); await setup.renderOnce();
     },
     async newSession() {
-      setup.renderer.root.findDescendantById("agent-session-list")!.focus();
       setup.mockInput.pressKey(" ", { ctrl: true }); setup.mockInput.pressKey("c");
       const id = await creation.at(-1)!; await setup.renderOnce(); return id;
     },
@@ -151,9 +150,8 @@ test("Closing active runs immediately shows empty UI without recreating final se
     app.mockInput.pressEnter(); await childStarted.promise; unsubscribe();
     app.mockInput.pressEscape();
 
-    // The explicit close command belongs to the Agents session strip, not Workspace traversal.
-    app.renderer.root.findDescendantById("agent-session-list")!.focus();
-    app.mockInput.pressKey("x");
+    // The shared close command targets the active session without moving focus to its strip.
+    pressLeader(app, "x");
     expect(app.selection.sessionId).toBeNull();
     expect(app.registry.details(id)).toBeNull();
     await app.renderOnce();
@@ -164,7 +162,8 @@ test("Closing active runs immediately shows empty UI without recreating final se
     // Late SDK events cannot resurrect a row, steal focus or create a replacement session.
     expect(app.creation).toHaveLength(1);
     expect(app.registry.closingCount).toBe(0);
-    expect(app.renderer.root.findDescendantById("agent-session-tabs")!.hasFocusedDescendant).toBe(true);
+    expect(app.renderer.root.findDescendantById("agent-session-tabs")!.hasFocusedDescendant).toBe(false);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("agent-view");
     expect(app.captureCharFrame()).not.toContain("Worktree probe");
   } finally { await app.closeApp(); }
 });

@@ -1,4 +1,4 @@
-import { openWorkspaceSearch } from "../../testing/keys.ts";
+import { openWorkspaceSearch, pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -78,14 +78,13 @@ test("Close keys choose previous sessions at the end and empty screens for final
   const app = await mount();
   try {
     // Select the last item and close each surviving selected item.
-    app.renderer.root.findDescendantById("agent-session-list")!.focus();
-    app.mockInput.pressKey("END");
-    app.mockInput.pressKey("x");
+    pressLeader(app, "p");
+    pressLeader(app, "x");
     await app.renderOnce();
     expect(app.selection.sessionId).toBe("a2");
-    app.mockInput.pressKey("x");
+    pressLeader(app, "x");
     await app.renderOnce();
-    app.mockInput.pressKey("x");
+    pressLeader(app, "x");
     await app.renderOnce();
 
     // The same central empty state offers an explicit action, not an automatic session.
@@ -123,7 +122,6 @@ test("Empty-worktree creation sends requests without manipulating selection or o
     const before = app.selection.snapshot;
 
     // The action crosses the host callback boundary without implementing OA-5.
-    app.renderer.root.findDescendantById("agent-session-list")!.focus();
     app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("c"); await app.renderOnce();
 
     // No runtime, automatic selection or placeholder session was manufactured.
@@ -147,7 +145,7 @@ test("History explains unsupported previews while preserving selection", async (
   } finally { await app.close(); }
 });
 
-test("Session-tab End reveals offscreen sessions and preserves selection in compact terminals", async () => {
+test("Leader navigation reveals offscreen sessions and preserves selection in compact terminals", async () => {
   // Long display-only data exceeds the viewport; no agent timers drive the UI.
   const fixture: Repository[] = [{ id: "long-repo", name: "long-repo", worktrees: [{
     id: "long-tree", path: "/demo/long", name: "long", branch: "main",
@@ -157,9 +155,8 @@ test("Session-tab End reveals offscreen sessions and preserves selection in comp
   }] }];
   const app = await mount(fixture);
   try {
-    // End is scoped to the horizontal session strip, not the left workspace tree.
-    app.renderer.root.findDescendantById("agent-session-list")!.focus();
-    app.mockInput.pressKey("END");
+    // Moving backward from the first tab wraps to the last without focusing its strip.
+    pressLeader(app, "p");
     await app.renderOnce(); await app.renderOnce();
     expect(app.selection.sessionId).toBe("long-39");
     expect(app.captureCharFrame()).toContain("long-39");
@@ -199,7 +196,7 @@ test("Kind icons stay left while aggregated parent/child status appears in right
     expect(spinnerFrames.some((frame) => app.tabFrame("a1").includes(frame))).toBe(true);
     await app.clickText("a2");
     expect(app.tabFrame("a2")).not.toContain(workspaceIcons.complete);
-    app.renderer.root.findDescendantById("agent-session-list")!.focus(); app.mockInput.pressKey("END");
+    pressLeader(app, "3");
     await app.renderOnce(); await app.renderOnce();
     expect(app.tabFrame("a3")).toContain(icons.failure);
     await app.clickText(`${icons.folder} radian-ui`);
@@ -358,8 +355,7 @@ test("Closing filtered trees selects the next session from original lists", asyn
 
     // Only the explicit close command asks the demo host to remove display metadata.
     app.mockInput.pressEnter();
-    app.renderer.root.findDescendantById("agent-session-list")!.focus();
-    app.mockInput.pressKey("x");
+    pressLeader(app, "x");
     await app.renderOnce();
 
     // Canonical fallback and filtering remain separate; B's hidden session is untouched.

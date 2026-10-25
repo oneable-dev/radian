@@ -14,7 +14,6 @@ type SessionTabOptions = {
   close(): void;
   button(label: string, activate: () => void, action: string): BoxRenderable;
   leading?: Renderable;
-  focusable?: boolean;
 };
 
 // Session owners retain navigation and lifecycle; this frame owns shared tab geometry and styling.
@@ -26,21 +25,19 @@ export class SessionTab {
   private label = "";
   private width = SESSION_TAB_WIDTH;
   private active = false;
-  private stripFocused = false;
 
   constructor(private readonly renderer: CliRenderer, private readonly options: SessionTabOptions) {
     this.root = new BoxRenderable(renderer, { id: options.id, width: SESSION_TAB_WIDTH, height: 1, flexShrink: 0,
-      flexDirection: "row", border: ["left"], paddingX: 1, gap: 1, focusable: options.focusable ?? false,
+      flexDirection: "row", border: ["left"], paddingX: 1, gap: 1, focusable: false,
       onMouseDown: event => {
         if (event.button !== 0) return;
         event.preventDefault(); event.stopPropagation();
-        if (options.focusable) this.root.focus();
         options.select();
       } });
     this.number = new TextRenderable(renderer, { id: `${options.id}:number`, content: "1.", width: 2, height: 1, flexShrink: 0, selectable: false });
     this.title = new TextRenderable(renderer, { id: `${options.id}:title`, height: 1, minWidth: 0, flexGrow: 1, flexShrink: 1, wrapMode: "none", selectable: false });
     this.closeButton = options.button("×", () => options.close(), options.closeLabel);
-    this.closeButton.id = options.closeId; this.closeButton.paddingX = 0; this.closeButton.width = 1;
+    this.closeButton.id = options.closeId; this.closeButton.paddingX = 0; this.closeButton.width = 1; this.closeButton.focusable = false;
     // Closing an inactive tab must not first select it or steal native input focus.
     this.closeButton.onMouseDown = event => {
       if (event.button !== 0) return;
@@ -50,7 +47,6 @@ export class SessionTab {
     if (options.leading) this.root.add(options.leading);
     this.root.add(this.title); this.root.add(this.closeButton);
     uiTheme(renderer).bindStyles(this.root, () => this.paint());
-    this.root.on("focused", this.paint); this.root.on("blurred", this.paint);
   }
 
   resize(availableWidth: number): void {
@@ -69,8 +65,8 @@ export class SessionTab {
     this.label = singleLine(label); this.refreshLabel();
   }
 
-  update(active: boolean, stripFocused = false): void {
-    this.active = active; this.stripFocused = stripFocused; this.paint();
+  update(active: boolean): void {
+    this.active = active; this.paint();
   }
 
   private refreshLabel(): void {
@@ -89,11 +85,10 @@ export class SessionTab {
   private paint = (): void => {
     if (this.root.isDestroyed) return;
     const theme = uiTheme(this.renderer), styles = theme.styles;
-    const focused = this.root.focused || (this.active && this.stripFocused);
-    const background = styles[focused ? "ui.selection" : this.active ? "ui.selectionInactive" : "ui.text"].bg;
+    const background = styles[this.active ? "ui.selectionInactive" : "ui.text"].bg;
     this.root.backgroundColor = background;
     const accent = styles["ui.focusBorder"].fg;
-    this.root.borderColor = this.active || focused ? accent : blendColors(background ?? theme.colors.panel, accent, 0.45);
+    this.root.borderColor = this.active ? accent : blendColors(background ?? theme.colors.panel, accent, 0.45);
     paintText(this.number, styles[this.active ? "ui.tabActive" : "ui.muted"]);
     paintText(this.title, styles[this.active ? "ui.tabActive" : "ui.tab"]);
   };

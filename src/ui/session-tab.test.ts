@@ -59,7 +59,7 @@ test("Tab padding selects while close buttons affect only their tabs without sel
   // Closing inactive tabs preserves current input owners.
   const app = await createTestRenderer({ width: 50, height: 4 });
   const calls: string[] = [];
-  const tab = new SessionTab(app.renderer, { id: "tab", closeId: "close", closeLabel: "Close", focusable: true,
+  const tab = new SessionTab(app.renderer, { id: "tab", closeId: "close", closeLabel: "Close",
     select: () => calls.push("select"), close: () => calls.push("close"), button: (label, activate) => new Button(app.renderer, label, activate) });
   const outside = new Button(app.renderer, "Input", () => {});
   app.renderer.root.add(tab.root); app.renderer.root.add(outside); tab.setLabel("zsh");
@@ -73,7 +73,8 @@ test("Tab padding selects while close buttons affect only their tabs without sel
     // Closure never propagates parent selection and retains input focus.
     expect(calls).toEqual(["close"]); expect(app.renderer.currentFocusedRenderable).toBe(outside);
     await app.mockMouse.click(tab.root.x, tab.root.y);
-    expect(calls).toEqual(["close", "select"]); expect(app.renderer.currentFocusedRenderable).toBe(tab.root);
+    expect(calls).toEqual(["close", "select"]); expect(app.renderer.currentFocusedRenderable).toBe(outside);
+    expect(tab.root.focusable).toBe(false); expect(tab.closeButton.focusable).toBe(false);
   } finally { await app.dispose(); }
 });
 
@@ -138,26 +139,25 @@ test("Two-digit numbers survive title truncation and expanding restores titles",
   } finally { await app.dispose(); }
 });
 
-test.each([false, true])("Light theme %s shares AI-style selection/focus backgrounds and underline-free titles", async light => {
-  // Render list-owned AI focus and tab-owned terminal focus with the same theme.
+test.each([false, true])("Light theme %s distinguishes active tabs without tab focus or underlined titles", async light => {
+  // Active selection is the only tab state, shared by Agent and Terminal.
   const app = await createTestRenderer({ width: 50, height: 4 }), theme = uiTheme(app.renderer);
   const row = new BoxRenderable(app.renderer, { height: 1, flexDirection: "row" });
-  const tab = new SessionTab(app.renderer, { id: "tab", closeId: "close", closeLabel: "Close", focusable: true,
+  const tab = new SessionTab(app.renderer, { id: "tab", closeId: "close", closeLabel: "Close",
     select() {}, close() {}, button: (label, activate) => new Button(app.renderer, label, activate) });
   row.add(tab.root); app.renderer.root.add(row); tab.setLabel("zsh");
   theme.configure({ palette: [], defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
     cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null });
   const span = () => app.captureSpans().lines[0]!.spans.find(item => item.text === "zsh")!;
   try {
-    // Transition selected-only tabs through list focus and direct focus.
-    tab.update(true); await app.renderOnce();
+    // Attempting to focus a tab cannot add a second selection state.
+    tab.update(true); tab.root.focus(); await app.renderOnce();
     expect(span().bg.toInts()).toEqual(theme.colors.surface.toInts());
-    tab.update(true, true); await app.renderOnce();
-    expect(span().bg.toInts()).toEqual(theme.colors.selected.toInts());
-    tab.update(false); tab.root.focus(); await app.renderOnce();
+    expect(tab.root.focused).toBe(false);
+    tab.update(false); await app.renderOnce();
 
-    // Both ownership styles distinguish backgrounds without underlining titles.
-    expect(span().bg.toInts()).toEqual(theme.colors.selected.toInts());
+    // Inactive tabs use the normal panel background without underlining titles.
+    expect(span().bg.toInts()).toEqual(theme.colors.panel.toInts());
     expect(span().attributes & TextAttributes.UNDERLINE).toBe(0);
   } finally { await app.dispose(); }
 });

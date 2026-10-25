@@ -269,7 +269,7 @@ test("Missing original inputs restore focus to visible navigation instead of hid
     app.get("session-prompt").focus(); await app.open();
     app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree, sessions: [] })) })));
     app.mockInput.pressEscape(); await app.render();
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("agent-session-list"); expect(app.get("session-history").visible).toBe(false);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("agent-view"); expect(app.get("session-history").visible).toBe(false);
     expect(app.resumed).toEqual([]);
   } finally { await app.close(); }
 });

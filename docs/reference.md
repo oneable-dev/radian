@@ -721,7 +721,7 @@ The Agent prompt completes and executes these host commands instead of sending t
   position. No model prompt is sent; **Esc** closes the popup and returns focus to the input.
   The command takes no arguments or images.
 - **`/new`** creates a fresh session in a **new tab in the same worktree**, using the same creation
-  path as the session strip's `+` / `session.new` action. Existing tabs, conversations, running Agents,
+  path as `<leader> c` / `tab.new`. Existing tabs, conversations, running Agents,
   owned subagents, queued input and saved history remain intact. The Agents UI selects the new tab
   once it is observable, unless the user has meanwhile selected another tab/worktree or the source
   conversation has changed. A creation failure retains the command and original tab.
@@ -734,7 +734,7 @@ The Agent prompt completes and executes these host commands instead of sending t
   lifecycle hooks are respected. This is the former `/new` behavior; it resets the current conversation,
   not saved history.
 - **`/exit`** closes the **current session tab**, using the same close path as the tab's `×` /
-  `session.close` action. It stops that session's Agent and owned subagents and cancels its pending
+  `<leader> x` / `tab.close` action. It stops that session's Agent and owned subagents and cancels its pending
   input. The saved conversation remains in History; modified files are not rolled back. Other tabs,
   editors and terminal shells keep running. Closing the last tab shows the empty Agent view, not an
   application exit. As with the close button, the tab disappears when closing starts while execution
@@ -1232,7 +1232,10 @@ from the current candidate. Further presses and held-key repeats continue naviga
 In compact layouts this returns from preview to results. **Ctrl+C** clears only the search query,
 without closing the popup or interrupting work; an empty query is a no-op.
 Agent/Git prompt editing and embedded editors/shells retain their native input bindings.
-Search, completion and focused tab strips keep **Ctrl+N/P** navigation. Creation uses the separate
+Search, completion and app-owned focusable tab strips keep **Ctrl+N/P** navigation. Agent and Terminal
+session headers are passive: neither their tabs nor close controls join focus traversal. Clicking a tab
+changes the active session/shell without focusing the header; input stays in the corresponding content
+area when it already owns focus. Creation uses the separate
 **Ctrl+Space, then c** sequence, not **Ctrl+N** or bare `n`.
 
 The default leader is **Ctrl+Space**. Press and release it, then press `d` to detach radian or `u` to open the usage dashboard,
@@ -1243,13 +1246,16 @@ from its results list, `/` returns to search without changing the query.
 visible view rather than the focused control. `<leader> c` creates a session/shell in that view,
 including empty states. `<leader> n` / `<leader> p` select the next/previous tab in the same worktree
 and view, wrapping at either end. They never create a tab, switch work views, or navigate behind a popup;
-Editor and Git ignore these Agent/Terminal tab commands. Ordinary focused-strip h/l and Ctrl+N/P
-navigation stays in the strip. `<leader> x` closes the selected terminal.
+Editor and Git ignore these Agent/Terminal tab commands. `<leader> x` closes the active session/shell
+through `tab.close`, from input or output navigation without a separate tab focus step. Bare `x`, h/l,
+arrow keys and Ctrl+N/P stay owned by the focused input or content rather than navigating session headers.
 `<leader> [` enters Agent/Terminal output navigation through `output.read`. Input focus has no default
 leader-p binding; Esc returns through the active navigation modes to input.
 These shared actions can be rebound with
-`tab.new`, `tab.next`, `tab.previous` and `tab.select-1` through `tab.select-9`; `session.new` and `terminal.new` remain available
-for explicit custom bindings but have no default bindings.
+`tab.new`, `tab.close`, `tab.next`, `tab.previous` and `tab.select-1` through `tab.select-9`.
+Screen-specific `session.*` and terminal creation/close/navigation commands remain available for explicit
+custom bindings but have no defaults. Older `session-tabs` / `terminal-tabs` scopes are still accepted
+when loading keymaps, but are no longer entered; move such bindings to an input/content scope or `global`.
 Ctrl+C clears drafts in Agent input; in Editor and Terminal, Neovim and shells still receive it as native input.
 If macOS reserves Ctrl+Space for input-source switching, change that system shortcut or radian's leader.
 
@@ -1272,14 +1278,14 @@ the runtime and its processes do not need restarting.
   "bindings": {
     "app.detach": ["<leader> d"],
     "view.editor": ["<leader> e"],
-    "session.new": [{ "keys": "s", "scope": "session-tabs" }]
+    "tab.close": ["<leader> x"]
   }
 }
 ```
 
 Spaces separate sequential keys (`"space r"` is a two-key leader); `+` combines modifiers.
 Use explicit `shift+c` for uppercase C. A string binding is global; an object can specify `scope`:
-`global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `history-search`, `monitor`, `monitor-search`, `session-tabs`, `terminal-tabs`, `git-tabs`,
+`global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `history-search`, `monitor`, `monitor-search`, `git-tabs`,
 `prompt`, `prompt-completion`, `button`, `transcript` (section navigation), `transcript-text`,
 `transcript-visual`, `transcript-search`, `editor`, `terminal`, `terminal-copy`, `terminal-visual`, `git`, `git-prompt`, `dialog`, or `none`. An override replaces that command's defaults;
 `[]` disables it. Command IDs/defaults are defined in `src/keybindings/commands.ts`.

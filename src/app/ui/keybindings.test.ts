@@ -36,19 +36,19 @@ test("User keymaps apply consistently to tree commands, disabling, footers, and 
   const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true, exitOnCtrlC: false });
   const calls: string[] = [];
   const keymap = expectOk(parseKeymap({ leader: "ctrl+b", bindings: {
-    "session.new": [{ keys: "s", scope: "session-tabs" }], "session.close": [], "view.git": ["<leader> g"],
+    "tab.new": [{ keys: "ctrl+s", scope: "prompt" }], "tab.close": [], "view.git": ["<leader> g"],
   } }));
   const view = new Workbench(app.renderer, new WorkspaceSelection(demoWorkspace()), {
-    keymap, onNewSession: () => calls.push("new"), onCloseSession: () => calls.push("close"), onDetach: () => calls.push("detach"),
+    keymap, onNewSession: () => calls.push("new"), onCloseSession: () => calls.push("close"), onDetach: () => calls.push("detach"), onPrompt: () => ok(undefined),
   });
   try {
     await app.renderOnce(); const footer = () => app.captureCharFrame().split("\n")[23]!;
     app.mockInput.pressKey("b", { ctrl: true }); app.mockInput.pressKey("b"); app.mockInput.pressTab(); await app.renderOnce();
     expect(footer()).not.toContain("<CR> Open worktree"); expect(footer()).not.toContain("New session");
     app.mockInput.pressEscape(); await app.renderOnce();
-    app.renderer.root.findDescendantById("agent-session-list")!.focus(); await app.renderOnce();
-    expect(footer()).toContain("s New session"); expect(footer()).not.toContain("x Close session");
-    app.mockInput.pressKey("n"); app.mockInput.pressKey("x"); app.mockInput.pressKey("s");
+    expect(footer()).toContain("<C-s> New session"); expect(footer()).not.toContain("Close tab");
+    app.mockInput.pressKey("b", { ctrl: true }); app.mockInput.pressKey("x");
+    app.mockInput.pressKey("n"); app.mockInput.pressKey("x"); app.mockInput.pressKey("s", { ctrl: true });
     expect(calls).toEqual(["new"]);
 
     app.mockInput.pressKey("b", { ctrl: true }); app.mockInput.pressKey("g"); await app.renderOnce();
