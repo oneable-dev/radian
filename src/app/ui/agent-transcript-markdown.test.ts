@@ -1,7 +1,7 @@
 import { pressLeader, pressTranscriptRead } from "../../testing/transcript-keys.ts";
 import { expect, test } from "bun:test";
 import { CodeRenderable, EditBufferRenderable, MarkdownRenderable, TextAttributes, type Renderable, type TerminalColors } from "@opentui/core";
-import { createTestRenderer } from "@opentui/core/testing";
+import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -12,8 +12,8 @@ import type { WorkViewPreferences } from "../../runtime/protocol.ts";
 
 const prose = (text: string, kind: "assistant" | "thinking" = "assistant", streaming = false): TranscriptSection => ({ id: "prose", kind, title: kind, text, status: streaming ? "streaming" : "complete" });
 function descendants(root: Renderable): Renderable[] { return root.getChildren().flatMap((child) => [child, ...descendants(child)]); }
-async function mount(sections: TranscriptSection[], actions: Partial<WorkbenchActions> = {}) {
-  const app = await createTestRenderer({ width: 140, height: 60, kittyKeyboard: true });
+async function mount(sections: TranscriptSection[], actions: Partial<WorkbenchActions> = {}, clock?: ManualClock) {
+  const app = await createTestRenderer({ width: 140, height: 60, kittyKeyboard: true, ...(clock ? { clock } : {}) });
   const selection = new WorkspaceSelection(demoWorkspace()), copies: string[] = [], sent: string[] = [];
   let current = sections;
   const view = new Workbench(app.renderer, selection, { onNewSession: () => {}, onCloseSession: () => {},
@@ -77,11 +77,13 @@ test.each(["**FIRST_FRAME_TEXT**", "```typescript\nconst FIRST_FRAME_TEXT = 1;\n
 
 test("Enter preserves Markdown presentation and height while copying visible lines separately from full source", async () => {
   // Keep source syntax hidden without losing full-source copying.
-  const source = "## Heading\r\n\r\n**한글 👨‍👩‍👧‍👦**\r\nlast";
-  const app = await mount([prose(source)]);
+  const source = "## Heading\r\n\r\n**한글 👨‍👩‍👧‍👦**\r\nlast", clock = new ManualClock();
+  const app = await mount([prose(source)], {}, clock);
   try {
     await app.settled(); await app.focus();
     app.mockInput.pressKey("y"); await app.render(); expect(app.copies).toEqual([source]);
+    // Let the copy notification expire before comparing the unobstructed Markdown viewport.
+    clock.advance(5000); await app.render();
     const height = app.markdown().height;
     const markdownFrame = () => app.captureCharFrame().split("\n").slice(app.markdown().y, app.markdown().y + height).join("\n");
     const before = markdownFrame();

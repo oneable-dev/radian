@@ -7,6 +7,7 @@ const routine = new Set<CommandId>([
   "focus.next", "focus.results", "button.activate",
   "agent.clear", "git.clear", "git.search-clear", "search.clear", "transcript.search-clear", "transcript.search-cancel",
   "dialog.dismiss", "dialog.half-page-down",
+  "messages.open", "messages.dismiss", "messages.next", "messages.previous", "messages.first", "messages.last", "messages.half-page-down",
   "workspace.open", "workspace.dismiss", "workspace.previous", "workspace.next", "workspace.first", "workspace.last", "workspace.half-page-down",
   "session.previous", "session.next", "tab.previous", "tab.next",
   "terminal.tab-previous", "terminal.tab-next", "terminal.scroll-up", "terminal.scroll-down",

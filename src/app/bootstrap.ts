@@ -123,13 +123,13 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
   const defaultMessage = discoveryError ?? (options.demo ? `DEMO · display fixtures only · ${detachHint} detaches` : options.offline
     ? `OFFLINE SDK · scripted slow / read / write / delegate · ${detachHint} detaches`
     : "");
-  let message = defaultMessage;
   const updateNotice = (): void => {
     const closing = (client?.snapshot.closingCount ?? 0) + (client?.snapshot.terminalClosingCount ?? 0);
-    view?.setNotice([client?.snapshot.notice || message, closing ? `Closing ${closing}` : ""].filter(Boolean).join(" · "));
+    view?.setNotice([client?.snapshot.notice || defaultMessage, closing ? `Closing ${closing}` : ""].filter(Boolean).join(" · "),
+      { level: client?.snapshot.notice ? "warning" : discoveryError ? "error" : "info", source: "Runtime" });
   };
-  const showFailure = (error: ExpectedError): void => { message = `[${error.code}] ${error.message}`; updateNotice(); };
-  const unexpected = (error: unknown): void => { message = reportUnexpected(error, "UI action"); updateNotice(); };
+  const showFailure = (error: ExpectedError): void => { view?.notify(`[${error.code}] ${error.message}`, { level: "error", source: "Runtime" }); };
+  const unexpected = (error: unknown): void => { view?.notify(reportUnexpected(error, "UI action"), { level: "error", source: "Runtime" }); };
   const notifications = client ? new TerminalNotifications(renderer, client, unexpected) : undefined;
   const completions = client ? new CompletionCache((id, signal) => client.catalog(id, signal), id => client.completionIdentity(id), unexpected) : undefined;
   const warmCompletions = (): void => {
@@ -171,7 +171,6 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
   const unsubscribe = client?.subscribe(() => {
     const restored = recovery !== client.recoveryVersion;
     recovery = client.recoveryVersion;
-    if (restored) message = defaultMessage;
     selection.replaceSnapshot(client.snapshot.repositories, preferences.selection.sessions);
     warmCompletions();
     if (restored) view?.refreshHistory();
@@ -190,9 +189,8 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
     const terminalTheme = new TerminalTheme(renderer, palette);
     view = new Workbench(renderer, selection, {
       keymap, onDetach: detach, terminalTheme,
-      onNotice: (text) => { message = text; updateNotice(); },
       onNewSession: (worktreeId, onCreated) => {
-        if (!client) { message = "Demo creation request · no agents running"; updateNotice(); return; }
+        if (!client) { view?.notify("Demo creation request · no agents running"); return; }
         observe(client.create(worktreeId).then(result => {
           if (result.ok) onCreated?.(result.value);
           return result;
@@ -203,7 +201,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
         selection.replaceSnapshot(selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id !== worktreeId ? tree : {
           ...tree, sessions: tree.sessions.filter((session) => session.id !== sessionId),
         }) })));
-        message = "Demo item removed · no runtime or saved history was modified"; updateNotice();
+        view?.notify("Demo item removed · no runtime or saved history was modified", { level: "success" });
       },
       ...(client ? {
         onPrompt: async (id: string, text: string, images?: readonly string[]) => {
@@ -211,9 +209,10 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
           if (!result.ok || text.trim() !== "/reload") return result;
           const refreshed = await completions!.refresh(id);
           // SDK reload was accepted. A local indexing failure is a warning, not a rejected action.
-          message = refreshed.ok ? "Resources and completion indexes reloaded."
-            : `Resources reloaded, but completion refresh failed [${refreshed.error.code}]: ${refreshed.error.message}`;
-          updateNotice(); return result;
+          view?.notify(refreshed.ok ? "Resources and completion indexes reloaded."
+            : `Resources reloaded, but completion refresh failed [${refreshed.error.code}]: ${refreshed.error.message}`,
+            { level: refreshed.ok ? "success" : "warning", source: "Reload" });
+          return result;
         },
         onInterrupt: (id: string) => client.interrupt(id),
         onAcknowledge: (id: string, conversationId: string, resultId: string) => client.acknowledge(id, conversationId, resultId),

@@ -83,9 +83,9 @@ test("Button-free popup expiry preserves bells without redisplaying results", as
   } finally { await app.close(); }
 });
 
-test("Popup clicks close pickers, jump to latest session results, and acknowledge through existing paths", async () => {
-  // The workspace picker may be open when a notification arrives above it.
-  const app = await fixture("terminal");
+test.each(["agent", "editor", "git", "terminal"] as const)("Popup clicks from %s open the latest result with prompt focus and acknowledge through existing paths", async workView => {
+  // Notifications can open another session from any work view, even with a workspace picker above it.
+  const app = await fixture(workView);
   try {
     openWorkspaceSearch(app); await app.render();
     expect(app.get("workspace-picker").visible).toBe(true);
@@ -95,8 +95,13 @@ test("Popup clicks close pickers, jump to latest session results, and acknowledg
     expect(app.selection.sessionId).toBe("two"); expect(app.selection.worktree?.id).toBe("two-tree");
     expect(app.get("workspace-picker").visible).toBe(false); expect(app.get("session-notifications").visible).toBe(false);
     expect(app.view.workViewPreferences.active["two-tree"]).toBe("agent"); expect(app.captureCharFrame()).toContain("RESULT_BODY");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
     expect(app.acknowledged).toEqual(["new-result"]); expect(app.state("two").attention).toBeUndefined();
     expect(app.state("two").result?.outcome).toBe("unfinished"); expect(app.view.promptDrafts.one).toBe("KEEP_DRAFT");
+
+    // Opening a result should allow a follow-up immediately, without entering transcript navigation.
+    await app.mockInput.typeText("Follow-up question"); await app.render();
+    expect(app.view.promptDrafts.two).toBe("Follow-up question"); expect(app.view.promptDrafts.one).toBe("KEEP_DRAFT");
   } finally { await app.close(); }
 });
 
@@ -109,6 +114,7 @@ test("Replaced conversations are neither navigated to nor acknowledged by stale 
     const toast = app.toast(); await app.mockMouse.click(toast.x + 2, toast.y + 2); await app.render();
 
     expect(app.selection.sessionId).toBe("one"); expect(app.acknowledged).toEqual([]);
-    expect(app.get("session-notifications").visible).toBe(false); expect(app.state("two").attention?.id).toBe("new-result");
+    expect(app.get("session-notifications").visible).toBe(true);
+    expect(app.captureCharFrame()).toContain("conversation is no longer"); expect(app.state("two").attention?.id).toBe("new-result");
   } finally { await app.close(); }
 });

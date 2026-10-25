@@ -8,6 +8,7 @@ import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { Clipboard } from "../../ui/clipboard.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
+import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { transcriptBackground, transcriptSpacing } from "./transcript-style.ts";
 import { TranscriptMarkdown, updateTranscriptMarkdownStyles } from "./transcript-markdown.ts";
@@ -59,7 +60,7 @@ function hiddenCancellation(section: TranscriptSection): boolean {
   return cancellationNotice(section) && !section.completion?.warning;
 }
 export type TranscriptOptions = {
-  notice(message: string): void;
+  notice: Notice;
   changed(): void;
   focusPrompt(): void;
   initialScroll: Readonly<Record<string, number>>;
@@ -986,14 +987,14 @@ export class TranscriptPanel {
     const linewise = state.linewise, source = row.section.text;
     void Promise.resolve().then(() => this.options.copy?.(text) ?? this.clipboard.copy(text)).then((result) => {
       if (this.disposed) return;
-      if (!result.ok) { this.options.notice(`[${result.error.code}] ${result.error.message}`); return; }
-      this.options.notice(result.value);
+      if (!result.ok) { this.options.notice(`[${result.error.code}] ${result.error.message}`, { level: "error" }); return; }
+      this.options.notice(result.value, { level: "success" });
       if (this.sessionId === sessionId && this.state === state && this.selected === row && !reader.isDestroyed && this.reader(row) === reader
         && state.selectedId === selectedId && state.anchor === anchor && state.mode === "visual" && reader.cursorOffset === cursor
         && state.linewise === linewise && row.section.text === source && this.readerText(row) === visibleText) {
         state.mode = "text"; state.anchor = null; delete state.linewise; reader.clearSelection(); this.reconcileSelection(); this.save(); this.options.changed();
       }
-    }).catch((error: unknown) => { const message = reportUnexpected(error, "transcript copy"); if (!this.disposed) this.options.notice(message); });
+    }).catch((error: unknown) => { const message = reportUnexpected(error, "transcript copy"); if (!this.disposed) this.options.notice(message, { level: "error" }); });
   }
   private mouseSelectionText(): string | null {
     const selection = this.renderer.getSelection();
@@ -1112,7 +1113,7 @@ export class TranscriptPanel {
   };
   private linkFailure = (error: unknown): void => {
     const message = reportUnexpected(error, "transcript link");
-    if (!this.disposed) this.options.notice(message);
+    if (!this.disposed) this.options.notice(message, { level: "error" });
   };
   private openCursorLink(reader: TranscriptBody, notify: boolean): void {
     const offset = reader.getTextRange(0, reader.cursorOffset).length;
@@ -1122,9 +1123,9 @@ export class TranscriptPanel {
   }
   private async openLink(url: string): Promise<void> {
     const checked = validateBrowserUrl(url);
-    if (!checked.ok) { this.options.notice(`[${checked.error.code}] ${checked.error.message}`); return; }
+    if (!checked.ok) { this.options.notice(`[${checked.error.code}] ${checked.error.message}`, { level: "error" }); return; }
     const result = await (this.options.openUrl ?? openBrowserUrl)(checked.value);
-    if (!this.disposed && !result.ok) this.options.notice(`[${result.error.code}] ${result.error.message}`);
+    if (!this.disposed && !result.ok) this.options.notice(`[${result.error.code}] ${result.error.message}`, { level: "error" });
   }
   private toggleHelp(): void {
     if (this.help.visible) {

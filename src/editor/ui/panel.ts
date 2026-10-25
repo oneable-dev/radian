@@ -5,6 +5,7 @@ import type { EditorFrame, EditorInfo } from "../../runtime/protocol.ts";
 import type { Worktree } from "../../workspace/model.ts";
 import { TerminalSurface, type PtyAttachment } from "../../ui/embedded-terminal/surface.ts";
 import type { TerminalTheme } from "../../ui/embedded-terminal/theme.ts";
+import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 
@@ -30,7 +31,7 @@ export class EditorPanel {
   private cancelLayout: (() => void) | undefined;
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: EditorActions | undefined,
-    button: (label: string, activate: () => void) => BoxRenderable, private readonly notice: (message: string) => void,
+    button: (label: string, activate: () => void) => BoxRenderable, private readonly notice: Notice,
     private readonly changed: () => void, private readonly terminalTheme?: TerminalTheme) {
     this.root = new BoxRenderable(renderer, { id: "editor-view", width: "100%", flexGrow: 1, minHeight: 0, padding: 0, flexDirection: "column", visible: false });
     this.message = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
@@ -123,7 +124,7 @@ export class EditorPanel {
     this.message.content = "Editor unavailable · open / reconnect explicitly"; this.message.visible = true;
     this.openButton.visible = true;
     if (this.selected?.surface.root.focused) this.openButton.focus();
-    this.selected?.surface.suspend(); this.notice(text); this.changed();
+    this.selected?.surface.suspend(); this.notice(text, { level: "error", source: "Editor" }); this.changed();
   }
   private laidOut(): Promise<void> {
     return new Promise((resolve) => {

@@ -7,7 +7,7 @@ import { Clipboard } from "./clipboard.ts";
 import { uiTheme } from "./theme.ts";
 import { paintText } from "./theme-styles.ts";
 
-export type DialogContent = { title: string; text: string; copy?: boolean };
+export type DialogContent = { title: string; text: string; copy?: boolean; copyText?: string };
 
 // Read-only details/help share focus and cleanup behavior, not feature-specific state.
 export class TextDialog {
@@ -24,7 +24,7 @@ export class TextDialog {
   private disposed = false;
 
   constructor(private readonly renderer: CliRenderer, private readonly changed: () => void,
-    private readonly fallback: () => void, private readonly copyText?: (text: string) => Promise<Result<string, ExpectedError>>) {
+    private readonly fallback: () => void, private readonly copySource?: (text: string) => Promise<Result<string, ExpectedError>>) {
     const theme = uiTheme(renderer);
     this.clipboard = new Clipboard(renderer);
     this.root = new BoxRenderable(renderer, { id: "text-dialog", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 6000,
@@ -87,10 +87,11 @@ export class TextDialog {
       case "dialog.last": this.scroll.scrollTo(Infinity); break;
     }
   }
+  copyContent(text: string): Promise<Result<string, ExpectedError>> { return this.copySource?.(text) ?? this.clipboard.copy(text); }
   private copy(): void {
     const content = this.content, revision = this.revision;
     if (!content || content.copy === false) return;
-    void Promise.resolve().then(() => this.copyText?.(content.text) ?? this.clipboard.copy(content.text)).then((result) => {
+    void Promise.resolve().then(() => this.copyContent(content.copyText ?? content.text)).then((result) => {
       if (!this.visible || revision !== this.revision) return;
       this.status.content = result.ok ? result.value : `[${result.error.code}] ${result.error.message}`;
       this.status.visible = true;

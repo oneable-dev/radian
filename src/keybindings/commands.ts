@@ -1,11 +1,12 @@
 // Legacy session-tabs/terminal-tabs scopes still parse older keymaps, but headers never receive focus.
-export const contexts = ["workspace", "search", "history", "history-search", "monitor", "monitor-search", "dashboard", "dashboard-tabs", "model", "model-search", "model-effort", "accounts", "accounts-search", "accounts-input", "extension", "extension-search", "extension-input", "extension-body", "session-tabs", "terminal-tabs", "git-tabs", "git-search", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "transcript-search", "editor", "terminal", "terminal-copy", "terminal-visual", "git", "git-prompt", "dialog", "none"] as const;
+export const contexts = ["messages", "messages-search", "workspace", "search", "history", "history-search", "monitor", "monitor-search", "dashboard", "dashboard-tabs", "model", "model-search", "model-effort", "accounts", "accounts-search", "accounts-input", "extension", "extension-search", "extension-input", "extension-body", "session-tabs", "terminal-tabs", "git-tabs", "git-search", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "transcript-search", "editor", "terminal", "terminal-copy", "terminal-visual", "git", "git-prompt", "dialog", "none"] as const;
 export type KeyContext = typeof contexts[number];
 export type KeyScope = KeyContext | "global" | "app" | "pty";
 export type BindingInput = { keys: string; scope: KeyScope };
 const key = (keys: string, scope: KeyScope = "global"): BindingInput => ({ keys, scope });
 
-const searchContexts = ["search", "history-search", "monitor-search", "model-search", "accounts-search", "extension-search"] as const;
+const messageContexts = ["messages", "messages-search"] as const;
+const searchContexts = ["messages-search", "search", "history-search", "monitor-search", "model-search", "accounts-search", "extension-search"] as const;
 const extensionContexts = ["extension", "extension-search", "extension-input", "extension-body"] as const;
 const extensionListContexts = ["extension", "extension-search", "extension-body"] as const;
 const transcriptContexts = ["transcript", "transcript-text", "transcript-visual"] as const;
@@ -18,6 +19,16 @@ export const defaultBindings = {
   "app.detach": [key("<leader> d")],
   "app.help": [key("<leader> ?"), key("<leader> shift+?"), key("<leader> shift+/"), ...contexts.filter((context) => !["editor", "terminal", "transcript", "transcript-text", "transcript-visual", "dialog"].includes(context)).map((context) => key("f1", context))],
   "notice.details": [key("<leader> !"), key("<leader> shift+!"), key("<leader> shift+1")],
+  "messages.dismiss": [key("escape", "messages"), key("escape", "messages-search")],
+  "messages.open": [key("enter", "messages"), key("enter", "messages-search")],
+  "messages.copy": [key("y", "messages"), key("ctrl+y", "messages-search")],
+  "messages.search": [key("/", "messages")],
+  "messages.previous": [key("k", "messages"), ...messageContexts.flatMap(scope => [key("up", scope), key("ctrl+p", scope)])],
+  "messages.next": [key("j", "messages"), ...messageContexts.flatMap(scope => [key("down", scope), key("ctrl+n", scope)])],
+  "messages.first": [key("g g", "messages"), key("home", "messages")],
+  "messages.last": [key("shift+g", "messages"), key("end", "messages")],
+  "messages.half-page-up": [key("ctrl+u", "messages"), key("ctrl+u", "messages-search")],
+  "messages.half-page-down": [key("ctrl+d", "messages"), key("ctrl+d", "messages-search")],
   "dialog.dismiss": [key("escape", "dialog")],
   "dialog.copy": [key("y", "dialog")],
   "dialog.previous": [key("k", "dialog"), key("up", "dialog"), key("ctrl+p", "dialog")],

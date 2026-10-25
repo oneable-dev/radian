@@ -6,6 +6,7 @@ import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
+import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { singleLine } from "../../ui/text.ts";
@@ -20,7 +21,7 @@ type Actions = {
   open(worktreeId: string, sessionId: string): void;
   changed(): void;
   fallback(): void;
-  notice(message: string): void;
+  notice: Notice;
   warning?(): string;
   keyHint(command: CommandId, context: KeyContext): string;
 };
@@ -108,7 +109,7 @@ export class SessionMonitor {
     this.owner = this.renderer.currentFocusedRenderable ?? undefined;
     this.root.visible = true; this.signature = ""; this.compactPreview = false; this.search.value = "";
     this.resize(); this.refresh(); this.search.focus(); this.actions.changed();
-    const warning = this.actions.warning?.(); if (warning) this.actions.notice(warning);
+    const warning = this.actions.warning?.(); if (warning) this.actions.notice(warning, { level: "warning" });
   }
   hide(restoreFocus = true): void {
     if (!this.visible) return;

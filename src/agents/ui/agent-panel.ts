@@ -6,6 +6,7 @@ import type { ExecutionState } from "../session-registry.ts";
 import type { Worktree } from "../../workspace/model.ts";
 import { CapabilityError, InputError, type ExpectedError } from "../../errors.ts";
 import { err, ok, type Result } from "../../result.ts";
+import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { EmptyState } from "../../ui/empty-state.ts";
 import { icons } from "../../icons.ts";
@@ -88,7 +89,7 @@ export class AgentPanel {
   private composerLayout = "";
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: AgentActions, button: Button,
-    private readonly notice: (message: string) => void, private readonly changed: () => void,
+    private readonly notice: Notice, private readonly changed: () => void,
     private readonly focusSidebar: () => void, initialScroll: Readonly<Record<string, number>>,
     saveScroll: (sessionId: string, position: number) => void,
     private readonly transcriptOptions: PanelOptions = {}) {
@@ -219,7 +220,7 @@ export class AgentPanel {
       const draft = sessionId ? this.inputDrafts.get(sessionId) : undefined;
       if (draft) {
         const restored = this.prompt.restore(draft);
-        if (!restored.ok) { this.prompt.value = expandPromptDraft(draft, false).text; this.notice(`[${restored.error.code}] Attachment display could not be restored; original references were retained.`); }
+        if (!restored.ok) { this.prompt.value = expandPromptDraft(draft, false).text; this.notice(`[${restored.error.code}] Attachment display could not be restored; original references were retained.`, { level: "warning" }); }
       } else this.prompt.value = sessionId ? this.drafts.get(sessionId) ?? "" : "";
       this.syncingDraft = false;
     }
@@ -344,7 +345,7 @@ export class AgentPanel {
     const id = this.promptSessionId;
     if (!id || !this.canInterrupt || !this.actions.onInterrupt) return;
     const result = await this.actions.onInterrupt(id);
-    if (!result.ok) this.notice(`[${result.error.code}] ${result.error.message}`);
+    if (!result.ok) this.notice(`[${result.error.code}] ${result.error.message}`, { level: "error" });
   }
 
   async submitPrompt(): Promise<void> {
@@ -362,15 +363,15 @@ export class AgentPanel {
       const fingerprint = (value: PromptDraft | undefined) => value ? JSON.stringify([value.value, value.tokens]) : "";
       const sent = fingerprint(draft);
       const control = parseSessionControl(submission.text);
-      if (!control.ok) { this.notice(`[${control.error.code}] ${control.error.message} · prompt retained`); return; }
+      if (!control.ok) { this.notice(`[${control.error.code}] ${control.error.message} · prompt retained`, { level: "error" }); return; }
       const accounts = parseAccountsCommand(submission.text);
-      if (!accounts.ok) { this.notice(`[${accounts.error.code}] ${accounts.error.message} · prompt retained`); return; }
+      if (!accounts.ok) { this.notice(`[${accounts.error.code}] ${accounts.error.message} · prompt retained`, { level: "error" }); return; }
       const model = parseModelCommand(submission.text);
-      if (!model.ok) { this.notice(`[${model.error.code}] ${model.error.message} · prompt retained`); return; }
+      if (!model.ok) { this.notice(`[${model.error.code}] ${model.error.message} · prompt retained`, { level: "error" }); return; }
       const history = parseHistoryCommand(submission.text);
-      if (!history.ok) { this.notice(`[${history.error.code}] ${history.error.message} · prompt retained`); return; }
+      if (!history.ok) { this.notice(`[${history.error.code}] ${history.error.message} · prompt retained`, { level: "error" }); return; }
       const dashboard = parseDashboardCommand(submission.text);
-      if (!dashboard.ok) { this.notice(`[${dashboard.error.code}] ${dashboard.error.message} · prompt retained`); return; }
+      if (!dashboard.ok) { this.notice(`[${dashboard.error.code}] ${dashboard.error.message} · prompt retained`, { level: "error" }); return; }
       // Non-conversation actions must not reset the outgoing conversation's reading position.
       if (!accounts.value && !model.value && !history.value && !dashboard.value && control.value?.action !== "new-tab" && control.value?.action !== "exit" && control.value?.action !== "reload") this.transcript.followLatest();
       let result: Result<void, ExpectedError>;
@@ -389,7 +390,7 @@ export class AgentPanel {
         result = submission.images.length ? err(new InputError("/model does not accept image attachments. Input was retained."))
           : this.actions.onModel?.(id) ?? err(new CapabilityError("Model selection is unavailable in this view. No prompt was sent."));
       } else result = await this.actions.onPrompt(id, submission.text, submission.images);
-      if (!result.ok) { this.notice(`[${result.error.code}] ${result.error.message} · prompt retained`); return; }
+      if (!result.ok) { this.notice(`[${result.error.code}] ${result.error.message} · prompt retained`, { level: "error" }); return; }
       if (fingerprint(this.inputDrafts.get(id)) === sent) {
         this.drafts.delete(id); this.inputDrafts.delete(id);
         if (!this.disposed && !this.root.isDestroyed && this.promptSessionId === id && fingerprint(this.prompt.draft) === sent) {

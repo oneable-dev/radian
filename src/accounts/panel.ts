@@ -7,6 +7,7 @@ import { SearchInput } from "../ui/search-input.ts";
 import { LoadingSpinner } from "../ui/loading-spinner.ts";
 import { halfPageStep } from "../ui/navigation.ts";
 import { singleLine } from "../ui/text.ts";
+import type { Notice } from "../ui/messages.ts";
 import { uiTheme } from "../ui/theme.ts";
 import { paintText } from "../ui/theme-styles.ts";
 import { footerKeyHint } from "../keybindings/footer.ts";
@@ -20,7 +21,7 @@ export type AccountsActions = {
   request?: (request: AccountRequest, signal?: AbortSignal) => Promise<Result<AccountReply, ExpectedError>>;
   openUrl?: (url: string) => Promise<Result<void, ExpectedError>>;
   copy?: (text: string) => Promise<Result<string, ExpectedError>>;
-  changed: () => void; notice: (message: string) => void; fallback: () => void;
+  changed: () => void; notice: Notice; fallback: () => void;
   keyHint: (command: CommandId, context: KeyContext) => string;
 };
 type Candidate = { id: string; label: string; detail: string; accountId?: string; choose: () => void };
@@ -106,7 +107,7 @@ export class AccountsPanel {
   hide(restore = true): void {
     if (!this.visible) return;
     const worktreeId = this.worktreeId, flow = this.flow;
-    if (restore && this.busy && this.activeRequest && ["select", "delete", "login", "answer"].includes(this.activeRequest)) this.actions.notice("Account action is still settling. Closing does not undo an accepted save or selection; reopen /accounts to confirm before retrying.");
+    if (restore && this.busy && this.activeRequest && ["select", "delete", "login", "answer"].includes(this.activeRequest)) this.actions.notice("Account action is still settling. Closing does not undo an accepted save or selection; reopen /accounts to confirm before retrying.", { level: "warning" });
     this.activeRequest = undefined;
     this.epoch++; this.root.visible = false; this.watching?.abort(); this.spinner.cancel(); this.busy = false; this.pendingReload = false; this.flow = undefined; this.promptId = undefined;
     this.secret.clear(); this.input.value = ""; this.body.content = ""; this.opened.clear();
@@ -190,7 +191,7 @@ export class AccountsPanel {
     const first = this.stage !== "login" || this.flow?.id !== login.id;
     this.flow = login;
     if (login.status === "complete") {
-      this.actions.notice(`Account added: ${singleLine(login.account?.label ?? "new account")}. Select it explicitly to use it in this worktree.`);
+      this.actions.notice(`Account added: ${singleLine(login.account?.label ?? "new account")}. Select it explicitly to use it in this worktree.`, { level: "success" });
       this.main(); if (this.busy) this.pendingReload = true; else this.launch(() => this.load()); return;
     }
     if (login.status === "cancelled" || login.status === "error") {

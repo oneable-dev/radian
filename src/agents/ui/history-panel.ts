@@ -11,6 +11,7 @@ import type { FooterShortcut } from "../../ui/footer.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import { footerKeyHint } from "../../keybindings/footer.ts";
+import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { AgentPanel } from "./agent-panel.ts";
@@ -24,7 +25,7 @@ export type HistoryActions = {
   preview?: (worktreeId: string, savedId: string, signal?: AbortSignal) => Promise<Result<HistoryPreview, ExpectedError>>;
   resume?: (worktreeId: string, savedId: string) => Promise<Result<string, ExpectedError>>;
   onOpened: (worktreeId: string, sessionId: string) => void;
-  onError: (message: string) => void;
+  onError: Notice;
   onCloseFallback?: () => void;
   onChange?: () => void;
   keyHint: (command: Extract<CommandId, `history.${string}`>, context: KeyContext) => string;
@@ -138,7 +139,7 @@ export class SessionHistoryPanel {
     this.generation++; this.loading = false; this.cancelPreview(); this.loadRequest?.abort(); this.spinner.cancel();
     this.updatePreview(null, [], "", false);
     this.root.visible = false;
-    if (this.resuming && restoreFocus) this.actions.onError("Open is still settling. Closing history does not cancel an accepted request; check the session tabs before retrying.");
+    if (this.resuming && restoreFocus) this.actions.onError("Open is still settling. Closing history does not cancel an accepted request; check the session tabs before retrying.", { level: "warning" });
     const owner = this.owner; this.owner = undefined;
     let restored = false;
     if (restoreFocus && owner && !owner.isDestroyed) {

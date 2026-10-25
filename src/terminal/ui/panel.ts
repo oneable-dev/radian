@@ -9,6 +9,7 @@ import { TerminalSurface, type PtyAttachment } from "../../ui/embedded-terminal/
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { EmptyState } from "../../ui/empty-state.ts";
 import type { TerminalTheme } from "../../ui/embedded-terminal/theme.ts";
+import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import type { ButtonFactory } from "../../ui/button.ts";
@@ -55,7 +56,7 @@ export class TerminalPanel {
   private titleWarning = false;
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: TerminalActions | undefined,
-    private readonly button: ButtonFactory, private readonly notice: (message: string) => void,
+    private readonly button: ButtonFactory, private readonly notice: Notice,
     private readonly selectionChanged: (worktreeId: string, id: string | null) => void, private readonly changed: () => void, private readonly unavailable?: string, private readonly terminalTheme?: TerminalTheme, private readonly creationHint: () => string = () => "", private readonly copyText?: (text: string) => Promise<Result<string, ExpectedError>>) {
     this.root = new BoxRenderable(renderer, { id: "terminal-view", flexGrow: 1, minHeight: 0, flexDirection: "column", visible: false, focusable: true });
     // Popups may restore the temporary pane target used while an attachment was pending.
@@ -96,7 +97,7 @@ export class TerminalPanel {
     const read = connection.read?.bind(connection);
     if (!read) {
       const error = new CapabilityError("Terminal copy mode is unavailable in this attachment.");
-      this.notice(`[${error.code}] ${error.message}`); return;
+      this.notice(`[${error.code}] ${error.message}`, { level: "error", source: "Terminal" }); return;
     }
     this.surface.acceptsInput = false;
     this.copyMode.open(read);
@@ -235,11 +236,11 @@ export class TerminalPanel {
     if (id === this.selected) this.intent++;
     void this.actions.close(id).then(result => {
       if (!result.ok && !this.disposed) {
-        this.notice(`[${result.error.code}] Terminal could not be closed. ${result.error.message}`); this.changed();
+        this.notice(`[${result.error.code}] Terminal could not be closed. ${result.error.message}`, { level: "error", source: "Terminal" }); this.changed();
       }
     }).catch((error: unknown) => {
       const message = reportUnexpected(error, "terminal close");
-      if (!this.disposed) this.notice(message);
+      if (!this.disposed) this.notice(message, { level: "error", source: "Terminal" });
     });
   }
   private activate(id: string | undefined, focus: boolean): void {
@@ -284,7 +285,7 @@ export class TerminalPanel {
     if (this.root.isDestroyed) return;
     this.setMessage("Terminal unavailable · reconnect explicitly"); this.reconnectButton.visible = Boolean(this.selected);
     if (this.surface?.root.focused) this.reconnectButton.focus();
-    this.removeSurface(); this.notice(message); this.changed();
+    this.removeSurface(); this.notice(message, { level: "error", source: "Terminal" }); this.changed();
   }
   private setMessage(text: string): void { this.message.content = text; this.messageRow.visible = Boolean(text); }
   private processName(item: TerminalInfo): string {
@@ -310,7 +311,7 @@ export class TerminalPanel {
         }
         this.titleWarning = false; this.paintTabs();
       } else if (!this.titleWarning) {
-        this.titleWarning = true; this.notice(`[${result.error.code}] Process names unavailable; terminal input is unaffected. ${result.error.message}`);
+        this.titleWarning = true; this.notice(`[${result.error.code}] Process names unavailable; terminal input is unaffected. ${result.error.message}`, { level: "warning", source: "Terminal" });
       }
     } catch (error) { reportUnexpected(error, "terminal process titles"); }
     finally {

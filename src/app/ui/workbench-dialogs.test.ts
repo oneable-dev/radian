@@ -55,20 +55,22 @@ test("Footer Help clicks remember original focus and retain compact entry points
   } finally {await app.close();}
 });
 
-test("Notifications reserve rows only when present and details read/copy untruncated source", async () => {
+test("Notifications leave footer height stable and Messages reads/copies untruncated source", async () => {
   const app = await mount();
   try {
     const footer = app.get("app-footer"); expect(footer.height).toBe(1);
     const message = "[CONNECTION_FAILED] Temporary connection failure\n" + "Detailed cause. ".repeat(200) + "\nRecovery: reconnect after saving your work.";
-    app.view.setNotice(message); await app.render();
-    expect(footer.height).toBe(2); expect(app.get("footer-notice").visible).toBe(true);
-    expect(app.captureCharFrame()).toContain("Temporary connection failure");
+    app.view.setNotice(message, { level: "error" }); await app.render();
+    expect(footer.height).toBe(1); expect(app.renderer.root.findDescendantById("footer-notice")?.visible).toBe(false);
+    expect(app.captureCharFrame()).toContain("Temporary connection");
     expect(app.captureCharFrame()).not.toContain("Detailed cause.");
-    await app.click("footer-notice-details"); app.mockInput.pressKey("y"); await app.render();
+    expect(app.captureCharFrame()).toContain("AGENT / radian");
+    pressLeader(app, "!"); app.mockInput.pressEnter(); app.mockInput.pressKey("y"); await app.render();
 
     expect(app.copies).toEqual([message]); expect(app.get("text-dialog").visible).toBe(true);
+    app.mockInput.pressEscape(); await app.render(); expect(app.get("messages").visible).toBe(true);
     app.mockInput.pressEscape(); await app.render(); expect(app.renderer.currentFocusedRenderable).toBe(app.prompt);
-    app.view.setNotice(""); await app.render(); expect(footer.height).toBe(1); expect(app.get("footer-notice").visible).toBe(false);
+    app.view.setNotice(""); await app.render(); expect(footer.height).toBe(1);
     expect(app.sent).toEqual([]);
   } finally {await app.close();}
 });

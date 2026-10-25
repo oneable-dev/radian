@@ -587,7 +587,10 @@ test("Rejected inactive-terminal closure notifies while preserving active input/
     app.actions.close = async () => err(new PtyError("PTY_BUSY", "Cleanup was rejected."));
 
     // Request closure of first tabs rather than active shells.
-    await app.mockMouse.click(close.x, close.y); await app.visible("Cleanup was rejected.");
+    await app.mockMouse.click(close.x, close.y); await app.visible("Terminal could not be closed");
+    app.leader("!"); app.mockInput.pressEnter(); await app.renderOnce();
+    expect(app.captureCharFrame()).toContain("Cleanup was rejected.");
+    app.mockInput.pressEscape(); app.mockInput.pressEscape(); await app.renderOnce();
 
     // Rejected tabs and active connections remain with only error notifications added.
     expect(app.renderer.root.findDescendantById("terminal-tab:shell-1")).toBeDefined();

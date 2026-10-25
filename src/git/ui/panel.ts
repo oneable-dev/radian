@@ -14,6 +14,7 @@ import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { GitList, type GitListItem } from "./list.ts";
 import { GitBrowser, type GitBrowserKind } from "./browser.ts";
+import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { icons } from "../../icons.ts";
 import { codeStyles, paintText, styleBackground, type StyleGroup } from "../../ui/theme-styles.ts";
@@ -92,7 +93,7 @@ export class GitPanel {
   private pointer: { x: number; y: number; moved: boolean } | undefined;
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: GitActions | undefined,
-    private readonly notice: (message: string) => void, private readonly changed: () => void,
+    private readonly notice: Notice, private readonly changed: () => void,
     private readonly saved: (id: string, state: GitViewState) => void, private readonly initial: Readonly<Record<string, GitViewState>>,
     private readonly hint: (command: CommandId, context: KeyContext) => string, private readonly inspect?: (content: DialogContent) => void) {
     const gitColors = uiTheme(renderer).colors;
@@ -346,7 +347,7 @@ export class GitPanel {
     this.root.visible = false;
   }
   private launch(operation: () => Promise<void>): void {
-    void operation().catch((error: unknown) => { if (!this.disposed) this.notice(reportUnexpected(error, "Git view")); });
+    void operation().catch((error: unknown) => { if (!this.disposed) this.notice(reportUnexpected(error, "Git view"), { level: "error", source: "Git" }); });
   }
   private request(): AbortController {
     const request = new AbortController(); this.requests.add(request); this.spinner.start();
@@ -357,7 +358,7 @@ export class GitPanel {
     this.requests.delete(request); if (!this.requests.size) { this.spinner.stop(); this.changesSpinner.stop(); }
   }
   private current(cache: Cache, generation: number, request: AbortController): boolean { return !this.disposed && !this.root.isDestroyed && this.root.visible && this.cache === cache && this.generation === generation && !request.signal.aborted; }
-  private failure(error: ExpectedError): void { if (!(error instanceof CancelledError)) this.notice(`[${error.code}] ${error.message}`); }
+  private failure(error: ExpectedError): void { if (!(error instanceof CancelledError)) this.notice(`[${error.code}] ${error.message}`, { level: "error", source: "Git" }); }
   private refreshOnFocus = (): void => {
     // Showing the view and handing it focus can occur in the same activation.
     if (this.loadRequest && !this.loadRequest.signal.aborted) return;
@@ -756,7 +757,7 @@ export class GitPanel {
     this.changed();
   };
   private copy(text: string): void {
-    this.launch(async () => { const result = await (this.actions?.copy ? this.actions.copy(text) : this.clipboard.copy(text)); if (result.ok) this.notice(result.value); else this.failure(result.error); });
+    this.launch(async () => { const result = await (this.actions?.copy ? this.actions.copy(text) : this.clipboard.copy(text)); if (result.ok) this.notice(result.value, { level: "success", source: "Git" }); else this.failure(result.error); });
   }
   private selectionFinished = (selection: Selection): void => {
     const pointer = this.pointer; this.pointer = undefined;

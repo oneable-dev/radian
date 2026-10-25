@@ -249,7 +249,7 @@ or requests to replay. Git data is read again on a fresh TUI attachment. Demo mo
 See **Native Git** below for the supported operations and resource limits.
 
 Editor uses the entire work pane with no application-owned padding on any edge; only the shared
-footer (and any actual notice row) remains outside it. Neovim receives that full viewport size on
+single-row footer remains outside it. Neovim receives that full viewport size on
 both explicit launch and resize. Neovim's own UI configuration is unchanged.
 
 Select Editor to explicitly open/attach Neovim. Worktree navigation and reconnect attach an existing
@@ -1333,9 +1333,9 @@ never disable the underlying bindings or remove them from application Help.
 Application bindings such as `<leader>b`, `<leader>[` and `Tab` still work outside Neovim input focus;
 the configured leader detach command works in every input context. See the input ownership rules above.
 
-The status-icon legend and routine live-service banner are not shown. Errors and service notices
-appear in a separate row immediately above the footer only when nonempty, so they never replace
-shortcut hints. Clearing a notice returns its row to the work panels.
+The status-icon legend and routine live-service banner are not shown. Errors and service notices use
+the top-right notification overlay, never a separate footer row. Their arrival and expiry do not resize
+the work panels or interrupt keyboard focus.
 Identity and shortcut text remain read-only. A dedicated Help entry opens a centered popup without
 changing the original draft or selection; closing it restores focus. **F1** opens application help
 in app controls; the conversation retains its existing F1 reader help. **Leader, then ?** opens the
@@ -1343,11 +1343,27 @@ application popup from any work view, including embedded PTYs, without intercept
 The popup lists the current context first, then common application bindings, including user overrides.
 It traps Tab traversal and supports arrows/j/k, PgUp/PgDn and Esc.
 
-A nonempty notification reserves exactly one row above the footer, showing its first nonempty line
-with width-aware ellipsis and a **Details** action. **Leader, then !** also opens the full original
-message in a scrollable, copyable popup. Notifications never open this popup automatically. Accepted
-model/tool failures stay in their conversation instead of duplicating into the global footer.
-Clearing the owner's notification removes the row; no permanent blank notification space is reserved.
+**Leader, then !** (`notice.details`) opens **Messages**, a searchable, newest-first list of the latest
+500 messages received during this attached UI's lifetime. General notices and observed session results
+share the record; toast expiry or session closure does not delete it. No command line or disk persistence
+is added. Each record keeps its time, level, source and complete text; repeated runtime snapshots do not
+create duplicates, while separate actions with identical messages remain distinct.
+
+Search text stays literal. Arrows and Ctrl+N/P move the highlighted candidate from either search or list
+focus; j/k also work in the list. Ctrl+D/U moves half a viewport of candidates and transfers search focus
+to the list without changing the query or caret. Ctrl+C clears only the search query, including a no-op
+when it is already empty. Enter opens the full wrapped, scrollable text. Use y in the list or details
+(Ctrl+Y while searching) to copy the original text. Esc returns from details to the list, then closes
+Messages and restores the original input focus. These actions use the shared configurable keymap.
+Messages never opens automatically; clicking a general notification explicitly opens its details.
+General notices and session results share a three-row toast layout: status, a one-line summary and
+muted source context. General notices show their source on the last row; session results show worktree
+and branch there, with elapsed time beside the status when available. Long previews are truncated;
+Messages retains the complete text. Info/success notices expire after five seconds and warnings/errors
+after eight seconds.
+Toasts are temporarily hidden while Messages or a read-only details/help dialog is open, so they cannot
+obscure the text being inspected; their normal expiry timers continue independently.
+Accepted model/tool failures otherwise remain in their conversation rather than generating per-tool alerts.
 
 The footer text stays one line on narrow terminals. Identity stays on the left; complete shortcut/label
 pairs fit in the owner's supplied order and trailing pairs are omitted with an ellipsis. Resize
@@ -1374,12 +1390,13 @@ and stopped or unknown-origin cancelled results use warning styling. Explicit us
 and lifecycle shutdown do not create new popups, matching the unread-bell policy. Individual
 messages, tools, retries and subagent status changes are not separate notifications.
 
-Cards fade in and show the result, delivered-request summary, repository/worktree and elapsed run
+Cards fade in and show the result, delivered-request summary, worktree/branch and elapsed run
 time when available. At most three fit on screen; smaller terminals show fewer, with excess cards
 queued until space is available. Completion cards expire after five seconds and other result cards
 after eight seconds of display. The overlay never changes keyboard focus or reserves workspace
-layout space. Click a card to open that conversation's latest output; a closed or replaced
-conversation is not opened. Automatic expiry only dismisses the popup, never the runtime-owned
+layout space. Click a card to open that conversation's latest output with keyboard focus in the Agent
+prompt, not on a transcript section; a closed or replaced conversation is not opened.
+Automatic expiry only dismisses the popup, never the runtime-owned
 unread bell. Reading the actual result uses the existing acknowledgement path.
 Successful session tabs still have no check icon.
 

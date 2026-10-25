@@ -373,7 +373,7 @@ test("Detail-dialog Ctrl+D/U scrolls bodies by half a page", async () => {
   const app = await mount("workspace");
   try {
     app.mockInput.pressEscape(); app.view.setNotice(Array.from({ length: 100 }, (_, index) => `Details line ${index}`).join("\n")); await app.render();
-    const details = app.get("footer-notice-details"); await app.mockMouse.click(details.x, details.y); await app.render();
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("!"); app.mockInput.pressEnter(); await app.render();
     const scroll = app.get("text-dialog-scroll") as ScrollBoxRenderable, half = Math.floor(scroll.viewport.height / 2);
 
     app.mockInput.pressKey("d", { ctrl: true }); await app.render();

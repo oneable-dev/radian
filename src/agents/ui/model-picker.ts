@@ -8,6 +8,7 @@ import type { FooterShortcut } from "../../ui/footer.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { singleLine } from "../../ui/text.ts";
 import { SearchInput } from "../../ui/search-input.ts";
+import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { Button } from "../../ui/button.ts";
@@ -18,7 +19,7 @@ type Scope = { sessionId: string; conversationId: string };
 export type ModelPickerActions = {
   list?: (sessionId: string, conversationId: string, signal?: AbortSignal) => Promise<Result<ModelCatalog, ExpectedError>>;
   select?: (sessionId: string, conversationId: string, model: ModelIdentity, effort?: ModelEffort) => Promise<Result<string | null, ExpectedError>>;
-  notice: (message: string) => void;
+  notice: Notice;
   changed: () => void;
   fallback: () => void;
   keyHint: (command: CommandId, context: KeyContext) => string;
@@ -110,7 +111,7 @@ export class ModelPicker {
   hide(restoreFocus = true): void {
     if (!this.visible) return;
     this.root.visible = false; this.revision++; this.request?.abort(); this.spinner.cancel(); this.loading = false;
-    if (this.applying) this.actions.notice("Model selection is still settling. Closing the popup does not undo an accepted change; check the session model before retrying.");
+    if (this.applying) this.actions.notice("Model selection is still settling. Closing the popup does not undo an accepted change; check the session model before retrying.", { level: "warning" });
     const owner = this.owner; this.owner = undefined; this.scope = undefined;
     if (restoreFocus) {
       let visible = !!owner && !owner.isDestroyed;
@@ -219,7 +220,7 @@ export class ModelPicker {
     finally { this.applying = false; if (this.current(revision)) { this.spinner.stop(); this.paint(); } }
     if (!this.current(revision)) return;
     if (!result.ok) { this.message.content = `[${result.error.code}] ${result.error.message}`; return; }
-    this.hide(); this.actions.notice(result.value ?? `Model set to ${singleLine(model.provider + "/" + model.id)} · effort ${effort} for this session.`);
+    this.hide(); this.actions.notice(result.value ?? `Model set to ${singleLine(model.provider + "/" + model.id)} · effort ${effort} for this session.`, { level: "success" });
   }
   command(command: CommandId): void {
     if (!this.visible) return;

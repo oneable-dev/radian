@@ -9,6 +9,7 @@ import { Clipboard } from "../../ui/clipboard.ts";
 import { openLoginUrl } from "../../accounts/browser.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import { singleLine } from "../../ui/text.ts";
+import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { createTextMatcher } from "../../search.ts";
@@ -19,7 +20,7 @@ import type { FooterShortcut } from "../../ui/footer.ts";
 type Scope = { sessionId: string; conversationId: string; dialog: ExtensionDialog };
 export type ExtensionDialogActions = {
   answer: (sessionId: string, conversationId: string, response: ExtensionUiResponse) => Promise<Result<void, ExpectedError>>;
-  changed: () => void; fallback: () => void; notice: (message: string) => void;
+  changed: () => void; fallback: () => void; notice: Notice;
   keyHint: (command: CommandId, context: KeyContext) => string;
 };
 const plain = (text: string) => stripVTControlCharacters(text).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/gu, "");
@@ -183,10 +184,10 @@ export class ExtensionDialogPanel {
   private async useUrl(browser: boolean): Promise<void> {
     const url = this.url; if (!url) return;
     const result = browser ? await openLoginUrl(url) : await this.clipboard.copy(url);
-    if (!result.ok) this.actions.notice(`[${result.error.code}] ${result.error.message}`);
-    else this.actions.notice(browser ? "Authorization URL opened in the browser." : "Authorization URL copied.");
+    if (!result.ok) this.actions.notice(`[${result.error.code}] ${result.error.message}`, { level: "error" });
+    else this.actions.notice(browser ? "Authorization URL opened in the browser." : "Authorization URL copied.", { level: "success" });
   }
-  private launch(operation: () => Promise<void>): void { void operation().catch(error => this.actions.notice(reportUnexpected(error, "extension dialog"))); }
+  private launch(operation: () => Promise<void>): void { void operation().catch(error => this.actions.notice(reportUnexpected(error, "extension dialog"), { level: "error" })); }
   private keepFocus = (): void => {
     if (!this.visible) return;
     for (let node = this.renderer.currentFocusedRenderable; node; node = node.parent as Renderable | null) if (node === this.root) return;

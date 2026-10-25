@@ -2,7 +2,7 @@ import { formatKeys, isImplicitArrowBinding, type Keymap } from "./config.ts";
 import { inScope, type CommandId, type KeyContext } from "./commands.ts";
 
 const labels: Partial<Record<CommandId, string>> = {
-  "app.detach": "Detach Radian (keep background work running)", "app.help": "Open application help", "notice.details": "Read the current notification",
+  "app.detach": "Detach Radian (keep background work running)", "app.help": "Open application help", "notice.details": "Open message history",
   "sidebar.toggle": "Toggle the workspace popup", "focus.search": "Search workspaces", "focus.sidebar": "Open the workspace popup",
   "workspace.dismiss": "Close without switching workspaces", "workspace.search": "Search workspaces", "search.clear": "Clear the search query",
   "monitor.show": "Monitor working sessions and unread results", "monitor.open": "Open the selected session", "monitor.dismiss": "Close session monitoring", "monitor.preview": "Focus or toggle live preview",

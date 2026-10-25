@@ -6,6 +6,7 @@ import type { SessionResult } from "../session-attention.ts";
 import { SessionNotificationStack } from "./session-notifications.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { icons } from "../../icons.ts";
+import type { Message } from "../../ui/messages.ts";
 
 function notification(id: string, outcome: SessionResult["outcome"] = "complete"): SessionNotification {
   return { id, sessionId: id, worktreeId: "tree", conversationId: "conversation", repository: "server", worktree: "auth-checkout", branch: "feature/auth", durationMs: 42000,
@@ -40,6 +41,52 @@ test.each(["complete", "error", "unfinished", "cancelled"] as const)("New %s not
     let x = 0; const border = app.captureSpans().lines[card.y]!.spans.find(span => { x += span.width; return x > card.x; })!;
     expect(border.fg.toInts()).toEqual(uiTheme(app.renderer).colors[outcome === "complete" ? "success" : outcome === "error" ? "error" : "warning"].toInts());
     expect(app.opened).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each([
+  ["info", "Info", 5000], ["success", "Completed", 5000], ["warning", "Warning", 8000], ["error", "Failed", 8000],
+] as const)("General %s notifications share the result card's status, summary, and context rows", async (level, label, lifetime) => {
+  // Both kinds of notification arrive while the same input retains keyboard ownership.
+  const app = await fixture();
+  const message: Message = { id: "message", timestamp: 0, level, source: "Clipboard", text: "Operation summary" };
+  try {
+    // Mixing a general notice with a result must not change their visual hierarchy.
+    app.stack.show(message); app.stack.show(notification("result")); app.clock.advance(160); await app.render();
+
+    // General notices reserve their last row for source, just as results do for checkout context.
+    const card = app.get("session-toast:message"), resultCard = app.get("session-toast:result"), lines = app.captureCharFrame().split("\n");
+    const rows = lines.slice(card.y + 1, card.y + 4).map(line => line.slice(card.x + 2, card.x + card.width - 2).trim());
+    expect(rows).toEqual([label, "Operation summary", "Clipboard"]);
+    expect(card.height).toBe(resultCard.height); expect(card.width).toBe(resultCard.width);
+    let x = 0; const border = app.captureSpans().lines[card.y]!.spans.find(span => { x += span.width; return x > card.x; })!;
+    expect(border.fg.toInts()).toEqual(uiTheme(app.renderer).styles[`status.${level}`].fg.toInts());
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.opened).toEqual([]);
+    app.clock.advance(lifetime - 161); await app.render(); expect(app.renderer.root.findDescendantById("session-toast:message")).toBeDefined();
+    app.clock.advance(1); await app.render(); expect(app.renderer.root.findDescendantById("session-toast:message")).toBeUndefined();
+  } finally { await app.close(); }
+});
+
+test("General notification rows safely truncate Unicode previews and sources through resize", async () => {
+  // Long diagnostics must leave the source visible without expanding the compact card.
+  const app = await fixture();
+  const message: Message = { id: "long", timestamp: 0, level: "warning", title: "Custom warning",
+    source: "\x1b[36mEditor\x1b[0m\n" + "checkout-".repeat(20), text: "\x1b[31m한글 👩🏽‍💻\x1b[0m\n\x07 " + "긴요약".repeat(100) };
+  try {
+    // Shrinking and restoring the terminal must keep all three rows in the same order.
+    app.stack.show(message); app.clock.advance(160);
+    for (const width of [100, 30, 100]) {
+      app.resize(width, 24); await app.render();
+
+      // Only the summary and context are shortened; the source never moves into the heading or body.
+      const card = app.get("session-toast:long"), frame = app.captureCharFrame(), lines = frame.split("\n");
+      expect(lines[card.y + 1]).toContain("Custom warning"); expect(lines[card.y + 1]).not.toContain("Editor");
+      expect(lines[card.y + 2]).toContain("한글 👩🏽‍💻"); expect(lines[card.y + 2]).toContain("…");
+      expect(lines[card.y + 3]).toContain("Editor checkout-"); expect(lines[card.y + 3]).toContain("…");
+      expect(frame).not.toContain("\x1b"); expect(frame).not.toContain("\x07");
+      expect(card.height).toBe(5); expect(card.x + card.width).toBeLessThanOrEqual(width);
+    }
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
   } finally { await app.close(); }
 });
 

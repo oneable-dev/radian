@@ -247,9 +247,10 @@ test("Item details show source and restore draft, caret, and focus on close", as
 test("Compact multiline input, activity, notifications, and completion never overlap footers", async () => {
   const app=await mount({onComplete:async()=>ok({items:[{kind:"file",value:"context.txt",description:"Context file"}],truncated:false})});
   try {
-    // Removing the view strip gives back two rows; use the same constrained content budget.
-    app.resize(60,9);app.view.setNotice("Connection fixture notice");app.input.value="prefix\n@";await app.render();
-    app.clock.advance(150);await app.render();expect(app.captureCharFrame()).toContain("context.txt");
+    // The single-row footer returns the former notice row; preserve the constrained content budget.
+    app.resize(60,8);app.view.setNotice("Connection fixture notice");app.input.value="prefix\n@";await app.render();
+    // Notification overlays may cover content but never change completion geometry.
+    app.clock.advance(5000);await app.render();expect(app.captureCharFrame()).toContain("context.txt");
     const menu=app.get("prompt-completions"),composer=app.get("agent-composer"),footer=app.get("app-footer"),status=app.get("session-status");
     expect(menu.visible).toBe(true);expect(menu.height).toBe(1);
     expect(composer.y+composer.height).toBeLessThanOrEqual(menu.y);expect(menu.y+menu.height).toBe(status.y);
@@ -257,7 +258,7 @@ test("Compact multiline input, activity, notifications, and completion never ove
     const row=status.getChildren()[0]!,frame=app.captureCharFrame().split("\n");
     // A zero-row conversation viewport must not leak its source text onto the mode line.
     const run=app.get("agent-run-status-text");
-    expect(frame[run.y]!.slice(run.x,run.x+run.width)).toStartWith("Working (0s");
+    expect(frame[run.y]!.slice(run.x,run.x+run.width)).toStartWith("Working (5s");
     expect(app.get("session-transcript").visible).toBe(false);
     expect(row.y-status.y).toBe(1);expect(status.y+status.height-row.y-row.height).toBe(1);
     for(const y of [row.y-1,row.y+1])expect(frame[y]!.slice(status.x,status.x+status.width).trim()).toBe("");

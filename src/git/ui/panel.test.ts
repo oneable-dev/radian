@@ -602,7 +602,8 @@ test("Oversized details fully expand and use shared Commits scrolling to read/co
 
     expect(app.copies).toEqual(["Last"]); expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid);
     expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("Radian");
-    app.mockInput.pressKey("HOME"); await app.renderOnce(); expect(app.captureCharFrame()).toContain("Author: Ada");
+    // Settle the shared scroll position and the independently mounted copy notification.
+    app.mockInput.pressKey("HOME"); await app.renderOnce(); await app.renderOnce(); expect(app.captureCharFrame()).toContain("Author: Ada");
     expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });

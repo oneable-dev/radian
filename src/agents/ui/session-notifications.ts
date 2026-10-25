@@ -6,9 +6,12 @@ import { uiTheme } from "../../ui/theme.ts";
 import { paintText, type StyleGroup } from "../../ui/theme-styles.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
 import { icons } from "../../icons.ts";
+import { messageLabels, messageText, type Message } from "../../ui/messages.ts";
+
+type Notification = SessionNotification | Message;
 
 type Timer = ReturnType<CliRenderer["clock"]["setTimeout"]>;
-type Toast = { notification: SessionNotification; root: BoxRenderable; heading: TextRenderable; task: TextRenderable; location: TextRenderable;
+type Toast = { notification: Notification; root: BoxRenderable; heading: TextRenderable; task: TextRenderable; location: TextRenderable;
   expiry: Timer; animation?: Timer };
 const labels = { complete: "Completed", error: "Failed", unfinished: "Stopped", cancelled: "Cancelled" } satisfies Record<SessionResult["outcome"], string>;
 const colors = { complete: "status.success", error: "status.error", unfinished: "status.warning", cancelled: "status.warning" } as const satisfies Record<SessionResult["outcome"], StyleGroup>;
@@ -16,12 +19,13 @@ const colors = { complete: "status.success", error: "status.error", unfinished: 
 // Own only presentation and timers. Neither dismissal nor expiry acknowledges a result.
 export class SessionNotificationStack {
   readonly root: BoxRenderable;
-  private readonly pending: SessionNotification[] = [];
+  private readonly pending: Notification[] = [];
   private readonly visible: Toast[] = [];
   private capacity = 0;
+  private hidden = false;
   private disposed = false;
 
-  constructor(private readonly renderer: CliRenderer, private readonly open: (notification: SessionNotification) => void) {
+  constructor(private readonly renderer: CliRenderer, private readonly open: (notification: Notification) => void) {
     // The overlay occupies only its cards, never a full-screen pointer-catching backdrop.
     this.root = new BoxRenderable(renderer, { id: "session-notifications", position: "absolute", top: 1, right: 2,
       width: 52, height: 0, flexDirection: "column", gap: 1, zIndex: 7000, visible: false });
@@ -30,14 +34,19 @@ export class SessionNotificationStack {
     renderer.on("resize", this.resize); this.resize();
   }
 
-  show(notification: SessionNotification): void {
+  show(notification: Notification): void {
     if (this.disposed || this.pending.some(item => item.id === notification.id) || this.visible.some(item => item.notification.id === notification.id)) return;
     this.pending.push(notification); this.pump();
   }
 
+  setHidden(hidden: boolean): void {
+    this.hidden = hidden;
+    if (!this.disposed) this.root.visible = !hidden && this.visible.length > 0;
+  }
+
   retain(sessionIds: ReadonlySet<string>): void {
-    for (let index = this.pending.length - 1; index >= 0; index--) if (!sessionIds.has(this.pending[index]!.sessionId)) this.pending.splice(index, 1);
-    for (const toast of [...this.visible]) if (!sessionIds.has(toast.notification.sessionId)) this.remove(toast);
+    for (let index = this.pending.length - 1; index >= 0; index--) if (isClosedSession(this.pending[index]!, sessionIds)) this.pending.splice(index, 1);
+    for (const toast of [...this.visible]) if (isClosedSession(toast.notification, sessionIds)) this.remove(toast);
     this.pump();
   }
 
@@ -59,11 +68,11 @@ export class SessionNotificationStack {
   private pump(): void {
     if (this.disposed) return;
     while (this.visible.length < this.capacity && this.pending.length) this.mount(this.pending.shift()!);
-    this.root.visible = this.visible.length > 0;
+    this.root.visible = !this.hidden && this.visible.length > 0;
     this.root.height = Math.max(0, this.visible.length * 6 - 1);
   }
 
-  private mount(notification: SessionNotification): void {
+  private mount(notification: Notification): void {
     const root = new BoxRenderable(this.renderer, { id: `session-toast:${notification.id}`, width: "100%", height: 5, flexShrink: 0,
       flexDirection: "column", border: true, paddingX: 1, opacity: 0.5,
       onMouseDown: event => {
@@ -75,7 +84,8 @@ export class SessionNotificationStack {
     const task = new TextRenderable(this.renderer, { height: 1, width: "100%", wrapMode: "none", selectable: false });
     const location = new TextRenderable(this.renderer, { height: 1, width: "100%", wrapMode: "none", selectable: false });
     header.add(heading); root.add(header); root.add(task); root.add(location); this.root.add(root);
-    const expiry = this.renderer.clock.setTimeout(() => this.dismiss(notification.id), notification.result.outcome === "complete" ? 5000 : 8000);
+    const brief = "result" in notification ? notification.result.outcome === "complete" : notification.level === "success" || notification.level === "info";
+    const expiry = this.renderer.clock.setTimeout(() => this.dismiss(notification.id), brief ? 5000 : 8000);
     const toast: Toast = { notification, root, heading, task, location, expiry };
     this.visible.push(toast); this.paint(toast);
     const started = this.renderer.clock.now();
@@ -87,13 +97,23 @@ export class SessionNotificationStack {
   }
 
   private paint(toast: Toast): void {
-    const styles = uiTheme(this.renderer).styles, status = styles[colors[toast.notification.result.outcome]];
+    const styles = uiTheme(this.renderer).styles;
+    const group: StyleGroup = "result" in toast.notification ? colors[toast.notification.result.outcome] : `status.${toast.notification.level}`;
+    const status = styles[group];
     toast.root.backgroundColor = styles["ui.popup"].bg;
     toast.root.borderColor = status.fg;
     paintText(toast.heading, status); paintText(toast.task, styles["ui.label"]);
     paintText(toast.location, styles["ui.muted"]);
     // Layout getters still describe the previous frame when a card first arrives.
-    const width = Math.max(0, Math.min(52, this.renderer.width - 2) - 4), { result, durationMs } = toast.notification;
+    const width = Math.max(0, Math.min(52, this.renderer.width - 2) - 4);
+    if (!("result" in toast.notification)) {
+      const item = toast.notification;
+      toast.heading.content = truncateCells(singleLine(messageText(item.title ?? messageLabels[item.level])), width);
+      toast.task.content = truncateCells(singleLine(messageText(item.text)), width);
+      toast.location.content = truncateCells(singleLine(messageText(item.source)), width);
+      return;
+    }
+    const { result, durationMs } = toast.notification;
     const elapsed = durationMs === undefined ? "" : ` · ${formatRunDuration(durationMs)}`;
     toast.heading.content = truncateCells(labels[result.outcome] + elapsed, width);
     toast.task.content = truncateCells(excerpt(result.request?.text || "AI session"), width);
@@ -120,6 +140,10 @@ export class SessionNotificationStack {
     this.pending.length = 0;
     if (!this.root.isDestroyed) this.root.destroyRecursively();
   }
+}
+
+function isClosedSession(notification: Notification, sessionIds: ReadonlySet<string>): boolean {
+  return "sessionId" in notification && !sessionIds.has(notification.sessionId);
 }
 
 function excerpt(value: string): string { return singleLine(Bun.stripANSI(value.slice(0, 512))); }

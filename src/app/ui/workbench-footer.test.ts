@@ -165,7 +165,8 @@ test("Compact hidden-panel layouts keep footer/notifications at bottom and click
 
     expect(app.footerLine()).toContain("Radian · Agents");
     expect(app.footerLine()).not.toContain("0.0.0");
-    expect(app.captureCharFrame().split("\n")[10]).toContain("Runtime reconnecting");
+    expect(app.captureCharFrame()).toContain("Runtime reconnecting");
+    expect(app.renderer.root.findDescendantById("app-footer")!.height).toBe(1);
     expect(app.captureCharFrame()).not.toContain("Inspector");
     expect(app.renderer.currentFocusedRenderable).toBe(focus);
     expect(app.selection.sessionId).toBe("a1");

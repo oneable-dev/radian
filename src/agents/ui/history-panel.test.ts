@@ -450,7 +450,10 @@ test("Closing during Open never claims rollback or lets late responses change se
   const app = await mount({ resume: () => pending.promise });
   try {
     await app.open(); app.mockInput.pressEnter(); await app.render(); app.mockInput.pressEscape(); await app.render();
+    expect(app.captureCharFrame()).toContain("Open is still settling.");
+    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("!"); app.mockInput.pressEnter(); await app.render();
     expect(app.captureCharFrame()).toContain("does not cancel");
+    app.mockInput.pressEscape(); app.mockInput.pressEscape(); await app.render();
     pending.resolve("a2"); await app.render(); expect(app.selection.sessionId).toBe("a1"); expect(app.resumed).toEqual(["demo:main/first"]);
   } finally { pending.resolve("a2"); await app.close(); }
 });
