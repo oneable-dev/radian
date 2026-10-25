@@ -44,6 +44,21 @@ async function mount(initial: readonly OpenSession[] = [session()], fast: (id: s
   };
 }
 
+test.each([100, 28])("Session tabs stay adjacent without gaps at %s columns", async width => {
+  // Two fixed-width tabs must share an edge even when the strip needs horizontal scrolling.
+  const entries = [session(), session(secondId)], app = await mount(entries);
+  try {
+    // Selecting the second tab reveals it in compact layouts without adding inter-tab space.
+    app.resize(width, 6); app.tabs.update("tree", entries, secondId, true); await app.render();
+
+    // The next tab starts immediately after the previous frame and stays fully visible.
+    const first = app.get(firstId).tab, second = app.get(secondId).tab, viewport = app.tabs.list.viewport;
+    expect(second.x).toBe(first.x + first.width);
+    expect(second.x).toBeGreaterThanOrEqual(viewport.x);
+    expect(second.x + second.width).toBeLessThanOrEqual(viewport.x + viewport.width);
+  } finally { await app.close(); }
+});
+
 const completed: SessionResult = { id: "completed", outcome: "complete", completedAt: 1000 };
 const failed: SessionResult = { id: "failed", outcome: "error", completedAt: 1000 };
 const stopped: SessionResult = { id: "stopped", outcome: "unfinished", completedAt: 1000 };

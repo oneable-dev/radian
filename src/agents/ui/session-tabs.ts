@@ -34,7 +34,7 @@ export class SessionTabs {
   constructor(private readonly renderer: CliRenderer, private readonly actions: Actions) {
     this.root = new BoxRenderable(renderer, { id: "agent-session-tabs", width: "100%", height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.list = new ScrollBoxRenderable(renderer, { id: "agent-session-list", height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0,
-      scrollX: true, scrollY: false, contentOptions: { flexDirection: "row", gap: 1 }, horizontalScrollbarOptions: { visible: false },
+      scrollX: true, scrollY: false, contentOptions: { flexDirection: "row", gap: 0 }, horizontalScrollbarOptions: { visible: false },
       onSizeChange: () => { this.resizeTitles(); this.reveal = true; this.renderer.requestRender(); } });
     this.root.add(this.list);
     uiTheme(renderer).scrollbars(this.list);
