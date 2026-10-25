@@ -1,7 +1,6 @@
 import { BoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
 import { uiTheme } from "./theme.ts";
 import { paintText } from "./theme-styles.ts";
-import { blendColors } from "./color.ts";
 import { singleLine, truncateCells } from "./text.ts";
 
 export const SESSION_TAB_WIDTH = 18;
@@ -28,7 +27,7 @@ export class SessionTab {
 
   constructor(private readonly renderer: CliRenderer, private readonly options: SessionTabOptions) {
     this.root = new BoxRenderable(renderer, { id: options.id, width: SESSION_TAB_WIDTH, height: 1, flexShrink: 0,
-      flexDirection: "row", border: ["left"], paddingX: 1, gap: 1, focusable: false,
+      flexDirection: "row", paddingLeft: 2, paddingRight: 1, gap: 1, focusable: false,
       onMouseDown: event => {
         if (event.button !== 0) return;
         event.preventDefault(); event.stopPropagation();
@@ -70,13 +69,13 @@ export class SessionTab {
   }
 
   private refreshLabel(): void {
-    // The border and close control take priority if the number cannot fit.
+    // The left inset and close control take priority if the number cannot fit.
     this.number.visible = this.width >= this.number.width + 2;
     const leading = this.options.leading;
     const controls = 1 + (this.number.visible ? this.number.width : 0) + (leading?.visible ? leading.width : 0) + 1;
     const gaps = 1 + Number(this.number.visible) + Number(!!leading?.visible);
     const gap = this.width >= controls + gaps + 2 ? 1 : 0;
-    this.root.paddingX = gap; this.root.gap = gap;
+    this.root.paddingLeft = 1 + gap; this.root.paddingRight = gap; this.root.gap = gap;
     const reserved = controls + gap * (gaps + 2);
     const width = Math.max(0, this.width - reserved);
     this.title.content = truncateCells(this.label, width);
@@ -84,11 +83,8 @@ export class SessionTab {
 
   private paint = (): void => {
     if (this.root.isDestroyed) return;
-    const theme = uiTheme(this.renderer), styles = theme.styles;
-    const background = styles[this.active ? "ui.selectionInactive" : "ui.text"].bg;
-    this.root.backgroundColor = background;
-    const accent = styles["ui.focusBorder"].fg;
-    this.root.borderColor = this.active ? accent : blendColors(background ?? theme.colors.panel, accent, 0.45);
+    const styles = uiTheme(this.renderer).styles;
+    this.root.backgroundColor = styles[this.active ? "ui.selectionInactive" : "ui.text"].bg;
     paintText(this.number, styles[this.active ? "ui.tabActive" : "ui.muted"]);
     paintText(this.title, styles[this.active ? "ui.tabActive" : "ui.tab"]);
   };

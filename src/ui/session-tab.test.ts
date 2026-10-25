@@ -78,8 +78,8 @@ test("Tab padding selects while close buttons affect only their tabs without sel
   } finally { await app.dispose(); }
 });
 
-test.each([false, true])("Light theme %s colors only matching left borders and clearly distinguishes active tabs", async light => {
-  // All tabs share accent colors regardless of status or title.
+test.each([false, true])("Light theme %s keeps tab left edges borderless and distinguishes active tabs", async light => {
+  // Active and inactive tabs use their normal backgrounds all the way to the left edge.
   const app = await createTestRenderer({ width: 80, height: 4 }), theme = uiTheme(app.renderer);
   const row = new BoxRenderable(app.renderer, { height: 1, flexDirection: "row", gap: 1 });
   const tabs = [1, 2, 10].map(position => {
@@ -90,31 +90,31 @@ test.each([false, true])("Light theme %s colors only matching left borders and c
   app.renderer.root.add(row);
   theme.configure({ palette: [], defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
     cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null });
-  const border = (tab: SessionTab) => {
+  const cell = (tab: SessionTab, offset = 0) => {
     let column = 0;
-    return app.captureSpans().lines[tab.root.y]!.spans.find(span => { column += span.width; return column > tab.root.x; })!;
+    return app.captureSpans().lines[tab.root.y]!.spans.find(span => { column += span.width; return column > tab.root.x + offset; })!;
   };
   try {
     // Colors depend on active selection, not focus or title content.
     tabs[0]!.update(true); await app.renderOnce();
 
-    // Actual borders occupy one vertical cell without accent-filled backgrounds.
+    // Neither line glyphs nor accent-filled cells appear at the left edge.
     const line = app.captureCharFrame().split("\n")[row.y]!;
     for (const [index, position] of [1, 2, 10].entries()) {
       const tab = tabs[index]!;
-      expect(line.slice(tab.root.x, tab.root.x + tab.root.width).startsWith(`│ ${position}. zsh`)).toBe(true);
+      expect(line.slice(tab.root.x, tab.root.x + tab.root.width).startsWith(`  ${position}. zsh`)).toBe(true);
       expect(tab.root.height).toBe(1);
+      const background = (index === 0 ? theme.colors.surface : theme.colors.panel).toInts();
+      expect(cell(tab).bg.toInts()).toEqual(background);
+      expect(cell(tab, 1).bg.toInts()).toEqual(background);
     }
-    expect(border(tabs[0]!).fg.toInts()).toEqual(theme.styles["ui.focusBorder"].fg.toInts());
-    expect(border(tabs[0]!).bg.toInts()).toEqual(theme.colors.surface.toInts());
-    expect(border(tabs[1]!).fg.toInts()).toEqual(border(tabs[2]!).fg.toInts());
-    expect(border(tabs[1]!).fg.toInts()).not.toEqual(border(tabs[0]!).fg.toInts());
-    expect(border(tabs[1]!).bg.toInts()).toEqual(theme.colors.panel.toInts());
+    expect(line).not.toContain("│");
 
-    // Selection moves identical accent emphasis to the next tab.
+    // Selection moves the background emphasis without adding an edge marker.
     tabs[0]!.update(false); tabs[1]!.update(true); await app.renderOnce();
-    expect(border(tabs[1]!).fg.toInts()).toEqual(theme.styles["ui.focusBorder"].fg.toInts());
-    expect(border(tabs[0]!).fg.toInts()).toEqual(border(tabs[2]!).fg.toInts());
+    expect(cell(tabs[0]!).bg.toInts()).toEqual(theme.colors.panel.toInts());
+    expect(cell(tabs[1]!).bg.toInts()).toEqual(theme.colors.surface.toInts());
+    expect(cell(tabs[2]!).bg.toInts()).toEqual(theme.colors.panel.toInts());
   } finally { await app.dispose(); }
 });
 
@@ -131,7 +131,7 @@ test("Two-digit numbers survive title truncation and expanding restores titles",
 
       // Widths fitting numbers retain full numbers and compact only titles.
       const line = app.captureCharFrame().split("\n")[tab.root.y]!;
-      if (width >= 5) expect(line.slice(tab.root.x, tab.root.x + tab.root.width)).toMatch(/^│\s?10\./);
+      if (width >= 5) expect(line.slice(tab.root.x, tab.root.x + tab.root.width)).toMatch(/^ {1,2}10\./);
       expect(tab.closeButton.x + tab.closeButton.width).toBeLessThanOrEqual(tab.root.x + tab.root.width);
       expect(Bun.stringWidth(tab.title.plainText)).toBeLessThanOrEqual(tab.title.width);
     }
