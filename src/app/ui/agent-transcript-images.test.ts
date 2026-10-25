@@ -85,15 +85,21 @@ test("Unsupported terminals show guidance and activate previews when pixel metad
 });
 
 test("Session switching cancels image reads and late responses never change new screens or drafts", async () => {
+  // Keep the request pending until after the user switches to another session.
   const pending = Promise.withResolvers<ReturnType<typeof ok<Uint8Array>>>(); let signal: AbortSignal | undefined;
   const app = await mount(async (_session, _id, abort) => { signal = abort; return pending.promise; });
   try {
+    const transcript = app.renderer.root.findDescendantById("session-transcript");
+    if (!transcript) throw new Error("Missing transcript viewport");
     await app.clickHeader(); expect(app.captureCharFrame()).toContain("Loading image");
+
+    // Deliver the cancelled request's response while the new session is active.
     app.selection.selectSession("demo:main", "a2"); await app.render();
     pending.resolve(ok(tinyPng())); await app.render();
 
+    // Transcript previews must disappear; unrelated app icons may retain image renderables.
     expect(signal?.aborted).toBe(true); expect(app.bitmap()).toBeUndefined();
-    expect(descendants(app.view.root).some((node) => node instanceof ImageRenderable)).toBe(false);
+    expect(descendants(transcript).some((node) => node instanceof ImageRenderable)).toBe(false);
     expect(app.view.promptDrafts.a1).toBe("keep this draft");
   } finally { pending.resolve(ok(tinyPng())); await app.close(); }
 });
