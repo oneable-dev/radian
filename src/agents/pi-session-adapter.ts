@@ -1,5 +1,5 @@
 import {
-  createAgentSession, defineTool, getAgentDir, ModelRuntime, parseSkillBlock,
+  createAgentSession, defineTool, getAgentDir, initTheme, ModelRuntime, parseSkillBlock,
   SessionManager, SettingsManager, type AgentSession, type AgentSessionEvent, type ExtensionError,
 } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel, getSupportedThinkingLevels, modelsAreEqual, ModelsError, Type, type ImageContent } from "@earendil-works/pi-ai";
@@ -29,6 +29,7 @@ import { parseAccountsCommand } from "../accounts/model.ts";
 import { bindAccountSession } from "../accounts/session.ts";
 import { sessionResourceLoader } from "./resource-loader.ts";
 import { ExtensionUiBridge, type ExtensionUiResponse } from "./extension-ui.ts";
+import { McpAuthPicker } from "./mcp-auth-picker.ts";
 
 type QueuedUserMessage = Extract<ReturnType<AgentSession["agent"]["peekQueuedMessages"]>[number], { role: "user" }>;
 
@@ -45,6 +46,9 @@ export type PiSessionOptions = {
 };
 
 export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory {
+  // RPC/headless extensions still format text with Pi's theme helpers. Radian owns
+  // the terminal, so initialize the built-in palette without a terminal or watcher.
+  initTheme("system");
   let runtime: Promise<ModelRuntime> | undefined;
   return async (context) => {
     if (!(await stat(context.cwd)).isDirectory()) throw new InputError("Session working directory is not a directory.");
@@ -60,8 +64,9 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
     }) : SettingsManager.create(context.cwd, agentDir);
     const fast = new FastMode();
     const compaction = new ManualCompaction();
+    const mcpAuth = new McpAuthPicker();
     const resourceLoader = sessionResourceLoader({
-      cwd: context.cwd, agentDir, settingsManager, noThemes: true, extensionFactories: [fast.extension, compaction.extension],
+      cwd: context.cwd, agentDir, settingsManager, noThemes: true, eventBus: mcpAuth.eventBus, extensionFactories: [fast.extension, compaction.extension],
       ...(options.streamFn ? { noSkills: true, noContextFiles: true, noPromptTemplates: true } : {}),
     });
     await resourceLoader.reload();
@@ -95,11 +100,11 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       } });
       executor = new PiSessionExecutor(session, workspace?.usage ?? options.usageMonitor, diagnostics, fast, options.imageLoader, compaction,
         () => settingsManager.applyOverrides({ ...options.settings, cacheWarming: "off" }), releaseAccounts,
-        options.accounts ? signal => options.accounts!.refreshModels(worktreeId, signal) : undefined, ui);
+        options.accounts ? signal => options.accounts!.refreshModels(worktreeId, signal) : undefined, ui, mcpAuth);
       executor.setUiActive(context.isUiActive?.() ?? false);
       adopted = true;
       return executor;
-    }, async () => { if (!adopted) { session.dispose(); releaseAccounts(); } });
+    }, async () => { if (!adopted) { session.dispose(); mcpAuth.dispose(); releaseAccounts(); } });
   };
 }
 
@@ -149,7 +154,7 @@ export class PiSessionExecutor implements SessionExecutor {
   private request: RequestSummary | undefined;
   private result: SessionResult | undefined;
 
-  constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode, private readonly imageLoader = loadPromptImages, private readonly compaction = new ManualCompaction(), private readonly reloadSettings: () => void = () => {}, private readonly releaseAccounts: () => void = () => {}, private readonly refreshAccountModels?: (signal?: AbortSignal) => Promise<Result<void, ExpectedError>>, private readonly ui?: ExtensionUiBridge) {
+  constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode, private readonly imageLoader = loadPromptImages, private readonly compaction = new ManualCompaction(), private readonly reloadSettings: () => void = () => {}, private readonly releaseAccounts: () => void = () => {}, private readonly refreshAccountModels?: (signal?: AbortSignal) => Promise<Result<void, ExpectedError>>, private readonly ui?: ExtensionUiBridge, private readonly mcpAuth?: McpAuthPicker) {
     this.status = this.finalStatus(false);
     this.commandCatalog = sessionCommands(session);
     this.transcript = new SessionTranscript(session.sessionManager.getBranch());
@@ -302,7 +307,7 @@ export class PiSessionExecutor implements SessionExecutor {
     const previousSettingsErrors = this.session.settingsManager.drainErrors();
     if (previousSettingsErrors.length) console.warn("[radian:settings] Earlier settings errors", previousSettingsErrors);
     this.controlling = true;
-    this.ui?.reset();
+    this.ui?.reset(); this.mcpAuth?.reset();
     const reported: ExtensionError[] = [];
     const stopReporting = this.diagnostics.observe(error => reported.push(error));
     const task = (async (): Promise<Result<void, ExpectedError>> => {
@@ -372,7 +377,8 @@ export class PiSessionExecutor implements SessionExecutor {
       if (this.session.isCompacting && !this.session.isStreaming) return err(new SessionError("SESSION_BUSY", "Session is compacting; retry after it finishes."));
       if ((imagePaths.length || replayImages?.length) && !this.acceptsImages) return err(new CapabilityError("The selected model no longer accepts image input. Input was retained."));
       const images = loaded.value;
-      const name = text.startsWith("/") ? text.slice(1).split(" ", 1)[0]! : "";
+      const bareMcpAuth = text.trimEnd() === "/mcp-auth";
+      const name = bareMcpAuth ? "mcp-auth" : text.startsWith("/") ? text.slice(1).split(" ", 1)[0]! : "";
       const registered = name ? this.session.extensionRunner.getCommand(name) : undefined;
       if (images.length && registered) return err(new InputError(`/${name} does not accept image attachments. Send the images in an ordinary prompt instead.`));
       const names = this.transcript.rememberImages(images, imagePaths);
@@ -381,7 +387,7 @@ export class PiSessionExecutor implements SessionExecutor {
         if (!saved.ok) return saved;
         if (revisionAtSubmission !== this.inputRevision || this.closing || this.disposed) return err(new CancelledError("Input was cancelled while saving attachment metadata."));
       }
-      const command = registered ? this.diagnostics.begin(name) : undefined;
+      let command = registered ? this.diagnostics.begin(name) : undefined;
       let handled = false;
       let accepted = false;
       const accept = () => { if (!accepted && !command?.failure) { accepted = true; onAccepted?.(); } };
@@ -390,15 +396,37 @@ export class PiSessionExecutor implements SessionExecutor {
       const stopDialog = command ? this.ui?.onDialog(accept) : undefined;
       // Admission, commands and handled input are not model runs. Only SDK work
       // events may publish working, including work started by an extension.
-      const result = await withCleanup(() => capture(() => this.session.prompt(text, {
-        streamingBehavior: "steer",
-        ...(replayImages ? { expandPromptTemplates: false } : {}),
-        ...(images.length ? { images: [...images] } : {}),
-        preflightResult: (disposition) => {
-          handled = disposition === "handled";
-          admitted.resolve(); accept();
-        },
-      })), async () => { stopDialog?.(); if (command) this.diagnostics.end(command); });
+      const result = await withCleanup(async (): Promise<Result<void, ExpectedError>> => {
+        if (bareMcpAuth) {
+          if (!registered || !this.ui || !this.mcpAuth)
+            return err(new CapabilityError("MCP authentication requires a configured MCP adapter and an interactive main session."));
+          // Refresh through the adapter's own command: a deferred runtime can publish an
+          // empty shutdown snapshot before its real catalog is initialized.
+          const status = this.session.extensionRunner.getRegisteredCommands().find(candidate => candidate.name === "mcp-adapter" && candidate.sourceInfo.path === registered.sourceInfo.path);
+          if (status) {
+            if (command) this.diagnostics.end(command);
+            command = this.diagnostics.begin(status.invocationName);
+            const initialized = await capture(() => this.session.prompt(`/${status.invocationName} status`, { streamingBehavior: "steer" }));
+            if (!initialized.ok || command.failure) return initialized;
+            this.diagnostics.end(command); command = this.diagnostics.begin(name);
+          }
+          const selected = await this.mcpAuth.select(this.ui.context);
+          if (!selected.ok) return selected;
+          if (selected.value === undefined || revisionAtSubmission !== this.inputRevision || this.closing || this.disposed) {
+            handled = true; admitted.resolve(); accept(); return ok(undefined);
+          }
+          text = `/mcp-auth ${selected.value}`;
+        }
+        return capture(() => this.session.prompt(text, {
+          streamingBehavior: "steer",
+          ...(replayImages ? { expandPromptTemplates: false } : {}),
+          ...(images.length ? { images: [...images] } : {}),
+          preflightResult: (disposition) => {
+            handled = disposition === "handled";
+            admitted.resolve(); accept();
+          },
+        }));
+      }, async () => { stopDialog?.(); if (command) this.diagnostics.end(command); });
       if (command?.failure) {
         this.ui?.cancelDialogs();
         const error = new AgentRunError(`Command /${name} failed${accepted ? "." : `: ${command.failure.error}.`} It may have changed state; inspect before retrying.`, { cause: command.failure });
@@ -494,7 +522,7 @@ export class PiSessionExecutor implements SessionExecutor {
         if (this.interruptTask) await this.interruptTask;
         await this.session.extensionRunner.emit({ type: "session_shutdown", reason });
       }, async () => {
-        this.telemetry.dispose(); this.session.dispose(); this.releaseAccounts(); this.unsubscribe(); this.listeners.clear(); this.disposed = true;
+        this.telemetry.dispose(); this.session.dispose(); this.mcpAuth?.dispose(); this.releaseAccounts(); this.unsubscribe(); this.listeners.clear(); this.disposed = true;
       });
     }).then((result) => { if (!result.ok) this.closeTask = undefined; return result; });
     this.closeTask = task; void task.catch(() => { this.closeTask = undefined; }); return task;

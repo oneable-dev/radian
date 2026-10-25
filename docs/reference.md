@@ -790,13 +790,20 @@ support **Ctrl+N/P** and arrows in either focus, **j/k** in results, **Ctrl+D/U*
 and **Ctrl+C** query clearing. Tab moves between the body, search/results and input. The body can
 scroll independently. All actions use the shared configurable `extension.*` commands.
 
-For a configured `pi-mcp-adapter`, use **`/mcp-auth <server>`** to reuse its existing OAuth flow,
-credential store and reconnect behavior. The dialog displays the authorization URL and accepts the
-callback URL. `extension.browser` and `extension.copy-url` open/copy the displayed URL; use Help or
-the contextual hints for their configured keys. No MCP authentication is implemented separately.
-The adapter's no-argument `/mcp-auth` picker requires Pi's custom terminal UI; use an explicit server
-name in Radian. Pi custom components and extension multiline editors are not hosted and fail
-explicitly; terminal decorations/editor replacement keep their non-interactive SDK behavior.
+For a configured `pi-mcp-adapter`, **`/mcp-auth`** opens Radian's searchable server selector.
+Enabled, trusted servers are listed with those needing authentication first; browsing does not start
+authentication, **Enter** selects a server, and **Esc** cancels. Radian uses the adapter's sanitized
+session-local status events, initializing a deferred adapter through its own status command when needed.
+Unsupported adapters fail explicitly rather than sending a command to the model. **`/mcp-auth <server>`**
+still bypasses selection. Both paths reuse the adapter's existing OAuth flow, credential store and
+reconnect behavior; the adapter checks whether the selected server supports OAuth. Reload discards
+previous server choices, and availability is checked again after selection.
+
+The authentication dialog displays the authorization URL and accepts the callback URL.
+`extension.browser` and `extension.copy-url` open/copy the displayed URL; use Help or the contextual
+hints for their configured keys. No MCP authentication is implemented separately. Pi custom components
+and extension multiline editors are not hosted and fail explicitly; terminal decorations/editor
+replacement keep their non-interactive SDK behavior.
 
 Command admission can complete before a dialog is answered; it does not imply authentication has
 finished. Responses use a separate instance-, session- and conversation-fenced operation. Dialogs

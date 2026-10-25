@@ -14,13 +14,17 @@ function observed(client: RuntimeClient, predicate: () => boolean): Promise<void
   });
 }
 
-test("Unix IPC delivers extension UI independently from command admission and never persists callback answers", async () => {
+test("Unix IPC selects an MCP auth server before its callback dialog without persisting either answer", async () => {
   // All processes, extension files and authentication-like data belong to this isolated offline runtime.
   const fixture = await createWorktreeFixture(), stateRoot = join(fixture.directory, "state");
   const paths = runtimePaths(fixture.repository.id, true, stateRoot), extensions = join(paths.directory, "offline-agent", "extensions");
   await mkdir(extensions, { recursive: true });
   await writeFile(join(extensions, "ui.ts"), `export default function(pi) {
-    pi.registerCommand("ui-fixture", { handler: async (_args, ctx) => {
+    pi.on("session_start", () => pi.events.emit("pi-mcp-adapter/status/v1", {
+      version: 1, servers: [{ name: "vercel", status: "needs-auth", disabled: false }],
+    }));
+    pi.registerCommand("mcp-auth", { handler: async (args, ctx) => {
+      if (args !== "vercel") throw new Error("Authentication requires an explicitly selected server");
       const answer = await ctx.ui.input("Callback https://example.test/private-auth-link");
       if (answer !== undefined) ctx.ui.notify(answer === "private-ipc-callback" ? "Callback received" : "Wrong callback");
     } });
@@ -37,8 +41,11 @@ test("Unix IPC delivers extension UI independently from command admission and ne
     const before = client.snapshot.details[id]?.sections;
 
     // Admission must complete while the handler is still waiting for its UI response.
-    expectOk(await client.prompt(id, "/ui-fixture"));
-    await observed(client, () => !!current()?.dialog);
+    expectOk(await client.prompt(id, "/mcp-auth"));
+    await observed(client, () => current()?.dialog?.kind === "select");
+    expect(current()?.dialog).toMatchObject({ options: ["vercel"] });
+    expectOk(await client.answerExtensionUi(id, conversation, { requestId: current()!.dialog!.id, value: "vercel" }));
+    await observed(client, () => current()?.dialog?.kind === "input");
     const requestId = current()!.dialog!.id;
     expect(client.snapshot.capabilities).toContain("extension-ui");
     expect(expectError(await client.answerExtensionUi(id, "old-conversation", { requestId, value: "private-ipc-callback" })).code).toBe("PROTOCOL_ERROR");
@@ -63,7 +70,7 @@ test("Unix IPC delivers extension UI independently from command admission and ne
     expect(client.snapshot.details[id]?.sections).toEqual(before);
 
     // Losing the last client cancels the pending request; reattachment must not resurrect it.
-    expectOk(await client.prompt(id, "/ui-fixture")); await observed(client, () => !!current()?.dialog);
+    expectOk(await client.prompt(id, "/mcp-auth")); await observed(client, () => current()?.dialog?.kind === "select");
     await client.disconnect();
     reconnect = expectOk(await connectRuntime(fixture.repository, fixture.main, options));
     if (!reconnect) throw new Error("Missing reconnected fixture runtime");
