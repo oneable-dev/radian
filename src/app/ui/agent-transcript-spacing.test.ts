@@ -70,7 +70,10 @@ test.each([120, 60])("At width %i, tools, answers, compaction notices, and promp
     // Check the visible text/surface boundaries, not only boxes with invisible internal padding.
     expect({ toolToAnswer: first.y - tool!.y - tool!.height, answerToCompact: compact!.y - last.y - last.height,
       compactToComposer: composer.y - compact!.y - compact!.height }).toEqual({ toolToAnswer: 1, answerToCompact: 1, compactToComposer: 1 });
-    expect(app.captureCharFrame().split("\n")[composer.y - 1]!.slice(app.scroll.viewport.x, app.scroll.viewport.x + app.scroll.viewport.width).trim()).toBe("");
+    // The existing boundary row holds the focused section's bottom edge, never extra padding.
+    const outlined = app.scroll.focused && app.view.workViewPreferences.agentViews?.a1?.selectedId === "compact";
+    expect(app.captureCharFrame().split("\n")[composer.y - 1]!.slice(app.scroll.viewport.x, app.scroll.viewport.x + app.scroll.viewport.width).trim())
+      .toBe(outlined ? "─".repeat(app.scroll.viewport.width) : "");
   };
   try {
     app.resize(width, 30); await app.render(); expectVisibleGaps();
@@ -136,7 +139,10 @@ test.each(["assistant", "thinking"] as const)("%s errors retain one-row spacing 
     expect(errorStart - toolCard!.y - toolCard!.height).toBe(1);
     expect(errorEnd).toBeGreaterThanOrEqual(errorStart);
     expect(body - errorEnd).toBe(2);
-    expect(lines[errorStart - 1]!.trim()).toBe(""); expect(lines[body - 1]!.trim()).toBe("");
+    // Only the outer gap becomes an outline; the inner error-to-body gap stays blank.
+    const outlined = (app.scroll.focused || app.scroll.hasFocusedDescendant) && app.view.workViewPreferences.agentViews?.a1?.selectedId === "prose";
+    expect(lines[errorStart - 1]!.trim()).toBe(outlined ? "─".repeat(app.scroll.viewport.width) : "");
+    expect(lines[body - 1]!.trim()).toBe("");
     expectVerticalInsets(proseCard!, 0);
     const content = proseCard!.getChildren().filter((child) => child.visible);
     for (let index = 1; index < content.length; index++) expect(content[index]!.y - content[index - 1]!.y - content[index - 1]!.height).toBe(1);

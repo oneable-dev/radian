@@ -31,31 +31,47 @@ async function mount(initial: readonly TranscriptSection[] = sections, width = 1
   const scroll = app.renderer.root.findDescendantById("session-transcript");
   if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript viewport");
   const cards = () => scroll.content.getChildren().filter((child): child is BoxRenderable => child instanceof BoxRenderable);
-  const background = (x: number, y: number) => {
+  const cell = (x: number, y: number) => {
     let column = 0;
-    const cell = app.captureSpans().lines[y]!.spans.find((span) => { column += span.width; return column > x; });
-    if (!cell) throw new Error(`Missing rendered cell at ${x}, ${y}`);
-    return cell.bg;
+    const span = app.captureSpans().lines[y]!.spans.find((span) => { column += span.width; return column > x; });
+    if (!span) throw new Error(`Missing rendered cell at ${x}, ${y}`);
+    return span;
   };
+  const background = (x: number, y: number) => cell(x, y).bg;
+  const foreground = (x: number, y: number) => cell(x, y).fg;
   const expectMarker = (index?: number) => {
     const card = index === undefined ? undefined : cards()[index]!;
     const viewport = scroll.viewport, accent = uiTheme(app.renderer).styles["ui.focusBorder"].fg;
+    const frame = app.captureCharFrame().split("\n"), left = viewport.x - 1, right = viewport.x + viewport.width;
+    const visible = !!card && card.y < viewport.y + viewport.height && card.y + card.height > viewport.y;
     for (let y = viewport.y; y < viewport.y + viewport.height; y++) {
-      const marked = !!card && y >= card.y && y < card.y + card.height;
-      expect(background(viewport.x - 1, y).equals(accent)).toBe(marked);
-      // Only the gutter cell changes; neither the body nor the remaining outer inset is painted.
+      const marked = visible && y >= card.y - 1 && y <= card.y + card.height;
+      for (const x of [left, right]) {
+        expect(foreground(x, y).equals(accent)).toBe(marked);
+        // Focus is a line, not a solid background bar or a tint on the section body.
+        expect(background(x, y).equals(accent)).toBe(false);
+        if (marked && y >= card.y && y < card.y + card.height) expect(frame[y]![x]).toBe("│");
+      }
       expect(background(viewport.x, y).equals(accent)).toBe(false);
       if (viewport.x >= 2) expect(background(viewport.x - 2, y).equals(accent)).toBe(false);
     }
+    if (visible) {
+      const bottomButton = app.renderer.root.findDescendantById("transcript-bottom-button");
+      for (const [y, start, end] of [[card.y - 1, "┌", "┐"], [card.y + card.height, "└", "┘"]] as const) {
+        if (y < viewport.y || y > viewport.y + viewport.height || y === viewport.y + viewport.height && bottomButton?.visible) continue;
+        expect(frame[y]!.slice(left, right + 1)).toBe(start + "─".repeat(viewport.width) + end);
+        expect(foreground(viewport.x, y).equals(accent)).toBe(true);
+      }
+    }
   };
-  return { ...app, view, scroll, cards, background, expectMarker, render,
+  return { ...app, view, scroll, cards, background, foreground, expectMarker, render,
     async focus() { pressLeader(app, "["); app.mockInput.pressKey("HOME"); await render(); },
     async update(next: readonly TranscriptSection[]) { current = next; selection.replaceSnapshot(demoWorkspace()); await render(); },
     async close() { view.dispose(); await app.dispose(); },
   };
 }
 
-test.each([120, 60])("At width %i, focus preserves body geometry/background and uses only a one-cell outer marker", async (width) => {
+test.each([120, 60])("At width %i, focus outlines the section without changing body geometry or backgrounds", async (width) => {
   // Plain prose and tinted cards must keep their own backgrounds, even for selected headers and skills.
   const app = await mount(sections, width);
   try {
@@ -86,7 +102,7 @@ test.each([120, 60])("At width %i, focus preserves body geometry/background and 
   } finally { await app.close(); }
 });
 
-test("Input focus, help, and empty transcripts leave no section focus marker", async () => {
+test("Input focus, help, and empty transcripts leave no section focus border", async () => {
   // A selected section remains remembered when focus leaves the transcript.
   const app = await mount();
   try {
@@ -105,7 +121,7 @@ test("Input focus, help, and empty transcripts leave no section focus marker", a
   } finally { await app.close(); }
 });
 
-test("Clicking and expanding tool headers or selecting bodies marks the full section height", async () => {
+test("Clicking and expanding tool headers or selecting bodies outlines the full section", async () => {
   // A folded tool starts with only its heading and padding visible.
   const app = await mount();
   try {
@@ -119,7 +135,7 @@ test("Clicking and expanding tool headers or selecting bodies marks the full sec
     expect(tool.height).toBeGreaterThan(foldedHeight); app.expectMarker(2);
     app.mockInput.pressEnter(); app.mockInput.pressKey("v"); await app.render();
 
-    // Text/visual modes retain the section marker in addition to their native cursor/selection.
+    // Text/visual modes retain the section outline in addition to their native cursor/selection.
     app.expectMarker(2);
     expect(app.captureCharFrame()).toContain("VISUAL");
     app.mockInput.pressEscape(); app.mockInput.pressEscape();
@@ -128,7 +144,7 @@ test("Clicking and expanding tool headers or selecting bodies marks the full sec
   } finally { await app.close(); }
 });
 
-test("Scroll, resize, and streaming draw markers only inside visible transcript section boundaries", async () => {
+test("Scroll, resize, and streaming clip section borders without covering adjacent content", async () => {
   // A section taller than the viewport exposes both top and bottom clipping boundaries.
   const long: TranscriptSection = { ...sections[5]!, text: Array.from({ length: 80 }, (_, i) => `LONG_LINE_${i}`).join("\n"), status: "streaming" };
   const app = await mount([long, sections[0]!]);
@@ -151,7 +167,33 @@ test("Scroll, resize, and streaming draw markers only inside visible transcript 
   } finally { await app.close(); }
 });
 
-test.each([120, 60])("At width %i, repeated Ctrl+D/U moves selection and markers together while keeping them visible", async (width) => {
+test.each([120, 60])("At width %i, section borders share boundary rows without covering Back to bottom", async (width) => {
+  // The selected section can end exactly at the viewport edge while more history remains below it.
+  const long: TranscriptSection = { ...sections[5]!, text: Array.from({ length: 80 }, (_, i) => `LONG_LINE_${i}`).join("\n") };
+  const app = await mount([long, sections[0]!], width);
+  try {
+    await app.focus();
+    const card = app.cards()[0]!, viewport = app.scroll.viewport;
+    app.scroll.scrollTo(app.scroll.scrollTop + card.y + card.height - viewport.y - viewport.height);
+    await app.render();
+
+    // The return command keeps its existing row instead of being overwritten by the bottom edge.
+    expect(card.y + card.height).toBe(viewport.y + viewport.height);
+    const button = app.renderer.root.findDescendantById("transcript-bottom-button")!;
+    expect(button.visible).toBe(true); app.expectMarker(0);
+    expect(app.captureCharFrame().split("\n")[button.y]!.slice(button.x, button.x + button.width)).toContain("Back to bottom");
+
+    // Following the final section frees the same row for its border, which disappears on input focus.
+    app.mockInput.pressKey("END"); await app.render();
+    expect(button.visible).toBe(false); app.expectMarker(1);
+    expect(app.cards()[1]!.y + app.cards()[1]!.height).toBe(viewport.y + viewport.height);
+    pressLeader(app, "a"); await app.render(); app.expectMarker();
+    expect(app.captureCharFrame().split("\n")[viewport.y + viewport.height]!.slice(viewport.x - 1, viewport.x + viewport.width + 1).trim()).toBe("");
+    expect(app.view.promptDrafts.a1).toBe("Keep my draft");
+  } finally { await app.close(); }
+});
+
+test.each([120, 60])("At width %i, repeated Ctrl+D/U moves selection and borders together while keeping them visible", async (width) => {
   // Repeated jumps must follow the selected section, even after scrolling is needed to reveal it.
   const app = await mount(Array.from({ length: 60 }, (_, index) => ({ ...sections[5]!, id: `section-${index}`, text: `BODY_${index}` })), width);
   const raw = (sequence: string) => {
@@ -185,22 +227,22 @@ test.each([120, 60])("At width %i, repeated Ctrl+D/U moves selection and markers
   } finally { await app.close(); }
 });
 
-test("Focus markers immediately follow theme ui.focusBorder changes", async () => {
-  // A style override must control the marker just like other focus borders.
+test("Section borders immediately follow theme ui.focusBorder changes", async () => {
+  // A style override must control every edge of the section outline.
   const app = await mount();
   const palette: TerminalColors = { palette: [], defaultForeground: "#202020", defaultBackground: "#FAFAF6",
     cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null,
     highlightForeground: null, highlightBackground: null };
   try {
     await app.focus();
-    const before = app.background(app.scroll.viewport.x - 1, app.cards()[0]!.y);
+    const before = app.foreground(app.scroll.viewport.x - 1, app.cards()[0]!.y);
 
     uiTheme(app.renderer).configure(palette, { styles: { "ui.focusBorder": { fg: "#F08020" } } });
     await app.render();
 
     // The same gutter updates without moving the selected section or requiring a focus cycle.
     app.expectMarker(0);
-    const after = app.background(app.scroll.viewport.x - 1, app.cards()[0]!.y);
+    const after = app.foreground(app.scroll.viewport.x - 1, app.cards()[0]!.y);
     expect(after.toInts().slice(0, 3)).toEqual([240, 128, 32]);
     expect(after.equals(before)).toBe(false);
   } finally { await app.close(); }

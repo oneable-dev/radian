@@ -27,6 +27,7 @@ import { Messages, messageText, type Message, type NoticeOptions } from "../../u
 import { MessagesPanel } from "../../ui/messages-panel.ts";
 import { formatRunDuration } from "../../agents/ui/run-completion.ts";
 import { TextDialog } from "../../ui/text-dialog.ts";
+import { PopupFrame } from "../../ui/popup-frame.ts";
 import { SearchInput } from "../../ui/search-input.ts";
 import { keymapHelp } from "../../keybindings/help.ts";
 import { footerKeyHint } from "../../keybindings/footer.ts";
@@ -136,7 +137,7 @@ export class Workbench {
     this.workspacePopup = new BoxRenderable(renderer, { id: "workspace-picker", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 4900, visible: false,
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
     // Legacy search/tree IDs and key commands remain, without permanent sidebar geometry.
-    this.sidebar = new BoxRenderable(renderer, { id: "workspace-sidebar", position: "absolute", visible: false, minWidth: 0, minHeight: 0,
+    this.sidebar = new PopupFrame(renderer, { id: "workspace-sidebar", position: "absolute", visible: false, minWidth: 0, minHeight: 0,
       flexDirection: "column", border: true, paddingX: 1 });
     this.workspacePopup.add(this.sidebar);
     this.search = new SearchInput(renderer, { id: "workspace-search", fieldId: "workspace-search-box", placeholder: "Search repo/worktree/branch" });

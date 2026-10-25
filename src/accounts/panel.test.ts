@@ -110,7 +110,7 @@ test("Incomplete connection checks show saved accounts alongside a warning", asy
   } finally { await app.close(); }
 });
 
-test("The GPT icon retains its scale and dims with the accounts popup backdrop", async () => {
+test("The GPT icon retains its scale and colors behind the undimmed accounts popup", async () => {
   // Connect the real status line and popup, replacing only terminal image transport.
   const app = await mount({ getSessionDetails: () => ({ status: "complete", output: "Retained answer", error: null,
     telemetry: { provider: "openai-codex", model: "gpt-fixture", effort: "high", fast: false, weekly: null, context: { usedTokens: 74000, maxTokens: 200000 },
@@ -122,13 +122,13 @@ test("The GPT icon retains its scale and dims with the accounts popup backdrop",
     app.resize(120, 48); await app.render(); expect(draw).toHaveBeenCalled();
     const original = draw.mock.calls.at(-1)!, pixels = original[0].raw().data.slice(), geometry = original.slice(3, 7);
 
-    // Use a viewport where the status line remains beneath the translucent backdrop.
+    // Uncovered telemetry keeps its colors because the default modal backdrop adds no tint.
     await app.open(); await app.render();
     const icon = app.get("usage-provider-icon");
     expect(app.captureCharFrame().split("\n")[icon.y]).not.toContain(icons.openai);
     expect(app.captureCharFrame().split("\n")[icon.y]).toContain("73% used");
-    const dimmed = draw.mock.calls.at(-1)!;
-    expect(dimmed.slice(3, 7)).toEqual(geometry); expect(dimmed[0].raw().data).not.toEqual(pixels);
+    const uncovered = draw.mock.calls.at(-1)!;
+    expect(uncovered.slice(3, 7)).toEqual(geometry); expect(uncovered[0].raw().data).toEqual(pixels);
 
     // Cancellation restores image presentation without changing usage or conversations.
     app.mockInput.pressEscape(); await app.render();

@@ -112,6 +112,37 @@ test("Input focus applies dedicated style emphasis without leaving previous attr
   } finally { await app.dispose(); }
 });
 
+test("Popup surfaces follow the normal background and do not dim surrounding content by default", async () => {
+  // A normal-surface override must not leave floating windows using the terminal's older background.
+  const app = await createTestRenderer({ width: 20, height: 3 });
+  try {
+    const theme = uiTheme(app.renderer);
+
+    theme.configure(defaultPalette(), { styles: { "ui.text": { bg: "#182028" } } });
+
+    // Body and border fills use Normal, while the modal backdrop adds no separate shade.
+    expect(rgb(theme.styles["ui.popup"].bg!)).toEqual([24, 32, 40]);
+    expect(theme.styles["ui.backdrop"].bg!.a).toBe(0);
+    theme.configure(defaultPalette(), { styles: { "ui.text": { bg: null } } });
+    expect(theme.styles["ui.popup"].bg!.equals(theme.colors.panel)).toBe(true);
+  } finally { await app.dispose(); }
+});
+
+test("Explicit popup and backdrop backgrounds retain precedence over the normal surface", async () => {
+  // Existing theme choices remain authoritative, including an explicitly cleared popup background.
+  const app = await createTestRenderer({ width: 20, height: 3 });
+  try {
+    const theme = uiTheme(app.renderer);
+
+    theme.configure(defaultPalette(), { styles: { "ui.text": { bg: "#182028" }, "ui.popup": { bg: "#445566" }, "ui.backdrop": { bg: "#112233" } } });
+
+    expect(rgb(theme.styles["ui.popup"].bg!)).toEqual([68, 85, 102]);
+    expect(rgb(theme.styles["ui.backdrop"].bg!)).toEqual([17, 34, 51]);
+    theme.configure(defaultPalette(), { styles: { "ui.text": { bg: "#182028" }, "ui.popup": { bg: null } } });
+    expect(theme.styles["ui.popup"].bg).toBeUndefined();
+  } finally { await app.dispose(); }
+});
+
 test("Shared heading styles supply level defaults while individual overrides remain independent", async () => {
   const app = await createTestRenderer({ width: 20, height: 3 });
   try {

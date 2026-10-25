@@ -7,6 +7,7 @@ import { halfPageStep } from "./navigation.ts";
 import { messageLabels, messageText, type Message, type Messages } from "./messages.ts";
 import { singleLine, truncateCells } from "./text.ts";
 import { uiTheme } from "./theme.ts";
+import { PopupFrame } from "./popup-frame.ts";
 import { paintText } from "./theme-styles.ts";
 
 type Actions = {
@@ -33,7 +34,7 @@ export class MessagesPanel {
   constructor(private readonly renderer: CliRenderer, private readonly messages: Messages, private readonly actions: Actions) {
     this.root = new BoxRenderable(renderer, { id: "messages", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 5900, visible: false,
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
-    this.panel = new BoxRenderable(renderer, { id: "messages-panel", position: "absolute", border: true, paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
+    this.panel = new PopupFrame(renderer, { id: "messages-panel", position: "absolute", border: true, paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
     const title = new TextRenderable(renderer, { content: "Messages", height: 1, flexShrink: 0, selectable: false });
     this.search = new SearchInput(renderer, { id: "messages-search", placeholder: "Search messages, levels or sources…" });
     this.empty = new TextRenderable(renderer, { id: "messages-empty", height: 1, flexShrink: 0, selectable: false });

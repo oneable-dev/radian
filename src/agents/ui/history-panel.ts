@@ -13,6 +13,7 @@ import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { PopupFrame } from "../../ui/popup-frame.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { AgentPanel } from "./agent-panel.ts";
 import type { ExecutionState, SessionRecord } from "../session-registry.ts";
@@ -73,7 +74,7 @@ export class SessionHistoryPanel {
     this.root = new BoxRenderable(renderer, { id: "session-history", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 5000,
       visible: false,
       onMouseDown: (event) => { event.stopPropagation(); }, onMouseScroll: (event) => event.stopPropagation() });
-    this.panel = new BoxRenderable(renderer, { id: "history-dialog", position: "absolute", border: true,
+    this.panel = new PopupFrame(renderer, { id: "history-dialog", position: "absolute", border: true,
       paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
     const heading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     this.title = new TextRenderable(renderer, { height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0, wrapMode: "none", selectable: false });

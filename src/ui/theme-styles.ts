@@ -8,7 +8,7 @@ export type UiStyle = Readonly<{ fg: RGBA; bg: RGBA | undefined; attributes: num
 const style = (fg: RGBA, bg?: RGBA, attributes = 0): UiStyle => ({ fg, bg, attributes });
 const bold = TextAttributes.BOLD, underline = TextAttributes.UNDERLINE;
 
-// Shared defaults are intentional; group overrides never flow into an unrelated group.
+// Shared defaults are intentional; popup backgrounds follow Normal unless explicitly overridden.
 const definitions = {
   "ui.text": (c: UiColors) => style(c.text, c.panel),
   "ui.label": (c: UiColors) => style(c.text),
@@ -29,7 +29,7 @@ const definitions = {
   "ui.workTabActive": (c: UiColors) => style(c.text, undefined, bold | underline),
   "ui.workTabFocused": (c: UiColors) => style(c.muted, undefined, underline),
   "ui.popup": (c: UiColors) => style(c.text, c.panel),
-  "ui.backdrop": (c: UiColors) => style(c.text, RGBA.fromValues(0, 0, 0, 0.45)),
+  "ui.backdrop": (c: UiColors) => style(c.text, RGBA.fromValues(0, 0, 0, 0)),
   "ui.popupTitle": (c: UiColors) => style(c.accent),
   "ui.popupBorder": (c: UiColors) => style(c.accent),
   "ui.scrollbar": (c: UiColors) => style(c.muted, c.panel),
@@ -112,8 +112,10 @@ export const selectionGroups = ["ui.selection", "ui.selectionInactive", "ui.inpu
   "ui.workTabActive", "ui.workTabFocused", "completion.selected", "transcript.selection", "prompt.attachment"] as const satisfies readonly StyleGroup[];
 
 export function resolveStyles(colors: UiColors, overrides: StyleOverrides = {}): UiStyles {
+  const normalBackground = overrides["ui.text"]?.bg;
   return Object.fromEntries(styleGroups.map((group) => {
     const base = definitions[group](colors);
+    const background = group === "ui.popup" && normalBackground ? RGBA.fromHex(normalBackground) : base.bg;
     const inherited = group.startsWith("markup.heading.") ? overrides["markup.heading"] : undefined;
     const value = { ...inherited, ...overrides[group] };
     let attributes = base.attributes;
@@ -121,7 +123,7 @@ export function resolveStyles(colors: UiColors, overrides: StyleOverrides = {}):
       if (value[key] !== undefined) attributes = value[key] ? attributes | flag : attributes & ~flag;
     }
     return [group, { fg: value.fg === undefined ? base.fg : RGBA.fromHex(value.fg),
-      bg: value.bg === undefined ? base.bg : value.bg === null ? undefined : RGBA.fromHex(value.bg), attributes }];
+      bg: value.bg === undefined ? background : value.bg === null ? undefined : RGBA.fromHex(value.bg), attributes }];
   })) as Record<StyleGroup, UiStyle>;
 }
 

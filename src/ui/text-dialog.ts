@@ -5,6 +5,7 @@ import type { Result } from "../result.ts";
 import { halfPageStep } from "./navigation.ts";
 import { Clipboard } from "./clipboard.ts";
 import { uiTheme } from "./theme.ts";
+import { PopupFrame } from "./popup-frame.ts";
 import { paintText } from "./theme-styles.ts";
 
 export type DialogContent = { title: string; text: string; copy?: boolean; copyText?: string };
@@ -30,7 +31,7 @@ export class TextDialog {
     this.root = new BoxRenderable(renderer, { id: "text-dialog", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 6000,
       visible: false,
       onMouseDown: (event) => event.stopPropagation(), onMouseScroll: (event) => event.stopPropagation() });
-    this.panel = new BoxRenderable(renderer, { id: "text-dialog-panel", position: "absolute", border: true, paddingX: 1,
+    this.panel = new PopupFrame(renderer, { id: "text-dialog-panel", position: "absolute", border: true, paddingX: 1,
       flexDirection: "column", minWidth: 0, minHeight: 0 });
     this.title = new TextRenderable(renderer, { id: "text-dialog-title", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.scroll = new ScrollBoxRenderable(renderer, { id: "text-dialog-scroll", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,

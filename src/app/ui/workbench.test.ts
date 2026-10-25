@@ -165,7 +165,7 @@ test("Leader navigation reveals offscreen sessions and preserves selection in co
     await app.renderOnce(); await app.renderOnce();
 
     // Fixed-width tabs keep the selected ID and right-aligned close control inside the viewport.
-    expect(app.tabFrame("long-39")).toBe("│ 40. long-39   × ");
+    expect(app.tabFrame("long-39")).toBe("  40. long-39   × ");
     expect(app.captureCharFrame()).not.toContain("Inspector");
     expect(app.selection.sessionId).toBe("long-39");
   } finally { await app.close(); }
@@ -200,7 +200,7 @@ test("Kind icons stay left while aggregated parent/child status appears in right
     await app.renderOnce(); await app.renderOnce();
     expect(app.tabFrame("a3")).toContain(icons.failure);
     await app.clickText(`${icons.folder} radian-ui`);
-    expect(app.tabFrame("b1")).toBe("│ 1. b1         × ");
+    expect(app.tabFrame("b1")).toBe("  1. b1         × ");
   } finally { await app.close(); }
 });
 

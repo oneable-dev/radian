@@ -16,6 +16,7 @@ import { GitList, type GitListItem } from "./list.ts";
 import { GitBrowser, type GitBrowserKind } from "./browser.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { PopupFrame } from "../../ui/popup-frame.ts";
 import { icons } from "../../icons.ts";
 import { codeStyles, paintText, styleBackground, type StyleGroup } from "../../ui/theme-styles.ts";
 import { GitClipboard } from "./clipboard.ts";
@@ -117,7 +118,7 @@ export class GitPanel {
     // Mouse selection stays in history; only Enter drills into the selected commit.
     this.history = new GitList(renderer, "git-history", (key) => this.chooseHistory(key), () => this.openChanges(), false);
     this.main.add(this.history.root);
-    this.detailsCard = new BoxRenderable(renderer, { id: "git-details-card", position: "absolute", left: 0, top: 0,
+    this.detailsCard = new PopupFrame(renderer, { id: "git-details-card", position: "absolute", left: 0, top: 0,
       zIndex: 5, border: true, paddingX: 1, minWidth: 0, minHeight: 0, flexDirection: "column", visible: false });
     this.details = new BoxRenderable(renderer, { id: "git-details", flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "column", focusable: true,
       onMouseDown: () => this.details.focus(), onMouseScroll: event => {
@@ -130,7 +131,7 @@ export class GitPanel {
     this.detailsAnchor = new TextRenderable(renderer, { id: "git-details-anchor", position: "absolute", width: 1, height: 1,
       zIndex: 6, content: "├", selectable: false, visible: false });
     this.main.add(this.detailsAnchor); this.body.add(this.main); this.root.add(this.body);
-    this.changes = new BoxRenderable(renderer, { id: "git-changes", position: "absolute", left: 0, right: 0, top: 0, bottom: 0,
+    this.changes = new PopupFrame(renderer, { id: "git-changes", position: "absolute", left: 0, right: 0, top: 0, bottom: 0,
       zIndex: 50, border: true, paddingX: 1, minWidth: 0, minHeight: 0, flexDirection: "column", visible: false });
     const heading = this.row(); this.changesTitle = this.text("", "ui.popupTitle");
     this.changesTitle.truncate = true; this.changesTitle.flexGrow = 1; this.changesTitle.flexShrink = 1; this.changesTitle.minWidth = 0;
@@ -162,7 +163,7 @@ export class GitPanel {
       open: details => this.openExternal(details), inspect: (event, signal) => this.inspectEvent(event, signal), hint,
     });
     this.root.add(this.browser.root);
-    this.dialog = new BoxRenderable(renderer, { id: "git-ask", position: "absolute", left: 0, right: 0, bottom: 0, height: 10,
+    this.dialog = new PopupFrame(renderer, { id: "git-ask", position: "absolute", left: 0, right: 0, bottom: 0, height: 10,
       zIndex: 100, border: true, borderColor: gitColors.accent, backgroundColor: gitColors.panel, paddingX: 1, flexDirection: "column", visible: false });
     this.dialog.add(this.text("Ask Agent · selected Git context", "ui.popupTitle"));
     this.dialogContext = new TextRenderable(renderer, { content: "", height: 2, wrapMode: "word", fg: gitColors.text, selectable: false }); this.dialog.add(this.dialogContext);

@@ -10,6 +10,7 @@ import { singleLine } from "../../ui/text.ts";
 import { SearchInput } from "../../ui/search-input.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { PopupFrame } from "../../ui/popup-frame.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { Button } from "../../ui/button.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
@@ -58,7 +59,7 @@ export class ModelPicker {
     this.root = new BoxRenderable(renderer, { id: "model-picker", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 5500,
       visible: false,
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
-    this.panel = new BoxRenderable(renderer, { id: "model-dialog", position: "absolute", border: true, paddingX: 1,
+    this.panel = new PopupFrame(renderer, { id: "model-dialog", position: "absolute", border: true, paddingX: 1,
       flexDirection: "column", minWidth: 0, minHeight: 0 });
     const heading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     const title = new TextRenderable(renderer, { content: "Model & effort · current session", height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });

@@ -96,7 +96,7 @@ export class AgentPanel {
     const theme = uiTheme(renderer);
     const id = (name: string) => `${transcriptOptions.idPrefix ?? ""}${name}`;
     this.root = new BoxRenderable(renderer, { id: id("agent-view"), onSizeChange: () => this.resizeComposer(),
-      renderAfter: (buffer) => this.transcript.paintFocusGutter(buffer),
+      renderAfter: (buffer) => this.transcript.paintFocusBorder(buffer, this.bottomButton.visible ? 0 : this.layoutGap),
       flexGrow: 1, minHeight: 0, minWidth: 0, padding: 1, flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
     this.sessions = new SessionTabs(renderer, { button,
       fast: id => actions.getSessionDetails?.(id)?.telemetry?.fast === true,

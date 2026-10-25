@@ -1,6 +1,7 @@
 import { openWorkspaceSearch, pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
+import { BoxRenderable, TextRenderable } from "@opentui/core";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -8,6 +9,7 @@ import { PromptInput } from "../../agents/ui/prompt-input.ts";
 import { parseKeymap } from "../../keybindings/config.ts";
 import { expectOk } from "../../testing/results.ts";
 import { ok } from "../../result.ts";
+import { uiTheme } from "../../ui/theme.ts";
 
 async function mount(actions: Partial<WorkbenchActions> = {}) {
   const app = await createTestRenderer({width: 120, height: 28, kittyKeyboard: true});
@@ -38,6 +40,90 @@ test("Help shows contextual/shared keys and restores input draft, caret, and foc
     expect(app.renderer.currentFocusedRenderable).toBe(app.prompt); expect(app.prompt.cursorOffset).toBe(cursor);
     expect(app.prompt.value).toBe("untouched draft"); expect(app.sent).toEqual([]);
   } finally {await app.close();}
+});
+
+test.each([false, true])("Light theme %s shares Normal across popup bodies and borders without dimming surrounding content", async light => {
+  // A normal-surface override must be shared by the popup, not just the underlying workbench.
+  const app = await mount(), theme = uiTheme(app.renderer);
+  const palette = { palette: [], defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
+    cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null,
+    highlightForeground: null, highlightBackground: null };
+  const normal = light ? "#F1F2F3" : "#182028";
+  const background = (x: number, y: number) => {
+    let column = 0;
+    return app.captureSpans().lines[y]!.spans.find(span => { column += span.width; return column > x; })!.bg;
+  };
+  try {
+    theme.configure(palette, { styles: { "ui.text": { bg: normal } } }); await app.render();
+    const outside = background(0, 0).toInts();
+
+    // Opening Help preserves the existing frame and leaves uncovered content at its original brightness.
+    app.mockInput.pressKey("F1"); await app.render();
+    const panel = app.get("text-dialog-panel"), frame = app.captureCharFrame();
+    const geometry = [panel.x, panel.y, panel.width, panel.height];
+    expect(background(0, 0).toInts()).toEqual(outside);
+    for (const x of [panel.x, panel.x + Math.floor(panel.width / 2), panel.x + panel.width - 1]) {
+      expect(background(x, panel.y).toInts()).toEqual(outside);
+      expect(background(x, panel.y + panel.height - 1).toInts()).toEqual(outside);
+    }
+    expect(background(panel.x + 1, panel.y + 1).toInts()).toEqual(outside);
+    expect(frame.split("\n")[panel.y]!.slice(panel.x, panel.x + panel.width)).toBe("┌" + "─".repeat(panel.width - 2) + "┐");
+
+    // Explicit popup colors affect the enclosed body, never the surface outside the border line.
+    theme.configure(palette, { styles: { "ui.text": { bg: normal }, "ui.popup": { bg: light ? "#DDEEFF" : "#112233" } } }); await app.render();
+    expect(background(panel.x, panel.y).toInts()).toEqual(outside);
+    expect(background(panel.x + 1, panel.y + 1).toInts()).toEqual(theme.styles["ui.popup"].bg!.toInts());
+    expect(background(0, 0).toInts()).toEqual(outside);
+    expect([panel.x, panel.y, panel.width, panel.height]).toEqual(geometry); expect(app.captureCharFrame()).toBe(frame);
+    app.mockInput.pressEscape(); await app.render();
+    expect(app.renderer.currentFocusedRenderable).toBe(app.prompt); expect(app.prompt.value).toBe("untouched draft");
+  } finally { await app.close(); }
+});
+
+test("Workspace popup preserves colored code backgrounds outside its lines while masking the body", async () => {
+  // Match the reported screenshot: the frame crosses code blocks with backgrounds unlike Normal.
+  const app = await mount(), theme = uiTheme(app.renderer);
+  const underlay = new BoxRenderable(app.renderer, { position: "absolute", width: "100%", height: "100%", zIndex: 4800 });
+  for (const [index, color] of ["#253240", "#363126"].entries()) {
+    const block = new BoxRenderable(app.renderer, { position: "absolute", top: index * 14, width: "100%", height: 14, backgroundColor: color });
+    block.add(new TextRenderable(app.renderer, { content: Array.from({ length: 14 }, () => "CODE_PATTERN ".repeat(10)).join("\n"), width: "100%" }));
+    underlay.add(block);
+  }
+  app.view.root.add(underlay);
+  const background = (x: number, y: number, frame: ReturnType<typeof app.captureSpans>) => {
+    let column = 0;
+    return frame.lines[y]!.spans.find(span => { column += span.width; return column > x; })!.bg;
+  };
+  try {
+    await app.render();
+    const before = app.captureSpans();
+
+    // Open the real Workspace popup rather than a synthetic frame over a uniform background.
+    openWorkspaceSearch(app); await app.render();
+
+    // Every border cell keeps the code block's background; only the enclosed padding is filled.
+    const panel = app.get("workspace-sidebar"), search = app.get("workspace-search-box");
+    const after = app.captureSpans(), lines = app.captureCharFrame().split("\n");
+    for (let y = panel.y; y < panel.y + panel.height; y++) {
+      for (const x of [panel.x, panel.x + panel.width - 1]) {
+        expect(background(x, y, after).toInts()).toEqual(background(x, y, before).toInts());
+        expect(background(x, y, after).intent).toBe(background(x, y, before).intent);
+      }
+      if (y > panel.y && y < panel.y + panel.height - 1) {
+        const surface = y >= search.y && y < search.y + search.height ? "ui.inputFocused" : "ui.popup";
+        expect(background(panel.x + 1, y, after).toInts()).toEqual(theme.styles[surface].bg!.toInts());
+        expect(lines[y]![panel.x]).toBe("│"); expect(lines[y]![panel.x + panel.width - 1]).toBe("│");
+        expect(lines[y]![panel.x + 1]).toBe(" ");
+      }
+    }
+    for (const y of [panel.y, panel.y + panel.height - 1]) for (let x = panel.x; x < panel.x + panel.width; x++) {
+      expect(background(x, y, after).toInts()).toEqual(background(x, y, before).toInts());
+    }
+    expect(lines[panel.y]!.slice(panel.x, panel.x + panel.width)).toBe("┌" + "─".repeat(panel.width - 2) + "┐");
+    expect(lines[panel.y + panel.height - 1]!.slice(panel.x, panel.x + panel.width)).toBe("└" + "─".repeat(panel.width - 2) + "┘");
+    app.mockInput.pressEscape(); await app.render();
+    expect(app.renderer.currentFocusedRenderable).toBe(app.prompt); expect(app.prompt.value).toBe("untouched draft");
+  } finally { await app.close(); }
 });
 
 test("Footer Help clicks remember original focus and retain compact entry points", async () => {

@@ -209,8 +209,9 @@ Tree cursor movement is only navigation; Enter or a direct worktree click commit
 Each worktree separately remembers its work view and selected Agent session. Within Agents, session
 tabs use the full session UUID as their label, alongside aggregate status and a close control.
 Agent and Terminal tabs share an 18-cell frame, including padding and the right-aligned `×` control.
-Each tab has a left-only accent border and a separate, one-based position number (`1.`, `2.`, …) before its status and title.
-Both strips use the same accent color, brighter on the active tab and subdued on inactive tabs.
+Each tab has a separate, one-based position number (`1.`, `2.`, …) before its status and title.
+Tab frames have no border or colored edge marker; active selection uses their background and text.
+Both strips use the same selection styling, with brighter active text and subdued inactive text.
 Numbers follow each strip's current order, including positions above nine, and are updated when tabs close or reorder.
 Title truncation preserves the number; at widths too small for both the number and close control, the close control takes priority.
 Status changes and process renames do not move neighboring tabs or their close controls. If the pane
@@ -444,7 +445,10 @@ switching/hiding a conversation cancels its indicator. Steer and queue semantics
 Sections have no disclosure arrows or separate role/status heading rows. Expanded user/Agent text
 starts directly with its content. Tools use inline invocations such as `[read] path:line` or `$ command`;
 folded items show an inline `(Ctrl+o to expand)` hint using the actual configured key. Agent replies
-and Thinking have no tinted background, border or added indentation. Thinking uses italic text in
+and Thinking have no tinted background, permanent border or added indentation. The focused section
+has a thin outline in the existing outer gutters; focus never changes body geometry or backgrounds.
+The outline clips at viewport edges and never covers status/input rows or Back to bottom.
+Thinking uses italic text in
 a theme-adaptive neutral gray, independent of accent hues or colored `muted` overrides.
 User, tool and notice blocks retain subtle host-palette tints and one row of internal padding above
 and below their content, including folded tools and single-line skill labels. Plain Agent replies
@@ -845,7 +849,7 @@ countdown before dropping either resource percentage. Theme changes preserve the
 
 Provider logos reserve two columns. On terminals reporting Kitty/Sixel graphics and pixel resolution,
 OpenTUI renders a font-derived, theme-tinted image with approximately 1.5x the ordinary glyph width,
-within the same row. Popup backdrops change the logo's colors without changing its image size;
+within the same row. Explicitly tinted popup backdrops change the logo's colors without changing its image size;
 model, effort, fast and context symbols retain their ordinary font scale. Other terminals retain a
 bold Nerd Font glyph; individual character scaling is not assumed. No terminal font settings are changed. Asset attribution is in
 `src/ui/provider-icon-data.LICENSE`.
@@ -1312,6 +1316,14 @@ Accounts uses **o** to open the login browser, **y** to copy its URL and **Y** t
 when the read-only login details have focus. In text fields those letters remain literal input;
 use Tab to focus details first. Passive result notifications also omit close icons and expire normally.
 Session-tab close controls and non-popup application controls are unchanged.
+Popup and notification frames retain their existing line glyphs, colors, geometry and inner padding.
+Bodies use an opaque background matching `ui.text` by default; an explicit `ui.popup.bg` override
+takes precedence. The shared `src/ui/popup-frame.ts` keeps border-cell backgrounds on the underlying
+surface, so colored code blocks behind a frame do not acquire a popup-colored fringe outside the line.
+Modal backdrops are clear by default, leaving uncovered content undimmed while the popup hides
+covered text. Explicit `ui.backdrop` overrides remain supported.
+Notifications fade foreground colors against their surface instead of making the window translucent,
+so underlying text stays hidden throughout the animation.
 
 ### Common footer
 

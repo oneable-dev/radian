@@ -248,7 +248,7 @@ test("Stopped tabs prioritize one question mark over bells regardless of acknowl
     await app.render();
     const tab = app.get("session:demo:main:a2"), region = () => app.captureCharFrame().split("\n")[tab.y]!.slice(tab.x, tab.x + tab.width);
 
-    expect(region()).toBe("│ 2. ? a2       × ");
+    expect(region()).toBe("  2. ? a2       × ");
     expect(app.selection.worktree?.sessions.find(session => session.id === "a2")?.attention?.id).toBe("stopped");
     const colorAt = (column: number) => {
       let x = 0; return app.captureSpans().lines[tab.y]!.spans.find(span => { x += span.width; return x > column; })!.fg.toInts();
@@ -260,7 +260,7 @@ test("Stopped tabs prioritize one question mark over bells regardless of acknowl
     }) })) })));
     await app.render();
     // Acknowledgement retains the interruption question mark and error color.
-    expect(region()).toBe("│ 2. ? a2       × ");
+    expect(region()).toBe("  2. ? a2       × ");
     expect(colorAt(tab.x + 5)).toEqual(uiTheme(app.renderer).colors.error.toInts());
   } finally { await app.close(); }
 });

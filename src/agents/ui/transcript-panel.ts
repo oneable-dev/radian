@@ -631,14 +631,18 @@ export class TranscriptPanel {
     this.reconcileSelection();
     this.pending = this.state?.follow && !this.positionIntent ? { position: Infinity } : this.viewportAnchor();
   };
-  // The owning pane paints its outer inset; the scroll viewport clips that cell away.
-  paintFocusGutter(buffer: OptimizedBuffer): void {
+  // Reuse the pane's side insets and blank section/boundary rows without reflowing content.
+  paintFocusBorder(buffer: OptimizedBuffer, bottomInset: number): void {
     if (this.disposed || !this.visible || !this.scroll.visible || this.help.visible || !this.focused) return;
     const row = this.selected, viewport = this.scroll.viewport;
     if (!row || !row.box.visible || viewport.width < 1 || viewport.height < 1) return;
-    const top = Math.max(row.box.screenY, viewport.screenY);
-    const bottom = Math.min(row.box.screenY + row.box.height, viewport.screenY + viewport.height);
-    if (bottom > top) buffer.fillRect(viewport.screenX - 1, top, 1, bottom - top, this.theme.styles["ui.focusBorder"].fg);
+    if (row.box.screenY >= viewport.screenY + viewport.height || row.box.screenY + row.box.height <= viewport.screenY) return;
+    buffer.pushScissorRect(viewport.screenX - 1, viewport.screenY, viewport.width + 2, viewport.height + bottomInset);
+    try {
+      buffer.drawBox({ x: viewport.screenX - 1, y: row.box.screenY - 1, width: viewport.width + 2, height: row.box.height + 2,
+        border: true, borderStyle: "single", borderColor: this.theme.styles["ui.focusBorder"].fg,
+        backgroundColor: this.theme.styles["ui.text"].bg ?? this.theme.colors.panel, shouldFill: false });
+    } finally { buffer.popScissorRect(); }
   }
   private paint(): void {
     this.paintLayout();

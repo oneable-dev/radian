@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { InputRenderable } from "@opentui/core";
+import { BoxRenderable, InputRenderable, TextRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import type { SessionNotification } from "../session-notification.ts";
 import type { SessionResult } from "../session-attention.ts";
@@ -41,6 +41,56 @@ test.each(["complete", "error", "unfinished", "cancelled"] as const)("New %s not
     let x = 0; const border = app.captureSpans().lines[card.y]!.spans.find(span => { x += span.width; return x > card.x; })!;
     expect(border.fg.toInts()).toEqual(uiTheme(app.renderer).colors[outcome === "complete" ? "success" : outcome === "error" ? "error" : "warning"].toInts());
     expect(app.opened).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each([false, true])("Light theme %s masks notification bodies without recoloring the border-cell underlay", async light => {
+  // A colored code surface behind a card must not be replaced by a fringe outside its thin border.
+  const app = await fixture(), theme = uiTheme(app.renderer);
+  const palette = { palette: [], defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
+    cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null,
+    highlightForeground: null, highlightBackground: null };
+  const normal = light ? "#F1F2F3" : "#182028";
+  const underlay = new BoxRenderable(app.renderer, { position: "absolute", top: 1, width: 100, height: 23, backgroundColor: "#456789" });
+  underlay.add(new TextRenderable(app.renderer, { content: Array.from({ length: 23 }, () => "UNDERLAY".repeat(14)).join("\n"), width: 100 }));
+  app.renderer.root.add(underlay, 0);
+  const background = (x: number, y: number) => {
+    let column = 0;
+    return app.captureSpans().lines[y]!.spans.find(span => { column += span.width; return column > x; })!.bg;
+  };
+  try {
+    theme.configure(palette, { styles: { "ui.text": { bg: normal } } });
+
+    // The existing fade and line glyphs still replace covered text instead of overlapping it.
+    app.stack.show(notification("edge"));
+    const borderColors: number[][] = [];
+    for (const advance of [80, 80]) {
+      app.clock.advance(advance); await app.render();
+      const card = app.get("session-toast:edge"), lines = app.captureCharFrame().split("\n");
+      expect(lines[card.y]!.slice(card.x, card.x + card.width)).toBe("┌" + "─".repeat(card.width - 2) + "┐");
+      for (let y = card.y; y < card.y + card.height; y++) expect(lines[y]!.slice(card.x, card.x + card.width)).not.toContain("UNDERLAY");
+      let column = 0;
+      borderColors.push(app.captureSpans().lines[card.y]!.spans.find(span => { column += span.width; return column > card.x; })!.fg.toInts());
+    }
+    expect(borderColors[0]).not.toEqual(borderColors[1]);
+    expect(borderColors[1]).toEqual(theme.styles["status.success"].fg.toInts());
+
+    // The body masks covered text, while edge cells preserve the surrounding code background.
+    const card = app.get("session-toast:edge"), geometry = [card.x, card.y, card.width, card.height];
+    for (const y of [card.y, card.y + 2, card.y + card.height - 1]) {
+      expect(background(card.x, y).toInts()).toEqual(background(card.x - 1, y).toInts());
+      expect(background(card.x + card.width - 1, y).toInts()).toEqual(background(card.x + card.width, y).toInts());
+    }
+    expect(background(card.x + 1, card.y + 1).toInts()).toEqual(theme.styles["ui.text"].bg!.toInts());
+    const outside = background(card.x - 1, card.y).toInts();
+
+    // Explicit body overrides keep the same thin border and do not change its underlay or focus.
+    theme.configure(palette, { styles: { "ui.text": { bg: normal }, "ui.popup": { bg: light ? "#DDEEFF" : "#112233" } } }); await app.render();
+    expect(background(card.x, card.y).toInts()).toEqual(outside);
+    expect(background(card.x + 1, card.y + 1).toInts()).toEqual(theme.styles["ui.popup"].bg!.toInts());
+    expect(background(card.x - 1, card.y).toInts()).toEqual(outside);
+    expect([card.x, card.y, card.width, card.height]).toEqual(geometry);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.opened).toEqual([]);
   } finally { await app.close(); }
 });
 

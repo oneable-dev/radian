@@ -132,7 +132,7 @@ test("Session status uses the same cell and unknown states reclaim empty status 
   const ordered = (id: string, title: string, glyphs: readonly string[]) => {
     const text = app.region(id), position = text.indexOf(title);
     expect(position).toBeGreaterThanOrEqual(0);
-    expect(text.startsWith("│ ")).toBe(true);
+    expect(text.startsWith("  ")).toBe(true);
     expect(glyphs).toContain(text[5]!);
     expect(glyphs).toContain(text.slice(5, position).trim());
     expect(text.slice(position + title.length).trim()).toBe("×");
@@ -141,12 +141,12 @@ test("Session status uses the same cell and unknown states reclaim empty status 
   try {
     // Passive tabs retain their edge gutters and leading status cells.
     ordered("session:demo:main:a1", "a1", spinnerFrames);
-    expect(app.region("session:demo:main:a2")).toBe("│ 2. a2         × ");
+    expect(app.region("session:demo:main:a2")).toBe("  2. a2         × ");
     ordered("session:demo:main:a3", "a3", [icons.failure]);
 
     // Unreported sessions keep the tab's outer padding, not an empty badge and its extra gap.
     await app.click(`${icons.folder} radian-ui`);
-    expect(app.region("session:demo:feature:b1")).toBe("│ 1. b1         × ");
+    expect(app.region("session:demo:feature:b1")).toBe("  1. b1         × ");
     expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
@@ -159,7 +159,7 @@ test("Tabs keep one-cell inner/outer padding and spacing between numbers, status
     for (const id of ["a1", "a2", "a3"]) {
       const tab = app.get(`session:demo:main:${id}`), close = app.get(`close-session:${id}`);
       const [number, status, title] = tab.getChildren();
-      expect(app.region(tab.id).startsWith(`│ ${id.slice(1)}. `)).toBe(true);
+      expect(app.region(tab.id).startsWith(`  ${id.slice(1)}. `)).toBe(true);
       expect(number!.x).toBe(tab.x + 2);
       if (status!.visible) expect(status!.x).toBe(number!.x + number!.width + 1);
       expect(title!.x).toBe(status!.visible ? status!.x + status!.width + 1 : number!.x + number!.width + 1);
@@ -190,22 +190,22 @@ test.each([["complete", "complete", ""], ["failure", "failure", icons.failure], 
       })) })));
       await app.render();
       const prefix = () => app.region(tab.id).slice(5, app.region(tab.id).indexOf("a1")).trim();
-      if (status === "failure") expect(app.region(tab.id)).toBe(`│ 1. ${glyph} a1       × `);
+      if (status === "failure") expect(app.region(tab.id)).toBe(`  1. ${glyph} a1       × `);
       else expect(spinnerFrames.some(frame => frame === prefix())).toBe(true);
       app.clock.advance(379); await app.render();
-      if (status === "failure") expect(app.region(tab.id)).toBe(`│ 1. ${glyph} a1       × `);
+      if (status === "failure") expect(app.region(tab.id)).toBe(`  1. ${glyph} a1       × `);
       else expect(spinnerFrames.some(frame => frame === prefix())).toBe(true);
       app.clock.advance(1); await app.render();
 
       // The badge collapses into label space without moving the tab boundary or close control.
       if (status !== "failure") {
-        expect(app.region(tab.id)).toBe("│ 1. a1         × ");
+        expect(app.region(tab.id)).toBe("  1. a1         × ");
         expect([tab.x, tab.width, title.x, close.x]).toEqual([geometry[0]!, geometry[1]!, geometry[2]! - 2, geometry[3]!]);
       } else {
         expect(app.region(tab.id)[5]).toBe(glyph); expect(app.region(tab.id)[6]).toBe(" ");
         expect([tab.x, tab.width, title.x, close.x]).toEqual(geometry);
       }
-      expect(app.region(tab.id).startsWith("│ 1. ")).toBe(true); expect(app.region(tab.id).endsWith("× ")).toBe(true);
+      expect(app.region(tab.id).startsWith("  1. ")).toBe(true); expect(app.region(tab.id).endsWith("× ")).toBe(true);
       expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
     } finally { await app.close(); }
   },
@@ -316,7 +316,7 @@ test("Narrow tabs show IDs instead of long Unicode names while retaining close/s
     app.resize(60, 12); await app.render();
     const tab = app.get("session:demo:main:a1"), close = app.get("close-session:a1");
     expect(tab.width).toBeLessThanOrEqual(app.get("agent-session-list").width);
-    expect(app.region(tab.id).startsWith("│ 1. ")).toBe(true);
+    expect(app.region(tab.id).startsWith("  1. ")).toBe(true);
     expect(app.region(tab.id).endsWith("× ")).toBe(true);
     expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[5])).toBe(true);
     expect(close.x + close.width).toBe(tab.x + tab.width - 1);

@@ -3,7 +3,9 @@ import type { SessionNotification } from "../session-notification.ts";
 import type { SessionResult } from "../session-attention.ts";
 import { formatRunDuration } from "./run-completion.ts";
 import { uiTheme } from "../../ui/theme.ts";
-import { paintText, type StyleGroup } from "../../ui/theme-styles.ts";
+import { PopupFrame } from "../../ui/popup-frame.ts";
+import { blendColors } from "../../ui/color.ts";
+import { paintText, type StyleGroup, type UiStyle } from "../../ui/theme-styles.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
 import { icons } from "../../icons.ts";
 import { messageLabels, messageText, type Message } from "../../ui/messages.ts";
@@ -12,7 +14,7 @@ type Notification = SessionNotification | Message;
 
 type Timer = ReturnType<CliRenderer["clock"]["setTimeout"]>;
 type Toast = { notification: Notification; root: BoxRenderable; heading: TextRenderable; task: TextRenderable; location: TextRenderable;
-  expiry: Timer; animation?: Timer };
+  expiry: Timer; intensity: number; animation?: Timer };
 const labels = { complete: "Completed", error: "Failed", unfinished: "Stopped", cancelled: "Cancelled" } satisfies Record<SessionResult["outcome"], string>;
 const colors = { complete: "status.success", error: "status.error", unfinished: "status.warning", cancelled: "status.warning" } as const satisfies Record<SessionResult["outcome"], StyleGroup>;
 
@@ -73,8 +75,8 @@ export class SessionNotificationStack {
   }
 
   private mount(notification: Notification): void {
-    const root = new BoxRenderable(this.renderer, { id: `session-toast:${notification.id}`, width: "100%", height: 5, flexShrink: 0,
-      flexDirection: "column", border: true, paddingX: 1, opacity: 0.5,
+    const root = new PopupFrame(this.renderer, { id: `session-toast:${notification.id}`, width: "100%", height: 5, flexShrink: 0,
+      flexDirection: "column", border: true, paddingX: 1,
       onMouseDown: event => {
         if (event.button !== 0) return;
         event.preventDefault(); event.stopPropagation(); this.dismiss(notification.id); this.open(notification);
@@ -86,24 +88,32 @@ export class SessionNotificationStack {
     header.add(heading); root.add(header); root.add(task); root.add(location); this.root.add(root);
     const brief = "result" in notification ? notification.result.outcome === "complete" : notification.level === "success";
     const expiry = this.renderer.clock.setTimeout(() => this.dismiss(notification.id), brief ? 5000 : 8000);
-    const toast: Toast = { notification, root, heading, task, location, expiry };
+    const toast: Toast = { notification, root, heading, task, location, expiry, intensity: 0.5 };
     this.visible.push(toast); this.paint(toast);
     const started = this.renderer.clock.now();
-    toast.animation = this.renderer.clock.setInterval(() => {
+    const animate = (): void => {
+      if (this.disposed || root.isDestroyed) return;
       const progress = Math.min(1, (this.renderer.clock.now() - started) / 160);
-      root.opacity = 0.5 + progress * 0.5;
-      if (progress === 1 && toast.animation !== undefined) { this.renderer.clock.clearInterval(toast.animation); delete toast.animation; }
-    }, 40);
+      toast.intensity = 0.5 + progress * 0.5; this.paint(toast);
+      if (progress < 1) toast.animation = this.renderer.clock.setTimeout(animate, 40);
+      else delete toast.animation;
+    };
+    toast.animation = this.renderer.clock.setTimeout(animate, 40);
   }
 
   private paint(toast: Toast): void {
-    const styles = uiTheme(this.renderer).styles;
+    if (this.disposed || toast.root.isDestroyed) return;
+    const theme = uiTheme(this.renderer), styles = theme.styles;
     const group: StyleGroup = "result" in toast.notification ? colors[toast.notification.result.outcome] : `status.${toast.notification.level}`;
-    const status = styles[group];
+    const background = styles["ui.popup"].bg ?? styles["ui.text"].bg ?? theme.colors.panel;
+    // Fade the ink, not the window: covered text must remain hidden throughout the animation.
+    const fade = (style: UiStyle): UiStyle => toast.intensity === 1 ? style
+      : { ...style, fg: blendColors(background, style.fg, toast.intensity) };
+    const status = fade(styles[group]);
     toast.root.backgroundColor = styles["ui.popup"].bg;
     toast.root.borderColor = status.fg;
-    paintText(toast.heading, status); paintText(toast.task, styles["ui.label"]);
-    paintText(toast.location, styles["ui.muted"]);
+    paintText(toast.heading, status); paintText(toast.task, fade(styles["ui.label"]));
+    paintText(toast.location, fade(styles["ui.muted"]));
     // Layout getters still describe the previous frame when a card first arrives.
     const width = Math.max(0, Math.min(52, this.renderer.width - 2) - 4);
     if (!("result" in toast.notification)) {
@@ -129,7 +139,7 @@ export class SessionNotificationStack {
 
   private remove(toast: Toast): void {
     this.renderer.clock.clearTimeout(toast.expiry);
-    if (toast.animation !== undefined) this.renderer.clock.clearInterval(toast.animation);
+    if (toast.animation !== undefined) this.renderer.clock.clearTimeout(toast.animation);
     this.visible.splice(this.visible.indexOf(toast), 1); toast.root.destroyRecursively();
   }
 

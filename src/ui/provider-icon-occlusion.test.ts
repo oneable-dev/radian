@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import { BoxRenderable, OptimizedBuffer } from "@opentui/core";
+import { BoxRenderable, OptimizedBuffer, RGBA } from "@opentui/core";
 import { createTestRenderer, setRendererCapabilities } from "@opentui/core/testing";
 import { ProviderIcon } from "./provider-icon.ts";
 import { uiTheme } from "./theme.ts";
@@ -26,8 +26,9 @@ for (const protocol of ["kitty", "sixel"] as const) for (const light of [false, 
     const background = new BoxRenderable(app.renderer, { width: "100%", height: "100%", backgroundColor: styleBackground(theme.styles["ui.text"]) });
     const icon = new ProviderIcon(app.renderer); icon.left = 4; icon.top = 2; icon.setProvider(provider); icon.visible = true;
     background.add(icon); app.renderer.root.add(background);
+    // Explicit translucent overlays remain supported even though default modal backdrops are clear.
     const popup = new BoxRenderable(app.renderer, { id: "popup-backdrop", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 5600,
-      visible: false, backgroundColor: styleBackground(theme.styles["ui.backdrop"]) }); app.renderer.root.add(popup);
+      visible: false, backgroundColor: RGBA.fromValues(0, 0, 0, 0.45) }); app.renderer.root.add(popup);
     const paints: Paint[] = [];
     const draw = spyOn(OptimizedBuffer.prototype, "drawImage").mockImplementation((image, _x, _y, width, height, pixelWidth, pixelHeight) => {
       paints.push({ pixels: image.raw().data.slice(), imageWidth: image.width, imageHeight: image.height, width, height, pixelWidth: pixelWidth!, pixelHeight: pixelHeight! }); return true;

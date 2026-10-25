@@ -183,9 +183,11 @@ test("Narrow Markdown tables fit available width without exposing source delimit
     const frame = app.captureCharFrame(); expect(frame).toContain("Name"); expect(frame).toContain("Value");
     expect(frame).toMatch(/┌─+┬─+┐/u); expect(frame).toMatch(/└─+┴─+┘/u);
     for (const text of ["한글 항목", "second", "ready"]) expect(frame).toContain(text);
-    // Korean wraps between syllables; join visible value columns to verify full content.
-    const values = frame.split("\n").map((line) => line.split("│")).filter((cells) => cells.length >= 4)
-      .map((cells) => cells.at(-2)).join("").replace(/\s+/gu, "");
+    // Scope columns to the table so the section outline cannot be mistaken for a cell separator.
+    const markdown = app.markdown();
+    const values = frame.split("\n").slice(markdown.y, markdown.y + markdown.height)
+      .map((line) => line.slice(markdown.x).split("│")).filter((cells) => cells.length >= 4)
+      .map((cells) => cells[2]).join("").replace(/\s+/gu, "");
     expect(values).toContain("긴설명을단어단위로줄바꿈해서표시합니다");
     expect(frame).not.toContain("|---|---|");
     expect(app.view.promptDrafts.a1).toBe("Keep this draft");

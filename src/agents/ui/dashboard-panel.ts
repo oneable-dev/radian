@@ -7,6 +7,7 @@ import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { PopupFrame } from "../../ui/popup-frame.ts";
 import { paintText, styleChunk } from "../../ui/theme-styles.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
@@ -53,7 +54,7 @@ export class DashboardPanel {
     const theme = uiTheme(renderer);
     this.root = new BoxRenderable(renderer, { id: "agent-dashboard", position: "absolute", width: "100%", height: "100%", zIndex: 5300, visible: false,
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
-    this.panel = new BoxRenderable(renderer, { id: "dashboard-dialog", position: "absolute", border: true, paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
+    this.panel = new PopupFrame(renderer, { id: "dashboard-dialog", position: "absolute", border: true, paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
     const header = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
     const title = new TextRenderable(renderer, { content: "Agent Dashboard", height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });
     this.spinner = new LoadingSpinner(renderer, { id: "dashboard-loading" });

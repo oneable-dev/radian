@@ -11,6 +11,7 @@ import { halfPageStep } from "../../ui/navigation.ts";
 import { singleLine } from "../../ui/text.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { PopupFrame } from "../../ui/popup-frame.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { createTextMatcher } from "../../search.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
@@ -52,7 +53,7 @@ export class ExtensionDialogPanel {
     const theme = uiTheme(renderer); this.clipboard = new Clipboard(renderer);
     this.root = new BoxRenderable(renderer, { id: "extension-dialog", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 5700, visible: false,
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
-    this.panel = new BoxRenderable(renderer, { id: "extension-dialog-panel", position: "absolute", border: true, paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
+    this.panel = new PopupFrame(renderer, { id: "extension-dialog-panel", position: "absolute", border: true, paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
     const header = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row" });
     this.title = new TextRenderable(renderer, { id: "extension-dialog-title", flexGrow: 1, height: 1, wrapMode: "none", selectable: false });
     this.spinner = new LoadingSpinner(renderer, { id: "extension-dialog-loading" }); header.add(this.title); header.add(this.spinner.root);
