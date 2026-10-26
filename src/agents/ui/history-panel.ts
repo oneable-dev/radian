@@ -2,7 +2,6 @@ import { BoxRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderab
 import type { HistoryItem } from "../history.ts";
 import type { HistoryPreview } from "../history-preview.ts";
 import { HistoryPreviewCache } from "../history-preview-cache.ts";
-import { singleLine } from "../../ui/text.ts";
 import { SearchInput } from "../../ui/search-input.ts";
 import type { Worktree } from "../../workspace/model.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
@@ -43,7 +42,6 @@ export class SessionHistoryPanel {
   private readonly candidates: BoxRenderable;
   private readonly title: TextRenderable;
   private readonly spinner: LoadingSpinner;
-  private readonly previewLabel: TextRenderable;
   private readonly previewCache: HistoryPreviewCache;
   private readonly message: TextRenderable;
   private readonly previewPane: BoxRenderable;
@@ -88,9 +86,6 @@ export class SessionHistoryPanel {
     this.list = new ScrollBoxRenderable(renderer, { id: "history-list", width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.list.focus() });
     this.previewPane = new BoxRenderable(renderer, { id: "history-preview-pane", width: "58%", minWidth: 0, minHeight: 0, flexDirection: "column", border: ["left"], paddingLeft: 1 });
-    const previewHeading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    this.previewLabel = new TextRenderable(renderer, { content: "Preview · read only", height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0, selectable: false, wrapMode: "none" });
-    previewHeading.add(this.previewLabel);
     this.session = new AgentPanel(renderer, { onNewSession: () => {}, getSessionDetails: () => this.previewState },
       (label) => { const button = new BoxRenderable(renderer, {}); button.add(new TextRenderable(renderer, { content: label })); return button; },
       actions.onError, () => actions.onChange?.(), () => this.search.focus(), {}, () => {},
@@ -99,7 +94,7 @@ export class SessionHistoryPanel {
     this.previewCache = new HistoryPreviewCache((tree, id, signal) => actions.preview!(tree, id, signal),
       () => this.renderPreview(), error => reportUnexpected(error, "history preview"));
     this.preview = this.session.transcriptScroll; this.preview.id = "history-preview";
-    this.previewPane.add(previewHeading); this.previewPane.add(this.session.root);
+    this.previewPane.add(this.session.root);
     this.candidates.add(this.search.field); this.candidates.add(this.message); this.candidates.add(this.list);
     this.body.add(this.candidates); this.body.add(this.previewPane);
     this.panel.add(heading); this.panel.add(this.body); this.root.add(this.panel);
@@ -107,7 +102,7 @@ export class SessionHistoryPanel {
     theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
       this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg; paintText(this.title, styles["ui.popupTitle"]);
-      for (const text of [this.message, this.previewLabel]) paintText(text, styles["ui.muted"]);
+      paintText(this.message, styles["ui.muted"]);
       this.previewPane.borderColor = styles["ui.border"].fg;
       this.session.root.backgroundColor = styles["ui.text"].bg;
       paintText(this.spinner.root, styles["status.working"]);
@@ -239,8 +234,6 @@ export class SessionHistoryPanel {
     if (value.snapshot) {
       const snapshot = value.snapshot;
       const sections = snapshot.state.sections;
-      const savedAt = snapshot.updatedAt === undefined ? "" : ` · saved ${new Date(snapshot.updatedAt).toISOString().slice(0, 16).replace("T", " ")}`;
-      this.previewLabel.content = `Preview · ${singleLine(this.selected?.title ?? snapshot.name)} · read only${savedAt}`;
       this.updatePreview(`history:${value.worktreeId}:${value.id}`, value.truncated && sections ? [...sections, {
         id: "history-preview-truncated", kind: "notice", title: "Preview truncated", text: "Open the session to read the full section content.", status: "complete",
       }] : sections, snapshot.state.output, this.visible, snapshot.state.telemetry, snapshot);
@@ -257,7 +250,6 @@ export class SessionHistoryPanel {
     const identity = item && worktree && !this.loading ? JSON.stringify([worktree.id, item.id]) : undefined;
     if (identity && identity === this.previewIdentity) return;
     this.previewIdentity = identity; this.preview.scrollTo(0);
-    this.previewLabel.content = item ? `Preview · ${singleLine(item.title)} · read only` : "Preview · read only";
     if (this.loading || this.loadError || !item || !worktree) {
       this.previewCache.unselect(); this.previewMessage(this.loadError ?? (this.loading ? "" : "Select a saved session")); return;
     }

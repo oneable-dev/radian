@@ -71,11 +71,10 @@ export class SessionMonitor {
     this.list = new ScrollBoxRenderable(renderer, { id: "monitor-list", width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.list.focus() });
     this.previewPane = new BoxRenderable(renderer, { id: "monitor-preview-pane", width: "58%", minWidth: 0, minHeight: 0, flexDirection: "column", border: ["left"], paddingLeft: 1 });
-    const label = new TextRenderable(renderer, { content: "Live preview · read only", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.transcript = new TranscriptPanel(renderer, { initialScroll: {}, initialPosition: "end", saveScroll() {},
       focusPrompt: () => this.search.focus(), notice: actions.notice, changed: actions.changed });
     this.transcript.scroll.id = "monitor-preview";
-    this.previewPane.add(label); this.previewPane.add(this.transcript.scroll);
+    this.previewPane.add(this.transcript.scroll);
     this.candidates.add(this.search.field); this.candidates.add(this.message); this.candidates.add(this.list);
     this.body.add(this.candidates); this.body.add(this.previewPane);
     this.panel.add(heading); this.panel.add(this.body); this.root.add(this.panel);
@@ -85,7 +84,7 @@ export class SessionMonitor {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
       this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
       this.previewPane.borderColor = styles["ui.border"].fg;
-      paintText(title, styles["ui.popupTitle"]); paintText(label, styles["ui.muted"]);
+      paintText(title, styles["ui.popupTitle"]);
       paintText(this.message, styles["ui.muted"]); paintText(this.spinner.root, styles["status.working"]); this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);

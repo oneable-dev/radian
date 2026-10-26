@@ -195,7 +195,8 @@ test("Shared snapshot previews show saved run state, context, usage, and Fast in
     // Never expire historical values using today's clock or apply them to live settings.
     expect(frame).toContain("Saved snapshot answer"); expect(frame).toContain("Failed"); expect(frame).toContain("Saved failure");
     expect(frame).toContain("archived-model"); expect(frame).toContain("fast on"); expect(frame).toContain("64%"); expect(frame).toContain("43% used");
-    expect(frame).toContain("saved 2023-11-14"); expect(app.selection.sessionId).toBe("a1"); expect(app.runs).toEqual([]); expect(app.resumed).toEqual([]);
+    expect(frame).not.toContain("Preview ·"); expect(frame).not.toContain("saved 2023-11-14");
+    expect(app.selection.sessionId).toBe("a1"); expect(app.runs).toEqual([]); expect(app.resumed).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -344,7 +345,7 @@ test("Uncached candidates show selected titles and empty bodies without loading 
 
     // Pending I/O must not display fixed timers or another session's body.
     const frame = app.captureCharFrame();
-    expect(frame).toContain("Preview · Saved keyboard"); expect(frame).not.toContain("FIRST SESSION ANSWER");
+    expect(frame).toContain("Saved keyboard navigation"); expect(frame).not.toContain("Preview ·"); expect(frame).not.toContain("FIRST SESSION ANSWER");
     expect(frame).not.toContain("Loading preview"); expect(!!app.renderer.root.findDescendantById("history-preview-loading")).toBe(false);
     expect(app.previews).toEqual(["first", "second"]);
     pending.resolve(ok({ worktreeId: "demo:main", id: "second", text: "SECOND SESSION ANSWER", truncated: false }));
