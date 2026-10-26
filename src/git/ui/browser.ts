@@ -10,6 +10,7 @@ import { halfPageStep } from "../../ui/navigation.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
+import { PopupBody, SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { icons } from "../../icons.ts";
 import { describeCommit, refContext, reflogContext, type GitContext } from "../context.ts";
@@ -37,7 +38,8 @@ export class GitBrowser {
   readonly preview: ScrollBoxRenderable;
   private readonly panel: BoxRenderable;
   private readonly body: BoxRenderable;
-  private readonly candidates: BoxRenderable;
+  private readonly layout: SearchPopupLayout;
+  private readonly previewBody: PopupBody;
   private readonly title: TextRenderable;
   private readonly message: TextRenderable;
   private readonly previewPane: BoxRenderable;
@@ -69,18 +71,17 @@ export class GitBrowser {
     const activity = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0 }); activity.add(this.spinner.root); heading.add(activity);
     this.search = new SearchInput(renderer, { id: "git-browser-search", placeholder: "Search refs…" });
     this.message = new TextRenderable(renderer, { id: "git-browser-status", height: 1, flexShrink: 0, selectable: false, wrapMode: "none", truncate: true });
-    this.body = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "row" });
-    this.candidates = new BoxRenderable(renderer, { width: "100%", minHeight: 0, minWidth: 0, flexDirection: "column", overflow: "hidden" });
     this.list = new GitList(renderer, "git-browser-list", key => this.choose(key), () => this.open(), false);
     this.list.root.width = "100%";
-    this.previewPane = new BoxRenderable(renderer, { id: "git-reflog-preview-pane", width: "48%", minWidth: 0, minHeight: 0,
-      flexDirection: "column", border: ["left"], paddingLeft: 1 });
     this.preview = new ScrollBoxRenderable(renderer, { id: "git-reflog-preview", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       onMouseDown: () => this.preview.focus() });
     this.previewText = new TextRenderable(renderer, { id: "git-reflog-preview-text", width: "100%", wrapMode: "word", selectable: true });
-    this.preview.add(this.previewText); this.previewPane.add(this.preview);
-    this.candidates.add(this.search.field); this.candidates.add(this.message); this.candidates.add(this.list.root);
-    this.body.add(this.candidates); this.body.add(this.previewPane);
+    this.preview.add(this.previewText);
+    this.previewBody = new PopupBody(renderer, "git-reflog-preview-pane", this.preview);
+    this.previewPane = this.previewBody.root;
+    this.layout = new SearchPopupLayout(renderer, { id: "git-browser", search: this.search, message: this.message, list: this.list.root,
+      preview: { body: this.previewBody, width: 48 } });
+    this.body = this.layout.root;
     this.panel.add(heading); this.panel.add(this.body); this.root.add(this.panel);
     const theme = uiTheme(renderer); theme.scrollbars(this.preview);
     theme.bindStyles(this.root, styles => {
@@ -157,7 +158,11 @@ export class GitBrowser {
     }
     const candidates = rows.filter(row => !row.disabled);
     if (!candidates.some(row => row.key === this.key)) this.key = candidates[0]?.key ?? null;
-    this.list.update(rows.length ? rows : [{ key: "empty", label: this.loadError ?? (!this.snapshot ? "Loading Git data…" : "No matches"), disabled: true }], this.key);
+    this.list.update(rows.length || this.snapshot && !this.loadError ? rows
+      : [{ key: "empty", label: this.loadError ?? "Loading Git data…", disabled: true }], this.key);
+    const empty = !!this.snapshot && !this.loadError && !candidates.length;
+    this.layout.results.showEmpty(empty ? "No matches" : undefined);
+    this.message.visible = !empty;
     const noun = this.kind === "refs" ? "result" : "event";
     this.summary = !this.snapshot ? "Loading Git data…" : `${candidates.length} ${noun}${candidates.length === 1 ? "" : "s"}`;
     this.message.content = this.loadError ?? this.summary;
@@ -199,7 +204,8 @@ export class GitBrowser {
     const event = this.event, result = event ? this.results.get(event.oid) : undefined;
     const failure = result && !result.ok ? `[${result.error.code}] ${result.error.message}` : event ? this.unexpected.get(event.oid) : undefined;
     this.message.content = this.loadError ?? failure ?? this.summary;
-    this.previewText.content = !event ? "Select a reflog event" : [
+    this.previewBody.showEmpty(!event ? "Select a reflog event" : undefined);
+    this.previewText.content = !event ? "" : [
       `Event ${display(event.selector)}`, `Occurred: ${display(event.date)}`, display(event.subject), "", "Target commit",
       result ? result.ok ? describeCommit(result.value, this.snapshot?.refs ?? [], this.snapshot) : `[${result.error.code}] ${result.error.message}`
         : this.loadError ?? this.unexpected.get(event.oid) ?? `Commit ${event.oid}\nLoading target commit…`,
@@ -226,7 +232,7 @@ export class GitBrowser {
       else if (command === "git.last") this.preview.scrollTo(Number.MAX_SAFE_INTEGER);
       else this.preview.scrollBy((down ? 1 : -1) * (half ? halfPageStep(this.preview.viewport.height) : command === "git.page-up" || command === "git.page-down" ? Math.max(1, this.preview.viewport.height - 1) : 1));
     } else if (half) {
-      const height = this.list.root.visible ? this.list.root.viewport.height : this.body.height - this.search.field.height - this.message.height;
+      const height = this.layout.listHeight;
       if (this.search.focused) { this.compactPreview = false; this.resize(); this.list.root.focus(); }
       this.list.move(down ? "next" : "previous", halfPageStep(height));
     } else if (command === "git.first" || command === "git.last") this.list.move(command === "git.first" ? "first" : "last");
@@ -255,14 +261,9 @@ export class GitBrowser {
     const availableWidth = this.root.width || this.renderer.width, availableHeight = this.root.height || this.renderer.height - 1;
     const width = Math.max(1, Math.floor(availableWidth * (availableWidth < 80 ? 1 : 0.9)));
     const height = Math.max(1, Math.floor(availableHeight * (availableHeight < 16 ? 1 : 0.85)));
-    this.panel.width = width; this.panel.height = height; this.panel.left = Math.floor((availableWidth - width) / 2); this.panel.top = Math.floor((availableHeight - height) / 2);
+    centerPopup(this.panel, width, height, availableWidth, availableHeight);
     this.search.fit(Math.max(1, height - 8));
-    const wide = this.renderer.width >= 100, reflog = this.kind === "reflog";
-    this.list.root.visible = !reflog || wide || !this.compactPreview; this.previewPane.visible = reflog && (wide || this.compactPreview);
-    this.body.flexDirection = wide ? "row" : "column";
-    this.candidates.width = reflog && wide ? "52%" : "100%"; this.candidates.flexGrow = this.list.root.visible ? 1 : 0;
-    this.previewPane.width = wide ? "48%" : "100%"; this.previewPane.flexGrow = wide ? 0 : 1;
-    this.previewPane.border = wide ? ["left"] : false; this.previewPane.paddingLeft = wide ? 1 : 0;
+    this.layout.resize(this.renderer.width >= 100, this.compactPreview, this.kind === "reflog");
   };
   dispose(): void {
     if (this.disposed) return;

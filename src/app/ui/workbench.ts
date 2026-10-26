@@ -27,6 +27,7 @@ import { MessagesPanel } from "../../ui/messages-panel.ts";
 import { formatRunDuration } from "../../agents/ui/run-completion.ts";
 import { TextDialog } from "../../ui/text-dialog.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
+import { SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
 import { SearchInput } from "../../ui/search-input.ts";
 import { keymapHelp } from "../../keybindings/help.ts";
 import { footerKeyHint } from "../../keybindings/footer.ts";
@@ -45,7 +46,7 @@ import { KeyRouter } from "../../keybindings/router.ts";
 import { inScope, tabIndex, type CommandId, type KeyContext } from "../../keybindings/commands.ts";
 import type { TerminalTheme } from "../../ui/embedded-terminal/theme.ts";
 import { uiTheme, type UiTheme } from "../../ui/theme.ts";
-import { paintText, styleChunk, type StyleGroup } from "../../ui/theme-styles.ts";
+import { paintText, styleChunk } from "../../ui/theme-styles.ts";
 
 export type WorkbenchActions = AgentActions & {
   onCloseSession: (worktreeId: string, sessionId: string) => void;
@@ -96,7 +97,7 @@ export class Workbench {
   private readonly acknowledgements = new Map<string, string>();
   private readonly search: SearchInput;
   private readonly tree: ScrollBoxRenderable;
-  private readonly resultMessage: TextRenderable;
+  private readonly workspaceLayout: SearchPopupLayout;
   private readonly history: SessionHistoryPanel;
   private readonly models: ModelPicker;
   private readonly accounts: AccountsPanel;
@@ -141,12 +142,11 @@ export class Workbench {
       flexDirection: "column", border: true, paddingX: 1 });
     this.workspacePopup.add(this.sidebar);
     this.search = new SearchInput(renderer, { id: "workspace-search", fieldId: "workspace-search-box", placeholder: "Search repo/worktree/branch" });
-    this.sidebar.add(this.search.field);
     this.tree = new ScrollBoxRenderable(renderer, {
       id: "workspace-tree", flexGrow: 1, minHeight: 0, marginTop: 1, scrollX: false,
       contentOptions: { flexDirection: "column" },
     });
-    this.resultMessage = this.text("", "ui.muted");
+    this.workspaceLayout = new SearchPopupLayout(renderer, { id: "workspace", search: this.search, list: this.tree });
     this.history = new SessionHistoryPanel(renderer, {
       ...(actions.onListHistory ? { list: actions.onListHistory } : {}),
       ...(actions.onResumeSession ? { resume: actions.onResumeSession } : {}),
@@ -192,8 +192,7 @@ export class Workbench {
       changed: () => this.updateFooter(), fallback: () => this.focusNavigation(),
       keyHint: (command, context) => this.keymap.hint(command, context),
     });
-    this.sidebar.add(this.resultMessage);
-    this.sidebar.add(this.tree);
+    this.sidebar.add(this.workspaceLayout.root);
     this.workPanel = new BoxRenderable(renderer, { id: "work-panel", flexGrow: 1, minWidth: 0, flexDirection: "column" });
     this.agent = new AgentPanel(renderer, { ...actions, onNewSession: id => this.createAgentSession(id), onModel: id => this.showModels(id), onAccounts: () => this.showAccounts(), onHistory: () => this.history.show(this.selection.worktree), onShowDashboard: () => this.dashboard.show(), onInspectInput: (content) => this.dialog.show(content), onSelectSession: (tree, id) => this.activateSession(tree, id) }, (label, activate, actionLabel) => this.button(label, activate, actionLabel),
       (message, options) => this.notify(message, options), () => this.updateFooter(), () => this.focusNavigation(), this.workViews.agentScroll,
@@ -494,12 +493,6 @@ export class Workbench {
     this.history.refreshVisible();
   }
 
-  private text(content: string, role: StyleGroup = "ui.label"): TextRenderable {
-    const text = new TextRenderable(this.renderer, { content, selectable: false, wrapMode: "none", height: 1, flexShrink: 0 });
-    this.theme.bindStyles(text, (styles) => paintText(text, styles[role]));
-    return text;
-  }
-
   private button(label: string, activate: () => void, actionLabel = label, variant: ButtonVariant = "default"): Button {
     const button = new Button(this.renderer, label, activate, variant);
     this.buttonHints.set(button, actionLabel); this.buttonActions.set(button, activate);
@@ -789,8 +782,7 @@ export class Workbench {
     const { horizontal, vertical } = panelSpacing(this.renderer);
     const width = Math.max(1, Math.min(100, Math.floor(this.renderer.width * 0.8)));
     const height = Math.max(1, Math.min(this.renderer.height, Math.max(9, Math.floor(this.renderer.height * 0.8))));
-    this.sidebar.width = width; this.sidebar.height = height;
-    this.sidebar.left = Math.floor((this.renderer.width - width) / 2); this.sidebar.top = Math.floor((this.renderer.height - height) / 2);
+    centerPopup(this.sidebar, width, height, this.renderer.width, this.renderer.height);
     this.sidebar.paddingX = horizontal; this.sidebar.paddingBottom = vertical;
     this.search.fit(height - 4);
     this.search.field.marginX = -horizontal;
@@ -896,8 +888,7 @@ export class Workbench {
     if (workView === "git") this.git.show(worktree, this.selection.sessionId); else this.git.hide();
     if (workView === "editor") this.editor.show(worktree); else this.editor.hide();
     if (workView === "terminal") this.terminals.show(worktree, worktree ? this.workViews.terminalSelection?.[worktree.id] : undefined); else this.terminals.hide();
-    this.resultMessage.content = this.search.value ? "No matching workspaces" : "No repositories";
-    this.resultMessage.visible = rows.length === 0;
+    this.workspaceLayout.results.showEmpty(!rows.length ? this.search.value ? "No matching workspaces" : "No repositories" : undefined);
     this.history.updateScope(worktree);
     this.monitor.update(this.selection.snapshot);
     for (const id of this.acknowledgements.keys()) if (!openIds.has(id)) this.acknowledgements.delete(id);

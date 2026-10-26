@@ -8,6 +8,7 @@ import type { FooterShortcut } from "../../ui/footer.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
+import { PopupBody, centerPopup } from "../../ui/popup-layout.ts";
 import { paintText, styleChunk } from "../../ui/theme-styles.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
@@ -34,6 +35,7 @@ export class DashboardPanel {
   private readonly summary: TextRenderable;
   private readonly graph: TextRenderable;
   private readonly ranking: TextRenderable;
+  private readonly rankingBody: PopupBody;
   private readonly message: TextRenderable;
   private readonly notes: TextRenderable;
   private readonly spinner: LoadingSpinner;
@@ -49,6 +51,7 @@ export class DashboardPanel {
   private disposed = false;
   private loading = false;
   private error = "";
+  private revealRankingPending = false;
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: DashboardActions) {
     const theme = uiTheme(renderer);
@@ -68,9 +71,12 @@ export class DashboardPanel {
     this.summary = this.text("dashboard-summary", 3); this.scroll.add(this.summary);
     this.metric = this.strip("dashboard-metric", ["Tokens", "Runs", "Run time"], () => this.paint()); this.scroll.add(this.metric.root);
     this.graph = this.text("dashboard-trend", 6); this.scroll.add(this.graph);
-    this.category = this.strip("dashboard-category", ["Skills", "Models", "MCP", "Subagents"], () => { this.paint(); this.scroll.scrollChildIntoView(this.ranking.id); });
+    this.category = this.strip("dashboard-category", ["Skills", "Models", "MCP", "Subagents"], () => { this.paint(); this.scroll.scrollChildIntoView(this.rankingBody.root.id); });
     this.scroll.add(this.category.root);
-    this.ranking = this.text("dashboard-ranking"); this.scroll.add(this.ranking);
+    this.ranking = this.text("dashboard-ranking");
+    this.rankingBody = new PopupBody(renderer, "dashboard-ranking-body", this.ranking);
+    this.rankingBody.root.flexGrow = 0; this.rankingBody.root.flexShrink = 0;
+    this.scroll.add(this.rankingBody.root);
     this.notes = new TextRenderable(renderer, { id: "dashboard-notes", width: "100%", height: "auto", minHeight: 1, flexShrink: 0, selectable: false, wrapMode: "word", marginTop: 1 }); this.scroll.add(this.notes);
     this.panel.add(this.scroll); this.root.add(this.panel);
     theme.scrollbars(this.scroll);
@@ -80,7 +86,8 @@ export class DashboardPanel {
       paintText(this.message, styles["ui.muted"]); paintText(this.graph, styles["metadata.meter"]); paintText(this.ranking, styles["ui.label"]); paintText(this.notes, styles["ui.muted"]);
       this.paint();
     });
-    renderer.on("resize", this.resize); renderer.on("focused_renderable", this.keepFocus); this.resize();
+    renderer.on("resize", this.resize); renderer.on("focused_renderable", this.keepFocus);
+    renderer.addPostProcessFn(this.revealRanking); this.resize();
   }
   private text(id: string, height = 1): TextRenderable {
     return new TextRenderable(this.renderer, { id, width: "100%", height, flexShrink: 0, selectable: false, wrapMode: "none" });
@@ -185,12 +192,22 @@ export class DashboardPanel {
     this.graph.height = Math.max(2, graph.length + 1); this.graph.content = graph.join("\n");
     const category = categories[this.category.index]!, rows = snapshot?.[category] ?? [];
     const ranking = snapshot ? dashboardBars(rows, width) : [this.loading ? "Loading…" : "No statistics available."];
-    this.ranking.height = ranking.length + 1;
-    this.ranking.content = new StyledText([styleChunk(category === "models" ? "Model usage · tokens\n" : "Resource usage · calls\n", styles["ui.muted"]), styleChunk(ranking.join("\n"), styles["ui.label"])]);
+    const empty = !!snapshot && !rows.length;
+    this.ranking.height = empty ? 0 : ranking.length + 1;
+    this.rankingBody.root.height = empty ? this.renderer.height < 25 ? 3 : 6 : ranking.length + 1;
+    this.rankingBody.showEmpty(empty ? "No recorded usage in this period." : undefined);
+    this.ranking.content = empty ? "" : new StyledText([styleChunk(category === "models" ? "Model usage · tokens\n" : "Resource usage · calls\n", styles["ui.muted"]), styleChunk(ranking.join("\n"), styles["ui.label"])]);
     this.notes.content = "Tokens include input, output and cache. Runs/time include recorded settled runs; overlapping durations are summed. Skills combine explicit calls and successful loads. Only observed MCP/subagent calls are counted."
       + (snapshot?.warnings.length ? `\n\nCoverage warnings\n${snapshot.warnings.join("\n")}` : "");
+    if (this.category.root.focused) this.revealRankingPending = true;
     this.actions.changed();
   }
+  private revealRanking = (): void => {
+    if (!this.revealRankingPending || !this.visible || this.root.isDestroyed) return;
+    this.revealRankingPending = false;
+    // Wait for the ranking body's new height before revealing the selected resource category.
+    this.scroll.scrollChildIntoView(this.rankingBody.root.id);
+  };
   private keepFocus = (): void => {
     if (!this.visible) return;
     for (let node = this.renderer.currentFocusedRenderable; node; node = node.parent as Renderable | null) if (node === this.root) return;
@@ -199,13 +216,14 @@ export class DashboardPanel {
   private resize = (): void => {
     if (this.disposed) return;
     const width = Math.max(1, Math.min(120, this.renderer.width - 4)), height = Math.max(1, this.renderer.height - 3);
-    this.panel.width = width; this.panel.height = height; this.panel.left = Math.floor((this.renderer.width - width) / 2); this.panel.top = Math.floor((this.renderer.height - height) / 2);
+    centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
     this.paint();
   };
   dispose(): void {
     if (this.disposed) return;
     this.hide(false); this.disposed = true; this.spinner.cancel(); this.request?.abort();
     this.renderer.off("resize", this.resize); this.renderer.off("focused_renderable", this.keepFocus);
+    this.renderer.removePostProcessFn(this.revealRanking);
     if (!this.root.isDestroyed) this.root.destroyRecursively();
   }
 }

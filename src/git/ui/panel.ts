@@ -17,6 +17,7 @@ import { GitBrowser, type GitBrowserKind } from "./browser.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
+import { PopupBody } from "../../ui/popup-layout.ts";
 import { icons } from "../../icons.ts";
 import { codeStyles, paintText, styleBackground, type StyleGroup } from "../../ui/theme-styles.ts";
 import { GitClipboard } from "./clipboard.ts";
@@ -58,6 +59,8 @@ export class GitPanel {
   private readonly browser: GitBrowser;
   private readonly history: GitList;
   private readonly files: GitList;
+  private readonly filesBody: PopupBody;
+  private readonly comparisonBody: PopupBody;
   private readonly detailsCard: BoxRenderable;
   private readonly detailsAnchor: TextRenderable;
   private readonly details: BoxRenderable;
@@ -146,7 +149,8 @@ export class GitPanel {
       const cache = this.cache; if (!cache || cache.state.file === key) return;
       this.remember(); cache.state.file = key; cache.state.diffScroll = 0; this.pendingRestore = true; this.loadComparison();
     }, () => this.diffFocus.focus());
-    filesPanel.add(this.files.root); lower.add(filesPanel);
+    this.filesBody = new PopupBody(renderer, "git-files-body", this.files.root);
+    filesPanel.add(this.filesBody.root); lower.add(filesPanel);
     this.diffFocus = new BoxRenderable(renderer, { id: "git-diff", flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "column", focusable: true,
       border: ["left"], paddingLeft: 1, onMouseDown: () => this.diffFocus.focus(), onMouseScroll: () => this.remember() });
     const diffHeader = this.row();
@@ -155,7 +159,9 @@ export class GitPanel {
     diffHeader.gap = 0; diffHeader.add(this.beforeTitle); diffHeader.add(this.afterTitle); this.diffFocus.add(diffHeader);
     this.diffBody = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "column", overflow: "hidden" });
     this.diffNotice = new TextRenderable(renderer, { content: "", fg: gitColors.muted, wrapMode: "word", selectable: false });
-    this.diffBody.add(this.diffNotice); this.diffFocus.add(this.diffBody); lower.add(this.diffFocus); this.changes.add(lower); this.root.add(this.changes);
+    this.diffBody.add(this.diffNotice);
+    this.comparisonBody = new PopupBody(renderer, "git-comparison-body", this.diffBody);
+    this.diffFocus.add(this.comparisonBody.root); lower.add(this.diffFocus); this.changes.add(lower); this.root.add(this.changes);
     this.browser = new GitBrowser(renderer, {
       changed: () => { this.updateHistoryRail(); this.changed(); }, close: () => this.closeBrowser(),
       selected: (kind, key) => { if (this.cache) { if (kind === "refs") this.cache.state.refSelected = key; else this.cache.state.reflogSelected = key; this.persist(); } },
@@ -540,7 +546,9 @@ export class GitPanel {
         label: file.status === "M" ? [{ text: "M", color: "git.modified" }, { text: display(` ${file.path}`) }] : display(`${file.status} ${file.path}`),
         color: file.status === "D" ? "git.removed" : file.status === "A" || file.status === "?" ? "git.added" : "ui.label" });
     }
-    this.files.update(fileRows.length ? fileRows : [{ key: "empty", label: state.selected && !cache.details ? cache.error ?? "Loading files…" : "No changed files", disabled: true }], state.file);
+    const waiting = state.selected && !cache.details;
+    this.files.update(waiting && !fileRows.length ? [{ key: "empty", label: cache.error ?? "Loading files…", disabled: true }] : fileRows, state.file);
+    this.filesBody.showEmpty(!waiting && !files.length ? "No changed files" : undefined);
     this.renderDiff(); this.applyScroll(); this.persist(); this.changed();
   }
   private renderDiff(): void {
@@ -549,16 +557,21 @@ export class GitPanel {
     if (comparison && comparison === this.renderedComparison && this.diff) return;
     this.diff?.destroyRecursively(); this.diff = undefined; this.renderedComparison = undefined;
     this.diffNotice.visible = true;
+    this.comparisonBody.showEmpty();
     this.beforeTitle.content = comparison ? `Before · ${display(comparison.beforeLabel)}` : "Before";
     this.afterTitle.content = comparison ? `After · ${display(comparison.afterLabel)}` : "After";
     if (!comparison) {
-      this.diffNotice.content = cache.diffError ?? (cache.state.selected && !cache.details ? cache.error ?? "Loading file comparison…"
-        : !this.selectedFile ? "No changed files" : "Loading file comparison…");
+      const empty = !cache.diffError && !cache.error && !(cache.state.selected && !cache.details) && !this.selectedFile;
+      this.comparisonBody.showEmpty(empty ? "No changed files" : undefined);
+      this.diffNotice.visible = !empty;
+      this.diffNotice.content = cache.diffError ?? cache.error ?? "Loading file comparison…";
       return;
     }
     const patch = fullFilePatch(comparison);
     if (!patch.ok) { this.diffNotice.content = patch.error.message; return; }
-    if (!patch.value) { this.diffNotice.content = "Both file versions are empty (no text lines)."; return; }
+    if (!patch.value) {
+      this.comparisonBody.showEmpty("Both file versions are empty (no text lines)."); this.diffNotice.visible = false; return;
+    }
     const styles = uiTheme(this.renderer).styles;
     this.syntax ??= SyntaxStyle.fromStyles(codeStyles(styles), this.renderer.nativeScene!);
     const extension = this.selectedFile?.path.split(".").at(-1)?.toLowerCase();

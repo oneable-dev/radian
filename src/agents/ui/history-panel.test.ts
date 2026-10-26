@@ -353,6 +353,47 @@ test("Uncached candidates show selected titles and empty bodies without loading 
   } finally { pending.resolve(ok({ worktreeId: "demo:main", id: "second", text: "late", truncated: false })); await app.close(); }
 });
 
+test("Pending history previews hand focus from the empty pane to ready content without changing candidates", async () => {
+  // A selected candidate can have no cached preview while its request is still pending.
+  const pending = Promise.withResolvers<Result<HistoryPreview, ExpectedError>>();
+  const app = await mount({ preview: () => pending.promise });
+  try {
+    await app.open(); app.mockInput.pressKey("o", { ctrl: true }); await app.render();
+
+    // Preview scrolling must not move the candidate cursor or reveal a fake composer.
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("history-preview-pane");
+    app.mockInput.pressKey("d", { ctrl: true }); await app.render();
+    expect(app.previews).toEqual(["first"]);
+    expect(app.get("history-preview-agent-view").visible).toBe(false);
+    pending.resolve(ok({ worktreeId: "demo:main", id: "first", text: "Ready saved conversation", truncated: false }));
+    await app.visible("Ready saved conversation");
+
+    // The ready transcript inherits preview focus without opening or changing the live session.
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("history-preview");
+    expect(app.selection.sessionId).toBe("a1"); expect(app.resumed).toEqual([]);
+    app.mockInput.pressKey("o", { ctrl: true }); await app.render();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("history-search");
+  } finally {
+    pending.resolve(ok({ worktreeId: "demo:main", id: "first", text: "late", truncated: false }));
+    await app.close();
+  }
+});
+
+test("Saved sessions without sections show centered guidance but remain explicitly openable", async () => {
+  // An empty saved conversation is different from having no history candidates.
+  const app = await mount({ preview: async (worktreeId, id) => ok({ worktreeId, id, sections: [], text: "", truncated: false }) });
+  try {
+    await app.open();
+
+    // Empty previews hide composer/telemetry while preserving the selected candidate and Open command.
+    expect(app.captureCharFrame()).toContain("No saved sections in this branch.");
+    expect(app.get("history-preview-agent-view").visible).toBe(false);
+    expect(app.captureCharFrame()).not.toContain("Read-only preview");
+    app.mockInput.pressEnter(); await app.render();
+    expect(app.resumed).toEqual(["demo:main/first"]);
+  } finally { await app.close(); }
+});
+
 test("Refresh and close clear preview caches and reject responses from older generations", async () => {
   // Even identical saved IDs require fresh request data after refresh.
   const old = Promise.withResolvers<Result<HistoryPreview, ExpectedError>>();

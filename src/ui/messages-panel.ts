@@ -8,6 +8,7 @@ import { messageLabels, messageText, type Message, type Messages } from "./messa
 import { singleLine, truncateCells } from "./text.ts";
 import { uiTheme } from "./theme.ts";
 import { PopupFrame } from "./popup-frame.ts";
+import { SearchPopupLayout, centerPopup } from "./popup-layout.ts";
 import { paintText } from "./theme-styles.ts";
 
 type Actions = {
@@ -24,7 +25,7 @@ export class MessagesPanel {
   readonly search: SearchInput;
   readonly list: ScrollBoxRenderable;
   private readonly panel: BoxRenderable;
-  private readonly empty: TextRenderable;
+  private readonly layout: SearchPopupLayout;
   private readonly rows: Row[] = [];
   private items: readonly Message[] = [];
   private cursor = 0;
@@ -37,14 +38,14 @@ export class MessagesPanel {
     this.panel = new PopupFrame(renderer, { id: "messages-panel", position: "absolute", border: true, paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
     const title = new TextRenderable(renderer, { content: "Messages", height: 1, flexShrink: 0, selectable: false });
     this.search = new SearchInput(renderer, { id: "messages-search", placeholder: "Search messages, levels or sources…" });
-    this.empty = new TextRenderable(renderer, { id: "messages-empty", height: 1, flexShrink: 0, selectable: false });
     this.list = new ScrollBoxRenderable(renderer, { id: "messages-list", flexGrow: 1, minHeight: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.list.focus() });
-    this.panel.add(title); this.panel.add(this.search.field); this.panel.add(this.empty); this.panel.add(this.list); this.root.add(this.panel);
+    this.layout = new SearchPopupLayout(renderer, { id: "messages", search: this.search, list: this.list });
+    this.panel.add(title); this.panel.add(this.layout.root); this.root.add(this.panel);
     const theme = uiTheme(renderer); theme.scrollbars(this.list);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
-      paintText(title, styles["ui.popupTitle"]); paintText(this.empty, styles["ui.muted"]); this.paint();
+      paintText(title, styles["ui.popupTitle"]); this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);
     renderer.on("resize", this.resize); renderer.on("focused_renderable", this.keepFocus); this.resize();
@@ -92,7 +93,7 @@ export class MessagesPanel {
       const text = new TextRenderable(this.renderer, { width: "100%", height: 2, wrapMode: "none", selectable: false, content: `${heading}\n${preview}` });
       root.add(text); this.list.add(root); this.rows.push({ root, text });
     }
-    this.empty.visible = !this.items.length; this.empty.content = this.search.value ? "No matching messages" : "No messages yet";
+    this.layout.results.showEmpty(!this.items.length ? this.search.value ? "No matching messages" : "No messages yet" : undefined);
     this.paint();
   }
   private paint(): void {
@@ -127,7 +128,7 @@ export class MessagesPanel {
   private resize = (): void => {
     if (this.disposed) return;
     const width = Math.max(1, Math.min(110, this.renderer.width - 4)), height = Math.max(1, Math.floor(this.renderer.height * 0.8));
-    this.panel.width = width; this.panel.height = height; this.panel.left = Math.floor((this.renderer.width - width) / 2); this.panel.top = Math.floor((this.renderer.height - height) / 2);
+    centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
     this.search.fit(height - 4); if (this.visible) this.refresh();
   };
   dispose(): void {

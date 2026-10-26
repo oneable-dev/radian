@@ -162,10 +162,9 @@ test("Runtime snapshots deduplicate notices but separate repeated actions remain
     app.view.notify("Action failed", { level: "error" }); app.view.notify("Action failed", { level: "error" });
     app.clock.advance(8000); app.open(); await app.render();
 
-    const listText = () => app.get("messages-panel").getChildren().find(node => node.id === "messages-list")!;
     expect(selected(app)).toContain("Action failed");
     app.mockInput.pressKey("y", { ctrl: true }); await app.render(); expect(app.copies).toEqual(["Action failed"]);
-    expect(listText()).toBeDefined(); expect(app.get("messages").visible).toBe(true);
+    expect(app.get("messages-list").visible).toBe(true); expect(app.get("messages").visible).toBe(true);
     app.mockInput.pressKey("n", { ctrl: true }); app.mockInput.pressKey("n", { ctrl: true }); await app.render(); expect(selected(app)).toContain("Runtime reconnecting");
   } finally { await app.close(); }
 });

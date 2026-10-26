@@ -9,6 +9,7 @@ import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
+import { PopupBody, SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { singleLine } from "../../ui/text.ts";
 import { SearchInput } from "../../ui/search-input.ts";
@@ -37,7 +38,8 @@ export class SessionMonitor {
   readonly list: ScrollBoxRenderable;
   private readonly panel: BoxRenderable;
   private readonly body: BoxRenderable;
-  private readonly candidates: BoxRenderable;
+  private readonly layout: SearchPopupLayout;
+  private readonly previewBody: PopupBody;
   private readonly message: TextRenderable;
   private readonly previewPane: BoxRenderable;
   private readonly transcript: TranscriptPanel;
@@ -66,17 +68,16 @@ export class SessionMonitor {
     heading.add(title); heading.add(this.spinner.root);
     this.search = new SearchInput(renderer, { id: "monitor-search", placeholder: "Search tasks, repositories or worktrees…" });
     this.message = new TextRenderable(renderer, { id: "monitor-message", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
-    this.body = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "row" });
-    this.candidates = new BoxRenderable(renderer, { width: "42%", minHeight: 0, minWidth: 0, flexDirection: "column", overflow: "hidden" });
     this.list = new ScrollBoxRenderable(renderer, { id: "monitor-list", width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.list.focus() });
-    this.previewPane = new BoxRenderable(renderer, { id: "monitor-preview-pane", width: "58%", minWidth: 0, minHeight: 0, flexDirection: "column", border: ["left"], paddingLeft: 1 });
-    this.transcript = new TranscriptPanel(renderer, { initialScroll: {}, initialPosition: "end", saveScroll() {},
+    this.transcript = new TranscriptPanel(renderer, { initialScroll: {}, initialPosition: "end", emptyLogo: false, saveScroll() {},
       focusPrompt: () => this.search.focus(), notice: actions.notice, changed: actions.changed });
     this.transcript.scroll.id = "monitor-preview";
-    this.previewPane.add(this.transcript.scroll);
-    this.candidates.add(this.search.field); this.candidates.add(this.message); this.candidates.add(this.list);
-    this.body.add(this.candidates); this.body.add(this.previewPane);
+    this.previewBody = new PopupBody(renderer, "monitor-preview-pane", this.transcript.scroll);
+    this.previewPane = this.previewBody.root;
+    this.layout = new SearchPopupLayout(renderer, { id: "monitor", search: this.search, message: this.message, list: this.list,
+      preview: { body: this.previewBody, width: 58 } });
+    this.body = this.layout.root;
     this.panel.add(heading); this.panel.add(this.body); this.root.add(this.panel);
     const theme = uiTheme(renderer);
     theme.scrollbars(this.list); theme.scrollbars(this.transcript.scroll);
@@ -158,6 +159,8 @@ export class SessionMonitor {
     }
     this.message.content = matches.length > maximumCandidates ? `Showing first ${maximumCandidates} of ${matches.length} sessions; refine search`
       : this.items.length ? `${this.items.length} sessions · Preview does not mark results as read` : this.search.value ? "No matching sessions" : "No working sessions or unread results";
+    this.layout.results.showEmpty(!this.items.length ? this.message.plainText : undefined);
+    this.message.visible = this.items.length > 0;
     const running = this.items.some(item => item.working);
     if (running && !this.running) this.spinner.start(); else if (!running) this.spinner.stop();
     this.running = running; this.paint(); this.preview();
@@ -180,8 +183,10 @@ export class SessionMonitor {
     const source = state?.sections ?? [];
     const sections: TranscriptSection[] = source.slice(-6).map(section => ({ ...section, text: previewTail(section.text) }));
     if (source.length > 6 || source.slice(-6).some(section => section.text.length > 8192)) sections.push({ id: "monitor-preview-limit", kind: "notice", title: "Preview truncated", text: "Open the session to read the full conversation.", status: "complete" });
-    this.transcript.update(item ? `monitor:${item.session.id}` : null, sections.length ? sections : undefined,
-      (state ? previewTail(state.output) : "") || (item ? "Session details are unavailable. Open the session to inspect it." : "Select a session"), this.visible, state?.conversationId);
+    const output = state ? previewTail(state.output) : "";
+    this.previewBody.showEmpty(!sections.length && !output
+      ? item ? "Session details are unavailable. Open the session to inspect it." : "Select a session" : undefined);
+    this.transcript.update(item ? `monitor:${item.session.id}` : null, sections.length ? sections : undefined, output, this.visible, state?.conversationId);
   }
   command(command: CommandId): void {
     if (!this.visible) return;
@@ -204,7 +209,7 @@ export class SessionMonitor {
     else if (command === "monitor.half-page-up" || command === "monitor.half-page-down") {
       const direction = command === "monitor.half-page-up" ? -1 : 1;
       if (this.transcript.focused) { this.transcript.scroll.scrollBy(direction * halfPageStep(this.transcript.scroll.viewport.height)); return; }
-      const height = this.list.visible ? this.list.viewport.height : this.body.height - this.search.field.height - this.message.height;
+      const height = this.layout.listHeight;
       if (this.search.focused) {
         if (this.compactPreview) { this.compactPreview = false; this.resize(); }
         this.list.focus();
@@ -217,13 +222,8 @@ export class SessionMonitor {
     if (this.disposed) return;
     const width = Math.max(1, Math.floor(this.renderer.width * 0.9)), height = Math.max(1, Math.floor(this.renderer.height * 0.8));
     this.search.fit(height - 5);
-    this.panel.width = width; this.panel.height = height; this.panel.left = Math.floor((this.renderer.width - width) / 2); this.panel.top = Math.floor((this.renderer.height - height) / 2);
-    const wide = this.renderer.width >= 100;
-    this.list.visible = wide || !this.compactPreview; this.previewPane.visible = wide || this.compactPreview;
-    this.body.flexDirection = wide ? "row" : "column";
-    this.candidates.width = wide ? "42%" : "100%"; this.candidates.flexGrow = this.list.visible ? 1 : 0;
-    this.previewPane.width = wide ? "58%" : "100%"; this.previewPane.flexGrow = wide ? 0 : 1;
-    this.previewPane.border = wide ? ["left"] : false; this.previewPane.paddingLeft = wide ? 1 : 0;
+    centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
+    this.layout.resize(this.renderer.width >= 100, this.compactPreview);
     if (this.visible && (this.transcript.focused && !this.previewPane.visible || this.list.focused && !this.list.visible)) this.search.focus();
     this.preview(); this.actions.changed();
   };

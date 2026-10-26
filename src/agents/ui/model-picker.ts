@@ -11,6 +11,7 @@ import { SearchInput } from "../../ui/search-input.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
+import { SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { Button } from "../../ui/button.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
@@ -39,6 +40,7 @@ export class ModelPicker {
   private readonly effortDrafts = new Map<string, ModelEffort>();
   private effortSignature = "";
   private readonly panel: BoxRenderable;
+  private readonly layout: SearchPopupLayout;
   private readonly message: TextRenderable;
   private readonly spinner: LoadingSpinner;
   private readonly rows: BoxRenderable[] = [];
@@ -74,7 +76,8 @@ export class ModelPicker {
     this.effortLabel = new TextRenderable(renderer, { id: "model-effort-label", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.effortOptions = new BoxRenderable(renderer, { id: "model-effort-options", width: "100%", flexShrink: 0, flexDirection: "row", flexWrap: "wrap" });
     this.effort.add(this.effortLabel); this.effort.add(this.effortOptions);
-    this.panel.add(heading); this.panel.add(this.search.field); this.panel.add(this.message); this.panel.add(this.list); this.panel.add(this.effort); this.root.add(this.panel);
+    this.layout = new SearchPopupLayout(renderer, { id: "model", search: this.search, message: this.message, list: this.list });
+    this.panel.add(heading); this.panel.add(this.layout.root); this.panel.add(this.effort); this.root.add(this.panel);
     theme.scrollbars(this.list);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
@@ -166,6 +169,11 @@ export class ModelPicker {
     });
     this.message.content = this.loadError ?? (this.loading ? "Loading available models…" : !this.catalog ? "" : !this.catalog.models.length ? "No available models. Configure provider authentication in Pi first."
       : !matches.length ? "No matching models" : `${matches.length} models${matches.length > 200 ? " · showing first 200; refine search" : ""} · changes apply only to this session`);
+    const empty = !!this.catalog && !this.filtered.length && !this.loadError && !this.loading;
+    const hasModels = !!this.catalog?.models.length;
+    this.layout.results.showEmpty(empty ? hasModels ? "No matching models" : "No available models" : undefined,
+      empty && !hasModels ? "Configure provider authentication in Pi first." : undefined);
+    this.message.visible = !empty;
     this.list.scrollTo(0); this.paint();
   };
   private paint(): void {
@@ -178,6 +186,7 @@ export class ModelPicker {
   private paintEffort(): void {
     if (!this.effort || this.effort.isDestroyed) return;
     const model = this.filtered[this.cursor], levels = model?.efforts ?? [], selected = this.selectedEffort;
+    this.effort.visible = !!model;
     const editable = !this.loading && !this.applying && levels.length > 1;
     this.effort.focusable = editable;
     const keys = [this.actions.keyHint("model.effort-less", "model-effort"), this.actions.keyHint("model.effort-more", "model-effort")].filter(Boolean).join("/");
@@ -249,8 +258,7 @@ export class ModelPicker {
     if (this.disposed || this.root.isDestroyed) return;
     const width = Math.max(1, Math.min(100, this.renderer.width - 4)), height = Math.max(1, Math.min(24, this.renderer.height - 2));
     this.search.fit(height - 7);
-    this.panel.width = width; this.panel.height = height;
-    this.panel.left = Math.floor((this.renderer.width - width) / 2); this.panel.top = Math.floor((this.renderer.height - height) / 2);
+    centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
   };
   dispose(): void {
     if (this.disposed) return;

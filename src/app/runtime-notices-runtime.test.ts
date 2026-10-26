@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Terminal } from "@xterm/headless";
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectOk } from "../testing/results.ts";
@@ -9,7 +10,9 @@ test("Closing a session through the real service never emits shutdown progress n
   // Observe actual bootstrap delivery through a PTY, using scripted responses instead of a model provider.
   const fixture = await createWorktreeFixture(), entry = join(import.meta.dir, "..", "index.ts");
   const stateRoot = join(fixture.directory, "state");
-  let client: RuntimeClient | undefined, child: Bun.Subprocess | undefined, raw = "";
+  let client: RuntimeClient | undefined, child: Bun.Subprocess | undefined, raw = "", messagesFrame = "";
+  const screen = new Terminal({ cols: 120, rows: 24, scrollback: 0, allowProposedApi: true });
+  const frame = () => Array.from({ length: screen.rows }, (_, row) => screen.buffer.active.getLine(screen.buffer.active.viewportY + row)?.translateToString(true) ?? "").join("\n");
   try {
     client = expectOk(await connectRuntime(fixture.repository, fixture.main, { offline: true, stateRoot, entry })) ?? undefined;
     if (!client) throw new Error("Missing offline runtime.");
@@ -26,10 +29,13 @@ test("Closing a session through the real service never emits shutdown progress n
         cwd: fixture.main, env: { ...process.env, TERM: "xterm-256color", XDG_CONFIG_HOME: join(fixture.directory, "config") },
         terminal: { cols: 120, rows: 24, name: "xterm-256color", data: (_terminal, bytes) => {
           raw += decoder.decode(bytes, { stream: true });
-          const screen = Bun.stripANSI(raw);
-          if (screen.includes("Ask to do anything") && screen.includes("context")) ready.resolve();
-          if (screen.includes("No AI sessions")) closed.resolve();
-          if (screen.includes("Messages") && screen.includes("No messages yet")) messagesShown.resolve();
+          // Cursor-addressed repaint patches are not contiguous prose; inspect the actual terminal cells.
+          screen.write(bytes, () => {
+            const text = frame();
+            if (text.includes("Ask to do anything") && text.includes("context")) ready.resolve();
+            if (text.includes("No AI sessions")) closed.resolve();
+            if (text.includes("Messages") && text.includes("No messages yet")) { messagesFrame = text; messagesShown.resolve(); }
+          });
         } },
       });
 
@@ -44,11 +50,11 @@ test("Closing a session through the real service never emits shutdown progress n
       expect(await child.exited).toBe(0);
 
       // Shutdown progress and offline startup Info appear in neither toasts nor retained Messages.
-      const screen = Bun.stripANSI(raw);
-      expect(screen).not.toMatch(/Closing \d/u);
-      expect(screen).not.toContain("OFFLINE SDK");
-      expect(screen).toContain("No messages yet");
-      expect(screen).toContain("Messages");
+      const output = Bun.stripANSI(raw);
+      expect(output).not.toMatch(/Closing \d/u);
+      expect(output).not.toContain("OFFLINE SDK");
+      expect(messagesFrame).toContain("No messages yet");
+      expect(messagesFrame).toContain("Messages");
     } finally {
       clearTimeout(deadline);
       ready.resolve(); closed.resolve(); messagesShown.resolve(); await observed.catch(() => {});
@@ -64,6 +70,6 @@ test("Closing a session through the real service never emits shutdown progress n
         await new Promise<void>(resolve => setTimeout(resolve, 20));
       }
     }
-    await fixture.cleanup();
+    screen.dispose(); await fixture.cleanup();
   }
 }, 25000);

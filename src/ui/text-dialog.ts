@@ -6,6 +6,7 @@ import { halfPageStep } from "./navigation.ts";
 import { Clipboard } from "./clipboard.ts";
 import { uiTheme } from "./theme.ts";
 import { PopupFrame } from "./popup-frame.ts";
+import { PopupBody, centerPopup } from "./popup-layout.ts";
 import { paintText } from "./theme-styles.ts";
 
 export type DialogContent = { title: string; text: string; copy?: boolean; copyText?: string };
@@ -15,6 +16,7 @@ export class TextDialog {
   readonly root: BoxRenderable;
   readonly scroll: ScrollBoxRenderable;
   private readonly panel: BoxRenderable;
+  private readonly contentBody: PopupBody;
   private readonly title: TextRenderable;
   private readonly body: TextRenderable;
   private readonly status: TextRenderable;
@@ -39,7 +41,8 @@ export class TextDialog {
     this.body = new TextRenderable(renderer, { id: "text-dialog-body", width: "100%", wrapMode: "word", selectable: true });
     this.scroll.add(this.body);
     this.status = new TextRenderable(renderer, { id: "text-dialog-status", height: 1, flexShrink: 0, wrapMode: "none", selectable: false, visible: false });
-    this.panel.add(this.title); this.panel.add(this.scroll); this.panel.add(this.status); this.root.add(this.panel);
+    this.contentBody = new PopupBody(renderer, "text-dialog-content", this.scroll);
+    this.panel.add(this.title); this.panel.add(this.contentBody.root); this.panel.add(this.status); this.root.add(this.panel);
     theme.scrollbars(this.scroll);
     theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
@@ -56,6 +59,7 @@ export class TextDialog {
     if (!this.visible) this.owner = this.renderer.currentFocusedRenderable ?? undefined;
     this.revision++; this.content = content;
     this.title.content = content.title; this.body.content = content.text;
+    this.contentBody.showEmpty(!content.text.trim() ? "No content" : undefined);
     this.status.visible = false; this.root.visible = true; this.resize(); this.scroll.scrollTo(0); this.scroll.focus(); this.changed();
   }
   hide(): void {
@@ -109,8 +113,7 @@ export class TextDialog {
   private resize = (): void => {
     if (this.disposed || this.root.isDestroyed) return;
     const width = Math.max(1, Math.min(110, this.renderer.width - 4)), height = Math.max(1, Math.min(this.renderer.height - 2, Math.floor(this.renderer.height * 0.85)));
-    this.panel.width = width; this.panel.height = height;
-    this.panel.left = Math.floor((this.renderer.width - width) / 2); this.panel.top = Math.floor((this.renderer.height - height) / 2);
+    centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
   };
   dispose(): void {
     if (this.disposed) return;

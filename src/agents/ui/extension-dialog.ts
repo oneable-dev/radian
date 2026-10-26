@@ -12,6 +12,7 @@ import { singleLine } from "../../ui/text.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
+import { SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { createTextMatcher } from "../../search.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
@@ -32,6 +33,7 @@ export class ExtensionDialogPanel {
   readonly list: ScrollBoxRenderable;
   readonly input: InputRenderable;
   private readonly panel: BoxRenderable;
+  private readonly layout: SearchPopupLayout;
   private readonly title: TextRenderable;
   private readonly details: ScrollBoxRenderable;
   private readonly body: TextRenderable;
@@ -63,7 +65,8 @@ export class ExtensionDialogPanel {
     this.list = new ScrollBoxRenderable(renderer, { id: "extension-dialog-list", flexGrow: 1, minHeight: 1, minWidth: 0, scrollX: false, onMouseDown: () => this.list.focus() });
     this.input = new InputRenderable(renderer, { id: "extension-dialog-input", width: "100%", maxLength: 65536, visible: false });
     this.status = new TextRenderable(renderer, { id: "extension-dialog-status", height: 1, flexShrink: 0, wrapMode: "none", visible: false, selectable: false });
-    this.panel.add(header); this.panel.add(this.details); this.panel.add(this.search.field); this.panel.add(this.list); this.panel.add(this.input); this.panel.add(this.status); this.root.add(this.panel);
+    this.layout = new SearchPopupLayout(renderer, { id: "extension", search: this.search, list: this.list });
+    this.panel.add(header); this.panel.add(this.details); this.panel.add(this.layout.root); this.panel.add(this.input); this.panel.add(this.status); this.root.add(this.panel);
     theme.scrollbars(this.details); theme.scrollbars(this.list); theme.input(this.input);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
@@ -141,6 +144,9 @@ export class ExtensionDialogPanel {
       paintText(row, styles[index === this.cursor ? "sidebar.selected" : "sidebar.item"]);
     });
     const row = this.rows[this.cursor]; if (row) this.list.scrollChildIntoView(row.id);
+    this.layout.root.visible = this.list.visible;
+    this.layout.results.showEmpty(this.scope?.dialog.kind === "select" && !this.filtered.length
+      ? this.search.value ? "No matching options" : "No available options" : undefined);
   }
   available(command: CommandId): boolean {
     if (!this.visible || !command.startsWith("extension.")) return false;
@@ -197,7 +203,7 @@ export class ExtensionDialogPanel {
   private resize = (): void => {
     if (this.disposed) return;
     const width = Math.max(1, Math.min(110, this.renderer.width - 4)), height = Math.max(1, Math.min(26, this.renderer.height - 2));
-    this.panel.width = width; this.panel.height = height; this.panel.left = Math.floor((this.renderer.width - width) / 2); this.panel.top = Math.floor((this.renderer.height - height) / 2);
+    centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
     this.search.fit(Math.max(1, height - 6));
   };
   dispose(): void {

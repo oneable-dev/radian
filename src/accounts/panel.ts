@@ -10,6 +10,7 @@ import { singleLine } from "../ui/text.ts";
 import type { Notice } from "../ui/messages.ts";
 import { uiTheme } from "../ui/theme.ts";
 import { PopupFrame } from "../ui/popup-frame.ts";
+import { SearchPopupLayout, centerPopup } from "../ui/popup-layout.ts";
 import { paintText } from "../ui/theme-styles.ts";
 import { footerKeyHint } from "../keybindings/footer.ts";
 import type { CommandId, KeyContext } from "../keybindings/commands.ts";
@@ -33,6 +34,7 @@ export class AccountsPanel {
   readonly search: SearchInput;
   readonly list: ScrollBoxRenderable;
   private readonly panel: BoxRenderable;
+  private readonly layout: SearchPopupLayout;
   private readonly title: TextRenderable;
   private readonly message: TextRenderable;
   private readonly details: ScrollBoxRenderable;
@@ -80,7 +82,8 @@ export class AccountsPanel {
     this.body = new TextRenderable(renderer, { id: "accounts-login-body", width: "100%", wrapMode: "char", selectable: true }); this.details.add(this.body);
     this.input = new InputRenderable(renderer, { id: "accounts-input", width: "100%", visible: false, maxLength: 65536 });
     this.secret = new SecretInput(renderer); this.secret.visible = false;
-    this.panel.add(header); this.panel.add(this.search.field); this.panel.add(this.message); this.panel.add(this.list); this.panel.add(this.details); this.panel.add(this.input); this.panel.add(this.secret); this.root.add(this.panel);
+    this.layout = new SearchPopupLayout(renderer, { id: "accounts", search: this.search, message: this.message, list: this.list });
+    this.panel.add(header); this.panel.add(this.layout.root); this.panel.add(this.details); this.panel.add(this.input); this.panel.add(this.secret); this.root.add(this.panel);
     theme.scrollbars(this.list); theme.scrollbars(this.details); theme.input(this.input);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
@@ -173,7 +176,7 @@ export class AccountsPanel {
         label: `${name} · ${account.label}${catalog.selections[provider] === account.id ? " [Active]" : ""}`, detail: `${account.type === "oauth" ? "OAuth" : "API key"} · used by ${account.usedBy.length} worktree(s)`, choose: () => choose(account.id) });
     }
     this.menu("accounts", "Accounts", providers.size ? "Enter switches accounts for this worktree. Use Add account to sign in to another account."
-      : "No connected accounts. Choose Add account to sign in.", entries);
+      : "", entries);
   }
   private providers(): void {
     this.menu("providers", "Add account · provider", "Choose a service to sign in.", (this.catalog?.providers ?? []).map(provider => ({
@@ -184,7 +187,7 @@ export class AccountsPanel {
     this.provider = provider;
     this.menu("methods", `Add account · ${singleLine(provider.name)}`, "Choose how to sign in. OAuth does not require a separate API key.", provider.methods.map(method => ({ id: method.id, label: method.name, detail: "", choose: () => {
       this.method = method.id; this.menu("label", "Add account · name", "Enter a label for the shared account, or press Enter to use the provider name.", []);
-      this.search.field.visible = this.list.visible = false; this.input.visible = true; this.input.placeholder = "Account label"; this.input.maxLength = 128; this.input.focus();
+      this.search.field.visible = this.list.visible = false; this.input.visible = true; this.input.placeholder = "Account label"; this.input.maxLength = 128; this.input.focus(); this.paint();
     } })));
   }
   private accept(login: LoginView): void {
@@ -284,6 +287,14 @@ export class AccountsPanel {
   private paint(): void {
     if (!this.rows) return;
     const styles = uiTheme(this.renderer).styles; this.rows.forEach((row, index) => { row.backgroundColor = styles[index === this.cursor ? "ui.selection" : "ui.popup"].bg; });
+    this.layout.results.root.visible = this.list.visible;
+    this.layout.root.flexGrow = this.layout.candidates.flexGrow = this.list.visible ? 1 : 0;
+    const noAccounts = this.stage === "accounts" && !!this.catalog && !this.catalog.accounts.length && !this.catalog.existingAccounts?.length && !this.search.value;
+    // The add-account candidate remains actionable above the centered setup guidance.
+    this.layout.results.empty.root.top = noAccounts ? this.filtered.length * this.rowHeight : 0;
+    this.layout.results.showEmpty(this.list.visible && !this.busy && !!this.catalog
+      ? noAccounts ? "No connected accounts" : !this.filtered.length ? this.search.value ? "No matching options" : "No available options" : undefined : undefined,
+      noAccounts ? "Choose Add account to sign in." : undefined);
     const row = this.rows[this.cursor]; if (row) this.list.scrollChildIntoView(row.id); this.actions.changed();
   }
   command(command: CommandId): void {
@@ -312,8 +323,8 @@ export class AccountsPanel {
   private resize = (): void => {
     if (this.disposed || this.root.isDestroyed) return;
     const width = Math.max(1, Math.min(106, this.renderer.width - 4)), height = Math.max(1, Math.min(30, this.renderer.height - 2));
-    this.search.fit(height - 6); this.panel.width = width; this.panel.height = height;
-    this.panel.left = Math.floor((this.renderer.width - width) / 2); this.panel.top = Math.floor((this.renderer.height - height) / 2);
+    this.search.fit(height - 6);
+    centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
   };
   dispose(): void {
     if (this.disposed) return;
