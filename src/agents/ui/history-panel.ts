@@ -78,7 +78,7 @@ export class SessionHistoryPanel {
       visible: false,
       onMouseDown: (event) => { event.stopPropagation(); }, onMouseScroll: (event) => event.stopPropagation() });
     this.panel = new PopupFrame(renderer, { id: "history-dialog", position: "absolute", border: true,
-      paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
+      paddingX: 0, flexDirection: "column", minWidth: 0, minHeight: 0 });
     this.spinner = new LoadingSpinner(renderer, { id: "history-loading" });
     this.search = new SearchInput(renderer, { id: "history-search", placeholder: "Search session titles…" });
     this.message = new TextRenderable(renderer, { id: "history-message", content: "", height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });

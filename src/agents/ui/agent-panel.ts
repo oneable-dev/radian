@@ -23,6 +23,7 @@ import { expandPromptDraft, type PromptDraft } from "../prompt-input.ts";
 import type { DialogContent } from "../../ui/text-dialog.ts";
 import { CompletionMenu, type CompletionProvider } from "./completion-menu.ts";
 import { SessionTabs } from "./session-tabs.ts";
+import { sessionSpinnerStyle } from "./status-indicator.ts";
 import { SubagentSummary } from "./subagent-summary.ts";
 import type { TranscriptImageProvider } from "../transcript-images.ts";
 import { PendingMessages } from "./pending-messages.ts";
@@ -101,11 +102,7 @@ export class AgentPanel {
       flexGrow: 1, minHeight: 0, minWidth: 0, padding: 1, flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
     theme.bindStyles(this.root, styles => { this.root.backgroundColor = styles["ui.text"].bg; });
     this.sessions = new SessionTabs(renderer, { button, ...(transcriptOptions.idPrefix ? { idPrefix: transcriptOptions.idPrefix } : {}),
-      spinnerStyle: id => {
-        const state = actions.getSessionDetails?.(id);
-        if (state?.status === "working" && state.activity === "compacting") return "circle-fill";
-        return state?.telemetry?.fast === true ? "fast" : "default";
-      },
+      spinnerStyle: id => sessionSpinnerStyle(actions.getSessionDetails?.(id)),
       select: (id) => { if (this.worktree && !transcriptOptions.readOnly) actions.onSelectSession?.(this.worktree.id, id); },
       create: () => { if (this.worktree && !transcriptOptions.readOnly) actions.onNewSession(this.worktree.id); },
       close: (id) => { if (this.worktree && !transcriptOptions.readOnly) actions.onCloseSession?.(this.worktree.id, id); },

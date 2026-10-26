@@ -65,7 +65,7 @@ async function renderSession(preview: boolean, state: ExecutionState, width: num
 
 for (const [width, height] of [[120, 30], [60, 16], [60, 7]] as const) {
   test.each(states)(`$name previews match the entire session screen at ${width}x${height}`, async ({ state }) => {
-    // The exact same runtime state, draft, roster and dimensions are supplied to both surfaces.
+    // The same runtime state, draft, roster, native session padding and dimensions go to both surfaces.
     const live = await renderSession(false, state, width, height);
 
     // Previewing uses the shared Agent renderer, not a shortened transcript or alternate composer.

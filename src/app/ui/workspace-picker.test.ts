@@ -11,7 +11,7 @@ import type { ExecutionState } from "../../agents/session-registry.ts";
 import { uiTheme } from "../../ui/theme.ts";
 
 async function fixture(options: Partial<WorkbenchActions> = {}) {
-  const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock: new ManualClock() });
+  const clock = new ManualClock(), app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
   const result = { id: "result-b", outcome: "complete" as const, completedAt: 1000, request: { text: "Fix authentication", images: 0, files: 0 } };
   const repositories = demoWorkspace().map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => tree.id === "demo:feature"
     ? { ...tree, sessions: [{ id: "b1", name: "opaque", status: "complete" as const, subagents: [], request: result.request, result, attention: result }] } : tree) }));
@@ -37,7 +37,7 @@ async function fixture(options: Partial<WorkbenchActions> = {}) {
   const get = (id: string) => { const node = app.renderer.root.findDescendantById(id); if (!node) throw new Error(`Missing ${id}`); return node; };
   const leader = (key: string) => { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey(key); };
   await render();
-  return { ...app, view, selection, states, acknowledged, submitted, lookups, get, render, leader,
+  return { ...app, clock, view, selection, states, acknowledged, submitted, lookups, get, render, leader,
     async close() { view.dispose(); await app.dispose(); } };
 }
 
@@ -145,13 +145,103 @@ test("Workspace hints omit default navigation in both search and results focus",
   } finally { await app.close(); }
 });
 
+test("Monitor candidates use one line with only a status icon, request, worktree and branch", async () => {
+  // Ordinary-sized lists do not need counters, explanatory prose, grouping headers or repeated state labels.
+  const app = await fixture();
+  try {
+    app.resize(180, 30); app.leader("s"); await app.render();
+
+    // The first candidate follows search directly, and the next candidate follows on the next terminal row.
+    const list = app.get("monitor-list"), search = app.get("monitor-search-field"), row = app.get("monitor:b1"), next = app.get("monitor:a1");
+    const caption = app.get("monitor-caption:b1"); if (!(caption instanceof TextRenderable)) throw new Error("Missing session caption");
+    expect(row.height).toBe(1); expect(next.height).toBe(1); expect(next.y).toBe(row.y + 1);
+    expect(list.y).toBe(search.y + search.height); expect(row.y).toBe(list.y);
+    expect(caption.plainText).toBe("Fix authentication · radian-ui · feature/workspace");
+    expect(app.get("monitor-status:b1").visible).toBe(true); expect(app.get("monitor-status:a1").visible).toBe(true);
+    expect(app.get("monitor-message").visible).toBe(false);
+    const listText = app.captureCharFrame().split("\n").slice(list.y, list.y + list.height).map(line => line.slice(list.x, list.x + list.width)).join("\n");
+    expect(listText).not.toMatch(/Needs attention|Working|Completed|sessions ·|Preview does not|radian \[demo\]/u);
+    const selected = app.captureSpans().lines[row.y]!.spans.find(span => span.text.includes("Fix authentication"));
+    expect(selected?.bg.toInts()).toEqual(uiTheme(app.renderer).styles["ui.selection"].bg!.toInts());
+    expect(app.acknowledged).toEqual([]); expect(app.submitted).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Long Unicode monitor captions retain both scope fields through resize without changing search or selection", async () => {
+  // Render only viewport-sized captions while matching against the complete original request.
+  const app = await fixture();
+  const request = { text: `${"한글 👩‍💻 e\u0301 ".repeat(40)}unicode-target`, images: 0, files: 0 };
+  try {
+    app.selection.replaceSnapshot(app.selection.snapshot.map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => tree.id === "demo:feature"
+      ? { ...tree, name: "작업트리-이름이-매우-긴-경우", branch: "feature/유니코드-브랜치-이름", sessions: tree.sessions.map(session => ({ ...session, request })) } : tree) })));
+    app.leader("s"); await app.mockInput.typeText("unicode-target"); app.mockInput.pressArrow("left"); await app.render();
+    const search = app.get("monitor-search") as InputRenderable, caret = search.cursorOffset, row = app.get("monitor:b1");
+
+    // Scope columns remain present even when the request and scope names all need truncation.
+    for (const width of [140, 60, 180]) {
+      app.resize(width, 30); await app.render();
+      const caption = app.get("monitor-caption:b1"); if (!(caption instanceof TextRenderable)) throw new Error("Missing session caption");
+      const parts = caption.plainText.split(" · ");
+      expect(parts).toHaveLength(3); expect(parts.every(part => part.length > 0)).toBe(true);
+      expect(parts[0]).toContain("한글"); expect(parts[1]).toStartWith("작업"); expect(parts[2]).toStartWith("feat");
+      expect(Bun.stringWidth(caption.plainText)).toBeLessThanOrEqual(row.width - app.get("monitor-status:b1").width - 1);
+      expect(caption.plainText).not.toMatch(/[\r\n\uFFFD]/u); expect(row.height).toBe(1);
+      expect(app.get("monitor:b1")).toBe(row); expect(search.value).toBe("unicode-target"); expect(search.cursorOffset).toBe(caret);
+    }
+    app.mockInput.pressEnter(); await app.render();
+    expect(app.selection.sessionId).toBe("b1"); expect(app.acknowledged).toEqual(["result-b"]); expect(app.submitted).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Monitor row loading follows Fast and compaction state without losing caption space or selection", async () => {
+  // The same background session changes modes without replacing its list candidate.
+  const app = await fixture(), original = app.states.b1!;
+  const update = async (fast: boolean, activity?: ExecutionState["activity"]) => {
+    app.states.b1 = { ...original, status: "working", ...(activity ? { activity } : {}),
+      telemetry: { provider: "fixture", model: "fixture-model", effort: "high", fast, context: null, weekly: null } };
+    app.selection.replaceSnapshot(app.selection.snapshot.map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => ({ ...tree,
+      sessions: tree.sessions.map(session => session.id === "b1" ? { ...session, status: "working" as const } : session),
+    })) })));
+    await app.render();
+  };
+  const glyphs = () => {
+    const node = app.get("monitor-status:b1");
+    return app.captureCharFrame().split("\n")[node.y]!.slice(node.x, node.x + node.width);
+  };
+  try {
+    app.resize(180, 30); await update(true); app.leader("s"); await app.render();
+    const row = app.get("monitor:b1"), marker = app.get("monitor-status:b1"), caption = app.get("monitor-caption:b1");
+    if (!(caption instanceof TextRenderable)) throw new Error("Missing session caption");
+
+    // Fast uses the session's three-cell arrows and active-arrow theme color, not the default spinner.
+    expect(glyphs()).toBe("▶▷▷"); expect(marker.width).toBe(3);
+    expect(caption.x).toBe(marker.x + 4);
+    const arrow = app.captureSpans().lines[marker.y]!.spans.find(span => span.text.includes("▶"));
+    expect(arrow?.fg.toInts()).toEqual(uiTheme(app.renderer).styles["metadata.fastOn"].fg.toInts());
+    app.clock.advance(80); await app.render(); expect(glyphs()).toBe("▷▶▷");
+
+    // Compaction overrides Fast; mode changes preserve both the native row and available caption width.
+    await update(true, "compacting");
+    const runLoading = app.get("monitor-preview-agent-view").findDescendantById("agent-run-loading");
+    if (!runLoading) throw new Error("Missing preview run activity");
+    const sessionActivity = app.captureCharFrame().split("\n")[runLoading.y]!.slice(runLoading.x, runLoading.x + runLoading.width);
+    expect(glyphs()).toBe(sessionActivity); expect(glyphs()).not.toMatch(/[▶▷]/u); expect(marker.width).toBe(runLoading.width);
+    await update(false); expect(marker.width).toBe(1); expect(glyphs()).not.toMatch(/[▶▷]/u);
+    expect(caption.x).toBe(marker.x + 2);
+    expect(caption.plainText).toBe("Fix authentication · radian-ui · feature/workspace");
+    expect(Bun.stringWidth(caption.plainText)).toBeLessThanOrEqual(caption.width);
+    expect(app.get("monitor:b1")).toBe(row); expect(app.selection.sessionId).toBe("a1");
+    expect(app.acknowledged).toEqual([]); expect(app.submitted).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("Monitor previews and browsing never acknowledge; only sessions opened with Enter do", async () => {
   // Separate another workspace's unread results from the current conversation.
   const app = await fixture();
   try {
     app.leader("s"); await app.render();
     expect(app.get("session-monitor").visible).toBe(true); expect(app.captureCharFrame()).toContain("PREVIEW_RESULT");
-    expect(app.captureCharFrame()).toContain("Needs attention"); expect(app.acknowledged).toEqual([]);
+    expect(app.captureCharFrame()).not.toContain("Needs attention"); expect(app.get("monitor-message").visible).toBe(false); expect(app.acknowledged).toEqual([]);
     expect(app.selection.sessionId).toBe("a1");
     app.mockInput.pressKey("n", { ctrl: true }); await app.render();
     app.mockInput.pressKey("p", { ctrl: true }); await app.render();
@@ -339,6 +429,7 @@ test("Large monitors report rendering limits and search still reaches later sess
     await app.mockInput.typeText("special last"); await app.render();
 
     expect(app.get("monitor:bulk-249")).toBeDefined(); expect(app.captureCharFrame()).toContain("Last special task"); expect(app.acknowledged).toEqual([]);
+    expect(message.visible).toBe(false);
   } finally { await app.close(); }
 });
 

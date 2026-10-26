@@ -62,7 +62,7 @@ export class GitBrowser {
   constructor(private readonly renderer: CliRenderer, private readonly actions: Actions) {
     this.root = new BoxRenderable(renderer, { id: "git-browser", position: "absolute", left: 0, right: 0, top: 0, bottom: 0,
       zIndex: 50, visible: false, onSizeChange: () => this.resize() });
-    this.panel = new PopupFrame(renderer, { id: "git-browser-panel", position: "absolute", border: true, paddingX: 1,
+    this.panel = new PopupFrame(renderer, { id: "git-browser-panel", position: "absolute", border: true, paddingX: 0,
       minHeight: 0, minWidth: 0, flexDirection: "column" });
     this.spinner = new LoadingSpinner(renderer, { id: "git-browser-loading" });
     this.search = new SearchInput(renderer, { id: "git-browser-search", placeholder: "Search refs…" });

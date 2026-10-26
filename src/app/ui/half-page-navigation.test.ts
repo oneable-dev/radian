@@ -9,6 +9,7 @@ import { modelCommand } from "../../agents/model-selection.ts";
 import { ok } from "../../result.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { SearchInput } from "../../ui/search-input.ts";
+import { horizontalInset } from "../../ui/spacing.ts";
 
 type Surface = "workspace" | "history" | "monitor" | "model";
 const surfaces = ["workspace", "history", "monitor", "model"] as const;
@@ -122,14 +123,15 @@ test.each(["history", "monitor"] as const)("%s preview panes fill their height w
 
       // Search and result hints belong only to lists; previews use their full height.
       expect(field.x).toBe(app.list.x); expect(field.width).toBe(app.list.width);
-      expect((surface === "history" ? app.get("history-list-status") : message).x).toBe(app.list.x);
+      if (surface === "history") expect(app.get("history-list-status").x).toBe(app.list.x);
+      else { expect(message.visible).toBe(false); expect(app.list.y).toBe(field.y + field.height); }
       expect(preview.visible).toBe(width >= 100);
       if (preview.visible) {
         expect(field.x + field.width).toBe(preview.x);
         expect(preview.y).toBe(field.y);
         expect(preview.y + preview.height).toBe(app.list.y + app.list.height);
         const lines = app.captureCharFrame().split("\n");
-        expect(lines[field.y]![preview.x]).toBe("│"); expect(lines[message.y]![preview.x]).toBe("│");
+        expect(lines[field.y]![preview.x]).toBe("│"); expect(lines[surface === "history" ? message.y : app.list.y]![preview.x]).toBe("│");
       }
       // Compact layouts reveal the same preview surface through its configured command.
       if (width < 100) { app.mockInput.pressKey("o", { ctrl: true }); await app.render(); }
@@ -139,6 +141,12 @@ test.each(["history", "monitor"] as const)("%s preview panes fill their height w
       // Removing a heading must reclaim its row without stripping the actual session UI.
       expect(preview.visible).toBe(true);
       expect(content.y).toBe(preview.y); expect(content.height).toBe(preview.height);
+      expect(content.x).toBe(preview.x + Number(width >= 100));
+      expect(content.x + content.width).toBe(app.get(`${surface}-dialog`).x + app.get(`${surface}-dialog`).width - 1);
+      // Remove only host padding: preserve the session's native inset and full-bleed composer background.
+      const transcript = app.get(`${surface}-preview`), composer = app.get(`${surface}-preview-agent-composer`), prompt = app.get(`${surface}-preview-session-prompt`);
+      expect(transcript.x).toBe(content.x + horizontalInset(width)); expect(prompt.x).toBe(transcript.x);
+      expect(composer.x).toBe(content.x); expect(composer.x + composer.width).toBe(content.x + content.width);
       expect(frame).not.toContain("Preview ·"); expect(frame).not.toContain("Live preview ·");
       expect(frame).not.toContain(surface === "history" ? "History · radian" : "AI Sessions");
       expect(field.y).toBe(app.get(`${surface}-dialog`).y + 1);
@@ -158,7 +166,7 @@ test.each(surfaces)("%s list Ctrl+D/U moves half-page candidates without committ
   const app = await mount(surface);
   try {
     await app.mockInput.typeText("candidate"); app.mockInput.pressTab(); await app.render();
-    const stride = surface === "workspace" || surface === "monitor" ? 3 : 2;
+    const stride = surface === "workspace" ? 3 : surface === "monitor" ? 1 : 2;
     const step = Math.max(1, Math.floor(app.list.viewport.height / (2 * stride)));
     expect(step).toBeGreaterThan(1);
 
@@ -191,7 +199,7 @@ test.each(surfaces)("%s half-page list jumps stop at the final candidate and ret
   const app = await mount(surface);
   try {
     app.mockInput.pressTab(); await app.render();
-    const stride = surface === "workspace" || surface === "monitor" ? 3 : 2;
+    const stride = surface === "workspace" ? 3 : surface === "monitor" ? 1 : 2;
     const step = Math.max(1, Math.floor(app.list.viewport.height / (2 * stride)));
 
     app.mockInput.pressKey("END"); app.mockInput.pressKey("d", { ctrl: true }); app.mockInput.pressKey("u", { ctrl: true });
@@ -213,7 +221,7 @@ test.each(surfaces.flatMap(surface => (["d", "u"] as const).map(key => ({ surfac
     for (let index = 0; index < 20; index++) { app.mockInput.pressKey("n", { ctrl: true }); await app.render(); }
     app.mockInput.pressArrow("left"); app.mockInput.pressArrow("left"); await app.render();
     const cursor = app.input.cursorOffset;
-    const stride = surface === "workspace" || surface === "monitor" ? 3 : 2;
+    const stride = surface === "workspace" ? 3 : surface === "monitor" ? 1 : 2;
     const step = Math.max(1, Math.floor(app.list.viewport.height / (2 * stride)));
     const selected = 20 + (key === "d" ? step : -step);
 
@@ -333,7 +341,7 @@ test.each(["history", "monitor"] as const)("Compact %s search jumps return from 
   try {
     app.resize(60, 18); await app.render(); await app.mockInput.typeText("candidate"); await app.render();
     for (let index = 0; index < 10; index++) { app.mockInput.pressKey("n", { ctrl: true }); await app.render(); }
-    const step = Math.max(1, Math.floor(app.list.viewport.height / (2 * (surface === "history" ? 2 : 3))));
+    const step = Math.max(1, Math.floor(app.list.viewport.height / (2 * (surface === "history" ? 2 : 1))));
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
     expect(app.list.visible).toBe(false); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
 

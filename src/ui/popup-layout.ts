@@ -56,11 +56,13 @@ export class SearchPopupLayout {
     this.candidates.width = split && wide ? `${100 - preview.width}%` : "100%";
     this.candidates.flexGrow = showList ? 1 : 0;
     if (!preview) return;
+    // Split popups inset only their search/list column; previews use the full frame edge.
+    this.candidates.paddingLeft = 1; this.candidates.paddingRight = split && wide ? 0 : 1;
     const pane = preview.body.root;
     pane.visible = Boolean(split && (wide || compactPreview));
     pane.width = wide ? `${preview.width}%` : "100%";
     pane.flexGrow = wide ? 0 : 1;
-    pane.border = wide ? ["left"] : false; pane.paddingLeft = wide ? 1 : 0;
+    pane.border = wide ? ["left"] : false; pane.paddingX = 0;
   }
 
   get listHeight(): number {

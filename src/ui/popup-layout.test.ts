@@ -51,6 +51,11 @@ test.each([false, true])("Search layouts preserve queries and viewport ownership
       expect(list.visible).toBe(!previewEnabled || width >= 100 || !compactPreview);
       if (previewEnabled) {
         expect(preview.root.visible).toBe(width >= 100 || compactPreview);
+        if (preview.root.visible) {
+          const content = preview.root.getChildren()[0]!;
+          expect(content.x).toBe(preview.root.x + Number(width >= 100));
+          expect(content.x + content.width).toBe(preview.root.x + preview.root.width);
+        }
         if (width >= 100) {
           expect(preview.root.y).toBe(search.field.y);
           expect(search.field.x + search.field.width).toBe(preview.root.x);

@@ -1,11 +1,17 @@
 import { BoxRenderable, TextRenderable, type CliRenderer } from "@opentui/core";
 import type { AgentStatus, OpenSession } from "../model.ts";
+import type { ExecutionState } from "../session-registry.ts";
 import { icons } from "../../icons.ts";
 import { LoadingSpinner, type SpinnerStyle } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText, type StyleGroup } from "../../ui/theme-styles.ts";
 
 type Indicator = { icon: string; color: StyleGroup };
+
+export function sessionSpinnerStyle(state: ExecutionState | null | undefined): SpinnerStyle {
+  if (state?.status === "working" && state.activity === "compacting") return "circle-fill";
+  return state?.telemetry?.fast === true ? "fast" : "default";
+}
 
 function display(status: AgentStatus | null, session?: Pick<OpenSession, "result" | "attention">): Indicator {
   const result = session?.result;

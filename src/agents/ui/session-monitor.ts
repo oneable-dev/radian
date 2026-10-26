@@ -1,4 +1,4 @@
-import { BoxRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
+import { BoxRenderable, InputRenderableEvents, ScrollBoxRenderable, StyledText, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
 import type { Repository } from "../../workspace/model.ts";
 import type { ExecutionState } from "../session-registry.ts";
 import { monitoredSessions, type MonitoredSession } from "../session-monitor.ts";
@@ -9,12 +9,12 @@ import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
 import { SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
-import { paintText } from "../../ui/theme-styles.ts";
-import { singleLine } from "../../ui/text.ts";
+import { paintText, styleChunk } from "../../ui/theme-styles.ts";
+import { singleLine, truncateCells } from "../../ui/text.ts";
 import { SearchInput } from "../../ui/search-input.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import { SessionPreview } from "./session-preview.ts";
-import { StatusIndicator } from "./status-indicator.ts";
+import { StatusIndicator, sessionSpinnerStyle } from "./status-indicator.ts";
 import type { PromptDraft } from "../prompt-input.ts";
 import type { TranscriptImageProvider } from "../transcript-images.ts";
 
@@ -29,7 +29,7 @@ type Actions = {
   draft?(id: string): PromptDraft | string | undefined;
   image?: TranscriptImageProvider;
 };
-type Candidate = { root: BoxRenderable; title: TextRenderable; metadata: TextRenderable; status: StatusIndicator };
+type Candidate = { root: BoxRenderable; text: TextRenderable; status: StatusIndicator; item: MonitoredSession };
 const maximumCandidates = 200;
 
 // This popup owns browsing only. Preview and candidate movement never acknowledge a result.
@@ -44,7 +44,6 @@ export class SessionMonitor {
   private readonly previewPane: BoxRenderable;
   private readonly previewSurface: SessionPreview;
   private readonly rows: Candidate[] = [];
-  private readonly headings: TextRenderable[] = [];
   private repositories: readonly Repository[] = [];
   private items: readonly MonitoredSession[] = [];
   private cursor = 0;
@@ -59,7 +58,7 @@ export class SessionMonitor {
     if (this.listenerBudget) renderer.setMaxListeners(renderer.getMaxListeners() + this.listenerBudget);
     this.root = new BoxRenderable(renderer, { id: "session-monitor", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 4900, visible: false,
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
-    this.panel = new PopupFrame(renderer, { id: "monitor-dialog", position: "absolute", border: true, paddingX: 1, minWidth: 0, minHeight: 0, flexDirection: "column" });
+    this.panel = new PopupFrame(renderer, { id: "monitor-dialog", position: "absolute", border: true, paddingX: 0, minWidth: 0, minHeight: 0, flexDirection: "column" });
     this.search = new SearchInput(renderer, { id: "monitor-search", placeholder: "Search tasks, repositories or worktrees…" });
     this.message = new TextRenderable(renderer, { id: "monitor-message", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.list = new ScrollBoxRenderable(renderer, { id: "monitor-list", width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
@@ -128,43 +127,47 @@ export class SessionMonitor {
     if (signature !== this.signature) {
       this.signature = signature;
       for (const row of this.rows) { row.status.dispose(); row.root.destroyRecursively(); } this.rows.length = 0;
-      for (const heading of this.headings) heading.destroy(); this.headings.length = 0;
-      let group: boolean | undefined;
       for (const [index, item] of this.items.entries()) {
-        const unread = !!item.session.attention;
-        if (unread !== group) {
-          group = unread;
-          const heading = new TextRenderable(this.renderer, { content: unread ? "Needs attention" : "Working", height: 1, flexShrink: 0, selectable: false, wrapMode: "none" });
-          this.headings.push(heading); this.list.add(heading);
-        }
-        const root = new BoxRenderable(this.renderer, { id: `monitor:${item.session.id}`, height: 3, flexShrink: 0, minWidth: 0, flexDirection: "column",
+        const root = new BoxRenderable(this.renderer, { id: `monitor:${item.session.id}`, height: 1, flexShrink: 0, minWidth: 0, flexDirection: "row", gap: 1,
           onMouseDown: event => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.list.focus(); this.cursor = index; this.paint(); this.preview(); } } });
-        const line = new BoxRenderable(this.renderer, { height: 1, minWidth: 0, flexDirection: "row", gap: 1 });
-        const status = new StatusIndicator(this.renderer); status.root.id = `monitor-status:${item.session.id}`;
-        const title = new TextRenderable(this.renderer, { content: singleLine(item.title), height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });
-        const outcome = item.session.result?.outcome;
-        const state = item.working ? "Working" : outcome === "error" || item.session.status === "failure" ? "Failed" : outcome === "unfinished" ? "? Stopped" : outcome === "cancelled" ? "Cancelled" : "Completed";
-        const metadata = new TextRenderable(this.renderer, { content: singleLine(`${item.repository} / ${item.worktree} · ${item.branch ?? "detached HEAD"} · ${state}`), height: 1, wrapMode: "none", selectable: false });
-        line.add(status.root); line.add(title); root.add(line); root.add(metadata); this.list.add(root); this.rows.push({ root, title, metadata, status });
+        let row: Candidate | undefined;
+        const status = new StatusIndicator(this.renderer, () => { if (row) this.paintCaption(row); }); status.root.id = `monitor-status:${item.session.id}`;
+        const text = new TextRenderable(this.renderer, { id: `monitor-caption:${item.session.id}`, height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });
+        row = { root, text, status, item };
+        root.onSizeChange = text.onSizeChange = () => { if (row) this.paintCaption(row); };
+        root.add(status.root); root.add(text); this.list.add(root); this.rows.push(row);
       }
     }
-    this.message.content = matches.length > maximumCandidates ? `Showing first ${maximumCandidates} of ${matches.length} sessions; refine search`
-      : this.items.length ? `${this.items.length} sessions · Preview does not mark results as read` : this.search.value ? "No matching sessions" : "No working sessions or unread results";
-    this.layout.results.showEmpty(!this.items.length ? this.message.plainText : undefined);
-    this.message.visible = this.items.length > 0;
+    this.message.content = matches.length > maximumCandidates ? `Showing first ${maximumCandidates} of ${matches.length} sessions; refine search` : "";
+    this.message.visible = matches.length > maximumCandidates;
+    this.layout.results.showEmpty(!this.items.length ? this.search.value ? "No matching sessions" : "No working sessions or unread results" : undefined);
     this.paint(); this.preview();
   }
   private paint(): void {
     if (!this.rows) return;
     const styles = uiTheme(this.renderer).styles;
-    for (const heading of this.headings) paintText(heading, styles["ui.muted"]);
     this.rows.forEach((row, index) => {
       row.root.backgroundColor = styles[index === this.cursor ? "ui.selection" : "ui.popup"].bg;
-      paintText(row.title, styles["ui.label"]); paintText(row.metadata, styles["ui.muted"]);
-      const item = this.items[index]; if (item) row.status.update(item.working ? "working" : item.session.status, this.visible, item.session);
+      const item = this.items[index]; if (item) row.status.update(item.working ? "working" : item.session.status, this.visible, item.session,
+        sessionSpinnerStyle(this.visible ? this.actions.details(item.session.id) : null));
+      this.paintCaption(row);
     });
     const row = this.rows[this.cursor]; if (row) this.list.scrollChildIntoView(row.root.id);
     this.actions.changed();
+  }
+  private paintCaption(row: Candidate): void {
+    if (row.root.isDestroyed) return;
+    const width = Math.max(0, row.root.width - row.status.root.width - 1);
+    const title = singleLine(row.item.title), tree = singleLine(row.item.worktree), branch = singleLine(row.item.branch ?? "detached HEAD");
+    // Preserve both scope fields while giving long requests a visible, grapheme-safe prefix.
+    const scopeBudget = Math.max(0, width - Math.min(Bun.stringWidth(title), 12, Math.floor(width / 3)) - 6);
+    const branchBudget = Math.min(Bun.stringWidth(branch), scopeBudget - Math.min(Bun.stringWidth(tree), Math.ceil(scopeBudget / 2)));
+    const treeText = truncateCells(tree, scopeBudget - branchBudget);
+    const branchText = truncateCells(branch, scopeBudget - Bun.stringWidth(treeText));
+    const scope = width >= 8 ? ` · ${treeText} · ${branchText}` : "";
+    const styles = uiTheme(this.renderer).styles;
+    row.text.content = new StyledText([styleChunk(truncateCells(title, width - Bun.stringWidth(scope)), styles["ui.label"]),
+      styleChunk(scope, styles["ui.muted"])]);
   }
   private preview(): void {
     if (!this.visible || !this.previewPane.visible) { this.previewSurface.hide(); return; }
@@ -202,7 +205,7 @@ export class SessionMonitor {
         if (this.compactPreview) { this.compactPreview = false; this.resize(); }
         this.list.focus();
       }
-      this.cursor += direction * halfPageStep(height, 3);
+      this.cursor += direction * halfPageStep(height);
     } else return;
     this.cursor = Math.max(0, Math.min(this.items.length - 1, this.cursor)); this.paint(); this.preview();
   }
