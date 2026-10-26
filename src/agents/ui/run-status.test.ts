@@ -57,23 +57,24 @@ test("Compaction shows dedicated wording and animated spinners, restoring reques
     const compacting = { ...state, activity: "compacting" as const };
     app.status.update("a", compacting, true); await app.render();
     const first = app.captureCharFrame();
-    expect(first).toContain(" ○  Compacting context");
+    expect(first).toContain("○ Compacting context");
+    expect(app.spinner().width).toBe(1); expect(app.node().x).toBe(app.spinner().x + 2);
 
     // Circle-fill frames keep advancing without restarting on repeated compaction snapshots.
     app.clock.advance(80); app.status.update("a", compacting, true); await app.render();
-    expect(app.captureCharFrame()).toContain(" ◔  Compacting context");
+    expect(app.captureCharFrame()).toContain("◔ Compacting context");
     expect(app.text()).toBe("Compacting context (0s · <Esc> to interrupt)"); expect(app.spinner().visible).toBe(true);
     expect(app.captureCharFrame()).not.toBe(first); expect(app.text()).not.toContain("Previous delivered request");
 
     // Normal execution resumes the same request and spinner afterward.
     app.status.update("a", state, true); await app.render();
     expect(app.text()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toBe("“Previous delivered request”"); expect(app.spinner().visible).toBe(true);
-    expect(app.captureCharFrame()).toContain("⠋ Working");
+    expect(app.captureCharFrame()).toContain("⠋ Working"); expect(app.node().x).toBe(app.spinner().x + 2);
   } finally { await app.close(); }
 });
 
 test("Compaction overrides Fast arrows and shimmer, then restores them when execution resumes", async () => {
-  // Compaction centers one circle in the same three-cell slot reserved for Fast arrows.
+  // Compaction uses one cell like ordinary work, even when the session keeps Fast enabled.
   const app = await mount();
   const state = { ...working([user("Retained request")]), telemetry: { provider: "fixture", model: "fixture", effort: "high", fast: true, context: null, weekly: null } };
   try {
@@ -84,9 +85,9 @@ test("Compaction overrides Fast arrows and shimmer, then restores them when exec
     // Automatic compaction changes presentation without starting another operation or shimmer timer.
     app.status.update("a", { ...state, activity: "compacting" }, true); await app.render();
 
-    expect(app.captureCharFrame()).toContain(" ○  Compacting context"); expect(app.spinner().width).toBe(3); expect(app.node().x).toBe(textX);
+    expect(app.captureCharFrame()).toContain("○ Compacting context"); expect(app.spinner().width).toBe(1); expect(app.node().x).toBe(textX - 2);
     expect(app.clock.pendingTimerCount).toBe(timers - 1); expect(app.caption()).toBe("");
-    app.clock.advance(80); await app.render(); expect(app.captureCharFrame()).toContain(" ◔  Compacting context");
+    app.clock.advance(80); await app.render(); expect(app.captureCharFrame()).toContain("◔ Compacting context");
 
     // Returning to model work restores the configured Fast presentation and original request.
     app.status.update("a", state, true); await app.render();

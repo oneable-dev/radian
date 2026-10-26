@@ -26,7 +26,7 @@ export class LoadingSpinner {
     uiTheme(renderer).bindStyles(this.root, () => { if (this.style === "fast" && this.root.visible) this.paint(); });
   }
 
-  get columns(): number { return this.style === "default" ? 1 : 3; }
+  get columns(): number { return this.style === "fast" ? 3 : 1; }
   private get frames(): readonly string[] { return this.style === "circle-fill" ? circleFillFrames : spinnerFrames; }
 
   setStyle(style: SpinnerStyle): void {
@@ -65,11 +65,7 @@ export class LoadingSpinner {
   }
 
   private paint(): void {
-    if (this.style === "circle-fill") {
-      this.root.content = ` ${circleFillFrames[this.frame]!} `;
-      return;
-    }
-    if (this.style === "default") { this.root.content = spinnerFrames[this.frame]!; return; }
+    if (this.style !== "fast") { this.root.content = this.frames[this.frame]!; return; }
     const styles = uiTheme(this.renderer).styles;
     this.root.content = new StyledText(Array.from({ length: 3 }, (_, index) =>
       styleChunk(index === this.frame ? "▶" : "▷", styles[index === this.frame ? "metadata.fastOn" : "ui.muted"])));

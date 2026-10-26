@@ -61,7 +61,7 @@ test.each(["fast", "circle-fill"] as const)("Switching to %s preserves minimum d
 
     app.spinner.setStyle(style); app.spinner.stop(); await app.advance(379);
 
-    expect(app.spinner.root.visible).toBe(true); expect(app.spinner.root.width).toBe(3);
+    expect(app.spinner.root.visible).toBe(true); expect(app.spinner.root.width).toBe(style === "fast" ? 3 : 1);
     await app.advance(1); expect(app.spinner.root.visible).toBe(false);
     app.spinner.setStyle("default"); app.spinner.start(); await app.renderOnce();
     expect(app.spinner.root.plainText).toBe("⠋"); expect(app.spinner.root.width).toBe(1);
@@ -69,20 +69,20 @@ test.each(["fast", "circle-fill"] as const)("Switching to %s preserves minimum d
   } finally { await app.dispose(); }
 });
 
-test("Circle-fill spinners center one glyph in three cells and loop without resetting on repeated style updates", async () => {
-  // A single filling circle keeps compaction quiet without changing the slot reserved for Fast arrows.
+test("Circle-fill spinners use one cell without padding and loop without resetting on repeated style updates", async () => {
+  // Compaction reserves the same single cell as ordinary loading instead of keeping the Fast arrow slot.
   const app = await mount();
   try {
     app.spinner.setStyle("circle-fill"); app.spinner.start(); await app.renderOnce();
     const x = app.spinner.root.x;
 
-    // Each fill stage and its wraparound retain one blank cell on either side of the circle.
-    for (const expected of [" ○ ", " ◔ ", " ◑ ", " ◕ ", " ● ", " ○ "]) {
+    // Every fill stage and its wraparound render the glyph without surrounding whitespace.
+    for (const expected of ["○", "◔", "◑", "◕", "●", "○"]) {
       app.spinner.setStyle("circle-fill"); await app.renderOnce();
 
       expect(app.spinner.root.plainText).toBe(expected);
-      expect(app.captureCharFrame().split("\n")[app.spinner.root.y]!.slice(x, x + 3)).toBe(expected);
-      expect(app.spinner.root.width).toBe(3); expect(app.spinner.columns).toBe(3); expect(app.spinner.root.x).toBe(x);
+      expect(app.captureCharFrame().split("\n")[app.spinner.root.y]!.slice(x, x + 1)).toBe(expected);
+      expect(app.spinner.root.width).toBe(1); expect(app.spinner.columns).toBe(1); expect(app.spinner.root.x).toBe(x);
       await app.advance(80);
     }
     app.spinner.cancel(); await app.renderOnce(); expect(app.clock.pendingTimerCount).toBe(0);
