@@ -18,9 +18,6 @@ export class PopupFrame extends BoxRenderable {
     const color = focused ? this._focusedBorderColor : this._borderColor;
     buffer.drawBox({ x, y, width: this.width, height: this.height, border: this._border,
       borderStyle: this._borderStyle, borderColor: color, backgroundColor: transparent, shouldFill: false,
-      ...(this._customBorderChars ? { customBorderChars: this._customBorderChars } : {}),
-      ...(this._title === undefined ? {} : { title: this._title }), titleColor: this._titleColor ?? color,
-      titleAlignment: this._titleAlignment, ...(this._bottomTitle === undefined ? {} : { bottomTitle: this._bottomTitle }),
-      bottomTitleAlignment: this._bottomTitleAlignment });
+      ...(this._customBorderChars ? { customBorderChars: this._customBorderChars } : {}) });
   }
 }

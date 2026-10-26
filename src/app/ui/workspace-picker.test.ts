@@ -1,7 +1,8 @@
 import { openWorkspaceSearch, pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
-import { InputRenderable, ScrollBoxRenderable, TextRenderable } from "@opentui/core";
+import { EditBufferRenderable, InputRenderable, ScrollBoxRenderable, TextRenderable, type Renderable } from "@opentui/core";
+import type { TranscriptSection } from "../../agents/transcript.ts";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -207,6 +208,42 @@ test.each(["search", "list"] as const)("Opening sessions from monitor %s shows l
   } finally { await app.close(); }
 });
 
+test("Monitor previews include the full session screen and retain complete sections without allowing session actions", async () => {
+  // A background session has real telemetry, queued input, an unsent draft and more than six sections.
+  const closed: string[] = [];
+  const app = await fixture({ initialDrafts: { a1: "KEEP_DRAFT", b1: "PREVIEW_DRAFT" }, onCloseSession: (_tree, id) => { closed.push(id); } });
+  const longPrompt = `FIRST_RETAINED_SECTION ${"x".repeat(9000)} RETAINED_TAIL`;
+  const sections: TranscriptSection[] = [{ id: "long-request", kind: "user", title: "You", text: longPrompt, status: "complete" },
+    ...Array.from({ length: 10 }, (_, index): TranscriptSection => ({ id: `answer-${index}`, kind: "assistant", title: "Agent", text: `Saved answer ${index}`, status: "complete" }))];
+  const walk = (node: Renderable): Renderable[] => [node, ...node.getChildren().flatMap(walk)];
+  try {
+    app.states.b1 = { ...app.states.b1!, status: "working", sections, pendingMessages: [{ text: "Queued follow-up", images: 0, files: 0 }],
+      telemetry: { provider: "fixture", model: "preview-model", effort: "high", fast: true, context: { usedTokens: 25000, maxTokens: 100000 }, weekly: null } };
+    app.selection.replaceSnapshot(app.selection.snapshot.map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => ({ ...tree,
+      sessions: tree.sessions.map(session => session.id === "b1" ? { ...session, status: "working" } : session),
+    })) })));
+
+    // The list owns browsing activity, while the right pane reuses the complete Agent view.
+    app.leader("s"); await app.render();
+    const preview = app.get("monitor-preview-agent-view"), composer = app.get("monitor-preview-agent-composer");
+    expect(app.get("monitor-preview-agent-session-tabs").visible).toBe(true);
+    expect(app.get("monitor-preview-session-status").visible).toBe(true);
+    expect(app.get("monitor-status:b1").visible).toBe(true);
+    expect(app.renderer.root.findDescendantById("monitor-loading")).toBeUndefined();
+    const first = walk(preview).find((node): node is EditBufferRenderable => node instanceof EditBufferRenderable && node.plainText === longPrompt);
+    expect(first).toBeDefined(); expect(first!.focusable).toBe(false);
+    expect(app.captureCharFrame()).toContain("preview-model"); expect(app.captureCharFrame()).toContain("Queued follow-up");
+    expect(app.captureCharFrame()).toContain("PREVIEW_DRAFT"); expect(app.captureCharFrame()).not.toContain("Preview truncated");
+
+    // A displayed composer and close control are inert, not a second editing or session-selection surface.
+    await app.mockMouse.click(composer.x + 1, composer.y + 1); await app.mockInput.typeText("zzzz");
+    await app.mockInput.pasteBracketedText("must not enter a draft"); await app.render();
+    const close = app.get("monitor-preview-close-session:b1"); await app.mockMouse.click(close.x, close.y); await app.render();
+    expect(app.view.promptDrafts).toEqual({ a1: "KEEP_DRAFT", b1: "PREVIEW_DRAFT" });
+    expect(app.selection.sessionId).toBe("a1"); expect(closed).toEqual([]); expect(app.acknowledged).toEqual([]); expect(app.submitted).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("Monitor updates retain selection/list nodes and never query previews while closed", async () => {
   // Streaming changes selected conversation content, not candidate-list structure.
   const app = await fixture();
@@ -233,7 +270,10 @@ test("Compact monitors switch lists/previews like History while preserving searc
 
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
 
-    expect(app.get("monitor-preview-pane").visible).toBe(true); expect(app.captureCharFrame()).toContain("PREVIEW_RESULT");
+    expect(app.get("monitor-preview-pane").visible).toBe(true);
+    // Very short previews keep normal session controls; a taller viewport reveals the transcript.
+    expect(app.get("monitor-preview-session-status").height).toBe(3);
+    app.resize(60, 22); await app.render(); expect(app.captureCharFrame()).toContain("PREVIEW_RESULT");
     expect((app.get("monitor-search") as InputRenderable).value).toBe("auth"); expect(app.acknowledged).toEqual([]);
   } finally { await app.close(); }
 });

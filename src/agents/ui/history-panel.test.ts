@@ -64,7 +64,8 @@ test("History is an Agents search popup leaving only Workspace in the sidebar", 
 
     expect(app.get("session-history").visible).toBe(true);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("history-search");
-    expect(app.captureCharFrame()).toContain("History · radian");
+    expect(app.captureCharFrame()).not.toContain("History · radian");
+    expect(app.get("history-search-field").y).toBe(app.get("history-dialog").y + 1);
     expect(app.captureCharFrame()).toContain("2026-10-14 12:34"); expect(app.captureCharFrame()).toContain("4 messages");
     expect(app.selection.sessionId).toBe("a1"); expect(app.resumed).toEqual([]); expect(app.runs).toEqual([]);
     // Fetch the first candidate without advancing fake time; previews have no loading indicator.
@@ -104,7 +105,9 @@ test("Previews reuse Agent cards, folding, and errors and open read-only at the 
     // New previews start at the latest answer like live sessions.
     expect(preview.scrollTop).toBe(Math.max(0, preview.scrollHeight - preview.viewport.height)); expect(app.captureCharFrame()).toContain("Latest reply");
     expect(app.captureCharFrame()).not.toContain("[thinking]"); expect(app.captureCharFrame()).not.toContain("DO NOT RENDER THE LEGACY STRING");
-    const prompt = body(preview, "Newest prompt")!; prompt.focus();
+    const prompt = body(preview, "Newest prompt")!;
+    expect(prompt.focusable).toBe(false);
+    await app.mockMouse.click(preview.viewport.x + 1, preview.viewport.y + preview.viewport.height - 1); await app.render();
     await app.mockInput.pasteBracketedText("must not edit"); app.mockInput.pressBackspace(); await app.render();
     expect(prompt.plainText).toBe("Newest prompt"); expect(app.view.workViewPreferences.agentViews).toEqual(state);
     expect(app.selection.sessionId).toBe("a1"); expect(app.resumed).toEqual([]); expect(app.runs).toEqual([]);
@@ -153,19 +156,21 @@ test("History shows real prompt and status components without changing input, su
   try {
     app.resize(180, 36); await app.render();
 
-    // Reuse composer and telemetry components while explicitly marking previews read-only.
+    // Preview composers and telemetry must look exactly like the actual session components.
     await app.open();
     const prompt = app.get("history-preview-session-prompt") as EditBufferRenderable;
     const composer = app.get("history-preview-agent-composer") as BoxRenderable;
     const liveComposer = app.get("agent-composer") as BoxRenderable;
     const frame = app.captureCharFrame();
-    expect(frame).toContain("Read-only preview"); expect(frame).toContain("saved-model"); expect(frame).toContain("Cancelled");
+    expect(frame).toContain("Ask to do anything"); expect(frame).not.toContain("Read-only preview");
+    expect(frame).toContain("saved-model"); expect(frame).toContain("Cancelled");
     expect(frame).toContain("context -"); expect(frame).toContain("usage -");
     expect(composer.border).toEqual(liveComposer.border); expect(composer.height).toBe(liveComposer.height);
     expect(app.get("history-preview-session-status").visible).toBe(true);
 
     // Keys and pastes in read-only input never modify saved history or live drafts.
-    prompt.focus(); await app.mockInput.typeText("must not send");
+    await app.mockMouse.click(composer.x + 1, composer.y + 1); await app.render();
+    expect(prompt.focusable).toBe(false); await app.mockInput.typeText("must not send");
     await app.mockInput.pasteBracketedText("pasted text"); app.mockInput.pressBackspace(); await app.render();
     expect(prompt.plainText).toBe(""); expect(app.runs).toEqual([]); expect(app.resumed).toEqual([]);
     expect(app.selection.sessionId).toBe("a1"); expect(app.view.promptDrafts.a1).toBe("untouched draft");
@@ -293,6 +298,11 @@ test("Fast results appear immediately while shared spinners persist 500 ms and c
   const app = await mount();
   try {
     await app.open(); expect(app.captureCharFrame()).toContain("Saved layout review"); expect(app.get("history-loading").visible).toBe(true);
+    // Lookup feedback belongs to the session list, not the popup frame or preview screen.
+    const loading = app.get("history-loading");
+    expect(loading.parent?.id).toBe("history-list-status"); expect(loading.x).toBe(app.get("history-list").x);
+    expect(loading.x).toBeLessThan(app.get("history-preview-pane").x);
+    expect(loading.y).toBeGreaterThan(app.get("history-dialog").y);
     app.clock.advance(499); await app.render(); expect(app.get("history-loading").visible).toBe(true);
     app.clock.advance(1); await app.render(); expect(app.get("history-loading").visible).toBe(false);
     app.mockInput.pressKey("r", { ctrl: true }); await app.render(); expect(app.get("history-loading").visible).toBe(true);
@@ -379,15 +389,16 @@ test("Pending history previews hand focus from the empty pane to ready content w
   }
 });
 
-test("Saved sessions without sections show centered guidance but remain explicitly openable", async () => {
-  // An empty saved conversation is different from having no history candidates.
+test("Saved empty sessions reuse the actual empty conversation screen and remain explicitly openable", async () => {
+  // An empty saved conversation is still a selected session, not an unavailable preview.
   const app = await mount({ preview: async (worktreeId, id) => ok({ worktreeId, id, sections: [], text: "", truncated: false }) });
   try {
     await app.open();
 
-    // Empty previews hide composer/telemetry while preserving the selected candidate and Open command.
-    expect(app.captureCharFrame()).toContain("No saved sections in this branch.");
-    expect(app.get("history-preview-agent-view").visible).toBe(false);
+    // Normal empty-session branding, composer and telemetry remain visible without preview-only prose.
+    expect(app.get("history-preview-agent-view").visible).toBe(true);
+    expect(app.captureCharFrame()).toContain("Ask to do anything");
+    expect(app.captureCharFrame()).not.toContain("No saved sections in this branch.");
     expect(app.captureCharFrame()).not.toContain("Read-only preview");
     app.mockInput.pressEnter(); await app.render();
     expect(app.resumed).toEqual(["demo:main/first"]);
@@ -425,6 +436,9 @@ test("Narrow layouts switch between lists and previews while preserving search a
     expect(app.view.workViewPreferences.active["demo:main"] ?? "agent").toBe("agent");
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
     expect(app.get("history-list").visible).toBe(false); expect(app.get("history-preview-pane").visible).toBe(true);
+    // Short panes retain the real session controls instead of a preview-specific compact status row.
+    expect(app.get("history-preview-session-status").height).toBe(3);
+    app.resize(60, 20); await app.render();
     expect(app.captureCharFrame()).toContain("Saved answer second");
     // Moving up from the latest answer reveals its request even in compact viewports.
     const preview = app.get("history-preview") as ScrollBoxRenderable, initialScroll = preview.scrollTop;
@@ -434,7 +448,7 @@ test("Narrow layouts switch between lists and previews while preserving search a
       await app.mockInput.pressKeys(["\x1b[5~"]); await app.render();
     }
     expect(app.captureCharFrame()).toContain("Saved question second");
-    const dialog = app.get("history-dialog"); expect(dialog.x + dialog.width).toBeLessThanOrEqual(60); expect(dialog.y + dialog.height).toBeLessThanOrEqual(12);
+    const dialog = app.get("history-dialog"); expect(dialog.x + dialog.width).toBeLessThanOrEqual(60); expect(dialog.y + dialog.height).toBeLessThanOrEqual(20);
     app.resize(140, 30); await app.render();
     expect(app.get("history-list").visible).toBe(true); expect(app.get("history-preview-pane").visible).toBe(true);
     expect((app.get("history-search") as InputRenderable).value).toBe("keyboard"); expect(app.resumed).toEqual([]);

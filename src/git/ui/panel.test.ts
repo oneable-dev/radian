@@ -154,7 +154,7 @@ test("Reflog previews distinguish event/commit times and open absent commits in 
     app.mockInput.pressEnter(); await app.waitForFrame(frame => frame.includes("only in lost commit"));
 
     expect(app.get("git-browser").visible).toBe(false); expect(app.get("git-changes").visible).toBe(true);
-    expect(compared[0]?.commit).toEqual(lost); expect(app.captureCharFrame()).toContain("ccccccc · Lost change");
+    expect(compared[0]?.commit).toEqual(lost); expect(app.captureCharFrame()).not.toContain("ccccccc · Lost change");
     const saved = app.view.workViewPreferences.gitViews?.["demo:main"];
     expect(saved?.selected).toBe(before?.selected); expect(saved?.file).toBe(before?.file); expect(saved?.diff).toBe(false);
     app.mockInput.pressEscape(); await app.renderOnce();
@@ -168,16 +168,19 @@ test("Enter intent survives loading Reflog previews and opens the ready target c
   // Enter before metadata arrival must not discard valid selection intent.
   const target = { ...commit, oid: "c".repeat(40), subject: "Delayed target" }, data = snapshot();
   data.reflog = [{ oid: target.oid, selector: "HEAD@{0}", date: "2026-10-21", subject: "delayed event" }];
-  const pending = Promise.withResolvers<Result<GitDetails, ExpectedError>>();
+  const pending = Promise.withResolvers<Result<GitDetails, ExpectedError>>(), compared: GitFile[] = [];
   const app = await mount({ source: { load: async () => ok(data), lookup: () => pending.promise,
-    details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }), compare: async () => ok(comparison()) } });
+    details: async selected => ok({ commit: selected, message: selected.subject, files: [], branches: [] }),
+    compare: async file => { compared.push(file); return ok({ before: "previous content\n", after: "Ready delayed commit\n", beforeLabel: "parent:delayed.txt", afterLabel: "commit:delayed.txt" }); } } });
   try {
     await app.openReflog(); app.mockInput.pressEnter(); await app.renderOnce(); expect(app.get("git-changes").visible).toBe(false);
 
-    pending.resolve(ok({ commit: target, message: "Delayed full message", files: [], branches: [] }));
-    await app.waitFor(() => app.get("git-changes").visible); await app.renderOnce();
+    pending.resolve(ok({ commit: target, message: "Delayed full message", files: [{ kind: "commit", status: "M", path: "delayed.txt", commit: target }], branches: [] }));
+    await app.waitForFrame(frame => frame.includes("Ready delayed commit"));
 
-    expect(app.get("git-browser").visible).toBe(false); expect(app.captureCharFrame()).toContain("ccccccc · Delayed target");
+    // Verify the actual opened target through its file comparison, not a removed popup title.
+    expect(app.get("git-changes").visible).toBe(true); expect(compared[0]?.commit).toEqual(target);
+    expect(app.get("git-browser").visible).toBe(false); expect(app.captureCharFrame()).not.toContain("ccccccc · Delayed target");
     expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBeNull(); expect(app.requests).toEqual([]);
   } finally { pending.resolve(ok({ commit: target, message: "cleanup", files: [], branches: [] })); await app.close(); }
 });
@@ -1492,13 +1495,30 @@ test("Commit clicks expand left details and Enter shows only files with Before/A
     const files = app.get("git-files"), diff = app.get("git-diff");
     expect(app.get("git-details-card").visible).toBe(false);
     expect(app.captureCharFrame()).not.toContain("Author: Ada"); expect(app.captureCharFrame()).not.toContain("Commit details");
-    expect(app.captureCharFrame()).toContain("aaaaaaa · Update login");
+    expect(app.captureCharFrame()).not.toContain("aaaaaaa · Update login");
+    expect(app.get("git-changes-body").y).toBe(app.get("git-changes").y + 1);
     expect(app.captureCharFrame()).not.toContain("Changes ·");
     expect(app.captureCharFrame()).toContain("Changed files (2)");
     expect(app.captureCharFrame()).toContain("Before ·"); expect(app.captureCharFrame()).toContain("After ·");
     expect(files.x).toBeLessThan(diff.x); expect(app.codes()).toHaveLength(2);
     expect(app.renderer.currentFocusedRenderable).toBe(files);
     expect(app.requests).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Ask popups begin with the selected Git context instead of a popup title", async () => {
+  // Removing chrome must preserve the actual Git target, session choice and prompt ownership.
+  const app = await mount();
+  try {
+    await app.chooseCommit(); app.mockInput.pressKey("a"); await app.renderOnce(); await app.renderOnce();
+
+    // The selected context is the first content row, not a replacement decorative header.
+    const popup = app.get("git-ask"), context = popup.getChildren().find(node => node instanceof TextRenderable && node.plainText.startsWith("Commit "));
+    expect(context).toBeDefined(); expect(context!.y).toBe(popup.y + 1);
+    expect(app.captureCharFrame()).not.toContain("Ask Agent · selected Git context");
+    expect(app.captureCharFrame()).toContain("Session:");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-prompt");
+    expect(app.requests).toEqual([]); expect(app.creations).toEqual([]);
   } finally { await app.close(); }
 });
 

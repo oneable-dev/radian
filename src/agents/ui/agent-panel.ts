@@ -87,6 +87,7 @@ export class AgentPanel {
   private syncingDraft = false;
   private disposed = false;
   private composerLayout = "";
+  private previewDraftSignature = "";
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: AgentActions, button: Button,
     private readonly notice: Notice, private readonly changed: () => void,
@@ -98,26 +99,27 @@ export class AgentPanel {
     this.root = new BoxRenderable(renderer, { id: id("agent-view"), onSizeChange: () => this.resizeComposer(),
       renderAfter: (buffer) => this.transcript.paintFocusBorder(buffer, this.bottomButton.visible ? 0 : this.layoutGap),
       flexGrow: 1, minHeight: 0, minWidth: 0, padding: 1, flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
-    this.sessions = new SessionTabs(renderer, { button,
+    theme.bindStyles(this.root, styles => { this.root.backgroundColor = styles["ui.text"].bg; });
+    this.sessions = new SessionTabs(renderer, { button, ...(transcriptOptions.idPrefix ? { idPrefix: transcriptOptions.idPrefix } : {}),
       fast: id => actions.getSessionDetails?.(id)?.telemetry?.fast === true,
-      select: (id) => { if (this.worktree) actions.onSelectSession?.(this.worktree.id, id); },
-      create: () => { if (this.worktree) actions.onNewSession(this.worktree.id); },
-      close: (id) => { if (this.worktree) actions.onCloseSession?.(this.worktree.id, id); },
+      select: (id) => { if (this.worktree && !transcriptOptions.readOnly) actions.onSelectSession?.(this.worktree.id, id); },
+      create: () => { if (this.worktree && !transcriptOptions.readOnly) actions.onNewSession(this.worktree.id); },
+      close: (id) => { if (this.worktree && !transcriptOptions.readOnly) actions.onCloseSession?.(this.worktree.id, id); },
       keyHint: (command, context) => transcriptOptions.keyHint?.(command, context) ?? "",
     });
     this.emptyState = new EmptyState(renderer, id("agent-empty-state"));
     this.root.add(this.sessions.root); this.root.add(this.emptyState.root);
     this.runtimePanel = new BoxRenderable(renderer, { width: "100%", flexGrow: 1, minHeight: 0, flexDirection: "column", gap: 0 });
     this.transcript = new TranscriptPanel(renderer, { notice, changed, focusPrompt: () => this.prompt.focus(), initialScroll, saveScroll, cacheSessions: true,
-      ...transcriptOptions, ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}),
+      ...transcriptOptions, passive: transcriptOptions.readOnly ?? false, ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}),
       ...(actions.onOpenTranscriptUrl ? { openUrl: actions.onOpenTranscriptUrl } : {}), ...(actions.onImage ? { image: actions.onImage } : {}) });
     this.transcriptScroll = this.transcript.scroll;
     this.transcriptScroll.id = id("session-transcript");
     // Hide the session scroll thumb; wheel, keys and the shared scroll model stay active.
     this.transcriptScroll.verticalScrollBar.visible = false;
-    this.bottomButton = new TranscriptBottomButton(renderer, () => { renderer.clearSelection(); this.transcript.followLatest(); });
+    this.bottomButton = new TranscriptBottomButton(renderer, () => { if (!transcriptOptions.readOnly) { renderer.clearSelection(); this.transcript.followLatest(); } });
     this.runtimePanel.add(this.bottomButton);
-    const interruptKey = () => transcriptOptions.readOnly ? "" : transcriptOptions.keyHint?.("agent.interrupt", "prompt") ?? "<Esc>";
+    const interruptKey = () => transcriptOptions.keyHint?.("agent.interrupt", "prompt") ?? "<Esc>";
     this.runStatus = new RunStatus(renderer, interruptKey, () => this.transcript.prepareLayoutChange());
     this.pendingMessages = new PendingMessages(renderer, interruptKey);
     const transcriptArea = this.transcriptArea = new BoxRenderable(renderer, { id: id("agent-transcript-area"), width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, flexDirection: "column", overflow: "hidden" });
@@ -125,7 +127,6 @@ export class AgentPanel {
     this.prompt = new PromptInput(renderer, notice, (content) => actions.onInspectInput?.(content), {
       id: id("session-prompt"), fieldId: id("agent-composer"), activityId: id("prompt-paste-loading"), readOnly: transcriptOptions.readOnly ?? false,
     });
-    if (transcriptOptions.readOnly) this.prompt.placeholder = "Read-only preview · Open session to continue";
     for (const [id, draft] of Object.entries(actions.initialDrafts ?? {})) this.drafts.set(id, draft);
     for (const [id, draft] of Object.entries(actions.initialInputDrafts ?? {})) { this.inputDrafts.set(id, draft); this.drafts.set(id, expandPromptDraft(draft, false).text); }
     this.prompt.on(InputRenderableEvents.INPUT, this.handleDraftInput);
@@ -161,6 +162,24 @@ export class AgentPanel {
     if (!this.disposed && !this.prompt.isDestroyed && this.promptSessionId && this.prompt.value) drafts[this.promptSessionId] = this.prompt.draft;
     return drafts;
   }
+  promptDraftFor(id: string): PromptDraft | string | undefined {
+    if (id === this.promptSessionId && !this.disposed) return this.prompt.draft;
+    const draft = this.inputDrafts.get(id);
+    return draft ? structuredClone(draft) : this.drafts.get(id);
+  }
+  showPreviewDraft(draft: PromptDraft | string | undefined): void {
+    if (!this.transcriptOptions.readOnly || this.disposed) return;
+    const signature = JSON.stringify([this.promptSessionId, draft ?? ""]);
+    if (signature === this.previewDraftSignature) return;
+    this.previewDraftSignature = signature; this.syncingDraft = true;
+    try {
+      if (draft && typeof draft !== "string") {
+        const restored = this.prompt.restore(draft);
+        if (!restored.ok) { this.prompt.value = expandPromptDraft(draft, false).text; this.notice(`[${restored.error.code}] Preview attachment display could not be restored.`, { level: "warning" }); }
+      } else this.prompt.value = draft ?? "";
+    } finally { this.syncingDraft = false; }
+    this.resizeComposer();
+  }
   get active(): boolean { return this.runtimePanel.visible; }
   get resultVisible(): boolean { return this.active && this.transcript.latestVisible; }
   focusLatest(target: "prompt" | "transcript" = "transcript"): void {
@@ -177,10 +196,10 @@ export class AgentPanel {
   get transcriptShortcuts(): readonly FooterShortcut[] { return this.transcript.shortcuts; }
   get transcriptStatus(): string { return this.transcript.footerStatus; }
   get completionOpen(): boolean { return this.completion.engaged; }
-  sessionAvailable(command: CommandId): boolean { return this.root.visible && this.sessions.available(command); }
-  sessionCommand(command: CommandId): void { this.sessions.command(command); }
-  completionAvailable(command: CommandId): boolean { return this.active && this.completion.available(command); }
-  completionCommand(command: CommandId): void { this.completion.command(command); }
+  sessionAvailable(command: CommandId): boolean { return !this.transcriptOptions.readOnly && this.root.visible && this.sessions.available(command); }
+  sessionCommand(command: CommandId): void { if (!this.transcriptOptions.readOnly) this.sessions.command(command); }
+  completionAvailable(command: CommandId): boolean { return !this.transcriptOptions.readOnly && this.active && this.completion.available(command); }
+  completionCommand(command: CommandId): void { if (!this.transcriptOptions.readOnly) this.completion.command(command); }
   transcriptContext(): KeyContext | null { return this.transcript.keyContext(); }
   focusTranscript(): void { this.completion.hide(); if (this.transcriptScroll.visible) this.transcript.focus(); }
   get transcriptFocused(): boolean { return this.transcript.focused; }
@@ -198,7 +217,7 @@ export class AgentPanel {
     this.rememberScroll();
     const emptyFocused = this.root.focused;
     this.root.visible = visible; this.worktree = worktree;
-    this.sessions.update(worktree?.id ?? null, this.transcriptOptions.readOnly ? [] : worktree?.sessions ?? [], selectedId, visible && !this.transcriptOptions.readOnly);
+    this.sessions.update(worktree?.id ?? null, worktree?.sessions ?? [], selectedId, visible);
     const session = worktree?.sessions.find((item) => item.id === selectedId);
     const details = session ? this.actions.getSessionDetails?.(session.id) : null;
     const creationKey = worktree && !session && !this.transcriptOptions.readOnly ? this.sessions.creationShortcut : "";
@@ -231,7 +250,7 @@ export class AgentPanel {
     this.root.focusable = visible && !!worktree && !this.active;
     this.completion.prepare(sessionId, worktree?.path, openIds);
     const capturedAt = this.transcriptOptions.snapshotTime?.();
-    this.runStatus.update(sessionId, details, this.active, !this.transcriptOptions.readOnly && capturedAt === undefined);
+    this.runStatus.update(sessionId, details, this.active, capturedAt === undefined);
     this.pending = details?.pendingMessages ?? [];
     this.sessionStatus.update(details?.telemetry, this.active, capturedAt);
     this.emptyState.root.visible = visible && !this.active;
@@ -263,10 +282,6 @@ export class AgentPanel {
 
   private resizeComposer = (): void => {
     if (this.disposed || !this.composer || !this.statusRow || this.prompt.isDestroyed) return;
-    if (this.transcriptOptions.readOnly) {
-      const compact = this.root.height < 8;
-      this.sessionStatus.root.height = compact ? 1 : 3; this.sessionStatus.root.paddingY = compact ? 0 : 1;
-    }
     const requested = this.prompt.requestedRows;
     const menuRowsBeforeLayout = this.completion?.open ? this.completion.root.height : 0;
     const minimumControls = (this.sessions.root.visible ? 1 : 0) + this.sessionStatus.root.height + menuRowsBeforeLayout + 2;
@@ -294,7 +309,7 @@ export class AgentPanel {
     }
     const reserved = this.reservedRows(true) + menuRows;
     // The panel allocates space; the shared input alone fits its editor and decoration.
-    const available = this.transcriptOptions.readOnly && this.root.height < 8 ? 1 : Math.max(1, this.root.height - reserved - 1);
+    const available = Math.max(1, this.root.height - reserved - 1);
     const { rows: lines, height } = this.prompt.measure(available);
     const showTranscript = this.root.height > reserved + height;
     if (this.transcriptScroll.visible !== showTranscript || this.transcriptArea.visible !== showTranscript) {
@@ -331,6 +346,7 @@ export class AgentPanel {
     else { this.drafts.delete(this.promptSessionId); this.inputDrafts.delete(this.promptSessionId); }
   }
   private publishDrafts(): void {
+    if (this.transcriptOptions.readOnly) return;
     this.actions.onDraftChange?.(this.promptDrafts, this.promptInputDrafts);
   }
   rememberScroll = (): void => { this.transcript.rememberScroll(); };

@@ -10,7 +10,7 @@ import { halfPageStep } from "../../ui/navigation.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
-import { PopupBody, SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
+import { PopupBody, SearchPopupLayout, attachPopupActivity, centerPopup } from "../../ui/popup-layout.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { icons } from "../../icons.ts";
 import { describeCommit, refContext, reflogContext, type GitContext } from "../context.ts";
@@ -40,7 +40,6 @@ export class GitBrowser {
   private readonly body: BoxRenderable;
   private readonly layout: SearchPopupLayout;
   private readonly previewBody: PopupBody;
-  private readonly title: TextRenderable;
   private readonly message: TextRenderable;
   private readonly previewPane: BoxRenderable;
   private readonly previewText: TextRenderable;
@@ -65,10 +64,7 @@ export class GitBrowser {
       zIndex: 50, visible: false, onSizeChange: () => this.resize() });
     this.panel = new PopupFrame(renderer, { id: "git-browser-panel", position: "absolute", border: true, paddingX: 1,
       minHeight: 0, minWidth: 0, flexDirection: "column" });
-    const heading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    this.title = new TextRenderable(renderer, { height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0, selectable: false, truncate: true }); heading.add(this.title);
     this.spinner = new LoadingSpinner(renderer, { id: "git-browser-loading" });
-    const activity = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0 }); activity.add(this.spinner.root); heading.add(activity);
     this.search = new SearchInput(renderer, { id: "git-browser-search", placeholder: "Search refs…" });
     this.message = new TextRenderable(renderer, { id: "git-browser-status", height: 1, flexShrink: 0, selectable: false, wrapMode: "none", truncate: true });
     this.list = new GitList(renderer, "git-browser-list", key => this.choose(key), () => this.open(), false);
@@ -82,11 +78,11 @@ export class GitBrowser {
     this.layout = new SearchPopupLayout(renderer, { id: "git-browser", search: this.search, message: this.message, list: this.list.root,
       preview: { body: this.previewBody, width: 48 } });
     this.body = this.layout.root;
-    this.panel.add(heading); this.panel.add(this.body); this.root.add(this.panel);
+    this.panel.add(this.body); attachPopupActivity(this.panel, this.spinner.root); this.root.add(this.panel);
     const theme = uiTheme(renderer); theme.scrollbars(this.preview);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
-      this.previewPane.borderColor = styles["ui.border"].fg; paintText(this.title, styles["ui.popupTitle"]); paintText(this.message, styles["ui.muted"]);
+      this.previewPane.borderColor = styles["ui.border"].fg; paintText(this.message, styles["ui.muted"]);
       paintText(this.spinner.root, styles["status.working"]); paintText(this.previewText, styles["ui.label"]);
       this.previewText.selectionBg = styles["ui.selection"].bg; this.previewText.selectionFg = styles["ui.selection"].fg;
     });
@@ -123,7 +119,7 @@ export class GitBrowser {
     this.cancel(); this.results.clear(); this.unexpected.clear(); this.snapshot = snapshot; this.loadError = undefined;
     this.kind = kind; this.key = kind === "refs" ? selected ?? allRefs : selected;
     this.compactPreview = false; this.previewSelector = undefined; this.root.visible = true;
-    this.title.content = kind === "refs" ? "Refs" : "Reflog"; this.search.placeholder = kind === "refs" ? "Search branches, remotes or tags…" : "Search events, branches, hashes or time…";
+    this.search.placeholder = kind === "refs" ? "Search branches, remotes or tags…" : "Search events, branches, hashes or time…";
     this.search.value = ""; this.filter(); this.resize(); this.search.focus();
     if (!snapshot) this.spinner.start(); this.actions.changed();
   }
@@ -262,7 +258,7 @@ export class GitBrowser {
     const width = Math.max(1, Math.floor(availableWidth * (availableWidth < 80 ? 1 : 0.9)));
     const height = Math.max(1, Math.floor(availableHeight * (availableHeight < 16 ? 1 : 0.85)));
     centerPopup(this.panel, width, height, availableWidth, availableHeight);
-    this.search.fit(Math.max(1, height - 8));
+    this.search.fit(Math.max(1, height - 7));
     this.layout.resize(this.renderer.width >= 100, this.compactPreview, this.kind === "reflog");
   };
   dispose(): void {

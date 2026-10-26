@@ -122,7 +122,7 @@ test.each(["history", "monitor"] as const)("%s preview panes fill their height w
 
       // Search and result hints belong only to lists; previews use their full height.
       expect(field.x).toBe(app.list.x); expect(field.width).toBe(app.list.width);
-      expect(message.x).toBe(app.list.x);
+      expect((surface === "history" ? app.get("history-list-status") : message).x).toBe(app.list.x);
       expect(preview.visible).toBe(width >= 100);
       if (preview.visible) {
         expect(field.x + field.width).toBe(preview.x);
@@ -133,16 +133,18 @@ test.each(["history", "monitor"] as const)("%s preview panes fill their height w
       }
       // Compact layouts reveal the same preview surface through its configured command.
       if (width < 100) { app.mockInput.pressKey("o", { ctrl: true }); await app.render(); }
-      const content = app.get(surface === "history" ? "history-preview-agent-view" : "monitor-preview");
+      const content = app.get(`${surface}-preview-agent-view`);
       const frame = app.captureCharFrame();
 
       // Removing a heading must reclaim its row without stripping the actual session UI.
       expect(preview.visible).toBe(true);
       expect(content.y).toBe(preview.y); expect(content.height).toBe(preview.height);
       expect(frame).not.toContain("Preview ·"); expect(frame).not.toContain("Live preview ·");
-      expect(frame).toContain(surface === "history" ? "History · radian" : "AI Sessions");
+      expect(frame).not.toContain(surface === "history" ? "History · radian" : "AI Sessions");
+      expect(field.y).toBe(app.get(`${surface}-dialog`).y + 1);
       expect(frame).toContain("Preview line");
-      if (surface === "history") expect(frame).toContain("Read-only preview");
+      expect(frame).not.toContain("Read-only preview");
+      expect(app.get(`${surface}-preview-agent-composer`).visible).toBe(true);
       if (width < 100) { app.mockInput.pressKey("o", { ctrl: true }); await app.render(); }
       expect(input.value).toBe(value); expect(input.cursorOffset).toBe(cursor);
       expect(app.renderer.currentFocusedRenderable).toBe(input);

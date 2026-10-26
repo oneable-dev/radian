@@ -24,7 +24,7 @@ const within = (node: Renderable | null, parent: Renderable): boolean => {
   return false;
 };
 
-test.each(surfaces)("$name popups trap focus and restore input with Esc without close/action buttons", async surface => {
+test.each(surfaces)("$name popups trap focus and restore input with Esc without popup chrome buttons", async surface => {
   // Use real Workbench and replace only external lookups; compact layouts share command contracts.
   const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock: new ManualClock() });
   const sent: string[] = [];
@@ -52,8 +52,12 @@ test.each(surfaces)("$name popups trap focus and restore input with Esc without 
     for (const [width, height] of [[120, 30], [60, 16]] as const) {
       app.resize(width, height); await render(); const panel = get(surface.panel);
       expect(panel.visible).toBe(true);
-      expect(app.captureCharFrame().split("\n")[panel.y + 1]?.slice(panel.x, panel.x + panel.width)).not.toContain("×");
-      expect(walk(panel).filter(node => node instanceof Button && !node.id.startsWith("model-effort:"))).toEqual([]);
+      expect(app.captureCharFrame().split("\n")[panel.y]?.slice(panel.x, panel.x + panel.width)).not.toContain("×");
+      // A faithful session preview includes inert tab close glyphs, not popup close controls.
+      const buttons = walk(panel).filter((node): node is Button => node instanceof Button);
+      const previewClose = (node: Button) => /^(?:monitor|history)-preview-close-session:/.test(node.id);
+      expect(buttons.filter(node => !node.id.startsWith("model-effort:") && !previewClose(node))).toEqual([]);
+      for (const button of buttons.filter(previewClose)) expect(button.focusable).toBe(false);
       for (let i = 0; i < 4; i++) {
         app.mockInput.pressTab({ shift: i % 2 === 1 }); await render();
         expect(within(app.renderer.currentFocusedRenderable, panel)).toBe(true);

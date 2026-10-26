@@ -8,7 +8,7 @@ import type { FooterShortcut } from "../../ui/footer.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
-import { PopupBody, centerPopup } from "../../ui/popup-layout.ts";
+import { PopupBody, attachPopupActivity, centerPopup } from "../../ui/popup-layout.ts";
 import { paintText, styleChunk } from "../../ui/theme-styles.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
@@ -58,10 +58,7 @@ export class DashboardPanel {
     this.root = new BoxRenderable(renderer, { id: "agent-dashboard", position: "absolute", width: "100%", height: "100%", zIndex: 5300, visible: false,
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
     this.panel = new PopupFrame(renderer, { id: "dashboard-dialog", position: "absolute", border: true, paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
-    const header = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    const title = new TextRenderable(renderer, { content: "Agent Dashboard", height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });
     this.spinner = new LoadingSpinner(renderer, { id: "dashboard-loading" });
-    header.add(title); header.add(this.spinner.root); this.panel.add(header);
     this.period = this.strip("dashboard-period", ["Today", "7 days", "30 days"], () => this.reload()); this.period.index = 1;
     this.project = this.strip("dashboard-project", ["All projects"], () => this.reload(), true);
     this.panel.add(this.period.root); this.panel.add(this.project.root);
@@ -78,11 +75,11 @@ export class DashboardPanel {
     this.rankingBody.root.flexGrow = 0; this.rankingBody.root.flexShrink = 0;
     this.scroll.add(this.rankingBody.root);
     this.notes = new TextRenderable(renderer, { id: "dashboard-notes", width: "100%", height: "auto", minHeight: 1, flexShrink: 0, selectable: false, wrapMode: "word", marginTop: 1 }); this.scroll.add(this.notes);
-    this.panel.add(this.scroll); this.root.add(this.panel);
+    this.panel.add(this.scroll); attachPopupActivity(this.panel, this.spinner.root); this.root.add(this.panel);
     theme.scrollbars(this.scroll);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
-      paintText(title, styles["ui.popupTitle"]); paintText(this.spinner.root, styles["status.working"]);
+      paintText(this.spinner.root, styles["status.working"]);
       paintText(this.message, styles["ui.muted"]); paintText(this.graph, styles["metadata.meter"]); paintText(this.ranking, styles["ui.label"]); paintText(this.notes, styles["ui.muted"]);
       this.paint();
     });

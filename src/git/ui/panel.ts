@@ -17,7 +17,7 @@ import { GitBrowser, type GitBrowserKind } from "./browser.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
-import { PopupBody } from "../../ui/popup-layout.ts";
+import { PopupBody, attachPopupActivity } from "../../ui/popup-layout.ts";
 import { icons } from "../../icons.ts";
 import { codeStyles, paintText, styleBackground, type StyleGroup } from "../../ui/theme-styles.ts";
 import { GitClipboard } from "./clipboard.ts";
@@ -54,7 +54,6 @@ export class GitPanel {
   private readonly main: BoxRenderable;
   private readonly changes: BoxRenderable;
   private readonly changesSpinner: LoadingSpinner;
-  private readonly changesTitle: TextRenderable;
   private readonly filterText: TextRenderable;
   private readonly browser: GitBrowser;
   private readonly history: GitList;
@@ -136,12 +135,9 @@ export class GitPanel {
     this.main.add(this.detailsAnchor); this.body.add(this.main); this.root.add(this.body);
     this.changes = new PopupFrame(renderer, { id: "git-changes", position: "absolute", left: 0, right: 0, top: 0, bottom: 0,
       zIndex: 50, border: true, paddingX: 1, minWidth: 0, minHeight: 0, flexDirection: "column", visible: false });
-    const heading = this.row(); this.changesTitle = this.text("", "ui.popupTitle");
-    this.changesTitle.truncate = true; this.changesTitle.flexGrow = 1; this.changesTitle.flexShrink = 1; this.changesTitle.minWidth = 0;
-    heading.add(this.changesTitle);
     this.changesSpinner = new LoadingSpinner(renderer, { id: "git-changes-loading", fg: gitColors.accent });
-    heading.add(this.changesSpinner.root); this.changes.add(heading);
-    const lower = new BoxRenderable(renderer, { id: "git-changes-body", flexDirection: "row", flexGrow: 1, minHeight: 0, minWidth: 0, marginTop: 1 });
+    attachPopupActivity(this.changes, this.changesSpinner.root);
+    const lower = new BoxRenderable(renderer, { id: "git-changes-body", flexDirection: "row", flexGrow: 1, minHeight: 0, minWidth: 0 });
     const filesPanel = new BoxRenderable(renderer, { id: "git-files-panel", width: "25%", minWidth: 12, minHeight: 0, flexShrink: 0, flexDirection: "column", paddingRight: 1 });
     this.filesHeader = new BoxRenderable(renderer, { height: 1, flexShrink: 0, marginBottom: 1 });
     this.filesTitle = this.text("Changed files", "ui.muted"); this.filesHeader.add(this.filesTitle); filesPanel.add(this.filesHeader);
@@ -171,7 +167,6 @@ export class GitPanel {
     this.root.add(this.browser.root);
     this.dialog = new PopupFrame(renderer, { id: "git-ask", position: "absolute", left: 0, right: 0, bottom: 0, height: 10,
       zIndex: 100, border: true, borderColor: gitColors.accent, backgroundColor: gitColors.panel, paddingX: 1, flexDirection: "column", visible: false });
-    this.dialog.add(this.text("Ask Agent · selected Git context", "ui.popupTitle"));
     this.dialogContext = new TextRenderable(renderer, { content: "", height: 2, wrapMode: "word", fg: gitColors.text, selectable: false }); this.dialog.add(this.dialogContext);
     this.targetText = this.text("Session: "); this.dialog.add(this.targetText);
     this.prompt = new PromptInput(renderer, notice, (content) => inspect?.(content), { id: "git-prompt" });
@@ -529,8 +524,6 @@ export class GitPanel {
     }
     this.history.update(history.length ? history : [{ key: "empty", label: data ? "No commits" : "Loading…", disabled: true }], state.selected ?? workingKey);
     const selected = data?.commits.find(commit => commit.oid === state.selected);
-    const target = cache.external?.details.commit ?? selected;
-    this.changesTitle.content = target ? `${target.oid.slice(0, 7)} · ${display(target.subject)}` : "Working tree";
     this.detailText.content = cache.details ? describeCommit(cache.details, data?.refs ?? [], data) : selected
       ? describeCommit({ commit: selected, message: `${selected.subject}\n\n${cache.error ?? "Loading commit details…"}` }, data?.refs ?? [], data) : "";
     this.updateHistoryRail();
@@ -764,9 +757,9 @@ export class GitPanel {
   };
   private resizeAsk = (): void => {
     if (this.disposed || !this.dialog?.visible || this.prompt.isDestroyed) return;
-    // Heading, context, target and the dialog border consume six rows.
-    const input = this.prompt.fit(this.root.height - 6);
-    const height = Math.min(this.root.height, 6 + input.height);
+    // Context, target and the dialog border consume five rows.
+    const input = this.prompt.fit(this.root.height - 5);
+    const height = Math.min(this.root.height, 5 + input.height);
     if (this.dialog.height !== height) this.dialog.height = height;
     this.changed();
   };

@@ -34,7 +34,7 @@ test("Closing a session through the real service never emits shutdown progress n
             const text = frame();
             if (text.includes("Ask to do anything") && text.includes("context")) ready.resolve();
             if (text.includes("No AI sessions")) closed.resolve();
-            if (text.includes("Messages") && text.includes("No messages yet")) { messagesFrame = text; messagesShown.resolve(); }
+            if (text.includes("Search messages") && text.includes("No messages yet")) { messagesFrame = text; messagesShown.resolve(); }
           });
         } },
       });
@@ -54,7 +54,7 @@ test("Closing a session through the real service never emits shutdown progress n
       expect(output).not.toMatch(/Closing \d/u);
       expect(output).not.toContain("OFFLINE SDK");
       expect(messagesFrame).toContain("No messages yet");
-      expect(messagesFrame).toContain("Messages");
+      expect(messagesFrame).toContain("Search messages");
     } finally {
       clearTimeout(deadline);
       ready.resolve(); closed.resolve(); messagesShown.resolve(); await observed.catch(() => {});

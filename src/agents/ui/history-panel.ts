@@ -13,9 +13,11 @@ import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
-import { PopupBody, SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
+import { SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
 import { paintText } from "../../ui/theme-styles.ts";
-import { AgentPanel } from "./agent-panel.ts";
+import { SessionPreview } from "./session-preview.ts";
+import type { PromptDraft } from "../prompt-input.ts";
+import type { TranscriptImageProvider } from "../transcript-images.ts";
 import type { ExecutionState, SessionRecord } from "../session-registry.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import type { TranscriptSection } from "../transcript.ts";
@@ -29,7 +31,10 @@ export type HistoryActions = {
   onError: Notice;
   onCloseFallback?: () => void;
   onChange?: () => void;
-  keyHint: (command: Extract<CommandId, `history.${string}`>, context: KeyContext) => string;
+  keyHint: (command: CommandId, context: KeyContext) => string;
+  details?: (id: string) => ExecutionState | null;
+  draft?: (id: string) => PromptDraft | string | undefined;
+  image?: TranscriptImageProvider;
 };
 
 // The popup owns only a query and a candidate cursor. Canonical session selection changes on Open.
@@ -41,15 +46,12 @@ export class SessionHistoryPanel {
   private readonly panel: BoxRenderable;
   private readonly body: BoxRenderable;
   private readonly layout: SearchPopupLayout;
-  private readonly previewBody: PopupBody;
-  private readonly title: TextRenderable;
+  private readonly listStatus: BoxRenderable;
   private readonly spinner: LoadingSpinner;
   private readonly previewCache: HistoryPreviewCache;
   private readonly message: TextRenderable;
   private readonly previewPane: BoxRenderable;
-  private readonly session: AgentPanel;
-  private previewState: ExecutionState | null = null;
-  private previewCapturedAt: number | undefined;
+  private readonly session: SessionPreview;
   private readonly rows: BoxRenderable[] = [];
   private items: readonly HistoryItem[] = [];
   private filtered: readonly HistoryItem[] = [];
@@ -63,7 +65,7 @@ export class SessionHistoryPanel {
   private loading = false;
   private loadError: string | undefined;
   private compactPreview = false;
-  private focusPreviewPending = false;
+  private previewLoading = false;
   private disposed = false;
   private readonly listenerBudget: number;
 
@@ -77,46 +79,41 @@ export class SessionHistoryPanel {
       onMouseDown: (event) => { event.stopPropagation(); }, onMouseScroll: (event) => event.stopPropagation() });
     this.panel = new PopupFrame(renderer, { id: "history-dialog", position: "absolute", border: true,
       paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
-    const heading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    this.title = new TextRenderable(renderer, { height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0, wrapMode: "none", selectable: false });
     this.spinner = new LoadingSpinner(renderer, { id: "history-loading" });
-    heading.add(this.title);
-    const activity = new BoxRenderable(renderer, { width: 1, height: 1, flexShrink: 0 }); activity.add(this.spinner.root); heading.add(activity);
     this.search = new SearchInput(renderer, { id: "history-search", placeholder: "Search session titles…" });
-    this.message = new TextRenderable(renderer, { id: "history-message", content: "", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
+    this.message = new TextRenderable(renderer, { id: "history-message", content: "", height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });
+    this.listStatus = new BoxRenderable(renderer, { id: "history-list-status", height: 1, flexShrink: 0, flexDirection: "row", gap: 1,
+      renderBefore: () => { this.listStatus.visible = this.message.visible || this.spinner.root.visible; } });
+    this.listStatus.add(this.spinner.root); this.listStatus.add(this.message);
     this.list = new ScrollBoxRenderable(renderer, { id: "history-list", width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.list.focus() });
-    this.session = new AgentPanel(renderer, { onNewSession: () => {}, getSessionDetails: () => this.previewState },
-      (label) => { const button = new BoxRenderable(renderer, {}); button.add(new TextRenderable(renderer, { content: label })); return button; },
-      actions.onError, () => actions.onChange?.(), () => this.search.focus(), {}, () => {},
-      { readOnly: true, idPrefix: "history-preview-", initialPosition: "end", emptyLogo: false, snapshotTime: () => this.previewCapturedAt });
-    this.session.update(null, null, new Set(), false);
+    this.session = new SessionPreview(renderer, "history", { notice: actions.onError, changed: () => actions.onChange?.(),
+      focusList: () => this.search.focus(), keyHint: actions.keyHint,
+      ...(actions.details ? { details: actions.details } : {}), ...(actions.image ? { image: actions.image } : {}) });
     this.previewCache = new HistoryPreviewCache((tree, id, signal) => actions.preview!(tree, id, signal),
       () => this.renderPreview(), error => reportUnexpected(error, "history preview"));
-    this.preview = this.session.transcriptScroll; this.preview.id = "history-preview";
-    this.previewBody = new PopupBody(renderer, "history-preview-pane", this.session.root);
-    this.previewPane = this.previewBody.root;
-    this.layout = new SearchPopupLayout(renderer, { id: "history", search: this.search, message: this.message, list: this.list,
-      preview: { body: this.previewBody, width: 58 } });
+    this.preview = this.session.transcript;
+    this.previewPane = this.session.body.root;
+    this.layout = new SearchPopupLayout(renderer, { id: "history", search: this.search, message: this.listStatus, list: this.list,
+      preview: { body: this.session.body, width: 58 } });
     this.body = this.layout.root;
-    this.panel.add(heading); this.panel.add(this.body); this.root.add(this.panel);
-    theme.scrollbars(this.list); theme.scrollbars(this.preview);
+    this.panel.add(this.body); this.root.add(this.panel);
+    theme.scrollbars(this.list);
     theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
-      this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg; paintText(this.title, styles["ui.popupTitle"]);
+      this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
       paintText(this.message, styles["ui.muted"]);
       this.previewPane.borderColor = styles["ui.border"].fg;
-      this.session.root.backgroundColor = styles["ui.text"].bg;
       paintText(this.spinner.root, styles["status.working"]);
       this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);
-    renderer.on("resize", this.resize); renderer.addPostProcessFn(this.focusReadyPreview); this.resize();
+    renderer.on("resize", this.resize); this.resize();
   }
 
   get visible(): boolean { return this.root.visible && !this.disposed && !this.root.isDestroyed; }
   get context(): KeyContext { return this.search.focused ? "history-search" : "history"; }
-  private get previewTarget(): Renderable { return this.session.root.visible ? this.preview : this.previewPane; }
+  private get previewTarget(): Renderable { return this.session.focusTarget; }
   get focusTargets(): Renderable[] { return [this.search, ...(this.list.visible ? [this.list] : []), ...(this.previewPane.visible ? [this.previewTarget] : [])]; }
   get shortcuts(): readonly FooterShortcut[] {
     const hint = (command: Extract<CommandId, `history.${string}`>, label: string) => ({ key: footerKeyHint(command, this.context, this.actions.keyHint(command, this.context)), label });
@@ -135,7 +132,7 @@ export class SessionHistoryPanel {
   }
   hide(restoreFocus = true): void {
     if (!this.visible) return;
-    this.generation++; this.loading = false; this.focusPreviewPending = false; this.cancelPreview(); this.loadRequest?.abort(); this.spinner.cancel();
+    this.generation++; this.loading = false; this.cancelPreview(); this.loadRequest?.abort(); this.spinner.cancel();
     this.updatePreview(null, [], "", false);
     this.root.visible = false;
     if (this.resuming && restoreFocus) this.actions.onError("Open is still settling. Closing history does not cancel an accepted request; check the session tabs before retrying.", { level: "warning" });
@@ -168,12 +165,11 @@ export class SessionHistoryPanel {
   private async refresh(): Promise<void> {
     const generation = ++this.generation, worktree = this.worktree;
     this.loadRequest?.abort(); this.cancelPreview(); this.spinner.cancel(); this.loading = false; this.loadError = undefined;
-    this.title.content = worktree ? `History · ${worktree.name}` : "History";
     if (!worktree || !this.actions.list) {
       this.loadError = worktree ? "Session history is unavailable in this preview." : "No worktree selected";
       this.items = []; this.filter(); return;
     }
-    const request = this.loadRequest = new AbortController(); this.loading = true; this.spinner.start(); this.message.content = "Loading saved sessions…";
+    const request = this.loadRequest = new AbortController(); this.loading = true; this.spinner.start(); this.message.content = "Loading saved sessions…"; this.message.visible = this.listStatus.visible = true;
     this.actions.onChange?.();
     let result: Result<readonly HistoryItem[], ExpectedError>;
     try { result = await this.actions.list(worktree.id, request.signal); }
@@ -207,7 +203,7 @@ export class SessionHistoryPanel {
       : `${matchesQuery.length} ${matchesQuery.length === 1 ? "session" : "sessions"}${matchesQuery.length > 200 ? " · showing first 200; refine search" : ""}`);
     const empty = !this.loading && !this.loadError && !this.filtered.length;
     this.layout.results.showEmpty(empty ? this.message.plainText : undefined);
-    this.message.visible = !empty;
+    this.message.visible = !empty; this.listStatus.visible = !empty || this.spinner.root.visible;
     this.paint(); this.schedulePreview();
   };
   private paint(): void {
@@ -218,55 +214,44 @@ export class SessionHistoryPanel {
     this.actions.onChange?.();
   }
   private cancelPreview(): void {
-    this.previewIdentity = undefined; this.previewCache.clear();
+    this.previewIdentity = undefined; this.previewCache.clear(); this.setPreviewLoading(false);
     this.updatePreview(null, [], "", this.visible);
+  }
+  private setPreviewLoading(loading: boolean): void {
+    if (loading === this.previewLoading) return;
+    this.previewLoading = loading;
+    if (loading) { this.spinner.start(); this.listStatus.visible = true; }
+    else if (!this.loading) this.spinner.stop();
   }
   private previewMessage(message: string): void {
     this.updatePreview(null, undefined, message, this.visible);
   }
   private updatePreview(id: string | null, sections: readonly TranscriptSection[] | undefined, output: string, visible: boolean, telemetry?: HistoryPreview["telemetry"], snapshot?: SessionRecord): void {
-    const emptyFocused = this.previewPane.focused;
-    this.previewBody.showEmpty(id === null ? output : undefined);
-    this.previewPane.focusable = id === null;
-    if (id === null) {
-      const focused = this.session.root.hasFocusedDescendant;
-      this.session.update(null, null, new Set(), false);
-      if (focused && visible) this.previewPane.focus();
-      return;
-    }
-    const sessionId = id;
+    if (id === null) { this.session.empty(output, visible); return; }
+    const sessionId = this.selected?.openSessionId ?? snapshot?.id ?? this.selected?.id ?? id;
     const turn = sections?.slice(Math.max(0, sections.findLastIndex(section => section.kind === "user" || section.request !== undefined))) ?? [];
     const answer = turn.findLast(section => section.kind === "assistant" || section.kind === "notice" && section.status === "error");
     const failure = answer?.status === "error" ? answer : undefined;
-    this.previewCapturedAt = snapshot?.lifecycle === "closed" ? snapshot.updatedAt : undefined;
+    const capturedAt = snapshot?.lifecycle === "closed" ? snapshot.updatedAt : undefined;
     const status = snapshot ? snapshot.state.status : failure ? "failure" : "complete";
-    this.previewState = { status, error: failure?.error ?? null, ...snapshot?.state, output, ...(sections !== undefined ? { sections } : {}), ...(telemetry ? { telemetry } : {}) };
+    const state: ExecutionState = { status, error: failure?.error ?? null, ...snapshot?.state, output, ...(sections !== undefined ? { sections } : {}), ...(telemetry ? { telemetry } : {}) };
     const tree = this.worktree ?? { id: "history", path: "", name: "History", branch: null, sessions: [] };
-    this.session.update({ ...tree, sessions: [{ id: sessionId, name: this.selected?.title ?? "Preview", status, subagents: snapshot?.subagents ?? [] }] },
-      sessionId, new Set([sessionId]), visible && this.previewPane.visible);
-    if (emptyFocused && visible && this.previewPane.visible) this.focusPreviewPending = true;
+    const descriptor = { id: sessionId, name: snapshot?.name ?? this.selected?.title ?? "Preview", status, subagents: snapshot?.subagents ?? [] };
+    const sessions = tree.sessions.some(session => session.id === sessionId)
+      ? tree.sessions.map(session => session.id === sessionId ? descriptor : session) : [...tree.sessions, descriptor];
+    this.session.show({ ...tree, sessions }, sessionId, state, visible && this.previewPane.visible, capturedAt, this.actions.draft?.(sessionId));
   }
-  private focusReadyPreview = (): void => {
-    if (!this.focusPreviewPending || !this.visible || !this.previewPane.visible || !this.session.root.visible) return;
-    this.focusPreviewPending = false;
-    // Hidden session surfaces become focusable only after their new visibility is laid out.
-    if (!this.renderer.currentFocusedRenderable || this.previewPane.focused) this.preview.focus();
-  };
   private showPreview(value: HistoryPreview): void {
     if (value.snapshot) {
       const snapshot = value.snapshot;
       const sections = snapshot.state.sections;
-      if (!sections?.length && !snapshot.state.output && !snapshot.state.error && snapshot.state.status !== "working") {
-        this.previewMessage("No saved sections in this branch."); return;
-      }
       this.updatePreview(`history:${value.worktreeId}:${value.id}`, value.truncated && sections ? [...sections, {
         id: "history-preview-truncated", kind: "notice", title: "Preview truncated", text: "Open the session to read the full section content.", status: "complete",
       }] : sections, snapshot.state.output, this.visible, snapshot.state.telemetry, snapshot);
       return;
     }
     const sections: readonly TranscriptSection[] = value.sections ?? (value.text ? [{ id: "legacy-preview", kind: "notice", title: "Saved conversation", text: value.text, status: "complete" }] : []);
-    if (!sections.length) { this.previewMessage("No saved sections in this branch."); return; }
-    this.updatePreview(`history:${value.worktreeId}:${value.id}:${sections[0]!.id}`, value.truncated ? [...sections, {
+    this.updatePreview(`history:${value.worktreeId}:${value.id}:${sections[0]?.id ?? "empty"}`, value.truncated ? [...sections, {
       id: "history-preview-truncated", kind: "notice", title: "Preview truncated", text: "Open the session to read the full section content.", status: "complete",
     }] : sections, "", this.visible, value.telemetry);
   }
@@ -276,7 +261,7 @@ export class SessionHistoryPanel {
     if (identity && identity === this.previewIdentity) return;
     this.previewIdentity = identity; this.preview.scrollTo(0);
     if (this.loading || this.loadError || !item || !worktree) {
-      this.previewCache.unselect(); this.previewMessage(this.loadError ?? (this.loading ? "" : "Select a saved session")); return;
+      this.previewCache.unselect(); this.setPreviewLoading(false); this.previewMessage(this.loadError ?? (this.loading ? "" : "Select a saved session")); return;
     }
     if (!this.actions.preview) { this.previewMessage("Read-only preview is unavailable. Press <CR> to open the session explicitly."); return; }
     this.previewCache.select(worktree.id, item.id); this.renderPreview();
@@ -286,6 +271,7 @@ export class SessionHistoryPanel {
     if (!this.visible || this.loading || !item || !worktree) return;
     // Responses populate their own slots; the screen only ever reads the selected slot.
     const state = this.previewCache.read(worktree.id, item.id);
+    this.setPreviewLoading(!state || state.kind === "pending");
     switch (state?.kind) {
       case "ready": this.showPreview(state.value); break;
       case "error": this.previewMessage(`[${state.error.code}] ${state.error.message}`); break;
@@ -315,7 +301,7 @@ export class SessionHistoryPanel {
     if (command === "history.open") { this.launch(() => this.openSelected()); return; }
     if (command === "history.preview") {
       if (this.renderer.width < 100) { this.compactPreview = !this.compactPreview; this.resize(); }
-      else if (this.session.transcriptFocused || this.previewPane.focused) this.search.focus(); else this.previewTarget.focus();
+      else if (this.session.focused) this.search.focus(); else this.previewTarget.focus();
       this.actions.onChange?.(); return;
     }
     if (command === "history.page-up" || command === "history.page-down") {
@@ -326,8 +312,7 @@ export class SessionHistoryPanel {
     else if (command === "history.previous" || command === "history.next") this.cursor += command === "history.previous" ? -1 : 1;
     else if (command === "history.half-page-up" || command === "history.half-page-down") {
       const direction = command === "history.half-page-up" ? -1 : 1;
-      if (this.previewPane.focused) return;
-      if (this.session.transcriptFocused) { this.preview.scrollBy(direction * halfPageStep(this.preview.viewport.height)); return; }
+      if (this.session.focused) { this.preview.scrollBy(direction * halfPageStep(this.preview.viewport.height)); return; }
       const height = this.layout.listHeight;
       if (this.search.focused) {
         if (this.compactPreview) { this.compactPreview = false; this.resize(); }
@@ -342,10 +327,10 @@ export class SessionHistoryPanel {
     const width = Math.max(1, Math.min(this.renderer.width, Math.floor(this.renderer.width * 0.9)));
     const height = Math.max(1, Math.min(this.renderer.height, Math.max(8, Math.floor(this.renderer.height * 0.8))));
     // Keep at least four body rows for the preview in short dialogs.
-    this.search.fit(height - 8);
+    this.search.fit(height - 7);
     centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
     this.layout.resize(this.renderer.width >= 100, this.compactPreview);
-    if (this.visible && (((this.session.root.hasFocusedDescendant || this.previewPane.focused) && !this.previewPane.visible) || (this.list.focused && !this.list.visible))) this.search.focus();
+    if (this.visible && ((this.session.focused && !this.previewPane.visible) || (this.list.focused && !this.list.visible))) this.search.focus();
     if (this.visible) this.renderPreview();
     this.actions.onChange?.();
   };
@@ -353,7 +338,7 @@ export class SessionHistoryPanel {
     if (this.disposed) return;
     this.hide(false); this.disposed = true; this.generation++; this.cancelPreview(); this.loadRequest?.abort(); this.spinner.cancel();
     this.search.off(InputRenderableEvents.INPUT, this.filter); this.renderer.off("resize", this.resize);
-    this.renderer.removePostProcessFn(this.focusReadyPreview); this.session.dispose();
+    this.session.dispose();
     if (!this.root.isDestroyed) this.root.destroyRecursively();
     if (this.listenerBudget) this.renderer.setMaxListeners(Math.max(1, this.renderer.getMaxListeners() - this.listenerBudget));
   }

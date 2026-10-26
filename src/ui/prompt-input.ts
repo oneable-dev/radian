@@ -37,10 +37,11 @@ export class PromptInput extends TextareaRenderable {
   constructor(private readonly renderer: CliRenderer, private readonly notice: Notice,
     private readonly inspect: (content: DialogContent) => void, private readonly options: Options = {}) {
     super(renderer, { id: options.id ?? "session-prompt", width: "auto", flexGrow: 1, minWidth: 0, height: 1, flexShrink: 0, wrapMode: "word",
-      placeholder: options.readOnly ? "" : "Ask to do anything",
+      placeholder: "Ask to do anything",
       keyBindings: [{ name: "return", shift: true, action: "newline" }, { name: "return", meta: true, action: "newline" },
         { name: "kpenter", shift: true, action: "newline" }, { name: "kpenter", meta: true, action: "newline" }] });
     this.field = new InputField(renderer, this, "prompt", options.fieldId ?? `${this.id}-field`);
+    if (options.readOnly) { this.focusable = false; this.selectable = false; this.showCursor = false; }
     this.clipboard = options.clipboard ?? new Clipboard(renderer); this.activity = new LoadingSpinner(renderer, { id: options.activityId ?? `${this.id}-paste-loading` });
     // Clipboard progress occupies an existing gutter cell, never a row or editor column.
     this.activity.root.position = "absolute"; this.activity.root.top = 0; this.activity.root.right = 0; this.activity.root.zIndex = 1;

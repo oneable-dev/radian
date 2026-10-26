@@ -175,13 +175,13 @@ test("Esc steps back through account name, authentication method, and provider s
 
     // Cancelling name entry returns to the current provider's authentication methods.
     app.mockInput.pressEscape(); await app.render();
-    expect(app.captureCharFrame()).toContain("Add account · Fixture");
+    expect(app.captureCharFrame()).toContain("Choose how to sign in to Fixture.");
     expect(app.captureCharFrame()).toContain("API key"); expect(app.get("accounts-input").visible).toBe(false);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-list");
 
     // Going back from methods returns to providers, not the initial account list.
     app.mockInput.pressEscape(); await app.render();
-    expect(app.captureCharFrame()).toContain("Add account · provider"); expect(app.captureCharFrame()).toContain("Fixture");
+    expect(app.captureCharFrame()).toContain("Choose a service to sign in."); expect(app.captureCharFrame()).toContain("Fixture");
     expect(app.captureCharFrame()).not.toContain("Personal"); expect(app.get("accounts-picker").visible).toBe(true);
     app.mockInput.pressEscape(); await app.render(); expect(app.captureCharFrame()).toContain("Fixture · Personal");
 
@@ -211,7 +211,7 @@ test.each([[120, 30], [60, 16]])("The %dx%d single-line provider list preserves 
     app.mockInput.pressEnter(); await app.render();
 
     // Jump by half the visible single-line candidates, not empty secondary rows.
-    expect(app.captureCharFrame()).toContain(`Add account · Service ${jump}`);
+    expect(app.captureCharFrame()).toContain(`Choose how to sign in to Service ${jump}.`);
     expect(app.requests.some(request => request.type === "login")).toBe(false); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });

@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { BoxRenderable, ScrollBoxRenderable, TextRenderable } from "@opentui/core";
-import { createTestRenderer } from "@opentui/core/testing";
-import { PopupBody, SearchPopupLayout, centerPopup } from "./popup-layout.ts";
+import { createTestRenderer, ManualClock } from "@opentui/core/testing";
+import { PopupBody, SearchPopupLayout, attachPopupActivity, centerPopup } from "./popup-layout.ts";
+import { LoadingSpinner } from "./loading-spinner.ts";
 import { PopupFrame } from "./popup-frame.ts";
 import { SearchInput } from "./search-input.ts";
 
@@ -58,6 +59,29 @@ test.each([false, true])("Search layouts preserve queries and viewport ownership
       expect(layout.listHeight).toBeGreaterThan(0);
     }
   } finally { if (!previewEnabled) preview.root.destroyRecursively(); await app.dispose(); }
+});
+
+test("Headerless popup activity stays on the frame edge without reserving or covering a content row", async () => {
+  // Loading feedback must survive title removal without stealing the first content cell.
+  const clock = new ManualClock(), app = await createTestRenderer({ width: 80, height: 20, clock });
+  const panel = new PopupFrame(app.renderer, { position: "absolute", border: true, paddingX: 1,
+    title: "Unused popup title", bottomTitle: "Unused popup footer" });
+  const content = new TextRenderable(app.renderer, { content: "First content line", flexGrow: 1 });
+  const spinner = new LoadingSpinner(app.renderer, { id: "popup-loading" });
+  panel.add(content); attachPopupActivity(panel, spinner.root); app.renderer.root.add(panel);
+  try {
+    centerPopup(panel, 60, 14, 80, 20); spinner.start(); spinner.stop();
+    await app.renderOnce(); await app.renderOnce();
+
+    // Neither border titles nor spinner-only headers take space from the popup body.
+    expect(content.y).toBe(panel.y + 1); expect(spinner.root.y).toBe(panel.y);
+    expect(spinner.root.x).toBeGreaterThan(panel.x); expect(spinner.root.x).toBeLessThan(panel.x + panel.width - 1);
+    expect(app.captureCharFrame()).toContain("First content line");
+    expect(app.captureCharFrame()).not.toContain("Unused popup");
+    expect(spinner.root.visible).toBe(true);
+    clock.advance(500); await app.renderOnce();
+    expect(spinner.root.visible).toBe(false); expect(content.y).toBe(panel.y + 1);
+  } finally { await app.dispose(); }
 });
 
 test("Popup placement uses requested dimensions rather than stale native resize geometry", async () => {

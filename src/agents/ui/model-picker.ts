@@ -11,7 +11,7 @@ import { SearchInput } from "../../ui/search-input.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
-import { SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
+import { SearchPopupLayout, attachPopupActivity, centerPopup } from "../../ui/popup-layout.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { Button } from "../../ui/button.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
@@ -63,11 +63,7 @@ export class ModelPicker {
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
     this.panel = new PopupFrame(renderer, { id: "model-dialog", position: "absolute", border: true, paddingX: 1,
       flexDirection: "column", minWidth: 0, minHeight: 0 });
-    const heading = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    const title = new TextRenderable(renderer, { content: "Model & effort · current session", height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });
     this.spinner = new LoadingSpinner(renderer, { id: "model-loading" });
-    const activity = new BoxRenderable(renderer, { height: 1, width: 1, flexShrink: 0 }); activity.add(this.spinner.root);
-    heading.add(title); heading.add(activity);
     this.search = new SearchInput(renderer, { id: "model-search", placeholder: "Search model or provider…" });
     this.message = new TextRenderable(renderer, { id: "model-message", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.list = new ScrollBoxRenderable(renderer, { id: "model-list", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
@@ -77,12 +73,12 @@ export class ModelPicker {
     this.effortOptions = new BoxRenderable(renderer, { id: "model-effort-options", width: "100%", flexShrink: 0, flexDirection: "row", flexWrap: "wrap" });
     this.effort.add(this.effortLabel); this.effort.add(this.effortOptions);
     this.layout = new SearchPopupLayout(renderer, { id: "model", search: this.search, message: this.message, list: this.list });
-    this.panel.add(heading); this.panel.add(this.layout.root); this.panel.add(this.effort); this.root.add(this.panel);
+    this.panel.add(this.layout.root); this.panel.add(this.effort); attachPopupActivity(this.panel, this.spinner.root); this.root.add(this.panel);
     theme.scrollbars(this.list);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
       this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
-      paintText(title, styles["ui.popupTitle"]); paintText(this.message, styles["ui.muted"]); paintText(this.spinner.root, styles["status.working"]);
+      paintText(this.message, styles["ui.muted"]); paintText(this.spinner.root, styles["status.working"]);
       this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);
@@ -257,7 +253,7 @@ export class ModelPicker {
   private resize = (): void => {
     if (this.disposed || this.root.isDestroyed) return;
     const width = Math.max(1, Math.min(100, this.renderer.width - 4)), height = Math.max(1, Math.min(24, this.renderer.height - 2));
-    this.search.fit(height - 7);
+    this.search.fit(height - 6);
     centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
   };
   dispose(): void {

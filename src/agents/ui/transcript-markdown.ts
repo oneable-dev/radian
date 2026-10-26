@@ -37,7 +37,8 @@ export class TranscriptMarkdown {
   private streaming = true;
   private styles: UiStyles;
 
-  constructor(private readonly renderer: CliRenderer, syntax: SyntaxStyle, private readonly thinking: boolean, private readonly changing: () => void, private readonly notice: Notice) {
+  constructor(private readonly renderer: CliRenderer, syntax: SyntaxStyle, private readonly thinking: boolean, private readonly changing: () => void, private readonly notice: Notice,
+    private readonly selectable = true) {
     const theme = uiTheme(renderer); this.styles = theme.styles;
     this.root = new MarkdownRenderable(renderer, { width: "100%", minWidth: 0, minHeight: 1, flexShrink: 0,
       syntaxStyle: syntax, streaming: true, conceal: true, concealCode: false, internalBlockMode: "top-level",
@@ -47,7 +48,7 @@ export class TranscriptMarkdown {
         const original = context.defaultRender();
         if (!(original instanceof TextTableRenderable)) return original;
         const selection = theme.styles["transcript.selection"];
-        const table = new TranscriptTable(renderer, { width: "100%", flexShrink: 0, content: original.content, selectable: original.selectable,
+        const table = new TranscriptTable(renderer, { width: "100%", flexShrink: 0, content: original.content, selectable: this.selectable && original.selectable,
           columnWidthMode: original.columnWidthMode, columnFitter: original.columnFitter, wrapMode: original.wrapMode,
           cellPaddingX: original.cellPaddingX, cellPaddingY: original.cellPaddingY, columnGap: original.columnGap,
           showBorders: original.showBorders, border: original.border, outerBorder: original.outerBorder,
@@ -57,7 +58,7 @@ export class TranscriptMarkdown {
       },
       renderBefore: () => this.paintLeaves(theme.styles), renderAfter: () => this.settle(),
     });
-    this.root.selectable = true;
+    this.root.selectable = this.selectable;
     this.root.once(RenderableEvents.DESTROYED, () => { this.revision++; });
     theme.bindStyles(this.root, (styles) => {
       this.changing(); this.styles = styles;
@@ -84,6 +85,7 @@ export class TranscriptMarkdown {
 
   private paintLeaves(styles: UiStyles): void {
     for (const child of descendants(this.root)) if (child instanceof TextBufferRenderable) {
+      child.selectable = this.selectable;
       child.attributes = this.thinking ? styles["transcript.thinking"].attributes : styles["ui.text"].attributes;
       child.selectionBg = styles["transcript.selection"].bg; child.selectionFg = styles["transcript.selection"].fg;
       if (this.thinking) child.fg = styles["transcript.thinking"].fg;

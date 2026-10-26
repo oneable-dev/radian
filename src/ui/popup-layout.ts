@@ -70,6 +70,12 @@ export class SearchPopupLayout {
   }
 }
 
+// Activity lives on the frame edge, never in a reserved popup header or over its content.
+export function attachPopupActivity(panel: BoxRenderable, activity: Renderable): void {
+  activity.position = "absolute"; activity.top = -1; activity.right = 0; activity.zIndex = 1;
+  panel.add(activity);
+}
+
 export function centerPopup(panel: BoxRenderable, width: number, height: number, availableWidth: number, availableHeight: number): void {
   const columns = Math.max(1, Math.min(availableWidth, Math.floor(width)));
   const rows = Math.max(1, Math.min(availableHeight, Math.floor(height)));

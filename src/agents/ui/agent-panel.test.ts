@@ -49,16 +49,23 @@ test("Read-only Agent panels block send, interrupt, and creation despite provide
   const app = await mount({ initialDrafts: { a: "Saved draft" },
     onPrompt: () => { actions.push("prompt"); return ok(undefined); },
     onInterrupt: async () => { actions.push("interrupt"); return ok(undefined); },
-    onNewSession: () => actions.push("create"),
+    onNewSession: () => actions.push("create"), onSelectSession: () => actions.push("select"), onCloseSession: () => actions.push("close"),
     getSessionDetails: () => ({ status: "working", output: "Saved output", error: null }),
   }, {}, { readOnly: true });
   try {
     // Public command boundaries enforce the same policy when UI routing is bypassed.
     await app.panel.submitPrompt(); await app.panel.interrupt(); app.panel.sessionCommand("session.new");
+    app.panel.sessionCommand("session.next"); app.panel.sessionCommand("session.close");
+    const close = app.renderer.root.findDescendantById("close-session:a")!;
+    await app.mockMouse.click(close.x, close.y); await app.renderOnce();
 
     // No write callbacks run; drafts and status lines remain displayed.
     expect(actions).toEqual([]); expect(app.panel.canSubmit).toBe(false); expect(app.panel.canInterrupt).toBe(false);
-    expect(app.panel.prompt.value).toBe("Saved draft"); expect(app.captureCharFrame()).not.toContain("to interrupt");
+    expect(app.panel.prompt.value).toBe("Saved draft"); expect(app.captureCharFrame()).toContain("to interrupt");
+    expect(app.panel.prompt.focusable).toBe(false);
+    expect(app.panel.transcriptAvailable("transcript.fold")).toBe(false);
+    expect(app.panel.transcriptAvailable("transcript.open-link")).toBe(false);
+    expect(app.panel.sessionId).toBe("a");
   } finally { await app.close(); }
 });
 

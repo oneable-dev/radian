@@ -36,16 +36,15 @@ export class MessagesPanel {
     this.root = new BoxRenderable(renderer, { id: "messages", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 5900, visible: false,
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
     this.panel = new PopupFrame(renderer, { id: "messages-panel", position: "absolute", border: true, paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
-    const title = new TextRenderable(renderer, { content: "Messages", height: 1, flexShrink: 0, selectable: false });
     this.search = new SearchInput(renderer, { id: "messages-search", placeholder: "Search messages, levels or sources…" });
     this.list = new ScrollBoxRenderable(renderer, { id: "messages-list", flexGrow: 1, minHeight: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.list.focus() });
     this.layout = new SearchPopupLayout(renderer, { id: "messages", search: this.search, list: this.list });
-    this.panel.add(title); this.panel.add(this.layout.root); this.root.add(this.panel);
+    this.panel.add(this.layout.root); this.root.add(this.panel);
     const theme = uiTheme(renderer); theme.scrollbars(this.list);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
-      paintText(title, styles["ui.popupTitle"]); this.paint();
+      this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);
     renderer.on("resize", this.resize); renderer.on("focused_renderable", this.keepFocus); this.resize();
@@ -129,7 +128,7 @@ export class MessagesPanel {
     if (this.disposed) return;
     const width = Math.max(1, Math.min(110, this.renderer.width - 4)), height = Math.max(1, Math.floor(this.renderer.height * 0.8));
     centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
-    this.search.fit(height - 4); if (this.visible) this.refresh();
+    this.search.fit(height - 3); if (this.visible) this.refresh();
   };
   dispose(): void {
     if (this.disposed) return;

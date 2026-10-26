@@ -74,6 +74,7 @@ export type TranscriptOptions = {
   image?: TranscriptImageProvider;
   cacheSessions?: boolean;
   emptyLogo?: boolean;
+  passive?: boolean;
 };
 
 export class TranscriptPanel {
@@ -188,7 +189,7 @@ export class TranscriptPanel {
   }
   get focusTarget(): Renderable { return this.searchLine.visible ? this.searchInput : !this.help.visible && this.state?.mode !== "sections" && this.selected ? this.reader(this.selected) : this.scroll; }
   keyContext(): KeyContext | null {
-    if (!this.visible || !this.focused) return null;
+    if (this.options.passive || !this.visible || !this.focused) return null;
     if (this.searchLine.visible) return "transcript-search";
     if (this.help.visible) return "transcript";
     return this.state?.mode === "visual" ? "transcript-visual" : this.state?.mode === "text" ? "transcript-text" : "transcript";
@@ -374,6 +375,7 @@ export class TranscriptPanel {
     const heading = new BoxRenderable(this.renderer, { width: "100%", flexShrink: 0, minWidth: 0, minHeight: 1, flexDirection: "row", alignItems: "flex-start",
       onMouseDown: (event) => {
         if (event.button !== 0) return;
+        if (this.options.passive) { event.preventDefault(); event.stopPropagation(); this.scroll.focus(); return; }
         if (!this.isCurrentRow(row)) return;
         event.preventDefault(); event.stopPropagation(); this.select(section.id); this.scroll.focus();
         if (compactionNotice(row.section) || row.section.image) this.command("transcript.fold");
@@ -394,7 +396,7 @@ export class TranscriptPanel {
       this.readers.add(reader);
       reader.on("focused", () => {
         const state = this.state;
-        if (!state || this.disposed || !this.isCurrentRow(row)) return;
+        if (this.options.passive || !state || this.disposed || !this.isCurrentRow(row)) return;
         state.selectedId = section.id;
         if (reader === header) state.readingHeading = true; else delete state.readingHeading;
         if (state.mode === "sections") state.mode = "text";
@@ -491,7 +493,7 @@ export class TranscriptPanel {
       if (markdownKind) {
         row.markdown = new TranscriptMarkdown(this.renderer, markdownKind === "thinking" ? this.thinkingSyntax : this.proseSyntax, markdownKind === "thinking",
           () => { if (this.isCurrentRow(row)) this.markdownChanging(); },
-          (message, options) => { if (this.isCurrentRow(row)) this.options.notice(message, options); });
+          (message, options) => { if (this.isCurrentRow(row)) this.options.notice(message, options); }, !this.options.passive);
         row.box.remove(row.bodyRow); row.markdown.root.add(row.bodyRow);
         row.box.remove(row.completion); row.box.add(row.markdown.root); row.box.add(row.completion);
         row.markdown.root.on("resize", () => {
@@ -542,6 +544,9 @@ export class TranscriptPanel {
     row.body.cursorColor = styles["ui.focusBorder"].fg;
     const selectionStyle = styles[this.legacy ? "ui.selection" : "transcript.selection"];
     row.body.selectionBg = selectionStyle.bg; row.body.selectionFg = selectionStyle.fg;
+    if (this.options.passive) for (const reader of [row.header, row.body]) {
+      reader.focusable = false; reader.selectable = false; reader.showCursor = false;
+    }
     this.paintCompletion(row);
   }
   private paintCompletion(row: Row): void {
@@ -627,7 +632,7 @@ export class TranscriptPanel {
   };
   // Reuse the pane's side insets and blank section/boundary rows without reflowing content.
   paintFocusBorder(buffer: OptimizedBuffer, bottomInset: number): void {
-    if (this.disposed || !this.visible || !this.scroll.visible || this.help.visible || !this.focused) return;
+    if (this.options.passive || this.disposed || !this.visible || !this.scroll.visible || this.help.visible || !this.focused) return;
     const row = this.selected, viewport = this.scroll.viewport;
     if (!row || !row.box.visible || viewport.width < 1 || viewport.height < 1) return;
     if (row.box.screenY >= viewport.screenY + viewport.height || row.box.screenY + row.box.height <= viewport.screenY) return;
@@ -800,7 +805,7 @@ export class TranscriptPanel {
     this.applySelection(row);
   }
   available(command: CommandId): boolean {
-    if (!this.visible || !this.sessionId) return false;
+    if (this.options.passive || !this.visible || !this.sessionId) return false;
     if (this.searchLine.visible) return ["transcript.search-submit", "transcript.search-cancel", "transcript.search-clear"].includes(command);
     if (["transcript.search-submit", "transcript.search-cancel", "transcript.search-clear"].includes(command)) return false;
     if (command === "transcript.fold" && !this.foldable(this.selected)) return false;
@@ -1088,6 +1093,7 @@ export class TranscriptPanel {
     return text.replace(/\n/gu, () => original[line++]?.endsWith("\r") ? "\r\n" : "\n");
   }
   private linkDown = (event: MouseEvent): void => {
+    if (this.options.passive) { event.preventDefault(); this.scroll.focus(); return; }
     this.cancelPending(); this.linkPress = undefined;
     if (!this.visible || this.help.visible || event.button !== 0 || event.modifiers.ctrl || event.modifiers.alt || event.modifiers.shift) return;
     const url = this.renderer.getLinkAt(event.x, event.y);
@@ -1095,6 +1101,7 @@ export class TranscriptPanel {
     if (url || reader) this.linkPress = { x: event.x, y: event.y, sessionId: this.sessionId, url, reader, source: reader?.plainText };
   };
   private linkUp = (event: MouseEvent): void => {
+    if (this.options.passive) return;
     const press = this.linkPress; this.linkPress = undefined;
     if (!press || !this.visible || this.help.visible || event.button !== 0 || event.x !== press.x || event.y !== press.y
       || event.modifiers.ctrl || event.modifiers.alt || event.modifiers.shift || press.sessionId !== this.sessionId) return;

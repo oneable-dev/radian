@@ -17,7 +17,6 @@ export class TextDialog {
   readonly scroll: ScrollBoxRenderable;
   private readonly panel: BoxRenderable;
   private readonly contentBody: PopupBody;
-  private readonly title: TextRenderable;
   private readonly body: TextRenderable;
   private readonly status: TextRenderable;
   private readonly clipboard: Clipboard;
@@ -35,19 +34,18 @@ export class TextDialog {
       onMouseDown: (event) => event.stopPropagation(), onMouseScroll: (event) => event.stopPropagation() });
     this.panel = new PopupFrame(renderer, { id: "text-dialog-panel", position: "absolute", border: true, paddingX: 1,
       flexDirection: "column", minWidth: 0, minHeight: 0 });
-    this.title = new TextRenderable(renderer, { id: "text-dialog-title", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.scroll = new ScrollBoxRenderable(renderer, { id: "text-dialog-scroll", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       onMouseDown: () => this.scroll.focus() });
     this.body = new TextRenderable(renderer, { id: "text-dialog-body", width: "100%", wrapMode: "word", selectable: true });
     this.scroll.add(this.body);
     this.status = new TextRenderable(renderer, { id: "text-dialog-status", height: 1, flexShrink: 0, wrapMode: "none", selectable: false, visible: false });
     this.contentBody = new PopupBody(renderer, "text-dialog-content", this.scroll);
-    this.panel.add(this.title); this.panel.add(this.contentBody.root); this.panel.add(this.status); this.root.add(this.panel);
+    this.panel.add(this.contentBody.root); this.panel.add(this.status); this.root.add(this.panel);
     theme.scrollbars(this.scroll);
     theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
       this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
-      paintText(this.title, styles["ui.popupTitle"]); paintText(this.body, styles["ui.label"]); paintText(this.status, styles["ui.muted"]);
+      paintText(this.body, styles["ui.label"]); paintText(this.status, styles["ui.muted"]);
     });
     renderer.on("resize", this.resize); renderer.on("focused_renderable", this.keepFocus); this.resize();
     this.root.once(RenderableEvents.DESTROYED, () => this.dispose());
@@ -58,7 +56,7 @@ export class TextDialog {
     if (this.disposed || this.root.isDestroyed) return;
     if (!this.visible) this.owner = this.renderer.currentFocusedRenderable ?? undefined;
     this.revision++; this.content = content;
-    this.title.content = content.title; this.body.content = content.text;
+    this.body.content = content.text;
     this.contentBody.showEmpty(!content.text.trim() ? "No content" : undefined);
     this.status.visible = false; this.root.visible = true; this.resize(); this.scroll.scrollTo(0); this.scroll.focus(); this.changed();
   }

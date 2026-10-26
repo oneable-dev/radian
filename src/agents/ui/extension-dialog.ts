@@ -12,7 +12,7 @@ import { singleLine } from "../../ui/text.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
-import { SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
+import { SearchPopupLayout, attachPopupActivity, centerPopup } from "../../ui/popup-layout.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { createTextMatcher } from "../../search.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
@@ -34,7 +34,6 @@ export class ExtensionDialogPanel {
   readonly input: InputRenderable;
   private readonly panel: BoxRenderable;
   private readonly layout: SearchPopupLayout;
-  private readonly title: TextRenderable;
   private readonly details: ScrollBoxRenderable;
   private readonly body: TextRenderable;
   private readonly status: TextRenderable;
@@ -56,9 +55,7 @@ export class ExtensionDialogPanel {
     this.root = new BoxRenderable(renderer, { id: "extension-dialog", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 5700, visible: false,
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
     this.panel = new PopupFrame(renderer, { id: "extension-dialog-panel", position: "absolute", border: true, paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
-    const header = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row" });
-    this.title = new TextRenderable(renderer, { id: "extension-dialog-title", flexGrow: 1, height: 1, wrapMode: "none", selectable: false });
-    this.spinner = new LoadingSpinner(renderer, { id: "extension-dialog-loading" }); header.add(this.title); header.add(this.spinner.root);
+    this.spinner = new LoadingSpinner(renderer, { id: "extension-dialog-loading" });
     this.details = new ScrollBoxRenderable(renderer, { id: "extension-dialog-details", flexGrow: 1, minHeight: 1, minWidth: 0, scrollX: false, onMouseDown: () => this.details.focus() });
     this.body = new TextRenderable(renderer, { id: "extension-dialog-body", width: "100%", wrapMode: "char", selectable: true }); this.details.add(this.body);
     this.search = new SearchInput(renderer, { id: "extension-dialog-search", placeholder: "Search options…" });
@@ -66,11 +63,12 @@ export class ExtensionDialogPanel {
     this.input = new InputRenderable(renderer, { id: "extension-dialog-input", width: "100%", maxLength: 65536, visible: false });
     this.status = new TextRenderable(renderer, { id: "extension-dialog-status", height: 1, flexShrink: 0, wrapMode: "none", visible: false, selectable: false });
     this.layout = new SearchPopupLayout(renderer, { id: "extension", search: this.search, list: this.list });
-    this.panel.add(header); this.panel.add(this.details); this.panel.add(this.layout.root); this.panel.add(this.input); this.panel.add(this.status); this.root.add(this.panel);
+    this.panel.add(this.details); this.panel.add(this.layout.root); this.panel.add(this.input); this.panel.add(this.status);
+    attachPopupActivity(this.panel, this.spinner.root); this.root.add(this.panel);
     theme.scrollbars(this.details); theme.scrollbars(this.list); theme.input(this.input);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
-      paintText(this.title, styles["ui.popupTitle"]); paintText(this.body, styles["ui.label"]); paintText(this.status, styles["ui.muted"]); this.paint();
+      paintText(this.body, styles["ui.label"]); paintText(this.status, styles["ui.muted"]); this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);
     renderer.on("resize", this.resize); renderer.on("focused_renderable", this.keepFocus); this.resize();
@@ -97,7 +95,6 @@ export class ExtensionDialogPanel {
     }
     this.hide(); this.scope = scope; this.owner = this.renderer.currentFocusedRenderable ?? undefined;
     const dialog = scope.dialog;
-    this.title.content = `Extension · ${dialog.kind === "input" ? "Input" : dialog.kind === "select" ? "Select" : "Confirm"}`;
     this.body.content = plain(dialog.title + (dialog.kind === "confirm" ? `\n\n${dialog.message}` : ""));
     this.input.value = ""; this.input.placeholder = dialog.kind === "input" ? plain(dialog.placeholder ?? "") : "";
     this.input.visible = dialog.kind === "input"; this.search.field.visible = dialog.kind === "select"; this.list.visible = dialog.kind !== "input";
@@ -204,7 +201,7 @@ export class ExtensionDialogPanel {
     if (this.disposed) return;
     const width = Math.max(1, Math.min(110, this.renderer.width - 4)), height = Math.max(1, Math.min(26, this.renderer.height - 2));
     centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
-    this.search.fit(Math.max(1, height - 6));
+    this.search.fit(Math.max(1, height - 5));
   };
   dispose(): void {
     if (this.disposed) return;

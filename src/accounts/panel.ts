@@ -10,7 +10,7 @@ import { singleLine } from "../ui/text.ts";
 import type { Notice } from "../ui/messages.ts";
 import { uiTheme } from "../ui/theme.ts";
 import { PopupFrame } from "../ui/popup-frame.ts";
-import { SearchPopupLayout, centerPopup } from "../ui/popup-layout.ts";
+import { SearchPopupLayout, attachPopupActivity, centerPopup } from "../ui/popup-layout.ts";
 import { paintText } from "../ui/theme-styles.ts";
 import { footerKeyHint } from "../keybindings/footer.ts";
 import type { CommandId, KeyContext } from "../keybindings/commands.ts";
@@ -35,7 +35,6 @@ export class AccountsPanel {
   readonly list: ScrollBoxRenderable;
   private readonly panel: BoxRenderable;
   private readonly layout: SearchPopupLayout;
-  private readonly title: TextRenderable;
   private readonly message: TextRenderable;
   private readonly details: ScrollBoxRenderable;
   private readonly body: TextRenderable;
@@ -72,9 +71,7 @@ export class AccountsPanel {
     this.root = new BoxRenderable(renderer, { id: "accounts-picker", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", visible: false, zIndex: 5600,
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
     this.panel = new PopupFrame(renderer, { id: "accounts-dialog", position: "absolute", border: true, paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
-    const header = new BoxRenderable(renderer, { height: 1, flexShrink: 0, flexDirection: "row" });
-    this.title = new TextRenderable(renderer, { content: "Accounts", height: 1, flexGrow: 1, wrapMode: "none", selectable: false });
-    this.spinner = new LoadingSpinner(renderer, { id: "accounts-loading" }); header.add(this.title); header.add(this.spinner.root);
+    this.spinner = new LoadingSpinner(renderer, { id: "accounts-loading" });
     this.search = new SearchInput(renderer, { id: "accounts-search", placeholder: "Search accounts or providers…" });
     this.message = new TextRenderable(renderer, { id: "accounts-message", height: 2, flexShrink: 0, wrapMode: "word", selectable: false });
     this.list = new ScrollBoxRenderable(renderer, { id: "accounts-list", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false, contentOptions: { flexDirection: "column" }, onMouseDown: () => this.list.focus() });
@@ -83,11 +80,12 @@ export class AccountsPanel {
     this.input = new InputRenderable(renderer, { id: "accounts-input", width: "100%", visible: false, maxLength: 65536 });
     this.secret = new SecretInput(renderer); this.secret.visible = false;
     this.layout = new SearchPopupLayout(renderer, { id: "accounts", search: this.search, message: this.message, list: this.list });
-    this.panel.add(header); this.panel.add(this.layout.root); this.panel.add(this.details); this.panel.add(this.input); this.panel.add(this.secret); this.root.add(this.panel);
+    this.panel.add(this.layout.root); this.panel.add(this.details); this.panel.add(this.input); this.panel.add(this.secret);
+    attachPopupActivity(this.panel, this.spinner.root); this.root.add(this.panel);
     theme.scrollbars(this.list); theme.scrollbars(this.details); theme.input(this.input);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
-      paintText(this.title, styles["ui.popupTitle"]); paintText(this.message, styles["ui.muted"]); paintText(this.body, styles["ui.label"]); paintText(this.spinner.root, styles["status.working"]); this.paint();
+      paintText(this.message, styles["ui.muted"]); paintText(this.body, styles["ui.label"]); paintText(this.spinner.root, styles["status.working"]); this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);
     renderer.on("resize", this.resize); renderer.on("focused_renderable", this.keepFocus); this.resize();
@@ -152,8 +150,8 @@ export class AccountsPanel {
     this.actions.changed();
   }
   private async load(): Promise<void> { if (this.worktreeId) await this.perform({ type: "list", worktreeId: this.worktreeId }); }
-  private menu(stage: Stage, title: string, message: string, candidates: Candidate[]): void {
-    this.stage = stage; this.title.content = title; this.message.content = message; this.candidates = candidates; this.cursor = 0;
+  private menu(stage: Stage, message: string, candidates: Candidate[]): void {
+    this.stage = stage; this.message.content = message; this.candidates = candidates; this.cursor = 0;
     this.secret.clear(); this.secret.visible = this.input.visible = false; this.input.value = "";
     this.details.visible = false; this.body.content = "";
     this.search.field.visible = true; this.list.visible = true; this.search.clear(); this.filter(); this.list.focus();
@@ -175,18 +173,18 @@ export class AccountsPanel {
       for (const account of catalog.accounts.filter(account => account.provider === provider)) entries.push({ id: account.id, accountId: account.id,
         label: `${name} · ${account.label}${catalog.selections[provider] === account.id ? " [Active]" : ""}`, detail: `${account.type === "oauth" ? "OAuth" : "API key"} · used by ${account.usedBy.length} worktree(s)`, choose: () => choose(account.id) });
     }
-    this.menu("accounts", "Accounts", providers.size ? "Enter switches accounts for this worktree. Use Add account to sign in to another account."
+    this.menu("accounts", providers.size ? "Enter switches accounts for this worktree. Use Add account to sign in to another account."
       : "", entries);
   }
   private providers(): void {
-    this.menu("providers", "Add account · provider", "Choose a service to sign in.", (this.catalog?.providers ?? []).map(provider => ({
+    this.menu("providers", "Choose a service to sign in.", (this.catalog?.providers ?? []).map(provider => ({
       id: provider.id, label: provider.name, detail: "", choose: () => this.methods(provider),
     })));
   }
   private methods(provider: AccountsCatalog["providers"][number]): void {
     this.provider = provider;
-    this.menu("methods", `Add account · ${singleLine(provider.name)}`, "Choose how to sign in. OAuth does not require a separate API key.", provider.methods.map(method => ({ id: method.id, label: method.name, detail: "", choose: () => {
-      this.method = method.id; this.menu("label", "Add account · name", "Enter a label for the shared account, or press Enter to use the provider name.", []);
+    this.menu("methods", `Choose how to sign in to ${singleLine(provider.name)}. OAuth does not require a separate API key.`, provider.methods.map(method => ({ id: method.id, label: method.name, detail: "", choose: () => {
+      this.method = method.id; this.menu("label", "Enter a label for the shared account, or press Enter to use the provider name.", []);
       this.search.field.visible = this.list.visible = false; this.input.visible = true; this.input.placeholder = "Account label"; this.input.maxLength = 128; this.input.focus(); this.paint();
     } })));
   }
@@ -201,7 +199,7 @@ export class AccountsPanel {
     if (login.status === "cancelled" || login.status === "error") {
       this.spinner.stop(); this.main(); this.message.content = login.error ?? "Login cancelled. Existing accounts and selections were retained."; return;
     }
-    this.stage = "login"; this.title.content = `Add account · ${singleLine(this.provider?.name ?? "provider")}`;
+    this.stage = "login";
     this.details.visible = true; this.body.content = login.events.map(event => [event.message, event.url, event.code ? `Code: ${event.code}` : undefined].filter(Boolean).join("\n")).join("\n\n");
     const prompt = login.prompt;
     this.message.content = prompt?.message ?? "Waiting for browser authentication… You can always copy or reopen the URL.";
@@ -252,7 +250,7 @@ export class AccountsPanel {
     const accountId = this.filtered[this.cursor]?.accountId, catalog = this.catalog, worktreeId = this.worktreeId;
     if (this.stage !== "accounts" || !accountId || !catalog || !worktreeId || this.busy) return;
     const account = catalog.accounts.find(account => account.id === accountId); if (!account) return;
-    this.menu("delete", "Delete local account?", `Remove ${singleLine(account.label)} and its saved credential from Radian. This does not delete the service account or conversations.`, [
+    this.menu("delete", `Remove ${singleLine(account.label)} and its saved credential from Radian. This does not delete the service account or conversations.`, [
       { id: "cancel", label: "Keep account", detail: "", choose: () => this.main() },
       { id: "delete", label: "Delete local account", detail: "Switch any worktrees using this account to another connected account first.", choose: () => this.launch(() => this.perform({ type: "delete", worktreeId, accountId, revision: catalog.revision })) },
     ]);
@@ -323,7 +321,7 @@ export class AccountsPanel {
   private resize = (): void => {
     if (this.disposed || this.root.isDestroyed) return;
     const width = Math.max(1, Math.min(106, this.renderer.width - 4)), height = Math.max(1, Math.min(30, this.renderer.height - 2));
-    this.search.fit(height - 6);
+    this.search.fit(height - 5);
     centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
   };
   dispose(): void {

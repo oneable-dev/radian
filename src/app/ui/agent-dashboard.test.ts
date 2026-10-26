@@ -80,7 +80,7 @@ test("Dashboards show three summary metrics and charts, restoring drafts and inp
     // Open and close read-only statistics using global shortcuts.
     await app.open();
     const frame = app.captureCharFrame();
-    expect(frame).toContain("Agent Dashboard"); expect(frame).toContain("Total tokens"); expect(frame).toContain("Total run time");
+    expect(frame).not.toContain("Agent Dashboard"); expect(frame).toContain("Total tokens"); expect(frame).toContain("Total run time");
     expect(frame).toContain("1,240"); expect(frame).toContain("1m 5s"); expect(frame).toContain("write-good-code"); expect(frame).toContain("█");
     app.mockInput.pressEscape(); await app.render();
 
@@ -168,7 +168,7 @@ test("Compact dashboards distinguish empty data from lookup failures without inv
   let fail = false;
   const app = await mount({ onDashboard: async days => fail ? err(new SessionError("SESSION_BUSY", "Lookup failed")) : ok(emptyDashboard(days)) }, 50, 18);
   try {
-    await app.open(); expect(app.captureCharFrame()).toContain("Agent Dashboard"); expect(app.captureCharFrame()).not.toContain("NaN");
+    await app.open(); expect(app.get("agent-dashboard").visible).toBe(true); expect(app.captureCharFrame()).not.toContain("NaN");
     app.get("dashboard-body").focus(); app.mockInput.pressKey("END"); await app.render();
     expect(app.captureCharFrame()).toContain("No recorded usage");
 

@@ -8,6 +8,7 @@ import { StatusIndicator } from "./status-indicator.ts";
 
 type Tab = { root: BoxRenderable; title: TextRenderable; frame: SessionTab; status: StatusIndicator };
 type Actions = {
+  idPrefix?: string;
   select(id: string): void;
   fast?(id: string): boolean;
   create(): void;
@@ -28,8 +29,8 @@ export class SessionTabs {
   private disposed = false;
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: Actions) {
-    this.root = new BoxRenderable(renderer, { id: "agent-session-tabs", width: "100%", height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    this.list = new ScrollBoxRenderable(renderer, { id: "agent-session-list", height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0,
+    this.root = new BoxRenderable(renderer, { id: `${actions.idPrefix ?? ""}agent-session-tabs`, width: "100%", height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
+    this.list = new ScrollBoxRenderable(renderer, { id: `${actions.idPrefix ?? ""}agent-session-list`, height: 1, flexGrow: 1, flexShrink: 1, minWidth: 0,
       scrollX: true, scrollY: false, contentOptions: { flexDirection: "row", gap: 0 }, horizontalScrollbarOptions: { visible: false },
       onSizeChange: () => { this.resizeTitles(); this.reveal = true; this.renderer.requestRender(); } });
     // ScrollBox's constructor only enables focus; disable its inherited default explicitly.
@@ -59,8 +60,8 @@ export class SessionTabs {
           const current = this.tabs.get(session.id); if (!current) return;
           this.setTitle(current, session.id); this.reveal = true; this.renderer.requestRender();
         });
-        const frame = new SessionTab(this.renderer, { id: `session:${worktreeId}:${session.id}`,
-          closeId: `close-session:${session.id}`, closeLabel: "Close session", leading: status.root,
+        const frame = new SessionTab(this.renderer, { id: `${this.actions.idPrefix ?? ""}session:${worktreeId}:${session.id}`,
+          closeId: `${this.actions.idPrefix ?? ""}close-session:${session.id}`, closeLabel: "Close session", leading: status.root,
           select: () => this.actions.select(session.id),
           close: () => this.actions.close(session.id), button: this.actions.button });
         this.list.add(frame.root);

@@ -151,6 +151,9 @@ export class Workbench {
       ...(actions.onListHistory ? { list: actions.onListHistory } : {}),
       ...(actions.onResumeSession ? { resume: actions.onResumeSession } : {}),
       ...(actions.onPreviewHistory ? { preview: actions.onPreviewHistory } : {}),
+      details: id => actions.getSessionDetails?.(id) ?? null,
+      draft: id => this.agent?.promptDraftFor(id),
+      ...(actions.onImage ? { image: actions.onImage } : {}),
       onChange: () => this.updateFooter(),
       keyHint: (command, context) => this.keymap.hint(command, context),
       onError: (message, options) => this.notify(message, { level: "error", source: "History", ...options }),
@@ -181,6 +184,8 @@ export class Workbench {
     });
     this.monitor = new SessionMonitor(renderer, {
       details: id => actions.getSessionDetails?.(id) ?? null,
+      draft: id => this.agent?.promptDraftFor(id),
+      ...(actions.onImage ? { image: actions.onImage } : {}),
       open: (tree, id) => { this.activateSession(tree, id); this.agent.focusLatest("prompt"); },
       changed: () => this.updateFooter(), fallback: () => this.focusNavigation(), notice: (text, options) => this.notify(text, options),
       ...(actions.getMonitoringNotice ? { warning: actions.getMonitoringNotice } : {}),

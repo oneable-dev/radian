@@ -21,18 +21,18 @@ import { ok, err } from "../../result.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 
 const surfaces = [
-  { name: "workspace", body: "workspace-results", title: "No repositories" },
-  { name: "monitor", body: "monitor-results", title: "No working sessions or unread results", preview: "monitor-preview-pane" },
-  { name: "history", body: "history-results", title: "No saved sessions", preview: "history-preview-pane" },
-  { name: "model", body: "model-results", title: "No available models" },
-  { name: "messages", body: "messages-results", title: "No messages yet" },
-  { name: "refs", body: "git-browser-results", title: "No matches" },
-  { name: "reflog", body: "git-browser-results", title: "No matches", preview: "git-reflog-preview-pane" },
-  { name: "changes", body: "git-files-body", title: "No changed", preview: "git-comparison-body" },
-  { name: "accounts", body: "accounts-results", title: "No connected accounts" },
-  { name: "extension", body: "extension-results", title: "No matching options" },
-  { name: "dashboard", body: "dashboard-ranking-body", title: "No recorded usage" },
-  { name: "text", body: "text-dialog-content", title: "No content" },
+  { name: "workspace", panel: "workspace-sidebar", content: "workspace-body", header: "Workspace", body: "workspace-results", title: "No repositories" },
+  { name: "monitor", panel: "monitor-dialog", content: "monitor-body", header: "AI Sessions", body: "monitor-results", title: "No working sessions or unread results", preview: "monitor-preview-pane" },
+  { name: "history", panel: "history-dialog", content: "history-body", header: "History · radian", body: "history-results", title: "No saved sessions", preview: "history-preview-pane" },
+  { name: "model", panel: "model-dialog", content: "model-body", header: "Model & effort", body: "model-results", title: "No available models" },
+  { name: "messages", panel: "messages-panel", content: "messages-body", header: "Messages", body: "messages-results", title: "No messages yet" },
+  { name: "refs", panel: "git-browser-panel", content: "git-browser-body", header: "Refs", body: "git-browser-results", title: "No matches" },
+  { name: "reflog", panel: "git-browser-panel", content: "git-browser-body", header: "Reflog", body: "git-browser-results", title: "No matches", preview: "git-reflog-preview-pane" },
+  { name: "changes", panel: "git-changes", content: "git-changes-body", header: "Working tree", body: "git-files-body", title: "No changed", preview: "git-comparison-body" },
+  { name: "accounts", panel: "accounts-dialog", content: "accounts-body", header: "Accounts", body: "accounts-results", title: "No connected accounts" },
+  { name: "extension", panel: "extension-dialog-panel", content: "extension-dialog-details", header: "Extension ·", body: "extension-results", title: "No matching options" },
+  { name: "dashboard", panel: "dashboard-dialog", content: "dashboard-period", header: "Agent Dashboard", body: "dashboard-ranking-body", title: "No recorded usage" },
+  { name: "text", panel: "text-dialog-panel", content: "text-dialog-content", header: "Details", body: "text-dialog-content", title: "No content" },
 ] as const;
 type Surface = typeof surfaces[number]["name"];
 
@@ -101,7 +101,7 @@ async function mount(name: Surface, width: number, height: number) {
 }
 
 for (const [width, height] of [[140, 32], [60, 16]] as const) {
-  test.each(surfaces)(`$name empty guidance is centered within its own body at ${width} columns`, async surface => {
+  test.each(surfaces)(`$name popups have no title row and center empty guidance at ${width} columns`, async surface => {
     // Each feature supplies its own state while the shared body owns cell-accurate placement.
     const app = await mount(surface.name, width, height);
     const centered = (id: string, expected?: string) => {
@@ -116,6 +116,13 @@ for (const [width, height] of [[140, 32], [60, 16]] as const) {
       expect(frame[title.y]?.slice(title.x, title.x + title.width).trim()).toBe(title.plainText);
     };
     try {
+      // Content starts immediately inside the frame, with no hidden or reserved title row.
+      const panel = app.get(surface.panel), content = app.get(surface.content);
+      expect(content.y).toBe(panel.y + 1);
+      const popupText = app.captureCharFrame().split("\n").slice(panel.y, panel.y + panel.height)
+        .map(line => line.slice(panel.x, panel.x + panel.width)).join("\n");
+      expect(popupText).not.toContain(surface.header);
+
       // Empty data and unmatched queries must not turn into disabled candidate rows.
       centered(surface.body, surface.title);
       if ("preview" in surface) {
