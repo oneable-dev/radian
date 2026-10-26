@@ -69,6 +69,91 @@ test("Account lists distinguish authenticated connections from available provide
   expect(connected.accounts).toEqual([]); expect(JSON.stringify(connected)).not.toContain("private-existing-key");
 });
 
+test.each(["oauth", "api_key"] as const)("Renaming an existing %s connection persists a shared label without copying credentials", async type => {
+  // Existing authentication remains owned by Pi, even when Radian stores its display label.
+  const { manager, defaults, directory } = await fixture([provider(async () => { throw new Error("No login expected"); })]);
+  const credential: Credential = type === "oauth"
+    ? { type, access: "private-existing-access", refresh: "private-existing-refresh", expires: Date.now() + 3600000 }
+    : { type, key: "private-existing-key" };
+  await defaults.modify("fixture", async () => credential);
+  const before = await manager.catalog("one");
+
+  // Rename from one worktree and reopen the metadata with the same external credential store.
+  expectOk(await manager.handle({ type: "rename", worktreeId: "one", provider: "fixture", accountId: null, label: "  ONEABLE  ", revision: before.revision }));
+  const reopened = expectOk(await AccountManager.open(directory, { offline: true, defaultCredentials: defaults, providers: [provider(async () => { throw new Error("No login expected"); })] }));
+  cleanups.push(async () => { expectOk(await reopened.stop()); });
+  const other = await reopened.catalog("two"), stored = await readFile(join(directory, "accounts.json"), "utf8");
+
+  // Labels are shared and durable, but never create a named account, selection, or token copy.
+  expect(other.existingAccounts).toContainEqual({ provider: "fixture", name: "Fixture", type, label: "ONEABLE" });
+  expect(other.revision).toBe(before.revision + 1); expect(other.accounts).toEqual([]); expect(other.selections).toEqual({});
+  expect(await defaults.read("fixture")).toEqual(credential);
+  expect(stored).toContain('"existingLabels":{"fixture":"ONEABLE"}'); expect(stored).not.toContain("private-existing");
+  expect((await stat(join(directory, "accounts.json"))).mode & 0o777).toBe(0o600);
+});
+
+test("Renaming a selected named account preserves authentication and worktree selections", async () => {
+  // A saved account can be active in another worktree while its label is edited.
+  const { manager } = await fixture(), account = await add(manager, "private-named-key");
+  expectOk(await select(manager, "two", account.id));
+  const before = await manager.catalog("one"), identity = manager.selectionIdentity("two", "fixture");
+
+  expectOk(await manager.handle({ type: "rename", worktreeId: "one", provider: "fixture", accountId: account.id, label: "Work", revision: before.revision }));
+  const other = await manager.catalog("two");
+
+  // Changing a label must not switch credentials or invalidate request identity.
+  expect(other.accounts).toContainEqual({ ...account, label: "Work", usedBy: ["two"] });
+  expect(other.selections.fixture).toBe(account.id); expect(manager.selectionIdentity("two", "fixture")).toBe(identity);
+  expect((await (await manager.workspace("two")).runtime.getAuth("fixture"))?.auth.apiKey).toBe("private-named-key");
+});
+
+test("Stale label edits cannot overwrite a newer shared label", async () => {
+  // Two worktrees edit the same external connection from the same catalog revision.
+  const { manager, defaults } = await fixture();
+  await defaults.modify("fixture", async () => ({ type: "api_key", key: "private-existing-key" }));
+  const before = await manager.catalog("one");
+  expectOk(await manager.handle({ type: "rename", worktreeId: "one", provider: "fixture", accountId: null, label: "ONEABLE", revision: before.revision }));
+
+  const stale = await manager.handle({ type: "rename", worktreeId: "two", provider: "fixture", accountId: null, label: "Stale", revision: before.revision });
+
+  // Require a refresh rather than silently losing the accepted rename.
+  expect(expectError(stale).code).toBe("ACCOUNT_CONFLICT");
+  expect((await manager.catalog("two")).existingAccounts?.[0]?.label).toBe("ONEABLE");
+});
+
+test.each([null, "missing"])("Renaming unavailable account %j does not create a label or change storage", async accountId => {
+  // A supported provider without authentication is not an existing account.
+  const { manager } = await fixture(), before = await manager.catalog("one");
+
+  const renamed = await manager.handle({ type: "rename", worktreeId: "one", provider: "fixture", accountId, label: "ONEABLE", revision: before.revision });
+
+  expect(expectError(renamed).code).toBe("ACCOUNT_NOT_FOUND"); expect(await manager.catalog("one")).toEqual(before);
+});
+
+test.each([["Blank", " "], ["Oversized", "x".repeat(129)]])("%s labels are rejected without changing a saved account", async (_name, label) => {
+  // Domain validation also protects direct callers that bypass the IPC schema.
+  const { manager } = await fixture(), account = await add(manager, "Original"), before = await manager.catalog("one");
+
+  const renamed = await manager.handle({ type: "rename", worktreeId: "one", provider: "fixture", accountId: account.id, label, revision: before.revision });
+
+  expect(expectError(renamed).code).toBe("INVALID_INPUT"); expect(await manager.catalog("one")).toEqual(before);
+});
+
+test("Label persistence failures retain the accepted label and original authentication", async () => {
+  // Make an existing label durable before blocking the next atomic file replacement.
+  const { manager, defaults, directory } = await fixture();
+  const credential: Credential = { type: "api_key", key: "private-existing-key" };
+  await defaults.modify("fixture", async () => credential);
+  expectOk(await manager.handle({ type: "rename", worktreeId: "one", provider: "fixture", accountId: null, label: "Original", revision: (await manager.catalog("one")).revision }));
+  const before = await manager.catalog("one"), target = join(directory, "accounts.json"); await rm(target); await mkdir(target);
+
+  const renamed = await manager.handle({ type: "rename", worktreeId: "one", provider: "fixture", accountId: null, label: "Unsaved", revision: before.revision });
+
+  // A rejected save must not apply the new display label in memory either.
+  expect(expectError(renamed).code).toBe("STORAGE_FAILED"); expect(await manager.catalog("one")).toEqual(before);
+  expect(await defaults.read("fixture")).toEqual(credential);
+});
+
 test("Connection checks preserve saved accounts and return sanitized warnings on failure", async () => {
   // A provider authentication check must not block switching to a valid account.
   const failing = provider(), { manager } = await fixture([failing]);

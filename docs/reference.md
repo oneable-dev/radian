@@ -694,27 +694,34 @@ The Agent prompt completes and executes these host commands instead of sending t
   authorization-code input are masked and never enter Agent drafts or conversation history.
   **/** searches, **Ctrl+N/P** moves candidates in either focus, **j/k** navigates results, and
   **Ctrl+D/U** jumps half a list viewport. **Ctrl+C** clears only the search query. **Enter** switches
-  the account for this worktree, **x** opens local-account deletion confirmation, and **Ctrl+R**
-  refreshes the account list. **Esc** goes back or cancels login and restores input focus.
+  the account for this worktree, **r** edits the selected account's label, **x** opens local-account
+  deletion confirmation, and **Ctrl+R** refreshes the account list. Label entry uses **Enter** to save
+  and **Esc** to discard unsubmitted edits. Labels are shared across worktrees; renaming never changes
+  authentication or selections. **Esc** goes back or cancels login and restores input focus.
   Already-sent model requests finish with their original credentials; subsequent calls, including
   calls after tools in the same Agent run, use the new account. Conversations and models are retained.
   An active account must be changed in every affected worktree before it can be deleted. Deletion
   removes only Radian's local credential, not the provider account, remote authorization or history.
   **Existing login** and **Existing API key** appear only when existing authentication is configured,
-  using its original credential store or environment without copying secrets. **[Active]** marks the
-  account used for that provider in this worktree, not a successful live authorization check. Revoked
+  using its original credential store or environment without copying secrets. These default display
+  labels can also be renamed; an existing connection's label follows that provider's external
+  authentication source, not a specific remote identity if Pi credentials are later replaced.
+  **[Active]** marks the account used for that provider in this worktree, not a successful live
+  authorization check. Revoked
   credentials may require signing in again. Supported login methods are shown only under **Add account**.
   If an existing connection cannot be checked, the popup shows a warning and keeps saved accounts available.
   Missing named accounts fail closed, never silently falling back to environment authentication.
-  Named credentials and selections are stored atomically in the daemon's private `accounts.json`
-  (directory mode `0700`, file mode `0600`; this is not an encrypted vault). OAuth receives a stable
+  Named credentials, selections, and existing-connection labels are stored atomically in the daemon's
+  private `accounts.json` (directory mode `0700`, file mode `0600`; this is not an encrypted vault). OAuth receives a stable
   installation ID. If token rotation succeeds but saving fails, Radian keeps the refreshed token in
   memory and displays a storage warning: repair storage before restarting the daemon. A known remote
   OAuth account cannot be added again under a second label, avoiding competing refresh owners.
   The legacy `pi-accounts`
   extension is excluded before import on startup and `/reload`, without modifying Pi CLI settings
   or importing its tokens. The `accounts` service capability is required; older services must be
-  explicitly restarted after existing jobs finish. The command accepts no arguments or images.
+  explicitly restarted after existing jobs finish. Renaming additionally requires `account-labels`;
+  older account-switching services remain usable but reject label edits until an explicit restart.
+  The command accepts no arguments or images.
 - **`/model`** opens a model-and-effort popup for the **current session**. Models come from Pi's
   authenticated chat-model catalog, including configured and extension-provided models. The list starts
   focused: use **j/k** to move, **h/l** to change effort, and **Tab/Shift+Tab** to move between the list

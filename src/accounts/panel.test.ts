@@ -6,8 +6,11 @@ import { Workbench, type WorkbenchActions } from "../app/ui/workbench.ts";
 import { WorkspaceSelection } from "../app/workspace-selection.ts";
 import { demoWorkspace } from "../workspace/demo.ts";
 import { accountsCommand, type AccountReply, type AccountRequest, type AccountsCatalog, type LoginView } from "./model.ts";
-import { BrowserError, CancelledError, InputError, type ExpectedError } from "../errors.ts";
+import { BrowserError, CancelledError, InputError, StorageError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
+import { parseKeymap } from "../keybindings/config.ts";
+import { keymapHelp } from "../keybindings/help.ts";
+import { expectOk } from "../testing/results.ts";
 
 const catalog: AccountsCatalog = { revision: 1, worktreeId: "", selections: {}, accounts: [{ id: "named", provider: "fixture", label: "Personal", type: "api_key", usedBy: [] }],
   providers: [{ id: "fixture", name: "Fixture", methods: [{ id: "api_key", name: "API key" }, { id: "oauth", name: "OAuth" }] }] };
@@ -93,6 +96,104 @@ test.each(["oauth", "api_key"] as const)("Existing verified %s authentication is
     const frame = app.captureCharFrame();
     expect(frame).toContain(`${type === "oauth" ? "Existing login" : "Existing API key"} [Active]`);
     expect(frame).not.toContain("Personal [Active]"); expect(frame).not.toContain("Pi default"); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each(["oauth", "api_key", "named"] as const)("The rename command labels %s accounts without switching authentication", async target => {
+  // Both externally connected and saved accounts expose the same context-local rename action.
+  const connected: AccountsCatalog = { ...structuredClone(catalog), selections: target === "named" ? { fixture: "named" } : {},
+    existingAccounts: [{ provider: "fixture", name: "Fixture", type: target === "oauth" ? "oauth" : "api_key" }] };
+  const calls: AccountRequest[] = [];
+  const app = await mount({ onAccountsRequest: async request => {
+    calls.push(request);
+    if (request.type === "rename") {
+      if (request.accountId === null) connected.existingAccounts![0]!.label = request.label;
+      else connected.accounts[0]!.label = request.label;
+      connected.revision++;
+    }
+    return ok({ kind: "catalog", catalog: { ...connected, worktreeId: request.worktreeId } });
+  } });
+  try {
+    await app.open(); expect(app.captureCharFrame()).not.toContain("Rename account");
+    app.mockInput.pressKey("n", { ctrl: true });
+    if (target === "named") app.mockInput.pressKey("j");
+    await app.render(); expect(app.captureCharFrame()).toContain("r Rename account");
+
+    // Enter a label through native editing; only Enter accepts the change.
+    app.mockInput.pressKey("r"); await app.render();
+    const input = app.get("accounts-input") as InputRenderable;
+    expect(app.renderer.currentFocusedRenderable).toBe(input);
+    expect(input.value).toBe(target === "named" ? "Personal" : target === "oauth" ? "Existing login" : "Existing API key");
+    app.mockInput.pressKey("u", { ctrl: true }); await app.mockInput.typeText("ONEABLE"); await app.render();
+    expect(calls.some(request => request.type === "rename")).toBe(false);
+    app.mockInput.pressEnter(); await app.render();
+
+    // Display the accepted label without changing active markers, credentials, or conversations.
+    expect(calls.find(request => request.type === "rename")).toEqual({ type: "rename", worktreeId: app.selection.worktree!.id,
+      provider: "fixture", accountId: target === "named" ? "named" : null, label: "ONEABLE", revision: 1 });
+    expect(app.captureCharFrame()).toContain("Fixture · ONEABLE [Active]");
+    expect(calls.some(request => request.type === "select" || request.type === "login")).toBe(false); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Cancelling label edits preserves the existing account and native text entry", async () => {
+  // External logins can be renamed without creating an account or starting authentication.
+  const connected: AccountsCatalog = { ...catalog, existingAccounts: [{ provider: "fixture", name: "Fixture", type: "oauth" }] };
+  const calls: AccountRequest[] = [];
+  const app = await mount({ onAccountsRequest: async request => { calls.push(request); return ok({ kind: "catalog", catalog: { ...connected, worktreeId: request.worktreeId } }); } });
+  try {
+    await app.open(); app.mockInput.pressKey("j"); app.mockInput.pressKey("r"); await app.render();
+
+    // Empty labels are not submitted, and normal Vim letters remain literal in the input.
+    app.mockInput.pressKey("u", { ctrl: true }); app.mockInput.pressEnter(); await app.render();
+    expect(app.captureCharFrame()).toContain("Account label must not be blank.");
+    await app.mockInput.typeText("hjklr"); await app.render();
+    expect((app.get("accounts-input") as InputRenderable).value).toBe("hjklr");
+    app.mockInput.pressEscape(); await app.render();
+
+    // Esc discards only the unsubmitted name and returns to the account list.
+    expect(app.get("accounts-picker").visible).toBe(true); expect(app.get("accounts-input").visible).toBe(false);
+    expect(app.captureCharFrame()).toContain("Existing login [Active]");
+    expect(calls.map(request => request.type)).toEqual(["list"]); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Rename shortcuts and Help follow user overrides without changing literal search input", async () => {
+  // Override the mnemonic without adding an unconfigurable widget-local shortcut.
+  const keymap = expectOk(parseKeymap({ bindings: { "accounts.rename": [{ keys: "e", scope: "accounts" }] } }));
+  const app = await mount({ keymap });
+  try {
+    await app.open(); app.mockInput.pressKey("j"); await app.render();
+    expect(app.captureCharFrame()).toContain("e Rename account"); expect(app.captureCharFrame()).not.toContain("r Rename account");
+
+    // Search owns literal characters; the remapped command applies only to the results list.
+    app.mockInput.pressKey("/"); await app.render(); await app.mockInput.typeText("Personal"); await app.render();
+    expect((app.get("accounts-search") as InputRenderable).value).toBe("Personal");
+    app.mockInput.pressKey("d", { ctrl: true }); await app.render();
+    app.mockInput.pressKey("r"); await app.render(); expect(app.get("accounts-input").visible).toBe(false);
+    expect(keymapHelp(keymap, "accounts", () => true)).toMatch(/e\s+Rename the selected account/u);
+    app.mockInput.pressKey("e"); await app.render();
+
+    // The configured action opens label entry, preserving the current account name.
+    expect((app.get("accounts-input") as InputRenderable).value).toBe("Personal"); expect(app.requests.map(request => request.type)).toEqual(["list"]);
+  } finally { await app.close(); }
+});
+
+test("Failed label saves retain the draft for retry instead of claiming a successful rename", async () => {
+  // Persistence errors leave the account name unchanged and remain visible in the edit surface.
+  const calls: AccountRequest[] = [];
+  const app = await mount({ onAccountsRequest: async request => {
+    calls.push(request); if (request.type === "rename") return err(new StorageError("Fixture label save failed"));
+    return ok({ kind: "catalog", catalog: { ...catalog, worktreeId: request.worktreeId } });
+  } });
+  try {
+    await app.open(); app.mockInput.pressKey("j"); app.mockInput.pressKey("r"); await app.render();
+    app.mockInput.pressKey("u", { ctrl: true }); await app.mockInput.typeText("ONEABLE"); app.mockInput.pressEnter(); await app.render();
+
+    // Keep the submitted draft editable; cancelling must reveal the original label.
+    expect(app.captureCharFrame()).toContain("Fixture label save failed"); expect((app.get("accounts-input") as InputRenderable).value).toBe("ONEABLE");
+    app.mockInput.pressEscape(); await app.render(); expect(app.captureCharFrame()).toContain("Fixture · Personal");
+    expect(calls.filter(request => request.type === "rename")).toHaveLength(1); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });
 

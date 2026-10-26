@@ -26,8 +26,8 @@ export type AccountsActions = {
   changed: () => void; notice: Notice; fallback: () => void;
   keyHint: (command: CommandId, context: KeyContext) => string;
 };
-type Candidate = { id: string; label: string; detail: string; accountId?: string; choose: () => void };
-type Stage = "accounts" | "providers" | "methods" | "label" | "login" | "delete";
+type Candidate = { id: string; label: string; detail: string; accountId?: string; choose: () => void; rename?: () => void };
+type Stage = "accounts" | "providers" | "methods" | "label" | "rename" | "login" | "delete";
 
 export class AccountsPanel {
   readonly root: BoxRenderable;
@@ -60,6 +60,7 @@ export class AccountsPanel {
   private provider: AccountsCatalog["providers"][number] | undefined;
   private method: "api_key" | "oauth" = "oauth";
   private promptId: string | undefined;
+  private renameTarget: { provider: string; accountId: string | null } | undefined;
   private disposed = false;
   private readonly listenerBudget: number;
 
@@ -94,8 +95,9 @@ export class AccountsPanel {
   get context(): KeyContext { return this.secret.focused || this.input.focused ? "accounts-input" : this.search.focused ? "accounts-search" : "accounts"; }
   get focusTargets(): Renderable[] { return [this.search, this.list, this.details, this.input, this.secret].filter(node => node.visible && (node !== this.search || this.search.field.visible)); }
   get shortcuts(): readonly FooterShortcut[] {
-    return ([ ["accounts.choose", "Continue"], ["accounts.dismiss", "Back / Cancel"], ["accounts.search", "Search"], ["accounts.previous", "Previous"], ["accounts.next", "Next"], ["accounts.half-page-down", "½ page"], ["accounts.delete", "Delete account"], ["accounts.browser", "Open browser"], ["accounts.copy-url", "Copy URL"], ["accounts.copy-code", "Copy code"] ] as const)
-      .filter(([command]) => command !== "accounts.choose" || !this.busy && (this.stage === "label" || this.stage === "login" && !!this.flow?.prompt || this.list.visible && this.filtered.length > 0))
+    return ([ ["accounts.choose", this.stage === "rename" ? "Save label" : "Continue"], ["accounts.dismiss", "Back / Cancel"], ["accounts.search", "Search"], ["accounts.previous", "Previous"], ["accounts.next", "Next"], ["accounts.half-page-down", "½ page"], ["accounts.rename", "Rename account"], ["accounts.delete", "Delete account"], ["accounts.browser", "Open browser"], ["accounts.copy-url", "Copy URL"], ["accounts.copy-code", "Copy code"] ] as const)
+      .filter(([command]) => command !== "accounts.choose" || !this.busy && (this.stage === "label" || this.stage === "rename" || this.stage === "login" && !!this.flow?.prompt || this.list.visible && this.filtered.length > 0))
+      .filter(([command]) => command !== "accounts.rename" || this.stage === "accounts" && !this.busy && !!this.filtered[this.cursor]?.rename)
       .filter(([command]) => command !== "accounts.search" || this.search.field.visible)
       .filter(([command]) => command !== "accounts.delete" || this.stage === "accounts" && !!this.filtered[this.cursor]?.accountId)
       .filter(([command]) => command !== "accounts.copy-code" || !!this.code)
@@ -109,10 +111,10 @@ export class AccountsPanel {
   hide(restore = true): void {
     if (!this.visible) return;
     const worktreeId = this.worktreeId, flow = this.flow;
-    if (restore && this.busy && this.activeRequest && ["select", "delete", "login", "answer"].includes(this.activeRequest)) this.actions.notice("Account action is still settling. Closing does not undo an accepted save or selection; reopen /accounts to confirm before retrying.", { level: "warning" });
+    if (restore && this.busy && this.activeRequest && ["select", "rename", "delete", "login", "answer"].includes(this.activeRequest)) this.actions.notice("Account action is still settling. Closing does not undo an accepted save or selection; reopen /accounts to confirm before retrying.", { level: "warning" });
     this.activeRequest = undefined;
     this.epoch++; this.root.visible = false; this.watching?.abort(); this.spinner.cancel(); this.busy = false; this.pendingReload = false; this.flow = undefined; this.promptId = undefined;
-    this.secret.clear(); this.input.value = ""; this.body.content = ""; this.opened.clear();
+    this.secret.clear(); this.input.value = ""; this.body.content = ""; this.opened.clear(); this.renameTarget = undefined;
     if (worktreeId && flow?.status === "pending") this.launch(async () => { await this.actions.request?.({ type: "cancel", worktreeId, flowId: flow.id }); });
     const owner = this.owner; this.owner = undefined;
     let available = !!owner && !owner.isDestroyed; for (let node = owner; node; node = node.parent as Renderable | undefined) available &&= node.visible;
@@ -151,7 +153,7 @@ export class AccountsPanel {
   }
   private async load(): Promise<void> { if (this.worktreeId) await this.perform({ type: "list", worktreeId: this.worktreeId }); }
   private menu(stage: Stage, message: string, candidates: Candidate[]): void {
-    this.stage = stage; this.message.content = message; this.candidates = candidates; this.cursor = 0;
+    this.stage = stage; this.message.content = message; this.candidates = candidates; this.cursor = 0; this.renameTarget = undefined;
     this.secret.clear(); this.secret.visible = this.input.visible = false; this.input.value = "";
     this.details.visible = false; this.body.content = "";
     this.search.field.visible = true; this.list.visible = true; this.search.clear(); this.filter(); this.list.focus();
@@ -168,10 +170,13 @@ export class AccountsPanel {
       const name = names.get(provider) ?? provider;
       const choose = (accountId: string | null) => this.launch(() => this.perform({ type: "select", worktreeId, provider, accountId, revision: catalog.revision }));
       const connection = existing.get(provider);
-      if (connection) entries.push({ id: `existing:${provider}`, label: `${name} · ${connection.type === "oauth" ? "Existing login" : "Existing API key"}${catalog.selections[provider] ? "" : " [Active]"}`,
-        detail: `${connection.type === "oauth" ? "OAuth" : "API key"} · already connected`, choose: () => choose(null) });
+      if (connection) {
+        const label = connection.label ?? (connection.type === "oauth" ? "Existing login" : "Existing API key");
+        entries.push({ id: `existing:${provider}`, label: `${name} · ${label}${catalog.selections[provider] ? "" : " [Active]"}`,
+          detail: `${connection.type === "oauth" ? "OAuth" : "API key"} · already connected`, choose: () => choose(null), rename: () => this.rename(provider, null, label) });
+      }
       for (const account of catalog.accounts.filter(account => account.provider === provider)) entries.push({ id: account.id, accountId: account.id,
-        label: `${name} · ${account.label}${catalog.selections[provider] === account.id ? " [Active]" : ""}`, detail: `${account.type === "oauth" ? "OAuth" : "API key"} · used by ${account.usedBy.length} worktree(s)`, choose: () => choose(account.id) });
+        label: `${name} · ${account.label}${catalog.selections[provider] === account.id ? " [Active]" : ""}`, detail: `${account.type === "oauth" ? "OAuth" : "API key"} · used by ${account.usedBy.length} worktree(s)`, choose: () => choose(account.id), rename: () => this.rename(provider, account.id, account.label) });
     }
     this.menu("accounts", providers.size ? "Enter switches accounts for this worktree. Use Add account to sign in to another account."
       : "", entries);
@@ -237,6 +242,12 @@ export class AccountsPanel {
       const label = this.input.value.trim() || this.provider.name; this.input.value = "";
       this.launch(() => this.perform({ type: "login", worktreeId: this.worktreeId!, provider: this.provider!.id, method: this.method, label })); return;
     }
+    if (this.stage === "rename" && this.renameTarget && this.worktreeId && this.catalog) {
+      const label = this.input.value.trim();
+      if (!label) { this.message.content = "Account label must not be blank."; return; }
+      const request: AccountRequest = { type: "rename", worktreeId: this.worktreeId, ...this.renameTarget, label, revision: this.catalog.revision };
+      this.launch(() => this.perform(request)); return;
+    }
     if (this.stage === "login" && (this.secret.visible || this.input.visible)) { this.answer(this.secret.visible ? this.secret.value : this.input.value); return; }
     this.filtered[this.cursor]?.choose();
   }
@@ -245,6 +256,12 @@ export class AccountsPanel {
     if (this.stage === "methods") { this.providers(); return; }
     if (this.stage === "label" && this.provider) { this.methods(this.provider); return; }
     this.main();
+  }
+  private rename(provider: string, accountId: string | null, label: string): void {
+    this.menu("rename", "Edit the account label. Labels are shared across worktrees; authentication and selections stay unchanged.", []);
+    this.renameTarget = { provider, accountId };
+    this.search.field.visible = this.list.visible = false; this.input.visible = true; this.input.placeholder = "Account label"; this.input.maxLength = 128;
+    this.input.value = label; this.input.focus(); this.paint();
   }
   private remove(): void {
     const accountId = this.filtered[this.cursor]?.accountId, catalog = this.catalog, worktreeId = this.worktreeId;
@@ -299,6 +316,7 @@ export class AccountsPanel {
     if (!this.visible) return;
     if (command === "accounts.dismiss") { this.back(); return; }
     if (command === "accounts.choose") { this.choose(); return; }
+    if (command === "accounts.rename") { if (this.stage === "accounts" && !this.busy) this.filtered[this.cursor]?.rename?.(); return; }
     if (command === "accounts.delete") { this.remove(); return; }
     if (command === "accounts.refresh") { if (this.stage === "accounts") this.launch(() => this.load()); return; }
     if (command === "accounts.browser") { this.launch(() => this.openBrowser()); return; }

@@ -9,7 +9,7 @@ export const accountInfoSchema = Type.Object({ id, provider: id, label: Type.Str
 export type AccountInfo = Static<typeof accountInfoSchema>;
 export const accountsCatalogSchema = Type.Object({ revision: Type.Integer({ minimum: 0 }), worktreeId: id,
   accounts: Type.Array(accountInfoSchema), selections: Type.Record(Type.String(), id),
-  existingAccounts: Type.Optional(Type.Array(Type.Object({ provider: id, name: Type.String(), type: authType }))),
+  existingAccounts: Type.Optional(Type.Array(Type.Object({ provider: id, name: Type.String(), type: authType, label: Type.Optional(Type.String()) }))),
   warning: Type.Optional(Type.String()),
   providers: Type.Array(Type.Object({ id, name: Type.String(), methods: Type.Array(Type.Object({ id: Type.Union([Type.Literal("api_key"), Type.Literal("oauth")]), name: Type.String() })) })),
 });
@@ -24,6 +24,7 @@ export type LoginView = Static<typeof loginViewSchema>;
 export const accountRequestSchema = Type.Union([
   Type.Object({ type: Type.Literal("list"), worktreeId: id }, { additionalProperties: false }),
   Type.Object({ type: Type.Literal("select"), worktreeId: id, provider: id, accountId: Type.Union([id, Type.Null()]), revision: Type.Integer({ minimum: 0 }) }, { additionalProperties: false }),
+  Type.Object({ type: Type.Literal("rename"), worktreeId: id, provider: id, accountId: Type.Union([id, Type.Null()]), label: Type.String({ minLength: 1, maxLength: 128 }), revision: Type.Integer({ minimum: 0 }) }, { additionalProperties: false }),
   Type.Object({ type: Type.Literal("delete"), worktreeId: id, accountId: id, revision: Type.Integer({ minimum: 0 }) }, { additionalProperties: false }),
   Type.Object({ type: Type.Literal("login"), worktreeId: id, provider: id, method: Type.Union([Type.Literal("api_key"), Type.Literal("oauth")]), label: Type.String({ minLength: 1, maxLength: 128 }) }, { additionalProperties: false }),
   Type.Object({ type: Type.Literal("poll"), worktreeId: id, flowId: id, revision: Type.Integer({ minimum: 0 }) }, { additionalProperties: false }),

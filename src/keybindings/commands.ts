@@ -162,6 +162,7 @@ export const defaultBindings = {
   "accounts.next": [key("j", "accounts"), key("down", "accounts"), key("ctrl+n", "accounts"), key("down", "accounts-search"), key("ctrl+n", "accounts-search")],
   "accounts.half-page-up": [key("ctrl+u", "accounts"), key("ctrl+u", "accounts-search")],
   "accounts.half-page-down": [key("ctrl+d", "accounts"), key("ctrl+d", "accounts-search")],
+  "accounts.rename": [key("r", "accounts")],
   "accounts.delete": [key("x", "accounts")],
   "accounts.browser": [key("o", "accounts")],
   "accounts.copy-url": [key("y", "accounts")],

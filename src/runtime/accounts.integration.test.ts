@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 import { connectRuntime } from "./client.ts";
@@ -42,6 +42,19 @@ test("Real shared daemon IPC shares account lists while preserving selections, c
     if (switched.kind !== "catalog") throw new Error("Expected catalog");
     expect(switched.catalog.selections).toEqual({});
     expect(switched.catalog.existingAccounts).toContainEqual({ provider: "openai", name: "OpenAI", type: "api_key" });
+
+    // Renaming an external connection shares only its label, not its credential or selection.
+    const authBefore = await readFile(join(directory, "pi-auth.json"), "utf8");
+    const renamed = expectOk(await client.accounts({ type: "rename", worktreeId: one.id, provider: "openai", accountId: null, label: "ONEABLE", revision: switched.catalog.revision }));
+    if (renamed.kind !== "catalog") throw new Error("Expected catalog");
+    const shared = expectOk(await client.accounts({ type: "list", worktreeId: two.id }));
+    if (shared.kind !== "catalog") throw new Error("Expected catalog");
+    expect(shared.catalog.existingAccounts).toContainEqual({ provider: "openai", name: "OpenAI", type: "api_key", label: "ONEABLE" });
+    expect(shared.catalog.accounts[0]?.label).toBe("Personal"); expect(shared.catalog.selections).toEqual({}); expect(renamed.catalog.selections).toEqual({});
+    expect(await readFile(join(directory, "pi-auth.json"), "utf8")).toBe(authBefore);
+    expect(await readFile(join(directory, "accounts.json"), "utf8")).not.toContain("private-existing-ipc-key");
+    expect(JSON.stringify(shared)).not.toContain("private-existing-ipc-key");
+    expect(expectError(await client.accounts({ type: "rename", worktreeId: one.id, provider: "openai", accountId: null, label: "Stale", revision: switched.catalog.revision })).code).toBe("ACCOUNT_CONFLICT");
   } finally {
     const pid = client.snapshot.pid; await client.stopRuntime(); await client.disconnect();
     const deadline = Date.now() + 8000; while (pidAlive(pid) && Date.now() < deadline) await Bun.sleep(20);

@@ -54,6 +54,20 @@ test("Raw history never becomes model prompts or other requests even on legacy s
   } finally { await client.disconnect(); mocked.mockRestore(); }
 });
 
+test("Legacy account services reject label edits before transport without restarting or changing state", async () => {
+  // Existing account-switching services may still be running jobs on an older version.
+  const state = { ...snapshot(), capabilities: ["accounts"] }, before = structuredClone(state);
+  const mocked = stubFetch(async () => { throw new Error("Legacy services must not receive label edits"); });
+  const client = new RuntimeClient(paths, state);
+  try {
+    const renamed = await client.accounts({ type: "rename", worktreeId: "one", provider: "openai", accountId: null, label: "ONEABLE", revision: 1 });
+
+    // Require an explicit owner-controlled restart instead of guessing mutation support.
+    expect(expectError(renamed).code).toBe("UNSUPPORTED_CAPABILITY"); expect(expectError(renamed).message).toContain("explicitly restart");
+    expect(mocked).not.toHaveBeenCalled(); expect(client.snapshot).toEqual(before);
+  } finally { await client.disconnect(); mocked.mockRestore(); }
+});
+
 test("Session state above 8 MiB preserves conversations, drafts, and History connections", async () => {
   // Fragment real-failure-like snapshots exceeding 9 MiB from individually small sections.
   const large: RuntimeSnapshot = { ...snapshot(), preferences: { ...structuredClone(emptyPreferences), drafts: { unsent: "keep this draft" } },

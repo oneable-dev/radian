@@ -232,6 +232,7 @@ export class RuntimeClient {
   async accounts(request: AccountRequest, signal?: AbortSignal): Promise<Result<AccountReply, ExpectedError>> {
     if (this.detaching || this.failure) return err(this.connectionClosed());
     if (!this.state.capabilities?.includes("accounts")) return err(new CapabilityError("Running service predates account management. Finish work and explicitly restart it; no service was restarted."));
+    if (request.type === "rename" && !this.state.capabilities.includes("account-labels")) return err(new CapabilityError("Running service predates account labels. Finish work and explicitly restart it; no service was restarted."));
     if (!Value.Check(accountRequestSchema, request)) return err(new InputError("Malformed account request."));
     if (signal?.aborted) return err(new CancelledError());
     const instance = this.state.instance, epoch = this.connectionEpoch;

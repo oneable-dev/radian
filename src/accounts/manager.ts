@@ -19,7 +19,7 @@ const credentialSchema = Type.Union([
   Type.Object({ type: Type.Literal("oauth"), access: text, refresh: Type.String(), expires: Type.Number() }, { additionalProperties: true }),
 ]);
 const storedAccountSchema = Type.Object({ id: text, provider: text, label: text, credential: credentialSchema });
-const stateSchema = Type.Object({ version: Type.Literal(1), deviceId: Type.Optional(Type.String({ pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" })), revision: Type.Integer({ minimum: 0 }), accounts: Type.Array(storedAccountSchema), selections: Type.Record(Type.String(), Type.Record(Type.String(), text)) });
+const stateSchema = Type.Object({ version: Type.Literal(1), deviceId: Type.Optional(Type.String({ pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" })), revision: Type.Integer({ minimum: 0 }), accounts: Type.Array(storedAccountSchema), selections: Type.Record(Type.String(), Type.Record(Type.String(), text)), existingLabels: Type.Optional(Type.Record(Type.String(), Type.String({ minLength: 1, maxLength: 128 }))) });
 type State = Static<typeof stateSchema>;
 type StoredAccount = State["accounts"][number];
 type Login = { worktreeId: string; view: LoginView; controller: AbortController; timer: ReturnType<typeof setTimeout>; listeners: Set<() => void>;
@@ -98,7 +98,8 @@ export class AccountManager {
       if (error instanceof ModelsError) return err(new AccountError("ACCOUNT_LOGIN_FAILED", "Could not check an existing account connection.", { cause: error }));
       throw error;
     }
-    return ok(auth ? { provider: provider.id, name: provider.name, type: auth.type } : undefined);
+    const label = this.state.existingLabels?.[provider.id];
+    return ok(auth ? { provider: provider.id, name: provider.name, type: auth.type, ...(label ? { label } : {}) } : undefined);
   }
   async catalog(worktreeId: string): Promise<AccountsCatalog> {
     const { runtime } = await this.workspace(worktreeId);
@@ -247,6 +248,25 @@ export class AccountManager {
     view.usage.invalidate(request.provider);
     return ok(result.errors.size || result.aborted ? "Account selected, but model metadata refresh did not finish. Reopen /model before selecting a model; the account change was not rolled back." : undefined);
   }
+  private async rename(request: Extract<AccountRequest, { type: "rename" }>): Promise<Result<void, ExpectedError>> {
+    const label = request.label.trim();
+    if (!label || label.length > 128) return err(new InputError("Account label must contain 1–128 characters."));
+    return this.serialize(async () => {
+      if (request.revision !== this.state.revision) return err(new AccountError("ACCOUNT_CONFLICT", "Accounts changed. Refresh before renaming an account."));
+      if (request.accountId === null) {
+        const provider = this.defaults.getProvider(request.provider);
+        if (!provider) return err(new AccountError("ACCOUNT_NOT_FOUND", "That provider is no longer available."));
+        const connection = await this.existingAccount(provider);
+        if (!connection.ok) return connection;
+        if (!connection.value) return err(new AccountError("ACCOUNT_NOT_FOUND", "That existing connection is no longer available."));
+        const state = structuredClone(this.state); (state.existingLabels ??= {})[request.provider] = label; state.revision++;
+        return this.commit(state);
+      }
+      const state = structuredClone(this.state), account = state.accounts.find(account => account.id === request.accountId && account.provider === request.provider);
+      if (!account) return err(new AccountError("ACCOUNT_NOT_FOUND", "That account is not available for this provider."));
+      account.label = label; state.revision++; return this.commit(state);
+    });
+  }
   private remove(request: Extract<AccountRequest, { type: "delete" }>): Promise<Result<void, ExpectedError>> {
     return this.lock(request.accountId, () => this.serialize(async () => {
       if (request.revision !== this.state.revision) return err(new AccountError("ACCOUNT_CONFLICT", "Accounts changed. Refresh before deleting an account."));
@@ -263,6 +283,7 @@ export class AccountManager {
     switch (request.type) {
       case "list": return ok({ kind: "catalog", catalog: await this.catalog(request.worktreeId), ...(this.persistenceWarning ? { warning: this.persistenceWarning } : {}) });
       case "select": { const selected = await this.select(request); return selected.ok ? ok({ kind: "catalog", catalog: await this.catalog(request.worktreeId), ...(selected.value ? { warning: selected.value } : {}) }) : selected; }
+      case "rename": { const renamed = await this.rename(request); return renamed.ok ? ok({ kind: "catalog", catalog: await this.catalog(request.worktreeId) }) : renamed; }
       case "delete": { const removed = await this.remove(request); return removed.ok ? ok({ kind: "catalog", catalog: await this.catalog(request.worktreeId) }) : removed; }
       case "login": return this.begin(request);
       default: {

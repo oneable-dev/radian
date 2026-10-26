@@ -73,7 +73,7 @@ test.each([
   ["transcript.enter", "transcript"], ["transcript.fold", "transcript"], ["transcript.copy", "transcript-text"],
   ["history.preview", "history"], ["model.select", "model"], ["model.effort-more", "model"],
   ["git.open", "git"], ["git.refs", "git"], ["git.reflog", "git"], ["git.preview", "git-search"], ["git.change-session", "git-prompt"],
-  ["accounts.browser", "accounts"], ["accounts.copy-url", "accounts"], ["accounts.copy-code", "accounts"],
+  ["accounts.rename", "accounts"], ["accounts.browser", "accounts"], ["accounts.copy-url", "accounts"], ["accounts.copy-code", "accounts"],
 ] satisfies [CommandId, KeyContext][])("%s app-specific actions remain in %s footers", (command, context) => {
   // Non-navigation actions stay discoverable even with identical Enter/Ctrl keys.
   const key = defaults.hint(command, context);

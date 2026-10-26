@@ -107,6 +107,24 @@ test.each([["search", "search.clear"], ["prompt", "agent.clear"], ["git-prompt",
   } finally { router.dispose(); surface.dispose(); await app.dispose(); }
 });
 
+test("Held account rename keys never become literal edits after label input takes focus", async () => {
+  // The rename command changes focus while its physical key may still be held.
+  const app = await createTestRenderer({ width: 60, height: 8, kittyKeyboard: true });
+  const input = new InputRenderable(app.renderer, { width: 60 }); app.renderer.root.add(input);
+  const commands: string[] = []; let editing = false;
+  const router = new KeyRouter(app.renderer, defaultKeymap(), () => editing ? "accounts-input" : "accounts", () => true,
+    command => { commands.push(command); editing = true; input.value = "ONEABLE"; input.focus(); });
+  const raw = (event: string) => { const key = parseKeypress(event, { useKittyKeyboard: true }); if (!key) throw new Error("Invalid Kitty key"); app.renderer.keyInput.processParsedKey(key); };
+  try {
+    // Suppress held repeats across the context change, but restore normal typing on release.
+    raw("\u001b[114u"); raw("\u001b[114;1:2u");
+    expect(input.value).toBe("ONEABLE"); expect(commands).toEqual(["accounts.rename"]);
+    raw("\u001b[114;1:3u"); app.mockInput.pressKey("r");
+
+    expect(input.value).toBe("ONEABLEr"); expect(commands).toEqual(["accounts.rename"]);
+  } finally { router.dispose(); await app.dispose(); }
+});
+
 test("Default Ctrl+C reaches shared native terminals while only leader commands intercept", async () => {
   const app = await createTestRenderer({ width: 60, height: 8, kittyKeyboard: true, exitOnCtrlC: false });
   const surface = new TerminalSurface(app.renderer, "test-terminal"); app.renderer.root.add(surface.root);
