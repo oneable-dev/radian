@@ -103,7 +103,7 @@ export class AgentPanel {
     this.sessions = new SessionTabs(renderer, { button, ...(transcriptOptions.idPrefix ? { idPrefix: transcriptOptions.idPrefix } : {}),
       spinnerStyle: id => {
         const state = actions.getSessionDetails?.(id);
-        if (state?.status === "working" && state.activity === "compacting") return "pulse";
+        if (state?.status === "working" && state.activity === "compacting") return "circle-fill";
         return state?.telemetry?.fast === true ? "fast" : "default";
       },
       select: (id) => { if (this.worktree && !transcriptOptions.readOnly) actions.onSelectSession?.(this.worktree.id, id); },

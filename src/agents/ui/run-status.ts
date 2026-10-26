@@ -99,7 +99,7 @@ export class RunStatus {
     this.scope = scope; this.root.visible = visible; this.current = display(state);
     const running = visible && state?.status === "working";
     this.fast = running && this.current.label === "Working" && state?.telemetry?.fast === true;
-    this.spinner.setStyle(running && state?.activity === "compacting" ? "pulse" : this.fast ? "fast" : "default");
+    this.spinner.setStyle(running && state?.activity === "compacting" ? "circle-fill" : this.fast ? "fast" : "default");
     if (running && !this.running) { this.spinner.start(); this.elapsed = 0; this.sampledAt = this.renderer.clock.now(); }
     else if (!running && this.running) this.spinner.stop();
     if (running && state?.runTiming && (this.timing?.startedAt !== state.runTiming.startedAt || this.timing.elapsedMs !== state.runTiming.elapsedMs)) {

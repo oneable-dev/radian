@@ -134,7 +134,7 @@ test("Only Fast tabs use yellow three-cell arrows and retain tab/close positions
   } finally { await app.close(); }
 });
 
-test.each(["default", "fast"] as const)("Compacting tabs replace %s frames with three-cell pulses and preserve Fast label positions", async original => {
+test.each(["default", "fast"] as const)("Compacting tabs replace %s frames with centered circles and preserve Fast label positions", async original => {
   // Two active tabs retain independent activity styles, including a compacting background session.
   const entries = [{ ...session(), status: "working" as const }, { ...session(secondId), status: "working" as const }];
   let style: SpinnerStyle = original;
@@ -146,12 +146,12 @@ test.each(["default", "fast"] as const)("Compacting tabs replace %s frames with 
     const initialTitle = title.x;
 
     // Activity can change without changing the working status or the currently selected session.
-    style = "pulse"; app.tabs.update("tree", entries, secondId, true); await app.render();
+    style = "circle-fill"; app.tabs.update("tree", entries, secondId, true); await app.render();
 
-    expect(app.status(firstId)).toBe("⣀⣶⣿"); expect(title.x).toBe(tab.x + 9);
+    expect(app.status(firstId)).toBe("○"); expect(title.x).toBe(tab.x + 9);
     if (original === "fast") expect(title.x).toBe(initialTitle);
     expect(app.status(secondId)).toBe("⠋"); expect([tab.x, tab.width, close.x, other.x]).toEqual(geometry);
-    for (const expected of ["⣤⣾⣾", "⣶⣿⣶", "⣾⣾⣤", "⣿⣶⣀", "⣾⣤⣤", "⣶⣀⣶", "⣤⣤⣾", "⣀⣶⣿"]) {
+    for (const expected of ["◔", "◑", "◕", "●", "○"]) {
       app.clock.advance(80); app.tabs.update("tree", entries, secondId, true); await app.render();
       expect(app.status(firstId)).toBe(expected); expect(title.x).toBe(tab.x + 9);
       expect([tab.x, tab.width, close.x, other.x]).toEqual(geometry);
@@ -161,9 +161,9 @@ test.each(["default", "fast"] as const)("Compacting tabs replace %s frames with 
     style = original; app.tabs.update("tree", entries, secondId, true); await app.render();
     expect(app.status(firstId)).toBe(original === "fast" ? "▶▷▷" : "⠋"); expect(title.x).toBe(initialTitle);
 
-    // Three-cell pulses still leave the ID and close action inside compact tab viewports.
-    style = "pulse"; app.tabs.update("tree", entries, firstId, true); app.resize(12, 6); await app.render();
-    expect(app.status(firstId)).toBe("⣀⣶⣿"); expect(Bun.stringWidth(title.plainText)).toBeLessThanOrEqual(title.width);
+    // The centered circle still leaves the ID and close action inside compact tab viewports.
+    style = "circle-fill"; app.tabs.update("tree", entries, firstId, true); app.resize(12, 6); await app.render();
+    expect(app.status(firstId)).toBe("○"); expect(Bun.stringWidth(title.plainText)).toBeLessThanOrEqual(title.width);
     expect(close.x + close.width).toBeLessThanOrEqual(app.tabs.list.viewport.x + app.tabs.list.viewport.width);
     app.tabs.update("tree", entries, firstId, false); await app.render(); expect(app.clock.pendingTimerCount).toBe(0);
   } finally { await app.close(); }

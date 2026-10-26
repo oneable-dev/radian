@@ -49,8 +49,8 @@ async function mount(initial: ExecutionState = { status: "complete", output: "",
   };
 }
 
-test.each([false, true])("Compaction with Fast %s shows three-cell pulses in tabs and status, preserving drafts and focus", async fast => {
-  // Manual compaction uses the same staggered pulse regardless of the session's Fast setting.
+test.each([false, true])("Compaction with Fast %s centers circle-fill spinners in tabs and status, preserving drafts and focus", async fast => {
+  // Manual compaction uses one centered circle regardless of the session's Fast setting.
   const compacting = { status: "working" as const, activity: "compacting" as const, output: "", error: null, sections: history(),
     telemetry: { provider: "fixture", model: "fixture", effort: "high", fast, context: null, weekly: null } };
   const app = await mount(compacting);
@@ -59,12 +59,12 @@ test.each([false, true])("Compaction with Fast %s shows three-cell pulses in tab
     pressLeader(app, "a"); await app.render();
     const label = () => app.captureCharFrame().split("\n")[status.y]!.slice(status.x, status.x + status.width).trimEnd();
     expect(label()).toBe("Compacting context (0s · <Esc> to interrupt)"); expect(app.get("agent-run-loading").visible).toBe(true);
-    expect(app.tabStatus()).toBe("⣀⣶⣿"); expect(app.captureCharFrame()).toContain("⣀⣶⣿ Compacting context");
+    expect(app.tabStatus()).toBe("○"); expect(app.captureCharFrame()).toContain(" ○  Compacting context");
 
     // The tab and body animate independently from the same session activity without changing the draft.
     app.clock.advance(80); await app.render();
 
-    expect(app.tabStatus()).toBe("⣤⣾⣾"); expect(app.captureCharFrame()).toContain("⣤⣾⣾ Compacting context");
+    expect(app.tabStatus()).toBe("◔"); expect(app.captureCharFrame()).toContain(" ◔  Compacting context");
     expect(label()).not.toContain("Previous delivered request");
 
     // Clear status after compaction and hide long summary bodies by default.

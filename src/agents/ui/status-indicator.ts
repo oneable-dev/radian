@@ -21,7 +21,7 @@ function display(status: AgentStatus | null, session?: Pick<OpenSession, "result
   }
 }
 
-// One slot: working > failure > stopped > unread > settled result. Fast and pulse loading use three fixed cells.
+// One slot: working > failure > stopped > unread > settled result. Fast and circle-fill loading use three fixed cells.
 export class StatusIndicator {
   readonly root: BoxRenderable;
   private readonly spinner: LoadingSpinner;

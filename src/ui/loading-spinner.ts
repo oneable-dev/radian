@@ -3,13 +3,12 @@ import { spinnerFrames } from "../icons.ts";
 import { uiTheme } from "./theme.ts";
 import { styleChunk } from "./theme-styles.ts";
 
-export type SpinnerStyle = "default" | "fast" | "pulse";
+export type SpinnerStyle = "default" | "fast" | "circle-fill";
 
 type Timer = ReturnType<CliRenderer["clock"]["setTimeout"]>;
 const minimumVisibleMs = 500;
 const frameIntervalMs = 80;
-const pulseFrames = ["⣀", "⣤", "⣶", "⣾", "⣿", "⣾", "⣶", "⣤"] as const;
-const pulsePhaseStep = 2;
+const circleFillFrames = ["○", "◔", "◑", "◕", "●"] as const;
 
 // Shared loading feedback: delay only hiding the indicator, never the operation's result.
 export class LoadingSpinner {
@@ -28,7 +27,7 @@ export class LoadingSpinner {
   }
 
   get columns(): number { return this.style === "default" ? 1 : 3; }
-  private get frames(): readonly string[] { return this.style === "pulse" ? pulseFrames : spinnerFrames; }
+  private get frames(): readonly string[] { return this.style === "circle-fill" ? circleFillFrames : spinnerFrames; }
 
   setStyle(style: SpinnerStyle): void {
     if (this.root.isDestroyed || style === this.style) return;
@@ -66,8 +65,8 @@ export class LoadingSpinner {
   }
 
   private paint(): void {
-    if (this.style === "pulse") {
-      this.root.content = Array.from({ length: this.columns }, (_, index) => pulseFrames[(this.frame + index * pulsePhaseStep) % pulseFrames.length]).join("");
+    if (this.style === "circle-fill") {
+      this.root.content = ` ${circleFillFrames[this.frame]!} `;
       return;
     }
     if (this.style === "default") { this.root.content = spinnerFrames[this.frame]!; return; }

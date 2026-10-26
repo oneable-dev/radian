@@ -53,7 +53,7 @@ test("Fast spinners cycle yellow arrows rightward inside fixed three-cell slots"
   } finally { await app.dispose(); }
 });
 
-test.each(["fast", "pulse"] as const)("Switching to %s preserves minimum display duration and cancellation lifetime", async style => {
+test.each(["fast", "circle-fill"] as const)("Switching to %s preserves minimum display duration and cancellation lifetime", async style => {
   // Changing animation style is not a new operation and cannot reset its 500ms visibility window.
   const app = await mount();
   try {
@@ -69,18 +69,19 @@ test.each(["fast", "pulse"] as const)("Switching to %s preserves minimum display
   } finally { await app.dispose(); }
 });
 
-test("Pulse spinners stagger three cells and loop without resetting on repeated style updates", async () => {
-  // Compaction flows across the same three-cell slot as Fast instead of pulsing every cell in unison.
+test("Circle-fill spinners center one glyph in three cells and loop without resetting on repeated style updates", async () => {
+  // A single filling circle keeps compaction quiet without changing the slot reserved for Fast arrows.
   const app = await mount();
   try {
-    app.spinner.setStyle("pulse"); app.spinner.start(); await app.renderOnce();
+    app.spinner.setStyle("circle-fill"); app.spinner.start(); await app.renderOnce();
     const x = app.spinner.root.x;
 
-    // Adjacent cells are two frames apart throughout a full pulse cycle and its wraparound.
-    for (const expected of ["⣀⣶⣿", "⣤⣾⣾", "⣶⣿⣶", "⣾⣾⣤", "⣿⣶⣀", "⣾⣤⣤", "⣶⣀⣶", "⣤⣤⣾", "⣀⣶⣿"]) {
-      app.spinner.setStyle("pulse"); await app.renderOnce();
+    // Each fill stage and its wraparound retain one blank cell on either side of the circle.
+    for (const expected of [" ○ ", " ◔ ", " ◑ ", " ◕ ", " ● ", " ○ "]) {
+      app.spinner.setStyle("circle-fill"); await app.renderOnce();
 
       expect(app.spinner.root.plainText).toBe(expected);
+      expect(app.captureCharFrame().split("\n")[app.spinner.root.y]!.slice(x, x + 3)).toBe(expected);
       expect(app.spinner.root.width).toBe(3); expect(app.spinner.columns).toBe(3); expect(app.spinner.root.x).toBe(x);
       await app.advance(80);
     }
