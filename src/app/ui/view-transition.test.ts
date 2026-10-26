@@ -136,8 +136,8 @@ test("Long Git list restoration never clamps to placeholders or shorter previous
   } finally { record.stop(); await app.close(); }
 });
 
-test("Cached Git lists restore per-worktree scroll on first paint without refetching", async () => {
-  // Stub only data reads; use real native list/graph layout and painting.
+test("Cached Git lists preserve per-worktree scroll from the first paint while revalidating", async () => {
+  // Distinct cached positions must survive fresh repository reads on each worktree return.
   const fixture = gitFixture(), app = await mount({ git: fixture.git });
   try {
     await app.showGit(); await app.waitForFrame((frame) => frame.includes("GITMAIN-000"));
@@ -146,18 +146,21 @@ test("Cached Git lists restore per-worktree scroll on first paint without refetc
     await app.waitForFrame((frame) => frame.includes("GITFEATURE-000"));
     await app.scroll("git-history", 48); const feature = app.first(/GITFEATURE-\d{3}/);
     expect(main).not.toBeNull(); expect(feature).not.toBeNull();
+    expect(fixture.loads).toEqual(["MAIN", "FEATURE"]);
     const record = app.capture(/GIT(?:MAIN|FEATURE)-\d{3}/);
 
+    // Return to both cached worktrees and inspect every frame during revalidation.
     await app.click(`${icons.folder} radian`); await app.click(`${icons.folder} radian-ui`); record.stop();
 
     expect(new Set(record.frames.filter((frame) => frame.tree === "demo:main").map((frame) => frame.first))).toEqual(new Set([main]));
     expect(new Set(record.frames.filter((frame) => frame.tree === "demo:feature").map((frame) => frame.first))).toEqual(new Set([feature]));
-    expect(fixture.loads).toEqual(["MAIN", "FEATURE"]);
+    // Each return refreshes its snapshot without briefly displaying a reset viewport.
+    expect(fixture.loads).toEqual(["MAIN", "FEATURE", "MAIN", "FEATURE"]);
   } finally { await app.close(); }
 });
 
-test("Cached Git diffs apply saved positions on first paint without refetching", async () => {
-  // New diff renderers must not show initial zero before distinct saved positions.
+test("Cached Git diffs preserve saved positions from the first paint while revalidating", async () => {
+  // Fresh comparisons must retain each worktree's distinct synchronized reading position.
   const fixture = gitFixture(), app = await mount({ git: fixture.git });
   const scroll = async (position: number) => {
     const panes = walk(app.get("git-diff")).filter((node): node is CodeRenderable => node instanceof CodeRenderable);
@@ -173,12 +176,16 @@ test("Cached Git diffs apply saved positions on first paint without refetching",
     await app.waitForFrame((frame) => frame.includes("Working tree")); app.get("git-history").focus(); app.mockInput.pressEnter();
     await app.waitForFrame((frame) => frame.includes("DIFFFEATURE-000"));
     await scroll(7); const feature = app.first(/DIFFFEATURE-\d{3}/); expect(feature).toBe("DIFFFEATURE-007");
+    expect(fixture.loads).toEqual(["MAIN", "FEATURE"]); expect(fixture.comparisons).toEqual(["MAIN", "FEATURE"]);
     const record = app.capture(/DIFF(?:MAIN|FEATURE)-\d{3}/, true);
 
+    // Reopen the cached diffs and observe the first visible frame as new comparisons arrive.
     await app.click(`${icons.folder} radian`); await app.click(`${icons.folder} radian-ui`); record.stop();
 
     expect(new Set(record.frames.filter((frame) => frame.tree === "demo:main").map((frame) => frame.first))).toEqual(new Set([main]));
     expect(new Set(record.frames.filter((frame) => frame.tree === "demo:feature").map((frame) => frame.first))).toEqual(new Set([feature]));
-    expect(fixture.loads).toEqual(["MAIN", "FEATURE"]); expect(fixture.comparisons).toEqual(["MAIN", "FEATURE"]);
+    // Snapshots and comparisons both refresh on return while the cached positions remain stable.
+    expect(fixture.loads).toEqual(["MAIN", "FEATURE", "MAIN", "FEATURE"]);
+    expect(fixture.comparisons).toEqual(["MAIN", "FEATURE", "MAIN", "FEATURE"]);
   } finally { await app.close(); }
 });
