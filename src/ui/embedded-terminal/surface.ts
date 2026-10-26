@@ -3,6 +3,7 @@ import type { PtyFrame, TerminalText } from "../../runtime/protocol.ts";
 import type { ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
 import type { TerminalTheme } from "./theme.ts";
+import { bindCtrlClickLink } from "../ctrl-click-link.ts";
 
 export type PtyAttachment = {
   input(data: Uint8Array): void;
@@ -22,9 +23,10 @@ export class TerminalSurface {
   private paintQueued = false;
   private prepared: { cols: number; rows: number; revision: number; commit: () => void } | undefined;
   private readonly unsubscribeTheme: (() => void) | undefined;
+  private paintedFrame: PtyFrame | undefined;
   acceptsInput = true;
 
-  constructor(private readonly renderer: CliRenderer, id: string, private readonly theme?: TerminalTheme) {
+  constructor(private readonly renderer: CliRenderer, id: string, private readonly theme?: TerminalTheme, openLink?: (url: string) => void) {
     this.root = new EmbeddedTerminalRenderable(renderer, { id, width: "100%", flexGrow: 1, flexShrink: 1,
       minHeight: 1, maxWidth: 500, maxHeight: 200, maxScrollback: 0,
       onData: (bytes, source) => { if (source === "input" && this.acceptsInput && !this.frame?.exited) this.connection?.input(bytes); },
@@ -36,7 +38,14 @@ export class TerminalSurface {
         }
       },
     });
+    if (openLink) bindCtrlClickLink(this.root, { linkAt: (x, y) => this.linkAt(x, y), revision: () => this.paintedFrame, open: openLink });
     this.unsubscribeTheme = theme?.subscribe(() => this.queuePaint());
+  }
+  private linkAt(x: number, y: number): string | undefined {
+    const frame = this.paintedFrame;
+    if (!frame || !this.root.visible || this.root.isDestroyed || frame.cols !== this.root.width || frame.rows !== this.root.height) return;
+    const column = x - this.root.x, row = y - this.root.y;
+    return frame.links?.find(link => link.cells.some(cell => cell.row === row && column >= cell.start && column < cell.end))?.url;
   }
   get canScroll(): boolean { return this.frame?.scrollback?.enabled ?? false; }
   get scrollOffset(): number { return this.frame?.scrollback?.offset ?? 0; }
@@ -80,6 +89,7 @@ export class TerminalSurface {
     this.paintQueued = false;
     const reset = "\x1bc", colors = this.theme?.ansi ?? "";
     this.root.write(frame.ansi.startsWith(reset) ? reset + colors + frame.ansi.slice(reset.length) : colors + frame.ansi);
+    this.paintedFrame = frame;
   };
   private resize(cols = this.root?.width ?? 0, rows = this.root?.height ?? 0): void {
     if (!this.connection || !this.root || this.root.isDestroyed || !this.root.visible || cols < 2 || rows < 1) return;
@@ -91,6 +101,6 @@ export class TerminalSurface {
     this.unsubscribeTheme?.();
     this.prepared = undefined; this.paintQueued = false;
     if (!this.root.isDestroyed) this.root.destroyRecursively();
-    this.connection = undefined; this.frame = undefined;
+    this.connection = undefined; this.frame = undefined; this.paintedFrame = undefined;
   }
 }

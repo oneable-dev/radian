@@ -2,6 +2,7 @@ import { BoxRenderable, RenderableEvents, ScrollBoxRenderable, TextRenderable, t
 import { CapabilityError, ExpectedError, reportUnexpected } from "../../errors.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import { TerminalCopyMode } from "./copy-mode.ts";
+import { openBrowserUrl, validateBrowserUrl } from "../../browser.ts";
 import type { Result } from "../../result.ts";
 import type { PtyFrame, TerminalInfo } from "../../runtime/protocol.ts";
 import type { Worktree } from "../../workspace/model.ts";
@@ -25,6 +26,7 @@ export type TerminalActions = {
   attach(id: string, frame: (frame: PtyFrame) => void, failed: (error: unknown) => void): Promise<Result<PtyAttachment, ExpectedError>>;
   close(id: string): Promise<Result<void, ExpectedError>>;
 };
+export type OpenTerminalUrl = (url: string) => Promise<Result<void, ExpectedError>>;
 export class TerminalPanel {
   readonly root: BoxRenderable;
   private readonly tabs: ScrollBoxRenderable;
@@ -58,7 +60,7 @@ export class TerminalPanel {
 
   constructor(private readonly renderer: CliRenderer, private readonly actions: TerminalActions | undefined,
     private readonly button: ButtonFactory, private readonly notice: Notice,
-    private readonly selectionChanged: (worktreeId: string, id: string | null) => void, private readonly changed: () => void, private readonly unavailable?: string, private readonly terminalTheme?: TerminalTheme, private readonly creationHint: () => string = () => "", private readonly copyText?: (text: string) => Promise<Result<string, ExpectedError>>) {
+    private readonly selectionChanged: (worktreeId: string, id: string | null) => void, private readonly changed: () => void, private readonly unavailable?: string, private readonly terminalTheme?: TerminalTheme, private readonly creationHint: () => string = () => "", private readonly copyText?: (text: string) => Promise<Result<string, ExpectedError>>, private readonly openUrl: OpenTerminalUrl = openBrowserUrl) {
     this.root = new BoxRenderable(renderer, { id: "terminal-view", flexGrow: 1, minHeight: 0, flexDirection: "column", visible: false, focusable: true });
     // Popups may restore the temporary pane target used while an attachment was pending.
     this.root.on("focused", () => this.input?.focus());
@@ -257,8 +259,8 @@ export class TerminalPanel {
     this.spinner.start();
     this.task = this.task.then(async () => {
       await this.detach(); if (!this.current(generation)) return;
-      const surface = new TerminalSurface(this.renderer, "shell-terminal", this.terminalTheme); this.surface = surface; this.viewport.add(surface.root);
-      this.copyMode = new TerminalCopyMode(this.renderer, { notice: this.notice, changed: this.changed,
+      const surface = new TerminalSurface(this.renderer, "shell-terminal", this.terminalTheme, this.openLink); this.surface = surface; this.viewport.add(surface.root);
+      this.copyMode = new TerminalCopyMode(this.renderer, { notice: this.notice, changed: this.changed, openLink: this.openLink,
         input: (focus) => {
           surface.acceptsInput = !this.items.find(item => item.id === id)?.exited;
           if (surface.scrollOffset) surface.scroll(10000);
@@ -280,6 +282,16 @@ export class TerminalPanel {
     }).catch((error: unknown) => { if (this.current(generation)) this.failure(error); else reportUnexpected(error, "terminal attachment"); })
       .finally(() => { if (this.current(generation)) this.spinner.stop(); });
   }
+  private openLink = (url: string): void => {
+    const checked = validateBrowserUrl(url);
+    if (!checked.ok) { this.notice(`[${checked.error.code}] ${checked.error.message}`, { level: "error", source: "Terminal" }); return; }
+    void Promise.resolve().then(() => this.openUrl(checked.value)).then(result => {
+      if (!this.disposed && !result.ok) this.notice(`[${result.error.code}] ${result.error.message}`, { level: "error", source: "Terminal" });
+    }).catch((error: unknown) => {
+      const message = reportUnexpected(error, "terminal link");
+      if (!this.disposed) this.notice(message, { level: "error", source: "Terminal" });
+    });
+  };
   private current(generation: number): boolean { return !this.disposed && !this.root.isDestroyed && this.root.visible && this.generation === generation; }
   private failure(error: unknown): void {
     const message = error instanceof ExpectedError ? `[${error.code}] ${error.message}` : reportUnexpected(error, "terminal view");

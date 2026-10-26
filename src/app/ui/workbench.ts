@@ -37,7 +37,7 @@ import { singleLine } from "../../ui/text.ts";
 import { err, ok, type Result } from "../../result.ts";
 import { CapabilityError, ProtocolError, SessionError, reportUnexpected, type ExpectedError } from "../../errors.ts";
 import { EditorPanel, type EditorActions } from "../../editor/ui/panel.ts";
-import { TerminalPanel, type TerminalActions } from "../../terminal/ui/panel.ts";
+import { TerminalPanel, type TerminalActions, type OpenTerminalUrl } from "../../terminal/ui/panel.ts";
 import { GitPanel, type GitActions } from "../../git/ui/panel.ts";
 import type { WorkView, WorkViewPreferences } from "../../runtime/protocol.ts";
 import { defaultKeymap, formatKeys, type Keymap } from "../../keybindings/config.ts";
@@ -62,6 +62,7 @@ export type WorkbenchActions = AgentActions & {
   onResumeSession?: (worktreeId: string, savedId: string) => Promise<Result<string, ExpectedError>>;
   editor?: EditorActions;
   terminal?: TerminalActions;
+  onOpenTerminalUrl?: OpenTerminalUrl;
   git?: GitActions;
   terminalUnavailable?: string;
   terminalTheme?: TerminalTheme;
@@ -211,7 +212,7 @@ export class Workbench {
         if (id) selected[worktreeId] = id; else delete selected[worktreeId];
         this.saveWorkViews();
       }, () => this.updateFooter(), actions.terminalUnavailable, actions.terminalTheme,
-      () => this.keymap.hint("tab.new", "button") || this.keymap.hint("terminal.new", "button"), actions.onCopyTranscript);
+      () => this.keymap.hint("tab.new", "button") || this.keymap.hint("terminal.new", "button"), actions.onCopyTranscript, actions.onOpenTerminalUrl);
     this.git = new GitPanel(renderer, actions.git,
       (message, options) => this.notify(message, options), () => this.updateFooter(),
       (id, state) => {
@@ -429,7 +430,7 @@ export class Workbench {
     else if (focused && focused === this.editor?.input) shortcuts = [hint("sidebar.toggle", "Workspaces")];
     else if (this.terminals.copyContext) shortcuts = [hint("terminal.copy-right", "Cursor"), hint("terminal.copy-visual", "Select"),
       hint("terminal.copy-visual-line", "Lines"), hint("terminal.copy-yank", context === "terminal-visual" ? "Copy selection" : "Copy line"),
-      hint("terminal.copy-half-page-down", "½ page"), hint("terminal.copy-back", "Back")];
+      hint("terminal.copy-open-link", "Open link"), hint("terminal.copy-half-page-down", "½ page"), hint("terminal.copy-back", "Back")];
     else if (focused && focused === this.terminals?.input) shortcuts = [
       hint("output.read", "Read output"), pair("tab.previous", "tab.next", "Tab"), hint("tab.new", "New terminal"), hint("tab.close", "Close tab"), ...(this.terminals.canScroll ? [pair("terminal.scroll-up", "terminal.scroll-down", "Scroll")] : []), hint("sidebar.toggle", "Workspaces"),
     ];

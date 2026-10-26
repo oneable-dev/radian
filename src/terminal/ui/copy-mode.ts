@@ -7,6 +7,8 @@ import { Clipboard } from "../../ui/clipboard.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import type { Notice } from "../../ui/messages.ts";
+import { textLinkAt } from "../../text-links.ts";
+import { bindCtrlClickLink } from "../../ui/ctrl-click-link.ts";
 
 class TerminalReader extends EditBufferRenderable {
   handleKeyPress(_event: KeyEvent): boolean { return true; }
@@ -17,6 +19,7 @@ type Options = {
   changed(): void;
   input(focus: boolean): void;
   busy(pending: boolean): void;
+  openLink(url: string): void;
   copy?(text: string): Promise<Result<string, ExpectedError>>;
 };
 
@@ -36,6 +39,7 @@ export class TerminalCopyMode {
     this.root = new TerminalReader(renderer, { id: "terminal-copy", position: "absolute", top: 0, left: 0,
       width: "100%", height: "100%", visible: false, wrapMode: "char", scrollMargin: 0,
       cursorStyle: { style: "block", blinking: false } });
+    bindCtrlClickLink(this.root, { linkAt: (x, y) => this.linkAt(x, y), revision: () => this.generation, open: url => this.options.openLink(url) });
     uiTheme(renderer).bindStyles(this.root, styles => {
       this.root.textColor = styles["ui.text"].fg; this.root.backgroundColor = styles["ui.text"].bg;
       this.root.selectionBg = styles["transcript.selection"].bg; this.root.selectionFg = styles["transcript.selection"].fg;
@@ -71,6 +75,7 @@ export class TerminalCopyMode {
       return;
     }
     if (this.pending) return;
+    if (command === "terminal.copy-open-link") { this.openCursorLink(); return; }
     if (command === "terminal.copy-yank") { this.copy(); return; }
     if (command === "terminal.copy-visual" || command === "terminal.copy-visual-line") {
       const linewise = command === "terminal.copy-visual-line";
@@ -102,6 +107,21 @@ export class TerminalCopyMode {
       }
     }
     this.select(); this.options.changed();
+  }
+  private linkAt(x: number, y: number): string | null {
+    if (!this.active || this.pending) return null;
+    // Ctrl-click does not move OpenTUI's selection cursor. Resolve the clicked
+    // cell through the native wrapped viewport without changing reading state.
+    const info = this.root.editorView.getLineInfo(), row = y - this.root.y;
+    const column = x - this.root.x + this.root.editorView.getViewport().offsetX;
+    const start = info.lineStartCols[row], width = info.lineWidthCols[row];
+    if (start === undefined || width === undefined || column < 0 || column >= width) return null;
+    return textLinkAt(this.root.plainText, this.root.getTextRange(0, start + column).length);
+  }
+  private openCursorLink(): void {
+    const offset = this.root.getTextRange(0, this.root.cursorOffset).length;
+    const url = textLinkAt(this.root.plainText, offset);
+    if (url) this.options.openLink(url);
   }
   private select(): void {
     if (this.anchor === null) return;

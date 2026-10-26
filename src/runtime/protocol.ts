@@ -77,9 +77,15 @@ export const terminalInfoSchema = Type.Object({ ...ptyInfoSchema.properties, tit
 export type TerminalInfo = Static<typeof terminalInfoSchema>;
 export const editorInfoSchema = ptyInfoSchema;
 export type EditorInfo = PtyInfo;
+export const terminalLinkSchema = Type.Object({ url: Type.String(), cells: Type.Array(Type.Object({
+  row: Type.Integer({ minimum: 0, maximum: 199 }),
+  start: Type.Integer({ minimum: 0, maximum: 499 }), end: Type.Integer({ minimum: 1, maximum: 500 }),
+})) });
+export type TerminalLink = Static<typeof terminalLinkSchema>;
 export const ptyFrameSchema = Type.Object({ ...ptyInfoSchema.properties,
   cols: Type.Integer({ minimum: 2, maximum: 500 }), rows: Type.Integer({ minimum: 1, maximum: 200 }),
   revision: Type.Integer({ minimum: 0 }), ansi: Type.String({ maxLength: maxFrameBytes }),
+  links: Type.Optional(Type.Array(terminalLinkSchema)),
   scrollback: Type.Optional(Type.Object({ offset: Type.Integer({ minimum: 0 }), available: Type.Integer({ minimum: 0 }), enabled: Type.Boolean() })),
 });
 export type PtyFrame = Static<typeof ptyFrameSchema>;

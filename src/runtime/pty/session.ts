@@ -1,6 +1,7 @@
 import { Terminal as Screen } from "@xterm/headless";
 import { terminalScreen } from "./screen.ts";
 import { terminalText } from "./text.ts";
+import { terminalLinks } from "./links.ts";
 import { capture, PtyError, type ExpectedError } from "../../errors.ts";
 import { err, ok, type Result } from "../../result.ts";
 import { maxFrameBytes, type PtyFrame, type PtyInfo, type TerminalText } from "../protocol.ts";
@@ -86,6 +87,7 @@ export class PtySession {
       const buffer = this.screen.buffer.active, offset = buffer.baseY - buffer.viewportY;
       this.cached = { ...this.info, cols: this.screen.cols, rows: this.screen.rows, revision: this.revision,
         ansi: `${terminalScreen(this.screen)}${modes}\x1b[${this.cursorStyle} q${offset ? "\x1b[?25l" : ""}`,
+        links: terminalLinks(this.screen),
         scrollback: { offset, available: buffer.baseY, enabled: (this.screen.options.scrollback ?? 0) > 0 && buffer.type === "normal" && this.screen.modes.mouseTrackingMode === "none" } };
     }
     return this.cached;

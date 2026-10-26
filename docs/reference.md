@@ -1120,6 +1120,15 @@ or default Shift+PgUp/PgDn. Typing returns to live output. History/viewport surv
 radian does not save terminal output/commands to its manifest. A live shell may save its own
 history according to its user configuration.
 
+**Ctrl+click** on a literal HTTP(S) URL opens it in the attached UI host's default browser.
+This works on live output, scrolled output and frozen reading snapshots, including URLs that wrap
+across terminal rows. Ordinary clicks and drags retain their existing terminal behavior; Ctrl-drag
+never opens a link. Only a complete Ctrl+left-click on the same displayed URL is activated, and
+that gesture is not forwarded to the embedded program. Non-web schemes are never opened.
+Live-output link cells require the updated runtime's optional frame metadata. An older running
+service keeps working but cannot provide live link activation until you explicitly restart it
+when safe; Radian never restarts shells automatically for this feature.
+
 **Leader, then [** enters read-only output navigation, using an on-demand plain-text snapshot of the active
 screen and retained scrollback. Shells and jobs keep running; new output does not replace the text
 being selected. The footer shows **NORMAL**, **VISUAL** or **VISUAL LINE** and `frozen output`.
@@ -1127,6 +1136,9 @@ Use h/j/k/l, arrows or Ctrl+N/P to move, w/b for words, 0/$ for line bounds, gg/
 and Ctrl+U/D or Ctrl+B/F (also PgUp/PgDn) for half/full pages. **v/V** selects characters/logical lines; **y** copies
 the selection or current line, returning to Normal after accepted clipboard delivery. Copy failures
 retain the selection. Soft-wrapped terminal lines are joined rather than copied as artificial newlines.
+**gx** (`terminal.copy-open-link`) opens the HTTP(S) URL under the reading cursor without changing
+the cursor or Visual selection. Its binding is configurable in `terminal-copy` and `terminal-visual`;
+outside reading mode, `gx` remains literal input for the embedded program.
 Esc cancels Visual selection, then returns from Normal to shell input; **i** returns from Normal directly.
 Unbound keys and paste never edit the snapshot or reach the shell. Ordinary shell input retains
 Esc, Ctrl+C, Ctrl+N/P and other program bindings. Tab-strip navigation and leader-1 through leader-9

@@ -93,6 +93,7 @@ export const defaultBindings = {
   "terminal.copy-visual": terminalCopyKeys("v"),
   "terminal.copy-visual-line": terminalCopyKeys("shift+v"),
   "terminal.copy-yank": terminalCopyKeys("y"),
+  "terminal.copy-open-link": terminalCopyKeys("g x"),
   "terminal.copy-page-up": terminalCopyKeys("ctrl+b", "pageup"),
   "terminal.copy-page-down": terminalCopyKeys("ctrl+f", "pagedown"),
   "terminal.copy-half-page-up": terminalCopyKeys("ctrl+u"),

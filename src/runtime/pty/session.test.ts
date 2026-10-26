@@ -74,6 +74,20 @@ test("Output reads validate lease ownership and isolate snapshots from later out
   } finally { await app.close(); }
 });
 
+test("PTY frames publish complete wrapped link targets with visible cell ranges", async () => {
+  // A real process supplies output; link metadata must accompany its ANSI snapshot.
+  const url = "http://localhost:3000/preview";
+  const session = new PtySession("fixture", { argv: [process.execPath, "-e", `process.stdout.write(${JSON.stringify(url)}); setInterval(() => {}, 1000);`],
+    cwd: process.cwd(), size: { cols: 20, rows: 2 } }, () => {});
+  try {
+    // Wait for the VT parser rather than assuming that process startup has painted output.
+    await until(() => !!session.frame().links?.length);
+
+    // One target covers both physical rows without duplicating the wrapped URL.
+    expect(session.frame().links).toEqual([{ url, cells: [{ row: 0, start: 0, end: 20 }, { row: 1, start: 0, end: 9 }] }]);
+  } finally { expectOk(await session.dispose()); }
+});
+
 test("Ordinary shell PTYs preserve immediate resize behavior without awaiting repaint", async () => {
   const app = await mount(false);
   try {

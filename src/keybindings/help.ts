@@ -9,6 +9,7 @@ const labels: Partial<Record<CommandId, string>> = {
   "focus.prompt": "Focus the Agent input", "focus.transcript": "Read the Agent conversation", "focus.next": "Next focus target", "focus.previous": "Previous focus target",
   "output.read": "Read Agent conversation or terminal output",
   "terminal.copy-back": "Cancel selection or return to terminal input", "terminal.copy-input": "Return to terminal input",
+  "terminal.copy-open-link": "Open the HTTP(S) link under the cursor in the default browser",
   "terminal.copy-yank": "Copy the current line or selection", "terminal.copy-visual": "Select characters", "terminal.copy-visual-line": "Select logical lines",
   "view.agent": "Show Agents", "view.editor": "Show Editor", "view.git": "Show Git", "view.terminal": "Show Terminal",
   "tab.new": "Create a session in Agents or a shell in Terminal",
@@ -61,5 +62,5 @@ export function keymapHelp(keymap: Keymap, context: KeyContext, available: (comm
       return width < 28 ? key + " ".repeat(28 - width) + description : `${key}\n  ${description}`;
     }).join("\n") || "No additional bindings in this context.";
   };
-  return `Current context: ${context}\n<leader>: ${formatKeys(keymap.leader)}\n\n${rows(false)}\n\nApplication shortcuts\n\n${rows(true)}\n\nInput ownership\n\n<CR> sends the current Agent input, even with suggestions open; <Tab> inserts the selected completion. <S-CR> inserts a newline (<M-CR> is an alternative). Paste never sends automatically.\n\nUnbound input, mouse and paste in Editor/Terminal belong to the embedded program. <F1> stays native there. The configured application leader remains available.\n\nThe active keybindings are shown above, including user overrides. Read-only details use j/k and <PageUp>/<PageDown>; <Esc> returns to the previous focus.`;
+  return `Current context: ${context}\n<leader>: ${formatKeys(keymap.leader)}\n\n${rows(false)}\n\nApplication shortcuts\n\n${rows(true)}\n\nInput ownership\n\n<CR> sends the current Agent input, even with suggestions open; <Tab> inserts the selected completion. <S-CR> inserts a newline (<M-CR> is an alternative). Paste never sends automatically.\n\nUnbound input, mouse and paste in Editor/Terminal belong to the embedded program. <F1> stays native there. The configured application leader remains available. Ctrl+click on an HTTP(S) URL in Terminal opens the default browser.\n\nThe active keybindings are shown above, including user overrides. Read-only details use j/k and <PageUp>/<PageDown>; <Esc> returns to the previous focus.`;
 }
