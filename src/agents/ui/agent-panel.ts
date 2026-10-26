@@ -101,7 +101,11 @@ export class AgentPanel {
       flexGrow: 1, minHeight: 0, minWidth: 0, padding: 1, flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 1 });
     theme.bindStyles(this.root, styles => { this.root.backgroundColor = styles["ui.text"].bg; });
     this.sessions = new SessionTabs(renderer, { button, ...(transcriptOptions.idPrefix ? { idPrefix: transcriptOptions.idPrefix } : {}),
-      fast: id => actions.getSessionDetails?.(id)?.telemetry?.fast === true,
+      spinnerStyle: id => {
+        const state = actions.getSessionDetails?.(id);
+        if (state?.status === "working" && state.activity === "compacting") return "pulse";
+        return state?.telemetry?.fast === true ? "fast" : "default";
+      },
       select: (id) => { if (this.worktree && !transcriptOptions.readOnly) actions.onSelectSession?.(this.worktree.id, id); },
       create: () => { if (this.worktree && !transcriptOptions.readOnly) actions.onNewSession(this.worktree.id); },
       close: (id) => { if (this.worktree && !transcriptOptions.readOnly) actions.onCloseSession?.(this.worktree.id, id); },

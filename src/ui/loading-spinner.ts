@@ -3,9 +3,13 @@ import { spinnerFrames } from "../icons.ts";
 import { uiTheme } from "./theme.ts";
 import { styleChunk } from "./theme-styles.ts";
 
+export type SpinnerStyle = "default" | "fast" | "pulse";
+
 type Timer = ReturnType<CliRenderer["clock"]["setTimeout"]>;
 const minimumVisibleMs = 500;
 const frameIntervalMs = 80;
+const pulseFrames = ["⣀", "⣤", "⣶", "⣾", "⣿", "⣾", "⣶", "⣤"] as const;
+const pulsePhaseStep = 2;
 
 // Shared loading feedback: delay only hiding the indicator, never the operation's result.
 export class LoadingSpinner {
@@ -14,20 +18,21 @@ export class LoadingSpinner {
   private pendingHide: Timer | undefined;
   private startedAt = 0;
   private frame = 0;
-  private fast = false;
+  private style: SpinnerStyle = "default";
 
   constructor(private readonly renderer: CliRenderer, options: Pick<TextOptions, "id" | "fg"> = {}) {
     this.root = new TextRenderable(renderer, { ...options, content: "", width: 1, height: 1, flexShrink: 0,
       visible: false, selectable: false, wrapMode: "none" });
     this.root.on(RenderableEvents.DESTROYED, () => this.cancel());
-    uiTheme(renderer).bindStyles(this.root, () => { if (this.fast && this.root.visible) this.paint(); });
+    uiTheme(renderer).bindStyles(this.root, () => { if (this.style === "fast" && this.root.visible) this.paint(); });
   }
 
-  get columns(): number { return this.fast ? 3 : 1; }
+  get columns(): number { return this.style === "default" ? 1 : 3; }
+  private get frames(): readonly string[] { return this.style === "pulse" ? pulseFrames : spinnerFrames; }
 
-  setFast(enabled: boolean): void {
-    if (this.root.isDestroyed || enabled === this.fast) return;
-    this.fast = enabled; this.frame = 0; this.root.width = this.columns;
+  setStyle(style: SpinnerStyle): void {
+    if (this.root.isDestroyed || style === this.style) return;
+    this.style = style; this.frame = 0; this.root.width = this.columns;
     if (this.root.visible) this.paint();
   }
 
@@ -40,7 +45,7 @@ export class LoadingSpinner {
     this.frame = 0; this.paint();
     this.root.visible = true;
     this.animation = this.renderer.clock.setInterval(() => {
-      this.frame = (this.frame + 1) % (this.fast ? 3 : spinnerFrames.length);
+      this.frame = (this.frame + 1) % (this.style === "fast" ? 3 : this.frames.length);
       this.paint();
     }, frameIntervalMs);
   }
@@ -61,7 +66,11 @@ export class LoadingSpinner {
   }
 
   private paint(): void {
-    if (!this.fast) { this.root.content = spinnerFrames[this.frame]!; return; }
+    if (this.style === "pulse") {
+      this.root.content = Array.from({ length: this.columns }, (_, index) => pulseFrames[(this.frame + index * pulsePhaseStep) % pulseFrames.length]).join("");
+      return;
+    }
+    if (this.style === "default") { this.root.content = spinnerFrames[this.frame]!; return; }
     const styles = uiTheme(this.renderer).styles;
     this.root.content = new StyledText(Array.from({ length: 3 }, (_, index) =>
       styleChunk(index === this.frame ? "▶" : "▷", styles[index === this.frame ? "metadata.fastOn" : "ui.muted"])));

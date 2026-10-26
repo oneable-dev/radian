@@ -17,12 +17,15 @@ const history = (): TranscriptSection[] => [
 ];
 async function mount(initial: ExecutionState = { status: "complete", output: "", error: null, sections: [...history(), summary()] }, preferences?: WorkViewPreferences) {
   const clock = new ManualClock(), app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
-  const selection = new WorkspaceSelection(demoWorkspace());
   let current = initial;
+  const snapshot = () => demoWorkspace().map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => ({ ...tree,
+    sessions: tree.sessions.map(session => session.id === "a1" ? { ...session, status: current.status, subagents: [] } : session),
+  })) }));
+  const selection = new WorkspaceSelection(snapshot());
   const copied: string[] = [], sent: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {}, onCloseSession: () => {}, onPrompt: (_id, text) => { sent.push(text); return ok(undefined); },
-    getSessionDetails: () => current, initialDrafts: { a1: "retained draft" },
+    getSessionDetails: id => id === "a1" ? current : null, initialDrafts: { a1: "retained draft" },
     ...(preferences ? { initialWorkViews: preferences } : {}),
     onCopyTranscript: async (text) => { copied.push(text); return ok("Copied to clipboard"); },
   });
@@ -31,7 +34,11 @@ async function mount(initial: ExecutionState = { status: "complete", output: "",
   const get = (id: string) => { const node = app.renderer.root.findDescendantById(id); if (!node) throw new Error(`Missing ${id}`); return node; };
   return { ...app, clock, selection, view, copied, sent, render, get,
     state: () => view.workViewPreferences.agentViews?.[selection.sessionId ?? ""],
-    async update(state: ExecutionState) { current = state; selection.replaceSnapshot(selection.snapshot); await render(); },
+    tabStatus(id = "a1") {
+      const tab = `session:demo:main:${id}`, number = get(`${tab}:number`), title = get(`${tab}:title`);
+      return app.captureCharFrame().split("\n")[number.y]!.slice(number.x + number.width, title.x).trim();
+    },
+    async update(state: ExecutionState) { current = state; selection.replaceSnapshot(snapshot()); await render(); },
     async transcript() { pressLeader(app, "["); app.mockInput.pressKey("HOME"); app.mockInput.pressKey("j"); app.mockInput.pressKey("j"); await render(); },
     async clickSummary() {
       const lines = app.captureCharFrame().split("\n"), y = lines.findIndex((line) => line.includes("[Context compacted]"));
@@ -42,23 +49,29 @@ async function mount(initial: ExecutionState = { status: "complete", output: "",
   };
 }
 
-test("Compaction shows dedicated spinners and status, then folded summaries while preserving drafts and focus", async () => {
-  // Prepare manual compaction in a conversation retaining its previous request.
-  const compacting = { status: "working" as const, activity: "compacting" as const, output: "", error: null, sections: history() };
+test.each([false, true])("Compaction with Fast %s shows three-cell pulses in tabs and status, preserving drafts and focus", async fast => {
+  // Manual compaction uses the same staggered pulse regardless of the session's Fast setting.
+  const compacting = { status: "working" as const, activity: "compacting" as const, output: "", error: null, sections: history(),
+    telemetry: { provider: "fixture", model: "fixture", effort: "high", fast, context: null, weekly: null } };
   const app = await mount(compacting);
   try {
     const status = app.get("agent-run-status-text"), prompt = app.get("session-prompt");
     pressLeader(app, "a"); await app.render();
     const label = () => app.captureCharFrame().split("\n")[status.y]!.slice(status.x, status.x + status.width).trimEnd();
     expect(label()).toBe("Compacting context (0s · <Esc> to interrupt)"); expect(app.get("agent-run-loading").visible).toBe(true);
-    const first = app.captureCharFrame(); app.clock.advance(80); await app.render();
-    expect(app.captureCharFrame()).not.toBe(first); expect(label()).not.toContain("Previous delivered request");
+    expect(app.tabStatus()).toBe("⣀⣶⣿"); expect(app.captureCharFrame()).toContain("⣀⣶⣿ Compacting context");
+
+    // The tab and body animate independently from the same session activity without changing the draft.
+    app.clock.advance(80); await app.render();
+
+    expect(app.tabStatus()).toBe("⣤⣾⣾"); expect(app.captureCharFrame()).toContain("⣤⣾⣾ Compacting context");
+    expect(label()).not.toContain("Previous delivered request");
 
     // Clear status after compaction and hide long summary bodies by default.
     await app.update({ status: "complete", output: "", error: null, sections: [...history(), summary()] });
     app.clock.advance(420); await app.render();
 
-    expect(status.visible).toBe(false); expect(app.get("agent-run-loading").visible).toBe(false);
+    expect(status.visible).toBe(false); expect(app.get("agent-run-loading").visible).toBe(false); expect(app.tabStatus()).toBe("");
     expect(app.captureCharFrame()).toContain("[Context compacted] (<C-o> to expand)");
     expect(app.captureCharFrame()).not.toContain("COMPACTION_SUMMARY_");
     expect(app.view.promptDrafts.a1).toBe("retained draft"); expect(app.renderer.currentFocusedRenderable?.id).toBe(prompt.id);

@@ -1,7 +1,7 @@
 import { BoxRenderable, TextRenderable, type CliRenderer } from "@opentui/core";
 import type { AgentStatus, OpenSession } from "../model.ts";
 import { icons } from "../../icons.ts";
-import { LoadingSpinner } from "../../ui/loading-spinner.ts";
+import { LoadingSpinner, type SpinnerStyle } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText, type StyleGroup } from "../../ui/theme-styles.ts";
 
@@ -21,7 +21,7 @@ function display(status: AgentStatus | null, session?: Pick<OpenSession, "result
   }
 }
 
-// One slot: working > failure > stopped > unread > settled result. Fast loading uses three fixed cells.
+// One slot: working > failure > stopped > unread > settled result. Fast and pulse loading use three fixed cells.
 export class StatusIndicator {
   readonly root: BoxRenderable;
   private readonly spinner: LoadingSpinner;
@@ -44,11 +44,11 @@ export class StatusIndicator {
     });
   }
 
-  update(status: AgentStatus | null, visible: boolean, session?: Pick<OpenSession, "result" | "attention">, fast = false): void {
+  update(status: AgentStatus | null, visible: boolean, session?: Pick<OpenSession, "result" | "attention">, style: SpinnerStyle = "default"): void {
     if (this.root.isDestroyed) return;
     const changed = status !== this.status || visible !== this.visible;
     this.status = status; this.visible = visible;
-    this.spinner.setFast(fast); this.animation.width = this.spinner.columns;
+    this.spinner.setStyle(style); this.animation.width = this.spinner.columns;
     const { icon, color } = display(status, session);
     this.iconStyle = color; this.hasIcon = icon !== ""; this.icon.content = icon;
     // A settled badge supersedes the spinner tail immediately. Cancelling the hidden

@@ -4,13 +4,14 @@ import { sessionStatus } from "../status.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { SessionTab } from "../../ui/session-tab.ts";
+import type { SpinnerStyle } from "../../ui/loading-spinner.ts";
 import { StatusIndicator } from "./status-indicator.ts";
 
 type Tab = { root: BoxRenderable; title: TextRenderable; frame: SessionTab; status: StatusIndicator };
 type Actions = {
   idPrefix?: string;
   select(id: string): void;
-  fast?(id: string): boolean;
+  spinnerStyle?(id: string): SpinnerStyle;
   create(): void;
   close(id: string): void;
   keyHint(command: CommandId, context: KeyContext): string;
@@ -69,7 +70,7 @@ export class SessionTabs {
       }
       tab.frame.setPosition(index + 1);
       const working = session.status === "working" || session.subagents.some(child => child.status === "working");
-      tab.status.update(working ? "working" : sessionStatus(session), this.visible, session, this.actions.fast?.(session.id) ?? false);
+      tab.status.update(working ? "working" : sessionStatus(session), this.visible, session, this.actions.spinnerStyle?.(session.id));
       this.setTitle(tab, session.id);
       if (this.list.getChildren()[index] !== tab.root) { this.list.add(tab.root, index); this.reveal = true; }
     }

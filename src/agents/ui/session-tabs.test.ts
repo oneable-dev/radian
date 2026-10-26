@@ -4,6 +4,7 @@ import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Button } from "../../ui/button.ts";
 import { uiTheme, type UiColors } from "../../ui/theme.ts";
 import { SESSION_TAB_WIDTH } from "../../ui/session-tab.ts";
+import type { SpinnerStyle } from "../../ui/loading-spinner.ts";
 import type { OpenSession } from "../model.ts";
 import type { SessionResult } from "../session-attention.ts";
 import { icons, spinnerFrames } from "../../icons.ts";
@@ -16,12 +17,12 @@ const secondLabel = "23ec1867-…";
 const collisionId = "01a156a2-ba65-4d41-b656-d2c13806b5de";
 const session = (id = firstId, name = "A conversation title, not the session ID"): OpenSession => ({ id, name, status: "complete", subagents: [] });
 
-async function mount(initial: readonly OpenSession[] = [session()], fast: (id: string) => boolean = () => false) {
+async function mount(initial: readonly OpenSession[] = [session()], spinnerStyle: (id: string) => SpinnerStyle = () => "default") {
   const clock = new ManualClock();
   const app = await createTestRenderer({ width: 100, height: 6, kittyKeyboard: true, clock });
   const selected: string[] = [], closed: string[] = [];
   const tabs = new SessionTabs(app.renderer, { select: (id) => selected.push(id), close: (id) => closed.push(id),
-    fast, create() {}, keyHint: () => "", button: (label, activate) => new Button(app.renderer, label, activate) });
+    spinnerStyle, create() {}, keyHint: () => "", button: (label, activate) => new Button(app.renderer, label, activate) });
   app.renderer.root.add(tabs.root);
   tabs.update("tree", initial, initial[0]?.id ?? null, true);
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
@@ -107,7 +108,7 @@ test("Only Fast tabs use yellow three-cell arrows and retain tab/close positions
   // The two running tabs observe independent session-local Fast settings.
   const entries = [{ ...session(), status: "working" as const }, { ...session(secondId), status: "working" as const }];
   let fast = true;
-  const app = await mount(entries, id => id === firstId && fast);
+  const app = await mount(entries, id => id === firstId && fast ? "fast" : "default");
   const prefix = app.status;
   try {
     const { tab, title } = app.get(firstId), other = app.get(secondId).tab;
@@ -128,6 +129,41 @@ test("Only Fast tabs use yellow three-cell arrows and retain tab/close positions
     expect([tab.width, close.x, other.x]).toEqual([geometry[1]!, geometry[3]!, geometry[4]!]);
     fast = true; app.tabs.update("tree", entries, firstId, true); app.resize(12, 6); await app.render();
     expect(Bun.stringWidth(title.plainText)).toBeLessThanOrEqual(title.width);
+    expect(close.x + close.width).toBeLessThanOrEqual(app.tabs.list.viewport.x + app.tabs.list.viewport.width);
+    app.tabs.update("tree", entries, firstId, false); await app.render(); expect(app.clock.pendingTimerCount).toBe(0);
+  } finally { await app.close(); }
+});
+
+test.each(["default", "fast"] as const)("Compacting tabs replace %s frames with three-cell pulses and preserve Fast label positions", async original => {
+  // Two active tabs retain independent activity styles, including a compacting background session.
+  const entries = [{ ...session(), status: "working" as const }, { ...session(secondId), status: "working" as const }];
+  let style: SpinnerStyle = original;
+  const app = await mount(entries, id => id === firstId ? style : "default");
+  try {
+    const { tab, title } = app.get(firstId), other = app.get(secondId).tab;
+    const close = app.renderer.root.findDescendantById(`close-session:${firstId}`)!;
+    const geometry = [tab.x, tab.width, close.x, other.x];
+    const initialTitle = title.x;
+
+    // Activity can change without changing the working status or the currently selected session.
+    style = "pulse"; app.tabs.update("tree", entries, secondId, true); await app.render();
+
+    expect(app.status(firstId)).toBe("⣀⣶⣿"); expect(title.x).toBe(tab.x + 9);
+    if (original === "fast") expect(title.x).toBe(initialTitle);
+    expect(app.status(secondId)).toBe("⠋"); expect([tab.x, tab.width, close.x, other.x]).toEqual(geometry);
+    for (const expected of ["⣤⣾⣾", "⣶⣿⣶", "⣾⣾⣤", "⣿⣶⣀", "⣾⣤⣤", "⣶⣀⣶", "⣤⣤⣾", "⣀⣶⣿"]) {
+      app.clock.advance(80); app.tabs.update("tree", entries, secondId, true); await app.render();
+      expect(app.status(firstId)).toBe(expected); expect(title.x).toBe(tab.x + 9);
+      expect([tab.x, tab.width, close.x, other.x]).toEqual(geometry);
+    }
+
+    // Resuming model work restores the previous width; hiding the strip cancels every timer.
+    style = original; app.tabs.update("tree", entries, secondId, true); await app.render();
+    expect(app.status(firstId)).toBe(original === "fast" ? "▶▷▷" : "⠋"); expect(title.x).toBe(initialTitle);
+
+    // Three-cell pulses still leave the ID and close action inside compact tab viewports.
+    style = "pulse"; app.tabs.update("tree", entries, firstId, true); app.resize(12, 6); await app.render();
+    expect(app.status(firstId)).toBe("⣀⣶⣿"); expect(Bun.stringWidth(title.plainText)).toBeLessThanOrEqual(title.width);
     expect(close.x + close.width).toBeLessThanOrEqual(app.tabs.list.viewport.x + app.tabs.list.viewport.width);
     app.tabs.update("tree", entries, firstId, false); await app.render(); expect(app.clock.pendingTimerCount).toBe(0);
   } finally { await app.close(); }
@@ -158,7 +194,7 @@ test.each([completed, failed, stopped, cancelled])("Fast $outcome results never 
 
 test.each([false, true])("Direct cancellation of Fast %s runs retains gray dots instead of spinners", async fast => {
   // A user cancellation has no new unread result, even if it settles before the spinner minimum.
-  const app = await mount([{ ...session(), status: "working" }], () => fast);
+  const app = await mount([{ ...session(), status: "working" }], () => fast ? "fast" : "default");
   const interrupted: OpenSession = { ...session(), status: null, result: { ...cancelled, cancellation: "user" } };
   const prefix = app.status;
   try {

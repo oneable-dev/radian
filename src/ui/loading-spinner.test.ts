@@ -39,7 +39,7 @@ test("Fast spinners cycle yellow arrows rightward inside fixed three-cell slots"
   // Only priority work changes the shared spinner's presentation; normal loaders retain their frames.
   const app = await mount();
   try {
-    app.spinner.setFast(true); app.spinner.start(); await app.renderOnce();
+    app.spinner.setStyle("fast"); app.spinner.start(); await app.renderOnce();
     const x = app.spinner.root.x, width = app.spinner.root.width;
 
     for (const expected of ["▶▷▷", "▷▶▷", "▷▷▶", "▶▷▷"]) {
@@ -53,18 +53,37 @@ test("Fast spinners cycle yellow arrows rightward inside fixed three-cell slots"
   } finally { await app.dispose(); }
 });
 
-test("Normal/Fast transitions preserve minimum display duration and cancellation lifetime", async () => {
+test.each(["fast", "pulse"] as const)("Switching to %s preserves minimum display duration and cancellation lifetime", async style => {
   // Changing animation style is not a new operation and cannot reset its 500ms visibility window.
   const app = await mount();
   try {
     app.spinner.start(); await app.advance(120);
 
-    app.spinner.setFast(true); app.spinner.stop(); await app.advance(379);
+    app.spinner.setStyle(style); app.spinner.stop(); await app.advance(379);
 
     expect(app.spinner.root.visible).toBe(true); expect(app.spinner.root.width).toBe(3);
     await app.advance(1); expect(app.spinner.root.visible).toBe(false);
-    app.spinner.setFast(false); app.spinner.start(); await app.renderOnce();
+    app.spinner.setStyle("default"); app.spinner.start(); await app.renderOnce();
     expect(app.spinner.root.plainText).toBe("⠋"); expect(app.spinner.root.width).toBe(1);
+    app.spinner.cancel(); await app.renderOnce(); expect(app.clock.pendingTimerCount).toBe(0);
+  } finally { await app.dispose(); }
+});
+
+test("Pulse spinners stagger three cells and loop without resetting on repeated style updates", async () => {
+  // Compaction flows across the same three-cell slot as Fast instead of pulsing every cell in unison.
+  const app = await mount();
+  try {
+    app.spinner.setStyle("pulse"); app.spinner.start(); await app.renderOnce();
+    const x = app.spinner.root.x;
+
+    // Adjacent cells are two frames apart throughout a full pulse cycle and its wraparound.
+    for (const expected of ["⣀⣶⣿", "⣤⣾⣾", "⣶⣿⣶", "⣾⣾⣤", "⣿⣶⣀", "⣾⣤⣤", "⣶⣀⣶", "⣤⣤⣾", "⣀⣶⣿"]) {
+      app.spinner.setStyle("pulse"); await app.renderOnce();
+
+      expect(app.spinner.root.plainText).toBe(expected);
+      expect(app.spinner.root.width).toBe(3); expect(app.spinner.columns).toBe(3); expect(app.spinner.root.x).toBe(x);
+      await app.advance(80);
+    }
     app.spinner.cancel(); await app.renderOnce(); expect(app.clock.pendingTimerCount).toBe(0);
   } finally { await app.dispose(); }
 });
