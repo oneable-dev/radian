@@ -35,7 +35,8 @@ also opens it. **Esc** closes without changing selection and restores the origin
 Opening or closing the popup never changes the work pane or PTY dimensions.
 **Ctrl+Space, then s** opens a searchable list of working sessions and unread results, without a preview pane.
 Browsing preserves the current work view and unread state; **Enter** opens the selected session's latest output.
-The session monitor is capped at 80 columns and 18 rows, shrinking to 80% of smaller terminals.
+The session monitor uses 80% of the terminal width without a fixed column cap. Its height stays capped
+at 18 rows, shrinking to 80% of shorter terminals.
 Searchable pickers share a borderless outer surface and a rounded search field carrying a centered title,
 a `>` prompt on the left and matched/total counts on the right. Search has no placeholder and uses the
 popup background in either focus state. Lists have one cell of padding on each side and follow search

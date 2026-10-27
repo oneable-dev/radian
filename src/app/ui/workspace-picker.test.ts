@@ -186,7 +186,7 @@ test("Long Unicode monitor captions retain both scope fields through resize with
     const search = app.get("monitor-search") as InputRenderable, caret = search.cursorOffset, row = app.get("monitor:b1");
 
     // Scope columns remain present even when the request and scope names all need truncation.
-    for (const width of [140, 60, 180]) {
+    for (const width of [320, 140, 60, 240, 180]) {
       app.resize(width, 30); await app.render();
       const caption = app.get("monitor-caption:b1"), scope = app.get("monitor-scope:b1");
       if (!(caption instanceof TextRenderable) || !(scope instanceof TextRenderable)) throw new Error("Missing session labels");
@@ -309,14 +309,14 @@ test.each(["search", "list"] as const)("Opening sessions from monitor %s shows l
   } finally { await app.close(); }
 });
 
-test("Monitor popups cap list-only dimensions and stay centered on smaller terminals", async () => {
-  // A session list needs room for two-line candidates, not the previous full conversation preview.
+test("Monitor popups scale with terminal width and stay centered without expanding list height", async () => {
+  // Wide terminals need more caption space while the list stays vertically compact.
   const app = await fixture();
   try {
     app.leader("s"); await app.render();
 
-    // Wide terminals keep a compact frame; smaller terminals retain space around it.
-    for (const [width, height, columns, rows] of [[180, 50, 80, 18], [120, 30, 80, 18], [60, 16, 48, 12], [30, 10, 24, 8]] as const) {
+    // Large displays grow beyond 80 columns, and smaller terminals retain their existing margins.
+    for (const [width, height, columns, rows] of [[320, 90, 256, 18], [240, 70, 192, 18], [180, 50, 144, 18], [120, 30, 96, 18], [60, 16, 48, 12], [30, 10, 24, 8]] as const) {
       app.resize(width, height); await app.render();
       const panel = app.get("monitor-dialog"), list = app.get("monitor-list") as ScrollBoxRenderable;
 
