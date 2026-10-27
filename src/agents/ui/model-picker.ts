@@ -61,14 +61,14 @@ export class ModelPicker {
     this.root = new BoxRenderable(renderer, { id: "model-picker", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 5500,
       visible: false,
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
-    this.panel = new PopupFrame(renderer, { id: "model-dialog", position: "absolute", border: true, paddingX: 1,
+    this.panel = new PopupFrame(renderer, { id: "model-dialog", position: "absolute", border: false, paddingX: 0,
       flexDirection: "column", minWidth: 0, minHeight: 0 });
     this.spinner = new LoadingSpinner(renderer, { id: "model-loading" });
-    this.search = new SearchInput(renderer, { id: "model-search", placeholder: "Search model or provider…" });
+    this.search = new SearchInput(renderer, { id: "model-search", title: "Models" });
     this.message = new TextRenderable(renderer, { id: "model-message", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.list = new ScrollBoxRenderable(renderer, { id: "model-list", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.list.focus() });
-    this.effort = new BoxRenderable(renderer, { id: "model-effort", width: "100%", flexShrink: 0, flexDirection: "column", focusable: true });
+    this.effort = new BoxRenderable(renderer, { id: "model-effort", width: "100%", paddingX: 1, flexShrink: 0, flexDirection: "column", focusable: true });
     this.effortLabel = new TextRenderable(renderer, { id: "model-effort-label", height: 1, flexShrink: 0, wrapMode: "none", selectable: false });
     this.effortOptions = new BoxRenderable(renderer, { id: "model-effort-options", width: "100%", flexShrink: 0, flexDirection: "row", flexWrap: "wrap" });
     this.effort.add(this.effortLabel); this.effort.add(this.effortOptions);
@@ -77,7 +77,7 @@ export class ModelPicker {
     theme.scrollbars(this.list);
     theme.bindStyles(this.root, styles => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
-      this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
+      this.panel.backgroundColor = styles["ui.popup"].bg;
       paintText(this.message, styles["ui.muted"]); paintText(this.spinner.root, styles["status.working"]);
       this.paint();
     });
@@ -89,7 +89,7 @@ export class ModelPicker {
   get visible(): boolean { return !this.disposed && !this.root.isDestroyed && this.root.visible; }
   get changing(): boolean { return this.applying; }
   get context(): KeyContext { return this.search.focused ? "model-search" : this.effort.focused || this.effort.hasFocusedDescendant ? "model-effort" : "model"; }
-  get focusTargets(): Renderable[] { return [...(this.search.focused ? [this.search] : []), this.list, ...(this.effort.focusable ? [this.effort] : [])]; }
+  get focusTargets(): Renderable[] { return [this.search, this.list, ...(this.effort.focusable ? [this.effort] : [])]; }
   private get selectedEffort(): ModelEffort | undefined {
     const model = this.filtered[this.cursor]; if (!model) return undefined;
     const draft = this.effortDrafts.get(JSON.stringify([model.provider, model.id]));
@@ -105,7 +105,7 @@ export class ModelPicker {
     if (this.disposed || this.root.isDestroyed) return;
     this.owner = this.renderer.currentFocusedRenderable ?? undefined;
     this.scope = scope; this.catalog = undefined; this.loadError = undefined; this.filtered = []; this.cursor = 0; this.effortDrafts.clear();
-    this.root.visible = true; this.search.value = ""; this.filter(); this.resize(); this.list.focus();
+    this.root.visible = true; this.search.value = ""; this.filter(); this.resize(); this.search.focus();
     this.launch(() => this.load());
   }
   hide(restoreFocus = true): void {
@@ -135,14 +135,16 @@ export class ModelPicker {
     const scope = this.scope; if (!scope || !this.actions.list || this.applying) return;
     const revision = ++this.revision;
     this.request?.abort(); const request = this.request = new AbortController();
-    this.loading = true; this.catalog = undefined; this.loadError = undefined; this.filtered = []; this.filter(); this.spinner.start();
+    this.loading = true; this.loadError = undefined; this.filter(); this.spinner.start();
     this.message.content = "Loading available models…"; this.actions.changed();
     let result: Result<ModelCatalog, ExpectedError>;
     try { result = await this.actions.list(scope.sessionId, scope.conversationId, request.signal); }
     finally { if (this.current(revision)) { this.loading = false; this.spinner.stop(); this.actions.changed(); } }
     if (!this.current(revision)) return;
-    if (!result.ok) { this.loadError = `[${result.error.code}] ${result.error.message}`; this.message.content = this.loadError; return; }
-    if (result.value.conversationId !== scope.conversationId) { this.loadError = "Conversation changed. Close and reopen /model."; this.message.content = this.loadError; return; }
+    if (!result.ok || result.value.conversationId !== scope.conversationId) {
+      this.loadError = !result.ok ? `[${result.error.code}] ${result.error.message}` : "Conversation changed. Close and reopen /model.";
+      this.catalog = undefined; this.filtered = []; this.filter(); return;
+    }
     this.catalog = result.value; this.filter();
   }
   private filter = (): void => {
@@ -150,6 +152,7 @@ export class ModelPicker {
     const selected = this.filtered[this.cursor] ?? this.catalog?.current;
     const matchesText = createTextMatcher(this.search.value);
     const matches = this.catalog?.models.filter(model => matchesText(`${model.name} ${model.provider}/${model.id}`)) ?? [];
+    this.search.setCounts(this.catalog && !this.loading && !this.loadError ? { matched: matches.length, total: this.catalog.models.length } : null);
     // Keep the current model visible even when a large provider catalog needs display bounds.
     const current = matches.find(model => sameModel(this.catalog?.current, model));
     this.filtered = current ? [current, ...matches.filter(model => model !== current).slice(0, 199)] : matches.slice(0, 200);
@@ -248,7 +251,7 @@ export class ModelPicker {
   private keepFocus = (): void => {
     if (!this.visible) return;
     for (let node = this.renderer.currentFocusedRenderable; node; node = node.parent as Renderable | null) if (node === this.root) return;
-    this.list.focus();
+    this.search.focus();
   };
   private resize = (): void => {
     if (this.disposed || this.root.isDestroyed) return;

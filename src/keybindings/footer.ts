@@ -14,7 +14,7 @@ const routine = new Set<CommandId>([
   "terminal.copy-right", "terminal.copy-visual", "terminal.copy-visual-line", "terminal.copy-half-page-down", "terminal.copy-back",
   "completion.next", "completion.previous", "completion.dismiss",
   "history.open", "history.dismiss", "history.previous", "history.next", "history.half-page-down",
-  "monitor.open", "monitor.dismiss", "monitor.previous", "monitor.next", "monitor.half-page-down", "monitor.page-down",
+  "monitor.open", "monitor.dismiss", "monitor.previous", "monitor.next", "monitor.half-page-down",
   "model.dismiss", "model.previous", "model.next", "model.half-page-down",
   "accounts.dismiss", "accounts.previous", "accounts.next", "accounts.half-page-down",
   "extension.dismiss", "extension.previous", "extension.next", "extension.half-page-down",

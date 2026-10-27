@@ -24,7 +24,13 @@ async function mount(overrides: Partial<WorkbenchActions> = {}) {
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
   const prompt = get("session-prompt") as InputRenderable; await render(); prompt.focus();
   return { ...app, view, clock, selection, requests, sent, get, prompt, render,
-    async open(text = "/accounts") { await app.mockInput.typeText(text); await render(); clock.advance(150); await render(); app.mockInput.pressEnter(); await render(); },
+    async open(text = "/accounts") {
+      await app.mockInput.typeText(text); await render(); clock.advance(150); await render(); app.mockInput.pressEnter(); await render();
+      if (get("accounts-picker").visible) {
+        // Explicitly enter the list for the account-action scenarios below.
+        expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-search"); app.mockInput.pressTab(); await render();
+      }
+    },
     async close() { view.dispose(); await app.dispose(); } };
 }
 
@@ -278,7 +284,7 @@ test("Esc steps back through account name, authentication method, and provider s
     app.mockInput.pressEscape(); await app.render();
     expect(app.captureCharFrame()).toContain("Choose how to sign in to Fixture.");
     expect(app.captureCharFrame()).toContain("API key"); expect(app.get("accounts-input").visible).toBe(false);
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-list");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-search");
 
     // Going back from methods returns to providers, not the initial account list.
     app.mockInput.pressEscape(); await app.render();
@@ -299,7 +305,7 @@ test.each([[120, 30], [60, 16]])("The %dx%d single-line provider list preserves 
   const app = await mount({ onAccountsRequest: async request => ok({ kind: "catalog", catalog: { ...catalog, providers, worktreeId: request.worktreeId } }) });
   try {
     app.resize(width, height); await app.render(); await app.open(); app.mockInput.pressEnter(); await app.render();
-    app.mockInput.pressKey("/"); await app.render(); await app.mockInput.typeText("Service"); await app.render();
+    await app.mockInput.typeText("Service"); await app.render();
     const search = app.get("accounts-search") as InputRenderable, caret = search.cursorOffset;
     const jump = Math.max(1, Math.floor((app.get("accounts-list") as ScrollBoxRenderable).viewport.height / 2));
 
@@ -392,7 +398,7 @@ test("OAuth provides browser, URL, code, and cancel commands without buttons in 
     } });
   try {
     await app.open(); app.mockInput.pressEnter(); await app.render(); app.mockInput.pressEnter(); await app.render();
-    app.mockInput.pressKey("j"); app.mockInput.pressEnter(); await app.render(); app.mockInput.pressEnter(); await app.render();
+    app.mockInput.pressKey("n", { ctrl: true }); app.mockInput.pressEnter(); await app.render(); app.mockInput.pressEnter(); await app.render();
 
     // Keep the URL visible for manual authentication regardless of automatic opening.
     expect(opened).toEqual(["https://example.test/device"]); expect(app.captureCharFrame()).toContain("https://example.test/device"); expect(app.captureCharFrame()).toContain("ABCD-EFGH");

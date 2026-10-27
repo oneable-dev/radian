@@ -9,7 +9,7 @@ import type { ExpectedError } from "../errors.ts";
 test.each(["search", "prompt"] as const)("%s input-padding clicks preserve caret while text clicks use native positions", async kind => {
   // Both fields share padding hit testing without replacing native text clicks.
   const app = await createTestRenderer({ width: 80, height: 12 });
-  const input = kind === "search" ? new SearchInput(app.renderer, { id: "query", placeholder: "Search" })
+  const input = kind === "search" ? new SearchInput(app.renderer, { id: "query" })
     : new PromptInput(app.renderer, () => {}, () => {});
   const other = new BoxRenderable(app.renderer, { height: 1, focusable: true });
   app.renderer.root.add(input.field); app.renderer.root.add(other);

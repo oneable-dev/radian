@@ -1,6 +1,6 @@
 import { pressLeader } from "../../testing/keys.ts";
 import { expect, spyOn, test } from "bun:test";
-import { BoxRenderable, CodeRenderable, EditBufferRenderable, InputRenderable, MarkdownRenderable, ScrollBoxRenderable, parseKeypress, type Renderable } from "@opentui/core";
+import { BoxRenderable, CodeRenderable, EditBufferRenderable, InputRenderable, MarkdownRenderable, ScrollBoxRenderable, TextRenderable, parseKeypress, type Renderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { demoWorkspace } from "../../workspace/demo.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
@@ -65,13 +65,42 @@ test("History is an Agents search popup leaving only Workspace in the sidebar", 
     expect(app.get("session-history").visible).toBe(true);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("history-search");
     expect(app.captureCharFrame()).not.toContain("History · radian");
-    expect(app.get("history-search-field").y).toBe(app.get("history-dialog").y + 1);
+    expect(app.get("history-search-field").y).toBe(app.get("history-dialog").y);
     expect(app.captureCharFrame()).toContain("2026-10-14 12:34"); expect(app.captureCharFrame()).toContain("4 messages");
     expect(app.selection.sessionId).toBe("a1"); expect(app.resumed).toEqual([]); expect(app.runs).toEqual([]);
     // Fetch the first candidate without advancing fake time; previews have no loading indicator.
     expect(app.previews).toEqual(["first"]); expect(app.captureCharFrame()).toContain("Saved answer first");
     expect(!!app.renderer.root.findDescendantById("history-preview-loading")).toBe(false);
     expect(app.captureCharFrame()).not.toContain("Loading preview");
+  } finally { await app.close(); }
+});
+
+test.each([120, 60])("History shows counts only inside search without reserving a status row at %s columns", async width => {
+  // Normal results already have matched/total counts in the search field.
+  const app = await mount();
+  try {
+    app.resize(width, 24); await app.render();
+    await app.open(); app.clock.advance(500); await app.render();
+    const search = app.get("history-search") as InputRenderable;
+    const field = app.get("history-search-field"), list = app.get("history-list");
+    const counter = app.get("history-search-count") as TextRenderable;
+
+    // Once loading settles, candidates start directly below search with no duplicate count.
+    expect(counter.plainText).toBe("2/2"); expect(counter.visible).toBe(true);
+    expect(app.get("history-list-status").visible).toBe(false);
+    expect(list.y).toBe(field.y + field.height);
+    expect(app.captureCharFrame()).not.toContain("2 sessions");
+
+    // Filtering updates the inline count without bringing back a status row.
+    await app.mockInput.typeText("keyboard"); app.clock.advance(500); await app.render();
+
+    expect(counter.plainText).toBe("1/2"); expect(counter.visible).toBe(true);
+    expect(app.get("history-list-status").visible).toBe(false);
+    expect(list.y).toBe(field.y + field.height);
+    expect(app.captureCharFrame()).not.toContain("1 session");
+    expect(app.captureCharFrame()).toContain("Saved keyboard navigation");
+    expect(app.renderer.currentFocusedRenderable).toBe(search);
+    expect(app.resumed).toEqual([]); expect(app.runs).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -438,7 +467,7 @@ test("Narrow layouts switch between lists and previews while preserving search a
     expect(app.get("history-list").visible).toBe(false); expect(app.get("history-preview-pane").visible).toBe(true);
     // Short panes retain the real session controls instead of a preview-specific compact status row.
     expect(app.get("history-preview-session-status").height).toBe(3);
-    app.resize(60, 20); await app.render();
+    app.resize(60, 18); await app.render();
     expect(app.captureCharFrame()).toContain("Saved answer second");
     // Moving up from the latest answer reveals its request even in compact viewports.
     const preview = app.get("history-preview") as ScrollBoxRenderable, initialScroll = preview.scrollTop;
@@ -474,7 +503,9 @@ test("Busy and resume errors stay in the popup while existing sessions select wi
   const app = await mount({ list: async () => [{ ...saved("busy", "Busy history"), unavailableReason: "Still closing" }, saved("broken", "Broken history"), { ...saved("open", "Open history"), openSessionId: "a1" }],
     resume: async (_tree, id) => { if (id === "broken") throw new HistoryError("HISTORY_UNAVAILABLE", "Cannot resume"); return "a1"; } });
   try {
-    await app.open(); app.mockInput.pressEnter(); await app.render(); expect(app.captureCharFrame()).toContain("Still closing"); expect(app.resumed).toEqual([]);
+    // Open failures must reveal their feedback even after the normal status row has disappeared.
+    await app.open(); app.clock.advance(500); await app.render();
+    app.mockInput.pressEnter(); await app.render(); expect(app.captureCharFrame()).toContain("Still closing"); expect(app.resumed).toEqual([]);
     app.mockInput.pressArrow("down"); app.mockInput.pressEnter(); await app.visible("Resume error:"); expect(app.get("session-history").visible).toBe(true);
     expect(app.selection.sessionId).toBe("a1"); app.mockInput.pressArrow("down"); app.mockInput.pressEnter(); await app.waitFor(() => !app.get("session-history").visible);
     expect(app.resumed).toEqual(["demo:main/broken", "demo:main/open"]); expect(app.selection.sessionId).toBe("a1"); expect(app.runs).toEqual([]);
@@ -505,7 +536,11 @@ test("Closing during Open never claims rollback or lets late responses change se
   const pending = Promise.withResolvers<string>();
   const app = await mount({ resume: () => pending.promise });
   try {
-    await app.open(); app.mockInput.pressEnter(); await app.render(); app.mockInput.pressEscape(); await app.render();
+    // A pending Open still needs feedback after loading and ordinary counts have disappeared.
+    await app.open(); app.clock.advance(500); await app.render();
+    app.mockInput.pressEnter(); await app.render();
+    expect(app.captureCharFrame()).toContain("Opening saved session…");
+    app.mockInput.pressEscape(); await app.render();
     expect(app.captureCharFrame()).toContain("Open is still settling.");
     app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("!"); app.mockInput.pressEnter(); await app.render();
     expect(app.captureCharFrame()).toContain("does not cancel");

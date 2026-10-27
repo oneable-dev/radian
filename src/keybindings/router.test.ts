@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { InputRenderable, parseKeypress } from "@opentui/core";
+import { BoxRenderable, InputRenderable, parseKeypress } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { KeyRouter } from "./router.ts";
 import { defaultKeymap, parseKeymap, type Keymap } from "./config.ts";
@@ -86,7 +86,8 @@ test("Kitty release never duplicates replay or leaks consumed commands to native
   } finally { await app.close(); }
 });
 
-test.each([["search", "search.clear"], ["prompt", "agent.clear"], ["git-prompt", "git.clear"], ["git-search", "git.search-clear"], ["extension-search", "search.clear"]] as const)("%s held Ctrl+C clearing never replays as shell interruption after focus changes", async (context, clearCommand) => {
+test.each([["search", "search.clear"], ["monitor", "search.clear"], ["history", "search.clear"], ["model", "search.clear"],
+  ["accounts", "search.clear"], ["prompt", "agent.clear"], ["git-prompt", "git.clear"], ["git-search", "git.search-clear"], ["extension-search", "search.clear"]] as const)("%s held Ctrl+C clearing never replays as shell interruption after focus changes", async (context, clearCommand) => {
   // Distinguish clearing started in app inputs from fresh shell interrupts.
   const app = await createTestRenderer({ width: 60, height: 8, kittyKeyboard: true, exitOnCtrlC: false });
   const input = new InputRenderable(app.renderer, { width: 60 }); input.value = "candidate"; app.renderer.root.add(input);
@@ -105,6 +106,28 @@ test.each([["search", "search.clear"], ["prompt", "agent.clear"], ["git-prompt",
 
     expect(bytes).toContain("03"); expect(commands).toEqual([clearCommand]);
   } finally { router.dispose(); surface.dispose(); await app.dispose(); }
+});
+
+test.each([
+  ["workspace", "search", "workspace.search"], ["monitor", "monitor-search", "monitor.search"], ["history", "history-search", "history.search"],
+  ["model", "model-search", "model.search"], ["accounts", "accounts-search", "accounts.search"], ["messages", "messages-search", "messages.search"],
+  ["extension", "extension-search", "extension.search"], ["git", "git-search", "git.search"],
+] as const)("Held slash from %s never leaks into search after focus changes", async (context, searchContext, command) => {
+  // Returning to search changes the native input owner while the physical slash key may still be held.
+  const app = await createTestRenderer({ width: 60, height: 8, kittyKeyboard: true });
+  const input = new InputRenderable(app.renderer, { width: 60 }), list = new BoxRenderable(app.renderer, { height: 1, focusable: true });
+  app.renderer.root.add(input); app.renderer.root.add(list); list.focus();
+  const router = new KeyRouter(app.renderer, defaultKeymap(), () => input.focused ? searchContext : context,
+    value => value === command, () => input.focus());
+  const raw = (event: string) => { const key = parseKeypress(event, { useKittyKeyboard: true }); if (!key) throw new Error("Invalid Kitty key"); app.renderer.keyInput.processParsedKey(key); };
+  try {
+    raw("\x1b[47;1u"); raw("\x1b[47;1:2u"); await app.renderOnce();
+    expect(app.renderer.currentFocusedRenderable).toBe(input); expect(input.value).toBe("");
+
+    // A new slash after key release is ordinary search text, not another navigation action.
+    raw("\x1b[47;1:3u"); raw("\x1b[47;1u"); await app.renderOnce();
+    expect(input.value).toBe("/");
+  } finally { router.dispose(); await app.dispose(); }
 });
 
 test("Held account rename keys never become literal edits after label input takes focus", async () => {

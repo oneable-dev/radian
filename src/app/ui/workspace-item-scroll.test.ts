@@ -24,7 +24,7 @@ async function mount() {
   openWorkspaceSearch(app); app.mockInput.pressTab(); await render();
   const item = app.renderer.root.findDescendantById("worktree:demo:main")!;
   const content = item.findDescendantById("worktree:demo:main:label")!;
-  const lines = () => app.captureCharFrame().split("\n").slice(content.y, content.y + 2).map((line) => line.slice(item.x + 1, item.x + item.width - 1));
+  const lines = () => app.captureCharFrame().split("\n").slice(content.y, content.y + 2).map((line) => line.slice(item.x, item.x + item.width));
   return { ...app, clock, selection, actions, view, render, item, lines,
     label: () => texts(item).find((text) => text.plainText.includes("folder-") || text.plainText.includes("short-folder"))!,
     async close() { view.dispose(); await app.dispose(); } };
@@ -51,9 +51,9 @@ test("Horizontal scroll over fixed status moves both rows while status stays fix
   try {
     const slot = app.item.findDescendantById("worktree:demo:main:status")!;
     const body = app.item.findDescendantById("worktree:demo:main:body")!;
-    // Natural long-name widths must not push selection backgrounds or fixed status outside borders.
-    expect(body.x).toBe(app.item.x + 1); expect(body.width).toBe(app.item.width - 2);
-    expect(slot.x + slot.width).toBe(app.item.x + app.item.width - 1);
+    // Natural long-name widths must not push selection backgrounds or fixed status outside the list.
+    expect(body.x).toBe(app.item.x); expect(body.width).toBe(app.item.width);
+    expect(slot.x + slot.width).toBe(app.item.x + app.item.width);
     expect(slot.height).toBe(2); expect(slot.y).toBe(app.label().y);
     const status = slot.getChildren()[0]!, geometry = [slot.x, slot.y, slot.width, slot.height];
     expect(status.visible).toBe(false);
@@ -62,7 +62,7 @@ test("Horizontal scroll over fixed status moves both rows while status stays fix
 
     expect(app.lines()[0]).not.toBe(before[0]); expect(app.lines()[1]).not.toBe(before[1]);
     expect([slot.x, slot.y, slot.width, slot.height]).toEqual(geometry); expect(status.visible).toBe(false);
-    expect(app.item.height).toBe(4); expect(app.actions).toEqual([]);
+    expect(app.item.height).toBe(2); expect(app.actions).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -112,7 +112,7 @@ test("After horizontal scrolling, branch clicks open one worktree and vertical w
     await app.mockMouse.click(app.item.x + 6, app.label().y + 1); await app.render();
     expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
     openWorkspaceSearch(app); app.mockInput.pressTab(); await app.render();
-    expect(app.item.height).toBe(4); expect(app.view.promptDrafts.a1).toBe("preserved draft"); expect(app.actions).toEqual([]);
+    expect(app.item.height).toBe(2); expect(app.view.promptDrafts.a1).toBe("preserved draft"); expect(app.actions).toEqual([]);
     app.resize(60, 12); await app.render();
     const tree = app.renderer.root.findDescendantById("workspace-tree")! as ScrollBoxRenderable, top = tree.scrollTop;
     await app.mockMouse.scroll(app.item.x + 6, app.label().y + 1, "down"); await app.render();

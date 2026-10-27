@@ -28,7 +28,7 @@ test("Workspace popups show repositories plus two-row folder/branch items withou
   try {
     const main = app.get("worktree:demo:main"), label = app.get(`${main.id}:label`);
 
-    expect(main.height).toBe(4); expect(label.height).toBe(2);
+    expect(main.height).toBe(2); expect(label.height).toBe(2);
     expect(app.line(main.id)).toContain(`${icons.folder} radian`); expect(app.line(main.id, 1)).toContain(`${icons.branch} main`);
     expect(app.line(main.id, 1).indexOf(icons.branch)).toBe(app.line(main.id).indexOf(icons.folder));
     expect(app.captureCharFrame()).toContain(`${icons.repo} radian [demo]`);
@@ -59,20 +59,20 @@ test.each(["search", "results"] as const)("Ctrl+N/P at %s focus moves visible hi
     if (focus === "search") app.mockInput.pressTab({ shift: true });
     await app.render();
     const tree = app.get("workspace-tree") as ScrollBoxRenderable, top = tree.scrollTop;
-    const border = (id: string) => { const row = app.get(id); return app.captureCharFrame().split("\n")[row.y]![row.x]; };
+    const highlighted = (id: string) => { const row = app.get(id); return app.cell(row.x, row.y).bg.equals(uiTheme(app.renderer).styles["ui.selection"].bg!); };
 
     // Next candidates remain visibly identifiable even with search focus retained.
     app.mockInput.pressKey("n", { ctrl: true }); await app.render();
 
-    expect(border("worktree:demo:feature")).toBe("┌"); expect(border("worktree:demo:main")).not.toBe("┌");
+    expect(highlighted("worktree:demo:feature")).toBe(true); expect(highlighted("worktree:demo:main")).toBe(false);
     expect(tree.scrollTop).toBe(top); expect(app.selection.worktree?.id).toBe("demo:main");
     app.selection.replaceSnapshot(structuredClone(app.selection.snapshot)); await app.render();
-    expect(border("worktree:demo:feature")).toBe("┌"); expect(tree.scrollTop).toBe(top);
+    expect(highlighted("worktree:demo:feature")).toBe(true); expect(tree.scrollTop).toBe(top);
     app.mockInput.pressTab(); await app.render();
-    expect(border("worktree:demo:feature")).toBe("┌");
+    expect(highlighted("worktree:demo:feature")).toBe(true);
     app.mockInput.pressKey("p", { ctrl: true }); await app.render();
 
-    expect(border("worktree:demo:main")).toBe("┌"); expect(border("worktree:demo:feature")).not.toBe("┌");
+    expect(highlighted("worktree:demo:main")).toBe(true); expect(highlighted("worktree:demo:feature")).toBe(false);
     expect(tree.scrollTop).toBe(top); expect(app.view.promptDrafts.a1).toBe("main draft"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
@@ -117,7 +117,7 @@ test("Branch-row clicks open the same worktree and close popups", async () => {
   } finally { await app.close(); }
 });
 
-test.each([false, true])("At brightness %j, popup candidates highlight with borders/text rather than backgrounds", async light => {
+test.each([false, true])("At brightness %j, popup candidates highlight across their full width without borders", async light => {
   // Theme changes must not recreate searches or selections.
   const app = await mount();
   try {
@@ -127,8 +127,10 @@ test.each([false, true])("At brightness %j, popup candidates highlight with bord
     await app.render();
     const main = app.get("worktree:demo:main");
 
-    expect(app.cell(main.x, main.y).fg.toInts()).toEqual(theme.colors.accent.toInts());
-    expect(app.cell(main.x + 1, main.y + 1).bg.toInts()).toEqual(theme.colors.panel.toInts());
+    expect(app.cell(main.x, main.y).bg.toInts()).toEqual(theme.styles["ui.selection"].bg!.toInts());
+    expect(app.cell(main.x + main.width - 1, main.y + 1).bg.toInts()).toEqual(theme.styles["ui.selection"].bg!.toInts());
+    const other = app.get("worktree:demo:feature");
+    expect(app.cell(other.x, other.y).bg.toInts()).toEqual(theme.styles["ui.popup"].bg!.toInts());
     expect(app.get("work-panel").width).toBe(120); expect(app.selection.worktree?.id).toBe("demo:main");
   } finally { await app.close(); }
 });
@@ -158,6 +160,6 @@ test("Branch and detached HEAD updates never recreate candidates or change selec
     await app.render();
 
     expect(app.get(feature.id)).toBe(feature); expect(app.line(feature.id, 1)).toContain("detached HEAD");
-    expect(feature.height).toBe(4); expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.requests).toEqual([]);
+    expect(feature.height).toBe(2); expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });

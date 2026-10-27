@@ -10,6 +10,7 @@ import { uiTheme } from "./theme.ts";
 import { PopupFrame } from "./popup-frame.ts";
 import { SearchPopupLayout, centerPopup } from "./popup-layout.ts";
 import { paintText } from "./theme-styles.ts";
+import { createTextMatcher } from "../search.ts";
 
 type Actions = {
   changed(): void;
@@ -35,15 +36,15 @@ export class MessagesPanel {
   constructor(private readonly renderer: CliRenderer, private readonly messages: Messages, private readonly actions: Actions) {
     this.root = new BoxRenderable(renderer, { id: "messages", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 5900, visible: false,
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
-    this.panel = new PopupFrame(renderer, { id: "messages-panel", position: "absolute", border: true, paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
-    this.search = new SearchInput(renderer, { id: "messages-search", placeholder: "Search messages, levels or sources…" });
+    this.panel = new PopupFrame(renderer, { id: "messages-panel", position: "absolute", border: false, paddingX: 0, flexDirection: "column", minWidth: 0, minHeight: 0 });
+    this.search = new SearchInput(renderer, { id: "messages-search", title: "Messages" });
     this.list = new ScrollBoxRenderable(renderer, { id: "messages-list", flexGrow: 1, minHeight: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.list.focus() });
     this.layout = new SearchPopupLayout(renderer, { id: "messages", search: this.search, list: this.list });
     this.panel.add(this.layout.root); this.root.add(this.panel);
     const theme = uiTheme(renderer); theme.scrollbars(this.list);
     theme.bindStyles(this.root, styles => {
-      this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
+      this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg;
       this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);
@@ -76,8 +77,9 @@ export class MessagesPanel {
   private filter = (): void => { this.cursor = 0; this.items = []; this.refresh(); };
   refresh(): void {
     if (!this.visible) return;
-    const selected = this.items[this.cursor]?.id, query = this.search.value.toLocaleLowerCase();
-    this.items = this.messages.items.filter(item => messageText(`${item.level} ${item.title ?? ""} ${item.source} ${item.text}`).toLocaleLowerCase().includes(query));
+    const selected = this.items[this.cursor]?.id, matches = createTextMatcher(this.search.value);
+    this.items = this.messages.items.filter(item => matches(messageText(`${item.level} ${item.title ?? ""} ${item.source} ${item.text}`)));
+    this.search.setCounts({ matched: this.items.length, total: this.messages.items.length });
     const previous = this.items.findIndex(item => item.id === selected);
     this.cursor = previous >= 0 ? previous : Math.max(0, Math.min(this.cursor, this.items.length - 1));
     for (const row of this.rows) row.root.destroyRecursively(); this.rows.length = 0;
@@ -85,7 +87,7 @@ export class MessagesPanel {
       const root = new BoxRenderable(this.renderer, { id: `messages-row:${item.id}`, height: 2, flexShrink: 0, minWidth: 0,
         onMouseDown: event => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.cursor = index; this.list.focus(); this.paint(); } } });
       const time = new Date(item.timestamp).toLocaleTimeString("en-GB", { hour12: false });
-      const width = Math.max(0, Math.min(110, this.renderer.width - 4) - 4);
+      const width = Math.max(0, Math.min(110, this.renderer.width - 4) - 2);
       // Keep full originals in the store, not in every native single-line preview buffer.
       const heading = truncateCells(`${time} · ${messageLabels[item.level]} · ${singleLine(messageText(item.source))}`, width);
       const preview = truncateCells(singleLine(messageText(item.text)), width);

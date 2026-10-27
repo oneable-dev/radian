@@ -33,7 +33,22 @@ Arrow navigation remains available by default and is omitted from shortcut hints
 **Enter** opens the highlighted worktree and restores its last work view/session; a worktree click
 also opens it. **Esc** closes without changing selection and restores the original focus.
 Opening or closing the popup never changes the work pane or PTY dimensions.
-**Ctrl+Space, then s** opens a separate session monitor with a History-style live preview.
+**Ctrl+Space, then s** opens a searchable list of working sessions and unread results, without a preview pane.
+Browsing preserves the current work view and unread state; **Enter** opens the selected session's latest output.
+The session monitor is capped at 80 columns and 18 rows, shrinking to 80% of smaller terminals.
+Searchable pickers share a borderless outer surface and a rounded search field carrying a centered title,
+a `>` prompt on the left and matched/total counts on the right. Search has no placeholder and uses the
+popup background in either focus state. Lists have one cell of padding on each side and follow search
+without a blank gap; loading, errors and meaningful status messages keep their own content rows.
+This applies to Workspaces, Sessions, History, Models, Accounts and its selection stages, Messages,
+Git Refs/Reflog and extension options. Each retains its own dimensions, previews and editable state.
+Counts reflect all matching selectable candidates, not group headings or only the rendered first page;
+unknown counts stay hidden during discovery.
+Opening or reopening a picker clears its query and input caret and focuses search. Tab/Shift+Tab always
+includes search, and `/` returns from results without editing the query. Refresh and data arrival keep
+the current query, input caret, focus and candidate identity when still available; new data is filtered
+using the latest query. A removed candidate falls back to the first match or an empty result. Ordinary
+and secret authentication prompts retain their own input ownership.
 Neither popup adds a top-level entry button or a global notification counter.
 Open sessions remain tabs within Agents; focus that strip to use `h/l` (or left/right),
 Home/End and `x` for close. Use `<leader>c` to create a tab.
@@ -712,7 +727,7 @@ is automatically restarted.
 
 The Agent prompt completes and executes these host commands instead of sending them to the model:
 
-- **`/accounts`** opens account switching. The first screen lists saved accounts and existing
+- **`/accounts`** opens account switching with a fresh, focused search field. The first screen lists saved accounts and existing
   connections with configured authentication; unauthenticated providers are not shown as accounts.
   Choose **Add account** to see supported providers, choose OAuth or API key, and name the new account.
   Accounts and credentials are shared by the daemon; each **worktree** uses its own account per
@@ -723,7 +738,8 @@ The Agent prompt completes and executes these host commands instead of sending t
   **/** searches, **Ctrl+N/P** moves candidates in either focus, **j/k** navigates results, and
   **Ctrl+D/U** jumps half a list viewport. **Ctrl+C** clears only the search query. **Enter** switches
   the account for this worktree, **r** edits the selected account's label, **x** opens local-account
-  deletion confirmation, and **Ctrl+R** refreshes the account list. Label entry uses **Enter** to save
+  deletion confirmation, and **Ctrl+R** refreshes the account list without resetting search, caret,
+  focus or the selected candidate when it still exists. Label entry uses **Enter** to save
   and **Esc** to discard unsubmitted edits. Labels are shared across worktrees; renaming never changes
   authentication or selections. **Esc** goes back or cancels login and restores input focus.
   Already-sent model requests finish with their original credentials; subsequent calls, including
@@ -751,10 +767,11 @@ The Agent prompt completes and executes these host commands instead of sending t
   older account-switching services remain usable but reject label edits until an explicit restart.
   The command accepts no arguments or images.
 - **`/model`** opens a model-and-effort popup for the **current session**. Models come from Pi's
-  authenticated chat-model catalog, including configured and extension-provided models. The list starts
-  focused: use **j/k** to move, **h/l** to change effort, and **Tab/Shift+Tab** to move between the list
-  and editable effort controls. Arrow keys remain available. Press **/** to search by model name, ID
-  or provider; while searching, hjkl are literal input and **Ctrl+N/P** navigate matches.
+  authenticated chat-model catalog, including configured and extension-provided models. Search starts
+  focused; **Ctrl+N/P** or arrows navigate matches while hjkl remain literal input. **Tab/Shift+Tab**
+  cycles through search, results and editable effort controls. In results, use **j/k** to move and **h/l**
+  to change effort; **/** returns to search by model name, ID or provider. **Ctrl+R** refreshes metadata
+  without resetting the query, caret, focus or a candidate that still exists.
   Model and effort clicks only stage choices. **Enter** commits the pair in one operation;
   **Esc** discards unsubmitted choices. The popup has no close icon or action-button row. The current
   model is marked and only SDK-supported effort levels are offered, using Pi's clamped preview of the
@@ -1228,8 +1245,9 @@ without an unused row below them. Popup dimensions are clamped to the terminal w
 that viewport. Embedded programs receive the measured inner viewport rather than rendering
 beneath the padding. The footer remains one row, with a solid rectangular view badge at the left edge
 followed by plain worktree and branch text.
-Keyboard focus is separate from selection: the focused workspace popup or input border uses the terminal's
-accent, while an unfocused selection stays softly highlighted. Agent input has a dedicated surface.
+Keyboard focus is separate from selection: picker search borders use the terminal's accent and native
+carets show input ownership. Candidates stay highlighted while search keeps focus; worktree items use
+two-line full-width selection backgrounds rather than individual frames. Agent input has a dedicated surface.
 These are presentation changes only; keybindings and embedded program input ownership are unchanged.
 
 No theme file is required. Put optional `#RRGGBB` color overrides in the unified `theme` section.
@@ -1295,7 +1313,7 @@ and programs' explicit RGB colors or Neovim colorschemes remain unchanged.
 `Ctrl+N/P` moves the current candidate, tab or read-only cursor by one step. In result lists,
 `Ctrl+D/U` jumps the candidate by half a viewport of items: this applies to Workspace, History,
 AI Sessions, model selection and Git lists. In Transcript Sections, it jumps the selected section by
-roughly half a viewport using rendered section heights. In History/AI Sessions previews, Git
+roughly half a viewport using rendered section heights. In History previews, Git
 details/diffs, conversation text and help/notification details, `Ctrl+D/U` moves the focused body by
 half a viewport.
 From a search input, `Ctrl+D/U` preserves the query and caret, focuses the results list and jumps
@@ -1405,7 +1423,8 @@ Accounts uses **o** to open the login browser, **y** to copy its URL and **Y** t
 when the read-only login details have focus. In text fields those letters remain literal input;
 use Tab to focus details first. Passive result notifications also omit close icons and expire normally.
 Session-tab close controls and non-popup application controls are unchanged.
-Popup and notification frames retain their existing line glyphs, colors, geometry and inner padding.
+Searchable pickers share the titled search-field design without an outer frame; non-picker dialogs
+and notifications retain their existing frame glyphs, colors, geometry and inner padding.
 Bodies use an opaque background matching `ui.text` by default; an explicit `ui.popup.bg` override
 takes precedence. The shared `src/ui/popup-frame.ts` keeps border-cell backgrounds on the underlying
 surface, so colored code blocks behind a frame do not acquire a popup-colored fringe outside the line.
@@ -1807,7 +1826,9 @@ Global view/workspace/session commands are inactive while the popup owns focus. 
 Open is pending does not cancel or roll back an accepted request; a late result never changes selection.
 
 Wide screens show the list and read-only conversation preview side by side. Below 100 columns,
-Ctrl+O switches between them; PageUp/PageDown scroll the preview. Preview reuses the Agent session
+Ctrl+O reveals and focuses the preview, and toggling back returns to search. Tab/Shift+Tab includes
+the preview even in compact layouts, revealing each target region before focusing it. PageUp/PageDown
+scroll the preview. Preview reuses the Agent session
 panel, including the Prompt composer, run-status row and model/context/usage line, as well as compact
 inline invocations, Markdown prose, error styling and initially folded tool sections. Thinking remains
 visible just as in the live transcript. The Prompt is visibly read-only: typing and paste do not edit
@@ -1897,7 +1918,8 @@ not automatically restarted to upgrade error handling.
 App-owned search uses shared, UI-independent matching with NFKC Unicode normalization and
 case-insensitive comparison. It does not use fuzzy matching. Commands, prompt templates and Skills
 match name prefixes. File completion matches literal path substrings, preserving query whitespace.
-Workspace, History, session monitor, model, Refs and Reflog searches require every whitespace-separated
+Workspace, History, session monitor, model, Accounts, Messages, extension options, Refs and Reflog
+searches require every whitespace-separated
 term as a contiguous substring, regardless of term order. Empty general queries show all eligible
 candidates. Each feature retains its searchable fields, domain ordering, selection and display limits;
 matching never rewrites original names or paths.
@@ -1914,7 +1936,8 @@ Session/subagent titles, paths and history are not searched.
 Tab switches to the tree for j/k and Home/End. `/` returns from the tree to search. **Enter from either surface opens the candidate.**
 `Ctrl+C` clears the query; it never closes the popup or interrupts the Agent.
 From search, `Ctrl+D/U` transfers focus to results and jumps the current
-candidate by half a viewport without editing the query. **Esc closes**, preserving the query and cursor for reopening.
+candidate by half a viewport without editing the query. **Esc closes** without changing the active
+workspace; reopening starts an empty query and resets the input caret.
 Filtering and host updates never change canonical selection or start a repository service.
 
 ### Session monitoring
@@ -1926,18 +1949,16 @@ navigation destinations. Search matches delivered-request summaries, repositorie
 branches. Candidate identity is retained during streaming and status updates. Rendering is capped
 at 200 matches with an explicit refine-search notice; search still covers all session summaries.
 
-The right-hand pane previews the selected conversation without marking it as read. Like History,
-preview is bounded to six sections / 8,192 text units each; open the session for full content.
-At narrow widths, **Ctrl+O** toggles the list and preview; PgUp/PgDn scroll preview. Preview rendering
-and loading animation stop when hidden. The monitor never polls processes, rescans session files,
-queries models or starts cold repository services. It projects in-memory session summaries in linear
-time and renders only the selected preview. Full-snapshot transport/parsing remains an existing
-cost, separate from this summary projection.
+The monitor is list-only, with no conversation preview or preview commands. Opening focuses a fresh
+search; **/** returns from results, and Tab/Shift+Tab cycles between search and the list. Browsing
+never marks a result as read. The monitor never polls processes, rescans session files, queries models
+or starts cold repository services. It projects in-memory session summaries in linear time.
+Full-snapshot transport/parsing remains an existing cost, separate from this summary projection.
 
 **Enter** opens the actual session in Agents, reveals its latest output and focuses the input so you
 can continue the conversation immediately. A foreground Agent conversation acknowledges a pending
 result only while its latest output is actually visible, not while scrolled into older output,
-covered by a popup or in another work view. Merely restoring a selection, browsing preview or
+covered by a popup or in another work view. Merely restoring a selection, browsing candidates or
 receiving a background snapshot does not acknowledge it.
 
 Completion, failure, unfinished (`Stopped`) and unknown-origin cancellation create unread results.

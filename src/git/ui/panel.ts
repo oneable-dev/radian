@@ -284,6 +284,7 @@ export class GitPanel {
   }
   private get selectedFiles(): GitFile[] { return this.cache?.external?.details.files ?? (this.cache?.state.selected ? this.cache.details?.files ?? [] : this.cache?.data?.files ?? []); }
   private get selectedFile(): GitFile | undefined { return this.selectedFiles.find((file) => fileKey(file) === this.cache?.state.file); }
+  get search(): GitBrowser["search"] | undefined { return this.browser.visible && !this.dialog.visible ? this.browser.search : undefined; }
   get focusTargets(): Renderable[] {
     if (this.dialog.visible) return [this.prompt];
     if (this.changes.visible) return [this.files.root, this.diffFocus];

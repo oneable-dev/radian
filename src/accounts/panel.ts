@@ -28,6 +28,8 @@ export type AccountsActions = {
 };
 type Candidate = { id: string; label: string; detail: string; accountId?: string; choose: () => void; rename?: () => void };
 type Stage = "accounts" | "providers" | "methods" | "label" | "rename" | "login" | "delete";
+const stageTitles: Record<Stage, string> = { accounts: "Accounts", providers: "Providers", methods: "Sign-in methods",
+  label: "Account label", rename: "Rename account", login: "Sign in", delete: "Delete account" };
 
 export class AccountsPanel {
   readonly root: BoxRenderable;
@@ -71,9 +73,9 @@ export class AccountsPanel {
     const theme = uiTheme(renderer); this.clipboard = new Clipboard(renderer);
     this.root = new BoxRenderable(renderer, { id: "accounts-picker", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", visible: false, zIndex: 5600,
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
-    this.panel = new PopupFrame(renderer, { id: "accounts-dialog", position: "absolute", border: true, paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
+    this.panel = new PopupFrame(renderer, { id: "accounts-dialog", position: "absolute", border: false, paddingX: 0, flexDirection: "column", minWidth: 0, minHeight: 0 });
     this.spinner = new LoadingSpinner(renderer, { id: "accounts-loading" });
-    this.search = new SearchInput(renderer, { id: "accounts-search", placeholder: "Search accounts or providers…" });
+    this.search = new SearchInput(renderer, { id: "accounts-search", title: "Accounts" });
     this.message = new TextRenderable(renderer, { id: "accounts-message", height: 2, flexShrink: 0, wrapMode: "word", selectable: false });
     this.list = new ScrollBoxRenderable(renderer, { id: "accounts-list", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false, contentOptions: { flexDirection: "column" }, onMouseDown: () => this.list.focus() });
     this.details = new ScrollBoxRenderable(renderer, { id: "accounts-login-details", flexGrow: 1, minHeight: 0, scrollX: false, visible: false, onMouseDown: () => this.details.focus() });
@@ -85,7 +87,7 @@ export class AccountsPanel {
     attachPopupActivity(this.panel, this.spinner.root); this.root.add(this.panel);
     theme.scrollbars(this.list); theme.scrollbars(this.details); theme.input(this.input);
     theme.bindStyles(this.root, styles => {
-      this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
+      this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg;
       paintText(this.message, styles["ui.muted"]); paintText(this.body, styles["ui.label"]); paintText(this.spinner.root, styles["status.working"]); this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);
@@ -106,7 +108,10 @@ export class AccountsPanel {
   }
   show(worktreeId: string): void {
     if (this.visible || this.disposed) return;
-    this.owner = this.renderer.currentFocusedRenderable ?? undefined; this.worktreeId = worktreeId; this.epoch++; this.root.visible = true; this.stage = "accounts"; this.list.focus(); this.resize(); this.launch(() => this.load());
+    this.owner = this.renderer.currentFocusedRenderable ?? undefined; this.worktreeId = worktreeId; this.epoch++; this.root.visible = true; this.stage = "accounts";
+    this.catalog = undefined; this.flow = undefined; this.promptId = undefined;
+    this.menu("accounts", "", []); this.search.setCounts(null);
+    this.resize(); this.launch(() => this.load());
   }
   hide(restore = true): void {
     if (!this.visible) return;
@@ -128,6 +133,7 @@ export class AccountsPanel {
   private async perform(request: AccountRequest): Promise<void> {
     if (!this.actions.request || this.busy) return;
     const epoch = this.epoch; this.busy = true; this.activeRequest = request.type; this.spinner.start();
+    if (request.type === "list") this.search.setCounts(null);
     let result: Result<AccountReply, ExpectedError>;
     try { result = await this.actions.request(request); }
     finally {
@@ -143,7 +149,8 @@ export class AccountsPanel {
     if (request.type === "answer" && this.flow?.id !== request.flowId) return;
     if (!result.ok) { this.message.content = `[${result.error.code}] ${result.error.message}`; return; }
     if (result.value.kind === "catalog") {
-      this.catalog = result.value.catalog; this.main();
+      const preserveSearch = this.stage === "accounts" && (request.type === "list" || request.type === "select");
+      this.catalog = result.value.catalog; this.main(preserveSearch);
       const warning = [result.value.warning, this.catalog.warning].filter(Boolean).join(" · "); if (warning) this.message.content = warning;
     } else {
       this.accept(result.value.login);
@@ -152,13 +159,17 @@ export class AccountsPanel {
     this.actions.changed();
   }
   private async load(): Promise<void> { if (this.worktreeId) await this.perform({ type: "list", worktreeId: this.worktreeId }); }
-  private menu(stage: Stage, message: string, candidates: Candidate[]): void {
-    this.stage = stage; this.message.content = message; this.candidates = candidates; this.cursor = 0; this.renameTarget = undefined;
+  private menu(stage: Stage, message: string, candidates: Candidate[], preserveSearch = false): void {
+    this.stage = stage; this.search.setTitle(stageTitles[stage]);
+    this.message.content = message; this.candidates = candidates; this.renameTarget = undefined;
+    if (!preserveSearch) { this.cursor = 0; this.filtered = []; }
     this.secret.clear(); this.secret.visible = this.input.visible = false; this.input.value = "";
     this.details.visible = false; this.body.content = "";
-    this.search.field.visible = true; this.list.visible = true; this.search.clear(); this.filter(); this.list.focus();
+    this.search.field.visible = true; this.list.visible = true;
+    if (!preserveSearch) this.search.clear();
+    this.filter(); if (!preserveSearch) this.search.focus();
   }
-  private main(): void {
+  private main(preserveSearch = false): void {
     const catalog = this.catalog, worktreeId = this.worktreeId; if (!catalog || !worktreeId) return;
     this.flow = undefined; this.promptId = undefined;
     const entries: Candidate[] = [{ id: "add", label: "+ Add account", detail: "Sign in to another account", choose: () => this.providers() }];
@@ -179,7 +190,7 @@ export class AccountsPanel {
         label: `${name} · ${account.label}${catalog.selections[provider] === account.id ? " [Active]" : ""}`, detail: `${account.type === "oauth" ? "OAuth" : "API key"} · used by ${account.usedBy.length} worktree(s)`, choose: () => choose(account.id), rename: () => this.rename(provider, account.id, account.label) });
     }
     this.menu("accounts", providers.size ? "Enter switches accounts for this worktree. Use Add account to sign in to another account."
-      : "", entries);
+      : "", entries, preserveSearch);
   }
   private providers(): void {
     this.menu("providers", "Choose a service to sign in.", (this.catalog?.providers ?? []).map(provider => ({
@@ -204,7 +215,7 @@ export class AccountsPanel {
     if (login.status === "cancelled" || login.status === "error") {
       this.spinner.stop(); this.main(); this.message.content = login.error ?? "Login cancelled. Existing accounts and selections were retained."; return;
     }
-    this.stage = "login";
+    this.stage = "login"; this.search.setTitle(stageTitles.login);
     this.details.visible = true; this.body.content = login.events.map(event => [event.message, event.url, event.code ? `Code: ${event.code}` : undefined].filter(Boolean).join("\n")).join("\n\n");
     const prompt = login.prompt;
     this.message.content = prompt?.message ?? "Waiting for browser authentication… You can always copy or reopen the URL.";
@@ -215,7 +226,7 @@ export class AccountsPanel {
       this.secret.visible = prompt?.type === "secret" || prompt?.type === "manual_code";
       this.input.visible = prompt?.type === "text"; this.input.maxLength = 65536; this.input.placeholder = prompt?.placeholder ?? "Enter the requested value";
       this.search.clear(); this.filter();
-      if (this.secret.visible) this.secret.focus(); else if (this.input.visible) this.input.focus(); else if (this.list.visible) this.list.focus(); else this.details.focus();
+      if (this.secret.visible) this.secret.focus(); else if (this.input.visible) this.input.focus(); else if (this.search.field.visible) this.search.focus(); else this.details.focus();
     }
     if (this.url && !this.opened.has(this.url)) { this.opened.add(this.url); this.launch(() => this.openBrowser()); }
     this.actions.changed();
@@ -288,7 +299,10 @@ export class AccountsPanel {
   private get rowHeight(): number { return this.stage === "providers" || this.stage === "methods" ? 1 : 2; }
   private filter = (): void => {
     const matches = createTextMatcher(this.search.value), selected = this.filtered[this.cursor]?.id;
-    this.filtered = this.candidates.filter(candidate => matches(`${candidate.label} ${candidate.detail}`)); this.cursor = Math.max(0, this.filtered.findIndex(candidate => candidate.id === selected));
+    this.filtered = this.candidates.filter(candidate => matches(`${candidate.label} ${candidate.detail}`));
+    this.search.setCounts(this.activeRequest === "list" || this.stage === "accounts" && !this.catalog
+      ? null : { matched: this.filtered.length, total: this.candidates.length });
+    this.cursor = Math.max(0, this.filtered.findIndex(candidate => candidate.id === selected));
     for (const row of this.rows) row.destroyRecursively(); this.rows.length = 0;
     this.filtered.forEach((candidate, index) => {
       const row = new BoxRenderable(this.renderer, { id: `accounts-row:${candidate.id}`, height: this.rowHeight, flexShrink: 0, flexDirection: "column", minWidth: 0,
@@ -334,7 +348,7 @@ export class AccountsPanel {
   private keepFocus = (): void => {
     if (!this.visible) return;
     for (let node = this.renderer.currentFocusedRenderable; node; node = node.parent as Renderable | null) if (node === this.root) return;
-    (this.secret.visible ? this.secret : this.input.visible ? this.input : this.list.visible ? this.list : this.details).focus();
+    (this.secret.visible ? this.secret : this.input.visible ? this.input : this.search.field.visible ? this.search : this.details).focus();
   };
   private resize = (): void => {
     if (this.disposed || this.root.isDestroyed) return;

@@ -1,5 +1,5 @@
 import {
-  BorderChars, BoxRenderable, InputRenderableEvents, ScrollBoxRenderable, Selection as TextSelection, StyledText, TextAttributes, TextRenderable,
+  BoxRenderable, InputRenderableEvents, ScrollBoxRenderable, Selection as TextSelection, StyledText, TextAttributes, TextRenderable,
   type CliRenderer, type KeyEvent, type Renderable,
 } from "@opentui/core";
 import { stripVTControlCharacters } from "node:util";
@@ -32,7 +32,6 @@ import { SearchInput } from "../../ui/search-input.ts";
 import { keymapHelp } from "../../keybindings/help.ts";
 import { footerKeyHint } from "../../keybindings/footer.ts";
 import { Button, type ButtonVariant } from "../../ui/button.ts";
-import { panelSpacing } from "../../ui/spacing.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import { singleLine } from "../../ui/text.ts";
 import { err, ok, type Result } from "../../result.ts";
@@ -76,12 +75,6 @@ export type WorkbenchActions = AgentActions & {
 };
 
 type RowView = { box: BoxRenderable; body: BoxRenderable; text: TextRenderable; status?: TextRenderable };
-// Reserve the same frame in every item, including in monochrome terminals.
-const hiddenWorkspaceBorder = {
-  topLeft: " ", topRight: " ", bottomLeft: " ", bottomRight: " ", horizontal: " ", vertical: " ",
-  topT: " ", bottomT: " ", leftT: " ", rightT: " ", cross: " ",
-};
-
 export class Workbench {
   readonly root: BoxRenderable;
   private readonly sidebar: BoxRenderable;
@@ -140,9 +133,9 @@ export class Workbench {
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
     // Legacy search/tree IDs and key commands remain, without permanent sidebar geometry.
     this.sidebar = new PopupFrame(renderer, { id: "workspace-sidebar", position: "absolute", visible: false, minWidth: 0, minHeight: 0,
-      flexDirection: "column", border: true, paddingX: 1 });
+      flexDirection: "column", border: false, paddingX: 0 });
     this.workspacePopup.add(this.sidebar);
-    this.search = new SearchInput(renderer, { id: "workspace-search", fieldId: "workspace-search-box", placeholder: "Search repo/worktree/branch" });
+    this.search = new SearchInput(renderer, { id: "workspace-search", fieldId: "workspace-search-box", title: "Workspaces" });
     this.tree = new ScrollBoxRenderable(renderer, {
       id: "workspace-tree", flexGrow: 1, minHeight: 0, scrollX: false,
       contentOptions: { flexDirection: "column" },
@@ -183,8 +176,6 @@ export class Workbench {
     });
     this.monitor = new SessionMonitor(renderer, {
       details: id => actions.getSessionDetails?.(id) ?? null,
-      draft: id => this.agent?.promptDraftFor(id),
-      ...(actions.onImage ? { image: actions.onImage } : {}),
       open: (tree, id) => { this.activateSession(tree, id); this.agent.focusLatest("prompt"); },
       changed: () => this.updateFooter(), fallback: () => this.focusNavigation(), notice: (text, options) => this.notify(text, options),
       ...(actions.getMonitoringNotice ? { warning: actions.getMonitoringNotice } : {}),
@@ -253,7 +244,6 @@ export class Workbench {
     this.render();
     this.focusNavigation();
     this.theme.scrollbars(this.tree);
-    this.theme.focusBorder(this.sidebar);
     this.tree.on("focused", this.repaintRows); this.tree.on("blurred", this.repaintRows);
     this.theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.text"].bg;
@@ -612,14 +602,21 @@ export class Workbench {
       if (!this.disposed) this.notify(message, { level: "error", source: "Clipboard" });
     });
   }
+  private activeSearch(): SearchInput | undefined {
+    if (this.dialog.visible || this.dashboard.visible) return undefined;
+    if (this.messagesPanel.visible) return this.messagesPanel.search;
+    if (this.extension.visible) return this.extension.search.field.visible ? this.extension.search : undefined;
+    if (this.accounts.visible) return this.accounts.search.field.visible ? this.accounts.search : undefined;
+    if (this.models.visible) return this.models.search;
+    if (this.history.visible) return this.history.search;
+    if (this.monitor.visible) return this.monitor.search;
+    return this.sidebar.visible ? this.search : this.git.search;
+  }
   private commandAvailable(command: CommandId): boolean {
     if (command === "selection.copy") return this.selectedText() !== null;
     // Explicit ignore bindings are consumed without reaching native input or shortcut help.
     if (command === "input.ignore") return false;
-    if (command === "search.clear") {
-      const context = this.keyContext();
-      return context === "search" || context.endsWith("-search");
-    }
+    if (command === "search.clear") return this.activeSearch() !== undefined;
     if (command === "notice.details") return !this.dialog.visible;
     if (this.messagesPanel.visible && !this.dialog.visible) return command.startsWith("messages.") || ["search.clear", "focus.next", "focus.previous", "app.detach", "app.help"].includes(command);
     if (command.startsWith("messages.")) return false;
@@ -733,11 +730,7 @@ export class Workbench {
       case "focus.transcript": this.agent.focusTranscript(); break;
       case "focus.next": this.moveFocus(1); break;
       case "focus.previous": this.moveFocus(-1); break;
-      case "search.clear": {
-        const focused = this.renderer.currentFocusedRenderable;
-        if (focused instanceof SearchInput) focused.clear();
-        break;
-      }
+      case "search.clear": this.activeSearch()?.clear(); break;
       case "view.agent": this.selectWorkView("agent"); break;
       case "view.editor": this.selectWorkView("editor", true); break;
       case "view.git": this.selectWorkView("git"); break;
@@ -761,8 +754,8 @@ export class Workbench {
       case "workspace.last": this.moveTree("end"); break;
       case "workspace.half-page-up": case "workspace.half-page-down": {
         if (this.search.focused) this.tree.focus();
-        // Two label lines plus the shared border give each workspace a three-row stride.
-        this.moveTree(command === "workspace.half-page-up" ? "up" : "down", halfPageStep(this.tree.viewport.height, 3));
+        // Each candidate owns two label lines, independent of search and group headings.
+        this.moveTree(command === "workspace.half-page-up" ? "up" : "down", halfPageStep(this.tree.viewport.height, 2));
         break;
       }
       case "agent.clear": this.agent.clearPrompt(); break;
@@ -801,10 +794,7 @@ export class Workbench {
       const targets = this.models.focusTargets, index = targets.indexOf(this.renderer.currentFocusedRenderable!);
       targets[(index + direction + targets.length) % targets.length]?.focus(); return;
     }
-    if (this.history.visible) {
-      const targets = this.history.focusTargets, index = targets.indexOf(this.renderer.currentFocusedRenderable!);
-      targets[(index + direction + targets.length) % targets.length]?.focus(); return;
-    }
+    if (this.history.visible) { this.history.moveFocus(direction); return; }
     if (this.git.modal && !this.monitor.visible && !this.sidebar.visible) {
       this.git.moveFocus(direction); return;
     }
@@ -827,16 +817,10 @@ export class Workbench {
   }
 
   private resize = (): void => {
-    const { horizontal, vertical } = panelSpacing(this.renderer);
     const width = Math.max(1, Math.min(100, Math.floor(this.renderer.width * 0.8)));
     const height = Math.max(1, Math.min(this.renderer.height, Math.max(9, Math.floor(this.renderer.height * 0.8))));
     centerPopup(this.sidebar, width, height, this.renderer.width, this.renderer.height);
-    this.sidebar.paddingX = horizontal; this.sidebar.paddingBottom = vertical;
     this.search.fit(height - 4);
-    this.search.field.marginX = -horizontal;
-    this.search.placeholder = this.renderer.width < 80 ? "Search workspaces" : "Search repo/worktree/branch";
-    // Keep one cell before the divider without changing the sidebar's left inset.
-    this.tree.marginRight = 1 - horizontal;
     this.spaceRows(this.visibleRows());
     this.navigationRevealPending = true;
     this.workPanel.minWidth = 0;
@@ -845,10 +829,7 @@ export class Workbench {
   private spaceRows(rows: readonly WorkspaceRow[]): void {
     rows.forEach((row, index) => {
       const view = this.rows.get(row.key); if (!view) return;
-      // Frames occupy the existing gaps; adjacent items share one border row.
-      const previous = rows[index - 1];
-      if (row.kind === "worktree") view.box.marginTop = previous?.kind === "worktree" ? -1 : 0;
-      else view.box.marginTop = index > 0 && previous?.kind !== "worktree" ? 1 : 0;
+      view.box.marginTop = row.kind === "repository" && index > 0 ? 1 : 0;
     });
   }
 
@@ -866,6 +847,8 @@ export class Workbench {
   private render(): void {
     if (this.disposed || this.root.isDestroyed) return;
     const rows = this.visibleRows();
+    this.search.setCounts({ matched: rows.filter(row => row.kind === "worktree").length,
+      total: this.selection.snapshot.reduce((total, repository) => total + repository.worktrees.length, 0) });
     const order = rows.map((row) => row.key);
     if (order.join("\0") !== this.rowOrder.join("\0")) {
       const focusedRow = this.tree.content.hasFocusedDescendant;
@@ -873,8 +856,7 @@ export class Workbench {
       this.rows.clear();
       for (const row of rows) {
         const box = new BoxRenderable(this.renderer, {
-          id: row.key, height: row.kind === "worktree" ? 4 : 1, flexShrink: 0, minWidth: 0,
-          ...(row.kind === "worktree" ? { border: true, customBorderChars: hiddenWorkspaceBorder } : {}),
+          id: row.key, height: row.kind === "worktree" ? 2 : 1, flexShrink: 0, minWidth: 0,
           flexDirection: "row", paddingLeft: row.kind === "worktree" ? 0 : row.depth * 2,
           onMouseScroll: (event) => {
             if (row.kind !== "worktree" || !event.scroll || !["left", "right"].includes(event.scroll.direction)) return;
@@ -892,7 +874,7 @@ export class Workbench {
         });
         // Keep both label lines and their fixed status slot in one inset body.
         const body = row.kind === "worktree" ? new BoxRenderable(this.renderer, { id: `${row.key}:body`,
-          height: 2, flexGrow: 1, flexShrink: 1, minWidth: 0, flexDirection: "row", paddingLeft: row.depth * 2 - 1 }) : box;
+          height: 2, flexGrow: 1, flexShrink: 1, minWidth: 0, flexDirection: "row", paddingLeft: row.depth * 2 }) : box;
         if (body !== box) box.add(body);
         // One two-line text viewport shares its horizontal offset and width across both labels.
         const text = new TextRenderable(this.renderer, { id: `${row.key}:label`, content: row.label,
@@ -988,13 +970,8 @@ export class Workbench {
         styleChunk(`${icons.branch} ${singleLine(row.worktree.branch ?? "detached HEAD")}`, styles[highlighted ? "sidebar.selected" : active ? "sidebar.item" : "sidebar.branch"]),
       ]) : label;
       view.text.attributes = itemStyle.attributes | (active ? TextAttributes.BOLD : 0);
-      view.box.backgroundColor = styles["ui.text"].bg;
-      view.body.backgroundColor = styles["ui.text"].bg;
+      view.box.backgroundColor = view.body.backgroundColor = styles[highlighted ? "ui.selection" : "ui.popup"].bg;
       if (row.kind === "worktree") {
-        view.box.customBorderChars = highlighted ? BorderChars.single : hiddenWorkspaceBorder;
-        view.box.borderColor = styles["ui.focusBorder"].fg;
-        // Later siblings must not erase the selected item's shared border row.
-        view.box.zIndex = highlighted ? 2 : active ? 1 : 0;
         if (view.status) {
           view.status.visible = row.worktree.sessions.some((session) => sessionStatus(session) === "failure");
           paintText(view.status, styles["status.error"]);

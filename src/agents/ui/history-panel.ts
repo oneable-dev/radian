@@ -77,13 +77,14 @@ export class SessionHistoryPanel {
     this.root = new BoxRenderable(renderer, { id: "session-history", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 5000,
       visible: false,
       onMouseDown: (event) => { event.stopPropagation(); }, onMouseScroll: (event) => event.stopPropagation() });
-    this.panel = new PopupFrame(renderer, { id: "history-dialog", position: "absolute", border: true,
+    this.panel = new PopupFrame(renderer, { id: "history-dialog", position: "absolute", border: false,
       paddingX: 0, flexDirection: "column", minWidth: 0, minHeight: 0 });
     this.spinner = new LoadingSpinner(renderer, { id: "history-loading" });
-    this.search = new SearchInput(renderer, { id: "history-search", placeholder: "Search session titles…" });
+    this.search = new SearchInput(renderer, { id: "history-search", title: "History" });
     this.message = new TextRenderable(renderer, { id: "history-message", content: "", height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });
-    this.listStatus = new BoxRenderable(renderer, { id: "history-list-status", height: 1, flexShrink: 0, flexDirection: "row", gap: 1,
-      renderBefore: () => { this.listStatus.visible = this.message.visible || this.spinner.root.visible; } });
+    this.listStatus = new BoxRenderable(renderer, { id: "history-list-status", height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
+    // Collapse completed loading feedback before layout so it leaves no blank row.
+    this.listStatus.onLifecyclePass = () => { this.listStatus.visible = this.message.visible || this.spinner.root.visible; };
     this.listStatus.add(this.spinner.root); this.listStatus.add(this.message);
     this.list = new ScrollBoxRenderable(renderer, { id: "history-list", width: "100%", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.list.focus() });
@@ -101,7 +102,7 @@ export class SessionHistoryPanel {
     theme.scrollbars(this.list);
     theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
-      this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
+      this.panel.backgroundColor = styles["ui.popup"].bg;
       paintText(this.message, styles["ui.muted"]);
       this.previewPane.borderColor = styles["ui.border"].fg;
       paintText(this.spinner.root, styles["status.working"]);
@@ -157,7 +158,7 @@ export class SessionHistoryPanel {
   }
   private current(generation: number): boolean { return this.visible && this.generation === generation; }
   private failure(message: string, notify = false): void {
-    this.message.content = message;
+    this.message.content = message; this.message.visible = this.listStatus.visible = true;
     if (notify) this.actions.onError(message);
     this.actions.onChange?.();
   }
@@ -187,6 +188,7 @@ export class SessionHistoryPanel {
     const selected = this.selected?.id;
     const matches = createTextMatcher(this.search.value);
     const matchesQuery = this.items.filter(item => matches(item.title));
+    this.search.setCounts(this.loading || this.loadError ? null : { matched: matchesQuery.length, total: this.items.length });
     this.filtered = matchesQuery.slice(0, 200);
     this.cursor = Math.max(0, this.filtered.findIndex((item) => item.id === selected));
     for (const row of this.rows) row.destroyRecursively(); this.rows.length = 0;
@@ -200,10 +202,10 @@ export class SessionHistoryPanel {
     }
     this.list.scrollTo(0);
     this.message.content = this.loadError ?? (this.loading ? "Loading saved sessions…" : !this.items.length ? "No saved sessions" : !matchesQuery.length ? "No matching sessions"
-      : `${matchesQuery.length} ${matchesQuery.length === 1 ? "session" : "sessions"}${matchesQuery.length > 200 ? " · showing first 200; refine search" : ""}`);
+      : matchesQuery.length > 200 ? "Showing first 200; refine search" : "");
     const empty = !this.loading && !this.loadError && !this.filtered.length;
     this.layout.results.showEmpty(empty ? this.message.plainText : undefined);
-    this.message.visible = !empty; this.listStatus.visible = !empty || this.spinner.root.visible;
+    this.message.visible = !empty && Boolean(this.message.plainText); this.listStatus.visible = this.message.visible || this.spinner.root.visible;
     this.paint(); this.schedulePreview();
   };
   private paint(): void {
@@ -284,8 +286,9 @@ export class SessionHistoryPanel {
   private async openSelected(): Promise<void> {
     const item = this.selected, worktree = this.worktree;
     if (!item || !worktree || !this.actions.resume || this.resuming || this.loading) return;
-    if (item.unavailableReason) { this.message.content = item.unavailableReason; return; }
-    const generation = this.generation; this.resuming = true; this.message.content = "Opening saved session…"; this.actions.onChange?.();
+    if (item.unavailableReason) { this.failure(item.unavailableReason); return; }
+    const generation = this.generation; this.resuming = true; this.message.content = "Opening saved session…";
+    this.message.visible = this.listStatus.visible = true; this.actions.onChange?.();
     let result: Result<string, ExpectedError>;
     try { result = await this.actions.resume(worktree.id, item.id); }
     finally { this.resuming = false; if (this.visible) this.actions.onChange?.(); }
@@ -297,11 +300,14 @@ export class SessionHistoryPanel {
   command(command: CommandId): void {
     if (!this.visible) return;
     if (command === "history.dismiss") { this.hide(); return; }
+    if (command === "history.search") { this.search.focus(); return; }
     if (command === "history.refresh") { this.refreshVisible(); return; }
     if (command === "history.open") { this.launch(() => this.openSelected()); return; }
     if (command === "history.preview") {
-      if (this.renderer.width < 100) { this.compactPreview = !this.compactPreview; this.resize(); }
-      else if (this.session.focused) this.search.focus(); else this.previewTarget.focus();
+      if (this.renderer.width < 100) {
+        this.compactPreview = !this.compactPreview; this.resize();
+        (this.compactPreview ? this.previewTarget : this.search).focus();
+      } else if (this.session.focused) this.search.focus(); else this.previewTarget.focus();
       this.actions.onChange?.(); return;
     }
     if (command === "history.page-up" || command === "history.page-down") {
@@ -321,6 +327,19 @@ export class SessionHistoryPanel {
       this.cursor += direction * halfPageStep(height, 2);
     } else return;
     this.cursor = Math.max(0, Math.min(this.filtered.length - 1, this.cursor)); this.paint(); this.schedulePreview();
+  }
+  moveFocus(direction: 1 | -1): void {
+    if (this.renderer.width < 100) {
+      const targets = [this.search, this.list, this.previewTarget];
+      const index = this.session.focused ? 2 : targets.indexOf(this.renderer.currentFocusedRenderable!);
+      const next = (index + direction + targets.length) % targets.length;
+      this.compactPreview = next === 2; this.resize();
+      (next === 2 ? this.previewTarget : targets[next])?.focus();
+    } else {
+      const targets = this.focusTargets, index = this.session.focused ? targets.length - 1 : targets.indexOf(this.renderer.currentFocusedRenderable!);
+      targets[(index + direction + targets.length) % targets.length]?.focus();
+    }
+    this.actions.onChange?.();
   }
   private resize = (): void => {
     if (this.disposed || this.root.isDestroyed) return;

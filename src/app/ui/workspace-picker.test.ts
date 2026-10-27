@@ -1,8 +1,7 @@
 import { openWorkspaceSearch, pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
-import { EditBufferRenderable, InputRenderable, ScrollBoxRenderable, TextRenderable, type Renderable } from "@opentui/core";
-import type { TranscriptSection } from "../../agents/transcript.ts";
+import { InputRenderable, ScrollBoxRenderable, TextRenderable } from "@opentui/core";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -152,12 +151,12 @@ test("Monitor candidates show status and scope above muted quoted requests", asy
   try {
     app.resize(180, 30); app.leader("s"); await app.render();
 
-    // One blank row separates search from candidates; each status stays beside its scope, not the request.
+    // Candidates follow search directly; each status stays beside its scope, not the request.
     const list = app.get("monitor-list"), search = app.get("monitor-search-field"), row = app.get("monitor:b1"), next = app.get("monitor:a1");
     const caption = app.get("monitor-caption:b1"), scope = app.get("monitor-scope:b1"), marker = app.get("monitor-status:b1");
     if (!(caption instanceof TextRenderable) || !(scope instanceof TextRenderable)) throw new Error("Missing session labels");
     expect(row.height).toBe(2); expect(next.height).toBe(2); expect(next.y).toBe(row.y + 2);
-    expect(list.y).toBe(search.y + search.height + 1); expect(row.y).toBe(list.y);
+    expect(list.y).toBe(search.y + search.height); expect(row.y).toBe(list.y);
     expect(scope.plainText).toBe(`${icons.folder} radian-ui · ${icons.branch} feature/workspace`); expect(scope.y).toBe(row.y);
     expect(marker.y).toBe(row.y); expect(scope.x).toBe(marker.x + marker.width + 1);
     expect(caption.plainText).toBe("“Fix authentication”"); expect(caption.y).toBe(row.y + 1); expect(caption.x).toBe(row.x);
@@ -235,10 +234,8 @@ test("Monitor row loading follows Fast and compaction state without losing capti
 
     // Compaction overrides Fast; mode changes preserve both the native row and available caption width.
     await update(true, "compacting");
-    const runLoading = app.get("monitor-preview-agent-view").findDescendantById("agent-run-loading");
-    if (!runLoading) throw new Error("Missing preview run activity");
-    const sessionActivity = app.captureCharFrame().split("\n")[runLoading.y]!.slice(runLoading.x, runLoading.x + runLoading.width);
-    expect(glyphs()).toBe(sessionActivity); expect(glyphs()).not.toMatch(/[▶▷]/u); expect(marker.width).toBe(runLoading.width);
+    expect(glyphs()).toBe("○"); expect(marker.width).toBe(1);
+    app.clock.advance(80); await app.render(); expect(glyphs()).toBe("◔");
     await update(false); expect(marker.width).toBe(1); expect(glyphs()).not.toMatch(/[▶▷]/u);
     expect(scope.x).toBe(marker.x + 2); expect(caption.x).toBe(row.x);
     expect(scope.plainText).toBe(`${icons.folder} radian-ui · ${icons.branch} feature/workspace`); expect(caption.plainText).toBe("“Fix authentication”");
@@ -249,12 +246,12 @@ test("Monitor row loading follows Fast and compaction state without losing capti
   } finally { await app.close(); }
 });
 
-test("Monitor previews and browsing never acknowledge; only sessions opened with Enter do", async () => {
+test("Monitor browsing never acknowledges; only sessions opened with Enter do", async () => {
   // Separate another workspace's unread results from the current conversation.
   const app = await fixture();
   try {
     app.leader("s"); await app.render();
-    expect(app.get("session-monitor").visible).toBe(true); expect(app.captureCharFrame()).toContain("PREVIEW_RESULT");
+    expect(app.get("session-monitor").visible).toBe(true); expect(app.captureCharFrame()).not.toContain("PREVIEW_RESULT");
     expect(app.captureCharFrame()).not.toContain("Needs attention"); expect(app.get("monitor-message").visible).toBe(false); expect(app.acknowledged).toEqual([]);
     expect(app.selection.sessionId).toBe("a1");
     app.mockInput.pressKey("n", { ctrl: true }); await app.render();
@@ -312,73 +309,155 @@ test.each(["search", "list"] as const)("Opening sessions from monitor %s shows l
   } finally { await app.close(); }
 });
 
-test("Monitor previews include the full session screen and retain complete sections without allowing session actions", async () => {
-  // A background session has real telemetry, queued input, an unsent draft and more than six sections.
-  const closed: string[] = [];
-  const app = await fixture({ initialDrafts: { a1: "KEEP_DRAFT", b1: "PREVIEW_DRAFT" }, onCloseSession: (_tree, id) => { closed.push(id); } });
-  const longPrompt = `FIRST_RETAINED_SECTION ${"x".repeat(9000)} RETAINED_TAIL`;
-  const sections: TranscriptSection[] = [{ id: "long-request", kind: "user", title: "You", text: longPrompt, status: "complete" },
-    ...Array.from({ length: 10 }, (_, index): TranscriptSection => ({ id: `answer-${index}`, kind: "assistant", title: "Agent", text: `Saved answer ${index}`, status: "complete" }))];
-  const walk = (node: Renderable): Renderable[] => [node, ...node.getChildren().flatMap(walk)];
+test("Monitor popups cap list-only dimensions and stay centered on smaller terminals", async () => {
+  // A session list needs room for two-line candidates, not the previous full conversation preview.
+  const app = await fixture();
   try {
-    app.states.b1 = { ...app.states.b1!, status: "working", sections, pendingMessages: [{ text: "Queued follow-up", images: 0, files: 0 }],
-      telemetry: { provider: "fixture", model: "preview-model", effort: "high", fast: true, context: { usedTokens: 25000, maxTokens: 100000 }, weekly: null } };
-    app.selection.replaceSnapshot(app.selection.snapshot.map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => ({ ...tree,
-      sessions: tree.sessions.map(session => session.id === "b1" ? { ...session, status: "working" } : session),
-    })) })));
-
-    // The list owns browsing activity, while the right pane reuses the complete Agent view.
     app.leader("s"); await app.render();
-    const preview = app.get("monitor-preview-agent-view"), composer = app.get("monitor-preview-agent-composer");
-    expect(app.get("monitor-preview-agent-session-tabs").visible).toBe(true);
-    expect(app.get("monitor-preview-session-status").visible).toBe(true);
-    expect(app.get("monitor-status:b1").visible).toBe(true);
-    expect(app.renderer.root.findDescendantById("monitor-loading")).toBeUndefined();
-    const first = walk(preview).find((node): node is EditBufferRenderable => node instanceof EditBufferRenderable && node.plainText === longPrompt);
-    expect(first).toBeDefined(); expect(first!.focusable).toBe(false);
-    expect(app.captureCharFrame()).toContain("preview-model"); expect(app.captureCharFrame()).toContain("Queued follow-up");
-    expect(app.captureCharFrame()).toContain("PREVIEW_DRAFT"); expect(app.captureCharFrame()).not.toContain("Preview truncated");
 
-    // A displayed composer and close control are inert, not a second editing or session-selection surface.
-    await app.mockMouse.click(composer.x + 1, composer.y + 1); await app.mockInput.typeText("zzzz");
-    await app.mockInput.pasteBracketedText("must not enter a draft"); await app.render();
-    const close = app.get("monitor-preview-close-session:b1"); await app.mockMouse.click(close.x, close.y); await app.render();
-    expect(app.view.promptDrafts).toEqual({ a1: "KEEP_DRAFT", b1: "PREVIEW_DRAFT" });
-    expect(app.selection.sessionId).toBe("a1"); expect(closed).toEqual([]); expect(app.acknowledged).toEqual([]); expect(app.submitted).toEqual([]);
+    // Wide terminals keep a compact frame; smaller terminals retain space around it.
+    for (const [width, height, columns, rows] of [[180, 50, 80, 18], [120, 30, 80, 18], [60, 16, 48, 12], [30, 10, 24, 8]] as const) {
+      app.resize(width, height); await app.render();
+      const panel = app.get("monitor-dialog"), list = app.get("monitor-list") as ScrollBoxRenderable;
+
+      // The frame remains centered and leaves enough height for complete session candidates.
+      expect(panel.width).toBe(columns); expect(panel.height).toBe(rows);
+      expect(panel.x).toBe(Math.floor((width - columns) / 2)); expect(panel.y).toBe(Math.floor((height - rows) / 2));
+      expect(list.viewport.height).toBeGreaterThanOrEqual(2);
+      expect(app.renderer.currentFocusedRenderable?.id).toBe("monitor-search");
+    }
+    expect(app.selection.sessionId).toBe("a1"); expect(app.acknowledged).toEqual([]); expect(app.submitted).toEqual([]);
   } finally { await app.close(); }
 });
 
-test("Monitor updates retain selection/list nodes and never query previews while closed", async () => {
-  // Streaming changes selected conversation content, not candidate-list structure.
+test("Monitor search shares popup backgrounds through focus, resize and theme updates", async () => {
+  // Distinct input colors must not create a separate surface inside the monitor's search border.
+  const app = await fixture(), theme = uiTheme(app.renderer);
+  const background = (x: number, y: number) => {
+    let column = 0;
+    return app.captureSpans().lines[y]!.spans.find(span => { column += span.width; return column > x; })!.bg.toInts();
+  };
+  try {
+    app.leader("s"); await app.mockInput.typeText("radian"); app.mockInput.pressArrow("left"); await app.render();
+    const search = app.get("monitor-search") as InputRenderable, caret = search.cursorOffset;
+
+    // Existing search nodes must follow both palette changes and explicit popup backgrounds without remounting.
+    for (const light of [false, true]) {
+      theme.configure({ palette: [], defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
+        cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null,
+        highlightForeground: null, highlightBackground: null }, { styles: {
+        "ui.popup": { bg: light ? "#DDEEFF" : "#112233" }, "ui.input": { bg: "#334455" }, "ui.inputFocused": { bg: "#556677" },
+      } });
+      for (const width of [120, 60]) {
+        app.resize(width, 30); search.focus(); await app.render();
+        for (const focus of ["search", "results"]) {
+          if (focus === "results") app.mockInput.pressTab();
+          await app.render();
+          const field = app.get("monitor-search-field"), prompt = app.get("monitor-search-prompt"), count = app.get("monitor-search-count");
+          const row = app.get("monitor:a1"), expected = theme.styles["ui.popup"].bg!.toInts();
+
+          // Editor text, padding, prompt, count and border rows share the unselected list's surface in either focus state.
+          expect(background(row.x, row.y)).toEqual(expected);
+          for (const [x, y] of [[search.x, search.y], [field.x + 1, search.y], [prompt.x, prompt.y], [count.x, count.y],
+            [field.x + 2, field.y], [field.x + 2, field.y + field.height - 1]] as const) expect(background(x, y)).toEqual(expected);
+          expect(app.renderer.currentFocusedRenderable?.id).toBe(focus === "search" ? "monitor-search" : "monitor-list");
+          expect(search.value).toBe("radian"); expect(search.cursorOffset).toBe(caret);
+        }
+      }
+    }
+    expect(app.selection.sessionId).toBe("a1"); expect(app.view.promptDrafts.a1).toBe("KEEP_DRAFT");
+    expect(app.acknowledged).toEqual([]); expect(app.submitted).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test.each([120, 60])("Monitor search shows a centered title, prompt and live result counts at %i columns", async width => {
+  // Search decoration identifies the monitor without adding a title row or changing session state.
+  const app = await fixture();
+  try {
+    app.resize(width, 30); app.leader("s"); await app.render();
+    const search = app.get("monitor-search") as InputRenderable, field = app.get("monitor-search-field");
+    const prompt = app.get("monitor-search-prompt"), count = app.get("monitor-search-count");
+    if (!(prompt instanceof TextRenderable) || !(count instanceof TextRenderable)) throw new Error("Missing monitor search decoration");
+
+    // Only the search bar is framed; the title is centered in its top border and the count stays at the right edge.
+    const line = app.captureCharFrame().split("\n")[field.y]!.slice(field.x, field.x + field.width);
+    expect(line).toStartWith("╭"); expect(line).toEndWith("╮"); expect(line).toContain("Sessions");
+    expect(Math.abs(line.indexOf("Sessions") + 4 - field.width / 2)).toBeLessThanOrEqual(1);
+    expect(prompt.plainText).toBe(">"); expect(prompt.y).toBe(search.y); expect(count.y).toBe(search.y);
+    expect(count.plainText).toBe("2/2");
+    expect(count.x + count.width).toBe(field.x + field.width - 1 - (width < 80 ? 1 : 2));
+    expect(app.captureCharFrame().split("\n")[search.y]!.slice(prompt.x, prompt.x + prompt.width)).toBe(">");
+
+    // Filtering, clearing and background session removal keep the matched/total count accurate, including no matches.
+    await app.mockInput.typeText("auth"); await app.render(); expect(count.plainText).toBe("1/2");
+    app.mockInput.pressCtrlC(); await app.render(); expect(count.plainText).toBe("2/2");
+    await app.mockInput.typeText("no-matching-session"); await app.render(); expect(count.plainText).toBe("0/2");
+    app.selection.replaceSnapshot(app.selection.snapshot.map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => ({ ...tree,
+      sessions: tree.sessions.filter(session => session.id !== "b1"),
+    })) })));
+    await app.render(); expect(count.plainText).toBe("0/1");
+    app.mockInput.pressCtrlC(); await app.render(); expect(count.plainText).toBe("1/1");
+
+    expect(app.renderer.currentFocusedRenderable).toBe(search); expect(app.selection.sessionId).toBe("a1");
+    expect(app.view.promptDrafts.a1).toBe("KEEP_DRAFT"); expect(app.acknowledged).toEqual([]); expect(app.submitted).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Monitor keeps a titled search above borderless results through resize with focus confined to search and results", async () => {
+  // Background conversations and drafts remain separate from the session-selection surface.
+  const app = await fixture({ initialDrafts: { a1: "KEEP_DRAFT", b1: "BACKGROUND_DRAFT" } });
+  try {
+    app.leader("s"); await app.mockInput.typeText("auth"); app.mockInput.pressArrow("left"); await app.render();
+    const search = app.get("monitor-search") as InputRenderable, caret = search.cursorOffset;
+
+    // Crossing the former preview breakpoint must never hide results or restore preview commands.
+    for (const width of [180, 99, 60, 140]) {
+      app.resize(width, 30); await app.render();
+      const panel = app.get("monitor-dialog"), list = app.get("monitor-list");
+      app.mockInput.pressKey("o", { ctrl: true }); await app.render();
+
+      // Search and results meet the popup edges without frame borders or outer horizontal padding.
+      const field = app.get("monitor-search-field");
+      expect(field.x).toBe(panel.x); expect(field.y).toBe(panel.y); expect(field.width).toBe(panel.width);
+      expect(list.visible).toBe(true); expect(list.x).toBe(panel.x + 1); expect(list.width).toBe(panel.width - 2);
+      const lines = app.captureCharFrame().split("\n");
+      expect(lines[field.y]!.slice(field.x, field.x + field.width)).toContain("Sessions");
+      const resultText = lines.slice(field.y + field.height, panel.y + panel.height)
+        .map(line => line.slice(panel.x, panel.x + panel.width)).join("\n");
+      expect(resultText).not.toMatch(/[┌┐└┘╭╮╰╯─│]/u);
+      expect(app.renderer.root.findDescendantById("monitor-preview-pane")).toBeUndefined();
+      expect(app.renderer.root.findDescendantById("monitor-preview-agent-view")).toBeUndefined();
+      expect(app.captureCharFrame()).not.toContain("PREVIEW_RESULT"); expect(app.captureCharFrame()).not.toContain("BACKGROUND_DRAFT");
+      const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
+      expect(footer).not.toMatch(/Preview|<C-o>|Page/u);
+      expect(search.value).toBe("auth"); expect(search.cursorOffset).toBe(caret);
+      for (let index = 0; index < 4; index++) {
+        app.mockInput.pressTab(); await app.render();
+        expect(app.renderer.currentFocusedRenderable).toBe(index % 2 === 0 ? list : search);
+      }
+    }
+    app.mockInput.pressEscape(); await app.render();
+
+    // Cancelling browsing restores the original session input without acknowledging or editing anything.
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt"); expect(app.selection.sessionId).toBe("a1");
+    expect(app.view.promptDrafts).toEqual({ a1: "KEEP_DRAFT", b1: "BACKGROUND_DRAFT" });
+    expect(app.acknowledged).toEqual([]); expect(app.submitted).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Monitor updates retain list nodes without displaying conversation output or looking up closed rows", async () => {
+  // Streaming changes conversation content without turning the monitor into another conversation view.
   const app = await fixture();
   try {
     app.leader("s"); await app.render(); const row = app.get("monitor:b1");
     app.states.b1 = { ...app.states.b1!, sections: [{ id: "answer", kind: "assistant", title: "Agent", text: "UPDATED_PREVIEW", status: "streaming" }] };
     app.selection.replaceSnapshot(structuredClone(app.selection.snapshot)); await app.render();
 
-    expect(app.get("monitor:b1")).toBe(row); expect(app.captureCharFrame()).toContain("UPDATED_PREVIEW");
+    expect(app.get("monitor:b1")).toBe(row); expect(app.captureCharFrame()).not.toContain("UPDATED_PREVIEW");
     app.mockInput.pressEscape(); await app.render();
     expect(app.get("session-monitor").visible).toBe(false); expect(app.acknowledged).toEqual([]);
     app.lookups.length = 0; app.selection.replaceSnapshot(app.selection.snapshot); await app.render();
     expect(app.lookups).not.toContain("b1");
-  } finally { await app.close(); }
-});
-
-test("Compact monitors switch lists/previews like History while preserving search input", async () => {
-  // Never force two columns into narrow terminals.
-  const app = await fixture();
-  try {
-    app.resize(60, 14); app.leader("s"); await app.render();
-    await app.mockInput.typeText("auth"); await app.render();
-    expect(app.get("monitor-list").visible).toBe(true); expect(app.get("monitor-preview-pane").visible).toBe(false);
-
-    app.mockInput.pressKey("o", { ctrl: true }); await app.render();
-
-    expect(app.get("monitor-preview-pane").visible).toBe(true);
-    // Very short previews keep normal session controls; a taller viewport reveals the transcript.
-    expect(app.get("monitor-preview-session-status").height).toBe(3);
-    app.resize(60, 22); await app.render(); expect(app.captureCharFrame()).toContain("PREVIEW_RESULT");
-    expect((app.get("monitor-search") as InputRenderable).value).toBe("auth"); expect(app.acknowledged).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -435,14 +514,16 @@ test("Large monitors report rendering limits and search still reaches later sess
     app.selection.replaceSnapshot(app.selection.snapshot.map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => tree.id === "demo:main" ? { ...tree, sessions: [...tree.sessions, ...sessions] } : tree) })));
 
     app.leader("s"); await app.render();
-    // Left-column clipping requires checking displayed counts and complete hint content.
+    // Candidate limits remain visible even without a preview column.
     expect(app.captureCharFrame()).toContain("Showing first 200 of 252 sessions");
     const message = app.get("monitor-message"); if (!(message instanceof TextRenderable)) throw new Error("Missing monitor summary");
     expect(message.plainText).toBe("Showing first 200 of 252 sessions; refine search");
+    expect((app.get("monitor-search-count") as TextRenderable).plainText).toBe("252/252");
     expect(app.renderer.root.findDescendantById("monitor:bulk-249")).toBeUndefined();
     await app.mockInput.typeText("special last"); await app.render();
 
     expect(app.get("monitor:bulk-249")).toBeDefined(); expect(app.captureCharFrame()).toContain("Last special task"); expect(app.acknowledged).toEqual([]);
+    expect((app.get("monitor-search-count") as TextRenderable).plainText).toBe("1/252");
     expect(message.visible).toBe(false);
   } finally { await app.close(); }
 });

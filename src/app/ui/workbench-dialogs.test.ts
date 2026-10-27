@@ -80,7 +80,7 @@ test.each([false, true])("Light theme %s shares Normal across popup bodies and b
   } finally { await app.close(); }
 });
 
-test("Workspace popup preserves colored code backgrounds outside its lines while masking the body", async () => {
+test("Workspace popup preserves colored code outside its bounds and shares surfaces inside", async () => {
   // Match the reported screenshot: the frame crosses code blocks with backgrounds unlike Normal.
   const app = await mount(), theme = uiTheme(app.renderer);
   const underlay = new BoxRenderable(app.renderer, { position: "absolute", width: "100%", height: "100%", zIndex: 4800 });
@@ -101,26 +101,21 @@ test("Workspace popup preserves colored code backgrounds outside its lines while
     // Open the real Workspace popup rather than a synthetic frame over a uniform background.
     openWorkspaceSearch(app); await app.render();
 
-    // Every border cell keeps the code block's background; only the enclosed padding is filled.
+    // The borderless outer surface fills its bounds; uncovered code keeps its original colors.
     const panel = app.get("workspace-sidebar"), search = app.get("workspace-search-box");
     const after = app.captureSpans(), lines = app.captureCharFrame().split("\n");
     for (let y = panel.y; y < panel.y + panel.height; y++) {
-      for (const x of [panel.x, panel.x + panel.width - 1]) {
+      for (const x of [panel.x - 1, panel.x + panel.width]) {
         expect(background(x, y, after).toInts()).toEqual(background(x, y, before).toInts());
         expect(background(x, y, after).intent).toBe(background(x, y, before).intent);
       }
-      if (y > panel.y && y < panel.y + panel.height - 1) {
-        const surface = y >= search.y && y < search.y + search.height ? "ui.inputFocused" : "ui.popup";
-        expect(background(panel.x + 1, y, after).toInts()).toEqual(theme.styles[surface].bg!.toInts());
-        expect(lines[y]![panel.x]).toBe("│"); expect(lines[y]![panel.x + panel.width - 1]).toBe("│");
-        expect(lines[y]![panel.x + 1]).toBe(" ");
+      for (const x of [panel.x, panel.x + panel.width - 1]) {
+        expect(background(x, y, after).toInts()).toEqual(theme.styles["ui.popup"].bg!.toInts());
       }
     }
-    for (const y of [panel.y, panel.y + panel.height - 1]) for (let x = panel.x; x < panel.x + panel.width; x++) {
-      expect(background(x, y, after).toInts()).toEqual(background(x, y, before).toInts());
-    }
-    expect(lines[panel.y]!.slice(panel.x, panel.x + panel.width)).toBe("┌" + "─".repeat(panel.width - 2) + "┐");
-    expect(lines[panel.y + panel.height - 1]!.slice(panel.x, panel.x + panel.width)).toBe("└" + "─".repeat(panel.width - 2) + "┘");
+    const top = lines[search.y]!.slice(search.x, search.x + search.width);
+    expect(top).toStartWith("╭"); expect(top).toEndWith("╮"); expect(top).toContain("Workspaces");
+    expect(lines[panel.y + panel.height - 1]!.slice(panel.x, panel.x + panel.width)).not.toContain("─");
     app.mockInput.pressEscape(); await app.render();
     expect(app.renderer.currentFocusedRenderable).toBe(app.prompt); expect(app.prompt.value).toBe("untouched draft");
   } finally { await app.close(); }

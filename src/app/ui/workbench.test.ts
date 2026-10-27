@@ -253,7 +253,7 @@ test("Branch search filters only worktree lists while preserving right sessions 
   const app = await mount();
   try {
     const before = app.selection.snapshot;
-    await app.clickText("Search repo/worktree/branch");
+    await app.openWorkspaces();
     const input = app.renderer.currentFocusedRenderable;
 
     // Mixed-case typing filters on INPUT, without Enter or blur.

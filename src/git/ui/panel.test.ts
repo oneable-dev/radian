@@ -114,9 +114,9 @@ test.each(["refs", "reflog"] as const)("Git %s modals align search with lists an
       const field = input.field, list = app.get("git-browser-list"), preview = app.get("git-reflog-preview-pane"), message = app.get("git-browser-status");
 
       // Search and result hints must not extend over right-side previews.
-      expect(field.x).toBe(list.x); expect(field.width).toBe(list.width);
+      expect(field.x + 1).toBe(list.x); expect(field.width - 2).toBe(list.width);
       expect(message.x).toBe(list.x);
-      expect(message.y).toBe(field.y + field.height + 1); expect(list.y).toBe(message.y + message.height);
+      expect(message.y).toBe(field.y + field.height); expect(list.y).toBe(message.y + message.height);
       expect(preview.visible).toBe(mode === "reflog" && width >= 100);
       if (preview.visible) {
         expect(field.x + field.width).toBe(preview.x);

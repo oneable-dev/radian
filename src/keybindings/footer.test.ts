@@ -13,7 +13,7 @@ test.each([
   ["agent.clear", "prompt"], ["agent.clear", "prompt-completion"], ["agent.history-previous", "prompt"], ["agent.history-next", "prompt"], ["git.clear", "git-prompt"],
   ["git.search-clear", "git-search"], ["search.clear", "search"],
   ["transcript.search-clear", "transcript-search"], ["transcript.search-cancel", "transcript-search"],
-  ["history.open", "history"], ["history.dismiss", "history-search"], ["monitor.page-down", "monitor"],
+  ["history.open", "history"], ["history.dismiss", "history-search"], ["monitor.half-page-down", "monitor"],
   ["dashboard.next", "dashboard-tabs"], ["model.next", "model-search"],
   ["accounts.dismiss", "accounts-input"], ["accounts.next", "accounts-search"],
   ["terminal.scroll-up", "terminal"],

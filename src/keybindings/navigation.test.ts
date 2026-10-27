@@ -53,6 +53,16 @@ test.each([["search", "workspace"], ["history-search", "history"], ["monitor-sea
   expect(defaultKeymap().hints("search.clear", context)).toBe("<C-c>");
 });
 
+test.each([["workspace", "workspace.search"], ["monitor", "monitor.search"], ["history", "history.search"],
+  ["model", "model.search"], ["accounts", "accounts.search"], ["messages", "messages.search"], ["extension", "extension.search"]] as const)("%s returns to search with configurable slash and clears query from results", (context, command) => {
+  // Returning to search and clearing from results use registered commands, never widget-local key handlers.
+  expect(commandFor(context, "/")).toBe(command); expect(commandFor(context, "ctrl+c")).toBe("search.clear");
+  const map = expectOk(parseKeymap({ bindings: { [command]: [{ keys: "ctrl+f", scope: context }] } }));
+
+  // Explicit remaps replace the default slash binding without changing literal search input.
+  expect(map.bound("/", context)).toBe(false); expect(map.hint(command, context)).toBe("<C-f>");
+});
+
 test("Git search provides default navigation/clearing while keeping ordinary characters literal", () => {
   // Git modal keys divide ownership from main navigation and Agent prompts.
   const map = defaultKeymap();

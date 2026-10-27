@@ -68,11 +68,11 @@ export class UiTheme {
     const cleanup = () => { this.bindings.delete(update); owner.off(RenderableEvents.DESTROYED, cleanup); };
     this.bindings.set(update, cleanup); owner.once(RenderableEvents.DESTROYED, cleanup); update();
   }
-  input(input: InputRenderable | TextareaRenderable, normal: StyleGroup = "ui.input", focused: StyleGroup = "ui.inputFocused"): void {
+  input(input: InputRenderable | TextareaRenderable, normal: StyleGroup = "ui.input", focused: StyleGroup = "ui.inputFocused", backgroundStyle?: StyleGroup): void {
     const paint = () => {
       const styles = this.styles;
       input.textColor = styles[normal].fg; input.focusedTextColor = styles[focused].fg;
-      input.backgroundColor = styles[normal].bg; input.focusedBackgroundColor = styleBackground(styles[focused]);
+      input.backgroundColor = styles[backgroundStyle ?? normal].bg; input.focusedBackgroundColor = styleBackground(styles[backgroundStyle ?? focused]);
       input.attributes = styles[input.focused ? focused : normal].attributes;
       input.placeholderColor = styles["ui.placeholder"].fg;
       input.selectionBg = styles["ui.selection"].bg; input.selectionFg = styles["ui.selection"].fg;

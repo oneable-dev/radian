@@ -44,7 +44,7 @@ export class ExtensionDialogPanel {
   private coveredFocus: Renderable | undefined;
   private candidates: { label: string; value: string | boolean }[] = [];
   private filtered: typeof this.candidates = [];
-  private rows: TextRenderable[] = [];
+  private rows: { root: BoxRenderable; text: TextRenderable }[] = [];
   private cursor = 0;
   private busy = false;
   private completedId: string | undefined;
@@ -54,11 +54,11 @@ export class ExtensionDialogPanel {
     const theme = uiTheme(renderer); this.clipboard = new Clipboard(renderer);
     this.root = new BoxRenderable(renderer, { id: "extension-dialog", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 5700, visible: false,
       onMouseDown: event => event.stopPropagation(), onMouseScroll: event => event.stopPropagation() });
-    this.panel = new PopupFrame(renderer, { id: "extension-dialog-panel", position: "absolute", border: true, paddingX: 1, flexDirection: "column", minWidth: 0, minHeight: 0 });
+    this.panel = new PopupFrame(renderer, { id: "extension-dialog-panel", position: "absolute", border: false, paddingX: 0, flexDirection: "column", minWidth: 0, minHeight: 0 });
     this.spinner = new LoadingSpinner(renderer, { id: "extension-dialog-loading" });
-    this.details = new ScrollBoxRenderable(renderer, { id: "extension-dialog-details", flexGrow: 1, minHeight: 1, minWidth: 0, scrollX: false, onMouseDown: () => this.details.focus() });
+    this.details = new ScrollBoxRenderable(renderer, { id: "extension-dialog-details", paddingX: 1, flexGrow: 1, minHeight: 1, minWidth: 0, scrollX: false, onMouseDown: () => this.details.focus() });
     this.body = new TextRenderable(renderer, { id: "extension-dialog-body", width: "100%", wrapMode: "char", selectable: true }); this.details.add(this.body);
-    this.search = new SearchInput(renderer, { id: "extension-dialog-search", placeholder: "Search options…" });
+    this.search = new SearchInput(renderer, { id: "extension-dialog-search", title: "Options" });
     this.list = new ScrollBoxRenderable(renderer, { id: "extension-dialog-list", flexGrow: 1, minHeight: 1, minWidth: 0, scrollX: false, onMouseDown: () => this.list.focus() });
     this.input = new InputRenderable(renderer, { id: "extension-dialog-input", width: "100%", maxLength: 65536, visible: false });
     this.status = new TextRenderable(renderer, { id: "extension-dialog-status", height: 1, flexShrink: 0, wrapMode: "none", visible: false, selectable: false });
@@ -67,7 +67,7 @@ export class ExtensionDialogPanel {
     attachPopupActivity(this.panel, this.spinner.root); this.root.add(this.panel);
     theme.scrollbars(this.details); theme.scrollbars(this.list); theme.input(this.input);
     theme.bindStyles(this.root, styles => {
-      this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
+      this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg;
       paintText(this.body, styles["ui.label"]); paintText(this.status, styles["ui.muted"]); this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);
@@ -124,23 +124,27 @@ export class ExtensionDialogPanel {
   }
   private filter = (): void => {
     const match = createTextMatcher(this.search.value);
-    this.filtered = this.candidates.filter(candidate => match(candidate.label)); this.cursor = Math.max(0, Math.min(this.cursor, this.filtered.length - 1)); this.paint();
+    this.filtered = this.candidates.filter(candidate => match(candidate.label));
+    this.search.setCounts({ matched: this.filtered.length, total: this.candidates.length });
+    this.cursor = Math.max(0, Math.min(this.cursor, this.filtered.length - 1)); this.paint();
   };
   private paint(): void {
     if (!this.list || this.list.isDestroyed) return;
-    while (this.rows.length > this.filtered.length) this.rows.pop()!.destroyRecursively();
+    while (this.rows.length > this.filtered.length) this.rows.pop()!.root.destroyRecursively();
     const styles = uiTheme(this.renderer).styles;
     this.filtered.forEach((candidate, index) => {
       let row = this.rows[index];
       if (!row) {
-        row = new TextRenderable(this.renderer, { id: `extension-option:${index}`, height: 1, width: "100%", wrapMode: "none", selectable: false,
+        const root = new BoxRenderable(this.renderer, { id: `extension-option:${index}`, height: 1, width: "100%", flexShrink: 0,
           onMouseDown: event => { if (event.button === 0) { event.preventDefault(); this.cursor = index; this.list.focus(); this.paint(); } } });
-        this.rows.push(row); this.list.add(row);
+        const text = new TextRenderable(this.renderer, { height: 1, width: "100%", wrapMode: "none", selectable: false });
+        root.add(text); row = { root, text }; this.rows.push(row); this.list.add(root);
       }
-      row.content = candidate.label;
-      paintText(row, styles[index === this.cursor ? "sidebar.selected" : "sidebar.item"]);
+      row.text.content = candidate.label;
+      const style = styles[index === this.cursor ? "ui.selection" : "ui.popup"];
+      row.root.backgroundColor = style.bg; paintText(row.text, style);
     });
-    const row = this.rows[this.cursor]; if (row) this.list.scrollChildIntoView(row.id);
+    const row = this.rows[this.cursor]; if (row) this.list.scrollChildIntoView(row.root.id);
     this.layout.root.visible = this.list.visible;
     this.layout.results.showEmpty(this.scope?.dialog.kind === "select" && !this.filtered.length
       ? this.search.value ? "No matching options" : "No available options" : undefined);

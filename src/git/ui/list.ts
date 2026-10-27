@@ -28,7 +28,8 @@ export class GitList {
   private readonly annotations = new Map<string, Annotation>();
 
   constructor(private readonly renderer: CliRenderer, id: string, private readonly choose: (key: string) => void,
-    private readonly activate: (key: string) => void, private readonly activateOnClick = true) {
+    private readonly activate: (key: string) => void, private readonly activateOnClick = true,
+    private readonly surface: "ui.text" | "ui.popup" = "ui.text") {
     this.root = new ScrollBoxRenderable(renderer, { id, flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       contentOptions: { flexDirection: "column" }, onMouseDown: () => this.root.focus() });
     this.tail = new BoxRenderable(renderer, { id: `${id}:tail`, height: 0, flexShrink: 0 }); this.root.add(this.tail);
@@ -91,7 +92,7 @@ export class GitList {
           label.selectionBg = styles["ui.selection"].bg; label.selectionFg = styles["ui.selection"].fg;
         });
         uiTheme(this.renderer).bindStyles(row, (styles) => {
-          row.backgroundColor = !item.history && item.key === this.selected ? this.selectionColor : styles["ui.text"].bg;
+          row.backgroundColor = !item.history && item.key === this.selected ? this.selectionColor : styles[this.surface].bg;
           const annotation = this.annotations.get(item.key); if (annotation) this.paintAnnotation(annotation);
         });
         line.add(label); row.add(line);
@@ -121,7 +122,7 @@ export class GitList {
     ref.selectionBg = styles["ui.selection"].bg; ref.selectionFg = styles["ui.selection"].fg;
     leader.width = remaining; leader.content = connected && remaining ? ` ${"─".repeat(remaining - 1)}` : ""; paintText(leader, color);
     const selected = item.key === this.selected;
-    const band = blendColors(styleBackground(styles["ui.text"]), color.fg, selected ? (this.root.focused ? 0.56 : 0.44) : 0.32);
+    const band = blendColors(styleBackground(styles[this.surface]), color.fg, selected ? (this.root.focused ? 0.56 : 0.44) : 0.32);
     node.content = new StyledText(item.graph!.map((cell, index) => {
       const left = connected && index < decoration.nodeColumn;
       const text = cell.text === " " && left ? "─" : cell.text;
@@ -137,12 +138,12 @@ export class GitList {
   }
   private get selectionColor() {
     const styles = uiTheme(this.renderer).styles;
-    return styles[this.root.focused ? "ui.selection" : "ui.selectionInactive"].bg;
+    return styles[this.surface === "ui.popup" || this.root.focused ? "ui.selection" : "ui.selectionInactive"].bg;
   }
   private highlight(previous: string | null = this.selected): void {
     if (this.root.isDestroyed || this.renderer.isDestroyed) return;
     const styles = uiTheme(this.renderer).styles;
-    for (const [key, row] of this.rows) row.backgroundColor = !this.annotations.has(key) && key === this.selected ? this.selectionColor : styles["ui.text"].bg;
+    for (const [key, row] of this.rows) row.backgroundColor = !this.annotations.has(key) && key === this.selected ? this.selectionColor : styles[this.surface].bg;
     for (const key of new Set([previous, this.selected])) {
       const annotation = this.annotations.get(key ?? ""); if (annotation) this.paintAnnotation(annotation);
     }

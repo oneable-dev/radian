@@ -6,7 +6,8 @@ export type BindingInput = { keys: string; scope: KeyScope };
 const key = (keys: string, scope: KeyScope = "global"): BindingInput => ({ keys, scope });
 
 const messageContexts = ["messages", "messages-search"] as const;
-const searchContexts = ["messages-search", "search", "history-search", "monitor-search", "model-search", "accounts-search", "extension-search"] as const;
+const searchContexts = ["messages-search", "messages", "search", "workspace", "history-search", "history", "monitor-search", "monitor",
+  "model-search", "model", "model-effort", "accounts-search", "accounts", "extension-search", "extension", "extension-body"] as const;
 const extensionContexts = ["extension", "extension-search", "extension-input", "extension-body"] as const;
 const extensionListContexts = ["extension", "extension-search", "extension-body"] as const;
 const transcriptContexts = ["transcript", "transcript-text", "transcript-visual"] as const;
@@ -123,18 +124,17 @@ export const defaultBindings = (platform: NodeJS.Platform = process.platform) =>
   "dashboard.last": [key("end", "dashboard")],
   "monitor.show": [key("<leader> s")],
   "monitor.dismiss": [key("escape", "monitor"), key("escape", "monitor-search")],
+  "monitor.search": [key("/", "monitor")],
   "monitor.open": [key("enter", "monitor"), key("enter", "monitor-search")],
   "monitor.previous": [key("k", "monitor"), key("up", "monitor"), key("ctrl+p", "monitor"), key("up", "monitor-search"), key("ctrl+p", "monitor-search")],
   "monitor.next": [key("j", "monitor"), key("down", "monitor"), key("ctrl+n", "monitor"), key("down", "monitor-search"), key("ctrl+n", "monitor-search")],
   "monitor.first": [key("home", "monitor")],
   "monitor.last": [key("end", "monitor")],
-  "monitor.preview": [key("ctrl+o", "monitor"), key("ctrl+o", "monitor-search")],
-  "monitor.page-up": [key("pageup", "monitor"), key("pageup", "monitor-search")],
-  "monitor.page-down": [key("pagedown", "monitor"), key("pagedown", "monitor-search")],
   "monitor.half-page-up": [key("ctrl+u", "monitor"), key("ctrl+u", "monitor-search")],
   "monitor.half-page-down": [key("ctrl+d", "monitor"), key("ctrl+d", "monitor-search")],
   "history.show": [key("<leader> h")],
   "history.dismiss": [key("escape", "history"), key("escape", "history-search")],
+  "history.search": [key("/", "history")],
   "history.preview": [key("ctrl+o", "history"), key("ctrl+o", "history-search")],
   "history.page-up": [key("pageup", "history"), key("pageup", "history-search")],
   "history.page-down": [key("pagedown", "history"), key("pagedown", "history-search")],

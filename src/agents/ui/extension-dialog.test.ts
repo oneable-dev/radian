@@ -5,6 +5,7 @@ import { Workbench, type WorkbenchActions } from "../../app/ui/workbench.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
+import { uiTheme } from "../../ui/theme.ts";
 import { parseKeymap } from "../../keybindings/config.ts";
 import { expectOk } from "../../testing/results.ts";
 import { ok } from "../../result.ts";
@@ -57,6 +58,12 @@ test.each([[120, 30], [60, 16]])("Extension choices preserve search input and na
     // Single steps retain search focus; half-page jumps transfer it without editing the query.
     app.mockInput.pressKey("n", { ctrl: true }); await app.render();
     expect(app.renderer.currentFocusedRenderable).toBe(search);
+    const selected = app.get("extension-option:1");
+    for (const x of [selected.x, selected.x + selected.width - 1]) {
+      let column = 0;
+      const span = app.captureSpans().lines[selected.y]!.spans.find(span => { column += span.width; return column > x; });
+      expect(span?.bg.toInts()).toEqual(uiTheme(app.renderer).styles["ui.selection"].bg!.toInts());
+    }
     app.mockInput.pressKey("p", { ctrl: true }); await app.render();
     const list = app.get("extension-dialog-list") as ScrollBoxRenderable;
     const step = halfPageStep(list.viewport.height);

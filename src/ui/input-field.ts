@@ -1,6 +1,7 @@
 import { BoxRenderable, RenderableEvents, type CliRenderer, type TextareaRenderable } from "@opentui/core";
 import { horizontalInset } from "./spacing.ts";
 import { uiTheme } from "./theme.ts";
+import type { StyleGroup } from "./theme-styles.ts";
 
 export type InputLayout = Readonly<{ rows: number; height: number }>;
 type InputKind = "search" | "prompt";
@@ -10,13 +11,13 @@ export class InputField extends BoxRenderable {
   private inset = -1;
 
   constructor(private readonly renderer: CliRenderer, private readonly editor: TextareaRenderable,
-    private readonly kind: InputKind, id: string) {
+    private readonly kind: InputKind, id: string, private readonly backgroundStyle?: StyleGroup) {
     super(renderer, { id, width: "auto", minWidth: 0, height: 3, flexShrink: 0,
       flexDirection: "row", alignItems: "center", border: false,
       onMouseDown: event => { if (event.button === 0 && !editor.focused) editor.focus(); } });
     this.add(editor);
     const theme = uiTheme(renderer);
-    theme.input(editor, kind === "prompt" ? "prompt.input" : "ui.input", kind === "prompt" ? "prompt.input" : "ui.inputFocused");
+    theme.input(editor, kind === "prompt" ? "prompt.input" : "ui.input", kind === "prompt" ? "prompt.input" : "ui.inputFocused", backgroundStyle);
     theme.bindStyles(this, this.paint);
     editor.on("focused", this.paint); editor.on("blurred", this.paint);
     this.onLifecyclePass = this.resize;
@@ -43,7 +44,8 @@ export class InputField extends BoxRenderable {
   private paint = (): void => {
     if (this.isDestroyed) return;
     const styles = uiTheme(this.renderer).styles;
-    this.backgroundColor = styles[this.kind === "prompt" ? "prompt.input" : this.editor.focused ? "ui.inputFocused" : "ui.input"].bg;
+    const surface = this.backgroundStyle ?? (this.kind === "prompt" ? "prompt.input" : this.editor.focused ? "ui.inputFocused" : "ui.input");
+    this.backgroundColor = styles[surface].bg;
   };
   private resize = (): void => {
     if (this.isDestroyed) return;

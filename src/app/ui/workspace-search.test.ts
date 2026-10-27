@@ -34,7 +34,8 @@ test("Search popups center without reducing work areas or creating previews", as
     expect(panel.x).toBeGreaterThan(0); expect(panel.y).toBeGreaterThan(0);
     expect(panel.x + panel.width).toBeLessThanOrEqual(120); expect(panel.y + panel.height).toBeLessThanOrEqual(24);
     expect(app.get("work-panel").width).toBe(120); expect(field.height).toBe(3); expect(app.input.height).toBe(1);
-    expect(app.input.y).toBe(field.y + 1); expect(app.captureCharFrame()).toContain("Search repo/worktree/branch");
+    expect(app.input.y).toBe(field.y + 1); expect(app.captureCharFrame()).toContain("Workspaces");
+    expect(app.input.placeholder).toBe("");
     expect(app.renderer.root.findDescendantById("workspace-preview")).toBeUndefined(); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
@@ -59,12 +60,12 @@ test.each([false, true])("At brightness %j, search padding clicks focus inputs w
   try {
     const theme = uiTheme(app.renderer); theme.configure(palette(light)); await app.render();
     const field = app.get("workspace-search-box");
-    expect(app.cell(field.x + 1, field.y).bg.toInts()).toEqual(theme.colors.surface.toInts());
+    expect(app.cell(field.x + 1, field.y).bg.toInts()).toEqual(theme.styles["ui.popup"].bg!.toInts());
 
     await app.mockMouse.click(field.x + 1, field.y); await app.render(); await app.mockInput.typeText("main"); await app.render();
 
     expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.input.value).toBe("main");
-    expect(app.cell(app.input.x, app.input.y).bg.toInts()).toEqual(theme.colors.selected.toInts());
+    expect(app.cell(app.input.x, app.input.y).bg.toInts()).toEqual(theme.styles["ui.popup"].bg!.toInts());
     app.mockInput.pressEnter(); await app.render();
     expect(app.get("workspace-picker").visible).toBe(false); expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
@@ -82,7 +83,7 @@ test("Resize preserves query, caret, and drafts while fitting popups within comp
     const panel = app.get("workspace-sidebar"); expect(panel.x).toBeGreaterThanOrEqual(0); expect(panel.x + panel.width).toBeLessThanOrEqual(60);
     expect(panel.y + panel.height).toBeLessThanOrEqual(12); expect(app.get("workspace-tree").height).toBeGreaterThan(0);
     expect(app.input.value).toBe(value); expect(app.input.cursorOffset).toBe(cursor); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
-    app.mockInput.pressCtrlC(); await app.render(); expect(app.captureCharFrame()).toContain("Search workspaces");
+    app.mockInput.pressCtrlC(); await app.render(); expect(app.input.value).toBe(""); expect(app.input.placeholder).toBe("");
     expect(app.view.promptDrafts.a1).toBe("keep agent draft"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
@@ -98,7 +99,7 @@ test("Cancelling and reopening resets search query/caret while preserving Agent 
 
     // New search is empty without affecting active workspaces or conversation drafts.
     expect(app.get("workspace-picker").visible).toBe(true); expect(app.input.value).toBe(""); expect(app.input.cursorOffset).toBe(0);
-    expect(app.captureCharFrame()).toContain("Search repo/worktree/branch");
+    expect(app.captureCharFrame()).toContain("Workspaces"); expect(app.input.placeholder).toBe("");
     expect(app.view.promptDrafts.a1).toBe("keep agent draft");
     expect(app.renderer.currentFocusedRenderable).toBe(app.input); expect(app.selection.worktree?.id).toBe("demo:main"); expect(app.requests).toEqual([]);
   } finally { await app.close(); }

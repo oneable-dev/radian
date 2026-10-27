@@ -32,7 +32,13 @@ async function mount(overrides: Partial<WorkbenchActions> = {}) {
   const render = async () => { await app.renderOnce(); await app.renderOnce(); };
   await render(); prompt.focus(); await render();
   return { ...app, view, selection, sent, changes, get, prompt, render,
-    async open(text = "/model") { await app.mockInput.typeText(text); await render(); clock.advance(150); await render(); app.mockInput.pressEnter(); await render(); },
+    async open(text = "/model") {
+      await app.mockInput.typeText(text); await render(); clock.advance(150); await render(); app.mockInput.pressEnter(); await render();
+      if (get("model-picker").visible) {
+        // These scenarios exercise list commands after the real search-first entry point.
+        expect(app.renderer.currentFocusedRenderable?.id).toBe("model-search"); app.mockInput.pressTab(); await render();
+      }
+    },
     update(next: ExecutionState) { state = next; selection.replaceSnapshot(selection.snapshot); },
     async close() { view.dispose(); await app.dispose(); } };
 }
@@ -192,8 +198,8 @@ test("Popup Esc closes and restores input without changing models or interruptin
   try {
     await app.open();
     app.mockInput.pressTab(); await app.render(); expect(app.renderer.currentFocusedRenderable?.id).toBe("model-effort");
-    app.mockInput.pressTab(); await app.render(); expect(app.renderer.currentFocusedRenderable?.id).toBe("model-list");
-    pressLeader(app, "a"); await app.render(); expect(app.renderer.currentFocusedRenderable?.id).toBe("model-list");
+    app.mockInput.pressTab(); await app.render(); expect(app.renderer.currentFocusedRenderable?.id).toBe("model-search");
+    pressLeader(app, "a"); await app.render(); expect(app.renderer.currentFocusedRenderable?.id).toBe("model-search");
 
     app.mockInput.pressEscape(); await app.render();
     expect(app.get("model-picker").visible).toBe(false); expect(app.renderer.currentFocusedRenderable).toBe(app.prompt);
@@ -260,7 +266,7 @@ test("Many effort options wrap within narrow layouts and remain selectable and a
 
     await app.mockMouse.click(maximum.x + 1, maximum.y); await app.render();
 
-    expect(maximum.y + maximum.height).toBeLessThan(panel.y + panel.height);
+    expect(maximum.y + maximum.height).toBeLessThanOrEqual(panel.y + panel.height);
     expect(maximum.x + maximum.width).toBeLessThan(panel.x + panel.width);
     expect(app.captureCharFrame()).toContain("[max]"); expect(app.changes).toEqual([]);
     app.mockInput.pressEnter(); await app.render(); expect(app.changes[0]?.effort).toBe("max");

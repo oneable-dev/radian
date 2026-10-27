@@ -35,10 +35,10 @@ test.each([
   { status: "one-line", rows: 1, visible: true },
   { status: "two-line", rows: 2, visible: true },
   { status: "hidden", rows: 1, visible: false },
-])("Search layouts keep one blank row below the field with $status status", async ({ rows, visible }) => {
-  // Status text and candidates must stay separated from the search field by the same single row.
+])("Search layouts remove the search gap and inset results with $status status", async ({ rows, visible }) => {
+  // Status and candidates follow search immediately, with one cell of horizontal list padding.
   const app = await createTestRenderer({ width: 120, height: 20 });
-  const search = new SearchInput(app.renderer, { id: "search", placeholder: "Search" });
+  const search = new SearchInput(app.renderer, { id: "search", title: "Search" });
   const list = new ScrollBoxRenderable(app.renderer, { flexGrow: 1, minHeight: 0 });
   list.add(new TextRenderable(app.renderer, { content: "First candidate", height: 1, flexShrink: 0 }));
   const message = rows ? new TextRenderable(app.renderer, { content: "Result status", height: rows, flexShrink: 0, visible }) : undefined;
@@ -50,11 +50,12 @@ test.each([
       app.resize(width, height); search.field.visible = true;
       await app.renderOnce(); await app.renderOnce();
 
-      const next = message?.visible ? message : layout.results.root, gapY = search.field.y + search.field.height;
-      expect(next.y).toBe(gapY + 1);
-      expect(list.y).toBe(gapY + 1 + (visible ? rows : 0));
-      expect(app.captureCharFrame().split("\n")[gapY]!.slice(search.field.x, search.field.x + search.field.width).trim()).toBe("");
-      expect(list.height).toBe(height - search.field.height - 1 - (visible ? rows : 0));
+      const next = message?.visible ? message : layout.results.root, nextY = search.field.y + search.field.height;
+      expect(next.y).toBe(nextY);
+      expect(list.y).toBe(nextY + (visible ? rows : 0));
+      expect(list.x).toBe(search.field.x + 1); expect(list.width).toBe(search.field.width - 2);
+      if (message?.visible) { expect(message.x).toBe(list.x); expect(message.width).toBe(list.width); }
+      expect(list.height).toBe(height - search.field.height - (visible ? rows : 0));
 
       search.field.visible = false; await app.renderOnce(); await app.renderOnce();
 
@@ -67,7 +68,7 @@ test.each([
 test.each([false, true])("Search layouts preserve queries and viewport ownership with preview=%s", async previewEnabled => {
   // Both popup shapes use the same query/list layout without owning feature commands.
   const app = await createTestRenderer({ width: 140, height: 30 });
-  const search = new SearchInput(app.renderer, { id: "search", placeholder: "Search" });
+  const search = new SearchInput(app.renderer, { id: "search", title: "Search" });
   const list = new ScrollBoxRenderable(app.renderer, { flexGrow: 1, minHeight: 0 });
   const message = new TextRenderable(app.renderer, { content: "Results", height: 1, flexShrink: 0 });
   const preview = new PopupBody(app.renderer, "preview", new BoxRenderable(app.renderer, { flexGrow: 1 }));
@@ -95,8 +96,8 @@ test.each([false, true])("Search layouts preserve queries and viewport ownership
           expect(search.field.x + search.field.width).toBe(preview.root.x);
         }
       }
-      // Compact preview jumps use the same candidate height as visible lists, including the search gap.
-      expect(layout.listHeight).toBe(layout.root.height - search.field.height - 1 - message.height);
+      // Compact preview jumps use the same candidate height as visible lists, without a reserved search gap.
+      expect(layout.listHeight).toBe(layout.root.height - search.field.height - message.height);
     }
   } finally { if (!previewEnabled) preview.root.destroyRecursively(); await app.dispose(); }
 });

@@ -211,7 +211,7 @@ test("Long previews stay bounded through resize while copying retains the comple
       app.resize(width, 24); await app.render();
       const preview = selected(app);
       expect(preview).toContain("…");
-      for (const line of preview.split("\n")) expect(Bun.stringWidth(line)).toBeLessThanOrEqual(app.get("messages-panel").width - 4);
+      for (const line of preview.split("\n")) expect(Bun.stringWidth(line)).toBeLessThanOrEqual(app.get("messages-panel").width - 2);
     }
     app.mockInput.pressKey("y", { ctrl: true }); await app.render();
 

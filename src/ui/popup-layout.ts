@@ -30,8 +30,6 @@ type SearchLayoutOptions = {
   preview?: { body: PopupBody; width: number };
 };
 
-const searchBottomGap = 1;
-
 // Features own query, selection, commands and lifetimes; this owns only geometry.
 export class SearchPopupLayout {
   readonly root: BoxRenderable;
@@ -42,9 +40,10 @@ export class SearchPopupLayout {
     this.root = new BoxRenderable(renderer, { id: `${options.id}-body`, flexGrow: 1, minWidth: 0, minHeight: 0, flexDirection: "row" });
     this.candidates = new BoxRenderable(renderer, { minWidth: 0, minHeight: 0, flexDirection: "column" });
     this.results = new PopupBody(renderer, `${options.id}-results`, options.list);
-    options.search.field.marginBottom = searchBottomGap;
+    options.search.field.marginBottom = 0;
+    this.results.root.paddingX = 1;
     this.candidates.add(options.search.field);
-    if (options.message) this.candidates.add(options.message);
+    if (options.message) { options.message.marginX = 1; this.candidates.add(options.message); }
     this.candidates.add(this.results.root); this.root.add(this.candidates);
     if (options.preview) this.root.add(options.preview.body.root);
     this.resize(false);
@@ -59,8 +58,6 @@ export class SearchPopupLayout {
     this.candidates.width = split && wide ? `${100 - preview.width}%` : "100%";
     this.candidates.flexGrow = showList ? 1 : 0;
     if (!preview) return;
-    // Split popups inset only their search/list column; previews use the full frame edge.
-    this.candidates.paddingLeft = 1; this.candidates.paddingRight = split && wide ? 0 : 1;
     const pane = preview.body.root;
     pane.visible = Boolean(split && (wide || compactPreview));
     pane.width = wide ? `${preview.width}%` : "100%";
@@ -71,13 +68,13 @@ export class SearchPopupLayout {
   get listHeight(): number {
     const { search, message } = this.options;
     return this.results.root.visible ? this.results.root.height
-      : this.root.height - (search.field.visible ? search.field.height + searchBottomGap : 0) - (message?.visible ? message.height : 0);
+      : this.root.height - (search.field.visible ? search.field.height : 0) - (message?.visible ? message.height : 0);
   }
 }
 
 // Activity lives on the frame edge, never in a reserved popup header or over its content.
 export function attachPopupActivity(panel: BoxRenderable, activity: Renderable): void {
-  activity.position = "absolute"; activity.top = -1; activity.right = 0; activity.zIndex = 1;
+  activity.position = "absolute"; activity.top = panel.border ? -1 : 0; activity.right = 0; activity.zIndex = 1;
   panel.add(activity);
 }
 

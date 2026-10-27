@@ -47,7 +47,7 @@ async function mount(surface: Surface) {
   if (surface === "model") {
     const prompt = get("session-prompt") as InputRenderable;
     prompt.focus(); prompt.value = "/model"; await render(); clock.advance(150); await render();
-    app.mockInput.pressEnter(); await render(); app.mockInput.pressKey("/");
+    app.mockInput.pressEnter(); await render();
   } else {
     app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey(surface === "history" ? "h" : "s");
   }

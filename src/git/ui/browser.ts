@@ -62,12 +62,12 @@ export class GitBrowser {
   constructor(private readonly renderer: CliRenderer, private readonly actions: Actions) {
     this.root = new BoxRenderable(renderer, { id: "git-browser", position: "absolute", left: 0, right: 0, top: 0, bottom: 0,
       zIndex: 50, visible: false, onSizeChange: () => this.resize() });
-    this.panel = new PopupFrame(renderer, { id: "git-browser-panel", position: "absolute", border: true, paddingX: 0,
+    this.panel = new PopupFrame(renderer, { id: "git-browser-panel", position: "absolute", border: false, paddingX: 0,
       minHeight: 0, minWidth: 0, flexDirection: "column" });
     this.spinner = new LoadingSpinner(renderer, { id: "git-browser-loading" });
-    this.search = new SearchInput(renderer, { id: "git-browser-search", placeholder: "Search refs…" });
+    this.search = new SearchInput(renderer, { id: "git-browser-search", title: "Refs" });
     this.message = new TextRenderable(renderer, { id: "git-browser-status", height: 1, flexShrink: 0, selectable: false, wrapMode: "none", truncate: true });
-    this.list = new GitList(renderer, "git-browser-list", key => this.choose(key), () => this.open(), false);
+    this.list = new GitList(renderer, "git-browser-list", key => this.choose(key), () => this.open(), false, "ui.popup");
     this.list.root.width = "100%";
     this.preview = new ScrollBoxRenderable(renderer, { id: "git-reflog-preview", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
       onMouseDown: () => this.preview.focus() });
@@ -81,7 +81,7 @@ export class GitBrowser {
     this.panel.add(this.body); attachPopupActivity(this.panel, this.spinner.root); this.root.add(this.panel);
     const theme = uiTheme(renderer); theme.scrollbars(this.preview);
     theme.bindStyles(this.root, styles => {
-      this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
+      this.root.backgroundColor = styles["ui.backdrop"].bg; this.panel.backgroundColor = styles["ui.popup"].bg;
       this.previewPane.borderColor = styles["ui.border"].fg; paintText(this.message, styles["ui.muted"]);
       paintText(this.spinner.root, styles["status.working"]); paintText(this.previewText, styles["ui.label"]);
       this.previewText.selectionBg = styles["ui.selection"].bg; this.previewText.selectionFg = styles["ui.selection"].fg;
@@ -119,7 +119,7 @@ export class GitBrowser {
     this.cancel(); this.results.clear(); this.unexpected.clear(); this.snapshot = snapshot; this.loadError = undefined;
     this.kind = kind; this.key = kind === "refs" ? selected ?? allRefs : selected;
     this.compactPreview = false; this.previewSelector = undefined; this.root.visible = true;
-    this.search.placeholder = kind === "refs" ? "Search branches, remotes or tags…" : "Search events, branches, hashes or time…";
+    this.search.setTitle(kind === "refs" ? "Refs" : "Reflog");
     this.search.value = ""; this.filter(); this.resize(); this.search.focus();
     if (!snapshot) this.spinner.start(); this.actions.changed();
   }
@@ -153,6 +153,8 @@ export class GitBrowser {
       }
     }
     const candidates = rows.filter(row => !row.disabled);
+    this.search.setCounts(this.snapshot && !this.loadError ? { matched: candidates.length,
+      total: this.kind === "refs" ? this.snapshot.refs.length + 1 : this.snapshot.reflog.length } : null);
     if (!candidates.some(row => row.key === this.key)) this.key = candidates[0]?.key ?? null;
     this.list.update(rows.length || this.snapshot && !this.loadError ? rows
       : [{ key: "empty", label: this.loadError ?? "Loading Git data…", disabled: true }], this.key);
@@ -238,7 +240,7 @@ export class GitBrowser {
   }
   private togglePreview(): void {
     if (this.kind !== "reflog") return;
-    if (this.renderer.width < 100) { this.compactPreview = !this.compactPreview; this.resize(); (this.compactPreview ? this.preview : this.list.root).focus(); }
+    if (this.renderer.width < 100) { this.compactPreview = !this.compactPreview; this.resize(); (this.compactPreview ? this.preview : this.search).focus(); }
     else if (this.preview.focused) this.search.focus(); else this.preview.focus();
   }
   moveFocus(direction: 1 | -1): void {

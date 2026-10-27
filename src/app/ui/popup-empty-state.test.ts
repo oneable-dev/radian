@@ -19,10 +19,11 @@ import { emptyDashboard } from "../../agents/dashboard.ts";
 import { InputError } from "../../errors.ts";
 import { ok, err } from "../../result.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
+import { SearchInput } from "../../ui/search-input.ts";
 
 const surfaces = [
   { name: "workspace", panel: "workspace-sidebar", content: "workspace-body", header: "Workspace", body: "workspace-results", title: "No repositories" },
-  { name: "monitor", panel: "monitor-dialog", content: "monitor-body", header: "AI Sessions", body: "monitor-results", title: "No working sessions or unread results", preview: "monitor-preview-pane" },
+  { name: "monitor", panel: "monitor-dialog", content: "monitor-body", header: "AI Sessions", body: "monitor-results", title: "No working sessions or unread results" },
   { name: "history", panel: "history-dialog", content: "history-body", header: "History · radian", body: "history-results", title: "No saved sessions", preview: "history-preview-pane" },
   { name: "model", panel: "model-dialog", content: "model-body", header: "Model & effort", body: "model-results", title: "No available models" },
   { name: "messages", panel: "messages-panel", content: "messages-body", header: "Messages", body: "messages-results", title: "No messages yet" },
@@ -35,6 +36,17 @@ const surfaces = [
   { name: "text", panel: "text-dialog-panel", content: "text-dialog-content", header: "Details", body: "text-dialog-content", title: "No content" },
 ] as const;
 type Surface = typeof surfaces[number]["name"];
+const searches: Partial<Record<Surface, { id: string; title: string; counts: string; status?: string }>> = {
+  workspace: { id: "workspace-search", title: "Workspaces", counts: "0/0" },
+  monitor: { id: "monitor-search", title: "Sessions", counts: "0/0", status: "monitor-message" },
+  history: { id: "history-search", title: "History", counts: "0/0", status: "history-list-status" },
+  model: { id: "model-search", title: "Models", counts: "0/0", status: "model-message" },
+  messages: { id: "messages-search", title: "Messages", counts: "0/0" },
+  refs: { id: "git-browser-search", title: "Refs", counts: "0/1", status: "git-browser-status" },
+  reflog: { id: "git-browser-search", title: "Reflog", counts: "0/0", status: "git-browser-status" },
+  accounts: { id: "accounts-search", title: "Accounts", counts: "1/1", status: "accounts-message" },
+  extension: { id: "extension-dialog-search", title: "Options", counts: "0/1" },
+};
 
 async function mount(name: Surface, width: number, height: number) {
   const app = await createTestRenderer({ width, height, kittyKeyboard: true, clock: new ManualClock() });
@@ -50,7 +62,6 @@ async function mount(name: Surface, width: number, height: number) {
   } else if (name === "monitor") {
     const monitor = new SessionMonitor(app.renderer, { ...common, details: () => null, open: noop });
     panel = monitor; app.renderer.root.add(panel.root); monitor.update([]); monitor.show();
-    revealPreview = () => monitor.command("monitor.preview");
   } else if (name === "history") {
     const history = new SessionHistoryPanel(app.renderer, { list: async () => ok([]), onOpened: noop, onError: noop, keyHint: hint });
     panel = history; app.renderer.root.add(panel.root); history.show(tree);
@@ -116,12 +127,23 @@ for (const [width, height] of [[140, 32], [60, 16]] as const) {
       expect(frame[title.y]?.slice(title.x, title.x + title.width).trim()).toBe(title.plainText);
     };
     try {
-      // Content starts immediately inside the frame, with no hidden or reserved title row.
+      // Content starts at the first available row, with no hidden or reserved title row.
       const panel = app.get(surface.panel), content = app.get(surface.content);
-      expect(content.y).toBe(panel.y + 1);
+      const spec = searches[surface.name];
+      expect(content.y).toBe(panel.y + (spec ? 0 : 1));
       const popupText = app.captureCharFrame().split("\n").slice(panel.y, panel.y + panel.height)
         .map(line => line.slice(panel.x, panel.x + panel.width)).join("\n");
-      expect(popupText).not.toContain(surface.header);
+      if (spec) {
+        // Shared picker chrome identifies the surface without placeholder text or a dedicated title row.
+        const input = app.get(spec.id); if (!(input instanceof SearchInput)) throw new Error("Missing shared search");
+        const body = app.get(surface.body), list = body.getChildren()[0]!, status = spec.status ? app.get(spec.status) : undefined;
+        expect(input.field.title).toBe(` ${spec.title} `); expect(input.placeholder).toBe("");
+        expect(app.captureCharFrame().split("\n")[input.field.y]).toContain(spec.title);
+        expect((app.get(`${spec.id}-prompt`) as TextRenderable).plainText).toBe(">");
+        expect((app.get(`${spec.id}-count`) as TextRenderable).plainText).toBe(spec.counts);
+        expect(list.x).toBe(body.x + 1); expect(list.width).toBe(body.width - 2);
+        expect(body.y).toBe(input.field.y + input.field.height + (status?.visible ? status.height : 0));
+      } else expect(popupText).not.toContain(surface.header);
 
       // Empty data and unmatched queries must not turn into disabled candidate rows.
       centered(surface.body, surface.title);

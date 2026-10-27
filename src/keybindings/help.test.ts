@@ -3,6 +3,20 @@ import { defaultKeymap, parseKeymap } from "./config.ts";
 import { keymapHelp } from "./help.ts";
 import { expectOk } from "../testing/results.ts";
 
+test.each(["monitor", "monitor-search"] as const)("%s help omits removed preview actions while retaining candidate jumps", context => {
+  // Session monitoring is list-only; History retains its independent preview command.
+  const keymap = defaultKeymap();
+
+  // Help follows the real configured actions in either monitor focus context.
+  const help = keymapHelp(keymap, context, command => command.startsWith("monitor."));
+
+  // Obsolete preview shortcuts must not remain discoverable or consume input.
+  expect(help).not.toMatch(/preview|<C-o>/iu);
+  expect(help).toContain("<C-d>"); expect(help).toContain("<C-u>");
+  for (const key of ["ctrl+o", "pageup", "pagedown"]) expect(keymap.bound(key, context)).toBe(false);
+  expect(keymap.hint("history.preview", "history")).toBe("<C-o>");
+});
+
 test("Help shows registered navigation alternatives instead of bare arrows", () => {
   // Git registers arrows first and provides Vim alternatives on both axes.
   const keymap = defaultKeymap();

@@ -44,7 +44,7 @@ async function mount(surface: Surface) {
   await render();
   if (surface === "model") {
     const prompt = get("session-prompt") as InputRenderable;
-    prompt.focus(); prompt.value = "/model"; await render(); clock.advance(150); await render(); app.mockInput.pressEnter(); await render(); app.mockInput.pressKey("/");
+    prompt.focus(); prompt.value = "/model"; await render(); clock.advance(150); await render(); app.mockInput.pressEnter(); await render();
   } else if (surface === "workspace") openWorkspaceSearch(app);
   else { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey(surface === "history" ? "h" : "s"); }
   await render();
@@ -65,7 +65,7 @@ test.each(surfaces)("Reopening %s search popups starts fresh input without old q
     if (surface === "model") {
       const prompt = app.get("session-prompt") as InputRenderable;
       prompt.focus(); prompt.value = "/model"; await app.render(); app.clock.advance(150); await app.render();
-      app.mockInput.pressEnter(); await app.render(); app.mockInput.pressKey("/");
+      app.mockInput.pressEnter(); await app.render();
     } else if (surface === "workspace") openWorkspaceSearch(app);
     else { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey(surface === "history" ? "h" : "s"); }
     await app.render();
@@ -95,26 +95,31 @@ test.each(surfaces)("%s search shares padding/focus backgrounds and preserves ca
     // Leave results and return through input padding in wide and narrow terminals.
     for (const width of [120, 60]) {
       app.resize(width, 30); await app.render(); app.list.focus(); await app.render();
-      expect(background(field.x + 1, field.y)).toEqual(uiTheme(app.renderer).styles["ui.input"].bg!.toInts());
-      await app.mockMouse.click(field.x + 1, field.y); await app.render();
+      const paddingY = input.y;
+      expect(background(field.x + 1, paddingY)).toEqual(uiTheme(app.renderer).styles["ui.popup"].bg!.toInts());
+      await app.mockMouse.click(field.x + 1, paddingY); await app.render();
 
-      // Single-line inputs share horizontal/vertical padding and focus colors without screen overrides.
+      // Single-line editors share sizing and focus colors; monitor decoration surrounds the same native input.
       expect(field.height).toBe(3); expect(input.height).toBe(1); expect(input.y - field.y).toBe(1);
       const status = surface === "history" ? app.get("history-list-status") : surface === "model" ? app.get("model-message") : null;
-      expect((status?.visible ? status : app.list).y).toBe(field.y + field.height + 1);
-      expect(app.list.y).toBe(field.y + field.height + 1 + (status?.visible ? status.height : 0));
-      expect(input.x - field.x).toBe(width < 80 ? 1 : 2);
-      expect(field.x + field.width - input.x - input.width).toBe(width < 80 ? 1 : 2);
-      expect(background(field.x + 1, field.y)).toEqual(uiTheme(app.renderer).styles["ui.inputFocused"].bg!.toInts());
+      expect((status?.visible ? status : app.list).y).toBe(field.y + field.height);
+      expect(app.list.y).toBe(field.y + field.height + (status?.visible ? status.height : 0));
+      expect(app.list.x).toBe(field.x + 1); expect(app.list.width).toBe(field.width - 2);
+      const inset = horizontalInset(width), counter = app.get(`${surface}-search-count`);
+      expect(input.x - field.x).toBe(inset + 3);
+      // Split-column percentages can round adjacent native text widths to different cells.
+      expect(Math.abs(field.x + field.width - input.x - input.width - inset - (counter.visible ? counter.width + 2 : 1))).toBeLessThanOrEqual(1);
+      expect(background(field.x + 1, paddingY)).toEqual(uiTheme(app.renderer).styles["ui.popup"].bg!.toInts());
+      expect(input.placeholder).toBe("");
       expect(app.renderer.currentFocusedRenderable).toBe(input); expect(input.value).toBe(value); expect(input.cursorOffset).toBe(cursor);
     }
     expect(input.maxLength).toBe(256); expect(app.opened).toEqual([]); expect(app.submitted).toEqual([]);
   } finally { await app.close(); }
 });
 
-test.each(["history", "monitor"] as const)("%s preview panes fill their height without headings in split and compact layouts", async surface => {
+test("History preview panes fill their height without headings in split and compact layouts", async () => {
   // Preview-only panes must preserve list-local search and independent conversation state.
-  const app = await mount(surface);
+  const surface = "history", app = await mount(surface);
   try {
     await app.mockInput.typeText("candidate"); app.mockInput.pressArrow("left"); await app.render();
     const input = app.input as SearchInput, value = input.value, cursor = input.cursorOffset;
@@ -125,16 +130,15 @@ test.each(["history", "monitor"] as const)("%s preview panes fill their height w
       const field = input.field, preview = app.get(`${surface}-preview-pane`), message = app.get(`${surface}-message`);
 
       // Search and result hints belong only to lists; previews use their full height.
-      expect(field.x).toBe(app.list.x); expect(field.width).toBe(app.list.width);
-      if (surface === "history") expect(app.get("history-list-status").x).toBe(app.list.x);
-      else { expect(message.visible).toBe(false); expect(app.list.y).toBe(field.y + field.height + 1); }
+      expect(field.x + 1).toBe(app.list.x); expect(field.width - 2).toBe(app.list.width);
+      expect(app.get("history-list-status").x).toBe(app.list.x);
       expect(preview.visible).toBe(width >= 100);
       if (preview.visible) {
         expect(field.x + field.width).toBe(preview.x);
         expect(preview.y).toBe(field.y);
         expect(preview.y + preview.height).toBe(app.list.y + app.list.height);
         const lines = app.captureCharFrame().split("\n");
-        expect(lines[field.y]![preview.x]).toBe("│"); expect(lines[surface === "history" ? message.y : app.list.y]![preview.x]).toBe("│");
+        expect(lines[field.y]![preview.x]).toBe("│"); expect(lines[message.y]![preview.x]).toBe("│");
       }
       // Compact layouts reveal the same preview surface through its configured command.
       if (width < 100) { app.mockInput.pressKey("o", { ctrl: true }); await app.render(); }
@@ -145,14 +149,14 @@ test.each(["history", "monitor"] as const)("%s preview panes fill their height w
       expect(preview.visible).toBe(true);
       expect(content.y).toBe(preview.y); expect(content.height).toBe(preview.height);
       expect(content.x).toBe(preview.x + Number(width >= 100));
-      expect(content.x + content.width).toBe(app.get(`${surface}-dialog`).x + app.get(`${surface}-dialog`).width - 1);
+      expect(content.x + content.width).toBe(app.get(`${surface}-dialog`).x + app.get(`${surface}-dialog`).width);
       // Remove only host padding: preserve the session's native inset and full-bleed composer background.
       const transcript = app.get(`${surface}-preview`), composer = app.get(`${surface}-preview-agent-composer`), prompt = app.get(`${surface}-preview-session-prompt`);
       expect(transcript.x).toBe(content.x + horizontalInset(width)); expect(prompt.x).toBe(transcript.x);
       expect(composer.x).toBe(content.x); expect(composer.x + composer.width).toBe(content.x + content.width);
       expect(frame).not.toContain("Preview ·"); expect(frame).not.toContain("Live preview ·");
-      expect(frame).not.toContain(surface === "history" ? "History · radian" : "AI Sessions");
-      expect(field.y).toBe(app.get(`${surface}-dialog`).y + 1);
+      expect(frame).not.toContain("History · radian");
+      expect(field.y).toBe(app.get(`${surface}-dialog`).y);
       expect(frame).toContain("Preview line");
       expect(frame).not.toContain("Read-only preview");
       expect(app.get(`${surface}-preview-agent-composer`).visible).toBe(true);
@@ -169,8 +173,7 @@ test.each(surfaces)("%s list Ctrl+D/U moves half-page candidates without committ
   const app = await mount(surface);
   try {
     await app.mockInput.typeText("candidate"); app.mockInput.pressTab(); await app.render();
-    const stride = surface === "workspace" ? 3 : 2;
-    const step = Math.max(1, Math.floor(app.list.viewport.height / (2 * stride)));
+    const step = Math.max(1, Math.floor(app.list.viewport.height / 4));
     expect(step).toBeGreaterThan(1);
 
     // Retain candidates at upper boundaries and commit only the final jump.
@@ -183,12 +186,9 @@ test.each(surfaces)("%s list Ctrl+D/U moves half-page candidates without committ
     const id = surface === "workspace" ? `worktree:tree-${step}` : surface === "history" ? `history:saved-${step}`
       : surface === "monitor" ? `monitor:session-${step}` : `model:${JSON.stringify(["fixture", `candidate-${step}`])}`;
     const row = app.get(id);
-    if (surface === "workspace") expect(app.captureCharFrame().split("\n")[row.y]![row.x]).toBe("┌");
-    else {
-      let column = 0;
-      const span = app.captureSpans().lines[row.y]!.spans.find(span => { column += span.width; return column > row.x + 1; });
-      expect(span?.bg.toInts()).toEqual(uiTheme(app.renderer).styles["ui.selection"].bg!.toInts());
-    }
+    let column = 0;
+    const span = app.captureSpans().lines[row.y]!.spans.find(span => { column += span.width; return column > row.x + 1; });
+    expect(span?.bg.toInts()).toEqual(uiTheme(app.renderer).styles["ui.selection"].bg!.toInts());
     app.mockInput.pressEnter(); await app.render();
 
     if (surface === "workspace") expect(app.selection.worktree?.id).toBe(`tree-${step}`);
@@ -202,8 +202,7 @@ test.each(surfaces)("%s half-page list jumps stop at the final candidate and ret
   const app = await mount(surface);
   try {
     app.mockInput.pressTab(); await app.render();
-    const stride = surface === "workspace" ? 3 : 2;
-    const step = Math.max(1, Math.floor(app.list.viewport.height / (2 * stride)));
+    const step = Math.max(1, Math.floor(app.list.viewport.height / 4));
 
     app.mockInput.pressKey("END"); app.mockInput.pressKey("d", { ctrl: true }); app.mockInput.pressKey("u", { ctrl: true });
     app.mockInput.pressEnter(); await app.render();
@@ -224,8 +223,7 @@ test.each(surfaces.flatMap(surface => (["d", "u"] as const).map(key => ({ surfac
     for (let index = 0; index < 20; index++) { app.mockInput.pressKey("n", { ctrl: true }); await app.render(); }
     app.mockInput.pressArrow("left"); app.mockInput.pressArrow("left"); await app.render();
     const cursor = app.input.cursorOffset;
-    const stride = surface === "workspace" ? 3 : 2;
-    const step = Math.max(1, Math.floor(app.list.viewport.height / (2 * stride)));
+    const step = Math.max(1, Math.floor(app.list.viewport.height / 4));
     const selected = 20 + (key === "d" ? step : -step);
 
     app.mockInput.pressKey(key, { ctrl: true }); await app.render();
@@ -323,7 +321,7 @@ test.each(["d", "u"] as const)("Search Ctrl+%s keeps jumping on repeats after fo
     await app.mockInput.typeText("candidate");
     for (let index = 0; index < 15; index++) app.mockInput.pressKey("n", { ctrl: true });
     await app.render();
-    const step = Math.max(1, Math.floor(app.list.viewport.height / 6));
+    const step = Math.max(1, Math.floor(app.list.viewport.height / 4));
 
     raw(`\x1b[${code};5u`); await app.render();
     expect(app.renderer.currentFocusedRenderable?.id).toBe(app.list.id);
@@ -338,25 +336,25 @@ test.each(["d", "u"] as const)("Search Ctrl+%s keeps jumping on repeats after fo
   } finally { await app.close(); }
 });
 
-test.each(["history", "monitor"] as const)("Compact %s search jumps return from previews to result lists", async surface => {
+test("Compact History search jumps return from previews to result lists", async () => {
   // Search jumps target results even when compact layouts currently show only previews.
-  const app = await mount(surface);
+  const app = await mount("history");
   try {
     app.resize(60, 18); await app.render(); await app.mockInput.typeText("candidate"); await app.render();
     for (let index = 0; index < 10; index++) { app.mockInput.pressKey("n", { ctrl: true }); await app.render(); }
     const step = Math.max(1, Math.floor(app.list.viewport.height / 4));
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
-    expect(app.list.visible).toBe(false); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+    expect(app.list.visible).toBe(false);
+    app.mockInput.pressKey("/"); await app.render(); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
 
     app.mockInput.pressKey("d", { ctrl: true }); await app.render();
 
     expect(app.list.visible).toBe(true); expect(app.renderer.currentFocusedRenderable?.id).toBe(app.list.id);
-    expect(app.get(`${surface}-preview-pane`).visible).toBe(false); expect(app.input.value).toBe("candidate");
-    const selected = 10 + step, row = app.get(surface === "history" ? `history:saved-${selected}` : `monitor:session-${selected}`);
+    expect(app.get("history-preview-pane").visible).toBe(false); expect(app.input.value).toBe("candidate");
+    const selected = 10 + step, row = app.get(`history:saved-${selected}`);
     expect(row.y).toBeGreaterThanOrEqual(app.list.viewport.y); expect(row.y + row.height).toBeLessThanOrEqual(app.list.viewport.y + app.list.viewport.height);
     app.mockInput.pressEnter(); await app.render();
-    if (surface === "history") expect(app.opened).toEqual([`saved-${selected}`]);
-    else expect(app.selection.sessionId).toBe(`session-${selected}`);
+    expect(app.opened).toEqual([`saved-${selected}`]);
   } finally { await app.close(); }
 });
 
@@ -374,12 +372,12 @@ test.each(surfaces)("%s jump keys preserve input and focus lists even without ma
   } finally { await app.close(); }
 });
 
-test.each(["history", "monitor"] as const)("%s preview Ctrl+D/U scrolls only bodies without changing candidates", async surface => {
+test("History preview Ctrl+D/U scrolls only bodies without changing candidates", async () => {
   // Lists and previews within one modal jump within their focused region.
-  const app = await mount(surface);
+  const app = await mount("history");
   try {
     app.mockInput.pressKey("o", { ctrl: true }); app.clock.advance(150); await app.render();
-    const preview = app.get(`${surface}-preview`) as ScrollBoxRenderable;
+    const preview = app.get("history-preview") as ScrollBoxRenderable;
     preview.scrollTo(0); await app.render();
     const half = Math.max(1, Math.floor(preview.viewport.height / 2));
 
@@ -389,8 +387,7 @@ test.each(["history", "monitor"] as const)("%s preview Ctrl+D/U scrolls only bod
 
     expect(preview.scrollTop).toBe(0); expect(app.opened).toEqual([]);
     app.mockInput.pressKey("o", { ctrl: true }); app.mockInput.pressEnter(); await app.render();
-    if (surface === "history") expect(app.opened).toEqual(["saved-0"]);
-    else expect(app.selection.sessionId).toBe("session-0");
+    expect(app.opened).toEqual(["saved-0"]);
   } finally { await app.close(); }
 });
 
