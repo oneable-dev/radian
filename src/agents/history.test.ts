@@ -8,6 +8,8 @@ import { piSessionFactory } from "./pi-session-adapter.ts";
 import { SessionRegistry } from "./session-registry.ts";
 import { SessionHistory } from "./history.ts";
 import { expectOk, expectError } from "../testing/results.ts";
+import { ok } from "../result.ts";
+import type { SessionSnapshotSource } from "./session-snapshot.ts";
 
 async function setup(blockCleanup = false) {
   const fixture = await createWorktreeFixture();
@@ -24,28 +26,91 @@ async function setup(blockCleanup = false) {
   const history = new SessionHistory([fixture.repository], registry, options.sessionDir);
   const main = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
   const feature = fixture.repository.worktrees.find((tree) => tree.path === fixture.feature)!;
-  return { ...fixture, main, feature, registry, history, gate,
+  return { ...fixture, main, feature, registry, history, gate, sessionDir: options.sessionDir,
     async cleanup() { gate.resolve(); await registry.shutdown(); await fixture.cleanup(); } };
 }
 
-test("SDK history scopes to the selected worktree and includes titles, activity times, and open IDs", async () => {
+test("History lists only closed SDK conversations in the selected worktree", async () => {
   // The shared SDK directory contains two different worktree conversations.
   const app = await setup();
   try {
     const main = expectOk(await app.registry.create(app.main.id)); const feature = expectOk(await app.registry.create(app.feature.id));
     await Promise.all([app.registry.prompt(main, "read"), app.registry.prompt(feature, "write")]);
 
-    // History is read-only metadata, not an operation that creates/resumes a session.
+    // Neither running nor idle open conversations belong in saved History.
+    expect(expectOk(await app.history.list(app.main.id))).toEqual([]);
+    expectOk(await app.registry.close(main));
     const list = expectOk(await app.history.list(app.main.id));
 
     // Metadata from another cwd cannot appear under the selected worktree.
     expect(list).toHaveLength(1);
     expect(list[0]?.title).toBe("read");
     expect(list[0]?.worktreeId).toBe(app.main.id);
-    expect(list[0]?.openSessionId).toBe(main);
+    expect(list[0]?.openSessionId).toBeNull();
+    expect(list[0]?.unavailableReason).toBeNull();
     expect(Number.isNaN(Date.parse(list[0]!.modified))).toBe(false);
     expect(list[0]!.messageCount).toBeGreaterThan(0);
   } finally { await app.cleanup(); }
+});
+
+test("Snapshots without SDK conversations never create History rows, even for open recovery", async () => {
+  // Recovery metadata is not an independently resumable saved conversation.
+  const app = await setup();
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)), live = app.registry.records.find(record => record.id === id)!;
+    const snapshots: SessionSnapshotSource = {
+      listSessions: () => (["open", "closed"] as const).map(lifecycle => ({ id: lifecycle === "open" ? live.id : "orphan", name: "Snapshot", title: "Snapshot",
+        worktreeId: app.main.id, conversationId: lifecycle === "open" ? live.state.conversationId! : "orphan", lifecycle, updatedAt: Date.now(), messageCount: 0 })),
+      readSession: async () => ok(live),
+    };
+    const history = new SessionHistory([app.repository], app.registry, app.sessionDir, snapshots);
+
+    // Both open and closed snapshot-only entries stay out of SDK-backed History.
+    const items = expectOk(await history.list(app.main.id));
+
+    // The open tab remains available for recovery without appearing in the saved list.
+    expect(items).toEqual([]); expect(app.registry.records.map(record => record.id)).toEqual([id]);
+    expect(expectError(await history.preview(app.main.id, "orphan")).code).toBe("HISTORY_UNAVAILABLE");
+  } finally { await app.cleanup(); }
+});
+
+test("Open recovery intent excludes SDK conversations even without a live writer", async () => {
+  // Failed recovery can leave an open tab without a registry-owned executor.
+  const app = await setup();
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
+    const conversationId = app.registry.records.find(record => record.id === id)!.state.conversationId!;
+    expectOk(await app.registry.close(id)); app.registry.acknowledgeCheckpoint(app.registry.checkpointRecords);
+    const snapshot = { id, conversationId, name: "Recovery", title: "Recovery", worktreeId: app.main.id,
+      lifecycle: "open" as "open" | "closed", updatedAt: Date.now(), messageCount: 1 };
+    const history = new SessionHistory([app.repository], app.registry, app.sessionDir, {
+      listSessions: () => [snapshot], readSession: async () => ok(null),
+    });
+
+    // Stored open intent must stay out of History until that tab is explicitly closed.
+    const open = expectOk(await history.list(app.main.id)); snapshot.lifecycle = "closed";
+    const closed = expectOk(await history.list(app.main.id));
+
+    // A saved original becomes a candidate only once both runtime and recovery intent are closed.
+    expect(open).toEqual([]); expect(closed.map(item => item.id)).toEqual([conversationId]);
+  } finally { await app.cleanup(); }
+});
+
+test.each(["opening", "closing", "replacing", "cleanup", "subagent"])("History hides SDK conversations reserved for %s", async state => {
+  // A valid original is not a saved candidate while its writer reservation is active.
+  const app = await setup(); let restore: (() => void) | undefined;
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
+    expectOk(await app.registry.close(id));
+    const ownership = spyOn(app.registry, "historyOwnership").mockReturnValue({ openSessionId: null, unavailableReason: state });
+    restore = () => ownership.mockRestore();
+
+    // Discover saved candidates while the writer reservation remains active.
+    const items = expectOk(await app.history.list(app.main.id));
+
+    // Reserved conversations never reach the popup as unavailable rows.
+    expect(items).toEqual([]);
+  } finally { restore?.(); await app.cleanup(); }
 });
 
 test("Previews read open and closed histories without writes and reject other worktrees", async () => {
@@ -53,7 +118,7 @@ test("Previews read open and closed histories without writes and reject other wo
   const app = await setup();
   try {
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
-    const saved = expectOk(await app.history.list(app.main.id))[0]!, file = app.registry.sessionFile(id)!;
+    const file = app.registry.sessionFile(id)!, saved = { id: SessionManager.open(file).getSessionId() };
     const before = await readFile(file, "utf8"), records = app.registry.records;
     const preview = expectOk(await app.history.preview(app.main.id, saved.id));
     expect(preview.text).toContain("read"); expect(preview.telemetry).toEqual(app.registry.details(id)?.telemetry);
@@ -71,7 +136,7 @@ test("Closed-session previews remain read-only for real SDK histories exceeding 
   const app = await setup();
   try {
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
-    const saved = expectOk(await app.history.list(app.main.id))[0]!, file = app.registry.sessionFile(id)!;
+    const file = app.registry.sessionFile(id)!, saved = { id: SessionManager.open(file).getSessionId() };
     expectOk(await app.registry.close(id));
     const entries = (await readFile(file, "utf8")).trimEnd().split("\n").map((line) => JSON.parse(line));
     const parent = entries.at(-1)!.id;
@@ -146,7 +211,7 @@ test("Resuming rejects unknown IDs and IDs belonging to other worktrees", async 
   const app = await setup();
   try {
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
-    const saved = expectOk(await app.history.list(app.main.id))[0]!;
+    const saved = { id: SessionManager.open(app.registry.sessionFile(id)!).getSessionId() };
 
     // Cross-worktree or arbitrary IDs cannot bypass discovery membership.
     expect(expectError(await app.history.resume(app.feature.id, saved.id)).code).toBe("HISTORY_UNAVAILABLE");
@@ -158,12 +223,12 @@ test("Resuming rejects unknown IDs and IDs belonging to other worktrees", async 
   } finally { await app.cleanup(); }
 });
 
-test("Closing saved sessions appear busy in history without creating another writer", async () => {
+test("Closing sessions stay out of History until their writer releases ownership", async () => {
   // Cleanup acknowledgement is held so the hidden closing writer can be observed.
   const app = await setup(true);
   try {
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
-    const savedId = expectOk(await app.history.list(app.main.id))[0]!.id;
+    const savedId = SessionManager.open(app.registry.sessionFile(id)!).getSessionId();
 
     // Closing removes display ownership but keeps the canonical-file reservation.
     const closing = app.registry.close(id);
@@ -171,9 +236,9 @@ test("Closing saved sessions appear busy in history without creating another wri
     expect(expectError(await app.history.resume(app.main.id, savedId)).code).toBe("SESSION_CONFLICT");
 
     // Read-only history does not mistake an in-progress close for a reusable saved context.
-    expect(list[0]?.unavailableReason).toContain("still closing");
-    expect(list[0]?.openSessionId).toBeNull();
+    expect(list).toEqual([]);
     app.gate.resolve(); await closing;
+    expect(expectOk(await app.history.list(app.main.id)).map(item => item.id)).toEqual([savedId]);
   } finally { await app.cleanup(); }
 });
 
@@ -218,11 +283,29 @@ test("History permission failures return StorageError Results rather than empty 
   } finally { restoreListing?.(); await chmod(blocked, 0o700).catch(() => {}); await app.cleanup(); }
 });
 
+test("History excludes SDK originals deleted after metadata discovery", async () => {
+  // A concurrent deletion must not turn an otherwise valid list into a phantom candidate.
+  const app = await setup(); let restore: (() => void) | undefined;
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
+    const file = app.registry.sessionFile(id)!; expectOk(await app.registry.close(id));
+    const records = await SessionManager.list(app.main.path, dirname(file)); await unlink(file);
+    const listing = spyOn(SessionManager, "list").mockResolvedValue(records); restore = () => listing.mockRestore();
+
+    // Revalidate the metadata's original path before exposing a saved candidate.
+    const items = expectOk(await app.history.list(app.main.id));
+
+    // Definite disappearance excludes the row instead of failing the entire lookup.
+    expect(items).toEqual([]);
+  } finally { restore?.(); await app.cleanup(); }
+});
+
 test("Previews reuse the listing file index and rescan only on explicit refresh", async () => {
   // Count real SDK discovery calls to detect repeated full-list I/O.
   const app = await setup(); let restore: (() => void) | undefined;
   try {
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
+    expectOk(await app.registry.close(id));
     const listing = spyOn(SessionManager, "list"); restore = () => listing.mockRestore();
     const saved = expectOk(await app.history.list(app.main.id))[0]!;
     for (let i = 0; i < 3; i++) expect(expectOk(await app.history.preview(app.main.id, saved.id)).text).toContain("read");
@@ -252,6 +335,7 @@ test("Cancelling completed list request signals does not rescan validated indexe
   const app = await setup(); let restore: (() => void) | undefined;
   try {
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
+    expectOk(await app.registry.close(id));
     const listing = spyOn(SessionManager, "list"); restore = () => listing.mockRestore(); const abort = new AbortController();
     const saved = expectOk(await app.history.list(app.main.id, abort.signal))[0]!; abort.abort();
     expectOk(await app.history.preview(app.main.id, saved.id));
@@ -264,8 +348,8 @@ test("Preview rejects cached files replaced by another worktree's history", asyn
   const app = await setup();
   try {
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
-    const file = app.registry.sessionFile(id)!, saved = expectOk(await app.history.list(app.main.id))[0]!;
-    expectOk(await app.registry.close(id));
+    const file = app.registry.sessionFile(id)!; expectOk(await app.registry.close(id));
+    const saved = expectOk(await app.history.list(app.main.id))[0]!;
     const lines = (await readFile(file, "utf8")).trimEnd().split("\n"), header = JSON.parse(lines[0]!);
     lines[0] = JSON.stringify({ ...header, cwd: app.feature.path }); await writeFile(file, lines.join("\n") + "\n");
 
@@ -279,8 +363,8 @@ test.each(["\0invalid", 42])("Invalid cached header cwd %j returns corruption er
   const app = await setup();
   try {
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
-    const file = app.registry.sessionFile(id)!, saved = expectOk(await app.history.list(app.main.id))[0]!;
-    expectOk(await app.registry.close(id));
+    const file = app.registry.sessionFile(id)!; expectOk(await app.registry.close(id));
+    const saved = expectOk(await app.history.list(app.main.id))[0]!;
     const lines = (await readFile(file, "utf8")).trimEnd().split("\n"), header = JSON.parse(lines[0]!);
     lines[0] = JSON.stringify({ ...header, cwd }); await writeFile(file, lines.join("\n") + "\n");
 
@@ -293,8 +377,8 @@ test("Preview rejects cached paths replaced by symbolic links", async () => {
   const app = await setup();
   try {
     const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
-    const file = app.registry.sessionFile(id)!, saved = expectOk(await app.history.list(app.main.id))[0]!;
-    expectOk(await app.registry.close(id)); const other = join(app.directory, "replaced.jsonl");
+    const file = app.registry.sessionFile(id)!; expectOk(await app.registry.close(id));
+    const saved = expectOk(await app.history.list(app.main.id))[0]!, other = join(app.directory, "replaced.jsonl");
     await writeFile(other, await readFile(file)); await unlink(file); await symlink(other, file);
 
     expect(expectError(await app.history.preview(app.main.id, saved.id)).code).toBe("HISTORY_UNAVAILABLE");

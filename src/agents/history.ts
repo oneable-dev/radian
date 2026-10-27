@@ -19,7 +19,7 @@ export type HistoryItem = {
   readonly unavailableReason: string | null;
 };
 
-type SavedHistory = HistoryItem & { readonly path?: string; readonly snapshotOnly?: boolean; readonly requireCwd?: boolean };
+type SavedHistory = HistoryItem & { readonly path: string; readonly requireCwd?: boolean };
 type HistoryIndex = { readonly cwd: string; readonly items: readonly SavedHistory[]; readonly byId: ReadonlyMap<string, SavedHistory> };
 type Discovery = { readonly ready: Promise<Result<HistoryIndex, ExpectedError>>; readonly signal: AbortSignal | undefined; valid: boolean };
 
@@ -34,7 +34,15 @@ export class SessionHistory {
 
   async list(worktreeId: string, signal?: AbortSignal): Promise<Result<readonly HistoryItem[], ExpectedError>> {
     const saved = await this.index(worktreeId, signal, true);
-    return saved.ok ? ok(saved.value.items.map(({ path: _path, snapshotOnly: _snapshotOnly, requireCwd: _requireCwd, ...item }) => item)) : saved;
+    if (!saved.ok) return saved;
+    // Failed recovery can retain open intent without a live executor owning the SDK file.
+    const lifecycles = new Map(this.snapshots?.listSessions(worktreeId).map(snapshot => [snapshot.conversationId ?? snapshot.id, snapshot.lifecycle]));
+    for (const record of this.registry.checkpointRecords) if (record.worktreeId === worktreeId) {
+      lifecycles.set(record.state.conversationId ?? record.id, record.lifecycle ?? "open");
+    }
+    // Keep the full index for ownership-safe resume, direct previews and dashboard totals.
+    return ok(saved.value.items.filter(item => lifecycles.get(item.id) !== "open" && !item.openSessionId && !item.unavailableReason)
+      .map(({ path: _path, requireCwd: _requireCwd, ...item }) => item));
   }
 
   async preview(worktreeId: string, savedId: string, signal?: AbortSignal): Promise<Result<HistoryPreview, ExpectedError>> {
@@ -56,10 +64,9 @@ export class SessionHistory {
     if (this.snapshots) {
       const snapshot = await this.snapshots.readSession(worktreeId, savedId); if (!snapshot.ok) return snapshot;
       if (signal?.aborted) return err(new CancelledError());
-      if (snapshot.value && (!item.path || snapshot.value.sessionFile === item.path)) return this.snapshotPreview(snapshot.value, savedId, cwd.value, signal);
+      if (snapshot.value?.sessionFile === item.path) return this.snapshotPreview(snapshot.value, savedId, cwd.value, signal);
     }
     const selectedPath = item.path;
-    if (!selectedPath) return err(new HistoryError("HISTORY_UNAVAILABLE", "No session snapshot or SDK conversation is available."));
     const path = await capture(() => realpath(selectedPath)); if (!path.ok) return path;
     if (cwd.value !== saved.value.cwd || path.value !== item.path) return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved session location changed. Refresh history."));
     const preview = await readHistoryPreview(path.value, worktreeId, savedId, signal, { cwd: cwd.value, requireCwd: item.requireCwd ?? !!this.sessionDir });
@@ -84,10 +91,8 @@ export class SessionHistory {
     const saved = await this.index(worktreeId, undefined, true); if (!saved.ok) return saved;
     const item = saved.value.byId.get(savedId);
     if (!item) return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved session is not available in this worktree. Refresh history."));
-    if (item.snapshotOnly && !item.openSessionId) return err(new HistoryError("HISTORY_UNAVAILABLE", item.unavailableReason ?? "The SDK conversation is unavailable."));
     if (item.unavailableReason) return err(new SessionError("SESSION_CONFLICT", item.unavailableReason));
     if (item.openSessionId) return ok(item.openSessionId);
-    if (!item.path) return err(new HistoryError("HISTORY_UNAVAILABLE", "The SDK conversation is unavailable. The saved snapshot is read only."));
     const validated = await validateHistory(item.path); if (!validated.ok) return validated;
     const managed = this.snapshots?.listSessions(worktreeId).find(snapshot => snapshot.conversationId === savedId)?.managed === true;
     return this.registry.create(worktreeId, item.path, { id: crypto.randomUUID(), name: item.title, managed });
@@ -100,7 +105,6 @@ export class SessionHistory {
       const index = await this.index(tree.id, signal, true); if (!index.ok) return index;
       for (const item of index.value.items) {
         if (signal?.aborted) return err(new CancelledError());
-        if (!item.path) { warnings.push("Some saved snapshots have no SDK history and are excluded."); continue; }
         if (files.has(item.path)) continue;
         files.add(item.path);
         const summary = await readDashboardHistory(item.path, index.value.cwd, days, now, seen, signal);
@@ -156,26 +160,15 @@ export class SessionHistory {
         }
         if (savedCwd.value !== cwd.value) continue;
       } else if (session.requireCwd) continue;
-      const path = await capture(() => realpath(session.path)); if (!path.ok) return path;
+      const path = await capture(() => realpath(session.path));
+      if (!path.ok) {
+        if (path.error instanceof StorageError && path.error.systemCode === "ENOENT") continue;
+        return path;
+      }
       const ownership = this.registry.historyOwnership(path.value);
       result.push({ id: session.id, path: path.value, requireCwd: session.requireCwd, worktreeId, title: (session.name?.trim() || session.firstMessage.trim() || "Untitled session").replace(/\s+/g, " ").slice(0, 120),
         modified: session.modified.toISOString(), messageCount: session.messageCount,
         openSessionId: ownership.openSessionId, unavailableReason: ownership.unavailableReason });
-    }
-    const listed = new Set(result.map(item => item.id));
-    for (const snapshot of this.snapshots?.listSessions(worktreeId) ?? []) {
-      const id = snapshot.conversationId ?? snapshot.id;
-      if (listed.has(id)) continue;
-      const snapshotCwd = snapshot.cwd;
-      if (snapshotCwd) {
-        const scope = await capture(() => realpath(snapshotCwd)); if (!scope.ok) return scope;
-        if (scope.value !== cwd.value) continue;
-      }
-      const live = this.registry.records.find(record => record.worktreeId === worktreeId && record.state.conversationId === id);
-      result.push({ id, worktreeId, snapshotOnly: true, title: snapshot.title, modified: new Date(snapshot.updatedAt).toISOString(), messageCount: snapshot.messageCount,
-        ...(snapshot.sessionFile ? { path: snapshot.sessionFile } : {}), openSessionId: live?.id ?? null,
-        unavailableReason: live ? null : "The SDK conversation is unavailable. Its saved snapshot can still be previewed." });
-      listed.add(id);
     }
     if (signal?.aborted) return err(new CancelledError());
     result.sort((a, b) => b.modified.localeCompare(a.modified) || a.id.localeCompare(b.id));

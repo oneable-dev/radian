@@ -54,7 +54,7 @@ const digest = (text: string) => createHash("sha256").update(text).digest("hex")
 const snapshotKey = (record: SessionRecord) => digest(sessionRecordKey(record));
 
 // One shared session record per conversation. The workspace file holds only a small index;
-// closed bodies stay on disk and are read lazily by History, never instantiated for recovery.
+// closed bodies with SDK originals are read lazily by History, never instantiated for recovery.
 export class RuntimeStore implements SessionSnapshotSource {
   private tail: Promise<Result<unknown, ExpectedError>> = Promise.resolve(ok(undefined));
   private entries = new Map<string, SnapshotIndex>();
@@ -179,7 +179,16 @@ export class RuntimeStore implements SessionSnapshotSource {
     if (!saved.ok) return saved;
     this.entries = next; this.legacy.clear();
     const { records: _records, ...metadata } = manifest; this.metadata = metadata;
-    return ok(undefined);
+    // Newly closed empty/deleted conversations must not accumulate preview-only bodies.
+    // Publish closed intent first so a cleanup failure can never reopen an old snapshot.
+    const failures: ExpectedError[] = [];
+    for (const key of incoming.keys()) {
+      const entry = this.entries.get(key);
+      if (!entry) continue;
+      const pruned = await this.pruneOrphanedEntry(entry);
+      if (!pruned.ok) failures.push(pruned.error);
+    }
+    return failures.length ? err(new CleanupError("Closed-session snapshot cleanup partially failed.", failures)) : ok(undefined);
   }
 
   pruneExpired(days: number | null, reserve: (snapshot: SessionSnapshotInfo, canonicalFile?: string) => (() => void) | null, now = Date.now()): Promise<Result<number, ExpectedError>> {
@@ -196,11 +205,35 @@ export class RuntimeStore implements SessionSnapshotSource {
     let removed = 0;
     const failures: ExpectedError[] = [];
     for (const entry of [...this.entries.values()]) {
+      const orphaned = await this.pruneOrphanedEntry(entry, reserve);
+      if (!orphaned.ok) { failures.push(orphaned.error); continue; }
+      if (orphaned.value) { removed += orphaned.value; continue; }
       if (!entry.cleanupPending && (entry.expiredAt !== undefined || !sessionExpired(entry, days, now))) continue;
       const result = await this.pruneEntry(entry, reserve, now);
       if (result.ok) removed += result.value; else failures.push(result.error);
     }
     return failures.length ? err(new CleanupError("Session retention cleanup partially failed; unverified files were preserved.", failures)) : ok(removed);
+  }
+  private async pruneOrphanedEntry(entry: SnapshotIndex, reserve?: (snapshot: SessionSnapshotInfo, canonicalFile?: string) => (() => void) | null): Promise<Result<number, ExpectedError>> {
+    if (entry.lifecycle !== "closed" || entry.cleanupPending || entry.expiredAt !== undefined) return ok(0);
+    const sessionFile = entry.sessionFile;
+    if (sessionFile) {
+      const found = await capture(() => lstat(sessionFile));
+      if (found.ok) return ok(0);
+      // Only definite absence authorizes removal; permission and other I/O failures stay visible.
+      if (!(found.error instanceof StorageError) || found.error.systemCode !== "ENOENT") return found;
+    }
+    const release = reserve?.(entry, entry.sessionFile);
+    if (reserve && !release) return ok(0);
+    try {
+      // Keep the closed index until unlink succeeds, so an interrupted cleanup remains retryable.
+      const removed = await removeRetentionFile(join(this.paths.directory, "sessions", `${entry.key}.json`));
+      if (!removed.ok) return removed;
+      const next = new Map(this.entries); next.delete(entry.key);
+      const saved = await this.publishIndex(next); if (!saved.ok) return saved;
+      this.legacy.delete(entry.key);
+      return ok(1);
+    } finally { release?.(); }
   }
   private async pruneEntry(entry: SnapshotIndex, reserve: (snapshot: SessionSnapshotInfo, canonicalFile?: string) => (() => void) | null, now: number): Promise<Result<number, ExpectedError>> {
     if (entry.managed !== true || entry.lifecycle !== "closed" || entry.closedAt == null) return ok(0);

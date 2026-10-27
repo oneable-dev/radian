@@ -7,6 +7,7 @@ import { connectRuntime, fetchSnapshot, RuntimeClient } from "./client.ts";
 import { runtimePaths, pidAlive, privateDirectory, RuntimeStore } from "./storage.ts";
 import { replySchema, type RuntimeManifest, type RuntimeSnapshot } from "./protocol.ts";
 import { Value } from "typebox/value";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { expectOk, expectError } from "../testing/results.ts";
 import { initialGitState } from "../git/model.ts";
 
@@ -64,6 +65,8 @@ test("Dashboard Unix IPC reads closed SDK runs without conversations or new mode
     expectOk(await client.prompt(id, "read"));
     await observed(client, snapshot => !!snapshot.details[id]?.result);
     expect(expectOk(await client.catalog(id)).items.some(item => item.value === "dashboard")).toBe(true);
+    expect(expectOk(await client.listHistory(tree.id))).toEqual([]);
+    expect(expectOk(await client.dashboard(7)).totals.runs).toBe(1);
     expectOk(await client.closeSession(id));
     const before = client.snapshot.repositories;
 
@@ -162,7 +165,7 @@ test("new IPC adds same-worktree tabs while retaining conversations, queues, and
     expect(client.snapshot.details[id]?.pendingMessages).toHaveLength(1);
     expect(client.snapshot.details[id]?.status).toBe("working"); expect(client.snapshot.details[added]?.sections).toEqual([]);
     expect(client.snapshot.preferences.drafts[id]).toBe("Unsent original draft");
-    expect(expectOk(await client.listHistory(tree.id)).find((item) => item.id === conversation)?.openSessionId).toBe(id);
+    expect(expectOk(await client.listHistory(tree.id))).toEqual([]);
     // The text API must dispatch /new as tab creation too, never as a paid model prompt or reset.
     expectOk(await client.prompt(id, "/new"));
     expect(client.snapshot.repositories[0]!.worktrees.find((item) => item.id === tree.id)!.sessions).toHaveLength(3);
@@ -345,7 +348,7 @@ test("Event connections survive 31 idle seconds and retain same-service history/
     expect(notices).toEqual([]);
     expect(client.snapshot.notice).toBe("");
     expect(client.snapshot.instance).toBe(instance);
-    expect(expectOk(await client.listHistory(worktree))).toHaveLength(1);
+    expect(expectOk(await client.listHistory(worktree))).toEqual([]);
     const next = expectOk(await client.create(worktree));
     await observed(client, (state) => !!state.details[next]);
     expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions.map((session) => session.id)).toEqual([id, next]);
@@ -445,7 +448,7 @@ test("Existing clients reconnect to explicitly replaced services without replayi
     // Fresh history/capabilities and the same conversation are available without another UI launch.
     expect(client.snapshot.pid).not.toBe(pid);
     expect(client.snapshot.details[id]?.output).toContain("main-worktree-marker");
-    expect(expectOk(await client.listHistory(worktree))[0]?.openSessionId).toBe(id);
+    expect(expectOk(await client.listHistory(worktree))).toEqual([]);
     expect(await readFile(file, "utf8")).toBe(original);
     expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions.map((session) => session.id)).toEqual([id]);
   } finally { await app.cleanup(); }
@@ -572,30 +575,33 @@ test.each(["close", "exit"] as const)("%s: corrupt history remains unmodified, r
   } finally { await app.cleanup(); }
 }, 20000);
 
-test("Closed shared snapshots support previews without SDK files or reexecution", async () => {
-  // Verify recovery and previews read the same format through actual IPC.
+test.each(["inline", "indexed"])("Startup discards %s closed snapshots without SDK originals instead of exposing unavailable History", async format => {
+  // An older runtime may have archived a body after its original conversation disappeared.
   const app = await setup();
   try {
     await privateDirectory(app.paths.directory);
-    const tree = app.repository.worktrees[0]!, store = new RuntimeStore(app.paths);
+    const tree = app.repository.worktrees[0]!;
     const archived = { id: "archived-tab", name: "Archived task", worktreeId: tree.id, cwd: tree.path, lifecycle: "closed" as const,
       sessionFile: join(tree.path, "missing-conversation.jsonl"), updatedAt: 1000,
-      state: { conversationId: "archived-conversation", status: "failure" as const, error: "Saved failure", output: "Stored output",
-        sections: Array.from({ length: 20 }, (_, index) => ({ id: `s${index}`, kind: "assistant" as const, title: "Agent", text: `Stored section ${index}`, status: "complete" as const })),
-        telemetry: { provider: "fixture", model: "archived-model", effort: "high", fast: true, context: { usedTokens: 72000, maxTokens: 200000 }, weekly: null } }, subagents: [] };
-    expectOk(await store.save({ version: 1, repositoryId: app.repository.id, repositories: [app.repository], records: [archived], preferences: { selection: { worktreeId: tree.id, sessions: {} }, drafts: {} } }));
+      state: { conversationId: "archived-conversation", status: "failure" as const, error: "Saved failure", output: "Stored output" }, subagents: [] };
+    const manifest: RuntimeManifest = { version: 1, repositoryId: app.repository.id, repositories: [app.repository], records: [archived],
+      preferences: { selection: { worktreeId: tree.id, sessions: {} }, drafts: {} } };
+    if (format === "inline") await writeFile(app.paths.manifest, JSON.stringify(manifest));
+    else {
+      await writeFile(archived.sessionFile, JSON.stringify({ type: "session", version: 3, id: archived.state.conversationId, cwd: tree.path }) + "\n");
+      expectOk(await new RuntimeStore(app.paths).save(manifest)); await rm(archived.sessionFile);
+    }
 
-    // Startup and History reads create neither executors nor SDK writers for closed conversations.
-    const client = await app.connect(), items = expectOk(await client.listHistory(tree.id));
-    const preview = expectOk(await client.previewHistory(tree.id, "archived-conversation"));
+    // Restore open intent only and let startup maintenance remove unusable closed bodies.
+    const client = await app.connect(); await observed(client, state => !!state.sessionRetention);
+    const items = expectOk(await client.listHistory(tree.id));
 
-    // Limit only recent sections while passing saved run state and telemetry unchanged.
-    expect(client.snapshot.details).toEqual({}); expect(items.map(item => item.id)).toEqual(["archived-conversation"]);
-    expect(preview.snapshot?.lifecycle).toBe("closed"); expect(preview.snapshot?.state.status).toBe("failure");
-    expect(preview.snapshot?.state.error).toBe("Saved failure"); expect(preview.telemetry).toEqual(archived.state.telemetry);
-    expect(preview.snapshot?.state.sections).toHaveLength(15); expect(preview.snapshot?.state.sections?.[0]?.text).toBe("Stored section 5");
-    expect(preview.snapshot?.state.sections?.at(-1)?.text).toBe("Stored section 19");
+    // Neither a visible row, a preview, nor an internal archived snapshot survives.
+    expect(client.snapshot.details).toEqual({}); expect(items).toEqual([]);
+    expect(expectError(await client.previewHistory(tree.id, "archived-conversation")).code).toBe("HISTORY_UNAVAILABLE");
     expect(expectError(await client.resume(tree.id, "archived-conversation")).code).toBe("HISTORY_UNAVAILABLE");
+    const store = new RuntimeStore(app.paths); expectOk(await store.load(app.repository.id)); expect(store.listSessions(tree.id)).toEqual([]);
+    expect(await readFile(app.paths.manifest, "utf8")).not.toContain("Archived task");
     expect(await Bun.file(archived.sessionFile).exists()).toBe(false);
   } finally { await app.cleanup(); }
 });
@@ -662,7 +668,8 @@ test("IPC history opens worktree-scoped SDK records and returns existing entries
     const a = expectOk(await client.create(main)); const b = expectOk(await client.create(feature));
     await client.prompt(a, "read"); await client.prompt(b, "write");
     await observed(client, (state) => state.details[a]?.status === "complete" && state.details[b]?.status === "complete");
-    const saved = expectOk(await client.listHistory(main))[0]!;
+    expect(expectOk(await client.listHistory(main))).toEqual([]);
+    const saved = { id: client.snapshot.details[a]!.conversationId! };
     const file = (await app.manifest()).records.find((record) => record.id === a)!.sessionFile!;
 
     // Preview is a separate read-only, instance-fenced route and must preserve the active runtime/file.
@@ -701,8 +708,8 @@ test("IPC history opens worktree-scoped SDK records and returns existing entries
     expect(reopened).not.toBe(a);
     expect(client.snapshot.details[reopened]?.output).toContain("main-worktree-marker");
     expect((await app.manifest()).records.find((record) => record.id === reopened)?.sessionFile).toBe(file);
-    expect(expectOk(await client.listHistory(main))).toHaveLength(1);
-    expect(expectOk(await client.listHistory(feature))[0]?.title).toBe("write");
+    expect(expectOk(await client.listHistory(main))).toEqual([]);
+    expect(expectOk(await client.listHistory(feature))).toEqual([]);
     expect(expectError(await client.resume(feature, saved.id)).code).toBe("HISTORY_UNAVAILABLE");
   } finally { await app.cleanup(); }
 }, 20000);
@@ -715,15 +722,17 @@ test("Active subagent files never execute twice through history", async () => {
     const id = expectOk(await client.create(main)); expectOk(await client.prompt(id, "delegate"));
     await observed(client, (state) => state.repositories[0]?.worktrees[0]?.sessions[0]?.subagents[0]?.status === "working");
     let childId: string | undefined;
-    await until(async () => { childId = expectOk(await client.listHistory(main)).find((entry) => entry.title === "slow")?.id; return !!childId; });
+    await until(async () => { childId = (await SessionManager.list(app.main, join(app.paths.directory, "offline-agent", "sessions")))
+      .find(entry => entry.firstMessage === "slow")?.id; return !!childId; });
 
-    // A history request cannot turn an active owned child into a second independent writer.
-    const item = expectOk(await client.listHistory(main)).find((entry) => entry.id === childId)!;
+    // Active parents and children are hidden, but stale/direct resume still checks writer ownership.
+    expect(expectOk(await client.listHistory(main))).toEqual([]);
     expect(expectError(await client.resume(main, childId!)).code).toBe("SESSION_CONFLICT");
 
     // Parent ownership and the single open-session item are unchanged.
-    expect(item.unavailableReason).toContain("active subagent");
     expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions.map((session) => session.id)).toEqual([id]);
+    expectOk(await client.closeSession(id)); await observed(client, state => state.closingCount === 0);
+    expect(expectOk(await client.listHistory(main)).some(item => item.id === childId)).toBe(true);
   } finally { await app.cleanup(); }
 }, 20000);
 

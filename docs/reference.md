@@ -74,7 +74,7 @@ interruption explicitly and is never automatically restarted.
 
 `--demo` remains display-only: closing removes fixture metadata and creation only reports a
 request. It does not invoke Pi, access credentials, or create stored sessions.
-The History popup lists saved SDK conversations for the selected worktree and opens them explicitly.
+The History popup lists closed, resumable SDK conversations for the selected worktree and opens them explicitly.
 The Agent view provides a keyboard-first, read-only transcript and prompt, not a conversation-content editor.
 The Editor view embeds Neovim; Git provides a native, read-only history and whole-file diff UI.
 
@@ -1564,8 +1564,9 @@ Stored JSONL history is never deleted or forked by closing. The registry's `crea
 API reopens the same saved session; the History tab uses this same-file resume boundary. Duplicate writers,
 including attempts to reopen while closing, are rejected. Unused-session persistence follows
 SDK defaults: a session with no user/assistant exchange may not have a history file. Closing retains
-the same session snapshot used by runtime recovery, marked `closed`, for read-only History previews.
-A missing SDK conversation does not prevent viewing that snapshot, but it cannot be resumed.
+the same session snapshot used by runtime recovery, marked `closed`, for read-only History previews
+only while its SDK conversation still exists. Closed snapshots without an original are discarded;
+open snapshots remain available for runtime recovery even when no SDK file has been created yet.
 
 ### Test real SDK switching without a paid model
 
@@ -1685,7 +1686,8 @@ The Agent view uses the structured read-only transcript described above on servi
 Runtime recovery and History share the same session-record format, containing the structured
 Transcript, compatible plain output, execution/result state, subagent summaries and telemetry.
 `lifecycle: open | closed` is independent of `working | complete | failure`. Explicit close and `/clear`
-preserve the outgoing conversation as closed; stopping the runtime preserves open-session intent.
+preserve the outgoing conversation as closed when its SDK file exists; stopping the runtime preserves
+open-session intent.
 Records are keyed by worktree and SDK conversation ID, not the replaceable UI tab ID.
 
 On disk, `workspace.json` storage version 2 contains the workspace/preferences and a small session
@@ -1710,8 +1712,15 @@ SDK conversation is reopened, and set anew when it is closed again. Ordinary che
 updates and creation dates do not reset that clock. Open or runtime-owned active sessions are never
 removed. Owned subagent conversations receive closed snapshots after their work settles as well.
 
-Only records positively marked as Radian-created (`managed`) are eligible. New hosted SDK conversations
-are created under the repository runtime's private `sdk-sessions/` directory, not mixed into Pi's default
+Separately from age-based retention, checkpoints discard newly closed snapshots without an SDK file.
+Startup and hourly maintenance also remove existing closed snapshots whose original file is absent,
+even under unlimited retention or for unknown-origin snapshots. This removes only Radian's snapshot
+body and index entry, never an external SDK file. Open recovery records, active ownership reservations,
+and files whose existence cannot be checked because of permission or other I/O errors are preserved.
+
+Only records positively marked as Radian-created (`managed`) are eligible for age-based deletion.
+New hosted SDK conversations are created under the repository runtime's private `sdk-sessions/`
+directory, not mixed into Pi's default
 session directory; isolated test runtimes keep their existing private fixture directory. Existing files
 are never moved. History combines that owned directory with Pi's default per-worktree discovery, so
 older/external conversations remain accessible. External Pi conversations and older records without
@@ -1779,15 +1788,19 @@ History is a searchable popup, not a sidebar tab or a session-toolbar button. Us
 the Agent prompt, or **Ctrl+Space → h** (`history.show`, configurable) from any work view.
 Its scope is the active worktree, not the workspace popup's candidate cursor. The list uses SDK conversation
 names (falling back to the first prompt or `Untitled session`), last activity and message count,
-newest first, including in shared offline directories.
+newest first, including in shared offline directories. Only closed conversations with discoverable SDK
+originals and no active writer reservation appear. Open sessions, opening/closing/cleanup operations,
+active subagents and snapshot-only records are excluded rather than shown as `[Open]` or `[Unavailable]`.
+Use session tabs or the session monitor to access open sessions.
 
 Type a title query, including Unicode text. Every whitespace-separated term must occur as a
 contiguous substring; scattered letters do not match. Arrows or Ctrl+N/P move the candidate cursor without
 changing the live session; normal letters, including hjkl and r, remain search text. `Tab`/`Shift+Tab`
 cycle within the popup. The list additionally supports j/k and Home/End. `Enter` opens the selected
-context in Agents, or selects its existing open tab, without copying/forking the SDK file or sending a
-prompt. Clicking a row only selects its preview. `Esc` closes the popup and restores its original
-focus without changing drafts, transcript scroll, work views, workspace popup visibility or PTY attachments.
+context in Agents without copying/forking the SDK file or sending a prompt. If another client has
+already opened it since discovery, Open selects that existing tab instead of creating a duplicate.
+Clicking a row only selects its preview. `Esc` closes the popup and restores its original focus without
+changing drafts, transcript scroll, work views, workspace popup visibility or PTY attachments.
 Global view/workspace/session commands are inactive while the popup owns focus. Closing a popup while
 Open is pending does not cancel or roll back an accepted request; a late result never changes selection.
 
@@ -1800,9 +1813,10 @@ it, read the OS clipboard or send a request. Session-management controls are hid
 The transcript retains at most the 15 newest sections of the saved current branch, including earlier
 turns, in chronological order, and initially scrolls to the latest content. Completion metadata stays
 on its original section rather than moving to a new unanswered prompt; explicit skills remain name-only.
-Open sessions supply their current session snapshot. Closed sessions reuse their preserved snapshot,
-including execution state, subagent summaries, model, context, Fast and account usage. The header shows
-the snapshot's saved time, and closed-session usage/countdowns are rendered as of that time, not as
+Closed sessions reuse their preserved snapshot, including execution state, subagent summaries,
+model, context, Fast and account usage. If a listed session has since reopened, Preview can read its
+current snapshot without creating another writer. The header shows the snapshot's saved time, and
+closed-session usage/countdowns are rendered as of that time, not as
 current account allowance. These values are display-only: SDK resume still resolves current telemetry
 and never restores a historical quota or enables Fast from the preview. Only records without a snapshot
 fall back to JSONL, where unavailable metadata remains unknown.
@@ -1820,10 +1834,11 @@ entries; these are data-retention limits, not total heap measurements. The cache
 current popup: Ctrl+R or closing clears it and cancels its queries. Reopening discovers current metadata;
 there is no background polling or file watcher. Late responses cannot populate a replacement cache.
 
-History combines the shared snapshot index with SDK-discovered conversations. Snapshots also cover
-empty or closed sessions whose SDK file is absent; those records remain previewable but cannot start
-a new SDK execution. Preview reads the current or preserved session record and applies its 15-section
-and per-body limits only to the response, never to the recovery record. A corrupt snapshot is an explicit
+SDK discovery determines History membership; the shared snapshot index only enriches eligible
+conversations with saved preview state. Empty or deleted conversations without SDK originals never
+create rows, even when an open recovery snapshot exists. Closed snapshots without originals are
+removed rather than kept as preview-only archives. Preview applies its 15-section and per-body limits
+only to the response, never to the recovery record. A corrupt snapshot is an explicit
 error, not a silent JSONL fallback. Open always rediscovers current membership and writer ownership.
 
 For older/external conversations without a snapshot, the runtime reuses the ID-to-file index from SDK
@@ -1843,8 +1858,9 @@ Only the metadata list uses a loading spinner: it remains visible for at least 5
 results or errors, and cancels on close/disposal. Preview failures remain visible until refresh.
 Empty history, no matches, discovery failures, preview failures and Open failures remain distinct.
 
-Closing records and active owned-child writers cannot be opened until cleanup finishes. Completed
-SDK child conversations can appear in history. The shared retention policy applies only to expired,
+Opening, closing, cleanup and active owned-child writers stay out of the list until ownership is
+released. Stale/direct Open requests still check writer ownership. Completed SDK child conversations
+with originals can appear in history. The shared retention policy applies only to expired,
 closed records with confirmed Radian ownership; external and legacy conversations remain visible.
 The workspace search remains exclusively the workspace-name projection. A worktree change closes an
 open popup rather than admitting an outdated selection into the new scope.

@@ -18,7 +18,7 @@ export type SessionSnapshotInfo = {
   readonly messageCount: number;
 };
 
-// Recovery and History read the same records; only recovery filters by lifecycle.
+// Recovery restores open records; History reads snapshots only for SDK-discovered conversations.
 export type SessionSnapshotSource = {
   listSessions(worktreeId: string): readonly SessionSnapshotInfo[];
   readSession(worktreeId: string, conversationId: string): Promise<Result<SessionRecord | null, ExpectedError>>;

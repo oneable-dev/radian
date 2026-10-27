@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, renameSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionRecord } from "../agents/session-registry.ts";
@@ -173,6 +173,116 @@ test("Restart after partial deletion finishes cleanup without JSONL fallback res
     await rm(path, { recursive: true });
     expect(expectOk(await restored.pruneExpired(null, release, now))).toBe(1);
     expect(restored.isExpired("tree", "partial")).toBe(true);
+  } finally { await app.close(); }
+});
+
+test.each(["missing", "unassigned"])("Checkpoints discard closed snapshots with %s SDK files but preserve open recovery", async kind => {
+  // Empty or deleted conversations must not become permanent preview-only archives.
+  const app = await fixture();
+  try {
+    const closed = await app.record("closed"), open = { ...await app.record("open"), lifecycle: "open" as const, closedAt: null };
+    await rm(closed.sessionFile!); await rm(open.sessionFile!);
+    const { sessionFile: _source, ...withoutFile } = closed;
+
+    // A closed record needs an original conversation; an open record still carries recovery intent.
+    expectOk(await app.store.save(app.manifest([kind === "unassigned" ? withoutFile : closed, open])));
+    const restored = new RuntimeStore(app.paths), loaded = expectOk(await restored.load("repo"));
+
+    // Remove closed bodies and index entries without losing the open session's last state.
+    expect(app.store.listSessions("tree").map(record => record.id)).toEqual(["open"]);
+    expect(expectOk(await app.store.readSession("tree", "closed"))).toBeNull();
+    expect(loaded?.records.map(record => record.id)).toEqual(["open"]);
+    expect(await readdir(join(app.paths.directory, "sessions"))).toHaveLength(1);
+    expect(await readFile(app.paths.manifest, "utf8")).not.toContain("Private title closed");
+  } finally { await app.close(); }
+});
+
+test("Closing an open recovery snapshot without an original removes its stored body and identity", async () => {
+  // An unused tab still needs recovery until the user explicitly closes it.
+  const app = await fixture();
+  try {
+    const open = { ...await app.record("empty"), lifecycle: "open" as const, closedAt: null };
+    await rm(open.sessionFile!); expectOk(await app.store.save(app.manifest([open])));
+    const path = await app.snapshotFile("empty");
+
+    // A checkpoint without that open tab records explicit closed intent.
+    expectOk(await app.store.save(app.manifest([])));
+
+    // No closed snapshot-only archive remains, including after restarting storage.
+    const restored = new RuntimeStore(app.paths); expect(expectOk(await restored.load("repo"))?.records).toEqual([]);
+    expect(restored.listSessions("tree")).toEqual([]); expect(await Bun.file(path).exists()).toBe(false);
+  } finally { await app.close(); }
+});
+
+test("Maintenance preserves snapshots when permissions prevent checking their SDK originals", async () => {
+  // An inaccessible original is not proof that the conversation no longer exists.
+  const app = await fixture(), blocked = join(app.root, "blocked");
+  try {
+    const record = await app.record("inaccessible"); await mkdir(blocked);
+    const sessionFile = join(blocked, "original.jsonl"); renameSync(record.sessionFile!, sessionFile);
+    expectOk(await app.store.save(app.manifest([{ ...record, sessionFile }])));
+    await chmod(blocked, 0);
+
+    // Report the I/O failure rather than authorizing destructive snapshot cleanup.
+    const failure = expectError(await app.store.pruneExpired(null, release, now));
+
+    expect(failure.code).toBe("CLEANUP_FAILED");
+    expect(expectOk(await app.store.readSession("tree", "inaccessible"))).not.toBeNull();
+  } finally { await chmod(blocked, 0o700); await app.close(); }
+});
+
+test("Maintenance removes orphaned closed snapshots even with unlimited retention and unknown provenance", async () => {
+  // Existing archives may outlive originals deleted by an external application.
+  const app = await fixture();
+  try {
+    const orphan = await app.record("orphan", 1, false), saved = await app.record("saved", 1, false);
+    expectOk(await app.store.save(app.manifest([orphan, saved])));
+    const path = await app.snapshotFile("orphan"); await rm(orphan.sessionFile!);
+
+    // Missing-original cleanup is independent of age-based SDK deletion policy.
+    const removed = expectOk(await app.store.pruneExpired(null, release, now));
+
+    // Drop only Radian's unusable snapshot; the external SDK conversation remains unchanged.
+    expect(removed).toBe(1); expect(await Bun.file(path).exists()).toBe(false);
+    expect(app.store.listSessions("tree").map(record => record.id)).toEqual(["saved"]);
+    expect(await Bun.file(saved.sessionFile!).exists()).toBe(true);
+  } finally { await app.close(); }
+});
+
+test("Active ownership protects orphaned snapshots until cleanup can reserve them", async () => {
+  // A stale closed index must not override a live runtime's ownership.
+  const app = await fixture();
+  try {
+    const record = await app.record("reserved"); expectOk(await app.store.save(app.manifest([record])));
+    await rm(record.sessionFile!);
+
+    // Keep the record while another owner blocks maintenance.
+    expect(expectOk(await app.store.pruneExpired(null, () => null, now))).toBe(0);
+    expect(expectOk(await app.store.readSession("tree", "reserved"))).not.toBeNull();
+
+    // Once ownership is released, no missing-original record needs to survive.
+    expect(expectOk(await app.store.pruneExpired(null, release, now))).toBe(1);
+    expect(app.store.listSessions("tree")).toEqual([]);
+  } finally { await app.close(); }
+});
+
+test("Interrupted orphan cleanup retries after its snapshot was removed but index publication failed", async () => {
+  // A failed index replacement must not strand old closed entries permanently.
+  const app = await fixture();
+  try {
+    const record = await app.record("interrupted"); expectOk(await app.store.save(app.manifest([record])));
+    const path = await app.snapshotFile("interrupted"); await rm(record.sessionFile!);
+    renameSync(app.paths.manifest, app.paths.manifest + ".backup"); await mkdir(app.paths.manifest);
+
+    // The old closed index stays authoritative until a replacement can be published.
+    const failure = expectError(await app.store.pruneExpired(null, release, now));
+    await rm(app.paths.manifest, { recursive: true }); renameSync(app.paths.manifest + ".backup", app.paths.manifest);
+    const restored = new RuntimeStore(app.paths); expectOk(await restored.load("repo"));
+
+    // Missing snapshot bodies do not prevent retrying missing-original cleanup.
+    expect(failure.code).toBe("CLEANUP_FAILED"); expect(await Bun.file(path).exists()).toBe(false);
+    expect(expectOk(await restored.pruneExpired(null, release, now))).toBe(1);
+    expect(restored.listSessions("tree")).toEqual([]);
   } finally { await app.close(); }
 });
 
