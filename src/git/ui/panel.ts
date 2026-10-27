@@ -519,7 +519,7 @@ export class GitPanel {
         return { key: row.commit.oid, label: row.commit.workingTree ? subject : [
           { text: `${row.commit.oid.slice(0, 7)} `, color: row.color }, { text: subject },
         ], graph: row.node, connector: row.connector,
-          history: { refs: labels, color: row.color, nodeColumn: row.nodeColumn, messageBand: !row.commit.workingTree } };
+          history: { refs: labels, color: row.color, nodeColumn: row.nodeColumn } };
       });
     }
     this.history.update(history.length ? history : [{ key: "empty", label: data ? "No commits" : "Loading…", disabled: true }], state.selected ?? workingKey);

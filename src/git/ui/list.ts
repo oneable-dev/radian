@@ -7,7 +7,7 @@ import { truncateCells } from "../../ui/text.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 
 type GitListSpan = { text: string; color?: StyleGroup };
-type HistoryDecoration = { refs: readonly string[]; color: StyleGroup; nodeColumn: number; messageBand: boolean };
+type HistoryDecoration = { refs: readonly string[]; color: StyleGroup; nodeColumn: number };
 export type GitListItem = { key: string; label: string | readonly GitListSpan[]; graph?: GraphCell[]; connector?: GraphCell[];
   history?: HistoryDecoration; color?: StyleGroup; disabled?: boolean; gapBefore?: boolean };
 type Annotation = { item: GitListItem; gutter: BoxRenderable; ref: TextRenderable; leader: TextRenderable;
@@ -53,6 +53,7 @@ export class GitList {
     }
   }
   update(items: readonly GitListItem[], selected: string | null): void {
+    const previous = this.selected;
     this.items = items; this.selected = selected;
     const signature = JSON.stringify(items);
     if (signature !== this.signature) {
@@ -90,7 +91,7 @@ export class GitList {
           label.selectionBg = styles["ui.selection"].bg; label.selectionFg = styles["ui.selection"].fg;
         });
         uiTheme(this.renderer).bindStyles(row, (styles) => {
-          row.backgroundColor = item.key === this.selected ? this.selectionColor : styles["ui.text"].bg;
+          row.backgroundColor = !item.history && item.key === this.selected ? this.selectionColor : styles["ui.text"].bg;
           const annotation = this.annotations.get(item.key); if (annotation) this.paintAnnotation(annotation);
         });
         line.add(label); row.add(line);
@@ -104,7 +105,7 @@ export class GitList {
       // Only the shared history viewport scrolls when an expanded details card is taller than its rows.
       this.root.remove(this.tail); this.root.add(this.tail);
     }
-    this.highlight();
+    this.highlight(previous);
   }
   private paintAnnotation(annotation: Annotation): void {
     const { item, gutter, ref, leader, node, link, indent } = annotation, decoration = item.history!;
@@ -119,14 +120,15 @@ export class GitList {
     ref.content = caption; ref.width = length; paintText(ref, color);
     ref.selectionBg = styles["ui.selection"].bg; ref.selectionFg = styles["ui.selection"].fg;
     leader.width = remaining; leader.content = connected && remaining ? ` ${"─".repeat(remaining - 1)}` : ""; paintText(leader, color);
-    const band = blendColors(styleBackground(styles["ui.text"]), color.fg, 0.32);
+    const selected = item.key === this.selected;
+    const band = blendColors(styleBackground(styles["ui.text"]), color.fg, selected ? (this.root.focused ? 0.56 : 0.44) : 0.32);
     node.content = new StyledText(item.graph!.map((cell, index) => {
       const left = connected && index < decoration.nodeColumn;
       const text = cell.text === " " && left ? "─" : cell.text;
       const style = styles[cell.color ?? (left ? decoration.color : "ui.label")];
-      return styleChunk(text, decoration.messageBand && index >= decoration.nodeColumn ? { ...style, bg: band } : style);
+      return styleChunk(text, index >= decoration.nodeColumn ? { ...style, bg: band } : style);
     }));
-    paintText(link, color); link.bg = decoration.messageBand ? band : undefined;
+    paintText(link, color); link.bg = band;
   }
   private graph(cells: GraphCell[], width?: number): TextRenderable {
     const text = new TextRenderable(this.renderer, { ...(width ? { width } : {}), height: 1, selectable: false, flexShrink: 0 });
@@ -137,13 +139,18 @@ export class GitList {
     const styles = uiTheme(this.renderer).styles;
     return styles[this.root.focused ? "ui.selection" : "ui.selectionInactive"].bg;
   }
-  private highlight(): void {
+  private highlight(previous: string | null = this.selected): void {
+    if (this.root.isDestroyed || this.renderer.isDestroyed) return;
     const styles = uiTheme(this.renderer).styles;
-    for (const [key, row] of this.rows) row.backgroundColor = key === this.selected ? this.selectionColor : styles["ui.text"].bg;
+    for (const [key, row] of this.rows) row.backgroundColor = !this.annotations.has(key) && key === this.selected ? this.selectionColor : styles["ui.text"].bg;
+    for (const key of new Set([previous, this.selected])) {
+      const annotation = this.annotations.get(key ?? ""); if (annotation) this.paintAnnotation(annotation);
+    }
   }
   select(key: string): void {
     if (this.items.find((item) => item.key === key)?.disabled) return;
-    this.selected = key; this.highlight();
+    const previous = this.selected;
+    this.selected = key; this.highlight(previous);
     this.root.scrollChildIntoView(`${this.root.id}:${key}`); this.choose(key);
   }
   moveHalfPage(direction: -1 | 1): void {

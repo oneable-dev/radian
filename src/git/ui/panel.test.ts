@@ -387,8 +387,8 @@ test("Detached HEAD labels never invent current-branch icons", async () => {
   } finally { await app.close(); }
 });
 
-test.each([{ width: 160, light: false }, { width: 60, light: false }, { width: 160, light: true }, { width: 60, light: true }])("Working tree omits bands and commits keep two-cell gaps between bands and messages: %j", async ({ width, light }) => {
-  // Compare cell backgrounds to distinguish selection from bands and catch colored gaps.
+test.each([{ width: 160, light: false }, { width: 60, light: false }, { width: 160, light: true }, { width: 60, light: true }])("History selection strengthens only node-to-message bands: %j", async ({ width, light }) => {
+  // Both terminal brightnesses and compact layouts must distinguish selection without row fills.
   const app = await mount();
   const cell = (x: number, y: number) => {
     let end = 0;
@@ -396,29 +396,53 @@ test.each([{ width: 160, light: false }, { width: 60, light: false }, { width: 1
     if (!span) throw new Error(`Missing cell ${x},${y}`);
     return span;
   };
+  const bandBackground = (prefix: string) => { const graph = app.get(`${prefix}:graph`); return cell(graph.x + 1, graph.y).bg; };
   try {
     app.resize(width, 32);
     uiTheme(app.renderer).configure({ palette: [], defaultForeground: light ? "#202020" : "#ECECEC", defaultBackground: light ? "#FAFAF6" : "#141414",
       cursorColor: null, mouseForeground: null, mouseBackground: null, tekForeground: null, tekBackground: null, highlightForeground: null, highlightBackground: null });
     app.get("git-history").focus(); await app.renderOnce(); await app.renderOnce();
-    const working = "git-history:__working_tree__", workingGraph = app.get(`${working}:graph`);
-    const workingLink = app.get(`${working}:message-link`), workingLabel = app.get(`${working}:label`);
-    const workingBackground = cell(workingLabel.x, workingLabel.y).bg.toInts();
+    const neutral = uiTheme(app.renderer).styles["ui.text"].bg!.toInts();
+    const working = "git-history:__working_tree__", prefix = `git-history:${commit.oid}`;
+    const idleBand = bandBackground(prefix).toInts(), foreground = app.spanIn("git-history", "aaaaaaa").fg.toInts();
+    const distance = (values: readonly number[]) => values.slice(0, 3).reduce((sum, value, index) => sum + (value - foreground[index]!) ** 2, 0);
+    const expectBandOnly = (key: string) => {
+      const graph = app.get(`${key}:graph`), band = app.get(`${key}:message-link`), label = app.get(`${key}:label`);
+      const tint = bandBackground(key).toInts();
+      expect(cell(graph.x, graph.y).bg.toInts()).toEqual(neutral);
+      for (let x = graph.x + 1; x < band.x + band.width; x++) expect(cell(x, graph.y).bg.toInts()).toEqual(tint);
+      for (let x = band.x + band.width; x < label.x + label.width; x++) expect(cell(x, label.y).bg.toInts()).toEqual(neutral);
+      for (let x = graph.x; x < label.x + label.width; x++) expect(cell(x, graph.y + 1).bg.toInts()).toEqual(neutral);
+      expect(label.x - band.x - band.width).toBe(2);
+      expect(app.captureCharFrame().split("\n")[label.y]!.slice(band.x + band.width, label.x)).toBe("  ");
+    };
 
-    // Working-tree node tails and connector space retain ordinary selection backgrounds.
-    expect(cell(workingGraph.x + 2, workingGraph.y).bg.toInts()).toEqual(workingBackground);
-    expect(cell(workingLink.x, workingLink.y).bg.toInts()).toEqual(workingBackground);
+    // Working tree shares the solid band, while its hollow node and dotted parent lane remain distinct.
+    const workingBand = bandBackground(working).toInts();
+    expect(distance(workingBand)).toBeLessThan(distance(idleBand)); expectBandOnly(working);
     expect(app.captureCharFrame()).toContain("◌"); expect(app.captureCharFrame()).toContain("┊");
 
-    // Selected commits leave two neutral message-colored cells after bands.
+    // Choosing a commit softens Working tree's solid band without removing it.
     await app.chooseCommit(); await app.renderOnce();
-    const prefix = `git-history:${commit.oid}`, band = app.get(`${prefix}:message-link`), label = app.get(`${prefix}:label`);
-    const background = cell(label.x, label.y).bg.toInts();
-    expect(label.x - band.x - band.width).toBe(2);
-    expect(cell(band.x, band.y).bg.toInts()).not.toEqual(background);
-    for (let x = band.x + band.width; x < label.x; x++) expect(cell(x, label.y).bg.toInts()).toEqual(background);
-    expect(app.captureCharFrame().split("\n")[label.y]!.slice(band.x + band.width, label.x)).toBe("  ");
-    expect(app.get(`${working}:label`).x).toBe(label.x); expect(app.requests).toEqual([]);
+    const focusedBand = bandBackground(prefix).toInts();
+    expect(distance(focusedBand)).toBeLessThan(distance(idleBand)); expectBandOnly(prefix);
+    expect(bandBackground(working).toInts()).toEqual(idleBand); expectBandOnly(working);
+    expect(app.get(`${working}:label`).x).toBe(app.get(`${prefix}:label`).x);
+
+    // Losing focus softens, but does not erase, the selected commit's band.
+    app.get("git-history").blur(); await app.renderOnce();
+    const inactiveBand = bandBackground(prefix).toInts();
+    expect(distance(inactiveBand)).toBeGreaterThan(distance(focusedBand));
+    expect(distance(inactiveBand)).toBeLessThan(distance(idleBand)); expectBandOnly(prefix);
+
+    // Keyboard selection transfers the emphasis and restores the previous idle band.
+    app.get("git-history").focus(); await app.renderOnce();
+    expect(bandBackground(prefix).toInts()).toEqual(focusedBand);
+    app.mockInput.pressKey("n", { ctrl: true }); await app.renderOnce(); await app.renderOnce();
+    expect(bandBackground(prefix).toInts()).toEqual(idleBand);
+    const next = `git-history:${rootCommit.oid}`;
+    expect(distance(bandBackground(next).toInts())).toBeLessThan(distance(idleBand)); expectBandOnly(next);
+    expect(app.requests).toEqual([]);
   } finally { await app.close(); }
 });
 
@@ -2133,6 +2157,7 @@ test("Renderer-first shutdown prevents late Git responses and cleanup from acces
   // UI shutdown is independent from the lifetime of a slow read-only query.
   const pending = Promise.withResolvers<Result<import("../model.ts").GitDetails, ExpectedError>>();
   const app = await mount({ source: { load: async () => ok(snapshot()), details: () => pending.promise, compare: async () => ok(comparison()) } });
+  const errors = spyOn(console, "error");
   try {
     await app.click("Update login");
 
@@ -2141,7 +2166,8 @@ test("Renderer-first shutdown prevents late Git responses and cleanup from acces
     app.view.dispose();
 
     expect(app.view.workViewPreferences.active["demo:main"]).toBe("git"); expect(app.requests).toEqual([]);
-  } finally { pending.resolve(ok({ commit, message: "cleanup", files: [], branches: [] })); await app.close(); }
+    expect(errors).not.toHaveBeenCalled();
+  } finally { errors.mockRestore(); pending.resolve(ok({ commit, message: "cleanup", files: [], branches: [] })); await app.close(); }
 });
 
 test("Late worktree lookups never overwrite current Git screens", async () => {

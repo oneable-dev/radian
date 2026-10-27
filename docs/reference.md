@@ -1030,10 +1030,12 @@ Ctrl+O toggles list/preview on compact terminals, and Tab/Shift+Tab cycle throug
 Ctrl+D/U scrolls the preview body while that body owns focus.
 
 Commits places ref labels in a dedicated left column, connected to their commit nodes. Multiple refs
-share one caption with a +N count; long captions are truncated on terminal-cell boundaries. A stronger
+share one caption with a +N count; long captions are truncated on terminal-cell boundaries. A
 node-colored background band connects the graph to each commit message without a decorative horizontal
-line, followed by two neutral cells before the message. Working tree has no connecting band, while
-keeping messages aligned with commit rows. Parent lanes and ref-to-node lines remain intact.
+line, followed by two neutral cells before the message. Selection strengthens only this band instead
+of filling the row, with softer emphasis while history is unfocused. Working tree uses the same solid
+background band as commits; its hollow node and dotted parent lane distinguish uncommitted changes.
+Parent lanes, ref-to-node lines, and message alignment remain intact.
 The left column always reserves the responsive details-card width, including on Working tree and
 while history is unfocused, so the graph and messages do not move horizontally as focus changes.
 Focusing a selected commit reveals a fully unfolded details card anchored to that row; commit row
