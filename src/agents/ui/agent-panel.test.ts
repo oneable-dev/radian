@@ -56,13 +56,14 @@ test("Read-only Agent panels block send, interrupt, and creation despite provide
     // Public command boundaries enforce the same policy when UI routing is bypassed.
     await app.panel.submitPrompt(); await app.panel.interrupt(); app.panel.sessionCommand("session.new");
     app.panel.sessionCommand("session.next"); app.panel.sessionCommand("session.close");
+    app.panel.movePromptHistory(-1); app.panel.movePromptHistory(1);
     const close = app.renderer.root.findDescendantById("close-session:a")!;
     await app.mockMouse.click(close.x, close.y); await app.renderOnce();
 
     // No write callbacks run; drafts and status lines remain displayed.
     expect(actions).toEqual([]); expect(app.panel.canSubmit).toBe(false); expect(app.panel.canInterrupt).toBe(false);
     expect(app.panel.prompt.value).toBe("Saved draft"); expect(app.captureCharFrame()).toContain("to interrupt");
-    expect(app.panel.prompt.focusable).toBe(false);
+    expect(app.panel.prompt.focusable).toBe(false); expect(app.panel.promptHistoryAvailable).toBe(false);
     expect(app.panel.transcriptAvailable("transcript.fold")).toBe(false);
     expect(app.panel.transcriptAvailable("transcript.open-link")).toBe(false);
     expect(app.panel.sessionId).toBe("a");

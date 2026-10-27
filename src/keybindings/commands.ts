@@ -186,6 +186,8 @@ export const defaultBindings = (platform: NodeJS.Platform = process.platform) =>
   "agent.clear": [key("ctrl+c", "prompt"), key("ctrl+c", "prompt-completion")],
   "agent.paste": [key("ctrl+v", "prompt"), key("ctrl+v", "prompt-completion")],
   "agent.inspect": [key("ctrl+o", "prompt")],
+  "agent.history-previous": [key("ctrl+p", "prompt")],
+  "agent.history-next": [key("ctrl+n", "prompt")],
   "completion.next": [key("ctrl+n", "prompt-completion"), key("down", "prompt-completion")],
   "completion.previous": [key("ctrl+p", "prompt-completion"), key("up", "prompt-completion")],
   "completion.accept": [key("tab", "prompt-completion")],

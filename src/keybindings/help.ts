@@ -19,6 +19,7 @@ const labels: Partial<Record<CommandId, string>> = {
   "tab.select-4": "Select tab 4", "tab.select-5": "Select tab 5", "tab.select-6": "Select tab 6",
   "tab.select-7": "Select tab 7", "tab.select-8": "Select tab 8", "tab.select-9": "Select tab 9",
   "agent.send": "Send input (steer at the next eligible turn when busy)", "agent.newline": "Insert a newline without sending", "agent.paste": "Paste text, images or files from the clipboard", "agent.inspect": "Inspect the attachment at the cursor",
+  "agent.history-previous": "Previous input in this session", "agent.history-next": "Next input or restore the unsent draft",
   "git.refs": "Search refs and filter commit history", "git.reflog": "Search reflog events and preview target commits",
   "git.search": "Focus Git search", "git.search-clear": "Clear the Git search query", "git.preview": "Focus or toggle reflog preview",
   "git.change-session": "Cycle the Git request target through this worktree's sessions and New session",

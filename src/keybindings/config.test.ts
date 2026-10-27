@@ -72,7 +72,7 @@ test.each(["ctrl+b", "ctrl+f"])("An explicit %s leader wins optional default pag
   expect(expectError(parseKeymap({ leader, bindings: { [command]: [{ keys: leader, scope: "transcript" }] } })).code).toBe("INVALID_INPUT");
 });
 
-test("Session creation defaults only to leader+c in all contexts while Ctrl+N stays input-owned", () => {
+test("Session creation defaults only to leader+c while Ctrl+N recalls Agent input history or stays PTY-owned", () => {
   // Inputs and empty content views share the same creation sequence.
   const map = defaultKeymap();
 
@@ -83,7 +83,7 @@ test("Session creation defaults only to leader+c in all contexts while Ctrl+N st
 
   // Strip-local aliases remain configurable but no longer have defaults.
   expect(map.hint("session.new", "session-tabs")).toBe("");
-  expect(map.bound("ctrl+n", "prompt")).toBe(false); expect(map.bound("ctrl+n", "terminal")).toBe(false);
+  expect(map.hints("agent.history-next", "prompt")).toBe("<C-n>"); expect(map.bound("ctrl+n", "terminal")).toBe(false);
   expect(map.hints("session.next", "session-tabs")).toBe("");
   expect(map.hints("terminal.tab-next", "terminal-tabs")).toBe("");
 });

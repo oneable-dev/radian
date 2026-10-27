@@ -318,6 +318,27 @@ Rich input drafts are additive preference metadata, alongside compatible origina
 A legacy client's replacement text invalidates stale attachment metadata instead of resurrecting it.
 Git's Ask Agent input uses the same multiline, paste and attachment rules.
 
+### Prompt input history
+
+With completion closed, **Ctrl+P** recalls the previous accepted input and **Ctrl+N** recalls the next
+one, regardless of the cursor's current line. Directional keys only move the cursor inside the current
+input, including at its boundaries and while editing a recalled entry. History navigation never sends
+input. The configurable commands are `agent.history-previous` and `agent.history-next` in `prompt` scope;
+completion retains its own commands in `prompt-completion` scope.
+
+The first history step saves the unsent draft, attachments and cursor; stepping forward past the newest
+entry restores them exactly. Recalled entries are editable copies. Recalling slash, Skill or file input
+does not reopen completion; a subsequent edit can open suggestions normally. Clearing the input ends
+the current browse operation without deleting accepted history. Rejected or uncertain submissions do
+not enter history, and history navigation is disabled while submission acceptance or clipboard reads
+are pending.
+
+History is isolated per session and records inputs accepted during the current TUI lifetime, including
+handled host commands. It is not reconstructed from display-only transcript sections or persisted across
+TUI restarts. Closing a session or replacing its conversation releases its history. Consecutive duplicate
+inputs collapse to one entry. Each session retains at most 100 entries with a 4 MiB serialized-draft
+budget; the latest complete entry is always retained even if it alone exceeds that budget.
+
 ### Prompt completion
 
 The Agent prompt shows a read-only completion menu directly below the input. `/` opens command
@@ -348,7 +369,8 @@ inserted until results for the current query arrive. Footer shortcuts retain the
 unavailable actions use muted keys instead of disappearing.
 
 - **Ctrl+N / Ctrl+P** selects the next/previous candidate. `hjkl` remains ordinary input.
-  Dismissing the menu restores ordinary cursor movement.
+  Completion owns these keys and directional navigation even while loading, empty or failed.
+  Dismissing the menu returns **Ctrl+N/P** to input history; directional keys edit the current input.
 - **Tab** inserts the selected candidate without sending the prompt or executing a command.
 - **Enter** completes the focused command, template or Skill candidate and immediately submits it
   in one key press: `/com` with `/compact` focused runs `/compact`, not `/com`; `$rev` with
@@ -1272,7 +1294,8 @@ From a search input, `Ctrl+D/U` preserves the query and caret, focuses the resul
 from the current candidate. Further presses and held-key repeats continue navigating the list.
 In compact layouts this returns from preview to results. Without a text selection, **Ctrl+C** clears only the search query,
 without closing the popup or interrupting work; an empty query is a no-op.
-Agent/Git prompt editing and embedded editors/shells retain their native input bindings.
+Agent prompt directional keys retain native cursor movement; **Ctrl+N/P** browses input history when
+completion is closed. Git prompt editing and embedded editors/shells retain their native input bindings.
 Search, completion and app-owned focusable tab strips keep **Ctrl+N/P** navigation. Agent and Terminal
 session headers are passive: neither their tabs nor close controls join focus traversal. Clicking a tab
 changes the active session/shell without focusing the header; input stays in the corresponding content

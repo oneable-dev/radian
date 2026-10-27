@@ -10,7 +10,7 @@ test.each([
   ["workspace.previous", "search"], ["workspace.next", "workspace"], ["workspace.open", "workspace"],
   ["workspace.first", "workspace"], ["workspace.half-page-down", "search"],
   ["completion.next", "prompt-completion"], ["completion.previous", "prompt-completion"], ["completion.dismiss", "prompt-completion"],
-  ["agent.clear", "prompt"], ["agent.clear", "prompt-completion"], ["git.clear", "git-prompt"],
+  ["agent.clear", "prompt"], ["agent.clear", "prompt-completion"], ["agent.history-previous", "prompt"], ["agent.history-next", "prompt"], ["git.clear", "git-prompt"],
   ["git.search-clear", "git-search"], ["search.clear", "search"],
   ["transcript.search-clear", "transcript-search"], ["transcript.search-cancel", "transcript-search"],
   ["history.open", "history"], ["history.dismiss", "history-search"], ["monitor.page-down", "monitor"],

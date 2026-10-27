@@ -162,6 +162,9 @@ input behavior except for configured application shortcuts.
 In the Agent prompt, `<C-c>` clears the draft; it does not interrupt work. `<Esc>`
 interrupts the selected agent, or interrupts and sends its queued messages when
 present. An open completion menu consumes the first `<Esc>` to dismiss itself.
+With completion closed, `<C-p>` / `<C-n>` recalls previous/next accepted inputs from the current
+session's TUI-local history; stepping beyond the newest restores the unsent draft and its attachments.
+Directional keys only move the input cursor. While completion is open, navigation selects candidates instead.
 
 See the [full keybinding reference](docs/reference.md#keybindings) for scopes,
 custom mappings, and input ownership. If macOS reserves Ctrl+Space for input-source

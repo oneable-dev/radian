@@ -455,6 +455,7 @@ export class Workbench {
           hint("agent.newline", "New line"), ...(this.agent.prompt.canInspect ? [hint("agent.inspect", "Inspect")] : []),
           ...(this.agent.canInterrupt ? [hint("agent.interrupt", "Interrupt")] : []),
           ...(this.agent.prompt.value ? [hint("agent.clear", "Clear")] : []),
+          pair("agent.history-previous", "agent.history-next", "Input history"),
           hint("output.read", "Transcript"), pair("tab.previous", "tab.next", "Tab"), hint("sidebar.toggle", "Workspace"), hint("tab.new", "New session"), hint("tab.close", "Close tab"), hint("dashboard.show", "Dashboard")];
     } else if (context === "git" || context === "git-tabs" || context === "git-search" || context === "git-prompt" || this.git.available("git.back")) shortcuts = this.git.shortcuts;
     else if (focused) {
@@ -667,6 +668,7 @@ export class Workbench {
       case "focus.prompt": case "focus.transcript": return this.agent.active;
       case "agent.send": return this.agent.active && Boolean(this.agent.sessionId);
       case "agent.paste": case "agent.newline": case "agent.clear": return this.agent.active;
+      case "agent.history-previous": case "agent.history-next": return this.agent.promptHistoryAvailable;
       case "agent.interrupt": return this.agent.canInterrupt;
       case "agent.inspect": return this.agent.active && this.agent.prompt.canInspect;
       case "button.activate": return !!this.renderer.currentFocusedRenderable && this.buttonActions.has(this.renderer.currentFocusedRenderable);
@@ -764,6 +766,8 @@ export class Workbench {
         break;
       }
       case "agent.clear": this.agent.clearPrompt(); break;
+      case "agent.history-previous": this.agent.movePromptHistory(-1); break;
+      case "agent.history-next": this.agent.movePromptHistory(1); break;
       case "agent.interrupt": void this.agent.interrupt().catch((error: unknown) => this.notify(reportUnexpected(error, "agent interruption"), { level: "error" })); break;
       case "agent.newline": this.agent.prompt.newLine(); break;
       case "agent.inspect": this.agent.prompt.inspectAtCursor(); break;

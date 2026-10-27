@@ -56,6 +56,9 @@ export type AgentActions = {
 };
 type Button = (label: string, activate: () => void, actionLabel: string) => BoxRenderable;
 type PanelOptions = Pick<TranscriptOptions, "initialViews" | "saveView" | "keyHint" | "initialPosition" | "emptyLogo"> & { readOnly?: boolean; idPrefix?: string; snapshotTime?: () => number | undefined };
+type PromptHistory = { entries: { draft: PromptDraft; bytes: number }[]; bytes: number; selected: number | null; draft: PromptDraft | null };
+const maximumPromptHistoryEntries = 100;
+const maximumPromptHistoryBytes = 4 * 1024 * 1024;
 
 // Owns the Agent view, drafts and transcript viewport. The workbench supplies
 // selection and visibility; it alone decides how this panel joins other features.
@@ -81,6 +84,7 @@ export class AgentPanel {
   private pending: ExecutionState["pendingMessages"] = [];
   private readonly drafts = new Map<string, string>();
   private readonly inputDrafts = new Map<string, PromptDraft>();
+  private readonly promptHistories = new Map<string, PromptHistory>();
   private readonly submitting = new Set<string>();
   private worktree: Worktree | null = null;
   private promptSessionId: string | null = null;
@@ -229,7 +233,7 @@ export class AgentPanel {
     const previousConversation = sessionId ? this.conversations.get(sessionId) : undefined;
     const replaced = !!details?.conversationId && previousConversation !== undefined && previousConversation !== details.conversationId;
     if (sessionId && details?.conversationId) this.conversations.set(sessionId, details.conversationId);
-    if (replaced) this.completion.hide();
+    if (replaced) { this.completion.hide(); if (sessionId) this.promptHistories.delete(sessionId); }
     const switchedSession = sessionId !== this.promptSessionId;
     if (switchedSession) {
       this.completion.hide();
@@ -246,6 +250,7 @@ export class AgentPanel {
     }
     for (const id of this.drafts.keys()) if (!openIds.has(id)) this.drafts.delete(id);
     for (const id of this.inputDrafts.keys()) if (!openIds.has(id)) this.inputDrafts.delete(id);
+    for (const id of this.promptHistories.keys()) if (!openIds.has(id)) this.promptHistories.delete(id);
     this.runtimePanel.visible = Boolean(visible && session && (this.actions.onPrompt || this.transcriptOptions.readOnly));
     // Only empty content needs a fallback target; active pane ancestors must not intercept input clicks.
     this.root.focusable = visible && !!worktree && !this.active;
@@ -356,7 +361,46 @@ export class AgentPanel {
     this.saveDraft(); this.publishDrafts(); this.resizeComposer(); this.completion.refresh(); this.changed();
   };
 
-  clearPrompt(): void { this.completion.hide(); this.prompt.clear(); }
+  private promptHistoryFor(id: string): PromptHistory {
+    let history = this.promptHistories.get(id);
+    if (!history) { history = { entries: [], bytes: 0, selected: null, draft: null }; this.promptHistories.set(id, history); }
+    return history;
+  }
+  private rememberPrompt(history: PromptHistory, draft: PromptDraft): void {
+    const previous = history.entries.at(-1)?.draft;
+    // Cursor movement alone does not make two consecutive accepted inputs distinct.
+    if (previous?.value === draft.value && JSON.stringify(previous.tokens) === JSON.stringify(draft.tokens)) return;
+    const entry = { draft: structuredClone(draft), bytes: Buffer.byteLength(JSON.stringify(draft)) };
+    history.entries.push(entry); history.bytes += entry.bytes;
+    // Keep at least the latest complete rich draft, even when it alone exceeds the history budget.
+    while (history.entries.length > 1 && (history.entries.length > maximumPromptHistoryEntries || history.bytes > maximumPromptHistoryBytes)) {
+      history.bytes -= history.entries.shift()!.bytes;
+      if (history.selected !== null) history.selected = Math.max(0, history.selected - 1);
+    }
+  }
+  get promptHistoryAvailable(): boolean {
+    return !this.transcriptOptions.readOnly && this.active && !!this.promptSessionId && this.prompt.focused
+      && !this.completion.engaged && !this.prompt.pending && !this.submitting.has(this.promptSessionId);
+  }
+  movePromptHistory(direction: -1 | 1): void {
+    const id = this.promptSessionId; if (!id || !this.promptHistoryAvailable) return;
+    const history = this.promptHistoryFor(id), current = history.selected ?? history.entries.length;
+    const next = Math.max(0, Math.min(history.entries.length, current + direction));
+    if (next === current) return;
+    const original = history.draft ?? this.prompt.draft;
+    const target = next === history.entries.length ? original : history.entries[next]!.draft;
+    const restored = this.prompt.restore(target);
+    if (!restored.ok) { this.notice(`[${restored.error.code}] Input history could not be restored; draft retained.`, { level: "error" }); return; }
+    history.selected = next === history.entries.length ? null : next;
+    history.draft = history.selected === null ? null : original;
+    // Recalling a slash/file/skill input is not a new completion interaction. Editing it can reopen suggestions.
+    this.completion.command("completion.dismiss"); this.changed();
+  }
+  clearPrompt(): void {
+    this.completion.hide(); this.prompt.clear();
+    const history = this.promptSessionId ? this.promptHistories.get(this.promptSessionId) : undefined;
+    if (history) { history.selected = null; history.draft = null; }
+  }
 
   async interrupt(): Promise<void> {
     const id = this.promptSessionId;
@@ -376,7 +420,7 @@ export class AgentPanel {
       if (this.disposed || this.root.isDestroyed || this.promptSessionId !== id || !this.active) return;
       this.completion.command("completion.dismiss");
       this.saveDraft();
-      const draft = this.prompt.draft, submission = this.prompt.submission;
+      const draft = this.prompt.draft, submission = this.prompt.submission, inputHistory = this.promptHistoryFor(id);
       const fingerprint = (value: PromptDraft | undefined) => value ? JSON.stringify([value.value, value.tokens]) : "";
       const sent = fingerprint(draft);
       const control = parseSessionControl(submission.text);
@@ -408,7 +452,9 @@ export class AgentPanel {
           : this.actions.onModel?.(id) ?? err(new CapabilityError("Model selection is unavailable in this view. No prompt was sent."));
       } else result = await this.actions.onPrompt(id, submission.text, submission.images);
       if (!result.ok) { this.notice(`[${result.error.code}] ${result.error.message} · prompt retained`, { level: "error" }); return; }
+      if (!this.disposed && this.promptHistories.get(id) === inputHistory) this.rememberPrompt(inputHistory, draft);
       if (fingerprint(this.inputDrafts.get(id)) === sent) {
+        inputHistory.selected = null; inputHistory.draft = null;
         this.drafts.delete(id); this.inputDrafts.delete(id);
         if (!this.disposed && !this.root.isDestroyed && this.promptSessionId === id && fingerprint(this.prompt.draft) === sent) {
           this.syncingDraft = true; this.prompt.value = ""; this.syncingDraft = false;
@@ -423,6 +469,7 @@ export class AgentPanel {
     this.rememberScroll(); this.disposed = true;
     this.renderer.off("resize", this.resize); this.renderer.removePostProcessFn(this.resizeComposer);
     this.renderer.removePostProcessFn(this.layoutBottomButton);
+    this.promptHistories.clear();
     this.completion.dispose(); this.prompt.dispose(); this.runStatus.dispose(); this.sessionStatus.dispose(); this.transcript.dispose(); this.sessions.dispose(); this.children.dispose();
     this.prompt.off("resize", this.resizeComposer); this.prompt.off("line-info-change", this.resizeComposer);
     this.prompt.off(InputRenderableEvents.INPUT, this.handleDraftInput);
