@@ -81,15 +81,18 @@ test("Plain-URL gx and Visual selection preserve selected text while opening bro
   } finally { await app.close(); }
 });
 
-test("Clicking rendered Markdown links opens actual targets exactly once", async () => {
+test.each(["assistant", "thinking"] as const)("Clicking rendered %s Markdown links focuses their section and opens actual targets exactly once", async kind => {
   // App clicks must work even when the test terminal lacks OSC 8.
-  const app = await mount("[Open documentation](https://example.invalid/docs)");
+  const app = await mount("[Open documentation](https://example.invalid/docs)", {}, kind);
   try {
     await app.settled(); const { x, y } = app.position("Open documentation");
 
     await app.mockMouse.click(x + 2, y); await app.waitFor(() => app.opened.length === 1);
 
     expect(app.opened).toEqual(["https://example.invalid/docs"]);
+    expect(app.view.workViewPreferences.agentViews?.a1?.selectedId).toBe("answer");
+    expect(app.view.workViewPreferences.agentViews?.a1?.mode).toBe("sections");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-transcript");
     expect(app.view.promptDrafts.a1).toBe("Keep this draft"); expect(app.sent).toEqual([]);
   } finally { await app.close(); }
 });

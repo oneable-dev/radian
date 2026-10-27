@@ -498,6 +498,12 @@ Tables use bordered grids with word-wrapped cells, including during streaming.
 Incomplete streaming Markdown updates incrementally; completed messages finalize after native
 highlighting, without hiding their initial prose or code while the bundled grammars initialize.
 
+An ordinary left click on an Agent answer or Thinking body selects and focuses that section, including
+nested code and table content. Clicking an already-visible part of a long section does not jump its
+viewport back to the section's beginning. Native drag selection and link activation remain available;
+clicking within the active reader preserves its text-selection and yank behavior. Passive session
+previews remain scroll-only and do not change live section selection.
+
 `Enter` on formatted prose adds a **read-only cursor without revealing Markdown source**. Character,
 word and logical-line selection operate on native visible text; visual-row movement and link targets
 use the native Markdown layout. `Esc` returns to Sections without changing formatting. Section-mode

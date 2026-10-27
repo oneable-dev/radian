@@ -494,6 +494,14 @@ export class TranscriptPanel {
         row.markdown = new TranscriptMarkdown(this.renderer, markdownKind === "thinking" ? this.thinkingSyntax : this.proseSyntax, markdownKind === "thinking",
           () => { if (this.isCurrentRow(row)) this.markdownChanging(); },
           (message, options) => { if (this.isCurrentRow(row)) this.options.notice(message, options); }, !this.options.passive);
+        row.markdown.root.onMouseDown = (event) => {
+          if (this.options.passive || this.disposed || !this.visible || this.help.visible || !this.isCurrentRow(row)
+            || event.button !== 0 || event.modifiers.ctrl || event.modifiers.alt || event.modifiers.shift) return;
+          // Preserve the active reader's native mouse-selection and yank behavior.
+          if (this.selected === row && this.state?.mode !== "sections") return;
+          // Keep the clicked text under the pointer and let native selection/link events continue bubbling.
+          this.select(row.section.id, "pointer"); this.scroll.focus(); this.options.changed();
+        };
         row.box.remove(row.bodyRow); row.markdown.root.add(row.bodyRow);
         row.box.remove(row.completion); row.box.add(row.markdown.root); row.box.add(row.completion);
         row.markdown.root.on("resize", () => {
@@ -772,12 +780,16 @@ export class TranscriptPanel {
       reader.focus();
     } else this.scroll.focus();
   }
-  private select(id: string): void {
+  private select(id: string, source: "navigation" | "pointer" = "navigation"): void {
     this.cancelPending(); this.vimModel = undefined;
     if (!this.state || !this.rows.has(id)) return;
-    if (this.selected) this.reader(this.selected).clearSelection();
+    if (this.selected) {
+      const reader = this.reader(this.selected);
+      // Native selection starts before mouse-down bubbles. Clear only the old reader, not the new pointer selection.
+      if (source === "pointer") reader.onSelectionChanged(null); else reader.clearSelection();
+    }
     this.state.selectedId = id; this.state.mode = "sections"; this.state.anchor = null; delete this.state.linewise; delete this.state.readingHeading;
-    this.positionIntent = true; this.pending = { reveal: true }; this.paint(); this.applyTarget(); this.save();
+    this.positionIntent = true; this.pending = source === "pointer" ? null : { reveal: true }; this.paint(); this.applyTarget(); this.save();
   }
   private jumpSections(direction: -1 | 1, distance: number): void {
     const row = this.selected; if (!row) return;

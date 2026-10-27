@@ -65,6 +65,11 @@ async function mount(initial: readonly TranscriptSection[] = sections, width = 1
     }
   };
   return { ...app, view, scroll, cards, background, foreground, expectMarker, render,
+    position(text: string) {
+      const lines = app.captureCharFrame().split("\n"), y = lines.findIndex(line => line.includes(text));
+      if (y < 0) throw new Error(`Missing rendered text: ${text}`);
+      return { x: Bun.stringWidth(lines[y]!.slice(0, lines[y]!.indexOf(text))), y };
+    },
     async focus() { pressLeader(app, "["); app.mockInput.pressKey("HOME"); await render(); },
     async update(next: readonly TranscriptSection[]) { current = next; selection.replaceSnapshot(demoWorkspace()); await render(); },
     async close() { view.dispose(); await app.dispose(); },
@@ -182,6 +187,109 @@ test("Input focus, help, and empty transcripts leave no section focus border", a
 
     // Help and empty views are not sections, even while the scroll surface owns focus.
     app.expectMarker();
+    expect(app.view.promptDrafts.a1).toBe("Keep my draft");
+  } finally { await app.close(); }
+});
+
+test.each([
+  { kind: "assistant", width: 120 }, { kind: "assistant", width: 60 },
+  { kind: "thinking", width: 120 }, { kind: "thinking", width: 60 },
+] as const)("Clicking $kind prose at width $width focuses the clicked section instead of the previous selection", async ({ kind, width }) => {
+  // The initially selected tail must not mask a missing click handler on the rendered Markdown body.
+  const target: TranscriptSection = { id: "clicked", kind, title: "Agent", text: "**CLICKED_BODY**\n\n- LIST_ITEM", status: "complete" };
+  const app = await mount([target, sections[0]!], width);
+  try {
+    await app.focus(); app.mockInput.pressKey("END");
+    pressLeader(app, "a"); await app.render();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
+    expect(app.view.workViewPreferences.agentViews?.a1?.selectedId).toBe("user");
+    const { x, y } = app.position("CLICKED_BODY");
+
+    // Native prose clicks select a section without changing its layout or entering text-editing mode.
+    await app.mockMouse.click(x + 2, y); await app.render();
+    expect(app.renderer.currentFocusedRenderable).toBe(app.scroll);
+    expect(app.view.workViewPreferences.agentViews?.a1?.selectedId).toBe("clicked");
+    expect(app.view.workViewPreferences.agentViews?.a1?.mode).toBe("sections"); app.expectMarker(0);
+    app.mockInput.pressKey("n", { ctrl: true }); await app.render(); app.expectMarker(1);
+    app.mockInput.pressKey("p", { ctrl: true }); app.mockInput.pressEnter(); await app.render();
+
+    // Enter and subsequent keyboard navigation operate on the clicked content, never the old tail or draft.
+    const reader = app.renderer.currentFocusedRenderable;
+    if (!(reader instanceof EditBufferRenderable)) throw new Error("Missing clicked section reader");
+    expect(reader.plainText).toContain("CLICKED_BODY"); expect(reader.plainText).not.toContain("**");
+    expect(app.view.promptDrafts.a1).toBe("Keep my draft"); app.expectMarker(0);
+  } finally { await app.close(); }
+});
+
+test.each(["click", "drag"] as const)("A %s in nested code and table content switches from another section's Visual mode to section focus", async (gesture) => {
+  // Markdown blocks have different native leaves, and an old reading selection must not retain command ownership.
+  const target: TranscriptSection = { id: "blocks", kind: "assistant", title: "Agent", status: "complete",
+    text: "```text\nCODE_BODY\n```\n\n| Column |\n| --- |\n| TABLE_BODY |" };
+  const app = await mount([sections[0]!, target, sections[1]!]);
+  try {
+    for (const label of ["CODE_BODY", "TABLE_BODY"]) {
+      await app.focus(); app.mockInput.pressEnter(); app.mockInput.pressKey("v"); await app.render();
+      expect(app.view.workViewPreferences.agentViews?.a1?.mode).toBe("visual");
+      const previous = app.renderer.currentFocusedRenderable;
+      if (!(previous instanceof EditBufferRenderable)) throw new Error("Missing previous Visual reader");
+      const { x, y } = app.position(label);
+
+      // Either pointer gesture exits the unrelated reading mode without cancelling its own new native selection.
+      if (gesture === "drag") await app.mockMouse.drag(x + 2, y, x + 6, y);
+      else await app.mockMouse.click(x + 2, y);
+      await app.render();
+
+      expect(app.renderer.currentFocusedRenderable).toBe(app.scroll);
+      expect(app.view.workViewPreferences.agentViews?.a1?.selectedId).toBe("blocks");
+      expect(app.view.workViewPreferences.agentViews?.a1?.mode).toBe("sections");
+      expect(app.renderer.getCursorState().visible).toBe(false); app.expectMarker(1);
+      expect(previous.hasSelection()).toBe(false);
+      if (gesture === "drag") expect(app.renderer.getSelection()?.getSelectedText()).toContain(label.slice(2, 5));
+      expect(app.view.promptDrafts.a1).toBe("Keep my draft");
+    }
+  } finally { await app.close(); }
+});
+
+test.each([
+  { kind: "assistant", gesture: "click" }, { kind: "assistant", gesture: "drag" },
+  { kind: "thinking", gesture: "click" }, { kind: "thinking", gesture: "drag" },
+] as const)("A $gesture inside scrolled $kind content selects its section without jumping the viewport", async ({ kind, gesture }) => {
+  // The visible portion of a tall section must remain under the pointer, not jump back to the section's first line.
+  const target: TranscriptSection = { id: "long", kind, title: "Agent", status: "streaming",
+    text: Array.from({ length: 80 }, (_, index) => `LONG_LINE_${String(index).padStart(2, "0")}`).join("\n") };
+  const app = await mount([target, sections[0]!]);
+  try {
+    app.scroll.scrollTo(25); await app.render(); pressLeader(app, "a"); await app.render();
+    const top = app.scroll.scrollTop, { x, y } = app.position("LONG_LINE_30");
+
+    // Focusing rendered prose must preserve native text selection and the existing scroll position.
+    if (gesture === "drag") await app.mockMouse.drag(x + 1, y, x + 7, y);
+    else await app.mockMouse.click(x + 2, y);
+    await app.render();
+
+    expect(app.renderer.currentFocusedRenderable).toBe(app.scroll);
+    expect(app.view.workViewPreferences.agentViews?.a1?.selectedId).toBe("long");
+    expect(app.scroll.scrollTop).toBe(top); app.expectMarker(0);
+    if (gesture === "drag") expect(app.renderer.getSelection()?.getSelectedText()).toContain("ONG");
+    expect(app.view.promptDrafts.a1).toBe("Keep my draft");
+  } finally { await app.close(); }
+});
+
+test("Secondary and modified Markdown clicks do not change the selected section", async () => {
+  // Only ordinary left clicks belong to section activation; terminal-owned modified gestures retain their behavior.
+  const app = await mount([sections[5]!, sections[0]!]);
+  try {
+    await app.focus(); app.mockInput.pressKey("END"); pressLeader(app, "a"); await app.render();
+    const { x, y } = app.position("ASSISTANT_BODY");
+
+    // Neither a secondary click nor a modified left click should activate the pointed-at section.
+    await app.mockMouse.click(x + 2, y, 2);
+    for (const modifiers of [{ ctrl: true }, { shift: true }, { alt: true }]) {
+      await app.mockMouse.click(x + 2, y, 0, { modifiers });
+    }
+    await app.render();
+
+    expect(app.view.workViewPreferences.agentViews?.a1?.selectedId).toBe("user");
     expect(app.view.promptDrafts.a1).toBe("Keep my draft");
   } finally { await app.close(); }
 });
