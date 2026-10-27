@@ -68,7 +68,7 @@ export class Keymap {
   }
 }
 function object(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
-export function parseKeymap(value: unknown): Result<Keymap, InputError> {
+export function parseKeymap(value: unknown, platform: NodeJS.Platform = process.platform): Result<Keymap, InputError> {
   const invalid = (message: string) => err(new InputError(`Invalid keybindings: ${message}`));
   if (!object(value) || Object.keys(value).some((key) => !["leader", "timeoutMs", "bindings"].includes(key))) return invalid("expected leader, timeoutMs and/or bindings.");
   const leaderText = value.leader ?? "ctrl+space";
@@ -78,9 +78,9 @@ export function parseKeymap(value: unknown): Result<Keymap, InputError> {
   if (typeof timeout !== "number" || !Number.isInteger(timeout) || timeout < 100 || timeout > 5000) return invalid("timeoutMs must be an integer between 100 and 5000.");
   const overrides = value.bindings ?? {};
   if (!object(overrides) || Object.keys(overrides).some((name) => !isCommand(name))) return invalid("unknown command in bindings.");
-  const bindings: Binding[] = [];
+  const defaults = defaultBindings(platform), bindings: Binding[] = [];
   for (const command of commandIds) {
-    const choices = Object.hasOwn(overrides, command) ? overrides[command] : defaultBindings[command];
+    const choices = Object.hasOwn(overrides, command) ? overrides[command] : defaults[command];
     if (!Array.isArray(choices)) return invalid(`${command} must be an array (use [] to disable it).`);
     for (const choice of choices) {
       const input: unknown = typeof choice === "string" ? { keys: choice, scope: "global" } : choice;
@@ -106,8 +106,8 @@ export function parseKeymap(value: unknown): Result<Keymap, InputError> {
   }
   return ok(new Keymap(bindings, leader, timeout));
 }
-export function defaultKeymap(): Keymap {
-  const result = parseKeymap({}); if (!result.ok) throw result.error;
+export function defaultKeymap(platform: NodeJS.Platform = process.platform): Keymap {
+  const result = parseKeymap({}, platform); if (!result.ok) throw result.error;
   return result.value;
 }
 export async function loadKeymap(explicitPath?: string): Promise<Result<Keymap, ExpectedError>> {

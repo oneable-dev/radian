@@ -1,5 +1,5 @@
 import {
-  BorderChars, BoxRenderable, InputRenderableEvents, ScrollBoxRenderable, StyledText, TextAttributes, TextRenderable,
+  BorderChars, BoxRenderable, InputRenderableEvents, ScrollBoxRenderable, Selection as TextSelection, StyledText, TextAttributes, TextRenderable,
   type CliRenderer, type KeyEvent, type Renderable,
 } from "@opentui/core";
 import { stripVTControlCharacters } from "node:util";
@@ -119,6 +119,7 @@ export class Workbench {
   private readonly buttonActions = new WeakMap<Renderable, () => void>();
   private readonly keymap: Keymap;
   private readonly router: KeyRouter;
+  private textSelection: { selection: TextSelection; owner: Renderable } | undefined;
   private readonly rows = new Map<string, RowView>();
   private rowOrder: string[] = [];
   private navigationKey: string | null = null;
@@ -178,9 +179,7 @@ export class Workbench {
     this.messagesPanel = new MessagesPanel(renderer, this.messages, {
       changed: () => this.updateFooter(), fallback: () => this.focusNavigation(),
       hint: (command, context) => this.keymap.hint(command, context), details: item => this.showMessage(item),
-      copy: item => { void Promise.resolve().then(() => this.dialog.copyContent(item.text)).then(result => {
-        this.notify(result.ok ? result.value : `[${result.error.code}] ${result.error.message}`, { level: result.ok ? "success" : "error", source: "Clipboard" });
-      }).catch(error => this.notify(reportUnexpected(error, "message copy"), { level: "error", source: "Clipboard" })); },
+      copy: item => this.copyText(item.text),
     });
     this.monitor = new SessionMonitor(renderer, {
       details: id => actions.getSessionDetails?.(id) ?? null,
@@ -241,8 +240,10 @@ export class Workbench {
     this.root.add(this.notifications.root);
     renderer.root.add(this.root);
     this.router = new KeyRouter(renderer, this.keymap, () => this.keyContext(), (command) => this.commandAvailable(command), (command, key) => this.command(command, key),
-      key => this.keyContext().startsWith("transcript") && this.agent.transcriptCaptureKey(key, this.keymap));
+      key => this.keyContext().startsWith("transcript") && this.agent.transcriptCaptureKey(key, this.keymap),
+      () => this.selectedText() !== null ? "selection" : null);
     renderer.on("resize", this.resize);
+    renderer.on("selection", this.selectionFinished);
     renderer.on("focused_renderable", this.updateFooter);
     renderer.addPostProcessFn(this.settleRows); renderer.addPostProcessFn(this.acknowledgeVisible);
     renderer.on("focus", this.focusTerminal); renderer.on("blur", this.blurTerminal);
@@ -574,7 +575,44 @@ export class Workbench {
     if (focused === this.agent.transcriptScroll) return "transcript";
     return "button";
   }
+  private selectionRoot(): Renderable {
+    return this.dialog.visible ? this.dialog.root : this.messagesPanel.visible ? this.messagesPanel.root
+      : this.extension.visible ? this.extension.root : this.accounts.visible ? this.accounts.root
+      : this.dashboard.visible ? this.dashboard.root : this.models.visible ? this.models.root
+      : this.history.visible ? this.history.root : this.monitor.visible ? this.monitor.root
+      : this.sidebar.visible ? this.sidebar : this.workPanel;
+  }
+  private selectionFinished = (selection: TextSelection): void => {
+    this.textSelection = { selection, owner: this.selectionRoot() };
+  };
+  private selectedText(): string | null {
+    const selection = this.renderer.getSelection(), owner = this.selectionRoot();
+    // A popup must not copy an older selection from the screen underneath it.
+    if (!selection?.isActive || selection.isDragging || this.textSelection?.selection !== selection || this.textSelection.owner !== owner) return null;
+    const visible = selection.selectedRenderables.filter(renderable => {
+      for (let node: Renderable | null = renderable; node; node = node.parent) {
+        if (node.isDestroyed || !node.visible) return false;
+        if (node === owner) return true;
+      }
+      return false;
+    });
+    if (!visible.length) return null;
+    // OpenTUI can include hidden Markdown readers/decorations in native selections.
+    // Reuse its text ordering without mutating the user's live selection.
+    const selected = new TextSelection(visible[0]!, selection.anchor, selection.focus, selection.behavior);
+    selected.updateSelectedRenderables(visible);
+    return selected.getSelectedText() || null;
+  }
+  private copyText(text: string): void {
+    void Promise.resolve().then(() => this.dialog.copyContent(text)).then(result => {
+      if (!this.disposed) this.notify(result.ok ? result.value : `[${result.error.code}] ${result.error.message}`, { level: result.ok ? "success" : "error", source: "Clipboard" });
+    }).catch((error: unknown) => {
+      const message = reportUnexpected(error, "clipboard copy");
+      if (!this.disposed) this.notify(message, { level: "error", source: "Clipboard" });
+    });
+  }
   private commandAvailable(command: CommandId): boolean {
+    if (command === "selection.copy") return this.selectedText() !== null;
     // Explicit ignore bindings are consumed without reaching native input or shortcut help.
     if (command === "input.ignore") return false;
     if (command === "search.clear") {
@@ -638,6 +676,7 @@ export class Workbench {
   private command(command: CommandId, key?: KeyEvent): void {
     if (!command.startsWith("transcript.")) this.agent.cancelTranscriptPending();
     this.foreground = true;
+    if (command === "selection.copy") { const text = this.selectedText(); if (text !== null) this.copyText(text); return; }
     if (command === "dashboard.show") { this.dashboard.show(); return; }
     if (command.startsWith("dashboard.")) { this.dashboard.command(command); return; }
     if (command === "monitor.show") { this.monitor.show(); return; }
@@ -970,6 +1009,7 @@ export class Workbench {
     this.search.off(InputRenderableEvents.INPUT, this.handleSearchInput);
     this.router.dispose();
     this.renderer.off("resize", this.resize);
+    this.renderer.off("selection", this.selectionFinished); this.textSelection = undefined;
     this.renderer.off("focused_renderable", this.updateFooter);
     this.renderer.removePostProcessFn(this.settleRows); this.renderer.removePostProcessFn(this.acknowledgeVisible);
     this.renderer.off("focus", this.focusTerminal); this.renderer.off("blur", this.blurTerminal);

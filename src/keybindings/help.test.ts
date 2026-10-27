@@ -15,6 +15,29 @@ test("Help shows registered navigation alternatives instead of bare arrows", () 
   expect(help).not.toMatch(/[↑↓←→]/u); expect(help).not.toContain("arrows");
 });
 
+test.each([["darwin", "<D-c>", "<C-c>"], ["win32", "<C-c>", "<D-c>"], ["linux", "<C-c>", "<D-c>"]] as const)("%s help advertises only its platform copy shortcut", (platform, shortcut, other) => {
+  // Full Help must describe the actual OS-specific keymap rather than both platform conventions.
+  const keymap = defaultKeymap(platform);
+
+  const help = keymapHelp(keymap, "terminal", () => false);
+
+  expect(help).toContain(`${shortcut} copies visible selected text`); expect(help).not.toContain(other);
+});
+
+test("Help derives selection copy hints from overrides and explains terminal forwarding", () => {
+  // Selection help remains discoverable even when no text is currently selected.
+  const keymap = expectOk(parseKeymap({ bindings: { "selection.copy": [{ keys: "ctrl+shift+c", scope: "selection" }] } }));
+  const disabled = expectOk(parseKeymap({ bindings: { "selection.copy": [] } }));
+
+  const help = keymapHelp(keymap, "terminal", () => false);
+  const disabledHelp = keymapHelp(disabled, "terminal", () => false);
+
+  expect(help).toContain("<C-S-c> copies visible selected text"); expect(help).not.toContain("<D-c>");
+  expect(help).toContain("must be forwarded by the host terminal");
+  expect(disabledHelp).toContain("Selection copying has no configured binding.");
+  expect(disabledHelp).not.toContain("copies visible selected text");
+});
+
 test("Help retains custom modifiers and sequences while omitting default navigation hints", () => {
   // Honor arrow-only overrides while showing semantically distinct modifiers/sequences.
   const keymap = expectOk(parseKeymap({ bindings: {

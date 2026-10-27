@@ -2,7 +2,7 @@ import { EmbeddedTerminalRenderable, KeyEvent, type CliRenderer, type Renderable
 import { inScope, type CommandId, type KeyContext } from "./commands.ts";
 import { keyToken, type Binding, type Keymap } from "./config.ts";
 
-const oneShot = new Set<CommandId>(["notice.details", "messages.open", "messages.dismiss", "messages.copy", "messages.search", "output.read", "focus.prompt", "transcript.back", "terminal.copy-back", "terminal.copy-input", "terminal.copy-visual", "terminal.copy-visual-line", "terminal.copy-yank", "transcript.open-link", "transcript.copy", "transcript.search-submit", "transcript.search-cancel", "transcript.search-clear", "accounts.choose", "accounts.dismiss", "accounts.rename", "accounts.delete", "accounts.browser", "accounts.copy-url", "accounts.copy-code", "accounts.search", "extension.submit", "extension.dismiss", "extension.search", "extension.browser", "extension.copy-url", "tab.new", "tab.close", "session.close", "terminal.close", "input.ignore", "search.clear", "monitor.open", "monitor.dismiss", "dashboard.show", "dashboard.dismiss", "dashboard.refresh", "workspace.dismiss", "workspace.open", "focus.results", "agent.send", "agent.clear", "git.clear", "git.search-clear", "git.refs", "git.reflog", "git.change-session", "git.open", "git.back", "git.preview", "completion.accept", "completion.dismiss", "history.open", "history.dismiss", "model.select", "model.dismiss", "model.search", "dialog.dismiss", "dialog.copy", "app.help", "agent.inspect", "git.inspect"]);
+const oneShot = new Set<CommandId>(["selection.copy", "notice.details", "messages.open", "messages.dismiss", "messages.copy", "messages.search", "output.read", "focus.prompt", "transcript.back", "terminal.copy-back", "terminal.copy-input", "terminal.copy-visual", "terminal.copy-visual-line", "terminal.copy-yank", "transcript.open-link", "transcript.copy", "transcript.search-submit", "transcript.search-cancel", "transcript.search-clear", "accounts.choose", "accounts.dismiss", "accounts.rename", "accounts.delete", "accounts.browser", "accounts.copy-url", "accounts.copy-code", "accounts.search", "extension.submit", "extension.dismiss", "extension.search", "extension.browser", "extension.copy-url", "tab.new", "tab.close", "session.close", "terminal.close", "input.ignore", "search.clear", "monitor.open", "monitor.dismiss", "dashboard.show", "dashboard.dismiss", "dashboard.refresh", "workspace.dismiss", "workspace.open", "focus.results", "agent.send", "agent.clear", "git.clear", "git.search-clear", "git.refs", "git.reflog", "git.change-session", "git.open", "git.back", "git.preview", "completion.accept", "completion.dismiss", "history.open", "history.dismiss", "model.select", "model.dismiss", "model.search", "dialog.dismiss", "dialog.copy", "app.help", "agent.inspect", "git.inspect"]);
 type Pending = { owner: Renderable | null; events: KeyEvent[]; keys: string[]; held: Set<string>; candidates: readonly Binding[] };
 export class KeyRouter {
   private pending: Pending | undefined;
@@ -12,7 +12,8 @@ export class KeyRouter {
   constructor(private readonly renderer: CliRenderer, readonly keymap: Keymap,
     private readonly context: () => KeyContext, private readonly available: (command: CommandId) => boolean,
     private readonly execute: (command: CommandId, key: KeyEvent) => void,
-    private readonly capture?: (key: KeyEvent) => boolean) {
+    private readonly capture?: (key: KeyEvent) => boolean,
+    private readonly overlayContext?: () => KeyContext | null) {
     renderer.keyInput.prependListener("keypress", this.press);
     renderer.keyInput.prependListener("keyrelease", this.release);
     renderer.keyInput.prependListener("paste", this.flush);
@@ -24,12 +25,15 @@ export class KeyRouter {
     const repeated = key.eventType === "repeat" || key.repeated === true;
     if (repeated && this.consumed.get(key.name)) { this.consume(key); return; }
     if (!repeated) this.consumed.delete(key.name);
-    // Owned literal arguments get first refusal only outside a configured sequence.
-    // Do not steal the tail of a leader binding or replay captured held-key repeats.
-    if (!this.pending && this.capture?.(key)) { this.consume(key); this.consumed.set(key.name, true); return; }
     const token = keyToken(key);
+    // A transient selection owns only its explicitly scoped keys, not app/native navigation.
+    const overlay = !this.pending ? this.overlayContext?.() : null;
+    const overlayBindings = overlay ? this.keymap.bindings.filter(binding => binding.keys[0] === token && binding.scope === overlay) : [];
+    // Literal arguments must not steal selection copying or the tail of a configured sequence.
+    if (!this.pending && !overlayBindings.length && this.capture?.(key)) { this.consume(key); this.consumed.set(key.name, true); return; }
     if (!this.pending) {
-      const candidates = this.keymap.bindings.filter((binding) => binding.keys[0] === token && inScope(binding.scope, this.context()));
+      let candidates = overlayBindings;
+      if (!candidates.length) candidates = this.keymap.bindings.filter((binding) => binding.keys[0] === token && inScope(binding.scope, this.context()));
       if (!candidates.length) return;
       this.pending = { owner: this.renderer.currentFocusedRenderable ?? null, events: [], keys: [], held: new Set(), candidates };
     }

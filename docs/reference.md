@@ -1270,7 +1270,7 @@ details/diffs, conversation text and help/notification details, `Ctrl+D/U` moves
 half a viewport.
 From a search input, `Ctrl+D/U` preserves the query and caret, focuses the results list and jumps
 from the current candidate. Further presses and held-key repeats continue navigating the list.
-In compact layouts this returns from preview to results. **Ctrl+C** clears only the search query,
+In compact layouts this returns from preview to results. Without a text selection, **Ctrl+C** clears only the search query,
 without closing the popup or interrupting work; an empty query is a no-op.
 Agent/Git prompt editing and embedded editors/shells retain their native input bindings.
 Search, completion and app-owned focusable tab strips keep **Ctrl+N/P** navigation. Agent and Terminal
@@ -1297,7 +1297,28 @@ These shared actions can be rebound with
 Screen-specific `session.*` and terminal creation/close/navigation commands remain available for explicit
 custom bindings but have no defaults. Older `session-tabs` / `terminal-tabs` scopes are still accepted
 when loading keymaps, but are no longer entered; move such bindings to an input/content scope or `global`.
-Ctrl+C clears drafts in Agent input; in Editor and Terminal, Neovim and shells still receive it as native input.
+Without a text selection, Ctrl+C clears drafts in Agent input; in Editor and Terminal, Neovim and shells still receive it as native input.
+
+After dragging to select text, `selection.copy` uses an OS-specific default:
+**Cmd+C** (`<D-c>`, reported as `super+c`) on macOS, or **Ctrl+C** (`<C-c>`) on Windows/Linux.
+On macOS, Ctrl+C retains ordinary draft clearing or native program interruption even while text is selected.
+Only a nonempty, completed selection in the visible screen or topmost popup takes priority;
+stale selections behind popups or hidden tabs do not intercept input. Copying preserves selection,
+focus and drafts, including when the clipboard reports an error. With no selection, the usual
+clear/interrupt bindings remain unchanged. Programs that own mouse reporting still receive native
+mouse input rather than creating an app selection.
+
+The host terminal must forward the shortcut to Radian. Many macOS terminal apps reserve Cmd+C for
+their own Copy action; Radian cannot intercept a key they do not send. Configure the terminal to forward
+Cmd+C as a Super+C keyboard event (Kitty CSI `99;9u`, preceded by ESC and `[`), or explicitly remap
+`selection.copy`. A terminal-native selection and its Copy shortcut remain outside Radian's control.
+
+Defaults use the OS running the TUI (`process.platform`), not the daemon's OS. When running the TUI
+over SSH, this is the remote OS; the terminal protocol does not reliably report the client keyboard OS.
+Override `selection.copy` to match the client if necessary. To remap copying without changing normal
+input bindings, use the transient `selection` scope, for example
+`"selection.copy": [{ "keys": "super+c", "scope": "selection" }]`; `[]` disables it.
+
 If macOS reserves Ctrl+Space for input-source switching, change that system shortcut or radian's leader.
 
 Shortcut hints use Neovim notation (`<CR>`, `<C-n>`, `<S-Tab>`, `<Esc>`). Sequential keys are
@@ -1328,7 +1349,7 @@ Spaces separate sequential keys (`"space r"` is a two-key leader); `+` combines 
 Use explicit `shift+c` for uppercase C. A string binding is global; an object can specify `scope`:
 `global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `history-search`, `monitor`, `monitor-search`, `git-tabs`,
 `prompt`, `prompt-completion`, `button`, `transcript` (section navigation), `transcript-text`,
-`transcript-visual`, `transcript-search`, `editor`, `terminal`, `terminal-copy`, `terminal-visual`, `git`, `git-prompt`, `dialog`, or `none`. An override replaces that command's defaults;
+`transcript-visual`, `transcript-search`, `editor`, `terminal`, `terminal-copy`, `terminal-visual`, `git`, `git-prompt`, `dialog`, `selection`, or `none`. The transient `selection` scope is checked before the focused context only while visible text is selected; other keys retain their original context. An override replaces that command's defaults;
 `[]` disables it. Command IDs/defaults are defined in `src/keybindings/commands.ts`.
 Unknown commands, invalid keys and overlapping/prefix bindings are errors rather than silent fallbacks.
 For example, a printable Space leader conflicts with the default button Space activation unless that

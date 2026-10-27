@@ -1,5 +1,5 @@
 // Legacy session-tabs/terminal-tabs scopes still parse older keymaps, but headers never receive focus.
-export const contexts = ["messages", "messages-search", "workspace", "search", "history", "history-search", "monitor", "monitor-search", "dashboard", "dashboard-tabs", "model", "model-search", "model-effort", "accounts", "accounts-search", "accounts-input", "extension", "extension-search", "extension-input", "extension-body", "session-tabs", "terminal-tabs", "git-tabs", "git-search", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "transcript-search", "editor", "terminal", "terminal-copy", "terminal-visual", "git", "git-prompt", "dialog", "none"] as const;
+export const contexts = ["selection", "messages", "messages-search", "workspace", "search", "history", "history-search", "monitor", "monitor-search", "dashboard", "dashboard-tabs", "model", "model-search", "model-effort", "accounts", "accounts-search", "accounts-input", "extension", "extension-search", "extension-input", "extension-body", "session-tabs", "terminal-tabs", "git-tabs", "git-search", "prompt", "prompt-completion", "button", "transcript", "transcript-text", "transcript-visual", "transcript-search", "editor", "terminal", "terminal-copy", "terminal-visual", "git", "git-prompt", "dialog", "none"] as const;
 export type KeyContext = typeof contexts[number];
 export type KeyScope = KeyContext | "global" | "app" | "pty";
 export type BindingInput = { keys: string; scope: KeyScope };
@@ -13,11 +13,12 @@ const transcriptContexts = ["transcript", "transcript-text", "transcript-visual"
 const transcriptKeys = (keys: string): BindingInput[] => transcriptContexts.map((scope) => key(keys, scope));
 const textKeys = (...keys: string[]): BindingInput[] => keys.flatMap((keys) => [key(keys, "transcript-text"), key(keys, "transcript-visual")]);
 const terminalCopyKeys = (...keys: string[]): BindingInput[] => keys.flatMap(keys => [key(keys, "terminal-copy"), key(keys, "terminal-visual")]);
-const tabContexts = contexts.filter((context) => context !== "editor" && context !== "terminal" && context !== "prompt-completion");
+const tabContexts = contexts.filter((context) => context !== "selection" && context !== "editor" && context !== "terminal" && context !== "prompt-completion");
 
-export const defaultBindings = {
+export const defaultBindings = (platform: NodeJS.Platform = process.platform) => ({
+  "selection.copy": [key(platform === "darwin" ? "super+c" : "ctrl+c", "selection")],
   "app.detach": [key("<leader> d")],
-  "app.help": [key("<leader> ?"), key("<leader> shift+?"), key("<leader> shift+/"), ...contexts.filter((context) => !["editor", "terminal", "transcript", "transcript-text", "transcript-visual", "dialog"].includes(context)).map((context) => key("f1", context))],
+  "app.help": [key("<leader> ?"), key("<leader> shift+?"), key("<leader> shift+/"), ...contexts.filter((context) => !["selection", "editor", "terminal", "transcript", "transcript-text", "transcript-visual", "dialog"].includes(context)).map((context) => key("f1", context))],
   "notice.details": [key("<leader> !"), key("<leader> shift+!"), key("<leader> shift+1")],
   "messages.dismiss": [key("escape", "messages"), key("escape", "messages-search")],
   "messages.open": [key("enter", "messages"), key("enter", "messages-search")],
@@ -274,12 +275,13 @@ export const defaultBindings = {
   "git.left": [key("h", "git"), key("left", "git")],
   "git.right": [key("l", "git"), key("right", "git")],
   "button.activate": [key("enter", "button"), key("space", "button"), key("enter", "git-tabs"), key("space", "git-tabs")],
-} satisfies Record<string, readonly BindingInput[]>;
-export type CommandId = keyof typeof defaultBindings;
-export const commandIds = Object.keys(defaultBindings) as CommandId[];
+} satisfies Record<string, readonly BindingInput[]>);
+export type CommandId = keyof ReturnType<typeof defaultBindings>;
+const registeredCommands = defaultBindings();
+export const commandIds = Object.keys(registeredCommands) as CommandId[];
 const tabSelectionCommands = commandIds.filter((command) => command.startsWith("tab.select-"));
 export function tabIndex(command: CommandId): number { return tabSelectionCommands.indexOf(command); }
-export function isCommand(value: string): value is CommandId { return Object.hasOwn(defaultBindings, value); }
+export function isCommand(value: string): value is CommandId { return Object.hasOwn(registeredCommands, value); }
 export function inScope(scope: KeyScope, context: KeyContext): boolean {
   if (scope === "global") return true;
   if (scope === "pty") return context === "editor" || context === "terminal";

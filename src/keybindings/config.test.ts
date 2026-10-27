@@ -17,6 +17,41 @@ test("Default leader is Ctrl+Space and Ctrl+C never quits the app", () => {
   expect(map.bound("ctrl+b", "prompt")).toBe(false);
 });
 
+test.each([
+  ["darwin", "<D-c>", "super+c", "ctrl+c"],
+  ["win32", "<C-c>", "ctrl+c", "super+c"],
+  ["linux", "<C-c>", "ctrl+c", "super+c"],
+] as const)("%s copy defaults use only %s in the transient selection scope", (platform, hint, copyKey, nativeKey) => {
+  // Platform-specific copy shortcuts must not reserve the other platform's key.
+  const map = defaultKeymap(platform);
+
+  const selection = map.hints("selection.copy", "selection");
+
+  expect(selection).toBe(hint); expect(map.bound(copyKey, "selection")).toBe(true); expect(map.bound(nativeKey, "selection")).toBe(false);
+  expect(map.bound("ctrl+c", "terminal")).toBe(false); expect(map.hints("selection.copy", "prompt")).toBe("");
+  expect(map.hints("agent.clear", "prompt")).toBe("<C-c>"); expect(map.hints("search.clear", "search")).toBe("<C-c>");
+});
+
+test("Default keymaps detect the TUI process platform", () => {
+  // Production callers do not have to pass the OS explicitly.
+  const map = defaultKeymap();
+
+  const hint = map.hints("selection.copy", "selection");
+
+  expect(hint).toBe(process.platform === "darwin" ? "<D-c>" : "<C-c>");
+});
+
+test.each(["darwin", "win32", "linux"] as const)("%s selection copy overrides replace platform defaults", platform => {
+  // Explicit mappings remain authoritative for SSH clients and user preferences.
+  const map = expectOk(parseKeymap({ bindings: { "selection.copy": [{ keys: "alt+c", scope: "selection" }] } }, platform));
+  const disabled = expectOk(parseKeymap({ bindings: { "selection.copy": [] } }, platform));
+
+  const hint = map.hints("selection.copy", "selection");
+
+  expect(hint).toBe("<M-c>"); expect(map.bound("ctrl+c", "selection")).toBe(false); expect(map.bound("super+c", "selection")).toBe(false);
+  expect(disabled.hints("selection.copy", "selection")).toBe("");
+});
+
 test("Workspace defaults use only leader+b and reading surfaces own Ctrl+F/B", () => {
   const map = defaultKeymap();
   for (const context of ["prompt", "editor", "terminal", "transcript", "transcript-text", "workspace", "search"] as const) {
