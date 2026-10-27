@@ -598,7 +598,7 @@ export class SessionHistoryPanel {
       item && worktree && !this.loading ? JSON.stringify([worktree.id, item.id]) : undefined;
     if (identity && identity === this.previewIdentity) return;
     this.previewIdentity = identity;
-    this.preview.scrollTo(0);
+    // The session renderer owns scroll restoration; resetting here overwrites the previous session's saved position.
     if (this.loading || this.loadError || !item || !worktree) {
       this.previewCache.unselect();
       this.setPreviewLoading(false);
