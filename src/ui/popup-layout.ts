@@ -78,11 +78,29 @@ export function attachPopupActivity(panel: BoxRenderable, activity: Renderable):
   panel.add(activity);
 }
 
-export function centerPopup(panel: BoxRenderable, width: number, height: number, availableWidth: number, availableHeight: number): void {
-  const columns = Math.max(1, Math.min(availableWidth, Math.floor(width)));
-  const rows = Math.max(1, Math.min(availableHeight, Math.floor(height)));
-  panel.width = columns; panel.height = rows;
+type PopupSize = { width: number; height: number };
+
+// Centered overlays share cell-based presets; anchored cards and pane-sized views keep their own geometry.
+export const POPUP_SIZES = {
+  compact: { width: 64, height: 10 },
+  standard: { width: 100, height: 24 },
+  expanded: { width: 160, height: 36 },
+} as const satisfies Record<string, PopupSize>;
+
+const POPUP_VIEWPORT = { width: 0.9, height: 0.8 } as const;
+
+export function getPopupSize(size: PopupSize, availableWidth: number, availableHeight: number): PopupSize {
+  return {
+    width: Math.max(1, Math.floor(Math.min(size.width, availableWidth * POPUP_VIEWPORT.width))),
+    height: Math.max(1, Math.floor(Math.min(size.height, availableHeight * POPUP_VIEWPORT.height))),
+  };
+}
+
+export function centerPopup(panel: BoxRenderable, size: PopupSize, availableWidth: number, availableHeight: number): PopupSize {
+  const dimensions = getPopupSize(size, availableWidth, availableHeight);
+  panel.width = dimensions.width; panel.height = dimensions.height;
   // Native geometry getters still describe the previous frame during resize.
-  panel.left = Math.floor((availableWidth - columns) / 2);
-  panel.top = Math.floor((availableHeight - rows) / 2);
+  panel.left = Math.floor((availableWidth - dimensions.width) / 2);
+  panel.top = Math.floor((availableHeight - dimensions.height) / 2);
+  return dimensions;
 }

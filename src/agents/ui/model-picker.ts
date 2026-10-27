@@ -11,7 +11,7 @@ import { SearchInput } from "../../ui/search-input.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
-import { SearchPopupLayout, attachPopupActivity, centerPopup } from "../../ui/popup-layout.ts";
+import { POPUP_SIZES, SearchPopupLayout, attachPopupActivity, centerPopup } from "../../ui/popup-layout.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { Button } from "../../ui/button.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
@@ -255,9 +255,8 @@ export class ModelPicker {
   };
   private resize = (): void => {
     if (this.disposed || this.root.isDestroyed) return;
-    const width = Math.max(1, Math.min(100, this.renderer.width - 4)), height = Math.max(1, Math.min(24, this.renderer.height - 2));
+    const { height } = centerPopup(this.panel, POPUP_SIZES.standard, this.renderer.width, this.renderer.height);
     this.search.fit(height - 6);
-    centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
   };
   dispose(): void {
     if (this.disposed) return;

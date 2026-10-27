@@ -6,7 +6,7 @@ import { halfPageStep } from "./navigation.ts";
 import { Clipboard } from "./clipboard.ts";
 import { uiTheme } from "./theme.ts";
 import { PopupFrame } from "./popup-frame.ts";
-import { PopupBody, centerPopup } from "./popup-layout.ts";
+import { POPUP_SIZES, PopupBody, centerPopup } from "./popup-layout.ts";
 import { paintText } from "./theme-styles.ts";
 
 export type DialogContent = { title: string; text: string; copy?: boolean; copyText?: string };
@@ -110,8 +110,7 @@ export class TextDialog {
   };
   private resize = (): void => {
     if (this.disposed || this.root.isDestroyed) return;
-    const width = Math.max(1, Math.min(110, this.renderer.width - 4)), height = Math.max(1, Math.min(this.renderer.height - 2, Math.floor(this.renderer.height * 0.85)));
-    centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
+    centerPopup(this.panel, POPUP_SIZES.expanded, this.renderer.width, this.renderer.height);
   };
   dispose(): void {
     if (this.disposed) return;

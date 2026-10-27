@@ -9,7 +9,7 @@ import type { FooterShortcut } from "../../ui/footer.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
-import { SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
+import { POPUP_SIZES, SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
 import { SearchInput } from "../../ui/search-input.ts";
@@ -182,10 +182,8 @@ export class SessionMonitor {
   }
   private resize = (): void => {
     if (this.disposed) return;
-    const width = Math.max(1, Math.floor(this.renderer.width * 0.8));
-    const height = Math.max(1, Math.min(18, Math.floor(this.renderer.height * 0.8)));
+    const { height } = centerPopup(this.panel, POPUP_SIZES.standard, this.renderer.width, this.renderer.height);
     this.search.fit(height - 4);
-    centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
     this.layout.resize(false); this.actions.changed();
   };
   dispose(): void {

@@ -164,6 +164,43 @@ test("Cancelling label edits preserves the existing account and native text entr
   } finally { await app.close(); }
 });
 
+test.each(["label", "rename", "delete"] as const)("Account %s prompts use compact sizing and return to the standard list", async stage => {
+  // A stage change, not result count, determines whether account actions use a compact prompt.
+  const app = await mount();
+  try {
+    await app.open();
+    if (stage === "label") {
+      for (let step = 0; step < 3; step++) { app.mockInput.pressEnter(); await app.render(); }
+    } else {
+      app.mockInput.pressKey("j"); app.mockInput.pressKey(stage === "rename" ? "r" : "x"); await app.render();
+    }
+    const input = app.get("accounts-input") as InputRenderable;
+    if (stage !== "delete") { input.value = "unsubmitted-hjkl"; input.cursorOffset = 4; }
+    const focus = app.renderer.currentFocusedRenderable;
+
+    // Compact geometry and native text ownership survive small-terminal shrink/grow cycles.
+    for (const [width, height, columns, rows] of [[120, 30, 64, 10], [60, 16, 54, 10], [30, 10, 27, 8], [120, 30, 64, 10]] as const) {
+      app.resize(width, height); await app.render();
+
+      const panel = app.get("accounts-dialog");
+      expect([panel.width, panel.height]).toEqual([columns, rows]);
+      expect(panel.x).toBe(Math.floor((width - columns) / 2)); expect(panel.y).toBe(Math.floor((height - rows) / 2));
+      expect(app.renderer.currentFocusedRenderable).toBe(focus);
+      if (stage !== "delete") { expect(input.value).toBe("unsubmitted-hjkl"); expect(input.cursorOffset).toBe(4); }
+      expect(app.requests.map(request => request.type)).toEqual(["list"]);
+    }
+
+    // Going back restores the standard list immediately without accepting or persisting the prompt.
+    app.mockInput.pressEscape(); await app.render();
+
+    const panel = app.get("accounts-dialog");
+    expect([panel.width, panel.height]).toEqual([100, 24]);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-search");
+    expect(app.get("accounts-input").visible).toBe(false);
+    expect(app.requests.map(request => request.type)).toEqual(["list"]); expect(app.sent).toEqual([]);
+  } finally { await app.close(); }
+});
+
 test("Rename shortcuts and Help follow user overrides without changing literal search input", async () => {
   // Override the mnemonic without adding an unconfigurable widget-local shortcut.
   const keymap = expectOk(parseKeymap({ bindings: { "accounts.rename": [{ keys: "e", scope: "accounts" }] } }));

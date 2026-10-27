@@ -22,18 +22,18 @@ import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import { SearchInput } from "../../ui/search-input.ts";
 
 const surfaces = [
-  { name: "workspace", panel: "workspace-sidebar", content: "workspace-body", header: "Workspace", body: "workspace-results", title: "No repositories" },
-  { name: "monitor", panel: "monitor-dialog", content: "monitor-body", header: "AI Sessions", body: "monitor-results", title: "No working sessions or unread results" },
-  { name: "history", panel: "history-dialog", content: "history-body", header: "History · radian", body: "history-results", title: "No saved sessions", preview: "history-preview-pane" },
-  { name: "model", panel: "model-dialog", content: "model-body", header: "Model & effort", body: "model-results", title: "No available models" },
-  { name: "messages", panel: "messages-panel", content: "messages-body", header: "Messages", body: "messages-results", title: "No messages yet" },
-  { name: "refs", panel: "git-browser-panel", content: "git-browser-body", header: "Refs", body: "git-browser-results", title: "No matches" },
-  { name: "reflog", panel: "git-browser-panel", content: "git-browser-body", header: "Reflog", body: "git-browser-results", title: "No matches", preview: "git-reflog-preview-pane" },
+  { name: "workspace", preset: "standard", panel: "workspace-sidebar", content: "workspace-body", header: "Workspace", body: "workspace-results", title: "No repositories" },
+  { name: "monitor", preset: "standard", panel: "monitor-dialog", content: "monitor-body", header: "AI Sessions", body: "monitor-results", title: "No working sessions or unread results" },
+  { name: "history", preset: "expanded", panel: "history-dialog", content: "history-body", header: "History · radian", body: "history-results", title: "No saved sessions", preview: "history-preview-pane" },
+  { name: "model", preset: "standard", panel: "model-dialog", content: "model-body", header: "Model & effort", body: "model-results", title: "No available models" },
+  { name: "messages", preset: "standard", panel: "messages-panel", content: "messages-body", header: "Messages", body: "messages-results", title: "No messages yet" },
+  { name: "refs", preset: "standard", panel: "git-browser-panel", content: "git-browser-body", header: "Refs", body: "git-browser-results", title: "No matches" },
+  { name: "reflog", preset: "expanded", panel: "git-browser-panel", content: "git-browser-body", header: "Reflog", body: "git-browser-results", title: "No matches", preview: "git-reflog-preview-pane" },
   { name: "changes", panel: "git-changes", content: "git-changes-body", header: "Working tree", body: "git-files-body", title: "No changed", preview: "git-comparison-body" },
-  { name: "accounts", panel: "accounts-dialog", content: "accounts-body", header: "Accounts", body: "accounts-results", title: "No connected accounts" },
-  { name: "extension", panel: "extension-dialog-panel", content: "extension-dialog-details", header: "Extension ·", body: "extension-results", title: "No matching options" },
-  { name: "dashboard", panel: "dashboard-dialog", content: "dashboard-period", header: "Agent Dashboard", body: "dashboard-ranking-body", title: "No recorded usage" },
-  { name: "text", panel: "text-dialog-panel", content: "text-dialog-content", header: "Details", body: "text-dialog-content", title: "No content" },
+  { name: "accounts", preset: "standard", panel: "accounts-dialog", content: "accounts-body", header: "Accounts", body: "accounts-results", title: "No connected accounts" },
+  { name: "extension", preset: "standard", panel: "extension-dialog-panel", content: "extension-dialog-details", header: "Extension ·", body: "extension-results", title: "No matching options" },
+  { name: "dashboard", preset: "expanded", panel: "dashboard-dialog", content: "dashboard-period", header: "Agent Dashboard", body: "dashboard-ranking-body", title: "No recorded usage" },
+  { name: "text", preset: "expanded", panel: "text-dialog-panel", content: "text-dialog-content", header: "Details", body: "text-dialog-content", title: "No content" },
 ] as const;
 type Surface = typeof surfaces[number]["name"];
 const searches: Partial<Record<Surface, { id: string; title: string; counts: string; status?: string }>> = {
@@ -110,6 +110,40 @@ async function mount(name: Surface, width: number, height: number) {
   return { ...app, get, render, revealPreview,
     async close() { panel.dispose(); await app.dispose(); } };
 }
+
+test.each(surfaces.filter(surface => "preset" in surface))("$name uses shared popup sizes without resetting search or focus", async surface => {
+  // Centered surfaces share one size per role, independently of empty results or search queries.
+  const app = await mount(surface.name, 320, 90);
+  const searchId = searches[surface.name]?.id;
+  const search = searchId ? app.get(searchId) as SearchInput : undefined;
+  const focus = app.renderer.currentFocusedRenderable;
+  try {
+    const panel = app.get(surface.panel), expanded = surface.preset === "expanded";
+    const geometry = [panel.x, panel.y, panel.width, panel.height];
+
+    // Filtering must not shrink the frame or move the input caret.
+    if (search) { search.value = "no-match-hjkl"; search.cursorOffset = 3; }
+    await app.render();
+
+    expect([panel.x, panel.y, panel.width, panel.height]).toEqual(geometry);
+    for (const [width, height, columns, rows] of [
+      [320, 90, expanded ? 160 : 100, expanded ? 36 : 24],
+      [140, 32, expanded ? 126 : 100, expanded ? 25 : 24],
+      [60, 16, 54, 12],
+      [30, 10, 27, 8],
+      [320, 90, expanded ? 160 : 100, expanded ? 36 : 24],
+    ] as const) {
+      // Repeated shrink/grow cycles use current bounds rather than stale native geometry.
+      app.resize(width, height); await app.render();
+
+      expect([panel.width, panel.height]).toEqual([columns, rows]);
+      expect(panel.x).toBe(Math.floor((width - columns) / 2));
+      expect(panel.y).toBe(Math.floor((height - rows) / 2));
+      expect(app.renderer.currentFocusedRenderable).toBe(focus);
+      if (search) { expect(search.value).toBe("no-match-hjkl"); expect(search.cursorOffset).toBe(3); }
+    }
+  } finally { await app.close(); }
+});
 
 for (const [width, height] of [[140, 32], [60, 16]] as const) {
   test.each(surfaces)(`$name popups have no title row and center empty guidance at ${width} columns`, async surface => {

@@ -124,7 +124,9 @@ test("Short folders and long branches share viewports with Korean, emoji, and ne
   const app = await mount();
   try {
     const rawName = "short-folder\n한글 👨‍👩‍👧‍👦 é";
-    app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id !== "demo:main" ? tree : { ...tree, name: rawName }) })));
+    // The branch must scroll past the entire shorter folder name regardless of the shared popup width.
+    const branch = "branch-" + "0123456789-".repeat(8) + "TAIL";
+    app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id !== "demo:main" ? tree : { ...tree, name: rawName, branch }) })));
     await app.render(); const label = app.label();
     expect(label.plainText).toContain("short-folder 한글 👨‍👩‍👧‍👦 é\n"); expect(label.lineCount).toBe(2);
     app.resize(40, 20); await app.render();

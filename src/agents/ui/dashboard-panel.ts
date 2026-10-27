@@ -8,7 +8,7 @@ import type { FooterShortcut } from "../../ui/footer.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
-import { PopupBody, attachPopupActivity, centerPopup } from "../../ui/popup-layout.ts";
+import { POPUP_SIZES, PopupBody, attachPopupActivity, centerPopup } from "../../ui/popup-layout.ts";
 import { paintText, styleChunk } from "../../ui/theme-styles.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
@@ -212,8 +212,7 @@ export class DashboardPanel {
   };
   private resize = (): void => {
     if (this.disposed) return;
-    const width = Math.max(1, Math.min(120, this.renderer.width - 4)), height = Math.max(1, this.renderer.height - 3);
-    centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
+    centerPopup(this.panel, POPUP_SIZES.expanded, this.renderer.width, this.renderer.height);
     this.paint();
   };
   dispose(): void {

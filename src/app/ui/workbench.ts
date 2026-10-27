@@ -27,7 +27,7 @@ import { MessagesPanel } from "../../ui/messages-panel.ts";
 import { formatRunDuration } from "../../agents/ui/run-completion.ts";
 import { TextDialog } from "../../ui/text-dialog.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
-import { SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
+import { POPUP_SIZES, SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
 import { SearchInput } from "../../ui/search-input.ts";
 import { keymapHelp } from "../../keybindings/help.ts";
 import { footerKeyHint } from "../../keybindings/footer.ts";
@@ -817,9 +817,7 @@ export class Workbench {
   }
 
   private resize = (): void => {
-    const width = Math.max(1, Math.min(100, Math.floor(this.renderer.width * 0.8)));
-    const height = Math.max(1, Math.min(this.renderer.height, Math.max(9, Math.floor(this.renderer.height * 0.8))));
-    centerPopup(this.sidebar, width, height, this.renderer.width, this.renderer.height);
+    const { height } = centerPopup(this.sidebar, POPUP_SIZES.standard, this.renderer.width, this.renderer.height);
     this.search.fit(height - 4);
     this.spaceRows(this.visibleRows());
     this.navigationRevealPending = true;

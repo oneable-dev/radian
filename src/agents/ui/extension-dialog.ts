@@ -12,7 +12,7 @@ import { singleLine } from "../../ui/text.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
-import { SearchPopupLayout, attachPopupActivity, centerPopup } from "../../ui/popup-layout.ts";
+import { POPUP_SIZES, SearchPopupLayout, attachPopupActivity, centerPopup } from "../../ui/popup-layout.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { createTextMatcher } from "../../search.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
@@ -203,8 +203,8 @@ export class ExtensionDialogPanel {
   };
   private resize = (): void => {
     if (this.disposed) return;
-    const width = Math.max(1, Math.min(110, this.renderer.width - 4)), height = Math.max(1, Math.min(26, this.renderer.height - 2));
-    centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
+    const size = this.scope && this.scope.dialog.kind !== "select" ? POPUP_SIZES.compact : POPUP_SIZES.standard;
+    const { height } = centerPopup(this.panel, size, this.renderer.width, this.renderer.height);
     this.search.fit(Math.max(1, height - 5));
   };
   dispose(): void {

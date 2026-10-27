@@ -309,14 +309,14 @@ test.each(["search", "list"] as const)("Opening sessions from monitor %s shows l
   } finally { await app.close(); }
 });
 
-test("Monitor popups scale with terminal width and stay centered without expanding list height", async () => {
-  // Wide terminals need more caption space while the list stays vertically compact.
+test("Monitor popups share standard picker dimensions and stay centered through resize", async () => {
+  // Session browsing uses the same frame size as other single-list pickers.
   const app = await fixture();
   try {
     app.leader("s"); await app.render();
 
-    // Large displays grow beyond 80 columns, and smaller terminals retain their existing margins.
-    for (const [width, height, columns, rows] of [[320, 90, 256, 18], [240, 70, 192, 18], [180, 50, 144, 18], [120, 30, 96, 18], [60, 16, 48, 12], [30, 10, 24, 8]] as const) {
+    // Large displays respect the standard cap; smaller displays share proportional margins.
+    for (const [width, height, columns, rows] of [[320, 90, 100, 24], [240, 70, 100, 24], [180, 50, 100, 24], [120, 30, 100, 24], [60, 16, 54, 12], [30, 10, 27, 8]] as const) {
       app.resize(width, height); await app.render();
       const panel = app.get("monitor-dialog"), list = app.get("monitor-list") as ScrollBoxRenderable;
 

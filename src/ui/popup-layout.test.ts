@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { BoxRenderable, ScrollBoxRenderable, TextRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
-import { PopupBody, SearchPopupLayout, attachPopupActivity, centerPopup } from "./popup-layout.ts";
+import { POPUP_SIZES, PopupBody, SearchPopupLayout, attachPopupActivity, centerPopup } from "./popup-layout.ts";
 import { LoadingSpinner } from "./loading-spinner.ts";
 import { PopupFrame } from "./popup-frame.ts";
 import { SearchInput } from "./search-input.ts";
@@ -111,7 +111,7 @@ test("Headerless popup activity stays on the frame edge without reserving or cov
   const spinner = new LoadingSpinner(app.renderer, { id: "popup-loading" });
   panel.add(content); attachPopupActivity(panel, spinner.root); app.renderer.root.add(panel);
   try {
-    centerPopup(panel, 60, 14, 80, 20); spinner.start(); spinner.stop();
+    centerPopup(panel, { width: 60, height: 14 }, 80, 20); spinner.start(); spinner.stop();
     await app.renderOnce(); await app.renderOnce();
 
     // Neither border titles nor spinner-only headers take space from the popup body.
@@ -125,17 +125,33 @@ test("Headerless popup activity stays on the frame edge without reserving or cov
   } finally { await app.dispose(); }
 });
 
+test.each(Object.entries(POPUP_SIZES))("The %s popup preset fits even a one-cell terminal", async (_name, size) => {
+  // Minimal terminal dimensions must never produce zero-sized or offscreen popup frames.
+  const app = await createTestRenderer({ width: 80, height: 20 });
+  const panel = new PopupFrame(app.renderer, { position: "absolute", border: false }); app.renderer.root.add(panel);
+  try {
+    for (const [width, height] of [[2, 2], [1, 1], [80, 20]] as const) {
+      // Shrink and restore each role using the same sizing path as real popups.
+      app.resize(width, height); centerPopup(panel, size, width, height); await app.renderOnce();
+
+      expect(panel.width).toBeGreaterThanOrEqual(1); expect(panel.height).toBeGreaterThanOrEqual(1);
+      expect(panel.x).toBeGreaterThanOrEqual(0); expect(panel.y).toBeGreaterThanOrEqual(0);
+      expect(panel.x + panel.width).toBeLessThanOrEqual(width); expect(panel.y + panel.height).toBeLessThanOrEqual(height);
+    }
+  } finally { await app.dispose(); }
+});
+
 test("Popup placement uses requested dimensions rather than stale native resize geometry", async () => {
   // Native getters still report the last frame when the terminal begins shrinking.
   const app = await createTestRenderer({ width: 140, height: 30 });
   const panel = new PopupFrame(app.renderer, { position: "absolute", border: true }); app.renderer.root.add(panel);
   try {
-    centerPopup(panel, 120, 26, 140, 30); await app.renderOnce();
+    centerPopup(panel, POPUP_SIZES.expanded, 140, 30); await app.renderOnce();
 
     // A compact resize must not move the popup offscreen using its previous larger width.
-    app.resize(46, 12); centerPopup(panel, 100, 24, 46, 12); await app.renderOnce();
+    app.resize(46, 12); centerPopup(panel, POPUP_SIZES.standard, 46, 12); await app.renderOnce();
 
-    expect(panel.x).toBe(0); expect(panel.y).toBe(0);
-    expect(panel.width).toBe(46); expect(panel.height).toBe(12);
+    expect(panel.x).toBe(2); expect(panel.y).toBe(1);
+    expect(panel.width).toBe(41); expect(panel.height).toBe(9);
   } finally { await app.dispose(); }
 });

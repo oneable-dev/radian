@@ -46,6 +46,38 @@ test("Extension input submits only through its response channel and restores the
   } finally { await app.close(); }
 });
 
+test.each(["input", "confirm"] as const)("Extension %s dialogs use the compact preset and preserve focus through resize", async kind => {
+  // Short prompts use compact geometry rather than the searchable selection frame.
+  const app = await mount();
+  try {
+    await app.show(kind === "input" ? { id: "request", kind, title: "Callback" }
+      : { id: "request", kind, title: "Authorize", message: "Allow access?" });
+    const input = app.get("extension-dialog-input") as InputRenderable;
+    if (kind === "input") await app.mockInput.typeText("unsubmitted-hjkl");
+    const focus = app.renderer.currentFocusedRenderable;
+
+    // Resizing never accepts the request or clears an unsubmitted answer.
+    for (const [width, height, columns, rows] of [[120, 30, 64, 10], [60, 16, 54, 10], [30, 10, 27, 8], [120, 30, 64, 10]] as const) {
+      app.resize(width, height); await app.render();
+
+      const panel = app.get("extension-dialog-panel");
+      expect([panel.width, panel.height]).toEqual([columns, rows]);
+      expect(panel.x).toBe(Math.floor((width - columns) / 2)); expect(panel.y).toBe(Math.floor((height - rows) / 2));
+      expect(app.renderer.currentFocusedRenderable).toBe(focus);
+      if (kind === "input") expect(input.value).toBe("unsubmitted-hjkl");
+      expect(app.answers).toEqual([]);
+    }
+
+    // A following selection request returns to the standard frame without a terminal resize.
+    await app.show({ id: "selection", kind: "select", title: "Choose", options: ["First", "Second"] });
+
+    const panel = app.get("extension-dialog-panel");
+    expect([panel.width, panel.height]).toEqual([100, 24]);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("extension-dialog-search");
+    expect(app.answers).toEqual([]); expect(app.prompt.value).toBe("Unsent Agent draft");
+  } finally { await app.close(); }
+});
+
 test.each([[120, 30], [60, 16]])("Extension choices preserve search input and navigate candidates across focus at %dx%d", async (width, height) => {
   // A long list forces viewport-based navigation in both ordinary and compact layouts.
   const app = await mount(width, height), options = Array.from({ length: 60 }, (_, index) => `Choice ${String(index).padStart(2, "0")}`);

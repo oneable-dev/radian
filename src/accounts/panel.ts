@@ -10,7 +10,7 @@ import { singleLine } from "../ui/text.ts";
 import type { Notice } from "../ui/messages.ts";
 import { uiTheme } from "../ui/theme.ts";
 import { PopupFrame } from "../ui/popup-frame.ts";
-import { SearchPopupLayout, attachPopupActivity, centerPopup } from "../ui/popup-layout.ts";
+import { POPUP_SIZES, SearchPopupLayout, attachPopupActivity, centerPopup } from "../ui/popup-layout.ts";
 import { paintText } from "../ui/theme-styles.ts";
 import { footerKeyHint } from "../keybindings/footer.ts";
 import type { CommandId, KeyContext } from "../keybindings/commands.ts";
@@ -167,7 +167,7 @@ export class AccountsPanel {
     this.details.visible = false; this.body.content = "";
     this.search.field.visible = true; this.list.visible = true;
     if (!preserveSearch) this.search.clear();
-    this.filter(); if (!preserveSearch) this.search.focus();
+    this.filter(); this.resize(); if (!preserveSearch) this.search.focus();
   }
   private main(preserveSearch = false): void {
     const catalog = this.catalog, worktreeId = this.worktreeId; if (!catalog || !worktreeId) return;
@@ -215,7 +215,7 @@ export class AccountsPanel {
     if (login.status === "cancelled" || login.status === "error") {
       this.spinner.stop(); this.main(); this.message.content = login.error ?? "Login cancelled. Existing accounts and selections were retained."; return;
     }
-    this.stage = "login"; this.search.setTitle(stageTitles.login);
+    this.stage = "login"; this.search.setTitle(stageTitles.login); this.resize();
     this.details.visible = true; this.body.content = login.events.map(event => [event.message, event.url, event.code ? `Code: ${event.code}` : undefined].filter(Boolean).join("\n")).join("\n\n");
     const prompt = login.prompt;
     this.message.content = prompt?.message ?? "Waiting for browser authentication… You can always copy or reopen the URL.";
@@ -352,9 +352,9 @@ export class AccountsPanel {
   };
   private resize = (): void => {
     if (this.disposed || this.root.isDestroyed) return;
-    const width = Math.max(1, Math.min(106, this.renderer.width - 4)), height = Math.max(1, Math.min(30, this.renderer.height - 2));
+    const size = this.stage === "label" || this.stage === "rename" || this.stage === "delete" ? POPUP_SIZES.compact : POPUP_SIZES.standard;
+    const { height } = centerPopup(this.panel, size, this.renderer.width, this.renderer.height);
     this.search.fit(height - 5);
-    centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
   };
   dispose(): void {
     if (this.disposed) return;

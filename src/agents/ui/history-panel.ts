@@ -13,7 +13,7 @@ import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
-import { SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
+import { POPUP_SIZES, SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { SessionPreview } from "./session-preview.ts";
 import type { PromptDraft } from "../prompt-input.ts";
@@ -343,11 +343,9 @@ export class SessionHistoryPanel {
   }
   private resize = (): void => {
     if (this.disposed || this.root.isDestroyed) return;
-    const width = Math.max(1, Math.min(this.renderer.width, Math.floor(this.renderer.width * 0.9)));
-    const height = Math.max(1, Math.min(this.renderer.height, Math.max(8, Math.floor(this.renderer.height * 0.8))));
+    const { height } = centerPopup(this.panel, POPUP_SIZES.expanded, this.renderer.width, this.renderer.height);
     // Keep at least four body rows for the preview in short dialogs.
     this.search.fit(height - 7);
-    centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
     this.layout.resize(this.renderer.width >= 100, this.compactPreview);
     if (this.visible && ((this.session.focused && !this.previewPane.visible) || (this.list.focused && !this.list.visible))) this.search.focus();
     if (this.visible) this.renderPreview();

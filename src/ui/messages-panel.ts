@@ -8,7 +8,7 @@ import { messageLabels, messageText, type Message, type Messages } from "./messa
 import { singleLine, truncateCells } from "./text.ts";
 import { uiTheme } from "./theme.ts";
 import { PopupFrame } from "./popup-frame.ts";
-import { SearchPopupLayout, centerPopup } from "./popup-layout.ts";
+import { POPUP_SIZES, SearchPopupLayout, centerPopup, getPopupSize } from "./popup-layout.ts";
 import { paintText } from "./theme-styles.ts";
 import { createTextMatcher } from "../search.ts";
 
@@ -83,11 +83,11 @@ export class MessagesPanel {
     const previous = this.items.findIndex(item => item.id === selected);
     this.cursor = previous >= 0 ? previous : Math.max(0, Math.min(this.cursor, this.items.length - 1));
     for (const row of this.rows) row.root.destroyRecursively(); this.rows.length = 0;
+    const width = Math.max(0, getPopupSize(POPUP_SIZES.standard, this.renderer.width, this.renderer.height).width - 2);
     for (const [index, item] of this.items.entries()) {
       const root = new BoxRenderable(this.renderer, { id: `messages-row:${item.id}`, height: 2, flexShrink: 0, minWidth: 0,
         onMouseDown: event => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); this.cursor = index; this.list.focus(); this.paint(); } } });
       const time = new Date(item.timestamp).toLocaleTimeString("en-GB", { hour12: false });
-      const width = Math.max(0, Math.min(110, this.renderer.width - 4) - 2);
       // Keep full originals in the store, not in every native single-line preview buffer.
       const heading = truncateCells(`${time} · ${messageLabels[item.level]} · ${singleLine(messageText(item.source))}`, width);
       const preview = truncateCells(singleLine(messageText(item.text)), width);
@@ -128,8 +128,7 @@ export class MessagesPanel {
   };
   private resize = (): void => {
     if (this.disposed) return;
-    const width = Math.max(1, Math.min(110, this.renderer.width - 4)), height = Math.max(1, Math.floor(this.renderer.height * 0.8));
-    centerPopup(this.panel, width, height, this.renderer.width, this.renderer.height);
+    const { height } = centerPopup(this.panel, POPUP_SIZES.standard, this.renderer.width, this.renderer.height);
     this.search.fit(height - 3); if (this.visible) this.refresh();
   };
   dispose(): void {

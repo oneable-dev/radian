@@ -10,7 +10,7 @@ import { halfPageStep } from "../../ui/navigation.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
-import { PopupBody, SearchPopupLayout, attachPopupActivity, centerPopup } from "../../ui/popup-layout.ts";
+import { POPUP_SIZES, PopupBody, SearchPopupLayout, attachPopupActivity, centerPopup } from "../../ui/popup-layout.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { icons } from "../../icons.ts";
 import { describeCommit, refContext, reflogContext, type GitContext } from "../context.ts";
@@ -257,9 +257,8 @@ export class GitBrowser {
   private resize = (): void => {
     if (this.disposed || this.root.isDestroyed || this.renderer.isDestroyed) return;
     const availableWidth = this.root.width || this.renderer.width, availableHeight = this.root.height || this.renderer.height - 1;
-    const width = Math.max(1, Math.floor(availableWidth * (availableWidth < 80 ? 1 : 0.9)));
-    const height = Math.max(1, Math.floor(availableHeight * (availableHeight < 16 ? 1 : 0.85)));
-    centerPopup(this.panel, width, height, availableWidth, availableHeight);
+    const size = this.kind === "reflog" ? POPUP_SIZES.expanded : POPUP_SIZES.standard;
+    const { height } = centerPopup(this.panel, size, availableWidth, availableHeight);
     this.search.fit(Math.max(1, height - 7));
     this.layout.resize(this.renderer.width >= 100, this.compactPreview, this.kind === "reflog");
   };
