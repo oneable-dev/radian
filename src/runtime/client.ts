@@ -248,7 +248,7 @@ export class RuntimeClient {
     return Value.Check(accountReplySchema, body) ? ok(body) : err(new ProtocolError("Malformed account response."));
   }
 
-  async models(sessionId: string, conversationId: string, signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>> {
+  async models(sessionId: string, conversationId: string, signal?: AbortSignal, refresh = false): Promise<Result<ModelCatalog, ExpectedError>> {
     if (this.detaching || this.failure) return err(this.connectionClosed());
     if (!this.state.capabilities?.includes("model-selection")) return err(new CapabilityError("Running service predates model selection. Finish work and explicitly restart it when ready; no service was restarted."));
     if (!this.state.capabilities?.includes("model-effort")) return err(new CapabilityError("Running service predates model effort selection. Finish work and explicitly restart it when ready; no service was restarted."));
@@ -256,7 +256,7 @@ export class RuntimeClient {
     if (!Value.Check(modelCatalogQuerySchema, { sessionId, conversationId })) return err(new InputError("Invalid model selection conversation identity."));
     const instance = this.state.instance, epoch = this.connectionEpoch;
     const abort = AbortSignal.any([this.streamAbort.signal, AbortSignal.timeout(15000), ...(signal ? [signal] : [])]);
-    const request = await capture(() => transport(this.paths, `/models?${new URLSearchParams({ sessionId, conversationId })}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
+    const request = await capture(() => transport(this.paths, `/models?${new URLSearchParams({ sessionId, conversationId, ...(refresh ? { refresh: "true" } : {}) })}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
     if (!request.ok) return request;
     if (!request.value.ok) return request.value;
     const response = request.value.value;

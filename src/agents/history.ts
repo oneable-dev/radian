@@ -1,5 +1,5 @@
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { realpath } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { repositorySnapshot, type RepositorySource } from "../workspace/catalog.ts";
 import { validateHistory, type SessionRecord, type SessionRegistry } from "./session-registry.ts";
 import { CancelledError, capture, HistoryError, SessionError, StorageError, type ExpectedError } from "../errors.ts";
@@ -15,6 +15,7 @@ export type HistoryItem = {
   readonly title: string;
   readonly modified: string;
   readonly messageCount: number;
+  readonly revision?: string;
   readonly openSessionId: string | null;
   readonly unavailableReason: string | null;
 };
@@ -64,7 +65,11 @@ export class SessionHistory {
     if (this.snapshots) {
       const snapshot = await this.snapshots.readSession(worktreeId, savedId); if (!snapshot.ok) return snapshot;
       if (signal?.aborted) return err(new CancelledError());
-      if (snapshot.value?.sessionFile === item.path) return this.snapshotPreview(snapshot.value, savedId, cwd.value, signal);
+      if (snapshot.value?.sessionFile === item.path) {
+        const file = await capture(() => stat(item.path)); if (!file.ok) return file;
+        // External SDK writes supersede a closed runtime snapshot's transcript.
+        if (snapshot.value.updatedAt === undefined || Math.floor(Math.max(file.value.mtimeMs, file.value.ctimeMs)) <= snapshot.value.updatedAt) return this.snapshotPreview(snapshot.value, savedId, cwd.value, signal);
+      }
     }
     const selectedPath = item.path;
     const path = await capture(() => realpath(selectedPath)); if (!path.ok) return path;
@@ -165,8 +170,14 @@ export class SessionHistory {
         if (path.error instanceof StorageError && path.error.systemCode === "ENOENT") continue;
         return path;
       }
+      const file = await capture(() => stat(path.value, { bigint: true }));
+      if (!file.ok) {
+        if (file.error instanceof StorageError && file.error.systemCode === "ENOENT") continue;
+        return file;
+      }
+      const revision = `${file.value.ino}:${file.value.size}:${file.value.mtimeNs}:${file.value.ctimeNs}`;
       const ownership = this.registry.historyOwnership(path.value);
-      result.push({ id: session.id, path: path.value, requireCwd: session.requireCwd, worktreeId, title: (session.name?.trim() || session.firstMessage.trim() || "Untitled session").replace(/\s+/g, " ").slice(0, 120),
+      result.push({ id: session.id, revision, path: path.value, requireCwd: session.requireCwd, worktreeId, title: (session.name?.trim() || session.firstMessage.trim() || "Untitled session").replace(/\s+/g, " ").slice(0, 120),
         modified: session.modified.toISOString(), messageCount: session.messageCount,
         openSessionId: ownership.openSessionId, unavailableReason: ownership.unavailableReason });
     }

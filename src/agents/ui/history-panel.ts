@@ -1,7 +1,7 @@
 import { BoxRenderable, InputRenderableEvents, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
 import type { HistoryItem } from "../history.ts";
 import type { HistoryPreview } from "../history-preview.ts";
-import { HistoryPreviewCache } from "../history-preview-cache.ts";
+import { HistoryPreviewCache, type PreviewState } from "../history-preview-cache.ts";
 import { SearchInput } from "../../ui/search-input.ts";
 import type { Worktree } from "../../workspace/model.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
@@ -24,7 +24,9 @@ import type { TranscriptSection } from "../transcript.ts";
 import { createTextMatcher } from "../../search.ts";
 
 export type HistoryActions = {
-  list?: (worktreeId: string, signal?: AbortSignal) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
+  list?: (worktreeId: string, signal?: AbortSignal, refresh?: boolean) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
+  cached?: (worktreeId: string) => Result<readonly HistoryItem[], ExpectedError> | undefined;
+  previews?: HistoryPreviewCache;
   preview?: (worktreeId: string, savedId: string, signal?: AbortSignal) => Promise<Result<HistoryPreview, ExpectedError>>;
   resume?: (worktreeId: string, savedId: string) => Promise<Result<string, ExpectedError>>;
   onOpened: (worktreeId: string, sessionId: string) => void;
@@ -49,6 +51,7 @@ export class SessionHistoryPanel {
   private readonly listStatus: BoxRenderable;
   private readonly spinner: LoadingSpinner;
   private readonly previewCache: HistoryPreviewCache;
+  private readonly unsubscribePreviews: (() => void) | undefined;
   private readonly message: TextRenderable;
   private readonly previewPane: BoxRenderable;
   private readonly session: SessionPreview;
@@ -60,6 +63,7 @@ export class SessionHistoryPanel {
   private cursor = 0;
   private generation = 0;
   private previewIdentity: string | undefined;
+  private previewState: PreviewState | undefined;
   private loadRequest: AbortController | undefined;
   private resuming = false;
   private loading = false;
@@ -91,8 +95,12 @@ export class SessionHistoryPanel {
     this.session = new SessionPreview(renderer, "history", { notice: actions.onError, changed: () => actions.onChange?.(),
       focusList: () => this.search.focus(), keyHint: actions.keyHint,
       ...(actions.details ? { details: actions.details } : {}), ...(actions.image ? { image: actions.image } : {}) });
-    this.previewCache = new HistoryPreviewCache((tree, id, signal) => actions.preview!(tree, id, signal),
+    this.previewCache = actions.previews ?? new HistoryPreviewCache((tree, id, signal) => actions.preview!(tree, id, signal),
       () => this.renderPreview(), error => reportUnexpected(error, "history preview"));
+    this.unsubscribePreviews = actions.previews?.subscribe(() => {
+      const item = this.selected;
+      if (item && this.worktree && this.previewCache.read(this.worktree.id, item.id) !== this.previewState) this.renderPreview();
+    });
     this.preview = this.session.transcript;
     this.previewPane = this.session.body.root;
     this.layout = new SearchPopupLayout(renderer, { id: "history", search: this.search, message: this.listStatus, list: this.list,
@@ -129,7 +137,18 @@ export class SessionHistoryPanel {
     this.owner = this.renderer.currentFocusedRenderable ?? undefined;
     this.worktree = worktree; this.compactPreview = false; this.root.visible = true;
     this.items = []; this.filtered = []; this.loadError = undefined; this.search.value = ""; this.filter(); this.resize();
-    this.search.focus(); this.launch(() => this.refresh());
+    this.search.focus();
+    const cached = worktree ? this.actions.cached?.(worktree.id) : undefined;
+    if (cached) this.accept(cached); else this.launch(() => this.refresh());
+  }
+  updateData(): void {
+    if (!this.visible || !this.worktree || this.loading || this.resuming) return;
+    const cached = this.actions.cached?.(this.worktree.id);
+    if (cached && (!cached.ok || cached.value !== this.items)) this.accept(cached);
+  }
+  private accept(result: Result<readonly HistoryItem[], ExpectedError>): void {
+    this.loadError = result.ok ? undefined : `[${result.error.code}] History error: ${result.error.message}`;
+    this.items = result.ok ? result.value : []; this.filter();
   }
   hide(restoreFocus = true): void {
     if (!this.visible) return;
@@ -147,7 +166,7 @@ export class SessionHistoryPanel {
     this.actions.onChange?.();
   }
   updateScope(worktree: Worktree | null): void { if (this.visible && this.worktree?.id !== worktree?.id) this.hide(); }
-  refreshVisible(): void { if (this.visible) this.launch(() => this.refresh()); }
+  refreshVisible(): void { if (this.visible) this.launch(() => this.refresh(true)); }
   private launch(operation: () => Promise<void>): void {
     const pending = operation(), generation = this.generation;
     void pending.catch((error: unknown) => {
@@ -163,7 +182,7 @@ export class SessionHistoryPanel {
     this.actions.onChange?.();
   }
 
-  private async refresh(): Promise<void> {
+  private async refresh(force = false): Promise<void> {
     const generation = ++this.generation, worktree = this.worktree;
     this.loadRequest?.abort(); this.cancelPreview(); this.spinner.cancel(); this.loading = false; this.loadError = undefined;
     if (!worktree || !this.actions.list) {
@@ -173,14 +192,10 @@ export class SessionHistoryPanel {
     const request = this.loadRequest = new AbortController(); this.loading = true; this.spinner.start(); this.message.content = "Loading saved sessions…"; this.message.visible = this.listStatus.visible = true;
     this.actions.onChange?.();
     let result: Result<readonly HistoryItem[], ExpectedError>;
-    try { result = await this.actions.list(worktree.id, request.signal); }
+    try { result = await this.actions.list(worktree.id, request.signal, force); }
     finally { if (this.current(generation)) { this.loading = false; this.spinner.stop(); this.actions.onChange?.(); } }
     if (!this.current(generation)) return;
-    if (!result.ok) {
-      this.loadError = `[${result.error.code}] History error: ${result.error.message}`;
-      this.items = []; this.filter(); return;
-    }
-    this.items = result.value; this.filter();
+    this.accept(result);
   }
 
   private filter = (): void => {
@@ -216,7 +231,9 @@ export class SessionHistoryPanel {
     this.actions.onChange?.();
   }
   private cancelPreview(): void {
-    this.previewIdentity = undefined; this.previewCache.clear(); this.setPreviewLoading(false);
+    this.previewIdentity = undefined; this.previewState = undefined;
+    if (this.actions.previews) this.previewCache.unselect(); else this.previewCache.clear();
+    this.setPreviewLoading(false);
     this.updatePreview(null, [], "", this.visible);
   }
   private setPreviewLoading(loading: boolean): void {
@@ -265,14 +282,15 @@ export class SessionHistoryPanel {
     if (this.loading || this.loadError || !item || !worktree) {
       this.previewCache.unselect(); this.setPreviewLoading(false); this.previewMessage(this.loadError ?? (this.loading ? "" : "Select a saved session")); return;
     }
-    if (!this.actions.preview) { this.previewMessage("Read-only preview is unavailable. Press <CR> to open the session explicitly."); return; }
+    if (!this.actions.preview && !this.actions.previews) { this.previewMessage("Read-only preview is unavailable. Press <CR> to open the session explicitly."); return; }
     this.previewCache.select(worktree.id, item.id); this.renderPreview();
   }
   private renderPreview(): void {
     const item = this.selected, worktree = this.worktree;
     if (!this.visible || this.loading || !item || !worktree) return;
     // Responses populate their own slots; the screen only ever reads the selected slot.
-    const state = this.previewCache.read(worktree.id, item.id);
+    const state = this.previewCache.read(worktree.id, item.id) ?? this.previewCache.select(worktree.id, item.id);
+    this.previewState = state;
     this.setPreviewLoading(!state || state.kind === "pending");
     switch (state?.kind) {
       case "ready": this.showPreview(state.value); break;
@@ -355,7 +373,7 @@ export class SessionHistoryPanel {
     if (this.disposed) return;
     this.hide(false); this.disposed = true; this.generation++; this.cancelPreview(); this.loadRequest?.abort(); this.spinner.cancel();
     this.search.off(InputRenderableEvents.INPUT, this.filter); this.renderer.off("resize", this.resize);
-    this.session.dispose();
+    this.unsubscribePreviews?.(); this.session.dispose();
     if (!this.root.isDestroyed) this.root.destroyRecursively();
     if (this.listenerBudget) this.renderer.setMaxListeners(Math.max(1, this.renderer.getMaxListeners() - this.listenerBudget));
   }

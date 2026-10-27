@@ -236,6 +236,16 @@ export class WorkspaceClient {
     const client = entry.value.client;
     return client?.selectModel ? client.selectModel(...args) : err(new CapabilityError("This repository connection does not support model selection."));
   }
+  dataIdentity(worktreeId: string, kind: "models" | "accounts" | "history"): string | undefined {
+    const entry = this.worktreeOwner(worktreeId); if (!entry.ok) return undefined;
+    const snapshot = entry.value.client?.snapshot;
+    // Never activate a cold repository solely to preload popup data.
+    if (!snapshot?.capabilities?.includes("popup-preload") || snapshot.capabilities.includes("repository-catalog")) return undefined;
+    const revisions = Object.values(snapshot.details).map(state => state.resourceRevision ?? 0);
+    return JSON.stringify([snapshot.instance, entry.value.connectionVersion,
+      kind === "history" ? snapshot.historyRevision ?? 0 : snapshot.accountsRevision ?? 0,
+      kind === "accounts" ? 0 : revisions]);
+  }
   completionIdentity(sessionId: string): string {
     const entry = this.sessionOwner(sessionId);
     if (!entry.ok) return JSON.stringify([sessionId, null]);

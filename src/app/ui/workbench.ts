@@ -47,7 +47,10 @@ import type { TerminalTheme } from "../../ui/embedded-terminal/theme.ts";
 import { uiTheme, type UiTheme } from "../../ui/theme.ts";
 import { paintText, styleChunk } from "../../ui/theme-styles.ts";
 
+import type { PreloadedData } from "../preload.ts";
+
 export type WorkbenchActions = AgentActions & {
+  preloaded?: Pick<PreloadedData, "cachedModels" | "cachedAccounts" | "cachedHistory" | "previews">;
   onCloseSession: (worktreeId: string, sessionId: string) => void;
   getRetainedSessionIds?: () => ReadonlySet<string>;
   onDashboard?: DashboardActions["load"];
@@ -57,7 +60,7 @@ export type WorkbenchActions = AgentActions & {
   getExtensionUi?: () => readonly SessionExtensionUi[];
   onExtensionUiResponse?: ExtensionDialogActions["answer"];
   onOpenLoginUrl?: AccountsActions["openUrl"];
-  onListHistory?: (worktreeId: string, signal?: AbortSignal) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
+  onListHistory?: (worktreeId: string, signal?: AbortSignal, refresh?: boolean) => Promise<Result<readonly HistoryItem[], ExpectedError>>;
   onPreviewHistory?: (worktreeId: string, savedId: string, signal?: AbortSignal) => Promise<Result<HistoryPreview, ExpectedError>>;
   onResumeSession?: (worktreeId: string, savedId: string) => Promise<Result<string, ExpectedError>>;
   editor?: EditorActions;
@@ -143,6 +146,7 @@ export class Workbench {
     this.workspaceLayout = new SearchPopupLayout(renderer, { id: "workspace", search: this.search, list: this.tree });
     this.history = new SessionHistoryPanel(renderer, {
       ...(actions.onListHistory ? { list: actions.onListHistory } : {}),
+      ...(actions.preloaded ? { cached: actions.preloaded.cachedHistory, previews: actions.preloaded.previews } : {}),
       ...(actions.onResumeSession ? { resume: actions.onResumeSession } : {}),
       ...(actions.onPreviewHistory ? { preview: actions.onPreviewHistory } : {}),
       details: id => actions.getSessionDetails?.(id) ?? null,
@@ -157,10 +161,10 @@ export class Workbench {
         if (this.agent.active) this.agent.focusTranscript(); else this.agent.focusTargets[0]?.focus();
       },
     });
-    this.models = new ModelPicker(renderer, { ...(actions.onListModels ? { list: actions.onListModels } : {}), ...(actions.onSelectModel ? { select: actions.onSelectModel } : {}),
+    this.models = new ModelPicker(renderer, { ...(actions.preloaded ? { cached: actions.preloaded.cachedModels } : {}), ...(actions.onListModels ? { list: actions.onListModels } : {}), ...(actions.onSelectModel ? { select: actions.onSelectModel } : {}),
       notice: (message, options) => this.notify(message, options), changed: () => this.updateFooter(), fallback: () => this.focusNavigation(),
       keyHint: (command, context) => this.keymap.hint(command, context) });
-    this.accounts = new AccountsPanel(renderer, { ...(actions.onAccountsRequest ? { request: actions.onAccountsRequest } : {}), ...(actions.onOpenLoginUrl ? { openUrl: actions.onOpenLoginUrl } : {}),
+    this.accounts = new AccountsPanel(renderer, { ...(actions.preloaded ? { cached: actions.preloaded.cachedAccounts } : {}), ...(actions.onAccountsRequest ? { request: actions.onAccountsRequest } : {}), ...(actions.onOpenLoginUrl ? { openUrl: actions.onOpenLoginUrl } : {}),
       ...(actions.onCopyTranscript ? { copy: actions.onCopyTranscript } : {}),
       notice: (message, options) => this.notify(message, options), changed: () => this.updateFooter(), fallback: () => this.focusNavigation(), keyHint: (command, context) => this.keymap.hint(command, context) });
     this.extension = new ExtensionDialogPanel(renderer, {
@@ -459,6 +463,10 @@ export class Workbench {
     this.footer.setContext(overlay ? "" : this.extensionStatus || outputStatus);
     this.footer.setShortcuts(shortcuts.filter((shortcut) => shortcut.key));
   };
+
+  refreshPreloadedData(): void {
+    this.models.updateData(); this.accounts.updateData(); this.history.updateData();
+  }
 
   private showAccounts(): Result<void, ExpectedError> {
     const worktreeId = this.selection.worktree?.id;

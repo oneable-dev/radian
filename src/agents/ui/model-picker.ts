@@ -19,7 +19,8 @@ import { createTextMatcher } from "../../search.ts";
 
 type Scope = { sessionId: string; conversationId: string };
 export type ModelPickerActions = {
-  list?: (sessionId: string, conversationId: string, signal?: AbortSignal) => Promise<Result<ModelCatalog, ExpectedError>>;
+  list?: (sessionId: string, conversationId: string, signal?: AbortSignal, refresh?: boolean) => Promise<Result<ModelCatalog, ExpectedError>>;
+  cached?: (sessionId: string, conversationId: string) => Result<ModelCatalog, ExpectedError> | undefined;
   select?: (sessionId: string, conversationId: string, model: ModelIdentity, effort?: ModelEffort) => Promise<Result<string | null, ExpectedError>>;
   notice: Notice;
   changed: () => void;
@@ -106,7 +107,13 @@ export class ModelPicker {
     this.owner = this.renderer.currentFocusedRenderable ?? undefined;
     this.scope = scope; this.catalog = undefined; this.loadError = undefined; this.filtered = []; this.cursor = 0; this.effortDrafts.clear();
     this.root.visible = true; this.search.value = ""; this.filter(); this.resize(); this.search.focus();
-    this.launch(() => this.load());
+    const cached = this.actions.cached?.(scope.sessionId, scope.conversationId);
+    if (cached) this.accept(cached, scope); else this.launch(() => this.load());
+  }
+  updateData(): void {
+    if (!this.visible || !this.scope || this.loading || this.applying) return;
+    const cached = this.actions.cached?.(this.scope.sessionId, this.scope.conversationId);
+    if (cached && (!cached.ok || cached.value !== this.catalog)) this.accept(cached, this.scope);
   }
   hide(restoreFocus = true): void {
     if (!this.visible) return;
@@ -131,16 +138,19 @@ export class ModelPicker {
       if (this.current(revision)) { this.message.content = message; this.actions.changed(); }
     });
   }
-  private async load(): Promise<void> {
+  private async load(refresh = false): Promise<void> {
     const scope = this.scope; if (!scope || !this.actions.list || this.applying) return;
     const revision = ++this.revision;
     this.request?.abort(); const request = this.request = new AbortController();
     this.loading = true; this.loadError = undefined; this.filter(); this.spinner.start();
     this.message.content = "Loading available models…"; this.actions.changed();
     let result: Result<ModelCatalog, ExpectedError>;
-    try { result = await this.actions.list(scope.sessionId, scope.conversationId, request.signal); }
+    try { result = await this.actions.list(scope.sessionId, scope.conversationId, request.signal, refresh); }
     finally { if (this.current(revision)) { this.loading = false; this.spinner.stop(); this.actions.changed(); } }
     if (!this.current(revision)) return;
+    this.accept(result, scope);
+  }
+  private accept(result: Result<ModelCatalog, ExpectedError>, scope: Scope): void {
     if (!result.ok || result.value.conversationId !== scope.conversationId) {
       this.loadError = !result.ok ? `[${result.error.code}] ${result.error.message}` : "Conversation changed. Close and reopen /model.";
       this.catalog = undefined; this.filtered = []; this.filter(); return;
@@ -235,7 +245,7 @@ export class ModelPicker {
     if (!this.visible) return;
     if (command === "model.dismiss") { this.hide(); return; }
     if (command === "model.select") { this.launch(() => this.choose()); return; }
-    if (command === "model.refresh") { this.launch(() => this.load()); return; }
+    if (command === "model.refresh") { this.launch(() => this.load(true)); return; }
     if (command === "model.search") { this.search.focus(); this.actions.changed(); return; }
     if (command === "model.effort-less" || command === "model.effort-more") { this.moveEffort(command === "model.effort-less" ? -1 : 1); return; }
     const halfPage = command === "model.half-page-up" || command === "model.half-page-down";

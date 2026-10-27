@@ -108,6 +108,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
   const { TerminalNotifications } = await import("./terminal-notifications.ts");
   const { SessionNotifications } = await import("./session-notifications.ts");
   const { CompletionCache } = await import("../agents/completion-cache.ts");
+  const { PreloadedData } = await import("./preload.ts");
   const { uiTheme } = await import("../ui/theme.ts");
   const { monochromeFrame } = await import("../ui/monochrome.ts");
   let attachedTheme: ReturnType<typeof uiTheme> | undefined;
@@ -128,10 +129,12 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
       { level: client?.snapshot.notice ? "warning" : discoveryError ? "error" : "info", source: "Runtime" });
   };
   const showFailure = (error: ExpectedError): void => { view?.notify(`[${error.code}] ${error.message}`, { level: "error", source: "Runtime" }); };
-  const unexpected = (error: unknown): void => { view?.notify(reportUnexpected(error, "UI action"), { level: "error", source: "Runtime" }); };
+  const unexpected = (error: unknown): void => { const message = reportUnexpected(error, "UI action"); view?.notify(message, { level: "error", source: "Runtime" }); };
   const notifications = client ? new TerminalNotifications(renderer, client, unexpected) : undefined;
   const completions = client ? new CompletionCache((id, signal) => client.catalog(id, signal), id => client.completionIdentity(id), unexpected) : undefined;
-  const warmCompletions = (): void => {
+  const preloaded = client ? new PreloadedData(client, unexpected) : undefined;
+  const unsubscribeData = preloaded?.subscribe(() => view?.refreshPreloadedData());
+  const preloadCompletions = (): void => {
     if (!client || !completions) return;
     const snapshot = client.snapshot, ids = new Set<string>();
     for (const repo of snapshot.repositories) for (const tree of repo.worktrees) for (const session of tree.sessions) {
@@ -140,6 +143,12 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
       ids.add(session.id); completions.provider.prepare?.(session.id, tree.path);
     }
     completions.provider.retain?.(ids);
+  };
+  const preload = (): void => {
+    preloadCompletions();
+    preloaded?.preloadModels();
+    preloaded?.preloadAccounts();
+    preloaded?.preloadHistory();
   };
   const observe = <T>(task: Promise<Result<T, ExpectedError>>): void => {
     void task.then((result) => { if (!result.ok) showFailure(result.error); }).catch(unexpected);
@@ -171,17 +180,17 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
     const restored = recovery !== client.recoveryVersion;
     recovery = client.recoveryVersion;
     selection.replaceSnapshot(client.snapshot.repositories, preferences.selection.sessions);
-    warmCompletions();
+    preload();
     if (restored) view?.refreshHistory();
     updateNotice();
   });
   const detach = (): void => {
-    sessionNotifications?.dispose(); notifications?.dispose(); completions?.dispose(); unsubscribe?.(); unsubscribeSelection();
+    sessionNotifications?.dispose(); notifications?.dispose(); completions?.dispose(); unsubscribeData?.(); preloaded?.dispose(); unsubscribe?.(); unsubscribeSelection();
     if (view) { preferences.drafts = view.promptDrafts; preferences.inputDrafts = view.promptInputDrafts; persist(); }
     const mounted = view; view = undefined; mounted?.dispose(); client?.beginDetach(); renderer.destroy();
   };
   try {
-    warmCompletions();
+    preload();
     renderer.setTerminalTitle("radian");
     const palette = await renderer.getPalette({ size: 256, timeout: 200 });
     uiTheme(renderer).configure(palette, theme);
@@ -206,6 +215,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
         onPrompt: async (id: string, text: string, images?: readonly string[]) => {
           const result = await submitAgentPrompt(client, selection, id, text, images);
           if (!result.ok || text.trim() !== "/reload") return result;
+          preloaded!.reload();
           const refreshed = await completions!.refresh(id);
           // SDK reload was accepted. A local indexing failure is a warning, not a rejected action.
           view?.notify(refreshed.ok ? "Resources and completion indexes reloaded."
@@ -217,10 +227,11 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
         onAcknowledge: (id: string, conversationId: string, resultId: string) => client.acknowledge(id, conversationId, resultId),
         getMonitoringNotice: () => client.attentionNotice,
         onComplete: completions!.provider,
-        onAccountsRequest: (request, signal) => client.accounts(request, signal),
+        preloaded: preloaded!,
+        onAccountsRequest: preloaded!.requestAccounts,
         getExtensionUi: () => client.snapshot.extensionUi ?? [],
         onExtensionUiResponse: (id, conversation, response) => client.answerExtensionUi(id, conversation, response),
-        onListModels: (id, conversationId, signal) => client.models(id, conversationId, signal),
+        onListModels: preloaded!.listModels,
         onSelectModel: (id, conversationId, model, effort) => client.selectModel(id, conversationId, model, effort),
         onImage: (id, imageId, signal) => client.image(id, imageId, signal),
         git: {
@@ -230,7 +241,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
         },
         getSessionDetails: (id: string) => client.snapshot.details[id] ?? null,
         onDashboard: (days, repositoryId, signal) => client.dashboard(days, repositoryId, signal),
-        onListHistory: (worktreeId, signal) => client.listHistory(worktreeId, signal),
+        onListHistory: preloaded!.listHistory,
         onPreviewHistory: (worktreeId, savedId, signal) => client.previewHistory(worktreeId, savedId, signal),
         onResumeSession: (worktreeId: string, savedId: string) => client.resume(worktreeId, savedId),
         initialDrafts: preferences.drafts,
@@ -256,7 +267,7 @@ async function runUI(repositories: readonly Repository[], client: WorkspaceClien
     if (client) sessionNotifications = new SessionNotifications(client, notification => view?.notifySession(notification));
     updateNotice(); await renderer.closed;
   } finally {
-    sessionNotifications?.dispose(); notifications?.dispose(); completions?.dispose(); unsubscribe?.(); unsubscribeSelection();
+    sessionNotifications?.dispose(); notifications?.dispose(); completions?.dispose(); unsubscribeData?.(); preloaded?.dispose(); unsubscribe?.(); unsubscribeSelection();
     preferences.drafts = view?.promptDrafts ?? preferences.drafts;
     if (view) preferences.inputDrafts = view.promptInputDrafts;
     persist();

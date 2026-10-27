@@ -34,7 +34,7 @@ export type SessionExecutor = {
   setUiActive?(active: boolean): void;
   commands?(): readonly CompletionItem[];
   reload?(): Promise<Result<void, ExpectedError>>;
-  models?(signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>>;
+  models?(signal?: AbortSignal, refresh?: boolean): Promise<Result<ModelCatalog, ExpectedError>>;
   selectModel?(model: ModelIdentity, effort?: ModelEffort): Promise<Result<string | null, ExpectedError>>;
   imageData?(id: string): Result<TranscriptImageData, ExpectedError>;
   readonly acceptsImages?: boolean;
@@ -341,11 +341,11 @@ export class SessionRegistry {
     return entry.executor?.reload ? entry.executor.reload() : Promise.resolve(err(new CapabilityError("This executor does not support resource reload.")));
   }
 
-  async models(id: string, conversationId: string, signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>> {
+  async models(id: string, conversationId: string, signal?: AbortSignal, refresh = false): Promise<Result<ModelCatalog, ExpectedError>> {
     const selected = this.modelOwner(id, conversationId); if (!selected.ok) return selected;
     const executor = selected.value.executor;
     if (!executor?.models) return err(new CapabilityError("This executor does not support model selection."));
-    const result = await executor.models(signal);
+    const result = await executor.models(signal, refresh);
     const current = this.modelOwner(id, conversationId); if (!current.ok) return current;
     return signal?.aborted ? err(new CancelledError()) : result;
   }

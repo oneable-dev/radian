@@ -79,6 +79,37 @@ test("Capacity eviction removes old results but preserves current selection and 
   } finally { cache.clear(); }
 });
 
+test("Background previews are ready before selection and invalidate only changed versions", async () => {
+  // Metadata versions allow unchanged conversations to survive external file notifications.
+  const calls: string[] = [];
+  const cache = new HistoryPreviewCache(async (tree, id) => { calls.push(id); return ok(preview(id, tree)); }, () => {}, unexpected);
+  try {
+    cache.preload("tree", [{ id: "a", revision: "1" }, { id: "b", revision: "1" }]); await flush();
+    expect(cache.select("tree", "b").kind).toBe("ready"); cache.unselect();
+    expect(calls).toEqual(["a", "b"]);
+
+    // A changed body is replaced while unchanged B remains immediately available.
+    cache.preload("tree", [{ id: "a", revision: "2" }, { id: "b", revision: "1" }]); await flush();
+    expect(calls).toEqual(["a", "b", "a"]); expect(cache.read("tree", "b")?.kind).toBe("ready");
+    cache.preload("tree", [{ id: "b", revision: "1" }]);
+    expect(cache.read("tree", "a")).toBeUndefined();
+  } finally { cache.clear(); }
+});
+
+test("Visible selection takes priority over queued background previews within two read slots", async () => {
+  // Startup preparation must not force the user to wait behind a long FIFO queue.
+  const calls: string[] = [], pending = new Map<string, ReturnType<typeof Promise.withResolvers<Result<HistoryPreview, HistoryError>>>>();
+  const cache = new HistoryPreviewCache(async (_tree, id) => {
+    calls.push(id); const task = Promise.withResolvers<Result<HistoryPreview, HistoryError>>(); pending.set(id, task); return task.promise;
+  }, () => {}, unexpected);
+  try {
+    cache.preload("tree", ["a", "b", "c", "d"].map(id => ({ id, revision: "1" }))); await flush();
+    expect(calls).toEqual(["a", "b"]); cache.select("tree", "d");
+    pending.get("a")!.resolve(ok(preview("a"))); await flush();
+    expect(calls).toEqual(["a", "b", "d"]);
+  } finally { cache.clear(); for (const [id, task] of pending) task.resolve(ok(preview(id))); await flush(); }
+});
+
 test("Unexpected failures reach the UI boundary unchanged instead of becoming lookup errors", async () => {
   // Programming errors must remain observable for logging, not become empty previews.
   const error = new TypeError("Broken loader"), reported: unknown[] = [];

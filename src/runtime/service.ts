@@ -1,4 +1,6 @@
 import { realpath } from "node:fs/promises";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { HistoryWatcher } from "../agents/history-watcher.ts";
 import { loadSessionSettings } from "../app/settings.ts";
 import { RetentionScheduler } from "./session-retention.ts";
 import { Value } from "typebox/value";
@@ -52,6 +54,7 @@ export async function openRepositoryRuntime(repositoryId: string, offline: boole
       new SessionHistory(catalog, registry, sessionDir, store, !offline), paths.directory, settings.value.exists ? settings.value.path : configPath, accounts, !sharedAccounts);
     await runtime.restore(manifest?.records ?? [], manifest?.repositories ?? []);
     await runtime.watchRepository();
+    await runtime.watchHistory(sessionDir);
     runtime.startRetention();
     ready = true;
     return ok(runtime);
@@ -72,6 +75,11 @@ export class WorkspaceRuntime {
   private readonly failedRecovery = new Map<string, SessionRecord>();
   private readonly restoredSessionOrder = new Map<string, number>();
   private readonly unsubscribe: () => void;
+  private readonly unsubscribeAccounts: (() => void) | undefined;
+  private historyWatcher: HistoryWatcher | undefined;
+  private historyRevision = 0;
+  private historyMembership = "";
+  private historyWarning = "";
   private notice = "";
   private persistenceError = "";
   private checkpointTimer: ReturnType<typeof setTimeout> | undefined;
@@ -90,6 +98,7 @@ export class WorkspaceRuntime {
     this.editors = new EditorSessions(catalog, () => this.changed(), { clean: offline });
     this.terminals = new TerminalSessions(catalog, () => this.changed(), supervisorDirectory, offline, (task) => this.observe(task));
     this.unsubscribe = registry.subscribe(() => this.changed());
+    this.unsubscribeAccounts = accounts?.subscribe(() => this.changed());
   }
 
   subscribe(listener: () => void): () => void { this.subscribers.add(listener); return () => this.subscribers.delete(listener); }
@@ -104,7 +113,7 @@ export class WorkspaceRuntime {
       retentionDays = settings.value.retentionDays;
       return this.store.pruneExpired(retentionDays, (snapshot, file) => this.stopped ? null : this.registry.reserveSnapshotCleanup(snapshot, file));
     }, result => {
-      this.history.invalidate();
+      this.invalidateHistory();
       if (!result.ok && result.error.code !== "INVALID_INPUT") console.error(`[radian:${result.error.code}] Session retention cleanup failed`, result.error);
       const warning = result.ok ? "" : `Session cleanup [${result.error.code}]: ${result.error.message}`;
       const changed = warning !== this.retentionWarning || result.ok;
@@ -129,6 +138,19 @@ export class WorkspaceRuntime {
       this.discoveryWarning = `Worktree watching failed [${started.error.code}]: ${started.error.message}`;
       this.changed();
     }
+  }
+
+  async watchHistory(sessionDir: string): Promise<void> {
+    this.historyWatcher = new HistoryWatcher([sessionDir, ...(!this.offline ? [join(getAgentDir(), "sessions")] : [])],
+      () => this.invalidateHistory(), error => { this.historyWarning = `History watching failed [${error.code}]: ${error.message}`; this.changed(); },
+      error => { this.historyWarning = reportUnexpected(error, "history watching"); this.changed(); },
+      path => !!this.registry.historyOwnership(path).openSessionId);
+    const watched = await this.historyWatcher.start();
+    if (!watched.ok) { this.historyWarning = `History watching failed [${watched.error.code}]: ${watched.error.message}`; this.changed(); }
+  }
+
+  private invalidateHistory(): void {
+    this.history.invalidate(); this.historyRevision++; this.changed();
   }
 
   private reconcileCatalog(): void {
@@ -177,11 +199,12 @@ export class WorkspaceRuntime {
   get snapshot(): RuntimeSnapshot {
     const repositories = this.repositories;
     const details = Object.fromEntries([...this.registry.records, ...this.failedRecovery.values()].map((record) => [record.id, record.state]));
-    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["shared-daemon", "repository-runtime", "history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "terminal-copy-mode", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "session-exit", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention", "agent-dashboard", "accounts", "account-labels", "extension-ui"], repositoryId: this.repositoryId,
+    return { version: protocolVersion, pid: process.pid, instance: this.instance, capabilities: ["shared-daemon", "repository-runtime", "history", "history-preview", "typed-errors", "work-views", "terminal-tabs", "terminal-copy-mode", "instance-guard", "agent-transcript", "run-completion", "agent-telemetry", "provider-usage", "prompt-completion", "prompt-images", "transcript-images", "session-controls", "session-tab-commands", "session-exit", "agent-interrupt", "model-selection", "model-effort", "completion-catalog", "resource-reload", "session-attention", "agent-dashboard", "accounts", "account-labels", "extension-ui", "popup-preload"], repositoryId: this.repositoryId,
+      accountsRevision: this.accounts?.revision ?? 0, historyRevision: this.historyRevision,
       ...(this.retentionStatus ? { sessionRetention: this.retentionStatus } : {}),
       mode: this.offline ? "offline" : "live", repositories, details, closingCount: this.registry.closingCount,
       extensionUi: this.registry.extensionUi,
-      preferences: this.preferences, notice: this.persistenceError || [this.accounts?.warning, this.discoveryWarning, this.retentionWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
+      preferences: this.preferences, notice: this.persistenceError || [this.accounts?.warning, this.discoveryWarning, this.historyWarning, this.retentionWarning, this.notice].filter(Boolean).join(" · "), editors: this.editors.infos,
       terminals: this.terminals.infos, terminalClosingCount: this.terminals.closingCount };
   }
 
@@ -224,7 +247,7 @@ export class WorkspaceRuntime {
         if (this.stopped) return this.rejected(new SessionError("RUNTIME_STOPPING", "Runtime is stopping."));
         const query = Object.fromEntries(new URL(request.url).searchParams);
         if (!Value.Check(modelCatalogQuerySchema, query)) return this.rejected(new InputError("Malformed model catalog query."));
-        const result = await this.registry.models(query.sessionId, query.conversationId, request.signal);
+        const result = await this.registry.models(query.sessionId, query.conversationId, request.signal, new URL(request.url).searchParams.get("refresh") === "true");
         return result.ok ? Response.json(result.value) : this.rejected(result.error);
       }
       if (path === "/completion-catalog" && request.method === "GET") {
@@ -430,6 +453,11 @@ export class WorkspaceRuntime {
     if (control.action === "new-tab") return this.registry.newTab(id);
     if (control.action === "reload") {
       const result = await this.registry.reload(id);
+      if (result.ok) {
+        const watched = await this.historyWatcher?.start();
+        this.historyWarning = watched && !watched.ok ? `History watching failed [${watched.error.code}]: ${watched.error.message}` : "";
+        this.invalidateHistory();
+      }
       return result.ok ? ok(null) : result;
     }
     const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
@@ -461,7 +489,11 @@ export class WorkspaceRuntime {
   }
 
   private changed(): void {
-    if (!this.initializing && !this.stopped) this.reconcileCatalog();
+    if (!this.initializing && !this.stopped) {
+      this.reconcileCatalog();
+      const membership = JSON.stringify(this.repositories.map(repo => [repo.id, repo.worktrees.map(tree => [tree.id, tree.sessions.map(session => session.id)])]));
+      if (membership !== this.historyMembership) { this.historyMembership = membership; this.historyWatcher?.invalidate(); }
+    }
     for (const subscriber of this.subscribers) subscriber();
     if (this.initializing || this.stopped || this.checkpointTimer) return;
     this.checkpointTimer = setTimeout(() => {
@@ -497,7 +529,7 @@ export class WorkspaceRuntime {
     this.stopped = true; this.setObserved(false);
     await this.retention?.stop();
     if (this.checkpointTimer) clearTimeout(this.checkpointTimer);
-    this.unsubscribe();
+    this.unsubscribe(); this.unsubscribeAccounts?.(); this.historyWatcher?.stop();
     // Stopping the service is NOT explicit session close. Freeze open intent before teardown emits removals.
     const manifest: RuntimeManifest = { version: protocolVersion, repositoryId: this.repositoryId,
       repositories: this.repositories, records: [...this.registry.checkpointRecords, ...this.failedRecovery.values()], preferences: this.preferences };

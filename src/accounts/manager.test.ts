@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,6 +37,41 @@ async function add(manager: AccountManager, key: string, worktreeId = "one") {
 async function select(manager: AccountManager, worktreeId: string, accountId: string | null) {
   return manager.handle({ type: "select", worktreeId, provider: "fixture", accountId, revision: (await manager.catalog(worktreeId)).revision });
 }
+
+test("Concurrent model preload requests share metadata until an explicit invalidation", async () => {
+  // Sessions in the same worktree must not supersede one another's startup discovery.
+  const { manager } = await fixture();
+  const view = await manager.workspace("one"), release = Promise.withResolvers<void>();
+  const original = view.runtime.refresh.bind(view.runtime);
+  const refresh = spyOn(view.runtime, "refresh").mockImplementation(async options => { await release.promise; return original(options); });
+  try {
+    const requests = Array.from({ length: 5 }, () => manager.refreshModels("one"));
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    release.resolve(); for (const request of requests) expectOk(await request);
+    expectOk(await manager.refreshModels("one")); expect(refresh).toHaveBeenCalledTimes(1);
+
+    // Manual refresh and resource reload explicitly grant another metadata discovery.
+    manager.invalidateModels("one"); expectOk(await manager.refreshModels("one"));
+    expect(refresh).toHaveBeenCalledTimes(2);
+  } finally { release.resolve(); refresh.mockRestore(); }
+});
+
+test("Account notifications publish safe catalog revisions after accepted changes", async () => {
+  // Popup caches subscribe to metadata revisions rather than to stored credentials.
+  const { manager } = await fixture(), revisions: number[] = [];
+  const unsubscribe = manager.subscribe(() => revisions.push(manager.revision));
+  try {
+    const saved = await add(manager, "private-key");
+    expect(revisions.at(-1)).toBe((await manager.catalog("one")).revision);
+    const before = revisions.length;
+    expectOk(await select(manager, "one", saved.id));
+
+    expect(revisions).toHaveLength(before + 1);
+    expect((await manager.catalog("one")).selections.fixture).toBe(saved.id);
+    expect(revisions.at(-1)).toBe(manager.revision);
+  } finally { unsubscribe(); }
+});
 
 test("Adding an account updates the global list without changing selections or Pi default authentication", async () => {
   // Prepare an account separate from the existing default credentials.

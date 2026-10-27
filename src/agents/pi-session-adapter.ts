@@ -99,8 +99,8 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         switchSession: unsupportedSessionAction, navigateTree: unsupportedSessionAction, reload: unsupportedSessionAction,
       } });
       executor = new PiSessionExecutor(session, workspace?.usage ?? options.usageMonitor, diagnostics, fast, options.imageLoader, compaction,
-        () => settingsManager.applyOverrides({ ...options.settings, cacheWarming: "off" }), releaseAccounts,
-        options.accounts ? signal => options.accounts!.refreshModels(worktreeId, signal) : undefined, ui, mcpAuth);
+        () => { options.accounts?.invalidateModels(worktreeId); settingsManager.applyOverrides({ ...options.settings, cacheWarming: "off" }); }, releaseAccounts,
+        options.accounts ? (signal, refresh) => { if (refresh) options.accounts!.invalidateModels(worktreeId); return options.accounts!.refreshModels(worktreeId, signal); } : undefined, ui, mcpAuth);
       executor.setUiActive(context.isUiActive?.() ?? false);
       adopted = true;
       return executor;
@@ -154,7 +154,7 @@ export class PiSessionExecutor implements SessionExecutor {
   private request: RequestSummary | undefined;
   private result: SessionResult | undefined;
 
-  constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode, private readonly imageLoader = loadPromptImages, private readonly compaction = new ManualCompaction(), private readonly reloadSettings: () => void = () => {}, private readonly releaseAccounts: () => void = () => {}, private readonly refreshAccountModels?: (signal?: AbortSignal) => Promise<Result<void, ExpectedError>>, private readonly ui?: ExtensionUiBridge, private readonly mcpAuth?: McpAuthPicker) {
+  constructor(private readonly session: AgentSession, usage?: UsageMonitor, private readonly diagnostics = new CommandDiagnostics(), fast?: FastMode, private readonly imageLoader = loadPromptImages, private readonly compaction = new ManualCompaction(), private readonly reloadSettings: () => void = () => {}, private readonly releaseAccounts: () => void = () => {}, private readonly refreshAccountModels?: (signal?: AbortSignal, refresh?: boolean) => Promise<Result<void, ExpectedError>>, private readonly ui?: ExtensionUiBridge, private readonly mcpAuth?: McpAuthPicker) {
     this.status = this.finalStatus(false);
     this.commandCatalog = sessionCommands(session);
     this.transcript = new SessionTranscript(session.sessionManager.getBranch());
@@ -181,10 +181,10 @@ export class PiSessionExecutor implements SessionExecutor {
   }
   imageData(id: string) { return this.transcript.imageData(id); }
 
-  async models(signal?: AbortSignal): Promise<Result<ModelCatalog, ExpectedError>> {
+  async models(signal?: AbortSignal, refresh = false): Promise<Result<ModelCatalog, ExpectedError>> {
     if (signal?.aborted) return err(new CancelledError());
     if (this.closing || this.disposed) return err(new SessionError("SESSION_NOT_OPEN", "Session is closing."));
-    const refreshed = await this.refreshAccountModels?.(signal); if (refreshed && !refreshed.ok) return refreshed;
+    const refreshed = await this.refreshAccountModels?.(signal, refresh); if (refreshed && !refreshed.ok) return refreshed;
     const loaded = await modelOperation(() => this.session.modelRuntime.getAvailable(undefined, signal ? { signal } : {}));
     if (!loaded.ok) return loaded;
     if (signal?.aborted) return err(new CancelledError());

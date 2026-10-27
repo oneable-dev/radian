@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import { appendFile, chmod, mkdir, readFile, symlink, unlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readFile, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
@@ -51,6 +51,30 @@ test("History lists only closed SDK conversations in the selected worktree", asy
     expect(Number.isNaN(Date.parse(list[0]!.modified))).toBe(false);
     expect(list[0]!.messageCount).toBeGreaterThan(0);
   } finally { await app.cleanup(); }
+});
+
+test("External SDK edits supersede closed runtime previews and change the file revision", async () => {
+  // Persisted runtime metadata is useful only while its SDK transcript remains unchanged.
+  const app = await setup();
+  const registry = new SessionRegistry([app.repository], async () => { throw new Error("Read-only history must not create sessions"); });
+  try {
+    const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read")); expectOk(await app.registry.close(id));
+    const saved = app.registry.checkpointRecords.find(record => record.id === id)!;
+    const record = { ...saved, updatedAt: Date.now(), state: { ...saved.state, output: "Preserved runtime body" } };
+    const history = new SessionHistory([app.repository], registry, app.sessionDir, { listSessions: () => [], readSession: async () => ok(record) });
+    const before = expectOk(await history.list(app.main.id))[0]!;
+    expect(expectOk(await history.preview(app.main.id, before.id)).snapshot?.state.output).toBe("Preserved runtime body");
+
+    // An external writer updates the file without touching Radian's saved snapshot.
+    await appendFile(saved.sessionFile!, JSON.stringify({ type: "message", id: "external", parentId: null, timestamp: new Date().toISOString(),
+      message: { role: "user", content: [{ type: "text", text: "External SDK update" }], timestamp: Date.now() } }) + "\n");
+    const modified = new Date(record.updatedAt + 1000); await utimes(saved.sessionFile!, modified, modified);
+    const after = expectOk(await history.list(app.main.id))[0]!;
+    const preview = expectOk(await history.preview(app.main.id, after.id));
+
+    expect(after.revision).not.toBe(before.revision); expect(preview.snapshot).toBeUndefined();
+    expect(preview.sections?.some(section => section.text.includes("External SDK update"))).toBe(true);
+  } finally { await registry.shutdown(); await app.cleanup(); }
 });
 
 test("Snapshots without SDK conversations never create History rows, even for open recovery", async () => {

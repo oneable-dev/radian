@@ -20,7 +20,8 @@ import type { Result } from "../result.ts";
 import { createTextMatcher } from "../search.ts";
 
 export type AccountsActions = {
-  request?: (request: AccountRequest, signal?: AbortSignal) => Promise<Result<AccountReply, ExpectedError>>;
+  request?: (request: AccountRequest, signal?: AbortSignal, refresh?: boolean) => Promise<Result<AccountReply, ExpectedError>>;
+  cached?: (worktreeId: string) => Result<AccountsCatalog, ExpectedError> | undefined;
   openUrl?: (url: string) => Promise<Result<void, ExpectedError>>;
   copy?: (text: string) => Promise<Result<string, ExpectedError>>;
   changed: () => void; notice: Notice; fallback: () => void;
@@ -111,7 +112,19 @@ export class AccountsPanel {
     this.owner = this.renderer.currentFocusedRenderable ?? undefined; this.worktreeId = worktreeId; this.epoch++; this.root.visible = true; this.stage = "accounts";
     this.catalog = undefined; this.flow = undefined; this.promptId = undefined;
     this.menu("accounts", "", []); this.search.setCounts(null);
-    this.resize(); this.launch(() => this.load());
+    this.resize();
+    const cached = this.actions.cached?.(worktreeId);
+    if (cached) this.acceptCatalog(cached); else this.launch(() => this.load());
+  }
+  updateData(): void {
+    if (!this.visible || !this.worktreeId || this.busy || this.stage !== "accounts") return;
+    const cached = this.actions.cached?.(this.worktreeId);
+    if (cached && (!cached.ok || cached.value !== this.catalog)) this.acceptCatalog(cached, true);
+  }
+  private acceptCatalog(result: Result<AccountsCatalog, ExpectedError>, preserveSearch = false): void {
+    if (!result.ok) { this.message.content = `[${result.error.code}] ${result.error.message}`; this.search.setCounts(null); }
+    else { this.catalog = result.value; this.main(preserveSearch); if (result.value.warning) this.message.content = result.value.warning; }
+    this.actions.changed();
   }
   hide(restore = true): void {
     if (!this.visible) return;
@@ -130,12 +143,12 @@ export class AccountsPanel {
   private launch(operation: () => Promise<void>): void {
     void operation().catch(error => { const message = reportUnexpected(error, "accounts popup"); if (this.visible) this.message.content = message; });
   }
-  private async perform(request: AccountRequest): Promise<void> {
+  private async perform(request: AccountRequest, refresh = false): Promise<void> {
     if (!this.actions.request || this.busy) return;
     const epoch = this.epoch; this.busy = true; this.activeRequest = request.type; this.spinner.start();
     if (request.type === "list") this.search.setCounts(null);
     let result: Result<AccountReply, ExpectedError>;
-    try { result = await this.actions.request(request); }
+    try { result = await this.actions.request(request, undefined, refresh); }
     finally {
       if (this.visible && epoch === this.epoch) {
         this.busy = false; this.activeRequest = undefined; this.spinner.stop();
@@ -158,7 +171,7 @@ export class AccountsPanel {
     }
     this.actions.changed();
   }
-  private async load(): Promise<void> { if (this.worktreeId) await this.perform({ type: "list", worktreeId: this.worktreeId }); }
+  private async load(refresh = false): Promise<void> { if (this.worktreeId) await this.perform({ type: "list", worktreeId: this.worktreeId }, refresh); }
   private menu(stage: Stage, message: string, candidates: Candidate[], preserveSearch = false): void {
     this.stage = stage; this.search.setTitle(stageTitles[stage]);
     this.message.content = message; this.candidates = candidates; this.renameTarget = undefined;
@@ -332,7 +345,7 @@ export class AccountsPanel {
     if (command === "accounts.choose") { this.choose(); return; }
     if (command === "accounts.rename") { if (this.stage === "accounts" && !this.busy) this.filtered[this.cursor]?.rename?.(); return; }
     if (command === "accounts.delete") { this.remove(); return; }
-    if (command === "accounts.refresh") { if (this.stage === "accounts") this.launch(() => this.load()); return; }
+    if (command === "accounts.refresh") { if (this.stage === "accounts") this.launch(() => this.load(true)); return; }
     if (command === "accounts.browser") { this.launch(() => this.openBrowser()); return; }
     if (command === "accounts.copy-url" || command === "accounts.copy-code") { this.launch(() => this.copy(command === "accounts.copy-code")); return; }
     if (command === "accounts.search") { if (this.search.field.visible) this.search.focus(); return; }

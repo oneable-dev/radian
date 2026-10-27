@@ -24,7 +24,8 @@ type State = Static<typeof stateSchema>;
 type StoredAccount = State["accounts"][number];
 type Login = { worktreeId: string; view: LoginView; controller: AbortController; timer: ReturnType<typeof setTimeout>; listeners: Set<() => void>;
   answer?: { id: string; resolve(value: string): void; reject(error: Error): void } | undefined; task?: Promise<void> };
-export type WorkspaceModels = { runtime: ModelRuntime; usage: UsageMonitor; scope: AsyncLocalStorage<Readonly<Record<string, string>>>; listeners: Set<(provider: string) => void>; catalogs: Map<string, InMemoryModelsStore>; refresh?: AbortController };
+export type WorkspaceModels = { runtime: ModelRuntime; usage: UsageMonitor; scope: AsyncLocalStorage<Readonly<Record<string, string>>>; listeners: Set<(provider: string) => void>; catalogs: Map<string, InMemoryModelsStore>; refresh?: AbortController; modelsKey?: string;
+  modelsTask?: { key: string; ready: Promise<Result<void, ExpectedError>> } };
 const networkCodes = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EHOSTUNREACH"]);
 const externalAuthFailure = (error: unknown) => error instanceof ModelsError || error instanceof SyntaxError
   || error instanceof Error && (error.constructor === Error || error instanceof TypeError && networkCodes.has(systemCode(error.cause) ?? ""));
@@ -36,7 +37,11 @@ export class AccountManager {
   private saving: Promise<unknown> = Promise.resolve();
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly workspaces = new Map<string, Promise<WorkspaceModels>>();
+  private readonly modelRevisions = new Map<string, number>();
   private readonly logins = new Map<string, Login>();
+  private readonly listeners = new Set<() => void>();
+  get revision(): number { return this.state.revision; }
+  subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   private active = false;
   private readonly observers = new Set<string>();
   private stopped = false;
@@ -71,12 +76,16 @@ export class AccountManager {
     const tail = task.then(() => {}, () => {}); this.locks.set(key, tail);
     void tail.then(() => { if (this.locks.get(key) === tail) this.locks.delete(key); }); return task;
   }
-  private async commit(next: State): Promise<Result<void, ExpectedError>> {
+  private async commit(next: State, publish = true): Promise<Result<void, ExpectedError>> {
     const saved = await capture(async () => {
       const target = join(this.directory, "accounts.json"), temporary = `${target}.${crypto.randomUUID()}.tmp`;
       await withCleanup(async () => { await writeFile(temporary, JSON.stringify(next), { mode: 0o600, flag: "wx" }); await rename(temporary, target); }, () => rm(temporary, { force: true }));
     });
-    if (saved.ok) { this.state = next; this.deviceIdPersisted = true; this.persistenceWarning = ""; } return saved;
+    if (saved.ok) {
+      this.state = next; this.deviceIdPersisted = true; this.persistenceWarning = "";
+      if (publish) for (const listener of this.listeners) listener();
+    }
+    return saved;
   }
   private selection(worktreeId: string, provider: string, view?: Pick<WorkspaceModels, "scope">): string | undefined {
     return (view?.scope.getStore() ?? this.state.selections[worktreeId])?.[provider];
@@ -217,13 +226,23 @@ export class AccountManager {
     const selections = { ...this.state.selections[worktreeId] };
     return view.scope.run(selections, () => operation(view.runtime, provider => this.selectionIdentity(worktreeId, provider, selections)));
   }
+  invalidateModels(worktreeId: string): void { this.modelRevisions.set(worktreeId, (this.modelRevisions.get(worktreeId) ?? 0) + 1); }
   async refreshModels(worktreeId: string, signal?: AbortSignal): Promise<Result<void, ExpectedError>> {
+    if (signal?.aborted) return err(new CancelledError());
     const view = await this.workspace(worktreeId);
+    const selections = Object.keys(this.state.selections[worktreeId] ?? {}).sort().map(provider => [provider, this.selectionIdentity(worktreeId, provider)]);
+    const key = JSON.stringify([selections, this.modelRevisions.get(worktreeId) ?? 0]);
+    if (view.modelsKey === key) return ok(undefined);
+    if (view.modelsTask?.key === key) return view.modelsTask.ready;
     view.refresh?.abort(); const controller = view.refresh = new AbortController();
-    const abort = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-    const result = await view.scope.run({ ...this.state.selections[worktreeId] }, () => view.runtime.refresh({ allowNetwork: !this.options.offline, signal: abort }));
-    if (result.aborted || abort.aborted) return err(new CancelledError("Model metadata refresh was superseded or cancelled."));
-    return result.errors.size ? err(new ModelSelectionError("Could not refresh model metadata for the selected authentication. The account selection and running conversations were retained.")) : ok(undefined);
+    // Popup closure must not cancel metadata shared by other sessions or attached UIs.
+    const ready = view.scope.run({ ...this.state.selections[worktreeId] }, async (): Promise<Result<void, ExpectedError>> => {
+      const result = await view.runtime.refresh({ allowNetwork: !this.options.offline, signal: controller.signal });
+      if (result.aborted || controller.signal.aborted) return err(new CancelledError("Model metadata refresh was superseded or cancelled."));
+      if (result.errors.size) return err(new ModelSelectionError("Could not refresh model metadata for the selected authentication. The account selection and running conversations were retained."));
+      view.modelsKey = key; return ok(undefined);
+    }).finally(() => { if (view.modelsTask?.ready === ready) delete view.modelsTask; });
+    view.modelsTask = { key, ready }; return ready;
   }
   selectionIdentity(worktreeId: string, provider: string, selections = this.state.selections[worktreeId]): string {
     const id = selections?.[provider];
@@ -238,14 +257,15 @@ export class AccountManager {
       if (request.accountId && !this.state.accounts.some(account => account.id === request.accountId && account.provider === request.provider)) return err(new AccountError("ACCOUNT_NOT_FOUND", "That account is not available for this provider."));
       const state = structuredClone(this.state), selected = state.selections[request.worktreeId] ??= {};
       if (request.accountId) selected[request.provider] = request.accountId; else delete selected[request.provider];
-      state.revision++; return this.commit(state);
+      state.revision++; return this.commit(state, false);
     });
     if (!saved.ok) return saved;
     const view = await this.workspace(request.worktreeId);
     view.refresh?.abort(); view.refresh = new AbortController();
-    view.usage.invalidate(request.provider); for (const listener of view.listeners) listener(request.provider);
     const result = await view.scope.run({ ...this.state.selections[request.worktreeId] }, () => view.runtime.refresh({ providers: [request.provider], allowNetwork: false, signal: view.refresh!.signal }));
-    view.usage.invalidate(request.provider);
+    // Publish only after the selected-authentication view is ready for background readers.
+    view.usage.invalidate(request.provider); for (const listener of view.listeners) listener(request.provider);
+    for (const listener of this.listeners) listener();
     return ok(result.errors.size || result.aborted ? "Account selected, but model metadata refresh did not finish. Reopen /model before selecting a model; the account change was not rolled back." : undefined);
   }
   private async rename(request: Extract<AccountRequest, { type: "rename" }>): Promise<Result<void, ExpectedError>> {
@@ -373,11 +393,12 @@ export class AccountManager {
     return ok({ kind: "login", login: structuredClone(flow.view) });
   }
   async stop(): Promise<Result<void, ExpectedError>> {
-    this.stopped = true;
+    this.stopped = true; this.listeners.clear();
     for (const flow of this.logins.values()) { this.cancel(flow); clearTimeout(flow.timer); }
     await Promise.all([...this.logins.values()].flatMap(flow => flow.task ? [flow.task] : [])); this.logins.clear();
     const views = await Promise.all(this.workspaces.values());
     for (const view of views) { view.refresh?.abort(); view.listeners.clear(); }
+    await Promise.all(views.flatMap(view => view.modelsTask ? [view.modelsTask.ready] : []));
     await Promise.all(views.map(view => view.usage.stop())); await this.saving;
     return this.persistenceWarning ? this.commit(this.state) : ok(undefined);
   }

@@ -111,6 +111,8 @@ export const snapshotSchema = Type.Object({
   mode: Type.Union([Type.Literal("live"), Type.Literal("offline")]), repositoryId: id,
   repositories: Type.Array(repository), details: Type.Record(Type.String(), execution),
   closingCount: Type.Integer({ minimum: 0 }), preferences: preferencesSchema, notice: Type.String(),
+  accountsRevision: Type.Optional(Type.Integer({ minimum: 0 })),
+  historyRevision: Type.Optional(Type.Integer({ minimum: 0 })),
   extensionUi: Type.Optional(Type.Array(sessionExtensionUiSchema)),
   editors: Type.Optional(Type.Array(editorInfoSchema)),
   terminals: Type.Optional(Type.Array(terminalInfoSchema)),
@@ -135,7 +137,7 @@ export type RuntimeManifest = Omit<Static<typeof manifestSchema>, "repositories"
   readonly records: readonly SessionRecord[];
 };
 export const historySchema = Type.Array(Type.Object({ id, worktreeId: id, title: Type.String(), modified: Type.String(),
-  messageCount: Type.Integer({ minimum: 0 }), openSessionId: Type.Union([id, Type.Null()]), unavailableReason: Type.Union([Type.String(), Type.Null()]),
+  messageCount: Type.Integer({ minimum: 0 }), revision: Type.Optional(Type.String()), openSessionId: Type.Union([id, Type.Null()]), unavailableReason: Type.Union([Type.String(), Type.Null()]),
 }));
 export const historyPreviewSchema = Type.Object({ id, worktreeId: id, text: Type.String({ maxLength: 65536 }), truncated: Type.Boolean(),
   sections: Type.Optional(Type.Array(Type.Object({ ...transcriptSection.properties, text: Type.String({ maxLength: 8192 }) }), { maxItems: 15 })),
