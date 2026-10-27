@@ -166,7 +166,7 @@ test.each(surfaces)("%s list Ctrl+D/U moves half-page candidates without committ
   const app = await mount(surface);
   try {
     await app.mockInput.typeText("candidate"); app.mockInput.pressTab(); await app.render();
-    const stride = surface === "workspace" ? 3 : surface === "monitor" ? 1 : 2;
+    const stride = surface === "workspace" ? 3 : 2;
     const step = Math.max(1, Math.floor(app.list.viewport.height / (2 * stride)));
     expect(step).toBeGreaterThan(1);
 
@@ -199,7 +199,7 @@ test.each(surfaces)("%s half-page list jumps stop at the final candidate and ret
   const app = await mount(surface);
   try {
     app.mockInput.pressTab(); await app.render();
-    const stride = surface === "workspace" ? 3 : surface === "monitor" ? 1 : 2;
+    const stride = surface === "workspace" ? 3 : 2;
     const step = Math.max(1, Math.floor(app.list.viewport.height / (2 * stride)));
 
     app.mockInput.pressKey("END"); app.mockInput.pressKey("d", { ctrl: true }); app.mockInput.pressKey("u", { ctrl: true });
@@ -221,7 +221,7 @@ test.each(surfaces.flatMap(surface => (["d", "u"] as const).map(key => ({ surfac
     for (let index = 0; index < 20; index++) { app.mockInput.pressKey("n", { ctrl: true }); await app.render(); }
     app.mockInput.pressArrow("left"); app.mockInput.pressArrow("left"); await app.render();
     const cursor = app.input.cursorOffset;
-    const stride = surface === "workspace" ? 3 : surface === "monitor" ? 1 : 2;
+    const stride = surface === "workspace" ? 3 : 2;
     const step = Math.max(1, Math.floor(app.list.viewport.height / (2 * stride)));
     const selected = 20 + (key === "d" ? step : -step);
 
@@ -341,7 +341,7 @@ test.each(["history", "monitor"] as const)("Compact %s search jumps return from 
   try {
     app.resize(60, 18); await app.render(); await app.mockInput.typeText("candidate"); await app.render();
     for (let index = 0; index < 10; index++) { app.mockInput.pressKey("n", { ctrl: true }); await app.render(); }
-    const step = Math.max(1, Math.floor(app.list.viewport.height / (2 * (surface === "history" ? 2 : 1))));
+    const step = Math.max(1, Math.floor(app.list.viewport.height / 4));
     app.mockInput.pressKey("o", { ctrl: true }); await app.render();
     expect(app.list.visible).toBe(false); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
 

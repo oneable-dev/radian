@@ -9,6 +9,7 @@ import { demoWorkspace } from "../../workspace/demo.ts";
 import { ok } from "../../result.ts";
 import type { ExecutionState } from "../../agents/session-registry.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { icons } from "../../icons.ts";
 
 async function fixture(options: Partial<WorkbenchActions> = {}) {
   const clock = new ManualClock(), app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
@@ -145,24 +146,32 @@ test("Workspace hints omit default navigation in both search and results focus",
   } finally { await app.close(); }
 });
 
-test("Monitor candidates use one line with only a status icon, request, worktree and branch", async () => {
-  // Ordinary-sized lists do not need counters, explanatory prose, grouping headers or repeated state labels.
+test("Monitor candidates show status and scope above muted quoted requests", async () => {
+  // Two-line candidates mirror the composer status without repeating state labels or list chrome.
   const app = await fixture();
   try {
     app.resize(180, 30); app.leader("s"); await app.render();
 
-    // The first candidate follows search directly, and the next candidate follows on the next terminal row.
+    // Search flows directly into two-line candidates with the status beside the scope, not the request.
     const list = app.get("monitor-list"), search = app.get("monitor-search-field"), row = app.get("monitor:b1"), next = app.get("monitor:a1");
-    const caption = app.get("monitor-caption:b1"); if (!(caption instanceof TextRenderable)) throw new Error("Missing session caption");
-    expect(row.height).toBe(1); expect(next.height).toBe(1); expect(next.y).toBe(row.y + 1);
+    const caption = app.get("monitor-caption:b1"), scope = app.get("monitor-scope:b1"), marker = app.get("monitor-status:b1");
+    if (!(caption instanceof TextRenderable) || !(scope instanceof TextRenderable)) throw new Error("Missing session labels");
+    expect(row.height).toBe(2); expect(next.height).toBe(2); expect(next.y).toBe(row.y + 2);
     expect(list.y).toBe(search.y + search.height); expect(row.y).toBe(list.y);
-    expect(caption.plainText).toBe("Fix authentication · radian-ui · feature/workspace");
-    expect(app.get("monitor-status:b1").visible).toBe(true); expect(app.get("monitor-status:a1").visible).toBe(true);
+    expect(scope.plainText).toBe(`${icons.folder} radian-ui · ${icons.branch} feature/workspace`); expect(scope.y).toBe(row.y);
+    expect(marker.y).toBe(row.y); expect(scope.x).toBe(marker.x + marker.width + 1);
+    expect(caption.plainText).toBe("“Fix authentication”"); expect(caption.y).toBe(row.y + 1); expect(caption.x).toBe(row.x);
+    expect(marker.visible).toBe(true); expect(app.get("monitor-status:a1").visible).toBe(true);
     expect(app.get("monitor-message").visible).toBe(false);
     const listText = app.captureCharFrame().split("\n").slice(list.y, list.y + list.height).map(line => line.slice(list.x, list.x + list.width)).join("\n");
     expect(listText).not.toMatch(/Needs attention|Working|Completed|sessions ·|Preview does not|radian \[demo\]/u);
-    const selected = app.captureSpans().lines[row.y]!.spans.find(span => span.text.includes("Fix authentication"));
-    expect(selected?.bg.toInts()).toEqual(uiTheme(app.renderer).styles["ui.selection"].bg!.toInts());
+    const styles = uiTheme(app.renderer).styles;
+    const scopeSpan = app.captureSpans().lines[scope.y]!.spans.find(span => span.text.includes("feature/workspace"));
+    const requestSpan = app.captureSpans().lines[caption.y]!.spans.find(span => span.text.includes("“Fix authentication”"));
+    expect(scopeSpan?.fg.toInts()).toEqual(styles["ui.label"].fg.toInts());
+    expect(requestSpan?.fg.toInts()).toEqual(styles["ui.muted"].fg.toInts());
+    expect(scopeSpan?.bg.toInts()).toEqual(styles["ui.selection"].bg!.toInts());
+    expect(requestSpan?.bg.toInts()).toEqual(styles["ui.selection"].bg!.toInts());
     expect(app.acknowledged).toEqual([]); expect(app.submitted).toEqual([]);
   } finally { await app.close(); }
 });
@@ -170,7 +179,7 @@ test("Monitor candidates use one line with only a status icon, request, worktree
 test("Long Unicode monitor captions retain both scope fields through resize without changing search or selection", async () => {
   // Render only viewport-sized captions while matching against the complete original request.
   const app = await fixture();
-  const request = { text: `${"한글 👩‍💻 e\u0301 ".repeat(40)}unicode-target`, images: 0, files: 0 };
+  const request = { text: `${"한글 👩‍💻 e\u0301\n ".repeat(40)}unicode-target`, images: 0, files: 0 };
   try {
     app.selection.replaceSnapshot(app.selection.snapshot.map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => tree.id === "demo:feature"
       ? { ...tree, name: "작업트리-이름이-매우-긴-경우", branch: "feature/유니코드-브랜치-이름", sessions: tree.sessions.map(session => ({ ...session, request })) } : tree) })));
@@ -180,12 +189,15 @@ test("Long Unicode monitor captions retain both scope fields through resize with
     // Scope columns remain present even when the request and scope names all need truncation.
     for (const width of [140, 60, 180]) {
       app.resize(width, 30); await app.render();
-      const caption = app.get("monitor-caption:b1"); if (!(caption instanceof TextRenderable)) throw new Error("Missing session caption");
-      const parts = caption.plainText.split(" · ");
-      expect(parts).toHaveLength(3); expect(parts.every(part => part.length > 0)).toBe(true);
-      expect(parts[0]).toContain("한글"); expect(parts[1]).toStartWith("작업"); expect(parts[2]).toStartWith("feat");
-      expect(Bun.stringWidth(caption.plainText)).toBeLessThanOrEqual(row.width - app.get("monitor-status:b1").width - 1);
-      expect(caption.plainText).not.toMatch(/[\r\n\uFFFD]/u); expect(row.height).toBe(1);
+      const caption = app.get("monitor-caption:b1"), scope = app.get("monitor-scope:b1");
+      if (!(caption instanceof TextRenderable) || !(scope instanceof TextRenderable)) throw new Error("Missing session labels");
+      const parts = scope.plainText.split(" · ");
+      expect(parts).toHaveLength(2); expect(parts.every(part => part.length > 0)).toBe(true);
+      expect(parts[0]).toStartWith(`${icons.folder} 작업`); expect(parts[1]).toStartWith(`${icons.branch} feat`);
+      expect(Bun.stringWidth(scope.plainText)).toBeLessThanOrEqual(row.width - app.get("monitor-status:b1").width - 1);
+      expect(caption.plainText).toStartWith("“한글"); expect(caption.plainText).toEndWith("…”");
+      expect(Bun.stringWidth(caption.plainText)).toBeLessThanOrEqual(row.width);
+      expect(caption.plainText + scope.plainText).not.toMatch(/[\r\n\uFFFD]/u); expect(row.height).toBe(2);
       expect(app.get("monitor:b1")).toBe(row); expect(search.value).toBe("unicode-target"); expect(search.cursorOffset).toBe(caret);
     }
     app.mockInput.pressEnter(); await app.render();
@@ -210,12 +222,13 @@ test("Monitor row loading follows Fast and compaction state without losing capti
   };
   try {
     app.resize(180, 30); await update(true); app.leader("s"); await app.render();
-    const row = app.get("monitor:b1"), marker = app.get("monitor-status:b1"), caption = app.get("monitor-caption:b1");
-    if (!(caption instanceof TextRenderable)) throw new Error("Missing session caption");
+    const row = app.get("monitor:b1"), marker = app.get("monitor-status:b1"), scope = app.get("monitor-scope:b1"), caption = app.get("monitor-caption:b1");
+    if (!(caption instanceof TextRenderable) || !(scope instanceof TextRenderable)) throw new Error("Missing session labels");
 
     // Fast uses the session's three-cell arrows and active-arrow theme color, not the default spinner.
     expect(glyphs()).toBe("▶▷▷"); expect(marker.width).toBe(3);
-    expect(caption.x).toBe(marker.x + 4);
+    expect(scope.x).toBe(marker.x + 4); expect(scope.y).toBe(marker.y);
+    expect(caption.x).toBe(row.x); expect(caption.y).toBe(marker.y + 1);
     const arrow = app.captureSpans().lines[marker.y]!.spans.find(span => span.text.includes("▶"));
     expect(arrow?.fg.toInts()).toEqual(uiTheme(app.renderer).styles["metadata.fastOn"].fg.toInts());
     app.clock.advance(80); await app.render(); expect(glyphs()).toBe("▷▶▷");
@@ -227,8 +240,9 @@ test("Monitor row loading follows Fast and compaction state without losing capti
     const sessionActivity = app.captureCharFrame().split("\n")[runLoading.y]!.slice(runLoading.x, runLoading.x + runLoading.width);
     expect(glyphs()).toBe(sessionActivity); expect(glyphs()).not.toMatch(/[▶▷]/u); expect(marker.width).toBe(runLoading.width);
     await update(false); expect(marker.width).toBe(1); expect(glyphs()).not.toMatch(/[▶▷]/u);
-    expect(caption.x).toBe(marker.x + 2);
-    expect(caption.plainText).toBe("Fix authentication · radian-ui · feature/workspace");
+    expect(scope.x).toBe(marker.x + 2); expect(caption.x).toBe(row.x);
+    expect(scope.plainText).toBe(`${icons.folder} radian-ui · ${icons.branch} feature/workspace`); expect(caption.plainText).toBe("“Fix authentication”");
+    expect(Bun.stringWidth(scope.plainText)).toBeLessThanOrEqual(scope.width);
     expect(Bun.stringWidth(caption.plainText)).toBeLessThanOrEqual(caption.width);
     expect(app.get("monitor:b1")).toBe(row); expect(app.selection.sessionId).toBe("a1");
     expect(app.acknowledged).toEqual([]); expect(app.submitted).toEqual([]);
