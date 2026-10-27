@@ -30,6 +30,8 @@ type SearchLayoutOptions = {
   preview?: { body: PopupBody; width: number };
 };
 
+const searchBottomGap = 1;
+
 // Features own query, selection, commands and lifetimes; this owns only geometry.
 export class SearchPopupLayout {
   readonly root: BoxRenderable;
@@ -40,6 +42,7 @@ export class SearchPopupLayout {
     this.root = new BoxRenderable(renderer, { id: `${options.id}-body`, flexGrow: 1, minWidth: 0, minHeight: 0, flexDirection: "row" });
     this.candidates = new BoxRenderable(renderer, { minWidth: 0, minHeight: 0, flexDirection: "column" });
     this.results = new PopupBody(renderer, `${options.id}-results`, options.list);
+    options.search.field.marginBottom = searchBottomGap;
     this.candidates.add(options.search.field);
     if (options.message) this.candidates.add(options.message);
     this.candidates.add(this.results.root); this.root.add(this.candidates);
@@ -68,7 +71,7 @@ export class SearchPopupLayout {
   get listHeight(): number {
     const { search, message } = this.options;
     return this.results.root.visible ? this.results.root.height
-      : this.root.height - search.field.height - (message?.visible ? message.height : 0);
+      : this.root.height - (search.field.visible ? search.field.height + searchBottomGap : 0) - (message?.visible ? message.height : 0);
   }
 }
 

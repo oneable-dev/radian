@@ -100,6 +100,9 @@ test.each(surfaces)("%s search shares padding/focus backgrounds and preserves ca
 
       // Single-line inputs share horizontal/vertical padding and focus colors without screen overrides.
       expect(field.height).toBe(3); expect(input.height).toBe(1); expect(input.y - field.y).toBe(1);
+      const status = surface === "history" ? app.get("history-list-status") : surface === "model" ? app.get("model-message") : null;
+      expect((status?.visible ? status : app.list).y).toBe(field.y + field.height + 1);
+      expect(app.list.y).toBe(field.y + field.height + 1 + (status?.visible ? status.height : 0));
       expect(input.x - field.x).toBe(width < 80 ? 1 : 2);
       expect(field.x + field.width - input.x - input.width).toBe(width < 80 ? 1 : 2);
       expect(background(field.x + 1, field.y)).toEqual(uiTheme(app.renderer).styles["ui.inputFocused"].bg!.toInts());
@@ -124,7 +127,7 @@ test.each(["history", "monitor"] as const)("%s preview panes fill their height w
       // Search and result hints belong only to lists; previews use their full height.
       expect(field.x).toBe(app.list.x); expect(field.width).toBe(app.list.width);
       if (surface === "history") expect(app.get("history-list-status").x).toBe(app.list.x);
-      else { expect(message.visible).toBe(false); expect(app.list.y).toBe(field.y + field.height); }
+      else { expect(message.visible).toBe(false); expect(app.list.y).toBe(field.y + field.height + 1); }
       expect(preview.visible).toBe(width >= 100);
       if (preview.visible) {
         expect(field.x + field.width).toBe(preview.x);

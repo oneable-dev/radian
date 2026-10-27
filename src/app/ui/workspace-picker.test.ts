@@ -152,12 +152,12 @@ test("Monitor candidates show status and scope above muted quoted requests", asy
   try {
     app.resize(180, 30); app.leader("s"); await app.render();
 
-    // Search flows directly into two-line candidates with the status beside the scope, not the request.
+    // One blank row separates search from candidates; each status stays beside its scope, not the request.
     const list = app.get("monitor-list"), search = app.get("monitor-search-field"), row = app.get("monitor:b1"), next = app.get("monitor:a1");
     const caption = app.get("monitor-caption:b1"), scope = app.get("monitor-scope:b1"), marker = app.get("monitor-status:b1");
     if (!(caption instanceof TextRenderable) || !(scope instanceof TextRenderable)) throw new Error("Missing session labels");
     expect(row.height).toBe(2); expect(next.height).toBe(2); expect(next.y).toBe(row.y + 2);
-    expect(list.y).toBe(search.y + search.height); expect(row.y).toBe(list.y);
+    expect(list.y).toBe(search.y + search.height + 1); expect(row.y).toBe(list.y);
     expect(scope.plainText).toBe(`${icons.folder} radian-ui · ${icons.branch} feature/workspace`); expect(scope.y).toBe(row.y);
     expect(marker.y).toBe(row.y); expect(scope.x).toBe(marker.x + marker.width + 1);
     expect(caption.plainText).toBe("“Fix authentication”"); expect(caption.y).toBe(row.y + 1); expect(caption.x).toBe(row.x);

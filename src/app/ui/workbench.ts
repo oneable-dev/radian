@@ -144,7 +144,7 @@ export class Workbench {
     this.workspacePopup.add(this.sidebar);
     this.search = new SearchInput(renderer, { id: "workspace-search", fieldId: "workspace-search-box", placeholder: "Search repo/worktree/branch" });
     this.tree = new ScrollBoxRenderable(renderer, {
-      id: "workspace-tree", flexGrow: 1, minHeight: 0, marginTop: 1, scrollX: false,
+      id: "workspace-tree", flexGrow: 1, minHeight: 0, scrollX: false,
       contentOptions: { flexDirection: "column" },
     });
     this.workspaceLayout = new SearchPopupLayout(renderer, { id: "workspace", search: this.search, list: this.tree });
@@ -835,7 +835,6 @@ export class Workbench {
     this.search.fit(height - 4);
     this.search.field.marginX = -horizontal;
     this.search.placeholder = this.renderer.width < 80 ? "Search workspaces" : "Search repo/worktree/branch";
-    this.tree.marginTop = vertical;
     // Keep one cell before the divider without changing the sidebar's left inset.
     this.tree.marginRight = 1 - horizontal;
     this.spaceRows(this.visibleRows());
