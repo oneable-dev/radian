@@ -54,5 +54,6 @@ export function expandPromptDraft(draft: PromptDraft, inlineImages = true): Prom
 }
 export function collapsedPaste(text: string): boolean {
   // Collapse representation, never data. Control sequences also stay out of the terminal surface.
+  // oxlint-disable-next-line eslint/no-control-regex -- Collapse pasted terminal controls instead of rendering them as input.
   return text.length >= 1024 || text.split("\n", 9).length >= 9 || /[\x00-\x08\x0b-\x1f\x7f-\x9f]/u.test(text);
 }

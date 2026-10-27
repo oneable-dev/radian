@@ -91,7 +91,7 @@ test("Shell ownership supervisors never automatically execute worktree Bun prelo
     const tree = fixture.repository.worktrees.find((item) => item.path === fixture.main)!;
 
     const id = expectOk(await sessions.create(tree.id, { cols: 80, rows: 12 })); reader = await watch(sessions, id); await reader.seen("radian$");
-    reader.input(`printf 'env-%s\\n' \"\${${key}-unset}\"\r`); await reader.seen("env-unset");
+    reader.input(`printf 'env-%s\\n' "\${${key}-unset}"\r`); await reader.seen("env-unset");
 
     expect(await Bun.file(marker).exists()).toBe(false);
   } finally { await reader?.disconnect(); expectOk(await sessions.stop()); await fixture.cleanup(); }

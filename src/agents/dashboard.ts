@@ -23,6 +23,7 @@ export type DashboardSnapshot = Static<typeof dashboardSchema>;
 export type DashboardRanking = DashboardSnapshot[DashboardCategory];
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const nonnegative = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
+// oxlint-disable-next-line eslint/no-control-regex -- History labels must remain printable single-line terminal text.
 const label = (value: string) => value.replace(/[\s\x00-\x1f\x7f-\x9f]+/gu, " ").trim().slice(0, 512);
 const blocks = (value: unknown): Record<string, unknown>[] => Array.isArray(value) ? value.filter(object) : [];
 const prose = (value: unknown) => typeof value === "string" ? value : blocks(value).filter(part => part.type === "text" && typeof part.text === "string").map(part => part.text).join("\n");
@@ -90,7 +91,7 @@ export class DashboardAccumulator {
     if (value.type === "session") return ok(undefined);
     const timestamp = typeof value.timestamp === "string" ? Date.parse(value.timestamp) : NaN;
     if (!Number.isFinite(timestamp) || typeof value.id !== "string") return err(new HistoryError("HISTORY_CORRUPT", "Saved history has invalid entry identity or time."));
-    const identity = `${value.type}:${value.id}:${value.timestamp}`;
+    const identity = `${value.type}:${value.id}:${String(value.timestamp)}`;
     const fresh = !this.seen.has(identity) && !this.identities.has(identity);
     this.identities.add(identity);
     if (value.type === "model_change" && typeof value.provider === "string" && typeof value.modelId === "string") this.model = `${value.provider}/${value.modelId}`;

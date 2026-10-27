@@ -19,6 +19,7 @@ import { GitList, type GitListItem } from "./list.ts";
 
 export type GitBrowserKind = "refs" | "reflog";
 const allRefs = "__all_refs__";
+// oxlint-disable-next-line eslint/no-control-regex -- Render control characters as visible escapes, never terminal commands.
 const display = (value: string) => value.replace(/[\x00-\x1f\x7f-\x9f]/g, character => `\\x${character.charCodeAt(0).toString(16).padStart(2, "0")}`);
 type Actions = {
   changed(): void;

@@ -311,7 +311,7 @@ export class TerminalPanel {
     void this.lookupTitles(scope);
   }
   private async lookupTitles(scope: string): Promise<void> {
-    const provider = this.actions?.titles; if (!provider) return;
+    const provider = this.actions?.titles?.bind(this.actions); if (!provider) return;
     const abort = new AbortController(); this.titleAbort = abort;
     const current = () => !this.disposed && !this.root.isDestroyed && this.root.visible && this.titleAbort === abort && this.titleScope === scope;
     try {

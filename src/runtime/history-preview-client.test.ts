@@ -26,7 +26,7 @@ test("Preview instance-fenced GET rejects identity/format errors as protocol fai
   let response: unknown = valid;
   const requests: string[] = [];
   const fetchMock = stub(async (input, options) => {
-    const url = new URL(String(input)); requests.push(url.pathname);
+    const url = new URL(input instanceof Request ? input.url : input); requests.push(url.pathname);
     expect(url.searchParams.get("worktreeId")).toBe("문서/a b"); expect(url.searchParams.get("savedId")).toBe("saved");
     expect(new Headers(options?.headers).get("X-Radian-Instance")).toBe("first");
     expect(options?.method ?? "GET").toBe("GET"); return Response.json(response);

@@ -204,7 +204,9 @@ export class RuntimeStore implements SessionSnapshotSource {
     if (!this.initialized || !this.metadata) return ok(0);
     let removed = 0;
     const failures: ExpectedError[] = [];
-    for (const entry of [...this.entries.values()]) {
+    // Publishing a pruned index replaces the live map during this sweep.
+    const entries = [...this.entries.values()];
+    for (const entry of entries) {
       const orphaned = await this.pruneOrphanedEntry(entry, reserve);
       if (!orphaned.ok) { failures.push(orphaned.error); continue; }
       if (orphaned.value) { removed += orphaned.value; continue; }

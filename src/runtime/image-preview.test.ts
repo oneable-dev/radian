@@ -41,7 +41,7 @@ test("Real Unix IPC exposes no originals in snapshots and explicitly reads only 
     const other = expectOk(await client.create(main.id));
     expect(expectError(await client.image(other, descriptor!.id)).code).toBe("INVALID_INPUT");
     expect(expectError(await client.image(id, descriptor!.id, AbortSignal.abort())).code).toBe("CANCELLED");
-    const wrongInstance = await fetch(`http://localhost/images?${new URLSearchParams({ sessionId: id, imageId: descriptor!.id })}`, { unix: paths.socket, headers: { "X-Radian-Instance": "stale" } });
+    const wrongInstance = await fetch(`http://localhost/images?${new URLSearchParams({ sessionId: id, imageId: descriptor!.id }).toString()}`, { unix: paths.socket, headers: { "X-Radian-Instance": "stale" } });
     expect(wrongInstance.status).toBe(422); await wrongInstance.body?.cancel();
     const arbitraryPath = await fetch("http://localhost/images?sessionId=image-session&imageId=..%2Fprivate.png", { unix: paths.socket, headers: { "X-Radian-Instance": client.snapshot.instance } });
     expect(arbitraryPath.status).toBe(400); await arbitraryPath.body?.cancel();

@@ -97,7 +97,10 @@ export class ExtensionUiBridge {
     this.active = active && !this.disposed;
     if (!this.active) this.clear();
   }
-  cancelDialogs(): void { for (const pending of [...this.pending.values()]) pending.finish(); }
+  cancelDialogs(): void {
+    const pending = [...this.pending.values()];
+    for (const dialog of pending) dialog.finish();
+  }
   observeEvent(event: AgentSessionEvent): void { if (!this.disposed) this.childDisplay.handleEvent(event); }
   reset(): void { this.children = []; this.childWidget = undefined; this.childDisplay.reset(); this.clear(); }
   clear(): void {

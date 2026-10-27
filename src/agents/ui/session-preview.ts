@@ -32,9 +32,9 @@ export class SessionPreview {
     this.panel = new AgentPanel(renderer, { onNewSession() {},
       getSessionDetails: sessionId => sessionId === this.sessionId ? this.state : actions.details?.(sessionId) ?? null,
       ...(actions.image ? { onImage: actions.image } : {}),
-    }, (label, activate) => new Button(renderer, label, activate), actions.notice, actions.changed, actions.focusList, {}, () => {}, {
+    }, (label, activate) => new Button(renderer, label, activate), actions.notice, () => actions.changed(), () => actions.focusList(), {}, () => {}, {
       readOnly: true, idPrefix: `${id}-preview-`, initialPosition: "end",
-      keyHint: actions.keyHint, snapshotTime: () => this.capturedAt,
+      keyHint: (command, context) => actions.keyHint(command, context), snapshotTime: () => this.capturedAt,
     });
     this.panel.update(null, null, new Set(), false);
     this.transcript = this.panel.transcriptScroll; this.transcript.id = `${id}-preview`;

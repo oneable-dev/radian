@@ -55,7 +55,11 @@ test.each([
     if (running) {
       const pid = running.snapshot.pid; expectOk(await running.stopRuntime()); await running.disconnect();
       const deadline = Date.now() + 12000;
-      while (pidAlive(pid) || expectOk(await fetchSnapshot(paths))) { if (Date.now() > deadline) throw new Error("Runtime stop timed out"); await Bun.sleep(20); }
+      while (pidAlive(pid) || expectOk(await fetchSnapshot(paths))) {
+        // oxlint-disable-next-line eslint/no-unsafe-finally -- A leaked daemon must fail cleanup even after a test failure.
+        if (Date.now() > deadline) throw new Error("Runtime stop timed out");
+        await Bun.sleep(20);
+      }
     }
     await fixture.cleanup();
   }

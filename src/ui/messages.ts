@@ -22,5 +22,6 @@ export class Messages {
 
 export const messageLabels = { success: "Completed", warning: "Warning", error: "Failed" } satisfies Record<MessageLevel, string>;
 export function messageText(text: string): string {
+  // oxlint-disable-next-line eslint/no-control-regex -- Strip unsafe terminal controls while preserving tabs and newlines.
   return Bun.stripANSI(text).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/gu, "");
 }

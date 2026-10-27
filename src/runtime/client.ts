@@ -256,7 +256,7 @@ export class RuntimeClient {
     if (!Value.Check(modelCatalogQuerySchema, { sessionId, conversationId })) return err(new InputError("Invalid model selection conversation identity."));
     const instance = this.state.instance, epoch = this.connectionEpoch;
     const abort = AbortSignal.any([this.streamAbort.signal, AbortSignal.timeout(15000), ...(signal ? [signal] : [])]);
-    const request = await capture(() => transport(this.paths, `/models?${new URLSearchParams({ sessionId, conversationId, ...(refresh ? { refresh: "true" } : {}) })}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
+    const request = await capture(() => transport(this.paths, `/models?${new URLSearchParams({ sessionId, conversationId, ...(refresh ? { refresh: "true" } : {}) }).toString()}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
     if (!request.ok) return request;
     if (!request.value.ok) return request.value;
     const response = request.value.value;
@@ -284,7 +284,7 @@ export class RuntimeClient {
     if (signal?.aborted) return err(new CancelledError());
     const instance = this.state.instance, epoch = this.connectionEpoch;
     const abort = AbortSignal.any([this.streamAbort.signal, AbortSignal.timeout(15000), ...(signal ? [signal] : [])]);
-    const requested = await capture(() => transport(this.paths, `/completion-catalog?${new URLSearchParams({ sessionId, conversationId })}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
+    const requested = await capture(() => transport(this.paths, `/completion-catalog?${new URLSearchParams({ sessionId, conversationId }).toString()}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
     if (!requested.ok) return requested;
     if (!requested.value.ok) return requested.value;
     const response = requested.value.value;
@@ -304,7 +304,7 @@ export class RuntimeClient {
     const instance = this.state.instance, epoch = this.connectionEpoch;
     const abort = AbortSignal.any([this.streamAbort.signal, AbortSignal.timeout(8000), ...(signal ? [signal] : [])]);
     const params = new URLSearchParams({ sessionId, kind: query.kind, query: query.query });
-    const attempted = await capture(() => transport(this.paths, `/completions?${params}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
+    const attempted = await capture(() => transport(this.paths, `/completions?${params.toString()}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
     if (!attempted.ok) return attempted;
     const response = attempted.value; if (!response.ok) return response;
     const decoded = await capture(() => readJson(response.value)); if (!decoded.ok) return decoded;
@@ -320,7 +320,7 @@ export class RuntimeClient {
     if (!Value.Check(transcriptImageQuerySchema, { sessionId, imageId })) return err(new InputError("Invalid image preview identity."));
     const instance = this.state.instance, epoch = this.connectionEpoch, conversation = this.state.details[sessionId]?.conversationId;
     const abort = AbortSignal.any([this.streamAbort.signal, AbortSignal.timeout(8000), ...(signal ? [signal] : [])]);
-    const requested = await capture(() => transport(this.paths, `/images?${new URLSearchParams({ sessionId, imageId })}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
+    const requested = await capture(() => transport(this.paths, `/images?${new URLSearchParams({ sessionId, imageId }).toString()}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
     if (!requested.ok) return requested;
     const response = requested.value; if (!response.ok) return response;
     const reply = response.value;
@@ -379,7 +379,7 @@ export class RuntimeClient {
     if (!Value.Check(historyPreviewQuerySchema, { worktreeId, savedId })) return err(new InputError("Invalid history preview identity."));
     const instance = this.state.instance, epoch = this.connectionEpoch;
     const abort = AbortSignal.any([this.streamAbort.signal, AbortSignal.timeout(8000), ...(signal ? [signal] : [])]);
-    const response = await capture(() => transport(this.paths, `/history/preview?${new URLSearchParams({ worktreeId, savedId })}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
+    const response = await capture(() => transport(this.paths, `/history/preview?${new URLSearchParams({ worktreeId, savedId }).toString()}`, { headers: { "X-Radian-Instance": instance }, signal: abort }));
     if (!response.ok) return response;
     if (!response.value.ok) return response.value;
     const reply = response.value.value;
@@ -566,7 +566,9 @@ export class RuntimeClient {
   }
   private async attachPty(editor: PtyConnection): Promise<Result<PtyConnection, ExpectedError>> {
     this.connections.add(editor);
-    editor.closed.finally(() => this.connections.delete(editor));
+    void editor.closed.then(() => { this.connections.delete(editor); }).catch((error: unknown) => {
+      reportUnexpected(error, "PTY connection cleanup");
+    });
     let attached: Result<void, ExpectedError>;
     try { attached = await editor.attach(); }
     catch (error) { await editor.disconnect(); throw error; }
@@ -586,7 +588,9 @@ export class RuntimeClient {
   private invalidatePtys(): void {
     this.connectionEpoch++;
     const error = new ConnectionError("CONNECTION_FAILED", "Runtime subscription interrupted. Reconnect this editor/terminal explicitly; no input was replayed.");
-    for (const connection of [...this.connections]) connection.invalidate(error);
+    // Invalidating a connection can remove it from the live set.
+    const connections = [...this.connections];
+    for (const connection of connections) connection.invalidate(error);
   }
   // Cancel recovery immediately while the UI finishes its final preference writes.
   // Already-queued healthy PTY input is drained once; no new input is accepted.

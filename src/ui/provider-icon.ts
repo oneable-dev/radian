@@ -53,6 +53,7 @@ export class ProviderIcon extends Renderable {
 
   private paintImage = (buffer: OptimizedBuffer): void => {
     if (this.isDestroyed || this.renderer.isDestroyed || !this.name || this.failed || uiTheme(this.renderer).monochrome || this.width < 2 || this.height < 1) return;
+    // oxlint-disable-next-line typescript/no-this-alias -- Walk this renderable's ancestry without changing the callback receiver.
     for (let node: Renderable | null = this; node; node = node.parent) if (!node.visible) return;
     const resolution = this.renderer.resolution;
     const protocol = resolveImageRenderProtocol("auto", this.renderer.capabilities, resolution !== null);

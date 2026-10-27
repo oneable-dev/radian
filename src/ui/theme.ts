@@ -56,7 +56,9 @@ export class UiTheme {
   setMonochrome(value: boolean): void {
     if (value === this.colorless) return;
     this.colorless = value;
-    for (const update of [...this.bindings.keys()]) update();
+    // Painting may register or dispose bindings; only update the current snapshot.
+    const updates = [...this.bindings.keys()];
+    for (const update of updates) update();
     this.renderer.requestRender();
   }
   configure(palette: TerminalColors, overrides: ThemeOverrides = {}): void {
@@ -133,13 +135,15 @@ export class UiTheme {
     this.renderer.setBackgroundColor(styles["ui.text"].bg ?? next.panel);
     if (themeRoles.every((role) => next[role].equals(this.value[role])) && sameStyles(styles, this.styleValue)) return;
     this.value = next; this.styleValue = styles;
-    for (const update of [...this.bindings.keys()]) update();
+    const updates = [...this.bindings.keys()];
+    for (const update of updates) update();
     this.renderer.requestRender();
   };
   private dispose = (): void => {
     this.disposed = true; this.renderer.removeInputHandler(this.hostThemeSequence);
     this.renderer.off("palette", this.updatePalette); this.renderer.off("theme_mode", this.refresh);
-    for (const cleanup of [...this.bindings.values()]) cleanup();
+    const cleanups = [...this.bindings.values()];
+    for (const cleanup of cleanups) cleanup();
     themes.delete(this.renderer);
   };
 }

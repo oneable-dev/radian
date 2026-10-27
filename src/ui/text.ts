@@ -1,5 +1,6 @@
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
+// oxlint-disable-next-line eslint/no-control-regex -- Terminal labels intentionally remove C0 and C1 controls.
 export function singleLine(text: string): string { return text.replace(/[\s\x00-\x1f\x7f-\x9f]+/gu, " ").trim(); }
 
 export function truncateCells(text: string, width: number, suffix = "…"): string {

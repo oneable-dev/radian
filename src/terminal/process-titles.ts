@@ -48,7 +48,8 @@ export async function readTerminalProcessTitles(items: readonly TerminalInfo[], 
     // A freshly launched shell may briefly inherit its supervisor's foreground group.
     const foreground = shell.foreground === item.pid ? shell : candidates.find((row) => row.pid === shell.foreground) ?? candidates[0];
     if (!foreground) continue;
-    const title = [...basename(foreground.command).replace(/[\x00-\x1f\x7f-\x9f]/g, "").trim()].slice(0, 80).join("");
+    // oxlint-disable-next-line eslint/no-control-regex -- Process names are untrusted terminal labels; keep only printable code points.
+    const title = Array.from(basename(foreground.command).replace(/[\x00-\x1f\x7f-\x9f]/g, "").trim()).slice(0, 80).join("");
     if (title) titles[item.id] = title;
   }
   return ok(titles);

@@ -17,7 +17,7 @@ function chord(value: string): string | null {
   name = aliases[name] ?? name;
   const modifiers = parts.map((part) => part === "control" ? "ctrl" : ["option", "meta"].includes(part) ? "alt" : part);
   if (new Set(modifiers).size !== modifiers.length || modifiers.some((part) => !["ctrl", "alt", "shift", "super"].includes(part))) return null;
-  if (!named.has(name) && [...name].length !== 1 && !/^f([1-9]|[12]\d|3[0-5])$/.test(name)) return null;
+  if (!named.has(name) && Array.from(name).length !== 1 && !/^f([1-9]|[12]\d|3[0-5])$/.test(name)) return null;
   return [...["ctrl", "alt", "shift", "super"].filter((part) => modifiers.includes(part)), name].join("+");
 }
 function sequence(value: string, leader?: readonly string[]): string[] | null {

@@ -48,7 +48,9 @@ export class SessionNotificationStack {
 
   retain(sessionIds: ReadonlySet<string>): void {
     for (let index = this.pending.length - 1; index >= 0; index--) if (isClosedSession(this.pending[index]!, sessionIds)) this.pending.splice(index, 1);
-    for (const toast of [...this.visible]) if (isClosedSession(toast.notification, sessionIds)) this.remove(toast);
+    // Removal mutates the live array; retain a snapshot so adjacent cards are not skipped.
+    const visible = [...this.visible];
+    for (const toast of visible) if (isClosedSession(toast.notification, sessionIds)) this.remove(toast);
     this.pump();
   }
 
@@ -146,7 +148,8 @@ export class SessionNotificationStack {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true; this.renderer.off("resize", this.resize);
-    for (const toast of [...this.visible]) this.remove(toast);
+    const visible = [...this.visible];
+    for (const toast of visible) this.remove(toast);
     this.pending.length = 0;
     if (!this.root.isDestroyed) this.root.destroyRecursively();
   }

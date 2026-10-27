@@ -233,6 +233,7 @@ test("Short summaries remove control characters and OSC separators while preserv
 
     const sent = app.terminal.sent[0]!;
     expect(sent.body).toStartWith("Notification, implementation ");
+    // oxlint-disable-next-line eslint/no-control-regex -- Verify sanitization removes OSC terminators and control characters.
     expect(sent.body).not.toMatch(/[\x00-\x1f\x7f-\x9f;]/u);
     expect(Bun.stringWidth(sent.body)).toBeLessThanOrEqual(240);
     expect(sent.body).toEndWith("… · 42s");

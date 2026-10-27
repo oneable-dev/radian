@@ -3,6 +3,7 @@ import { BrowserError } from "./errors.ts";
 import { err, ok, type Result } from "./result.ts";
 
 export function validateBrowserUrl(url: string): Result<string, BrowserError> {
+  // oxlint-disable-next-line eslint/no-control-regex -- Reject control characters before passing URLs to an OS launcher.
   if (/[\u0000-\u001f\u007f]/u.test(url) || !/^https?:\/\//iu.test(url) || !URL.canParse(url)) {
     return err(new BrowserError("Only HTTP(S) URLs can be opened in the browser."));
   }

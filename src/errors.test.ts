@@ -103,6 +103,40 @@ test("Accepted responses with persistence warnings stay successful and preserve 
   } finally { fetchMock.mockRestore(); await client.disconnect(); }
 });
 
+test("Successful operations finish cleanup before returning the original value", async () => {
+  // Cleanup belongs to the operation even when no exception needs propagation.
+  const value = { saved: true }, events: string[] = [];
+
+  // Record both phases through the public cleanup boundary.
+  const result = await withCleanup(async () => { events.push("operation"); return value; }, async () => { events.push("cleanup"); });
+
+  // The caller receives the exact value only after cleanup has completed.
+  expect(result).toBe(value);
+  expect(events).toEqual(["operation", "cleanup"]);
+});
+
+test.each([new TypeError("original defect"), undefined])("Successful cleanup preserves the original rejection: %s", async original => {
+  // Even an undefined rejection must remain distinct from a successful operation.
+  let cleaned = false;
+
+  // A successful cleanup must not replace the original failure.
+  const operation = withCleanup(async () => { throw original; }, async () => { cleaned = true; });
+
+  // Both the rejection identity and cleanup completion are observable contracts.
+  await expect(operation).rejects.toBe(original);
+  expect(cleaned).toBe(true);
+});
+
+test("Cleanup failures after successful operations preserve the cleanup exception", async () => {
+  // There is no original operation failure to aggregate with this cleanup defect.
+  const cleanup = new TypeError("cleanup defect");
+
+  const operation = withCleanup(async () => "saved", async () => { throw cleanup; });
+
+  // Preserve the original object and stack instead of inventing an aggregate.
+  await expect(operation).rejects.toBe(cleanup);
+});
+
 test("Operation and cleanup failures preserve both original and cleanup errors", async () => {
   // Cleanup cannot replace an unexpected defect's stack with a second generic message.
   const original = new TypeError("original defect"); const cleanup = new StorageError("cleanup failed");

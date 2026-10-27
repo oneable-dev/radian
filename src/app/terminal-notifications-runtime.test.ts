@@ -48,7 +48,9 @@ test("Real service completion reaches connected CLI UI and terminal notification
 
       // The real service drives both the in-app card and native delivery without changing detach ownership.
       expect(raw).toContain("Completed");
+      // oxlint-disable-next-line eslint/no-control-regex -- Assert the exact OSC notification protocol on the captured PTY.
       expect(raw.match(/\x1b\]777;notify;Radian · Task completed;/gu)).toHaveLength(1);
+      // oxlint-disable-next-line eslint/no-control-regex -- OSC payloads terminate at ESC or BEL, not arbitrary text boundaries.
       const notification = raw.match(/\x1b\]777;notify;Radian · Task completed;([^\x1b\x07]*)\x1b\\/u);
       expect(notification?.[1]).toMatch(/^read · (?:<1s|(?:\d+h )?(?:\d+m )?\d+s)$/u);
       expect(raw).toContain("\x1b[?1049l"); expect(code).toBe(0);
@@ -63,6 +65,7 @@ test("Real service completion reaches connected CLI UI and terminal notification
       expectOk(await client.stopRuntime()); await client.disconnect();
       const deadline = Date.now() + 10000;
       while (expectOk(await fetchSnapshot(client.paths)) || pidAlive(pid)) {
+        // oxlint-disable-next-line eslint/no-unsafe-finally -- A leaked daemon must fail cleanup even after a test failure.
         if (Date.now() > deadline) throw new Error("Offline runtime did not stop.");
         await new Promise<void>((resolve) => setTimeout(resolve, 20));
       }

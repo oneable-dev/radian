@@ -40,6 +40,7 @@ export function summarizeRequest(text: string, images: number): RequestSummary {
   let files = 0, fileName: string | undefined;
   // Only Radian's explicit @"absolute path" references count as files. Ordinary
   // filenames, fenced code examples, image extensions and opaque image bytes do not.
+  // oxlint-disable-next-line eslint/no-control-regex -- File references must not contain raw control characters inside JSON strings.
   const references = /^ {0,3}(`{3,}|~{3,})[^\n]*|(^|\s)@("(?:[^"\\\x00-\x1f]|\\.)*")(?=\s|$)/gmu;
   let fence: string | undefined;
   const prose = text.replace(references, (match: string, marker: string | undefined, space: string | undefined, encoded: string | undefined) => {

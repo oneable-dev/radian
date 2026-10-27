@@ -53,7 +53,7 @@ export class AccountManager {
   static async open(directory: string, options: Options = {}): Promise<Result<AccountManager, ExpectedError>> {
     const prepared = await capture(() => privateDirectory(directory)); if (!prepared.ok) return prepared;
     const defaultAuthPath = options.offline ? join(directory, "pi-auth.json") : undefined;
-    const defaults = await ModelRuntime.create({ ...(options.defaultCredentials ? { credentials: options.defaultCredentials } : { ...(defaultAuthPath ? { authPath: defaultAuthPath } : {}) }),
+    const defaults = await ModelRuntime.create({ ...(options.defaultCredentials ? { credentials: options.defaultCredentials } : defaultAuthPath ? { authPath: defaultAuthPath } : {}),
       ...(options.offline ? { modelsPath: null } : {}), modelsStore: new InMemoryModelsStore(), allowModelNetwork: false });
     for (const provider of options.providers ?? []) defaults.registerNativeProvider(provider);
     const manager = new AccountManager(directory, defaults, options, defaultAuthPath);
@@ -319,7 +319,11 @@ export class AccountManager {
       }
     }
   }
-  private publish(flow: Login): void { flow.view.revision++; for (const listener of [...flow.listeners]) listener(); }
+  private publish(flow: Login): void {
+    flow.view.revision++;
+    const listeners = [...flow.listeners];
+    for (const listener of listeners) listener();
+  }
   private wait(flow: Login, signal?: AbortSignal): Promise<void> {
     return new Promise(resolve => {
       const done = () => { clearTimeout(timer); flow.listeners.delete(done); signal?.removeEventListener("abort", done); resolve(); };

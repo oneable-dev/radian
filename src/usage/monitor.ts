@@ -201,7 +201,9 @@ export class UsageMonitor {
     if (this.stopped) return;
     if (JSON.stringify(this.snapshots.get(provider)) === JSON.stringify(snapshot)) return;
     this.snapshots.set(provider, snapshot);
-    for (const changed of [...this.watchers.get(provider) ?? []]) changed();
+    // Subscribers may unsubscribe or add listeners while handling this publication.
+    const watchers = [...this.watchers.get(provider) ?? []];
+    for (const changed of watchers) changed();
   }
 
   private schedule(): void {

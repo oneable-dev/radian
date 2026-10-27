@@ -110,17 +110,16 @@ export async function collectCleanup(tasks: readonly Promise<Result<void, Expect
 }
 
 export async function withCleanup<T>(operation: () => Promise<T>, cleanup: () => Promise<void>): Promise<T> {
-  let original: unknown;
-  let failed = false;
-  try { return await operation(); }
-  catch (error) { failed = true; original = error; throw error; }
-  finally {
-    try { await cleanup(); }
-    catch (cleanupError) {
-      if (failed) throw new AggregateError([original, cleanupError], "Operation and cleanup failed.");
-      throw cleanupError;
-    }
+  let result: Result<T, unknown>;
+  try { result = ok(await operation()); }
+  catch (error) { result = err(error); }
+  try { await cleanup(); }
+  catch (cleanupError) {
+    if (!result.ok) throw new AggregateError([result.error, cleanupError], "Operation and cleanup failed.");
+    throw cleanupError;
   }
+  if (!result.ok) throw result.error;
+  return result.value;
 }
 
 export function parseJson(text: string, context: string): Result<unknown, InputError> {

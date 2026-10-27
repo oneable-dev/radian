@@ -684,7 +684,7 @@ test("IPC history opens worktree-scoped SDK records and returns existing entries
     expect(Object.keys(client.snapshot.details)).toHaveLength(count); expect(await readFile(file, "utf8")).toBe(bytes);
     expect(expectError(await client.previewHistory(feature, saved.id)).code).toBe("HISTORY_UNAVAILABLE");
     for (const instance of [undefined, "obsolete"]) {
-      const response = await fetch(`http://localhost/history/preview?${new URLSearchParams({ worktreeId: main, savedId: saved.id })}`, {
+      const response = await fetch(`http://localhost/history/preview?${new URLSearchParams({ worktreeId: main, savedId: saved.id }).toString()}`, {
         unix: app.paths.socket, ...(instance ? { headers: { "X-Radian-Instance": instance } } : {}),
       });
       expect(response.status).toBe(422); await response.body?.cancel();

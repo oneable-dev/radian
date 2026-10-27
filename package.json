@@ -18,6 +18,10 @@
     "dev": "bun src/index.ts",
     "restart": "bun src/index.ts runtime restart",
     "typecheck": "tsc --noEmit",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
     "test": "bun test",
     "test:workspace": "bun src/testing/worktree-fixture.ts"
   },
@@ -33,6 +37,9 @@
   },
   "devDependencies": {
     "@types/bun": "1.4.3",
+    "oxfmt": "0.75.0",
+    "oxlint": "1.90.0",
+    "oxlint-tsgolint": "7.0.2005",
     "typescript": "7.0.2"
   }
 }

@@ -18,6 +18,7 @@ async function terminalRun(args:string[],directory:string,extra:NodeJS.ProcessEn
   finally{clearTimeout(timer);child.terminal?.close();}
 }
 function coloredSGR(raw:string):boolean {
+  // oxlint-disable-next-line eslint/no-control-regex -- Detect actual ANSI SGR bytes captured from a real PTY.
   return [...raw.matchAll(/\x1b\[([\d;:]*)m/gu)].some((match)=>match[1]!.split(/[;:]/u).map(Number)
     .some((code)=>code===38||code===48||code===58||code>=30&&code<=37||code>=40&&code<=47||code>=90&&code<=107));
 }

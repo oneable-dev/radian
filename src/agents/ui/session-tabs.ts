@@ -64,7 +64,7 @@ export class SessionTabs {
         const frame = new SessionTab(this.renderer, { id: `${this.actions.idPrefix ?? ""}session:${worktreeId}:${session.id}`,
           closeId: `${this.actions.idPrefix ?? ""}close-session:${session.id}`, closeLabel: "Close session", leading: status.root,
           select: () => this.actions.select(session.id),
-          close: () => this.actions.close(session.id), button: this.actions.button });
+          close: () => this.actions.close(session.id), button: (label, activate, action) => this.actions.button(label, activate, action) });
         this.list.add(frame.root);
         tab = { root: frame.root, title: frame.title, frame, status }; this.tabs.set(session.id, tab);
       }

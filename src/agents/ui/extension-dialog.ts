@@ -25,6 +25,7 @@ export type ExtensionDialogActions = {
   changed: () => void; fallback: () => void; notice: Notice;
   keyHint: (command: CommandId, context: KeyContext) => string;
 };
+// oxlint-disable-next-line eslint/no-control-regex -- Extension text must not inject terminal control bytes.
 const plain = (text: string) => stripVTControlCharacters(text).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/gu, "");
 
 export class ExtensionDialogPanel {

@@ -18,7 +18,8 @@ class ControlledExecutor implements SessionExecutor {
   closeCalls = 0;
   promptCalls = 0;
   failClose = false;
-  constructor(readonly sessionFile: string | undefined = undefined) {}
+  readonly sessionFile: string | undefined;
+  constructor(sessionFile?: string) { this.sessionFile = sessionFile; }
   subscribe(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   async prompt(): Promise<Result<void, ExpectedError>> { this.promptCalls++; this.update({ status: "working", output: "running", error: null }); return ok(undefined); }
   update(state: ExecutionState) { this.state = state; for (const listener of this.listeners) listener(); }

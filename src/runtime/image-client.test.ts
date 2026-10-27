@@ -30,7 +30,7 @@ test("Legacy services and invalid image IDs fail explicitly without queries or r
 test("Binary images remain bounded current-instance bytes without UTF-8 conversion", async () => {
   const bytes = tinyPng(), requests: { path: string; instance: string | null }[] = [];
   const fetchMock = stubFetch(async (input, options) => {
-    requests.push({ path: new URL(String(input)).pathname, instance: new Headers(options?.headers).get("X-Radian-Instance") });
+    requests.push({ path: new URL(input instanceof Request ? input.url : input).pathname, instance: new Headers(options?.headers).get("X-Radian-Instance") });
     return new Response(new ReadableStream({ start(controller) { for (const byte of bytes) controller.enqueue(Uint8Array.of(byte)); controller.close(); } }), { headers: { "Content-Type": "image/png" } });
   });
   const client = new RuntimeClient(paths, snapshot());

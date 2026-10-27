@@ -8,8 +8,17 @@ const paths = runtimePaths("/fixture/.git", true, "/tmp/radian-reconnect-unit-te
 const snapshot = (): RuntimeSnapshot => ({ version: protocolVersion, pid: process.pid, instance: "first", repositoryId: "/fixture/.git", mode: "offline",
   repositories: [], details: {}, closingCount: 0, preferences: structuredClone(emptyPreferences), notice: "", capabilities: ["history"] });
 const encoder = new TextEncoder();
-function stubFetch(implementation: (input: Parameters<typeof fetch>[0], options?: Parameters<typeof fetch>[1]) => Promise<Response>) {
-  return spyOn(globalThis, "fetch").mockImplementation(Object.assign(implementation, { preconnect: fetch.preconnect }));
+type RuntimeRequestOptions = Omit<NonNullable<Parameters<typeof fetch>[1]>, "body"> & { body?: string | null };
+function stubFetch(implementation: (input: string | URL, options?: RuntimeRequestOptions) => Promise<Response>) {
+  // The runtime wire protocol uses explicit URLs and serialized JSON, not Request or streaming bodies.
+  const request = (input: Parameters<typeof fetch>[0], options?: Parameters<typeof fetch>[1]) => {
+    if (input instanceof Request) throw new TypeError("Expected an explicit runtime request URL.");
+    if (!options) return implementation(input);
+    const { body, ...init } = options;
+    if (body != null && typeof body !== "string") throw new TypeError("Expected a serialized runtime request body.");
+    return implementation(input, { ...init, ...(body === undefined ? {} : { body }) });
+  };
+  return spyOn(globalThis, "fetch").mockImplementation(Object.assign(request, { preconnect: fetch.preconnect }));
 }
 async function settle(): Promise<void> { for (let i = 0; i < 40; i++) await Promise.resolve(); }
 async function advance(milliseconds: number): Promise<void> { jest.advanceTimersByTime(milliseconds); await settle(); }

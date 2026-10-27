@@ -843,6 +843,7 @@ export class Workbench {
     if (this.disposed || !this.sidebar.visible) return;
     // Public text widths settle after native layout. Keep the shared offset valid
     // after resize or metadata shrink, without resetting it for ordinary repaint.
+    // oxlint-disable-next-line eslint/no-self-assign -- Re-run the native setter to clamp stale offsets after layout changes.
     for (const { text } of this.rows.values()) if (text.scrollX > 0) text.scrollX = text.scrollX;
     if (!this.navigationRevealPending) return;
     this.navigationRevealPending = false;

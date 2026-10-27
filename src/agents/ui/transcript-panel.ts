@@ -1022,6 +1022,7 @@ export class TranscriptPanel {
   }
   private vimContext(): VimContext | null {
     const row = this.selected; if (!row || !this.state || this.state.mode === "sections") return null;
+    // oxlint-disable-next-line typescript/no-this-alias -- Returned getters have their own receiver; retain the owning panel explicitly.
     const reader = this.reader(row), panel = this;
     // Prefixes and native visual-row motion need no document segmentation/copy.
     return {
@@ -1141,7 +1142,7 @@ export class TranscriptPanel {
   private async openLink(url: string): Promise<void> {
     const checked = validateBrowserUrl(url);
     if (!checked.ok) { this.options.notice(`[${checked.error.code}] ${checked.error.message}`, { level: "error" }); return; }
-    const result = await (this.options.openUrl ?? openBrowserUrl)(checked.value);
+    const result = await (this.options.openUrl ? this.options.openUrl(checked.value) : openBrowserUrl(checked.value));
     if (!this.disposed && !result.ok) this.options.notice(`[${result.error.code}] ${result.error.message}`, { level: "error" });
   }
   private toggleHelp(): void {

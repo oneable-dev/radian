@@ -55,7 +55,7 @@ test.each(surfaces)("$name popups trap focus and restore input with Esc without 
       expect(app.captureCharFrame().split("\n")[panel.y]?.slice(panel.x, panel.x + panel.width)).not.toContain("×");
       // A faithful session preview includes inert tab close glyphs, not popup close controls.
       const buttons = walk(panel).filter((node): node is Button => node instanceof Button);
-      const previewClose = (node: Button) => /^history-preview-close-session:/.test(node.id);
+      const previewClose = (node: Button) => node.id.startsWith("history-preview-close-session:");
       expect(buttons.filter(node => !node.id.startsWith("model-effort:") && !previewClose(node))).toEqual([]);
       for (const button of buttons.filter(previewClose)) expect(button.focusable).toBe(false);
       for (let i = 0; i < 4; i++) {

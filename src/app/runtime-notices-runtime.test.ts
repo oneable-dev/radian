@@ -67,6 +67,7 @@ test("Closing a session through the real service never emits shutdown progress n
       expectOk(await client.stopRuntime()); await client.disconnect();
       const deadline = Date.now() + 10000;
       while (expectOk(await fetchSnapshot(client.paths)) || pidAlive(pid)) {
+        // oxlint-disable-next-line eslint/no-unsafe-finally -- A leaked daemon must fail cleanup even after a test failure.
         if (Date.now() > deadline) throw new Error("Offline runtime did not stop.");
         await new Promise<void>(resolve => setTimeout(resolve, 20));
       }

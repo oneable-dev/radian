@@ -31,7 +31,7 @@ test("Dashboard instance-fenced GET validates periods, numbers, and bucket count
   // Validate even socket responses at public IPC boundaries.
   let response: unknown = emptyDashboard(7);
   const request = mockFetch(async (input, options) => {
-    const url = new URL(String(input)); expect(url.pathname).toBe("/dashboard"); expect(url.searchParams.get("days")).toBe("7");
+    const url = new URL(input instanceof Request ? input.url : input); expect(url.pathname).toBe("/dashboard"); expect(url.searchParams.get("days")).toBe("7");
     expect(new Headers(options?.headers).get("X-Radian-Instance")).toBe("fixture"); return Response.json(response);
   });
   const client = new RuntimeClient(paths, snapshot());

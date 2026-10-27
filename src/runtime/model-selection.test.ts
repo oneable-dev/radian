@@ -18,8 +18,8 @@ test("Model IPC sends session/conversation/runtime IDs and distinguishes provide
   // Replace only network responses while verifying actual transmitted protocols.
   const requests: { path: string; headers: Headers; body?: unknown }[] = [];
   const mocked = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof fetch>[0], options?: Parameters<typeof fetch>[1]) => {
-    const url = new URL(String(input));
-    requests.push({ path: url.pathname + url.search, headers: new Headers(options?.headers), ...(options?.body ? { body: JSON.parse(String(options.body)) } : {}) });
+    const url = new URL(input instanceof Request ? input.url : input);
+    requests.push({ path: url.pathname + url.search, headers: new Headers(options?.headers), ...(options?.body ? { body: JSON.parse(await new Response(options.body).text()) } : {}) });
     return Response.json(url.pathname === "/models" ? catalog : { ok: true, value: null });
   }, { preconnect: fetch.preconnect }));
   const client = new RuntimeClient(paths, state());

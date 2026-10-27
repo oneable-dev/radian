@@ -39,6 +39,7 @@ type Cache = { state: GitViewState; source: GitSource; data?: GitSnapshot; detai
   external?: ExternalChange | undefined; error?: string | undefined; diffError?: string | undefined };
 type Ask = { context: GitContext; worktree: Worktree; session: string | null; createdSession?: string; owner: Renderable | null; sending: boolean };
 const workingKey = "__working_tree__";
+// oxlint-disable-next-line eslint/no-control-regex -- Render control characters as visible escapes, never terminal commands.
 const display = (value: string) => value.replace(/[\x00-\x1f\x7f-\x9f]/g, (character) => `\\x${character.charCodeAt(0).toString(16).padStart(2, "0")}`);
 const within = (target: Renderable | null, parent: Renderable): boolean => {
   for (let current: Renderable | null = target; current; current = current.parent instanceof Renderable ? current.parent : null) if (current === parent) return true;

@@ -571,7 +571,7 @@ test("Detail branches, remotes, and tags show only refs directly targeting selec
 test("Stable left-detail geometry never requests additional renders during screen refresh", async () => {
   // Resetting text or borders on every position correction would schedule endless frames.
   const clock = new ManualClock(), app = await mount({ clock });
-  let cardRender: ReturnType<typeof spyOn> | undefined, anchorRender: ReturnType<typeof spyOn> | undefined;
+  let cardRender: ReturnType<typeof spyOn<Renderable, "requestRender">> | undefined, anchorRender: ReturnType<typeof spyOn<Renderable, "requestRender">> | undefined;
   try {
     await app.chooseCommit(); clock.advance(500); await app.renderOnce(); await app.renderOnce();
     const card = app.get("git-details-card");

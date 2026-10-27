@@ -20,7 +20,7 @@ function changes() {
         const done = () => {
           if (!predicate() && !errors.length) return;
           clearTimeout(timer); listeners.delete(done);
-          errors.length ? reject(errors[0]) : resolve();
+          if (errors.length) reject(errors[0]); else resolve();
         };
         const timer = setTimeout(() => { listeners.delete(done); reject(new Error("Git metadata event was not observed.")); }, 5000);
         listeners.add(done); done();
