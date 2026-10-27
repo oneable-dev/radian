@@ -15,8 +15,20 @@ test("Theme settings override only specified roles and empty settings retain ter
   expect(expectOk(parseTheme({}))).toEqual({});
 });
 
-test.each([null, [], "dark", { unknown: "#123456" }, { text: "red" }, { accent: "#123" }, { panel: 123456 }, { selected: "#12345678" }].map((value) => ({ value })))(
-  "Invalid roles and colors return input errors instead of being silently ignored: %j", ({ value }) => {
+test.each(
+  [
+    null,
+    [],
+    "dark",
+    { unknown: "#123456" },
+    { text: "red" },
+    { accent: "#123" },
+    { panel: 123456 },
+    { selected: "#12345678" },
+  ].map((value) => ({ value })),
+)(
+  "Invalid roles and colors return input errors instead of being silently ignored: %j",
+  ({ value }) => {
     // Only documented roles and unambiguous RGB values may enter the UI.
     const result = parseTheme(value);
 
@@ -26,21 +38,27 @@ test.each([null, [], "dark", { unknown: "#123456" }, { text: "red" }, { accent: 
 
 test("Explicit theme files distinguish missing/corrupt files from valid overrides", async () => {
   // No test may consult or overwrite the user's actual theme file.
-  const directory = await mkdtemp(join(tmpdir(), "radian-theme-")), path = join(directory, "theme.json");
+  const directory = await mkdtemp(join(tmpdir(), "radian-theme-")),
+    path = join(directory, "theme.json");
   try {
     const missing = await loadTheme(path);
-    await writeFile(path, "{"); const malformed = await loadTheme(path);
-    await writeFile(path, '{"accent":"#abcdef"}'); const valid = await loadTheme(path);
+    await writeFile(path, "{");
+    const malformed = await loadTheme(path);
+    await writeFile(path, '{"accent":"#abcdef"}');
+    const valid = await loadTheme(path);
 
     expect(expectError(missing).code).toBe("STORAGE_FAILED");
     expect(expectError(malformed).code).toBe("INVALID_INPUT");
     expect(expectOk(valid)).toEqual({ accent: "#abcdef" });
-  } finally { await rm(directory, { recursive: true, force: true }); }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("Absent default themes follow terminals while existing XDG themes load", async () => {
   const directory = await mkdtemp(join(tmpdir(), "radian-theme-xdg-"));
-  const previous = process.env.XDG_CONFIG_HOME; process.env.XDG_CONFIG_HOME = directory;
+  const previous = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = directory;
   try {
     // Optional default configuration is distinct from an explicitly missing file.
     const absent = await loadTheme();
@@ -51,7 +69,8 @@ test("Absent default themes follow terminals while existing XDG themes load", as
     expect(expectOk(absent)).toEqual({});
     expect(expectOk(configured)).toEqual({ text: "#102030" });
   } finally {
-    if (previous === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = previous;
+    if (previous === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = previous;
     await rm(directory, { recursive: true, force: true });
   }
 });

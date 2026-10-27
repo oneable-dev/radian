@@ -7,10 +7,16 @@ export function terminalText(screen: Terminal): TerminalText {
   const buffer = screen.buffer.active;
   const target = buffer.viewportY < buffer.baseY ? buffer.viewportY : buffer.baseY + buffer.cursorY;
   const cursor = { row: 0, column: 0 };
-  let text = "", row = 0, column = 0;
+  let text = "",
+    row = 0,
+    column = 0;
   for (let index = 0; index < buffer.length; index++) {
     const line = buffer.getLine(index)!;
-    if (index && !line.isWrapped) { text += "\n"; row++; column = 0; }
+    if (index && !line.isWrapped) {
+      text += "\n";
+      row++;
+      column = 0;
+    }
     if (index === target) {
       cursor.row = row;
       cursor.column = column + (buffer.viewportY < buffer.baseY ? 0 : buffer.cursorX);

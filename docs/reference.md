@@ -545,32 +545,32 @@ and prompt caret unchanged. Intermediate back steps preserve the reading positio
 the Agent input without sending the draft. Bare **i** is not an input-focus shortcut. There are no
 default Ctrl+T/Ctrl+E or leader-o aliases. All commands remain configurable:
 
-| Mode | Default keys | Action |
-| --- | --- | --- |
-| Sections | j/k or Ctrl+N/P; Home/gg and End | Previous/next or first/last section |
-| Sections | Enter | Read formatted prose, folded heading/summary, or literal body with the cursor |
-| Sections/Text/Visual | Ctrl+O (also za); zm/zr | Toggle the selected section; fold/unfold all |
-| Text/Visual | h/j/k/l or arrows | Grapheme/visual-line cursor movement; Text up/down crosses visible headings and adjacent sections |
-| Text/Visual | w/b/e; W/B/E; 0/^/$ or Home/End; gg/G or Ctrl+Home/End | Word/WORD, logical-line and section boundaries |
-| Text/Visual | f/F/t/T, then a character; ; / , | Find/till on the logical line; repeat/reverse the last find |
-| Visual / yank pending | i / a, then w/W/p or a quote/bracket | Select/yank an inner or surrounding text object |
-| Text/Visual | 1–9, then more digits and a motion | Repeat a motion; counts on either side of y multiply |
-| Text/Visual | / / ?; n / N; * / # | Literal section search, repeat/reverse, or whole-word search |
-| Search input | Enter / Esc / Ctrl+C | Accept, cancel without moving, or clear only the query |
-| Text/Visual | v / V | Character selection / whole-logical-line selection; repeat the same key to stop |
-| Text/Visual | gx | Open the HTTP(S) link under the cursor in the system default browser |
-| Visual Line | j/k | Move by logical source lines, including wrapped paragraphs |
-| Sections | Ctrl+D / Ctrl+U | Jump the selected section down/up roughly half a viewport |
-| Text/Visual | Ctrl+D / Ctrl+U | Move the cursor down/up half the transcript viewport |
-| Sections | Ctrl+F / Ctrl+B; PgDn/PgUp | Select a section about a full viewport away |
-| Text/Visual | Ctrl+F / Ctrl+B; PgDn/PgUp | Move the reading cursor about a full viewport |
-| Sections / Visual | y | Copy the section or selected range |
-| Text | y + motion/object; yy | Yank a range; copy the current logical line including its real newline |
-| Sections/Text/Visual | Y | Copy the whole raw section, including folded details |
-| Sections | G (Shift+g) or Ctrl+End | Jump to the actual bottom of the whole transcript and resume following |
-| Sections/Text/Visual | ge | Jump to the latest output and resume following |
-| Sections/Text/Visual | F1 | Open/close scrollable keyboard help |
-| Visual/Text/Sections | Esc | Return to Text, Sections, then Input |
+| Mode                  | Default keys                                           | Action                                                                                            |
+| --------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| Sections              | j/k or Ctrl+N/P; Home/gg and End                       | Previous/next or first/last section                                                               |
+| Sections              | Enter                                                  | Read formatted prose, folded heading/summary, or literal body with the cursor                     |
+| Sections/Text/Visual  | Ctrl+O (also za); zm/zr                                | Toggle the selected section; fold/unfold all                                                      |
+| Text/Visual           | h/j/k/l or arrows                                      | Grapheme/visual-line cursor movement; Text up/down crosses visible headings and adjacent sections |
+| Text/Visual           | w/b/e; W/B/E; 0/^/$ or Home/End; gg/G or Ctrl+Home/End | Word/WORD, logical-line and section boundaries                                                    |
+| Text/Visual           | f/F/t/T, then a character; ; / ,                       | Find/till on the logical line; repeat/reverse the last find                                       |
+| Visual / yank pending | i / a, then w/W/p or a quote/bracket                   | Select/yank an inner or surrounding text object                                                   |
+| Text/Visual           | 1–9, then more digits and a motion                     | Repeat a motion; counts on either side of y multiply                                              |
+| Text/Visual           | / / ?; n / N; * / #                                    | Literal section search, repeat/reverse, or whole-word search                                      |
+| Search input          | Enter / Esc / Ctrl+C                                   | Accept, cancel without moving, or clear only the query                                            |
+| Text/Visual           | v / V                                                  | Character selection / whole-logical-line selection; repeat the same key to stop                   |
+| Text/Visual           | gx                                                     | Open the HTTP(S) link under the cursor in the system default browser                              |
+| Visual Line           | j/k                                                    | Move by logical source lines, including wrapped paragraphs                                        |
+| Sections              | Ctrl+D / Ctrl+U                                        | Jump the selected section down/up roughly half a viewport                                         |
+| Text/Visual           | Ctrl+D / Ctrl+U                                        | Move the cursor down/up half the transcript viewport                                              |
+| Sections              | Ctrl+F / Ctrl+B; PgDn/PgUp                             | Select a section about a full viewport away                                                       |
+| Text/Visual           | Ctrl+F / Ctrl+B; PgDn/PgUp                             | Move the reading cursor about a full viewport                                                     |
+| Sections / Visual     | y                                                      | Copy the section or selected range                                                                |
+| Text                  | y + motion/object; yy                                  | Yank a range; copy the current logical line including its real newline                            |
+| Sections/Text/Visual  | Y                                                      | Copy the whole raw section, including folded details                                              |
+| Sections              | G (Shift+g) or Ctrl+End                                | Jump to the actual bottom of the whole transcript and resume following                            |
+| Sections/Text/Visual  | ge                                                     | Jump to the latest output and resume following                                                    |
+| Sections/Text/Visual  | F1                                                     | Open/close scrollable keyboard help                                                               |
+| Visual/Text/Sections  | Esc                                                    | Return to Text, Sections, then Input                                                              |
 
 **Enter never changes folding or Markdown formatting**. It enters text navigation over the visible
 heading/summary, formatted prose, or literal body. Headings, emphasis, code highlighting, links, lists
@@ -1088,14 +1088,14 @@ Unchanged content is included, not silently omitted by a default short-context p
 
 Git-specific actions are scoped to Git browsing controls and can be rebound in the normal keymap:
 
-| Focus | `a`: attach to an Agent prompt | `y`: copy the complete identifier |
-| --- | --- | --- |
-| Commit history row | Commit hash only | Full hash |
-| Commit details | Not available (read-only) | Not available; drag text to copy |
-| Changed file / entire Diff | Relative path and historical revision/change identity | Relative path |
-| Local / Remote branch result | Name only; no automatic tip hash | Name, including remote prefix |
-| Tag result | Name only | Name |
-| Reflog event result | Event details and target hash | Full target hash |
+| Focus                        | `a`: attach to an Agent prompt                        | `y`: copy the complete identifier |
+| ---------------------------- | ----------------------------------------------------- | --------------------------------- |
+| Commit history row           | Commit hash only                                      | Full hash                         |
+| Commit details               | Not available (read-only)                             | Not available; drag text to copy  |
+| Changed file / entire Diff   | Relative path and historical revision/change identity | Relative path                     |
+| Local / Remote branch result | Name only; no automatic tip hash                      | Name, including remote prefix     |
+| Tag result                   | Name only                                             | Name                              |
+| Reflog event result          | Event details and target hash                         | Full target hash                  |
 
 `a` freezes the chosen context and opens a small prompt showing its target session. The default is the
 last selected session in that worktree. **Ctrl+S** (`git.change-session`, configurable) cycles through
@@ -1439,7 +1439,7 @@ so underlying text stays hidden throughout the animation.
 The work pane and navigation popups share one full-width, single-row footer. The **displayed work view**
 (`AGENT`, `EDITOR`, `GIT` or `TERMINAL`) occupies a solid accent-colored rectangle on the left; branding,
 version text and the former gradient are omitted. The view label has exactly one space on each side.
-The selected worktree and branch follow as plain text with no individual backgrounds, separated by ` · `
+The selected worktree and branch follow as plain text with no individual backgrounds, separated by `·`
 and using the existing folder and branch icons. They are no longer duplicated
 in Agent telemetry. Detached worktrees show `detached HEAD`; long names truncate by terminal cells.
 The view stays visible when focus moves to another control or popup. Context and configured shortcut
@@ -2037,21 +2037,21 @@ The source is organized by feature ownership, with shared runtime and presentati
 This is an incremental domain-oriented layout, not a requirement to give every feature identical
 `domain/application/infrastructure` directories.
 
-| Directory | Responsibility |
-| --- | --- |
-| `src/app/` | CLI/UI bootstrap, workspace selection and whole-application composition |
+| Directory                 | Responsibility                                                                                  |
+| ------------------------- | ----------------------------------------------------------------------------------------------- |
+| `src/app/`                | CLI/UI bootstrap, workspace selection and whole-application composition                         |
 | `src/app/ui/workbench.ts` | Overall layout, workspace popup, view switching, focus, acknowledgement and footer coordination |
-| `src/agents/` | Agent session/subagent models and lifecycle, saved History and Pi SDK integration |
-| `src/agents/ui/` | Session tabs/status, Agent transcript/prompt/drafts/scroll and saved-History panel |
-| `src/usage/` | Provider-neutral account usage snapshots, shared polling/cache and isolated provider sources |
-| `src/editor/` | Worktree Neovim lifecycle and its UI panel |
-| `src/terminal/` | Shell-tab lifecycle, ownership supervisor/cleanup and its UI panel |
-| `src/git/` | Read-only Git queries, comparisons and Agent context; Git-specific rendering lives in `ui/` |
-| `src/workspace/` | Repository/worktree discovery, snapshot models and search projection |
-| `src/runtime/` | Detached service, IPC, recovery, checkpoints and shared `pty/` implementation |
-| `src/keybindings/` | Application commands, binding configuration and input routing |
-| `src/ui/` | Shared footer, loading feedback, clipboard, theme and embedded-terminal presentation |
-| `src/testing/` | Isolated repositories, scripted SDK responses and test helpers |
+| `src/agents/`             | Agent session/subagent models and lifecycle, saved History and Pi SDK integration               |
+| `src/agents/ui/`          | Session tabs/status, Agent transcript/prompt/drafts/scroll and saved-History panel              |
+| `src/usage/`              | Provider-neutral account usage snapshots, shared polling/cache and isolated provider sources    |
+| `src/editor/`             | Worktree Neovim lifecycle and its UI panel                                                      |
+| `src/terminal/`           | Shell-tab lifecycle, ownership supervisor/cleanup and its UI panel                              |
+| `src/git/`                | Read-only Git queries, comparisons and Agent context; Git-specific rendering lives in `ui/`     |
+| `src/workspace/`          | Repository/worktree discovery, snapshot models and search projection                            |
+| `src/runtime/`            | Detached service, IPC, recovery, checkpoints and shared `pty/` implementation                   |
+| `src/keybindings/`        | Application commands, binding configuration and input routing                                   |
+| `src/ui/`                 | Shared footer, loading feedback, clipboard, theme and embedded-terminal presentation            |
+| `src/testing/`            | Isolated repositories, scripted SDK responses and test helpers                                  |
 
 `src/index.ts` is the executable entry point. `app/bootstrap.ts` wires the runtime and feature
 interfaces; features do not import the workbench. Keep feature runtime modules independent of their

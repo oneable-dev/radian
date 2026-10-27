@@ -39,33 +39,80 @@ export class ShellHandshake {
   readonly frozen = deferred<void>();
   constructor(private readonly exited: (code: number) => void) {}
   receive(message: unknown): void {
-    if (typeof message !== "object" || message === null || !("type" in message)) { this.fail(new ProtocolError("Invalid shell supervisor message.")); return; }
+    if (typeof message !== "object" || message === null || !("type" in message)) {
+      this.fail(new ProtocolError("Invalid shell supervisor message."));
+      return;
+    }
     switch (message.type) {
-      case "ready": this.ready.resolve(); return;
-      case "frozen": this.frozen.resolve(); return;
+      case "ready":
+        this.ready.resolve();
+        return;
+      case "frozen":
+        this.frozen.resolve();
+        return;
       case "started":
-        if ("pid" in message && typeof message.pid === "number" && Number.isSafeInteger(message.pid) && message.pid > 1) { this.started.resolve(message.pid); return; }
+        if (
+          "pid" in message &&
+          typeof message.pid === "number" &&
+          Number.isSafeInteger(message.pid) &&
+          message.pid > 1
+        ) {
+          this.started.resolve(message.pid);
+          return;
+        }
         break;
       case "exited":
-        if ("code" in message && typeof message.code === "number" && Number.isInteger(message.code)) { this.exited(message.code); return; }
+        if (
+          "code" in message &&
+          typeof message.code === "number" &&
+          Number.isInteger(message.code)
+        ) {
+          this.exited(message.code);
+          return;
+        }
         break;
       case "failed": {
-        const cause = new Error("message" in message && typeof message.message === "string" ? message.message : "Shell supervisor failed.");
+        const cause = new Error(
+          "message" in message && typeof message.message === "string"
+            ? message.message
+            : "Shell supervisor failed.",
+        );
         if ("stack" in message && typeof message.stack === "string") cause.stack = message.stack;
-        this.started.reject("expected" in message && message.expected === true
-          ? new PtyError("PTY_UNAVAILABLE", cause.message, { cause }) : cause);
+        this.started.reject(
+          "expected" in message && message.expected === true
+            ? new PtyError("PTY_UNAVAILABLE", cause.message, { cause })
+            : cause,
+        );
         return;
       }
     }
     this.fail(new ProtocolError("Invalid shell supervisor payload."));
   }
-  fail(error: Error): void { this.ready.reject(error); this.started.reject(error); this.frozen.reject(error); }
+  fail(error: Error): void {
+    this.ready.reject(error);
+    this.started.reject(error);
+    this.frozen.reject(error);
+  }
 }
 export async function shellHandshake<T>(task: Promise<T>, phase: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([task, new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new PtyError("PTY_UNAVAILABLE", `Shell ${phase} timed out; no commands will be replayed.`)), 4000);
-    })]);
-  } finally { if (timer) clearTimeout(timer); }
+    return await Promise.race([
+      task,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new PtyError(
+                "PTY_UNAVAILABLE",
+                `Shell ${phase} timed out; no commands will be replayed.`,
+              ),
+            ),
+          4000,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

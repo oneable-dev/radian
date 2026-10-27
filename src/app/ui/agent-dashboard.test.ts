@@ -1,7 +1,11 @@
 import { expect, test } from "bun:test";
 import { ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
-import { emptyDashboard, type DashboardPeriod, type DashboardSnapshot } from "../../agents/dashboard.ts";
+import {
+  emptyDashboard,
+  type DashboardPeriod,
+  type DashboardSnapshot,
+} from "../../agents/dashboard.ts";
 import { PromptInput } from "../../ui/prompt-input.ts";
 import { SessionError } from "../../errors.ts";
 import { err, ok, type Result } from "../../result.ts";
@@ -13,62 +17,146 @@ import { Workbench, type WorkbenchActions } from "./workbench.ts";
 
 function sample(days: DashboardPeriod = 7): DashboardSnapshot {
   const data = emptyDashboard(days);
-  data.totals = { tokens: 1240, runs: 9, durationMs: 65000 }; Object.assign(data.daily.at(-1)!, data.totals);
-  data.skills = [{ name: "write-good-code", value: 42 }, { name: "review-code", value: 18 }];
-  data.models = [{ name: "test/large", value: 1240 }]; data.mcp = [{ name: "figma-remote", value: 12 }]; data.subagents = [{ name: "reviewer", value: 3 }];
+  data.totals = { tokens: 1240, runs: 9, durationMs: 65000 };
+  Object.assign(data.daily.at(-1)!, data.totals);
+  data.skills = [
+    { name: "write-good-code", value: 42 },
+    { name: "review-code", value: 18 },
+  ];
+  data.models = [{ name: "test/large", value: 1240 }];
+  data.mcp = [{ name: "figma-remote", value: 12 }];
+  data.subagents = [{ name: "reviewer", value: 3 }];
   return data;
 }
 async function mount(options: Partial<WorkbenchActions> = {}, width = 120, height = 32) {
-  const clock = new ManualClock(), app = await createTestRenderer({ width, height, kittyKeyboard: true, clock });
-  const lookups: { days: DashboardPeriod; project: string | undefined; signal: AbortSignal | undefined }[] = [], sent: string[] = [];
-  const view = new Workbench(app.renderer, new WorkspaceSelection(demoWorkspace()), { onNewSession() {}, onCloseSession() {},
-    getSessionDetails: () => ({ conversationId: "conversation", status: "complete", output: "Answer", error: null }),
-    onPrompt: (_id, text) => { sent.push(text); return ok(undefined); },
-    onDashboard: async (days, project, signal) => { lookups.push({ days, project, signal }); return ok(sample(days)); }, ...options });
-  const render = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); await app.renderOnce(); await app.renderOnce(); };
+  const clock = new ManualClock(),
+    app = await createTestRenderer({ width, height, kittyKeyboard: true, clock });
+  const lookups: {
+      days: DashboardPeriod;
+      project: string | undefined;
+      signal: AbortSignal | undefined;
+    }[] = [],
+    sent: string[] = [];
+  const view = new Workbench(app.renderer, new WorkspaceSelection(demoWorkspace()), {
+    onNewSession() {},
+    onCloseSession() {},
+    getSessionDetails: () => ({
+      conversationId: "conversation",
+      status: "complete",
+      output: "Answer",
+      error: null,
+    }),
+    onPrompt: (_id, text) => {
+      sent.push(text);
+      return ok(undefined);
+    },
+    onDashboard: async (days, project, signal) => {
+      lookups.push({ days, project, signal });
+      return ok(sample(days));
+    },
+    ...options,
+  });
+  const render = async () => {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    await app.renderOnce();
+    await app.renderOnce();
+  };
   await render();
   const input = app.renderer.root.findDescendantById("session-prompt");
-  if (!(input instanceof PromptInput)) throw new Error("Missing prompt"); input.focus();
-  const get = (id: string) => { const node = app.renderer.root.findDescendantById(id); if (!node) throw new Error(`Missing ${id}`); return node; };
-  return { ...app, view, input, lookups, sent, render, get,
-    async open() { app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("u"); await render(); },
-    async close() { view.dispose(); await app.dispose(); } };
+  if (!(input instanceof PromptInput)) throw new Error("Missing prompt");
+  input.focus();
+  const get = (id: string) => {
+    const node = app.renderer.root.findDescendantById(id);
+    if (!node) throw new Error(`Missing ${id}`);
+    return node;
+  };
+  return {
+    ...app,
+    view,
+    input,
+    lookups,
+    sent,
+    render,
+    get,
+    async open() {
+      app.mockInput.pressKey(" ", { ctrl: true });
+      app.mockInput.pressKey("u");
+      await render();
+    },
+    async close() {
+      view.dispose();
+      await app.dispose();
+    },
+  };
 }
 
 test("Dashboard commands open without prompting and preserve invalid arguments and attachments", async () => {
   // Distinguish commands from ordinary submission despite shared input routing.
   const app = await mount();
   try {
-    app.input.value = "/dashboard"; await app.render();
+    app.input.value = "/dashboard";
+    await app.render();
 
     // Explicit commands consume input and request only statistics.
-    app.mockInput.pressEnter(); await app.render();
-    expect(app.get("agent-dashboard").visible).toBe(true); expect(app.input.value).toBe(""); expect(app.sent).toEqual([]);
-    app.mockInput.pressEscape(); await app.render();
-    app.input.value = "/dashboard recent"; await app.render(); app.mockInput.pressEnter(); await app.render();
+    app.mockInput.pressEnter();
+    await app.render();
+    expect(app.get("agent-dashboard").visible).toBe(true);
+    expect(app.input.value).toBe("");
+    expect(app.sent).toEqual([]);
+    app.mockInput.pressEscape();
+    await app.render();
+    app.input.value = "/dashboard recent";
+    await app.render();
+    app.mockInput.pressEnter();
+    await app.render();
 
     // Invalid arguments neither reach the model nor disappear silently.
-    expect(app.input.value).toBe("/dashboard recent"); expect(app.get("agent-dashboard").visible).toBe(false); expect(app.sent).toEqual([]);
-    app.input.value = "/dashboard "; app.input.attachFile("/tmp/dashboard-fixture.png"); const draft = app.input.draft;
-    await app.render(); app.mockInput.pressEnter(); await app.render();
-    expect(app.input.draft).toEqual(draft); expect(app.get("agent-dashboard").visible).toBe(false); expect(app.lookups).toHaveLength(1);
-  } finally { await app.close(); }
+    expect(app.input.value).toBe("/dashboard recent");
+    expect(app.get("agent-dashboard").visible).toBe(false);
+    expect(app.sent).toEqual([]);
+    app.input.value = "/dashboard ";
+    app.input.attachFile("/tmp/dashboard-fixture.png");
+    const draft = app.input.draft;
+    await app.render();
+    app.mockInput.pressEnter();
+    await app.render();
+    expect(app.input.draft).toEqual(draft);
+    expect(app.get("agent-dashboard").visible).toBe(false);
+    expect(app.lookups).toHaveLength(1);
+  } finally {
+    await app.close();
+  }
 });
 
 test("New filter results take precedence over slower earlier statistics", async () => {
   // Prepare distinct slow seven-day and fast thirty-day results.
   const old = Promise.withResolvers<Result<DashboardSnapshot, SessionError>>();
-  const app = await mount({ onDashboard: async days => { if (days === 7) return old.promise; const data = sample(days); data.totals.tokens = 9999; return ok(data); } });
+  const app = await mount({
+    onDashboard: async (days) => {
+      if (days === 7) return old.promise;
+      const data = sample(days);
+      data.totals.tokens = 9999;
+      return ok(data);
+    },
+  });
   try {
-    await app.open(); app.get("dashboard-period").focus();
+    await app.open();
+    app.get("dashboard-period").focus();
 
     // Prefer the new filter response over earlier requests.
-    app.mockInput.pressKey("n", { ctrl: true }); await app.render(); expect(app.captureCharFrame()).toContain("9,999");
-    old.resolve(ok(sample(7))); await app.render();
+    app.mockInput.pressKey("n", { ctrl: true });
+    await app.render();
+    expect(app.captureCharFrame()).toContain("9,999");
+    old.resolve(ok(sample(7)));
+    await app.render();
 
     // Late responses never restore old-period values or focus.
-    expect(app.captureCharFrame()).toContain("9,999"); expect(app.renderer.currentFocusedRenderable?.id).toBe("dashboard-period");
-  } finally { old.resolve(ok(sample(7))); await app.close(); }
+    expect(app.captureCharFrame()).toContain("9,999");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("dashboard-period");
+  } finally {
+    old.resolve(ok(sample(7)));
+    await app.close();
+  }
 });
 
 test("Dashboards show three summary metrics and charts, restoring drafts and input focus on close", async () => {
@@ -80,14 +168,25 @@ test("Dashboards show three summary metrics and charts, restoring drafts and inp
     // Open and close read-only statistics using global shortcuts.
     await app.open();
     const frame = app.captureCharFrame();
-    expect(frame).not.toContain("Agent Dashboard"); expect(frame).toContain("Total tokens"); expect(frame).toContain("Total run time");
-    expect(frame).toContain("1,240"); expect(frame).toContain("1m 5s"); expect(frame).toContain("write-good-code"); expect(frame).toContain("█");
-    app.mockInput.pressEscape(); await app.render();
+    expect(frame).not.toContain("Agent Dashboard");
+    expect(frame).toContain("Total tokens");
+    expect(frame).toContain("Total run time");
+    expect(frame).toContain("1,240");
+    expect(frame).toContain("1m 5s");
+    expect(frame).toContain("write-good-code");
+    expect(frame).toContain("█");
+    app.mockInput.pressEscape();
+    await app.render();
 
     // Return to original input ownership without model execution.
-    expect(app.lookups.map(query => query.days)).toEqual([7]); expect(app.sent).toEqual([]);
-    expect(app.get("agent-dashboard").visible).toBe(false); expect(app.input.value).toBe("Retained draft"); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
-  } finally { await app.close(); }
+    expect(app.lookups.map((query) => query.days)).toEqual([7]);
+    expect(app.sent).toEqual([]);
+    expect(app.get("agent-dashboard").visible).toBe(false);
+    expect(app.input.value).toBe("Retained draft");
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+  } finally {
+    await app.close();
+  }
 });
 
 test("Resource tabs retain focus through repeated Ctrl+N/P and horizontal navigation and show correct units", async () => {
@@ -97,84 +196,160 @@ test("Resource tabs retain focus through repeated Ctrl+N/P and horizontal naviga
     await app.open();
 
     // Navigate repeatedly inside the tab strip.
-    app.mockInput.pressKey("n", { ctrl: true }); await app.render();
-    expect(app.captureCharFrame()).toContain("test/large"); expect(app.captureCharFrame()).toContain("Model usage · tokens");
-    app.mockInput.pressKey("ARROW_RIGHT"); await app.render(); expect(app.captureCharFrame()).toContain("figma-remote");
-    app.mockInput.pressKey("l"); await app.render(); expect(app.captureCharFrame()).toContain("reviewer");
-    app.mockInput.pressKey("p", { ctrl: true }); app.mockInput.pressKey("ARROW_LEFT"); await app.render();
+    app.mockInput.pressKey("n", { ctrl: true });
+    await app.render();
+    expect(app.captureCharFrame()).toContain("test/large");
+    expect(app.captureCharFrame()).toContain("Model usage · tokens");
+    app.mockInput.pressKey("ARROW_RIGHT");
+    await app.render();
+    expect(app.captureCharFrame()).toContain("figma-remote");
+    app.mockInput.pressKey("l");
+    await app.render();
+    expect(app.captureCharFrame()).toContain("reviewer");
+    app.mockInput.pressKey("p", { ctrl: true });
+    app.mockInput.pressKey("ARROW_LEFT");
+    await app.render();
 
     // One navigation key must not enter content; hints omit bare arrows.
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("dashboard-category"); expect(app.captureCharFrame()).toContain("test/large");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("dashboard-category");
+    expect(app.captureCharFrame()).toContain("test/large");
     const footer = app.captureCharFrame().split("\n").at(-2) ?? "";
-    expect(footer).not.toContain("Right"); expect(footer).not.toContain("Left");
-  } finally { await app.close(); }
+    expect(footer).not.toContain("Right");
+    expect(footer).not.toContain("Left");
+  } finally {
+    await app.close();
+  }
 });
 
 test("Period and project changes reaggregate by scope while half-page navigation scrolls read-only bodies", async () => {
   // Long rankings remain readable by scrolling at any screen size.
   const queries: [DashboardPeriod, string | undefined][] = [];
-  const app = await mount({ onDashboard: async (days, project) => { queries.push([days, project]); const data = sample(days); data.skills = Array.from({ length: 80 }, (_, i) => ({ name: `skill-${i}`, value: 80 - i })); return ok(data); } });
+  const app = await mount({
+    onDashboard: async (days, project) => {
+      queries.push([days, project]);
+      const data = sample(days);
+      data.skills = Array.from({ length: 80 }, (_, i) => ({ name: `skill-${i}`, value: 80 - i }));
+      return ok(data);
+    },
+  });
   try {
-    await app.open(); app.get("dashboard-period").focus(); app.mockInput.pressKey("n", { ctrl: true }); await app.render();
+    await app.open();
+    app.get("dashboard-period").focus();
+    app.mockInput.pressKey("n", { ctrl: true });
+    await app.render();
     expect(app.captureCharFrame()).toContain("30 days");
-    app.get("dashboard-project").focus(); app.mockInput.pressKey("n", { ctrl: true }); await app.render();
+    app.get("dashboard-project").focus();
+    app.mockInput.pressKey("n", { ctrl: true });
+    await app.render();
     expect(app.captureCharFrame()).not.toContain("Project ‹ All projects ›");
-    expect(queries).toEqual([[7, undefined], [30, undefined], [30, "demo:radian"]]);
+    expect(queries).toEqual([
+      [7, undefined],
+      [30, undefined],
+      [30, "demo:radian"],
+    ]);
 
     // Half-page navigation hands filter focus to the body and continues scrolling.
-    app.mockInput.pressKey("d", { ctrl: true }); await app.render();
-    const body = app.get("dashboard-body"); if (!(body instanceof ScrollBoxRenderable)) throw new Error("Missing scroll body");
-    const first = body.scrollTop; app.mockInput.pressKey("d", { ctrl: true }); await app.render();
+    app.mockInput.pressKey("d", { ctrl: true });
+    await app.render();
+    const body = app.get("dashboard-body");
+    if (!(body instanceof ScrollBoxRenderable)) throw new Error("Missing scroll body");
+    const first = body.scrollTop;
+    app.mockInput.pressKey("d", { ctrl: true });
+    await app.render();
 
     // Keys never leak into the original Agent draft.
-    expect(app.renderer.currentFocusedRenderable).toBe(body); expect(first).toBeGreaterThan(0); expect(body.scrollTop).toBeGreaterThan(first); expect(app.input.value).toBe("");
-  } finally { await app.close(); }
+    expect(app.renderer.currentFocusedRenderable).toBe(body);
+    expect(first).toBeGreaterThan(0);
+    expect(body.scrollTop).toBeGreaterThan(first);
+    expect(app.input.value).toBe("");
+  } finally {
+    await app.close();
+  }
 });
 
 test("Custom dashboard navigation updates both behavior and footer hints", async () => {
   // Preserve explicit overrides replacing default Ctrl+N.
-  const keymap = expectOk(parseKeymap({ bindings: { "dashboard.next": [{ keys: "q", scope: "dashboard-tabs" }] } }));
+  const keymap = expectOk(
+    parseKeymap({ bindings: { "dashboard.next": [{ keys: "q", scope: "dashboard-tabs" }] } }),
+  );
   const app = await mount({ keymap });
   try {
     await app.open();
 
     // Old bindings stop moving tabs; only configured keys work.
-    app.mockInput.pressKey("n", { ctrl: true }); await app.render(); expect(app.captureCharFrame()).toContain("write-good-code");
-    app.mockInput.pressKey("q"); await app.render();
+    app.mockInput.pressKey("n", { ctrl: true });
+    await app.render();
+    expect(app.captureCharFrame()).toContain("write-good-code");
+    app.mockInput.pressKey("q");
+    await app.render();
 
     // Visible hints match actual key behavior.
-    expect(app.captureCharFrame()).toContain("test/large"); expect(app.captureCharFrame()).toContain("q Next");
-  } finally { await app.close(); }
+    expect(app.captureCharFrame()).toContain("test/large");
+    expect(app.captureCharFrame()).toContain("q Next");
+  } finally {
+    await app.close();
+  }
 });
 
 test("Closing pending dashboards cancels spinners and requests without late resurrection", async () => {
   // Prepare delayed queries users can close before results arrive.
-  const pending = Promise.withResolvers<Result<DashboardSnapshot, SessionError>>(); let signal: AbortSignal | undefined;
-  const app = await mount({ onDashboard: async (_days, _project, abort) => { signal = abort; return pending.promise; } });
+  const pending = Promise.withResolvers<Result<DashboardSnapshot, SessionError>>();
+  let signal: AbortSignal | undefined;
+  const app = await mount({
+    onDashboard: async (_days, _project, abort) => {
+      signal = abort;
+      return pending.promise;
+    },
+  });
   try {
-    await app.open(); expect(app.get("dashboard-loading").visible).toBe(true);
+    await app.open();
+    expect(app.get("dashboard-loading").visible).toBe(true);
 
     // Close before reading completes, then deliver the response.
-    app.mockInput.pressEscape(); await app.render(); pending.resolve(ok(sample())); await app.render();
+    app.mockInput.pressEscape();
+    await app.render();
+    pending.resolve(ok(sample()));
+    await app.render();
 
     // Cancelled owners cannot reclaim focus or screens through late responses.
-    expect(signal?.aborted).toBe(true); expect(app.get("dashboard-loading").visible).toBe(false);
-    expect(app.get("agent-dashboard").visible).toBe(false); expect(app.renderer.currentFocusedRenderable).toBe(app.input);
-  } finally { pending.resolve(err(new SessionError("SESSION_BUSY", "Cancelled fixture"))); await app.close(); }
+    expect(signal?.aborted).toBe(true);
+    expect(app.get("dashboard-loading").visible).toBe(false);
+    expect(app.get("agent-dashboard").visible).toBe(false);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+  } finally {
+    pending.resolve(err(new SessionError("SESSION_BUSY", "Cancelled fixture")));
+    await app.close();
+  }
 });
 
 test("Compact dashboards distinguish empty data from lookup failures without invalid chart values", async () => {
   // No history and failed lookup are distinct outcomes.
   let fail = false;
-  const app = await mount({ onDashboard: async days => fail ? err(new SessionError("SESSION_BUSY", "Lookup failed")) : ok(emptyDashboard(days)) }, 50, 18);
+  const app = await mount(
+    {
+      onDashboard: async (days) =>
+        fail ? err(new SessionError("SESSION_BUSY", "Lookup failed")) : ok(emptyDashboard(days)),
+    },
+    50,
+    18,
+  );
   try {
-    await app.open(); expect(app.get("agent-dashboard").visible).toBe(true); expect(app.captureCharFrame()).not.toContain("NaN");
-    app.get("dashboard-body").focus(); app.mockInput.pressKey("END"); await app.render();
+    await app.open();
+    expect(app.get("agent-dashboard").visible).toBe(true);
+    expect(app.captureCharFrame()).not.toContain("NaN");
+    app.get("dashboard-body").focus();
+    app.mockInput.pressKey("END");
+    await app.render();
     expect(app.captureCharFrame()).toContain("No recorded usage");
 
     // Failed refreshes must not display stale numbers or fabricated zero success.
-    fail = true; app.mockInput.pressKey("r"); await app.render();
+    fail = true;
+    app.mockInput.pressKey("r");
+    await app.render();
 
-    expect(app.captureCharFrame()).toContain("SESSION_BUSY"); expect(app.captureCharFrame()).not.toContain("NaN");
-  } finally { await app.close(); }
+    expect(app.captureCharFrame()).toContain("SESSION_BUSY");
+    expect(app.captureCharFrame()).not.toContain("NaN");
+  } finally {
+    await app.close();
+  }
 });

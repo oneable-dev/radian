@@ -10,7 +10,8 @@ export function parseWorktrees(porcelain: string): Worktree[] {
   let branch: string | null = null;
   let bare = false;
   function finish(): void {
-    if (path && !bare) worktrees.push({ id: path, path, name: basename(path), branch, sessions: [] });
+    if (path && !bare)
+      worktrees.push({ id: path, path, name: basename(path), branch, sessions: [] });
     path = null;
     branch = null;
     bare = false;
@@ -29,13 +30,17 @@ export function parseWorktrees(porcelain: string): Worktree[] {
 }
 
 export class GitDiscoveryError extends ExpectedError {
-  constructor(message: string) { super("GIT_DISCOVERY_FAILED", message); }
+  constructor(message: string) {
+    super("GIT_DISCOVERY_FAILED", message);
+  }
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {
   const process = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
   const [output, error, code] = await Promise.all([
-    new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited,
+    new Response(process.stdout).text(),
+    new Response(process.stderr).text(),
+    process.exited,
   ]);
   if (code !== 0) throw new GitDiscoveryError(`Git discovery failed: ${error.trim()}`);
   return output;
@@ -43,7 +48,9 @@ async function git(cwd: string, args: string[]): Promise<string> {
 
 export async function discoverRepository(cwd: string): Promise<Result<Repository, ExpectedError>> {
   const discovered = await capture(async () => {
-    const commonDir = await realpath(resolve(cwd, (await git(cwd, ["rev-parse", "--git-common-dir"])).trim()));
+    const commonDir = await realpath(
+      resolve(cwd, (await git(cwd, ["rev-parse", "--git-common-dir"])).trim()),
+    );
     const worktrees = parseWorktrees(await git(cwd, ["worktree", "list", "--porcelain", "-z"]));
     const mainTree = worktrees[0];
     return { id: commonDir, name: mainTree?.name ?? basename(cwd), worktrees };

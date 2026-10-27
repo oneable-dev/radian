@@ -12,162 +12,329 @@ import { ok } from "../../result.ts";
 import type { ExtensionDialog, ExtensionUiResponse, SessionExtensionUi } from "../extension-ui.ts";
 
 async function mount(width = 120, height = 30, overrides: Partial<WorkbenchActions> = {}) {
-  const clock = new ManualClock(), app = await createTestRenderer({ width, height, kittyKeyboard: true, clock });
-  const selection = new WorkspaceSelection(demoWorkspace()), answers: ExtensionUiResponse[] = [], sent: string[] = [];
+  const clock = new ManualClock(),
+    app = await createTestRenderer({ width, height, kittyKeyboard: true, clock });
+  const selection = new WorkspaceSelection(demoWorkspace()),
+    answers: ExtensionUiResponse[] = [],
+    sent: string[] = [];
   let state: SessionExtensionUi[] = [];
-  const view = new Workbench(app.renderer, selection, { onNewSession() {}, onCloseSession() {}, getExtensionUi: () => state,
-    getSessionDetails: () => ({ conversationId: "conversation", status: null, output: "", error: null }),
-    onExtensionUiResponse: async (_id, _conversation, response) => { answers.push(response); return ok(undefined); },
-    onPrompt: async (_id, text) => { sent.push(text); return ok(undefined); }, ...overrides });
-  const get = (id: string) => { const node = app.renderer.root.findDescendantById(id); if (!node) throw new Error(`Missing ${id}`); return node; };
-  const render = async () => { await app.renderOnce(); await app.renderOnce(); };
-  const prompt = get("session-prompt") as InputRenderable; await render(); prompt.focus(); prompt.value = "Unsent Agent draft";
-  return { ...app, selection, view, answers, sent, prompt, clock, get, render,
-    async show(dialog: ExtensionDialog) { state = [{ sessionId: selection.sessionId!, conversationId: "conversation", dialog, notifications: [], statuses: {} }]; selection.replaceSnapshot(selection.snapshot); await render(); },
-    async clear() { state = []; selection.replaceSnapshot(selection.snapshot); await render(); },
-    async close() { view.dispose(); await app.dispose(); } };
+  const view = new Workbench(app.renderer, selection, {
+    onNewSession() {},
+    onCloseSession() {},
+    getExtensionUi: () => state,
+    getSessionDetails: () => ({
+      conversationId: "conversation",
+      status: null,
+      output: "",
+      error: null,
+    }),
+    onExtensionUiResponse: async (_id, _conversation, response) => {
+      answers.push(response);
+      return ok(undefined);
+    },
+    onPrompt: async (_id, text) => {
+      sent.push(text);
+      return ok(undefined);
+    },
+    ...overrides,
+  });
+  const get = (id: string) => {
+    const node = app.renderer.root.findDescendantById(id);
+    if (!node) throw new Error(`Missing ${id}`);
+    return node;
+  };
+  const render = async () => {
+    await app.renderOnce();
+    await app.renderOnce();
+  };
+  const prompt = get("session-prompt") as InputRenderable;
+  await render();
+  prompt.focus();
+  prompt.value = "Unsent Agent draft";
+  return {
+    ...app,
+    selection,
+    view,
+    answers,
+    sent,
+    prompt,
+    clock,
+    get,
+    render,
+    async show(dialog: ExtensionDialog) {
+      state = [
+        {
+          sessionId: selection.sessionId!,
+          conversationId: "conversation",
+          dialog,
+          notifications: [],
+          statuses: {},
+        },
+      ];
+      selection.replaceSnapshot(selection.snapshot);
+      await render();
+    },
+    async clear() {
+      state = [];
+      selection.replaceSnapshot(selection.snapshot);
+      await render();
+    },
+    async close() {
+      view.dispose();
+      await app.dispose();
+    },
+  };
 }
 
 test("Extension input submits only through its response channel and restores the untouched Agent draft", async () => {
   // An OAuth-style title may contain Pi terminal hyperlinks and a long callback URL.
   const app = await mount();
   try {
-    await app.show({ id: "request", kind: "input", title: "Complete OAuth\n\u001b]8;;https://example.test/auth\u0007Open page\u001b]8;;\u0007\nhttps://example.test/auth", placeholder: "Paste callback" });
+    await app.show({
+      id: "request",
+      kind: "input",
+      title:
+        "Complete OAuth\n\u001b]8;;https://example.test/auth\u0007Open page\u001b]8;;\u0007\nhttps://example.test/auth",
+      placeholder: "Paste callback",
+    });
 
     // Text entry belongs to the dialog, including unmodified Vim letters.
-    await app.mockInput.typeText("https://localhost/callback?code=hjkl"); await app.render();
-    app.mockInput.pressEnter(); await app.render();
+    await app.mockInput.typeText("https://localhost/callback?code=hjkl");
+    await app.render();
+    app.mockInput.pressEnter();
+    await app.render();
 
-    expect(app.answers).toEqual([{ requestId: "request", value: "https://localhost/callback?code=hjkl" }]);
-    expect(app.sent).toEqual([]); expect(app.prompt.value).toBe("Unsent Agent draft");
+    expect(app.answers).toEqual([
+      { requestId: "request", value: "https://localhost/callback?code=hjkl" },
+    ]);
+    expect(app.sent).toEqual([]);
+    expect(app.prompt.value).toBe("Unsent Agent draft");
     expect(app.renderer.currentFocusedRenderable).toBe(app.prompt);
     expect(app.get("extension-dialog").visible).toBe(false);
     expect((app.get("extension-dialog-input") as InputRenderable).value).toBe("");
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
-test.each(["input", "confirm"] as const)("Extension %s dialogs use the compact preset and preserve focus through resize", async kind => {
-  // Short prompts use compact geometry rather than the searchable selection frame.
-  const app = await mount();
-  try {
-    await app.show(kind === "input" ? { id: "request", kind, title: "Callback" }
-      : { id: "request", kind, title: "Authorize", message: "Allow access?" });
-    const input = app.get("extension-dialog-input") as InputRenderable;
-    if (kind === "input") await app.mockInput.typeText("unsubmitted-hjkl");
-    const focus = app.renderer.currentFocusedRenderable;
+test.each(["input", "confirm"] as const)(
+  "Extension %s dialogs use the compact preset and preserve focus through resize",
+  async (kind) => {
+    // Short prompts use compact geometry rather than the searchable selection frame.
+    const app = await mount();
+    try {
+      await app.show(
+        kind === "input"
+          ? { id: "request", kind, title: "Callback" }
+          : { id: "request", kind, title: "Authorize", message: "Allow access?" },
+      );
+      const input = app.get("extension-dialog-input") as InputRenderable;
+      if (kind === "input") await app.mockInput.typeText("unsubmitted-hjkl");
+      const focus = app.renderer.currentFocusedRenderable;
 
-    // Resizing never accepts the request or clears an unsubmitted answer.
-    for (const [width, height, columns, rows] of [[120, 30, 64, 10], [60, 16, 54, 10], [30, 10, 27, 8], [120, 30, 64, 10]] as const) {
-      app.resize(width, height); await app.render();
+      // Resizing never accepts the request or clears an unsubmitted answer.
+      for (const [width, height, columns, rows] of [
+        [120, 30, 64, 10],
+        [60, 16, 54, 10],
+        [30, 10, 27, 8],
+        [120, 30, 64, 10],
+      ] as const) {
+        app.resize(width, height);
+        await app.render();
+
+        const panel = app.get("extension-dialog-panel");
+        expect([panel.width, panel.height]).toEqual([columns, rows]);
+        expect(panel.x).toBe(Math.floor((width - columns) / 2));
+        expect(panel.y).toBe(Math.floor((height - rows) / 2));
+        expect(app.renderer.currentFocusedRenderable).toBe(focus);
+        if (kind === "input") expect(input.value).toBe("unsubmitted-hjkl");
+        expect(app.answers).toEqual([]);
+      }
+
+      // A following selection request returns to the standard frame without a terminal resize.
+      await app.show({
+        id: "selection",
+        kind: "select",
+        title: "Choose",
+        options: ["First", "Second"],
+      });
 
       const panel = app.get("extension-dialog-panel");
-      expect([panel.width, panel.height]).toEqual([columns, rows]);
-      expect(panel.x).toBe(Math.floor((width - columns) / 2)); expect(panel.y).toBe(Math.floor((height - rows) / 2));
-      expect(app.renderer.currentFocusedRenderable).toBe(focus);
-      if (kind === "input") expect(input.value).toBe("unsubmitted-hjkl");
+      expect([panel.width, panel.height]).toEqual([100, 24]);
+      expect(app.renderer.currentFocusedRenderable?.id).toBe("extension-dialog-search");
       expect(app.answers).toEqual([]);
+      expect(app.prompt.value).toBe("Unsent Agent draft");
+    } finally {
+      await app.close();
     }
+  },
+);
 
-    // A following selection request returns to the standard frame without a terminal resize.
-    await app.show({ id: "selection", kind: "select", title: "Choose", options: ["First", "Second"] });
+test.each([
+  [120, 30],
+  [60, 16],
+])(
+  "Extension choices preserve search input and navigate candidates across focus at %dx%d",
+  async (width, height) => {
+    // A long list forces viewport-based navigation in both ordinary and compact layouts.
+    const app = await mount(width, height),
+      options = Array.from(
+        { length: 60 },
+        (_, index) => `Choice ${String(index).padStart(2, "0")}`,
+      );
+    try {
+      await app.show({ id: "request", kind: "select", title: "Choose server", options });
+      await app.mockInput.typeText("Choice");
+      await app.render();
+      const search = app.get("extension-dialog-search") as InputRenderable;
+      const caret = search.cursorOffset;
 
-    const panel = app.get("extension-dialog-panel");
-    expect([panel.width, panel.height]).toEqual([100, 24]);
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("extension-dialog-search");
-    expect(app.answers).toEqual([]); expect(app.prompt.value).toBe("Unsent Agent draft");
-  } finally { await app.close(); }
-});
+      // Single steps retain search focus; half-page jumps transfer it without editing the query.
+      app.mockInput.pressKey("n", { ctrl: true });
+      await app.render();
+      expect(app.renderer.currentFocusedRenderable).toBe(search);
+      const selected = app.get("extension-option:1");
+      for (const x of [selected.x, selected.x + selected.width - 1]) {
+        let column = 0;
+        const span = app.captureSpans().lines[selected.y]!.spans.find((span) => {
+          column += span.width;
+          return column > x;
+        });
+        expect(span?.bg.toInts()).toEqual(
+          uiTheme(app.renderer).styles["ui.selection"].bg!.toInts(),
+        );
+      }
+      app.mockInput.pressKey("p", { ctrl: true });
+      await app.render();
+      const list = app.get("extension-dialog-list") as ScrollBoxRenderable;
+      const step = halfPageStep(list.viewport.height);
+      app.mockInput.pressKey("d", { ctrl: true });
+      await app.render();
+      expect(app.renderer.currentFocusedRenderable).toBe(list);
+      expect(search.value).toBe("Choice");
+      expect(search.cursorOffset).toBe(caret);
+      for (let repeat = 0; repeat < 3; repeat++) {
+        app.mockInput.pressKey("d", { ctrl: true });
+        await app.render();
+      }
+      app.mockInput.pressKey("u", { ctrl: true });
+      await app.render();
+      const candidate = app.get(`extension-option:${step * 3}`);
+      expect(candidate.y).toBeGreaterThanOrEqual(list.viewport.y);
+      expect(candidate.y).toBeLessThan(list.viewport.y + list.viewport.height);
+      app.mockInput.pressEnter();
+      await app.render();
 
-test.each([[120, 30], [60, 16]])("Extension choices preserve search input and navigate candidates across focus at %dx%d", async (width, height) => {
-  // A long list forces viewport-based navigation in both ordinary and compact layouts.
-  const app = await mount(width, height), options = Array.from({ length: 60 }, (_, index) => `Choice ${String(index).padStart(2, "0")}`);
-  try {
-    await app.show({ id: "request", kind: "select", title: "Choose server", options });
-    await app.mockInput.typeText("Choice"); await app.render();
-    const search = app.get("extension-dialog-search") as InputRenderable;
-    const caret = search.cursorOffset;
-
-    // Single steps retain search focus; half-page jumps transfer it without editing the query.
-    app.mockInput.pressKey("n", { ctrl: true }); await app.render();
-    expect(app.renderer.currentFocusedRenderable).toBe(search);
-    const selected = app.get("extension-option:1");
-    for (const x of [selected.x, selected.x + selected.width - 1]) {
-      let column = 0;
-      const span = app.captureSpans().lines[selected.y]!.spans.find(span => { column += span.width; return column > x; });
-      expect(span?.bg.toInts()).toEqual(uiTheme(app.renderer).styles["ui.selection"].bg!.toInts());
+      expect(app.answers).toEqual([{ requestId: "request", value: options[step * 3]! }]);
+      expect(app.prompt.value).toBe("Unsent Agent draft");
+      expect(app.sent).toEqual([]);
+    } finally {
+      await app.close();
     }
-    app.mockInput.pressKey("p", { ctrl: true }); await app.render();
-    const list = app.get("extension-dialog-list") as ScrollBoxRenderable;
-    const step = halfPageStep(list.viewport.height);
-    app.mockInput.pressKey("d", { ctrl: true }); await app.render();
-    expect(app.renderer.currentFocusedRenderable).toBe(list);
-    expect(search.value).toBe("Choice"); expect(search.cursorOffset).toBe(caret);
-    for (let repeat = 0; repeat < 3; repeat++) { app.mockInput.pressKey("d", { ctrl: true }); await app.render(); }
-    app.mockInput.pressKey("u", { ctrl: true }); await app.render();
-    const candidate = app.get(`extension-option:${step * 3}`);
-    expect(candidate.y).toBeGreaterThanOrEqual(list.viewport.y); expect(candidate.y).toBeLessThan(list.viewport.y + list.viewport.height);
-    app.mockInput.pressEnter(); await app.render();
-
-    expect(app.answers).toEqual([{ requestId: "request", value: options[step * 3]! }]);
-    expect(app.prompt.value).toBe("Unsent Agent draft"); expect(app.sent).toEqual([]);
-  } finally { await app.close(); }
-});
+  },
+);
 
 test("Extension search clearing preserves literal text ownership and empty clearing never dismisses the popup", async () => {
   // An empty search is not an application cancellation or an Agent draft clear.
   const app = await mount();
   try {
     await app.show({ id: "request", kind: "select", title: "Choose", options: ["hjkl", "other"] });
-    await app.mockInput.typeText("hjkl"); await app.render();
+    await app.mockInput.typeText("hjkl");
+    await app.render();
     const search = app.get("extension-dialog-search") as InputRenderable;
     expect(search.value).toBe("hjkl");
 
-    app.mockInput.pressKey("c", { ctrl: true }); await app.render();
-    app.mockInput.pressKey("c", { ctrl: true }); await app.render();
+    app.mockInput.pressKey("c", { ctrl: true });
+    await app.render();
+    app.mockInput.pressKey("c", { ctrl: true });
+    await app.render();
 
-    expect(search.value).toBe(""); expect(app.get("extension-dialog").visible).toBe(true);
-    expect(app.answers).toEqual([]); expect(app.prompt.value).toBe("Unsent Agent draft");
-    app.mockInput.pressEscape(); await app.render();
+    expect(search.value).toBe("");
+    expect(app.get("extension-dialog").visible).toBe(true);
+    expect(app.answers).toEqual([]);
+    expect(app.prompt.value).toBe("Unsent Agent draft");
+    app.mockInput.pressEscape();
+    await app.render();
     expect(app.answers).toEqual([{ requestId: "request", cancelled: true }]);
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Confirmation requires explicit activation and respects configured navigation and submit keys", async () => {
   // Permission prompts default to No, while explicit overrides own their keys.
-  const keymap = expectOk(parseKeymap({ bindings: { "extension.next": [{ keys: "ctrl+j", scope: "extension" }], "extension.submit": [{ keys: "ctrl+s", scope: "extension" }] } }));
+  const keymap = expectOk(
+    parseKeymap({
+      bindings: {
+        "extension.next": [{ keys: "ctrl+j", scope: "extension" }],
+        "extension.submit": [{ keys: "ctrl+s", scope: "extension" }],
+      },
+    }),
+  );
   const app = await mount(120, 30, { keymap });
   try {
-    await app.show({ id: "request", kind: "confirm", title: "Authorize", message: "Allow access?" });
-    app.mockInput.pressKey("n", { ctrl: true }); await app.render();
-    app.mockInput.pressEnter(); await app.render();
+    await app.show({
+      id: "request",
+      kind: "confirm",
+      title: "Authorize",
+      message: "Allow access?",
+    });
+    app.mockInput.pressKey("n", { ctrl: true });
+    await app.render();
+    app.mockInput.pressEnter();
+    await app.render();
     expect(app.answers).toEqual([]);
-    expect(app.captureCharFrame()).toContain("<C-s>"); expect(app.captureCharFrame()).not.toContain("<Down>");
+    expect(app.captureCharFrame()).toContain("<C-s>");
+    expect(app.captureCharFrame()).not.toContain("<Down>");
 
-    app.mockInput.pressKey("j", { ctrl: true }); await app.render();
-    app.mockInput.pressKey("s", { ctrl: true }); await app.render();
+    app.mockInput.pressKey("j", { ctrl: true });
+    await app.render();
+    app.mockInput.pressKey("s", { ctrl: true });
+    await app.render();
 
-    expect(app.answers).toEqual([{ requestId: "request", confirmed: true }]); expect(app.sent).toEqual([]);
-  } finally { await app.close(); }
+    expect(app.answers).toEqual([{ requestId: "request", confirmed: true }]);
+    expect(app.sent).toEqual([]);
+  } finally {
+    await app.close();
+  }
 });
 
 test("Held submission never accepts a following dialog or submits the restored Agent draft", async () => {
   // Kitty repeats belong to the original activation until its key is released.
   const app = await mount();
-  const raw = (event: string) => { const key = parseKeypress(event, { useKittyKeyboard: true }); if (!key) throw new Error("Invalid Kitty key"); app.renderer.keyInput.processParsedKey(key); };
+  const raw = (event: string) => {
+    const key = parseKeypress(event, { useKittyKeyboard: true });
+    if (!key) throw new Error("Invalid Kitty key");
+    app.renderer.keyInput.processParsedKey(key);
+  };
   try {
     await app.show({ id: "first", kind: "input", title: "First callback" });
-    await app.mockInput.typeText("answer"); await app.render();
+    await app.mockInput.typeText("answer");
+    await app.render();
 
-    raw("\u001b[13;1u"); await app.render();
-    raw("\u001b[13;1:2u"); await app.render();
-    await app.show({ id: "second", kind: "confirm", title: "Continue", message: "Another permission" });
-    raw("\u001b[13;1:2u"); await app.render();
+    raw("\u001b[13;1u");
+    await app.render();
+    raw("\u001b[13;1:2u");
+    await app.render();
+    await app.show({
+      id: "second",
+      kind: "confirm",
+      title: "Continue",
+      message: "Another permission",
+    });
+    raw("\u001b[13;1:2u");
+    await app.render();
 
     expect(app.answers).toEqual([{ requestId: "first", value: "answer" }]);
-    expect(app.sent).toEqual([]); expect(app.prompt.value).toBe("Unsent Agent draft");
-    raw("\u001b[13;1:3u"); app.mockInput.pressEnter(); await app.render();
+    expect(app.sent).toEqual([]);
+    expect(app.prompt.value).toBe("Unsent Agent draft");
+    raw("\u001b[13;1:3u");
+    app.mockInput.pressEnter();
+    await app.render();
     expect(app.answers.at(-1)).toEqual({ requestId: "second", confirmed: false });
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Help temporarily covers extension input and returns to the unsubmitted answer without runtime events", async () => {
@@ -175,17 +342,24 @@ test("Help temporarily covers extension input and returns to the unsubmitted ans
   const app = await mount();
   try {
     await app.show({ id: "request", kind: "input", title: "Callback" });
-    await app.mockInput.typeText("partial-callback"); await app.render();
+    await app.mockInput.typeText("partial-callback");
+    await app.render();
 
-    app.mockInput.pressKey("F1"); await app.render();
-    expect(app.get("text-dialog").visible).toBe(true); expect(app.get("extension-dialog").visible).toBe(false);
-    app.mockInput.pressEscape(); await app.render();
+    app.mockInput.pressKey("F1");
+    await app.render();
+    expect(app.get("text-dialog").visible).toBe(true);
+    expect(app.get("extension-dialog").visible).toBe(false);
+    app.mockInput.pressEscape();
+    await app.render();
 
     expect(app.get("extension-dialog").visible).toBe(true);
     expect((app.get("extension-dialog-input") as InputRenderable).value).toBe("partial-callback");
     expect(app.renderer.currentFocusedRenderable).toBe(app.get("extension-dialog-input"));
-    expect(app.answers).toEqual([]); expect(app.prompt.value).toBe("Unsent Agent draft");
-  } finally { await app.close(); }
+    expect(app.answers).toEqual([]);
+    expect(app.prompt.value).toBe("Unsent Agent draft");
+  } finally {
+    await app.close();
+  }
 });
 
 test("Retracted extension requests clear input without answering an expired or replaced conversation", async () => {
@@ -193,13 +367,18 @@ test("Retracted extension requests clear input without answering an expired or r
   const app = await mount();
   try {
     await app.show({ id: "request", kind: "input", title: "Callback" });
-    await app.mockInput.typeText("private-partial-callback"); await app.render();
+    await app.mockInput.typeText("private-partial-callback");
+    await app.render();
 
     await app.clear();
-    app.mockInput.pressEscape(); await app.render();
+    app.mockInput.pressEscape();
+    await app.render();
 
     expect(app.get("extension-dialog").visible).toBe(false);
     expect((app.get("extension-dialog-input") as InputRenderable).value).toBe("");
-    expect(app.answers).toEqual([]); expect(app.prompt.value).toBe("Unsent Agent draft");
-  } finally { await app.close(); }
+    expect(app.answers).toEqual([]);
+    expect(app.prompt.value).toBe("Unsent Agent draft");
+  } finally {
+    await app.close();
+  }
 });

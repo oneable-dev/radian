@@ -5,23 +5,36 @@ import { singleLine } from "../ui/text.ts";
 
 const maximumPreviewUnits = 4096;
 const count = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
-export const requestSummarySchema = Type.Object({
-  text: Type.String({ maxLength: maximumPreviewUnits }), images: count, files: count,
-  fileName: Type.Optional(Type.String({ maxLength: maximumPreviewUnits })),
-}, { additionalProperties: false });
+export const requestSummarySchema = Type.Object(
+  {
+    text: Type.String({ maxLength: maximumPreviewUnits }),
+    images: count,
+    files: count,
+    fileName: Type.Optional(Type.String({ maxLength: maximumPreviewUnits })),
+  },
+  { additionalProperties: false },
+);
 export type RequestSummary = Static<typeof requestSummarySchema>;
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 const dimensionHint = String.raw`\[Image: original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by \d+\.\d{2} to map to original image\.\]`;
 const conversionHint = String.raw`\[Image converted from [^\s[\]]+ to image\/(?:png|jpeg|gif|webp)\.\]`;
 const imageHint = `(?:${dimensionHint}|${conversionHint})`;
-const appendedImageHints = new RegExp(String.raw`\r?\n\r?\n${imageHint}(?:\r?\n${imageHint})*\s*$`, "u");
+const appendedImageHints = new RegExp(
+  String.raw`\r?\n\r?\n${imageHint}(?:\r?\n${imageHint})*\s*$`,
+  "u",
+);
 
 // Hide only known SDK suffix hints and rich-input labels when real images exist.
 // This is display-only: preserve the original message and its model-facing hints.
 export function requestDisplayText(text: string, images: number): string {
   if (!images) return text;
-  return text.replace(appendedImageHints, "")
-    .replace(/[ \t]*(?:\[Image #\d+\][ \t]*)+(\r?\n)?/gu, (_labels, newline: string | undefined) => newline ?? " ").trim();
+  return text
+    .replace(appendedImageHints, "")
+    .replace(
+      /[ \t]*(?:\[Image #\d+\][ \t]*)+(\r?\n)?/gu,
+      (_labels, newline: string | undefined) => newline ?? " ",
+    )
+    .trim();
 }
 
 // Bound this derived display metadata, never the original SDK user message.
@@ -37,27 +50,64 @@ function preview(text: string): string {
 }
 
 export function summarizeRequest(text: string, images: number): RequestSummary {
-  let files = 0, fileName: string | undefined;
+  let files = 0,
+    fileName: string | undefined;
   // Only Radian's explicit @"absolute path" references count as files. Ordinary
   // filenames, fenced code examples, image extensions and opaque image bytes do not.
   // oxlint-disable-next-line eslint/no-control-regex -- File references must not contain raw control characters inside JSON strings.
   const references = /^ {0,3}(`{3,}|~{3,})[^\n]*|(^|\s)@("(?:[^"\\\x00-\x1f]|\\.)*")(?=\s|$)/gmu;
   let fence: string | undefined;
-  const prose = text.replace(references, (match: string, marker: string | undefined, space: string | undefined, encoded: string | undefined) => {
-    if (marker !== undefined) {
-      if (!fence) fence = marker;
-      else if (marker[0] === fence[0] && marker.length >= fence.length && !match.trimStart().slice(marker.length).trim()) fence = undefined;
-      return match;
-    }
-    if (fence || encoded === undefined) return match;
-    const parsed = parseJson(encoded, "request file reference");
-    if (!parsed.ok || typeof parsed.value !== "string" || !isAbsolute(parsed.value) || parsed.value.includes("\0")) return match;
-    files++; fileName = files === 1 ? preview(basename(parsed.value)) : undefined;
-    return space ?? "";
-  });
-  return { text: preview(requestDisplayText(prose, images)), images, files, ...(fileName ? { fileName } : {}) };
+  const prose = text.replace(
+    references,
+    (
+      match: string,
+      marker: string | undefined,
+      space: string | undefined,
+      encoded: string | undefined,
+    ) => {
+      if (marker !== undefined) {
+        if (!fence) fence = marker;
+        else if (
+          marker[0] === fence[0] &&
+          marker.length >= fence.length &&
+          !match.trimStart().slice(marker.length).trim()
+        )
+          fence = undefined;
+        return match;
+      }
+      if (fence || encoded === undefined) return match;
+      const parsed = parseJson(encoded, "request file reference");
+      if (
+        !parsed.ok ||
+        typeof parsed.value !== "string" ||
+        !isAbsolute(parsed.value) ||
+        parsed.value.includes("\0")
+      )
+        return match;
+      files++;
+      fileName = files === 1 ? preview(basename(parsed.value)) : undefined;
+      return space ?? "";
+    },
+  );
+  return {
+    text: preview(requestDisplayText(prose, images)),
+    images,
+    files,
+    ...(fileName ? { fileName } : {}),
+  };
 }
 
-export function sameRequestSummary(a: RequestSummary | undefined, b: RequestSummary | undefined): boolean {
-  return a === b || !!a && !!b && a.text === b.text && a.images === b.images && a.files === b.files && a.fileName === b.fileName;
+export function sameRequestSummary(
+  a: RequestSummary | undefined,
+  b: RequestSummary | undefined,
+): boolean {
+  return (
+    a === b ||
+    (!!a &&
+      !!b &&
+      a.text === b.text &&
+      a.images === b.images &&
+      a.files === b.files &&
+      a.fileName === b.fileName)
+  );
 }

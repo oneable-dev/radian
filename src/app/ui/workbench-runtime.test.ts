@@ -15,48 +15,95 @@ import type { ExpectedError } from "../../errors.ts";
 
 async function mount() {
   const fixture = await createWorktreeFixture();
-  const registry = new SessionRegistry([fixture.repository], piSessionFactory(await offlineRuntime(join(fixture.directory, "agent"))));
+  const registry = new SessionRegistry(
+    [fixture.repository],
+    piSessionFactory(await offlineRuntime(join(fixture.directory, "agent"))),
+  );
   const setup = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
   const selection = new WorkspaceSelection(registry.snapshot);
   const creation: Promise<string>[] = [];
-  const prompts: { id: string; text: string; done: Promise<void>; accepted: Promise<Result<void, ExpectedError>> }[] = [];
+  const prompts: {
+    id: string;
+    text: string;
+    done: Promise<void>;
+    accepted: Promise<Result<void, ExpectedError>>;
+  }[] = [];
   const closes: Promise<void>[] = [];
   const view = new Workbench(setup.renderer, selection, {
-    onNewSession: (id, onCreated) => { creation.push(registry.create(id).then(result => {
-      const sessionId = expectOk(result); onCreated?.(sessionId); return sessionId;
-    })); },
-    onCloseSession: (_tree, id) => { closes.push(registry.close(id).then(expectOk)); },
+    onNewSession: (id, onCreated) => {
+      creation.push(
+        registry.create(id).then((result) => {
+          const sessionId = expectOk(result);
+          onCreated?.(sessionId);
+          return sessionId;
+        }),
+      );
+    },
+    onCloseSession: (_tree, id) => {
+      closes.push(registry.close(id).then(expectOk));
+    },
     onPrompt: (id, text) => {
       const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
       const run = registry.prompt(id, text, () => accepted.resolve(ok(undefined)));
-      prompts.push({ id, text, accepted: accepted.promise, done: run.then((result) => {
-        accepted.resolve(result);
-        if (!result.ok && result.error.code !== "CANCELLED") expectOk(result);
-      }) });
+      prompts.push({
+        id,
+        text,
+        accepted: accepted.promise,
+        done: run.then((result) => {
+          accepted.resolve(result);
+          if (!result.ok && result.error.code !== "CANCELLED") expectOk(result);
+        }),
+      });
       return accepted.promise;
     },
     getSessionDetails: (id) => registry.details(id),
   });
   const unsubscribe = registry.subscribe(() => selection.replaceSnapshot(registry.snapshot));
   await setup.renderOnce();
-  return { ...setup, ...fixture, registry, selection, creation, prompts, closes, view,
+  return {
+    ...setup,
+    ...fixture,
+    registry,
+    selection,
+    creation,
+    prompts,
+    closes,
+    view,
     async click(text: string) {
-      if (text.startsWith(icons.folder)) { openWorkspaceSearch(setup); setup.mockInput.pressCtrlC(); await setup.renderOnce(); }
+      if (text.startsWith(icons.folder)) {
+        openWorkspaceSearch(setup);
+        setup.mockInput.pressCtrlC();
+        await setup.renderOnce();
+      }
       const lines = setup.captureCharFrame().split("\n");
       const y = lines.findIndex((line) => line.includes(text));
       const x = lines[y]?.indexOf(text) ?? -1;
-      if (x < 0 || y < 0) throw new Error(`Missing visible text: ${text}\n${setup.captureCharFrame()}`);
-      await setup.mockMouse.click(x, y); await setup.renderOnce();
+      if (x < 0 || y < 0)
+        throw new Error(`Missing visible text: ${text}\n${setup.captureCharFrame()}`);
+      await setup.mockMouse.click(x, y);
+      await setup.renderOnce();
     },
     async newSession() {
-      setup.mockInput.pressKey(" ", { ctrl: true }); setup.mockInput.pressKey("c");
-      const id = await creation.at(-1)!; await setup.renderOnce(); return id;
+      setup.mockInput.pressKey(" ", { ctrl: true });
+      setup.mockInput.pressKey("c");
+      const id = await creation.at(-1)!;
+      await setup.renderOnce();
+      return id;
     },
     async send(text: string) {
-      pressLeader(setup, "a"); await setup.mockInput.typeText(text);
-      setup.mockInput.pressEnter(); await prompts.at(-1)!.done; await setup.renderOnce();
+      pressLeader(setup, "a");
+      await setup.mockInput.typeText(text);
+      setup.mockInput.pressEnter();
+      await prompts.at(-1)!.done;
+      await setup.renderOnce();
     },
-    async closeApp() { unsubscribe(); view.dispose(); await registry.shutdown(); await setup.dispose(); await fixture.cleanup(); },
+    async closeApp() {
+      unsubscribe();
+      view.dispose();
+      await registry.shutdown();
+      await setup.dispose();
+      await fixture.cleanup();
+    },
   };
 }
 
@@ -69,16 +116,20 @@ test("Adding real SDK sessions focuses new input and preserves previous drafts",
 
     // Creating another session must make typing target the new SDK session immediately.
     const created = await app.newSession();
-    await app.mockInput.typeText("read"); app.mockInput.pressEnter();
-    await app.prompts.at(-1)!.done; await app.renderOnce();
+    await app.mockInput.typeText("read");
+    app.mockInput.pressEnter();
+    await app.prompts.at(-1)!.done;
+    await app.renderOnce();
 
     // The old draft remains local to its session, while only the new session receives the prompt.
     expect(app.selection.sessionId).toBe(created);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
-    expect(app.prompts.map(prompt => prompt.id)).toEqual([created]);
+    expect(app.prompts.map((prompt) => prompt.id)).toEqual([created]);
     expect(app.view.promptDrafts[original]).toBe("Keep original draft");
     expect(app.captureCharFrame()).toContain("main-worktree-marker");
-  } finally { await app.closeApp(); }
+  } finally {
+    await app.closeApp();
+  }
 });
 
 test("Real worktree UI explicitly creates sessions and routes input to each SDK run", async () => {
@@ -100,7 +151,9 @@ test("Real worktree UI explicitly creates sessions and routes input to each SDK 
     expect(app.prompts.map((prompt) => prompt.id)).toEqual([main, feature]);
     expect(app.captureCharFrame()).toContain("feature-worktree-marker");
     expect(app.creation).toHaveLength(2);
-  } finally { await app.closeApp(); }
+  } finally {
+    await app.closeApp();
+  }
 });
 
 test("Per-worktree drafts/focus survive background SDK updates and searches", async () => {
@@ -108,11 +161,13 @@ test("Per-worktree drafts/focus survive background SDK updates and searches", as
   const app = await mount();
   try {
     const main = await app.newSession();
-    pressLeader(app, "a"); await app.mockInput.typeText("main draft");
+    pressLeader(app, "a");
+    await app.mockInput.typeText("main draft");
     app.mockInput.pressEscape();
     await app.click(`${icons.folder} feature`);
     const feature = await app.newSession();
-    pressLeader(app, "a"); await app.mockInput.typeText("feature draft");
+    pressLeader(app, "a");
+    await app.mockInput.typeText("feature draft");
     app.mockInput.pressEscape();
     await app.click(`${icons.folder} main`);
     pressLeader(app, "a");
@@ -124,17 +179,21 @@ test("Per-worktree drafts/focus survive background SDK updates and searches", as
     await app.renderOnce();
     expect(app.captureCharFrame()).toContain("main draf");
     expect(app.renderer.currentFocusedRenderable).toBe(input);
-    openWorkspaceSearch(app); await app.mockInput.typeText("feature/probe");
+    openWorkspaceSearch(app);
+    await app.mockInput.typeText("feature/probe");
     await app.renderOnce();
 
     // Search hides the selected main row but does not retarget its draft or create a run.
     expect(app.selection.sessionId).toBe(main);
     expect(app.view.promptDrafts[main]).toBe("main draf");
     expect(app.prompts).toEqual([]);
-    app.mockInput.pressEscape(); await app.renderOnce();
+    app.mockInput.pressEscape();
+    await app.renderOnce();
     await app.click(`${icons.folder} feature`);
     expect(app.captureCharFrame()).toContain("feature draft");
-  } finally { await app.closeApp(); }
+  } finally {
+    await app.closeApp();
+  }
 });
 
 test("Closing active runs immediately shows empty UI without recreating final sessions", async () => {
@@ -144,10 +203,14 @@ test("Closing active runs immediately shows empty UI without recreating final se
     const id = await app.newSession();
     const childStarted = Promise.withResolvers<void>();
     const unsubscribe = app.registry.subscribe(() => {
-      if (app.selection.worktree?.sessions[0]?.subagents[0]?.status === "working") childStarted.resolve();
+      if (app.selection.worktree?.sessions[0]?.subagents[0]?.status === "working")
+        childStarted.resolve();
     });
-    pressLeader(app, "a"); await app.mockInput.typeText("delegate");
-    app.mockInput.pressEnter(); await childStarted.promise; unsubscribe();
+    pressLeader(app, "a");
+    await app.mockInput.typeText("delegate");
+    app.mockInput.pressEnter();
+    await childStarted.promise;
+    unsubscribe();
     app.mockInput.pressEscape();
 
     // The shared close command targets the active session without moving focus to its strip.
@@ -162,10 +225,14 @@ test("Closing active runs immediately shows empty UI without recreating final se
     // Late SDK events cannot resurrect a row, steal focus or create a replacement session.
     expect(app.creation).toHaveLength(1);
     expect(app.registry.closingCount).toBe(0);
-    expect(app.renderer.root.findDescendantById("agent-session-tabs")!.hasFocusedDescendant).toBe(false);
+    expect(app.renderer.root.findDescendantById("agent-session-tabs")!.hasFocusedDescendant).toBe(
+      false,
+    );
     expect(app.renderer.currentFocusedRenderable?.id).toBe("agent-view");
     expect(app.captureCharFrame()).not.toContain("Worktree probe");
-  } finally { await app.closeApp(); }
+  } finally {
+    await app.closeApp();
+  }
 });
 
 test("Active runs accept more input while n/x/q remain prompt characters", async () => {
@@ -173,11 +240,15 @@ test("Active runs accept more input while n/x/q remain prompt characters", async
   const app = await mount();
   try {
     const id = await app.newSession();
-    pressLeader(app, "a"); await app.mockInput.typeText("slow"); app.mockInput.pressEnter();
+    pressLeader(app, "a");
+    await app.mockInput.typeText("slow");
+    app.mockInput.pressEnter();
 
     await app.prompts[0]!.accepted;
     // A second Enter admits a steer without interrupting the current response.
-    await app.mockInput.typeText("querynx"); app.mockInput.pressEnter(); await app.renderOnce();
+    await app.mockInput.typeText("querynx");
+    app.mockInput.pressEnter();
+    await app.renderOnce();
 
     await app.prompts[1]!.accepted;
     await app.renderOnce();
@@ -188,7 +259,9 @@ test("Active runs accept more input while n/x/q remain prompt characters", async
     expect(app.selection.sessionId).toBe(id);
     await app.registry.close(id);
     await app.prompts[0]!.done;
-  } finally { await app.closeApp(); }
+  } finally {
+    await app.closeApp();
+  }
 });
 
 test("Renderer-first shutdown reads drafts and safely handles late SDK updates", async () => {
@@ -196,14 +269,18 @@ test("Renderer-first shutdown reads drafts and safely handles late SDK updates",
   const app = await mount();
   try {
     const id = await app.newSession();
-    pressLeader(app, "a"); await app.mockInput.typeText("persist this draft");
+    pressLeader(app, "a");
+    await app.mockInput.typeText("persist this draft");
 
     // Teardown is initiated by the renderer, not the view, while the SDK owner remains alive.
-    app.renderer.destroy(); await app.renderer.closed;
+    app.renderer.destroy();
+    await app.renderer.closed;
     await app.registry.prompt(id, "read");
 
     // Cached drafts do not access destroyed edit buffers, and background snapshots do not render into them.
     expect(app.view.promptDrafts[id]).toBe("persist this draft");
     expect(app.registry.details(id)?.output).toContain("main-worktree-marker");
-  } finally { await app.closeApp(); }
+  } finally {
+    await app.closeApp();
+  }
 });

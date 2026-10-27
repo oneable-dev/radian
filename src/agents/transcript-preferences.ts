@@ -18,5 +18,12 @@ export const transcriptViewSchema = Type.Object({
 export type TranscriptViewState = Static<typeof transcriptViewSchema>;
 export const agentViewsSchema = Type.Record(Type.String(), transcriptViewSchema);
 export function emptyTranscriptView(): TranscriptViewState {
-  return { selectedId: null, folded: {}, cursors: {}, mode: "sections", anchor: null, follow: true };
+  return {
+    selectedId: null,
+    folded: {},
+    cursors: {},
+    mode: "sections",
+    anchor: null,
+    follow: true,
+  };
 }

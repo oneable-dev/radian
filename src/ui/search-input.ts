@@ -12,31 +12,71 @@ export class SearchInput extends InputRenderable {
   private readonly count: TextRenderable | undefined;
 
   constructor(renderer: CliRenderer, options: Options) {
-    super(renderer, { id: options.id, width: "auto", flexGrow: 1,
-      minWidth: 0, flexShrink: options.title ? 1 : 0, maxLength: 256 });
-    this.field = new InputField(renderer, this, "search", options.fieldId ?? `${options.id}-field`,
-      options.backgroundStyle ?? (options.title ? "ui.popup" : undefined));
+    super(renderer, {
+      id: options.id,
+      width: "auto",
+      flexGrow: 1,
+      minWidth: 0,
+      flexShrink: options.title ? 1 : 0,
+      maxLength: 256,
+    });
+    this.field = new InputField(
+      renderer,
+      this,
+      "search",
+      options.fieldId ?? `${options.id}-field`,
+      options.backgroundStyle ?? (options.title ? "ui.popup" : undefined),
+    );
     if (options.title) {
-      this.field.border = true; this.field.borderStyle = "rounded";
-      this.field.titleAlignment = "center"; this.setTitle(options.title);
-      const prompt = new TextRenderable(renderer, { id: `${options.id}-prompt`, content: ">", width: 1, height: 1, marginRight: 1,
-        flexShrink: 0, wrapMode: "none", selectable: false });
-      const count = this.count = new TextRenderable(renderer, { id: `${options.id}-count`, width: 0, height: 1, marginLeft: 1,
-        flexShrink: 0, wrapMode: "none", selectable: false, visible: false });
-      this.field.insertBefore(prompt, this); this.field.add(this.count);
-      uiTheme(renderer).bindStyles(this.field, styles => {
-        this.field.borderColor = styles["ui.popupBorder"].fg; this.field.titleColor = styles["ui.popupTitle"].fg;
-        paintText(prompt, styles["ui.popupTitle"]); paintText(count, styles["ui.muted"]);
+      this.field.border = true;
+      this.field.borderStyle = "rounded";
+      this.field.titleAlignment = "center";
+      this.setTitle(options.title);
+      const prompt = new TextRenderable(renderer, {
+        id: `${options.id}-prompt`,
+        content: ">",
+        width: 1,
+        height: 1,
+        marginRight: 1,
+        flexShrink: 0,
+        wrapMode: "none",
+        selectable: false,
+      });
+      const count = (this.count = new TextRenderable(renderer, {
+        id: `${options.id}-count`,
+        width: 0,
+        height: 1,
+        marginLeft: 1,
+        flexShrink: 0,
+        wrapMode: "none",
+        selectable: false,
+        visible: false,
+      }));
+      this.field.insertBefore(prompt, this);
+      this.field.add(this.count);
+      uiTheme(renderer).bindStyles(this.field, (styles) => {
+        this.field.borderColor = styles["ui.popupBorder"].fg;
+        this.field.titleColor = styles["ui.popupTitle"].fg;
+        paintText(prompt, styles["ui.popupTitle"]);
+        paintText(count, styles["ui.muted"]);
       });
     }
   }
 
-  setTitle(title: string): void { this.field.title = ` ${title} `; }
+  setTitle(title: string): void {
+    this.field.title = ` ${title} `;
+  }
   setCounts(counts: Counts | null): void {
     if (!this.count) return;
     const text = counts ? `${counts.matched}/${counts.total}` : "";
-    this.count.content = text; this.count.width = text.length; this.count.visible = counts !== null;
+    this.count.content = text;
+    this.count.width = text.length;
+    this.count.visible = counts !== null;
   }
-  clear(): void { if (this.value) this.value = ""; }
-  fit(availableHeight: number): InputLayout { return this.field.fit(1, Math.min(3, availableHeight)); }
+  clear(): void {
+    if (this.value) this.value = "";
+  }
+  fit(availableHeight: number): InputLayout {
+    return this.field.fit(1, Math.min(3, availableHeight));
+  }
 }

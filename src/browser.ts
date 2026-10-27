@@ -14,8 +14,26 @@ export function validateBrowserUrl(url: string): Result<string, BrowserError> {
 export function openBrowserUrl(url: string): Promise<Result<void, BrowserError>> {
   const checked = validateBrowserUrl(url);
   if (!checked.ok) return Promise.resolve(checked);
-  const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "rundll32.exe" : "xdg-open";
-  const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", checked.value] : [checked.value];
-  return new Promise(resolve => execFile(command, args, { timeout: 5000 }, error => resolve(error
-    ? err(new BrowserError("Could not confirm opening the browser. Copy the URL and open it manually; it may already have opened.", { cause: error })) : ok(undefined))));
+  const command =
+    process.platform === "darwin"
+      ? "open"
+      : process.platform === "win32"
+        ? "rundll32.exe"
+        : "xdg-open";
+  const args =
+    process.platform === "win32" ? ["url.dll,FileProtocolHandler", checked.value] : [checked.value];
+  return new Promise((resolve) =>
+    execFile(command, args, { timeout: 5000 }, (error) =>
+      resolve(
+        error
+          ? err(
+              new BrowserError(
+                "Could not confirm opening the browser. Copy the URL and open it manually; it may already have opened.",
+                { cause: error },
+              ),
+            )
+          : ok(undefined),
+      ),
+    ),
+  );
 }

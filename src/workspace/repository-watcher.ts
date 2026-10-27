@@ -10,7 +10,11 @@ type WatchedDirectory = { watcher: FSWatcher; identity: string };
 type Options = { debounceMs?: number; discover?: typeof discoverRepository };
 
 function metadata(repository: Repository): string {
-  return JSON.stringify([repository.id, repository.name, repository.worktrees.map(({ id, path, name, branch }) => [id, path, name, branch])]);
+  return JSON.stringify([
+    repository.id,
+    repository.name,
+    repository.worktrees.map(({ id, path, name, branch }) => [id, path, name, branch]),
+  ]);
 }
 
 // Filesystem events invalidate the catalog; only Git determines its actual contents.
@@ -23,10 +27,12 @@ export class RepositoryWatcher {
   private failed = false;
   private previous: string;
 
-  constructor(private readonly repository: Repository,
+  constructor(
+    private readonly repository: Repository,
     private readonly receive: (result: Result<Repository, ExpectedError>) => void,
     private readonly unexpected: (error: unknown) => void,
-    private readonly options: Options = {}) {
+    private readonly options: Options = {},
+  ) {
     this.previous = metadata(repository);
   }
 
@@ -49,7 +55,10 @@ export class RepositoryWatcher {
         this.pending = undefined;
         if (this.dirty) this.request();
       });
-      void this.pending.catch((error: unknown) => { this.failed = true; this.unexpected(error); });
+      void this.pending.catch((error: unknown) => {
+        this.failed = true;
+        this.unexpected(error);
+      });
     }, this.options.debounceMs ?? 250);
     this.timer.unref();
   }
@@ -58,11 +67,17 @@ export class RepositoryWatcher {
     this.dirty = false;
     const watched = await this.syncDirectories();
     if (this.closed) return;
-    if (!watched.ok) { this.publish(watched); return; }
+    if (!watched.ok) {
+      this.publish(watched);
+      return;
+    }
     // The canonical common directory remains usable if the launching linked worktree is removed.
     const discovered = await (this.options.discover ?? discoverRepository)(this.repository.id);
     if (this.closed) return;
-    if (!discovered.ok) { this.publish(discovered); return; }
+    if (!discovered.ok) {
+      this.publish(discovered);
+      return;
+    }
     const current = metadata(discovered.value);
     if (this.failed || current !== this.previous) {
       this.previous = current;
@@ -78,20 +93,40 @@ export class RepositoryWatcher {
   private async syncDirectories(): Promise<Result<void, ExpectedError>> {
     const root = join(this.repository.id, "worktrees");
     const entries = await capture(() => readdir(root, { withFileTypes: true }));
-    if (!entries.ok && !(entries.error instanceof StorageError && entries.error.systemCode === "ENOENT")) return entries;
-    const paths = [this.repository.id, ...(entries.ok ? [root, ...entries.value.filter((entry) => entry.isDirectory()).map((entry) => join(root, entry.name))] : [])];
+    if (
+      !entries.ok &&
+      !(entries.error instanceof StorageError && entries.error.systemCode === "ENOENT")
+    )
+      return entries;
+    const paths = [
+      this.repository.id,
+      ...(entries.ok
+        ? [
+            root,
+            ...entries.value
+              .filter((entry) => entry.isDirectory())
+              .map((entry) => join(root, entry.name)),
+          ]
+        : []),
+    ];
     const wanted = new Set(paths);
     for (const [path, watched] of this.directories) {
       if (wanted.has(path)) continue;
-      watched.watcher.close(); this.directories.delete(path);
+      watched.watcher.close();
+      this.directories.delete(path);
     }
     for (const path of paths) {
       if (this.closed) return ok(undefined);
       const info = await capture(() => stat(path));
       if (!info.ok) {
         // Worktree registrations may disappear while Git is removing them. The parent watcher retries.
-        if (path !== this.repository.id && info.error instanceof StorageError && info.error.systemCode === "ENOENT") {
-          this.directories.get(path)?.watcher.close(); this.directories.delete(path);
+        if (
+          path !== this.repository.id &&
+          info.error instanceof StorageError &&
+          info.error.systemCode === "ENOENT"
+        ) {
+          this.directories.get(path)?.watcher.close();
+          this.directories.delete(path);
           continue;
         }
         return info;
@@ -100,7 +135,8 @@ export class RepositoryWatcher {
       const identity = `${info.value.dev}:${info.value.ino}`;
       const existing = this.directories.get(path);
       if (existing?.identity === identity) continue;
-      existing?.watcher.close(); this.directories.delete(path);
+      existing?.watcher.close();
+      this.directories.delete(path);
       const watched = this.watchDirectory(path, root);
       if (!watched.ok) return watched;
       this.directories.set(path, { watcher: watched.value, identity });
@@ -113,7 +149,14 @@ export class RepositoryWatcher {
       const watcher = watch(path, { persistent: false }, (_event, filename) => {
         // Ignore index/ref/object churn: only catalog/branch metadata needs rediscovery.
         const name = filename?.toString();
-        if (!name || path === root || (path === this.repository.id ? name === "worktrees" || name === "HEAD" : name === "HEAD" || name === "gitdir" || name === "commondir")) this.request();
+        if (
+          !name ||
+          path === root ||
+          (path === this.repository.id
+            ? name === "worktrees" || name === "HEAD"
+            : name === "HEAD" || name === "gitdir" || name === "commondir")
+        )
+          this.request();
       });
       watcher.on("error", (error: unknown) => {
         if (this.closed) return;
@@ -137,7 +180,8 @@ export class RepositoryWatcher {
     if (known) return known;
     const code = systemCode(error);
     return code && ["ENOSYS", "ENOTSUP", "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"].includes(code)
-      ? new StorageError(`Git metadata watching is unavailable (${code}).`, code, { cause: error }) : null;
+      ? new StorageError(`Git metadata watching is unavailable (${code}).`, code, { cause: error })
+      : null;
   }
 
   close(): void {

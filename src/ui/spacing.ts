@@ -1,6 +1,6 @@
 import { RenderableEvents, type BoxRenderable, type CliRenderer } from "@opentui/core";
 
-export const horizontalInset = (width: number): number => width < 80 ? 1 : 2;
+export const horizontalInset = (width: number): number => (width < 80 ? 1 : 2);
 
 export function panelSpacing(renderer: Pick<CliRenderer, "width" | "height">) {
   return { horizontal: horizontalInset(renderer.width), vertical: 1 };
@@ -12,7 +12,9 @@ export function bindPanelSpacing(renderer: CliRenderer, panel: BoxRenderable): v
   const resize = () => {
     if (panel.isDestroyed) return;
     const { horizontal } = panelSpacing(renderer);
-    panel.paddingX = horizontal; panel.paddingTop = 0; panel.paddingBottom = 0;
+    panel.paddingX = horizontal;
+    panel.paddingTop = 0;
+    panel.paddingBottom = 0;
   };
   renderer.on("resize", resize);
   panel.once(RenderableEvents.DESTROYED, () => renderer.off("resize", resize));

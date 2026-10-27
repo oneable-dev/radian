@@ -15,7 +15,22 @@ test("Default roots are projects/dotfiles and empty roots select current-reposit
   expect(local.roots).toEqual([]);
 });
 
-test.each([null, [], { roots: null }, { roots: [" "] }, { roots: [1] }, { roots: ["~another/repo"] }, { roots: ["x\0y"] }, { maxDepth: null }, { maxDepth: -1 }, { maxDepth: 11 }, { maxDepth: 1.5 }, { root: "wrong" }].map((value) => ({ value })))("Invalid workspace settings are rejected instead of defaulted: %j", ({ value }) => {
+test.each(
+  [
+    null,
+    [],
+    { roots: null },
+    { roots: [" "] },
+    { roots: [1] },
+    { roots: ["~another/repo"] },
+    { roots: ["x\0y"] },
+    { maxDepth: null },
+    { maxDepth: -1 },
+    { maxDepth: 11 },
+    { maxDepth: 1.5 },
+    { root: "wrong" },
+  ].map((value) => ({ value })),
+)("Invalid workspace settings are rejected instead of defaulted: %j", ({ value }) => {
   // Invalid formats must not trigger unintended directory discovery.
   const error = expectError(parseWorkspaceConfig(value));
 
@@ -28,14 +43,24 @@ test("Config-relative and home paths resolve independently of execution director
   try {
     // Relative roots belong to the config file's directory.
     const path = join(directory, "workspace.json");
-    await writeFile(path, JSON.stringify({ roots: ["./repos", "~/projects", "~/.dotfiles"], maxDepth: 2 }));
+    await writeFile(
+      path,
+      JSON.stringify({ roots: ["./repos", "~/projects", "~/.dotfiles"], maxDepth: 2 }),
+    );
 
     const config = expectOk(await loadWorkspaceConfig(path));
 
     // Expand home without relying on shell quoting or current working directories.
-    expect(config).toEqual({ roots: [join(directory, "repos"), join(homedir(), "projects"), join(homedir(), ".dotfiles")], maxDepth: 2 });
+    expect(config).toEqual({
+      roots: [join(directory, "repos"), join(homedir(), "projects"), join(homedir(), ".dotfiles")],
+      maxDepth: 2,
+    });
     await writeFile(path, "{");
     expect(expectError(await loadWorkspaceConfig(path)).code).toBe("INVALID_INPUT");
-    expect(expectError(await loadWorkspaceConfig(join(directory, "missing.json"))).code).toBe("STORAGE_FAILED");
-  } finally { await rm(directory, { recursive: true, force: true }); }
+    expect(expectError(await loadWorkspaceConfig(join(directory, "missing.json"))).code).toBe(
+      "STORAGE_FAILED",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

@@ -1,16 +1,18 @@
 type SearchMatcher = (value: string) => boolean;
 
-function normalize(value: string): string { return value.normalize("NFKC").toLowerCase(); }
+function normalize(value: string): string {
+  return value.normalize("NFKC").toLowerCase();
+}
 
 // Literal matchers preserve whitespace, including spaces inside quoted file paths.
 export function createPrefixMatcher(query: string): SearchMatcher {
   const needle = normalize(query);
-  return value => normalize(value).startsWith(needle);
+  return (value) => normalize(value).startsWith(needle);
 }
 
 export function createSubstringMatcher(query: string): SearchMatcher {
   const needle = normalize(query);
-  return value => normalize(value).includes(needle);
+  return (value) => normalize(value).includes(needle);
 }
 
 // General search requires every whitespace-delimited term as a contiguous substring.
@@ -18,8 +20,8 @@ export function createSubstringMatcher(query: string): SearchMatcher {
 export function createTextMatcher(query: string): SearchMatcher {
   const words = normalize(query).trim().split(/\s+/u).filter(Boolean);
   if (!words.length) return () => true;
-  return value => {
+  return (value) => {
     const text = normalize(value);
-    return words.every(word => text.includes(word));
+    return words.every((word) => text.includes(word));
   };
 }

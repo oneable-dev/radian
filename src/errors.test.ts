@@ -1,23 +1,55 @@
 import { expect, spyOn, test } from "bun:test";
-import { capture, CleanupError, collectCleanup, ConnectionError, ExpectedError, HistoryError, InputError, SessionError, StorageError, withCleanup } from "./errors.ts";
+import {
+  capture,
+  CleanupError,
+  collectCleanup,
+  ConnectionError,
+  ExpectedError,
+  HistoryError,
+  InputError,
+  SessionError,
+  StorageError,
+  withCleanup,
+} from "./errors.ts";
 import { err, ok } from "./result.ts";
 import { expectError, expectOk } from "./testing/results.ts";
 import { RuntimeClient, fetchSnapshot } from "./runtime/client.ts";
 import { runtimePaths } from "./runtime/storage.ts";
-import { emptyPreferences, errorStatus, parseCommand, protocolVersion, type RuntimeSnapshot } from "./runtime/protocol.ts";
+import {
+  emptyPreferences,
+  errorStatus,
+  parseCommand,
+  protocolVersion,
+  type RuntimeSnapshot,
+} from "./runtime/protocol.ts";
 import { SessionRegistry } from "./agents/session-registry.ts";
 import { demoWorkspace } from "./workspace/demo.ts";
 
 const paths = runtimePaths("/fixture/.git", true, "/tmp/radian-result-unit-test");
-const snapshot = (): RuntimeSnapshot => ({ version: protocolVersion, pid: process.pid, instance: "test", repositoryId: "/fixture/.git", mode: "offline",
-  repositories: [], details: {}, closingCount: 0, preferences: structuredClone(emptyPreferences), notice: "", capabilities: ["typed-errors", "history"] });
+const snapshot = (): RuntimeSnapshot => ({
+  version: protocolVersion,
+  pid: process.pid,
+  instance: "test",
+  repositoryId: "/fixture/.git",
+  mode: "offline",
+  repositories: [],
+  details: {},
+  closingCount: 0,
+  preferences: structuredClone(emptyPreferences),
+  notice: "",
+  capabilities: ["typed-errors", "history"],
+});
 
 test("Expected file failures retain causes and codes in custom error Results", async () => {
   // An OS error has a stable code; its human message is not a classification key.
   const original = Object.assign(new Error("permission text may vary"), { code: "EACCES" });
 
   // Only the OS boundary translates it into a value.
-  const error = expectError(await capture(async () => { throw original; }));
+  const error = expectError(
+    await capture(async () => {
+      throw original;
+    }),
+  );
 
   // Callers can branch on the type/code and diagnostics still have the exact cause.
   expect(error).toBeInstanceOf(StorageError);
@@ -31,15 +63,26 @@ test("Unexpected TypeErrors never become failure Results or service absence", as
   const fetchMock = spyOn(globalThis, "fetch").mockRejectedValue(original);
   try {
     // Both external-boundary helpers preserve the exception object.
-    await expect(capture(async () => { throw original; })).rejects.toBe(original);
+    await expect(
+      capture(async () => {
+        throw original;
+      }),
+    ).rejects.toBe(original);
     await expect(fetchSnapshot(paths)).rejects.toBe(original);
 
     // No replacement error destroys the originating stack.
     expect(original.stack).toContain("unexpected defect");
-  } finally { fetchMock.mockRestore(); }
+  } finally {
+    fetchMock.mockRestore();
+  }
 });
 
-for (const [code, expected] of [["ENOENT", null], ["ECONNREFUSED", null], ["EACCES", "CONNECTION_FAILED"], ["ETIMEDOUT", "CONNECTION_TIMEOUT"]] as const) {
+for (const [code, expected] of [
+  ["ENOENT", null],
+  ["ECONNREFUSED", null],
+  ["EACCES", "CONNECTION_FAILED"],
+  ["ETIMEDOUT", "CONNECTION_TIMEOUT"],
+] as const) {
   test(`Snapshot lookup ${code} distinguishes absence from connection failure`, async () => {
     // Only absent/refused endpoints authorize bootstrap; permissions/timeouts must not do so.
     const failure = Object.assign(new Error("same message"), { code });
@@ -55,7 +98,9 @@ for (const [code, expected] of [["ENOENT", null], ["ECONNREFUSED", null], ["EACC
         expect(error.code).toBe(expected);
         expect(error.cause).toBe(failure);
       }
-    } finally { fetchMock.mockRestore(); }
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 }
 
@@ -64,8 +109,18 @@ test("IPC codes survive to clients without arbitrary classification of legacy st
   const fetchMock = spyOn(globalThis, "fetch");
   const client = new RuntimeClient(paths, snapshot());
   try {
-    fetchMock.mockResolvedValueOnce(Response.json({ ok: false, error: { code: "SESSION_BUSY", message: "localized text", outcome: "rejected" } }, { status: 409 }));
-    fetchMock.mockResolvedValueOnce(Response.json({ ok: false, error: "Session is busy" }, { status: 400 }));
+    fetchMock.mockResolvedValueOnce(
+      Response.json(
+        {
+          ok: false,
+          error: { code: "SESSION_BUSY", message: "localized text", outcome: "rejected" },
+        },
+        { status: 409 },
+      ),
+    );
+    fetchMock.mockResolvedValueOnce(
+      Response.json({ ok: false, error: "Session is busy" }, { status: 400 }),
+    );
 
     // Public methods return Result rather than rethrowing a newly constructed generic Error.
     const typed = expectError(await client.prompt("id", "run"));
@@ -73,12 +128,17 @@ test("IPC codes survive to clients without arbitrary classification of legacy st
 
     expect(typed.code).toBe("SESSION_BUSY");
     expect(legacy.code).toBe("LEGACY_REMOTE_ERROR");
-  } finally { fetchMock.mockRestore(); await client.disconnect(); }
+  } finally {
+    fetchMock.mockRestore();
+    await client.disconnect();
+  }
 });
 
 test("Mutation timeouts imply neither cancellation nor successful rollback", async () => {
   // A request might have been accepted before the acknowledgement was lost.
-  const fetchMock = spyOn(globalThis, "fetch").mockRejectedValue(new DOMException("expired", "TimeoutError"));
+  const fetchMock = spyOn(globalThis, "fetch").mockRejectedValue(
+    new DOMException("expired", "TimeoutError"),
+  );
   const client = new RuntimeClient(paths, snapshot());
   try {
     // The caller receives an uncertainty diagnostic and must not retry blindly.
@@ -86,13 +146,23 @@ test("Mutation timeouts imply neither cancellation nor successful rollback", asy
 
     expect(error.code).toBe("CONNECTION_TIMEOUT");
     expect(error.message).toContain("outcome is unknown");
-  } finally { fetchMock.mockRestore(); await client.disconnect(); }
+  } finally {
+    fetchMock.mockRestore();
+    await client.disconnect();
+  }
 });
 
 test("Accepted responses with persistence warnings stay successful and preserve warnings", async () => {
   // Persistence failed after execution was accepted; retrying would be unsafe.
-  const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ ok: true, value: null,
-    warnings: [{ code: "STORAGE_FAILED", message: "Checkpoint unavailable", outcome: "rejected" }] }));
+  const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(
+    Response.json({
+      ok: true,
+      value: null,
+      warnings: [
+        { code: "STORAGE_FAILED", message: "Checkpoint unavailable", outcome: "rejected" },
+      ],
+    }),
+  );
   const client = new RuntimeClient(paths, snapshot());
   try {
     expectOk(await client.prompt("id", "run"));
@@ -100,38 +170,65 @@ test("Accepted responses with persistence warnings stay successful and preserve 
     // Accepted work and durability warning are separate, observable outcomes.
     expect(client.snapshot.notice).toContain("Action accepted");
     expect(client.snapshot.notice).toContain("Checkpoint unavailable");
-  } finally { fetchMock.mockRestore(); await client.disconnect(); }
+  } finally {
+    fetchMock.mockRestore();
+    await client.disconnect();
+  }
 });
 
 test("Successful operations finish cleanup before returning the original value", async () => {
   // Cleanup belongs to the operation even when no exception needs propagation.
-  const value = { saved: true }, events: string[] = [];
+  const value = { saved: true },
+    events: string[] = [];
 
   // Record both phases through the public cleanup boundary.
-  const result = await withCleanup(async () => { events.push("operation"); return value; }, async () => { events.push("cleanup"); });
+  const result = await withCleanup(
+    async () => {
+      events.push("operation");
+      return value;
+    },
+    async () => {
+      events.push("cleanup");
+    },
+  );
 
   // The caller receives the exact value only after cleanup has completed.
   expect(result).toBe(value);
   expect(events).toEqual(["operation", "cleanup"]);
 });
 
-test.each([new TypeError("original defect"), undefined])("Successful cleanup preserves the original rejection: %s", async original => {
-  // Even an undefined rejection must remain distinct from a successful operation.
-  let cleaned = false;
+test.each([new TypeError("original defect"), undefined])(
+  "Successful cleanup preserves the original rejection: %s",
+  async (original) => {
+    // Even an undefined rejection must remain distinct from a successful operation.
+    let cleaned = false;
 
-  // A successful cleanup must not replace the original failure.
-  const operation = withCleanup(async () => { throw original; }, async () => { cleaned = true; });
+    // A successful cleanup must not replace the original failure.
+    const operation = withCleanup(
+      async () => {
+        throw original;
+      },
+      async () => {
+        cleaned = true;
+      },
+    );
 
-  // Both the rejection identity and cleanup completion are observable contracts.
-  await expect(operation).rejects.toBe(original);
-  expect(cleaned).toBe(true);
-});
+    // Both the rejection identity and cleanup completion are observable contracts.
+    await expect(operation).rejects.toBe(original);
+    expect(cleaned).toBe(true);
+  },
+);
 
 test("Cleanup failures after successful operations preserve the cleanup exception", async () => {
   // There is no original operation failure to aggregate with this cleanup defect.
   const cleanup = new TypeError("cleanup defect");
 
-  const operation = withCleanup(async () => "saved", async () => { throw cleanup; });
+  const operation = withCleanup(
+    async () => "saved",
+    async () => {
+      throw cleanup;
+    },
+  );
 
   // Preserve the original object and stack instead of inventing an aggregate.
   await expect(operation).rejects.toBe(cleanup);
@@ -139,9 +236,20 @@ test("Cleanup failures after successful operations preserve the cleanup exceptio
 
 test("Operation and cleanup failures preserve both original and cleanup errors", async () => {
   // Cleanup cannot replace an unexpected defect's stack with a second generic message.
-  const original = new TypeError("original defect"); const cleanup = new StorageError("cleanup failed");
+  const original = new TypeError("original defect");
+  const cleanup = new StorageError("cleanup failed");
 
-  const failure = await withCleanup(async () => { throw original; }, async () => { throw cleanup; }).then(() => null, (error: unknown) => error);
+  const failure = await withCleanup(
+    async () => {
+      throw original;
+    },
+    async () => {
+      throw cleanup;
+    },
+  ).then(
+    () => null,
+    (error: unknown) => error,
+  );
 
   expect(failure).toBeInstanceOf(AggregateError);
   if (!(failure instanceof AggregateError)) throw new Error("Missing aggregate");
@@ -150,16 +258,22 @@ test("Operation and cleanup failures preserve both original and cleanup errors",
 
 test("Expected shutdown failures aggregate into CleanupError Results while bugs remain exceptions", async () => {
   // Every owned cleanup is awaited, regardless of earlier failures.
-  const a = new StorageError("a"), b = new SessionError("SESSION_CONFLICT", "b");
+  const a = new StorageError("a"),
+    b = new SessionError("SESSION_CONFLICT", "b");
   const unexpected = new TypeError("cleanup defect");
 
-  const result = await collectCleanup([Promise.resolve(err(a)), Promise.resolve(err(b)), Promise.resolve(ok(undefined))], "close failed");
+  const result = await collectCleanup(
+    [Promise.resolve(err(a)), Promise.resolve(err(b)), Promise.resolve(ok(undefined))],
+    "close failed",
+  );
   const error = expectError(result);
 
   expect(error).toBeInstanceOf(CleanupError);
   if (!(error instanceof CleanupError)) throw new Error("Missing cleanup failure");
   expect(error.errors).toEqual([a, b]);
-  await expect(collectCleanup([Promise.reject(unexpected)], "close failed")).rejects.toBeInstanceOf(AggregateError);
+  await expect(collectCleanup([Promise.reject(unexpected)], "close failed")).rejects.toBeInstanceOf(
+    AggregateError,
+  );
 });
 
 test("Parsing, domain rejection, and external failures have distinct codes and HTTP statuses", () => {
@@ -178,7 +292,9 @@ test("Parsing, domain rejection, and external failures have distinct codes and H
 
 test("Expected registry failures return typed Results rather than rejecting", async () => {
   // A session ID is user/runtime state, so absence is an ordinary domain outcome.
-  const registry = new SessionRegistry(demoWorkspace(), async () => { throw new Error("factory must not run"); });
+  const registry = new SessionRegistry(demoWorkspace(), async () => {
+    throw new Error("factory must not run");
+  });
 
   const result = await registry.prompt("missing", "run");
 
@@ -190,7 +306,9 @@ test("Expected registry failures return typed Results rather than rejecting", as
 test("Factory bugs propagate identical exceptions instead of becoming expected creation failures", async () => {
   // No executor was constructed, so cleanup must release only the reservation.
   const defect = new TypeError("factory defect");
-  const registry = new SessionRegistry(demoWorkspace(), async () => { throw defect; });
+  const registry = new SessionRegistry(demoWorkspace(), async () => {
+    throw defect;
+  });
 
   // Unexpected bugs remain rejected promises, unlike normal domain Results.
   await expect(registry.create("demo:main")).rejects.toBe(defect);

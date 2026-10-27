@@ -21,7 +21,10 @@ export type SessionSnapshotInfo = {
 // Recovery restores open records; History reads snapshots only for SDK-discovered conversations.
 export type SessionSnapshotSource = {
   listSessions(worktreeId: string): readonly SessionSnapshotInfo[];
-  readSession(worktreeId: string, conversationId: string): Promise<Result<SessionRecord | null, ExpectedError>>;
+  readSession(
+    worktreeId: string,
+    conversationId: string,
+  ): Promise<Result<SessionRecord | null, ExpectedError>>;
   isExpired?(worktreeId: string, conversationId: string): boolean;
 };
 

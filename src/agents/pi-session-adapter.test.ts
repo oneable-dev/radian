@@ -16,32 +16,51 @@ import { tinyPng } from "../testing/image.ts";
 import { ok } from "../result.ts";
 
 function controlledStreams(options: PiSessionOptions) {
-  const gates = new Map<string, { aborted: boolean; abortReceived: Promise<void>; finish(text: string): void }>();
+  const gates = new Map<
+    string,
+    { aborted: boolean; abortReceived: Promise<void>; finish(text: string): void }
+  >();
   const started = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
   const waitFor = (key: string) => {
     if (gates.has(key)) return Promise.resolve();
     const gate = started.get(key) ?? Promise.withResolvers<void>();
-    started.set(key, gate); return gate.promise;
+    started.set(key, gate);
+    return gate.promise;
   };
   const base = options.streamFn!;
   const streamFn: NonNullable<PiSessionOptions["streamFn"]> = (model, context, request) => {
     const last = context.messages.at(-1);
     const user = context.messages.findLast((message) => message.role === "user");
-    const input = last?.role !== "toolResult" && user?.role === "user" ? (typeof user.content === "string" ? user.content : user.content.filter((part) => part.type === "text").map((part) => part.text).join("")) : "";
+    const input =
+      last?.role !== "toolResult" && user?.role === "user"
+        ? typeof user.content === "string"
+          ? user.content
+          : user.content
+              .filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join("")
+        : "";
     const key = input === "slow" ? "child" : input.startsWith("hold ") ? input.slice(5) : null;
     if (!key) return base(model, context, request);
     const stream = createAssistantMessageEventStream();
     const message: AssistantMessage = fixtureMessage(model.api, model.provider, model.id);
     const aborted = Promise.withResolvers<void>();
-    const gate = { aborted: false, abortReceived: aborted.promise, finish(text: string) {
-      request?.signal?.removeEventListener("abort", cancel);
-      message.content = [{ type: "text", text }];
-      message.stopReason = gate.aborted ? "aborted" : "stop";
-      if (gate.aborted) stream.push({ type: "error", reason: "aborted", error: message });
-      else stream.push({ type: "done", reason: "stop", message });
-      stream.end();
-    } };
-    const cancel = () => { gate.aborted = true; aborted.resolve(); };
+    const gate = {
+      aborted: false,
+      abortReceived: aborted.promise,
+      finish(text: string) {
+        request?.signal?.removeEventListener("abort", cancel);
+        message.content = [{ type: "text", text }];
+        message.stopReason = gate.aborted ? "aborted" : "stop";
+        if (gate.aborted) stream.push({ type: "error", reason: "aborted", error: message });
+        else stream.push({ type: "done", reason: "stop", message });
+        stream.end();
+      },
+    };
+    const cancel = () => {
+      gate.aborted = true;
+      aborted.resolve();
+    };
     request?.signal?.addEventListener("abort", cancel, { once: true });
     if (request?.signal?.aborted) cancel();
     gates.set(key, gate);
@@ -49,10 +68,20 @@ function controlledStreams(options: PiSessionOptions) {
     started.get(key)?.resolve();
     return stream;
   };
-  return { gates, waitFor, streamFn, releaseAll() { for (const gate of gates.values()) gate.finish("fixture released"); } };
+  return {
+    gates,
+    waitFor,
+    streamFn,
+    releaseAll() {
+      for (const gate of gates.values()) gate.finish("fixture released");
+    },
+  };
 }
 
-async function sdkFixture(controlled = false, configure?: (options: PiSessionOptions) => PiSessionOptions) {
+async function sdkFixture(
+  controlled = false,
+  configure?: (options: PiSessionOptions) => PiSessionOptions,
+) {
   const fixture = await createWorktreeFixture();
   const options = await offlineRuntime(join(fixture.directory, "agent"));
   const streams = controlledStreams(options);
@@ -60,154 +89,276 @@ async function sdkFixture(controlled = false, configure?: (options: PiSessionOpt
   const factoryOptions = { ...options, ...(controlled ? { streamFn: streams.streamFn } : {}) };
   const factory = piSessionFactory(configure?.(factoryOptions) ?? factoryOptions);
   const registry = new SessionRegistry([fixture.repository], async (context) => {
-    const executor = await factory(context); executors.push(executor); return executor;
+    const executor = await factory(context);
+    executors.push(executor);
+    return executor;
   });
   const selection = new WorkspaceSelection(registry.snapshot);
   const unsubscribe = registry.subscribe(() => selection.replaceSnapshot(registry.snapshot));
   const main = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
   const feature = fixture.repository.worktrees.find((tree) => tree.path === fixture.feature)!;
-  return { ...fixture, registry, selection, executors, streams, main, feature, async cleanup() {
-    // Signal cancellation before releasing provider acknowledgements to prevent new requests.
-    const shutdown = registry.shutdown();
-    streams.releaseAll();
-    await shutdown; unsubscribe(); await fixture.cleanup();
-  } };
+  return {
+    ...fixture,
+    registry,
+    selection,
+    executors,
+    streams,
+    main,
+    feature,
+    async cleanup() {
+      // Signal cancellation before releasing provider acknowledgements to prevent new requests.
+      const shutdown = registry.shutdown();
+      streams.releaseAll();
+      await shutdown;
+      unsubscribe();
+      await fixture.cleanup();
+    },
+  };
 }
 
 async function commandExtension(directory: string) {
-  const extensions = join(directory, "agent", "extensions"); await mkdir(extensions, { recursive: true });
-  await writeFile(join(extensions, "commands.ts"), `export default function (pi) {
+  const extensions = join(directory, "agent", "extensions");
+  await mkdir(extensions, { recursive: true });
+  await writeFile(
+    join(extensions, "commands.ts"),
+    `export default function (pi) {
     pi.registerCommand("fixture-command", { description: "Fixture slash command", handler: async (args) => { pi.appendEntry("command-probe", { args }); } });
     pi.registerCommand("fixture-broken", { handler: async () => { throw new Error("Fixture command failure"); } });
     pi.registerCommand("fixture-wait", { handler: async (_args, ctx) => { await ctx.waitForIdle(); } });
-  }`);
+  }`,
+  );
 }
 
 test("history completion overrides extensions and raw submission never reaches SDK or model", async () => {
   // An extension with the same name must not replace the host popup command.
   let requests = 0;
-  const app = await sdkFixture(false, options => ({ ...options, streamFn: (model, context, request) => {
-    requests++; return options.streamFn!(model, context, request);
-  } }));
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    streamFn: (model, context, request) => {
+      requests++;
+      return options.streamFn!(model, context, request);
+    },
+  }));
   try {
-    const extensions = join(app.directory, "agent", "extensions"); await mkdir(extensions, { recursive: true });
-    await writeFile(join(extensions, "history.ts"), `export default function(pi) {
+    const extensions = join(app.directory, "agent", "extensions");
+    await mkdir(extensions, { recursive: true });
+    await writeFile(
+      join(extensions, "history.ts"),
+      `export default function(pi) {
       pi.registerCommand("history", { description: "Conflicting extension command", handler: async () => { pi.appendEntry("unexpected-history", {}); } });
-    }`);
-    const id = expectOk(await app.registry.create(app.main.id)), conversation = app.registry.details(id)!.conversationId!;
+    }`,
+    );
+    const id = expectOk(await app.registry.create(app.main.id)),
+      conversation = app.registry.details(id)!.conversationId!;
 
     // Check the full catalog and direct server/SDK submission paths.
-    const commands = expectOk(app.registry.catalog(id, conversation)).items.filter(item => item.value === "history");
-    const registryResult = await app.registry.prompt(id, "/history"), sdkResult = await app.executors[0]!.prompt("/history");
+    const commands = expectOk(app.registry.catalog(id, conversation)).items.filter(
+      (item) => item.value === "history",
+    );
+    const registryResult = await app.registry.prompt(id, "/history"),
+      sdkResult = await app.executors[0]!.prompt("/history");
     const invalid = await app.executors[0]!.prompt("/history recent");
 
     // Name collisions and calls without popups must never create model requests.
-    expect(commands).toHaveLength(1); expect(commands[0]?.description).toContain("saved session history");
+    expect(commands).toHaveLength(1);
+    expect(commands[0]?.description).toContain("saved session history");
     expect(expectError(registryResult).code).toBe("UNSUPPORTED_CAPABILITY");
-    expect(expectError(sdkResult).code).toBe("UNSUPPORTED_CAPABILITY"); expect(expectError(invalid).code).toBe("INVALID_INPUT");
-    expect(requests).toBe(0); expect(app.registry.details(id)?.sections).toEqual([]);
-  } finally { await app.cleanup(); }
+    expect(expectError(sdkResult).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(expectError(invalid).code).toBe("INVALID_INPUT");
+    expect(requests).toBe(0);
+    expect(app.registry.details(id)?.sections).toEqual([]);
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Reload preserves conversation, model, and output while rereading commands, templates, and skills", async () => {
   // Use the real SDK resource loader and replace only model transport offline.
-  let requests = 0; const inputs: string[] = [];
-  const app = await sdkFixture(false, options => ({ ...options, streamFn: (model, context, request) => {
-    requests++;
-    const user = context.messages.findLast(message => message.role === "user");
-    if (user?.role === "user") inputs.push(typeof user.content === "string" ? user.content : user.content.filter(part => part.type === "text").map(part => part.text).join(""));
-    return options.streamFn!(model, context, request);
-  } }));
+  let requests = 0;
+  const inputs: string[] = [];
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    streamFn: (model, context, request) => {
+      requests++;
+      const user = context.messages.findLast((message) => message.role === "user");
+      if (user?.role === "user")
+        inputs.push(
+          typeof user.content === "string"
+            ? user.content
+            : user.content
+                .filter((part) => part.type === "text")
+                .map((part) => part.text)
+                .join(""),
+        );
+      return options.streamFn!(model, context, request);
+    },
+  }));
   try {
-    const extensions = join(app.directory, "agent", "extensions"), skills = join(app.directory, "explicit-skills");
+    const extensions = join(app.directory, "agent", "extensions"),
+      skills = join(app.directory, "explicit-skills");
     const template = join(app.directory, "reload-template.md");
-    await mkdir(extensions, { recursive: true }); await mkdir(skills);
-    await writeFile(template, "---\ndescription: Initial template\n---\nInitial template content\n");
-    await writeFile(join(extensions, "resources.ts"), `export default function(pi) {
+    await mkdir(extensions, { recursive: true });
+    await mkdir(skills);
+    await writeFile(
+      template,
+      "---\ndescription: Initial template\n---\nInitial template content\n",
+    );
+    await writeFile(
+      join(extensions, "resources.ts"),
+      `export default function(pi) {
       pi.on("resources_discover", () => ({ skillPaths: [${JSON.stringify(skills)}], promptPaths: [${JSON.stringify(template)}] }));
-    }`);
+    }`,
+    );
     const id = expectOk(await app.registry.create(app.main.id));
-    expect(expectError(await app.registry.prompt(id, "/reload")).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(expectError(await app.registry.prompt(id, "/reload")).code).toBe(
+      "UNSUPPORTED_CAPABILITY",
+    );
     expect(requests).toBe(0);
     expectOk(await app.registry.prompt(id, "Before reload"));
-    const before = app.registry.details(id)!, file = app.registry.sessionFile(id), conversation = before.conversationId!;
-    expect(expectOk(app.registry.catalog(id, conversation)).items.some(item => item.value === "fresh-149")).toBe(false);
+    const before = app.registry.details(id)!,
+      file = app.registry.sessionFile(id),
+      conversation = before.conversationId!;
+    expect(
+      expectOk(app.registry.catalog(id, conversation)).items.some(
+        (item) => item.value === "fresh-149",
+      ),
+    ).toBe(false);
 
     // Saved resources enter the catalog only after explicit reload.
-    const skill = join(skills, "reload-skill"); await mkdir(skill);
-    await writeFile(join(skill, "SKILL.md"), "---\nname: reload-skill\ndescription: Reloaded skill\n---\nRELOADED_SKILL_MARKER\n");
-    await writeFile(template, "---\ndescription: Updated template\n---\nUpdated template content\n");
-    await writeFile(join(extensions, "fresh.ts"), `export default function(pi) {
+    const skill = join(skills, "reload-skill");
+    await mkdir(skill);
+    await writeFile(
+      join(skill, "SKILL.md"),
+      "---\nname: reload-skill\ndescription: Reloaded skill\n---\nRELOADED_SKILL_MARKER\n",
+    );
+    await writeFile(
+      template,
+      "---\ndescription: Updated template\n---\nUpdated template content\n",
+    );
+    await writeFile(
+      join(extensions, "fresh.ts"),
+      `export default function(pi) {
       for (let i = 0; i < 150; i++) pi.registerCommand("fresh-" + i, { description: "Fresh command", handler: async () => { pi.appendEntry("reload-probe", { index: i }); } });
-    }`);
-    expect(expectOk(app.registry.catalog(id, conversation)).items.some(item => item.kind === "skill")).toBe(false);
+    }`,
+    );
+    expect(
+      expectOk(app.registry.catalog(id, conversation)).items.some((item) => item.kind === "skill"),
+    ).toBe(false);
     expectOk(await app.registry.reload(id));
 
     const after = app.registry.details(id)!;
-    expect(after.conversationId).toBe(conversation); expect(app.registry.sessionFile(id)).toBe(file);
-    expect(after.output).toBe(before.output); expect(after.sections).toEqual(before.sections); expect(after.status).toBe(before.status);
-    expect(after.telemetry?.model).toBe(before.telemetry?.model); expect(after.telemetry?.effort).toBe(before.telemetry?.effort);
-    expect(after.resourceRevision).toBe(1); expect(requests).toBe(1);
+    expect(after.conversationId).toBe(conversation);
+    expect(app.registry.sessionFile(id)).toBe(file);
+    expect(after.output).toBe(before.output);
+    expect(after.sections).toEqual(before.sections);
+    expect(after.status).toBe(before.status);
+    expect(after.telemetry?.model).toBe(before.telemetry?.model);
+    expect(after.telemetry?.effort).toBe(before.telemetry?.effort);
+    expect(after.resourceRevision).toBe(1);
+    expect(requests).toBe(1);
     const catalog = expectOk(app.registry.catalog(id, conversation));
     expect(catalog.items.length).toBeGreaterThan(150);
-    expect(catalog.items.find(item => item.value === "reload-template")?.description).toBe("Updated template");
-    expect(catalog.items.some(item => item.kind === "skill" && item.value === "skill:reload-skill")).toBe(true);
-    expect(expectOk(await app.registry.complete(id, { kind: "command", query: "reload-skill" })).items).toEqual([]);
-    expect(expectOk(await app.registry.complete(id, { kind: "skill", query: "reload" })).items[0]?.value).toBe("reload-skill");
+    expect(catalog.items.find((item) => item.value === "reload-template")?.description).toBe(
+      "Updated template",
+    );
+    expect(
+      catalog.items.some((item) => item.kind === "skill" && item.value === "skill:reload-skill"),
+    ).toBe(true);
+    expect(
+      expectOk(await app.registry.complete(id, { kind: "command", query: "reload-skill" })).items,
+    ).toEqual([]);
+    expect(
+      expectOk(await app.registry.complete(id, { kind: "skill", query: "reload" })).items[0]?.value,
+    ).toBe("reload-skill");
 
     // Dollar syntax expands into loaded skill instructions instead of reaching the model verbatim.
     expectOk(await app.registry.prompt(id, "$reload-skill inspect this"));
-    expect(inputs.at(-1)).toContain("RELOADED_SKILL_MARKER"); expect(inputs.at(-1)).toContain("inspect this");
+    expect(inputs.at(-1)).toContain("RELOADED_SKILL_MARKER");
+    expect(inputs.at(-1)).toContain("inspect this");
     expect(expectError(await app.registry.prompt(id, "$missing-skill")).code).toBe("INVALID_INPUT");
     expect(requests).toBe(2);
-  } finally { await app.cleanup(); }
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test.each([
-  ["new", false], ["new", true], ["clear", false], ["clear", true],
-  ["exit", false], ["exit", true], ["reload", false], ["reload", true],
-] as const)("/%s management commands create neither model requests nor intermediate working states with completion history %j", async (command, seeded) => {
-  // Run management commands through the real SDK for empty and completed conversations.
-  let requests = 0;
-  const app = await sdkFixture(false, options => ({ ...options, streamFn: (model, context, request) => {
-    requests++; return options.streamFn!(model, context, request);
-  } }));
-  let unsubscribe = () => {};
-  try {
-    const id = expectOk(await app.registry.create(app.main.id));
-    if (seeded) expectOk(await app.registry.prompt(id, "Existing completed conversation"));
-    const before = requests, statuses: (SessionExecutor["state"]["status"])[] = [];
-    unsubscribe = app.registry.subscribe(() => {
-      for (const repository of app.registry.snapshot) for (const tree of repository.worktrees)
-        for (const session of tree.sessions) statuses.push(session.status);
-    });
+  ["new", false],
+  ["new", true],
+  ["clear", false],
+  ["clear", true],
+  ["exit", false],
+  ["exit", true],
+  ["reload", false],
+  ["reload", true],
+] as const)(
+  "/%s management commands create neither model requests nor intermediate working states with completion history %j",
+  async (command, seeded) => {
+    // Run management commands through the real SDK for empty and completed conversations.
+    let requests = 0;
+    const app = await sdkFixture(false, (options) => ({
+      ...options,
+      streamFn: (model, context, request) => {
+        requests++;
+        return options.streamFn!(model, context, request);
+      },
+    }));
+    let unsubscribe = () => {};
+    try {
+      const id = expectOk(await app.registry.create(app.main.id));
+      if (seeded) expectOk(await app.registry.prompt(id, "Existing completed conversation"));
+      const before = requests,
+        statuses: SessionExecutor["state"]["status"][] = [];
+      unsubscribe = app.registry.subscribe(() => {
+        for (const repository of app.registry.snapshot)
+          for (const tree of repository.worktrees)
+            for (const session of tree.sessions) statuses.push(session.status);
+      });
 
-    // Use the same management operation invoked by the host after UI parsing.
-    switch (command) {
-      case "new": expectOk(await app.registry.newTab(id)); break;
-      case "clear": expectOk(await app.registry.clearSession(id)); break;
-      case "exit": expectOk(await app.registry.close(id)); break;
-      case "reload": expectOk(await app.registry.reload(id)); break;
+      // Use the same management operation invoked by the host after UI parsing.
+      switch (command) {
+        case "new":
+          expectOk(await app.registry.newTab(id));
+          break;
+        case "clear":
+          expectOk(await app.registry.clearSession(id));
+          break;
+        case "exit":
+          expectOk(await app.registry.close(id));
+          break;
+        case "reload":
+          expectOk(await app.registry.reload(id));
+          break;
+      }
+
+      // No published snapshot may contain a fake run, not just the final snapshot.
+      expect(statuses).not.toContain("working");
+      expect(requests).toBe(before);
+    } finally {
+      unsubscribe();
+      await app.cleanup();
     }
-
-    // No published snapshot may contain a fake run, not just the final snapshot.
-    expect(statuses).not.toContain("working"); expect(requests).toBe(before);
-  } finally { unsubscribe(); await app.cleanup(); }
-});
+  },
+);
 
 test("Reload during execution returns busy without interrupting the request", async () => {
   // Active models and command-resource replacement cannot run concurrently.
   const app = await sdkFixture(true);
   try {
     const id = expectOk(await app.registry.create(app.main.id));
-    const run = app.registry.prompt(id, "hold reload"); await app.streams.waitFor("reload");
+    const run = app.registry.prompt(id, "hold reload");
+    await app.streams.waitFor("reload");
 
     const result = await app.registry.reload(id);
 
-    expect(expectError(result).code).toBe("SESSION_BUSY"); expect(app.streams.gates.get("reload")?.aborted).toBe(false);
+    expect(expectError(result).code).toBe("SESSION_BUSY");
+    expect(app.streams.gates.get("reload")?.aborted).toBe(false);
     expect(app.registry.details(id)?.resourceRevision).toBe(0);
-    app.streams.gates.get("reload")!.finish("Original work completed"); expectOk(await run);
-  } finally { await app.cleanup(); }
+    app.streams.gates.get("reload")!.finish("Original work completed");
+    expectOk(await run);
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Failed extension reloads preserve previous catalogs and revisions", async () => {
@@ -215,175 +366,331 @@ test("Failed extension reloads preserve previous catalogs and revisions", async 
   const app = await sdkFixture();
   try {
     await commandExtension(app.directory);
-    const id = expectOk(await app.registry.create(app.main.id)), conversation = app.registry.details(id)!.conversationId!;
+    const id = expectOk(await app.registry.create(app.main.id)),
+      conversation = app.registry.details(id)!.conversationId!;
     const before = expectOk(app.registry.catalog(id, conversation));
-    await writeFile(join(app.directory, "agent", "extensions", "invalid.ts"), "export default function ( { invalid source");
+    await writeFile(
+      join(app.directory, "agent", "extensions", "invalid.ts"),
+      "export default function ( { invalid source",
+    );
 
     const result = await app.registry.reload(id);
 
     expect(expectError(result).code).toBe("AGENT_FAILED");
     expect(expectOk(app.registry.catalog(id, conversation))).toEqual(before);
-    expect(app.registry.details(id)?.conversationId).toBe(conversation); expect(app.registry.details(id)?.resourceRevision).toBe(0);
-  } finally { await app.cleanup(); }
+    expect(app.registry.details(id)?.conversationId).toBe(conversation);
+    expect(app.registry.details(id)?.resourceRevision).toBe(0);
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("SDK diagnostics for invalid settings never become reload success", async () => {
   // Reread file-based settings without starting model requests.
-  const app = await sdkFixture(false, options => { const configured = { ...options }; delete configured.streamFn; return configured; });
+  const app = await sdkFixture(false, (options) => {
+    const configured = { ...options };
+    delete configured.streamFn;
+    return configured;
+  });
   const warned = spyOn(console, "warn").mockImplementation(() => {});
   try {
-    const id = expectOk(await app.registry.create(app.main.id)), conversation = app.registry.details(id)!.conversationId!;
+    const id = expectOk(await app.registry.create(app.main.id)),
+      conversation = app.registry.details(id)!.conversationId!;
     const before = expectOk(app.registry.catalog(id, conversation));
     await writeFile(join(app.directory, "agent", "settings.json"), "{ invalid settings");
 
     const result = await app.registry.reload(id);
 
-    expect(expectError(result).code).toBe("AGENT_FAILED"); expect(expectOk(app.registry.catalog(id, conversation))).toEqual(before);
-    expect(app.registry.details(id)?.output).toBe(""); expect(warned).toHaveBeenCalled();
-  } finally { warned.mockRestore(); await app.cleanup(); }
+    expect(expectError(result).code).toBe("AGENT_FAILED");
+    expect(expectOk(app.registry.catalog(id, conversation))).toEqual(before);
+    expect(app.registry.details(id)?.output).toBe("");
+    expect(warned).toHaveBeenCalled();
+  } finally {
+    warned.mockRestore();
+    await app.cleanup();
+  }
 });
 
 test("SDK reload initialization error notifications never become success", async () => {
   // Some SDK hook failures arrive through onError rather than exceptions.
-  const app = await sdkFixture(), logged = spyOn(console, "error").mockImplementation(() => {}), warned = spyOn(console, "warn").mockImplementation(() => {});
+  const app = await sdkFixture(),
+    logged = spyOn(console, "error").mockImplementation(() => {}),
+    warned = spyOn(console, "warn").mockImplementation(() => {});
   try {
     await commandExtension(app.directory);
-    const id = expectOk(await app.registry.create(app.main.id)), conversation = app.registry.details(id)!.conversationId!;
+    const id = expectOk(await app.registry.create(app.main.id)),
+      conversation = app.registry.details(id)!.conversationId!;
     const before = expectOk(app.registry.catalog(id, conversation));
-    await writeFile(join(app.directory, "agent", "extensions", "bad-start.ts"), `export default function(pi) {
+    await writeFile(
+      join(app.directory, "agent", "extensions", "bad-start.ts"),
+      `export default function(pi) {
       pi.on("session_start", () => { throw new Error("Reload lifecycle fixture"); });
-    }`);
+    }`,
+    );
 
     const result = await app.registry.reload(id);
 
-    expect(expectError(result).code).toBe("AGENT_FAILED"); expect(expectOk(app.registry.catalog(id, conversation))).toEqual(before);
-    expect(logged).toHaveBeenCalled(); expect(warned).toHaveBeenCalled();
-  } finally { logged.mockRestore(); warned.mockRestore(); await app.cleanup(); }
+    expect(expectError(result).code).toBe("AGENT_FAILED");
+    expect(expectOk(app.registry.catalog(id, conversation))).toEqual(before);
+    expect(logged).toHaveBeenCalled();
+    expect(warned).toHaveBeenCalled();
+  } finally {
+    logged.mockRestore();
+    warned.mockRestore();
+    await app.cleanup();
+  }
 });
 
 test("Reload programming errors propagate unchanged without replacing catalogs as successful", async () => {
   // Distinguish input/resource diagnostics from host programming errors.
-  const app = await sdkFixture(); let restore: (() => void) | undefined;
+  const app = await sdkFixture();
+  let restore: (() => void) | undefined;
   try {
-    const id = expectOk(await app.registry.create(app.main.id)), marker = new TypeError("Reload programming defect");
-    const reload = spyOn(DefaultResourceLoader.prototype, "reload").mockRejectedValue(marker); restore = () => reload.mockRestore();
+    const id = expectOk(await app.registry.create(app.main.id)),
+      marker = new TypeError("Reload programming defect");
+    const reload = spyOn(DefaultResourceLoader.prototype, "reload").mockRejectedValue(marker);
+    restore = () => reload.mockRestore();
 
     const operation = app.registry.reload(id);
 
-    await expect(operation).rejects.toBe(marker); expect(app.registry.details(id)?.resourceRevision).toBe(0);
-  } finally { restore?.(); await app.cleanup(); }
+    await expect(operation).rejects.toBe(marker);
+    expect(app.registry.details(id)?.resourceRevision).toBe(0);
+  } finally {
+    restore?.();
+    await app.cleanup();
+  }
 });
 
 test("The real SDK sends and stores image bytes rather than path labels", async () => {
   const observed: string[] = [];
-  const app = await sdkFixture(false, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] },
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    model: { ...options.model!, input: ["text", "image"] },
     streamFn: (model, context, request) => {
       const user = context.messages.findLast((message) => message.role === "user");
-      if (user?.role === "user" && typeof user.content !== "string") observed.push(...user.content.flatMap((part) => part.type === "image" ? [part.data] : []));
+      if (user?.role === "user" && typeof user.content !== "string")
+        observed.push(
+          ...user.content.flatMap((part) => (part.type === "image" ? [part.data] : [])),
+        );
       return options.streamFn!(model, context, request);
-    } }));
+    },
+  }));
   try {
-    const path = join(app.directory, "image.png"); await writeFile(path, tinyPng());
+    const path = join(app.directory, "image.png");
+    await writeFile(path, tinyPng());
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "Inspect [Image #1]", undefined, [path]));
 
-    expect(observed).toHaveLength(1); expect(Buffer.from(observed[0]!, "base64")).toEqual(tinyPng());
+    expect(observed).toHaveLength(1);
+    expect(Buffer.from(observed[0]!, "base64")).toEqual(tinyPng());
     const file = app.registry.sessionFile(id)!;
-    const saved = await readFile(file, "utf8"); expect(saved).toContain('"type":"image"'); expect(saved).not.toContain(path);
+    const saved = await readFile(file, "utf8");
+    expect(saved).toContain('"type":"image"');
+    expect(saved).not.toContain(path);
     expect(app.registry.details(id)?.status).toBe("complete");
     const original = app.registry.details(id)?.sections?.find((section) => section.image)?.image;
     expect(original?.name).toBe("image.png");
     expect(expectOk(app.registry.imageData(id, original!.id)).bytes).toEqual(tinyPng());
-    expectOk(await app.registry.close(id)); const restored = expectOk(await app.registry.create(app.main.id, file));
-    expect(app.registry.details(restored)?.sections?.some(section => section.kind === "user")).toBe(true);
-    expect(app.registry.details(restored)?.sections?.find((section) => section.image)?.image).toEqual(original);
+    expectOk(await app.registry.close(id));
+    const restored = expectOk(await app.registry.create(app.main.id, file));
+    expect(
+      app.registry.details(restored)?.sections?.some((section) => section.kind === "user"),
+    ).toBe(true);
+    expect(
+      app.registry.details(restored)?.sections?.find((section) => section.image)?.image,
+    ).toEqual(original);
     expect(expectOk(app.registry.imageData(restored, original!.id)).bytes).toEqual(tinyPng());
     expect(expectError(app.registry.imageData(id, original!.id)).code).toBe("SESSION_NOT_OPEN");
     expect(observed).toHaveLength(1);
-  } finally { await app.cleanup(); }
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Slow image preparation preserves input acceptance and conversation ordering", async () => {
-  const preparing = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
-  const admissions: string[] = [], contexts: string[][] = [];
-  const app = await sdkFixture(false, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] },
-    imageLoader: async () => { preparing.resolve(); await release.promise; return ok([{ type: "image" as const, data: tinyPng().toString("base64"), mimeType: "image/png" }]); },
+  const preparing = Promise.withResolvers<void>(),
+    release = Promise.withResolvers<void>();
+  const admissions: string[] = [],
+    contexts: string[][] = [];
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    model: { ...options.model!, input: ["text", "image"] },
+    imageLoader: async () => {
+      preparing.resolve();
+      await release.promise;
+      return ok([
+        { type: "image" as const, data: tinyPng().toString("base64"), mimeType: "image/png" },
+      ]);
+    },
     streamFn: (model, context, request) => {
-      contexts.push(context.messages.flatMap(message => message.role === "user" ? [typeof message.content === "string" ? message.content : message.content.filter(part => part.type === "text").map(part => part.text).join("")] : []));
+      contexts.push(
+        context.messages.flatMap((message) =>
+          message.role === "user"
+            ? [
+                typeof message.content === "string"
+                  ? message.content
+                  : message.content
+                      .filter((part) => part.type === "text")
+                      .map((part) => part.text)
+                      .join(""),
+              ]
+            : [],
+        ),
+      );
       return options.streamFn!(model, context, request);
-    } }));
+    },
+  }));
   try {
     const id = expectOk(await app.registry.create(app.main.id));
-    const first = app.registry.prompt(id, "first image input", () => admissions.push("first"), ["/fixture/image.png"]); await preparing.promise;
+    const first = app.registry.prompt(id, "first image input", () => admissions.push("first"), [
+      "/fixture/image.png",
+    ]);
+    await preparing.promise;
     const second = app.registry.prompt(id, "later text input", () => admissions.push("second"));
     for (let i = 0; i < 20; i++) await Promise.resolve();
-    expect(contexts).toEqual([]); expect(admissions).toEqual([]);
-    release.resolve(); expectOk(await first); expectOk(await second);
+    expect(contexts).toEqual([]);
+    expect(admissions).toEqual([]);
+    release.resolve();
+    expectOk(await first);
+    expectOk(await second);
 
     // The SDK may combine steering received before the first model call.
     // Assert acceptance and actual user-message order rather than call count.
     expect(admissions).toEqual(["first", "second"]);
     // Image previews now have their own section; text order and the real attachment must both survive.
     const sections = app.registry.details(id)?.sections ?? [];
-    expect(sections.filter(section => section.kind === "user").map(section => section.text)).toEqual(["first image input", "later text input"]);
-    const images = sections.filter(section => section.image);
+    expect(
+      sections.filter((section) => section.kind === "user").map((section) => section.text),
+    ).toEqual(["first image input", "later text input"]);
+    const images = sections.filter((section) => section.image);
     expect(images).toHaveLength(1);
-    expect(images[0]?.image).toMatchObject({ name: "image.png", mimeType: "image/png", byteLength: tinyPng().byteLength });
-    expect(sections.indexOf(images[0]!)).toBeLessThan(sections.findIndex(section => section.text === "later text input"));
+    expect(images[0]?.image).toMatchObject({
+      name: "image.png",
+      mimeType: "image/png",
+      byteLength: tinyPng().byteLength,
+    });
+    expect(sections.indexOf(images[0]!)).toBeLessThan(
+      sections.findIndex((section) => section.text === "later text input"),
+    );
     expect(contexts.at(-1)).toEqual(["first image input", "later text input"]);
-  } finally { release.resolve(); await app.cleanup(); }
+  } finally {
+    release.resolve();
+    await app.cleanup();
+  }
 });
 
 test("Image steering queues in the same SDK session without interrupting active tools or responses", async () => {
   const observed: string[] = [];
-  const app = await sdkFixture(true, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] },
+  const app = await sdkFixture(true, (options) => ({
+    ...options,
+    model: { ...options.model!, input: ["text", "image"] },
     streamFn: (model, context, request) => {
       const user = context.messages.findLast((message) => message.role === "user");
-      if (user?.role === "user" && typeof user.content !== "string") observed.push(...user.content.flatMap((part) => part.type === "image" ? [part.data] : []));
+      if (user?.role === "user" && typeof user.content !== "string")
+        observed.push(
+          ...user.content.flatMap((part) => (part.type === "image" ? [part.data] : [])),
+        );
       return options.streamFn!(model, context, request);
-    } }));
+    },
+  }));
   try {
-    const path = join(app.directory, "queued.png"); await writeFile(path, tinyPng());
+    const path = join(app.directory, "queued.png");
+    await writeFile(path, tinyPng());
     const id = expectOk(await app.registry.create(app.main.id));
-    const first = app.registry.prompt(id, "hold A"); await app.streams.waitFor("A");
+    const first = app.registry.prompt(id, "hold A");
+    await app.streams.waitFor("A");
     const accepted = Promise.withResolvers<void>();
-    const second = app.registry.prompt(id, "hold B", accepted.resolve, [path]); await accepted.promise;
-    expect(app.streams.gates.get("A")!.aborted).toBe(false); expect(app.streams.gates.has("B")).toBe(false);
-    app.streams.gates.get("A")!.finish("A finished"); await app.streams.waitFor("B");
-    expect(observed).toHaveLength(1); expect(app.executors).toHaveLength(1);
-    app.streams.gates.get("B")!.finish("B finished"); expectOk(await first); expectOk(await second);
+    const second = app.registry.prompt(id, "hold B", accepted.resolve, [path]);
+    await accepted.promise;
+    expect(app.streams.gates.get("A")!.aborted).toBe(false);
+    expect(app.streams.gates.has("B")).toBe(false);
+    app.streams.gates.get("A")!.finish("A finished");
+    await app.streams.waitFor("B");
+    expect(observed).toHaveLength(1);
+    expect(app.executors).toHaveLength(1);
+    app.streams.gates.get("B")!.finish("B finished");
+    expectOk(await first);
+    expectOk(await second);
     expect(app.registry.details(id)?.status).toBe("complete");
-  } finally { await app.cleanup(); }
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Rejected image preparation preserves restored-session warnings and saved output", async () => {
-  const app = await sdkFixture(false, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] } }));
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    model: { ...options.model!, input: ["text", "image"] },
+  }));
   try {
-    const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "read"));
-    const record = app.registry.records.find(item => item.id === id)!;
+    const id = expectOk(await app.registry.create(app.main.id));
+    expectOk(await app.registry.prompt(id, "read"));
+    const record = app.registry.records.find((item) => item.id === id)!;
     expectOk(await app.registry.close(id));
-    expectOk(await app.registry.restore({ ...record, state: { ...record.state, status: "working", output: record.state.output + "\nRetained host recovery output" } }));
-    const before = app.registry.details(id); let accepted = 0;
-    expect(expectError(await app.registry.prompt(id, "Inspect image", () => accepted++, [join(app.directory, "missing.png")])).code).toBe("STORAGE_FAILED");
-    expect(accepted).toBe(0); expect(app.registry.details(id)?.error).toBe(before?.error);
-    expect(app.registry.details(id)?.output).toBe(before?.output); expect(before?.output).toContain("Retained host recovery output");
-  } finally { await app.cleanup(); }
+    expectOk(
+      await app.registry.restore({
+        ...record,
+        state: {
+          ...record.state,
+          status: "working",
+          output: record.state.output + "\nRetained host recovery output",
+        },
+      }),
+    );
+    const before = app.registry.details(id);
+    let accepted = 0;
+    expect(
+      expectError(
+        await app.registry.prompt(id, "Inspect image", () => accepted++, [
+          join(app.directory, "missing.png"),
+        ]),
+      ).code,
+    ).toBe("STORAGE_FAILED");
+    expect(accepted).toBe(0);
+    expect(app.registry.details(id)?.error).toBe(before?.error);
+    expect(app.registry.details(id)?.output).toBe(before?.output);
+    expect(before?.output).toContain("Retained host recovery output");
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Unsupported images and attachment-free settings commands fail before acceptance or execution", async () => {
   const plain = await sdkFixture();
   try {
-    const id = expectOk(await plain.registry.create(plain.main.id)); let accepted = 0;
-    expect(expectError(await plain.registry.prompt(id, "Inspect image", () => accepted++, [join(plain.directory, "missing.png")])).code).toBe("UNSUPPORTED_CAPABILITY");
-    expect(accepted).toBe(0); expect(plain.registry.details(id)?.output).toBe("");
-  } finally { await plain.cleanup(); }
-  const app = await sdkFixture(false, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] } }));
+    const id = expectOk(await plain.registry.create(plain.main.id));
+    let accepted = 0;
+    expect(
+      expectError(
+        await plain.registry.prompt(id, "Inspect image", () => accepted++, [
+          join(plain.directory, "missing.png"),
+        ]),
+      ).code,
+    ).toBe("UNSUPPORTED_CAPABILITY");
+    expect(accepted).toBe(0);
+    expect(plain.registry.details(id)?.output).toBe("");
+  } finally {
+    await plain.cleanup();
+  }
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    model: { ...options.model!, input: ["text", "image"] },
+  }));
   try {
-    await commandExtension(app.directory); const path = join(app.directory, "image.png"); await writeFile(path, tinyPng());
-    const id = expectOk(await app.registry.create(app.main.id)); let accepted = 0;
-    expect(expectError(await app.registry.prompt(id, "/fixture-command", () => accepted++, [path])).code).toBe("INVALID_INPUT");
-    expect(accepted).toBe(0); expect(app.registry.details(id)?.output).toBe(""); expect(app.registry.details(id)?.status).toBeNull();
-  } finally { await app.cleanup(); }
+    await commandExtension(app.directory);
+    const path = join(app.directory, "image.png");
+    await writeFile(path, tinyPng());
+    const id = expectOk(await app.registry.create(app.main.id));
+    let accepted = 0;
+    expect(
+      expectError(await app.registry.prompt(id, "/fixture-command", () => accepted++, [path])).code,
+    ).toBe("INVALID_INPUT");
+    expect(accepted).toBe(0);
+    expect(app.registry.details(id)?.output).toBe("");
+    expect(app.registry.details(id)?.status).toBeNull();
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("SDK command listing and execution avoid model calls and preserve previous run state", async () => {
@@ -391,37 +698,55 @@ test("SDK command listing and execution avoid model calls and preserve previous 
   try {
     await commandExtension(app.directory);
     const id = expectOk(await app.registry.create(app.main.id));
-    const items = expectOk(await app.registry.complete(id, { kind: "command", query: "fixture-command" })).items;
-    expect(items.map((item) => [item.value, item.description])).toEqual([["fixture-command", "Fixture slash command"]]);
+    const items = expectOk(
+      await app.registry.complete(id, { kind: "command", query: "fixture-command" }),
+    ).items;
+    expect(items.map((item) => [item.value, item.description])).toEqual([
+      ["fixture-command", "Fixture slash command"],
+    ]);
     let accepted = 0;
     expectOk(await app.registry.prompt(id, "/fixture-command argument", () => accepted++));
-    expect(app.registry.details(id)?.status).toBeNull(); expect(app.registry.details(id)?.output).toBe(""); expect(accepted).toBe(1);
+    expect(app.registry.details(id)?.status).toBeNull();
+    expect(app.registry.details(id)?.output).toBe("");
+    expect(accepted).toBe(1);
     expect(app.registry.details(id)?.sections?.some((section) => section.completion)).toBe(false);
     expectOk(await app.registry.prompt(id, "read"));
     const completed = app.registry.details(id)?.sections?.at(-1)?.completion;
     expectOk(await app.registry.prompt(id, "/fixture-command"));
     expect(app.registry.details(id)?.status).toBe("complete");
     expect(app.registry.details(id)?.sections?.at(-1)?.completion).toEqual(completed);
-    expect(app.registry.details(id)?.sections?.filter((section) => section.completion)).toHaveLength(1);
-  } finally { await app.cleanup(); }
+    expect(
+      app.registry.details(id)?.sections?.filter((section) => section.completion),
+    ).toHaveLength(1);
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Extensions consuming input with notices never show fake intermediate runs", async () => {
   // Distinguish input-hook consumption from model execution, not just registered commands.
   let requests = 0;
-  const app = await sdkFixture(false, options => ({ ...options, streamFn: (model, context, request) => {
-    requests++; return options.streamFn!(model, context, request);
-  } }));
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    streamFn: (model, context, request) => {
+      requests++;
+      return options.streamFn!(model, context, request);
+    },
+  }));
   let unsubscribe = () => {};
   try {
-    const directory = join(app.directory, "agent", "extensions"); await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, "handled.ts"), `export default function (pi) {
+    const directory = join(app.directory, "agent", "extensions");
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      join(directory, "handled.ts"),
+      `export default function (pi) {
       pi.on("input", async (event) => {
         if (event.text !== "/fixture-handled") return;
         pi.sendMessage({ customType: "fixture-info", content: "Settings updated", display: true }, { triggerTurn: false });
         return { action: "handled" };
       });
-    }`);
+    }`,
+    );
     const id = expectOk(await app.registry.create(app.main.id));
     const statuses: (SessionExecutor["state"]["status"] | undefined)[] = [];
     unsubscribe = app.registry.subscribe(() => statuses.push(app.registry.details(id)?.status));
@@ -430,11 +755,16 @@ test("Extensions consuming input with notices never show fake intermediate runs"
     expectOk(await app.registry.prompt(id, "/fixture-handled"));
 
     // Repairing only final state cannot stop the tail of an already-started spinner.
-    expect(statuses.length).toBeGreaterThan(0); expect(statuses).not.toContain("working");
-    expect(app.registry.details(id)?.status).toBeNull(); expect(requests).toBe(0);
+    expect(statuses.length).toBeGreaterThan(0);
+    expect(statuses).not.toContain("working");
+    expect(app.registry.details(id)?.status).toBeNull();
+    expect(requests).toBe(0);
     expect(app.registry.details(id)?.result).toBeUndefined();
-    expect(app.registry.details(id)?.sections?.some(section => section.completion)).toBe(false);
-  } finally { unsubscribe(); await app.cleanup(); }
+    expect(app.registry.details(id)?.sections?.some((section) => section.completion)).toBe(false);
+  } finally {
+    unsubscribe();
+    await app.cleanup();
+  }
 });
 
 test("Registered slash commands starting real model work report working and completion", async () => {
@@ -443,130 +773,249 @@ test("Registered slash commands starting real model work report working and comp
   const settled = Promise.withResolvers<void>();
   let unsubscribe = () => {};
   try {
-    const directory = join(app.directory, "agent", "extensions"); await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, "run.ts"), `export default function (pi) {
+    const directory = join(app.directory, "agent", "extensions");
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      join(directory, "run.ts"),
+      `export default function (pi) {
       pi.registerCommand("fixture-run", { handler: async () => { pi.sendUserMessage("hold command"); } });
-    }`);
+    }`,
+    );
     const id = expectOk(await app.registry.create(app.main.id));
-    unsubscribe = app.registry.subscribe(() => { if (app.registry.details(id)?.status === "complete") settled.resolve(); });
+    unsubscribe = app.registry.subscribe(() => {
+      if (app.registry.details(id)?.status === "complete") settled.resolve();
+    });
 
     // Start real SDK work before withholding the provider response.
-    expectOk(await app.registry.prompt(id, "/fixture-run")); await app.streams.waitFor("command");
+    expectOk(await app.registry.prompt(id, "/fixture-run"));
+    await app.streams.waitFor("command");
 
     // Unlike control commands, real work must be tracked from start to finish.
     expect(app.registry.details(id)?.status).toBe("working");
     expect(app.registry.details(id)?.runTiming).toBeDefined();
-    app.streams.gates.get("command")!.finish("Command work finished"); await settled.promise;
-    expect(app.registry.details(id)?.status).toBe("complete"); expect(app.registry.details(id)?.result?.outcome).toBe("complete");
-  } finally { unsubscribe(); await app.cleanup(); }
+    app.streams.gates.get("command")!.finish("Command work finished");
+    await settled.promise;
+    expect(app.registry.details(id)?.status).toBe("complete");
+    expect(app.registry.details(id)?.result?.outcome).toBe("complete");
+  } finally {
+    unsubscribe();
+    await app.cleanup();
+  }
 });
 
-test.each([true, false])("Completion metadata persistence failures warn without rejecting finished requests: %j", async (expected) => {
-  // Fail only supplementary metadata persistence after model and tool work finishes.
-  const app = await sdkFixture();
-  const original = SessionManager.prototype.appendCustomEntry;
-  const failure = Object.assign(new Error("Timing persistence fixture"), expected ? { code: "EIO" } : {});
-  const log = spyOn(console, "error").mockImplementation(() => {});
-  const append = spyOn(SessionManager.prototype, "appendCustomEntry").mockImplementation(function (this: SessionManager, type, data) {
-    if (type === runCompletionEntryType) throw failure;
-    return original.call(this, type, data);
-  });
-  try {
-    const id = expectOk(await app.registry.create(app.main.id));
-    expectOk(await app.registry.prompt(id, "read"));
-    // Separate completion from persistence warnings and log unexpected errors with original stacks.
-    expect(app.registry.details(id)?.status).toBe("complete"); expect(app.registry.details(id)?.error).toBeNull();
-    const completion = app.registry.details(id)?.sections?.at(-1)?.completion;
-    expect(completion?.outcome).toBe("complete");
-    expect(completion?.warning).toContain(expected ? "STORAGE_FAILED" : "Unexpected run timing persistence");
-    if (expected) expect(log).not.toHaveBeenCalled();
-    else expect(log.mock.calls.some((call) => call.includes(failure))).toBe(true);
-  } finally { append.mockRestore(); log.mockRestore(); await app.cleanup(); }
-});
+test.each([true, false])(
+  "Completion metadata persistence failures warn without rejecting finished requests: %j",
+  async (expected) => {
+    // Fail only supplementary metadata persistence after model and tool work finishes.
+    const app = await sdkFixture();
+    const original = SessionManager.prototype.appendCustomEntry;
+    const failure = Object.assign(
+      new Error("Timing persistence fixture"),
+      expected ? { code: "EIO" } : {},
+    );
+    const log = spyOn(console, "error").mockImplementation(() => {});
+    const append = spyOn(SessionManager.prototype, "appendCustomEntry").mockImplementation(
+      function (this: SessionManager, type, data) {
+        if (type === runCompletionEntryType) throw failure;
+        return original.call(this, type, data);
+      },
+    );
+    try {
+      const id = expectOk(await app.registry.create(app.main.id));
+      expectOk(await app.registry.prompt(id, "read"));
+      // Separate completion from persistence warnings and log unexpected errors with original stacks.
+      expect(app.registry.details(id)?.status).toBe("complete");
+      expect(app.registry.details(id)?.error).toBeNull();
+      const completion = app.registry.details(id)?.sections?.at(-1)?.completion;
+      expect(completion?.outcome).toBe("complete");
+      expect(completion?.warning).toContain(
+        expected ? "STORAGE_FAILED" : "Unexpected run timing persistence",
+      );
+      if (expected) expect(log).not.toHaveBeenCalled();
+      else expect(log.mock.calls.some((call) => call.includes(failure))).toBe(true);
+    } finally {
+      append.mockRestore();
+      log.mockRestore();
+      await app.cleanup();
+    }
+  },
+);
 
 test("SDK command failure notifications return failure Results instead of accepted success", async () => {
-  const app = await sdkFixture(); const log = spyOn(console, "error").mockImplementation(() => {});
+  const app = await sdkFixture();
+  const log = spyOn(console, "error").mockImplementation(() => {});
   try {
-    await commandExtension(app.directory); const id = expectOk(await app.registry.create(app.main.id));
+    await commandExtension(app.directory);
+    const id = expectOk(await app.registry.create(app.main.id));
     let accepted = false;
-    const failure = expectError(await app.registry.prompt(id, "/fixture-broken", () => { accepted = true; }));
-    expect(failure.code).toBe("AGENT_FAILED"); expect(failure.message).toContain("Fixture command failure");
-    expect(accepted).toBe(false); expect(app.registry.details(id)?.status).toBeNull(); expect(log).not.toHaveBeenCalled();
-  } finally { log.mockRestore(); await app.cleanup(); }
+    const failure = expectError(
+      await app.registry.prompt(id, "/fixture-broken", () => {
+        accepted = true;
+      }),
+    );
+    expect(failure.code).toBe("AGENT_FAILED");
+    expect(failure.message).toContain("Fixture command failure");
+    expect(accepted).toBe(false);
+    expect(app.registry.details(id)?.status).toBeNull();
+    expect(log).not.toHaveBeenCalled();
+  } finally {
+    log.mockRestore();
+    await app.cleanup();
+  }
 });
 
 test("Commands awaiting models preserve completion state and never deadlock on close", async () => {
   const app = await sdkFixture(true);
   try {
-    await commandExtension(app.directory); const id = expectOk(await app.registry.create(app.main.id));
-    const run = app.registry.prompt(id, "hold A"); await app.streams.waitFor("A");
+    await commandExtension(app.directory);
+    const id = expectOk(await app.registry.create(app.main.id));
+    const run = app.registry.prompt(id, "hold A");
+    await app.streams.waitFor("A");
     const command = app.registry.prompt(id, "/fixture-wait");
     for (let i = 0; i < 20; i++) await Promise.resolve();
     app.streams.gates.get("A")!.finish("finished");
-    expectOk(await run); expectOk(await command); expect(app.registry.details(id)?.status).toBe("complete");
+    expectOk(await run);
+    expectOk(await command);
+    expect(app.registry.details(id)?.status).toBe("complete");
 
-    const next = app.registry.prompt(id, "hold B"); await app.streams.waitFor("B");
+    const next = app.registry.prompt(id, "hold B");
+    await app.streams.waitFor("B");
     const waiting = app.registry.prompt(id, "/fixture-wait");
     for (let i = 0; i < 20; i++) await Promise.resolve();
-    const close = app.registry.close(id); const gate = app.streams.gates.get("B")!;
-    await gate.abortReceived; gate.finish("aborted");
-    await Promise.all([next, waiting]); expectOk(await close); expect(app.registry.details(id)).toBeNull();
-  } finally { await app.cleanup(); }
+    const close = app.registry.close(id);
+    const gate = app.streams.gates.get("B")!;
+    await gate.abortReceived;
+    gate.finish("aborted");
+    await Promise.all([next, waiting]);
+    expectOk(await close);
+    expect(app.registry.details(id)).toBeNull();
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("SDK sessions discover extensions in agentDir and execute registered tools", async () => {
   // Isolate extension discovery from the user's packages, credentials and external services.
-  const app = await sdkFixture(false, (options) => ({ ...options, streamFn: (model, context, request) => {
-    if (context.messages.at(-1)?.role !== "user") return options.streamFn!(model, context, request);
-    const stream = createAssistantMessageEventStream();
-    const message = fixtureMessage(model.api, model.provider, model.id);
-    message.content = [{ type: "toolCall", id: "extension-probe", name: "extension_probe", arguments: {} }];
-    message.stopReason = "toolUse";
-    stream.push({ type: "done", reason: "toolUse", message }); stream.end(); return stream;
-  } }));
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    streamFn: (model, context, request) => {
+      if (context.messages.at(-1)?.role !== "user")
+        return options.streamFn!(model, context, request);
+      const stream = createAssistantMessageEventStream();
+      const message = fixtureMessage(model.api, model.provider, model.id);
+      message.content = [
+        { type: "toolCall", id: "extension-probe", name: "extension_probe", arguments: {} },
+      ];
+      message.stopReason = "toolUse";
+      stream.push({ type: "done", reason: "toolUse", message });
+      stream.end();
+      return stream;
+    },
+  }));
   try {
     const directory = join(app.directory, "agent", "extensions");
     await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, "probe.ts"), `
+    await writeFile(
+      join(directory, "probe.ts"),
+      `
       import { Type } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai"))};
       export default function (pi) {
         pi.registerTool({ name: "extension_probe", label: "Extension probe", description: "Isolated extension probe",
           parameters: Type.Object({}), execute: async () => ({ content: [{ type: "text", text: "EXTENSION_PROBE_OK" }], details: {} }) });
       }
-    `);
+    `,
+    );
 
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "run extension probe"));
 
-    const tool = app.registry.details(id)?.sections?.find((section) => section.kind === "tool" && section.title === "extension_probe");
-    expect(tool?.status).toBe("complete"); expect(tool?.text).toContain("EXTENSION_PROBE_OK");
-  } finally { await app.cleanup(); }
+    const tool = app.registry
+      .details(id)
+      ?.sections?.find((section) => section.kind === "tool" && section.title === "extension_probe");
+    expect(tool?.status).toBe("complete");
+    expect(tool?.text).toContain("EXTENSION_PROBE_OK");
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Fast commands avoid model calls and apply or remove priority on native Codex HTTP requests", async () => {
   // A loopback SSE server exercises the real provider encoder without a paid model or user credentials.
   const bodies: Record<string, unknown>[] = [];
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (request) => {
-    const bytes = Buffer.from(await request.arrayBuffer());
-    const json = request.headers.get("content-encoding") === "zstd" ? zstdDecompressSync(bytes) : bytes;
-    const body = JSON.parse(json.toString("utf8")) as Record<string, unknown>; bodies.push(body);
-    const message = { id: "msg-fixture", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Native fixture response", annotations: [] }] };
-    const response = { id: `resp-${bodies.length}`, status: "completed", model: "native-fixture", output: [message],
-      service_tier: body.service_tier ?? "default", usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } };
-    const events = [{ type: "response.created", response: { id: response.id, status: "in_progress" } },
-      { type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } },
-      { type: "response.output_text.delta", output_index: 0, content_index: 0, delta: "Native fixture response" },
-      { type: "response.output_item.done", output_index: 0, item: message }, { type: "response.completed", response }];
-    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "Content-Type": "text/event-stream" } });
-  } });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: async (request) => {
+      const bytes = Buffer.from(await request.arrayBuffer());
+      const json =
+        request.headers.get("content-encoding") === "zstd" ? zstdDecompressSync(bytes) : bytes;
+      const body = JSON.parse(json.toString("utf8")) as Record<string, unknown>;
+      bodies.push(body);
+      const message = {
+        id: "msg-fixture",
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "Native fixture response", annotations: [] }],
+      };
+      const response = {
+        id: `resp-${bodies.length}`,
+        status: "completed",
+        model: "native-fixture",
+        output: [message],
+        service_tier: body.service_tier ?? "default",
+        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      };
+      const events = [
+        { type: "response.created", response: { id: response.id, status: "in_progress" } },
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { ...message, status: "in_progress", content: [] },
+        },
+        {
+          type: "response.output_text.delta",
+          output_index: 0,
+          content_index: 0,
+          delta: "Native fixture response",
+        },
+        { type: "response.output_item.done", output_index: 0, item: message },
+        { type: "response.completed", response },
+      ];
+      return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    },
+  });
   const app = await sdkFixture(false, (options) => {
     const modelRuntime = options.modelRuntime!;
     const apiKey = `e30.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "fixture-account" } })).toString("base64url")}.fixture`;
-    modelRuntime.registerProvider("native-fast-fixture", { api: "openai-codex-responses", apiKey, baseUrl: server.url.origin,
-      models: [{ id: "native-fixture", name: "Native fixture", reasoning: true, input: ["text"], contextWindow: 200000, maxTokens: 8192,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] });
-    const configured: PiSessionOptions = { ...options, model: modelRuntime.getModel("native-fast-fixture", "native-fixture")!,
-      settings: { transport: "sse", defaultThinkingLevel: "high", retry: { enabled: false }, compaction: { enabled: false } } };
+    modelRuntime.registerProvider("native-fast-fixture", {
+      api: "openai-codex-responses",
+      apiKey,
+      baseUrl: server.url.origin,
+      models: [
+        {
+          id: "native-fixture",
+          name: "Native fixture",
+          reasoning: true,
+          input: ["text"],
+          contextWindow: 200000,
+          maxTokens: 8192,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ],
+    });
+    const configured: PiSessionOptions = {
+      ...options,
+      model: modelRuntime.getModel("native-fast-fixture", "native-fixture")!,
+      settings: {
+        transport: "sse",
+        defaultThinkingLevel: "high",
+        retry: { enabled: false },
+        compaction: { enabled: false },
+      },
+    };
     delete configured.streamFn;
     return configured;
   });
@@ -577,29 +1026,46 @@ test("Fast commands avoid model calls and apply or remove priority on native Cod
     const toggle = async (text: string) => {
       statuses.length = 0;
       const before = app.registry.details(id);
-      const unsubscribe = app.registry.subscribe(() => statuses.push(app.registry.details(id)?.status));
-      try { expectOk(await app.registry.prompt(id, text)); } finally { unsubscribe(); }
+      const unsubscribe = app.registry.subscribe(() =>
+        statuses.push(app.registry.details(id)?.status),
+      );
+      try {
+        expectOk(await app.registry.prompt(id, text));
+      } finally {
+        unsubscribe();
+      }
       // Fast telemetry must not start prompt or session-tab loading.
-      expect(statuses.length).toBeGreaterThan(0); expect(statuses).not.toContain("working");
+      expect(statuses.length).toBeGreaterThan(0);
+      expect(statuses).not.toContain("working");
       expect(app.registry.details(id)?.status).toBe(before?.status);
       expect(app.registry.details(id)?.result).toEqual(before?.result);
     };
-    await toggle("/fast on"); await toggle("/fast status"); await toggle("/fast off"); await toggle("/fast");
+    await toggle("/fast on");
+    await toggle("/fast status");
+    await toggle("/fast off");
+    await toggle("/fast");
     expect(bodies).toHaveLength(0);
     // Reload preserves Fast selection and telemetry subscriptions without model requests.
     expectOk(await app.registry.reload(id));
-    expect(bodies).toHaveLength(0); expect(app.registry.details(id)?.telemetry?.fast).toBe(true);
+    expect(bodies).toHaveLength(0);
+    expect(app.registry.details(id)?.telemetry?.fast).toBe(true);
 
     expectOk(await app.registry.prompt(id, "priority fixture request"));
 
-    expect(bodies[0]?.service_tier).toBe("priority"); expect(bodies[0]?.reasoning).toMatchObject({ effort: "high" });
+    expect(bodies[0]?.service_tier).toBe("priority");
+    expect(bodies[0]?.reasoning).toMatchObject({ effort: "high" });
     expect(app.registry.details(id)?.telemetry?.fast).toBe(true);
-    await toggle("/fast off"); expect(bodies).toHaveLength(1);
+    await toggle("/fast off");
+    expect(bodies).toHaveLength(1);
     expect(app.registry.details(id)?.telemetry?.fast).toBe(false);
     expectOk(await app.registry.prompt(id, "standard fixture request"));
-    expect(bodies).toHaveLength(2); expect(bodies[1]).not.toHaveProperty("service_tier");
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).not.toHaveProperty("service_tier");
     expect(bodies[1]?.reasoning).toMatchObject({ effort: "high" });
-  } finally { await app.cleanup(); await server.stop(true); }
+  } finally {
+    await app.cleanup();
+    await server.stop(true);
+  }
 });
 
 test("Real SDK read/write uses the selected worktree cwd without modifying other worktrees", async () => {
@@ -618,16 +1084,24 @@ test("Real SDK read/write uses the selected worktree cwd without modifying other
     // Repository discovery, tool cwd and process cwd remain independent of display selection.
     expect(app.registry.details(a)?.output).toContain("main-worktree-marker");
     expect(app.registry.details(b)?.output).toContain("feature-worktree-marker");
-    expect(await Bun.file(join(app.feature.path, "radian-probe.txt")).text()).toBe("Offline SDK write probe\n");
+    expect(await Bun.file(join(app.feature.path, "radian-probe.txt")).text()).toBe(
+      "Offline SDK write probe\n",
+    );
     expect(await Bun.file(join(app.main.path, "radian-probe.txt")).exists()).toBe(false);
     expect(process.cwd()).toBe(originalCwd);
     expect(app.registry.details(a)?.status).toBe("complete");
-    const read = app.registry.details(a)?.sections?.find((section) => section.kind === "tool" && section.title === "read");
+    const read = app.registry
+      .details(a)
+      ?.sections?.find((section) => section.kind === "tool" && section.title === "read");
     expect(read?.status).toBe("complete");
     expect(read?.text).toContain("main-worktree-marker");
     expect(read?.text).toContain("Arguments:");
-    expect(app.registry.details(a)?.sections?.some((section) => section.kind === "user")).toBe(true);
-  } finally { await app.cleanup(); }
+    expect(app.registry.details(a)?.sections?.some((section) => section.kind === "user")).toBe(
+      true,
+    );
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Two real SDK runs survive worktree switching and restore background results on selection", async () => {
@@ -656,21 +1130,41 @@ test("Two real SDK runs survive worktree switching and restore background result
     expect(app.executors).toHaveLength(2);
     app.streams.gates.get("B")!.finish("B done");
     await runB;
-  } finally { await app.cleanup(); }
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Direct Pi subagent tools expose their authored input only after an exact launch receipt", async () => {
   // A scripted model invokes the real SDK tool boundary without starting an external child process.
   const task = "Check the actual delegated input";
-  const app = await sdkFixture(false, options => ({ ...options, streamFn: (model, context, request) => {
-    if (context.messages.at(-1)?.role === "toolResult") return options.streamFn!(model, context, request);
-    const stream = createAssistantMessageEventStream(), message = fixtureMessage(model.api, model.provider, model.id);
-    message.content = [{ type: "toolCall", id: "launch", name: "subagent", arguments: { agent: "implementer", task } }];
-    message.stopReason = "toolUse"; stream.push({ type: "done", reason: "toolUse", message }); stream.end(); return stream;
-  } }));
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    streamFn: (model, context, request) => {
+      if (context.messages.at(-1)?.role === "toolResult")
+        return options.streamFn!(model, context, request);
+      const stream = createAssistantMessageEventStream(),
+        message = fixtureMessage(model.api, model.provider, model.id);
+      message.content = [
+        {
+          type: "toolCall",
+          id: "launch",
+          name: "subagent",
+          arguments: { agent: "implementer", task },
+        },
+      ];
+      message.stopReason = "toolUse";
+      stream.push({ type: "done", reason: "toolUse", message });
+      stream.end();
+      return stream;
+    },
+  }));
   try {
-    const extensions = join(app.directory, "agent", "extensions"); await mkdir(extensions, { recursive: true });
-    await writeFile(join(extensions, "subagent.ts"), `export default function(pi) {
+    const extensions = join(app.directory, "agent", "extensions");
+    await mkdir(extensions, { recursive: true });
+    await writeFile(
+      join(extensions, "subagent.ts"),
+      `export default function(pi) {
       pi.registerTool({ name: "subagent", label: "Subagent", description: "Fixture child", parameters: { type: "object", properties: { agent: { type: "string" }, task: { type: "string" } }, required: ["agent", "task"] }, execute: async (_id, args, _signal, _update, ctx) => {
         pi.events.emit("subagent:async-started", { id: "direct", mode: "single", agent: args.agent, task: "[prompt redacted]" });
         const now = Date.now();
@@ -679,18 +1173,27 @@ test("Direct Pi subagent tools expose their authored input only after an exact l
         })]);
         return { content: [{ type: "text", text: "Started" }], details: { mode: "single", asyncId: "direct" } };
       } });
-    }`);
+    }`,
+    );
     const id = expectOk(await app.registry.create(app.main.id));
 
     expectOk(await app.registry.prompt(id, "Start the child"));
 
     // Observed Pi work keeps its identity and input, but acquires no Radian-owned child handle.
-    const children = app.registry.snapshot[0]!.worktrees.find(tree => tree.id === app.main.id)!.sessions[0]!.subagents;
+    const children = app.registry.snapshot[0]!.worktrees.find((tree) => tree.id === app.main.id)!
+      .sessions[0]!.subagents;
     expect(children).toHaveLength(1);
-    expect(children[0]).toMatchObject({ name: "implementer", source: "pi", status: "working", request: { text: task, images: 0, files: 0 } });
+    expect(children[0]).toMatchObject({
+      name: "implementer",
+      source: "pi",
+      status: "working",
+      request: { text: task, images: 0, files: 0 },
+    });
     expect(children[0]!.runTiming!.elapsedMs).toBeGreaterThanOrEqual(9000);
     expect(app.executors).toHaveLength(1);
-  } finally { await app.cleanup(); }
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Owned SDK children retain their received task and runtime duration after completion", async () => {
@@ -703,19 +1206,25 @@ test("Owned SDK children retain their received task and runtime duration after c
     const children = () => app.registry.snapshot[0]!.worktrees[0]!.sessions[0]!.subagents;
 
     // Working snapshots expose the actual child task and the runtime-owned clock.
-    expect(children()).toHaveLength(1); expect(children()[0]?.request?.text).toBe("slow");
-    expect(children()[0]?.status).toBe("working"); expect(children()[0]?.runTiming?.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(children()).toHaveLength(1);
+    expect(children()[0]?.request?.text).toBe("slow");
+    expect(children()[0]?.status).toBe("working");
+    expect(children()[0]?.runTiming?.elapsedMs).toBeGreaterThanOrEqual(0);
     app.streams.gates.get("child")!.finish("Child completed");
     expectOk(await run);
 
     // Closing the child executor must not discard the preview or restart its timer.
     const completed = children()[0]!;
-    expect(completed.status).toBe("complete"); expect(completed.request?.text).toBe("slow");
+    expect(completed.status).toBe("complete");
+    expect(completed.request?.text).toBe("slow");
     expect(completed.runTiming?.elapsedMs).toBeGreaterThan(0);
     expect(children()[0]?.runTiming).toEqual(completed.runTiming);
     const saved = app.registry.records[0]!.subagents[0]!;
-    expect(saved.request).toEqual(completed.request); expect(saved.runTiming).toEqual(completed.runTiming);
-  } finally { await app.cleanup(); }
+    expect(saved.request).toEqual(completed.request);
+    expect(saved.runTiming).toEqual(completed.runTiming);
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("SDK parents and subagents hide immediately and terminate in background without stopping other sessions", async () => {
@@ -729,7 +1238,9 @@ test("SDK parents and subagents hide immediately and terminate in background wit
     await Promise.all([app.streams.waitFor("child"), app.streams.waitFor("B")]);
     expect(app.registry.snapshot[0]!.worktrees[0]!.sessions[0]!.subagents).toHaveLength(1);
     const file = app.registry.sessionFile(parent)!;
-    expect(expectError(await app.registry.create(app.main.id, app.executors[2]!.sessionFile!)).code).toBe("SESSION_CONFLICT");
+    expect(
+      expectError(await app.registry.create(app.main.id, app.executors[2]!.sessionFile!)).code,
+    ).toBe("SESSION_CONFLICT");
 
     // UI removal is synchronous, while the child deliberately delays its cancellation acknowledgement.
     const closing = app.registry.close(parent);
@@ -749,7 +1260,9 @@ test("SDK parents and subagents hide immediately and terminate in background wit
     expect(app.registry.details(other)?.status).toBe("working");
     app.streams.gates.get("B")!.finish("B complete");
     await unrelated;
-  } finally { await app.cleanup(); }
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Reopening closed SDK sessions restores the same saved ID and history without forking", async () => {
@@ -760,10 +1273,20 @@ test("Reopening closed SDK sessions restores the same saved ID and history witho
     await app.registry.prompt(original, "read");
     const file = app.registry.sessionFile(original)!;
     const completion = app.registry.details(original)?.sections?.at(-1)?.completion;
-    expect(completion?.outcome).toBe("complete"); expect(completion?.durationMs).toBeGreaterThanOrEqual(0);
-    const saved = SessionManager.open(file), savedId = saved.getSessionId();
-    expect(saved.getBranch().findLast((entry) => entry.type === "custom" && entry.customType === runCompletionEntryType)).toMatchObject({ data: completion });
-    expect(JSON.stringify(saved.buildSessionContext().messages)).not.toContain(runCompletionEntryType);
+    expect(completion?.outcome).toBe("complete");
+    expect(completion?.durationMs).toBeGreaterThanOrEqual(0);
+    const saved = SessionManager.open(file),
+      savedId = saved.getSessionId();
+    expect(
+      saved
+        .getBranch()
+        .findLast(
+          (entry) => entry.type === "custom" && entry.customType === runCompletionEntryType,
+        ),
+    ).toMatchObject({ data: completion });
+    expect(JSON.stringify(saved.buildSessionContext().messages)).not.toContain(
+      runCompletionEntryType,
+    );
 
     // Close and reopen use a new display ID but the original persisted session file.
     await app.registry.close(original);
@@ -775,9 +1298,19 @@ test("Reopening closed SDK sessions restores the same saved ID and history witho
     expect(app.executors.at(-1)!.savedSessionId).toBe(savedId);
     expect(app.registry.details(reopened)?.output).toContain("main-worktree-marker");
     expect(app.registry.details(reopened)?.sections?.at(-1)?.completion).toEqual(completion);
-    expect(app.registry.details(reopened)?.sections?.find((section) => section.kind === "tool")?.text).toContain("main-worktree-marker");
-    expect((await readFile(file, "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((entry) => entry.type === "session")).toHaveLength(1);
-  } finally { await app.cleanup(); }
+    expect(
+      app.registry.details(reopened)?.sections?.find((section) => section.kind === "tool")?.text,
+    ).toContain("main-worktree-marker");
+    expect(
+      (await readFile(file, "utf8"))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .filter((entry) => entry.type === "session"),
+    ).toHaveLength(1);
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Input during SDK execution queues after the current response without replacing sessions", async () => {
@@ -806,8 +1339,12 @@ test("Input during SDK execution queues after the current response without repla
     expect(app.executors).toHaveLength(1);
     expect(app.registry.details(id)?.output).toContain("B complete");
     expect(app.registry.details(id)?.status).toBe("complete");
-    expect(app.registry.details(id)?.sections?.filter((section) => section.completion)).toHaveLength(1);
-  } finally { await app.cleanup(); }
+    expect(
+      app.registry.details(id)?.sections?.filter((section) => section.completion),
+    ).toHaveLength(1);
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Interrupt preserves sessions and merges queued input with newlines for one delivery", async () => {
@@ -815,63 +1352,131 @@ test("Interrupt preserves sessions and merges queued input with newlines for one
   const app = await sdkFixture(true);
   try {
     const id = expectOk(await app.registry.create(app.main.id));
-    const running = app.registry.prompt(id, "hold A"); await app.streams.waitFor("A");
-    expectOk(await app.registry.prompt(id, "second")); expectOk(await app.registry.prompt(id, "third"));
-    expect(app.registry.details(id)?.pendingMessages?.map((message) => message.text)).toEqual(["second", "third"]);
+    const running = app.registry.prompt(id, "hold A");
+    await app.streams.waitFor("A");
+    expectOk(await app.registry.prompt(id, "second"));
+    expectOk(await app.registry.prompt(id, "third"));
+    expect(app.registry.details(id)?.pendingMessages?.map((message) => message.text)).toEqual([
+      "second",
+      "third",
+    ]);
     expect(app.registry.details(id)?.runTiming?.elapsedMs).toBeGreaterThanOrEqual(0);
 
     // Repeated Esc coalesces while the provider is still acknowledging cancellation.
     const settled = Promise.withResolvers<void>();
-    const unsubscribe = app.registry.subscribe(() => { if (app.registry.details(id)?.status === "complete") settled.resolve(); });
-    const interrupt = app.registry.interrupt(id), repeated = app.registry.interrupt(id);
+    const unsubscribe = app.registry.subscribe(() => {
+      if (app.registry.details(id)?.status === "complete") settled.resolve();
+    });
+    const interrupt = app.registry.interrupt(id),
+      repeated = app.registry.interrupt(id);
     await app.streams.gates.get("A")!.abortReceived;
-    expect(app.registry.details(id)?.pendingMessages?.map((message) => message.text)).toEqual(["second", "third"]);
+    expect(app.registry.details(id)?.pendingMessages?.map((message) => message.text)).toEqual([
+      "second",
+      "third",
+    ]);
     app.streams.gates.get("A")!.finish("interrupted");
-    expectOk(await interrupt); expectOk(await repeated); expect(expectError(await running).code).toBe("CANCELLED");
-    await settled.promise; unsubscribe();
+    expectOk(await interrupt);
+    expectOk(await repeated);
+    expect(expectError(await running).code).toBe("CANCELLED");
+    await settled.promise;
+    unsubscribe();
 
     // Only delivered input is persisted; the two queue entries become one user message.
-    const messages = SessionManager.open(app.registry.sessionFile(id)!).getBranch().flatMap((entry) => entry.type === "message" && entry.message.role === "user"
-      ? [typeof entry.message.content === "string" ? entry.message.content : entry.message.content.filter((part) => part.type === "text").map((part) => part.text).join("")] : []);
+    const messages = SessionManager.open(app.registry.sessionFile(id)!)
+      .getBranch()
+      .flatMap((entry) =>
+        entry.type === "message" && entry.message.role === "user"
+          ? [
+              typeof entry.message.content === "string"
+                ? entry.message.content
+                : entry.message.content
+                    .filter((part) => part.type === "text")
+                    .map((part) => part.text)
+                    .join(""),
+            ]
+          : [],
+      );
     expect(messages).toEqual(["hold A", "second\nthird"]);
-    expect(app.executors).toHaveLength(1); expect(app.registry.details(id)?.pendingMessages).toEqual([]);
+    expect(app.executors).toHaveLength(1);
+    expect(app.registry.details(id)?.pendingMessages).toEqual([]);
     expectOk(await app.registry.prompt(id, "continue in the same conversation"));
-  } finally { await app.cleanup(); }
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Merging queued input preserves image bytes and duplicate-input order", async () => {
   // Two equal texts still represent two accepted messages, each with its own image.
-  const app = await sdkFixture(true, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] } }));
+  const app = await sdkFixture(true, (options) => ({
+    ...options,
+    model: { ...options.model!, input: ["text", "image"] },
+  }));
   try {
-    const id = expectOk(await app.registry.create(app.main.id)), path = join(app.directory, "queued.png");
+    const id = expectOk(await app.registry.create(app.main.id)),
+      path = join(app.directory, "queued.png");
     await writeFile(path, tinyPng());
-    const running = app.registry.prompt(id, "hold A"); await app.streams.waitFor("A");
-    expectOk(await app.registry.prompt(id, "same", undefined, [path])); expectOk(await app.registry.prompt(id, "same", undefined, [path]));
-    expect(app.registry.details(id)?.pendingMessages).toEqual([summarizeRequest("same", 1), summarizeRequest("same", 1)]);
+    const running = app.registry.prompt(id, "hold A");
+    await app.streams.waitFor("A");
+    expectOk(await app.registry.prompt(id, "same", undefined, [path]));
+    expectOk(await app.registry.prompt(id, "same", undefined, [path]));
+    expect(app.registry.details(id)?.pendingMessages).toEqual([
+      summarizeRequest("same", 1),
+      summarizeRequest("same", 1),
+    ]);
     const settled = Promise.withResolvers<void>();
-    const unsubscribe = app.registry.subscribe(() => { if (app.registry.details(id)?.status === "complete") settled.resolve(); });
+    const unsubscribe = app.registry.subscribe(() => {
+      if (app.registry.details(id)?.status === "complete") settled.resolve();
+    });
 
-    const interrupted = app.registry.interrupt(id); await app.streams.gates.get("A")!.abortReceived;
-    app.streams.gates.get("A")!.finish("cancelled"); expectOk(await interrupted); await running; await settled.promise; unsubscribe();
+    const interrupted = app.registry.interrupt(id);
+    await app.streams.gates.get("A")!.abortReceived;
+    app.streams.gates.get("A")!.finish("cancelled");
+    expectOk(await interrupted);
+    await running;
+    await settled.promise;
+    unsubscribe();
 
-    const users = SessionManager.open(app.registry.sessionFile(id)!).getBranch().flatMap((entry) => entry.type === "message" && entry.message.role === "user" ? [entry.message] : []);
+    const users = SessionManager.open(app.registry.sessionFile(id)!)
+      .getBranch()
+      .flatMap((entry) =>
+        entry.type === "message" && entry.message.role === "user" ? [entry.message] : [],
+      );
     const last = users.at(-1)!;
     expect(users).toHaveLength(2);
-    expect(typeof last.content === "string" ? last.content : last.content.filter((part) => part.type === "text").map((part) => part.text).join("")).toBe("same\nsame");
-    expect(typeof last.content === "string" ? [] : last.content.filter((part) => part.type === "image").map((part) => part.data)).toEqual([tinyPng().toString("base64"), tinyPng().toString("base64")]);
-  } finally { await app.cleanup(); }
+    expect(
+      typeof last.content === "string"
+        ? last.content
+        : last.content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join(""),
+    ).toBe("same\nsame");
+    expect(
+      typeof last.content === "string"
+        ? []
+        : last.content.filter((part) => part.type === "image").map((part) => part.data),
+    ).toEqual([tinyPng().toString("base64"), tinyPng().toString("base64")]);
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Interrupt cancels manual compaction while preserving conversation and session", async () => {
   // Only the summary request waits; ordinary conversation uses the real offline SDK path.
   let summarizing = false;
   const started = Promise.withResolvers<void>();
-  const app = await sdkFixture(false, (options) => ({ ...options,
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
     settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
     streamFn: (model, context, request) => {
       if (!summarizing) return options.streamFn!(model, context, request);
-      const stream = createAssistantMessageEventStream(), message = fixtureMessage(model.api, model.provider, model.id);
-      const cancel = () => { message.stopReason = "aborted"; stream.push({ type: "error", reason: "aborted", error: message }); stream.end(); };
+      const stream = createAssistantMessageEventStream(),
+        message = fixtureMessage(model.api, model.provider, model.id);
+      const cancel = () => {
+        message.stopReason = "aborted";
+        stream.push({ type: "error", reason: "aborted", error: message });
+        stream.end();
+      };
       if (request?.signal?.aborted) cancel();
       else request?.signal?.addEventListener("abort", cancel, { once: true });
       started.resolve();
@@ -880,72 +1485,124 @@ test("Interrupt cancels manual compaction while preserving conversation and sess
   }));
   try {
     const id = expectOk(await app.registry.create(app.main.id));
-    expectOk(await app.registry.prompt(id, "first")); expectOk(await app.registry.prompt(id, "second"));
-    const before = app.registry.details(id)!; summarizing = true;
-    const compact = app.registry.compact(id); await started.promise;
+    expectOk(await app.registry.prompt(id, "first"));
+    expectOk(await app.registry.prompt(id, "second"));
+    const before = app.registry.details(id)!;
+    summarizing = true;
+    const compact = app.registry.compact(id);
+    await started.promise;
 
     expectOk(await app.registry.interrupt(id));
 
     expect(expectError(await compact).code).toBe("CANCELLED");
-    expect(app.registry.details(id)?.sections?.at(-1)).toMatchObject({ title: "Compaction cancelled", status: "cancelled" });
-    expect(app.registry.details(id)?.conversationId).toBe(before.conversationId); expect(app.registry.details(id)?.runTiming).toBeUndefined();
-    expect(app.registry.details(id)?.sections?.slice(0, before.sections!.length)).toEqual([...before.sections!]);
-    summarizing = false; expectOk(await app.registry.prompt(id, "continue"));
-  } finally { await app.cleanup(); }
+    expect(app.registry.details(id)?.sections?.at(-1)).toMatchObject({
+      title: "Compaction cancelled",
+      status: "cancelled",
+    });
+    expect(app.registry.details(id)?.conversationId).toBe(before.conversationId);
+    expect(app.registry.details(id)?.runTiming).toBeUndefined();
+    expect(app.registry.details(id)?.sections?.slice(0, before.sections!.length)).toEqual([
+      ...before.sections!,
+    ]);
+    summarizing = false;
+    expectOk(await app.registry.prompt(id, "continue"));
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Unaccepted image input still preparing at interruption never executes later", async () => {
   // Image decoding is an SDK/OS boundary that can finish after the user presses Esc.
-  const loading = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
-  const app = await sdkFixture(true, (options) => ({ ...options, model: { ...options.model!, input: ["text", "image"] },
-    imageLoader: async () => { loading.resolve(); await release.promise; return ok([]); },
+  const loading = Promise.withResolvers<void>(),
+    release = Promise.withResolvers<void>();
+  const app = await sdkFixture(true, (options) => ({
+    ...options,
+    model: { ...options.model!, input: ["text", "image"] },
+    imageLoader: async () => {
+      loading.resolve();
+      await release.promise;
+      return ok([]);
+    },
   }));
   try {
     const id = expectOk(await app.registry.create(app.main.id));
-    const running = app.registry.prompt(id, "hold A"); await app.streams.waitFor("A");
+    const running = app.registry.prompt(id, "hold A");
+    await app.streams.waitFor("A");
     let accepted = false;
-    const preparing = app.registry.prompt(id, "Late image input", () => { accepted = true; }, ["/fixture/image.png"]);
+    const preparing = app.registry.prompt(
+      id,
+      "Late image input",
+      () => {
+        accepted = true;
+      },
+      ["/fixture/image.png"],
+    );
     await loading.promise;
 
-    const interrupted = app.registry.interrupt(id); await app.streams.gates.get("A")!.abortReceived;
-    release.resolve(); app.streams.gates.get("A")!.finish("cancelled"); expectOk(await interrupted);
+    const interrupted = app.registry.interrupt(id);
+    await app.streams.gates.get("A")!.abortReceived;
+    release.resolve();
+    app.streams.gates.get("A")!.finish("cancelled");
+    expectOk(await interrupted);
 
-    expect(expectError(await preparing).code).toBe("CANCELLED"); expect(accepted).toBe(false); await running;
-    expect(app.registry.details(id)?.pendingMessages).toEqual([]); expect(app.registry.details(id)?.output).not.toContain("Late image input");
-  } finally { release.resolve(); await app.cleanup(); }
+    expect(expectError(await preparing).code).toBe("CANCELLED");
+    expect(accepted).toBe(false);
+    await running;
+    expect(app.registry.details(id)?.pendingMessages).toEqual([]);
+    expect(app.registry.details(id)?.output).not.toContain("Late image input");
+  } finally {
+    release.resolve();
+    await app.cleanup();
+  }
 });
 
 test("Interrupt waits for owned subagent cancellation without closing the parent session", async () => {
   const app = await sdkFixture(true);
   try {
     const id = expectOk(await app.registry.create(app.main.id));
-    const running = app.registry.prompt(id, "delegate"); await app.streams.waitFor("child");
+    const running = app.registry.prompt(id, "delegate");
+    await app.streams.waitFor("child");
 
-    const interrupted = app.registry.interrupt(id); await app.streams.gates.get("child")!.abortReceived;
-    app.streams.gates.get("child")!.finish("cancelled child"); expectOk(await interrupted);
+    const interrupted = app.registry.interrupt(id);
+    await app.streams.gates.get("child")!.abortReceived;
+    app.streams.gates.get("child")!.finish("cancelled child");
+    expectOk(await interrupted);
 
     expect(expectError(await running).code).toBe("CANCELLED");
-    expect(app.registry.details(id)).not.toBeNull(); expect(app.registry.closingCount).toBe(0);
+    expect(app.registry.details(id)).not.toBeNull();
+    expect(app.registry.closingCount).toBe(0);
     expectOk(await app.registry.prompt(id, "Continue after cancellation"));
-  } finally { await app.cleanup(); }
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Interrupt without queued input cancels only the selected run", async () => {
   // Two independent sessions prove this is not runtime shutdown or session close.
   const app = await sdkFixture(true);
   try {
-    const a = expectOk(await app.registry.create(app.main.id)), b = expectOk(await app.registry.create(app.main.id));
-    const first = app.registry.prompt(a, "hold A"), second = app.registry.prompt(b, "hold B");
+    const a = expectOk(await app.registry.create(app.main.id)),
+      b = expectOk(await app.registry.create(app.main.id));
+    const first = app.registry.prompt(a, "hold A"),
+      second = app.registry.prompt(b, "hold B");
     await Promise.all([app.streams.waitFor("A"), app.streams.waitFor("B")]);
 
-    const interrupt = app.registry.interrupt(a); await app.streams.gates.get("A")!.abortReceived;
-    app.streams.gates.get("A")!.finish("cancelled"); expectOk(await interrupt);
+    const interrupt = app.registry.interrupt(a);
+    await app.streams.gates.get("A")!.abortReceived;
+    app.streams.gates.get("A")!.finish("cancelled");
+    expectOk(await interrupt);
 
-    expect(expectError(await first).code).toBe("CANCELLED"); expect(app.streams.gates.get("B")!.aborted).toBe(false);
-    expect(app.registry.snapshot[0]?.worktrees.find((tree) => tree.id === app.main.id)?.sessions).toHaveLength(2);
+    expect(expectError(await first).code).toBe("CANCELLED");
+    expect(app.streams.gates.get("B")!.aborted).toBe(false);
+    expect(
+      app.registry.snapshot[0]?.worktrees.find((tree) => tree.id === app.main.id)?.sessions,
+    ).toHaveLength(2);
     expect(app.registry.details(a)?.runTiming).toBeUndefined();
-    app.streams.gates.get("B")!.finish("finished"); expectOk(await second);
-  } finally { await app.cleanup(); }
+    app.streams.gates.get("B")!.finish("finished");
+    expectOk(await second);
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Concurrent SDK submissions serialize acceptance and preserve actual queue order", async () => {
@@ -953,42 +1610,64 @@ test("Concurrent SDK submissions serialize acceptance and preserve actual queue 
   const app = await sdkFixture();
   try {
     const id = expectOk(await app.registry.create(app.main.id));
-    const admissions = [Promise.withResolvers<void>(), Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    const admissions = [
+      Promise.withResolvers<void>(),
+      Promise.withResolvers<void>(),
+      Promise.withResolvers<void>(),
+    ];
 
     // Concurrent callers must not create three overlapping initial runs.
-    const runs = ["A", "B", "C"].map((name, i) => app.registry.prompt(id, `hold ${name}`, admissions[i]!.resolve));
+    const runs = ["A", "B", "C"].map((name, i) =>
+      app.registry.prompt(id, `hold ${name}`, admissions[i]!.resolve),
+    );
     await Promise.all(admissions.map((item) => item.promise));
     for (const result of await Promise.all(runs)) expectOk(result);
 
     // Early steering may join the initial request; finalized user-message order is authoritative.
-    const messages = SessionManager.open(app.registry.sessionFile(id)!).getBranch().flatMap((entry) => {
-      if (entry.type !== "message" || entry.message.role !== "user") return [];
-      const content = entry.message.content;
-      return [typeof content === "string" ? content : content.filter((part) => part.type === "text").map((part) => part.text).join("")];
-    });
+    const messages = SessionManager.open(app.registry.sessionFile(id)!)
+      .getBranch()
+      .flatMap((entry) => {
+        if (entry.type !== "message" || entry.message.role !== "user") return [];
+        const content = entry.message.content;
+        return [
+          typeof content === "string"
+            ? content
+            : content
+                .filter((part) => part.type === "text")
+                .map((part) => part.text)
+                .join(""),
+        ];
+      });
     expect(messages).toEqual(["hold A", "hold B", "hold C"]);
     expect(app.executors).toHaveLength(1);
-  } finally { await app.cleanup(); }
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Intermediate agent_end events during SDK retries do not report completion before final settlement", async () => {
   // The first scripted response is retryable; the second remains held until explicitly released.
   let requests = 0;
   const app = await sdkFixture(true, (options) => ({
-    ...options, settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 1, maxAgentDelayMs: 1 } },
+    ...options,
+    settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 1, maxAgentDelayMs: 1 } },
     streamFn: (model, context, request) => {
       if (++requests !== 1) return options.streamFn!(model, context, request);
       const stream = createAssistantMessageEventStream();
       const error = fixtureMessage(model.api, model.provider, model.id);
-      error.stopReason = "error"; error.errorMessage = "429 Too Many Requests";
-      stream.push({ type: "error", reason: "error", error }); stream.end();
+      error.stopReason = "error";
+      error.errorMessage = "429 Too Many Requests";
+      stream.push({ type: "error", reason: "error", error });
+      stream.end();
       return stream;
     },
   }));
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     const observed: (string | null)[] = [];
-    const unsubscribe = app.registry.subscribe(() => { observed.push(app.registry.details(id)?.status ?? null); });
+    const unsubscribe = app.registry.subscribe(() => {
+      observed.push(app.registry.details(id)?.status ?? null);
+    });
 
     // Pi performs the retry; radian does not implement a second retry engine.
     const running = app.registry.prompt(id, "hold Retry");
@@ -998,55 +1677,80 @@ test("Intermediate agent_end events during SDK retries do not report completion 
     expect(app.registry.details(id)?.status).toBe("working");
     expect(app.registry.details(id)?.sections?.some((section) => section.completion)).toBe(false);
     app.streams.gates.get("Retry")!.finish("retry succeeded");
-    await running; unsubscribe();
+    await running;
+    unsubscribe();
 
     // Completion appears only once Pi settles the successful recovery.
     expect(app.registry.details(id)?.status).toBe("complete");
     expect(app.registry.details(id)?.error).toBeNull();
-    expect(app.registry.details(id)?.sections?.filter((section) => section.completion)).toHaveLength(1);
-  } finally { await app.cleanup(); }
+    expect(
+      app.registry.details(id)?.sections?.filter((section) => section.completion),
+    ).toHaveLength(1);
+  } finally {
+    await app.cleanup();
+  }
 });
 
-test.each(["close", "interrupt"] as const)("Real SDK bash work cancels on %s without leaving owned shell processes", async (operation) => {
-  // The only spawned shell and filesystem changes belong to an isolated test worktree.
-  const app = await sdkFixture(false, (options) => ({
-    ...options, streamFn: (model, context, request) => {
-      const last = context.messages.at(-1);
-      if (last?.role !== "user") return options.streamFn!(model, context, request);
-      const stream = createAssistantMessageEventStream();
-      const message = fixtureMessage(model.api, model.provider, model.id);
-      message.stopReason = "toolUse";
-      message.content.push({ type: "toolCall", id: crypto.randomUUID(), name: "bash", arguments: {
-        command: "echo $$ > .bash-probe.pid; echo BASH_STARTED; while :; do sleep 1; done",
-      } });
-      stream.push({ type: "done", reason: "toolUse", message }); stream.end(); return stream;
-    },
-  }));
-  try {
-    const id = expectOk(await app.registry.create(app.main.id));
-    const started = Promise.withResolvers<void>();
-    const unsubscribe = app.registry.subscribe(() => {
-      if (app.registry.details(id)?.output.includes("BASH_STARTED")) started.resolve();
-    });
+test.each(["close", "interrupt"] as const)(
+  "Real SDK bash work cancels on %s without leaving owned shell processes",
+  async (operation) => {
+    // The only spawned shell and filesystem changes belong to an isolated test worktree.
+    const app = await sdkFixture(false, (options) => ({
+      ...options,
+      streamFn: (model, context, request) => {
+        const last = context.messages.at(-1);
+        if (last?.role !== "user") return options.streamFn!(model, context, request);
+        const stream = createAssistantMessageEventStream();
+        const message = fixtureMessage(model.api, model.provider, model.id);
+        message.stopReason = "toolUse";
+        message.content.push({
+          type: "toolCall",
+          id: crypto.randomUUID(),
+          name: "bash",
+          arguments: {
+            command: "echo $$ > .bash-probe.pid; echo BASH_STARTED; while :; do sleep 1; done",
+          },
+        });
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+        return stream;
+      },
+    }));
+    try {
+      const id = expectOk(await app.registry.create(app.main.id));
+      const started = Promise.withResolvers<void>();
+      const unsubscribe = app.registry.subscribe(() => {
+        if (app.registry.details(id)?.output.includes("BASH_STARTED")) started.resolve();
+      });
 
-    // Await the actual SDK tool update, not a guessed process-start delay.
-    const running = app.registry.prompt(id, "bash probe");
-    await started.promise; unsubscribe();
-    const pid = Number.parseInt(await readFile(join(app.main.path, ".bash-probe.pid"), "utf8"), 10);
-    expect(process.kill(pid, 0)).toBe(true);
-    const [stopped] = await Promise.all([app.registry[operation](id), running]); expectOk(stopped);
+      // Await the actual SDK tool update, not a guessed process-start delay.
+      const running = app.registry.prompt(id, "bash probe");
+      await started.promise;
+      unsubscribe();
+      const pid = Number.parseInt(
+        await readFile(join(app.main.path, ".bash-probe.pid"), "utf8"),
+        10,
+      );
+      expect(process.kill(pid, 0)).toBe(true);
+      const [stopped] = await Promise.all([app.registry[operation](id), running]);
+      expectOk(stopped);
 
-    // Abort propagation and tool completion include process cleanup before control resolves.
-    expect(() => process.kill(pid, 0)).toThrow();
-    expect(app.registry.closingCount).toBe(0);
-    if (operation === "interrupt") expect(app.registry.details(id)).not.toBeNull();
-  } finally { await app.cleanup(); }
-});
+      // Abort propagation and tool completion include process cleanup before control resolves.
+      expect(() => process.kill(pid, 0)).toThrow();
+      expect(app.registry.closingCount).toBe(0);
+      if (operation === "interrupt") expect(app.registry.details(id)).not.toBeNull();
+    } finally {
+      await app.cleanup();
+    }
+  },
+);
 
 test("SDK history defaults to the specified agentDir when sessionDir is omitted", async () => {
   // Default SDK session-directory selection must not escape into the user's global history.
   const app = await sdkFixture(false, (options) => {
-    const scoped = { ...options }; delete scoped.sessionDir; return scoped;
+    const scoped = { ...options };
+    delete scoped.sessionDir;
+    return scoped;
   });
   try {
     const id = expectOk(await app.registry.create(app.main.id));
@@ -1055,18 +1759,28 @@ test("SDK history defaults to the specified agentDir when sessionDir is omitted"
     await app.registry.prompt(id, "read");
 
     // No hand-written encoding or accidental global SessionManager default is used.
-    expect(app.registry.sessionFile(id)?.startsWith(join(app.directory, "agent", "sessions") + "/")).toBe(true);
-  } finally { await app.cleanup(); }
+    expect(
+      app.registry.sessionFile(id)?.startsWith(join(app.directory, "agent", "sessions") + "/"),
+    ).toBe(true);
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Final SDK provider failures return AgentRunError Results distinct from cancellation", async () => {
   // The SDK reports a terminal provider failure through its actual event contract, not a thrown bug.
-  const app = await sdkFixture(false, (options) => ({ ...options, streamFn: (model) => {
-    const stream = createAssistantMessageEventStream();
-    const message = fixtureMessage(model.api, model.provider, model.id);
-    message.stopReason = "error"; message.errorMessage = "Provider rejected this test request";
-    stream.push({ type: "error", reason: "error", error: message }); stream.end(); return stream;
-  } }));
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    streamFn: (model) => {
+      const stream = createAssistantMessageEventStream();
+      const message = fixtureMessage(model.api, model.provider, model.id);
+      message.stopReason = "error";
+      message.errorMessage = "Provider rejected this test request";
+      stream.push({ type: "error", reason: "error", error: message });
+      stream.end();
+      return stream;
+    },
+  }));
   try {
     const id = expectOk(await app.registry.create(app.main.id));
 
@@ -1076,18 +1790,30 @@ test("Final SDK provider failures return AgentRunError Results distinct from can
     expect(expectError(result).code).toBe("AGENT_FAILED");
     expect(app.registry.details(id)?.status).toBe("failure");
     expect(app.registry.details(id)?.error).toBe("Provider rejected this test request");
-  } finally { await app.cleanup(); }
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Automatic compaction reports dedicated activity and returns to normal execution before completing once", async () => {
   // Trigger real SDK threshold compaction with a low limit and pause only the summary provider.
-  const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
-  const app = await sdkFixture(false, (options) => ({ ...options,
+  const started = Promise.withResolvers<void>(),
+    release = Promise.withResolvers<void>();
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
     settings: { compaction: { enabled: true, keepRecentTokens: 0, reserveTokens: 199900 } },
     streamFn: async (model, context, request) => {
       const first = context.messages[0];
-      const system = first?.role === "system" ? typeof first.content === "string" ? first.content : first.content.map((part) => part.text).join("") : "";
-      if (system.startsWith("You are a context summarization assistant.")) { started.resolve(); await release.promise; }
+      const system =
+        first?.role === "system"
+          ? typeof first.content === "string"
+            ? first.content
+            : first.content.map((part) => part.text).join("")
+          : "";
+      if (system.startsWith("You are a context summarization assistant.")) {
+        started.resolve();
+        await release.promise;
+      }
       return options.streamFn!(model, context, request);
     },
   }));
@@ -1096,106 +1822,189 @@ test("Automatic compaction reports dedicated activity and returns to normal exec
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     const pending = app.registry.prompt(id, "Preserve the implementation plan. ".repeat(500));
-    await Promise.race([started.promise, pending.then((result) => { expectOk(result); throw new Error("SDK run ended without entering compaction."); })]);
+    await Promise.race([
+      started.promise,
+      pending.then((result) => {
+        expectOk(result);
+        throw new Error("SDK run ended without entering compaction.");
+      }),
+    ]);
     expect(app.registry.details(id)).toMatchObject({ status: "working", activity: "compacting" });
-    unsubscribe = app.registry.subscribe(() => { const state = app.registry.details(id); resumed.push(state?.status === "working" && !("activity" in state)); });
+    unsubscribe = app.registry.subscribe(() => {
+      const state = app.registry.details(id);
+      resumed.push(state?.status === "working" && !("activity" in state));
+    });
 
     // UI activity must end on compaction_end even if SDK isCompacting remains true.
-    release.resolve(); expectOk(await pending);
+    release.resolve();
+    expectOk(await pending);
 
-    expect(resumed).toContain(true); expect(app.registry.details(id)).not.toHaveProperty("activity");
+    expect(resumed).toContain(true);
+    expect(app.registry.details(id)).not.toHaveProperty("activity");
     expect(app.registry.details(id)?.status).toBe("complete");
-    expect(app.registry.details(id)?.sections?.filter((section) => section.completion)).toHaveLength(1);
-  } finally { release.resolve(); unsubscribe(); await app.cleanup(); }
+    expect(
+      app.registry.details(id)?.sections?.filter((section) => section.completion),
+    ).toHaveLength(1);
+  } finally {
+    release.resolve();
+    unsubscribe();
+    await app.cleanup();
+  }
 });
 
-test.each(["complete", "error"] as const)("Manual compaction retains dedicated activity throughout its lifetime and clears after %s", async (outcome) => {
-  // Pause only the real SDK summary stream to observe compaction deterministically.
-  const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
-  let summarizing = false;
-  const app = await sdkFixture(false, (options) => ({ ...options,
-    settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
-    streamFn: async (model, context, request) => {
-      if (!summarizing) return options.streamFn!(model, context, request);
-      started.resolve(); await release.promise;
-      const stream = createAssistantMessageEventStream(), message = fixtureMessage(model.api, model.provider, model.id);
-      message.content = [{ type: "text", text: "Retain the fixture implementation plan" }];
-      if (outcome === "complete") { message.stopReason = "stop"; stream.push({ type: "done", reason: "stop", message }); }
-      else {
-        message.stopReason = "error"; message.errorMessage = "Offline compaction fixture";
-        stream.push({ type: "error", reason: message.stopReason, error: message });
-      }
-      stream.end(); return stream;
-    },
-  }));
-  const observed: string[] = [];
-  let unsubscribe = () => {};
-  try {
-    const id = expectOk(await app.registry.create(app.main.id));
-    expectOk(await app.registry.prompt(id, "first request")); expectOk(await app.registry.prompt(id, "second request"));
-    const before = app.registry.details(id)!;
-    unsubscribe = app.registry.subscribe(() => { const state = app.registry.details(id); if (state?.status === "working") observed.push("activity" in state ? String(state.activity) : "missing"); });
-    summarizing = true;
+test.each(["complete", "error"] as const)(
+  "Manual compaction retains dedicated activity throughout its lifetime and clears after %s",
+  async (outcome) => {
+    // Pause only the real SDK summary stream to observe compaction deterministically.
+    const started = Promise.withResolvers<void>(),
+      release = Promise.withResolvers<void>();
+    let summarizing = false;
+    const app = await sdkFixture(false, (options) => ({
+      ...options,
+      settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
+      streamFn: async (model, context, request) => {
+        if (!summarizing) return options.streamFn!(model, context, request);
+        started.resolve();
+        await release.promise;
+        const stream = createAssistantMessageEventStream(),
+          message = fixtureMessage(model.api, model.provider, model.id);
+        message.content = [{ type: "text", text: "Retain the fixture implementation plan" }];
+        if (outcome === "complete") {
+          message.stopReason = "stop";
+          stream.push({ type: "done", reason: "stop", message });
+        } else {
+          message.stopReason = "error";
+          message.errorMessage = "Offline compaction fixture";
+          stream.push({ type: "error", reason: message.stopReason, error: message });
+        }
+        stream.end();
+        return stream;
+      },
+    }));
+    const observed: string[] = [];
+    let unsubscribe = () => {};
+    try {
+      const id = expectOk(await app.registry.create(app.main.id));
+      expectOk(await app.registry.prompt(id, "first request"));
+      expectOk(await app.registry.prompt(id, "second request"));
+      const before = app.registry.details(id)!;
+      unsubscribe = app.registry.subscribe(() => {
+        const state = app.registry.details(id);
+        if (state?.status === "working")
+          observed.push("activity" in state ? String(state.activity) : "missing");
+      });
+      summarizing = true;
 
-    // Never revert to the previous request's Working on state before SDK completion.
-    const pending = app.registry.compact(id);
-    await Promise.race([started.promise, pending.then((result) => { expectOk(result); throw new Error("SDK compaction ended before the summary provider started."); })]);
-    expect(app.registry.details(id)).toMatchObject({ status: "working", activity: "compacting", conversationId: before.conversationId });
-    release.resolve(); const result = await pending;
+      // Never revert to the previous request's Working on state before SDK completion.
+      const pending = app.registry.compact(id);
+      await Promise.race([
+        started.promise,
+        pending.then((result) => {
+          expectOk(result);
+          throw new Error("SDK compaction ended before the summary provider started.");
+        }),
+      ]);
+      expect(app.registry.details(id)).toMatchObject({
+        status: "working",
+        activity: "compacting",
+        conversationId: before.conversationId,
+      });
+      release.resolve();
+      const result = await pending;
 
-    if (outcome === "complete") expectOk(result);
-    else expect(expectError(result).code).toBe("AGENT_FAILED");
-    expect(observed.length).toBeGreaterThan(0); expect(observed.every((activity) => activity === "compacting")).toBe(true);
-    expect(app.registry.details(id)).not.toHaveProperty("activity"); expect(app.registry.details(id)?.status).toBe(before.status);
-    expect(app.registry.details(id)?.sections?.slice(0, before.sections!.length)).toEqual([...before.sections!]);
-  } finally { release.resolve(); unsubscribe(); await app.cleanup(); }
-});
+      if (outcome === "complete") expectOk(result);
+      else expect(expectError(result).code).toBe("AGENT_FAILED");
+      expect(observed.length).toBeGreaterThan(0);
+      expect(observed.every((activity) => activity === "compacting")).toBe(true);
+      expect(app.registry.details(id)).not.toHaveProperty("activity");
+      expect(app.registry.details(id)?.status).toBe(before.status);
+      expect(app.registry.details(id)?.sections?.slice(0, before.sections!.length)).toEqual([
+        ...before.sections!,
+      ]);
+    } finally {
+      release.resolve();
+      unsubscribe();
+      await app.cleanup();
+    }
+  },
+);
 
 test("Manual compaction saves real SDK summaries while preserving conversation, request ID, and tab", async () => {
   // A small retained tail makes this offline conversation eligible without a paid model call.
   const requests: string[] = [];
-  const app = await sdkFixture(false, (options) => ({ ...options,
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
     settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
-    streamFn: (model, context, request) => { requests.push(JSON.stringify(context.messages)); return options.streamFn!(model, context, request); },
+    streamFn: (model, context, request) => {
+      requests.push(JSON.stringify(context.messages));
+      return options.streamFn!(model, context, request);
+    },
   }));
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "Keep the current implementation plan"));
     expectOk(await app.registry.prompt(id, "Continue the fixture work"));
-    const before = app.registry.details(id)!, file = app.registry.sessionFile(id)!, calls = requests.length;
+    const before = app.registry.details(id)!,
+      file = app.registry.sessionFile(id)!,
+      calls = requests.length;
     let accepted = 0;
-    const commands = expectOk(await app.registry.complete(id, { kind: "command", query: "" })).items;
+    const commands = expectOk(
+      await app.registry.complete(id, { kind: "command", query: "" }),
+    ).items;
     expect(commands.map((item) => item.value)).toEqual(expect.arrayContaining(["new", "compact"]));
 
     // Instructions go to SDK summarization, never into a new user/model turn.
     expectOk(await app.registry.compact(id, "Preserve the implementation plan", () => accepted++));
 
-    expect(accepted).toBe(1); expect(requests.length).toBeGreaterThan(calls);
+    expect(accepted).toBe(1);
+    expect(requests.length).toBeGreaterThan(calls);
     expect(requests.slice(calls).join("\n")).toContain("Preserve the implementation plan");
     const after = app.registry.details(id)!;
-    expect(after.conversationId).toBe(before.conversationId); expect(app.registry.sessionFile(id)).toBe(file);
+    expect(after.conversationId).toBe(before.conversationId);
+    expect(app.registry.sessionFile(id)).toBe(file);
     expect(after.sections?.slice(0, before.sections!.length)).toEqual([...before.sections!]);
-    expect(after.sections?.at(-1)?.title).toBe("Context compacted"); expect(after.status).toBe("complete");
-    expect(SessionManager.open(file).getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(1);
+    expect(after.sections?.at(-1)?.title).toBe("Context compacted");
+    expect(after.status).toBe("complete");
+    expect(
+      SessionManager.open(file)
+        .getBranch()
+        .filter((entry) => entry.type === "compaction"),
+    ).toHaveLength(1);
     expect(app.selection.worktree?.sessions.map((session) => session.id)).toEqual([id]);
-  } finally { await app.cleanup(); }
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Manual compaction rejects empty or undersized conversations without model calls", async () => {
   let calls = 0;
-  const app = await sdkFixture(false, (options) => ({ ...options, streamFn: (model, context, request) => {
-    calls++; return options.streamFn!(model, context, request);
-  } }));
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    streamFn: (model, context, request) => {
+      calls++;
+      return options.streamFn!(model, context, request);
+    },
+  }));
   try {
-    const id = expectOk(await app.registry.create(app.main.id)); let accepted = 0;
-    expect(expectError(await app.registry.compact(id, undefined, () => accepted++)).code).toBe("INVALID_INPUT");
+    const id = expectOk(await app.registry.create(app.main.id));
+    let accepted = 0;
+    expect(expectError(await app.registry.compact(id, undefined, () => accepted++)).code).toBe(
+      "INVALID_INPUT",
+    );
     expect(calls).toBe(0);
-    expectOk(await app.registry.prompt(id, "tiny fixture")); const before = calls;
+    expectOk(await app.registry.prompt(id, "tiny fixture"));
+    const before = calls;
 
-    expect(expectError(await app.registry.compact(id, undefined, () => accepted++)).code).toBe("INVALID_INPUT");
+    expect(expectError(await app.registry.compact(id, undefined, () => accepted++)).code).toBe(
+      "INVALID_INPUT",
+    );
 
-    expect(calls).toBe(before); expect(accepted).toBe(0); expect(app.registry.details(id)?.status).toBe("complete");
-  } finally { await app.cleanup(); }
+    expect(calls).toBe(before);
+    expect(accepted).toBe(0);
+    expect(app.registry.details(id)?.status).toBe("complete");
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Manual compaction during execution neither interrupts the model nor queues input", async () => {
@@ -1203,156 +2012,250 @@ test("Manual compaction during execution neither interrupts the model nor queues
   const app = await sdkFixture(true);
   try {
     const id = expectOk(await app.registry.create(app.main.id));
-    const run = app.registry.prompt(id, "hold compact-busy"); await app.streams.waitFor("compact-busy");
+    const run = app.registry.prompt(id, "hold compact-busy");
+    await app.streams.waitFor("compact-busy");
 
     expect(expectError(await app.registry.compact(id)).code).toBe("SESSION_BUSY");
 
     expect(app.streams.gates.get("compact-busy")!.aborted).toBe(false);
-    app.streams.gates.get("compact-busy")!.finish("original result"); expectOk(await run);
-    expect(app.registry.details(id)?.sections?.some((section) => section.text === "original result")).toBe(true);
-  } finally { await app.cleanup(); }
+    app.streams.gates.get("compact-busy")!.finish("original result");
+    expectOk(await run);
+    expect(
+      app.registry.details(id)?.sections?.some((section) => section.text === "original result"),
+    ).toBe(true);
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Compaction model failures preserve conversation and record accepted command errors inline", async () => {
   let failSummary = false;
-  const app = await sdkFixture(false, (options) => ({ ...options,
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
     settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
     streamFn: (model, context, request) => {
       if (!failSummary) return options.streamFn!(model, context, request);
-      const stream = createAssistantMessageEventStream(), message = fixtureMessage(model.api, model.provider, model.id);
-      message.stopReason = "error"; message.errorMessage = "Offline summary rejected";
-      stream.push({ type: "error", reason: "error", error: message }); stream.end(); return stream;
+      const stream = createAssistantMessageEventStream(),
+        message = fixtureMessage(model.api, model.provider, model.id);
+      message.stopReason = "error";
+      message.errorMessage = "Offline summary rejected";
+      stream.push({ type: "error", reason: "error", error: message });
+      stream.end();
+      return stream;
     },
   }));
   try {
     const id = expectOk(await app.registry.create(app.main.id));
-    expectOk(await app.registry.prompt(id, "first")); expectOk(await app.registry.prompt(id, "second"));
-    const before = app.registry.details(id)!; let accepted = 0; failSummary = true;
+    expectOk(await app.registry.prompt(id, "first"));
+    expectOk(await app.registry.prompt(id, "second"));
+    const before = app.registry.details(id)!;
+    let accepted = 0;
+    failSummary = true;
 
     const result = await app.registry.compact(id, undefined, () => accepted++);
 
-    expect(expectError(result).code).toBe("AGENT_FAILED"); expect(accepted).toBe(1);
-    expect(app.registry.details(id)?.sections?.slice(0, before.sections!.length)).toEqual([...before.sections!]);
-    expect(app.registry.details(id)?.sections?.at(-1)).toMatchObject({ title: "Compaction failed", status: "error" });
+    expect(expectError(result).code).toBe("AGENT_FAILED");
+    expect(accepted).toBe(1);
+    expect(app.registry.details(id)?.sections?.slice(0, before.sections!.length)).toEqual([
+      ...before.sections!,
+    ]);
+    expect(app.registry.details(id)?.sections?.at(-1)).toMatchObject({
+      title: "Compaction failed",
+      status: "error",
+    });
     expect(app.registry.details(id)?.sections?.at(-1)?.text).toContain("Offline summary rejected");
-    expect(SessionManager.open(app.registry.sessionFile(id)!).getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+    expect(
+      SessionManager.open(app.registry.sessionFile(id)!)
+        .getBranch()
+        .some((entry) => entry.type === "compaction"),
+    ).toBe(false);
     expect(app.registry.details(id)?.status).toBe("complete");
-  } finally { await app.cleanup(); }
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("Compaction programming errors propagate unchanged instead of becoming input errors", async () => {
   let broken = false;
   const defect = new TypeError("Offline compaction defect", { cause: new Error("Original cause") });
-  const app = await sdkFixture(false, (options) => ({ ...options,
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
     settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
-    streamFn: (model, context, request) => { if (broken) throw defect; return options.streamFn!(model, context, request); },
+    streamFn: (model, context, request) => {
+      if (broken) throw defect;
+      return options.streamFn!(model, context, request);
+    },
   }));
   try {
     const id = expectOk(await app.registry.create(app.main.id));
-    expectOk(await app.registry.prompt(id, "first")); expectOk(await app.registry.prompt(id, "second")); broken = true;
+    expectOk(await app.registry.prompt(id, "first"));
+    expectOk(await app.registry.prompt(id, "second"));
+    broken = true;
 
     await expect(app.registry.compact(id)).rejects.toBe(defect);
 
     expect(app.registry.details(id)?.status).toBe("failure");
     expect(app.registry.details(id)?.error).toContain("Unexpected compaction failure");
-  } finally { await app.cleanup(); }
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("newTab opens a session without touching active SDK conversations, child work, or saved files", async () => {
   const app = await sdkFixture(true);
   try {
     const id = expectOk(await app.registry.create(app.main.id));
-    const run = app.registry.prompt(id, "delegate"); await app.streams.waitFor("child");
-    const conversation = app.registry.details(id)!.conversationId, file = app.registry.sessionFile(id)!;
+    const run = app.registry.prompt(id, "delegate");
+    await app.streams.waitFor("child");
+    const conversation = app.registry.details(id)!.conversationId,
+      file = app.registry.sessionFile(id)!;
 
     const added = expectOk(await app.registry.newTab(id));
 
-    expect(added).not.toBe(id); expect(app.registry.details(id)?.conversationId).toBe(conversation);
-    expect(app.registry.sessionFile(id)).toBe(file); expect(app.registry.sessionFile(added)).not.toBe(file);
+    expect(added).not.toBe(id);
+    expect(app.registry.details(id)?.conversationId).toBe(conversation);
+    expect(app.registry.sessionFile(id)).toBe(file);
+    expect(app.registry.sessionFile(added)).not.toBe(file);
     expect(app.registry.historyOwnership(file).openSessionId).toBe(id);
     expect(app.registry.details(added)?.sections).toEqual([]);
     expect(app.streams.gates.get("child")!.aborted).toBe(false);
     expect(app.registry.records.find((record) => record.id === id)?.subagents).toHaveLength(1);
     expect(app.registry.records.find((record) => record.id === added)?.subagents).toEqual([]);
-    app.streams.gates.get("child")!.finish("original child completed normally"); expectOk(await run);
+    app.streams.gates.get("child")!.finish("original child completed normally");
+    expectOk(await run);
     expect(app.registry.details(id)?.status).toBe("complete");
-  } finally { await app.cleanup(); }
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("clear interrupts and saves the current tab before replacing its conversation in place", async () => {
   const app = await sdkFixture(true);
   try {
-    const id = expectOk(await app.registry.create(app.main.id)), other = expectOk(await app.registry.create(app.main.id));
-    const first = app.registry.prompt(id, "hold previous-conversation"); await app.streams.waitFor("previous-conversation");
-    const second = app.registry.prompt(other, "hold other-tab"); await app.streams.waitFor("other-tab");
-    const conversation = app.registry.details(id)!.conversationId, oldFile = app.registry.sessionFile(id)!;
+    const id = expectOk(await app.registry.create(app.main.id)),
+      other = expectOk(await app.registry.create(app.main.id));
+    const first = app.registry.prompt(id, "hold previous-conversation");
+    await app.streams.waitFor("previous-conversation");
+    const second = app.registry.prompt(other, "hold other-tab");
+    await app.streams.waitFor("other-tab");
+    const conversation = app.registry.details(id)!.conversationId,
+      oldFile = app.registry.sessionFile(id)!;
     app.selection.selectSession(app.main.id, id);
     const accepted = Promise.withResolvers<void>();
 
-    const replacement = app.registry.clearSession(id, () => accepted.resolve()); await accepted.promise;
+    const replacement = app.registry.clearSession(id, () => accepted.resolve());
+    await accepted.promise;
     await app.streams.gates.get("previous-conversation")!.abortReceived;
-    expect(expectError(await app.registry.prompt(id, "during replacement")).code).toBe("SESSION_BUSY");
+    expect(expectError(await app.registry.prompt(id, "during replacement")).code).toBe(
+      "SESSION_BUSY",
+    );
     app.streams.gates.get("previous-conversation")!.finish("persisted cancellation");
-    expect(expectError(await first).code).toBe("CANCELLED"); expectOk(await replacement);
+    expect(expectError(await first).code).toBe("CANCELLED");
+    expectOk(await replacement);
 
-    expect(app.selection.sessionId).toBe(id); expect(app.selection.worktree?.sessions.map((session) => session.id)).toEqual([id, other]);
-    expect(app.registry.details(id)?.conversationId).not.toBe(conversation); expect(app.registry.details(id)?.sections).toEqual([]);
+    expect(app.selection.sessionId).toBe(id);
+    expect(app.selection.worktree?.sessions.map((session) => session.id)).toEqual([id, other]);
+    expect(app.registry.details(id)?.conversationId).not.toBe(conversation);
+    expect(app.registry.details(id)?.sections).toEqual([]);
     expect(app.registry.sessionFile(id)).not.toBe(oldFile);
-    expect(app.registry.historyOwnership(oldFile)).toEqual({ openSessionId: null, unavailableReason: null });
-    expect(SessionManager.open(oldFile).getBranch().some((entry) => entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "aborted")).toBe(true);
+    expect(app.registry.historyOwnership(oldFile)).toEqual({
+      openSessionId: null,
+      unavailableReason: null,
+    });
+    expect(
+      SessionManager.open(oldFile)
+        .getBranch()
+        .some(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message.role === "assistant" &&
+            entry.message.stopReason === "aborted",
+        ),
+    ).toBe(true);
     expect(app.streams.gates.get("other-tab")!.aborted).toBe(false);
-    app.streams.gates.get("other-tab")!.finish("unrelated tab result"); expectOk(await second);
+    app.streams.gates.get("other-tab")!.finish("unrelated tab result");
+    expectOk(await second);
     expectOk(await app.registry.prompt(id, "fresh conversation"));
-    expect(app.registry.details(id)?.sections?.some((section) => section.text === "hold previous-conversation")).toBe(false);
-  } finally { await app.cleanup(); }
+    expect(
+      app.registry
+        .details(id)
+        ?.sections?.some((section) => section.text === "hold previous-conversation"),
+    ).toBe(false);
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("clear cleans up owned child work and saves cancellation in the original conversation", async () => {
   const app = await sdkFixture(true);
   try {
     const id = expectOk(await app.registry.create(app.main.id));
-    const run = app.registry.prompt(id, "delegate"); await app.streams.waitFor("child");
+    const run = app.registry.prompt(id, "delegate");
+    await app.streams.waitFor("child");
     const accepted = Promise.withResolvers<void>();
 
-    const replacement = app.registry.clearSession(id, () => accepted.resolve()); await accepted.promise;
+    const replacement = app.registry.clearSession(id, () => accepted.resolve());
+    await accepted.promise;
     await app.streams.gates.get("child")!.abortReceived;
     app.streams.gates.get("child")!.finish("cancelled owned child");
-    await run; expectOk(await replacement);
+    await run;
+    expectOk(await replacement);
 
-    expect(app.registry.records[0]?.subagents).toEqual([]); expect(app.registry.details(id)?.sections).toEqual([]);
+    expect(app.registry.records[0]?.subagents).toEqual([]);
+    expect(app.registry.details(id)?.sections).toEqual([]);
     expect(app.executors).toHaveLength(3);
-  } finally { await app.cleanup(); }
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("clear respects extension vetoes without interrupting the active model", async () => {
   const app = await sdkFixture(true);
   try {
-    const extensions = join(app.directory, "agent", "extensions"); await mkdir(extensions, { recursive: true });
-    await writeFile(join(extensions, "cancel-new.ts"), `export default (pi) => {
+    const extensions = join(app.directory, "agent", "extensions");
+    await mkdir(extensions, { recursive: true });
+    await writeFile(
+      join(extensions, "cancel-new.ts"),
+      `export default (pi) => {
       pi.on("session_before_switch", (event) => event.reason === "new" ? { cancel: true } : undefined);
-    };`);
+    };`,
+    );
     const id = expectOk(await app.registry.create(app.main.id));
-    const run = app.registry.prompt(id, "hold cancelled-new"); await app.streams.waitFor("cancelled-new");
-    const conversation = app.registry.details(id)!.conversationId; let accepted = false;
+    const run = app.registry.prompt(id, "hold cancelled-new");
+    await app.streams.waitFor("cancelled-new");
+    const conversation = app.registry.details(id)!.conversationId;
+    let accepted = false;
 
-    const result = await app.registry.clearSession(id, () => { accepted = true; });
+    const result = await app.registry.clearSession(id, () => {
+      accepted = true;
+    });
 
-    expect(expectError(result).code).toBe("CANCELLED"); expect(accepted).toBe(false);
-    expect(app.registry.details(id)?.conversationId).toBe(conversation); expect(app.executors).toHaveLength(1);
+    expect(expectError(result).code).toBe("CANCELLED");
+    expect(accepted).toBe(false);
+    expect(app.registry.details(id)?.conversationId).toBe(conversation);
+    expect(app.executors).toHaveLength(1);
     expect(app.streams.gates.get("cancelled-new")!.aborted).toBe(false);
-    app.streams.gates.get("cancelled-new")!.finish("continued original"); expectOk(await run);
-  } finally { await app.cleanup(); }
+    app.streams.gates.get("cancelled-new")!.finish("continued original");
+    expectOk(await run);
+  } finally {
+    await app.cleanup();
+  }
 });
 
 test("clear SDK lifecycle hooks receive replacement reasons instead of startup or quit", async () => {
   const app = await sdkFixture();
   try {
-    const extensions = join(app.directory, "agent", "extensions"); await mkdir(extensions, { recursive: true });
-    await writeFile(join(extensions, "lifecycle.ts"), `export default (pi) => {
+    const extensions = join(app.directory, "agent", "extensions");
+    await mkdir(extensions, { recursive: true });
+    await writeFile(
+      join(extensions, "lifecycle.ts"),
+      `export default (pi) => {
       pi.on("session_start", (event) => { pi.appendEntry("start-reason", event); });
       pi.on("session_shutdown", (event) => { pi.appendEntry("shutdown-reason", event); });
-    };`);
-    const id = expectOk(await app.registry.create(app.main.id)); expectOk(await app.registry.prompt(id, "original work"));
+    };`,
+    );
+    const id = expectOk(await app.registry.create(app.main.id));
+    expectOk(await app.registry.prompt(id, "original work"));
     const oldFile = app.registry.sessionFile(id)!;
 
     expectOk(await app.registry.clearSession(id));
@@ -1361,7 +2264,17 @@ test("clear SDK lifecycle hooks receive replacement reasons instead of startup o
     // Pi buffers an empty conversation's metadata until its first actual turn.
     expectOk(await app.registry.prompt(id, "first fresh conversation turn"));
     const newEntries = SessionManager.open(app.registry.sessionFile(id)!).getBranch();
-    expect(oldEntries.filter((entry) => entry.type === "custom" && entry.customType === "shutdown-reason").map((entry) => entry.type === "custom" ? entry.data : null)).toEqual([{ type: "session_shutdown", reason: "new" }]);
-    expect(newEntries.filter((entry) => entry.type === "custom" && entry.customType === "start-reason").map((entry) => entry.type === "custom" ? entry.data : null)).toEqual([{ type: "session_start", reason: "new", previousSessionFile: oldFile }]);
-  } finally { await app.cleanup(); }
+    expect(
+      oldEntries
+        .filter((entry) => entry.type === "custom" && entry.customType === "shutdown-reason")
+        .map((entry) => (entry.type === "custom" ? entry.data : null)),
+    ).toEqual([{ type: "session_shutdown", reason: "new" }]);
+    expect(
+      newEntries
+        .filter((entry) => entry.type === "custom" && entry.customType === "start-reason")
+        .map((entry) => (entry.type === "custom" ? entry.data : null)),
+    ).toEqual([{ type: "session_start", reason: "new", previousSessionFile: oldFile }]);
+  } finally {
+    await app.cleanup();
+  }
 });

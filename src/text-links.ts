@@ -17,5 +17,5 @@ export function textLinks(text: string): TextLink[] {
 
 export function textLinkAt(text: string, offset: number): string | null {
   if (offset < 0 || offset >= text.length) return null;
-  return textLinks(text).find(link => offset >= link.start && offset < link.end)?.url ?? null;
+  return textLinks(text).find((link) => offset >= link.start && offset < link.end)?.url ?? null;
 }

@@ -8,44 +8,88 @@ import { workspaceIcons } from "./workspace-status.ts";
 import { icons, spinnerFrames } from "../../icons.ts";
 import { Workbench } from "./workbench.ts";
 
-async function mount(repositories: readonly Repository[] = demoWorkspace(), options: { kittyKeyboard?: boolean; clock?: ManualClock } = {}) {
+async function mount(
+  repositories: readonly Repository[] = demoWorkspace(),
+  options: { kittyKeyboard?: boolean; clock?: ManualClock } = {},
+) {
   // CSI-u makes Escape unambiguous; a separate legacy-clock test covers its timeout.
-  const setup = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true, ...options });
+  const setup = await createTestRenderer({
+    width: 120,
+    height: 24,
+    kittyKeyboard: true,
+    ...options,
+  });
   const selection = new WorkspaceSelection(repositories);
   const requests: string[] = [];
   const view = new Workbench(setup.renderer, selection, {
-    onNewSession: (id) => { requests.push(id); },
-    onCloseSession: (treeId, sessionId) => selection.replaceSnapshot(selection.snapshot.map((repo) => ({
-      ...repo, worktrees: repo.worktrees.map((tree) => tree.id === treeId ? {
-        ...tree, sessions: tree.sessions.filter((session) => session.id !== sessionId),
-      } : tree),
-    }))),
+    onNewSession: (id) => {
+      requests.push(id);
+    },
+    onCloseSession: (treeId, sessionId) =>
+      selection.replaceSnapshot(
+        selection.snapshot.map((repo) => ({
+          ...repo,
+          worktrees: repo.worktrees.map((tree) =>
+            tree.id === treeId
+              ? {
+                  ...tree,
+                  sessions: tree.sessions.filter((session) => session.id !== sessionId),
+                }
+              : tree,
+          ),
+        })),
+      ),
   });
   await setup.renderOnce();
   return {
-    ...setup, selection, requests, view,
-    async openWorkspaces() { openWorkspaceSearch(setup); await setup.renderOnce(); },
-    async openHistory() { setup.mockInput.pressKey(" ", { ctrl: true }); setup.mockInput.pressKey("h"); await setup.renderOnce(); },
+    ...setup,
+    selection,
+    requests,
+    view,
+    async openWorkspaces() {
+      openWorkspaceSearch(setup);
+      await setup.renderOnce();
+    },
+    async openHistory() {
+      setup.mockInput.pressKey(" ", { ctrl: true });
+      setup.mockInput.pressKey("h");
+      await setup.renderOnce();
+    },
     async clickText(text: string): Promise<void> {
       if (text.startsWith(icons.folder) || text === "radian-empty" || text.startsWith("Search")) {
-        openWorkspaceSearch(setup); setup.mockInput.pressCtrlC(); await setup.renderOnce();
-      } else if (setup.renderer.root.findDescendantById("workspace-picker")!.visible) { setup.mockInput.pressEscape(); await setup.renderOnce(); }
+        openWorkspaceSearch(setup);
+        setup.mockInput.pressCtrlC();
+        await setup.renderOnce();
+      } else if (setup.renderer.root.findDescendantById("workspace-picker")!.visible) {
+        setup.mockInput.pressEscape();
+        await setup.renderOnce();
+      }
       const lines = setup.captureCharFrame().split("\n");
       const y = lines.findIndex((line) => line.includes(text));
       const x = lines[y]?.indexOf(text) ?? -1;
-      if (x < 0 || y < 0) throw new Error(`Visible text not found: ${text}\n${setup.captureCharFrame()}`);
+      if (x < 0 || y < 0)
+        throw new Error(`Visible text not found: ${text}\n${setup.captureCharFrame()}`);
       await setup.mockMouse.click(x, y);
       await setup.renderOnce();
     },
     tabFrame(id: string): string {
-      const tab = setup.renderer.root.findDescendantById(`session:${selection.worktree!.id}:${id}`)!;
-      return setup.captureCharFrame().split("\n")[tab.y]!.slice(tab.x, tab.x + tab.width);
+      const tab = setup.renderer.root.findDescendantById(
+        `session:${selection.worktree!.id}:${id}`,
+      )!;
+      return setup
+        .captureCharFrame()
+        .split("\n")
+        [tab.y]!.slice(tab.x, tab.x + tab.width);
     },
     treeFrame(): string {
       const tree = setup.renderer.root.findDescendantById("workspace-tree");
       if (!tree) throw new Error("Missing workspace viewport");
-      return setup.captureCharFrame().split("\n").slice(tree.y, tree.y + tree.height)
-        .map((line) => line.slice(tree.x, tree.x + tree.width)).join("\n");
+      return setup
+        .captureCharFrame()
+        .split("\n")
+        .slice(tree.y, tree.y + tree.height)
+        .map((line) => line.slice(tree.x, tree.x + tree.width))
+        .join("\n");
     },
     async searchFor(query: string): Promise<void> {
       openWorkspaceSearch(setup);
@@ -54,7 +98,10 @@ async function mount(repositories: readonly Repository[] = demoWorkspace(), opti
       await setup.mockInput.typeText(query);
       await setup.renderOnce();
     },
-    async close(): Promise<void> { view.dispose(); await setup.dispose(); },
+    async close(): Promise<void> {
+      view.dispose();
+      await setup.dispose();
+    },
   };
 }
 
@@ -70,7 +117,9 @@ test("Mouse selection restores last sessions and central screens for worktrees",
     // The central panel reflects restored A2, without replacing source metadata.
     expect(app.selection.sessionId).toBe("a2");
     expect(app.tabFrame("a2")).toContain("a2");
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Close keys choose previous sessions at the end and empty screens for final entries", async () => {
@@ -93,7 +142,9 @@ test("Close keys choose previous sessions at the end and empty screens for final
     expect(app.captureCharFrame()).toContain("No AI sessions");
     expect(app.renderer.root.findDescendantById("agent-session-list")!.visible).toBe(true);
     expect(app.captureCharFrame().split("\n")[23]).toContain("<leader>c New session");
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Row close actions never accidentally select parent sessions", async () => {
@@ -111,7 +162,9 @@ test("Row close actions never accidentally select parent sessions", async () => 
     // Event propagation leaves the existing A2 selection unchanged.
     expect(app.selection.sessionId).toBe("a2");
     expect(app.selection.worktree?.sessions.map((session) => session.id)).toEqual(["a2", "a3"]);
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Empty-worktree creation sends requests without manipulating selection or open lists", async () => {
@@ -122,14 +175,18 @@ test("Empty-worktree creation sends requests without manipulating selection or o
     const before = app.selection.snapshot;
 
     // The action crosses the host callback boundary without implementing OA-5.
-    app.mockInput.pressKey(" ", { ctrl: true }); app.mockInput.pressKey("c"); await app.renderOnce();
+    app.mockInput.pressKey(" ", { ctrl: true });
+    app.mockInput.pressKey("c");
+    await app.renderOnce();
 
     // No runtime, automatic selection or placeholder session was manufactured.
     expect(app.requests).toEqual(["demo:empty"]);
     expect(app.selection.snapshot).toBe(before);
     expect(app.selection.sessionId).toBeNull();
     expect(app.captureCharFrame()).toContain("No AI sessions");
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("History explains unsupported previews while preserving selection", async () => {
@@ -142,47 +199,72 @@ test("History explains unsupported previews while preserving selection", async (
     // No history or resume operation is implied by the placeholder.
     expect(app.captureCharFrame()).toContain("Session history is unavailable in this preview.");
     expect(app.selection.sessionId).toBe("a1");
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Leader navigation reveals offscreen sessions and preserves selection in compact terminals", async () => {
   // Long display-only data exceeds the viewport; no agent timers drive the UI.
-  const fixture: Repository[] = [{ id: "long-repo", name: "long-repo", worktrees: [{
-    id: "long-tree", path: "/demo/long", name: "long", branch: "main",
-    sessions: Array.from({ length: 40 }, (_, index) => ({
-      id: `long-${index}`, name: `Long session ${index}`, status: null, subagents: [],
-    })),
-  }] }];
+  const fixture: Repository[] = [
+    {
+      id: "long-repo",
+      name: "long-repo",
+      worktrees: [
+        {
+          id: "long-tree",
+          path: "/demo/long",
+          name: "long",
+          branch: "main",
+          sessions: Array.from({ length: 40 }, (_, index) => ({
+            id: `long-${index}`,
+            name: `Long session ${index}`,
+            status: null,
+            subagents: [],
+          })),
+        },
+      ],
+    },
+  ];
   const app = await mount(fixture);
   try {
     // Moving backward from the first tab wraps to the last without focusing its strip.
     pressLeader(app, "p");
-    await app.renderOnce(); await app.renderOnce();
+    await app.renderOnce();
+    await app.renderOnce();
     expect(app.selection.sessionId).toBe("long-39");
     expect(app.captureCharFrame()).toContain("long-39");
     expect(app.treeFrame()).not.toContain("long-39");
     app.resize(60, 12);
-    await app.renderOnce(); await app.renderOnce();
+    await app.renderOnce();
+    await app.renderOnce();
 
     // Fixed-width tabs keep the selected ID and right-aligned close control inside the viewport.
     expect(app.tabFrame("long-39")).toBe("  40. long-39   × ");
     expect(app.captureCharFrame()).not.toContain("Inspector");
     expect(app.selection.sessionId).toBe("long-39");
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Up arrows browse previous worktrees and only Enter restores their last sessions", async () => {
   const app = await mount();
   try {
     await app.clickText(`${icons.folder} radian-ui`);
-    await app.openWorkspaces(); app.mockInput.pressTab();
-    app.mockInput.pressArrow("up"); await app.renderOnce();
+    await app.openWorkspaces();
+    app.mockInput.pressTab();
+    app.mockInput.pressArrow("up");
+    await app.renderOnce();
     expect(app.selection.worktree?.id).toBe("demo:feature");
-    app.mockInput.pressEnter(); await app.renderOnce();
+    app.mockInput.pressEnter();
+    await app.renderOnce();
 
     expect(app.selection.worktree?.id).toBe("demo:main");
     expect(app.selection.sessionId).toBe("a1");
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Kind icons stay left while aggregated parent/child status appears in right session tabs", async () => {
@@ -197,11 +279,14 @@ test("Kind icons stay left while aggregated parent/child status appears in right
     await app.clickText("a2");
     expect(app.tabFrame("a2")).not.toContain(workspaceIcons.complete);
     pressLeader(app, "3");
-    await app.renderOnce(); await app.renderOnce();
+    await app.renderOnce();
+    await app.renderOnce();
     expect(app.tabFrame("a3")).toContain(icons.failure);
     await app.clickText(`${icons.folder} radian-ui`);
     expect(app.tabFrame("b1")).toBe("  1. b1         × ");
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Failures behind History update after closing regardless of selection", async () => {
@@ -212,14 +297,27 @@ test("Failures behind History update after closing regardless of selection", asy
     await app.openHistory();
 
     // A host snapshot reports failure while the tree is not being painted.
-    app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({
-      ...repo, worktrees: repo.worktrees.map((tree) => ({
-        ...tree, sessions: tree.sessions.map((session) => session.id !== "a1" ? session : {
-          ...session, subagents: session.subagents.map((agent) => ({ ...agent, status: "failure" as const })),
-        }),
+    app.selection.replaceSnapshot(
+      app.selection.snapshot.map((repo) => ({
+        ...repo,
+        worktrees: repo.worktrees.map((tree) => ({
+          ...tree,
+          sessions: tree.sessions.map((session) =>
+            session.id !== "a1"
+              ? session
+              : {
+                  ...session,
+                  subagents: session.subagents.map((agent) => ({
+                    ...agent,
+                    status: "failure" as const,
+                  })),
+                },
+          ),
+        })),
       })),
-    })));
-    app.mockInput.pressEscape(); await app.renderOnce();
+    );
+    app.mockInput.pressEscape();
+    await app.renderOnce();
 
     // The aggregate changes without selecting A or changing repository/worktree types.
     expect(app.selection.sessionId).toBe("b1");
@@ -227,7 +325,9 @@ test("Failures behind History update after closing regardless of selection", asy
     expect(app.treeFrame()).toContain(`${workspaceIcons.worktree} radian`);
     await app.clickText(`${icons.folder} radian`);
     expect(app.tabFrame("a1")).toContain(icons.failure);
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Tab and Shift+Tab move focus among visible input owners", async () => {
@@ -245,7 +345,9 @@ test("Tab and Shift+Tab move focus among visible input owners", async () => {
     expect(next).not.toBe(first);
     expect(app.renderer.currentFocusedRenderable).toBe(first);
     expect(app.selection.sessionId).toBe("a1");
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Branch search filters only worktree lists while preserving right sessions and input focus", async () => {
@@ -269,7 +371,9 @@ test("Branch search filters only worktree lists while preserving right sessions 
     expect(app.treeFrame()).not.toContain("radian-empty");
     expect(app.renderer.currentFocusedRenderable).toBe(input);
     expect(app.selection.snapshot).toBe(before);
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Typing q/n/x in search never quits or executes session actions and Ctrl+C restores results", async () => {
@@ -294,7 +398,9 @@ test("Typing q/n/x in search never quits or executes session actions and Ctrl+C 
     expect(app.captureCharFrame()).not.toContain("No matching workspaces");
     expect(app.renderer.currentFocusedRenderable).toBe(input);
     expect(app.selection.sessionId).toBe("a1");
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Search deletion and paste update results while retaining input focus", async () => {
@@ -319,7 +425,9 @@ test("Search deletion and paste update results while retaining input focus", asy
     expect(app.treeFrame()).not.toContain("Workspace layout");
     expect(app.renderer.currentFocusedRenderable).toBe(input);
     expect(app.selection.sessionId).toBe("a1");
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Keyboard navigation after substring filtering selects only visible results", async () => {
@@ -338,13 +446,16 @@ test("Keyboard navigation after substring filtering selects only visible results
 
     // Navigation does not commit selection, even when only one result remains.
     expect(app.selection.worktree?.id).toBe("demo:main");
-    app.mockInput.pressEnter(); await app.renderOnce();
+    app.mockInput.pressEnter();
+    await app.renderOnce();
     expect(app.selection.worktree?.id).toBe("demo:feature");
     expect(app.selection.sessionId).toBe("b1");
     await app.openWorkspaces();
     expect(app.treeFrame()).toContain(`${icons.branch} feature/workspace`);
     expect(app.treeFrame()).not.toContain("Workspace layout");
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Closing filtered trees selects the next session from original lists", async () => {
@@ -362,8 +473,14 @@ test("Closing filtered trees selects the next session from original lists", asyn
     expect(app.selection.sessionId).toBe("a2");
     expect(app.treeFrame()).not.toContain("Workspace layout");
     expect(app.captureCharFrame()).toContain("a2");
-    expect(app.selection.snapshot.flatMap((repo) => repo.worktrees).find((tree) => tree.id === "demo:feature")?.sessions).toHaveLength(1);
-  } finally { await app.close(); }
+    expect(
+      app.selection.snapshot
+        .flatMap((repo) => repo.worktrees)
+        .find((tree) => tree.id === "demo:feature")?.sessions,
+    ).toHaveLength(1);
+  } finally {
+    await app.close();
+  }
 });
 
 test("Snapshots during search use current queries and hidden states reveal latest values after clearing", async () => {
@@ -374,19 +491,30 @@ test("Snapshots during search use current queries and hidden states reveal lates
     const input = app.renderer.currentFocusedRenderable;
 
     // The host reports new visible metadata and a hidden child's failure; no SDK is involved.
-    app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({
-      ...repo, worktrees: repo.worktrees.map((tree) => ({
-        ...tree, sessions: tree.sessions.map((session) => {
-          if (session.id === "a1") return {
-            ...session, subagents: session.subagents.map((agent) => ({ ...agent, status: "failure" as const })),
-          };
-          if (session.id === "b1") return {
-            ...session, subagents: [{ id: "fresh", name: "Fresh child", status: "working" as const }],
-          };
-          return session;
-        }),
+    app.selection.replaceSnapshot(
+      app.selection.snapshot.map((repo) => ({
+        ...repo,
+        worktrees: repo.worktrees.map((tree) => ({
+          ...tree,
+          sessions: tree.sessions.map((session) => {
+            if (session.id === "a1")
+              return {
+                ...session,
+                subagents: session.subagents.map((agent) => ({
+                  ...agent,
+                  status: "failure" as const,
+                })),
+              };
+            if (session.id === "b1")
+              return {
+                ...session,
+                subagents: [{ id: "fresh", name: "Fresh child", status: "working" as const }],
+              };
+            return session;
+          }),
+        })),
       })),
-    })));
+    );
     await app.renderOnce();
     expect(app.treeFrame()).toContain(`${icons.branch} feature/workspace`);
     expect(app.treeFrame()).not.toContain("Fresh child");
@@ -399,7 +527,9 @@ test("Snapshots during search use current queries and hidden states reveal lates
     expect(app.treeFrame()).toContain(`${icons.branch} feature/workspace`);
     expect(app.renderer.currentFocusedRenderable).toBe(input);
     expect(app.selection.sessionId).toBe("a1");
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Repository-name searches retain all worktrees and remain editable after Tab round-trips", async () => {
@@ -422,14 +552,17 @@ test("Repository-name searches retain all worktrees and remain editable after Ta
     expect(app.captureCharFrame()).toContain("DIAN [DEX");
     expect(app.captureCharFrame()).toContain("No matching workspaces");
     expect(app.renderer.currentFocusedRenderable).toBe(input);
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Search and reset never create sessions on repository-free screens", async () => {
   // An empty source distinguishes missing repositories from a no-match projection.
   const app = await mount([]);
   try {
-    await app.openWorkspaces(); expect(app.captureCharFrame()).toContain("No repositories");
+    await app.openWorkspaces();
+    expect(app.captureCharFrame()).toContain("No repositories");
 
     // Search and clear remain safe without any selectable tree row.
     await app.searchFor("missing");
@@ -442,7 +575,9 @@ test("Search and reset never create sessions on repository-free screens", async 
     expect(app.selection.worktree).toBeNull();
     expect(app.selection.snapshot).toEqual([]);
     expect(app.requests).toEqual([]);
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Compact resize preserves query/focus and allows continued result editing", async () => {
@@ -465,7 +600,9 @@ test("Compact resize preserves query/focus and allows continued result editing",
     expect(app.captureCharFrame()).not.toContain("Inspector");
     expect(app.renderer.currentFocusedRenderable).toBe(input);
     expect(app.selection.sessionId).toBe("a1");
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });
 
 test("Legacy Esc closes popups after the 20ms distinction window and preserves reopened input's first character", async () => {
@@ -483,7 +620,8 @@ test("Legacy Esc closes popups after the 20ms distinction window and preserves r
     clock.advance(20);
     await app.renderOnce();
     expect(app.captureCharFrame()).not.toContain("No matching workspaces");
-    await app.openWorkspaces(); app.mockInput.pressCtrlC();
+    await app.openWorkspaces();
+    app.mockInput.pressCtrlC();
     await app.mockInput.typeText("MAIN");
     await app.renderOnce();
 
@@ -491,5 +629,7 @@ test("Legacy Esc closes popups after the 20ms distinction window and preserves r
     expect(app.captureCharFrame()).toContain("MAIN");
     expect(app.treeFrame()).toContain(`${icons.branch} main`);
     expect(app.treeFrame()).not.toContain(`${icons.folder} radian-ui`);
-  } finally { await app.close(); }
+  } finally {
+    await app.close();
+  }
 });

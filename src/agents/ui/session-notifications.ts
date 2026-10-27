@@ -13,10 +13,28 @@ import { messageLabels, messageText, type Message } from "../../ui/messages.ts";
 type Notification = SessionNotification | Message;
 
 type Timer = ReturnType<CliRenderer["clock"]["setTimeout"]>;
-type Toast = { notification: Notification; root: BoxRenderable; heading: TextRenderable; task: TextRenderable; location: TextRenderable;
-  expiry: Timer; intensity: number; animation?: Timer };
-const labels = { complete: "Completed", error: "Failed", unfinished: "Stopped", cancelled: "Cancelled" } satisfies Record<SessionResult["outcome"], string>;
-const colors = { complete: "status.success", error: "status.error", unfinished: "status.warning", cancelled: "status.warning" } as const satisfies Record<SessionResult["outcome"], StyleGroup>;
+type Toast = {
+  notification: Notification;
+  root: BoxRenderable;
+  heading: TextRenderable;
+  task: TextRenderable;
+  location: TextRenderable;
+  expiry: Timer;
+  intensity: number;
+  animation?: Timer;
+};
+const labels = {
+  complete: "Completed",
+  error: "Failed",
+  unfinished: "Stopped",
+  cancelled: "Cancelled",
+} satisfies Record<SessionResult["outcome"], string>;
+const colors = {
+  complete: "status.success",
+  error: "status.error",
+  unfinished: "status.warning",
+  cancelled: "status.warning",
+} as const satisfies Record<SessionResult["outcome"], StyleGroup>;
 
 // Own only presentation and timers. Neither dismissal nor expiry acknowledges a result.
 export class SessionNotificationStack {
@@ -27,18 +45,40 @@ export class SessionNotificationStack {
   private hidden = false;
   private disposed = false;
 
-  constructor(private readonly renderer: CliRenderer, private readonly open: (notification: Notification) => void) {
+  constructor(
+    private readonly renderer: CliRenderer,
+    private readonly open: (notification: Notification) => void,
+  ) {
     // The overlay occupies only its cards, never a full-screen pointer-catching backdrop.
-    this.root = new BoxRenderable(renderer, { id: "session-notifications", position: "absolute", top: 1, right: 2,
-      width: 52, height: 0, flexDirection: "column", gap: 1, zIndex: 7000, visible: false });
+    this.root = new BoxRenderable(renderer, {
+      id: "session-notifications",
+      position: "absolute",
+      top: 1,
+      right: 2,
+      width: 52,
+      height: 0,
+      flexDirection: "column",
+      gap: 1,
+      zIndex: 7000,
+      visible: false,
+    });
     this.root.on(RenderableEvents.DESTROYED, () => this.dispose());
-    uiTheme(renderer).bind(this.root, () => { for (const toast of this.visible) this.paint(toast); });
-    renderer.on("resize", this.resize); this.resize();
+    uiTheme(renderer).bind(this.root, () => {
+      for (const toast of this.visible) this.paint(toast);
+    });
+    renderer.on("resize", this.resize);
+    this.resize();
   }
 
   show(notification: Notification): void {
-    if (this.disposed || this.pending.some(item => item.id === notification.id) || this.visible.some(item => item.notification.id === notification.id)) return;
-    this.pending.push(notification); this.pump();
+    if (
+      this.disposed ||
+      this.pending.some((item) => item.id === notification.id) ||
+      this.visible.some((item) => item.notification.id === notification.id)
+    )
+      return;
+    this.pending.push(notification);
+    this.pump();
   }
 
   setHidden(hidden: boolean): void {
@@ -47,10 +87,12 @@ export class SessionNotificationStack {
   }
 
   retain(sessionIds: ReadonlySet<string>): void {
-    for (let index = this.pending.length - 1; index >= 0; index--) if (isClosedSession(this.pending[index]!, sessionIds)) this.pending.splice(index, 1);
+    for (let index = this.pending.length - 1; index >= 0; index--)
+      if (isClosedSession(this.pending[index]!, sessionIds)) this.pending.splice(index, 1);
     // Removal mutates the live array; retain a snapshot so adjacent cards are not skipped.
     const visible = [...this.visible];
-    for (const toast of visible) if (isClosedSession(toast.notification, sessionIds)) this.remove(toast);
+    for (const toast of visible)
+      if (isClosedSession(toast.notification, sessionIds)) this.remove(toast);
     this.pump();
   }
 
@@ -60,10 +102,12 @@ export class SessionNotificationStack {
     const top = this.renderer.height > 6 ? 1 : 0;
     this.root.top = top;
     this.root.width = Math.max(1, Math.min(52, this.renderer.width - 2));
-    this.capacity = this.renderer.width < 8 ? 0 : Math.min(3, Math.floor((this.renderer.height - top) / 6));
+    this.capacity =
+      this.renderer.width < 8 ? 0 : Math.min(3, Math.floor((this.renderer.height - top) / 6));
     while (this.visible.length > this.capacity) {
       const toast = this.visible.at(-1)!;
-      this.pending.unshift(toast.notification); this.remove(toast);
+      this.pending.unshift(toast.notification);
+      this.remove(toast);
     }
     for (const toast of this.visible) this.paint(toast);
     this.pump();
@@ -71,32 +115,78 @@ export class SessionNotificationStack {
 
   private pump(): void {
     if (this.disposed) return;
-    while (this.visible.length < this.capacity && this.pending.length) this.mount(this.pending.shift()!);
+    while (this.visible.length < this.capacity && this.pending.length)
+      this.mount(this.pending.shift()!);
     this.root.visible = !this.hidden && this.visible.length > 0;
     this.root.height = Math.max(0, this.visible.length * 6 - 1);
   }
 
   private mount(notification: Notification): void {
-    const root = new PopupFrame(this.renderer, { id: `session-toast:${notification.id}`, width: "100%", height: 5, flexShrink: 0,
-      flexDirection: "column", border: true, paddingX: 1,
-      onMouseDown: event => {
+    const root = new PopupFrame(this.renderer, {
+      id: `session-toast:${notification.id}`,
+      width: "100%",
+      height: 5,
+      flexShrink: 0,
+      flexDirection: "column",
+      border: true,
+      paddingX: 1,
+      onMouseDown: (event) => {
         if (event.button !== 0) return;
-        event.preventDefault(); event.stopPropagation(); this.dismiss(notification.id); this.open(notification);
-      }, onMouseScroll: event => event.stopPropagation() });
-    const header = new BoxRenderable(this.renderer, { width: "100%", height: 1, flexShrink: 0, flexDirection: "row", gap: 1 });
-    const heading = new TextRenderable(this.renderer, { height: 1, flexGrow: 1, minWidth: 0, wrapMode: "none", selectable: false });
-    const task = new TextRenderable(this.renderer, { height: 1, width: "100%", wrapMode: "none", selectable: false });
-    const location = new TextRenderable(this.renderer, { height: 1, width: "100%", wrapMode: "none", selectable: false });
-    header.add(heading); root.add(header); root.add(task); root.add(location); this.root.add(root);
-    const brief = "result" in notification ? notification.result.outcome === "complete" : notification.level === "success";
-    const expiry = this.renderer.clock.setTimeout(() => this.dismiss(notification.id), brief ? 5000 : 8000);
+        event.preventDefault();
+        event.stopPropagation();
+        this.dismiss(notification.id);
+        this.open(notification);
+      },
+      onMouseScroll: (event) => event.stopPropagation(),
+    });
+    const header = new BoxRenderable(this.renderer, {
+      width: "100%",
+      height: 1,
+      flexShrink: 0,
+      flexDirection: "row",
+      gap: 1,
+    });
+    const heading = new TextRenderable(this.renderer, {
+      height: 1,
+      flexGrow: 1,
+      minWidth: 0,
+      wrapMode: "none",
+      selectable: false,
+    });
+    const task = new TextRenderable(this.renderer, {
+      height: 1,
+      width: "100%",
+      wrapMode: "none",
+      selectable: false,
+    });
+    const location = new TextRenderable(this.renderer, {
+      height: 1,
+      width: "100%",
+      wrapMode: "none",
+      selectable: false,
+    });
+    header.add(heading);
+    root.add(header);
+    root.add(task);
+    root.add(location);
+    this.root.add(root);
+    const brief =
+      "result" in notification
+        ? notification.result.outcome === "complete"
+        : notification.level === "success";
+    const expiry = this.renderer.clock.setTimeout(
+      () => this.dismiss(notification.id),
+      brief ? 5000 : 8000,
+    );
     const toast: Toast = { notification, root, heading, task, location, expiry, intensity: 0.5 };
-    this.visible.push(toast); this.paint(toast);
+    this.visible.push(toast);
+    this.paint(toast);
     const started = this.renderer.clock.now();
     const animate = (): void => {
       if (this.disposed || root.isDestroyed) return;
       const progress = Math.min(1, (this.renderer.clock.now() - started) / 160);
-      toast.intensity = 0.5 + progress * 0.5; this.paint(toast);
+      toast.intensity = 0.5 + progress * 0.5;
+      this.paint(toast);
       if (progress < 1) toast.animation = this.renderer.clock.setTimeout(animate, 40);
       else delete toast.animation;
     };
@@ -105,22 +195,32 @@ export class SessionNotificationStack {
 
   private paint(toast: Toast): void {
     if (this.disposed || toast.root.isDestroyed) return;
-    const theme = uiTheme(this.renderer), styles = theme.styles;
-    const group: StyleGroup = "result" in toast.notification ? colors[toast.notification.result.outcome] : `status.${toast.notification.level}`;
+    const theme = uiTheme(this.renderer),
+      styles = theme.styles;
+    const group: StyleGroup =
+      "result" in toast.notification
+        ? colors[toast.notification.result.outcome]
+        : `status.${toast.notification.level}`;
     const background = styles["ui.popup"].bg ?? styles["ui.text"].bg ?? theme.colors.panel;
     // Fade the ink, not the window: covered text must remain hidden throughout the animation.
-    const fade = (style: UiStyle): UiStyle => toast.intensity === 1 ? style
-      : { ...style, fg: blendColors(background, style.fg, toast.intensity) };
+    const fade = (style: UiStyle): UiStyle =>
+      toast.intensity === 1
+        ? style
+        : { ...style, fg: blendColors(background, style.fg, toast.intensity) };
     const status = fade(styles[group]);
     toast.root.backgroundColor = styles["ui.popup"].bg;
     toast.root.borderColor = status.fg;
-    paintText(toast.heading, status); paintText(toast.task, fade(styles["ui.label"]));
+    paintText(toast.heading, status);
+    paintText(toast.task, fade(styles["ui.label"]));
     paintText(toast.location, fade(styles["ui.muted"]));
     // Layout getters still describe the previous frame when a card first arrives.
     const width = Math.max(0, Math.min(52, this.renderer.width - 2) - 4);
     if (!("result" in toast.notification)) {
       const item = toast.notification;
-      toast.heading.content = truncateCells(singleLine(messageText(item.title ?? messageLabels[item.level])), width);
+      toast.heading.content = truncateCells(
+        singleLine(messageText(item.title ?? messageLabels[item.level])),
+        width,
+      );
       toast.task.content = truncateCells(singleLine(messageText(item.text)), width);
       toast.location.content = truncateCells(singleLine(messageText(item.source)), width);
       return;
@@ -129,12 +229,16 @@ export class SessionNotificationStack {
     const elapsed = durationMs === undefined ? "" : ` · ${formatRunDuration(durationMs)}`;
     toast.heading.content = truncateCells(labels[result.outcome] + elapsed, width);
     toast.task.content = truncateCells(excerpt(result.request?.text || "AI session"), width);
-    const worktree = excerpt(toast.notification.worktree), branch = excerpt(toast.notification.branch ?? "detached HEAD");
-    toast.location.content = truncateCells(`${icons.folder} ${worktree} / ${icons.branch} ${branch}`, width);
+    const worktree = excerpt(toast.notification.worktree),
+      branch = excerpt(toast.notification.branch ?? "detached HEAD");
+    toast.location.content = truncateCells(
+      `${icons.folder} ${worktree} / ${icons.branch} ${branch}`,
+      width,
+    );
   }
 
   private dismiss(id: string): void {
-    const toast = this.visible.find(item => item.notification.id === id);
+    const toast = this.visible.find((item) => item.notification.id === id);
     if (toast) this.remove(toast);
     this.pump();
   }
@@ -142,12 +246,14 @@ export class SessionNotificationStack {
   private remove(toast: Toast): void {
     this.renderer.clock.clearTimeout(toast.expiry);
     if (toast.animation !== undefined) this.renderer.clock.clearTimeout(toast.animation);
-    this.visible.splice(this.visible.indexOf(toast), 1); toast.root.destroyRecursively();
+    this.visible.splice(this.visible.indexOf(toast), 1);
+    toast.root.destroyRecursively();
   }
 
   dispose(): void {
     if (this.disposed) return;
-    this.disposed = true; this.renderer.off("resize", this.resize);
+    this.disposed = true;
+    this.renderer.off("resize", this.resize);
     const visible = [...this.visible];
     for (const toast of visible) this.remove(toast);
     this.pending.length = 0;
@@ -159,4 +265,6 @@ function isClosedSession(notification: Notification, sessionIds: ReadonlySet<str
   return "sessionId" in notification && !sessionIds.has(notification.sessionId);
 }
 
-function excerpt(value: string): string { return singleLine(Bun.stripANSI(value.slice(0, 512))); }
+function excerpt(value: string): string {
+  return singleLine(Bun.stripANSI(value.slice(0, 512)));
+}

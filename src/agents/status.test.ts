@@ -23,8 +23,14 @@ for (const [main, children, expected] of cases) {
   test(`Main agent ${main ?? "unreported"} and subagents ${JSON.stringify(children)} yield session status ${expected ?? "unreported"}`, () => {
     // Normalized snapshots model owned agents without creating any runtime.
     const session: OpenSession = {
-      id: "session", name: "Session", status: main,
-      subagents: children.map((status, index) => ({ id: `child-${index}`, name: "Subagent", status })),
+      id: "session",
+      name: "Session",
+      status: main,
+      subagents: children.map((status, index) => ({
+        id: `child-${index}`,
+        name: "Subagent",
+        status,
+      })),
     };
 
     // Aggregate only the current states supplied by the host.

@@ -53,12 +53,12 @@ and run shells without leaving your workbench.
 Each view gets the work pane to itself. Workspace navigation opens as a searchable
 popup, so switching projects does not take space away from your editor or terminal.
 
-| View | What you can do |
-| --- | --- |
-| **Agents** | Run independent Pi sessions, read tool output, switch models, and resume saved conversations. |
-| **Editor** | Use your own Neovim, with its buffers, cursor, and editing state retained while the runtime stays alive. |
-| **Git** | Browse commits, refs, reflog, and working-tree changes in a read-only interface. |
-| **Terminal** | Run worktree-local shells and development servers that keep running when you detach. |
+| View         | What you can do                                                                                          |
+| ------------ | -------------------------------------------------------------------------------------------------------- |
+| **Agents**   | Run independent Pi sessions, read tool output, switch models, and resume saved conversations.            |
+| **Editor**   | Use your own Neovim, with its buffers, cursor, and editing state retained while the runtime stays alive. |
+| **Git**      | Browse commits, refs, reflog, and working-tree changes in a read-only interface.                         |
+| **Terminal** | Run worktree-local shells and development servers that keep running when you detach.                     |
 
 ## Requirements
 
@@ -136,19 +136,19 @@ jobs first. A stopped runtime does not preserve live Neovim buffers or shell pro
 These are defaults; commands can be remapped or disabled. `<leader>` is `<C-Space>`
 unless you configure another sequence.
 
-| Keys | Action |
-| --- | --- |
-| `<leader>a` / `e` / `g` / `t` | Select Agents / Editor / Git / Terminal. |
-| `<leader>b` | Toggle workspace search; `/` focuses search from the results. |
-| `<leader>c` | Create an agent session or terminal in the current view. |
-| `<leader>n` / `<leader>p` | Next / previous tab in Agents or Terminal, wrapping at either end. |
-| `<leader>u` | Open the Agent usage dashboard. |
-| `<leader>1` … `<leader>9` | Select an agent session or terminal tab by position. |
-| `<leader>h` | Open saved agent history for the current worktree. |
-| `<leader>s` | Monitor agent sessions. |
-| `<leader>[` | Read and select output in Agents or Terminal. |
-| `<leader>d` | Detach the interface; keep the runtime running. |
-| `<leader>?` | Open keyboard help. |
+| Keys                          | Action                                                             |
+| ----------------------------- | ------------------------------------------------------------------ |
+| `<leader>a` / `e` / `g` / `t` | Select Agents / Editor / Git / Terminal.                           |
+| `<leader>b`                   | Toggle workspace search; `/` focuses search from the results.      |
+| `<leader>c`                   | Create an agent session or terminal in the current view.           |
+| `<leader>n` / `<leader>p`     | Next / previous tab in Agents or Terminal, wrapping at either end. |
+| `<leader>u`                   | Open the Agent usage dashboard.                                    |
+| `<leader>1` … `<leader>9`     | Select an agent session or terminal tab by position.               |
+| `<leader>h`                   | Open saved agent history for the current worktree.                 |
+| `<leader>s`                   | Monitor agent sessions.                                            |
+| `<leader>[`                   | Read and select output in Agents or Terminal.                      |
+| `<leader>d`                   | Detach the interface; keep the runtime running.                    |
+| `<leader>?`                   | Open keyboard help.                                                |
 
 App-owned lists support `<C-n>` / `<C-p>` for next/previous and `<C-d>` / `<C-u>` for
 half-page navigation. In Transcript Sections, `<C-d/u>` and `<C-f/b>` select sections
@@ -203,14 +203,14 @@ Provider credentials and Pi session settings are managed separately.
 The [reference guide](docs/reference.md) preserves the detailed behavior and
 implementation notes, including:
 
-| Topic | Reference |
-| --- | --- |
-| Workspaces and views | [Discovery](docs/reference.md#workspace-roots) · [Work views](docs/reference.md#work-views) |
-| Agent workflows | [Commands](docs/reference.md#agent-session-commands) · [Transcript](docs/reference.md#agent-transcript) · [Completion](docs/reference.md#prompt-completion) |
-| Git and shells | [Git](docs/reference.md#native-git) · [Terminals](docs/reference.md#terminal-tabs) |
-| Personalization | [Settings](docs/reference.md#unified-settings) · [Theme](docs/reference.md#theme) · [Keybindings](docs/reference.md#keybindings) |
-| Persistence and recovery | [Service lifetime](docs/reference.md#service-lifetime-and-recovery) · [Session retention](docs/reference.md#session-retention) |
-| Development | [Source organization](docs/reference.md#source-organization) · [Error contracts](docs/reference.md#error-contracts) |
+| Topic                    | Reference                                                                                                                                                   |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workspaces and views     | [Discovery](docs/reference.md#workspace-roots) · [Work views](docs/reference.md#work-views)                                                                 |
+| Agent workflows          | [Commands](docs/reference.md#agent-session-commands) · [Transcript](docs/reference.md#agent-transcript) · [Completion](docs/reference.md#prompt-completion) |
+| Git and shells           | [Git](docs/reference.md#native-git) · [Terminals](docs/reference.md#terminal-tabs)                                                                          |
+| Personalization          | [Settings](docs/reference.md#unified-settings) · [Theme](docs/reference.md#theme) · [Keybindings](docs/reference.md#keybindings)                            |
+| Persistence and recovery | [Service lifetime](docs/reference.md#service-lifetime-and-recovery) · [Session retention](docs/reference.md#session-retention)                              |
+| Development              | [Source organization](docs/reference.md#source-organization) · [Error contracts](docs/reference.md#error-contracts)                                         |
 
 ## Current scope
 

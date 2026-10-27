@@ -4,11 +4,19 @@ import { workspaceRows } from "./ui/workspace-rows.ts";
 import { WorkspaceSelection } from "./workspace-selection.ts";
 
 function remove(selection: WorkspaceSelection, worktreeId: string, sessionId: string): void {
-  selection.replaceSnapshot(selection.snapshot.map((repo) => ({
-    ...repo, worktrees: repo.worktrees.map((tree) => tree.id === worktreeId ? {
-      ...tree, sessions: tree.sessions.filter((session) => session.id !== sessionId),
-    } : tree),
-  })));
+  selection.replaceSnapshot(
+    selection.snapshot.map((repo) => ({
+      ...repo,
+      worktrees: repo.worktrees.map((tree) =>
+        tree.id === worktreeId
+          ? {
+              ...tree,
+              sessions: tree.sessions.filter((session) => session.id !== sessionId),
+            }
+          : tree,
+      ),
+    })),
+  );
 }
 
 test("Reselecting worktrees restores their last selected sessions", () => {
@@ -32,9 +40,15 @@ test("Initially displayed sessions restore after list reordering and worktree re
   selection.selectWorktree("demo:feature");
 
   // The host reorders surviving items without closing the remembered session.
-  selection.replaceSnapshot(selection.snapshot.map((repo) => ({
-    ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree, sessions: [...tree.sessions].reverse() })),
-  })));
+  selection.replaceSnapshot(
+    selection.snapshot.map((repo) => ({
+      ...repo,
+      worktrees: repo.worktrees.map((tree) => ({
+        ...tree,
+        sessions: [...tree.sessions].reverse(),
+      })),
+    })),
+  );
   selection.selectWorktree("demo:main");
 
   // Last selection is an identity, not an index into the new order.
@@ -42,7 +56,9 @@ test("Initially displayed sessions restore after list reordering and worktree re
 });
 
 test.each([
-  ["a2", "a3"], ["a3", "a2"], ["a1", "a2"],
+  ["a2", "a3"],
+  ["a3", "a2"],
+  ["a1", "a2"],
 ])("Removing selected %s entries selects adjacent session %s", (closed, next) => {
   // The fixture's display order is A1, A2, A3.
   const selection = new WorkspaceSelection(demoWorkspace());
@@ -116,7 +132,12 @@ test("Unknown selection IDs preserve current selection", () => {
 test("Late-connected repositories restore saved sessions without switching current worktrees", () => {
   // Inactive repositories have no runtime connection and empty session rows.
   const full = demoWorkspace();
-  const cold = full.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => tree.id === "demo:main" ? { ...tree, sessions: [] } : tree) }));
+  const cold = full.map((repo) => ({
+    ...repo,
+    worktrees: repo.worktrees.map((tree) =>
+      tree.id === "demo:main" ? { ...tree, sessions: [] } : tree,
+    ),
+  }));
   const selection = new WorkspaceSelection(cold);
   selection.selectWorktree("demo:feature");
 

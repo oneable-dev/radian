@@ -6,7 +6,8 @@ import type { TranscriptSection } from "../agents/transcript.ts";
 import { singleLine, truncateCells } from "../ui/text.ts";
 
 type Source = Pick<WorkspaceClient, "snapshot" | "recoveryVersion" | "subscribe">;
-type Terminal = Pick<EventEmitter, "on" | "off" | "once"> & Pick<CliRenderer, "isDestroyed" | "triggerNotification">;
+type Terminal = Pick<EventEmitter, "on" | "off" | "once"> &
+  Pick<CliRenderer, "isDestroyed" | "triggerNotification">;
 type ObservedSession = { conversationId: string | undefined; completions: Set<string> };
 type Notification = { title: string; body: string };
 
@@ -19,15 +20,25 @@ export class TerminalNotifications {
   private observed = new Map<string, ObservedSession>();
   private readonly unsubscribe: () => void;
 
-  constructor(private readonly terminal: Terminal, private readonly source: Source, private readonly unexpected: (error: unknown) => void) {
+  constructor(
+    private readonly terminal: Terminal,
+    private readonly source: Source,
+    private readonly unexpected: (error: unknown) => void,
+  ) {
     this.recovery = source.recoveryVersion;
     this.update(true);
     this.unsubscribe = source.subscribe(this.changed);
-    terminal.on("focus", this.focus); terminal.on("blur", this.blur); terminal.once("destroy", this.dispose);
+    terminal.on("focus", this.focus);
+    terminal.on("blur", this.blur);
+    terminal.once("destroy", this.dispose);
   }
 
-  private focus = (): void => { this.focused = true; };
-  private blur = (): void => { this.focused = false; };
+  private focus = (): void => {
+    this.focused = true;
+  };
+  private blur = (): void => {
+    this.focused = false;
+  };
   private changed = (): void => {
     if (this.disposed || this.terminal.isDestroyed) return;
     const restored = this.recovery !== this.source.recoveryVersion;
@@ -39,34 +50,55 @@ export class TerminalNotifications {
     const snapshot = this.source.snapshot;
     const next = new Map<string, ObservedSession>();
     const notifications: Notification[] = [];
-    for (const repository of snapshot.repositories) for (const worktree of repository.worktrees) for (const session of worktree.sessions) {
-      const state = snapshot.details[session.id];
-      const previous = this.observed.get(session.id);
-      if (!state?.sections) {
-        if (previous) next.set(session.id, previous);
-        continue;
-      }
-      const initial = baseline || !previous || previous.conversationId !== state.conversationId;
-      const completions = new Set<string>();
-      let request: string | undefined;
-      for (const section of state.sections) {
-        const delivered = requestExcerpt(section);
-        if (delivered !== undefined) request = delivered;
-        const completion = section.completion;
-        if (!completion) continue;
-        const excerpt = request; request = undefined; // Never borrow another run's request.
-        // Persistence warnings are not another run or a reason to alert again.
-        const key = JSON.stringify([section.id, completion.startedAt, completion.completedAt, completion.durationMs, completion.outcome]);
-        completions.add(key);
-        if (initial || previous.completions.has(key) || completion.outcome !== "complete" && completion.outcome !== "error") continue;
-        // Only a short delivered-request excerpt and run time belong in the body;
-        // project/worktree/session identifiers, responses and raw errors do not.
-        const summary = notificationSummary(excerpt ?? ""), elapsed = duration(completion);
-        const body = summary ? `${summary} · ${elapsed}` : elapsed;
-        notifications.push({ title: completion.outcome === "complete" ? "Radian · Task completed" : "Radian · Task failed", body });
-      }
-      next.set(session.id, { conversationId: state.conversationId, completions });
-    }
+    for (const repository of snapshot.repositories)
+      for (const worktree of repository.worktrees)
+        for (const session of worktree.sessions) {
+          const state = snapshot.details[session.id];
+          const previous = this.observed.get(session.id);
+          if (!state?.sections) {
+            if (previous) next.set(session.id, previous);
+            continue;
+          }
+          const initial = baseline || !previous || previous.conversationId !== state.conversationId;
+          const completions = new Set<string>();
+          let request: string | undefined;
+          for (const section of state.sections) {
+            const delivered = requestExcerpt(section);
+            if (delivered !== undefined) request = delivered;
+            const completion = section.completion;
+            if (!completion) continue;
+            const excerpt = request;
+            request = undefined; // Never borrow another run's request.
+            // Persistence warnings are not another run or a reason to alert again.
+            const key = JSON.stringify([
+              section.id,
+              completion.startedAt,
+              completion.completedAt,
+              completion.durationMs,
+              completion.outcome,
+            ]);
+            completions.add(key);
+            if (
+              initial ||
+              previous.completions.has(key) ||
+              (completion.outcome !== "complete" && completion.outcome !== "error")
+            )
+              continue;
+            // Only a short delivered-request excerpt and run time belong in the body;
+            // project/worktree/session identifiers, responses and raw errors do not.
+            const summary = notificationSummary(excerpt ?? ""),
+              elapsed = duration(completion);
+            const body = summary ? `${summary} · ${elapsed}` : elapsed;
+            notifications.push({
+              title:
+                completion.outcome === "complete"
+                  ? "Radian · Task completed"
+                  : "Radian · Task failed",
+              body,
+            });
+          }
+          next.set(session.id, { conversationId: state.conversationId, completions });
+        }
     // Consume even focused/unsupported deliveries so blur, heartbeat or warning
     // updates cannot replay them. Commit before crossing the SDK output boundary.
     this.observed = next;
@@ -76,23 +108,35 @@ export class TerminalNotifications {
         // False means the terminal did not accept this best-effort notification;
         // true is not an acknowledgement from the OS notification center.
         if (!this.terminal.triggerNotification(notification.body, notification.title)) continue;
-      } catch (error) { this.unexpected(error); }
+      } catch (error) {
+        this.unexpected(error);
+      }
     }
   }
 
   dispose = (): void => {
     if (this.disposed) return;
     this.disposed = true;
-    this.unsubscribe(); this.observed.clear();
-    this.terminal.off("focus", this.focus); this.terminal.off("blur", this.blur); this.terminal.off("destroy", this.dispose);
+    this.unsubscribe();
+    this.observed.clear();
+    this.terminal.off("focus", this.focus);
+    this.terminal.off("blur", this.blur);
+    this.terminal.off("destroy", this.dispose);
   };
 }
 
 // Accept optional request metadata without requiring it from older runtimes.
 // Keep raw legacy text until ANSI sanitization so escape prefixes are not lost.
-function requestExcerpt(section: Pick<TranscriptSection, "kind" | "text" | "skillName"> & { readonly request?: { readonly text: string } }): string | undefined {
+function requestExcerpt(
+  section: Pick<TranscriptSection, "kind" | "text" | "skillName"> & {
+    readonly request?: { readonly text: string };
+  },
+): string | undefined {
   if (section.kind !== "user" && section.skillName === undefined) return undefined;
-  return section.request?.text ?? (section.skillName !== undefined ? `/skill:${section.skillName}` : section.text);
+  return (
+    section.request?.text ??
+    (section.skillName !== undefined ? `/skill:${section.skillName}` : section.text)
+  );
 }
 
 // Bound encoded size as well as display width, including zero-width input, and
@@ -104,6 +148,9 @@ function notificationSummary(value: string): string {
 function duration(completion: RunCompletion): string {
   const seconds = Math.floor(completion.durationMs / 1000);
   if (seconds < 1) return "<1s";
-  const hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60);
-  return [hours ? `${hours}h` : "", minutes || hours ? `${minutes}m` : "", `${seconds % 60}s`].filter(Boolean).join(" ");
+  const hours = Math.floor(seconds / 3600),
+    minutes = Math.floor((seconds % 3600) / 60);
+  return [hours ? `${hours}h` : "", minutes || hours ? `${minutes}m` : "", `${seconds % 60}s`]
+    .filter(Boolean)
+    .join(" ");
 }

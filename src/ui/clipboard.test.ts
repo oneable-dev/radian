@@ -12,5 +12,8 @@ test("Clipboard reads pass real SDK MIME validation and return cancellation Resu
 
     // A valid request reaches cancellation instead of rejecting with a MIME configuration TypeError.
     expect(expectError(result).code).toBe("CANCELLED");
-  } finally { await clipboard.dispose(); await app.dispose(); }
+  } finally {
+    await clipboard.dispose();
+    await app.dispose();
+  }
 });

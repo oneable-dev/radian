@@ -1,4 +1,10 @@
-import { RenderableEvents, StyledText, TextRenderable, type CliRenderer, type TextOptions } from "@opentui/core";
+import {
+  RenderableEvents,
+  StyledText,
+  TextRenderable,
+  type CliRenderer,
+  type TextOptions,
+} from "@opentui/core";
 import { spinnerFrames } from "../icons.ts";
 import { uiTheme } from "./theme.ts";
 import { styleChunk } from "./theme-styles.ts";
@@ -19,19 +25,38 @@ export class LoadingSpinner {
   private frame = 0;
   private style: SpinnerStyle = "default";
 
-  constructor(private readonly renderer: CliRenderer, options: Pick<TextOptions, "id" | "fg"> = {}) {
-    this.root = new TextRenderable(renderer, { ...options, content: "", width: 1, height: 1, flexShrink: 0,
-      visible: false, selectable: false, wrapMode: "none" });
+  constructor(
+    private readonly renderer: CliRenderer,
+    options: Pick<TextOptions, "id" | "fg"> = {},
+  ) {
+    this.root = new TextRenderable(renderer, {
+      ...options,
+      content: "",
+      width: 1,
+      height: 1,
+      flexShrink: 0,
+      visible: false,
+      selectable: false,
+      wrapMode: "none",
+    });
     this.root.on(RenderableEvents.DESTROYED, () => this.cancel());
-    uiTheme(renderer).bindStyles(this.root, () => { if (this.style === "fast" && this.root.visible) this.paint(); });
+    uiTheme(renderer).bindStyles(this.root, () => {
+      if (this.style === "fast" && this.root.visible) this.paint();
+    });
   }
 
-  get columns(): number { return this.style === "fast" ? 3 : 1; }
-  private get frames(): readonly string[] { return this.style === "circle-fill" ? circleFillFrames : spinnerFrames; }
+  get columns(): number {
+    return this.style === "fast" ? 3 : 1;
+  }
+  private get frames(): readonly string[] {
+    return this.style === "circle-fill" ? circleFillFrames : spinnerFrames;
+  }
 
   setStyle(style: SpinnerStyle): void {
     if (this.root.isDestroyed || style === this.style) return;
-    this.style = style; this.frame = 0; this.root.width = this.columns;
+    this.style = style;
+    this.frame = 0;
+    this.root.width = this.columns;
     if (this.root.visible) this.paint();
   }
 
@@ -41,7 +66,8 @@ export class LoadingSpinner {
     this.clearPendingHide();
     this.startedAt = this.renderer.clock.now();
     if (this.animation !== undefined) return;
-    this.frame = 0; this.paint();
+    this.frame = 0;
+    this.paint();
     this.root.visible = true;
     this.animation = this.renderer.clock.setInterval(() => {
       this.frame = (this.frame + 1) % (this.style === "fast" ? 3 : this.frames.length);
@@ -52,7 +78,10 @@ export class LoadingSpinner {
   stop(): void {
     if (this.animation === undefined || this.pendingHide !== undefined) return;
     const remaining = minimumVisibleMs - (this.renderer.clock.now() - this.startedAt);
-    if (remaining <= 0) { this.cancel(); return; }
+    if (remaining <= 0) {
+      this.cancel();
+      return;
+    }
     this.pendingHide = this.renderer.clock.setTimeout(() => this.cancel(), remaining);
   }
 
@@ -61,14 +90,26 @@ export class LoadingSpinner {
     this.clearPendingHide();
     if (this.animation !== undefined) this.renderer.clock.clearInterval(this.animation);
     this.animation = undefined;
-    if (!this.root.isDestroyed) { this.root.visible = false; this.root.content = ""; }
+    if (!this.root.isDestroyed) {
+      this.root.visible = false;
+      this.root.content = "";
+    }
   }
 
   private paint(): void {
-    if (this.style !== "fast") { this.root.content = this.frames[this.frame]!; return; }
+    if (this.style !== "fast") {
+      this.root.content = this.frames[this.frame]!;
+      return;
+    }
     const styles = uiTheme(this.renderer).styles;
-    this.root.content = new StyledText(Array.from({ length: 3 }, (_, index) =>
-      styleChunk(index === this.frame ? "▶" : "▷", styles[index === this.frame ? "metadata.fastOn" : "ui.muted"])));
+    this.root.content = new StyledText(
+      Array.from({ length: 3 }, (_, index) =>
+        styleChunk(
+          index === this.frame ? "▶" : "▷",
+          styles[index === this.frame ? "metadata.fastOn" : "ui.muted"],
+        ),
+      ),
+    );
   }
 
   private clearPendingHide(): void {

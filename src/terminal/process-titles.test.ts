@@ -8,37 +8,70 @@ import { TerminalSessions } from "./sessions.ts";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { join } from "node:path";
 
-const item: TerminalInfo = { id: "tab", worktreeId: "tree", pid: 100, shellPid: 101, title: "Terminal 1 · zsh", exited: false, exitCode: null };
+const item: TerminalInfo = {
+  id: "tab",
+  worktreeId: "tree",
+  pid: 100,
+  shellPid: 101,
+  title: "Terminal 1 · zsh",
+  exited: false,
+  exitCode: null,
+};
 const signal = () => new AbortController().signal;
 
 test("Tab titles use actual foreground groups, not background jobs or shell argv", async () => {
   // Shell foreground group points to nvim, while sleep runs in a separate background group.
-  const text = "100 1 100 -1 /bin/bun\n101 100 101 200 /bin/zsh\n200 101 200 200 /usr/local/bin/nvim\n201 101 201 200 /bin/sleep\n";
+  const text =
+    "100 1 100 -1 /bin/bun\n101 100 101 200 /bin/zsh\n200 101 200 200 /usr/local/bin/nvim\n201 101 201 200 /bin/sleep\n";
   const result = await readTerminalProcessTitles([item], signal(), async () => ok(text));
   expect(expectOk(result)).toEqual({ tab: "nvim" });
 });
 
 test("Foreground completion restores shell names and rejects reused shell PIDs", async () => {
   const text = "100 1 100 -1 /bin/bun\n101 100 101 101 /bin/zsh\n";
-  expect(expectOk(await readTerminalProcessTitles([item], signal(), async () => ok(text)))).toEqual({ tab: "zsh" });
-  expect(expectOk(await readTerminalProcessTitles([{ ...item, pid: 999 }], signal(), async () => ok(text)))).toEqual({});
+  expect(expectOk(await readTerminalProcessTitles([item], signal(), async () => ok(text)))).toEqual(
+    { tab: "zsh" },
+  );
+  expect(
+    expectOk(
+      await readTerminalProcessTitles([{ ...item, pid: 999 }], signal(), async () => ok(text)),
+    ),
+  ).toEqual({});
 });
 
 test("Initial supervisor groups show shell names rather than internal bun", async () => {
   const text = "100 1 100 100 /bin/bun\n101 100 100 100 /bin/zsh\n";
-  expect(expectOk(await readTerminalProcessTitles([item], signal(), async () => ok(text)))).toEqual({ tab: "zsh" });
+  expect(expectOk(await readTerminalProcessTitles([item], signal(), async () => ok(text)))).toEqual(
+    { tab: "zsh" },
+  );
 });
 
-test.each(["", "101 invalid ps response", "101 100 101 101 /bin/zsh\nmalformed row"]) ("Corrupt process responses never become empty success or partial results: %j", async (text) => {
-  expect(expectError(await readTerminalProcessTitles([item], signal(), async () => ok(text))).code).toBe("PTY_UNAVAILABLE");
-});
+test.each(["", "101 invalid ps response", "101 100 101 101 /bin/zsh\nmalformed row"])(
+  "Corrupt process responses never become empty success or partial results: %j",
+  async (text) => {
+    expect(
+      expectError(await readTerminalProcessTitles([item], signal(), async () => ok(text))).code,
+    ).toBe("PTY_UNAVAILABLE");
+  },
+);
 
 test("Lookup cancellation and OS failures return distinct Result errors", async () => {
-  const abort = new AbortController(); abort.abort(); let calls = 0;
-  expect(expectError(await readTerminalProcessTitles([item], abort.signal, async () => { calls++; return ok(""); })).code).toBe("CANCELLED");
+  const abort = new AbortController();
+  abort.abort();
+  let calls = 0;
+  expect(
+    expectError(
+      await readTerminalProcessTitles([item], abort.signal, async () => {
+        calls++;
+        return ok("");
+      }),
+    ).code,
+  ).toBe("CANCELLED");
   expect(calls).toBe(0);
   const failure = new PtyError("PTY_UNAVAILABLE", "ps unavailable");
-  expect(expectError(await readTerminalProcessTitles([item], signal(), async () => err(failure)))).toBe(failure);
+  expect(
+    expectError(await readTerminalProcessTitles([item], signal(), async () => err(failure))),
+  ).toBe(failure);
 });
 
 test("Real PTYs detect foreground sleep and shell return without choosing background sleep", async () => {
@@ -52,15 +85,22 @@ test("Real PTYs detect foreground sleep and shell return without choosing backgr
     while (true) {
       const titles = expectOk(await readTerminalProcessTitles(sessions.infos, signal()));
       if (titles[id] && (!expected || titles[id] === expected)) return titles[id]!;
-      if (Date.now() >= deadline) throw new Error(`Expected process title ${expected ?? "shell"}, received ${JSON.stringify(titles)}`);
+      if (Date.now() >= deadline)
+        throw new Error(
+          `Expected process title ${expected ?? "shell"}, received ${JSON.stringify(titles)}`,
+        );
       await Bun.sleep(30);
     }
   }
   try {
-    const id = expectOk(await sessions.create(fixture.repository.worktrees[0]!.id, { cols: 80, rows: 12 }));
+    const id = expectOk(
+      await sessions.create(fixture.repository.worktrees[0]!.id, { cols: 80, rows: 12 }),
+    );
     const reader = expectOk(sessions.attach(id, lease)).body!.getReader();
     disconnect = () => reader.cancel();
-    pump = (async () => { while (!((await reader.read()).done)) {} })();
+    pump = (async () => {
+      while (!(await reader.read()).done) {}
+    })();
     const shell = await untilTitle(id);
     expect(shell).not.toContain("Terminal");
     expectOk(sessions.input(id, lease, new TextEncoder().encode("/bin/sleep 30\r")));
@@ -68,12 +108,23 @@ test("Real PTYs detect foreground sleep and shell return without choosing backgr
     expectOk(sessions.input(id, lease, new Uint8Array([3])));
     expect(await untilTitle(id, shell)).toBe(shell);
     const started = join(fixture.repository.worktrees[0]!.path, "background.pid");
-    expectOk(sessions.input(id, lease, new TextEncoder().encode(`/bin/sleep 30 & echo $! > ${JSON.stringify(started)}\r`)));
+    expectOk(
+      sessions.input(
+        id,
+        lease,
+        new TextEncoder().encode(`/bin/sleep 30 & echo $! > ${JSON.stringify(started)}\r`),
+      ),
+    );
     const deadline = Date.now() + 6000;
-    while (!await Bun.file(started).exists()) { if (Date.now() >= deadline) throw new Error("Background fixture did not start."); await Bun.sleep(20); }
+    while (!(await Bun.file(started).exists())) {
+      if (Date.now() >= deadline) throw new Error("Background fixture did not start.");
+      await Bun.sleep(20);
+    }
     expect(await untilTitle(id, shell)).toBe(shell);
   } finally {
-    await disconnect?.(); await pump;
-    expectOk(await sessions.stop()); await fixture.cleanup();
+    await disconnect?.();
+    await pump;
+    expectOk(await sessions.stop());
+    await fixture.cleanup();
   }
 }, 15000);

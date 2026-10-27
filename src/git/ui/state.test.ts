@@ -13,19 +13,39 @@ test("Hiding loading screens never overwrites saved scroll with empty placeholde
   const pending = Promise.withResolvers<Result<GitSnapshot, ExpectedError>>();
   const state = { ...initialGitState(), historyScroll: 200, filesScroll: 12 };
   let retained: GitViewState | undefined;
-  const panel = new GitPanel(app.renderer, {
-    source: () => ({ load: () => pending.promise, details: async () => err(new InputError("unused")), compare: async () => err(new InputError("unused")) }),
-    createSession: async () => err(new InputError("unused")), prompt: () => ok(undefined),
-  }, () => {}, () => {}, (_id, value) => { retained = value; }, { [worktree.id]: state }, () => "");
+  const panel = new GitPanel(
+    app.renderer,
+    {
+      source: () => ({
+        load: () => pending.promise,
+        details: async () => err(new InputError("unused")),
+        compare: async () => err(new InputError("unused")),
+      }),
+      createSession: async () => err(new InputError("unused")),
+      prompt: () => ok(undefined),
+    },
+    () => {},
+    () => {},
+    (_id, value) => {
+      retained = value;
+    },
+    { [worktree.id]: state },
+    () => "",
+  );
   app.renderer.root.add(panel.root);
   try {
-    panel.show(worktree, null); await app.renderOnce();
+    panel.show(worktree, null);
+    await app.renderOnce();
 
     panel.hide();
 
-    expect(retained?.historyScroll).toBe(200); expect(retained?.filesScroll).toBe(12);
+    expect(retained?.historyScroll).toBe(200);
+    expect(retained?.filesScroll).toBe(12);
   } finally {
-    pending.resolve(ok({ commits: [], refs: [], files: [], reflog: [], head: "main", headOid: null }));
-    panel.dispose(); await app.dispose();
+    pending.resolve(
+      ok({ commits: [], refs: [], files: [], reflog: [], head: "main", headOid: null }),
+    );
+    panel.dispose();
+    await app.dispose();
   }
 });

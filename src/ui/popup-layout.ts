@@ -8,12 +8,24 @@ export class PopupBody {
   readonly empty: EmptyState;
 
   constructor(renderer: CliRenderer, id: string, content: Renderable) {
-    this.root = new BoxRenderable(renderer, { id, width: "100%", flexGrow: 1, minWidth: 0, minHeight: 0,
-      flexDirection: "column", overflow: "hidden" });
+    this.root = new BoxRenderable(renderer, {
+      id,
+      width: "100%",
+      flexGrow: 1,
+      minWidth: 0,
+      minHeight: 0,
+      flexDirection: "column",
+      overflow: "hidden",
+    });
     this.empty = new EmptyState(renderer, `${id}-empty`);
-    this.empty.root.position = "absolute"; this.empty.root.left = 0; this.empty.root.top = 0;
-    this.empty.root.width = "100%"; this.empty.root.bottom = 0; this.empty.root.visible = false;
-    this.root.add(content); this.root.add(this.empty.root);
+    this.empty.root.position = "absolute";
+    this.empty.root.left = 0;
+    this.empty.root.top = 0;
+    this.empty.root.width = "100%";
+    this.empty.root.bottom = 0;
+    this.empty.root.visible = false;
+    this.root.add(content);
+    this.root.add(this.empty.root);
   }
 
   showEmpty(title?: string, description?: string): void {
@@ -36,15 +48,32 @@ export class SearchPopupLayout {
   readonly candidates: BoxRenderable;
   readonly results: PopupBody;
 
-  constructor(renderer: CliRenderer, private readonly options: SearchLayoutOptions) {
-    this.root = new BoxRenderable(renderer, { id: `${options.id}-body`, flexGrow: 1, minWidth: 0, minHeight: 0, flexDirection: "row" });
-    this.candidates = new BoxRenderable(renderer, { minWidth: 0, minHeight: 0, flexDirection: "column" });
+  constructor(
+    renderer: CliRenderer,
+    private readonly options: SearchLayoutOptions,
+  ) {
+    this.root = new BoxRenderable(renderer, {
+      id: `${options.id}-body`,
+      flexGrow: 1,
+      minWidth: 0,
+      minHeight: 0,
+      flexDirection: "row",
+    });
+    this.candidates = new BoxRenderable(renderer, {
+      minWidth: 0,
+      minHeight: 0,
+      flexDirection: "column",
+    });
     this.results = new PopupBody(renderer, `${options.id}-results`, options.list);
     options.search.field.marginBottom = 0;
     this.results.root.paddingX = 1;
     this.candidates.add(options.search.field);
-    if (options.message) { options.message.marginX = 1; this.candidates.add(options.message); }
-    this.candidates.add(this.results.root); this.root.add(this.candidates);
+    if (options.message) {
+      options.message.marginX = 1;
+      this.candidates.add(options.message);
+    }
+    this.candidates.add(this.results.root);
+    this.root.add(this.candidates);
     if (options.preview) this.root.add(options.preview.body.root);
     this.resize(false);
   }
@@ -62,19 +91,26 @@ export class SearchPopupLayout {
     pane.visible = Boolean(split && (wide || compactPreview));
     pane.width = wide ? `${preview.width}%` : "100%";
     pane.flexGrow = wide ? 0 : 1;
-    pane.border = wide ? ["left"] : false; pane.paddingX = 0;
+    pane.border = wide ? ["left"] : false;
+    pane.paddingX = 0;
   }
 
   get listHeight(): number {
     const { search, message } = this.options;
-    return this.results.root.visible ? this.results.root.height
-      : this.root.height - (search.field.visible ? search.field.height : 0) - (message?.visible ? message.height : 0);
+    return this.results.root.visible
+      ? this.results.root.height
+      : this.root.height -
+          (search.field.visible ? search.field.height : 0) -
+          (message?.visible ? message.height : 0);
   }
 }
 
 // Activity lives on the frame edge, never in a reserved popup header or over its content.
 export function attachPopupActivity(panel: BoxRenderable, activity: Renderable): void {
-  activity.position = "absolute"; activity.top = panel.border ? -1 : 0; activity.right = 0; activity.zIndex = 1;
+  activity.position = "absolute";
+  activity.top = panel.border ? -1 : 0;
+  activity.right = 0;
+  activity.zIndex = 1;
   panel.add(activity);
 }
 
@@ -89,16 +125,26 @@ export const POPUP_SIZES = {
 
 const POPUP_VIEWPORT = { width: 0.9, height: 0.8 } as const;
 
-export function getPopupSize(size: PopupSize, availableWidth: number, availableHeight: number): PopupSize {
+export function getPopupSize(
+  size: PopupSize,
+  availableWidth: number,
+  availableHeight: number,
+): PopupSize {
   return {
     width: Math.max(1, Math.floor(Math.min(size.width, availableWidth * POPUP_VIEWPORT.width))),
     height: Math.max(1, Math.floor(Math.min(size.height, availableHeight * POPUP_VIEWPORT.height))),
   };
 }
 
-export function centerPopup(panel: BoxRenderable, size: PopupSize, availableWidth: number, availableHeight: number): PopupSize {
+export function centerPopup(
+  panel: BoxRenderable,
+  size: PopupSize,
+  availableWidth: number,
+  availableHeight: number,
+): PopupSize {
   const dimensions = getPopupSize(size, availableWidth, availableHeight);
-  panel.width = dimensions.width; panel.height = dimensions.height;
+  panel.width = dimensions.width;
+  panel.height = dimensions.height;
   // Native geometry getters still describe the previous frame during resize.
   panel.left = Math.floor((availableWidth - dimensions.width) / 2);
   panel.top = Math.floor((availableHeight - dimensions.height) / 2);

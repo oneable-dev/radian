@@ -1,9 +1,23 @@
 import { createPrefixMatcher, createSubstringMatcher } from "../search.ts";
 
-export type CompletionQuery = { readonly kind: "command" | "skill" | "file"; readonly query: string };
-export type CompletionCatalog = { readonly conversationId: string; readonly revision: number; readonly items: readonly CompletionItem[] };
-export type CompletionItem = { readonly kind: "command" | "skill" | "template" | "file"; readonly value: string; readonly description: string };
-export type CompletionResult = { readonly items: readonly CompletionItem[]; readonly truncated: boolean };
+export type CompletionQuery = {
+  readonly kind: "command" | "skill" | "file";
+  readonly query: string;
+};
+export type CompletionCatalog = {
+  readonly conversationId: string;
+  readonly revision: number;
+  readonly items: readonly CompletionItem[];
+};
+export type CompletionItem = {
+  readonly kind: "command" | "skill" | "template" | "file";
+  readonly value: string;
+  readonly description: string;
+};
+export type CompletionResult = {
+  readonly items: readonly CompletionItem[];
+  readonly truncated: boolean;
+};
 export type CompletionTarget = CompletionQuery & { readonly start: number; readonly end: number };
 export const completionLimit = 100;
 
@@ -11,19 +25,34 @@ export const completionLimit = 100;
 export function completionTarget(text: string, cursor: number): CompletionTarget | null {
   if (cursor < 1 || cursor > text.length) return null;
   for (let start = 0; start < text.length;) {
-    if (/\s/u.test(text[start]!)) { start++; continue; }
+    if (/\s/u.test(text[start]!)) {
+      start++;
+      continue;
+    }
     let end = start;
     const quoted = text.startsWith('@"', start);
     let closed = false;
     if (quoted) {
       end = start + 2;
       while (end < text.length) {
-        if (text[end] === "\\") { end = Math.min(text.length, end + 2); continue; }
-        if (text[end++] === '"') { closed = true; break; }
+        if (text[end] === "\\") {
+          end = Math.min(text.length, end + 2);
+          continue;
+        }
+        if (text[end++] === '"') {
+          closed = true;
+          break;
+        }
       }
     } else while (end < text.length && !/\s/u.test(text[end]!)) end++;
     if (cursor > start && cursor <= end) {
-      if (start === 0 && (text[start] === "/" || text[start] === "$")) return { kind: text[start] === "$" ? "skill" : "command", start, end, query: text.slice(1, cursor) };
+      if (start === 0 && (text[start] === "/" || text[start] === "$"))
+        return {
+          kind: text[start] === "$" ? "skill" : "command",
+          start,
+          end,
+          query: text.slice(1, cursor),
+        };
       if (text[start] !== "@") return null;
       const raw = text.slice(start + (quoted ? 2 : 1), Math.min(cursor, closed ? end - 1 : end));
       return { kind: "file", start, end, query: quoted ? decodeQuotedPrefix(raw) : raw };
@@ -37,40 +66,72 @@ function decodeQuotedPrefix(raw: string): string {
   let value = "";
   const escapes: Record<string, string> = { n: "\n", r: "\r", t: "\t", b: "\b", f: "\f" };
   for (let index = 0; index < raw.length; index++) {
-    if (raw[index] !== "\\") { value += raw[index]; continue; }
+    if (raw[index] !== "\\") {
+      value += raw[index];
+      continue;
+    }
     const next = raw[++index];
     if (next === undefined) break;
     if (next === "u" && /^[\da-f]{4}$/iu.test(raw.slice(index + 1, index + 5))) {
-      value += String.fromCharCode(parseInt(raw.slice(index + 1, index + 5), 16)); index += 4;
+      value += String.fromCharCode(parseInt(raw.slice(index + 1, index + 5), 16));
+      index += 4;
     } else value += escapes[next] ?? next;
   }
   return value;
 }
 
-export function insertCompletion(text: string, target: CompletionTarget, item: CompletionItem): { text: string; cursor: number } {
-  const value = item.kind === "file" ? `@${/[\s"\\]/u.test(item.value) ? JSON.stringify(item.value) : item.value}`
-    : target.kind === "skill" ? `$${item.value.replace(/^skill:/u, "")}` : `/${item.value}`;
+export function insertCompletion(
+  text: string,
+  target: CompletionTarget,
+  item: CompletionItem,
+): { text: string; cursor: number } {
+  const value =
+    item.kind === "file"
+      ? `@${/[\s"\\]/u.test(item.value) ? JSON.stringify(item.value) : item.value}`
+      : target.kind === "skill"
+        ? `$${item.value.replace(/^skill:/u, "")}`
+        : `/${item.value}`;
   const insertion = value + (target.end === text.length ? " " : "");
-  return { text: text.slice(0, target.start) + insertion + text.slice(target.end), cursor: target.start + insertion.length };
+  return {
+    text: text.slice(0, target.start) + insertion + text.slice(target.end),
+    cursor: target.start + insertion.length,
+  };
 }
 
 // Only a leading skill token is an invocation; shell variables and inline prose stay literal.
 export function expandSkillInvocation(text: string, knownSkills: readonly string[] = []): string {
   const token = /^\$([^\s]+)/u.exec(text);
-  if (token && knownSkills.includes(token[1]!)) return `/skill:${token[1]}${text.slice(token[0].length)}`;
+  if (token && knownSkills.includes(token[1]!))
+    return `/skill:${token[1]}${text.slice(token[0].length)}`;
   return text.replace(/^\$([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)/u, "/skill:$1");
 }
 
-export function filterCatalog(items: readonly CompletionItem[], query: CompletionQuery): CompletionResult {
-  const candidates = query.kind === "skill" ? items.filter(item => item.kind === "skill").map(item => ({ ...item, value: item.value.replace(/^skill:/u, "") }))
-    : items.filter(item => item.kind !== "skill" && item.kind !== "file");
+export function filterCatalog(
+  items: readonly CompletionItem[],
+  query: CompletionQuery,
+): CompletionResult {
+  const candidates =
+    query.kind === "skill"
+      ? items
+          .filter((item) => item.kind === "skill")
+          .map((item) => ({ ...item, value: item.value.replace(/^skill:/u, "") }))
+      : items.filter((item) => item.kind !== "skill" && item.kind !== "file");
   return filterCompletions(candidates, query.query);
 }
 
-export function filterCompletions(items: readonly CompletionItem[], query: string): CompletionResult {
-  const prefix = createPrefixMatcher(query), substring = createSubstringMatcher(query);
-  const matches = items.filter(item => item.kind === "file" ? substring(item.value) : prefix(item.value));
-  matches.sort((a, b) => Number(prefix(b.value)) - Number(prefix(a.value))
-    || (a.value < b.value ? -1 : a.value > b.value ? 1 : 0));
+export function filterCompletions(
+  items: readonly CompletionItem[],
+  query: string,
+): CompletionResult {
+  const prefix = createPrefixMatcher(query),
+    substring = createSubstringMatcher(query);
+  const matches = items.filter((item) =>
+    item.kind === "file" ? substring(item.value) : prefix(item.value),
+  );
+  matches.sort(
+    (a, b) =>
+      Number(prefix(b.value)) - Number(prefix(a.value)) ||
+      (a.value < b.value ? -1 : a.value > b.value ? 1 : 0),
+  );
   return { items: matches.slice(0, completionLimit), truncated: matches.length > completionLimit };
 }

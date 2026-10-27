@@ -3,14 +3,24 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Value } from "typebox/value";
-import { commandSchema, emptyPreferences, parseSnapshot, protocolVersion, type RuntimeManifest } from "./protocol.ts";
+import {
+  commandSchema,
+  emptyPreferences,
+  parseSnapshot,
+  protocolVersion,
+  type RuntimeManifest,
+} from "./protocol.ts";
 import { daemonPaths, privateDirectory, runtimePaths, RuntimeStore } from "./storage.ts";
 import { RuntimeClient } from "./client.ts";
 import { expectOk, expectError } from "../testing/results.ts";
 
 test("Invalid protocol commands and snapshots fail at execution boundaries", () => {
   // Local IPC is private but still receives untyped JSON across a process boundary.
-  const malformed = [{ type: "prompt", sessionId: "id" }, { type: "close", sessionId: 3 }, { type: "unknown" }];
+  const malformed = [
+    { type: "prompt", sessionId: "id" },
+    { type: "close", sessionId: 3 },
+    { type: "unknown" },
+  ];
 
   // Validate the command shape before it reaches SDK execution.
   const accepted = malformed.map((command) => Value.Check(commandSchema, command));
@@ -52,7 +62,9 @@ test("Corrupt manifests never become empty success or overwritten source", async
 
     // The original input remains available for recovery.
     expect(await readFile(paths.manifest, "utf8")).toBe('{"version":99}');
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("Manifests save atomically and cannot restore another repository's state", async () => {
@@ -62,8 +74,17 @@ test("Manifests save atomically and cannot restore another repository's state", 
   try {
     await privateDirectory(paths.directory);
     const store = new RuntimeStore(paths);
-    const first: RuntimeManifest = { version: protocolVersion, repositoryId: "/repo/.git", repositories: [], records: [], preferences: structuredClone(emptyPreferences) };
-    const second = { ...first, preferences: { ...first.preferences, drafts: { id: "latest draft" } } };
+    const first: RuntimeManifest = {
+      version: protocolVersion,
+      repositoryId: "/repo/.git",
+      repositories: [],
+      records: [],
+      preferences: structuredClone(emptyPreferences),
+    };
+    const second = {
+      ...first,
+      preferences: { ...first.preferences, drafts: { id: "latest draft" } },
+    };
 
     // The write queue preserves invocation order and publishes a complete JSON document.
     await Promise.all([store.save(first), store.save(second)]);
@@ -71,14 +92,24 @@ test("Manifests save atomically and cannot restore another repository's state", 
     // Restore returns the last checkpoint only to its matching repository.
     expect(expectOk(await store.load("/repo/.git"))?.preferences.drafts.id).toBe("latest draft");
     expect(expectError(await store.load("/other/.git")).code).toBe("STORAGE_FAILED");
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("Legacy services report missing History support without automatic termination or replacement", async () => {
   // Protocol-v1 services may already own user jobs before the additive history capability ships.
   const client = new RuntimeClient(runtimePaths("/repo/.git", true, "/unused"), {
-    version: protocolVersion, pid: process.pid, instance: "legacy", repositoryId: "/repo/.git", mode: "offline",
-    repositories: [], details: {}, closingCount: 0, preferences: structuredClone(emptyPreferences), notice: "",
+    version: protocolVersion,
+    pid: process.pid,
+    instance: "legacy",
+    repositoryId: "/repo/.git",
+    mode: "offline",
+    repositories: [],
+    details: {},
+    closingCount: 0,
+    preferences: structuredClone(emptyPreferences),
+    notice: "",
   });
 
   // The guard rejects locally, without sending a stop or starting a replacement daemon.

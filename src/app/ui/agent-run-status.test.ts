@@ -11,192 +11,456 @@ import type { TranscriptSection } from "../../agents/transcript.ts";
 import { InputError, type ExpectedError } from "../../errors.ts";
 import { err, ok, type Result } from "../../result.ts";
 
-const request = (id: string, text: string): TranscriptSection => ({ id, kind: "user", title: "You", text, status: "complete" });
-const answer = (text: string): TranscriptSection => ({ id: "answer", kind: "assistant", title: "Agent", text, status: "streaming" });
+const request = (id: string, text: string): TranscriptSection => ({
+  id,
+  kind: "user",
+  title: "You",
+  text,
+  status: "complete",
+});
+const answer = (text: string): TranscriptSection => ({
+  id: "answer",
+  kind: "assistant",
+  title: "Agent",
+  text,
+  status: "streaming",
+});
 async function mount(actions: Partial<WorkbenchActions> = {}) {
   const clock = new ManualClock();
   const app = await createTestRenderer({ width: 120, height: 28, kittyKeyboard: true, clock });
   // Main-run tests keep owned-child layout in its dedicated regression suite.
-  const selection = new WorkspaceSelection(demoWorkspace().map(repo => ({ ...repo, worktrees: repo.worktrees.map(tree => ({ ...tree,
-    sessions: tree.sessions.map(session => ({ ...session, subagents: [] })),
-  })) })));
+  const selection = new WorkspaceSelection(
+    demoWorkspace().map((repo) => ({
+      ...repo,
+      worktrees: repo.worktrees.map((tree) => ({
+        ...tree,
+        sessions: tree.sessions.map((session) => ({ ...session, subagents: [] })),
+      })),
+    })),
+  );
   const states: Record<string, ExecutionState> = {
-    a1: { status: "working", output: "", error: null, sections: [request("first", "Implement workspace search"), answer(Array.from({ length: 100 }, (_, i) => `PROGRESS-${i}`).join("\n"))] },
-    a2: { status: "complete", output: "", error: null, sections: [request("second", "Review the editor changes"), answer("Completed")] },
-    b1: { status: "complete", output: "", error: null, sections: [request("feature", "Fix the feature worktree"), answer("Completed")] },
+    a1: {
+      status: "working",
+      output: "",
+      error: null,
+      sections: [
+        request("first", "Implement workspace search"),
+        answer(Array.from({ length: 100 }, (_, i) => `PROGRESS-${i}`).join("\n")),
+      ],
+    },
+    a2: {
+      status: "complete",
+      output: "",
+      error: null,
+      sections: [request("second", "Review the editor changes"), answer("Completed")],
+    },
+    b1: {
+      status: "complete",
+      output: "",
+      error: null,
+      sections: [request("feature", "Fix the feature worktree"), answer("Completed")],
+    },
   };
   const sent: string[] = [];
-  const view = new Workbench(app.renderer, selection, { onNewSession: () => {}, onCloseSession: () => {}, onPrompt: (_id, text) => { sent.push(text); return ok(undefined); },
-    getSessionDetails: (id) => states[id] ?? null, initialDrafts: { a1: "unsent next command", a2: "second session draft", b1: "feature draft" }, ...actions });
-  const render = async () => { await app.renderOnce(); await app.renderOnce(); };
-  const get = (id: string) => { const node = app.renderer.root.findDescendantById(id); if (!node) throw new Error(`Missing ${id}`); return node; };
-  const status = () => { const node = get("agent-run-status-text"); return node.visible ? app.captureCharFrame().split("\n")[node.y]!.slice(node.x, node.x + node.width).trimEnd() : ""; };
-  const caption = () => { const node = get("agent-run-request"); return node.visible ? app.captureCharFrame().split("\n")[node.y]!.slice(node.x, node.x + node.width).trimEnd() : ""; };
-  const update = async () => { selection.replaceSnapshot(selection.snapshot); await render(); };
+  const view = new Workbench(app.renderer, selection, {
+    onNewSession: () => {},
+    onCloseSession: () => {},
+    onPrompt: (_id, text) => {
+      sent.push(text);
+      return ok(undefined);
+    },
+    getSessionDetails: (id) => states[id] ?? null,
+    initialDrafts: { a1: "unsent next command", a2: "second session draft", b1: "feature draft" },
+    ...actions,
+  });
+  const render = async () => {
+    await app.renderOnce();
+    await app.renderOnce();
+  };
+  const get = (id: string) => {
+    const node = app.renderer.root.findDescendantById(id);
+    if (!node) throw new Error(`Missing ${id}`);
+    return node;
+  };
+  const status = () => {
+    const node = get("agent-run-status-text");
+    return node.visible
+      ? app
+          .captureCharFrame()
+          .split("\n")
+          [node.y]!.slice(node.x, node.x + node.width)
+          .trimEnd()
+      : "";
+  };
+  const caption = () => {
+    const node = get("agent-run-request");
+    return node.visible
+      ? app
+          .captureCharFrame()
+          .split("\n")
+          [node.y]!.slice(node.x, node.x + node.width)
+          .trimEnd()
+      : "";
+  };
+  const update = async () => {
+    selection.replaceSnapshot(selection.snapshot);
+    await render();
+  };
   await render();
-  return { ...app, clock, view, selection, states, sent, render, get, status, caption, update, async close() { view.dispose(); await app.dispose(); } };
+  return {
+    ...app,
+    clock,
+    view,
+    selection,
+    states,
+    sent,
+    render,
+    get,
+    status,
+    caption,
+    update,
+    async close() {
+      view.dispose();
+      await app.dispose();
+    },
+  };
 }
 
 test("Actual requests and spinners appear above prompts without top Request, mode, or section counts", async () => {
   const app = await mount();
   try {
-    const row = app.get("agent-run-status"), scroll = app.get("session-transcript"), prompt = app.get("session-prompt");
-    if (!(scroll instanceof ScrollBoxRenderable) || !(prompt instanceof PromptInput)) throw new Error("Missing native controls.");
-    const y = row.y, draft = prompt.value, cursor = prompt.cursorOffset;
-    expect(app.status()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toBe("“Implement workspace search”");
+    const row = app.get("agent-run-status"),
+      scroll = app.get("session-transcript"),
+      prompt = app.get("session-prompt");
+    if (!(scroll instanceof ScrollBoxRenderable) || !(prompt instanceof PromptInput))
+      throw new Error("Missing native controls.");
+    const y = row.y,
+      draft = prompt.value,
+      cursor = prompt.cursorOffset;
+    expect(app.status()).toBe("Working (0s · <Esc> to interrupt)");
+    expect(app.caption()).toBe("“Implement workspace search”");
     expect(app.get("agent-run-loading").visible).toBe(true);
     expect(app.renderer.root.findDescendantById("agent-request")).toBeUndefined();
     expect(scroll.y).toBe(app.get("agent-transcript-area").y);
     const group = app.get("transcript-status-row");
-    expect(group.height).toBe(2); expect(row.height).toBe(2); expect(row.y).toBe(group.y);
+    expect(group.height).toBe(2);
+    expect(row.height).toBe(2);
+    expect(row.y).toBe(group.y);
     expect(group.y).toBe(scroll.viewport.y + scroll.viewport.height + 1);
     expect(app.get("agent-composer").y).toBe(row.y + row.height + 1);
     const initialFrame = app.captureCharFrame().split("\n");
-    for (const gutter of [group.y - 1, group.y + group.height]) expect(initialFrame[gutter]!.slice(group.x, group.x + group.width).trim()).toBe("");
+    for (const gutter of [group.y - 1, group.y + group.height])
+      expect(initialFrame[gutter]!.slice(group.x, group.x + group.width).trim()).toBe("");
     expect(app.captureCharFrame()).not.toMatch(/(?:INPUT|TRANSCRIPT) · \d+\/\d+|Request Implement/);
 
     // Reading old output must not move the running-request anchor or overwrite the draft.
-    pressLeader(app, "["); scroll.scrollTo(20); await app.render();
-    const focus = app.renderer.currentFocusedRenderable, top = scroll.scrollTop;
+    pressLeader(app, "[");
+    scroll.scrollTo(20);
+    await app.render();
+    const focus = app.renderer.currentFocusedRenderable,
+      top = scroll.scrollTop;
     const sections = app.states.a1!.sections!;
-    app.states.a1 = { ...app.states.a1!, sections: [sections[0]!, answer(`${sections[1]!.text}\nNEW STREAM OUTPUT`)] };
+    app.states.a1 = {
+      ...app.states.a1!,
+      sections: [sections[0]!, answer(`${sections[1]!.text}\nNEW STREAM OUTPUT`)],
+    };
     await app.update();
 
-    expect(row.y).toBe(y); expect(row.height).toBe(2); expect(app.status()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toBe("“Implement workspace search”");
-    expect(scroll.scrollTop).toBe(top); expect(app.renderer.currentFocusedRenderable).toBe(focus);
-    expect(prompt.value).toBe(draft); expect(prompt.cursorOffset).toBe(cursor); expect(app.sent).toEqual([]);
+    expect(row.y).toBe(y);
+    expect(row.height).toBe(2);
+    expect(app.status()).toBe("Working (0s · <Esc> to interrupt)");
+    expect(app.caption()).toBe("“Implement workspace search”");
+    expect(scroll.scrollTop).toBe(top);
+    expect(app.renderer.currentFocusedRenderable).toBe(focus);
+    expect(prompt.value).toBe(draft);
+    expect(prompt.cursorOffset).toBe(cursor);
+    expect(app.sent).toEqual([]);
     const frame = app.captureCharFrame().split("\n");
-    expect(frame[row.y]).not.toContain("Paused"); expect(frame[app.get("footer-bar").y]).toContain("Paused");
-    app.mockInput.pressKey("END", { ctrl: true }); await app.render();
+    expect(frame[row.y]).not.toContain("Paused");
+    expect(frame[app.get("footer-bar").y]).toContain("Paused");
+    app.mockInput.pressKey("END", { ctrl: true });
+    await app.render();
     expect(app.captureCharFrame().split("\n")[app.get("footer-bar").y]).not.toContain("Paused");
-    expect(app.status()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toBe("“Implement workspace search”");
-  } finally { await app.close(); }
+    expect(app.status()).toBe("Working (0s · <Esc> to interrupt)");
+    expect(app.caption()).toBe("“Implement workspace search”");
+  } finally {
+    await app.close();
+  }
 });
 
 test("Failures remain above the prompt without duplicate transcript error summaries", async () => {
   // A failed response retains its partial output and runtime-owned failure detail.
-  const app = await mount(), error = "ECONNRESET: The socket connection was closed unexpectedly.";
+  const app = await mount(),
+    error = "ECONNRESET: The socket connection was closed unexpectedly.";
   try {
-    app.states.a1 = { status: "failure", output: "", error, sections: [request("failed", "Keep working"),
-      { ...answer("PARTIAL_RESPONSE"), status: "error", error }] };
+    app.states.a1 = {
+      status: "failure",
+      output: "",
+      error,
+      sections: [
+        request("failed", "Keep working"),
+        { ...answer("PARTIAL_RESPONSE"), status: "error", error },
+      ],
+    };
 
     // Render the settled failure through the normal session update path.
     await app.update();
 
     // Only the composer status owns the error summary; the transcript retains its prose.
     const scroll = app.get("session-transcript");
-    const transcript = app.captureCharFrame().split("\n").slice(scroll.y, scroll.y + scroll.height).join("\n");
+    const transcript = app
+      .captureCharFrame()
+      .split("\n")
+      .slice(scroll.y, scroll.y + scroll.height)
+      .join("\n");
     expect(app.status()).toBe(`Failed: ${error}`);
-    expect(transcript).toContain("PARTIAL_RESPONSE"); expect(transcript).not.toContain("ECONNRESET");
-    expect(app.view.promptDrafts.a1).toBe("unsent next command"); expect(app.sent).toEqual([]);
-  } finally { await app.close(); }
+    expect(transcript).toContain("PARTIAL_RESPONSE");
+    expect(transcript).not.toContain("ECONNRESET");
+    expect(app.view.promptDrafts.a1).toBe("unsent next command");
+    expect(app.sent).toEqual([]);
+  } finally {
+    await app.close();
+  }
 });
 
 test("Session/worktree switching restores request and activity together without leaking old spinners", async () => {
   const app = await mount();
   try {
-    app.selection.selectSession("demo:main", "a2"); await app.render();
-    expect(app.status()).toBe(""); expect(app.get("agent-run-loading").visible).toBe(false);
+    app.selection.selectSession("demo:main", "a2");
+    await app.render();
+    expect(app.status()).toBe("");
+    expect(app.get("agent-run-loading").visible).toBe(false);
     expect(app.get("transcript-status-row").visible).toBe(false);
-    app.selection.selectWorktree("demo:feature"); await app.render();
-    expect(app.status()).toBe(""); expect(app.get("transcript-status-row").visible).toBe(false);
-    app.selection.selectSession("demo:main", "a1"); await app.render();
+    app.selection.selectWorktree("demo:feature");
+    await app.render();
+    expect(app.status()).toBe("");
+    expect(app.get("transcript-status-row").visible).toBe(false);
+    app.selection.selectSession("demo:main", "a1");
+    await app.render();
     expect(app.get("agent-run-loading").visible).toBe(true);
 
-    app.states.a1 = { ...app.states.a1!, status: "complete" }; await app.update();
+    app.states.a1 = { ...app.states.a1!, status: "complete" };
+    await app.update();
     expect(app.status()).toBe("");
-    app.clock.advance(500); await app.render(); expect(app.get("agent-run-loading").visible).toBe(false);
-    expect(app.view.promptDrafts).toMatchObject({ a1: "unsent next command", a2: "second session draft", b1: "feature draft" }); expect(app.sent).toEqual([]);
-  } finally { await app.close(); }
+    app.clock.advance(500);
+    await app.render();
+    expect(app.get("agent-run-loading").visible).toBe(false);
+    expect(app.view.promptDrafts).toMatchObject({
+      a1: "unsent next command",
+      a2: "second session draft",
+      b1: "feature draft",
+    });
+    expect(app.sent).toEqual([]);
+  } finally {
+    await app.close();
+  }
 });
 
 test("Normal completion clears status after spinner minimums while preserving reading positions and input focus", async () => {
   const app = await mount();
   try {
     // No owned child or paste indicator should keep an otherwise empty status row open.
-    app.selection.replaceSnapshot(app.selection.snapshot.map((repo) => ({ ...repo, worktrees: repo.worktrees.map((tree) => ({ ...tree,
-      sessions: tree.sessions.map((session) => ({ ...session, subagents: [] })),
-    })) })));
-    const scroll = app.get("session-transcript"); if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript");
-    pressLeader(app, "["); scroll.scrollTo(20); await app.render();
-    const top = scroll.scrollTop, prompt = app.get("session-prompt");
-    pressLeader(app, "a"); await app.render(); const promptY = prompt.y;
+    app.selection.replaceSnapshot(
+      app.selection.snapshot.map((repo) => ({
+        ...repo,
+        worktrees: repo.worktrees.map((tree) => ({
+          ...tree,
+          sessions: tree.sessions.map((session) => ({ ...session, subagents: [] })),
+        })),
+      })),
+    );
+    const scroll = app.get("session-transcript");
+    if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript");
+    pressLeader(app, "[");
+    scroll.scrollTo(20);
+    await app.render();
+    const top = scroll.scrollTop,
+      prompt = app.get("session-prompt");
+    pressLeader(app, "a");
+    await app.render();
+    const promptY = prompt.y;
     app.clock.advance(100);
-    app.states.a1 = { ...app.states.a1!, status: "complete" }; await app.update();
-    expect(app.status()).toBe(""); expect(app.get("agent-run-loading").visible).toBe(true);
+    app.states.a1 = { ...app.states.a1!, status: "complete" };
+    await app.update();
+    expect(app.status()).toBe("");
+    expect(app.get("agent-run-loading").visible).toBe(true);
 
-    app.clock.advance(400); await app.render();
+    app.clock.advance(400);
+    await app.render();
 
-    expect(app.get("agent-run-loading").visible).toBe(false); expect(app.get("transcript-status-row").visible).toBe(false);
-    expect(scroll.scrollTop).toBe(top); expect(prompt.y).toBe(promptY); expect(app.renderer.currentFocusedRenderable).toBe(prompt);
-    expect(app.view.promptDrafts.a1).toBe("unsent next command"); expect(app.sent).toEqual([]);
-  } finally { await app.close(); }
+    expect(app.get("agent-run-loading").visible).toBe(false);
+    expect(app.get("transcript-status-row").visible).toBe(false);
+    expect(scroll.scrollTop).toBe(top);
+    expect(prompt.y).toBe(promptY);
+    expect(app.renderer.currentFocusedRenderable).toBe(prompt);
+    expect(app.view.promptDrafts.a1).toBe("unsent next command");
+    expect(app.sent).toEqual([]);
+  } finally {
+    await app.close();
+  }
 });
 
 test("Drafts, rejections, and settings commands update requests only when actual conversations gain input", async () => {
   let response: Result<void, ExpectedError> = ok(undefined);
   const sent: string[] = [];
-  const app = await mount({ onPrompt: (_id, text) => { sent.push(text); return response; } });
+  const app = await mount({
+    onPrompt: (_id, text) => {
+      sent.push(text);
+      return response;
+    },
+  });
   try {
-    const prompt = app.get("session-prompt"); if (!(prompt instanceof PromptInput)) throw new Error("Missing prompt.");
-    pressLeader(app, "a"); prompt.value = "";
-    await app.mockInput.typeText("/fast status"); app.mockInput.pressEnter(); await app.render();
-    expect(app.status()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toBe("“Implement workspace search”");
+    const prompt = app.get("session-prompt");
+    if (!(prompt instanceof PromptInput)) throw new Error("Missing prompt.");
+    pressLeader(app, "a");
+    prompt.value = "";
+    await app.mockInput.typeText("/fast status");
+    app.mockInput.pressEnter();
+    await app.render();
+    expect(app.status()).toBe("Working (0s · <Esc> to interrupt)");
+    expect(app.caption()).toBe("“Implement workspace search”");
     response = err(new InputError("Request rejected"));
-    await app.mockInput.typeText("rejected input"); app.mockInput.pressEnter(); await app.render();
-    expect(prompt.value).toBe("rejected input"); expect(app.status()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toBe("“Implement workspace search”");
+    await app.mockInput.typeText("rejected input");
+    app.mockInput.pressEnter();
+    await app.render();
+    expect(prompt.value).toBe("rejected input");
+    expect(app.status()).toBe("Working (0s · <Esc> to interrupt)");
+    expect(app.caption()).toBe("“Implement workspace search”");
 
-    app.states.a1 = { ...app.states.a1!, sections: [...app.states.a1!.sections!, request("delivered", "Run the tests first")] }; await app.update();
-    expect(app.status()).toBe("Working (0s · <Esc> to interrupt)"); expect(app.caption()).toBe("“Run the tests first”");
-    expect(prompt.value).toBe("rejected input"); expect(sent).toEqual(["/fast status", "rejected input"]);
-  } finally { await app.close(); }
+    app.states.a1 = {
+      ...app.states.a1!,
+      sections: [...app.states.a1!.sections!, request("delivered", "Run the tests first")],
+    };
+    await app.update();
+    expect(app.status()).toBe("Working (0s · <Esc> to interrupt)");
+    expect(app.caption()).toBe("“Run the tests first”");
+    expect(prompt.value).toBe("rejected input");
+    expect(sent).toEqual(["/fast status", "rejected input"]);
+  } finally {
+    await app.close();
+  }
 });
 
 test("Request-free runs never infer content and long requests fit the next row in compact screens", async () => {
   const app = await mount();
   try {
-    app.states.a1 = { status: "working", output: "Legacy output without request metadata", error: null }; await app.update();
+    app.states.a1 = {
+      status: "working",
+      output: "Legacy output without request metadata",
+      error: null,
+    };
+    await app.update();
     expect(app.status()).toBe("Working (0s · <Esc> to interrupt)");
-    app.states.a1 = { status: "working", output: "", error: null, sections: [request("restored", "A long request that should stay on one line while the screen becomes narrow")] }; await app.update();
-    app.resize(60, 12); await app.render();
-    expect(app.get("agent-run-status").height).toBe(2); expect(app.caption()).toStartWith("“"); expect(app.caption()).toEndWith("…”");
+    app.states.a1 = {
+      status: "working",
+      output: "",
+      error: null,
+      sections: [
+        request(
+          "restored",
+          "A long request that should stay on one line while the screen becomes narrow",
+        ),
+      ],
+    };
+    await app.update();
+    app.resize(60, 12);
+    await app.render();
+    expect(app.get("agent-run-status").height).toBe(2);
+    expect(app.caption()).toStartWith("“");
+    expect(app.caption()).toEndWith("…”");
     expect(app.get("session-transcript").height).toBeGreaterThan(0);
-    expect(app.get("session-status").y + app.get("session-status").height).toBeLessThanOrEqual(app.get("app-footer").y);
-    expect(app.view.promptDrafts.a1).toBe("unsent next command"); expect(app.sent).toEqual([]);
-  } finally { await app.close(); }
+    expect(app.get("session-status").y + app.get("session-status").height).toBeLessThanOrEqual(
+      app.get("app-footer").y,
+    );
+    expect(app.view.promptDrafts.a1).toBe("unsent next command");
+    expect(app.sent).toEqual([]);
+  } finally {
+    await app.close();
+  }
 });
 
 test("clear preserves tabs and other drafts while removing old requests, spinners, and navigation state", async () => {
-  const app = await mount({ onPrompt: () => {
-    app.states.a1 = { conversationId: "fresh", status: null, output: "", error: null, sections: [] };
-    app.selection.replaceSnapshot(app.selection.snapshot); return ok(undefined);
-  } });
+  const app = await mount({
+    onPrompt: () => {
+      app.states.a1 = {
+        conversationId: "fresh",
+        status: null,
+        output: "",
+        error: null,
+        sections: [],
+      };
+      app.selection.replaceSnapshot(app.selection.snapshot);
+      return ok(undefined);
+    },
+  });
   try {
-    app.states.a1 = { ...app.states.a1!, conversationId: "previous" }; await app.update();
-    const tab = app.get("session:demo:main:a1"), tabStrip = app.get("agent-session-list"), count = tabStrip.getChildren().length;
-    const prompt = app.get("session-prompt"); if (!(prompt instanceof PromptInput)) throw new Error("Missing input");
-    pressLeader(app, "["); app.mockInput.pressKey("HOME"); await app.render();
-    pressLeader(app, "a"); prompt.value = "/clear"; app.mockInput.pressEnter(); await app.render();
+    app.states.a1 = { ...app.states.a1!, conversationId: "previous" };
+    await app.update();
+    const tab = app.get("session:demo:main:a1"),
+      tabStrip = app.get("agent-session-list"),
+      count = tabStrip.getChildren().length;
+    const prompt = app.get("session-prompt");
+    if (!(prompt instanceof PromptInput)) throw new Error("Missing input");
+    pressLeader(app, "[");
+    app.mockInput.pressKey("HOME");
+    await app.render();
+    pressLeader(app, "a");
+    prompt.value = "/clear";
+    app.mockInput.pressEnter();
+    await app.render();
 
-    expect(app.selection.sessionId).toBe("a1"); expect(tabStrip.getChildren()).toHaveLength(count); expect(app.get("session:demo:main:a1")).toBe(tab);
-    expect(app.status()).toBe(""); expect(app.get("agent-run-loading").visible).toBe(false); expect(app.captureCharFrame()).not.toContain("PROGRESS-99");
-    expect(prompt.value).toBe(""); expect(app.renderer.currentFocusedRenderable).toBe(prompt);
-    expect(app.view.workViewPreferences.agentViews?.a1).toMatchObject({ mode: "sections", selectedId: null, follow: true });
-    expect(app.view.promptDrafts).toMatchObject({ a2: "second session draft", b1: "feature draft" });
-  } finally { await app.close(); }
+    expect(app.selection.sessionId).toBe("a1");
+    expect(tabStrip.getChildren()).toHaveLength(count);
+    expect(app.get("session:demo:main:a1")).toBe(tab);
+    expect(app.status()).toBe("");
+    expect(app.get("agent-run-loading").visible).toBe(false);
+    expect(app.captureCharFrame()).not.toContain("PROGRESS-99");
+    expect(prompt.value).toBe("");
+    expect(app.renderer.currentFocusedRenderable).toBe(prompt);
+    expect(app.view.workViewPreferences.agentViews?.a1).toMatchObject({
+      mode: "sections",
+      selectedId: null,
+      follow: true,
+    });
+    expect(app.view.promptDrafts).toMatchObject({
+      a2: "second session draft",
+      b1: "feature draft",
+    });
+  } finally {
+    await app.close();
+  }
 });
 
 test("Replacement snapshots and late acceptance never clear new drafts or misidentify work requests", async () => {
   const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
   const app = await mount({ onPrompt: () => accepted.promise });
   try {
-    app.states.a1 = { ...app.states.a1!, conversationId: "previous" }; await app.update();
-    const prompt = app.get("session-prompt"); if (!(prompt instanceof PromptInput)) throw new Error("Missing input");
-    pressLeader(app, "a"); prompt.value = "/clear"; app.mockInput.pressEnter(); await app.render();
-    app.states.a1 = { conversationId: "fresh", status: null, output: "", error: null, sections: [] }; await app.update();
-    prompt.value = "next conversation draft"; accepted.resolve(ok(undefined)); await app.render();
+    app.states.a1 = { ...app.states.a1!, conversationId: "previous" };
+    await app.update();
+    const prompt = app.get("session-prompt");
+    if (!(prompt instanceof PromptInput)) throw new Error("Missing input");
+    pressLeader(app, "a");
+    prompt.value = "/clear";
+    app.mockInput.pressEnter();
+    await app.render();
+    app.states.a1 = {
+      conversationId: "fresh",
+      status: null,
+      output: "",
+      error: null,
+      sections: [],
+    };
+    await app.update();
+    prompt.value = "next conversation draft";
+    accepted.resolve(ok(undefined));
+    await app.render();
 
-    expect(prompt.value).toBe("next conversation draft"); expect(app.view.promptDrafts.a1).toBe("next conversation draft");
-    expect(app.selection.sessionId).toBe("a1"); expect(app.status()).toBe("");
-  } finally { accepted.resolve(ok(undefined)); await app.close(); }
+    expect(prompt.value).toBe("next conversation draft");
+    expect(app.view.promptDrafts.a1).toBe("next conversation draft");
+    expect(app.selection.sessionId).toBe("a1");
+    expect(app.status()).toBe("");
+  } finally {
+    accepted.resolve(ok(undefined));
+    await app.close();
+  }
 });

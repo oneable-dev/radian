@@ -11,8 +11,11 @@ export class FastModeAnimation {
   private timer: ReturnType<CliRenderer["clock"]["setInterval"]> | undefined;
   private disposed = false;
 
-  constructor(private readonly renderer: CliRenderer, private readonly owner: Renderable,
-    private readonly paint: (frame: FastModeFrame | null) => void) {
+  constructor(
+    private readonly renderer: CliRenderer,
+    private readonly owner: Renderable,
+    private readonly paint: (frame: FastModeFrame | null) => void,
+  ) {
     renderer.addPostProcessFn(this.sync);
     owner.once(RenderableEvents.DESTROYED, this.dispose);
   }
@@ -20,14 +23,16 @@ export class FastModeAnimation {
   update(enabled: boolean, animate = true): void {
     if (this.disposed) return;
     if (enabled && !this.enabled) this.startedAt = this.renderer.clock.now();
-    this.enabled = enabled; this.animate = animate;
+    this.enabled = enabled;
+    this.animate = animate;
     this.sync();
   }
 
   private sync = (): void => {
     if (this.disposed) return;
     let visible = !this.owner.isDestroyed;
-    for (let node: Renderable | null = this.owner; node && visible; node = node.parent) visible = node.visible;
+    for (let node: Renderable | null = this.owner; node && visible; node = node.parent)
+      visible = node.visible;
     if (!this.enabled || !visible || !this.animate) {
       if (this.timer !== undefined) this.renderer.clock.clearInterval(this.timer);
       this.timer = undefined;
@@ -40,7 +45,7 @@ export class FastModeAnimation {
   };
 
   private tick = (): void => {
-    const phase = (this.renderer.clock.now() - this.startedAt) % cycleMs / cycleMs;
+    const phase = ((this.renderer.clock.now() - this.startedAt) % cycleMs) / cycleMs;
     this.paint({ phase });
   };
 

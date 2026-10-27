@@ -28,46 +28,93 @@ export class SessionPreview {
   private capturedAt: number | undefined;
   private focusPending = false;
 
-  constructor(private readonly renderer: CliRenderer, id: string, actions: Actions) {
-    this.panel = new AgentPanel(renderer, { onNewSession() {},
-      getSessionDetails: sessionId => sessionId === this.sessionId ? this.state : actions.details?.(sessionId) ?? null,
-      ...(actions.image ? { onImage: actions.image } : {}),
-    }, (label, activate) => new Button(renderer, label, activate), actions.notice, () => actions.changed(), () => actions.focusList(), {}, () => {}, {
-      readOnly: true, idPrefix: `${id}-preview-`, initialPosition: "end",
-      keyHint: (command, context) => actions.keyHint(command, context), snapshotTime: () => this.capturedAt,
-    });
+  constructor(
+    private readonly renderer: CliRenderer,
+    id: string,
+    actions: Actions,
+  ) {
+    this.panel = new AgentPanel(
+      renderer,
+      {
+        onNewSession() {},
+        getSessionDetails: (sessionId) =>
+          sessionId === this.sessionId ? this.state : (actions.details?.(sessionId) ?? null),
+        ...(actions.image ? { onImage: actions.image } : {}),
+      },
+      (label, activate) => new Button(renderer, label, activate),
+      actions.notice,
+      () => actions.changed(),
+      () => actions.focusList(),
+      {},
+      () => {},
+      {
+        readOnly: true,
+        idPrefix: `${id}-preview-`,
+        initialPosition: "end",
+        keyHint: (command, context) => actions.keyHint(command, context),
+        snapshotTime: () => this.capturedAt,
+      },
+    );
     this.panel.update(null, null, new Set(), false);
-    this.transcript = this.panel.transcriptScroll; this.transcript.id = `${id}-preview`;
+    this.transcript = this.panel.transcriptScroll;
+    this.transcript.id = `${id}-preview`;
     this.body = new PopupBody(renderer, `${id}-preview-pane`, this.panel.root);
     this.body.root.focusable = true;
-    this.body.root.onMouseDown = event => {
+    this.body.root.onMouseDown = (event) => {
       if (event.button !== 0) return;
-      event.preventDefault(); event.stopPropagation(); this.focusTarget.focus();
+      event.preventDefault();
+      event.stopPropagation();
+      this.focusTarget.focus();
     };
     renderer.addPostProcessFn(this.focusReady);
   }
 
-  get focusTarget(): Renderable { return this.panel.root.visible && this.transcript.visible ? this.transcript : this.body.root; }
-  get focused(): boolean { return this.body.root.focused || this.panel.root.hasFocusedDescendant; }
+  get focusTarget(): Renderable {
+    return this.panel.root.visible && this.transcript.visible ? this.transcript : this.body.root;
+  }
+  get focused(): boolean {
+    return this.body.root.focused || this.panel.root.hasFocusedDescendant;
+  }
 
-  show(worktree: Worktree, sessionId: string, state: ExecutionState, visible: boolean, capturedAt?: number, draft?: PromptDraft | string): void {
+  show(
+    worktree: Worktree,
+    sessionId: string,
+    state: ExecutionState,
+    visible: boolean,
+    capturedAt?: number,
+    draft?: PromptDraft | string,
+  ): void {
     this.focusPending ||= visible && this.body.root.focused;
-    this.sessionId = sessionId; this.state = state; this.capturedAt = capturedAt;
+    this.sessionId = sessionId;
+    this.state = state;
+    this.capturedAt = capturedAt;
     this.body.showEmpty();
-    this.panel.update(worktree, sessionId, new Set(worktree.sessions.map(session => session.id)), visible);
+    this.panel.update(
+      worktree,
+      sessionId,
+      new Set(worktree.sessions.map((session) => session.id)),
+      visible,
+    );
     this.panel.showPreviewDraft(draft);
   }
 
   empty(message: string, visible: boolean): void {
     const focused = this.focused;
-    this.state = null; this.sessionId = null; this.capturedAt = undefined; this.focusPending = false;
-    this.panel.update(null, null, new Set(), false); this.body.showEmpty(message);
+    this.state = null;
+    this.sessionId = null;
+    this.capturedAt = undefined;
+    this.focusPending = false;
+    this.panel.update(null, null, new Set(), false);
+    this.body.showEmpty(message);
     if (focused && visible) this.body.root.focus();
   }
 
   hide(): void {
-    this.focusPending = false; this.panel.update(null, null, new Set(), false);
-    this.state = null; this.sessionId = null; this.capturedAt = undefined;
+    this.focusPending = false;
+    this.panel.update(null, null, new Set(), false);
+    this.state = null;
+    this.sessionId = null;
+    this.capturedAt = undefined;
   }
 
   private focusReady = (): void => {
@@ -77,6 +124,7 @@ export class SessionPreview {
   };
 
   dispose(): void {
-    this.renderer.removePostProcessFn(this.focusReady); this.panel.dispose();
+    this.renderer.removePostProcessFn(this.focusReady);
+    this.panel.dispose();
   }
 }

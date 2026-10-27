@@ -11,11 +11,28 @@ export function fullFilePatch(comparison: GitComparison): Result<string, GitErro
   if (before === after) {
     const lines = before.split("\n");
     if (lines.at(-1) === "") lines.pop();
-    return ok(["--- Before", "+++ After", `@@ -1,${lines.length} +1,${lines.length} @@`,
-      ...lines.map((line) => ` ${line}`), ...(!before.endsWith("\n") ? ["\\ No newline at end of file"] : []), ""].join("\n"));
+    return ok(
+      [
+        "--- Before",
+        "+++ After",
+        `@@ -1,${lines.length} +1,${lines.length} @@`,
+        ...lines.map((line) => ` ${line}`),
+        ...(!before.endsWith("\n") ? ["\\ No newline at end of file"] : []),
+        "",
+      ].join("\n"),
+    );
   }
   const patch = createTwoFilesPatch("Before", "After", before, after, undefined, undefined, {
-    context: Infinity, timeout: 150, maxEditLength: 40000,
+    context: Infinity,
+    timeout: 150,
+    maxEditLength: 40000,
   });
-  return patch === undefined ? err(new GitError("GIT_PREVIEW_UNAVAILABLE", "Comparison exceeds the diff computation limit; no partial file was displayed.")) : ok(patch);
+  return patch === undefined
+    ? err(
+        new GitError(
+          "GIT_PREVIEW_UNAVAILABLE",
+          "Comparison exceeds the diff computation limit; no partial file was displayed.",
+        ),
+      )
+    : ok(patch);
 }

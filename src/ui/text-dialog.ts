@@ -1,4 +1,11 @@
-import { BoxRenderable, RenderableEvents, ScrollBoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
+import {
+  BoxRenderable,
+  RenderableEvents,
+  ScrollBoxRenderable,
+  TextRenderable,
+  type CliRenderer,
+  type Renderable,
+} from "@opentui/core";
 import type { CommandId } from "../keybindings/commands.ts";
 import { reportUnexpected, type ExpectedError } from "../errors.ts";
 import type { Result } from "../result.ts";
@@ -25,87 +32,184 @@ export class TextDialog {
   private revision = 0;
   private disposed = false;
 
-  constructor(private readonly renderer: CliRenderer, private readonly changed: () => void,
-    private readonly fallback: () => void, private readonly copySource?: (text: string) => Promise<Result<string, ExpectedError>>) {
+  constructor(
+    private readonly renderer: CliRenderer,
+    private readonly changed: () => void,
+    private readonly fallback: () => void,
+    private readonly copySource?: (text: string) => Promise<Result<string, ExpectedError>>,
+  ) {
     const theme = uiTheme(renderer);
     this.clipboard = new Clipboard(renderer);
-    this.root = new BoxRenderable(renderer, { id: "text-dialog", position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 6000,
+    this.root = new BoxRenderable(renderer, {
+      id: "text-dialog",
+      position: "absolute",
+      left: 0,
+      top: 0,
+      width: "100%",
+      height: "100%",
+      zIndex: 6000,
       visible: false,
-      onMouseDown: (event) => event.stopPropagation(), onMouseScroll: (event) => event.stopPropagation() });
-    this.panel = new PopupFrame(renderer, { id: "text-dialog-panel", position: "absolute", border: true, paddingX: 1,
-      flexDirection: "column", minWidth: 0, minHeight: 0 });
-    this.scroll = new ScrollBoxRenderable(renderer, { id: "text-dialog-scroll", flexGrow: 1, minHeight: 0, minWidth: 0, scrollX: false,
-      onMouseDown: () => this.scroll.focus() });
-    this.body = new TextRenderable(renderer, { id: "text-dialog-body", width: "100%", wrapMode: "word", selectable: true });
+      onMouseDown: (event) => event.stopPropagation(),
+      onMouseScroll: (event) => event.stopPropagation(),
+    });
+    this.panel = new PopupFrame(renderer, {
+      id: "text-dialog-panel",
+      position: "absolute",
+      border: true,
+      paddingX: 1,
+      flexDirection: "column",
+      minWidth: 0,
+      minHeight: 0,
+    });
+    this.scroll = new ScrollBoxRenderable(renderer, {
+      id: "text-dialog-scroll",
+      flexGrow: 1,
+      minHeight: 0,
+      minWidth: 0,
+      scrollX: false,
+      onMouseDown: () => this.scroll.focus(),
+    });
+    this.body = new TextRenderable(renderer, {
+      id: "text-dialog-body",
+      width: "100%",
+      wrapMode: "word",
+      selectable: true,
+    });
     this.scroll.add(this.body);
-    this.status = new TextRenderable(renderer, { id: "text-dialog-status", height: 1, flexShrink: 0, wrapMode: "none", selectable: false, visible: false });
+    this.status = new TextRenderable(renderer, {
+      id: "text-dialog-status",
+      height: 1,
+      flexShrink: 0,
+      wrapMode: "none",
+      selectable: false,
+      visible: false,
+    });
     this.contentBody = new PopupBody(renderer, "text-dialog-content", this.scroll);
-    this.panel.add(this.contentBody.root); this.panel.add(this.status); this.root.add(this.panel);
+    this.panel.add(this.contentBody.root);
+    this.panel.add(this.status);
+    this.root.add(this.panel);
     theme.scrollbars(this.scroll);
     theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
-      this.panel.backgroundColor = styles["ui.popup"].bg; this.panel.borderColor = styles["ui.popupBorder"].fg;
-      paintText(this.body, styles["ui.label"]); paintText(this.status, styles["ui.muted"]);
+      this.panel.backgroundColor = styles["ui.popup"].bg;
+      this.panel.borderColor = styles["ui.popupBorder"].fg;
+      paintText(this.body, styles["ui.label"]);
+      paintText(this.status, styles["ui.muted"]);
     });
-    renderer.on("resize", this.resize); renderer.on("focused_renderable", this.keepFocus); this.resize();
+    renderer.on("resize", this.resize);
+    renderer.on("focused_renderable", this.keepFocus);
+    this.resize();
     this.root.once(RenderableEvents.DESTROYED, () => this.dispose());
   }
 
-  get visible(): boolean { return !this.disposed && !this.root.isDestroyed && this.root.visible; }
+  get visible(): boolean {
+    return !this.disposed && !this.root.isDestroyed && this.root.visible;
+  }
   show(content: DialogContent): void {
     if (this.disposed || this.root.isDestroyed) return;
     if (!this.visible) this.owner = this.renderer.currentFocusedRenderable ?? undefined;
-    this.revision++; this.content = content;
+    this.revision++;
+    this.content = content;
     this.body.content = content.text;
     this.contentBody.showEmpty(!content.text.trim() ? "No content" : undefined);
-    this.status.visible = false; this.root.visible = true; this.resize(); this.scroll.scrollTo(0); this.scroll.focus(); this.changed();
+    this.status.visible = false;
+    this.root.visible = true;
+    this.resize();
+    this.scroll.scrollTo(0);
+    this.scroll.focus();
+    this.changed();
   }
   hide(): void {
     if (!this.visible) return;
-    this.revision++; this.root.visible = false; this.content = undefined;
-    const owner = this.owner; this.owner = undefined;
+    this.revision++;
+    this.root.visible = false;
+    this.content = undefined;
+    const owner = this.owner;
+    this.owner = undefined;
     let restored = false;
     if (owner && !owner.isDestroyed) {
       let visible = true;
-      for (let node: Renderable | null = owner; node; node = node.parent as Renderable | null) visible &&= node.visible;
-      if (visible) { owner.focus(); restored = this.renderer.currentFocusedRenderable === owner; }
+      for (let node: Renderable | null = owner; node; node = node.parent as Renderable | null)
+        visible &&= node.visible;
+      if (visible) {
+        owner.focus();
+        restored = this.renderer.currentFocusedRenderable === owner;
+      }
     }
     if (!restored) this.fallback();
     this.changed();
   }
-  moveFocus(): void { this.scroll.focus(); }
+  moveFocus(): void {
+    this.scroll.focus();
+  }
   command(command: CommandId): void {
     if (!this.visible) return;
     const page = Math.max(1, this.scroll.viewport.height - 1);
     switch (command) {
-      case "dialog.dismiss": this.hide(); break;
-      case "dialog.copy": this.copy(); break;
-      case "dialog.previous": this.scroll.scrollBy(-1); break;
-      case "dialog.next": this.scroll.scrollBy(1); break;
-      case "dialog.page-up": this.scroll.scrollBy(-page); break;
-      case "dialog.page-down": this.scroll.scrollBy(page); break;
-      case "dialog.half-page-up": this.scroll.scrollBy(-halfPageStep(this.scroll.viewport.height)); break;
-      case "dialog.half-page-down": this.scroll.scrollBy(halfPageStep(this.scroll.viewport.height)); break;
-      case "dialog.first": this.scroll.scrollTo(0); break;
-      case "dialog.last": this.scroll.scrollTo(Infinity); break;
+      case "dialog.dismiss":
+        this.hide();
+        break;
+      case "dialog.copy":
+        this.copy();
+        break;
+      case "dialog.previous":
+        this.scroll.scrollBy(-1);
+        break;
+      case "dialog.next":
+        this.scroll.scrollBy(1);
+        break;
+      case "dialog.page-up":
+        this.scroll.scrollBy(-page);
+        break;
+      case "dialog.page-down":
+        this.scroll.scrollBy(page);
+        break;
+      case "dialog.half-page-up":
+        this.scroll.scrollBy(-halfPageStep(this.scroll.viewport.height));
+        break;
+      case "dialog.half-page-down":
+        this.scroll.scrollBy(halfPageStep(this.scroll.viewport.height));
+        break;
+      case "dialog.first":
+        this.scroll.scrollTo(0);
+        break;
+      case "dialog.last":
+        this.scroll.scrollTo(Infinity);
+        break;
     }
   }
-  copyContent(text: string): Promise<Result<string, ExpectedError>> { return this.copySource?.(text) ?? this.clipboard.copy(text); }
+  copyContent(text: string): Promise<Result<string, ExpectedError>> {
+    return this.copySource?.(text) ?? this.clipboard.copy(text);
+  }
   private copy(): void {
-    const content = this.content, revision = this.revision;
+    const content = this.content,
+      revision = this.revision;
     if (!content || content.copy === false) return;
-    void Promise.resolve().then(() => this.copyContent(content.copyText ?? content.text)).then((result) => {
-      if (!this.visible || revision !== this.revision) return;
-      this.status.content = result.ok ? result.value : `[${result.error.code}] ${result.error.message}`;
-      this.status.visible = true;
-    }).catch((error: unknown) => {
-      const message = reportUnexpected(error, "dialog copy");
-      if (this.visible && revision === this.revision) { this.status.content = message; this.status.visible = true; }
-    });
+    void Promise.resolve()
+      .then(() => this.copyContent(content.copyText ?? content.text))
+      .then((result) => {
+        if (!this.visible || revision !== this.revision) return;
+        this.status.content = result.ok
+          ? result.value
+          : `[${result.error.code}] ${result.error.message}`;
+        this.status.visible = true;
+      })
+      .catch((error: unknown) => {
+        const message = reportUnexpected(error, "dialog copy");
+        if (this.visible && revision === this.revision) {
+          this.status.content = message;
+          this.status.visible = true;
+        }
+      });
   }
   private keepFocus = (): void => {
     if (!this.visible) return;
-    for (let node = this.renderer.currentFocusedRenderable; node; node = node.parent as Renderable | null) if (node === this.root) return;
+    for (
+      let node = this.renderer.currentFocusedRenderable;
+      node;
+      node = node.parent as Renderable | null
+    )
+      if (node === this.root) return;
     this.scroll.focus();
   };
   private resize = (): void => {
@@ -114,8 +218,13 @@ export class TextDialog {
   };
   dispose(): void {
     if (this.disposed) return;
-    this.disposed = true; this.revision++; this.owner = undefined;
-    this.renderer.off("resize", this.resize); this.renderer.off("focused_renderable", this.keepFocus);
-    void this.clipboard.dispose().catch((error: unknown) => reportUnexpected(error, "dialog clipboard cleanup"));
+    this.disposed = true;
+    this.revision++;
+    this.owner = undefined;
+    this.renderer.off("resize", this.resize);
+    this.renderer.off("focused_renderable", this.keepFocus);
+    void this.clipboard
+      .dispose()
+      .catch((error: unknown) => reportUnexpected(error, "dialog clipboard cleanup"));
   }
 }

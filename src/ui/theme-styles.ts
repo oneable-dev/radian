@@ -1,12 +1,24 @@
-import { RGBA, TextAttributes, type TextBufferRenderable, type TextChunk, type StyleDefinitionInput } from "@opentui/core";
+import {
+  RGBA,
+  TextAttributes,
+  type TextBufferRenderable,
+  type TextChunk,
+  type StyleDefinitionInput,
+} from "@opentui/core";
 import type { UiColors } from "./theme.ts";
 import { blendColors, contrastingText, neutralColor } from "./color.ts";
 import { styleGroups, type StyleGroup, type StyleOverrides } from "./theme-style-config.ts";
-export { styleGroups, type StyleGroup, type StyleOverride, type StyleOverrides } from "./theme-style-config.ts";
+export {
+  styleGroups,
+  type StyleGroup,
+  type StyleOverride,
+  type StyleOverrides,
+} from "./theme-style-config.ts";
 
 export type UiStyle = Readonly<{ fg: RGBA; bg: RGBA | undefined; attributes: number }>;
 const style = (fg: RGBA, bg?: RGBA, attributes = 0): UiStyle => ({ fg, bg, attributes });
-const bold = TextAttributes.BOLD, underline = TextAttributes.UNDERLINE;
+const bold = TextAttributes.BOLD,
+  underline = TextAttributes.UNDERLINE;
 
 // Shared defaults are intentional; popup backgrounds follow Normal unless explicitly overridden.
 const definitions = {
@@ -77,11 +89,12 @@ const definitions = {
   "markup.inlineCode": (c: UiColors) => style(c.success),
   "markup.link": (c: UiColors) => style(c.info, undefined, underline),
   "markup.tableBorder": (c: UiColors) => style(c.muted),
-  "transcript.user": (c: UiColors) => style(c.text, blendColors(c.panel, c.accent, 0.10)),
+  "transcript.user": (c: UiColors) => style(c.text, blendColors(c.panel, c.accent, 0.1)),
   "transcript.tool": (c: UiColors) => style(c.text, blendColors(c.panel, c.info, 0.09)),
   "transcript.notice": (c: UiColors) => style(c.text, blendColors(c.panel, c.warning, 0.08)),
   "transcript.toolHeader": (c: UiColors) => style(c.info),
-  "transcript.thinking": (c: UiColors) => style(neutralColor(c.panel, c.text), c.panel, TextAttributes.ITALIC),
+  "transcript.thinking": (c: UiColors) =>
+    style(neutralColor(c.panel, c.text), c.panel, TextAttributes.ITALIC),
   "transcript.elapsed": (c: UiColors) => style(neutralColor(c.panel, c.text)),
   "transcript.skill": (c: UiColors) => style(c.keyword, undefined, bold),
   "transcript.selection": (c: UiColors) => style(c.text, blendColors(c.panel, c.accent, 0.38)),
@@ -111,28 +124,64 @@ const definitions = {
 } satisfies Record<StyleGroup, (colors: UiColors) => UiStyle>;
 
 export type UiStyles = Readonly<Record<StyleGroup, UiStyle>>;
-export const selectionGroups = ["ui.selection", "ui.selectionInactive", "ui.inputFocused", "ui.buttonFocused", "ui.buttonActive", "ui.tabActive",
-  "ui.workTabActive", "ui.workTabFocused", "completion.selected", "transcript.selection", "prompt.attachment"] as const satisfies readonly StyleGroup[];
+export const selectionGroups = [
+  "ui.selection",
+  "ui.selectionInactive",
+  "ui.inputFocused",
+  "ui.buttonFocused",
+  "ui.buttonActive",
+  "ui.tabActive",
+  "ui.workTabActive",
+  "ui.workTabFocused",
+  "completion.selected",
+  "transcript.selection",
+  "prompt.attachment",
+] as const satisfies readonly StyleGroup[];
 
 export function resolveStyles(colors: UiColors, overrides: StyleOverrides = {}): UiStyles {
   const normalBackground = overrides["ui.text"]?.bg;
-  return Object.fromEntries(styleGroups.map((group) => {
-    const base = definitions[group](colors);
-    const background = group === "ui.popup" && normalBackground ? RGBA.fromHex(normalBackground) : base.bg;
-    const inherited = group.startsWith("markup.heading.") ? overrides["markup.heading"] : undefined;
-    const value = { ...inherited, ...overrides[group] };
-    let attributes = base.attributes;
-    for (const [key, flag] of [["bold", bold], ["italic", TextAttributes.ITALIC], ["underline", underline]] as const) {
-      if (value[key] !== undefined) attributes = value[key] ? attributes | flag : attributes & ~flag;
-    }
-    return [group, { fg: value.fg === undefined ? base.fg : RGBA.fromHex(value.fg),
-      bg: value.bg === undefined ? background : value.bg === null ? undefined : RGBA.fromHex(value.bg), attributes }];
-  })) as Record<StyleGroup, UiStyle>;
+  return Object.fromEntries(
+    styleGroups.map((group) => {
+      const base = definitions[group](colors);
+      const background =
+        group === "ui.popup" && normalBackground ? RGBA.fromHex(normalBackground) : base.bg;
+      const inherited = group.startsWith("markup.heading.")
+        ? overrides["markup.heading"]
+        : undefined;
+      const value = { ...inherited, ...overrides[group] };
+      let attributes = base.attributes;
+      for (const [key, flag] of [
+        ["bold", bold],
+        ["italic", TextAttributes.ITALIC],
+        ["underline", underline],
+      ] as const) {
+        if (value[key] !== undefined)
+          attributes = value[key] ? attributes | flag : attributes & ~flag;
+      }
+      return [
+        group,
+        {
+          fg: value.fg === undefined ? base.fg : RGBA.fromHex(value.fg),
+          bg:
+            value.bg === undefined
+              ? background
+              : value.bg === null
+                ? undefined
+                : RGBA.fromHex(value.bg),
+          attributes,
+        },
+      ];
+    }),
+  ) as Record<StyleGroup, UiStyle>;
 }
 
 export function sameStyles(a: UiStyles, b: UiStyles): boolean {
-  return styleGroups.every((key) => a[key].fg.equals(b[key].fg) && a[key].attributes === b[key].attributes
-    && (a[key].bg === b[key].bg || !!a[key].bg && !!b[key].bg && a[key].bg.equals(b[key].bg)));
+  return styleGroups.every(
+    (key) =>
+      a[key].fg.equals(b[key].fg) &&
+      a[key].attributes === b[key].attributes &&
+      (a[key].bg === b[key].bg || (!!a[key].bg && !!b[key].bg && a[key].bg.equals(b[key].bg))),
+  );
 }
 
 const transparent = RGBA.fromValues(0, 0, 0, 0);
@@ -140,15 +189,38 @@ const transparent = RGBA.fromValues(0, 0, 0, 0);
 export const styleBackground = (value: UiStyle): RGBA => value.bg ?? transparent;
 
 export function paintText(node: TextBufferRenderable, value: UiStyle): void {
-  node.fg = value.fg; node.bg = value.bg; node.attributes = value.attributes;
+  node.fg = value.fg;
+  node.bg = value.bg;
+  node.attributes = value.attributes;
 }
-export const styleChunk = (text: string, value: UiStyle): TextChunk => ({ __isChunk: true, text, fg: value.fg,
-  ...(value.bg ? { bg: value.bg } : {}), attributes: value.attributes });
-export const syntaxDefinition = (value: UiStyle): StyleDefinitionInput => ({ fg: value.fg, ...(value.bg ? { bg: value.bg } : {}),
-  bold: !!(value.attributes & bold), italic: !!(value.attributes & TextAttributes.ITALIC), underline: !!(value.attributes & underline) });
+export const styleChunk = (text: string, value: UiStyle): TextChunk => ({
+  __isChunk: true,
+  text,
+  fg: value.fg,
+  ...(value.bg ? { bg: value.bg } : {}),
+  attributes: value.attributes,
+});
+export const syntaxDefinition = (value: UiStyle): StyleDefinitionInput => ({
+  fg: value.fg,
+  ...(value.bg ? { bg: value.bg } : {}),
+  bold: !!(value.attributes & bold),
+  italic: !!(value.attributes & TextAttributes.ITALIC),
+  underline: !!(value.attributes & underline),
+});
 
 export function codeStyles(styles: UiStyles): Record<string, StyleDefinitionInput> {
-  const tokens = { default: "syntax.text", keyword: "syntax.keyword", string: "syntax.string", number: "syntax.number",
-    comment: "syntax.comment", function: "syntax.function", type: "syntax.type", constant: "syntax.constant", operator: "syntax.operator" } as const;
-  return Object.fromEntries(Object.entries(tokens).map(([token, group]) => [token, syntaxDefinition(styles[group])]));
+  const tokens = {
+    default: "syntax.text",
+    keyword: "syntax.keyword",
+    string: "syntax.string",
+    number: "syntax.number",
+    comment: "syntax.comment",
+    function: "syntax.function",
+    type: "syntax.type",
+    constant: "syntax.constant",
+    operator: "syntax.operator",
+  } as const;
+  return Object.fromEntries(
+    Object.entries(tokens).map(([token, group]) => [token, syntaxDefinition(styles[group])]),
+  );
 }
