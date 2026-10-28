@@ -118,7 +118,7 @@ const surfaces = [
     name: "dashboard",
     preset: "expanded",
     panel: "dashboard-dialog",
-    content: "dashboard-period",
+    content: "dashboard-body",
     header: "Agent Dashboard",
     body: "dashboard-ranking-body",
     title: "No recorded usage",
@@ -152,7 +152,7 @@ const searches: Partial<
     status: "git-browser-status",
   },
   accounts: { id: "accounts-search", title: "Accounts", counts: "1/1", status: "accounts-message" },
-  extension: { id: "extension-dialog-search", title: "Options", counts: "0/1" },
+  extension: { id: "extension-dialog-search", title: "Choose an option", counts: "0/1" },
 };
 
 async function mount(name: Surface, width: number, height: number) {
@@ -175,6 +175,7 @@ async function mount(name: Surface, width: number, height: number) {
   };
   let panel: { root: BoxRenderable; dispose(): void };
   let revealPreview = noop;
+  let revealEmpty = noop;
   if (name === "workspace") {
     panel = new Workbench(app.renderer, new WorkspaceSelection([]), {
       onNewSession: noop,
@@ -309,6 +310,7 @@ async function mount(name: Surface, width: number, height: number) {
     panel = dashboard;
     app.renderer.root.add(panel.root);
     dashboard.show();
+    revealEmpty = () => dashboard.focusTargets.at(-1)!.focus();
   } else {
     const dialog = new TextDialog(app.renderer, noop, noop);
     panel = dialog;
@@ -332,6 +334,7 @@ async function mount(name: Surface, width: number, height: number) {
     get,
     render,
     revealPreview,
+    revealEmpty,
     async close() {
       panel.dispose();
       await app.dispose();
@@ -457,6 +460,15 @@ for (const [width, height] of [
           );
         } else {
           expect(popupText).not.toContain(surface.header);
+        }
+
+        if (surface.name === "dashboard") {
+          // Live resources precede usage history; focusing its category reveals the empty ranking.
+          expect(app.get("dashboard-resources").y).toBe(content.y);
+          expect(popupText).toContain("Radian resources");
+          expect(app.get("dashboard-period").y).toBeGreaterThan(content.y);
+          app.revealEmpty();
+          await app.render();
         }
 
         // Empty data and unmatched queries must not turn into disabled candidate rows.

@@ -340,10 +340,12 @@ test("History preview panes fill their height without headings in split and comp
       const preview = app.get(`${surface}-preview-pane`);
       const message = app.get(`${surface}-message`);
 
-      // Search and result hints belong only to lists; previews use their full height.
+      // Completed feedback is hidden and reserves no row between search and candidates.
       expect(field.x + 1).toBe(app.list.x);
       expect(field.width - 2).toBe(app.list.width);
-      expect(app.get("history-list-status").x).toBe(app.list.x);
+      expect(message.visible).toBe(false);
+      expect(app.get("history-list-status").visible).toBe(false);
+      expect(app.list.y).toBe(field.y + field.height);
       expect(preview.visible).toBe(width >= 100);
       if (preview.visible) {
         expect(field.x + field.width).toBe(preview.x);
@@ -352,7 +354,7 @@ test("History preview panes fill their height without headings in split and comp
 
         const lines = app.captureCharFrame().split("\n");
         expect(lines[field.y]![preview.x]).toBe("│");
-        expect(lines[message.y]![preview.x]).toBe("│");
+        expect(lines[app.list.y]![preview.x]).toBe("│");
       }
       // Compact layouts reveal the same preview surface through its configured command.
       if (width < 100) {
