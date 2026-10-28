@@ -165,13 +165,22 @@ export class HistoryPreviewCache {
         )
         .then((result) => {
           if (this.entries.get(entry.key) !== entry) return;
+          const units = result.ok
+            ? JSON.stringify(result.value).length
+            : result.error.message.length;
+          if (
+            entry.revision !== undefined &&
+            entry.key !== this.selected &&
+            !this.makeRoomForBackground(entry, units)
+          ) {
+            this.emit();
+            return;
+          }
           entry.state = result.ok
             ? { kind: "ready", value: result.value }
             : { kind: "error", error: result.error };
-          entry.units = result.ok
-            ? JSON.stringify(result.value).length
-            : result.error.message.length;
-          this.units += entry.units;
+          entry.units = units;
+          this.units += units;
           this.trim();
           this.emit();
         })
@@ -193,11 +202,39 @@ export class HistoryPreviewCache {
     }
   }
 
-  private trim(): void {
-    if (this.units > maximumUnits) {
-      this.backgroundFull = true;
-      this.background.length = 0;
+  private makeRoomForBackground(entry: Entry, units: number): boolean {
+    if (this.units + units <= maximumUnits) return true;
+    this.stopBackground();
+    if (units <= maximumUnits) {
+      // Insertion order follows newest-first preload priority, not request completion order.
+      // A slow recent read may replace older speculation, never the other way around.
+      const entries = [...this.entries.values()];
+      for (const older of entries.slice(entries.indexOf(entry) + 1).reverse()) {
+        if (
+          older.key === this.selected ||
+          older === this.queued ||
+          (this.active.has(older) && older.state.kind === "pending")
+        )
+          continue;
+        this.entries.delete(older.key);
+        this.units -= older.units;
+        if (this.units + units <= maximumUnits) return true;
+      }
     }
+    this.entries.delete(entry.key);
+    return false;
+  }
+
+  private stopBackground(): void {
+    this.backgroundFull = true;
+    for (const entry of this.background)
+      if (this.entries.get(entry.key) === entry && !this.active.has(entry) && this.queued !== entry)
+        this.entries.delete(entry.key);
+    this.background.length = 0;
+  }
+
+  private trim(): void {
+    if (this.units > maximumUnits) this.stopBackground();
     for (const [key, entry] of this.entries) {
       if (this.entries.size <= maximumEntries && this.units <= maximumUnits) break;
       if (key === this.selected || this.active.has(entry) || this.queued === entry) continue;

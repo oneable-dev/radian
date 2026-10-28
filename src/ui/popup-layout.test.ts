@@ -181,8 +181,8 @@ test.each([false, true])(
   },
 );
 
-test("Headerless popup activity stays on the frame edge without reserving or covering a content row", async () => {
-  // Loading feedback must survive title removal without stealing the first content cell.
+test("Popup refresh activity stays inside the body without reserving a header or hiding content", async () => {
+  // Available content remains usable while a refresh or spinner tail is settling.
   const clock = new ManualClock(),
     app = await createTestRenderer({ width: 80, height: 20, clock });
   const panel = new PopupFrame(app.renderer, {
@@ -195,7 +195,12 @@ test("Headerless popup activity stays on the frame edge without reserving or cov
   const content = new TextRenderable(app.renderer, { content: "First content line", flexGrow: 1 });
   const spinner = new LoadingSpinner(app.renderer, { id: "popup-loading" });
   panel.add(content);
-  attachPopupActivity(panel, spinner.root);
+  attachPopupActivity(app.renderer, panel, spinner.root, () => ({
+    pending: false,
+    hasContent: true,
+    message: "Refreshing…",
+    body: content,
+  }));
   app.renderer.root.add(panel);
   try {
     centerPopup(panel, { width: 60, height: 14 }, 80, 20);
@@ -206,7 +211,7 @@ test("Headerless popup activity stays on the frame edge without reserving or cov
 
     // Neither border titles nor spinner-only headers take space from the popup body.
     expect(content.y).toBe(panel.y + 1);
-    expect(spinner.root.y).toBe(panel.y);
+    expect(spinner.root.y).toBe(content.y);
     expect(spinner.root.x).toBeGreaterThan(panel.x);
     expect(spinner.root.x).toBeLessThan(panel.x + panel.width - 1);
     expect(app.captureCharFrame()).toContain("First content line");
@@ -217,6 +222,110 @@ test("Headerless popup activity stays on the frame edge without reserving or cov
     expect(spinner.root.visible).toBe(false);
     expect(content.y).toBe(panel.y + 1);
   } finally {
+    await app.dispose();
+  }
+});
+
+test("Popup activity centers empty loads, follows selected rows and immediately reveals ready or failed data", async () => {
+  // The same owner handles initial I/O, refresh, selection and its minimum-visible tail.
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width: 81, height: 21, clock });
+  const body = new BoxRenderable(app.renderer, {
+    width: "100%",
+    height: "100%",
+    flexDirection: "column",
+  });
+  const first = new TextRenderable(app.renderer, { content: "First candidate", height: 1 });
+  const selected = new TextRenderable(app.renderer, { content: "Selected candidate", height: 1 });
+  body.add(first);
+  body.add(selected);
+  const spinner = new LoadingSpinner(app.renderer, { id: "activity" });
+  let pending = true,
+    hasContent = false;
+  const feedback = attachPopupActivity(app.renderer, body, spinner.root, () => ({
+    pending,
+    hasContent,
+    message: "Loading candidates…",
+    anchor: selected,
+  }));
+  app.renderer.root.add(body);
+  try {
+    first.visible = selected.visible = false;
+    spinner.start();
+    for (const [width, height] of [
+      [81, 21],
+      [40, 12],
+    ] as const) {
+      app.resize(width, height);
+      await app.renderOnce();
+      await app.renderOnce();
+      expect(feedback.x).toBe(Math.floor((width - feedback.width) / 2));
+      expect(feedback.y).toBe(Math.floor((height - 1) / 2));
+      expect(app.captureCharFrame()).toContain("Loading candidates…");
+    }
+
+    // A selected result keeps its own focus and receives only a small activity marker.
+    hasContent = true;
+    first.visible = selected.visible = true;
+    selected.focusable = true;
+    selected.focus();
+    await app.renderOnce();
+    await app.renderOnce();
+    expect(spinner.root.y).toBe(selected.y);
+    expect(app.captureCharFrame()).not.toContain("Loading candidates…");
+    expect(app.captureCharFrame()).toContain("Selected candidate");
+    expect(app.renderer.currentFocusedRenderable).toBe(selected);
+
+    // Completion and errors never wait for the animation's minimum interval.
+    pending = false;
+    selected.content = "Lookup failed";
+    spinner.stop();
+    await app.renderOnce();
+    expect(app.captureCharFrame()).toContain("Lookup failed");
+    expect(app.captureCharFrame()).not.toContain("Loading candidates…");
+    expect(spinner.root.visible).toBe(true);
+    clock.advance(500);
+    await app.renderOnce();
+    expect(feedback.visible).toBe(false);
+  } finally {
+    spinner.cancel();
+    await app.dispose();
+  }
+});
+
+test("Activity for an offscreen popup body never leaks onto the workbench", async () => {
+  // Scrollable details can leave the viewport while their operation or minimum-visible tail continues.
+  const app = await createTestRenderer({ width: 60, height: 20 });
+  const panel = new PopupFrame(app.renderer, { width: 40, height: 12, border: true });
+  const body = new BoxRenderable(app.renderer, {
+    position: "absolute",
+    top: -20,
+    width: 30,
+    height: 10,
+  });
+  panel.add(body);
+  const spinner = new LoadingSpinner(app.renderer, { id: "offscreen-loading" });
+  const feedback = attachPopupActivity(app.renderer, panel, spinner.root, () => ({
+    pending: true,
+    hasContent: true,
+    message: "Refreshing…",
+    body,
+  }));
+  app.renderer.root.add(panel);
+  try {
+    spinner.start();
+    await app.renderOnce();
+    await app.renderOnce();
+    expect(feedback.visible).toBe(false);
+
+    // Returning to the popup body reveals the same operation without restarting it or stealing focus.
+    body.top = 2;
+    await app.renderOnce();
+    await app.renderOnce();
+    expect(feedback.visible).toBe(true);
+    expect(spinner.root.y).toBe(body.y);
+  } finally {
+    spinner.cancel();
     await app.dispose();
   }
 });

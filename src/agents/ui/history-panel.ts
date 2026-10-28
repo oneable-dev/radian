@@ -20,7 +20,12 @@ import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
-import { POPUP_SIZES, SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
+import {
+  POPUP_SIZES,
+  SearchPopupLayout,
+  attachPopupActivity,
+  centerPopup,
+} from "../../ui/popup-layout.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import { SessionPreview } from "./session-preview.ts";
 import type { PromptDraft } from "../prompt-input.ts";
@@ -140,9 +145,8 @@ export class SessionHistoryPanel {
     });
     // Collapse completed loading feedback before layout so it leaves no blank row.
     this.listStatus.onLifecyclePass = () => {
-      this.listStatus.visible = this.message.visible || this.spinner.root.visible;
+      this.listStatus.visible = this.message.visible;
     };
-    this.listStatus.add(this.spinner.root);
     this.listStatus.add(this.message);
     this.list = new ScrollBoxRenderable(renderer, {
       id: "history-list",
@@ -187,6 +191,12 @@ export class SessionHistoryPanel {
       list: this.list,
       preview: { body: this.session.body, width: 58 },
     });
+    attachPopupActivity(renderer, this.layout.results.root, this.spinner.root, () => ({
+      pending: this.loading || this.previewLoading,
+      hasContent: this.items.length > 0,
+      message: "Loading saved sessions…",
+      anchor: this.rows[this.cursor],
+    }));
     this.body = this.layout.root;
     this.panel.add(this.body);
     this.root.add(this.panel);
@@ -336,7 +346,7 @@ export class SessionHistoryPanel {
     const generation = ++this.generation,
       worktree = this.worktree;
     this.loadRequest?.abort();
-    this.cancelPreview();
+    this.cancelPreview(this.items.length > 0);
     this.spinner.cancel();
     this.loading = false;
     this.loadError = undefined;
@@ -351,9 +361,7 @@ export class SessionHistoryPanel {
     const request = (this.loadRequest = new AbortController());
     this.loading = true;
     this.spinner.start();
-    this.message.content = "Loading saved sessions…";
-    this.message.visible = this.listStatus.visible = true;
-    this.actions.onChange?.();
+    this.filter();
     let result: Result<readonly HistoryItem[], ExpectedError>;
     try {
       result = await this.actions.list(worktree.id, request.signal, force);
@@ -438,8 +446,8 @@ export class SessionHistoryPanel {
               : "");
     const empty = !this.loading && !this.loadError && !this.filtered.length;
     this.layout.results.showEmpty(empty ? this.message.plainText : undefined);
-    this.message.visible = !empty && Boolean(this.message.plainText);
-    this.listStatus.visible = this.message.visible || this.spinner.root.visible;
+    this.message.visible = !this.loading && !empty && Boolean(this.message.plainText);
+    this.listStatus.visible = this.message.visible;
     this.paint();
     this.schedulePreview();
   };
@@ -453,20 +461,19 @@ export class SessionHistoryPanel {
     if (row) this.list.scrollChildIntoView(row.id);
     this.actions.onChange?.();
   }
-  private cancelPreview(): void {
+  private cancelPreview(preserveBody = false): void {
     this.previewIdentity = undefined;
     this.previewState = undefined;
     if (this.actions.previews) this.previewCache.unselect();
     else this.previewCache.clear();
     this.setPreviewLoading(false);
-    this.updatePreview(null, [], "", this.visible);
+    if (!preserveBody) this.updatePreview(null, [], "", this.visible);
   }
   private setPreviewLoading(loading: boolean): void {
     if (loading === this.previewLoading) return;
     this.previewLoading = loading;
     if (loading) {
       this.spinner.start();
-      this.listStatus.visible = true;
     } else if (!this.loading) this.spinner.stop();
   }
   private previewMessage(message: string): void {
@@ -602,7 +609,8 @@ export class SessionHistoryPanel {
     if (this.loading || this.loadError || !item || !worktree) {
       this.previewCache.unselect();
       this.setPreviewLoading(false);
-      this.previewMessage(this.loadError ?? (this.loading ? "" : "Select a saved session"));
+      if (!this.loading || !this.items.length)
+        this.previewMessage(this.loadError ?? (this.loading ? "" : "Select a saved session"));
       return;
     }
     if (!this.actions.preview && !this.actions.previews) {

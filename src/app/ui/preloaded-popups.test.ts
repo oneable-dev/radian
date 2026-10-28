@@ -14,7 +14,7 @@ import { pressLeader } from "../../testing/keys.ts";
 const flush = async () => {
   for (let i = 0; i < 30; i++) await Promise.resolve();
 };
-async function mount() {
+async function mount(previewUnits = 0) {
   const clock = new ManualClock(),
     app = await createTestRenderer({ width: 120, height: 28, kittyKeyboard: true, clock });
   const selection = new WorkspaceSelection(demoWorkspace());
@@ -44,7 +44,11 @@ async function mount() {
       { id: "one", label: "Preloaded account", provider: "fixture", type: "api_key", usedBy: [] },
     ],
   };
-  let history: readonly HistoryItem[] = ["first", "second"].map((id) => ({
+  let history: readonly HistoryItem[] = [
+    "first",
+    "second",
+    ...(previewUnits ? ["third", "fourth"] : []),
+  ].map((id) => ({
     id,
     title: `Saved ${id}`,
     worktreeId: "demo:main",
@@ -60,7 +64,7 @@ async function mount() {
       return ok({
         worktreeId: tree,
         id,
-        text: "",
+        text: "x".repeat(previewUnits),
         truncated: false,
         sections: [
           {
@@ -198,6 +202,26 @@ test("Prepared History and complete previews survive closure without rediscovery
     }
     expect(app.requests.history).toBe(0);
     expect(app.requests.previews).toBe(2);
+  } finally {
+    await app.close();
+  }
+});
+
+test("History opens its preloaded newest body without loading after background cache saturation", async () => {
+  // Four speculative bodies exceed the budget; the first two are the most recent conversations.
+  const app = await mount(3 * 1024 * 1024);
+  try {
+    expect(app.requests.previews).toBe(4);
+
+    pressLeader(app, "h");
+    await app.render();
+
+    // Opening the default selection must use its prepared body rather than start a fifth read.
+    expect(app.captureCharFrame()).toContain("Preloaded answer first");
+    expect(app.get("history-loading").visible).toBe(false);
+    expect(app.captureCharFrame()).not.toContain("Loading saved sessions…");
+    expect(app.requests.history).toBe(0);
+    expect(app.requests.previews).toBe(4);
   } finally {
     await app.close();
   }

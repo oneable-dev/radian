@@ -208,6 +208,76 @@ test("Background previews are ready before selection and invalidate only changed
   }
 });
 
+test("Background preload preserves newest previews when its memory budget is full", async () => {
+  // Newest-first history must not lose its first preview to older speculative reads.
+  const text = "x".repeat(3 * 1024 * 1024);
+  const calls: string[] = [];
+  const cache = new HistoryPreviewCache(
+    async (tree, id) => {
+      calls.push(id);
+      return ok({ ...preview(id, tree), text });
+    },
+    () => {},
+    unexpected,
+  );
+  try {
+    cache.preload(
+      "tree",
+      ["newest", "recent", "older", "oldest", "queued"].map((id) => ({ id, revision: "1" })),
+    );
+    await flush();
+    await flush();
+
+    // The two prepared recent bodies stay ready; stopped background work is not left pending.
+    expect(cache.read("tree", "newest")?.kind).toBe("ready");
+    expect(cache.read("tree", "recent")?.kind).toBe("ready");
+    for (const id of ["older", "oldest", "queued"]) expect(cache.read("tree", id)).toBeUndefined();
+    expect(calls).toEqual(["newest", "recent", "older", "oldest"]);
+    expect(cache.select("tree", "newest").kind).toBe("ready");
+    expect(calls).toHaveLength(4);
+
+    // Explicit selection can still load an older body and evict an unselected cached result.
+    cache.select("tree", "queued");
+    await flush();
+    expect(cache.read("tree", "queued")?.kind).toBe("ready");
+    expect(calls.at(-1)).toBe("queued");
+  } finally {
+    cache.clear();
+  }
+});
+
+test("A slow newest preview keeps priority over older background results that finish first", async () => {
+  // One slow recent read must not let a faster slot spend its cache budget on older sessions.
+  const newest = Promise.withResolvers<Result<HistoryPreview, HistoryError>>();
+  const text = "x".repeat(3 * 1024 * 1024);
+  const cache = new HistoryPreviewCache(
+    async (tree, id) => (id === "newest" ? newest.promise : ok({ ...preview(id, tree), text })),
+    () => {},
+    unexpected,
+  );
+  try {
+    cache.preload(
+      "tree",
+      ["newest", "recent", "older", "oldest"].map((id) => ({ id, revision: "1" })),
+    );
+    await flush();
+    await flush();
+    expect(cache.read("tree", "recent")?.kind).toBe("ready");
+
+    newest.resolve(ok({ ...preview("newest"), text }));
+    await flush();
+
+    // Retain the newest two bodies rather than whichever speculative requests resolved first.
+    expect(cache.read("tree", "newest")?.kind).toBe("ready");
+    expect(cache.read("tree", "recent")?.kind).toBe("ready");
+    expect(cache.read("tree", "older")).toBeUndefined();
+    expect(cache.read("tree", "oldest")).toBeUndefined();
+  } finally {
+    cache.clear();
+    newest.resolve(ok(preview("newest")));
+  }
+});
+
 test("Visible selection takes priority over queued background previews within two read slots", async () => {
   // Startup preparation must not force the user to wait behind a long FIFO queue.
   const calls: string[] = [],

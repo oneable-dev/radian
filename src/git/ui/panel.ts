@@ -329,7 +329,15 @@ export class GitPanel {
       id: "git-changes-loading",
       fg: gitColors.accent,
     });
-    attachPopupActivity(this.changes, this.changesSpinner.root);
+    attachPopupActivity(renderer, this.changes, this.changesSpinner.root, () => ({
+      pending: this.requests.size > 0,
+      hasContent:
+        this.selectedFiles.length > 0 ||
+        !!(this.cache?.details || this.cache?.external || this.cache?.error),
+      message: "Loading changed files…",
+      body: this.filesBody.root,
+      anchor: this.files.root.findDescendantById(`${this.files.root.id}:${this.cache?.state.file}`),
+    }));
     const lower = new BoxRenderable(renderer, {
       id: "git-changes-body",
       flexDirection: "row",
@@ -1225,7 +1233,9 @@ export class GitPanel {
     const waiting = state.selected && !cache.details;
     this.files.update(
       waiting && !fileRows.length
-        ? [{ key: "empty", label: cache.error ?? "Loading files…", disabled: true }]
+        ? cache.error
+          ? [{ key: "empty", label: cache.error, disabled: true }]
+          : []
         : fileRows,
       state.file,
     );
@@ -1256,8 +1266,8 @@ export class GitPanel {
         !(cache.state.selected && !cache.details) &&
         !this.selectedFile;
       this.comparisonBody.showEmpty(empty ? "No changed files" : undefined);
-      this.diffNotice.visible = !empty;
-      this.diffNotice.content = cache.diffError ?? cache.error ?? "Loading file comparison…";
+      this.diffNotice.visible = !empty && !!(cache.diffError || cache.error);
+      this.diffNotice.content = cache.diffError ?? cache.error ?? "";
       return;
     }
     const patch = fullFilePatch(comparison);

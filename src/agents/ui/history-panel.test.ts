@@ -697,6 +697,52 @@ test("Popups trap Tab focus, global commands, and background clicks while preser
   }
 });
 
+test.each([120, 60])(
+  "Pending History listings show loading text in the center of the candidate body at %s columns",
+  async (width) => {
+    // A real pending list has no candidates yet, but search and the preview region keep their layout.
+    const pending = Promise.withResolvers<readonly HistoryItem[]>();
+    const app = await mount({ list: () => pending.promise });
+    try {
+      app.resize(width, 24);
+      await app.render();
+
+      await app.open();
+
+      // Loading guidance belongs to the centered empty list, never a header or preview overlay.
+      const body = app.get("history-results");
+      const title = app.get("history-loading-message") as TextRenderable;
+      const feedback = app.get("history-loading-feedback");
+      expect(title.plainText).toBe("Loading saved sessions…");
+      expect(feedback.x).toBe(body.x + Math.floor((body.width - feedback.width) / 2));
+      expect(feedback.y).toBe(body.y + Math.floor((body.height - 1) / 2));
+      expect(app.get("history-loading").y).toBe(title.y);
+      expect(app.get("history-list-status").visible).toBe(false);
+      expect((app.get("history-message") as TextRenderable).visible).toBe(false);
+      expect(app.get("history-loading").visible).toBe(true);
+      expect(app.renderer.currentFocusedRenderable?.id).toBe("history-search");
+      const field = app.get("history-search-field");
+      expect(field.y).toBe(app.get("history-dialog").y);
+
+      // Discovery uses the latest query and does not delay results for the spinner's minimum duration.
+      await app.mockInput.typeText("keyboard");
+      const search = app.get("history-search") as InputRenderable;
+      search.cursorOffset = 3;
+      pending.resolve([saved("first", "Layout review"), saved("second", "Keyboard review")]);
+      await app.visible("Keyboard review");
+      expect(app.captureCharFrame()).not.toContain("Loading saved sessions…");
+      expect(app.captureCharFrame()).not.toContain("Layout review");
+      expect(app.get("history-results-empty").visible).toBe(false);
+      expect(search.value).toBe("keyboard");
+      expect(search.cursorOffset).toBe(3);
+      expect(app.renderer.currentFocusedRenderable).toBe(search);
+    } finally {
+      pending.resolve([]);
+      await app.close();
+    }
+  },
+);
+
 test("Fast results appear immediately while shared spinners persist 500 ms and cancel when hidden", async () => {
   const app = await mount();
   try {
@@ -705,8 +751,8 @@ test("Fast results appear immediately while shared spinners persist 500 ms and c
     expect(app.get("history-loading").visible).toBe(true);
     // Lookup feedback belongs to the session list, not the popup frame or preview screen.
     const loading = app.get("history-loading");
-    expect(loading.parent?.id).toBe("history-list-status");
-    expect(loading.x).toBe(app.get("history-list").x);
+    expect(loading.parent?.id).toBe("history-loading-feedback");
+    expect(loading.x).toBeGreaterThan(app.get("history-list").x);
     expect(loading.x).toBeLessThan(app.get("history-preview-pane").x);
     expect(loading.y).toBeGreaterThan(app.get("history-dialog").y);
     app.clock.advance(499);
@@ -723,6 +769,35 @@ test("Fast results appear immediately while shared spinners persist 500 ms and c
     expect(app.get("history-loading").visible).toBe(false);
     expect(!!app.renderer.root.findDescendantById("history-preview-loading")).toBe(false);
   } finally {
+    await app.close();
+  }
+});
+
+test("History refresh keeps existing candidates and preview visible with only inline activity", async () => {
+  // Only the second list request is delayed; accepted content remains available during refresh.
+  const pending = Promise.withResolvers<readonly HistoryItem[]>();
+  let calls = 0;
+  const app = await mount({
+    list: () =>
+      ++calls === 1 ? Promise.resolve([saved("first", "Existing session")]) : pending.promise,
+  });
+  try {
+    await app.open();
+    expect(app.captureCharFrame()).toContain("Saved answer first");
+
+    app.mockInput.pressKey("r", { ctrl: true });
+    await app.render();
+
+    expect(app.captureCharFrame()).toContain("Existing session");
+    expect(app.captureCharFrame()).toContain("Saved answer first");
+    expect(app.captureCharFrame()).not.toContain("Loading saved sessions…");
+    expect(app.get("history-loading").visible).toBe(true);
+    expect((app.get("history-loading-message") as TextRenderable).visible).toBe(false);
+    expect(app.get("history-list-status").visible).toBe(false);
+    pending.resolve([saved("first", "Updated session")]);
+    await app.visible("Updated session");
+  } finally {
+    pending.resolve([]);
     await app.close();
   }
 });
@@ -819,6 +894,9 @@ test("Uncached candidates show selected titles and empty bodies without loading 
     expect(frame).not.toContain("Loading preview");
     expect(!!app.renderer.root.findDescendantById("history-preview-loading")).toBe(false);
     expect(app.previews).toEqual(["first", "second"]);
+    expect(app.get("history-loading").y).toBe(app.get("history:second").y);
+    expect((app.get("history-loading-message") as TextRenderable).visible).toBe(false);
+    expect(app.get("history-list-status").visible).toBe(false);
     pending.resolve(
       ok({
         worktreeId: "demo:main",

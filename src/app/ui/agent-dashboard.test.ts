@@ -159,6 +159,35 @@ test("New filter results take precedence over slower earlier statistics", async 
   }
 });
 
+test("Dashboard refresh retains prepared statistics while a small body indicator marks the pending request", async () => {
+  // A new period must not replace useful statistics with a second full loading screen.
+  const pending = Promise.withResolvers<Result<DashboardSnapshot, SessionError>>();
+  const app = await mount({
+    onDashboard: async (days) => (days === 7 ? ok(sample(7)) : pending.promise),
+  });
+  try {
+    await app.open();
+    app.get("dashboard-period").focus();
+
+    app.mockInput.pressKey("n", { ctrl: true });
+    await app.render();
+
+    expect(app.captureCharFrame()).toContain("1,240");
+    expect(app.captureCharFrame()).not.toContain("Loading saved session statistics");
+    expect(app.get("dashboard-loading").visible).toBe(true);
+    expect(app.get("dashboard-loading-message").visible).toBe(false);
+    const historyBody =
+      app.renderer.root.findDescendantById("dashboard-history-body") ?? app.get("dashboard-body");
+    expect(app.get("dashboard-loading").y).toBe(historyBody.y);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("dashboard-period");
+    pending.resolve(ok(sample(30)));
+    await app.render();
+  } finally {
+    pending.resolve(ok(sample(30)));
+    await app.close();
+  }
+});
+
 test("Dashboards show three summary metrics and charts, restoring drafts and input focus on close", async () => {
   // Start in real Workbench to ensure statistics never consume conversations or drafts.
   const app = await mount();

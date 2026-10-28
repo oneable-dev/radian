@@ -1,5 +1,5 @@
 import { pressLeader } from "../../testing/keys.ts";
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { InputRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
@@ -445,6 +445,28 @@ test("Popup Esc closes and restores input without changing models or interruptin
     expect(interrupted).toEqual([]);
   } finally {
     await app.close();
+  }
+});
+
+test("Unexpected model discovery failures remain visible after the centered loading message is removed", async () => {
+  // Programming failures keep their original cause at the UI boundary, not a permanent loading state.
+  const failure = new TypeError("Broken model catalog");
+  const logged = spyOn(console, "error").mockImplementation(() => {});
+  const app = await mount({
+    onListModels: async () => {
+      throw failure;
+    },
+  });
+  try {
+    await app.open();
+
+    expect(app.captureCharFrame()).toContain("Unexpected model picker failure");
+    expect(app.get("model-message").visible).toBe(true);
+    expect(app.get("model-loading-message").visible).toBe(false);
+    expect(logged).toHaveBeenCalledWith("[radian:model picker] Unexpected failure", failure);
+  } finally {
+    await app.close();
+    logged.mockRestore();
   }
 });
 

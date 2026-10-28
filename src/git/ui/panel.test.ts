@@ -1898,7 +1898,10 @@ test("Changes results appear immediately while spinners honor minimums and clean
     await app.openWorkingTree();
     const spinner = app.get("git-changes-loading");
     expect(spinner.visible).toBe(true);
-    expect(app.captureCharFrame()).toContain("Loading file comparison");
+    expect(app.captureCharFrame()).toContain("M loading.txt");
+    expect(app.captureCharFrame()).not.toContain("Loading file comparison");
+    expect(app.captureCharFrame()).not.toContain("Loading changed files");
+    expect(spinner.y).toBe(app.get("git-files:unstaged:loading.txt").y);
 
     // Results stay readable before the spinner minimum ends.
     pending.resolve(ok(comparison()));

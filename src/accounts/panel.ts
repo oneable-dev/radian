@@ -145,6 +145,9 @@ export class AccountsPanel {
       wrapMode: "word",
       selectable: false,
     });
+    this.message.onLifecyclePass = () => {
+      this.message.visible = Boolean(this.message.plainText);
+    };
     this.list = new ScrollBoxRenderable(renderer, {
       id: "accounts-list",
       flexGrow: 1,
@@ -187,7 +190,19 @@ export class AccountsPanel {
     this.panel.add(this.details);
     this.panel.add(this.input);
     this.panel.add(this.secret);
-    attachPopupActivity(this.panel, this.spinner.root);
+    attachPopupActivity(renderer, this.panel, this.spinner.root, () => ({
+      pending: this.busy,
+      hasContent: this.catalog !== undefined || this.stage !== "accounts",
+      message: "Loading accounts…",
+      body: this.list.visible
+        ? this.layout.results.root
+        : this.details.visible
+          ? this.details
+          : this.input.visible
+            ? this.input
+            : this.panel,
+      anchor: this.list.visible ? this.rows[this.cursor] : undefined,
+    }));
     this.root.add(this.panel);
     theme.scrollbars(this.list);
     theme.scrollbars(this.details);

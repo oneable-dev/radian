@@ -148,7 +148,13 @@ export class ExtensionDialogPanel {
     this.panel.add(this.layout.root);
     this.panel.add(this.input);
     this.panel.add(this.status);
-    attachPopupActivity(this.panel, this.spinner.root);
+    attachPopupActivity(renderer, this.panel, this.spinner.root, () => ({
+      pending: this.busy,
+      hasContent: true,
+      message: "Sending response…",
+      body: this.list.visible ? this.layout.results.root : this.details,
+      anchor: this.list.visible ? this.rows[this.cursor]?.root : undefined,
+    }));
     this.root.add(this.panel);
     theme.scrollbars(this.details);
     theme.scrollbars(this.list);

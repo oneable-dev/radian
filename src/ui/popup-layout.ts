@@ -1,4 +1,7 @@
-import { BoxRenderable, type CliRenderer, type Renderable } from "@opentui/core";
+import { BoxRenderable, TextRenderable, type CliRenderer, type Renderable } from "@opentui/core";
+import { uiTheme } from "./theme.ts";
+import { paintText } from "./theme-styles.ts";
+import { truncateCells } from "./text.ts";
 import { EmptyState } from "./empty-state.ts";
 import type { SearchInput } from "./search-input.ts";
 
@@ -105,13 +108,82 @@ export class SearchPopupLayout {
   }
 }
 
-// Activity lives on the frame edge, never in a reserved popup header or over its content.
-export function attachPopupActivity(panel: BoxRenderable, activity: Renderable): void {
-  activity.position = "absolute";
-  activity.top = panel.border ? -1 : 0;
-  activity.right = 0;
-  activity.zIndex = 1;
-  panel.add(activity);
+export type PopupActivityState = {
+  pending: boolean;
+  hasContent: boolean;
+  message: string;
+  body?: Renderable | undefined;
+  anchor?: Renderable | undefined;
+};
+
+// Features own operation lifetimes; placement follows the data currently available to the user.
+export function attachPopupActivity(
+  renderer: CliRenderer,
+  panel: BoxRenderable,
+  activity: Renderable,
+  state: () => PopupActivityState,
+): BoxRenderable {
+  const feedback = new BoxRenderable(renderer, {
+    id: `${activity.id}-feedback`,
+    position: "absolute",
+    height: 1,
+    flexDirection: "row",
+    gap: 1,
+    zIndex: 10,
+    visible: false,
+  });
+  const label = new TextRenderable(renderer, {
+    id: `${activity.id}-message`,
+    height: 1,
+    wrapMode: "none",
+    selectable: false,
+  });
+  feedback.add(activity);
+  feedback.add(label);
+  panel.add(feedback);
+  uiTheme(renderer).bindStyles(feedback, (styles) => {
+    feedback.backgroundColor = styles["ui.popup"].bg;
+    paintText(label, styles["ui.muted"]);
+  });
+  feedback.onLifecyclePass = () => {
+    const current = state();
+    const body = current.body ?? panel;
+    feedback.visible = activity.visible && body.width > 0 && body.height > 0;
+    if (!feedback.visible) return;
+    // A spinner's minimum-visible tail never retains a loading message or obscures ready data.
+    const centered = current.pending && !current.hasContent;
+    label.visible = centered;
+    label.content = centered ? truncateCells(current.message, Math.max(0, body.width - 4)) : "";
+    label.width = Bun.stringWidth(label.plainText);
+    const width = Math.min(body.width, activity.width + (label.visible ? label.width + 1 : 0));
+    feedback.width = width;
+    const borderLeft =
+      panel.border === true || (Array.isArray(panel.border) && panel.border.includes("left"))
+        ? 1
+        : 0;
+    const borderTop =
+      panel.border === true || (Array.isArray(panel.border) && panel.border.includes("top"))
+        ? 1
+        : 0;
+    feedback.left =
+      body.x -
+      panel.x -
+      borderLeft +
+      (centered ? Math.floor((body.width - width) / 2) : Math.max(0, body.width - width - 1));
+    const y =
+      body.y +
+      (centered
+        ? Math.floor((body.height - 1) / 2)
+        : Math.max(0, Math.min(body.height - 1, (current.anchor?.y ?? body.y) - body.y)));
+    const borderBottom =
+      panel.border === true || (Array.isArray(panel.border) && panel.border.includes("bottom"))
+        ? 1
+        : 0;
+    // A body can scroll outside its popup; activity must never leak onto the underlying workbench.
+    feedback.visible = y >= panel.y + borderTop && y < panel.y + panel.height - borderBottom;
+    feedback.top = y - panel.y - borderTop;
+  };
+  return feedback;
 }
 
 type PopupSize = { width: number; height: number };

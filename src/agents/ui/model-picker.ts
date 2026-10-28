@@ -159,7 +159,12 @@ export class ModelPicker {
     });
     this.panel.add(this.layout.root);
     this.panel.add(this.effort);
-    attachPopupActivity(this.panel, this.spinner.root);
+    attachPopupActivity(renderer, this.layout.results.root, this.spinner.root, () => ({
+      pending: this.loading || this.applying,
+      hasContent: this.catalog !== undefined,
+      message: "Loading available models…",
+      anchor: this.applying ? this.rows[this.cursor] : undefined,
+    }));
     this.root.add(this.panel);
     theme.scrollbars(this.list);
     theme.bindStyles(this.root, (styles) => {
@@ -295,6 +300,7 @@ export class ModelPicker {
       const message = reportUnexpected(error, "model picker");
       if (this.current(revision)) {
         this.message.content = message;
+        this.message.visible = true;
         this.actions.changed();
       }
     });
@@ -309,7 +315,7 @@ export class ModelPicker {
     this.loadError = undefined;
     this.filter();
     this.spinner.start();
-    this.message.content = "Loading available models…";
+    this.message.content = "";
     this.actions.changed();
     let result: Result<ModelCatalog, ExpectedError>;
     try {
@@ -409,7 +415,7 @@ export class ModelPicker {
     this.message.content =
       this.loadError ??
       (this.loading
-        ? "Loading available models…"
+        ? ""
         : !this.catalog
           ? ""
           : !this.catalog.models.length
@@ -423,7 +429,7 @@ export class ModelPicker {
       empty ? (hasModels ? "No matching models" : "No available models") : undefined,
       empty && !hasModels ? "Configure provider authentication in Pi first." : undefined,
     );
-    this.message.visible = !empty;
+    this.message.visible = !empty && Boolean(this.message.plainText);
     this.list.scrollTo(0);
     this.paint();
   };

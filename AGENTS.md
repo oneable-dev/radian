@@ -18,6 +18,7 @@ Use English for repository documentation, source comments, test names, and commi
 ## UI feedback
 
 - Use `LoadingSpinner` from `src/ui/loading-spinner.ts` for loading indicators across the UI. It keeps the animation visible for at least 500 ms without delaying results or errors. Call `cancel()` when the owning screen is hidden; destroying its renderable also clears its timers.
+- Popups use `attachPopupActivity` from `src/ui/popup-layout.ts` for loading placement. Center the spinner and loading message in the relevant body only while no data is available. Preserve existing content during refresh and use a small in-body indicator; anchor detail/action activity beside the selected candidate when available. Never put activity on popup frames or reserve spinner-only header rows. Ready data and errors replace loading messages immediately, including during the spinner's minimum-visible tail. Prepared caches must open without starting a loading indicator.
 
 ## Keyboard input and navigation
 

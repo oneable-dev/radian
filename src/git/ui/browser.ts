@@ -146,7 +146,15 @@ export class GitBrowser {
     });
     this.body = this.layout.root;
     this.panel.add(this.body);
-    attachPopupActivity(this.panel, this.spinner.root);
+    attachPopupActivity(renderer, this.layout.results.root, this.spinner.root, () => ({
+      pending: (!this.snapshot && !this.loadError) || this.request !== undefined,
+      hasContent: this.snapshot !== undefined || this.loadError !== undefined,
+      message: "Loading Git data…",
+      anchor:
+        this.request && this.key
+          ? this.list.root.findDescendantById(`${this.list.root.id}:${this.key}`)
+          : undefined,
+    }));
     this.root.add(this.panel);
     const theme = uiTheme(renderer);
     theme.scrollbars(this.preview);
@@ -326,12 +334,14 @@ export class GitBrowser {
     this.list.update(
       rows.length || (this.snapshot && !this.loadError)
         ? rows
-        : [{ key: "empty", label: this.loadError ?? "Loading Git data…", disabled: true }],
+        : this.loadError
+          ? [{ key: "empty", label: this.loadError, disabled: true }]
+          : [],
       this.key,
     );
     const empty = !!this.snapshot && !this.loadError && !candidates.length;
     this.layout.results.showEmpty(empty ? "No matches" : undefined);
-    this.message.visible = !empty;
+    this.message.visible = !empty && (this.snapshot !== undefined || this.loadError !== undefined);
     const noun = this.kind === "refs" ? "result" : "event";
     this.summary = !this.snapshot
       ? "Loading Git data…"
@@ -444,9 +454,7 @@ export class GitBrowser {
             ? result.ok
               ? describeCommit(result.value, this.snapshot?.refs ?? [], this.snapshot)
               : `[${result.error.code}] ${result.error.message}`
-            : (this.loadError ??
-              this.unexpected.get(event.oid) ??
-              `Commit ${event.oid}\nLoading target commit…`),
+            : (this.loadError ?? this.unexpected.get(event.oid) ?? `Commit ${event.oid}`),
         ].join("\n");
     this.actions.changed();
   }

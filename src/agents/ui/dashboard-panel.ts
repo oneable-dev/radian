@@ -153,7 +153,12 @@ export class DashboardPanel {
     });
     this.scroll.add(this.notes);
     this.panel.add(this.scroll);
-    attachPopupActivity(this.panel, this.spinner.root);
+    attachPopupActivity(renderer, this.panel, this.spinner.root, () => ({
+      pending: this.loading,
+      hasContent: this.snapshot !== undefined || Boolean(this.error),
+      message: "Loading saved session statistics…",
+      body: this.scroll,
+    }));
     this.root.add(this.panel);
     theme.scrollbars(this.scroll);
     theme.bindStyles(this.root, (styles) => {
@@ -312,10 +317,8 @@ export class DashboardPanel {
     const revision = ++this.revision;
     this.request?.abort();
     const request = (this.request = new AbortController());
-    this.snapshot = undefined;
     this.error = "";
     this.loading = !!this.actions.load;
-    this.scroll.scrollTo(0);
     if (this.loading) this.spinner.start();
     else this.error = "Dashboard data is unavailable in this view.";
     this.paint();
@@ -364,7 +367,7 @@ export class DashboardPanel {
     }
     const snapshot = this.snapshot;
     this.message.content = this.loading
-      ? "Loading saved session statistics…"
+      ? ""
       : this.error ||
         (snapshot?.warnings.length
           ? `Partial data · ${snapshot.warnings.join(" ")}`
@@ -373,6 +376,10 @@ export class DashboardPanel {
       this.message,
       styles[this.error || snapshot?.warnings.length ? "status.warning" : "ui.muted"],
     );
+    this.message.visible = Boolean(this.message.plainText);
+    const contentVisible = !!snapshot || !this.loading;
+    for (const node of [this.summary, this.graph, this.rankingBody.root, this.notes])
+      node.visible = contentVisible;
     const totals = snapshot?.totals;
     const values = [
       totals ? dashboardValue(totals.tokens) : "—",
@@ -402,7 +409,7 @@ export class DashboardPanel {
       rows = snapshot?.[category] ?? [];
     const ranking = snapshot
       ? dashboardBars(rows, width)
-      : [this.loading ? "Loading…" : "No statistics available."];
+      : [this.loading ? "" : "No statistics available."];
     const empty = !!snapshot && !rows.length;
     this.ranking.height = empty ? 0 : ranking.length + 1;
     this.rankingBody.root.height = empty ? (this.renderer.height < 25 ? 3 : 6) : ranking.length + 1;
