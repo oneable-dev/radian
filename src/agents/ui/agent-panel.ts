@@ -7,6 +7,7 @@ import {
   type Renderable,
 } from "@opentui/core";
 import type { ExecutionState } from "../session-registry.ts";
+import type { McpStatus } from "../mcp-status.ts";
 import type { Worktree } from "../../workspace/model.ts";
 import { CapabilityError, InputError, type ExpectedError } from "../../errors.ts";
 import { err, ok, type Result } from "../../result.ts";
@@ -516,6 +517,10 @@ export class AgentPanel {
     } else this.completion.refresh();
     this.resizeComposer();
     if (switchedSession) this.publishDrafts();
+  }
+
+  updateMcp(status: McpStatus | undefined): void {
+    this.sessionStatus.updateMcp(status);
   }
 
   private resize = (): void => {

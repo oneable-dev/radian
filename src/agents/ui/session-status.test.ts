@@ -7,6 +7,7 @@ import { WorkspaceSelection } from "../../app/workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
 import { ok } from "../../result.ts";
 import type { SessionTelemetry } from "../telemetry.ts";
+import type { SessionExtensionUi } from "../extension-ui.ts";
 import type { ProviderUsage } from "../../usage/model.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { icons, spinnerFrames } from "../../icons.ts";
@@ -56,11 +57,14 @@ async function mount(telemetry: SessionTelemetry = sample(), clock?: ManualClock
       : snapshot,
   );
   const states: Record<string, SessionTelemetry | undefined> = { a1: telemetry };
+  let extensions: SessionExtensionUi[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {},
     onCloseSession: () => {},
     onPrompt: () => ok(undefined),
+    getExtensionUi: () => extensions,
     getSessionDetails: (id) => ({
+      conversationId: `conversation-${id}`,
       status: "complete",
       output: "Transcript",
       error: null,
@@ -79,6 +83,11 @@ async function mount(telemetry: SessionTelemetry = sample(), clock?: ManualClock
     line: () => app.captureCharFrame().split("\n")[row.y]!,
     async set(value: SessionTelemetry) {
       states[selection.sessionId!] = value;
+      selection.replaceSnapshot(selection.snapshot);
+      await app.renderOnce();
+    },
+    async setExtensions(value: SessionExtensionUi[]) {
+      extensions = value;
       selection.replaceSnapshot(selection.snapshot);
       await app.renderOnce();
     },
@@ -162,6 +171,160 @@ test("Status below prompts has one-row outer spacing and separates context from 
     await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable).toBe(prompt);
     expect(app.view.promptDrafts.a1).toBe("keep this draft");
+  } finally {
+    await app.close();
+  }
+});
+
+test("MCP follows Fast with a Nerd Font plug and colored issues without duplicating footer status", async () => {
+  // A legacy adapter status remains readable until a structured snapshot becomes available.
+  const app = await mount();
+  app.resize(220, 24);
+  const extension: SessionExtensionUi = {
+    sessionId: "a1",
+    conversationId: "conversation-a1",
+    notifications: [],
+    statuses: { mcp: "Legacy MCP footer", fixture: "Other extension" },
+  };
+  const footer = () => app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
+  const span = (text: string) =>
+    app.captureSpans().lines[app.row.y]!.spans.find((value) => value.text.includes(text))!;
+  try {
+    await app.setExtensions([extension]);
+    expect(footer()).toContain("Legacy MCP footer");
+    expect(app.line()).not.toContain("mcp");
+    pressLeader(app, "a");
+    await app.mockInput.typeText("keep MCP draft");
+
+    // The runtime summary replaces only the MCP footer entry, never unrelated extension status.
+    await app.setExtensions([{ ...extension, mcp: { servers: 8, needsAuth: 1, errors: 1 } }]);
+
+    expect(app.line()).toContain(
+      `${icons.bolt} fast on · ${icons.mcp} mcp 8 (1 needs auth · 1 error)`,
+    );
+    expect(icons.mcp).toBe("\uF1E6");
+    expect(app.line()).not.toContain("🔌");
+    expect(footer()).not.toContain("Legacy MCP footer");
+    expect(footer()).not.toContain("mcp 8");
+    expect(footer()).toContain("Other extension");
+    for (const light of [false, true]) {
+      app.renderer.emit("palette", palette(light));
+      await app.renderOnce();
+      const colors = uiTheme(app.renderer).colors;
+      expect(span("mcp 8").fg.toInts()).toEqual(colors.muted.toInts());
+      expect(span("1 needs auth").fg.toInts()).toEqual(colors.warning.toInts());
+      expect(span("1 error").fg.toInts()).toEqual(colors.error.toInts());
+    }
+    const column = Bun.stringWidth(app.line().slice(0, app.line().indexOf(icons.mcp)));
+    await app.mockMouse.click(column, app.row.y);
+    await app.renderOnce();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
+    expect(app.view.promptDrafts.a1).toBe("keep MCP draft");
+  } finally {
+    await app.close();
+  }
+});
+
+test.each([
+  { mcp: { servers: 8, needsAuth: 0, errors: 0 }, expected: "mcp 8" },
+  { mcp: { servers: 8, needsAuth: 1, errors: 0 }, expected: "mcp 8 (1 needs auth)" },
+  { mcp: { servers: 8, needsAuth: 0, errors: 1 }, expected: "mcp 8 (1 error)" },
+  { mcp: { servers: 8, needsAuth: 2, errors: 2 }, expected: "mcp 8 (2 need auth · 2 errors)" },
+  { mcp: { servers: 0, needsAuth: 0, errors: 0 }, expected: "" },
+])("MCP shows only nonzero issue counts: $expected", async ({ mcp, expected }) => {
+  // Zero issues do not need parentheses, and a session with no enabled servers needs no indicator.
+  const app = await mount();
+  app.resize(220, 24);
+  try {
+    await app.setExtensions([
+      {
+        sessionId: "a1",
+        conversationId: "conversation-a1",
+        notifications: [],
+        statuses: {},
+        mcp,
+      },
+    ]);
+
+    if (expected) {
+      expect(app.line()).toContain(`${icons.mcp} ${expected}`);
+      if (!mcp.needsAuth && !mcp.errors) expect(app.line()).not.toContain("(");
+    } else expect(app.line()).not.toContain(icons.mcp);
+    expect(app.line()).not.toContain("0 needs auth");
+    expect(app.line()).not.toContain("0 errors");
+  } finally {
+    await app.close();
+  }
+});
+
+test("MCP follows the selected conversation without leaking another session or stale runtime", async () => {
+  // Each session publishes its own summary; an old conversation must not overwrite its replacement.
+  const app = await mount();
+  app.resize(220, 24);
+  const extensions: SessionExtensionUi[] = [
+    {
+      sessionId: "a1",
+      conversationId: "conversation-a1",
+      notifications: [],
+      statuses: {},
+      mcp: { servers: 8, needsAuth: 1, errors: 0 },
+    },
+    {
+      sessionId: "a2",
+      conversationId: "conversation-a2",
+      notifications: [],
+      statuses: {},
+      mcp: { servers: 3, needsAuth: 0, errors: 2 },
+    },
+  ];
+  try {
+    await app.setExtensions(extensions);
+    expect(app.line()).toContain("mcp 8 (1 needs auth)");
+
+    app.selection.selectSession("demo:main", "a2");
+    await app.renderOnce();
+
+    expect(app.line()).toContain("mcp 3 (2 errors)");
+    expect(app.line()).not.toContain("mcp 8");
+    await app.setExtensions([{ ...extensions[1]!, conversationId: "old-conversation" }]);
+    expect(app.line()).not.toContain(icons.mcp);
+    await app.setExtensions([]);
+    expect(app.line()).not.toContain(icons.mcp);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Narrow layouts drop MCP before model settings and resource ratios and restore it on expansion", async () => {
+  // Optional runtime metadata must not displace the selected model, Fast or known percentages.
+  const app = await mount();
+  app.resize(220, 24);
+  try {
+    await app.setExtensions([
+      {
+        sessionId: "a1",
+        conversationId: "conversation-a1",
+        notifications: [],
+        statuses: {},
+        mcp: { servers: 8, needsAuth: 1, errors: 1 },
+      },
+    ]);
+    pressLeader(app, "a");
+    await app.mockInput.typeText("resize MCP draft");
+
+    app.resize(90, 24);
+    await app.renderOnce();
+
+    expect(app.line()).not.toContain(icons.mcp);
+    expect(app.line()).toContain("gpt-5.5");
+    expect(app.line()).toContain("fast on");
+    expect(app.line()).toContain("64% left");
+    expect(app.line()).toContain("18% used");
+    app.resize(220, 24);
+    await app.renderOnce();
+    expect(app.line()).toContain(`${icons.mcp} mcp 8 (1 needs auth · 1 error)`);
+    expect(app.view.promptDrafts.a1).toBe("resize MCP draft");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
   } finally {
     await app.close();
   }

@@ -172,7 +172,10 @@ export class SessionRegistry {
     return [...this.entries.values()].flatMap((entry) => {
       const state = entry.phase === "open" ? entry.executor?.extensionUi : undefined;
       return state &&
-        (state.dialog || state.notifications.length || Object.keys(state.statuses).length)
+        (state.dialog ||
+          state.notifications.length ||
+          Object.keys(state.statuses).length ||
+          state.mcp)
         ? [{ sessionId: entry.id, conversationId: entry.executor!.savedSessionId, ...state }]
         : [];
     });

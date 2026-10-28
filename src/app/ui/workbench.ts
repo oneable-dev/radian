@@ -1818,8 +1818,10 @@ export class Workbench {
           state.conversationId ===
             this.actions.getSessionDetails?.(state.sessionId)?.conversationId,
       );
-    this.extensionStatus = Object.values(extension?.statuses ?? {})
-      .map((text) => singleLine(stripVTControlCharacters(text)))
+    this.agent.updateMcp(extension?.mcp);
+    this.extensionStatus = Object.entries(extension?.statuses ?? {})
+      .filter(([key]) => key !== "mcp" || extension?.mcp === undefined)
+      .map(([, text]) => singleLine(stripVTControlCharacters(text)))
       .join(" · ");
     for (const notification of extension?.notifications ?? [])
       if (!this.extensionNotifications.has(notification.id)) {

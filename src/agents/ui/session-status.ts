@@ -7,6 +7,7 @@ import {
   type TextChunk,
 } from "@opentui/core";
 import type { SessionTelemetry } from "../telemetry.ts";
+import type { McpStatus } from "../mcp-status.ts";
 import { blendColors, uiTheme, type UiColors } from "../../ui/theme.ts";
 import { paintText, styleChunk, type StyleGroup, type UiStyles } from "../../ui/theme-styles.ts";
 import { ProviderIcon } from "../../ui/provider-icon.ts";
@@ -99,6 +100,7 @@ export class SessionStatus {
   private readonly spinner: LoadingSpinner;
   private recovering = false;
   private telemetry: SessionTelemetry | null = null;
+  private mcp: McpStatus | undefined;
   private capturedAt: number | undefined;
   private expiry: ReturnType<typeof setTimeout> | undefined;
   private visible = false;
@@ -165,6 +167,12 @@ export class SessionStatus {
     this.scheduleTick();
   }
 
+  updateMcp(status: McpStatus | undefined): void {
+    if (this.disposed) return;
+    this.mcp = status;
+    this.paint();
+  }
+
   private scheduleTick(): void {
     if (this.disposed || !this.visible || this.capturedAt !== undefined) return;
     const now = Date.now(),
@@ -199,7 +207,14 @@ export class SessionStatus {
     const provider = telemetry?.usage?.provider ?? telemetry?.provider;
     const hasIcon = this.providerIcon.setProvider(provider),
       providerName = providerLabel(provider, telemetry?.provider);
-    const signature = JSON.stringify([totalWidth, spinning, telemetry, window?.id, countdown]);
+    const signature = JSON.stringify([
+      totalWidth,
+      spinning,
+      telemetry,
+      this.mcp,
+      window?.id,
+      countdown,
+    ]);
     if (signature === this.lastPaint) return;
     this.lastPaint = signature;
     this.root.backgroundColor = styles["ui.text"].bg;
@@ -260,14 +275,32 @@ export class SessionStatus {
         : telemetry?.fast === false
           ? "metadata.fastOff"
           : "ui.muted";
+    const fullIdentity = [
+      modelChunk,
+      chunk(" · ", "ui.muted"),
+      effortChunk,
+      chunk(" · ", "ui.muted"),
+      chunk(`${icons.bolt} fast ${fast}`, fastStyle),
+    ];
+    const mcpChunks: TextChunk[] = [];
+    if (this.mcp && this.mcp.servers > 0) {
+      const { servers, needsAuth, errors } = this.mcp;
+      mcpChunks.push(chunk(` · ${icons.mcp} mcp ${servers}`, "ui.muted"));
+      if (needsAuth || errors) {
+        mcpChunks.push(chunk(" (", "ui.muted"));
+        if (needsAuth)
+          mcpChunks.push(
+            chunk(`${needsAuth} ${needsAuth === 1 ? "needs" : "need"} auth`, "status.warning"),
+          );
+        if (needsAuth && errors) mcpChunks.push(chunk(" · ", "ui.muted"));
+        if (errors)
+          mcpChunks.push(chunk(`${errors} ${errors === 1 ? "error" : "errors"}`, "status.error"));
+        mcpChunks.push(chunk(")", "ui.muted"));
+      }
+    }
     const identities = [
-      [
-        modelChunk,
-        chunk(" · ", "ui.muted"),
-        effortChunk,
-        chunk(" · ", "ui.muted"),
-        chunk(`${icons.bolt} fast ${fast}`, fastStyle),
-      ],
+      ...(mcpChunks.length ? [[...fullIdentity, ...mcpChunks]] : []),
+      fullIdentity,
       [
         modelChunk,
         chunk(" ", "ui.muted"),

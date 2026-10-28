@@ -10,6 +10,13 @@ import { err, ok, type Result } from "../result.ts";
 import type { Subagent } from "./model.ts";
 import { piSubagentsFromWidget } from "./pi-subagent-status.ts";
 import { PiSubagentDisplay } from "./pi-subagent-display.ts";
+import {
+  mcpStatusChannel,
+  mcpStatusSchema,
+  readMcpServers,
+  summarizeMcpServers,
+  type McpStatus,
+} from "./mcp-status.ts";
 
 const id = Type.String({ minLength: 1, maxLength: 4096 });
 const text = Type.String({ maxLength: 65536 });
@@ -41,6 +48,7 @@ export const extensionUiStateSchema = Type.Object({
     { maxItems: 8 },
   ),
   statuses: Type.Record(Type.String(), text),
+  mcp: Type.Optional(mcpStatusSchema),
 });
 export type ExtensionUiState = Static<typeof extensionUiStateSchema>;
 export const sessionExtensionUiSchema = Type.Object({
@@ -61,6 +69,8 @@ export class ExtensionUiBridge {
   private readonly dialogListeners = new Set<() => void>();
   private notifications: ExtensionUiState["notifications"] = [];
   private readonly statuses = new Map<string, string>();
+  private mcp: McpStatus | undefined;
+  private readonly unsubscribeMcp: (() => void) | undefined;
   private children: readonly Subagent[] = [];
   private childWidget: readonly string[] | undefined;
   private readonly childDisplay: PiSubagentDisplay;
@@ -69,6 +79,15 @@ export class ExtensionUiBridge {
   private disposed = false;
 
   constructor(base: ExtensionUIContext, events?: EventBus) {
+    this.unsubscribeMcp = events?.on(mcpStatusChannel, (value) => {
+      const result = readMcpServers(value);
+      if (result.ok) this.mcp = summarizeMcpServers(result.value);
+      else {
+        console.warn(`[radian:mcp] ${result.error.code}: ${result.error.message}`);
+        this.mcp = undefined;
+      }
+      this.changed();
+    });
     this.childDisplay = new PiSubagentDisplay(events, () => {
       const result = piSubagentsFromWidget(this.childWidget, this.childDisplay.lookup);
       if (!result.ok) {
@@ -150,6 +169,7 @@ export class ExtensionUiBridge {
       ...(dialog ? { dialog } : {}),
       notifications: [...this.notifications],
       statuses: Object.fromEntries(this.statuses),
+      ...(this.mcp ? { mcp: { ...this.mcp } } : {}),
     };
   }
   subscribe(listener: () => void): () => void {
@@ -176,6 +196,7 @@ export class ExtensionUiBridge {
     if (!this.disposed) this.childDisplay.handleEvent(event);
   }
   reset(): void {
+    this.mcp = undefined;
     this.children = [];
     this.childWidget = undefined;
     this.childDisplay.reset();
@@ -258,6 +279,8 @@ export class ExtensionUiBridge {
   }
   dispose(): void {
     this.disposed = true;
+    this.unsubscribeMcp?.();
+    this.mcp = undefined;
     this.children = [];
     this.childWidget = undefined;
     this.childDisplay.dispose();

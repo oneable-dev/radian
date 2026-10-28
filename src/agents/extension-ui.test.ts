@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { SessionRegistry } from "./session-registry.ts";
@@ -149,6 +149,70 @@ test("SDK extensions style startup statuses and authentication dialogs without a
       expect(app.registry.details(app.id)?.sections).toEqual([]);
     }
   } finally {
+    await app.cleanup();
+  }
+});
+
+test("MCP summaries count enabled servers and actionable issues without connecting or persisting runtime state", async () => {
+  // Cached and lazy servers are enabled; disabled and trust-blocked entries are not available targets.
+  const app = await fixture(
+    `pi.events.emit("pi-mcp-adapter/status/v1", {
+      version: 1, servers: [{ name: "updated", status: "failed", disabled: false }],
+    });`,
+    `pi.events.emit("pi-mcp-adapter/status/v1", { version: 1, servers: [
+      { name: "connected", status: "connected", disabled: false },
+      { name: "cached", status: "cached", disabled: false },
+      { name: "lazy", status: "not-connected", disabled: false },
+      { name: "auth", status: "needs-auth", disabled: false },
+      { name: "failed", status: "failed", disabled: false },
+      { name: "disabled", status: "disabled", disabled: false },
+      { name: "flagged", status: "failed", disabled: true },
+      { name: "untrusted", status: "blocked", disabled: false },
+      { name: "blocked-reason", status: "needs-auth", disabled: false, blockedReason: "Approval required" },
+    ] });`,
+  );
+  try {
+    // A snapshot alone must travel through live UI transport, even without a setStatus call.
+    expect(app.current()?.mcp).toEqual({ servers: 5, needsAuth: 1, errors: 1 });
+    expect(app.current()?.statuses).toEqual({});
+    app.registry.setUiActive(false);
+    app.registry.setUiActive(true);
+    expect(app.current()?.mcp).toEqual({ servers: 5, needsAuth: 1, errors: 1 });
+
+    expectOk(await app.registry.prompt(app.id, "/ui-fixture"));
+
+    expect(app.current()?.mcp).toEqual({ servers: 1, needsAuth: 0, errors: 1 });
+    expectOk(await app.registry.reload(app.id));
+    expect(app.current()?.mcp).toEqual({ servers: 5, needsAuth: 1, errors: 1 });
+    expect(app.models()).toBe(0);
+    expect(app.registry.details(app.id)?.sections).toEqual([]);
+    expect(JSON.stringify(app.registry.checkpointRecords)).not.toContain("needsAuth");
+    // Runtime snapshots and commands alone must not create a persisted conversation.
+    expect(await Bun.file(app.registry.sessionFile(app.id)!).exists()).toBe(false);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Malformed MCP events invalidate the previous summary and report a protocol warning", async () => {
+  // An incompatible update must not leave a previously healthy summary visible.
+  const app = await fixture(
+    `pi.events.emit("pi-mcp-adapter/status/v1", { version: 2, servers: [] });`,
+    `pi.events.emit("pi-mcp-adapter/status/v1", {
+      version: 1, servers: [{ name: "cached", status: "cached", disabled: false }],
+    });`,
+  );
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(app.current()?.mcp).toEqual({ servers: 1, needsAuth: 0, errors: 0 });
+
+    expectOk(await app.registry.prompt(app.id, "/ui-fixture"));
+
+    expect(app.current()?.mcp).toBeUndefined();
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("[radian:mcp] PROTOCOL_ERROR"));
+    expect(app.models()).toBe(0);
+  } finally {
+    warning.mockRestore();
     await app.cleanup();
   }
 });
@@ -307,6 +371,8 @@ test("MCP server snapshots stay session-local and reload discards previous choic
     );
     const otherUi = app.registry.extensionUi.find((state) => state.sessionId === other)!;
 
+    expect(app.current()?.mcp).toEqual({ servers: 2, needsAuth: 1, errors: 0 });
+    expect(otherUi.mcp).toEqual({ servers: 1, needsAuth: 1, errors: 0 });
     expect(app.current()?.dialog).toMatchObject({ options: ["vercel", "supabase"] });
     expect(otherUi.dialog).toMatchObject({ options: ["other-server"] });
     expectOk(app.answer({ requestId: app.current()!.dialog!.id, cancelled: true }));

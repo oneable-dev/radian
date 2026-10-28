@@ -54,6 +54,7 @@ test("Unix IPC selects an MCP auth server before its callback dialog without per
     const conversation = client.snapshot.details[id]!.conversationId!;
     const current = () => client.snapshot.extensionUi?.find((state) => state.sessionId === id);
     const before = client.snapshot.details[id]?.sections;
+    expect(current()?.mcp).toEqual({ servers: 1, needsAuth: 1, errors: 0 });
 
     // Admission must complete while the handler is still waiting for its UI response.
     expectOk(await client.prompt(id, "/mcp-auth"));
@@ -124,6 +125,7 @@ test("Unix IPC selects an MCP auth server before its callback dialog without per
     for (const content of [JSON.stringify(manifest), sdk, log]) {
       expect(content).not.toContain("private-ipc-callback");
       expect(content).not.toContain("private-auth-link");
+      expect(content).not.toContain("needsAuth");
     }
     expect(client.snapshot.details[id]?.sections).toEqual(before);
 
@@ -138,6 +140,11 @@ test("Unix IPC selects an MCP auth server before its callback dialog without per
       () => !reconnect!.snapshot.extensionUi?.some((state) => state.dialog),
     );
     expect(reconnect.snapshot.details[id]?.conversationId).toBe(conversation);
+    expect(reconnect.snapshot.extensionUi?.find((state) => state.sessionId === id)?.mcp).toEqual({
+      servers: 1,
+      needsAuth: 1,
+      errors: 0,
+    });
   } finally {
     const owner = reconnect ?? client,
       pid = owner.snapshot.pid;

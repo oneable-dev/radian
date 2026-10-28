@@ -17,6 +17,7 @@ export const icons = {
   terminal: "\uEA85", // nf-cod-terminal
   brain: "\u{F09D1}", // nf-md-brain
   bolt: "\uF0E7", // nf-fa-bolt
+  mcp: "\uF1E6", // nf-fa-plug
   context: "\uF1C0", // nf-fa-database
   openai: "\uEC81", // nf-cod-openai
   claude: "\uEC82", // nf-cod-claude
