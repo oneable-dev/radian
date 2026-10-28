@@ -985,10 +985,23 @@ Open **/dashboard** from the Agent input, or press **Ctrl+Space u** (the configu
 by `u`). Opening it never sends a model prompt or interrupts work. Esc restores the previous focus
 and preserves drafts. The shortcut is configurable as `dashboard.show`.
 
-The dashboard shows only **total tokens**, **recorded runs**, and **total run time** above a daily
+The popup opens at the top of a scrollable read-only body. **Radian resources** shows current CPU
+and resident memory for this **UI**, the **shared Runtime**, and their **Total**. The Runtime is
+counted once, regardless of how many repository channels share its PID. System-wide usage and
+external CLI, terminal, and MCP child processes are excluded. CPU uses interval deltas with one
+fully occupied core equal to 100%, so totals may exceed 100%; the first CPU reading is unknown.
+Memory is summed RSS, not unique physical memory: shared pages may be counted more than once.
+
+Total CPU and memory include small chronological sparklines for the latest 60 seconds. Samples
+are collected about once per second only while the popup is open, never persisted, and reset when
+it reopens. Narrow layouts omit sparklines but retain the Total/UI/Runtime values. Missing metrics
+remain unknown rather than zero, and resource failures do not prevent browsing usage history.
+
+**Usage history** retains **total tokens**, **recorded runs**, and **total run time** above a daily
 bar chart. Select Tokens, Runs or Run time to change the chart. Today, 7-day and 30-day filters use
 local calendar dates; Project cycles between all discovered repositories and individual projects.
-The resource tabs show horizontal bars with exact values:
+These filters affect only saved usage, never live process resources. The category tabs show
+horizontal bars with exact values:
 
 - **Skills:** explicit skill commands and successful skill-file loads combined by skill name.
 - **Models:** input, output, cache-read and cache-write tokens grouped by provider/model. Reasoning
@@ -1003,7 +1016,8 @@ The resource tabs show horizontal bars with exact values:
 Tab/Shift+Tab moves between filters, chart metric, resource tabs and the read-only body. Tab strips
 support Ctrl+N/P and h/l; the body supports Ctrl+N/P, j/k, Home/End and Ctrl+D/U half-page scrolling.
 Changed bindings appear in the footer; routine default navigation is kept in Help. Use r or Ctrl+R to
-refresh. Lookups run on open, filter changes and explicit refresh, not on every rendered frame.
+refresh both live resources and saved statistics. History lookups run on open, filter changes and
+explicit refresh, not on every rendered frame; live sampling never changes focus or scroll.
 
 Statistics come from bounded, read-only scans of the discovered SDK session files, including closed
 sessions and raw pre-compaction/alternate-branch history. Shared entry identities copied by forks are

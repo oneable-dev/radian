@@ -74,6 +74,24 @@ test("Concurrent registrations across repositories share one process with isolat
     expect(daemon.editors).toEqual([]);
     expect(daemon.terminals).toEqual([]);
 
+    // Process counters are available even while repositories remain SDK-free catalogs.
+    for (const client of clients) {
+      const resources = expectOk(await client.resources());
+      expect(resources.pid).toBe(daemon.pid);
+      expect(resources.rssBytes).toBeGreaterThan(0);
+      expect(resources.cpuMicros).toBeGreaterThanOrEqual(0);
+      const unchanged = expectOk(
+        await fetchSnapshot(runtimePaths(client.snapshot.repositoryId, true, stateRoot)),
+      )!;
+      expect(unchanged.capabilities).toContain("repository-catalog");
+      expect(unchanged.capabilities).not.toContain("agent-dashboard");
+      expect(unchanged.details).toEqual({});
+    }
+    const unfenced = await fetch("http://localhost/resources", {
+      unix: runtimePaths(a.repository.id, true, stateRoot).socket,
+    });
+    expect(unfenced.status).toBe(422);
+
     // Invalid control instances and repository IDs leave processes and registrations untouched.
     for (const [path, instance, body, code] of [
       ["/command", "stale-owner", { type: "stop" }, "PROTOCOL_ERROR"],

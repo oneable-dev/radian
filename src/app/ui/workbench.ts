@@ -75,6 +75,7 @@ export type WorkbenchActions = AgentActions & {
   onCloseSession: (worktreeId: string, sessionId: string) => void;
   getRetainedSessionIds?: () => ReadonlySet<string>;
   onDashboard?: DashboardActions["load"];
+  onResources?: DashboardActions["resources"];
   onListModels?: ModelPickerActions["list"];
   onSelectModel?: ModelPickerActions["select"];
   onAccountsRequest?: AccountsActions["request"];
@@ -296,6 +297,7 @@ export class Workbench {
     });
     this.dashboard = new DashboardPanel(renderer, {
       ...(actions.onDashboard ? { load: actions.onDashboard } : {}),
+      ...(actions.onResources ? { resources: actions.onResources } : {}),
       projects: () =>
         this.selection.snapshot.map((repository) => ({ id: repository.id, name: repository.name })),
       changed: () => this.updateFooter(),

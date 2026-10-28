@@ -409,6 +409,7 @@ async function runUI(
             getSessionDetails: (id: string) => client.snapshot.details[id] ?? null,
             onDashboard: (days, repositoryId, signal) =>
               client.dashboard(days, repositoryId, signal),
+            onResources: (signal) => client.resources(signal),
             onListHistory: preloaded!.listHistory,
             onPreviewHistory: (worktreeId, savedId, signal) =>
               client.previewHistory(worktreeId, savedId, signal),

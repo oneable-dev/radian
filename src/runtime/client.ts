@@ -82,6 +82,7 @@ import {
   transcriptImageQuerySchema,
 } from "../agents/transcript-images.ts";
 import { extensionUiResponseSchema, type ExtensionUiResponse } from "../agents/extension-ui.ts";
+import { processResourceSchema, type ProcessResourceSample } from "../usage/process-resources.ts";
 
 const reconnectDelays = [250, 500, 1000, 2000] as const;
 const streamHandshakeMs = 2000;
@@ -799,6 +800,46 @@ export class RuntimeClient {
     )
       return err(new CancelledError("Image preview belongs to an outdated conversation."));
     return decoded.value;
+  }
+  async resources(signal?: AbortSignal): Promise<Result<ProcessResourceSample, ExpectedError>> {
+    if (this.detaching || this.failure) return err(this.connectionClosed());
+    if (!this.state.capabilities?.includes("process-resources"))
+      return err(
+        new CapabilityError(
+          "This runtime does not support process resources. No service was restarted.",
+        ),
+      );
+    if (signal?.aborted) return err(new CancelledError());
+    const instance = this.state.instance,
+      epoch = this.connectionEpoch,
+      pid = this.state.pid;
+    const abort = AbortSignal.any([
+      this.streamAbort.signal,
+      AbortSignal.timeout(5000),
+      ...(signal ? [signal] : []),
+    ]);
+    const attempted = await capture(() =>
+      transport(this.paths, "/resources", {
+        headers: { "X-Radian-Instance": instance },
+        signal: abort,
+      }),
+    );
+    if (!attempted.ok) return attempted;
+    const response = attempted.value;
+    if (!response.ok) return response;
+    const received = await capture(() => readJson(response.value));
+    if (!received.ok) return received;
+    const decoded = received.value;
+    if (!decoded.ok) return decoded;
+    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance)
+      return err(new CancelledError("Process resources belong to an outdated connection."));
+    if (!response.value.ok)
+      return Value.Check(replySchema, decoded.value) && !decoded.value.ok
+        ? err(remoteError(decoded.value.error))
+        : err(new ProtocolError("Malformed process resources failure response."));
+    if (!Value.Check(processResourceSchema, decoded.value) || decoded.value.pid !== pid)
+      return err(new ProtocolError("Malformed process resources response."));
+    return ok(decoded.value);
   }
   async dashboard(
     days: DashboardPeriod,

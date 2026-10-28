@@ -27,6 +27,7 @@ import {
 } from "./protocol.ts";
 import type { WorkspaceRuntime } from "./service.ts";
 import type { AccountManager } from "../accounts/manager.ts";
+import { readProcessResources } from "../usage/process-resources.ts";
 
 export function rejected(error: ExpectedError): Response {
   return Response.json({ ok: false, error: wireError(error) }, { status: errorStatus(error) });
@@ -155,9 +156,11 @@ export class RepositoryHost {
   get snapshot(): RuntimeSnapshot {
     if (this.runtime) {
       const snapshot = this.runtime.snapshot;
-      return this.warning
-        ? { ...snapshot, notice: [snapshot.notice, this.warning].filter(Boolean).join(" · ") }
-        : snapshot;
+      return {
+        ...snapshot,
+        capabilities: [...(snapshot.capabilities ?? []), "process-resources"],
+        notice: [snapshot.notice, this.warning].filter(Boolean).join(" · "),
+      };
     }
     return {
       version: protocolVersion,
@@ -165,7 +168,7 @@ export class RepositoryHost {
       instance: this.instance,
       repositoryId: this.repository.id,
       mode: this.offline ? "offline" : "live",
-      capabilities: ["shared-daemon", "repository-catalog"],
+      capabilities: ["shared-daemon", "repository-catalog", "process-resources"],
       repositories: [this.repository],
       details: {},
       closingCount: 0,
@@ -237,6 +240,14 @@ export class RepositoryHost {
       if (path === "/snapshot" && request.method === "GET") return Response.json(this.snapshot);
       if (this.stopped)
         return rejected(new SessionError("RUNTIME_STOPPING", "Shared daemon is stopping."));
+      if (path === "/resources" && request.method === "GET") {
+        if (expected !== this.instance)
+          return rejected(
+            new ProtocolError("Process resources require the current runtime instance."),
+          );
+        const sample = readProcessResources();
+        return sample.ok ? Response.json(sample.value) : rejected(sample.error);
+      }
       if (path === "/events" && request.method === "GET")
         return snapshotEvents(
           () => this.snapshot,

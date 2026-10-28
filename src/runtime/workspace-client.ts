@@ -27,6 +27,7 @@ import {
 import type { RuntimePreferences, RuntimeSnapshot } from "./protocol.ts";
 import { runtimePaths, RuntimeStore } from "./storage.ts";
 import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
+import type { ProcessResourceSample } from "../usage/process-resources.ts";
 
 // Repository-scoped channels share a daemon process; identity fencing and PTY leases stay local.
 export type RepositoryClient = Pick<
@@ -62,6 +63,7 @@ export type RepositoryClient = Pick<
       | "catalog"
       | "acknowledge"
       | "dashboard"
+      | "resources"
       | "accounts"
       | "answerExtensionUi"
     >
@@ -412,6 +414,20 @@ export class WorkspaceClient {
     const result = await client.value.resume(worktreeId, savedId);
     if (result.ok) entry.value.sessions.add(result.value);
     return result;
+  }
+  async resources(signal?: AbortSignal): Promise<Result<ProcessResourceSample, ExpectedError>> {
+    if (signal?.aborted || this.detaching) return err(new CancelledError());
+    // Every repository channel shares the same daemon. Read one connected channel,
+    // without activating a cold repository or summing its PID once per project.
+    const client = this.entries
+      .map((entry) => entry.client)
+      .find(
+        (client) =>
+          client?.connected && client.snapshot.capabilities?.includes("process-resources"),
+      );
+    if (!client?.resources)
+      return err(new CapabilityError("No connected shared runtime supports process resources."));
+    return client.resources(signal);
   }
   async dashboard(
     days: DashboardPeriod,

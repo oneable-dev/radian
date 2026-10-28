@@ -1,5 +1,5 @@
-import { expect, test } from "bun:test";
-import { ScrollBoxRenderable } from "@opentui/core";
+import { expect, spyOn, test } from "bun:test";
+import { ScrollBoxRenderable, TextRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import {
   emptyDashboard,
@@ -7,7 +7,8 @@ import {
   type DashboardSnapshot,
 } from "../../agents/dashboard.ts";
 import { PromptInput } from "../../ui/prompt-input.ts";
-import { SessionError } from "../../errors.ts";
+import { CapabilityError, SessionError } from "../../errors.ts";
+import type { ProcessResourceSample } from "../../usage/process-resources.ts";
 import { err, ok, type Result } from "../../result.ts";
 import { parseKeymap } from "../../keybindings/config.ts";
 import { expectOk } from "../../testing/results.ts";
@@ -50,6 +51,8 @@ async function mount(options: Partial<WorkbenchActions> = {}, width = 120, heigh
       sent.push(text);
       return ok(undefined);
     },
+    onResources: async () =>
+      ok({ pid: process.pid + 1, elapsedMs: 1000, cpuMicros: 0, rssBytes: 320 * 1024 ** 2 }),
     onDashboard: async (days, project, signal) => {
       lookups.push({ days, project, signal });
       return ok(sample(days));
@@ -72,6 +75,7 @@ async function mount(options: Partial<WorkbenchActions> = {}, width = 120, heigh
   };
   return {
     ...app,
+    clock,
     view,
     input,
     lookups,
@@ -202,8 +206,12 @@ test("Dashboards show three summary metrics and charts, restoring drafts and inp
     expect(frame).toContain("Total run time");
     expect(frame).toContain("1,240");
     expect(frame).toContain("1m 5s");
-    expect(frame).toContain("write-good-code");
+    expect(frame).toContain("Radian resources");
     expect(frame).toContain("█");
+    // Rankings remain reachable below the new live section without changing the draft.
+    app.get("dashboard-category").focus();
+    await app.render();
+    expect(app.captureCharFrame()).toContain("write-good-code");
     app.mockInput.pressEscape();
     await app.render();
 
@@ -223,6 +231,7 @@ test("Resource tabs retain focus through repeated Ctrl+N/P and horizontal naviga
   const app = await mount();
   try {
     await app.open();
+    app.get("dashboard-category").focus();
 
     // Navigate repeatedly inside the tab strip.
     app.mockInput.pressKey("n", { ctrl: true });
@@ -304,6 +313,7 @@ test("Custom dashboard navigation updates both behavior and footer hints", async
   const app = await mount({ keymap });
   try {
     await app.open();
+    app.get("dashboard-category").focus();
 
     // Old bindings stop moving tabs; only configured keys work.
     app.mockInput.pressKey("n", { ctrl: true });
@@ -378,6 +388,178 @@ test("Compact dashboards distinguish empty data from lookup failures without inv
 
     expect(app.captureCharFrame()).toContain("SESSION_BUSY");
     expect(app.captureCharFrame()).not.toContain("NaN");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Live resources sum UI and Runtime and keep their history independent of usage filters and focus", async () => {
+  // Stable OS counters make the displayed one-core percentages and RSS sum deterministic.
+  let elapsedMs = 1000,
+    uiCpu = 0,
+    runtimeCpu = 0,
+    calls = 0;
+  const cpu = spyOn(process, "cpuUsage").mockImplementation(() => ({ user: uiCpu, system: 0 }));
+  const rss = spyOn(process.memoryUsage, "rss").mockReturnValue(85 * 1024 ** 2);
+  const elapsed = spyOn(performance, "now").mockImplementation(() => elapsedMs);
+  const app = await mount({
+    onResources: async () => {
+      calls++;
+      return ok({
+        pid: process.pid + 1,
+        elapsedMs,
+        cpuMicros: runtimeCpu,
+        rssBytes: 320 * 1024 ** 2,
+      });
+    },
+  });
+  try {
+    await app.open();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("dashboard-body");
+    expect(app.captureCharFrame()).toContain("Radian resources · live");
+    const table = app.get("dashboard-resources-table");
+    if (!(table instanceof TextRenderable)) throw new Error("Missing resource table");
+    expect(table.plainText).toContain("405 MB");
+
+    // Provider history filters must neither reset live samples nor move focus when polling completes.
+    app.get("dashboard-period").focus();
+    app.mockInput.pressKey("n", { ctrl: true });
+    await app.render();
+    expect(calls).toBe(1);
+    const body = app.get("dashboard-body");
+    if (!(body instanceof ScrollBoxRenderable)) throw new Error("Missing dashboard body");
+    const scrollTop = body.scrollTop;
+    elapsedMs = 2000;
+    uiCpu = 8000;
+    runtimeCpu = 32000;
+    app.clock.advance(1000);
+    await app.render();
+
+    expect(table.plainText).toMatch(/Total\s+4\.0%/);
+    expect(table.plainText).toMatch(/UI\s+0\.8%/);
+    expect(table.plainText).toMatch(/Runtime\s+3\.2%/);
+    expect(table.plainText).toContain("405 MB");
+    expect(table.plainText).toContain("▁");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("dashboard-period");
+    expect(body.scrollTop).toBe(scrollTop);
+    app.get("dashboard-project").focus();
+    app.mockInput.pressKey("n", { ctrl: true });
+    await app.render();
+    expect(table.plainText).toMatch(/Total\s+4\.0%/);
+    expect(calls).toBe(2);
+    expect(app.sent).toEqual([]);
+  } finally {
+    await app.close();
+    elapsed.mockRestore();
+    rss.mockRestore();
+    cpu.mockRestore();
+  }
+});
+
+test("Closing resource sampling aborts pending work and rejects late data across reopen", async () => {
+  // A request that ignores cancellation must not overwrite a later popup lifetime.
+  const pending = Promise.withResolvers<Result<ProcessResourceSample, CapabilityError>>();
+  let signal: AbortSignal | undefined,
+    calls = 0;
+  const app = await mount({
+    onResources: async (abort) => {
+      calls++;
+      signal = abort;
+      return calls === 1
+        ? pending.promise
+        : ok({ pid: process.pid + 1, elapsedMs: 1000, cpuMicros: 0, rssBytes: 320 * 1024 ** 2 });
+    },
+  });
+  try {
+    await app.open();
+    expect(app.get("dashboard-resources-loading").visible).toBe(true);
+    const feedback = app.get("dashboard-resources-loading-feedback");
+    const table = app.get("dashboard-resources-table");
+    expect(feedback.y).toBe(table.y + Math.floor((table.height - 1) / 2));
+    expect(feedback.x).toBe(table.x + Math.floor((table.width - feedback.width) / 2));
+    app.clock.advance(5000);
+    await app.render();
+    expect(calls).toBe(1);
+
+    app.mockInput.pressEscape();
+    await app.render();
+    expect(signal?.aborted).toBe(true);
+    expect(app.get("dashboard-resources-loading").visible).toBe(false);
+    app.clock.advance(10000);
+    await app.render();
+    expect(calls).toBe(1);
+    await app.open();
+    pending.resolve(err(new CapabilityError("Stale resource failure")));
+    await app.render();
+
+    expect(calls).toBe(2);
+    expect(app.captureCharFrame()).not.toContain("Stale resource failure");
+    expect(app.get("dashboard-resources-error").visible).toBe(false);
+    app.mockInput.pressEscape();
+    await app.render();
+    app.clock.advance(10000);
+    await app.render();
+    expect(calls).toBe(2);
+  } finally {
+    pending.resolve(err(new CapabilityError("Cancelled")));
+    await app.close();
+  }
+});
+
+test("Resizing live resources keeps memory and every process visible without clearing recent samples", async () => {
+  // Wide and compact layouts share the same resource history and never trigger extra sampling.
+  const app = await mount();
+  try {
+    await app.open();
+    const table = app.get("dashboard-resources-table");
+    if (!(table instanceof TextRenderable)) throw new Error("Missing resource table");
+    expect(table.plainText).toContain("··");
+
+    app.resize(50, 18);
+    await app.render();
+
+    // Native geometry updates one frame later; column sizing must already use the requested width.
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("Memory");
+    expect(frame).toContain("Runtime");
+    expect(frame).toContain("320 MB");
+    expect(table.plainText).not.toContain("··");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("dashboard-body");
+    app.resize(120, 32);
+    await app.render();
+    expect(table.plainText).toContain("··");
+    expect(table.plainText).toContain("320 MB");
+    expect(app.lookups).toHaveLength(1);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Resource failures leave usage history usable and compact layouts retain every process row", async () => {
+  // An older daemon may not support metrics, but its saved usage is still useful.
+  const app = await mount(
+    { onResources: async () => err(new CapabilityError("Resource metrics unsupported")) },
+    50,
+    18,
+  );
+  try {
+    await app.open();
+    const table = app.get("dashboard-resources-table");
+    if (!(table instanceof TextRenderable)) throw new Error("Missing resource table");
+
+    // Narrow layouts omit sparklines, never the process breakdown or unknown-value markers.
+    expect(table.plainText).toContain("Total");
+    expect(table.plainText).toContain("UI");
+    expect(table.plainText).toContain("Runtime");
+    expect(table.plainText).not.toContain("··");
+    expect(table.plainText).not.toContain("NaN");
+    expect(app.get("dashboard-resources-error").visible).toBe(true);
+    app.get("dashboard-category").focus();
+    await app.render();
+    expect(app.captureCharFrame()).toContain("write-good-code");
+    app.mockInput.pressEscape();
+    await app.render();
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
   } finally {
     await app.close();
   }

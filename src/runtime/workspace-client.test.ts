@@ -182,6 +182,55 @@ test("Extension UI aggregates connected repositories and routes answers only to 
     }
   }));
 
+test("Resources read the shared daemon once across repositories without activation or duplicate sums", () =>
+  isolated(async (stateRoot) => {
+    // Multiple repository endpoints represent one Runtime process, not separate resource consumers.
+    const a = repo("a"),
+      b = repo("b"),
+      pa = peer(a),
+      pb = peer(b);
+    const queried: string[] = [];
+    const sample = { pid: process.pid + 1, elapsedMs: 1000, cpuMicros: 1234, rssBytes: 5678 };
+    for (const [name, current] of [
+      ["a", pa],
+      ["b", pb],
+    ] as const) {
+      current.update({
+        ...current.client.snapshot,
+        capabilities: ["shared-daemon", "process-resources"],
+      });
+      current.client.resources = async () => {
+        queried.push(name);
+        return ok(sample);
+      };
+    }
+    const workspace = expectOk(
+      await WorkspaceClient.open(
+        [a, b],
+        a.worktrees[0]!.path,
+        { stateRoot, offline: true },
+        async (repository) => ok(repository.id === a.id ? pa.client : pb.client),
+      ),
+    );
+    try {
+      const first = expectOk(await workspace.resources());
+      pa.connection(false);
+      const fallback = expectOk(await workspace.resources());
+      expect(expectError(await workspace.resources(AbortSignal.abort())).code).toBe("CANCELLED");
+      pb.connection(false);
+      const unavailable = expectError(await workspace.resources());
+
+      // Switching channels preserves the same PID; no cold runtime or session is started for metrics.
+      expect(first).toEqual(sample);
+      expect(fallback).toEqual(sample);
+      expect(queried).toEqual(["a", "b"]);
+      expect(unavailable.code).toBe("UNSUPPORTED_CAPABILITY");
+      expect([...pa.calls, ...pb.calls]).toEqual([]);
+    } finally {
+      await workspace.disconnect();
+    }
+  }));
+
 test("Dashboards aggregate all/selected projects and distinguish partial unsupported services from cancellation", () =>
   isolated(async (stateRoot) => {
     // Repository usage can combine, but lookup failures must not become zero.

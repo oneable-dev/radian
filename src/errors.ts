@@ -24,6 +24,7 @@ export const errorCodes = [
   "HISTORY_UNAVAILABLE",
   "HISTORY_CORRUPT",
   "MODEL_UNAVAILABLE",
+  "RESOURCE_UNAVAILABLE",
   "STORAGE_FAILED",
   "RUNTIME_ABSENT",
   "CONNECTION_FAILED",
@@ -120,6 +121,11 @@ export class HistoryError extends ExpectedError<"HISTORY_UNAVAILABLE" | "HISTORY
     options?: ErrorOptions,
   ) {
     super(code, message, options);
+  }
+}
+export class ResourceError extends ExpectedError<"RESOURCE_UNAVAILABLE"> {
+  constructor(message: string, options?: ErrorOptions) {
+    super("RESOURCE_UNAVAILABLE", message, options);
   }
 }
 export class StorageError extends ExpectedError<"STORAGE_FAILED"> {
