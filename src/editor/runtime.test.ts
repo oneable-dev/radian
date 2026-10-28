@@ -140,7 +140,17 @@ test("Real per-worktree Neovim buffers and cursors survive TUI reconnects with i
     await until(() => Bun.file(join(app.main, "editor-size.txt")).exists());
     expect(await Bun.file(join(app.main, "editor-size.txt")).text()).toBe("93x19\n");
 
-    const before = await screen(first.frame);
+    // File creation does not guarantee that the command's final redraw reached the client.
+    // A distinct buffer column also prevents a stale pre-command frame from looking ready.
+    first.connection.input(new TextEncoder().encode("gg0l"));
+    const expected = { text: "unsaved-Amain-worktree-marker", x: 1, y: 0 };
+    let before = await screen(first.frame);
+    await until(async () => {
+      before = await screen(first.frame);
+
+      return before.text === expected.text && before.x === expected.x && before.y === expected.y;
+    });
+    expect(before).toEqual(expected);
     const pid = first.frame.pid;
     const preferences = {
       ...client.snapshot.preferences,
