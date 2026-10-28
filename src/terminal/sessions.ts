@@ -13,11 +13,12 @@ import { repositorySnapshot, type RepositorySource } from "../workspace/catalog.
 import type { TerminalInfo, TerminalText } from "../runtime/protocol.ts";
 import { OwnedProcesses } from "./owned-processes.ts";
 import { PtySession } from "../runtime/pty/session.ts";
-import { ShellHandshake, shellHandshake, shellSupervisorSource } from "./shell-supervisor.ts";
+import { TerminalSupervisorHandshake, terminalSupervisorHandshake } from "./terminal-supervisor.ts";
+import { childCommand, selfLaunch, type SelfLaunch } from "../runtime/launch.ts";
 
 type TerminalRecord = {
   session: PtySession;
-  handshake: ShellHandshake;
+  handshake: TerminalSupervisorHandshake;
   owner?: OwnedProcesses;
   title: string;
   shellPid: number;
@@ -37,6 +38,7 @@ export class TerminalSessions {
     private readonly supervisorDirectory: string,
     private readonly clean = false,
     private readonly observe: (task: Promise<Result<void, ExpectedError>>) => void = reportCleanup,
+    private readonly launch: SelfLaunch = selfLaunch(),
   ) {}
 
   get infos(): TerminalInfo[] {
@@ -81,7 +83,7 @@ export class TerminalSessions {
 
     return capture(async () => {
       let session: PtySession | undefined;
-      const handshake = new ShellHandshake((code) => {
+      const handshake = new TerminalSupervisorHandshake((code) => {
         session?.finish(code);
         // Cleanup belongs to the runtime, even while no TUI is attached. The same
         // verified close path collects any jobs left after the shell has exited.
@@ -93,13 +95,7 @@ export class TerminalSessions {
       session = new PtySession(
         worktreeId,
         {
-          argv: [
-            process.execPath,
-            "--no-env-file",
-            "--config=/dev/null",
-            "--eval",
-            shellSupervisorSource,
-          ],
+          argv: childCommand(this.launch, ["--terminal-supervisor"]),
           cwd: this.supervisorDirectory,
           size,
           detached: true,
@@ -133,7 +129,7 @@ export class TerminalSessions {
       };
       this.records.set(session.id, record);
       void session.settled.then(() =>
-        handshake.fail(new PtyError("PTY_OWNERSHIP_LOST", "Shell ownership supervisor ended.")),
+        handshake.fail(new PtyError("PTY_OWNERSHIP_LOST", "Terminal ownership supervisor ended.")),
       );
       try {
         const owner = OwnedProcesses.capture({
@@ -145,14 +141,14 @@ export class TerminalSessions {
         }
 
         record.owner = owner.value;
-        await shellHandshake(handshake.ready.promise, "supervisor startup");
+        await terminalSupervisorHandshake(handshake.ready.promise, "supervisor startup");
         if (this.stopping || record.phase !== "starting") {
           throw new PtyError("PTY_UNAVAILABLE", "Terminal creation was interrupted by shutdown.");
         }
 
         record.startSent = true;
         session.process.send({ type: "start", argv: [shell, "-i"], cwd: worktree.path });
-        record.shellPid = await shellHandshake(handshake.started.promise, "startup");
+        record.shellPid = await terminalSupervisorHandshake(handshake.started.promise, "startup");
         if (this.stopping || record.phase !== "starting") {
           throw new PtyError("PTY_UNAVAILABLE", "Terminal creation was interrupted by shutdown.");
         }
@@ -288,7 +284,7 @@ export class TerminalSessions {
         }
 
         record.session.process.send({ type: "freeze" });
-        await shellHandshake(record.handshake.frozen.promise, "cleanup handshake");
+        await terminalSupervisorHandshake(record.handshake.frozen.promise, "cleanup handshake");
 
         const stopped = await record.owner.stopChildren(record.shellPid);
         if (!stopped.ok) {

@@ -7,7 +7,8 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { createWorktreeFixture } from "../../testing/worktree-fixture.ts";
-import { connectRuntime, fetchSnapshot } from "../../runtime/client.ts";
+import { fetchSnapshot } from "../../runtime/client.ts";
+import { connectRuntime } from "../../runtime/lifecycle.ts";
 import { runtimePaths } from "../../runtime/storage.ts";
 import { expectOk } from "../../testing/results.ts";
 
@@ -28,7 +29,6 @@ test("Real UI/Unix IPC/SDK Tab only inserts while Enter completes and executes s
   const options = {
     offline: true,
     stateRoot: join(fixture.directory, "state"),
-    entry: join(import.meta.dir, "..", "..", "index.ts"),
   };
   const paths = runtimePaths(fixture.repository.id, true, options.stateRoot);
   const extensions = join(paths.directory, "offline-agent", "extensions");

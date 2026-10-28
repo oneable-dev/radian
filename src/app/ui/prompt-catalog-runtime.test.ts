@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { createTestRenderer } from "@opentui/core/testing";
 import { CompletionCache } from "../../agents/completion-cache.ts";
 import { PromptInput } from "../../agents/ui/prompt-input.ts";
-import { connectRuntime, fetchSnapshot, type RuntimeClient } from "../../runtime/client.ts";
+import { fetchSnapshot, type RuntimeClient } from "../../runtime/client.ts";
+import { connectRuntime } from "../../runtime/lifecycle.ts";
 import { runtimePaths } from "../../runtime/storage.ts";
 import { createWorktreeFixture } from "../../testing/worktree-fixture.ts";
 import { expectOk } from "../../testing/results.ts";
@@ -29,7 +30,6 @@ test("Real UI/IPC/SDK reuse full catalogs across reload, file moves, and dollar 
   const options = {
     offline: true,
     stateRoot: join(fixture.directory, "state"),
-    entry: join(import.meta.dir, "..", "..", "index.ts"),
   };
   const paths = runtimePaths(fixture.repository.id, true, options.stateRoot);
   const extensions = join(paths.directory, "offline-agent", "extensions");

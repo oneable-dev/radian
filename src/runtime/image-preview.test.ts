@@ -7,7 +7,8 @@ import { fixtureMessage } from "../testing/offline-runtime.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 import { SessionTranscript } from "../agents/transcript.ts";
 import { imageNamesEntryType } from "../agents/transcript-images.ts";
-import { connectRuntime, fetchSnapshot, type RuntimeClient } from "./client.ts";
+import { fetchSnapshot, type RuntimeClient } from "./client.ts";
+import { connectRuntime } from "./lifecycle.ts";
 import { emptyPreferences, protocolVersion } from "./protocol.ts";
 import { RuntimeStore, runtimePaths, privateDirectory } from "./storage.ts";
 
@@ -28,7 +29,6 @@ test("Real Unix IPC exposes no originals in snapshots and explicitly reads only 
   const options = {
     offline: true,
     stateRoot: join(fixture.directory, "state"),
-    entry: join(import.meta.dir, "..", "index.ts"),
   };
   const main = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
   const paths = runtimePaths(fixture.repository.id, true, options.stateRoot);

@@ -8,6 +8,7 @@ export type CliOptions = {
   demo: boolean;
   offline: boolean;
   service: boolean;
+  supervisor?: boolean;
   status: boolean;
   stop: boolean;
   restart?: boolean;
@@ -25,6 +26,7 @@ type RawOptions = {
   demo?: boolean;
   testRuntime?: boolean;
   runtimeService?: boolean;
+  terminalSupervisor?: boolean;
   runtimeStatus?: boolean;
   stopRuntime?: boolean;
   color?: boolean;
@@ -85,6 +87,9 @@ export function parseCli(
     .addOption(new Option("--runtime-status", "Alias for runtime status").hideHelp())
     .addOption(new Option("--stop-runtime", "Alias for runtime stop").hideHelp())
     .addOption(new Option("--runtime-service", "Run the internal shared daemon").hideHelp())
+    .addOption(
+      new Option("--terminal-supervisor", "Run the internal terminal supervisor").hideHelp(),
+    )
     .action(() => {});
   const runtime = program
     .command("runtime")
@@ -129,6 +134,11 @@ export function parseCli(
   }
 
   const raw = program.opts<RawOptions>();
+  if (raw.terminalSupervisor && args.length !== 1) {
+    return err(
+      new InputError("Terminal supervisor cannot be combined with other operations or settings."),
+    );
+  }
   const statuses = [
     operation,
     raw.runtimeStatus ? "status" : undefined,
@@ -168,6 +178,7 @@ export function parseCli(
       demo: raw.demo ?? false,
       offline: raw.testRuntime ?? false,
       service: raw.runtimeService ?? false,
+      ...(raw.terminalSupervisor ? { supervisor: true } : {}),
       status: administrative === "status",
       stop: administrative === "stop",
       restart: administrative === "restart",
@@ -187,7 +198,7 @@ export function checkInteractiveHost(
   options: CliOptions,
   host: { stdinTTY: boolean; stdoutTTY: boolean; term: string | undefined },
 ): Result<void, InputError> {
-  if (options.service || options.status || options.stop || options.restart) {
+  if (options.service || options.supervisor || options.status || options.stop || options.restart) {
     return ok(undefined);
   }
   if (!host.stdinTTY || !host.stdoutTTY) {

@@ -3,7 +3,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectError, expectOk } from "../testing/results.ts";
-import { connectRuntime, type RuntimeClient } from "./client.ts";
+import type { RuntimeClient } from "./client.ts";
+import { connectRuntime } from "./lifecycle.ts";
 import { daemonPaths, pidAlive, RuntimeStore, runtimePaths } from "./storage.ts";
 
 function observed(client: RuntimeClient, predicate: () => boolean): Promise<void> {
@@ -48,7 +49,7 @@ test("Unix IPC selects an MCP auth server before its callback dialog without per
   }`,
   );
 
-  const options = { offline: true, stateRoot, entry: join(import.meta.dir, "..", "index.ts") };
+  const options = { offline: true, stateRoot };
   const client = expectOk(await connectRuntime(fixture.repository, fixture.main, options));
   if (!client) {
     throw new Error("Missing fixture runtime");

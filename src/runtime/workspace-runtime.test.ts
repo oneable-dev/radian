@@ -3,7 +3,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectOk } from "../testing/results.ts";
-import { connectRuntime, fetchSnapshot } from "./client.ts";
+import { fetchSnapshot } from "./client.ts";
+import { connectRuntime } from "./lifecycle.ts";
 import { pidAlive, runtimePaths } from "./storage.ts";
 import { WorkspaceClient } from "./workspace-client.ts";
 
@@ -25,7 +26,6 @@ test("Two repositories share one daemon while SDK, shells, and storage stay isol
   const options = {
     offline: true,
     stateRoot: join(a.directory, "state"),
-    entry: join(import.meta.dir, "..", "index.ts"),
   };
   const repositories = [a.repository, b.repository];
   const aTree = a.repository.worktrees.find((tree) => tree.path === a.main)!;
@@ -36,7 +36,7 @@ test("Two repositories share one daemon while SDK, shells, and storage stay isol
   try {
     await writeFile(join(a.main, "workspace.txt"), "isolated-repository-A");
     await writeFile(join(b.main, "workspace.txt"), "isolated-repository-B");
-    workspace = expectOk(await WorkspaceClient.open(repositories, a.main, options));
+    workspace = expectOk(await WorkspaceClient.open(repositories, a.main, options, connectRuntime));
 
     const aCatalog = expectOk(await fetchSnapshot(aPaths))!;
     const bCatalog = expectOk(await fetchSnapshot(bPaths))!;
@@ -98,7 +98,7 @@ test("Two repositories share one daemon while SDK, shells, and storage stay isol
     await workspace.disconnect();
 
     // Reconnection reuses daemon/shells and merges both draft sets for restoration.
-    workspace = expectOk(await WorkspaceClient.open(repositories, b.main, options));
+    workspace = expectOk(await WorkspaceClient.open(repositories, b.main, options, connectRuntime));
     expect(expectOk(await fetchSnapshot(aPaths))!.pid).toBe(aPid);
     expect(expectOk(await fetchSnapshot(bPaths))!.pid).toBe(bPid);
     expect(workspace.snapshot.preferences.drafts).toEqual({ [aId]: "draft A", [bId]: "draft B" });
@@ -118,7 +118,7 @@ test("Two repositories share one daemon while SDK, shells, and storage stay isol
       const child = Bun.spawn(
         [
           process.execPath,
-          options.entry,
+          join(import.meta.dir, "..", "index.ts"),
           "--test-runtime",
           command,
           "--runtime-cwd",
@@ -155,7 +155,7 @@ test("Two repositories share one daemon while SDK, shells, and storage stay isol
     await workspace.disconnect();
 
     // Restore both repositories' conversations/drafts in fresh shared processes without moving storage.
-    workspace = expectOk(await WorkspaceClient.open(repositories, b.main, options));
+    workspace = expectOk(await WorkspaceClient.open(repositories, b.main, options, connectRuntime));
     expectOk(await workspace.activate(aTree.id));
     expectOk(await workspace.activate(bTree.id));
     expect(workspace.snapshot.details[aId]?.output).toContain("isolated-repository-A");

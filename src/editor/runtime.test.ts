@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { Terminal } from "@xterm/headless";
 import { EditorSessions } from "./sessions.ts";
-import { connectRuntime, fetchSnapshot, type RuntimeClient } from "../runtime/client.ts";
+import { fetchSnapshot, type RuntimeClient } from "../runtime/client.ts";
+import { connectRuntime } from "../runtime/lifecycle.ts";
 import { parseCommand, type EditorFrame } from "../runtime/protocol.ts";
 import { pidAlive } from "../runtime/storage.ts";
 import { expectError, expectOk } from "../testing/results.ts";
@@ -73,7 +74,6 @@ async function setup() {
   const options = {
     offline: true,
     stateRoot: join(fixture.directory, "state"),
-    entry: join(import.meta.dir, "..", "index.ts"),
   };
   const clients: RuntimeClient[] = [];
 

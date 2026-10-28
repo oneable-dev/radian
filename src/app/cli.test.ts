@@ -92,9 +92,30 @@ test.each(
     ["runtime", "restart", "--legacy"],
     ["runtime", "restart", "--stop-runtime"],
     ["--runtime-service", "runtime", "restart"],
+    ["--terminal-supervisor", "--runtime-service"],
+    ["--terminal-supervisor", "--demo"],
+    ["--terminal-supervisor", "--config", "settings.json"],
+    ["--terminal-supervisor", "runtime", "stop"],
   ].map((args) => ({ args })),
 )("Invalid CLI arguments %j return stable input errors without exiting the process", ({ args }) => {
   expect(expectError(parseCli(args, { cwd: "/fixture" })).code).toBe("INVALID_INPUT");
+});
+
+test("Internal terminal supervisor mode is hidden and does not require a TTY", () => {
+  // Internal children select exactly one role and do not mount an interactive UI.
+  const supervisor = options(["--terminal-supervisor"]);
+
+  const host = checkInteractiveHost(supervisor, {
+    stdinTTY: false,
+    stdoutTTY: false,
+    term: "dumb",
+  });
+  const help = expectOk(parseCli(["--help"]));
+
+  expect(supervisor.supervisor).toBe(true);
+  expectOk(host);
+  if (help.kind !== "output") throw new Error("Expected CLI help output.");
+  expect(help.text).not.toContain("--terminal-supervisor");
 });
 
 test("NO_COLOR and --no-color become explicit monochrome UI options", () => {

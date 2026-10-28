@@ -145,7 +145,7 @@ test("Shell exit reclaims tabs and owned jobs while preserving other terminals",
   }
 }, 15000);
 
-test("Shell ownership supervisors never automatically execute worktree Bun preloads or dotenv", async () => {
+test("Terminal supervisors never automatically execute worktree Bun preloads or dotenv", async () => {
   const fixture = await createWorktreeFixture();
   const sessions = new TerminalSessions([fixture.repository], () => {}, fixture.directory, true);
   const key = `RADIAN_SENTINEL_${crypto.randomUUID().replaceAll("-", "")}`;

@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectOk } from "../testing/results.ts";
 import type { SessionRecord } from "../agents/session-registry.ts";
-import { connectRuntime, fetchSnapshot, type RuntimeClient } from "./client.ts";
+import { fetchSnapshot, type RuntimeClient } from "./client.ts";
+import { connectRuntime } from "./lifecycle.ts";
 import { privateDirectory, pidAlive, runtimePaths, RuntimeStore } from "./storage.ts";
 import { emptyPreferences } from "./protocol.ts";
 import { retentionDayMs } from "./session-retention.ts";
@@ -21,7 +22,6 @@ test.each([
     const options = {
       offline: true,
       stateRoot: join(fixture.directory, "state"),
-      entry: join(import.meta.dir, "..", "index.ts"),
       config: join(fixture.directory, "settings.json"),
     };
     const paths = runtimePaths(fixture.repository.id, true, options.stateRoot);

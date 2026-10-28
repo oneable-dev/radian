@@ -18,12 +18,8 @@ import {
   type ExpectedError,
 } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
-import {
-  connectRuntime,
-  defaultPreferences,
-  type ConnectOptions,
-  type RuntimeClient,
-} from "./client.ts";
+import { defaultPreferences, type RuntimeClient } from "./client.ts";
+import type { ConnectOptions } from "./lifecycle.ts";
 import type { RuntimePreferences, RuntimeSnapshot } from "./protocol.ts";
 import { runtimePaths, RuntimeStore } from "./storage.ts";
 import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
@@ -132,8 +128,8 @@ export class WorkspaceClient {
   static async open(
     repositories: readonly Repository[],
     cwd: string,
-    options: ConnectOptions = {},
-    connect: Connector = connectRuntime,
+    options: ConnectOptions,
+    connect: Connector,
   ): Promise<Result<WorkspaceClient, ExpectedError>> {
     if (!repositories.length) {
       return err(new InputError("No repositories discovered in workspace roots."));

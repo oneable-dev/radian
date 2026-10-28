@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { createTestRenderer } from "@opentui/core/testing";
 import { createWorktreeFixture } from "../../testing/worktree-fixture.ts";
-import { connectRuntime, fetchSnapshot } from "../../runtime/client.ts";
+import { fetchSnapshot } from "../../runtime/client.ts";
+import { connectRuntime } from "../../runtime/lifecycle.ts";
 import { restoreWorkViews, saveWorkViews } from "../../runtime/work-view-preferences.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
 import { Workbench } from "../../app/ui/workbench.ts";
@@ -27,7 +28,6 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
   const options = {
     offline: true,
     stateRoot: join(fixture.directory, "state"),
-    entry: join(import.meta.dir, "..", "..", "index.ts"),
   };
 
   async function mount() {

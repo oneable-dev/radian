@@ -3,7 +3,8 @@ import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:f
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { WorkspaceSelection } from "../app/workspace-selection.ts";
-import { connectRuntime, fetchSnapshot, RuntimeClient } from "./client.ts";
+import { fetchSnapshot, RuntimeClient } from "./client.ts";
+import { connectRuntime } from "./lifecycle.ts";
 import { runtimePaths, pidAlive, privateDirectory, RuntimeStore } from "./storage.ts";
 import { replySchema, type RuntimeManifest, type RuntimeSnapshot } from "./protocol.ts";
 import { Value } from "typebox/value";
@@ -56,7 +57,6 @@ async function setup() {
   const options = {
     offline: true,
     stateRoot: join(fixture.directory, "state"),
-    entry: join(import.meta.dir, "..", "index.ts"),
   };
   const paths = runtimePaths(fixture.repository.id, true, options.stateRoot);
   const clients: RuntimeClient[] = [];

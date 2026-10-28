@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectError, expectOk } from "../testing/results.ts";
-import { connectRuntime } from "./client.ts";
+import { connectRuntime } from "./lifecycle.ts";
 import { pidAlive } from "./storage.ts";
 
 // Use only isolated services created here, never user credentials or services.
@@ -12,7 +12,6 @@ test("Real model-selection IPC preserves conversation/authentication runtimes wi
     await connectRuntime(fixture.repository, fixture.main, {
       offline: true,
       stateRoot: join(fixture.directory, "state"),
-      entry: join(import.meta.dir, "..", "index.ts"),
     }),
   );
   if (!connected) {

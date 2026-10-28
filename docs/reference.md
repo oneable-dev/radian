@@ -1219,8 +1219,12 @@ that service when ready. No service is automatically restarted. Snapshots are no
 with every terminal frame; an oversized snapshot is explicitly rejected at the 4 MiB safety limit.
 
 Closing a tab stops its shell and other processes in its **owned POSIX session**, including ordinary
-foreground/background development servers. Each tab retains a Bun supervisor as the
-session ownership anchor until its cleanup completes, including after shell exit. The runtime verifies
+foreground/background development servers. Each tab retains a **TerminalSupervisor** as the
+session ownership anchor until its cleanup completes, including after shell exit. The internal
+`--terminal-supervisor` mode runs ordinary TypeScript code, not a Bun `--eval` string. It requires
+parent IPC, starts no UI or SDK resources, and preserves the start/freeze cleanup handshake.
+Source children disable Bun configuration and dotenv loading; standalone builds apply the same
+policy at compile time. The runtime verifies
 the live anchor and kernel `getsid()` membership before signaling **individual positive PIDs only**. It never uses `ps sess`
 values or negative/group/broadcast kills, and refuses cleanup on lost ownership. Graceful termination
 is followed by bounded escalation for still-owned processes; failures remain tracked and are reported.
@@ -1634,6 +1638,14 @@ only the state root and live/test mode, not a repository or worktree. Unix socke
 (directory `0700`, socket `0600`); manifests/logs use private files. No TCP port is exposed.
 Repository-scoped Unix endpoints remain available for protocol compatibility, but every new endpoint
 is served by the **same Bun process**.
+
+`runtime/lifecycle.ts` owns daemon discovery, startup, readiness and repository registration.
+`runtime/client.ts` only communicates with existing endpoints and never spawns a process.
+The application bootstrap explicitly supplies the lifecycle connector to `WorkspaceClient`;
+metadata registration still does not activate repository SDKs, editors or terminals.
+`runtime/launch.ts` constructs child commands from an explicit source entrypoint or the compiled
+executable itself, never from the caller's `process.argv[1]` or working directory. Source and
+standalone execution share the same daemon protocol, state paths and ownership checks.
 
 Repository data stays at its existing `~/.radian/workspaces/<identity>/` location, keyed by canonical
 Git repository, state root and live/test mode. `workspace.json`, `sessions/` and `sdk-sessions/` do not
@@ -2059,7 +2071,7 @@ This is an incremental domain-oriented layout, not a requirement to give every f
 | `src/agents/ui/`          | Session tabs/status, Agent transcript/prompt/drafts/scroll and saved-History panel              |
 | `src/usage/`              | Provider-neutral account usage snapshots, shared polling/cache and isolated provider sources    |
 | `src/editor/`             | Worktree Neovim lifecycle and its UI panel                                                      |
-| `src/terminal/`           | Shell-tab lifecycle, ownership supervisor/cleanup and its UI panel                              |
+| `src/terminal/`           | Terminal-tab lifecycle, TerminalSupervisor/ownership cleanup and its UI panel                   |
 | `src/git/`                | Read-only Git queries, comparisons and Agent context; Git-specific rendering lives in `ui/`     |
 | `src/workspace/`          | Repository/worktree discovery, snapshot models and search projection                            |
 | `src/runtime/`            | Detached service, IPC, recovery, checkpoints and shared `pty/` implementation                   |

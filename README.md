@@ -228,7 +228,13 @@ implementation notes, including:
 ```sh
 bun run typecheck
 bun test
+bun run build
 ```
+
+`bun run build` creates `dist/radian` for the current operating system and CPU,
+including the Bun runtime. Git and Neovim remain external requirements. The build
+disables automatic project `.env` and `bunfig.toml` loading for deterministic
+startup; Radian settings and explicit provider authentication still apply.
 
 Tests that exercise embedded Neovim also require `nvim`. See the
 [reference guide](docs/reference.md#test-real-sdk-switching-without-a-paid-model)

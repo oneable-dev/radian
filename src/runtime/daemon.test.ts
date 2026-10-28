@@ -6,13 +6,8 @@ import { replySchema, type RuntimeSnapshot } from "./protocol.ts";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 import { WorkspaceClient } from "./workspace-client.ts";
-import {
-  connectRuntime,
-  defaultPreferences,
-  ensureSharedDaemon,
-  fetchSnapshot,
-  RuntimeClient,
-} from "./client.ts";
+import { defaultPreferences, fetchSnapshot, RuntimeClient } from "./client.ts";
+import { connectRuntime, ensureSharedDaemon } from "./lifecycle.ts";
 import {
   acquireRuntime,
   daemonPaths,
@@ -56,7 +51,7 @@ test("Concurrent registrations across repositories share one process with isolat
   const a = await createWorktreeFixture();
   const b = await createWorktreeFixture();
   const stateRoot = join(a.directory, "state");
-  const options = { offline: true, stateRoot, entry, start: false, register: true };
+  const options = { offline: true, stateRoot, start: false, register: true };
   const clients: RuntimeClient[] = [];
   try {
     // Competing startup requests converge on per-repository channels in one daemon.
@@ -161,7 +156,7 @@ test("Shared daemon catalogs detect worktrees without TUIs and retain drafts thr
   // Register SDK-free repositories and save only UI drafts.
   const fixture = await createWorktreeFixture();
   const stateRoot = join(fixture.directory, "state");
-  const options = { offline: true, stateRoot, entry };
+  const options = { offline: true, stateRoot };
   const paths = runtimePaths(fixture.repository.id, true, stateRoot);
   let workspace: WorkspaceClient | undefined;
   try {
@@ -179,7 +174,9 @@ test("Shared daemon catalogs detect worktrees without TUIs and retain drafts thr
         preferences: saved,
       }),
     );
-    workspace = expectOk(await WorkspaceClient.open([fixture.repository], fixture.main, options));
+    workspace = expectOk(
+      await WorkspaceClient.open([fixture.repository], fixture.main, options, connectRuntime),
+    );
 
     const preferences = workspace.snapshot.preferences;
     preferences.drafts.saved = "keep cold draft";
@@ -199,7 +196,9 @@ test("Shared daemon catalogs detect worktrees without TUIs and retain drafts thr
     );
 
     // Activation neither launches new processes nor resets per-repository drafts.
-    workspace = expectOk(await WorkspaceClient.open([fixture.repository], fixture.main, options));
+    workspace = expectOk(
+      await WorkspaceClient.open([fixture.repository], fixture.main, options, connectRuntime),
+    );
     expect(expectOk(await fetchSnapshot(paths))!.capabilities).toContain("repository-catalog");
     expectOk(await workspace.activate(added));
 
@@ -235,7 +234,6 @@ test("Shared daemons never steal live legacy ownership or overwrite saved files"
     const result = await connectRuntime(fixture.repository, fixture.main, {
       offline: true,
       stateRoot,
-      entry,
     });
 
     // Preserve ownership and source data rather than converting errors into empty state.
@@ -287,7 +285,7 @@ test("Closing shared owners block registration until sockets/locks release befor
       return Response.json(closing);
     },
   });
-  const starting = ensureSharedDaemon({ offline: true, stateRoot, entry });
+  const starting = ensureSharedDaemon({ offline: true, stateRoot });
   const observed = starting.then((result) => {
     settled = true;
 
@@ -353,7 +351,7 @@ test("runtime restart replaces shared processes outside Git and restores registe
   // Prepare restart commands from cwd unrelated to registered repositories.
   const fixture = await createWorktreeFixture();
   const stateRoot = join(fixture.directory, "state");
-  const options = { offline: true, stateRoot, entry, start: false, register: true };
+  const options = { offline: true, stateRoot, start: false, register: true };
   const client = expectOk(await connectRuntime(fixture.repository, fixture.main, options));
   if (!client) {
     throw new Error("Missing catalog.");

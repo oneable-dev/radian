@@ -6,13 +6,9 @@ import { demoWorkspace } from "../workspace/demo.ts";
 import { WorkspaceSelection } from "./workspace-selection.ts";
 import { submitAgentPrompt } from "./agent-prompt.ts";
 import type { Repository } from "../workspace/model.ts";
-import {
-  connectRuntime,
-  defaultPreferences,
-  ensureSharedDaemon,
-  fetchSnapshot,
-  RuntimeClient,
-} from "../runtime/client.ts";
+import { defaultPreferences, fetchSnapshot, RuntimeClient } from "../runtime/client.ts";
+import { connectRuntime, ensureSharedDaemon } from "../runtime/lifecycle.ts";
+import { selfLaunch, type SelfLaunch } from "../runtime/launch.ts";
 import { daemonPaths } from "../runtime/storage.ts";
 import type { RuntimePreferences, WorkViewPreferences } from "../runtime/protocol.ts";
 import { restoreWorkViews, saveWorkViews } from "../runtime/work-view-preferences.ts";
@@ -29,7 +25,10 @@ import type { ThemeOverrides } from "../ui/theme-config.ts";
 import { readTerminalProcessTitles } from "../terminal/process-titles.ts";
 import type { CliOptions as Options } from "./cli.ts";
 
-export async function main(options: Options): Promise<Result<void, ExpectedError>> {
+export async function main(
+  options: Options,
+  launch: SelfLaunch = selfLaunch(),
+): Promise<Result<void, ExpectedError>> {
   if (options.service) {
     const { runRuntime } = await import("../runtime/daemon.ts");
 
@@ -38,7 +37,7 @@ export async function main(options: Options): Promise<Result<void, ExpectedError
 
   const administrative = options.stop || options.status || options.restart;
   if (administrative) {
-    return runAdministrative(options);
+    return runAdministrative(options, launch);
   }
 
   const settings = await loadSettings({
@@ -79,11 +78,17 @@ export async function main(options: Options): Promise<Result<void, ExpectedError
 
   const connected =
     !options.demo && repositories.length
-      ? await WorkspaceClient.open(repositories, options.cwd, {
-          offline: options.offline,
-          ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
-          ...(options.config ? { config: options.config } : {}),
-        })
+      ? await WorkspaceClient.open(
+          repositories,
+          options.cwd,
+          {
+            offline: options.offline,
+            launch,
+            ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
+            ...(options.config ? { config: options.config } : {}),
+          },
+          connectRuntime,
+        )
       : ok(null);
   if (!connected.ok) {
     return connected;
@@ -115,7 +120,10 @@ export async function main(options: Options): Promise<Result<void, ExpectedError
 }
 
 // Ordinary lifecycle commands address the shared owner, independently of cwd or workspace roots.
-async function runAdministrative(options: Options): Promise<Result<void, ExpectedError>> {
+async function runAdministrative(
+  options: Options,
+  launch: SelfLaunch,
+): Promise<Result<void, ExpectedError>> {
   let client: RuntimeClient | null;
   if (options.legacy) {
     const discovered = await discoverRepository(options.cwd);
@@ -127,6 +135,7 @@ async function runAdministrative(options: Options): Promise<Result<void, Expecte
       offline: options.offline,
       ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
       start: false,
+      launch,
     });
     if (!connected.ok) {
       return connected;
@@ -211,6 +220,7 @@ async function runAdministrative(options: Options): Promise<Result<void, Expecte
     }
     if (options.restart) {
       const started = await ensureSharedDaemon({
+        launch,
         offline: options.offline,
         ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
       });

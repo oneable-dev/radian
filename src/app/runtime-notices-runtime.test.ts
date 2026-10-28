@@ -3,7 +3,8 @@ import { Terminal } from "@xterm/headless";
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectOk } from "../testing/results.ts";
-import { connectRuntime, fetchSnapshot, type RuntimeClient } from "../runtime/client.ts";
+import { fetchSnapshot, type RuntimeClient } from "../runtime/client.ts";
+import { connectRuntime } from "../runtime/lifecycle.ts";
 import { pidAlive } from "../runtime/storage.ts";
 
 test("Closing a session through the real service never emits shutdown progress notices", async () => {
@@ -27,7 +28,7 @@ test("Closing a session through the real service never emits shutdown progress n
   try {
     client =
       expectOk(
-        await connectRuntime(fixture.repository, fixture.main, { offline: true, stateRoot, entry }),
+        await connectRuntime(fixture.repository, fixture.main, { offline: true, stateRoot }),
       ) ?? undefined;
     if (!client) {
       throw new Error("Missing offline runtime.");

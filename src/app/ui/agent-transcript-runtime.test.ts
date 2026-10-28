@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { EditBufferRenderable } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { createWorktreeFixture } from "../../testing/worktree-fixture.ts";
-import { connectRuntime, fetchSnapshot } from "../../runtime/client.ts";
+import { fetchSnapshot } from "../../runtime/client.ts";
+import { connectRuntime } from "../../runtime/lifecycle.ts";
 import { restoreWorkViews, saveWorkViews } from "../../runtime/work-view-preferences.ts";
 import { RuntimeStore } from "../../runtime/storage.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
@@ -29,7 +30,6 @@ test("Real SDK/IPC folding, selection, and cursors restore the same run and sour
   const options = {
     offline: true,
     stateRoot: join(fixture.directory, "state"),
-    entry: join(import.meta.dir, "..", "..", "index.ts"),
   };
 
   async function mount() {

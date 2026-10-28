@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectError, expectOk } from "../testing/results.ts";
-import { connectRuntime } from "./client.ts";
+import { connectRuntime } from "./lifecycle.ts";
 import { daemonPaths, pidAlive, privateDirectory } from "./storage.ts";
 
 test("Real shared daemon IPC shares account lists while preserving selections, command reservation, and secrets", async () => {
@@ -40,7 +40,6 @@ test("Real shared daemon IPC shares account lists while preserving selections, c
     await connectRuntime(fixture.repository, fixture.main, {
       offline: true,
       stateRoot,
-      entry: join(import.meta.dir, "..", "index.ts"),
     }),
   );
   if (!client) {

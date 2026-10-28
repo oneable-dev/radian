@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectOk } from "../testing/results.ts";
 import { WorkspaceSelection } from "../app/workspace-selection.ts";
-import { connectRuntime, fetchSnapshot, type RuntimeClient } from "./client.ts";
+import { fetchSnapshot, type RuntimeClient } from "./client.ts";
+import { connectRuntime } from "./lifecycle.ts";
 import { WorkspaceClient } from "./workspace-client.ts";
 import { pidAlive, runtimePaths } from "./storage.ts";
 
@@ -24,7 +25,6 @@ async function fixtureRuntime() {
   const options = {
     offline: true,
     stateRoot: join(fixture.directory, "state"),
-    entry: join(import.meta.dir, "..", "index.ts"),
   };
   const paths = runtimePaths(fixture.repository.id, true, options.stateRoot);
   const clients: RuntimeClient[] = [];
@@ -188,7 +188,9 @@ test("Shared daemons watch SDK-inactive repositories and activate them in the sa
   const app = await fixtureRuntime();
   let workspace: WorkspaceClient | undefined;
   try {
-    workspace = expectOk(await WorkspaceClient.open([app.repository], app.main, app.options));
+    workspace = expectOk(
+      await WorkspaceClient.open([app.repository], app.main, app.options, connectRuntime),
+    );
 
     const catalog = expectOk(await fetchSnapshot(app.paths))!;
     expect(catalog.capabilities).toContain("repository-catalog");

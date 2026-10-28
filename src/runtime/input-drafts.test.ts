@@ -5,7 +5,8 @@ import { expandPromptDraft, type PromptDraft } from "../agents/prompt-input.ts";
 import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
 import { demoWorkspace } from "../workspace/demo.ts";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
-import { connectRuntime, fetchSnapshot } from "./client.ts";
+import { fetchSnapshot } from "./client.ts";
+import { connectRuntime } from "./lifecycle.ts";
 import { runtimePaths } from "./storage.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 
@@ -69,7 +70,6 @@ test("Real IPC attachment drafts restore after reconnect and legacy input replac
   const options = {
     offline: true,
     stateRoot: join(fixture.directory, "state"),
-    entry: join(import.meta.dir, "..", "index.ts"),
   };
   const paths = runtimePaths(fixture.repository.id, true, options.stateRoot);
   let client = expectOk(await connectRuntime(fixture.repository, fixture.main, options));

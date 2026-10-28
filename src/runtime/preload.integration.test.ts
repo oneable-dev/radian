@@ -5,7 +5,7 @@ import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectOk } from "../testing/results.ts";
 import { PreloadedData } from "../app/preload.ts";
 import { WorkspaceClient } from "./workspace-client.ts";
-import { connectRuntime } from "./client.ts";
+import { connectRuntime } from "./lifecycle.ts";
 import { daemonPaths, pidAlive, privateDirectory, runtimePaths } from "./storage.ts";
 
 function until(
@@ -37,7 +37,6 @@ test("Real history and account events refresh preloaded data without opening pop
   const options = {
     offline: true,
     stateRoot: join(fixture.directory, "preload-state"),
-    entry: join(import.meta.dir, "..", "index.ts"),
   };
   const accountDirectory = daemonPaths(true, options.stateRoot).directory;
 
@@ -61,7 +60,7 @@ test("Real history and account events refresh preloaded data without opening pop
   );
 
   const workspace = expectOk(
-    await WorkspaceClient.open([fixture.repository], fixture.main, options),
+    await WorkspaceClient.open([fixture.repository], fixture.main, options, connectRuntime),
   );
   const tree = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
   let data: PreloadedData | undefined;

@@ -53,7 +53,14 @@ test("Real help, version, invalid arguments, and non-TTY startup never read corr
     const pipe = await run(["--demo"], directory, config, state);
     expect(pipe.code).toBe(1);
     expect(pipe.stderr).toContain("requires a TTY");
-    for (const result of [help, version, invalid, pipe]) {
+
+    // Internal roles reject missing IPC before discovery, settings or SDK initialization.
+    const supervisor = await run(["--terminal-supervisor"], directory, config, state);
+    expect(supervisor.code).toBe(1);
+    expect(supervisor.stderr).toContain(
+      "[INVALID_INPUT] Terminal supervisor requires a parent IPC connection.",
+    );
+    for (const result of [help, version, invalid, pipe, supervisor]) {
       expect(result.stdout + result.stderr).not.toContain("\x1b");
     }
 

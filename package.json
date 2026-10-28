@@ -17,6 +17,7 @@
     "start": "bun src/index.ts",
     "dev": "bun src/index.ts",
     "restart": "bun src/index.ts runtime restart",
+    "build": "bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/index.ts --outfile dist/radian",
     "typecheck": "tsc --noEmit",
     "format": "bun fmt",
     "format:check": "bun fmt --check",

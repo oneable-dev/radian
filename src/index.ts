@@ -1,6 +1,7 @@
 import { checkInteractiveHost, parseCli } from "./app/cli.ts";
 import { reportUnexpected, type ExpectedError } from "./errors.ts";
 import { ok, type Result } from "./result.ts";
+import { selfLaunch } from "./runtime/launch.ts";
 
 async function run(): Promise<Result<void, ExpectedError>> {
   const parsed = parseCli(process.argv.slice(2));
@@ -27,11 +28,17 @@ async function run(): Promise<Result<void, ExpectedError>> {
     return host;
   }
 
+  // Internal terminal children must not initialize UI, SDK resources or user settings.
+  if (options.supervisor) {
+    const { runTerminalSupervisor } = await import("./terminal/terminal-supervisor.ts");
+    return runTerminalSupervisor();
+  }
+
   // Never initialize SDK/resources, scan roots, or attach/start a service for help,
   // version, invalid arguments, or an unsupported interactive host.
   const { main } = await import("./app/bootstrap.ts");
 
-  return main(options);
+  return main(options, selfLaunch(new URL(import.meta.url)));
 }
 
 try {

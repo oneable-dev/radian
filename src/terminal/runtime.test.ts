@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectOk } from "../testing/results.ts";
-import { connectRuntime, fetchSnapshot, type RuntimeClient } from "../runtime/client.ts";
+import { fetchSnapshot, type RuntimeClient } from "../runtime/client.ts";
+import { connectRuntime } from "../runtime/lifecycle.ts";
 import type { PtyFrame } from "../runtime/protocol.ts";
 import { restoreWorkViews, saveWorkViews } from "../runtime/work-view-preferences.ts";
 import { pidAlive } from "../runtime/storage.ts";
@@ -51,7 +52,6 @@ async function setup() {
   const options = {
     offline: true,
     stateRoot: join(fixture.directory, "state"),
-    entry: join(import.meta.dir, "..", "index.ts"),
   };
   const clients: RuntimeClient[] = [];
 

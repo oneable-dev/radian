@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
-import { connectRuntime, fetchSnapshot, type RuntimeClient } from "./client.ts";
+import { fetchSnapshot, type RuntimeClient } from "./client.ts";
+import { connectRuntime } from "./lifecycle.ts";
 import { pidAlive, RuntimeStore } from "./storage.ts";
 import { emptyPreferences, parseCommand, parseSnapshot, type RuntimeSnapshot } from "./protocol.ts";
 import { expectError, expectOk } from "../testing/results.ts";
@@ -35,7 +36,6 @@ async function fixture() {
   const options = {
     offline: true,
     stateRoot: join(app.directory, "state"),
-    entry: join(import.meta.dir, "..", "index.ts"),
   };
   const connect = async () => {
     const client = expectOk(await connectRuntime(app.repository, app.main, options));
