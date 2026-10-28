@@ -9,8 +9,9 @@ import { expectError, expectOk } from "../testing/results.ts";
 
 async function fixture(handler: string, onStart = "", extension = "") {
   const files = await createWorktreeFixture();
-  const agent = join(files.directory, "agent"),
-    extensions = join(agent, "extensions");
+  const agent = join(files.directory, "agent");
+  const extensions = join(agent, "extensions");
+
   await mkdir(extensions, { recursive: true });
   await writeFile(
     join(extensions, "ui.ts"),
@@ -20,6 +21,7 @@ async function fixture(handler: string, onStart = "", extension = "") {
     ${extension}
   }`,
   );
+
   const options = await offlineRuntime(agent);
   let models = 0;
   const registry = new SessionRegistry(
@@ -28,16 +30,22 @@ async function fixture(handler: string, onStart = "", extension = "") {
       ...options,
       streamFn: (...args) => {
         models++;
+
         return options.streamFn!(...args);
       },
     }),
   );
+
   registry.setUiActive(true);
+
   const id = expectOk(await registry.create(files.repository.worktrees[0]!.id));
   const conversation = registry.details(id)!.conversationId!;
   const current = () => registry.extensionUi.find((state) => state.sessionId === id);
   const waitFor = (predicate: () => boolean) => {
-    if (predicate()) return Promise.resolve();
+    if (predicate()) {
+      return Promise.resolve();
+    }
+
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         unsubscribe();
@@ -52,6 +60,7 @@ async function fixture(handler: string, onStart = "", extension = "") {
       });
     });
   };
+
   return {
     ...files,
     registry,
@@ -81,16 +90,19 @@ test("SDK commands admit interactive dialogs early and return select, confirm an
   `);
   try {
     expectOk(await app.registry.prompt(app.id, "read"));
-    const before = app.registry.details(app.id)?.sections,
-      modelCalls = app.models();
+
+    const before = app.registry.details(app.id)?.sections;
+    const modelCalls = app.models();
     const accepted = Promise.withResolvers<void>();
     let complete = false;
     const run = app.registry
       .prompt(app.id, "/ui-fixture", () => accepted.resolve())
       .then((result) => {
         complete = true;
+
         return result;
       });
+
     await accepted.promise;
     expect(complete).toBe(false);
     expect(app.current()?.dialog?.kind).toBe("select");
@@ -113,6 +125,7 @@ test("SDK commands admit interactive dialogs early and return select, confirm an
     expect(JSON.stringify(app.registry.checkpointRecords)).not.toContain(
       "https://example.test/auth",
     );
+
     const history = await readFile(app.registry.sessionFile(app.id)!, "utf8");
     expect(history).not.toContain("private-callback-fixture");
     expect(history).not.toContain("https://example.test/auth");
@@ -135,8 +148,12 @@ test("SDK extensions style startup statuses and authentication dialogs without a
 
     // The same hosted RPC context must remain usable after startup and resource reload.
     for (const reload of [false, true]) {
-      if (reload) expectOk(await app.registry.reload(app.id));
+      if (reload) {
+        expectOk(await app.registry.reload(app.id));
+      }
+
       expect(app.current()?.statuses.mcp).toContain("MCP ready");
+
       const run = app.registry.prompt(app.id, "/ui-fixture");
       await app.waitFor(() => !!app.current()?.dialog);
       expect(app.current()!.dialog!.title).toContain("Authenticate MCP");
@@ -223,6 +240,7 @@ async function mcpFixture(deferred = false, initialize = "publish();", shutdownS
       ? 'pi.events.emit("pi-mcp-adapter/status/v1", { version: 1, servers: [] });'
       : ""
     : "publish();";
+
   return fixture(
     `publish([{ name: _args, status: "needs-auth", disabled: false }]);`,
     startup,
@@ -257,10 +275,12 @@ test.each([false, true])(
     const app = await mcpFixture(deferred);
     try {
       expectOk(await app.registry.prompt(app.id, "read"));
-      const before = app.registry.details(app.id)?.sections,
-        models = app.models();
+
+      const before = app.registry.details(app.id)?.sections;
+      const models = app.models();
       const accepted = Promise.withResolvers<void>();
       const run = app.registry.prompt(app.id, "/mcp-auth   ", () => accepted.resolve());
+
       await accepted.promise;
 
       const picker = app.current()!.dialog!;
@@ -281,6 +301,7 @@ test.each([false, true])(
       expect(app.current()?.notifications.at(-1)?.message).toBe("Authenticated vercel");
       expect(app.models()).toBe(models);
       expect(app.registry.details(app.id)?.sections).toEqual(before);
+
       const history = await readFile(app.registry.sessionFile(app.id)!, "utf8");
       expect(history).not.toContain("private-mcp-callback");
       expect(history).not.toContain("/mcp-auth");
@@ -299,11 +320,16 @@ test.each(["escape", "interrupt", "detach", "close"] as const)(
       const run = app.registry.prompt(app.id, "/mcp-auth");
       await app.waitFor(() => app.current()?.dialog?.kind === "select");
 
-      if (action === "escape")
+      if (action === "escape") {
         expectOk(app.answer({ requestId: app.current()!.dialog!.id, cancelled: true }));
-      else if (action === "interrupt") expectOk(await app.registry.interrupt(app.id));
-      else if (action === "detach") app.registry.setUiActive(false);
-      else expectOk(await app.registry.close(app.id));
+      } else if (action === "interrupt") {
+        expectOk(await app.registry.interrupt(app.id));
+      } else if (action === "detach") {
+        app.registry.setUiActive(false);
+      } else {
+        expectOk(await app.registry.close(app.id));
+      }
+
       await run;
 
       expect(app.current()?.dialog).toBeUndefined();
@@ -358,17 +384,20 @@ test("MCP server snapshots stay session-local and reload discards previous choic
   try {
     const worktree = app.registry.snapshot[0]!.worktrees[0]!.id;
     const other = expectOk(await app.registry.create(worktree));
+
     expectOk(await app.registry.prompt(other, "/ui-fixture other-server"));
     expectOk(await app.registry.prompt(app.id, "/ui-fixture old-server"));
     expectOk(await app.registry.reload(app.id));
 
-    const first = app.registry.prompt(app.id, "/mcp-auth"),
-      second = app.registry.prompt(other, "/mcp-auth");
+    const first = app.registry.prompt(app.id, "/mcp-auth");
+    const second = app.registry.prompt(other, "/mcp-auth");
+
     await app.waitFor(
       () =>
         !!app.current()?.dialog &&
         !!app.registry.extensionUi.find((state) => state.sessionId === other)?.dialog,
     );
+
     const otherUi = app.registry.extensionUi.find((state) => state.sessionId === other)!;
 
     expect(app.current()?.mcp).toEqual({ servers: 2, needsAuth: 1, errors: 0 });
@@ -433,6 +462,7 @@ test("Extension responses reject stale conversations, invalid choices and duplic
   try {
     const run = app.registry.prompt(app.id, "/ui-fixture");
     await app.waitFor(() => !!app.current()?.dialog);
+
     const requestId = app.current()!.dialog!.id;
 
     // Rejected responses must leave the original prompt pending.
@@ -465,9 +495,14 @@ test.each(["interrupt", "detach", "close"] as const)(
       const run = app.registry.prompt(app.id, "/ui-fixture");
       await app.waitFor(() => !!app.current()?.dialog);
 
-      if (action === "interrupt") expectOk(await app.registry.interrupt(app.id));
-      else if (action === "close") expectOk(await app.registry.close(app.id));
-      else app.registry.setUiActive(false);
+      if (action === "interrupt") {
+        expectOk(await app.registry.interrupt(app.id));
+      } else if (action === "close") {
+        expectOk(await app.registry.close(app.id));
+      } else {
+        app.registry.setUiActive(false);
+      }
+
       await run;
 
       expect(app.current()?.dialog).toBeUndefined();
@@ -502,9 +537,11 @@ test("Command failures after dialog admission remain visible without echoing ent
   try {
     const accepted = Promise.withResolvers<void>();
     const run = app.registry.prompt(app.id, "/ui-fixture", () => accepted.resolve());
+
     await accepted.promise;
 
     expectOk(app.answer({ requestId: app.current()!.dialog!.id, value: "private-error-callback" }));
+
     const failure = expectError(await run);
 
     expect(failure.code).toBe("AGENT_FAILED");
@@ -545,6 +582,7 @@ test("Pi subagent RPC widgets update only their originating session while detach
   try {
     const worktree = app.registry.snapshot[0]!.worktrees[0]!.id;
     const other = expectOk(await app.registry.create(worktree));
+
     app.registry.setUiActive(false);
 
     expectOk(await app.registry.prompt(app.id, "/ui-fixture"));
@@ -552,6 +590,7 @@ test("Pi subagent RPC widgets update only their originating session while detach
     // Status continues independently of dialogs, UI attachment, and model turns.
     const sessions = () => app.registry.snapshot[0]!.worktrees[0]!.sessions;
     const children = sessions().find((session) => session.id === app.id)!.subagents;
+
     expect(children).toHaveLength(1);
     expect(children[0]).toMatchObject({ name: "Pi reviewer", status: "working", source: "pi" });
     expect(children[0]?.runTiming?.elapsedMs).toBeGreaterThanOrEqual(24000);
@@ -588,8 +627,10 @@ test("Late Pi child identity events replace task labels only in their originatin
     const children = (id: string) =>
       app.registry.snapshot[0]!.worktrees[0]!.sessions.find((session) => session.id === id)!
         .subagents;
+
     app.registry.setUiActive(false);
     expectOk(await app.registry.prompt(app.id, "/ui-fixture"));
+
     const elapsed = children(app.id)[0]!.runTiming!.elapsedMs;
 
     expectOk(await app.registry.prompt(app.id, "/ui-fixture identity"));

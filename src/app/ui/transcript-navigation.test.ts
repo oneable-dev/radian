@@ -15,6 +15,7 @@ const toolSections = (): TranscriptSection[] => [
   { id: "tool", kind: "tool", title: "read", text: toolText, status: "complete" },
   { id: "after", kind: "assistant", title: "Agent", text: "AFTER", status: "complete" },
 ];
+
 async function mount(sections = toolSections(), actions: Partial<WorkbenchActions> = {}) {
   const app = await createTestRenderer({
     width: 110,
@@ -22,8 +23,8 @@ async function mount(sections = toolSections(), actions: Partial<WorkbenchAction
     kittyKeyboard: true,
     exitOnCtrlC: false,
   });
-  const copied: string[] = [],
-    sent: string[] = [];
+  const copied: string[] = [];
+  const sent: string[] = [];
   const selection = new WorkspaceSelection(demoWorkspace());
   const view = new Workbench(app.renderer, selection, {
     onNewSession() {},
@@ -31,10 +32,12 @@ async function mount(sections = toolSections(), actions: Partial<WorkbenchAction
     initialDrafts: { a1: "retained draft" },
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     onCopyTranscript: async (text) => {
       copied.push(text);
+
       return ok("Copied");
     },
     getSessionDetails: () => ({ status: "complete", output: "", error: null, sections }),
@@ -44,14 +47,23 @@ async function mount(sections = toolSections(), actions: Partial<WorkbenchAction
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   const scroll = app.renderer.root.findDescendantById("session-transcript");
-  if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript");
+  if (!(scroll instanceof ScrollBoxRenderable)) {
+    throw new Error("Missing transcript");
+  }
+
   const reader = () => {
     const focused = app.renderer.currentFocusedRenderable;
-    if (!(focused instanceof EditBufferRenderable)) throw new Error("Missing reader");
+    if (!(focused instanceof EditBufferRenderable)) {
+      throw new Error("Missing reader");
+    }
+
     return focused;
   };
+
   return {
     ...app,
     selection,
@@ -94,8 +106,10 @@ test("Half/full-page section jumps select by rendered distance without opening w
   const app = await mount(sections);
   try {
     await app.sections();
-    const half = Math.floor(app.scroll.viewport.height / 4),
-      full = Math.floor((app.scroll.viewport.height - 1) / 2);
+
+    const half = Math.floor(app.scroll.viewport.height / 4);
+    const full = Math.floor((app.scroll.viewport.height - 1) / 2);
+
     app.mockInput.pressKey("d", { ctrl: true });
     await app.render();
     expect(app.state()?.selectedId).toBe(`s${half}`);
@@ -126,6 +140,7 @@ test("Folding keeps Text mode and restores the body cursor when reopened", async
   try {
     await app.tool();
     app.reader().setCursor(25, 3);
+
     const offset = app.reader().cursorOffset;
     app.mockInput.pressKey("o", { ctrl: true });
     await app.render();
@@ -213,6 +228,7 @@ test("Full-page Text movement reads expanded output rather than skipping its sec
   try {
     await app.tool();
     app.reader().gotoBufferHome();
+
     const page = app.scroll.viewport.height - 1;
     app.mockInput.pressKey("f", { ctrl: true });
     await app.render();
@@ -268,6 +284,7 @@ test("An expanded heading reader survives warm restoration with its own cursor",
   } finally {
     await app.close();
   }
+
   const next = await mount(toolSections(), { initialWorkViews: preferences });
   try {
     pressLeader(next, "[");

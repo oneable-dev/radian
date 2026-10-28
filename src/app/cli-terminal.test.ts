@@ -4,11 +4,12 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const entry = join(import.meta.dir, "..", "index.ts");
+
 async function terminalRun(args: string[], directory: string, extra: NodeJS.ProcessEnv = {}) {
-  let raw = "",
-    ready = false,
-    detached = false,
-    timedOut = false;
+  let raw = "";
+  let ready = false;
+  let detached = false;
+  let timedOut = false;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     TERM: "xterm-256color",
@@ -16,8 +17,10 @@ async function terminalRun(args: string[], directory: string, extra: NodeJS.Proc
     RADIAN_STATE_DIR: join(directory, "state"),
     ...extra,
   };
+
   delete env.FORCE_COLOR;
   delete env.CLICOLOR_FORCE;
+
   const child = Bun.spawn([process.execPath, entry, ...args], {
     cwd: directory,
     env,
@@ -41,12 +44,14 @@ async function terminalRun(args: string[], directory: string, extra: NodeJS.Proc
   }, 8000);
   try {
     const code = await child.exited;
+
     return { code, raw, ready, timedOut };
   } finally {
     clearTimeout(timer);
     child.terminal?.close();
   }
 }
+
 function coloredSGR(raw: string): boolean {
   // oxlint-disable-next-line eslint/no-control-regex -- Detect actual ANSI SGR bytes captured from a real PTY.
   return [...raw.matchAll(/\x1b\[([\d;:]*)m/gu)].some((match) =>
@@ -80,6 +85,7 @@ test("Real PTYs render monochrome with --no-color and NO_COLOR, then detach and 
       expect(result.raw).toContain("\x1b[?1049l");
       expect(result.raw).toContain("\x1b[?25h");
     }
+
     const colored = await terminalRun(["--demo"], directory, { NO_COLOR: "" });
     expect(colored.code).toBe(0);
     expect(colored.ready).toBe(true);

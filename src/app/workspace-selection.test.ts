@@ -92,6 +92,7 @@ test("Final removal and empty-worktree selection never automatically create sess
 
   // Removing the final item leaves the same shape as an initially empty worktree.
   remove(selection, "demo:feature", "b1");
+
   const closedSession = selection.sessionId;
   selection.selectWorktree("demo:empty");
 
@@ -109,6 +110,7 @@ test("Workspace lists retain session data while displaying only repository/workt
   const rows = workspaceRows(fixture);
 
   const main = rows.find((row) => row.key === "worktree:demo:main");
+
   expect(main?.label).toBe("radian");
   expect(main?.kind === "worktree" ? main.worktree.branch : null).toBe("main");
   expect(rows.map((row) => row.depth)).toEqual([0, 1, 1, 1]);
@@ -139,6 +141,7 @@ test("Late-connected repositories restore saved sessions without switching curre
     ),
   }));
   const selection = new WorkspaceSelection(cold);
+
   selection.selectWorktree("demo:feature");
 
   // Late connection retains current selection while remembering previously selected A2.

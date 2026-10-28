@@ -35,6 +35,7 @@ async function mount() {
         registry.create(id).then((result) => {
           const sessionId = expectOk(result);
           onCreated?.(sessionId);
+
           return sessionId;
         }),
       );
@@ -45,21 +46,27 @@ async function mount() {
     onPrompt: (id, text) => {
       const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
       const run = registry.prompt(id, text, () => accepted.resolve(ok(undefined)));
+
       prompts.push({
         id,
         text,
         accepted: accepted.promise,
         done: run.then((result) => {
           accepted.resolve(result);
-          if (!result.ok && result.error.code !== "CANCELLED") expectOk(result);
+          if (!result.ok && result.error.code !== "CANCELLED") {
+            expectOk(result);
+          }
         }),
       });
+
       return accepted.promise;
     },
     getSessionDetails: (id) => registry.details(id),
   });
   const unsubscribe = registry.subscribe(() => selection.replaceSnapshot(registry.snapshot));
+
   await setup.renderOnce();
+
   return {
     ...setup,
     ...fixture,
@@ -75,19 +82,24 @@ async function mount() {
         setup.mockInput.pressCtrlC();
         await setup.renderOnce();
       }
+
       const lines = setup.captureCharFrame().split("\n");
       const y = lines.findIndex((line) => line.includes(text));
       const x = lines[y]?.indexOf(text) ?? -1;
-      if (x < 0 || y < 0)
+      if (x < 0 || y < 0) {
         throw new Error(`Missing visible text: ${text}\n${setup.captureCharFrame()}`);
+      }
+
       await setup.mockMouse.click(x, y);
       await setup.renderOnce();
     },
     async newSession() {
       setup.mockInput.pressKey(" ", { ctrl: true });
       setup.mockInput.pressKey("c");
+
       const id = await creation.at(-1)!;
       await setup.renderOnce();
+
       return id;
     },
     async send(text: string) {
@@ -144,6 +156,7 @@ test("Real worktree UI explicitly creates sessions and routes input to each SDK 
     app.mockInput.pressEscape();
     await app.click(`${icons.folder} feature`);
     expect(app.captureCharFrame()).toContain("No AI sessions");
+
     const feature = await app.newSession();
     await app.send("read");
 
@@ -165,12 +178,14 @@ test("Per-worktree drafts/focus survive background SDK updates and searches", as
     await app.mockInput.typeText("main draft");
     app.mockInput.pressEscape();
     await app.click(`${icons.folder} feature`);
+
     const feature = await app.newSession();
     pressLeader(app, "a");
     await app.mockInput.typeText("feature draft");
     app.mockInput.pressEscape();
     await app.click(`${icons.folder} main`);
     pressLeader(app, "a");
+
     const input = app.renderer.currentFocusedRenderable;
 
     // Hidden SDK updates must not reset the selected session's persistent input or cursor.
@@ -203,9 +218,11 @@ test("Closing active runs immediately shows empty UI without recreating final se
     const id = await app.newSession();
     const childStarted = Promise.withResolvers<void>();
     const unsubscribe = app.registry.subscribe(() => {
-      if (app.selection.worktree?.sessions[0]?.subagents[0]?.status === "working")
+      if (app.selection.worktree?.sessions[0]?.subagents[0]?.status === "working") {
         childStarted.resolve();
+      }
     });
+
     pressLeader(app, "a");
     await app.mockInput.typeText("delegate");
     app.mockInput.pressEnter();

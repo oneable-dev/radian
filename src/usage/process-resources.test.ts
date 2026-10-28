@@ -91,12 +91,13 @@ test("Runtime restarts and invalid intervals never produce negative or lifetime 
 test("Recent resource samples stay bounded by time and count without double-counting the UI PID", () => {
   // The rolling view is transient and cannot accumulate an unbounded session history.
   const history = new ResourceHistory();
-  for (let second = 0; second <= 120; second++)
+  for (let second = 0; second <= 120; second++) {
     history.add(
       sample(1, second * 1000, second * 100),
       sample(2, second * 1000, second * 200),
       second * 1000,
     );
+  }
 
   history.add(sample(1, 121000, 13000), sample(1, 121000, 13000), 121000);
 

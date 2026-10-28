@@ -8,6 +8,7 @@ export type SessionControl =
   | { action: "exit" }
   | { action: "reload" }
   | { action: "compact"; instructions?: string };
+
 export const sessionControlCommands: readonly CompletionItem[] = [
   {
     kind: "command",
@@ -42,11 +43,16 @@ export const sessionControlCommands: readonly CompletionItem[] = [
 // actions must never fall through to SDK prompt/template expansion or the model.
 export function parseSessionControl(text: string): Result<SessionControl | null, InputError> {
   const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/u.exec(text);
-  if (!match || !sessionControlCommands.some((item) => item.value === match[1])) return ok(null);
+  if (!match || !sessionControlCommands.some((item) => item.value === match[1])) {
+    return ok(null);
+  }
+
   const instructions = match[2]?.trim();
-  if (match[1] === "new" || match[1] === "clear" || match[1] === "exit" || match[1] === "reload")
+  if (match[1] === "new" || match[1] === "clear" || match[1] === "exit" || match[1] === "reload") {
     return instructions
       ? err(new InputError(`Usage: /${match[1]} (no arguments).`))
       : ok({ action: match[1] === "new" ? "new-tab" : match[1] });
+  }
+
   return ok({ action: "compact", ...(instructions ? { instructions } : {}) });
 }

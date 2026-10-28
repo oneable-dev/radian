@@ -13,6 +13,7 @@ export class SecretInput extends BoxRenderable {
   private secret = "";
   private caret = 0;
   private readonly mask: TextRenderable;
+
   constructor(renderer: CliRenderer) {
     super(renderer, { id: "accounts-secret", height: 1, width: "100%", focusable: true });
     this.mask = new TextRenderable(renderer, {
@@ -28,20 +29,27 @@ export class SecretInput extends BoxRenderable {
       paintText(this.mask, styles["ui.label"]);
     });
   }
+
   get value(): string {
     return this.secret;
   }
+
   clear(): void {
     this.secret = "";
     this.caret = 0;
     this.paint();
   }
+
   private paint(): void {
-    if (this.mask.isDestroyed) return;
+    if (this.mask.isDestroyed) {
+      return;
+    }
+
     this.mask.content = this.secret
       ? "•".repeat(Math.min(this.secret.length, 100))
       : "Paste or type the credential…";
   }
+
   private insert(value: string): void {
     // oxlint-disable-next-line eslint/no-control-regex -- Credentials accept printable input only, including on paste.
     const text = value.replace(/[\r\n\x00-\x1f\x7f]/gu, "");
@@ -52,38 +60,51 @@ export class SecretInput extends BoxRenderable {
     this.caret = Math.min(this.secret.length, this.caret + text.length);
     this.paint();
   }
+
   handlePaste(event: PasteEvent): void {
     event.preventDefault();
     event.stopPropagation();
     this.insert(new TextDecoder().decode(event.bytes));
   }
+
   handleKeyPress(key: KeyEvent): boolean {
-    if (key.eventType === "release") return false;
-    if (key.name === "left") this.caret = Math.max(0, this.caret - 1);
-    else if (key.name === "right") this.caret = Math.min(this.secret.length, this.caret + 1);
-    else if (key.name === "home" || (key.ctrl && key.name === "a")) this.caret = 0;
-    else if (key.name === "end" || (key.ctrl && key.name === "e")) this.caret = this.secret.length;
-    else if (key.ctrl && ["c", "u"].includes(key.name)) this.clear();
-    else if (key.name === "backspace") {
+    if (key.eventType === "release") {
+      return false;
+    }
+    if (key.name === "left") {
+      this.caret = Math.max(0, this.caret - 1);
+    } else if (key.name === "right") {
+      this.caret = Math.min(this.secret.length, this.caret + 1);
+    } else if (key.name === "home" || (key.ctrl && key.name === "a")) {
+      this.caret = 0;
+    } else if (key.name === "end" || (key.ctrl && key.name === "e")) {
+      this.caret = this.secret.length;
+    } else if (key.ctrl && ["c", "u"].includes(key.name)) {
+      this.clear();
+    } else if (key.name === "backspace") {
       if (this.caret) {
         this.secret = this.secret.slice(0, this.caret - 1) + this.secret.slice(this.caret);
         this.caret--;
       }
-    } else if (key.name === "delete")
+    } else if (key.name === "delete") {
       this.secret = this.secret.slice(0, this.caret) + this.secret.slice(this.caret + 1);
-    else if (
+    } else if (
       !key.ctrl &&
       !key.meta &&
       !key.option &&
       key.sequence &&
       // oxlint-disable-next-line eslint/no-control-regex -- Native control-key sequences must not become credential text.
       !/[\x00-\x1f\x7f]/u.test(key.sequence)
-    )
+    ) {
       this.insert(key.sequence);
-    else return false;
+    } else {
+      return false;
+    }
+
     key.preventDefault();
     key.stopPropagation();
     this.paint();
+
     return true;
   }
 }

@@ -61,7 +61,10 @@ export class SessionPreview {
     this.body = new PopupBody(renderer, `${id}-preview-pane`, this.panel.root);
     this.body.root.focusable = true;
     this.body.root.onMouseDown = (event) => {
-      if (event.button !== 0) return;
+      if (event.button !== 0) {
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
       this.focusTarget.focus();
@@ -72,6 +75,7 @@ export class SessionPreview {
   get focusTarget(): Renderable {
     return this.panel.root.visible && this.transcript.visible ? this.transcript : this.body.root;
   }
+
   get focused(): boolean {
     return this.body.root.focused || this.panel.root.hasFocusedDescendant;
   }
@@ -106,7 +110,9 @@ export class SessionPreview {
     this.focusPending = false;
     this.panel.update(null, null, new Set(), false);
     this.body.showEmpty(message);
-    if (focused && visible) this.body.root.focus();
+    if (focused && visible) {
+      this.body.root.focus();
+    }
   }
 
   hide(): void {
@@ -118,9 +124,14 @@ export class SessionPreview {
   }
 
   private focusReady = (): void => {
-    if (!this.focusPending || !this.body.root.visible || !this.panel.root.visible) return;
+    if (!this.focusPending || !this.body.root.visible || !this.panel.root.visible) {
+      return;
+    }
+
     this.focusPending = false;
-    if (this.body.root.focused || !this.renderer.currentFocusedRenderable) this.focusTarget.focus();
+    if (this.body.root.focused || !this.renderer.currentFocusedRenderable) {
+      this.focusTarget.focus();
+    }
   };
 
   dispose(): void {

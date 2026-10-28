@@ -32,6 +32,7 @@ const history = (): TranscriptSection[] => [
     status: "complete",
   },
 ];
+
 async function mount(
   initial: ExecutionState = {
     status: "complete",
@@ -41,8 +42,8 @@ async function mount(
   },
   preferences?: WorkViewPreferences,
 ) {
-  const clock = new ManualClock(),
-    app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
   let current = initial;
   const snapshot = () =>
     demoWorkspace().map((repo) => ({
@@ -55,13 +56,14 @@ async function mount(
       })),
     }));
   const selection = new WorkspaceSelection(snapshot());
-  const copied: string[] = [],
-    sent: string[] = [];
+  const copied: string[] = [];
+  const sent: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {},
     onCloseSession: () => {},
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     getSessionDetails: (id) => (id === "a1" ? current : null),
@@ -69,6 +71,7 @@ async function mount(
     ...(preferences ? { initialWorkViews: preferences } : {}),
     onCopyTranscript: async (text) => {
       copied.push(text);
+
       return ok("Copied to clipboard");
     },
   });
@@ -76,12 +79,18 @@ async function mount(
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
+
   return {
     ...app,
     clock,
@@ -93,9 +102,10 @@ async function mount(
     get,
     state: () => view.workViewPreferences.agentViews?.[selection.sessionId ?? ""],
     tabStatus(id = "a1") {
-      const tab = `session:demo:main:${id}`,
-        number = get(`${tab}:number`),
-        title = get(`${tab}:title`);
+      const tab = `session:demo:main:${id}`;
+      const number = get(`${tab}:number`);
+      const title = get(`${tab}:title`);
+
       return app
         .captureCharFrame()
         .split("\n")
@@ -115,9 +125,12 @@ async function mount(
       await render();
     },
     async clickSummary() {
-      const lines = app.captureCharFrame().split("\n"),
-        y = lines.findIndex((line) => line.includes("[Context compacted]"));
-      if (y < 0) throw new Error(`Missing compaction heading\n${app.captureCharFrame()}`);
+      const lines = app.captureCharFrame().split("\n");
+      const y = lines.findIndex((line) => line.includes("[Context compacted]"));
+      if (y < 0) {
+        throw new Error(`Missing compaction heading\n${app.captureCharFrame()}`);
+      }
+
       await app.mockMouse.click(lines[y]!.indexOf("[Context compacted]"), y);
       await render();
     },
@@ -149,10 +162,12 @@ test.each([false, true])(
     };
     const app = await mount(compacting);
     try {
-      const status = app.get("agent-run-status-text"),
-        prompt = app.get("session-prompt");
+      const status = app.get("agent-run-status-text");
+      const prompt = app.get("session-prompt");
+
       pressLeader(app, "a");
       await app.render();
+
       const label = () =>
         app
           .captureCharFrame()
@@ -279,6 +294,7 @@ test("User-expanded compaction summaries remain expanded across snapshots and UI
   } finally {
     await app.close();
   }
+
   const next = await mount(undefined, preferences);
   try {
     // New renderables restore folding from UI preferences, not model conversations.

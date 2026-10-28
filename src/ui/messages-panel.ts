@@ -27,6 +27,7 @@ type Actions = {
   copy(message: Message): void;
   hint(command: CommandId, context: KeyContext): string;
 };
+
 type Row = { root: BoxRenderable; text: TextRenderable };
 
 export class MessagesPanel {
@@ -83,6 +84,7 @@ export class MessagesPanel {
     });
     this.panel.add(this.layout.root);
     this.root.add(this.panel);
+
     const theme = uiTheme(renderer);
     theme.scrollbars(this.list);
     theme.bindStyles(this.root, (styles) => {
@@ -96,15 +98,19 @@ export class MessagesPanel {
     this.resize();
     this.root.once(RenderableEvents.DESTROYED, () => this.dispose());
   }
+
   get visible(): boolean {
     return !this.disposed && !this.root.isDestroyed && this.root.visible;
   }
+
   get context(): KeyContext {
     return this.search.focused ? "messages-search" : "messages";
   }
+
   get focusTargets(): Renderable[] {
     return [this.search, this.list];
   }
+
   get shortcuts(): readonly FooterShortcut[] {
     return (
       [
@@ -117,8 +123,12 @@ export class MessagesPanel {
       label,
     }));
   }
+
   show(): void {
-    if (this.disposed || this.visible) return;
+    if (this.disposed || this.visible) {
+      return;
+    }
+
     this.owner = this.renderer.currentFocusedRenderable ?? undefined;
     this.root.visible = true;
     this.cursor = 0;
@@ -128,9 +138,14 @@ export class MessagesPanel {
     this.search.focus();
     this.actions.changed();
   }
+
   hide(restore = true): void {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
+
     this.root.visible = false;
+
     const owner = this.owner;
     this.owner = undefined;
     if (restore) {
@@ -139,31 +154,47 @@ export class MessagesPanel {
         let node: Renderable | null = owner ?? null;
         node;
         node = node.parent as Renderable | null
-      )
+      ) {
         available &&= node.visible;
-      if (available && owner) owner.focus();
-      else this.actions.fallback();
+      }
+      if (available && owner) {
+        owner.focus();
+      } else {
+        this.actions.fallback();
+      }
     }
+
     this.actions.changed();
   }
+
   private filter = (): void => {
     this.cursor = 0;
     this.items = [];
     this.refresh();
   };
+
   refresh(): void {
-    if (!this.visible) return;
-    const selected = this.items[this.cursor]?.id,
-      matches = createTextMatcher(this.search.value);
+    if (!this.visible) {
+      return;
+    }
+
+    const selected = this.items[this.cursor]?.id;
+    const matches = createTextMatcher(this.search.value);
+
     this.items = this.messages.items.filter((item) =>
       matches(messageText(`${item.level} ${item.title ?? ""} ${item.source} ${item.text}`)),
     );
     this.search.setCounts({ matched: this.items.length, total: this.messages.items.length });
+
     const previous = this.items.findIndex((item) => item.id === selected);
     this.cursor =
       previous >= 0 ? previous : Math.max(0, Math.min(this.cursor, this.items.length - 1));
-    for (const row of this.rows) row.root.destroyRecursively();
+    for (const row of this.rows) {
+      row.root.destroyRecursively();
+    }
+
     this.rows.length = 0;
+
     const width = Math.max(
       0,
       getPopupSize(POPUP_SIZES.standard, this.renderer.width, this.renderer.height).width - 2,
@@ -198,10 +229,12 @@ export class MessagesPanel {
         selectable: false,
         content: `${heading}\n${preview}`,
       });
+
       root.add(text);
       this.list.add(root);
       this.rows.push({ root, text });
     }
+
     this.layout.results.showEmpty(
       !this.items.length
         ? this.search.value
@@ -211,65 +244,99 @@ export class MessagesPanel {
     );
     this.paint();
   }
+
   private paint(): void {
     const styles = uiTheme(this.renderer).styles;
     for (const [index, row] of this.rows.entries()) {
       row.root.backgroundColor = styles[index === this.cursor ? "ui.selection" : "ui.popup"].bg;
       paintText(row.text, styles[`status.${this.items[index]!.level}`]);
     }
+
     const selected = this.rows[this.cursor];
-    if (selected) this.list.scrollChildIntoView(selected.root.id);
+    if (selected) {
+      this.list.scrollChildIntoView(selected.root.id);
+    }
   }
+
   command(command: CommandId): void {
-    if (!this.visible) return;
-    if (command === "messages.dismiss") {
-      this.hide();
+    if (!this.visible) {
       return;
     }
+    if (command === "messages.dismiss") {
+      this.hide();
+
+      return;
+    }
+
     const item = this.items[this.cursor];
     if (command === "messages.open") {
-      if (item) this.actions.details(item);
+      if (item) {
+        this.actions.details(item);
+      }
+
       return;
     }
     if (command === "messages.copy") {
-      if (item) this.actions.copy(item);
+      if (item) {
+        this.actions.copy(item);
+      }
+
       return;
     }
     if (command === "messages.search") {
       this.search.focus();
+
       return;
     }
-    if (command === "messages.next" || command === "messages.previous")
+    if (command === "messages.next" || command === "messages.previous") {
       this.cursor += command === "messages.next" ? 1 : -1;
-    else if (command === "messages.first") this.cursor = 0;
-    else if (command === "messages.last") this.cursor = this.items.length - 1;
-    else if (command === "messages.half-page-up" || command === "messages.half-page-down") {
-      if (this.search.focused) this.list.focus();
+    } else if (command === "messages.first") {
+      this.cursor = 0;
+    } else if (command === "messages.last") {
+      this.cursor = this.items.length - 1;
+    } else if (command === "messages.half-page-up" || command === "messages.half-page-down") {
+      if (this.search.focused) {
+        this.list.focus();
+      }
+
       this.cursor +=
         (command === "messages.half-page-up" ? -1 : 1) * halfPageStep(this.list.viewport.height, 2);
-    } else return;
+    } else {
+      return;
+    }
+
     this.cursor = Math.max(0, Math.min(this.items.length - 1, this.cursor));
     this.paint();
     this.actions.changed();
   }
+
   private keepFocus = (): void => {
     if (
       !this.visible ||
       this.search.isDestroyed ||
       this.list.isDestroyed ||
       this.renderer.root.findDescendantById("text-dialog")?.visible
-    )
+    ) {
       return;
+    }
     for (
       let node = this.renderer.currentFocusedRenderable;
       node;
       node = node.parent as Renderable | null
-    )
-      if (node === this.root) return;
+    ) {
+      if (node === this.root) {
+        return;
+      }
+    }
+
     this.search.focus();
   };
+
   private resize = (): void => {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     const { height } = centerPopup(
       this.panel,
       POPUP_SIZES.standard,
@@ -277,15 +344,23 @@ export class MessagesPanel {
       this.renderer.height,
     );
     this.search.fit(height - 3);
-    if (this.visible) this.refresh();
+    if (this.visible) {
+      this.refresh();
+    }
   };
+
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.hide(false);
     this.disposed = true;
     this.search.off(InputRenderableEvents.INPUT, this.filter);
     this.renderer.off("resize", this.resize);
     this.renderer.off("focused_renderable", this.keepFocus);
-    if (!this.root.isDestroyed) this.root.destroyRecursively();
+    if (!this.root.isDestroyed) {
+      this.root.destroyRecursively();
+    }
   }
 }

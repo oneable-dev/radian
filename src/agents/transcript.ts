@@ -22,6 +22,7 @@ import {
 type AgentMessage = AgentSession["messages"][number];
 
 export type TranscriptKind = "user" | "assistant" | "thinking" | "tool" | "notice";
+
 export type TranscriptStatus =
   | "complete"
   | "streaming"
@@ -30,6 +31,7 @@ export type TranscriptStatus =
   | "error"
   | "cancelled"
   | "unfinished";
+
 export type TranscriptSection = {
   readonly id: string;
   readonly kind: TranscriptKind;
@@ -46,12 +48,14 @@ export type TranscriptSection = {
   readonly request?: RequestSummary;
   readonly image?: TranscriptImage;
 };
+
 type Message = {
   id: string;
   message: AgentMessage;
   streaming: boolean;
   noticeStatus?: TranscriptStatus;
 };
+
 type Tool = {
   name: string;
   arguments: unknown;
@@ -66,39 +70,53 @@ function contentText(
   return typeof content === "string"
     ? content
     : content
-        .map((part) =>
-          part.type === "text"
-            ? (part.text ?? "")
-            : part.type === "image"
-              ? `[Image: ${part.mimeType ?? "attachment"}]`
-              : "",
-        )
+        .map((part) => {
+          if (part.type === "text") {
+            return part.text ?? "";
+          } else if (part.type === "image") {
+            return `[Image: ${part.mimeType ?? "attachment"}]`;
+          } else {
+            return "";
+          }
+        })
         .join("");
 }
+
 export function toolResultText(result: unknown): string {
   if (
     !result ||
     typeof result !== "object" ||
     !("content" in result) ||
     !Array.isArray(result.content)
-  )
+  ) {
     return "";
+  }
+
   return result.content
     .flatMap((part: unknown) => {
-      if (!part || typeof part !== "object" || !("type" in part)) return [];
-      if (part.type === "text" && "text" in part && typeof part.text === "string")
+      if (!part || typeof part !== "object" || !("type" in part)) {
+        return [];
+      }
+      if (part.type === "text" && "text" in part && typeof part.text === "string") {
         return [part.text];
-      if (part.type === "image") return ["[Image attachment]"];
+      }
+      if (part.type === "image") {
+        return ["[Image attachment]"];
+      }
+
       return [];
     })
     .join("");
 }
+
 function summary(text: string): string {
   return text.replace(/\s+/g, " ").slice(0, 160);
 }
+
 function invocation(text: string): string {
   return text.length <= 4096 ? text : text.slice(0, 4095).replace(/[\uD800-\uDBFF]$/, "") + "…";
 }
+
 function toolSection(id: string, callId: string, tool: Tool): TranscriptSection {
   const args = JSON.stringify(tool.arguments ?? {}, null, 2);
   const input =
@@ -135,6 +153,7 @@ function toolSection(id: string, callId: string, tool: Tool): TranscriptSection 
       ? input.timeout
       : undefined;
   const error = tool.error && !tool.text.includes(tool.error) ? `\n\nError:\n${tool.error}` : "";
+
   return {
     id,
     kind: "tool",
@@ -170,14 +189,16 @@ export class SessionTranscript {
     private readonly clock: RunClock = systemRunClock,
   ) {
     for (const entry of entries) {
-      if (entry.type === "message")
+      if (entry.type === "message") {
         this.messages.push({ id: entry.id, message: entry.message, streaming: false });
-      else if (entry.type === "custom" && entry.customType === runCompletionEntryType) {
-        const parsed = parseRunCompletion(entry.data),
-          previous = this.messages.at(-1);
+      } else if (entry.type === "custom" && entry.customType === runCompletionEntryType) {
+        const parsed = parseRunCompletion(entry.data);
+        const previous = this.messages.at(-1);
         if (parsed.ok) {
-          if (previous) this.completions.set(previous.id, parsed.value);
-        } else
+          if (previous) {
+            this.completions.set(previous.id, parsed.value);
+          }
+        } else {
           this.messages.push({
             id: entry.id,
             streaming: false,
@@ -189,14 +210,16 @@ export class SessionTranscript {
               timestamp: Date.parse(entry.timestamp),
             },
           });
+        }
       } else if (entry.type === "custom" && entry.customType === imageNamesEntryType) {
         const restored = this.images.restore(entry.data);
-        if (!restored.ok)
+        if (!restored.ok) {
           this.notice(
             "Image metadata unavailable",
             `[${restored.error.code}] ${restored.error.message}`,
           );
-      } else if (entry.type === "custom_message")
+        }
+      } else if (entry.type === "custom_message") {
         this.messages.push({
           id: entry.id,
           streaming: false,
@@ -208,7 +231,7 @@ export class SessionTranscript {
             timestamp: Date.parse(entry.timestamp),
           },
         });
-      else if (entry.type === "compaction" || entry.type === "branch_summary")
+      } else if (entry.type === "compaction" || entry.type === "branch_summary") {
         this.messages.push({
           id: entry.id,
           streaming: false,
@@ -220,6 +243,7 @@ export class SessionTranscript {
             timestamp: Date.parse(entry.timestamp),
           },
         });
+      }
     }
   }
 
@@ -245,22 +269,28 @@ export class SessionTranscript {
         break;
       }
       case "message_update":
-        if (this.current) this.current.message = event.message;
+        if (this.current) {
+          this.current.message = event.message;
+        }
         break;
       case "message_end":
         if (this.current) {
           this.current.message = event.message;
           this.current.streaming = false;
           this.current = undefined;
-        } else
+        } else {
           this.messages.push({
             id: `live:${crypto.randomUUID()}`,
             message: event.message,
             streaming: false,
           });
-        if (event.message.role === "assistant")
+        }
+        if (event.message.role === "assistant") {
           for (const part of event.message.content) {
-            if (part.type !== "toolCall" || this.tools.has(part.id)) continue;
+            if (part.type !== "toolCall" || this.tools.has(part.id)) {
+              continue;
+            }
+
             const reason = event.message.stopReason;
             this.tools.set(part.id, {
               name: part.name,
@@ -270,6 +300,7 @@ export class SessionTranscript {
               ...(event.message.errorMessage ? { error: event.message.errorMessage } : {}),
             });
           }
+        }
         break;
       case "tool_execution_start":
         this.tools.set(event.toolCallId, {
@@ -290,6 +321,7 @@ export class SessionTranscript {
       case "tool_execution_end": {
         const previous = this.tools.get(event.toolCallId);
         const text = toolResultText(event.result);
+
         this.tools.set(event.toolCallId, {
           name: event.toolName,
           arguments: previous?.arguments ?? {},
@@ -300,9 +332,12 @@ export class SessionTranscript {
         break;
       }
       case "agent_settled": {
-        for (const tool of this.tools.values())
-          if (tool.status === "running" || tool.status === "pending")
+        for (const tool of this.tools.values()) {
+          if (tool.status === "running" || tool.status === "pending") {
             tool.status = event.aborted ? "cancelled" : "unfinished";
+          }
+        }
+
         const run = this.run;
         this.run = undefined;
         this.cached = undefined;
@@ -311,27 +346,38 @@ export class SessionTranscript {
             .slice(run.messageIndex)
             .findLast(({ message }) => message.role === "assistant")?.message;
           const reason = last?.role === "assistant" ? last.stopReason : undefined;
+
+          const startedAt = run.startedAt;
+          const completedAt = this.clock.wallTime();
+          const durationMs = Math.max(0, Math.round(this.clock.monotonicTime() - run.monotonic));
+          let outcome: RunCompletion["outcome"];
+          if (event.aborted || reason === "aborted") {
+            outcome = "cancelled";
+          } else if (reason === "error") {
+            outcome = "error";
+          } else if (reason === "stop" || reason === "length") {
+            outcome = "complete";
+          } else {
+            outcome = "unfinished";
+          }
+
           completion = {
-            startedAt: run.startedAt,
-            completedAt: this.clock.wallTime(),
-            durationMs: Math.max(0, Math.round(this.clock.monotonicTime() - run.monotonic)),
-            outcome:
-              event.aborted || reason === "aborted"
-                ? "cancelled"
-                : reason === "error"
-                  ? "error"
-                  : reason === "stop" || reason === "length"
-                    ? "complete"
-                    : "unfinished",
+            startedAt,
+            completedAt,
+            durationMs,
+            outcome,
           };
           this.completions.set(this.messages.at(-1)!.id, completion);
         }
+
         break;
       }
       default:
         return;
     }
+
     this.cached = undefined;
+
     return completion;
   }
 
@@ -352,29 +398,40 @@ export class SessionTranscript {
   }
 
   warnCompletion(completion: RunCompletion, warning: string): void {
-    for (const [id, value] of this.completions)
-      if (value === completion)
+    for (const [id, value] of this.completions) {
+      if (value === completion) {
         this.completions.set(id, { ...value, warning: warning.slice(0, 512) });
+      }
+    }
+
     this.cached = undefined;
   }
 
   rememberImages(images: readonly ImageContent[], paths: readonly string[]) {
     this.cached = undefined;
+
     return this.images.remember(images, paths);
   }
+
   imageData(id: string) {
     void this.sections;
+
     return this.images.read(id);
   }
 
   get sections(): readonly TranscriptSection[] {
-    if (this.cached) return this.cached;
+    if (this.cached) {
+      return this.cached;
+    }
+
     this.images.clearReferences();
+
     const tools = new Map(this.tools);
-    for (const { message } of this.messages)
+    for (const { message } of this.messages) {
       if (message.role === "toolResult") {
         const previous = tools.get(message.toolCallId);
         const text = contentText(message.content);
+
         tools.set(message.toolCallId, {
           name: message.toolName,
           arguments: previous?.arguments,
@@ -383,6 +440,8 @@ export class SessionTranscript {
           ...(message.isError ? { error: text || "Tool failed" } : {}),
         });
       }
+    }
+
     const sections: TranscriptSection[] = [];
     const seenTools = new Set<string>();
     for (const { id, message, streaming, noticeStatus } of this.messages) {
@@ -398,11 +457,11 @@ export class SessionTranscript {
               : message.content
                   .flatMap((part) => (part.type === "text" ? [part.text] : []))
                   .join("");
-          const text = requestDisplayText(prose, images.length),
-            skill = parseSkillBlock(text),
-            start = sections.length;
+          const text = requestDisplayText(prose, images.length);
+          const skill = parseSkillBlock(text);
+          const start = sections.length;
           if (!skill) {
-            if (text || !images.length)
+            if (text || !images.length) {
               sections.push({
                 id,
                 kind: "user",
@@ -411,9 +470,11 @@ export class SessionTranscript {
                 status: "complete",
                 request: summarizeRequest(prose, images.length),
               });
+            }
           } else {
             const name = skill.name.replace(/\s+/g, " ").trim() || "Skill";
             const requestProse = skill.userMessage || `/skill:${name}`;
+
             // Instructions stay in SDK history; only invocation metadata and the user's request are visible.
             sections.push({
               id: `${id}:skill`,
@@ -426,7 +487,7 @@ export class SessionTranscript {
                 ? { request: summarizeRequest(`/skill:${name}`, images.length) }
                 : {}),
             });
-            if (skill.userMessage)
+            if (skill.userMessage) {
               sections.push({
                 id: `${id}:request`,
                 kind: "user",
@@ -435,6 +496,7 @@ export class SessionTranscript {
                 status: "complete",
                 request: summarizeRequest(requestProse, images.length),
               });
+            }
           }
           for (const [index, block] of images.entries()) {
             if (
@@ -452,6 +514,7 @@ export class SessionTranscript {
               });
               continue;
             }
+
             const image = this.images.describe(block, index);
             sections.push({
               id: `${id}:image:${index}`,
@@ -466,17 +529,21 @@ export class SessionTranscript {
                 : {}),
             });
           }
+
           break;
         }
         case "assistant": {
           const cancelled = message.stopReason === "aborted";
-          const status = streaming
-            ? "streaming"
-            : cancelled
-              ? "cancelled"
-              : message.stopReason === "error"
-                ? "error"
-                : "complete";
+          let status: TranscriptStatus;
+          if (streaming) {
+            status = "streaming";
+          } else if (cancelled) {
+            status = "cancelled";
+          } else if (message.stopReason === "error") {
+            status = "error";
+          } else {
+            status = "complete";
+          }
           const error = cancelled ? undefined : message.errorMessage;
           const start = sections.length;
           for (const [index, part] of message.content.entries()) {
@@ -488,7 +555,7 @@ export class SessionTranscript {
                   : part.redacted
                     ? "[Thinking redacted]"
                     : part.thinking;
-              if (text)
+              if (text) {
                 sections.push({
                   id: blockId,
                   kind: part.type === "text" ? "assistant" : "thinking",
@@ -497,6 +564,7 @@ export class SessionTranscript {
                   status,
                   ...(error ? { error: summary(error) } : {}),
                 });
+              }
             } else if (part.type === "toolCall") {
               const tool = tools.get(part.id);
               sections.push(
@@ -519,7 +587,7 @@ export class SessionTranscript {
           }
           // Retain a metadata-only boundary for timing/history when cancellation has no prose.
           // The transcript reader omits this marker; the work-status row owns its presentation.
-          if (cancelled && sections.length === start)
+          if (cancelled && sections.length === start) {
             sections.push({
               id,
               kind: "notice",
@@ -527,7 +595,7 @@ export class SessionTranscript {
               text: "",
               status: "cancelled",
             });
-          else if (!message.content.length && error)
+          } else if (!message.content.length && error) {
             sections.push({
               id,
               kind: "notice",
@@ -536,6 +604,8 @@ export class SessionTranscript {
               error: summary(error),
               status,
             });
+          }
+
           break;
         }
         case "toolResult":
@@ -556,7 +626,7 @@ export class SessionTranscript {
           });
           break;
         case "custom":
-          if (message.display)
+          if (message.display) {
             sections.push({
               id,
               kind: "notice",
@@ -564,6 +634,7 @@ export class SessionTranscript {
               text: contentText(message.content),
               status: noticeStatus ?? "complete",
             });
+          }
           break;
         case "compactionSummary":
         case "branchSummary":
@@ -578,11 +649,16 @@ export class SessionTranscript {
         case "system":
           break;
       }
-      const completion = this.completions.get(id),
-        last = sections.at(-1);
-      if (completion && last) sections[sections.length - 1] = { ...last, completion };
+
+      const completion = this.completions.get(id);
+      const last = sections.at(-1);
+      if (completion && last) {
+        sections[sections.length - 1] = { ...last, completion };
+      }
     }
+
     this.cached = sections;
+
     return sections;
   }
 }

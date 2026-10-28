@@ -55,6 +55,7 @@ test("Corrupt manifests never become empty success or overwritten source", async
   try {
     await privateDirectory(paths.directory);
     await writeFile(paths.manifest, '{"version":99}', { mode: 0o600 });
+
     const store = new RuntimeStore(paths);
 
     // Refuse the incompatible file rather than creating a new empty checkpoint.
@@ -73,6 +74,7 @@ test("Manifests save atomically and cannot restore another repository's state", 
   const paths = runtimePaths("/repo/.git", true, root);
   try {
     await privateDirectory(paths.directory);
+
     const store = new RuntimeStore(paths);
     const first: RuntimeManifest = {
       version: protocolVersion,

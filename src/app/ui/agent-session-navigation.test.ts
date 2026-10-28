@@ -24,8 +24,8 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     })),
   }));
   const selection = new WorkspaceSelection(repositories);
-  const requests: string[] = [],
-    saved: unknown[] = [];
+  const requests: string[] = [];
+  const saved: unknown[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: (tree) => requests.push(`new:${tree}`),
     onCloseSession: (tree, id) => {
@@ -46,6 +46,7 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     },
     onPrompt: (id, text) => {
       requests.push(`prompt:${id}:${text}`);
+
       return ok(undefined);
     },
     getSessionDetails: (id) => ({ status: "complete", error: null, output: `BODY-${id}` }),
@@ -57,12 +58,18 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
+
   return {
     ...app,
     clock,
@@ -74,20 +81,26 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     get,
     region(id: string) {
       const node = get(id);
+
       return app
         .captureCharFrame()
         .split("\n")
         .slice(node.y, node.y + node.height)
         .map((line) => {
           // Native geometry uses cells, while frame strings contain variable-width graphemes.
-          let text = "",
-            column = 0;
+          let text = "";
+          let column = 0;
           for (const { segment } of graphemes.segment(line)) {
             const start = column;
             column += Bun.stringWidth(segment);
-            if (start >= node.x && column <= node.x + node.width) text += segment;
-            if (column >= node.x + node.width) break;
+            if (start >= node.x && column <= node.x + node.width) {
+              text += segment;
+            }
+            if (column >= node.x + node.width) {
+              break;
+            }
           }
+
           return text;
         })
         .join("\n");
@@ -103,10 +116,14 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
         app.mockInput.pressCtrlC();
         await render();
       }
-      const lines = app.captureCharFrame().split("\n"),
-        y = lines.findIndex((line) => line.includes(label));
+
+      const lines = app.captureCharFrame().split("\n");
+      const y = lines.findIndex((line) => line.includes(label));
       const x = lines[y]?.indexOf(label) ?? -1;
-      if (x < 0) throw new Error(`Missing ${label}\n${app.captureCharFrame()}`);
+      if (x < 0) {
+        throw new Error(`Missing ${label}\n${app.captureCharFrame()}`);
+      }
+
       await app.mockMouse.click(x + 1, y);
       await render();
     },
@@ -211,8 +228,9 @@ test("Session status uses the same cell and unknown states reclaim empty status 
   // Execution, completion, and failure glyphs differ but share coordinates.
   const app = await mount();
   const ordered = (id: string, title: string, glyphs: readonly string[]) => {
-    const text = app.region(id),
-      position = text.indexOf(title);
+    const text = app.region(id);
+    const position = text.indexOf(title);
+
     expect(position).toBeGreaterThanOrEqual(0);
     expect(text.startsWith("  ")).toBe(true);
     expect(glyphs).toContain(text[5]!);
@@ -242,12 +260,16 @@ test("Tabs keep one-cell inner/outer padding and spacing between numbers, status
   try {
     // Native cell positions include both edge gutters without enlarging the close button.
     for (const id of ["a1", "a2", "a3"]) {
-      const tab = app.get(`session:demo:main:${id}`),
-        close = app.get(`close-session:${id}`);
+      const tab = app.get(`session:demo:main:${id}`);
+      const close = app.get(`close-session:${id}`);
       const [number, status, title] = tab.getChildren();
+
       expect(app.region(tab.id).startsWith(`  ${id.slice(1)}. `)).toBe(true);
       expect(number!.x).toBe(tab.x + 2);
-      if (status!.visible) expect(status!.x).toBe(number!.x + number!.width + 1);
+      if (status!.visible) {
+        expect(status!.x).toBe(number!.x + number!.width + 1);
+      }
+
       expect(title!.x).toBe(
         status!.visible ? status!.x + status!.width + 1 : number!.x + number!.width + 1,
       );
@@ -256,8 +278,10 @@ test("Tabs keep one-cell inner/outer padding and spacing between numbers, status
       expect(close.x + close.width).toBe(tab.x + tab.width - 1);
       expect(app.region(tab.id).endsWith("× ")).toBe(true);
     }
-    const first = app.get("session:demo:main:a1"),
-      second = app.get("session:demo:main:a2");
+
+    const first = app.get("session:demo:main:a1");
+    const second = app.get("session:demo:main:a2");
+
     expect(second.x).toBe(first.x + first.width);
     expect(app.view.promptDrafts.a1).toBe("main draft");
     expect(app.requests).toEqual([]);
@@ -276,10 +300,11 @@ test.each([
     // A short run settles before the spinner's 500 ms minimum interval has elapsed.
     const app = await mount();
     try {
-      const tab = app.get("session:demo:main:a1"),
-        close = app.get("close-session:a1"),
-        title = app.get(`${tab.id}:title`);
+      const tab = app.get("session:demo:main:a1");
+      const close = app.get("close-session:a1");
+      const title = app.get(`${tab.id}:title`);
       const geometry = [tab.x, tab.width, title.x, close.x];
+
       app.clock.advance(120);
       await app.render();
       expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[5])).toBe(true);
@@ -297,13 +322,22 @@ test.each([
         })),
       );
       await app.render();
+
       const prefix = () => app.region(tab.id).slice(5, app.region(tab.id).indexOf("a1")).trim();
-      if (status === "failure") expect(app.region(tab.id)).toBe(`  1. ${glyph} a1       × `);
-      else expect(spinnerFrames.some((frame) => frame === prefix())).toBe(true);
+      if (status === "failure") {
+        expect(app.region(tab.id)).toBe(`  1. ${glyph} a1       × `);
+      } else {
+        expect(spinnerFrames.some((frame) => frame === prefix())).toBe(true);
+      }
+
       app.clock.advance(379);
       await app.render();
-      if (status === "failure") expect(app.region(tab.id)).toBe(`  1. ${glyph} a1       × `);
-      else expect(spinnerFrames.some((frame) => frame === prefix())).toBe(true);
+      if (status === "failure") {
+        expect(app.region(tab.id)).toBe(`  1. ${glyph} a1       × `);
+      } else {
+        expect(spinnerFrames.some((frame) => frame === prefix())).toBe(true);
+      }
+
       app.clock.advance(1);
       await app.render();
 
@@ -321,6 +355,7 @@ test.each([
         expect(app.region(tab.id)[6]).toBe(" ");
         expect([tab.x, tab.width, title.x, close.x]).toEqual(geometry);
       }
+
       expect(app.region(tab.id).startsWith("  1. ")).toBe(true);
       expect(app.region(tab.id).endsWith("× ")).toBe(true);
       expect(app.view.promptDrafts.a1).toBe("main draft");
@@ -375,10 +410,12 @@ test("Subagent details belong only to the selected session and status changes pr
   try {
     pressLeader(app, "a");
     await app.render();
-    const tab = app.get("session:demo:main:a1"),
-      input = app.get("agent-composer"),
-      row = app.get("transcript-status-row");
+
+    const tab = app.get("session:demo:main:a1");
+    const input = app.get("agent-composer");
+    const row = app.get("transcript-status-row");
     const geometry = [tab.x, tab.y, tab.width, input.y, row.y, row.height];
+
     expect(app.region("transcript-status-row")).not.toContain("Completed");
     expect(app.region("transcript-status-row")).toContain("UI review · Working");
     app.clock.advance(160);
@@ -489,15 +526,21 @@ test("Narrow tabs show IDs instead of long Unicode names while retaining close/s
     );
     app.resize(60, 12);
     await app.render();
-    const tab = app.get("session:demo:main:a1"),
-      close = app.get("close-session:a1");
+
+    const tab = app.get("session:demo:main:a1");
+    const close = app.get("close-session:a1");
+
     expect(tab.width).toBeLessThanOrEqual(app.get("agent-session-list").width);
     expect(app.region(tab.id).startsWith("  1. ")).toBe(true);
     expect(app.region(tab.id).endsWith("× ")).toBe(true);
     expect(spinnerFrames.some((frame) => frame === app.region(tab.id)[5])).toBe(true);
     expect(close.x + close.width).toBe(tab.x + tab.width - 1);
+
     const title = app.get(`${tab.id}:title`);
-    if (!(title instanceof TextRenderable)) throw new Error("Missing session ID label");
+    if (!(title instanceof TextRenderable)) {
+      throw new Error("Missing session ID label");
+    }
+
     expect(title.plainText).toBe("a1");
     expect(app.region(tab.id)).not.toContain("연결");
     expect(app.captureCharFrame()).not.toContain("\uFFFD");

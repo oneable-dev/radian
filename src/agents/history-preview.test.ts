@@ -26,10 +26,13 @@ const message = (id: string, parentId: string | null, role: string, content: unk
   timestamp: header.timestamp,
   message: { role, content },
 });
+
 async function fixture(records: unknown[]) {
-  const directory = await mkdtemp(join(tmpdir(), "radian-history-preview-")),
-    path = join(directory, "session.jsonl");
+  const directory = await mkdtemp(join(tmpdir(), "radian-history-preview-"));
+  const path = join(directory, "session.jsonl");
+
   await writeFile(path, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+
   return {
     path,
     async close() {
@@ -67,6 +70,7 @@ test("Previews read only the current branch's latest SDK sections without changi
   try {
     const before = await readFile(app.path, "utf8");
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
+
     expect(preview.sections?.map((section) => section.kind)).toEqual([
       "user",
       "user",
@@ -102,6 +106,7 @@ test("Return only the latest 15 sections using Agent tool, error, and redaction 
     entries.push(message(`a${i}`, parent, "assistant", [{ type: "text", text: `Step ${i}` }]));
     parent = `a${i}`;
   }
+
   entries.push(
     message("work", parent, "assistant", [
       {
@@ -124,6 +129,7 @@ test("Return only the latest 15 sections using Agent tool, error, and redaction 
     },
   });
   entries.push(message("final", "result", "assistant", [{ type: "text", text: "Latest answer" }]));
+
   const app = await fixture(entries);
   try {
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
@@ -167,6 +173,7 @@ test("The latest 15 sections span earlier turns and restore only saved model and
       });
       parent = "effort";
     }
+
     entries.push({
       ...message(`a${turn}`, parent, "assistant", [{ type: "text", text: `Answer ${turn}` }]),
       message: {
@@ -178,6 +185,7 @@ test("The latest 15 sections span earlier turns and restore only saved model and
     });
     parent = `a${turn}`;
   }
+
   const app = await fixture(entries);
   try {
     const before = await readFile(app.path, "utf8");
@@ -269,6 +277,7 @@ test("Saved previews preserve Bash commands and timeouts without applying summar
   try {
     const before = await readFile(app.path, "utf8");
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
+
     // Restoring commands and timeouts must not open writers or modify history.
     expect(preview.sections?.at(-1)).toMatchObject({ kind: "tool", command, timeoutSeconds: 120 });
     expect(await readFile(app.path, "utf8")).toBe(before);
@@ -300,6 +309,7 @@ test("Recent completion metadata is retained but never attached to new unanswere
   try {
     const before = await readFile(app.path, "utf8");
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
+
     expect(preview.sections).toHaveLength(2);
     expect(preview.sections?.at(-1)?.completion).toEqual(completion);
     expect(await readFile(app.path, "utf8")).toBe(before);
@@ -307,6 +317,7 @@ test("Recent completion metadata is retained but never attached to new unanswere
       app.path,
       before + JSON.stringify(message("next", "completed", "user", "Unanswered")) + "\n",
     );
+
     const next = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
     expect(next.sections?.map((section) => section.text)).toEqual([
       "Question",
@@ -403,6 +414,7 @@ test("Version 2 hook messages convert in memory into recent sections", async () 
   try {
     const before = await readFile(app.path, "utf8");
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
+
     expect(preview.sections?.at(-1)).toMatchObject({
       kind: "notice",
       title: "Legacy extension",
@@ -464,6 +476,7 @@ test("Oversized legacy histories return completed recent turns with truncation i
   try {
     const before = await readFile(app.path, "utf8");
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
+
     expect(preview.sections?.map((section) => section.text)).toEqual([
       "CURRENT QUESTION",
       "Current plan",
@@ -588,6 +601,7 @@ test("Out-of-order tool results find their calls and preserve Agent section orde
     });
     parent = `result-${id}`;
   }
+
   const app = await fixture(entries);
   try {
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
@@ -612,13 +626,16 @@ test("CRLF and missing final LF preserve Unicode while active cancellation retur
   ]);
   try {
     await writeFile(app.path, (await readFile(app.path, "utf8")).replace(/\n/g, "\r\n").trimEnd());
+
     const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
     expect(preview.sections?.map((section) => section.text)).toEqual([
       "한글 😀\nsecond line",
       "답변 👨‍👩‍👧‍👦",
     ]);
-    const abort = new AbortController(),
-      pending = readHistoryPreview(app.path, "tree", "saved", abort.signal);
+
+    const abort = new AbortController();
+    const pending = readHistoryPreview(app.path, "tree", "saved", abort.signal);
+
     abort.abort();
     expect(expectError(await pending).code).toBe("CANCELLED");
   } finally {
@@ -642,6 +659,7 @@ test("Returned sections report size limits, truncation, and cancellation explici
         .map((value) => JSON.stringify(value))
         .join("\n"),
     );
+
     const unicode = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
     expect(unicode.sections?.[0]?.text.length).toBe(historyPreviewSectionLimit - 1);
     expect(unicode.sections?.[0]?.text.endsWith("x")).toBe(true);
@@ -650,6 +668,7 @@ test("Returned sections report size limits, truncation, and cancellation explici
     expect(expectError(await readHistoryPreview(app.path, "tree", "saved")).code).toBe(
       "HISTORY_CORRUPT",
     );
+
     const abort = new AbortController();
     abort.abort();
     expect(

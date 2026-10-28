@@ -17,18 +17,24 @@ export function monitoredSessions(
   repositories: readonly Repository[],
   query = "",
 ): MonitoredSession[] {
-  const unread: MonitoredSession[] = [],
-    running: MonitoredSession[] = [],
-    matches = createTextMatcher(query);
-  for (const repository of repositories)
-    for (const tree of repository.worktrees)
+  const unread: MonitoredSession[] = [];
+  const running: MonitoredSession[] = [];
+  const matches = createTextMatcher(query);
+  for (const repository of repositories) {
+    for (const tree of repository.worktrees) {
       for (const session of tree.sessions) {
         const working =
           session.status === "working" ||
           session.subagents.some((child) => child.status === "working");
-        if (!working && !session.attention) continue;
+        if (!working && !session.attention) {
+          continue;
+        }
+
         const title = session.request?.text || session.attention?.request?.text || session.name;
-        if (!matches(`${title} ${repository.name} ${tree.name} ${tree.branch ?? ""}`)) continue;
+        if (!matches(`${title} ${repository.name} ${tree.name} ${tree.branch ?? ""}`)) {
+          continue;
+        }
+
         (session.attention ? unread : running).push({
           session,
           worktreeId: tree.id,
@@ -39,6 +45,9 @@ export function monitoredSessions(
           working,
         });
       }
+    }
+  }
+
   // Stable within each group so streaming/progress updates cannot reorder candidates under the cursor.
   return [...unread, ...running];
 }

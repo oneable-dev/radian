@@ -16,6 +16,7 @@ test("Clipboard images are stored privately and read as actual image blocks", as
     expect(cached.kind).toBe("image");
     expect((await stat(cached.path)).mode & 0o777).toBe(0o600);
     expect(await readFile(cached.path)).toEqual(pixelPng);
+
     const images = expectOk(await loadPromptImages([cached.path]));
 
     expect(images).toHaveLength(1);
@@ -30,9 +31,11 @@ test("Clipboard images are stored privately and read as actual image blocks", as
 test("Image prevalidation never fixes original bytes to low resolution before model resize settings", async () => {
   const root = await mkdtemp(join(tmpdir(), "radian-image-profile-"));
   try {
-    const original = tinyPng(3000),
-      path = join(root, "wide.png");
+    const original = tinyPng(3000);
+    const path = join(root, "wide.png");
+
     await writeFile(path, original);
+
     const images = expectOk(await loadPromptImages([path]));
     expect(Buffer.from(images[0]!.data, "base64")).toEqual(original);
   } finally {

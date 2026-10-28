@@ -26,6 +26,7 @@ import { CommandDiagnostics } from "./session-commands.ts";
 import { PiSessionExecutor } from "./pi-session-adapter.ts";
 
 type Script = (request: SimpleStreamOptions | undefined, model: Model<Api>) => Promise<void>;
+
 async function mount(
   script: Script,
   extensions: InlineExtension[] = [],
@@ -35,6 +36,7 @@ async function mount(
   const directory = await mkdtemp(join(tmpdir(), "radian-telemetry-"));
   const options = await offlineRuntime(directory);
   const modelRuntime = options.modelRuntime!;
+
   modelRuntime.registerProvider("telemetry-fixture", {
     api: "openai-codex-responses",
     baseUrl: "http://127.0.0.1:1",
@@ -51,6 +53,7 @@ async function mount(
       },
     ],
   });
+
   const model = modelRuntime.getModel("telemetry-fixture", "model-fixture")!;
   const settingsManager = SettingsManager.inMemory({
     compaction: { enabled: false },
@@ -67,7 +70,9 @@ async function mount(
     noThemes: true,
     extensionFactories: [...(fast ? [fast.extension] : []), ...extensions],
   });
+
   await resourceLoader.reload();
+
   const { session } = await createAgentSession({
     cwd: directory,
     agentDir: directory,
@@ -80,23 +85,29 @@ async function mount(
   });
   session.agent.streamFunction = async (model, _context, request) => {
     await script(request, model);
+
     const stream = createAssistantMessageEventStream();
     const message = fixtureMessage(model.api, model.provider, model.id);
+
     message.content = [{ type: "text", text: "Fixture completed without a network request." }];
     message.usage.input = 72000;
     message.usage.totalTokens = 72000;
     stream.push({ type: "done", reason: "stop", message });
     stream.end();
+
     return stream;
   };
+
   const diagnostics = new CommandDiagnostics();
   await session.bindExtensions({ onError: diagnostics.report });
+
   const original = {
     payload: session.agent.onPayload,
     response: session.agent.onResponse,
     event: session.agent.onProviderStreamEvent,
   };
   const executor = new PiSessionExecutor(session, usage, diagnostics, fast);
+
   return {
     executor,
     session,
@@ -117,8 +128,8 @@ const headers = (reset: number): Record<string, string> => ({
 
 test("Fast defaults off before model calls and changes state and transport tier only through explicit commands", async () => {
   const fast = new FastMode();
-  let requests = 0,
-    outgoing: unknown;
+  let requests = 0;
+  let outgoing: unknown;
   const app = await mount(
     async (request, model) => {
       requests++;
@@ -131,6 +142,7 @@ test("Fast defaults off before model calls and changes state and transport tier 
   try {
     expect(app.executor.state.telemetry?.fast).toBe(false);
     expect(app.executor.commands().filter((command) => command.value === "fast")).toHaveLength(1);
+
     const before = app.session.messages.length;
 
     expectOk(await app.executor.prompt("/fast on"));
@@ -169,9 +181,13 @@ test.each([false, true])(
     const statuses: ("working" | "complete" | "failure" | null)[] = [];
     let unsubscribe = () => {};
     try {
-      if (seeded) expectOk(await app.executor.prompt("Previous actual request"));
-      const expected = seeded ? "complete" : null,
-        messages = app.session.messages.length;
+      if (seeded) {
+        expectOk(await app.executor.prompt("Previous actual request"));
+      }
+
+      const expected = seeded ? "complete" : null;
+      const messages = app.session.messages.length;
+
       expect(app.executor.state.status).toBe(expected);
       unsubscribe = app.executor.subscribe(() => statuses.push(app.executor.state.status));
 
@@ -220,6 +236,7 @@ test("Fast validation sends no requests and isolates state by model and session"
     expect(app.executor.state.telemetry?.fast).toBe(true);
     expect(other.executor.state.telemetry?.fast).toBe(false);
     expect(fast.read({ ...app.session.model!, id: "another-model" })).toBe(false);
+
     const redirected = { model: "another-model" };
     expect(fast.apply(redirected, app.session.model!)).toBe(redirected);
     expect(
@@ -293,8 +310,8 @@ test("Existing hooks returning null never fall back to original payloads", async
 test("SDK sessions receive usage before prompts and refresh after final completion", async () => {
   // A real SDK session observes an injected account source without making a model request for usage.
   const clock = new ManualClock();
-  let lookups = 0,
-    prompts = 0;
+  let lookups = 0;
+  let prompts = 0;
   const usage = new UsageMonitor(
     async () =>
       ok({
@@ -302,6 +319,7 @@ test("SDK sessions receive usage before prompts and refresh after final completi
         provider: "acme",
         load: async () => {
           lookups++;
+
           return ok([{ id: "period", usedPercent: 10, periodMs: 604800000, resetsAt: 604800000 }]);
         },
       }),
@@ -315,7 +333,9 @@ test("SDK sessions receive usage before prompts and refresh after final completi
     usage,
   );
   const settle = async () => {
-    for (let i = 0; i < 70; i++) await Promise.resolve();
+    for (let i = 0; i < 70; i++) {
+      await Promise.resolve();
+    }
   };
   try {
     expect(app.executor.state.telemetry?.usage?.status).toBe("loading");
@@ -341,8 +361,8 @@ test.each(["authentication", "usage"] as const)(
   async (stage) => {
     // SDK management commands and completion events require different refresh policies.
     const clock = new ManualClock();
-    let lookups = 0,
-      prompts = 0;
+    let lookups = 0;
+    let prompts = 0;
     const succeeds = () => ++lookups > 1;
     const failure = err(new UsageError("USAGE_QUERY_FAILED", "Temporary failure"));
     const usage = new UsageMonitor(
@@ -370,7 +390,9 @@ test.each(["authentication", "usage"] as const)(
       usage,
     );
     const settle = async () => {
-      for (let i = 0; i < 70; i++) await Promise.resolve();
+      for (let i = 0; i < 70; i++) {
+        await Promise.resolve();
+      }
     };
     try {
       expect(app.executor.state.telemetry?.usage?.status).toBe("loading");
@@ -382,6 +404,7 @@ test.each(["authentication", "usage"] as const)(
       expectOk(await app.executor.prompt("ordinary work"));
       await settle();
       expect(lookups).toBe(1);
+
       const before = app.session.messages.length;
       expectOk(await app.executor.reload());
       await settle();
@@ -434,6 +457,7 @@ test("Post-compaction context uses local estimates until the next normal respons
   try {
     manager.appendMessage({ role: "system", content: "s".repeat(800), timestamp: 0 });
     manager.appendMessage({ role: "user", content: "omitted".repeat(40000), timestamp: 1 });
+
     const kept = manager.appendMessage({
       role: "user",
       content: [
@@ -447,6 +471,7 @@ test("Post-compaction context uses local estimates until the next normal respons
       "telemetry-fixture",
       "model-fixture",
     );
+
     assistant.content = [{ type: "text", text: "a".repeat(400) }];
     assistant.usage.input = 72000;
     assistant.usage.totalTokens = 72000;
@@ -472,17 +497,22 @@ test("Post-compaction context uses local estimates until the next normal respons
 
 test("Estimated context is cached until committed messages, content, or system prompts change", async () => {
   // Do not rebuild all context on every render while awaiting post-compaction usage.
-  const app = await mount(async () => {}),
-    manager = app.session.sessionManager;
+  const app = await mount(async () => {});
+  const manager = app.session.sessionManager;
+
   manager.appendCompaction("c".repeat(400), null, 72000);
+
   const projection = spyOn(manager, "buildSessionProjection");
   try {
     expect(app.executor.state.telemetry?.context).toEqual({ usedTokens: 100, maxTokens: 200000 });
+
     const reads = projection.mock.calls.length;
 
     // Snapshots at the same conversation position reuse estimates.
-    for (let i = 0; i < 50; i++)
+    for (let i = 0; i < 50; i++) {
       expect(app.executor.state.telemetry?.context?.usedTokens).toBe(100);
+    }
+
     expect(projection.mock.calls.length).toBe(reads);
 
     // Committed input and append-only edits change position and update immediately.
@@ -540,6 +570,7 @@ test("Missing model limits never produce invented context ratios after compactio
   // Estimated tokens cannot define a remaining ratio without a known model limit.
   const app = await mount(async () => {});
   app.session.sessionManager.appendCompaction("c".repeat(400), null, 72000);
+
   const usage = spyOn(app.session, "getContextUsage").mockReturnValue(undefined);
   try {
     // Missing model metadata must not become 100% or an arbitrary total.
@@ -554,9 +585,9 @@ test("Missing model limits never produce invented context ratios after compactio
 
 test("Fast and weekly headers preserve existing extension request transforms and response observers", async () => {
   // Priority comes from an existing extension, not the Radian status display.
-  let responses = 0,
-    events = 0,
-    sent: unknown;
+  let responses = 0;
+  let events = 0;
+  let sent: unknown;
   const reset = futureReset();
   const outgoing = { model: "model-fixture" };
   const app = await mount(

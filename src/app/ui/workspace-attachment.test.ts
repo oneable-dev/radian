@@ -57,14 +57,19 @@ test("Delayed connections preserve other-repository drafts and restore saved ses
     await setup.renderOnce();
     openWorkspaceSearch(setup);
     await setup.renderOnce();
-    const lines = setup.captureCharFrame().split("\n"),
-      y = lines.findIndex((line) => line.includes(`${icons.folder} B-folder`));
+
+    const lines = setup.captureCharFrame().split("\n");
+    const y = lines.findIndex((line) => line.includes(`${icons.folder} B-folder`));
+
     await setup.mockMouse.click(lines[y]!.indexOf("B-folder"), y);
     await setup.renderOnce();
 
     // Show saved b2 and its input, not first session b1, while retaining A's draft.
     const prompt = setup.renderer.root.findDescendantById("session-prompt");
-    if (!(prompt instanceof PromptInput)) throw new Error("Missing session prompt.");
+    if (!(prompt instanceof PromptInput)) {
+      throw new Error("Missing session prompt.");
+    }
+
     expect(selection.sessionId).toBe("b2");
     expect(prompt.value).toBe("retained draft B");
     expect(view.promptDrafts.a1).toBe("draft A");

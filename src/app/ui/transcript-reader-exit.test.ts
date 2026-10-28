@@ -40,9 +40,11 @@ const sections = (): TranscriptSection[] => [
   },
   { id: "command", kind: "tool", title: "bash", command, text: "RAW OUTPUT", status: "complete" },
 ];
+
 function descendants(node: Renderable): Renderable[] {
   return node.getChildren().flatMap((child) => [child, ...descendants(child)]);
 }
+
 async function mount(working = false) {
   const app = await createTestRenderer({
     width: 200,
@@ -59,18 +61,20 @@ async function mount(working = false) {
   }));
   const selection = new WorkspaceSelection(repositories);
   let current = sections();
-  const sent: string[] = [],
-    interrupted: string[] = [];
+  const sent: string[] = [];
+  const interrupted: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession() {},
     onCloseSession() {},
     initialDrafts: { a1: "Unsent prompt" },
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     onInterrupt: async (id) => {
       interrupted.push(id);
+
       return ok(undefined);
     },
     getSessionDetails: () => ({
@@ -84,13 +88,18 @@ async function mount(working = false) {
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   const scroll = app.renderer.root.findDescendantById("session-transcript");
   const prompt = app.renderer.root.findDescendantById("session-prompt");
-  if (!(scroll instanceof ScrollBoxRenderable) || !(prompt instanceof EditBufferRenderable))
+  if (!(scroll instanceof ScrollBoxRenderable) || !(prompt instanceof EditBufferRenderable)) {
     throw new Error("Missing Agent layout");
+  }
+
   prompt.focus();
   prompt.cursorOffset = 4;
+
   const header = () =>
     descendants(app.renderer.root)
       .filter(
@@ -98,6 +107,7 @@ async function mount(working = false) {
           node instanceof EditBufferRenderable && node.plainText.startsWith("$ git diff"),
       )
       .at(-1)!;
+
   return {
     ...app,
     selection,
@@ -139,8 +149,10 @@ test("Explicit reader exit reveals the entire wrapped tool header and resumes fo
   try {
     await app.read();
     await app.clipHeader();
-    const node = app.header(),
-      edge = () => app.scroll.viewport.y + app.scroll.viewport.height;
+
+    const node = app.header();
+    const edge = () => app.scroll.viewport.y + app.scroll.viewport.height;
+
     expect(node.virtualLineCount).toBeGreaterThan(1);
     expect(node.height).toBe(node.virtualLineCount);
     expect(node.y).toBeLessThan(edge());
@@ -172,8 +184,10 @@ test("Visual/Text back steps preserve historical reading until the final exit", 
     app.mockInput.pressEnter();
     app.mockInput.pressKey("v");
     await app.render();
-    const position = app.scroll.scrollTop,
-      selected = app.state()?.selectedId;
+
+    const position = app.scroll.scrollTop;
+    const selected = app.state()?.selectedId;
+
     app.mockInput.pressEscape();
     await app.render();
     expect(app.state()?.mode).toBe("text");
@@ -204,6 +218,7 @@ test("Popup cancellation and ordinary prompt focus do not reset deliberately pau
   try {
     await app.read();
     await app.clipHeader();
+
     const position = app.scroll.scrollTop;
     pressLeader(app, "b");
     await app.render();
@@ -252,6 +267,7 @@ test("Following after explicit exit tracks new wrapped commands through terminal
     for (const width of [120, 60, 200]) {
       app.resize(width, 26);
       await app.render();
+
       const header = app.header();
       expect(app.state()?.follow).toBe(true);
       expect(app.scroll.scrollTop).toBe(app.bottom());
@@ -260,6 +276,7 @@ test("Following after explicit exit tracks new wrapped commands through terminal
         app.scroll.viewport.y + app.scroll.viewport.height,
       );
     }
+
     expect(app.captureCharFrame()).toContain("src/new-command-tail.test.ts");
     expect(app.view.promptDrafts.a1).toBe("Unsent prompt");
     expect(app.sent).toEqual([]);
@@ -272,9 +289,10 @@ test("Explicit exit releases an owned mouse selection before resuming live outpu
   // A native selection must not immediately re-pause the reader after its explicit exit.
   const app = await mount();
   try {
-    const lines = app.captureCharFrame().split("\n"),
-      y = lines.findIndex((line) => line.includes("Checking navigation"));
+    const lines = app.captureCharFrame().split("\n");
+    const y = lines.findIndex((line) => line.includes("Checking navigation"));
     const x = lines[y]!.indexOf("Checking navigation");
+
     expect(y).toBeGreaterThanOrEqual(0);
     await app.mockMouse.drag(x, y, x + 5, y);
     await app.render();
@@ -301,7 +319,10 @@ test("Held Esc after reader exit never becomes an Agent interruption", async () 
   const app = await mount(true);
   const raw = (sequence: string) => {
     const key = parseKeypress(sequence, { useKittyKeyboard: true });
-    if (!key) throw new Error("Invalid Kitty key");
+    if (!key) {
+      throw new Error("Invalid Kitty key");
+    }
+
     app.renderer.keyInput.processParsedKey(key);
   };
   try {

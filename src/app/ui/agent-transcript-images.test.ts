@@ -44,6 +44,7 @@ const descendants = (node: Renderable): Renderable[] => [
   node,
   ...node.getChildren().flatMap(descendants),
 ];
+
 async function mount(
   provider: TranscriptImageProvider = async () => ok(tinyPng()),
   graphics = true,
@@ -66,6 +67,7 @@ async function mount(
         ? { width: app.renderer.terminalWidth * 10, height: app.renderer.terminalHeight * 20 }
         : null,
   });
+
   const transcript = new SessionTranscript([]);
   const message = {
     role: "user" as const,
@@ -79,9 +81,11 @@ async function mount(
       })),
     ],
   };
+
   transcript.handle({ type: "message_end", message });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    sections = transcript.sections;
+
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const sections = transcript.sections;
   const image = sections.find((section) => section.image)!;
   const view = new Workbench(app.renderer, selection, {
     onNewSession() {},
@@ -97,19 +101,28 @@ async function mount(
     }),
   });
   const render = async () => {
-    for (let i = 0; i < 10; i++) await Promise.resolve();
+    for (let i = 0; i < 10; i++) {
+      await Promise.resolve();
+    }
+
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   const header = () => {
     const node = descendants(view.root).find(
       (node) => node instanceof EditBufferRenderable && node.plainText.startsWith("[read]"),
     );
-    if (!(node instanceof EditBufferRenderable)) throw new Error("Missing image attachment header");
+    if (!(node instanceof EditBufferRenderable)) {
+      throw new Error("Missing image attachment header");
+    }
+
     return node;
   };
   const bitmap = () => app.renderer.root.findDescendantById(`image-preview:${image.id}:image`);
+
   return {
     ...app,
     view,
@@ -140,6 +153,7 @@ test("Images start as folded read headers without duplicate text and toggle prev
   const app = await mount(async (session, _id, signal) => {
     expect(session).toBe("a1");
     signals.push(signal);
+
     return ok(tinyPng());
   });
   try {
@@ -149,16 +163,22 @@ test("Images start as folded read headers without duplicate text and toggle prev
     expect(signals).toHaveLength(0);
     expect(app.bitmap()).toBeUndefined();
     await app.clickHeader();
+
     const bitmap = app.bitmap();
-    if (!(bitmap instanceof ImageRenderable)) throw new Error("Missing native image preview");
+    if (!(bitmap instanceof ImageRenderable)) {
+      throw new Error("Missing native image preview");
+    }
+
     await bitmap.loadPromise;
     await app.render();
 
     expect(signals).toHaveLength(1);
     expect(bitmap.image?.width).toBe(1);
     expect(bitmap.image?.height).toBe(1);
+
     const native = bitmap.image!;
     const fitted = bitmap.getFittedSize(bitmap.width, bitmap.height);
+
     expect(fitted.width / fitted.height).toBeCloseTo(2, 1);
     expect(bitmap.fit).toBe("fit");
     expect(app.view.promptDrafts.a1).toBe("keep this draft");
@@ -187,6 +207,7 @@ test("Unsupported terminals show guidance and activate previews when pixel metad
   let calls = 0;
   const app = await mount(async () => {
     calls++;
+
     return ok(tinyPng());
   }, false);
   try {
@@ -197,7 +218,10 @@ test("Unsupported terminals show guidance and activate previews when pixel metad
     await app.render();
 
     const bitmap = app.bitmap();
-    if (!(bitmap instanceof ImageRenderable)) throw new Error("Missing late graphics preview");
+    if (!(bitmap instanceof ImageRenderable)) {
+      throw new Error("Missing late graphics preview");
+    }
+
     await bitmap.loadPromise;
     await app.render();
     expect(calls).toBe(1);
@@ -213,11 +237,15 @@ test("Session switching cancels image reads and late responses never change new 
   let signal: AbortSignal | undefined;
   const app = await mount(async (_session, _id, abort) => {
     signal = abort;
+
     return pending.promise;
   });
   try {
     const transcript = app.renderer.root.findDescendantById("session-transcript");
-    if (!transcript) throw new Error("Missing transcript viewport");
+    if (!transcript) {
+      throw new Error("Missing transcript viewport");
+    }
+
     await app.clickHeader();
     expect(app.captureCharFrame()).toContain("Loading image");
 
@@ -245,10 +273,12 @@ test("Session round-trips reuse transcript buffers but reload images and ignore 
   const signals: AbortSignal[] = [];
   const app = await mount(async (_session, _id, signal) => {
     signals.push(signal);
+
     return signals.length === 1 ? first.promise : second.promise;
   });
   try {
     await app.clickHeader();
+
     const header = app.header();
     app.selection.selectSession("demo:main", "a2");
     await app.render();
@@ -267,8 +297,12 @@ test("Session round-trips reuse transcript buffers but reload images and ignore 
     expect(app.bitmap()).toBeUndefined();
     second.resolve(ok(tinyPng()));
     await app.render();
+
     const bitmap = app.bitmap();
-    if (!(bitmap instanceof ImageRenderable)) throw new Error("Missing restored image preview");
+    if (!(bitmap instanceof ImageRenderable)) {
+      throw new Error("Missing restored image preview");
+    }
+
     await bitmap.loadPromise;
     await app.render();
     expect(bitmap.image?.width).toBe(1);
@@ -281,9 +315,9 @@ test("Session round-trips reuse transcript buffers but reload images and ignore 
 });
 
 test("Expand-all limits concurrent images and collapsing activates waiting previews", async () => {
-  let calls = 0,
-    active = 0,
-    maximum = 0;
+  let calls = 0;
+  let active = 0;
+  let maximum = 0;
   const app = await mount(
     async (_session, _id, signal) => {
       calls++;
@@ -296,6 +330,7 @@ test("Expand-all limits concurrent images and collapsing activates waiting previ
         },
         { once: true },
       );
+
       return ok(tinyPng());
     },
     true,
@@ -322,6 +357,7 @@ test("Expand-all limits concurrent images and collapsing activates waiting previ
   } finally {
     await app.close();
   }
+
   expect(active).toBe(0);
 });
 

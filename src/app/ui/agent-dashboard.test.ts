@@ -27,17 +27,19 @@ function sample(days: DashboardPeriod = 7): DashboardSnapshot {
   data.models = [{ name: "test/large", value: 1240 }];
   data.mcp = [{ name: "figma-remote", value: 12 }];
   data.subagents = [{ name: "reviewer", value: 3 }];
+
   return data;
 }
+
 async function mount(options: Partial<WorkbenchActions> = {}, width = 120, height = 32) {
-  const clock = new ManualClock(),
-    app = await createTestRenderer({ width, height, kittyKeyboard: true, clock });
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width, height, kittyKeyboard: true, clock });
   const lookups: {
-      days: DashboardPeriod;
-      project: string | undefined;
-      signal: AbortSignal | undefined;
-    }[] = [],
-    sent: string[] = [];
+    days: DashboardPeriod;
+    project: string | undefined;
+    signal: AbortSignal | undefined;
+  }[] = [];
+  const sent: string[] = [];
   const view = new Workbench(app.renderer, new WorkspaceSelection(demoWorkspace()), {
     onNewSession() {},
     onCloseSession() {},
@@ -49,30 +51,45 @@ async function mount(options: Partial<WorkbenchActions> = {}, width = 120, heigh
     }),
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     onResources: async () =>
       ok({ pid: process.pid + 1, elapsedMs: 1000, cpuMicros: 0, rssBytes: 320 * 1024 ** 2 }),
     onDashboard: async (days, project, signal) => {
       lookups.push({ days, project, signal });
+
       return ok(sample(days));
     },
     ...options,
   });
   const render = async () => {
-    for (let i = 0; i < 10; i++) await Promise.resolve();
+    for (let i = 0; i < 10; i++) {
+      await Promise.resolve();
+    }
+
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   const input = app.renderer.root.findDescendantById("session-prompt");
-  if (!(input instanceof PromptInput)) throw new Error("Missing prompt");
+  if (!(input instanceof PromptInput)) {
+    throw new Error("Missing prompt");
+  }
+
   input.focus();
+
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
+
   return {
     ...app,
     clock,
@@ -120,6 +137,7 @@ test("Dashboard commands open without prompting and preserve invalid arguments a
     expect(app.sent).toEqual([]);
     app.input.value = "/dashboard ";
     app.input.attachFile("/tmp/dashboard-fixture.png");
+
     const draft = app.input.draft;
     await app.render();
     app.mockInput.pressEnter();
@@ -137,9 +155,13 @@ test("New filter results take precedence over slower earlier statistics", async 
   const old = Promise.withResolvers<Result<DashboardSnapshot, SessionError>>();
   const app = await mount({
     onDashboard: async (days) => {
-      if (days === 7) return old.promise;
+      if (days === 7) {
+        return old.promise;
+      }
+
       const data = sample(days);
       data.totals.tokens = 9999;
+
       return ok(data);
     },
   });
@@ -180,6 +202,7 @@ test("Dashboard refresh retains prepared statistics while a small body indicator
     expect(app.captureCharFrame()).not.toContain("Loading saved session statistics");
     expect(app.get("dashboard-loading").visible).toBe(true);
     expect(app.get("dashboard-loading-message").visible).toBe(false);
+
     const historyBody =
       app.renderer.root.findDescendantById("dashboard-history-body") ?? app.get("dashboard-body");
     expect(app.get("dashboard-loading").y).toBe(historyBody.y);
@@ -200,6 +223,7 @@ test("Dashboards show three summary metrics and charts, restoring drafts and inp
 
     // Open and close read-only statistics using global shortcuts.
     await app.open();
+
     const frame = app.captureCharFrame();
     expect(frame).not.toContain("Agent Dashboard");
     expect(frame).toContain("Total tokens");
@@ -251,6 +275,7 @@ test("Resource tabs retain focus through repeated Ctrl+N/P and horizontal naviga
     // One navigation key must not enter content; hints omit bare arrows.
     expect(app.renderer.currentFocusedRenderable?.id).toBe("dashboard-category");
     expect(app.captureCharFrame()).toContain("test/large");
+
     const footer = app.captureCharFrame().split("\n").at(-2) ?? "";
     expect(footer).not.toContain("Right");
     expect(footer).not.toContain("Left");
@@ -265,8 +290,10 @@ test("Period and project changes reaggregate by scope while half-page navigation
   const app = await mount({
     onDashboard: async (days, project) => {
       queries.push([days, project]);
+
       const data = sample(days);
       data.skills = Array.from({ length: 80 }, (_, i) => ({ name: `skill-${i}`, value: 80 - i }));
+
       return ok(data);
     },
   });
@@ -289,8 +316,12 @@ test("Period and project changes reaggregate by scope while half-page navigation
     // Half-page navigation hands filter focus to the body and continues scrolling.
     app.mockInput.pressKey("d", { ctrl: true });
     await app.render();
+
     const body = app.get("dashboard-body");
-    if (!(body instanceof ScrollBoxRenderable)) throw new Error("Missing scroll body");
+    if (!(body instanceof ScrollBoxRenderable)) {
+      throw new Error("Missing scroll body");
+    }
+
     const first = body.scrollTop;
     app.mockInput.pressKey("d", { ctrl: true });
     await app.render();
@@ -337,6 +368,7 @@ test("Closing pending dashboards cancels spinners and requests without late resu
   const app = await mount({
     onDashboard: async (_days, _project, abort) => {
       signal = abort;
+
       return pending.promise;
     },
   });
@@ -395,16 +427,17 @@ test("Compact dashboards distinguish empty data from lookup failures without inv
 
 test("Live resources sum UI and Runtime and keep their history independent of usage filters and focus", async () => {
   // Stable OS counters make the displayed one-core percentages and RSS sum deterministic.
-  let elapsedMs = 1000,
-    uiCpu = 0,
-    runtimeCpu = 0,
-    calls = 0;
+  let elapsedMs = 1000;
+  let uiCpu = 0;
+  let runtimeCpu = 0;
+  let calls = 0;
   const cpu = spyOn(process, "cpuUsage").mockImplementation(() => ({ user: uiCpu, system: 0 }));
   const rss = spyOn(process.memoryUsage, "rss").mockReturnValue(85 * 1024 ** 2);
   const elapsed = spyOn(performance, "now").mockImplementation(() => elapsedMs);
   const app = await mount({
     onResources: async () => {
       calls++;
+
       return ok({
         pid: process.pid + 1,
         elapsedMs,
@@ -417,8 +450,12 @@ test("Live resources sum UI and Runtime and keep their history independent of us
     await app.open();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("dashboard-body");
     expect(app.captureCharFrame()).toContain("Radian resources · live");
+
     const table = app.get("dashboard-resources-table");
-    if (!(table instanceof TextRenderable)) throw new Error("Missing resource table");
+    if (!(table instanceof TextRenderable)) {
+      throw new Error("Missing resource table");
+    }
+
     expect(table.plainText).toContain("405 MB");
 
     // Provider history filters must neither reset live samples nor move focus when polling completes.
@@ -426,8 +463,12 @@ test("Live resources sum UI and Runtime and keep their history independent of us
     app.mockInput.pressKey("n", { ctrl: true });
     await app.render();
     expect(calls).toBe(1);
+
     const body = app.get("dashboard-body");
-    if (!(body instanceof ScrollBoxRenderable)) throw new Error("Missing dashboard body");
+    if (!(body instanceof ScrollBoxRenderable)) {
+      throw new Error("Missing dashboard body");
+    }
+
     const scrollTop = body.scrollTop;
     elapsedMs = 2000;
     uiCpu = 8000;
@@ -459,12 +500,13 @@ test("Live resources sum UI and Runtime and keep their history independent of us
 test("Closing resource sampling aborts pending work and rejects late data across reopen", async () => {
   // A request that ignores cancellation must not overwrite a later popup lifetime.
   const pending = Promise.withResolvers<Result<ProcessResourceSample, CapabilityError>>();
-  let signal: AbortSignal | undefined,
-    calls = 0;
+  let signal: AbortSignal | undefined;
+  let calls = 0;
   const app = await mount({
     onResources: async (abort) => {
       calls++;
       signal = abort;
+
       return calls === 1
         ? pending.promise
         : ok({ pid: process.pid + 1, elapsedMs: 1000, cpuMicros: 0, rssBytes: 320 * 1024 ** 2 });
@@ -473,8 +515,10 @@ test("Closing resource sampling aborts pending work and rejects late data across
   try {
     await app.open();
     expect(app.get("dashboard-resources-loading").visible).toBe(true);
+
     const feedback = app.get("dashboard-resources-loading-feedback");
     const table = app.get("dashboard-resources-table");
+
     expect(feedback.y).toBe(table.y + Math.floor((table.height - 1) / 2));
     expect(feedback.x).toBe(table.x + Math.floor((table.width - feedback.width) / 2));
     app.clock.advance(5000);
@@ -511,8 +555,12 @@ test("Resizing live resources keeps memory and every process visible without cle
   const app = await mount();
   try {
     await app.open();
+
     const table = app.get("dashboard-resources-table");
-    if (!(table instanceof TextRenderable)) throw new Error("Missing resource table");
+    if (!(table instanceof TextRenderable)) {
+      throw new Error("Missing resource table");
+    }
+
     expect(table.plainText).toContain("··");
 
     app.resize(50, 18);
@@ -544,8 +592,11 @@ test("Resource failures leave usage history usable and compact layouts retain ev
   );
   try {
     await app.open();
+
     const table = app.get("dashboard-resources-table");
-    if (!(table instanceof TextRenderable)) throw new Error("Missing resource table");
+    if (!(table instanceof TextRenderable)) {
+      throw new Error("Missing resource table");
+    }
 
     // Narrow layouts omit sparklines, never the process breakdown or unknown-value markers.
     expect(table.plainText).toContain("Total");

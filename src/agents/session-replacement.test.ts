@@ -14,6 +14,7 @@ function executor(
   status: ExecutionState["status"] = "working",
 ): SessionExecutor & { closes: number } {
   const conversationId = crypto.randomUUID();
+
   return {
     savedSessionId: conversationId,
     sessionFile: undefined,
@@ -23,6 +24,7 @@ function executor(
     prompt: async () => ok(undefined),
     async close() {
       this.closes++;
+
       return ok(undefined);
     },
   };
@@ -32,15 +34,19 @@ test.each([null, "complete", "failure", "working"] as const)(
   "clear preparation preserves %s state without creating command-induced working activity",
   async (status) => {
     // Slow replacement must not confuse command processing with actual model execution.
-    const original = executor(status),
-      next = executor(null);
-    const prepared = Promise.withResolvers<SessionExecutor>(),
-      creating = Promise.withResolvers<void>();
-    let calls = 0,
-      replacement: ReturnType<SessionRegistry["clearSession"]> | undefined;
+    const original = executor(status);
+    const next = executor(null);
+    const prepared = Promise.withResolvers<SessionExecutor>();
+    const creating = Promise.withResolvers<void>();
+    let calls = 0;
+    let replacement: ReturnType<SessionRegistry["clearSession"]> | undefined;
     const registry = new SessionRegistry(demoWorkspace(), async () => {
-      if (++calls === 1) return original;
+      if (++calls === 1) {
+        return original;
+      }
+
       creating.resolve();
+
       return prepared.promise;
     });
     try {
@@ -63,7 +69,10 @@ test.each([null, "complete", "failure", "working"] as const)(
       expect(original.closes).toBe(1);
     } finally {
       prepared.resolve(next);
-      if (replacement) await replacement;
+      if (replacement) {
+        await replacement;
+      }
+
       expectOk(await registry.shutdown());
     }
   },
@@ -74,7 +83,10 @@ test("Failed SDK preparation neither interrupts the original run nor removes its
   const original = executor();
   let calls = 0;
   const registry = new SessionRegistry(demoWorkspace(), async () => {
-    if (++calls === 2) throw new StorageError("Replacement fixture is unavailable", "EIO");
+    if (++calls === 2) {
+      throw new StorageError("Replacement fixture is unavailable", "EIO");
+    }
+
     return original;
   });
   try {
@@ -100,6 +112,7 @@ test("Callbacks retained by replaced conversations cannot create work in the new
   const contexts: SessionContext[] = [];
   const registry = new SessionRegistry(demoWorkspace(), async (context) => {
     contexts.push(context);
+
     return executor();
   });
   try {
@@ -117,18 +130,23 @@ test("Callbacks retained by replaced conversations cannot create work in the new
 });
 
 test("clear rejects concurrent commands and input while shutdown also cleans prepared handles", async () => {
-  const original = executor(),
-    next = executor();
-  const prepared = Promise.withResolvers<SessionExecutor>(),
-    creating = Promise.withResolvers<void>();
+  const original = executor();
+  const next = executor();
+  const prepared = Promise.withResolvers<SessionExecutor>();
+  const creating = Promise.withResolvers<void>();
   let calls = 0;
   const registry = new SessionRegistry(demoWorkspace(), async () => {
-    if (++calls === 1) return original;
+    if (++calls === 1) {
+      return original;
+    }
+
     creating.resolve();
+
     return prepared.promise;
   });
   const id = expectOk(await registry.create("demo:main"));
   const replacement = registry.clearSession(id);
+
   await creating.promise;
   expect(expectError(await registry.clearSession(id)).code).toBe("SESSION_BUSY");
   expect(expectError(await registry.newTab(id)).code).toBe("SESSION_BUSY");

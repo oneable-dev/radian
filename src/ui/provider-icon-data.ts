@@ -10,15 +10,21 @@ const compressed = {
   claude:
     "eJztVltMVFcUXTNIIaDiKzUYCbY6IjLEB3GMqTStaZVqrA+00pSIMVoBX2mb2JhiSWM/pKFio6HNpCofmLY+ArYmLRioHz4mERUNEIk0VQIaH7wcClRmZplzzp2BAefemfrXsD5m1t5nr3PP3Xufcw8wghH4I8/ZWBg+YMbMDS1BH5Dkpz7z7fvu3JD0fwt98yivWUM+iw9Ff1bomalZScKYEoo+V+prNWsZyR5TKPqY+3KCpcrKIFmvjSQf+s4WxATrpf68MnJI/qboO31k/aDCBESlnGCe5F+QLJTM2iW8u3V0r2j/VpeI/FnyQm8uY5vlrFmB5V+xvUhNUSwi3UmCHiU5G0D0NSlnbEC5TQxfmy7opA7BTwpaTvaEAaYzSn4w8OOnyoCu9YJ/IqgnWbWPA8B+JXfopa9exRRHAOGNgp0B8JD8Htightp1G3HWbRV1wwKslAuYgwgP+TFSetTISj05EF2iwp5+qNWwDNNJLhjdpPyqjnrIdKpIe6Sq4fxUsj/yuHJeDqJ3LJdU7K0EWcNjG8iGzcrVFmcsB8y7/5HR3QfEb6sshIRnRTByAK9X+zRknY8VDURE6u9H07anHIbmaDE0xpZV8GuT+/Y6/SXE/T5MvwqWTfZ6j2ZVGr1EVvsQfcWjwVb20Pg1f5y0F+zNyUhbmDBZ7qHYcgaAs/LLJd6d6oPsVy+6my6eOry/d7j0r1P56QlhL1qvrY8GuFeSpdcAE9LSM7fu3JN/4JC9tKzi4vXGFr8V/fBuTEiHKPBG/5AF9Hd2dLQ1Oc6VFG554Sv4YdovftqOf/3MmsCnkMTYgiHpaE1O3XtOHkoK1XrqUTmy1nfyXIMmsAAma3bpXWU268iXy3PI9U3iI7J2YAKrGp2acaTWeTjwOZSkDv+bKVE3ybrsQSlI9cUEroR5j0xUX144Ssle6xEyXziq7pG9q2GE+AvyUZcSge0kc1FFTisVD59/lXRtNZCv6ZS9sssMLHpGlgMPyMjJIu9no8pI7tPXy5arELl5tYVsmYjxZDuwTbgzzAfF2W7W0zeQbfL7FlZNut8C3iQbANMVko8nYbuLPB2ho5+wcXGMJAUkvwawg6wCMFc0wk/A0ifknypCF2tJXhEXIDt5QjiKxBu8D8TXGLSexMwusvM1wRzaN2OMyEzrOCDiRzqNNk90HeleK5i5m/xM+uTn7Khg6WlGjz9OejZLNoPkR/BdIzjOcOkAUkjuUHQdySWKhl8mGczlCcvc/Fyj35JM1HjcEzoTgtHD9p6XOUiO9xqxi6MQGkxOsg8vgeKBq+N/wtiqcsvL6EeA/zueAziGkpg=",
 } as const;
+
 export type ProviderIconName = keyof typeof compressed;
+
 const masks = new Map<ProviderIconName, Uint8Array>();
+
 export function providerIconMask(name: ProviderIconName): Uint8Array {
   let mask = masks.get(name);
   if (!mask) {
     mask = inflateSync(Buffer.from(compressed[name], "base64"));
-    if (mask.length !== providerIconSize ** 2)
+    if (mask.length !== providerIconSize ** 2) {
       throw new Error("Invalid embedded provider icon mask.");
+    }
+
     masks.set(name, mask);
   }
+
   return mask;
 }

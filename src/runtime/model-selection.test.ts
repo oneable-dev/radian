@@ -59,6 +59,7 @@ test("Model IPC sends session/conversation/runtime IDs and distinguishes provide
           headers: new Headers(options?.headers),
           ...(options?.body ? { body: JSON.parse(await new Response(options.body).text()) } : {}),
         });
+
         return Response.json(url.pathname === "/models" ? catalog : { ok: true, value: null });
       },
       { preconnect: fetch.preconnect },
@@ -94,6 +95,7 @@ test("Model IPC sends session/conversation/runtime IDs and distinguishes provide
 test("Legacy services and raw model commands never fall back to paid prompts, restart, or other commands", async () => {
   const snapshot = state();
   snapshot.capabilities = [];
+
   const mocked = spyOn(globalThis, "fetch").mockImplementation(
     Object.assign(
       () => {
@@ -128,6 +130,7 @@ test("Legacy services and raw model commands never fall back to paid prompts, re
 test("Model-only legacy services never receive requests that could ignore effort", async () => {
   const snapshot = state();
   snapshot.capabilities = ["model-selection"];
+
   const mocked = spyOn(globalThis, "fetch").mockImplementation(
     Object.assign(
       () => {

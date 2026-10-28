@@ -6,11 +6,14 @@ import { expectError, expectOk } from "../testing/results.ts";
 import { loadSessionSettings, loadSettings, parseSessionSettings } from "./settings.ts";
 
 async function fixture() {
-  const directory = await mkdtemp(join(tmpdir(), "radian-settings-")),
-    previous = process.env.XDG_CONFIG_HOME;
+  const directory = await mkdtemp(join(tmpdir(), "radian-settings-"));
+  const previous = process.env.XDG_CONFIG_HOME;
+
   process.env.XDG_CONFIG_HOME = directory;
+
   const root = join(directory, "radian");
   await mkdir(root);
+
   return {
     directory,
     root,
@@ -18,11 +21,16 @@ async function fixture() {
     async file(name: string, data: unknown) {
       const path = join(root, name);
       await writeFile(path, JSON.stringify(data));
+
       return path;
     },
     async close() {
-      if (previous === undefined) delete process.env.XDG_CONFIG_HOME;
-      else process.env.XDG_CONFIG_HOME = previous;
+      if (previous === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = previous;
+      }
+
       await rm(directory, { recursive: true, force: true });
     },
   };
@@ -65,6 +73,7 @@ test("Explicit file options override unified settings and legacy files fill only
       theme: { accent: "#111111" },
       sessions: { retentionDays: null },
     });
+
     const theme = await app.file("custom-theme.json", { accent: "#ABCDEF" });
     await app.file("keybindings.json", { leader: "ctrl+b" });
     await app.file("workspace.json", { roots: ["./legacy"] });
@@ -92,6 +101,7 @@ test("Absent default config uses 30 days while missing or corrupt explicit files
     // Replacing invalid files with 30-day retention could delete history unexpectedly.
     const missing = expectError(await loadSettings({ config: join(app.root, "missing.json") }));
     await writeFile(app.settings, "{broken JSON");
+
     const broken = expectError(await loadSessionSettings());
 
     // Runtime also reports file errors instead of interpreting cleanup policy.

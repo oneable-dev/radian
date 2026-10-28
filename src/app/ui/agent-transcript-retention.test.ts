@@ -74,12 +74,16 @@ async function mount() {
     initialDrafts: { a: "keep draft a", b: "keep draft b" },
   });
   const scroll = app.renderer.root.findDescendantById("session-transcript");
-  if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript viewport");
+  if (!(scroll instanceof ScrollBoxRenderable)) {
+    throw new Error("Missing transcript viewport");
+  }
+
   const render = async () => {
     await app.renderOnce();
     await app.renderOnce();
   };
   await render();
+
   return {
     ...app,
     view,
@@ -91,7 +95,10 @@ async function mount() {
       const node = descendants(scroll).find(
         (node) => node instanceof MarkdownRenderable && node.content === text,
       );
-      if (!(node instanceof MarkdownRenderable)) throw new Error(`Missing Markdown: ${text}`);
+      if (!(node instanceof MarkdownRenderable)) {
+        throw new Error(`Missing Markdown: ${text}`);
+      }
+
       return node;
     },
     async select(id: string) {
@@ -117,8 +124,8 @@ async function mount() {
 
 test("Background output/status changes update tabs without refreshing current conversations", async () => {
   // Deliver B's output and terminal state while reading A.
-  const app = await mount(),
-    updates = spyOn(TranscriptMarkdown.prototype, "update");
+  const app = await mount();
+  const updates = spyOn(TranscriptMarkdown.prototype, "update");
   try {
     const markdown = app.markdown("a history");
     updates.mockClear();
@@ -142,11 +149,12 @@ test("Background output/status changes update tabs without refreshing current co
 
 test("Streaming one response section never updates unchanged historical conversation", async () => {
   // Grow only the middle of three Markdown sections.
-  const app = await mount(),
-    updates = spyOn(TranscriptMarkdown.prototype, "update");
+  const app = await mount();
+  const updates = spyOn(TranscriptMarkdown.prototype, "update");
   try {
-    const history = app.markdown("a history"),
-      stream = app.markdown("a streaming");
+    const history = app.markdown("a history");
+    const stream = app.markdown("a streaming");
+
     updates.mockClear();
 
     // IPC-style cloned sections with equal values do not count as changes.
@@ -179,10 +187,14 @@ test("Session round-trips reuse Markdown/source buffers while preserving drafts 
     app.mockInput.pressKey("l");
     app.mockInput.pressKey("v");
     await app.render();
+
     const reader = app.renderer.currentFocusedRenderable;
-    if (!(reader instanceof EditBufferRenderable)) throw new Error("Missing source reader");
-    const selection = reader.getSelectedText(),
-      cursor = reader.cursorOffset;
+    if (!(reader instanceof EditBufferRenderable)) {
+      throw new Error("Missing source reader");
+    }
+
+    const selection = reader.getSelectedText();
+    const cursor = reader.cursorOffset;
 
     // Detach old conversations without destroying objects or reading state.
     await app.select("b");
@@ -205,9 +217,10 @@ test("Returning to retained sessions applies changed output and deleted rows", a
   // Deliver new A output while retaining its conversation UI offscreen.
   const app = await mount();
   try {
-    const history = app.markdown("a history"),
-      stream = app.markdown("a streaming"),
-      removed = app.markdown("a tail");
+    const history = app.markdown("a history");
+    const stream = app.markdown("a streaming");
+    const removed = app.markdown("a tail");
+
     await app.select("b");
     await app.update("a", {
       sections: [
@@ -277,7 +290,8 @@ test("Retention limits evict least-recent conversations and screen disposal rele
   // Retain at most two recent native trees beyond the active conversation.
   const app = await mount();
   const first = app.markdown("a history");
-  let second: MarkdownRenderable | undefined, third: MarkdownRenderable | undefined;
+  let second: MarkdownRenderable | undefined;
+  let third: MarkdownRenderable | undefined;
   try {
     await app.select("b");
     second = app.markdown("b history");
@@ -294,6 +308,7 @@ test("Retention limits evict least-recent conversations and screen disposal rele
   } finally {
     await app.close();
   }
+
   expect(second?.isDestroyed).toBe(true);
   expect(third?.isDestroyed).toBe(true);
 });
@@ -320,6 +335,7 @@ test.each([
         app.mockInput.pressKey("HOME");
         await app.render();
       }
+
       const position = app.scroll.scrollTop;
       await app.select("b");
       await app.update("a", { sections: [history, prose("new", "BACKGROUND_TAIL\n".repeat(30))] });
@@ -329,8 +345,9 @@ test.each([
 
       // Only following conversations move to the new bottom; paused readers keep positions.
       expect(app.view.workViewPreferences.agentViews?.a?.follow).toBe(!paused);
-      if (paused) expect(app.scroll.scrollTop).toBe(position);
-      else {
+      if (paused) {
+        expect(app.scroll.scrollTop).toBe(position);
+      } else {
         expect(app.scroll.scrollTop).toBe(
           Math.max(0, app.scroll.scrollHeight - app.scroll.viewport.height),
         );
@@ -348,6 +365,7 @@ test("Late retained-Markdown resize never changes current-session scroll", async
   try {
     const old = app.markdown("a history");
     await app.select("b");
+
     const scrollTo = spyOn(app.scroll, "scrollTo");
     try {
       // Deliver late resize events allowed by native lifecycle.
@@ -380,10 +398,12 @@ test("Combined section budgets evict old conversations even with few sessions", 
   ];
   try {
     await app.update("a", { sections: sections("a") });
+
     const first = app.markdown("a history");
     await app.select("b");
     expect(first.isDestroyed).toBe(false);
     await app.update("b", { sections: sections("b") });
+
     const second = app.markdown("b history");
 
     // Entering C would exceed the section budget if both A and B were retained.
@@ -413,6 +433,7 @@ test("Oversized source releases native buffers on departure even with few rows",
         },
       ],
     });
+
     const markdown = app.markdown("a history");
 
     // Conversations exceeding 2 MiB of source do not enter reuse caches.

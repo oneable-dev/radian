@@ -20,10 +20,10 @@ import type { CompletionResult } from "../../agents/completion.ts";
 async function mount(actions: Partial<WorkbenchActions> = {}) {
   const clock = new ManualClock();
   const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    sent: { id: string; text: string; images: readonly string[] }[] = [];
-  const saved: Record<string, PromptDraft>[] = [],
-    copies: string[] = [];
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const sent: { id: string; text: string; images: readonly string[] }[] = [];
+  const saved: Record<string, PromptDraft>[] = [];
+  const copies: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {},
     onCloseSession: () => {},
@@ -37,30 +37,43 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     }),
     onPrompt: (id, text, images) => {
       sent.push({ id, text, images: images ?? [] });
+
       return ok(undefined);
     },
     onDraftChange: (_legacy, drafts) => saved.push(structuredClone(drafts)),
     onCopyTranscript: async (text) => {
       copies.push(text);
+
       return ok("Copied fixture");
     },
     ...actions,
   });
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
   const render = async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
+    for (let i = 0; i < 8; i++) {
+      await Promise.resolve();
+    }
+
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
   pressLeader(app, "a");
   await render();
+
   const input = get("session-prompt");
-  if (!(input instanceof PromptInput)) throw new Error("Missing prompt editor.");
+  if (!(input instanceof PromptInput)) {
+    throw new Error("Missing prompt editor.");
+  }
+
   return {
     ...app,
     clock,
@@ -95,9 +108,11 @@ test.each([
   "Repeated paste loading preserves transcript height, scroll, and input width: %j",
   async ({ width, height, paused, status }) => {
     // Use an owned image-file URL so the real attachment path runs without changing the OS clipboard or user cache.
-    const directory = await mkdtemp(join(tmpdir(), "radian-paste-layout-")),
-      image = join(directory, "image.png");
+    const directory = await mkdtemp(join(tmpdir(), "radian-paste-layout-"));
+    const image = join(directory, "image.png");
+
     await writeFile(image, tinyPng());
+
     const representation: ClipboardRepresentation = {
       mimeType: "text/uri-list",
       bytes: new TextEncoder().encode(pathToFileURL(image).href),
@@ -138,11 +153,13 @@ test.each([
       app.resize(width, height);
       app.input.value = "draft ";
       await app.render();
-      const scroll = app.get("session-transcript"),
-        composer = app.get("agent-composer"),
-        spinner = app.get("prompt-paste-loading");
-      if (!(scroll instanceof ScrollBoxRenderable))
+
+      const scroll = app.get("session-transcript");
+      const composer = app.get("agent-composer");
+      const spinner = app.get("prompt-paste-loading");
+      if (!(scroll instanceof ScrollBoxRenderable)) {
         throw new Error("Missing native transcript viewport");
+      }
       if (paused) {
         pressLeader(app, "[");
         app.mockInput.pressKey("HOME");
@@ -153,6 +170,7 @@ test.each([
         await app.render();
         expect(app.view.workViewPreferences.agentViews?.a1?.follow).toBe(false);
       }
+
       const geometry = () => [
         scroll.y,
         scroll.height,
@@ -209,6 +227,7 @@ test("Hiding composer screens cancels paste loading immediately and rejects late
   let signal: AbortSignal | undefined;
   const read = spyOn(Clipboard.prototype, "read").mockImplementation((abort) => {
     signal = abort;
+
     return pending.promise;
   });
   const app = await mount();
@@ -252,8 +271,9 @@ test.each(["", "first\nsecond"])(
       for (const width of [120, 60]) {
         app.resize(width, 30);
         await app.render();
-        const composer = app.get("agent-composer"),
-          cursor = app.input.cursorOffset;
+
+        const composer = app.get("agent-composer");
+        const cursor = app.input.cursorOffset;
         const points = [
           [composer.x, app.input.y],
           [app.input.x - 1, app.input.y],
@@ -274,6 +294,7 @@ test.each(["", "first\nsecond"])(
           expect(app.sent).toEqual([]);
         }
       }
+
       // Subsequent typing belongs to the editor, not the previously focused sidebar.
       const cursor = app.input.cursorOffset;
       await app.mockInput.typeText("!");
@@ -293,6 +314,7 @@ test("Input text clicks retain native caret positions and padding right-clicks p
     await app.render();
     app.get("workspace-tree").focus();
     await app.render();
+
     const composer = app.get("agent-composer");
     await app.mockMouse.click(app.input.x + 2, composer.y, 2);
     await app.render();
@@ -342,10 +364,12 @@ test("Rejected command submission cancels completion loading while preserving dr
   const app = await mount({
     onComplete: async (_id, _query, abort) => {
       signal = abort;
+
       return pending.promise;
     },
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return err(new InputError("Rejected command"));
     },
   });
@@ -354,6 +378,7 @@ test("Rejected command submission cancels completion loading while preserving dr
     await app.render();
     app.clock.advance(150);
     await app.render();
+
     const cursor = app.input.cursorOffset;
     expect(app.get("prompt-completions").visible).toBe(true);
     app.mockInput.pressEnter();
@@ -414,8 +439,10 @@ test("Rejected attachments survive session round-trips and new Workbench restora
     await app.render();
     expect(app.input.value).toContain("[Image #1]");
     app.mockInput.pressArrow("left");
-    const cursor = app.input.cursorOffset,
-      expanded = app.input.submission;
+
+    const cursor = app.input.cursorOffset;
+    const expanded = app.input.submission;
+
     app.selection.selectSession("demo:main", "a2");
     await app.render();
     await app.mockInput.typeText("other draft");
@@ -428,6 +455,7 @@ test("Rejected attachments survive session round-trips and new Workbench restora
   } finally {
     await app.close();
   }
+
   const next = await mount({ initialInputDrafts: drafts });
   try {
     expect(next.input.value).toContain("[Image #1]");
@@ -445,6 +473,7 @@ test("Item details show source and restore draft, caret, and focus on close", as
     const text = "original large paste\n".repeat(100);
     await app.mockInput.pasteBracketedText(text);
     await app.render();
+
     const cursor = app.input.cursorOffset;
     app.mockInput.pressKey("o", { ctrl: true });
     await app.render();
@@ -483,26 +512,32 @@ test("Compact multiline input, activity, notifications, and completion never ove
     app.clock.advance(5000);
     await app.render();
     expect(app.captureCharFrame()).toContain("context.txt");
-    const menu = app.get("prompt-completions"),
-      composer = app.get("agent-composer"),
-      footer = app.get("app-footer"),
-      status = app.get("session-status");
+
+    const menu = app.get("prompt-completions");
+    const composer = app.get("agent-composer");
+    const footer = app.get("app-footer");
+    const status = app.get("session-status");
+
     expect(menu.visible).toBe(true);
     expect(menu.height).toBe(1);
     expect(composer.y + composer.height).toBeLessThanOrEqual(menu.y);
     expect(menu.y + menu.height).toBe(status.y);
     expect(status.height).toBe(3);
     expect(status.y + status.height).toBeLessThanOrEqual(footer.y);
-    const row = status.getChildren()[0]!,
-      frame = app.captureCharFrame().split("\n");
+
+    const row = status.getChildren()[0]!;
+    const frame = app.captureCharFrame().split("\n");
     // A zero-row conversation viewport must not leak its source text onto the mode line.
     const run = app.get("agent-run-status-text");
+
     expect(frame[run.y]!.slice(run.x, run.x + run.width)).toStartWith("Working (5s");
     expect(app.get("session-transcript").visible).toBe(false);
     expect(row.y - status.y).toBe(1);
     expect(status.y + status.height - row.y - row.height).toBe(1);
-    for (const y of [row.y - 1, row.y + 1])
+    for (const y of [row.y - 1, row.y + 1]) {
       expect(frame[y]!.slice(status.x, status.x + status.width).trim()).toBe("");
+    }
+
     expect(app.input.value).toBe("prefix\n@");
     expect(app.sent).toEqual([]);
     pressLeader(app, "[");
@@ -527,9 +562,11 @@ test("Long inputs limit display height only and compact input/completion never o
     await app.render();
 
     expect(app.input.height).toBeLessThanOrEqual(2);
-    const composer = app.get("agent-composer"),
-      footer = app.get("app-footer"),
-      status = app.get("session-status");
+
+    const composer = app.get("agent-composer");
+    const footer = app.get("app-footer");
+    const status = app.get("session-status");
+
     expect(composer.y + composer.height).toBe(status.y);
     expect(status.y + status.height).toBeLessThanOrEqual(footer.y);
     expect(app.input.submission.text).toContain("line 19");

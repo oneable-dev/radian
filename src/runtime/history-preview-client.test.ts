@@ -19,6 +19,7 @@ const snapshot = (preview = true): RuntimeSnapshot => ({
   notice: "",
   capabilities: preview ? ["history", "history-preview"] : ["history"],
 });
+
 function stub(
   implementation: (
     input: Parameters<typeof fetch>[0],
@@ -32,9 +33,9 @@ function stub(
 
 test("Legacy previews report unsupported without lookups, restarts, or model requests", async () => {
   const fetchMock = stub(async () => {
-      throw new Error("No requests allowed");
-    }),
-    client = new RuntimeClient(paths, snapshot(false));
+    throw new Error("No requests allowed");
+  });
+  const client = new RuntimeClient(paths, snapshot(false));
   try {
     const result = expectError(await client.previewHistory("tree", "saved"));
     expect(result.code).toBe("UNSUPPORTED_CAPABILITY");
@@ -63,6 +64,7 @@ test("Preview instance-fenced GET rejects identity/format errors as protocol fai
     expect(url.searchParams.get("savedId")).toBe("saved");
     expect(new Headers(options?.headers).get("X-Radian-Instance")).toBe("first");
     expect(options?.method ?? "GET").toBe("GET");
+
     return Response.json(response);
   });
   const client = new RuntimeClient(paths, snapshot());
@@ -131,8 +133,8 @@ test("Fifteen sections and saved status cross IPC while invalid telemetry fails"
     },
   };
   let response: unknown = valid;
-  const fetchMock = stub(async () => Response.json(response)),
-    client = new RuntimeClient(paths, snapshot());
+  const fetchMock = stub(async () => Response.json(response));
+  const client = new RuntimeClient(paths, snapshot());
   try {
     // Read preview responses through actual client schema checks.
     const preview = expectOk(await client.previewHistory("tree", "saved"));
@@ -245,6 +247,7 @@ test("Structured commands/timeouts survive preview IPC while invalid types/limit
       returned = { ...section, ...invalid };
       expect(expectError(await client.previewHistory("tree", "saved")).code).toBe("PROTOCOL_ERROR");
     }
+
     const { command: _command, timeoutSeconds: _timeout, ...legacy } = section;
     returned = legacy;
     expect(
@@ -323,8 +326,8 @@ test("Closed-popup list requests return CANCELLED and reject other worktree list
           },
         ]),
   );
-  const client = new RuntimeClient(paths, snapshot()),
-    controller = new AbortController();
+  const client = new RuntimeClient(paths, snapshot());
+  const controller = new AbortController();
   try {
     const read = client.listHistory("tree", controller.signal);
     controller.abort();
@@ -346,12 +349,13 @@ test("Cancelled previews return CANCELLED rather than exceptions or empty succes
         });
       }),
   );
-  const client = new RuntimeClient(paths, snapshot()),
-    controller = new AbortController();
+  const client = new RuntimeClient(paths, snapshot());
+  const controller = new AbortController();
   try {
     const pending = client.previewHistory("tree", "saved", controller.signal);
     controller.abort();
     expect(expectError(await pending).code).toBe("CANCELLED");
+
     const count = fetchMock.mock.calls.length;
     expect(expectError(await client.previewHistory("tree", "saved", controller.signal)).code).toBe(
       "CANCELLED",

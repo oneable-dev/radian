@@ -29,6 +29,7 @@ import { ResourcePanel } from "./resource-panel.ts";
 import type { ResourceLoader } from "../../usage/process-resources.ts";
 
 type Project = { id: string; name: string };
+
 type Strip = {
   root: BoxRenderable;
   text: TextRenderable[];
@@ -37,6 +38,7 @@ type Strip = {
   change: (index: number) => void;
   compact?: boolean;
 };
+
 export type DashboardActions = {
   resources?: ResourceLoader;
   load?: (
@@ -49,6 +51,7 @@ export type DashboardActions = {
   fallback: () => void;
   keyHint: (command: CommandId, context: KeyContext) => string;
 };
+
 const categories: DashboardCategory[] = ["skills", "models", "mcp", "subagents"];
 const metrics: DashboardMetric[] = ["tokens", "runs", "durationMs"];
 const periods: DashboardPeriod[] = [1, 7, 30];
@@ -199,6 +202,7 @@ export class DashboardPanel {
     renderer.addPostProcessFn(this.revealRanking);
     this.resize();
   }
+
   private text(id: string, height = 1): TextRenderable {
     return new TextRenderable(this.renderer, {
       id,
@@ -209,6 +213,7 @@ export class DashboardPanel {
       wrapMode: "none",
     });
   }
+
   private strip(id: string, labels: string[], change: Strip["change"], compact = false): Strip {
     const root = new BoxRenderable(this.renderer, {
       id,
@@ -228,7 +233,10 @@ export class DashboardPanel {
         wrapMode: "none",
         selectable: false,
         onMouseDown: (event) => {
-          if (event.button !== 0) return;
+          if (event.button !== 0) {
+            return;
+          }
+
           event.preventDefault();
           event.stopPropagation();
           root.focus();
@@ -240,23 +248,31 @@ export class DashboardPanel {
       root.add(text);
       strip.text.push(text);
     }
+
     root.on("focused", () => {
       this.paint();
       this.scroll?.scrollChildIntoView(root.id);
-      if (root === this.category?.root) this.revealRankingPending = true;
+      if (root === this.category?.root) {
+        this.revealRankingPending = true;
+      }
     });
     root.on("blurred", () => this.paint());
+
     return strip;
   }
+
   get visible(): boolean {
     return !this.disposed && this.root.visible;
   }
+
   get context(): KeyContext {
     return this.focusedStrip() ? "dashboard-tabs" : "dashboard";
   }
+
   get focusTargets(): Renderable[] {
     return [this.scroll, this.period.root, this.project.root, this.metric.root, this.category.root];
   }
+
   get shortcuts(): readonly FooterShortcut[] {
     return (
       [
@@ -272,9 +288,15 @@ export class DashboardPanel {
       label,
     }));
   }
+
   show(): void {
-    if (this.disposed) return;
-    if (!this.visible) this.owner = this.renderer.currentFocusedRenderable ?? undefined;
+    if (this.disposed) {
+      return;
+    }
+    if (!this.visible) {
+      this.owner = this.renderer.currentFocusedRenderable ?? undefined;
+    }
+
     const selectedId = this.projects[this.project.index - 1]?.id;
     this.projects = this.actions.projects();
     this.project.labels = ["All projects", ...this.projects.map((project) => project.name)];
@@ -288,8 +310,12 @@ export class DashboardPanel {
     this.resources.start();
     this.reload();
   }
+
   hide(restoreFocus = true): void {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
+
     this.root.visible = false;
     this.revision++;
     this.request?.abort();
@@ -297,32 +323,44 @@ export class DashboardPanel {
     this.resources.stop();
     this.loading = false;
     this.revealRankingPending = false;
+
     const owner = this.owner;
     this.owner = undefined;
     if (restoreFocus) {
       let visible = !!owner && !owner.isDestroyed;
-      for (let node = owner; node; node = node.parent as Renderable | undefined)
+      for (let node = owner; node; node = node.parent as Renderable | undefined) {
         visible &&= node.visible;
-      if (visible && owner) owner.focus();
-      else this.actions.fallback();
+      }
+
+      if (visible && owner) {
+        owner.focus();
+      } else {
+        this.actions.fallback();
+      }
     }
+
     this.actions.changed();
   }
+
   private focusedStrip(): Strip | undefined {
     return [this.period, this.project, this.metric, this.category].find(
       (strip) => strip?.root.focused,
     );
   }
+
   command(command: CommandId): void {
     if (command === "dashboard.dismiss") {
       this.hide();
+
       return;
     }
     if (command === "dashboard.refresh") {
       this.resources.refresh();
       this.reload();
+
       return;
     }
+
     const strip = this.focusedStrip();
     if (command === "dashboard.next" || command === "dashboard.previous") {
       const direction = command === "dashboard.next" ? 1 : -1;
@@ -330,28 +368,43 @@ export class DashboardPanel {
         strip.index = (strip.index + direction + strip.labels.length) % strip.labels.length;
         strip.change(strip.index);
         this.paint();
-      } else this.scroll.scrollBy(direction);
+      } else {
+        this.scroll.scrollBy(direction);
+      }
     } else if (command === "dashboard.half-page-down" || command === "dashboard.half-page-up") {
       this.scroll.focus();
       this.scroll.scrollBy(
         (command === "dashboard.half-page-down" ? 1 : -1) *
           halfPageStep(this.scroll.viewport.height),
       );
-    } else if (command === "dashboard.first") this.scroll.scrollTo(0);
-    else if (command === "dashboard.last") this.scroll.scrollTo(this.scroll.scrollHeight);
+    } else if (command === "dashboard.first") {
+      this.scroll.scrollTo(0);
+    } else if (command === "dashboard.last") {
+      this.scroll.scrollTo(this.scroll.scrollHeight);
+    }
+
     this.actions.changed();
   }
+
   private reload(): void {
     const revision = ++this.revision;
     this.request?.abort();
+
     const request = (this.request = new AbortController());
     this.error = "";
     this.revealErrorPending = false;
     this.loading = !!this.actions.load;
-    if (this.loading) this.spinner.start();
-    else this.error = "Dashboard data is unavailable in this view.";
+    if (this.loading) {
+      this.spinner.start();
+    } else {
+      this.error = "Dashboard data is unavailable in this view.";
+    }
+
     this.paint();
-    if (!this.actions.load) return;
+    if (!this.actions.load) {
+      return;
+    }
+
     const pending = this.actions.load(
       periods[this.period.index]!,
       this.projects[this.project.index - 1]?.id,
@@ -359,9 +412,12 @@ export class DashboardPanel {
     );
     void pending
       .then((result) => {
-        if (!this.visible || revision !== this.revision) return;
-        if (result.ok) this.snapshot = result.value;
-        else {
+        if (!this.visible || revision !== this.revision) {
+          return;
+        }
+        if (result.ok) {
+          this.snapshot = result.value;
+        } else {
           this.error = `[${result.error.code}] ${result.error.message}`;
           this.revealErrorPending = true;
         }
@@ -381,10 +437,14 @@ export class DashboardPanel {
         }
       });
   }
+
   private paint(): void {
-    if (!this.summary || this.disposed) return;
-    const styles = uiTheme(this.renderer).styles,
-      width = this.contentWidth;
+    if (!this.summary || this.disposed) {
+      return;
+    }
+
+    const styles = uiTheme(this.renderer).styles;
+    const width = this.contentWidth;
     for (const strip of [this.period, this.project, this.metric, this.category]) {
       const slot = Math.max(1, Math.floor(width / strip.text.length));
       strip.text.forEach((text, index) => {
@@ -392,14 +452,19 @@ export class DashboardPanel {
         const label = strip.compact
           ? `Project ‹ ${singleLine(strip.labels[strip.index] ?? "All projects")} ›`
           : ` ${strip.labels[index]} `;
+
         text.width = strip.compact ? width : slot;
         text.content = truncateCells(label, strip.compact ? width : slot);
-        paintText(
-          text,
-          styles[active ? (strip.root.focused ? "ui.buttonFocused" : "ui.tabActive") : "ui.tab"],
-        );
+
+        let role: "ui.buttonFocused" | "ui.tabActive" | "ui.tab" = "ui.tab";
+        if (active) {
+          role = strip.root.focused ? "ui.buttonFocused" : "ui.tabActive";
+        }
+
+        paintText(text, styles[role]);
       });
     }
+
     const snapshot = this.snapshot;
     this.message.content = this.loading
       ? ""
@@ -412,19 +477,22 @@ export class DashboardPanel {
       styles[this.error || snapshot?.warnings.length ? "status.warning" : "ui.muted"],
     );
     this.message.visible = Boolean(this.message.plainText);
+
     const contentVisible = !!snapshot || !this.loading;
     // Keep an empty data region below the editable strips for centered initial feedback.
     this.historyBody.minHeight = contentVisible ? 0 : 7;
-    for (const node of [this.summary, this.graph, this.rankingBody.root, this.notes])
+    for (const node of [this.summary, this.graph, this.rankingBody.root, this.notes]) {
       node.visible = contentVisible;
+    }
+
     const totals = snapshot?.totals;
     const values = [
       totals ? dashboardValue(totals.tokens) : "—",
       totals ? dashboardValue(totals.runs, "runs") : "—",
       totals ? dashboardValue(totals.durationMs, "durationMs") : "—",
     ];
-    const labels = ["Total tokens", "Runs", "Total run time"],
-      slot = Math.max(1, Math.floor(width / 3));
+    const labels = ["Total tokens", "Runs", "Total run time"];
+    const slot = Math.max(1, Math.floor(width / 3));
     const chunks = [
       styleChunk(
         labels.map((label) => truncateCells(label, slot - 1).padEnd(slot)).join("") + "\n",
@@ -435,19 +503,24 @@ export class DashboardPanel {
         styles["ui.popupTitle"],
       ),
     ];
+
     this.summary.content = new StyledText(chunks);
-    const metric = metrics[this.metric.index]!,
-      graph = snapshot
-        ? dashboardTrend(snapshot.daily, metric, width, this.renderer.height < 25 ? 2 : 4)
-        : [];
+
+    const metric = metrics[this.metric.index]!;
+    const graph = snapshot
+      ? dashboardTrend(snapshot.daily, metric, width, this.renderer.height < 25 ? 2 : 4)
+      : [];
+
     this.graph.height = Math.max(2, graph.length + 1);
     this.graph.content = graph.join("\n");
-    const category = categories[this.category.index]!,
-      rows = snapshot?.[category] ?? [];
+
+    const category = categories[this.category.index]!;
+    const rows = snapshot?.[category] ?? [];
     const ranking = snapshot
       ? dashboardBars(rows, width)
       : [this.loading ? "" : "No statistics available."];
     const empty = !!snapshot && !rows.length;
+
     this.ranking.height = empty ? 0 : ranking.length + 1;
     this.rankingBody.root.height = empty ? (this.renderer.height < 25 ? 3 : 6) : ranking.length + 1;
     this.rankingBody.showEmpty(empty ? "No recorded usage in this period." : undefined);
@@ -460,36 +533,55 @@ export class DashboardPanel {
           ),
           styleChunk(ranking.join("\n"), styles["ui.label"]),
         ]);
+
     this.notes.content =
       "Tokens include input, output and cache. Runs/time include recorded settled runs; overlapping durations are summed. Skills combine explicit calls and successful loads. Only observed MCP/subagent calls are counted." +
       (snapshot?.warnings.length ? `\n\nCoverage warnings\n${snapshot.warnings.join("\n")}` : "");
     this.actions.changed();
   }
+
   private revealRanking = (): void => {
-    if (!this.visible || this.root.isDestroyed) return;
+    if (!this.visible || this.root.isDestroyed) {
+      return;
+    }
     if (this.revealErrorPending) {
       this.revealErrorPending = false;
       this.revealRankingPending = false;
       this.scroll.scrollChildIntoView(this.message.id);
+
       return;
     }
-    if (!this.revealRankingPending) return;
+    if (!this.revealRankingPending) {
+      return;
+    }
+
     this.revealRankingPending = false;
     // Wait for the ranking body's new height before revealing the selected resource category.
     this.scroll.scrollChildIntoView(this.rankingBody.root.id);
   };
+
   private keepFocus = (): void => {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
     for (
       let node = this.renderer.currentFocusedRenderable;
       node;
       node = node.parent as Renderable | null
-    )
-      if (node === this.root) return;
+    ) {
+      if (node === this.root) {
+        return;
+      }
+    }
+
     this.scroll.focus();
   };
+
   private resize = (): void => {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     const { width } = centerPopup(
       this.panel,
       POPUP_SIZES.expanded,
@@ -501,8 +593,12 @@ export class DashboardPanel {
     this.resources.fit(this.contentWidth);
     this.paint();
   };
+
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.hide(false);
     this.disposed = true;
     this.spinner.cancel();
@@ -511,6 +607,8 @@ export class DashboardPanel {
     this.renderer.off("resize", this.resize);
     this.renderer.off("focused_renderable", this.keepFocus);
     this.renderer.removePostProcessFn(this.revealRanking);
-    if (!this.root.isDestroyed) this.root.destroyRecursively();
+    if (!this.root.isDestroyed) {
+      this.root.destroyRecursively();
+    }
   }
 }

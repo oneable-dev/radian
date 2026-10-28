@@ -22,7 +22,10 @@ export class Button extends BoxRenderable {
       paddingX: 1,
       focusable: true,
       onMouseDown: (event) => {
-        if (event.button !== 0) return;
+        if (event.button !== 0) {
+          return;
+        }
+
         event.stopPropagation();
         event.preventDefault();
         this.focus();
@@ -36,35 +39,32 @@ export class Button extends BoxRenderable {
       selectable: false,
     });
     this.add(this.label);
+
     const theme = uiTheme(renderer);
     this.paint = () => {
       const styles = theme.styles;
-      const group =
-        this.selected === undefined
-          ? this.focused
-            ? "ui.buttonFocused"
-            : "ui.button"
-          : this.variant === "default"
-            ? this.selected
-              ? "ui.buttonActive"
-              : "ui.buttonInactive"
-            : this.selected
-              ? this.variant === "session-tab"
-                ? "ui.tabActive"
-                : "ui.workTabActive"
-              : this.variant === "work-tab" && this.focused
-                ? "ui.workTabFocused"
-                : "ui.tab";
+      let group: keyof typeof styles;
+      if (this.selected === undefined) {
+        group = this.focused ? "ui.buttonFocused" : "ui.button";
+      } else if (this.variant === "default") {
+        group = this.selected ? "ui.buttonActive" : "ui.buttonInactive";
+      } else if (this.selected) {
+        group = this.variant === "session-tab" ? "ui.tabActive" : "ui.workTabActive";
+      } else {
+        group = this.variant === "work-tab" && this.focused ? "ui.workTabFocused" : "ui.tab";
+      }
       const value = styles[group];
+
       paintText(this.label, value);
-      this.backgroundColor =
-        this.variant === "work-tab"
-          ? value.bg
-          : this.focused
-            ? (value.bg ?? styles["ui.selection"].bg)
-            : this.variant === "session-tab" && this.selected
-              ? (value.bg ?? styles["ui.selectionInactive"].bg)
-              : value.bg;
+      if (this.variant === "work-tab") {
+        this.backgroundColor = value.bg;
+      } else if (this.focused) {
+        this.backgroundColor = value.bg ?? styles["ui.selection"].bg;
+      } else if (this.variant === "session-tab" && this.selected) {
+        this.backgroundColor = value.bg ?? styles["ui.selectionInactive"].bg;
+      } else {
+        this.backgroundColor = value.bg;
+      }
     };
     theme.bind(this, this.paint);
     this.on("focused", this.paint);

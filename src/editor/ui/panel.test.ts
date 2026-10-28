@@ -14,28 +14,31 @@ const tree: Worktree = {
   branch: "main",
   sessions: [],
 };
+
 async function mount() {
   const app = await createTestRenderer({ width: 60, height: 16, kittyKeyboard: true });
-  const inputs: string[] = [],
-    notices: string[] = [];
-  const openSizes: { cols: number; rows: number }[] = [],
-    sizes: { cols: number; rows: number }[] = [];
+  const inputs: string[] = [];
+  const notices: string[] = [];
+  const openSizes: { cols: number; rows: number }[] = [];
+  const sizes: { cols: number; rows: number }[] = [];
   const failures: ((error: unknown) => void)[] = [];
   const receivers: ((frame: EditorFrame) => void)[] = [];
-  let attaches = 0,
-    opens = 0,
-    detaches = 0;
+  let attaches = 0;
+  let opens = 0;
+  let detaches = 0;
   const actions: EditorActions = {
     info: () => ({ id: "editor", worktreeId: tree.id, pid: 123, exited: false, exitCode: null }),
     open: async (_id, size) => {
       opens++;
       openSizes.push(size);
+
       return ok("editor");
     },
     attach: async (id, receive, failed) => {
       attaches++;
       failures.push(failed);
       receivers.push(receive);
+
       let revision = 0;
       const frame = (cols: number, rows: number): EditorFrame => ({
         id,
@@ -48,7 +51,9 @@ async function mount() {
         revision: revision++,
         ansi: `\x1bcBUFFER-${id}`,
       });
+
       receive(frame(80, 24));
+
       return ok({
         input: (bytes) => inputs.push(new TextDecoder().decode(bytes)),
         resize: (cols, rows) => {
@@ -71,12 +76,15 @@ async function mount() {
         onMouseDown: activate,
       });
       button.add(new TextRenderable(app.renderer, { content: label }));
+
       return button;
     },
     (message) => notices.push(message),
     () => {},
   );
+
   app.renderer.root.add(panel.root);
+
   const render = async () => {
     await app.renderOnce();
     await app.renderOnce();
@@ -84,6 +92,7 @@ async function mount() {
   panel.show(tree, true);
   await render();
   await render();
+
   return {
     ...app,
     actions,
@@ -135,6 +144,7 @@ test("Editor fills panels without margins across resize and forwards identical P
       expect(app.sizes.at(-1)).toEqual({ cols: width, rows: height });
       expect(app.captureCharFrame().split("\n")[0]).toStartWith("BUFFER-editor");
     }
+
     expect(app.attaches).toBe(1);
     expect(app.opens).toBe(0);
   } finally {
@@ -180,6 +190,7 @@ test("Cached Editor screens restore immediately but input waits for new lease ac
         pending.resolve(await attach(id, receive, failed));
       };
       started.resolve();
+
       return pending.promise;
     };
     app.panel.hide();
@@ -193,6 +204,7 @@ test("Cached Editor screens restore immediately but input waits for new lease ac
     original.focus();
     await app.mockInput.typeText("blocked-input");
     expect(app.inputs.join("")).not.toContain("blocked-input");
+
     const ready = resume!;
     resume = undefined;
     await ready();
@@ -203,7 +215,10 @@ test("Cached Editor screens restore immediately but input waits for new lease ac
     expect(app.opens).toBe(0);
     expect(app.detaches).toBe(1);
   } finally {
-    if (resume) await resume();
+    if (resume) {
+      await resume();
+    }
+
     await app.close();
   }
 });
@@ -222,15 +237,19 @@ test("Disconnected Editor guidance stays centered across resize and preserves ca
     ] as const) {
       app.resize(width, height);
       await app.render();
+
       const lines = app.captureCharFrame().split("\n");
       const messageY = lines.findIndex((line) => line.includes("Editor unavailable"));
       const actionY = lines.findIndex((line) => line.includes("Open / reconnect editor"));
       for (const y of [messageY, actionY]) {
         expect(y).toBeGreaterThan(0);
-        const line = lines[y]!,
-          text = line.trim();
+
+        const line = lines[y]!;
+        const text = line.trim();
+
         expect(Math.abs(line.indexOf(text) + text.length / 2 - width / 2)).toBeLessThanOrEqual(1);
       }
+
       expect(Math.abs((messageY + actionY + 1) / 2 - height / 2)).toBeLessThanOrEqual(1);
       expect(app.captureCharFrame()).not.toContain("BUFFER-editor");
       expect(app.panel.openButton.focused).toBe(true);
@@ -290,6 +309,7 @@ test("Failure immediately after first reconnect frames prevents adoption despite
     app.actions.attach = async (id, receive, failed) => {
       const result = await attach(id, receive, failed);
       failed(new EditorError("EDITOR_UNAVAILABLE", "Stream ended during admission."));
+
       return result;
     };
     app.panel.show(tree, true);
@@ -325,6 +345,7 @@ test("Exit frames arriving before snapshots still make explicit opening request 
     await app.render();
     app.actions.open = async (id, size) => {
       await open(id, size);
+
       return ok("replacement");
     };
     app.panel.show(tree, true);

@@ -29,8 +29,10 @@ function weeklyWindow(
     !Number.isSafeInteger(reset) ||
     !Number.isSafeInteger(reset * 1000) ||
     reset * 1000 <= now
-  )
+  ) {
     return null;
+  }
+
   return { remainingPercent: 100 - used, resetsAt: reset * 1000, observedAt: now };
 }
 
@@ -50,11 +52,16 @@ function weeklyHeaders(headers: Record<string, string>, now: number): WeeklyQuot
       !used.trim() ||
       !minutes.trim() ||
       !reset.trim()
-    )
+    ) {
       continue;
+    }
+
     const value = weeklyWindow(Number(used), Number(minutes), Number(reset), now);
-    if (value) return value;
+    if (value) {
+      return value;
+    }
   }
+
   return null;
 }
 
@@ -64,14 +71,23 @@ function weeklyEvent(event: Record<string, unknown>, now: number): WeeklyQuota |
     event.metered_limit_name !== undefined &&
     event.metered_limit_name !== null &&
     event.metered_limit_name !== "codex"
-  )
+  ) {
     return null;
-  if (!record(event.rate_limits)) return null;
-  for (const value of [event.rate_limits.primary, event.rate_limits.secondary]) {
-    if (!record(value)) continue;
-    const quota = weeklyWindow(value.used_percent, value.window_minutes, value.reset_at, now);
-    if (quota) return quota;
   }
+  if (!record(event.rate_limits)) {
+    return null;
+  }
+  for (const value of [event.rate_limits.primary, event.rate_limits.secondary]) {
+    if (!record(value)) {
+      continue;
+    }
+
+    const quota = weeklyWindow(value.used_percent, value.window_minutes, value.reset_at, now);
+    if (quota) {
+      return quota;
+    }
+  }
+
   return null;
 }
 
@@ -93,6 +109,7 @@ export class PiSessionTelemetry {
   ) {
     this.usage = usage?.watch(changed);
     this.unsubscribeFast = fastMode?.subscribe(changed);
+
     const agent = session.agent;
     this.previous = {
       payload: agent.onPayload,
@@ -110,6 +127,7 @@ export class PiSessionTelemetry {
       this.fast = null;
       this.weekly = null;
     }
+
     this.requestScope = next;
   }
 
@@ -117,21 +135,29 @@ export class PiSessionTelemetry {
     const replacement = await this.previous.payload?.(payload, model);
     const transformed = replacement === undefined ? payload : replacement;
     const outgoing = this.fastMode ? this.fastMode.apply(transformed, model) : transformed;
+
     this.useScope(model);
     this.fast =
       priorityApi(model) && record(outgoing)
         ? outgoing.service_tier === "priority" || outgoing.service_tier === "fast"
         : null;
-    if (this.fast !== null) this.fastMode?.observe(model, this.fast);
+    if (this.fast !== null) {
+      this.fastMode?.observe(model, this.fast);
+    }
+
     // A fresh response must confirm the account allowance again; do not carry it across credentials or buckets.
     this.weekly = null;
     this.changed();
+
     return outgoing === transformed ? replacement : outgoing;
   };
 
   private response: NonNullable<AgentSession["agent"]["onResponse"]> = async (response, model) => {
     await this.previous.response?.(response, model);
-    if (model.api !== "openai-codex-responses") return;
+    if (model.api !== "openai-codex-responses") {
+      return;
+    }
+
     this.useScope(model);
     this.weekly = weeklyHeaders(response.headers, Date.now());
     this.changed();
@@ -146,8 +172,10 @@ export class PiSessionTelemetry {
       model.api !== "openai-codex-responses" ||
       !record(event) ||
       event.type !== "codex.rate_limits"
-    )
+    ) {
       return;
+    }
+
     this.useScope(model);
     this.weekly = weeklyEvent(event, Date.now());
     this.changed();
@@ -165,16 +193,23 @@ export class PiSessionTelemetry {
         // Pre-compaction usage is stale. Estimate only the current projection, replaying system patches once.
         const { messages } = this.session.sessionManager.buildSessionProjection();
         const system = getCurrentSystemMessage(messages);
+
         usedTokens = system ? estimateTokens(system) : 0;
-        for (const message of messages)
-          if (message.role !== "system") usedTokens += estimateTokens(message);
+        for (const message of messages) {
+          if (message.role !== "system") {
+            usedTokens += estimateTokens(message);
+          }
+        }
       }
+
       this.contextCache = {
         key,
         value: usage ? { usedTokens, maxTokens: usage.contextWindow } : null,
       };
     }
+
     const matches = model !== undefined && scope(model) === this.requestScope;
+
     return {
       provider: model?.provider ?? null,
       model: model?.id ?? null,
@@ -201,10 +236,16 @@ export class PiSessionTelemetry {
   dispose(): void {
     this.usage?.dispose();
     this.unsubscribeFast?.();
+
     const agent = this.session.agent;
-    if (agent.onPayload === this.payload) agent.onPayload = this.previous.payload;
-    if (agent.onResponse === this.response) agent.onResponse = this.previous.response;
-    if (agent.onProviderStreamEvent === this.event)
+    if (agent.onPayload === this.payload) {
+      agent.onPayload = this.previous.payload;
+    }
+    if (agent.onResponse === this.response) {
+      agent.onResponse = this.previous.response;
+    }
+    if (agent.onProviderStreamEvent === this.event) {
       agent.onProviderStreamEvent = this.previous.event;
+    }
   }
 }

@@ -32,11 +32,13 @@ function palette(light = false): TerminalColors {
     highlightBackground: null,
   };
 }
+
 const rgb = (color: RGBA) => color.toInts().slice(0, 3);
 
 async function mount() {
   const app = await createTestRenderer({ width: 140, height: 28, kittyKeyboard: true });
   uiTheme(app.renderer).configure(palette());
+
   const selection = new WorkspaceSelection(demoWorkspace());
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {},
@@ -45,13 +47,18 @@ async function mount() {
     getSessionDetails: () => ({ status: null, error: null, output: "Theme-sensitive transcript" }),
     initialDrafts: { a1: "unsent request" },
   });
+
   await app.renderOnce();
+
   const span = (text: string) => {
     const value = app
       .captureSpans()
       .lines.flatMap((line) => line.spans)
       .find((item) => item.text.includes(text));
-    if (!value) throw new Error(`Missing colored text: ${text}`);
+    if (!value) {
+      throw new Error(`Missing colored text: ${text}`);
+    }
+
     return value;
   };
   const identitySpan = () => {
@@ -62,11 +69,16 @@ async function mount() {
       .lines.at(-1)!
       .spans.find((item) => {
         x += item.width;
+
         return x > column;
       });
-    if (!value) throw new Error("Missing footer identity");
+    if (!value) {
+      throw new Error("Missing footer identity");
+    }
+
     return value;
   };
+
   return {
     ...app,
     view,
@@ -90,13 +102,18 @@ test("Full screens use terminal defaults/ANSI and immediately switch to light th
     expect(rgb(app.identitySpan().fg)).toEqual([255, 255, 255]);
     expect(app.identitySpan().fg.intent).toBe("rgb");
     expect(rgb(app.identitySpan().bg)).toEqual([17, 119, 153]);
+
     const prompt = app.renderer.root.findDescendantById("session-prompt");
-    if (!(prompt instanceof PromptInput)) throw new Error("Missing Agent input");
+    if (!(prompt instanceof PromptInput)) {
+      throw new Error("Missing Agent input");
+    }
+
     prompt.focus();
     await app.mockInput.typeText(" draft");
     await app.renderOnce();
-    const before = app.captureCharFrame(),
-      selected = app.selection.sessionId;
+
+    const before = app.captureCharFrame();
+    const selected = app.selection.sessionId;
 
     // A palette change must repaint existing controls without remounting the screen.
     app.renderer.emit("palette", palette(true));
@@ -125,8 +142,10 @@ test("Sidebar-to-borderless-input focus preserves selection and drafts", async (
   const border = (box: typeof sidebar) => {
     let x = 0;
     const column = box.x + box.width - 1;
+
     return app.captureSpans().lines[box.y]!.spans.find((span) => {
       x += span.width;
+
       return x > column;
     })!.fg;
   };
@@ -141,8 +160,10 @@ test("Sidebar-to-borderless-input focus preserves selection and drafts", async (
     await app.renderOnce();
 
     const frame = app.captureCharFrame().split("\n");
-    for (const y of [composer.y, composer.y + composer.height - 1])
+    for (const y of [composer.y, composer.y + composer.height - 1]) {
       expect(frame[y]!.slice(composer.x, composer.x + composer.width).trim()).toBe("");
+    }
+
     expect(app.renderer.root.findDescendantById("workspace-picker")!.visible).toBe(false);
     expect(app.selection.sessionId).toBe("a1");
     expect(app.view.promptDrafts.a1).toBe("unsent request");
@@ -197,24 +218,30 @@ test("Only explicit overrides stay fixed while other colors follow later termina
 
 test("Same-dark-mode theme changes requery palettes after notifications", async () => {
   const app = await createTestRenderer({ width: 20, height: 3 });
-  const foreground = "\x1b]10;rgb:eeee/eeee/eeee\x07",
-    background = "\x1b]11;rgb:1212/1212/1212\x07";
+  const foreground = "\x1b]10;rgb:eeee/eeee/eeee\x07";
+  const background = "\x1b]11;rgb:1212/1212/1212\x07";
+
   // Establish the renderer's existing dark mode through the actual input parser.
   app.mockInput.pressKey(foreground);
   app.mockInput.pressKey(background);
+
   const theme = uiTheme(app.renderer);
   theme.configure(palette());
+
   // The test renderer has no active OS terminal; only its outgoing query boundary is replaced.
   const nativeControl = NativeSession.prototype.control;
   const control = spyOn(NativeSession.prototype, "control").mockImplementation(function (
     this: NativeSession,
     command,
   ) {
-    if (command.kind !== "query-theme-colors") nativeControl.call(this, command);
+    if (command.kind !== "query-theme-colors") {
+      nativeControl.call(this, command);
+    }
   });
   const query = spyOn(app.renderer, "getPalette").mockImplementation(async () => {
     const next = { ...palette(), defaultBackground: "#102030" };
     app.renderer.emit("palette", next);
+
     return next;
   });
   try {
@@ -241,12 +268,15 @@ test("Terminal themes stay isolated and destroyed screens unsubscribe", async ()
   const second = await createTestRenderer({ width: 20, height: 3 });
   try {
     // Both renderers may attach to one runtime but must not share presentation state.
-    const a = uiTheme(first.renderer),
-      b = uiTheme(second.renderer);
+    const a = uiTheme(first.renderer);
+    const b = uiTheme(second.renderer);
+
     a.configure(palette());
     b.configure(palette(true));
+
     const owner = new BoxRenderable(first.renderer, { width: 1, height: 1 });
     first.renderer.root.add(owner);
+
     let paints = 0;
     a.bind(owner, () => {
       paints++;

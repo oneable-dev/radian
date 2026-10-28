@@ -40,7 +40,9 @@ async function mount(
         })),
       ),
   });
+
   await setup.renderOnce();
+
   return {
     ...setup,
     selection,
@@ -64,11 +66,14 @@ async function mount(
         setup.mockInput.pressEscape();
         await setup.renderOnce();
       }
+
       const lines = setup.captureCharFrame().split("\n");
       const y = lines.findIndex((line) => line.includes(text));
       const x = lines[y]?.indexOf(text) ?? -1;
-      if (x < 0 || y < 0)
+      if (x < 0 || y < 0) {
         throw new Error(`Visible text not found: ${text}\n${setup.captureCharFrame()}`);
+      }
+
       await setup.mockMouse.click(x, y);
       await setup.renderOnce();
     },
@@ -76,6 +81,7 @@ async function mount(
       const tab = setup.renderer.root.findDescendantById(
         `session:${selection.worktree!.id}:${id}`,
       )!;
+
       return setup
         .captureCharFrame()
         .split("\n")
@@ -83,7 +89,10 @@ async function mount(
     },
     treeFrame(): string {
       const tree = setup.renderer.root.findDescendantById("workspace-tree");
-      if (!tree) throw new Error("Missing workspace viewport");
+      if (!tree) {
+        throw new Error("Missing workspace viewport");
+      }
+
       return setup
         .captureCharFrame()
         .split("\n")
@@ -152,8 +161,11 @@ test("Row close actions never accidentally select parent sessions", async () => 
   const app = await mount();
   try {
     await app.clickText("a2");
+
     const close = app.renderer.root.findDescendantById("close-session:a1");
-    if (!close) throw new Error("Missing session tab close control");
+    if (!close) {
+      throw new Error("Missing session tab close control");
+    }
 
     // Activate A1's visible close control, rather than selecting A1's tab.
     await app.mockMouse.click(close.x, close.y);
@@ -172,6 +184,7 @@ test("Empty-worktree creation sends requests without manipulating selection or o
   const app = await mount();
   try {
     await app.clickText("radian-empty");
+
     const before = app.selection.snapshot;
 
     // The action crosses the host callback boundary without implementing OA-5.
@@ -338,6 +351,7 @@ test("Tab and Shift+Tab move focus among visible input owners", async () => {
 
     // Focus cycling is explicit because Core has no automatic Tab traversal.
     app.mockInput.pressTab();
+
     const next = app.renderer.currentFocusedRenderable;
     app.mockInput.pressTab({ shift: true });
 
@@ -356,6 +370,7 @@ test("Branch search filters only worktree lists while preserving right sessions 
   try {
     const before = app.selection.snapshot;
     await app.openWorkspaces();
+
     const input = app.renderer.currentFocusedRenderable;
 
     // Mixed-case typing filters on INPUT, without Enter or blur.
@@ -384,6 +399,7 @@ test("Typing q/n/x in search never quits or executes session actions and Ctrl+C 
 
     // These characters are text while the field is focused, not global commands.
     await app.searchFor("querynx");
+
     const input = app.renderer.currentFocusedRenderable;
     expect(app.captureCharFrame()).toContain("No matching workspaces");
     expect(app.selection.sessionId).toBe("a1");
@@ -408,6 +424,7 @@ test("Search deletion and paste update results while retaining input focus", asy
   const app = await mount();
   try {
     await app.searchFor("mainx");
+
     const input = app.renderer.currentFocusedRenderable;
     expect(app.captureCharFrame()).toContain("No matching workspaces");
 
@@ -488,6 +505,7 @@ test("Snapshots during search use current queries and hidden states reveal lates
   const app = await mount();
   try {
     await app.searchFor("IAN-UI");
+
     const input = app.renderer.currentFocusedRenderable;
 
     // The host reports new visible metadata and a hidden child's failure; no SDK is involved.
@@ -497,7 +515,7 @@ test("Snapshots during search use current queries and hidden states reveal lates
         worktrees: repo.worktrees.map((tree) => ({
           ...tree,
           sessions: tree.sessions.map((session) => {
-            if (session.id === "a1")
+            if (session.id === "a1") {
               return {
                 ...session,
                 subagents: session.subagents.map((agent) => ({
@@ -505,11 +523,14 @@ test("Snapshots during search use current queries and hidden states reveal lates
                   status: "failure" as const,
                 })),
               };
-            if (session.id === "b1")
+            }
+            if (session.id === "b1") {
               return {
                 ...session,
                 subagents: [{ id: "fresh", name: "Fresh child", status: "working" as const }],
               };
+            }
+
             return session;
           }),
         })),
@@ -537,6 +558,7 @@ test("Repository-name searches retain all worktrees and remain editable after Ta
   const app = await mount();
   try {
     await app.searchFor("DIAN [DE");
+
     const input = app.renderer.currentFocusedRenderable;
     expect(app.treeFrame()).toContain("radian-empty");
     expect(app.treeFrame()).toContain(`${icons.branch} main`);
@@ -585,6 +607,7 @@ test("Compact resize preserves query/focus and allows continued result editing",
   const app = await mount();
   try {
     await app.searchFor("MAIN");
+
     const input = app.renderer.currentFocusedRenderable;
 
     // Resize changes layout, not input identity or canonical selection.

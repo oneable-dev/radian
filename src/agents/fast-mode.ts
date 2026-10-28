@@ -43,7 +43,10 @@ export class FastMode {
         handler: async (args, ctx) => {
           const result = this.command(args, ctx.model);
           // Pi's command contract requires exceptions; normal domain validation remains a Result.
-          if (!result.ok) throw result.error;
+          if (!result.ok) {
+            throw result.error;
+          }
+
           ctx.ui.notify(
             `fast ${result.value ? "on" : "off"} (session only)${result.value ? " · priority may increase usage" : ""}`,
             "info",
@@ -55,15 +58,23 @@ export class FastMode {
 
   subscribe(changed: () => void): () => void {
     this.listeners.add(changed);
+
     return () => this.listeners.delete(changed);
   }
+
   private changed(): void {
-    for (const listener of this.listeners) listener();
+    for (const listener of this.listeners) {
+      listener();
+    }
   }
 
   read(model: Model<Api> | undefined): boolean | null {
-    if (!this.active || !model || !supported(model)) return null;
+    if (!this.active || !model || !supported(model)) {
+      return null;
+    }
+
     const key = scope(model);
+
     return this.observed.get(key) ?? this.requested.get(key) ?? false;
   }
 
@@ -72,37 +83,51 @@ export class FastMode {
     model: Model<Api> | undefined,
   ): Result<boolean, InputError | CapabilityError> {
     const action = args.trim();
-    if (!["", "on", "off", "status"].includes(action))
+    if (!["", "on", "off", "status"].includes(action)) {
       return err(new InputError("Usage: /fast [on|off|status]"));
-    if (!this.active || !model || !supported(model))
+    }
+    if (!this.active || !model || !supported(model)) {
       return err(
         new CapabilityError("Priority requests are not supported by this model provider."),
       );
-    if (action === "status") return ok(this.read(model) === true);
+    }
+    if (action === "status") {
+      return ok(this.read(model) === true);
+    }
+
     const enabled = action === "" ? this.read(model) !== true : action === "on";
     this.requested.set(scope(model), enabled);
     this.observed.delete(scope(model));
     this.changed();
+
     return ok(enabled);
   }
 
   apply(payload: unknown, model: Model<Api>): unknown {
-    if (!this.active || !supported(model) || !record(payload) || payload.model !== model.id)
+    if (!this.active || !supported(model) || !record(payload) || payload.model !== model.id) {
       return payload;
+    }
+
     const requested = this.requested.get(scope(model));
-    if (requested === true) return { ...payload, service_tier: "priority" };
+    if (requested === true) {
+      return { ...payload, service_tier: "priority" };
+    }
     if (
       requested === false &&
       (payload.service_tier === "priority" || payload.service_tier === "fast")
     ) {
       const next = { ...payload };
       delete next.service_tier;
+
       return next;
     }
+
     return payload;
   }
 
   observe(model: Model<Api>, enabled: boolean): void {
-    if (this.active && supported(model)) this.observed.set(scope(model), enabled);
+    if (this.active && supported(model)) {
+      this.observed.set(scope(model), enabled);
+    }
   }
 }

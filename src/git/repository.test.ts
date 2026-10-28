@@ -10,7 +10,9 @@ import { expectError, expectOk } from "../testing/results.ts";
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), "radian-git-view-"));
   const cwd = join(directory, "repo");
+
   await mkdir(cwd);
+
   const git = async (...args: string[]): Promise<string> => {
     const child = Bun.spawn(
       [
@@ -34,16 +36,21 @@ async function fixture() {
       new Response(child.stderr).text(),
       child.exited,
     ]);
-    if (code !== 0) throw new Error(error);
+    if (code !== 0) {
+      throw new Error(error);
+    }
+
     return output;
   };
   await git("init", "--initial-branch=main");
-  const source = new GitRepository(cwd),
-    signal = new AbortController().signal;
+
+  const source = new GitRepository(cwd);
+  const signal = new AbortController().signal;
   const commit = async (message: string) => {
     await git("add", "--all");
     await git("commit", "-m", message);
   };
+
   return {
     directory,
     cwd,
@@ -133,24 +140,30 @@ test("Commit details use --points-at for directly targeting local/remote branche
   try {
     await writeFile(join(app.cwd, "sample.txt"), "first\n");
     await app.commit("First");
+
     const first = (await app.git("rev-parse", "HEAD")).trim();
     await writeFile(join(app.cwd, "sample.txt"), "second\n");
     await app.commit("Second");
+
     const second = (await app.git("rev-parse", "HEAD")).trim();
     await app.git("branch", "feature/topic");
     await app.git("tag", "-a", "selected-tag", "-m", "Selected");
     await writeFile(join(app.cwd, "sample.txt"), "third\n");
     await app.commit("Third");
+
     const third = (await app.git("rev-parse", "HEAD")).trim();
     await app.git("tag", "future-tag");
+
     const unrelated = (await app.git("commit-tree", "HEAD^{tree}", "-m", "Unrelated root")).trim();
     await app.git("branch", "unrelated", unrelated);
     for (const [name, oid] of [
       ["main", third],
       ["topic", second],
       ["unrelated", unrelated],
-    ] as const)
+    ] as const) {
       await app.git("update-ref", `refs/remotes/origin/${name}`, oid);
+    }
+
     await app.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
 
     // Containment alone is insufficient; return only exactly matching ref targets.
@@ -187,6 +200,7 @@ test("Commit details use --points-at for directly targeting local/remote branche
         { kind: "remote", name: "origin/main", oid: third },
       ],
     });
+
     const text = describeCommit(middle, snapshot.refs, snapshot);
     expect(text).toContain("Branches: feature/topic\n");
     expect(text).toContain("Remotes: origin/topic\n");
@@ -205,9 +219,11 @@ test("Reflog-only commits remain hash-queryable and compare against original par
   try {
     await writeFile(join(app.cwd, "sample.txt"), "before\n");
     await app.commit("Initial");
+
     const parent = (await app.git("rev-parse", "HEAD")).trim();
     await writeFile(join(app.cwd, "sample.txt"), "after\n");
     await app.commit("Lost change\n\nComplete lost commit message");
+
     const lost = (await app.git("rev-parse", "HEAD")).trim();
     await app.git("reset", "--hard", parent);
 
@@ -239,8 +255,8 @@ test("Hash queries distinguish invalid input, cancellation, and missing commits 
     const abort = new AbortController();
     abort.abort();
 
-    const invalid = await app.source.lookup("HEAD~1", app.signal),
-      cancelled = await app.source.lookup("a".repeat(40), abort.signal);
+    const invalid = await app.source.lookup("HEAD~1", app.signal);
+    const cancelled = await app.source.lookup("a".repeat(40), abort.signal);
     const missing = await app.source.lookup("f".repeat(40), app.signal);
 
     expect(expectError(invalid).code).toBe("GIT_PROTOCOL_ERROR");
@@ -257,9 +273,11 @@ test("Cancelled branch-ref lookup and missing commits fail rather than return em
   try {
     await writeFile(join(app.cwd, "sample.txt"), "initial\n");
     await app.commit("Initial");
+
     const snapshot = expectOk(await app.source.load(null, 300, app.signal));
-    const selected = snapshot.commits[0]!,
-      abort = new AbortController();
+    const selected = snapshot.commits[0]!;
+    const abort = new AbortController();
+
     abort.abort();
 
     const cancelled = await app.source.details(selected, abort.signal);
@@ -276,8 +294,9 @@ test("Renames and newline paths preserve old/new names and compare complete cont
   // NUL parsing preserves paths that ordinary line splitting would corrupt.
   const app = await fixture();
   try {
-    const before = "old name\nfile.txt",
-      after = "-new name\nfile.txt";
+    const before = "old name\nfile.txt";
+    const after = "-new name\nfile.txt";
+
     await writeFile(join(app.cwd, before), "unchanged content\n");
     await app.commit("Initial");
     await rename(join(app.cwd, before), join(app.cwd, after));
@@ -358,6 +377,7 @@ test("Binary, oversized, and symlink files never silently truncate into success"
     await writeFile(join(app.cwd, "binary"), Buffer.from([0, 1, 2]));
     await writeFile(join(app.cwd, "large"), Buffer.alloc(maxPreviewBytes + 1, 65));
     await symlink("outside-secret", join(app.cwd, "link"));
+
     const snapshot = expectOk(await app.source.load(null, 300, app.signal));
 
     const binary = await app.source.compare(

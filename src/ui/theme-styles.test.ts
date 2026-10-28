@@ -63,8 +63,9 @@ test("Success-only overrides leave strings, additions, and Git graph greens unch
   const app = await createTestRenderer({ width: 20, height: 3 });
   try {
     // Equal default colors must not imply dependencies between groups.
-    const theme = uiTheme(app.renderer),
-      before = theme.styles;
+    const theme = uiTheme(app.renderer);
+    const before = theme.styles;
+
     theme.configure(defaultPalette(), {
       styles: { "status.success": { fg: "#AA00FF", bold: true } },
     });
@@ -73,6 +74,7 @@ test("Success-only overrides leave strings, additions, and Git graph greens unch
     for (const group of ["syntax.string", "git.added", "diff.added", "git.graph.1"] as const) {
       expect(theme.styles[group].fg.equals(before[group].fg)).toBe(true);
     }
+
     expect(theme.styles["syntax.string"].fg.intent).toBe("indexed");
     expect(theme.styles["syntax.string"].fg.slot).toBe(2);
     expect(theme.styles["ui.text"].fg.intent).toBe("default");
@@ -102,14 +104,17 @@ test("Shared legacy colors remain defaults and specific style overrides apply la
 test("Attribute-only changes refresh screens and false removes emphasis despite unchanged colors", async () => {
   const app = await createTestRenderer({ width: 20, height: 3 });
   try {
-    const theme = uiTheme(app.renderer),
-      node = new TextRenderable(app.renderer, { content: "STYLE_PROBE", height: 1 });
+    const theme = uiTheme(app.renderer);
+    const node = new TextRenderable(app.renderer, { content: "STYLE_PROBE", height: 1 });
+
     app.renderer.root.add(node);
+
     let paints = 0;
     theme.bindStyles(node, (styles) => {
       paintText(node, styles["footer.key"]);
       paints++;
     });
+
     const palette = defaultPalette();
     const before = theme.styles["footer.key"].fg;
 
@@ -119,6 +124,7 @@ test("Attribute-only changes refresh screens and false removes emphasis despite 
     });
     await app.renderOnce();
     await app.renderOnce();
+
     let span = app
       .captureSpans()
       .lines.flatMap((line) => line.spans)
@@ -143,6 +149,7 @@ test("Attribute-only changes refresh screens and false removes emphasis despite 
     ).toBe(0);
     expect(theme.styles["footer.key"].bg).toBeUndefined();
     expect(rgb(span.bg)).not.toEqual([34, 51, 68]);
+
     const count = paints;
     node.destroyRecursively();
     theme.configure(palette, { styles: { "footer.key": { bold: true } } });
@@ -155,8 +162,9 @@ test("Attribute-only changes refresh screens and false removes emphasis despite 
 test("Input focus applies dedicated style emphasis without leaving previous attributes", async () => {
   const app = await createTestRenderer({ width: 20, height: 3 });
   try {
-    const theme = uiTheme(app.renderer),
-      input = new InputRenderable(app.renderer, { value: "FOCUS_STYLE", width: 20 });
+    const theme = uiTheme(app.renderer);
+    const input = new InputRenderable(app.renderer, { value: "FOCUS_STYLE", width: 20 });
+
     app.renderer.root.add(input);
     theme.input(input);
     theme.configure(defaultPalette(), {

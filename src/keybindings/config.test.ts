@@ -88,6 +88,7 @@ test("Workspace defaults use only leader+b and reading surfaces own Ctrl+F/B", (
     expect(map.hints("focus.search", context)).toBe("");
     expect(map.hints("focus.sidebar", context)).toBe("");
   }
+
   expect(map.bound("ctrl+f", "prompt")).toBe(false);
   expect(map.bound("ctrl+f", "terminal")).toBe(false);
   expect(map.hint("transcript.page-down", "transcript")).toBe("<C-f>");
@@ -100,6 +101,7 @@ test.each(["ctrl+b", "ctrl+f"])(
   (leader) => {
     const map = expectOk(parseKeymap({ leader }));
     const command = leader === "ctrl+b" ? "transcript.page-up" : "transcript.page-down";
+
     expect(map.hints(command, "transcript")).toBe(leader === "ctrl+b" ? "<PageUp>" : "<PageDown>");
     expect(map.hint("sidebar.toggle", "transcript")).toBe("<leader>b");
     expect(
@@ -223,8 +225,8 @@ test("Arrow-only overrides omit hints while modified arrows and sequences remain
   );
 
   // Arrow-only commands must not hint nonexistent default alternatives.
-  const previous = map.hint("workspace.previous", "workspace"),
-    next = map.hints("workspace.next", "workspace");
+  const previous = map.hint("workspace.previous", "workspace");
+  const next = map.hints("workspace.next", "workspace");
 
   expect(previous).toBe("");
   expect(map.hints("workspace.previous", "workspace")).toBe("");
@@ -304,6 +306,7 @@ test("Explicit config reads distinguish missing files from malformed JSON", asyn
     await writeFile(path, "{");
     expect(expectError(await loadKeymap(path)).code).toBe("INVALID_INPUT");
     await writeFile(path, JSON.stringify({ leader: "ctrl+b" }));
+
     const map = expectOk(await loadKeymap(path));
     expect(map.leader).toEqual(["ctrl+b"]);
     expect(map.hint("app.detach", "none")).toBe("<leader>d");

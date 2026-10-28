@@ -23,19 +23,20 @@ const catalog = (revision = 0): CompletionCatalog => ({
 
 test("Commands, skills, files, and rerenders reuse catalogs after initial preparation", async () => {
   // Prepare over 100 catalog entries and index the selected worktree once.
-  const fixture = await createWorktreeFixture(),
-    unexpected: unknown[] = [];
+  const fixture = await createWorktreeFixture();
+  const unexpected: unknown[] = [];
   let requests = 0;
   const cache = new CompletionCache(
     async () => {
       requests++;
+
       return ok(catalog());
     },
     () => "instance/conversation/0",
     (error) => unexpected.push(error),
   );
-  const provider = cache.provider,
-    signal = new AbortController().signal;
+  const provider = cache.provider;
+  const signal = new AbortController().signal;
   try {
     await writeFile(join(fixture.main, "last-file.ts"), "file");
     provider.prepare?.("session", fixture.main);
@@ -87,12 +88,13 @@ test("Commands, skills, files, and rerenders reuse catalogs after initial prepar
 test("Catalogs reload only when resource revisions or runtime/conversation identities change", async () => {
   // Resource identity, not UI lifetime, determines cache validity.
   const fixture = await createWorktreeFixture();
-  let identity = "instance/conversation/0",
-    revision = 0,
-    requests = 0;
+  let identity = "instance/conversation/0";
+  let revision = 0;
+  let requests = 0;
   const cache = new CompletionCache(
     async () => {
       requests++;
+
       return ok(catalog(revision));
     },
     () => identity,
@@ -136,8 +138,8 @@ test("Late catalogs from replaced sessions never overwrite new catalogs", async 
   // Identity and entry ownership checks reject stale responses even if cancellation is ignored.
   const fixture = await createWorktreeFixture();
   let identity = "first";
-  const first = Promise.withResolvers<ReturnType<typeof ok<CompletionCatalog>>>(),
-    second = Promise.withResolvers<ReturnType<typeof ok<CompletionCatalog>>>();
+  const first = Promise.withResolvers<ReturnType<typeof ok<CompletionCatalog>>>();
+  const second = Promise.withResolvers<ReturnType<typeof ok<CompletionCatalog>>>();
   const cache = new CompletionCache(
     async () => (identity === "first" ? first.promise : second.promise),
     () => identity,
@@ -148,6 +150,7 @@ test("Late catalogs from replaced sessions never overwrite new catalogs", async 
   try {
     cache.provider.prepare?.("session", fixture.main);
     await Promise.resolve();
+
     const old = cache.provider(
       "session",
       { kind: "command", query: "" },
@@ -172,6 +175,7 @@ test("Late catalogs from replaced sessions never overwrite new catalogs", async 
         items: [{ kind: "command", value: "stale", description: "Stale" }],
       }),
     );
+
     const fresh = expectOk(
       await cache.provider("session", { kind: "command", query: "" }, new AbortController().signal),
     );
@@ -188,14 +192,15 @@ test("Late catalogs from replaced sessions never overwrite new catalogs", async 
 
 test("Lookup cancellation preserves shared initialization and failures remain errors", async () => {
   // Closing one search with Esc must not cancel shared catalog preparation.
-  const fixture = await createWorktreeFixture(),
-    ready = Promise.withResolvers<ReturnType<typeof ok<CompletionCatalog>>>();
-  let fail = false,
-    identity = "first",
-    requests = 0;
+  const fixture = await createWorktreeFixture();
+  const ready = Promise.withResolvers<ReturnType<typeof ok<CompletionCatalog>>>();
+  let fail = false;
+  let identity = "first";
+  let requests = 0;
   const cache = new CompletionCache(
     async () => {
       requests++;
+
       return fail ? err(new CapabilityError("Catalog unavailable")) : ready.promise;
     },
     () => identity,
@@ -205,8 +210,10 @@ test("Lookup cancellation preserves shared initialization and failures remain er
   );
   try {
     cache.provider.prepare?.("session", fixture.main);
-    const abort = new AbortController(),
-      query = cache.provider("session", { kind: "command", query: "" }, abort.signal);
+
+    const abort = new AbortController();
+    const query = cache.provider("session", { kind: "command", query: "" }, abort.signal);
+
     abort.abort();
     expect(expectError(await query).code).toBe("CANCELLED");
 
@@ -221,6 +228,7 @@ test("Lookup cancellation preserves shared initialization and failures remain er
     fail = true;
     identity = "second";
     cache.provider.prepare?.("session", fixture.main);
+
     const failed = await cache.provider(
       "session",
       { kind: "command", query: "" },

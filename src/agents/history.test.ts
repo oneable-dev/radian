@@ -25,9 +25,13 @@ async function setup(blockCleanup = false) {
   const options = await offlineRuntime(join(fixture.directory, "agent"));
   const factory = piSessionFactory(options);
   const gate = Promise.withResolvers<void>();
-  if (!blockCleanup) gate.resolve();
+  if (!blockCleanup) {
+    gate.resolve();
+  }
+
   const registry = new SessionRegistry([fixture.repository], async (context) => {
     const executor = await factory(context);
+
     return {
       savedSessionId: executor.savedSessionId,
       sessionFile: executor.sessionFile,
@@ -38,6 +42,7 @@ async function setup(blockCleanup = false) {
       prompt: (text: string) => executor.prompt(text),
       close: async () => {
         await gate.promise;
+
         return executor.close();
       },
     };
@@ -45,6 +50,7 @@ async function setup(blockCleanup = false) {
   const history = new SessionHistory([fixture.repository], registry, options.sessionDir);
   const main = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
   const feature = fixture.repository.worktrees.find((tree) => tree.path === fixture.feature)!;
+
   return {
     ...fixture,
     main,
@@ -67,11 +73,13 @@ test("History lists only closed SDK conversations in the selected worktree", asy
   try {
     const main = expectOk(await app.registry.create(app.main.id));
     const feature = expectOk(await app.registry.create(app.feature.id));
+
     await Promise.all([app.registry.prompt(main, "read"), app.registry.prompt(feature, "write")]);
 
     // Neither running nor idle open conversations belong in saved History.
     expect(expectOk(await app.history.list(app.main.id))).toEqual([]);
     expectOk(await app.registry.close(main));
+
     const list = expectOk(await app.history.list(app.main.id));
 
     // Metadata from another cwd cannot appear under the selected worktree.
@@ -97,6 +105,7 @@ test("External SDK edits supersede closed runtime previews and change the file r
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "read"));
     expectOk(await app.registry.close(id));
+
     const saved = app.registry.checkpointRecords.find((record) => record.id === id)!;
     const record = {
       ...saved,
@@ -108,6 +117,7 @@ test("External SDK edits supersede closed runtime previews and change the file r
       readSession: async () => ok(record),
     });
     const before = expectOk(await history.list(app.main.id))[0]!;
+
     expect(expectOk(await history.preview(app.main.id, before.id)).snapshot?.state.output).toBe(
       "Preserved runtime body",
     );
@@ -127,8 +137,10 @@ test("External SDK edits supersede closed runtime previews and change the file r
         },
       }) + "\n",
     );
+
     const modified = new Date(record.updatedAt + 1000);
     await utimes(saved.sessionFile!, modified, modified);
+
     const after = expectOk(await history.list(app.main.id))[0]!;
     const preview = expectOk(await history.preview(app.main.id, after.id));
 
@@ -147,8 +159,8 @@ test("Snapshots without SDK conversations never create History rows, even for op
   // Recovery metadata is not an independently resumable saved conversation.
   const app = await setup();
   try {
-    const id = expectOk(await app.registry.create(app.main.id)),
-      live = app.registry.records.find((record) => record.id === id)!;
+    const id = expectOk(await app.registry.create(app.main.id));
+    const live = app.registry.records.find((record) => record.id === id)!;
     const snapshots: SessionSnapshotSource = {
       listSessions: () =>
         (["open", "closed"] as const).map((lifecycle) => ({
@@ -185,10 +197,12 @@ test("Open recovery intent excludes SDK conversations even without a live writer
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "read"));
+
     const conversationId = app.registry.records.find((record) => record.id === id)!.state
       .conversationId!;
     expectOk(await app.registry.close(id));
     app.registry.acknowledgeCheckpoint(app.registry.checkpointRecords);
+
     const snapshot = {
       id,
       conversationId,
@@ -206,7 +220,9 @@ test("Open recovery intent excludes SDK conversations even without a live writer
 
     // Stored open intent must stay out of History until that tab is explicitly closed.
     const open = expectOk(await history.list(app.main.id));
+
     snapshot.lifecycle = "closed";
+
     const closed = expectOk(await history.list(app.main.id));
 
     // A saved original becomes a candidate only once both runtime and recovery intent are closed.
@@ -227,6 +243,7 @@ test.each(["opening", "closing", "replacing", "cleanup", "subagent"])(
       const id = expectOk(await app.registry.create(app.main.id));
       expectOk(await app.registry.prompt(id, "read"));
       expectOk(await app.registry.close(id));
+
       const ownership = spyOn(app.registry, "historyOwnership").mockReturnValue({
         openSessionId: null,
         unavailableReason: state,
@@ -251,11 +268,13 @@ test("Previews read open and closed histories without writes and reject other wo
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "read"));
-    const file = app.registry.sessionFile(id)!,
-      saved = { id: SessionManager.open(file).getSessionId() };
-    const before = await readFile(file, "utf8"),
-      records = app.registry.records;
+
+    const file = app.registry.sessionFile(id)!;
+    const saved = { id: SessionManager.open(file).getSessionId() };
+    const before = await readFile(file, "utf8");
+    const records = app.registry.records;
     const preview = expectOk(await app.history.preview(app.main.id, saved.id));
+
     expect(preview.text).toContain("read");
     expect(preview.telemetry).toEqual(app.registry.details(id)?.telemetry);
     expect(app.registry.records).toEqual(records);
@@ -281,15 +300,19 @@ test("Closed-session previews remain read-only for real SDK histories exceeding 
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "read"));
-    const file = app.registry.sessionFile(id)!,
-      saved = { id: SessionManager.open(file).getSessionId() };
+
+    const file = app.registry.sessionFile(id)!;
+    const saved = { id: SessionManager.open(file).getSessionId() };
+
     expectOk(await app.registry.close(id));
+
     const entries = (await readFile(file, "utf8"))
       .trimEnd()
       .split("\n")
       .map((line) => JSON.parse(line));
     const parent = entries.at(-1)!.id;
     const timestamp = new Date().toISOString();
+
     await appendFile(
       file,
       [
@@ -325,8 +348,10 @@ test("Closed-session previews remain read-only for real SDK histories exceeding 
         .map((entry) => JSON.stringify(entry))
         .join("\n") + "\n",
     );
+
     const before = await readFile(file, "utf8");
     const preview = expectOk(await app.history.preview(app.main.id, saved.id));
+
     expect(preview.sections?.slice(-3).map((section) => section.text)).toEqual([
       "LATEST QUESTION",
       "LATEST PLAN",
@@ -343,10 +368,11 @@ test("Closed-session previews remain read-only for real SDK histories exceeding 
 
 test("List both Radian SDK storage and legacy Pi histories without modifying legacy records", async () => {
   // Moving new records to dedicated storage must not hide legacy Pi conversations.
-  const app = await setup(),
-    timestamp = new Date();
-  const ownedPath = join(app.directory, "owned.jsonl"),
-    legacyPath = join(app.directory, "legacy.jsonl");
+  const app = await setup();
+  const timestamp = new Date();
+  const ownedPath = join(app.directory, "owned.jsonl");
+  const legacyPath = join(app.directory, "legacy.jsonl");
+
   await writeFile(
     ownedPath,
     [
@@ -368,6 +394,7 @@ test("List both Radian SDK storage and legacy Pi histories without modifying leg
       .map((entry) => JSON.stringify(entry))
       .join("\n") + "\n",
   );
+
   const legacy =
     [
       { type: "session", version: 1, id: "legacy", timestamp: timestamp.toISOString() },
@@ -376,6 +403,7 @@ test("List both Radian SDK storage and legacy Pi histories without modifying leg
       .map((entry) => JSON.stringify(entry))
       .join("\n") + "\n";
   await writeFile(legacyPath, legacy);
+
   const info = (id: string, path: string, cwd: string) => ({
     id,
     path,
@@ -421,9 +449,11 @@ test("Resuming closed history reuses its SDK ID, file, and conversation with a s
   try {
     const original = expectOk(await app.registry.create(app.main.id));
     await app.registry.prompt(original, "read");
+
     const file = app.registry.sessionFile(original)!;
     const sdkId = SessionManager.open(file).getSessionId();
     const before = await readFile(file, "utf8");
+
     await app.registry.close(original);
 
     // Resume uses the SDK saved ID selected from the worktree's history, not an arbitrary path.
@@ -448,6 +478,7 @@ test("Resuming rejects unknown IDs and IDs belonging to other worktrees", async 
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "read"));
+
     const saved = { id: SessionManager.open(app.registry.sessionFile(id)!).getSessionId() };
 
     // Cross-worktree or arbitrary IDs cannot bypass discovery membership.
@@ -472,11 +503,13 @@ test("Closing sessions stay out of History until their writer releases ownership
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "read"));
+
     const savedId = SessionManager.open(app.registry.sessionFile(id)!).getSessionId();
 
     // Closing removes display ownership but keeps the canonical-file reservation.
     const closing = app.registry.close(id);
     const list = expectOk(await app.history.list(app.main.id));
+
     expect(expectError(await app.history.resume(app.main.id, savedId)).code).toBe(
       "SESSION_CONFLICT",
     );
@@ -497,9 +530,12 @@ test("Resume never overwrites original history when SDK listing skips corrupt li
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "read"));
+
     const file = app.registry.sessionFile(id)!;
     const sdkId = SessionManager.open(file).getSessionId();
+
     await app.registry.close(id);
+
     const corrupt = (await readFile(file, "utf8")) + "invalid trailing JSON\n";
     await writeFile(file, corrupt);
 
@@ -522,13 +558,16 @@ test("History permission failures return StorageError Results rather than empty 
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "read"));
+
     const file = app.registry.sessionFile(id)!;
     expectOk(await app.registry.close(id));
     await mkdir(join(blocked, "child"), { recursive: true });
+
     const records = await SessionManager.list(app.main.path, dirname(file));
     const listing = spyOn(SessionManager, "list").mockResolvedValue(
       records.map((record) => ({ ...record, cwd: join(blocked, "child") })),
     );
+
     restoreListing = () => listing.mockRestore();
     await chmod(blocked, 0);
 
@@ -551,10 +590,13 @@ test("History excludes SDK originals deleted after metadata discovery", async ()
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "read"));
+
     const file = app.registry.sessionFile(id)!;
     expectOk(await app.registry.close(id));
+
     const records = await SessionManager.list(app.main.path, dirname(file));
     await unlink(file);
+
     const listing = spyOn(SessionManager, "list").mockResolvedValue(records);
     restore = () => listing.mockRestore();
 
@@ -577,11 +619,15 @@ test("Previews reuse the listing file index and rescan only on explicit refresh"
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "read"));
     expectOk(await app.registry.close(id));
+
     const listing = spyOn(SessionManager, "list");
     restore = () => listing.mockRestore();
+
     const saved = expectOk(await app.history.list(app.main.id))[0]!;
-    for (let i = 0; i < 3; i++)
+    for (let i = 0; i < 3; i++) {
       expect(expectOk(await app.history.preview(app.main.id, saved.id)).text).toContain("read");
+    }
+
     expect(expectError(await app.history.preview(app.main.id, "unknown")).code).toBe(
       "HISTORY_UNAVAILABLE",
     );
@@ -605,8 +651,10 @@ test("Direct previews initialize the index once without a preceding list request
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "read"));
+
     const savedId = SessionManager.open(app.registry.sessionFile(id)!).getSessionId();
     const listing = spyOn(SessionManager, "list");
+
     restore = () => listing.mockRestore();
     expect(expectOk(await app.history.preview(app.main.id, savedId)).text).toContain("read");
     expectOk(await app.history.preview(app.main.id, savedId));
@@ -625,10 +673,13 @@ test("Cancelling completed list request signals does not rescan validated indexe
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "read"));
     expectOk(await app.registry.close(id));
+
     const listing = spyOn(SessionManager, "list");
     restore = () => listing.mockRestore();
+
     const abort = new AbortController();
     const saved = expectOk(await app.history.list(app.main.id, abort.signal))[0]!;
+
     abort.abort();
     expectOk(await app.history.preview(app.main.id, saved.id));
     expect(listing).toHaveBeenCalledTimes(1);
@@ -644,11 +695,14 @@ test("Preview rejects cached files replaced by another worktree's history", asyn
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "read"));
+
     const file = app.registry.sessionFile(id)!;
     expectOk(await app.registry.close(id));
+
     const saved = expectOk(await app.history.list(app.main.id))[0]!;
-    const lines = (await readFile(file, "utf8")).trimEnd().split("\n"),
-      header = JSON.parse(lines[0]!);
+    const lines = (await readFile(file, "utf8")).trimEnd().split("\n");
+    const header = JSON.parse(lines[0]!);
+
     lines[0] = JSON.stringify({ ...header, cwd: app.feature.path });
     await writeFile(file, lines.join("\n") + "\n");
 
@@ -669,11 +723,14 @@ test.each(["\0invalid", 42])(
     try {
       const id = expectOk(await app.registry.create(app.main.id));
       expectOk(await app.registry.prompt(id, "read"));
+
       const file = app.registry.sessionFile(id)!;
       expectOk(await app.registry.close(id));
+
       const saved = expectOk(await app.history.list(app.main.id))[0]!;
-      const lines = (await readFile(file, "utf8")).trimEnd().split("\n"),
-        header = JSON.parse(lines[0]!);
+      const lines = (await readFile(file, "utf8")).trimEnd().split("\n");
+      const header = JSON.parse(lines[0]!);
+
       lines[0] = JSON.stringify({ ...header, cwd });
       await writeFile(file, lines.join("\n") + "\n");
 
@@ -692,10 +749,13 @@ test("Preview rejects cached paths replaced by symbolic links", async () => {
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "read"));
+
     const file = app.registry.sessionFile(id)!;
     expectOk(await app.registry.close(id));
-    const saved = expectOk(await app.history.list(app.main.id))[0]!,
-      other = join(app.directory, "replaced.jsonl");
+
+    const saved = expectOk(await app.history.list(app.main.id))[0]!;
+    const other = join(app.directory, "replaced.jsonl");
+
     await writeFile(other, await readFile(file));
     await unlink(file);
     await symlink(other, file);
@@ -711,10 +771,11 @@ test("Preview rejects cached paths replaced by symbolic links", async () => {
 test("Listing forwards cancellation to SDK discovery instead of returning empty success", async () => {
   // Cancel inside the SDK call so checks only before and after discovery cannot pass.
   const app = await setup();
-  const started = Promise.withResolvers<void>(),
-    finish = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
   const abort = new AbortController();
-  let restore: (() => void) | undefined, received: AbortSignal | undefined;
+  let restore: (() => void) | undefined;
+  let received: AbortSignal | undefined;
   try {
     const listing = spyOn(SessionManager, "list").mockImplementation(
       async (_cwd, _dir, _progress, signal) => {
@@ -722,10 +783,12 @@ test("Listing forwards cancellation to SDK discovery instead of returning empty 
         started.resolve();
         await finish.promise;
         signal?.throwIfAborted();
+
         return [];
       },
     );
     restore = () => listing.mockRestore();
+
     const result = app.history.list(app.main.id, abort.signal);
     await started.promise;
     abort.abort();

@@ -96,6 +96,7 @@ export type ConnectOptions = {
   start?: boolean;
   register?: boolean;
 };
+
 export async function connectRuntime(
   repository: Repository,
   cwd: string,
@@ -103,8 +104,13 @@ export async function connectRuntime(
 ): Promise<Result<RuntimeClient | null, ExpectedError>> {
   const paths = runtimePaths(repository.id, options.offline ?? false, options.stateRoot);
   let fetched = await fetchSnapshot(paths);
-  if (!fetched.ok) return fetched;
-  if (!fetched.value && options.start === false && !options.register) return ok(null);
+  if (!fetched.ok) {
+    return fetched;
+  }
+  if (!fetched.value && options.start === false && !options.register) {
+    return ok(null);
+  }
+
   let registrationWarning = "";
   if (
     !fetched.value ||
@@ -112,7 +118,10 @@ export async function connectRuntime(
       (options.register || options.start !== false))
   ) {
     const daemon = await ensureSharedDaemon(options);
-    if (!daemon.ok) return daemon;
+    if (!daemon.ok) {
+      return daemon;
+    }
+
     const registered = await transport(
       daemonPaths(options.offline ?? false, options.stateRoot),
       "/repositories",
@@ -127,49 +136,67 @@ export async function connectRuntime(
         signal: AbortSignal.timeout(15000),
       },
     );
-    if (!registered.ok) return registered;
+    if (!registered.ok) {
+      return registered;
+    }
+
     const body = await readJson(registered.value);
-    if (!body.ok) return body;
-    if (!Value.Check(replySchema, body.value))
+    if (!body.ok) {
+      return body;
+    }
+    if (!Value.Check(replySchema, body.value)) {
       return err(
         new ProtocolError(
           "Malformed shared daemon registration reply; registration outcome may be unknown.",
         ),
       );
-    if (!body.value.ok) return err(remoteError(body.value.error));
+    }
+    if (!body.value.ok) {
+      return err(remoteError(body.value.error));
+    }
+
     registrationWarning =
       body.value.warnings
         ?.map((warning) => `Repository registered; ${warning.message}`)
         .join(" · ") ?? "";
     fetched = await fetchSnapshot(paths);
-    if (!fetched.ok) return fetched;
-    if (!fetched.value)
+    if (!fetched.ok) {
+      return fetched;
+    }
+    if (!fetched.value) {
       return err(
         new ConnectionError(
           "RUNTIME_ABSENT",
           "Repository endpoint is missing after registration. Reconnect before retrying.",
         ),
       );
+    }
   }
+
   const snapshot = fetched.value;
   if (
     snapshot.repositoryId !== repository.id ||
     snapshot.mode !== (options.offline ? "offline" : "live")
-  )
+  ) {
     return err(new ProtocolError("Runtime identity does not match this workspace."));
+  }
+
   const client = new RuntimeClient(paths, snapshot, registrationWarning);
   const attached = await client.attach();
   if (!attached.ok) {
     await client.disconnect();
+
     return attached;
   }
   if (options.start !== false) {
     const activated = await client.activate();
     if (!activated.ok) {
       await client.disconnect();
+
       return activated;
     }
   }
+
   return ok(client);
 }
 
@@ -178,42 +205,59 @@ export async function ensureSharedDaemon(
 ): Promise<Result<RuntimeSnapshot, ExpectedError>> {
   const paths = daemonPaths(options.offline ?? false, options.stateRoot);
   const deadline = Date.now() + 15000;
-  let child: ChildProcess | undefined,
-    attempts = 0;
+  let child: ChildProcess | undefined;
+  let attempts = 0;
   while (Date.now() < deadline) {
     const fetched = await fetchSnapshot(paths);
-    if (!fetched.ok) return fetched;
+    if (!fetched.ok) {
+      return fetched;
+    }
     if (fetched.value) {
       const identity = sharedIdentity(fetched.value, options.offline ?? false);
-      if (!identity.ok) return identity;
-      if (!fetched.value.capabilities?.includes("daemon-stopping")) return identity;
+      if (!identity.ok) {
+        return identity;
+      }
+      if (!fetched.value.capabilities?.includes("daemon-stopping")) {
+        return identity;
+      }
     } else if (!child || child.exitCode !== null) {
-      if (child?.exitCode !== undefined && child.exitCode !== null && child.exitCode !== 0)
+      if (child?.exitCode !== undefined && child.exitCode !== null && child.exitCode !== 0) {
         return err(
           new ConnectionError(
             "CONNECTION_FAILED",
             `Shared daemon startup failed. Inspect ${paths.log}`,
           ),
         );
+      }
+
       const owned = await runtimeOwned(paths);
-      if (!owned.ok) return owned;
+      if (!owned.ok) {
+        return owned;
+      }
       // A repository socket may close before the common owner finishes shutting down.
       // Wait for ownership release rather than registering with a dying owner or losing a launch race.
       if (!owned.value) {
-        if (attempts++ >= 4)
+        if (attempts++ >= 4) {
           return err(
             new ConnectionError(
               "CONNECTION_FAILED",
               "Shared daemon ownership changed repeatedly. No existing owner was stopped.",
             ),
           );
+        }
+
         const launched = await launchSharedDaemon(paths, options);
-        if (!launched.ok) return launched;
+        if (!launched.ok) {
+          return launched;
+        }
+
         child = launched.value;
       }
     }
+
     await new Promise<void>((resolve) => setTimeout(resolve, 40));
   }
+
   return err(
     new ConnectionError(
       "CONNECTION_TIMEOUT",
@@ -229,23 +273,31 @@ function launchSharedDaemon(
   return capture(async () => {
     await privateDirectory(paths.directory);
     const log = await open(paths.log, "a", 0o600);
+
     return withCleanup(
       async () => {
         const args = [
           resolve(options.entry ?? process.argv[1] ?? "src/index.ts"),
           "--runtime-service",
         ];
-        if (options.stateRoot) args.push("--state-dir", resolve(options.stateRoot));
-        if (options.offline) args.push("--test-runtime");
+        if (options.stateRoot) {
+          args.push("--state-dir", resolve(options.stateRoot));
+        }
+        if (options.offline) {
+          args.push("--test-runtime");
+        }
+
         const child = spawn(process.execPath, args, {
           detached: true,
           stdio: ["ignore", log.fd, log.fd],
         });
         const started = Promise.withResolvers<void>();
+
         child.once("spawn", () => started.resolve());
         child.once("error", (error) => started.reject(error));
         await started.promise;
         child.unref();
+
         return child;
       },
       () => log.close(),
@@ -280,6 +332,7 @@ export class RuntimeClient {
   private readonly connections = new Set<PtyConnection>();
   private failure = "";
   private warning = "";
+
   constructor(
     readonly paths: RuntimePaths,
     snapshot: RuntimeSnapshot,
@@ -288,12 +341,16 @@ export class RuntimeClient {
     this.state = snapshot;
     this.warning = warning;
   }
+
   get connected(): boolean {
     return !this.detaching && !this.failure;
   }
+
   get snapshot(): RuntimeSnapshot {
-    if (!this.hidden.size && !this.hiddenTerminals.size && !this.failure && !this.warning)
+    if (!this.hidden.size && !this.hiddenTerminals.size && !this.failure && !this.warning) {
       return this.state;
+    }
+
     const details = Object.fromEntries(
       Object.entries(this.state.details)
         .filter(([id]) => !this.hidden.has(id))
@@ -304,6 +361,7 @@ export class RuntimeClient {
             : state,
         ]),
     );
+
     return {
       ...this.state,
       notice: this.failure || this.warning || this.state.notice,
@@ -337,27 +395,44 @@ export class RuntimeClient {
       })),
     };
   }
+
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
+
     return () => this.listeners.delete(listener);
   }
+
   async activate(): Promise<Result<void, ExpectedError>> {
-    if (this.detaching || this.failure) return err(this.connectionClosed());
-    if (!this.state.capabilities?.includes("repository-catalog")) return ok(undefined);
+    if (this.detaching || this.failure) {
+      return err(this.connectionClosed());
+    }
+    if (!this.state.capabilities?.includes("repository-catalog")) {
+      return ok(undefined);
+    }
+
     const instance = this.state.instance;
     const response = await transport(this.paths, "/activate", {
       method: "POST",
       headers: { "X-Radian-Instance": instance },
       signal: AbortSignal.timeout(15000),
     });
-    if (!response.ok) return response;
+    if (!response.ok) {
+      return response;
+    }
+
     const body = await readJson(response.value);
-    if (!body.ok) return body;
-    if (!Value.Check(replySchema, body.value))
+    if (!body.ok) {
+      return body;
+    }
+    if (!Value.Check(replySchema, body.value)) {
       return err(
         new ProtocolError("Malformed repository activation reply; outcome may be unknown."),
       );
-    if (!body.value.ok) return err(remoteError(body.value.error));
+    }
+    if (!body.value.ok) {
+      return err(remoteError(body.value.error));
+    }
+
     return this.waitForState(
       () =>
         this.state.instance === instance &&
@@ -365,11 +440,18 @@ export class RuntimeClient {
       "Repository activation",
     );
   }
+
   attach(): Promise<Result<void, ExpectedError>> {
-    if (this.detaching) return Promise.resolve(err(this.connectionClosed()));
-    if (this.attachment) return this.attachment;
+    if (this.detaching) {
+      return Promise.resolve(err(this.connectionClosed()));
+    }
+    if (this.attachment) {
+      return this.attachment;
+    }
+
     const ready = Promise.withResolvers<Result<void, ExpectedError>>();
     let established = false;
+
     this.attachment = ready.promise;
     this.streamTask = this.watch(() => {
       established = true;
@@ -380,18 +462,24 @@ export class RuntimeClient {
           this.failure = `${result.error.message} Reconnection stopped; use the configured detach command and reopen radian. No commands were replayed.`;
           this.emit();
         }
+
         ready.resolve(this.detaching ? err(this.connectionClosed()) : result);
       })
       .catch((error: unknown) => {
         if (!established) {
           this.failure = "Runtime attachment failed.";
           ready.reject(error);
+
           return;
         }
+
         this.failure = reportUnexpected(error, "runtime stream");
         this.invalidatePtys();
-        if (!this.detaching) this.emit();
+        if (!this.detaching) {
+          this.emit();
+        }
       });
+
     return this.attachment;
   }
 
@@ -403,23 +491,36 @@ export class RuntimeClient {
         connectedAt ??= Date.now();
         onReady();
       });
-      if (this.detaching) return ok(undefined);
-      if (result.ok) return result;
+      if (this.detaching) {
+        return ok(undefined);
+      }
+      if (result.ok) {
+        return result;
+      }
+
       this.failure = result.error.message;
       this.invalidatePtys();
       // Permission/protocol errors and programming defects are not transient disconnections.
       if (
         !(result.error instanceof ConnectionError) ||
         ["EACCES", "EPERM"].includes(systemCode(result.error.cause) ?? "")
-      )
+      ) {
         return result;
-      if (connectedAt !== undefined && Date.now() - connectedAt >= stableConnectionMs) retries = 0;
+      }
+      if (connectedAt !== undefined && Date.now() - connectedAt >= stableConnectionMs) {
+        retries = 0;
+      }
+
       const delay = reconnectDelays[retries++];
-      if (delay === undefined) return result;
+      if (delay === undefined) {
+        return result;
+      }
+
       this.failure = `${result.error.message} Reconnecting (${retries}/${reconnectDelays.length})...`;
       this.emit();
       await this.waitToReconnect(delay);
     }
+
     return ok(undefined);
   }
 
@@ -433,18 +534,23 @@ export class RuntimeClient {
     );
     try {
       const response = await transport(this.paths, "/events", { signal });
-      if (!response.ok) return response;
+      if (!response.ok) {
+        return response;
+      }
       if (!response.value.ok || !response.value.body) {
         await response.value.body?.cancel();
+
         return err(new ProtocolError("Runtime event stream is unavailable."));
       }
+
       return await this.consume(response.value.body, () => {
         clearTimeout(timer);
         onReady();
       });
     } catch (error) {
-      if (this.detaching && error instanceof Error && error.name === "AbortError")
+      if (this.detaching && error instanceof Error && error.name === "AbortError") {
         return ok(undefined);
+      }
       if (
         handshake.signal.aborted &&
         (error === handshake.signal.reason ||
@@ -456,6 +562,7 @@ export class RuntimeClient {
           }),
         );
       }
+
       throw error;
     } finally {
       clearTimeout(timer);
@@ -470,39 +577,58 @@ export class RuntimeClient {
         resolve();
       };
       const timer = setTimeout(finish, milliseconds);
+
       this.streamAbort.signal.addEventListener("abort", finish, { once: true });
-      if (this.detaching) finish();
+      if (this.detaching) {
+        finish();
+      }
     });
   }
+
   async create(worktreeId: string): Promise<Result<string, ExpectedError>> {
     const result = await this.command({ type: "create", worktreeId });
-    if (!result.ok) return result;
-    if (!result.value) return err(new ProtocolError("Runtime did not return a session ID."));
+    if (!result.ok) {
+      return result;
+    }
+    if (!result.value) {
+      return err(new ProtocolError("Runtime did not return a session ID."));
+    }
+
     const opened = await this.waitForOpen(result.value, "Session creation");
+
     return opened.ok ? ok(result.value) : opened;
   }
+
   async accounts(
     request: AccountRequest,
     signal?: AbortSignal,
   ): Promise<Result<AccountReply, ExpectedError>> {
-    if (this.detaching || this.failure) return err(this.connectionClosed());
-    if (!this.state.capabilities?.includes("accounts"))
+    if (this.detaching || this.failure) {
+      return err(this.connectionClosed());
+    }
+    if (!this.state.capabilities?.includes("accounts")) {
       return err(
         new CapabilityError(
           "Running service predates account management. Finish work and explicitly restart it; no service was restarted.",
         ),
       );
-    if (request.type === "rename" && !this.state.capabilities.includes("account-labels"))
+    }
+    if (request.type === "rename" && !this.state.capabilities.includes("account-labels")) {
       return err(
         new CapabilityError(
           "Running service predates account labels. Finish work and explicitly restart it; no service was restarted.",
         ),
       );
-    if (!Value.Check(accountRequestSchema, request))
+    }
+    if (!Value.Check(accountRequestSchema, request)) {
       return err(new InputError("Malformed account request."));
-    if (signal?.aborted) return err(new CancelledError());
-    const instance = this.state.instance,
-      epoch = this.connectionEpoch;
+    }
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+
+    const instance = this.state.instance;
+    const epoch = this.connectionEpoch;
     const abort = AbortSignal.any([
       this.streamAbort.signal,
       AbortSignal.timeout(35000),
@@ -516,23 +642,36 @@ export class RuntimeClient {
         signal: abort,
       }),
     );
-    if (!attempted.ok) return attempted;
-    if (!attempted.value.ok) return attempted.value;
-    const response = attempted.value.value,
-      decoded = await capture(() => readJson(response));
-    if (!decoded.ok) return decoded;
-    if (!decoded.value.ok) return decoded.value;
-    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance)
+    if (!attempted.ok) {
+      return attempted;
+    }
+    if (!attempted.value.ok) {
+      return attempted.value;
+    }
+
+    const response = attempted.value.value;
+    const decoded = await capture(() => readJson(response));
+    if (!decoded.ok) {
+      return decoded;
+    }
+    if (!decoded.value.ok) {
+      return decoded.value;
+    }
+    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance) {
       return err(
         new CancelledError(
           "Account reply belongs to an outdated connection. Check account state before retrying a change.",
         ),
       );
+    }
+
     const body = decoded.value.value;
-    if (!response.ok)
+    if (!response.ok) {
       return Value.Check(replySchema, body) && !body.ok
         ? err(remoteError(body.error))
         : err(new ProtocolError("Malformed account failure response."));
+    }
+
     return Value.Check(accountReplySchema, body)
       ? ok(body)
       : err(new ProtocolError("Malformed account response."));
@@ -544,24 +683,32 @@ export class RuntimeClient {
     signal?: AbortSignal,
     refresh = false,
   ): Promise<Result<ModelCatalog, ExpectedError>> {
-    if (this.detaching || this.failure) return err(this.connectionClosed());
-    if (!this.state.capabilities?.includes("model-selection"))
+    if (this.detaching || this.failure) {
+      return err(this.connectionClosed());
+    }
+    if (!this.state.capabilities?.includes("model-selection")) {
       return err(
         new CapabilityError(
           "Running service predates model selection. Finish work and explicitly restart it when ready; no service was restarted.",
         ),
       );
-    if (!this.state.capabilities?.includes("model-effort"))
+    }
+    if (!this.state.capabilities?.includes("model-effort")) {
       return err(
         new CapabilityError(
           "Running service predates model effort selection. Finish work and explicitly restart it when ready; no service was restarted.",
         ),
       );
-    if (signal?.aborted) return err(new CancelledError());
-    if (!Value.Check(modelCatalogQuerySchema, { sessionId, conversationId }))
+    }
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+    if (!Value.Check(modelCatalogQuerySchema, { sessionId, conversationId })) {
       return err(new InputError("Invalid model selection conversation identity."));
-    const instance = this.state.instance,
-      epoch = this.connectionEpoch;
+    }
+
+    const instance = this.state.instance;
+    const epoch = this.connectionEpoch;
     const abort = AbortSignal.any([
       this.streamAbort.signal,
       AbortSignal.timeout(15000),
@@ -574,26 +721,39 @@ export class RuntimeClient {
         { headers: { "X-Radian-Instance": instance }, signal: abort },
       ),
     );
-    if (!request.ok) return request;
-    if (!request.value.ok) return request.value;
+    if (!request.ok) {
+      return request;
+    }
+    if (!request.value.ok) {
+      return request.value;
+    }
+
     const response = request.value.value;
     const decoded = await capture(() => readJson(response));
-    if (!decoded.ok) return decoded;
-    if (!decoded.value.ok) return decoded.value;
+    if (!decoded.ok) {
+      return decoded;
+    }
+    if (!decoded.value.ok) {
+      return decoded.value;
+    }
     if (
       signal?.aborted ||
       epoch !== this.connectionEpoch ||
       instance !== this.state.instance ||
       this.state.details[sessionId]?.conversationId !== conversationId
-    )
+    ) {
       return err(
         new CancelledError("Model list belongs to an outdated conversation or connection."),
       );
+    }
+
     const body = decoded.value.value;
-    if (!response.ok)
+    if (!response.ok) {
       return Value.Check(replySchema, body) && !body.ok
         ? err(remoteError(body.error))
         : err(new ProtocolError("Malformed model lookup failure response."));
+    }
+
     return Value.Check(modelCatalogSchema, body) && body.conversationId === conversationId
       ? ok(body)
       : err(new ProtocolError("Malformed or mismatched model catalog."));
@@ -605,22 +765,27 @@ export class RuntimeClient {
     model: ModelIdentity,
     effort?: ModelEffort,
   ): Promise<Result<string | null, ExpectedError>> {
-    if (!this.state.capabilities?.includes("model-selection"))
+    if (!this.state.capabilities?.includes("model-selection")) {
       return err(
         new CapabilityError(
           "Running service predates model selection. Finish work and explicitly restart it when ready. No model was changed.",
         ),
       );
-    if (!Value.Check(modelIdentitySchema, model))
+    }
+    if (!Value.Check(modelIdentitySchema, model)) {
       return err(new InputError("Invalid model identity."));
-    if (effort !== undefined && !Value.Check(modelEffortSchema, effort))
+    }
+    if (effort !== undefined && !Value.Check(modelEffortSchema, effort)) {
       return err(new InputError("Invalid model effort."));
-    if (effort !== undefined && !this.state.capabilities?.includes("model-effort"))
+    }
+    if (effort !== undefined && !this.state.capabilities?.includes("model-effort")) {
       return err(
         new CapabilityError(
           "Running service predates model effort selection. No settings were changed. Finish work and explicitly restart it when ready.",
         ),
       );
+    }
+
     return this.command(
       {
         type: "model-select",
@@ -637,22 +802,30 @@ export class RuntimeClient {
     sessionId: string,
     signal?: AbortSignal,
   ): Promise<Result<CompletionCatalog, ExpectedError>> {
-    if (this.detaching || this.failure) return err(this.connectionClosed());
-    if (!this.state.capabilities?.includes("completion-catalog"))
+    if (this.detaching || this.failure) {
+      return err(this.connectionClosed());
+    }
+    if (!this.state.capabilities?.includes("completion-catalog")) {
       return err(
         new CapabilityError(
           "Running service predates cached command/skill catalogs. Finish work and explicitly restart it when ready. No service was restarted.",
         ),
       );
+    }
+
     const conversationId = this.state.details[sessionId]?.conversationId;
     if (
       !conversationId ||
       !Value.Check(completionCatalogQuerySchema, { sessionId, conversationId })
-    )
+    ) {
       return err(new ProtocolError("Current conversation identity is unavailable."));
-    if (signal?.aborted) return err(new CancelledError());
-    const instance = this.state.instance,
-      epoch = this.connectionEpoch;
+    }
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+
+    const instance = this.state.instance;
+    const epoch = this.connectionEpoch;
     const abort = AbortSignal.any([
       this.streamAbort.signal,
       AbortSignal.timeout(15000),
@@ -665,24 +838,37 @@ export class RuntimeClient {
         { headers: { "X-Radian-Instance": instance }, signal: abort },
       ),
     );
-    if (!requested.ok) return requested;
-    if (!requested.value.ok) return requested.value;
+    if (!requested.ok) {
+      return requested;
+    }
+    if (!requested.value.ok) {
+      return requested.value;
+    }
+
     const response = requested.value.value;
     const decoded = await capture(() => readJson(response));
-    if (!decoded.ok) return decoded;
-    if (!decoded.value.ok) return decoded.value;
+    if (!decoded.ok) {
+      return decoded;
+    }
+    if (!decoded.value.ok) {
+      return decoded.value;
+    }
     if (
       signal?.aborted ||
       epoch !== this.connectionEpoch ||
       instance !== this.state.instance ||
       this.state.details[sessionId]?.conversationId !== conversationId
-    )
+    ) {
       return err(new CancelledError("Catalog belongs to an outdated conversation or connection."));
+    }
+
     const body = decoded.value.value;
-    if (!response.ok)
+    if (!response.ok) {
       return Value.Check(replySchema, body) && !body.ok
         ? err(remoteError(body.error))
         : err(new ProtocolError("Malformed catalog lookup failure."));
+    }
+
     return Value.Check(completionCatalogSchema, body) && body.conversationId === conversationId
       ? ok(body)
       : err(new ProtocolError("Malformed or mismatched completion catalog."));
@@ -693,22 +879,29 @@ export class RuntimeClient {
     query: CompletionQuery,
     signal?: AbortSignal,
   ): Promise<Result<CompletionResult, ExpectedError>> {
-    if (this.detaching || this.failure) return err(this.connectionClosed());
-    if (!this.state.capabilities?.includes("prompt-completion"))
+    if (this.detaching || this.failure) {
+      return err(this.connectionClosed());
+    }
+    if (!this.state.capabilities?.includes("prompt-completion")) {
       return err(
         new CapabilityError(
           "Running service predates prompt completion. Save work and restart it explicitly when ready; no service was restarted.",
         ),
       );
-    if (signal?.aborted) return err(new CancelledError());
-    if (!Value.Check(completionQuerySchema, { sessionId, kind: query.kind, query: query.query }))
+    }
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+    if (!Value.Check(completionQuerySchema, { sessionId, kind: query.kind, query: query.query })) {
       return err(
         new InputError(
           "Invalid completion query; names and queries are limited to 4,096 characters.",
         ),
       );
-    const instance = this.state.instance,
-      epoch = this.connectionEpoch;
+    }
+
+    const instance = this.state.instance;
+    const epoch = this.connectionEpoch;
     const abort = AbortSignal.any([
       this.streamAbort.signal,
       AbortSignal.timeout(8000),
@@ -721,41 +914,63 @@ export class RuntimeClient {
         signal: abort,
       }),
     );
-    if (!attempted.ok) return attempted;
+    if (!attempted.ok) {
+      return attempted;
+    }
+
     const response = attempted.value;
-    if (!response.ok) return response;
+    if (!response.ok) {
+      return response;
+    }
+
     const decoded = await capture(() => readJson(response.value));
-    if (!decoded.ok) return decoded;
+    if (!decoded.ok) {
+      return decoded;
+    }
+
     const body = decoded.value;
-    if (!body.ok) return body;
-    if (epoch !== this.connectionEpoch || instance !== this.state.instance || signal?.aborted)
+    if (!body.ok) {
+      return body;
+    }
+    if (epoch !== this.connectionEpoch || instance !== this.state.instance || signal?.aborted) {
       return err(new CancelledError("Completion belongs to an outdated connection."));
-    if (!response.value.ok)
+    }
+    if (!response.value.ok) {
       return Value.Check(replySchema, body.value) && !body.value.ok
         ? err(remoteError(body.value.error))
         : err(new ProtocolError("Malformed completion failure response."));
+    }
+
     return Value.Check(completionResultSchema, body.value)
       ? ok(body.value)
       : err(new ProtocolError("Malformed completion response."));
   }
+
   async image(
     sessionId: string,
     imageId: string,
     signal?: AbortSignal,
   ): Promise<Result<Uint8Array, ExpectedError>> {
-    if (this.detaching || this.failure) return err(this.connectionClosed());
-    if (!this.state.capabilities?.includes("transcript-images"))
+    if (this.detaching || this.failure) {
+      return err(this.connectionClosed());
+    }
+    if (!this.state.capabilities?.includes("transcript-images")) {
       return err(
         new CapabilityError(
           "Running service predates image previews. Finish work and restart it explicitly when ready; no service was restarted.",
         ),
       );
-    if (signal?.aborted) return err(new CancelledError());
-    if (!Value.Check(transcriptImageQuerySchema, { sessionId, imageId }))
+    }
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+    if (!Value.Check(transcriptImageQuerySchema, { sessionId, imageId })) {
       return err(new InputError("Invalid image preview identity."));
-    const instance = this.state.instance,
-      epoch = this.connectionEpoch,
-      conversation = this.state.details[sessionId]?.conversationId;
+    }
+
+    const instance = this.state.instance;
+    const epoch = this.connectionEpoch;
+    const conversation = this.state.details[sessionId]?.conversationId;
     const abort = AbortSignal.any([
       this.streamAbort.signal,
       AbortSignal.timeout(8000),
@@ -767,15 +982,27 @@ export class RuntimeClient {
         signal: abort,
       }),
     );
-    if (!requested.ok) return requested;
+    if (!requested.ok) {
+      return requested;
+    }
+
     const response = requested.value;
-    if (!response.ok) return response;
+    if (!response.ok) {
+      return response;
+    }
+
     const reply = response.value;
     if (!reply.ok) {
       const decoded = await capture(() => readJson(reply));
-      if (!decoded.ok) return decoded;
-      if (!decoded.value.ok) return decoded.value;
+      if (!decoded.ok) {
+        return decoded;
+      }
+      if (!decoded.value.ok) {
+        return decoded.value;
+      }
+
       const body = decoded.value.value;
+
       return Value.Check(replySchema, body) && !body.ok
         ? err(remoteError(body.error))
         : err(new ProtocolError("Malformed image preview failure response."));
@@ -786,33 +1013,46 @@ export class RuntimeClient {
       )
     ) {
       await reply.body?.cancel();
+
       return err(new ProtocolError("Image preview response has an unsupported content type."));
     }
+
     const decoded = await capture(() =>
       readBytes(reply, { maximumBytes: maximumPreviewImageBytes, label: "Image preview" }),
     );
-    if (!decoded.ok) return decoded;
+    if (!decoded.ok) {
+      return decoded;
+    }
     if (
       signal?.aborted ||
       epoch !== this.connectionEpoch ||
       instance !== this.state.instance ||
       conversation !== this.state.details[sessionId]?.conversationId
-    )
+    ) {
       return err(new CancelledError("Image preview belongs to an outdated conversation."));
+    }
+
     return decoded.value;
   }
+
   async resources(signal?: AbortSignal): Promise<Result<ProcessResourceSample, ExpectedError>> {
-    if (this.detaching || this.failure) return err(this.connectionClosed());
-    if (!this.state.capabilities?.includes("process-resources"))
+    if (this.detaching || this.failure) {
+      return err(this.connectionClosed());
+    }
+    if (!this.state.capabilities?.includes("process-resources")) {
       return err(
         new CapabilityError(
           "This runtime does not support process resources. No service was restarted.",
         ),
       );
-    if (signal?.aborted) return err(new CancelledError());
-    const instance = this.state.instance,
-      epoch = this.connectionEpoch,
-      pid = this.state.pid;
+    }
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+
+    const instance = this.state.instance;
+    const epoch = this.connectionEpoch;
+    const pid = this.state.pid;
     const abort = AbortSignal.any([
       this.streamAbort.signal,
       AbortSignal.timeout(5000),
@@ -824,38 +1064,62 @@ export class RuntimeClient {
         signal: abort,
       }),
     );
-    if (!attempted.ok) return attempted;
+    if (!attempted.ok) {
+      return attempted;
+    }
+
     const response = attempted.value;
-    if (!response.ok) return response;
+    if (!response.ok) {
+      return response;
+    }
+
     const received = await capture(() => readJson(response.value));
-    if (!received.ok) return received;
+    if (!received.ok) {
+      return received;
+    }
+
     const decoded = received.value;
-    if (!decoded.ok) return decoded;
-    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance)
+    if (!decoded.ok) {
+      return decoded;
+    }
+    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance) {
       return err(new CancelledError("Process resources belong to an outdated connection."));
-    if (!response.value.ok)
+    }
+    if (!response.value.ok) {
       return Value.Check(replySchema, decoded.value) && !decoded.value.ok
         ? err(remoteError(decoded.value.error))
         : err(new ProtocolError("Malformed process resources failure response."));
-    if (!Value.Check(processResourceSchema, decoded.value) || decoded.value.pid !== pid)
+    }
+    if (!Value.Check(processResourceSchema, decoded.value) || decoded.value.pid !== pid) {
       return err(new ProtocolError("Malformed process resources response."));
+    }
+
     return ok(decoded.value);
   }
+
   async dashboard(
     days: DashboardPeriod,
     signal?: AbortSignal,
   ): Promise<Result<DashboardSnapshot, ExpectedError>> {
-    if (this.detaching || this.failure) return err(this.connectionClosed());
-    if (!this.state.capabilities?.includes("agent-dashboard"))
+    if (this.detaching || this.failure) {
+      return err(this.connectionClosed());
+    }
+    if (!this.state.capabilities?.includes("agent-dashboard")) {
       return err(
         new CapabilityError(
           "Running service predates Agent Dashboard. Finish work and restart it explicitly; no service was restarted.",
         ),
       );
-    if (!dashboardPeriods.includes(days)) return err(new InputError("Invalid dashboard period."));
-    if (signal?.aborted) return err(new CancelledError());
-    const instance = this.state.instance,
-      epoch = this.connectionEpoch;
+    }
+    if (!dashboardPeriods.includes(days)) {
+      return err(new InputError("Invalid dashboard period."));
+    }
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+
+    const instance = this.state.instance;
+    const epoch = this.connectionEpoch;
     const abort = AbortSignal.any([
       this.streamAbort.signal,
       AbortSignal.timeout(60000),
@@ -867,37 +1131,58 @@ export class RuntimeClient {
         signal: abort,
       }),
     );
-    if (!attempted.ok) return attempted;
+    if (!attempted.ok) {
+      return attempted;
+    }
+
     const response = attempted.value;
-    if (!response.ok) return response;
+    if (!response.ok) {
+      return response;
+    }
+
     const received = await capture(() => readJson(response.value));
-    if (!received.ok) return received;
+    if (!received.ok) {
+      return received;
+    }
+
     const decoded = received.value;
-    if (!decoded.ok) return decoded;
-    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance)
+    if (!decoded.ok) {
+      return decoded;
+    }
+    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance) {
       return err(new CancelledError("Dashboard belongs to an outdated connection."));
-    if (!response.value.ok)
+    }
+    if (!response.value.ok) {
       return Value.Check(replySchema, decoded.value) && !decoded.value.ok
         ? err(remoteError(decoded.value.error))
         : err(new ProtocolError("Malformed dashboard failure response."));
+    }
     if (
       !Value.Check(dashboardSchema, decoded.value) ||
       decoded.value.days !== days ||
       decoded.value.daily.length !== days ||
       new Set(decoded.value.daily.map((day) => day.date)).size !== days
-    )
+    ) {
       return err(new ProtocolError("Malformed dashboard response."));
+    }
+
     return ok(decoded.value);
   }
+
   async listHistory(
     worktreeId: string,
     signal?: AbortSignal,
   ): Promise<Result<readonly HistoryItem[], ExpectedError>> {
     const capability = this.requireHistory();
-    if (!capability.ok) return capability;
-    if (signal?.aborted) return err(new CancelledError());
-    const epoch = this.connectionEpoch,
-      instance = this.state.instance;
+    if (!capability.ok) {
+      return capability;
+    }
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+
+    const epoch = this.connectionEpoch;
+    const instance = this.state.instance;
     const abort = AbortSignal.any([
       this.streamAbort.signal,
       AbortSignal.timeout(15000),
@@ -909,42 +1194,63 @@ export class RuntimeClient {
         signal: abort,
       }),
     );
-    if (!attempted.ok) return attempted;
+    if (!attempted.ok) {
+      return attempted;
+    }
+
     const response = attempted.value;
-    if (!response.ok) return response;
+    if (!response.ok) {
+      return response;
+    }
+
     const decoded = await capture(() => readJson(response.value));
-    if (!decoded.ok) return decoded;
+    if (!decoded.ok) {
+      return decoded;
+    }
+
     const body = decoded.value;
-    if (!body.ok) return body;
-    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance)
+    if (!body.ok) {
+      return body;
+    }
+    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance) {
       return err(new CancelledError("History belongs to an outdated connection."));
+    }
     if (!response.value.ok) {
       return Value.Check(replySchema, body.value) && !body.value.ok
         ? err(remoteError(body.value.error))
         : err(new ProtocolError("Malformed history failure response."));
     }
+
     return Value.Check(historySchema, body.value) &&
       body.value.every((item) => item.worktreeId === worktreeId)
       ? ok(body.value)
       : err(new ProtocolError("Malformed or mismatched history response."));
   }
+
   async previewHistory(
     worktreeId: string,
     savedId: string,
     signal?: AbortSignal,
   ): Promise<Result<HistoryPreview, ExpectedError>> {
-    if (this.detaching || this.failure) return err(this.connectionClosed());
-    if (!this.state.capabilities?.includes("history-preview"))
+    if (this.detaching || this.failure) {
+      return err(this.connectionClosed());
+    }
+    if (!this.state.capabilities?.includes("history-preview")) {
       return err(
         new CapabilityError(
           "Running service predates history preview. Save work and restart it explicitly when ready; no service was restarted. Search and Open remain available.",
         ),
       );
-    if (signal?.aborted) return err(new CancelledError());
-    if (!Value.Check(historyPreviewQuerySchema, { worktreeId, savedId }))
+    }
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+    if (!Value.Check(historyPreviewQuerySchema, { worktreeId, savedId })) {
       return err(new InputError("Invalid history preview identity."));
-    const instance = this.state.instance,
-      epoch = this.connectionEpoch;
+    }
+
+    const instance = this.state.instance;
+    const epoch = this.connectionEpoch;
     const abort = AbortSignal.any([
       this.streamAbort.signal,
       AbortSignal.timeout(8000),
@@ -957,19 +1263,31 @@ export class RuntimeClient {
         { headers: { "X-Radian-Instance": instance }, signal: abort },
       ),
     );
-    if (!response.ok) return response;
-    if (!response.value.ok) return response.value;
+    if (!response.ok) {
+      return response;
+    }
+    if (!response.value.ok) {
+      return response.value;
+    }
+
     const reply = response.value.value;
     const decoded = await capture(() => readJson(reply));
-    if (!decoded.ok) return decoded;
-    if (!decoded.value.ok) return decoded.value;
-    if (epoch !== this.connectionEpoch || instance !== this.state.instance || signal?.aborted)
+    if (!decoded.ok) {
+      return decoded;
+    }
+    if (!decoded.value.ok) {
+      return decoded.value;
+    }
+    if (epoch !== this.connectionEpoch || instance !== this.state.instance || signal?.aborted) {
       return err(new CancelledError("History preview belongs to an outdated connection."));
+    }
+
     const body = decoded.value.value;
-    if (!reply.ok)
+    if (!reply.ok) {
       return Value.Check(replySchema, body) && !body.ok
         ? err(remoteError(body.error))
         : err(new ProtocolError("Malformed history preview failure response."));
+    }
     if (
       !Value.Check(historyPreviewSchema, body) ||
       body.id !== savedId ||
@@ -980,31 +1298,49 @@ export class RuntimeClient {
     ) {
       return err(new ProtocolError("Malformed or mismatched history preview response."));
     }
+
     return ok(body);
   }
+
   async resume(worktreeId: string, savedId: string): Promise<Result<string, ExpectedError>> {
     const capability = this.requireHistory();
-    if (!capability.ok) return capability;
+    if (!capability.ok) {
+      return capability;
+    }
+
     const result = await this.command({ type: "resume", worktreeId, savedId });
-    if (!result.ok) return result;
-    if (!result.value)
+    if (!result.ok) {
+      return result;
+    }
+    if (!result.value) {
       return err(new ProtocolError("Runtime did not return a resumed session ID."));
+    }
+
     const opened = await this.waitForOpen(result.value);
+
     return opened.ok ? ok(result.value) : opened;
   }
+
   private waitForOpen(id: string, action = "Resume"): Promise<Result<void, ExpectedError>> {
     const present = () =>
       this.snapshot.repositories.some((repo) =>
         repo.worktrees.some((tree) => tree.sessions.some((session) => session.id === id)),
       );
+
     return this.waitForState(present, action);
   }
+
   private waitForState(
     present: () => boolean,
     action: string,
   ): Promise<Result<void, ExpectedError>> {
-    if (present()) return Promise.resolve(ok(undefined));
-    if (this.detaching || this.failure) return Promise.resolve(err(this.connectionClosed()));
+    if (present()) {
+      return Promise.resolve(ok(undefined));
+    }
+    if (this.detaching || this.failure) {
+      return Promise.resolve(err(this.connectionClosed()));
+    }
+
     return new Promise((resolve) => {
       const finish = (result: Result<void, ExpectedError>) => {
         clearTimeout(timer);
@@ -1026,14 +1362,22 @@ export class RuntimeClient {
       );
       const aborted = () => finish(err(this.connectionClosed()));
       const unsubscribe = this.subscribe(() => {
-        if (present()) finish(ok(undefined));
-        else if (this.failure) finish(err(this.connectionClosed()));
+        if (present()) {
+          finish(ok(undefined));
+        } else if (this.failure) {
+          finish(err(this.connectionClosed()));
+        }
       });
+
       this.streamAbort.signal.addEventListener("abort", aborted, { once: true });
     });
   }
+
   private requireHistory(): Result<void, ExpectedError> {
-    if (this.detaching || this.failure) return err(this.connectionClosed());
+    if (this.detaching || this.failure) {
+      return err(this.connectionClosed());
+    }
+
     return this.state.capabilities?.includes("history")
       ? ok(undefined)
       : err(
@@ -1042,16 +1386,20 @@ export class RuntimeClient {
           ),
         );
   }
+
   closeSession(sessionId: string): Promise<Result<void, ExpectedError>> {
     this.hidden.add(sessionId);
     this.emit();
+
     return this.command({ type: "close", sessionId })
       .then((result) => {
         if (!result.ok) {
           this.hidden.delete(sessionId);
           this.emit();
+
           return result;
         }
+
         return ok(undefined);
       })
       .catch((error: unknown) => {
@@ -1060,64 +1408,83 @@ export class RuntimeClient {
         throw error;
       });
   }
+
   async acknowledge(
     sessionId: string,
     conversationId: string,
     resultId: string,
   ): Promise<Result<void, ExpectedError>> {
-    if (!this.state.capabilities?.includes("session-attention"))
+    if (!this.state.capabilities?.includes("session-attention")) {
       return err(
         new CapabilityError(
           "Running service predates session attention. Finish work and explicitly restart it when ready. No service was restarted.",
         ),
       );
+    }
+
     const result = await this.command(
       { type: "acknowledge", sessionId, conversationId, resultId },
       { instance: this.state.instance, epoch: this.connectionEpoch },
     );
+
     return result.ok ? ok(undefined) : result;
   }
+
   async interrupt(sessionId: string): Promise<Result<void, ExpectedError>> {
-    if (!this.state.capabilities?.includes("agent-interrupt"))
+    if (!this.state.capabilities?.includes("agent-interrupt")) {
       return err(
         new CapabilityError(
           "Running service predates agent interruption. Finish work and explicitly restart it when ready. No interrupt was sent.",
         ),
       );
+    }
+
     const conversationId = this.state.details[sessionId]?.conversationId;
-    if (!conversationId)
+    if (!conversationId) {
       return err(
         new ProtocolError("Current conversation identity is unavailable. No interrupt was sent."),
       );
+    }
+
     const result = await this.command({ type: "interrupt", sessionId, conversationId });
+
     return result.ok ? ok(undefined) : result;
   }
+
   async newTab(sessionId: string): Promise<Result<string, ExpectedError>> {
-    if (!this.state.capabilities?.includes("session-tab-commands"))
+    if (!this.state.capabilities?.includes("session-tab-commands")) {
       return err(
         new CapabilityError(
           "Running service predates /new tab creation and /clear. Finish work and restart it explicitly when ready. No command was sent.",
         ),
       );
+    }
+
     const conversationId = this.state.details[sessionId]?.conversationId;
-    if (!conversationId)
+    if (!conversationId) {
       return err(
         new ProtocolError(
           "Current conversation identity is unavailable. No new-tab command was sent.",
         ),
       );
+    }
+
     const binding = { instance: this.state.instance, epoch: this.connectionEpoch };
     const result = await this.command(
       { type: "session-control", sessionId, conversationId, action: "new-tab" },
       binding,
     );
-    if (!result.ok) return result;
-    if (!result.value)
+    if (!result.ok) {
+      return result;
+    }
+    if (!result.value) {
       return err(
         new ProtocolError(
           "New-tab creation was accepted without a session ID. Inspect open tabs before retrying.",
         ),
       );
+    }
+
     const id = result.value;
     const present = await this.waitForState(
       () =>
@@ -1128,87 +1495,120 @@ export class RuntimeClient {
         ),
       "New-tab creation",
     );
+
     return present.ok ? ok(id) : present;
   }
+
   async prompt(
     sessionId: string,
     text: string,
     images: readonly string[] = [],
   ): Promise<Result<void, ExpectedError>> {
     const accounts = parseAccountsCommand(text);
-    if (!accounts.ok) return accounts;
-    if (accounts.value)
+    if (!accounts.ok) {
+      return accounts;
+    }
+    if (accounts.value) {
       return err(
         new CapabilityError(
           "Use /accounts in the Agent input to manage accounts. No prompt was sent.",
         ),
       );
+    }
+
     const dashboard = parseDashboardCommand(text);
-    if (!dashboard.ok) return dashboard;
-    if (dashboard.value)
+    if (!dashboard.ok) {
+      return dashboard;
+    }
+    if (dashboard.value) {
       return err(
         new CapabilityError(
           "Use /dashboard in the Agent input to open usage statistics. No prompt was sent.",
         ),
       );
+    }
+
     const history = parseHistoryCommand(text);
-    if (!history.ok) return history;
-    if (history.value)
+    if (!history.ok) {
+      return history;
+    }
+    if (history.value) {
       return err(
         new CapabilityError(
           "Use /history in the Agent input to open saved session history. No prompt was sent.",
         ),
       );
+    }
+
     const model = parseModelCommand(text);
-    if (!model.ok) return model;
-    if (model.value)
+    if (!model.ok) {
+      return model;
+    }
+    if (model.value) {
       return err(
         new CapabilityError(
           "Use /model in the Agent input to open the model picker. No prompt was sent.",
         ),
       );
+    }
+
     const control = parseSessionControl(text);
-    if (!control.ok) return control;
+    if (!control.ok) {
+      return control;
+    }
+
     const conversationId = this.state.details[sessionId]?.conversationId;
     if (control.value) {
-      if (images.length)
+      if (images.length) {
         return err(
           new InputError(
             `/${control.value.action === "new-tab" ? "new" : control.value.action} does not accept image attachments. Input was retained.`,
           ),
         );
+      }
       if (control.value.action === "new-tab") {
         const result = await this.newTab(sessionId);
+
         return result.ok ? ok(undefined) : result;
       }
-      const capability =
-        control.value.action === "exit"
-          ? "session-exit"
-          : control.value.action === "reload"
-            ? "resource-reload"
-            : control.value.action === "clear"
-              ? "session-tab-commands"
-              : "session-controls";
-      if (!this.state.capabilities?.includes(capability))
+
+      let capability = "session-controls";
+      switch (control.value.action) {
+        case "exit":
+          capability = "session-exit";
+          break;
+        case "reload":
+          capability = "resource-reload";
+          break;
+        case "clear":
+          capability = "session-tab-commands";
+          break;
+      }
+      if (!this.state.capabilities?.includes(capability)) {
         return err(
           new CapabilityError(
             "Running service predates this session command. Finish work and restart it explicitly when ready. No prompt was sent.",
           ),
         );
-      if (!conversationId)
+      }
+      if (!conversationId) {
         return err(
           new ProtocolError(
             "Current conversation identity is unavailable. Reconnect before retrying. No command was sent.",
           ),
         );
+      }
+
       const revision = this.state.details[sessionId]?.resourceRevision ?? 0;
       const binding = { instance: this.state.instance, epoch: this.connectionEpoch };
       const result = await this.command(
         { type: "session-control", sessionId, conversationId, ...control.value },
         binding,
       );
-      if (!result.ok) return result;
-      if (control.value.action === "reload")
+      if (!result.ok) {
+        return result;
+      }
+      if (control.value.action === "reload") {
         return this.waitForState(
           () =>
             this.state.instance === binding.instance &&
@@ -1217,28 +1617,33 @@ export class RuntimeClient {
             (this.state.details[sessionId]?.resourceRevision ?? 0) > revision,
           "Resource reload",
         );
+      }
+
       return ok(undefined);
     }
-    if (text.startsWith("$") && !this.state.capabilities?.includes("completion-catalog"))
+    if (text.startsWith("$") && !this.state.capabilities?.includes("completion-catalog")) {
       return err(
         new CapabilityError(
           "Running service predates $skill invocations. Finish work and explicitly restart it when ready. No model prompt was sent.",
         ),
       );
-    if (images.length && !this.state.capabilities?.includes("prompt-images"))
+    }
+    if (images.length && !this.state.capabilities?.includes("prompt-images")) {
       return err(
         new CapabilityError(
           "Running service predates image input. Input was retained; finish work and restart the service explicitly when ready. No prompt was sent.",
         ),
       );
+    }
     // The old wire schema capped text at 1,000,000 UTF-16 units. Do not submit a
     // new large draft to a service that cannot accept it, or restart live work.
-    if (text.length > 1000000 && !this.state.capabilities?.includes("prompt-images"))
+    if (text.length > 1000000 && !this.state.capabilities?.includes("prompt-images")) {
       return err(
         new CapabilityError(
           "Running service predates large input. Input was retained; restart the service explicitly after finishing work. No prompt was sent.",
         ),
       );
+    }
     if (/^\/fast(?:\s|$)/.test(text)) {
       // An older SDK treats unknown slash commands as model input. Never turn a settings command into a paid prompt.
       const unsupported = () =>
@@ -1247,16 +1652,23 @@ export class RuntimeClient {
             "Running service has no /fast control. Finish jobs and restart it explicitly. No prompt was sent.",
           ),
         );
-      if (!this.state.capabilities?.includes("prompt-completion")) return unsupported();
+      if (!this.state.capabilities?.includes("prompt-completion")) {
+        return unsupported();
+      }
+
       const commands = await this.complete(sessionId, { kind: "command", query: "fast" });
-      if (!commands.ok) return commands;
+      if (!commands.ok) {
+        return commands;
+      }
       if (
         !commands.value.items.some(
           (command) => command.kind === "command" && command.value === "fast",
         )
-      )
+      ) {
         return unsupported();
+      }
     }
+
     const result = await this.command({
       type: "prompt",
       sessionId,
@@ -1269,58 +1681,80 @@ export class RuntimeClient {
         ? { resourceRevision: this.state.details[sessionId]?.resourceRevision ?? 0 }
         : {}),
     });
+
     return result.ok ? ok(undefined) : result;
   }
+
   async answerExtensionUi(
     sessionId: string,
     conversationId: string,
     response: ExtensionUiResponse,
   ): Promise<Result<void, ExpectedError>> {
-    if (!this.state.capabilities?.includes("extension-ui"))
+    if (!this.state.capabilities?.includes("extension-ui")) {
       return err(
         new CapabilityError(
           "Running service predates extension UI. Finish work and explicitly restart it when ready; no answer was sent.",
         ),
       );
-    if (!Value.Check(extensionUiResponseSchema, response))
+    }
+    if (!Value.Check(extensionUiResponseSchema, response)) {
       return err(new InputError("Malformed extension dialog answer."));
-    if (this.state.details[sessionId]?.conversationId !== conversationId)
+    }
+    if (this.state.details[sessionId]?.conversationId !== conversationId) {
       return err(
         new ProtocolError("This tab changed conversations. No extension answer was sent."),
       );
+    }
+
     const result = await this.command(
       { type: "extension-ui-response", sessionId, conversationId, response },
       { instance: this.state.instance, epoch: this.connectionEpoch },
     );
+
     return result.ok ? ok(undefined) : result;
   }
+
   async savePreferences(preferences: RuntimePreferences): Promise<Result<void, ExpectedError>> {
     const result = await this.command({ type: "preferences", preferences });
+
     return result.ok ? ok(undefined) : result;
   }
+
   async stopRuntime(): Promise<Result<void, ExpectedError>> {
     const result = await this.command({ type: "stop" });
+
     return result.ok ? ok(undefined) : result;
   }
+
   async openEditor(
     worktreeId: string,
     size?: { cols: number; rows: number },
   ): Promise<Result<string, ExpectedError>> {
     const capability = this.requireWorkViews();
-    if (!capability.ok) return capability;
+    if (!capability.ok) {
+      return capability;
+    }
+
     const result = await this.command({ type: "editor-open", worktreeId, ...size });
-    if (!result.ok) return result;
+    if (!result.ok) {
+      return result;
+    }
+
     return result.value
       ? ok(result.value)
       : err(new ProtocolError("Runtime did not return an editor ID."));
   }
+
   async attachEditor(
     id: string,
     onFrame: (frame: EditorFrame) => void,
     onFailure: (error: unknown) => void,
   ): Promise<Result<PtyConnection, ExpectedError>> {
     const capability = this.requireWorkViews();
-    if (!capability.ok) return capability;
+    if (!capability.ok) {
+      return capability;
+    }
+
     const binding = this.ptyBinding();
     const editor = new PtyConnection(
       this.paths,
@@ -1356,13 +1790,19 @@ export class RuntimeClient {
       onFailure,
       binding.instance,
     );
+
     return this.attachPty(editor);
   }
+
   get supportsTerminals(): boolean {
     return this.state.capabilities?.includes("terminal-tabs") ?? false;
   }
+
   private requireTerminals(): Result<void, ExpectedError> {
-    if (this.detaching || this.failure) return err(this.connectionClosed());
+    if (this.detaching || this.failure) {
+      return err(this.connectionClosed());
+    }
+
     return this.supportsTerminals
       ? ok(undefined)
       : err(
@@ -1371,30 +1811,46 @@ export class RuntimeClient {
           ),
         );
   }
+
   async createTerminal(
     worktreeId: string,
     size: { cols: number; rows: number },
   ): Promise<Result<string, ExpectedError>> {
     const supported = this.requireTerminals();
-    if (!supported.ok) return supported;
+    if (!supported.ok) {
+      return supported;
+    }
+
     const result = await this.command({ type: "terminal-create", worktreeId, ...size });
-    if (!result.ok) return result;
+    if (!result.ok) {
+      return result;
+    }
+
     const id = result.value;
-    if (!id) return err(new ProtocolError("Runtime did not return a terminal ID."));
+    if (!id) {
+      return err(new ProtocolError("Runtime did not return a terminal ID."));
+    }
+
     const present = await this.waitForState(
       () => this.snapshot.terminals?.some((terminal) => terminal.id === id) ?? false,
       "Terminal creation",
     );
+
     return present.ok ? ok(id) : present;
   }
+
   async attachTerminal(
     id: string,
     onFrame: (frame: EditorFrame) => void,
     onFailure: (error: unknown) => void,
   ): Promise<Result<PtyConnection, ExpectedError>> {
     const supported = this.requireTerminals();
-    if (!supported.ok) return supported;
+    if (!supported.ok) {
+      return supported;
+    }
+
     const binding = this.ptyBinding();
+
     return this.attachPty(
       new PtyConnection(
         this.paths,
@@ -1448,9 +1904,13 @@ export class RuntimeClient {
       ),
     );
   }
+
   async closeTerminal(id: string): Promise<Result<void, ExpectedError>> {
     const supported = this.requireTerminals();
-    if (!supported.ok) return supported;
+    if (!supported.ok) {
+      return supported;
+    }
+
     this.hiddenTerminals.add(id);
     this.emit();
     try {
@@ -1458,8 +1918,10 @@ export class RuntimeClient {
       if (!result.ok) {
         this.hiddenTerminals.delete(id);
         this.emit();
+
         return result;
       }
+
       return ok(undefined);
     } catch (error) {
       this.hiddenTerminals.delete(id);
@@ -1467,6 +1929,7 @@ export class RuntimeClient {
       throw error;
     }
   }
+
   private async attachPty(editor: PtyConnection): Promise<Result<PtyConnection, ExpectedError>> {
     this.connections.add(editor);
     void editor.closed
@@ -1476,6 +1939,7 @@ export class RuntimeClient {
       .catch((error: unknown) => {
         reportUnexpected(error, "PTY connection cleanup");
       });
+
     let attached: Result<void, ExpectedError>;
     try {
       attached = await editor.attach();
@@ -1485,16 +1949,23 @@ export class RuntimeClient {
     }
     if (!attached.ok) {
       await editor.disconnect();
+
       return attached;
     }
     if (this.detaching) {
       await editor.disconnect();
+
       return err(this.connectionClosed());
     }
+
     return ok(editor);
   }
+
   private requireWorkViews(): Result<void, ExpectedError> {
-    if (this.detaching || this.failure) return err(this.connectionClosed());
+    if (this.detaching || this.failure) {
+      return err(this.connectionClosed());
+    }
+
     return this.state.capabilities?.includes("work-views")
       ? ok(undefined)
       : err(
@@ -1503,28 +1974,38 @@ export class RuntimeClient {
           ),
         );
   }
+
   private ptyBinding() {
-    const instance = this.state.instance,
-      epoch = this.connectionEpoch;
+    const instance = this.state.instance;
+    const epoch = this.connectionEpoch;
+
     return {
       instance,
       send: (command: RuntimeCommand) => this.command(command, { instance, epoch }),
     };
   }
+
   private invalidatePtys(): void {
     this.connectionEpoch++;
+
     const error = new ConnectionError(
       "CONNECTION_FAILED",
       "Runtime subscription interrupted. Reconnect this editor/terminal explicitly; no input was replayed.",
     );
     // Invalidating a connection can remove it from the live set.
     const connections = [...this.connections];
-    for (const connection of connections) connection.invalidate(error);
+    for (const connection of connections) {
+      connection.invalidate(error);
+    }
   }
+
   // Cancel recovery immediately while the UI finishes its final preference writes.
   // Already-queued healthy PTY input is drained once; no new input is accepted.
   beginDetach(): void {
-    if (this.detaching) return;
+    if (this.detaching) {
+      return;
+    }
+
     this.detaching = true;
     this.streamAbort.abort();
     this.ptyDetachment = Promise.allSettled(
@@ -1533,15 +2014,20 @@ export class RuntimeClient {
       const errors = results
         .filter((result) => result.status === "rejected")
         .map((result) => result.reason);
-      if (errors.length) throw new AggregateError(errors, "PTY client detach failed.");
+      if (errors.length) {
+        throw new AggregateError(errors, "PTY client detach failed.");
+      }
     });
     void this.ptyDetachment.catch(() => {}); // disconnect() below owns the eventual cleanup result.
   }
+
   disconnect(): Promise<void> {
     this.beginDetach();
     this.disconnection ??= this.finishDisconnect();
+
     return this.disconnection;
   }
+
   private async finishDisconnect(): Promise<void> {
     try {
       await this.ptyDetachment;
@@ -1560,28 +2046,33 @@ export class RuntimeClient {
       this.disconnected ||
       this.failure ||
       (this.detaching && !binding && command.type !== "preferences")
-    )
+    ) {
       return err(this.connectionClosed());
+    }
     if (
       binding &&
       (binding.instance !== this.state.instance || binding.epoch !== this.connectionEpoch)
-    )
+    ) {
       return err(this.connectionClosed());
+    }
+
     const instance = binding?.instance ?? this.state.instance;
     const payload = JSON.stringify(command);
-    if (Buffer.byteLength(payload) > maxFrameBytes)
+    if (Buffer.byteLength(payload) > maxFrameBytes) {
       return err(
         new InputError(
           "Runtime payload exceeds the 8 MiB safety limit. Nothing was sent; input was retained.",
         ),
       );
+    }
+
     const response = await transport(this.paths, "/command", {
       method: "POST",
       body: payload,
       headers: { "Content-Type": "application/json", "X-Radian-Instance": instance },
       signal: AbortSignal.timeout(15000),
     });
-    if (!response.ok)
+    if (!response.ok) {
       return err(
         new ConnectionError(
           response.error.code,
@@ -1589,21 +2080,32 @@ export class RuntimeClient {
           { cause: response.error },
         ),
       );
+    }
+
     const body = await readJson(response.value);
-    if (!body.ok) return body;
-    if (!Value.Check(replySchema, body.value))
+    if (!body.ok) {
+      return body;
+    }
+    if (!Value.Check(replySchema, body.value)) {
       return err(new ProtocolError("Malformed runtime reply; action outcome is unknown."));
-    if (!body.value.ok) return err(remoteError(body.value.error));
+    }
+    if (!body.value.ok) {
+      return err(remoteError(body.value.error));
+    }
     // A late acknowledgement still reports the accepted action, but cannot overwrite
     // notices belonging to a replacement service or recovered connection.
     if (instance === this.state.instance && (!binding || binding.epoch === this.connectionEpoch)) {
       this.warning =
         body.value.warnings?.map((warning) => `Action accepted; ${warning.message}`).join(" · ") ??
         "";
-      if (this.warning) this.emit();
+      if (this.warning) {
+        this.emit();
+      }
     }
+
     return ok(body.value.value);
   }
+
   private async consume(
     body: ReadableStream<Uint8Array>,
     onReady: () => void,
@@ -1617,51 +2119,82 @@ export class RuntimeClient {
         try {
           chunk = await reader.read();
         } catch (error) {
-          if (this.detaching) return ok(undefined);
+          if (this.detaching) {
+            return ok(undefined);
+          }
+
           const known = connectionError(error);
-          if (known) return err(known);
+          if (known) {
+            return err(known);
+          }
+
           throw error;
         }
-        if (this.detaching) return ok(undefined);
-        if (chunk.done) return err(this.connectionClosed());
+        if (this.detaching) {
+          return ok(undefined);
+        }
+        if (chunk.done) {
+          return err(this.connectionClosed());
+        }
         for (const frame of frames.push(chunk.value)) {
-          if (!frame.ok) return frame;
+          if (!frame.ok) {
+            return frame;
+          }
+
           const json = parseJson(frame.value, "runtime event");
-          if (!json.ok) return err(new ProtocolError(json.error.message, { cause: json.error }));
+          if (!json.ok) {
+            return err(new ProtocolError(json.error.message, { cause: json.error }));
+          }
+
           const parsed = parseSnapshot(json.value);
-          if (!parsed.ok) return parsed;
+          if (!parsed.ok) {
+            return parsed;
+          }
           if (
             parsed.value.repositoryId !== this.state.repositoryId ||
             parsed.value.mode !== this.state.mode
-          )
+          ) {
             return err(new ProtocolError("Runtime identity does not match this workspace."));
+          }
           if (parsed.value.instance !== this.state.instance) {
-            if (!firstFrame)
+            if (!firstFrame) {
               return err(new ProtocolError("Service instance changed within the event stream."));
+            }
+
             this.invalidatePtys();
             this.hidden.clear();
             this.hiddenTerminals.clear();
             this.warning =
               "Runtime restarted; state restored. Interrupted actions were not replayed.";
           }
+
           this.state = parsed.value;
           this.failure = "";
+
           const open = new Set(
             this.state.repositories.flatMap((repo) =>
               repo.worktrees.flatMap((tree) => tree.sessions.map((session) => session.id)),
             ),
           );
-          for (const id of this.hidden) if (!open.has(id)) this.hidden.delete(id);
-          for (const id of this.hiddenTerminals)
-            if (!this.state.terminals?.some((terminal) => terminal.id === id))
+          for (const id of this.hidden) {
+            if (!open.has(id)) {
+              this.hidden.delete(id);
+            }
+          }
+          for (const id of this.hiddenTerminals) {
+            if (!this.state.terminals?.some((terminal) => terminal.id === id)) {
               this.hiddenTerminals.delete(id);
+            }
+          }
           if (firstFrame) {
             firstFrame = false;
             onReady();
           }
+
           this.emit();
         }
       }
+
       return ok(undefined);
     } finally {
       try {
@@ -1670,20 +2203,26 @@ export class RuntimeClient {
         if (
           !connectionError(error) &&
           !(this.detaching && error instanceof Error && error.name === "AbortError")
-        )
+        ) {
           reportUnexpected(error, "stream cleanup");
+        }
       }
+
       reader.releaseLock();
     }
   }
+
   private connectionClosed(): ConnectionError {
     return new ConnectionError(
       "CONNECTION_FAILED",
       "Runtime client is disconnected; reconnect to observe the action outcome.",
     );
   }
+
   private emit(): void {
-    for (const listener of this.listeners) listener();
+    for (const listener of this.listeners) {
+      listener();
+    }
   }
 }
 
@@ -1691,15 +2230,21 @@ export async function fetchSnapshot(
   paths: RuntimePaths,
 ): Promise<Result<RuntimeSnapshot | null, ExpectedError>> {
   const response = await transport(paths, "/snapshot", { signal: AbortSignal.timeout(500) });
-  if (!response.ok) return response.error.code === "RUNTIME_ABSENT" ? ok(null) : response;
-  if (!response.value.ok)
+  if (!response.ok) {
+    return response.error.code === "RUNTIME_ABSENT" ? ok(null) : response;
+  }
+  if (!response.value.ok) {
     return err(new ProtocolError(`Runtime snapshot failed: ${response.value.status}`));
+  }
+
   const body = await readJson(response.value, {
     maximumBytes: maxSnapshotBytes,
     label: "Runtime snapshot",
   });
+
   return body.ok ? parseSnapshot(body.value) : body;
 }
+
 export function defaultPreferences(): RuntimePreferences {
   return structuredClone(emptyPreferences);
 }

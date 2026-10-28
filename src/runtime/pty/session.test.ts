@@ -5,10 +5,14 @@ import { expectOk } from "../../testing/results.ts";
 async function until(check: () => boolean) {
   const deadline = Date.now() + 5000;
   while (!check()) {
-    if (Date.now() > deadline) throw new Error("Fixture PTY output timed out.");
+    if (Date.now() > deadline) {
+      throw new Error("Fixture PTY output timed out.");
+    }
+
     await Bun.sleep(5);
   }
 }
+
 async function mount(waitForResizeOutput: boolean) {
   const ready = Promise.withResolvers<void>();
   // The child acknowledges startup but deliberately redraws only when instructed over owned IPC.
@@ -25,16 +29,22 @@ async function mount(waitForResizeOutput: boolean) {
       size: { cols: 20, rows: 2 },
       waitForResizeOutput,
       ipc: (message) => {
-        if (message === "ready") ready.resolve();
+        if (message === "ready") {
+          ready.resolve();
+        }
       },
     },
     () => {},
   );
+
   await ready.promise;
   await until(() => session.frame().ansi.includes("OLD-OUTPUT"));
+
   const stream = expectOk(session.attach("fixture-lease")).body!;
   const reader = stream.getReader();
+
   await reader.read();
+
   return {
     session,
     async close() {
@@ -97,9 +107,13 @@ test("Output reads validate lease ownership and isolate snapshots from later out
   try {
     const rejected = await app.session.read("stale-lease");
     expect(rejected.ok).toBe(false);
-    if (!rejected.ok) expect(rejected.error.code).toBe("PTY_BUSY");
-    const before = app.session.frame(),
-      snapshot = expectOk(await app.session.read("fixture-lease"));
+    if (!rejected.ok) {
+      expect(rejected.error.code).toBe("PTY_BUSY");
+    }
+
+    const before = app.session.frame();
+    const snapshot = expectOk(await app.session.read("fixture-lease"));
+
     expect(snapshot.text).toContain("OLD-OUTPUT");
     expect(app.session.frame()).toEqual(before);
 

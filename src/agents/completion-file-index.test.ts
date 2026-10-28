@@ -8,28 +8,33 @@ import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 
 async function mount() {
-  const fixture = await createWorktreeFixture(),
-    listeners = new Set<() => void>(),
-    unexpected: unknown[] = [];
+  const fixture = await createWorktreeFixture();
+  const listeners = new Set<() => void>();
+  const unexpected: unknown[] = [];
   let changes = 0;
   const index = new CompletionFileIndex(
     fixture.main,
     () => {
       changes++;
-      for (const listener of listeners) listener();
+      for (const listener of listeners) {
+        listener();
+      }
     },
     (error) => unexpected.push(error),
   );
   const paths = (query = "") => {
     const result = index.read(query);
+
     return result?.ok ? result.value.items.map((item) => item.value) : [];
   };
   const until = (predicate: () => boolean, label = "file update") =>
     new Promise<void>((resolve, reject) => {
       if (predicate()) {
         resolve();
+
         return;
       }
+
       const check = () => {
         if (predicate()) {
           clearTimeout(timer);
@@ -45,8 +50,10 @@ async function mount() {
           ),
         );
       }, 3000);
+
       listeners.add(check);
     });
+
   return {
     ...fixture,
     index,
@@ -76,13 +83,20 @@ test("File indexes load complete catalogs and search subsequent input without I/
     await writeFile(join(app.main, "ignored.ts"), "ignore");
 
     expectOk(await app.index.refresh());
+
     const changes = app.changes();
-    for (let i = 0; i < 50; i++) expect(app.paths("file-159")).toEqual(["files/file-159.ts"]);
+    for (let i = 0; i < 50; i++) {
+      expect(app.paths("file-159")).toEqual(["files/file-159.ts"]);
+    }
 
     expect(app.changes()).toBe(changes);
     expect(app.paths("ignored")).toEqual([]);
+
     const all = app.index.read("");
-    if (!all) throw new Error("Index was not initialized");
+    if (!all) {
+      throw new Error("Index was not initialized");
+    }
+
     expect(expectOk(all).truncated).toBe(true);
     expect(app.unexpected).toEqual([]);
   } finally {
@@ -147,9 +161,10 @@ test("Included Git config and symlinked excludes changes trigger resynchronizati
   // Test the boundary with isolated include files and symlinks, not global user config.
   const app = await mount();
   try {
-    const settings = join(app.directory, "included.gitconfig"),
-      target = join(app.directory, "actual.ignore"),
-      link = join(app.directory, "linked.ignore");
+    const settings = join(app.directory, "included.gitconfig");
+    const target = join(app.directory, "actual.ignore");
+    const link = join(app.directory, "linked.ignore");
+
     await writeFile(join(app.main, "conditional.ts"), "file");
     await writeFile(target, "");
     await symlink(target, link);
@@ -175,9 +190,9 @@ test("Included Git config and symlinked excludes changes trigger resynchronizati
 
 test("Resynchronization requested during initial scanning runs in the next scan", async () => {
   // Changes arriving after the initial listing must not be lost before completion.
-  const app = await mount(),
-    scanned = Promise.withResolvers<void>(),
-    release = Promise.withResolvers<void>();
+  const app = await mount();
+  const scanned = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
   const original = discovery.listCompletionFiles;
   let calls = 0;
   const scan = spyOn(discovery, "listCompletionFiles").mockImplementation(async (cwd, signal) => {
@@ -186,6 +201,7 @@ test("Resynchronization requested during initial scanning runs in the next scan"
       scanned.resolve();
       await release.promise;
     }
+
     return result;
   });
   try {
@@ -193,6 +209,7 @@ test("Resynchronization requested during initial scanning runs in the next scan"
     await scanned.promise;
 
     await writeFile(join(app.main, "during-startup.ts"), "new");
+
     const reload = app.index.refresh();
     release.resolve();
     expectOk(await initial);
@@ -210,16 +227,23 @@ test("Resynchronization requested during initial scanning runs in the next scan"
 
 test("Watcher errors report failure and recover through reconnection and a full scan", async () => {
   // Inject an OS-boundary error while using real replacement watchers and Git scans.
-  const app = await mount(),
-    watching = spyOn(fs, "watch");
+  const app = await mount();
+  const watching = spyOn(fs, "watch");
   try {
     expectOk(await app.index.refresh());
+
     const root = watching.mock.results[0];
-    if (root?.type !== "return") throw new Error("Root watcher was not installed");
+    if (root?.type !== "return") {
+      throw new Error("Root watcher was not installed");
+    }
 
     root.value.emit("error", Object.assign(new Error("Fixture watcher failure"), { code: "EIO" }));
+
     const failed = app.index.read("");
-    if (!failed) throw new Error("Watcher failure was hidden as pending");
+    if (!failed) {
+      throw new Error("Watcher failure was hidden as pending");
+    }
+
     expect(expectError(failed).code).toBe("STORAGE_FAILED");
     await app.until(() => app.index.read("")?.ok === true, "watch recovery");
 
@@ -245,8 +269,12 @@ test("Disposed indexes return cancellation and initial discovery failures remain
     app.index.dispose();
 
     expect(expectError(failed).code).toBe("GIT_QUERY_FAILED");
+
     const result = app.index.read("file");
-    if (!result) throw new Error("Closed index returned pending");
+    if (!result) {
+      throw new Error("Closed index returned pending");
+    }
+
     expect(expectError(result).code).toBe("CANCELLED");
     expect(app.unexpected).toEqual([]);
   } finally {

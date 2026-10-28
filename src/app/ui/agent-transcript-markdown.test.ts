@@ -28,9 +28,11 @@ const prose = (
   text,
   status: streaming ? "streaming" : "complete",
 });
+
 function descendants(root: Renderable): Renderable[] {
   return root.getChildren().flatMap((child) => [child, ...descendants(child)]);
 }
+
 async function mount(
   sections: TranscriptSection[],
   actions: Partial<WorkbenchActions> = {},
@@ -42,20 +44,22 @@ async function mount(
     kittyKeyboard: true,
     ...(clock ? { clock } : {}),
   });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    copies: string[] = [],
-    sent: string[] = [];
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const copies: string[] = [];
+  const sent: string[] = [];
   let current = sections;
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {},
     onCloseSession: () => {},
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     initialDrafts: { a1: "Keep this draft" },
     onCopyTranscript: async (text) => {
       copies.push(text);
+
       return ok("Copied to clipboard");
     },
     getSessionDetails: () => ({ status: "complete", output: "", error: null, sections: current }),
@@ -77,7 +81,9 @@ async function mount(
       await render();
     }
   };
+
   await render();
+
   return {
     ...app,
     view,
@@ -91,14 +97,20 @@ async function mount(
       )!;
     },
     position(text: string) {
-      const lines = app.captureCharFrame().split("\n"),
-        y = lines.findIndex((line) => line.includes(text));
-      if (y < 0) throw new Error(`Missing ${text}`);
+      const lines = app.captureCharFrame().split("\n");
+      const y = lines.findIndex((line) => line.includes(text));
+      if (y < 0) {
+        throw new Error(`Missing ${text}`);
+      }
+
       return { x: Bun.stringWidth(lines[y]!.slice(0, lines[y]!.indexOf(text))), y };
     },
     body() {
       const node = app.renderer.currentFocusedRenderable;
-      if (!(node instanceof EditBufferRenderable)) throw new Error("Missing source cursor");
+      if (!(node instanceof EditBufferRenderable)) {
+        throw new Error("Missing source cursor");
+      }
+
       return node;
     },
     async focus() {
@@ -126,6 +138,7 @@ test("Answers render headings, emphasis, code, links, lists, and tables through 
   const app = await mount([prose(document)]);
   try {
     await app.settled();
+
     const frame = app.captureCharFrame();
     // Draw table borders and row/column separators, not just cell contents.
     expect(frame).toMatch(/┌─+┬─+┐/u);
@@ -144,8 +157,9 @@ test("Answers render headings, emphasis, code, links, lists, and tables through 
       "CODE_LITERAL **keep stars**",
       "Radian",
       "ready",
-    ])
+    ]) {
       expect(frame).toContain(text);
+    }
     for (const syntax of [
       "### Actual structure",
       "**Emphasized answer**",
@@ -154,8 +168,10 @@ test("Answers render headings, emphasis, code, links, lists, and tables through 
       "[README](",
       "| --- | --- |",
       "| Radian |",
-    ])
+    ]) {
       expect(frame).not.toContain(syntax);
+    }
+
     const spans = app.captureSpans().lines.flatMap((line) => line.spans);
     expect(
       spans.find((span) => span.text.includes("Emphasized answer"))!.attributes &
@@ -186,8 +202,8 @@ test.each(["**FIRST_FRAME_TEXT**", "```typescript\nconst FIRST_FRAME_TEXT = 1;\n
 
 test("Enter preserves Markdown presentation and height while copying visible lines separately from full source", async () => {
   // Keep source syntax hidden without losing full-source copying.
-  const source = "## Heading\r\n\r\n**한글 👨‍👩‍👧‍👦**\r\nlast",
-    clock = new ManualClock();
+  const source = "## Heading\r\n\r\n**한글 👨‍👩‍👧‍👦**\r\nlast";
+  const clock = new ManualClock();
   const app = await mount([prose(source)], {}, clock);
   try {
     await app.settled();
@@ -198,6 +214,7 @@ test("Enter preserves Markdown presentation and height while copying visible lin
     // Let the copy notification expire before comparing the unobstructed Markdown viewport.
     clock.advance(5000);
     await app.render();
+
     const height = app.markdown().height;
     const markdownFrame = () =>
       app
@@ -206,6 +223,7 @@ test("Enter preserves Markdown presentation and height while copying visible lin
         .slice(app.markdown().y, app.markdown().y + height)
         .join("\n");
     const before = markdownFrame();
+
     expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<CR> Text");
 
     // Entering reading mode neither swaps buffers nor exposes Markdown syntax.
@@ -271,6 +289,7 @@ test.each([false, true])(
     try {
       uiTheme(app.renderer).configure(palette(light), { muted: "#CC2288" });
       await app.settled();
+
       const spans = app.captureSpans().lines.flatMap((line) => line.spans);
       for (const text of [
         "Reviewing extension docs",
@@ -280,13 +299,17 @@ test.each([false, true])(
         "pending",
       ]) {
         const span = spans.find((span) => span.text.includes(text));
-        if (!span) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+        if (!span) {
+          throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+        }
+
         const [r, g, b] = span.fg.toInts();
         expect(r).toBe(g);
         expect(g).toBe(b);
         expect(span.attributes & TextAttributes.ITALIC).toBe(TextAttributes.ITALIC);
         expect(span.bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
       }
+
       expect(app.captureCharFrame()).not.toContain("**Reviewing extension docs**");
       expect(app.captureCharFrame()).not.toContain("[thinking]");
     } finally {
@@ -306,6 +329,7 @@ test("Streaming partial Markdown updates the same renderer and finalizes tables 
     await app.settled();
     expect(app.markdown()).toBe(original);
     expect(original.streaming).toBe(true);
+
     // Partially received final table cells still show borders and available content.
     const prefix =
       "### Streaming\n\n**hello 한글**\n\n```text\nfirst\nsecond\n```\n\n| Key | Value |\n|---|---|\n";
@@ -318,12 +342,15 @@ test("Streaming partial Markdown updates the same renderer and finalizes tables 
     // Completion preserves table borders and final cells in the same renderer.
     await app.update([prose(prefix + "| final | complete |")]);
     await app.settled();
+
     const frame = app.captureCharFrame();
     expect(original.streaming).toBe(false);
     expect(frame).toMatch(/┌─+┬─+┐/u);
     expect(frame).toMatch(/└─+┴─+┘/u);
-    for (const text of ["hello 한글", "first", "second", "final", "complete"])
+    for (const text of ["hello 한글", "first", "second", "final", "complete"]) {
       expect(frame).toContain(text);
+    }
+
     expect(frame).not.toContain("```text");
     expect(frame).not.toContain("|---|---|");
   } finally {
@@ -338,6 +365,7 @@ test("Completed messages with missing closing syntax still show truncated-previe
   ]);
   try {
     await app.settled();
+
     const frame = app.captureCharFrame();
     expect(frame).toContain("Truncated");
     expect(frame).toContain("unfinished emphasis");
@@ -387,15 +415,20 @@ test("Narrow Markdown tables fit available width without exposing source delimit
     app.resize(80, 26);
     await app.settled();
     await app.focus();
+
     const scroll = app.renderer.root.findDescendantById("session-transcript")!;
     expect(app.markdown().width).toBeLessThanOrEqual(scroll.width);
+
     // Both borders and the final row remain visible in compact screens.
     const frame = app.captureCharFrame();
     expect(frame).toContain("Name");
     expect(frame).toContain("Value");
     expect(frame).toMatch(/┌─+┬─+┐/u);
     expect(frame).toMatch(/└─+┴─+┘/u);
-    for (const text of ["한글 항목", "second", "ready"]) expect(frame).toContain(text);
+    for (const text of ["한글 항목", "second", "ready"]) {
+      expect(frame).toContain(text);
+    }
+
     // Scope columns to the table so the section outline cannot be mistaken for a cell separator.
     const markdown = app.markdown();
     const values = frame
@@ -406,6 +439,7 @@ test("Narrow Markdown tables fit available width without exposing source delimit
       .map((cells) => cells[2])
       .join("")
       .replace(/\s+/gu, "");
+
     expect(values).toContain("긴설명을단어단위로줄바꿈해서표시합니다");
     expect(frame).not.toContain("|---|---|");
     expect(app.view.promptDrafts.a1).toBe("Keep this draft");
@@ -423,6 +457,7 @@ test("Disposal during highlighting prevents late updates to destroyed Markdown o
     .filter((node): node is CodeRenderable => node instanceof CodeRenderable)
     .map((node) => node.highlightingDone);
   const markdown = app.markdown();
+
   await app.close();
   await Promise.all(pending);
   // Late completion after native buffer destruction causes neither exceptions nor state changes.
@@ -450,12 +485,17 @@ test("Status, syntax, and Markdown styles apply independently to code, inline co
 
     // Verify completed native highlighting and tables through actual screen output.
     await app.settled();
+
     const spans = app.captureSpans().lines.flatMap((line) => line.spans);
     const span = (text: string) => {
       const value = spans.find((span) => span.text.includes(text));
-      if (!value) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+      if (!value) {
+        throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+      }
+
       return value;
     };
+
     expect(span("semantic_string").fg.toInts().slice(0, 3)).toEqual([18, 171, 52]);
     expect(span("semantic_inline").fg.toInts().slice(0, 3)).toEqual([34, 153, 204]);
     expect(span("semantic_inline").attributes & TextAttributes.ITALIC).not.toBe(0);
@@ -502,6 +542,7 @@ test("Table cursors and character selection preserve borders/styles and copy vis
     {
       onOpenTranscriptUrl: async (url) => {
         opened.push(url);
+
         return ok(undefined);
       },
     },
@@ -511,15 +552,19 @@ test("Table cursors and character selection preserve borders/styles and copy vis
     await app.focus();
     app.mockInput.pressEnter();
     await app.render();
-    const body = app.body(),
-      offset = body.plainText.indexOf("표한글");
+
+    const body = app.body();
+    const offset = body.plainText.indexOf("표한글");
+
     expect(offset).toBeGreaterThanOrEqual(0);
 
     // Move into displayed cells and select adjacent characters.
     body.cursorOffset = body.editBuffer.measureText(body.plainText.slice(0, offset));
     await app.render();
-    const target = app.position("표한글"),
-      cursor = app.renderer.getCursorState();
+
+    const target = app.position("표한글");
+    const cursor = app.renderer.getCursorState();
+
     app.mockInput.pressKey("g");
     app.mockInput.pressKey("x");
     await app.waitFor(() => opened.length === 1);
@@ -563,6 +608,7 @@ test("Long emphasized prose navigates display rows while line selection excludes
     await app.focus();
     app.mockInput.pressEnter();
     await app.render();
+
     const first = app.renderer.getCursorState();
 
     // Ctrl+N/P moves display rows; V selects complete logical lines.
@@ -594,7 +640,9 @@ test("Vertical motions retain preferred columns across short rows while horizont
     await app.focus();
     app.mockInput.pressEnter();
     await app.render();
-    for (let index = 0; index < 8; index++) app.mockInput.pressKey("l");
+    for (let index = 0; index < 8; index++) {
+      app.mockInput.pressKey("l");
+    }
 
     // Clamping on short rows must restore the original column on later long rows.
     app.mockInput.pressKey("n", { ctrl: true });
@@ -622,16 +670,18 @@ test.each([
   "$key first-nonblank motions follow Vim for Korean, tabs, and whitespace-only lines",
   async ({ key, shift }) => {
     // Leading code-block whitespace is visible source content, not Markdown syntax.
-    const first = " \t  한글 value",
-      blank = " \t  ";
+    const first = " \t  한글 value";
+    const blank = " \t  ";
     const app = await mount([prose(`\`\`\`text\n${first}\n${blank}\nnext\n\`\`\``)]);
     try {
       await app.settled();
       await app.focus();
       app.mockInput.pressEnter();
       await app.render();
-      const body = app.body(),
-        leading = " \t  ";
+
+      const body = app.body();
+      const leading = " \t  ";
+
       app.mockInput.pressKey("END");
 
       // First-nonblank differs from 0 and preserves existing selection anchors.
@@ -665,6 +715,7 @@ test("Transcript i never returns sections, bodies, or selections to input while 
   try {
     await app.settled();
     await app.focus();
+
     const sections = app.renderer.currentFocusedRenderable;
 
     app.mockInput.pressKey("i");
@@ -672,6 +723,7 @@ test("Transcript i never returns sections, bodies, or selections to input while 
     expect(app.renderer.currentFocusedRenderable?.id).toBe(sections?.id);
     app.mockInput.pressEnter();
     await app.render();
+
     const body = app.body();
     app.mockInput.pressKey("i");
     app.mockInput.pressKey("v");
@@ -698,6 +750,7 @@ test("Native Markdown code and emphasis keep styles in cursor and selection mode
   try {
     await app.settled();
     await app.focus();
+
     const height = app.markdown().height;
 
     app.mockInput.pressEnter();
@@ -719,14 +772,15 @@ test("Native Markdown code and emphasis keep styles in cursor and selection mode
 
 test("Reconnected screens restore cursor and selection using rendered characters", async () => {
   // Never reinterpret new-coordinate selections as source-syntax offsets.
-  const source = "## Saved\n\n**한글** after",
-    app = await mount([prose(source)]);
+  const source = "## Saved\n\n**한글** after";
+  const app = await mount([prose(source)]);
   let preferences: WorkViewPreferences;
   try {
     await app.settled();
     await app.focus();
     app.mockInput.pressEnter();
     await app.render();
+
     const body = app.body();
     body.cursorOffset = body.editBuffer.measureText(
       body.plainText.slice(0, body.plainText.indexOf("한글")),
@@ -738,6 +792,7 @@ test("Reconnected screens restore cursor and selection using rendered characters
   } finally {
     await app.close();
   }
+
   const next = await mount([prose(source)], { initialWorkViews: preferences! });
   try {
     // Restoring reading focus in a new UI must not unwrap Markdown.

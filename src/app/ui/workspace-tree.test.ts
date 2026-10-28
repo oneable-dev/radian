@@ -14,13 +14,14 @@ async function mount(
   size: { width?: number; height?: number } = {},
 ) {
   const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, ...size });
-  const selection = new WorkspaceSelection(repositories),
-    requests: string[] = [];
+  const selection = new WorkspaceSelection(repositories);
+  const requests: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => requests.push("new"),
     onCloseSession: () => requests.push("close"),
     onPrompt: () => {
       requests.push("prompt");
+
       return ok(undefined);
     },
     getSessionDetails: () => ({ status: "complete", output: "Transcript", error: null }),
@@ -30,13 +31,16 @@ async function mount(
     await app.renderOnce();
     await app.renderOnce();
   };
+
   openWorkspaceSearch(app);
   app.mockInput.pressTab();
   await render();
+
   const get = (id: string) => app.renderer.root.findDescendantById(id)!;
   const line = (id: string, offset = 0) => {
-    const node = get(id),
-      label = get(`${id}:label`);
+    const node = get(id);
+    const label = get(`${id}:label`);
+
     return app
       .captureCharFrame()
       .split("\n")
@@ -44,11 +48,14 @@ async function mount(
   };
   const cell = (x: number, y: number) => {
     let column = 0;
+
     return app.captureSpans().lines[y]!.spans.find((span) => {
       column += span.width;
+
       return column > x;
     })!;
   };
+
   return {
     ...app,
     selection,
@@ -69,8 +76,8 @@ test("Workspace popups show repositories plus two-row folder/branch items withou
   // Worktree branches are metadata on the same item, not separate candidates.
   const app = await mount();
   try {
-    const main = app.get("worktree:demo:main"),
-      label = app.get(`${main.id}:label`);
+    const main = app.get("worktree:demo:main");
+    const label = app.get(`${main.id}:label`);
 
     expect(main.height).toBe(2);
     expect(label.height).toBe(2);
@@ -117,12 +124,17 @@ test.each(["search", "results"] as const)(
     // Lists showing all three candidates need no viewport movement.
     const app = await mount();
     try {
-      if (focus === "search") app.mockInput.pressTab({ shift: true });
+      if (focus === "search") {
+        app.mockInput.pressTab({ shift: true });
+      }
+
       await app.render();
-      const tree = app.get("workspace-tree") as ScrollBoxRenderable,
-        top = tree.scrollTop;
+
+      const tree = app.get("workspace-tree") as ScrollBoxRenderable;
+      const top = tree.scrollTop;
       const highlighted = (id: string) => {
         const row = app.get(id);
+
         return app.cell(row.x, row.y).bg.equals(uiTheme(app.renderer).styles["ui.selection"].bg!);
       };
 
@@ -170,10 +182,14 @@ test.each(["search", "results"] as const)(
     }));
     const app = await mount([{ ...repository, worktrees }], { width: 60, height: 12 });
     try {
-      if (focus === "search") app.mockInput.pressTab({ shift: true });
+      if (focus === "search") {
+        app.mockInput.pressTab({ shift: true });
+      }
+
       await app.render();
-      const tree = app.get("workspace-tree") as ScrollBoxRenderable,
-        theme = uiTheme(app.renderer);
+
+      const tree = app.get("workspace-tree") as ScrollBoxRenderable;
+      const theme = uiTheme(app.renderer);
 
       // Keep viewports for visible neighbors; reveal candidates only when outside.
       for (const [index, key] of [
@@ -185,10 +201,11 @@ test.each(["search", "results"] as const)(
         [4, "p"],
         [3, "p"],
       ] as const) {
-        const row = app.get(`worktree:tree-${index}`),
-          top = tree.scrollTop;
+        const row = app.get(`worktree:tree-${index}`);
+        const top = tree.scrollTop;
         const visible =
           row.y >= tree.viewport.y && row.y + row.height <= tree.viewport.y + tree.viewport.height;
+
         app.mockInput.pressKey(key, { ctrl: true });
         await app.render();
 
@@ -198,9 +215,13 @@ test.each(["search", "results"] as const)(
         expect(app.cell(label.x, label.y).fg.toInts()).toEqual(
           theme.styles["sidebar.selected"].fg.toInts(),
         );
-        if (visible) expect(tree.scrollTop).toBe(top);
+        if (visible) {
+          expect(tree.scrollTop).toBe(top);
+        }
+
         expect(app.selection.worktree?.id).toBe("tree-0");
       }
+
       expect(app.renderer.currentFocusedRenderable?.id).toBe(
         focus === "search" ? "workspace-search" : "workspace-tree",
       );
@@ -215,8 +236,8 @@ test("Branch-row clicks open the same worktree and close popups", async () => {
   // Both row click targets belong to one worktree.
   const app = await mount();
   try {
-    const feature = app.get("worktree:demo:feature"),
-      label = app.get(`${feature.id}:label`);
+    const feature = app.get("worktree:demo:feature");
+    const label = app.get(`${feature.id}:label`);
 
     await app.mockMouse.click(label.x + 3, label.y + 1);
     await app.render();
@@ -250,6 +271,7 @@ test.each([false, true])(
         highlightBackground: null,
       });
       await app.render();
+
       const main = app.get("worktree:demo:main");
 
       expect(app.cell(main.x, main.y).bg.toInts()).toEqual(
@@ -258,6 +280,7 @@ test.each([false, true])(
       expect(app.cell(main.x + main.width - 1, main.y + 1).bg.toInts()).toEqual(
         theme.styles["ui.selection"].bg!.toInts(),
       );
+
       const other = app.get("worktree:demo:feature");
       expect(app.cell(other.x, other.y).bg.toInts()).toEqual(theme.styles["ui.popup"].bg!.toInts());
       expect(app.get("work-panel").width).toBe(120);
@@ -285,9 +308,12 @@ test.each([11, 12, 36])(
     try {
       app.mockInput.pressKey("END");
       await app.render();
-      const label = app.get("worktree:tree-19:label"),
-        tree = app.get("workspace-tree");
-      if (!(tree instanceof ScrollBoxRenderable)) throw new Error("Missing workspace list");
+
+      const label = app.get("worktree:tree-19:label");
+      const tree = app.get("workspace-tree");
+      if (!(tree instanceof ScrollBoxRenderable)) {
+        throw new Error("Missing workspace list");
+      }
 
       expect(label.y).toBeGreaterThanOrEqual(tree.viewport.y);
       expect(label.y + 2).toBeLessThanOrEqual(tree.viewport.y + tree.viewport.height);

@@ -8,7 +8,9 @@ export const repositoryRegistrationSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
 export type RepositoryRegistration = Static<typeof repositoryRegistrationSchema>;
+
 export const daemonRegistrySchema = Type.Object(
   {
     version: Type.Literal(1),
@@ -24,4 +26,5 @@ export const daemonRegistrySchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
 export type DaemonRegistry = Static<typeof daemonRegistrySchema>;

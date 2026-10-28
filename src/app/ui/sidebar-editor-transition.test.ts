@@ -9,12 +9,12 @@ import { ConnectionError, type ExpectedError } from "../../errors.ts";
 
 async function fixture() {
   const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
-  const sizes: { cols: number; rows: number }[] = [],
-    input: string[] = [];
-  let receive: (frame: EditorFrame) => void = () => {},
-    failure: (error: ExpectedError) => void = () => {},
-    attaches = 0,
-    revision = 0;
+  const sizes: { cols: number; rows: number }[] = [];
+  const input: string[] = [];
+  let receive: (frame: EditorFrame) => void = () => {};
+  let failure: (error: ExpectedError) => void = () => {};
+  let attaches = 0;
+  let revision = 0;
   const frame = (cols: number, rows: number): EditorFrame => ({
     id: "editor",
     worktreeId: "demo:main",
@@ -40,6 +40,7 @@ async function fixture() {
         receive = onFrame;
         failure = failed;
         receive(frame(116, 23));
+
         return ok({
           input: (bytes) => input.push(new TextDecoder().decode(bytes)),
           resize: (cols, rows) => {
@@ -59,9 +60,12 @@ async function fixture() {
     app.mockInput.pressKey(" ", { ctrl: true });
     app.mockInput.pressKey(key);
   };
+
   leader("e");
   await render();
+
   const get = (id: string) => app.renderer.root.findDescendantById(id)!;
+
   return {
     ...app,
     view,
@@ -84,9 +88,9 @@ test("Workspace overlays above Editor preserve PTY size, instance, and connectio
   // Overlays need no legacy sidebar resize preparation/commit protocol.
   const app = await fixture();
   try {
-    const surface = app.renderer.currentFocusedRenderable!,
-      geometry = [surface.x, surface.y, surface.width, surface.height],
-      sizes = app.sizes.length;
+    const surface = app.renderer.currentFocusedRenderable!;
+    const geometry = [surface.x, surface.y, surface.width, surface.height];
+    const sizes = app.sizes.length;
 
     app.leader("b");
     await app.render();

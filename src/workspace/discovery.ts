@@ -9,23 +9,32 @@ export function parseWorktrees(porcelain: string): Worktree[] {
   let path: string | null = null;
   let branch: string | null = null;
   let bare = false;
+
   function finish(): void {
-    if (path && !bare)
+    if (path && !bare) {
       worktrees.push({ id: path, path, name: basename(path), branch, sessions: [] });
+    }
+
     path = null;
     branch = null;
     bare = false;
   }
+
   for (const field of porcelain.split("\0")) {
-    if (field === "") finish();
-    else if (field.startsWith("worktree ")) {
+    if (field === "") {
+      finish();
+    } else if (field.startsWith("worktree ")) {
       finish();
       path = field.slice("worktree ".length);
     } else if (field.startsWith("branch ")) {
       branch = field.slice("branch ".length).replace(/^refs\/heads\//, "");
-    } else if (field === "bare") bare = true;
+    } else if (field === "bare") {
+      bare = true;
+    }
   }
+
   finish();
+
   return worktrees;
 }
 
@@ -42,7 +51,10 @@ async function git(cwd: string, args: string[]): Promise<string> {
     new Response(process.stderr).text(),
     process.exited,
   ]);
-  if (code !== 0) throw new GitDiscoveryError(`Git discovery failed: ${error.trim()}`);
+  if (code !== 0) {
+    throw new GitDiscoveryError(`Git discovery failed: ${error.trim()}`);
+  }
+
   return output;
 }
 
@@ -53,7 +65,9 @@ export async function discoverRepository(cwd: string): Promise<Result<Repository
     );
     const worktrees = parseWorktrees(await git(cwd, ["worktree", "list", "--porcelain", "-z"]));
     const mainTree = worktrees[0];
+
     return { id: commonDir, name: mainTree?.name ?? basename(cwd), worktrees };
   });
+
   return discovered.ok ? ok(discovered.value) : err(discovered.error);
 }

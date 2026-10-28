@@ -19,16 +19,20 @@ test("Command catalogs merge SDK extensions, templates, and enabled skills witho
   try {
     const agentDir = join(directory, "agent");
     const options = await offlineRuntime(agentDir);
-    if (!options.modelRuntime || !options.model)
+    if (!options.modelRuntime || !options.model) {
       throw new Error("Offline model fixture is missing.");
+    }
+
     const skill = join(directory, "fixture-skill");
     await mkdir(skill);
     await writeFile(
       join(skill, "SKILL.md"),
       "---\nname: fixture-skill\ndescription: Fixture skill\n---\nDo a fixture task.\n",
     );
+
     const template = join(directory, "fixture-template.md");
     await writeFile(template, "---\ndescription: Fixture template\n---\nInspect $ARGUMENTS\n");
+
     const settingsManager = SettingsManager.inMemory({ enableSkillCommands: true });
     const resourceLoader = new DefaultResourceLoader({
       cwd: directory,
@@ -48,6 +52,7 @@ test("Command catalogs merge SDK extensions, templates, and enabled skills witho
           }),
       ],
     });
+
     await resourceLoader.reload();
     ({ session } = await createAgentSession({
       cwd: directory,

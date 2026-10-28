@@ -18,8 +18,8 @@ async function mount(viewMode: WorkView = "agent", custom = false) {
     exitOnCtrlC: false,
   });
   const selection = new WorkspaceSelection(demoWorkspace());
-  const requests: string[] = [],
-    inputs: string[] = [];
+  const requests: string[] = [];
+  const inputs: string[] = [];
   const terminals: TerminalInfo[] = [1, 2, 3].map((index) => ({
     id: `shell-${index}`,
     worktreeId: "demo:main",
@@ -93,11 +93,13 @@ async function mount(viewMode: WorkView = "agent", custom = false) {
     terminal: {
       list: () => terminals,
       create: async (tree) => {
-        const index = terminals.length + 1,
-          id = `shell-${index}`;
+        const index = terminals.length + 1;
+        const id = `shell-${index}`;
+
         requests.push(`create:${tree}`);
         terminals.push({ ...terminals[0]!, id, pid: 100 + index, shellPid: 200 + index });
         selection.replaceSnapshot(selection.snapshot);
+
         return ok(id);
       },
       close: async (id) => {
@@ -107,6 +109,7 @@ async function mount(viewMode: WorkView = "agent", custom = false) {
           1,
         );
         selection.replaceSnapshot(selection.snapshot);
+
         return ok(undefined);
       },
       attach: async (id, receive) => {
@@ -114,7 +117,9 @@ async function mount(viewMode: WorkView = "agent", custom = false) {
         let revision = 0;
         const send = (cols: number, rows: number) =>
           receive({ ...terminal, cols, rows, revision: revision++, ansi: `\x1bcOutput ${id}` });
+
         send(80, 24);
+
         return ok({
           input: (data) => inputs.push(Buffer.from(data).toString("hex")),
           resize: send,
@@ -125,9 +130,13 @@ async function mount(viewMode: WorkView = "agent", custom = false) {
     },
   });
   const render = async () => {
-    for (let index = 0; index < 4; index++) await app.renderOnce();
+    for (let index = 0; index < 4; index++) {
+      await app.renderOnce();
+    }
   };
+
   await render();
+
   return {
     ...app,
     selection,
@@ -140,7 +149,9 @@ async function mount(viewMode: WorkView = "agent", custom = false) {
       if (custom) {
         app.mockInput.pressKey("b", { ctrl: true });
         app.mockInput.pressKey(key);
-      } else pressLeader(app, key);
+      } else {
+        pressLeader(app, key);
+      }
     },
     active: () =>
       viewMode === "terminal"
@@ -209,8 +220,11 @@ test.each(["agent", "terminal"] as const)(
       );
       expect(tab.focusable).toBe(false);
       expect(app.requests).toEqual([]);
-      if (mode === "agent") expect(app.view.promptDrafts.a2).toBe("second draftx");
-      else expect(app.inputs).toEqual(["78"]);
+      if (mode === "agent") {
+        expect(app.view.promptDrafts.a2).toBe("second draftx");
+      } else {
+        expect(app.inputs).toEqual(["78"]);
+      }
     } finally {
       await app.close();
     }
@@ -225,6 +239,7 @@ test.each(["agent", "terminal"] as const)(
     try {
       const footer = app.renderer.root.findDescendantById("footer-help")!;
       footer.focus();
+
       const tab = app.renderer.root.findDescendantById(
         mode === "agent" ? "session:demo:main:a2" : "terminal-session:shell-2",
       )!;
@@ -253,6 +268,7 @@ test.each(["agent", "terminal"] as const)(
         app.leader("x");
         await app.render();
       }
+
       const closed = [...app.requests];
 
       // Closing an empty view is a consumed no-op, and creation remains explicitly available.
@@ -292,14 +308,21 @@ test.each(["agent", "terminal"] as const)(
       // Kitty repeats remain consumed until the chord's physical release.
       for (const sequence of ["\x1b[119;3:2u", "\x1b[119;3:2u", "\x1b[119;3:3u"]) {
         const key = parseKeypress(sequence, { useKittyKeyboard: true });
-        if (!key) throw new Error("Invalid Kitty key");
+        if (!key) {
+          throw new Error("Invalid Kitty key");
+        }
+
         app.renderer.keyInput.processParsedKey(key);
       }
+
       await app.render();
 
       expect(app.requests).toEqual([mode === "agent" ? "close:a1" : "close:shell-1"]);
       expect(app.active()).toBe(mode === "agent" ? "a2" : "shell-2");
-      if (mode === "agent") expect(app.view.promptDrafts.a2).toBe("second draft");
+      if (mode === "agent") {
+        expect(app.view.promptDrafts.a2).toBe("second draft");
+      }
+
       expect(app.inputs).toEqual([]);
     } finally {
       await app.close();
@@ -325,6 +348,7 @@ test.each(["agent", "terminal"] as const)(
           /^(agent-session|session:|terminal-session:|close-session:|close-terminal:)/,
         );
       }
+
       expect(app.requests).toEqual([]);
       expect(app.inputs).toEqual([]);
     } finally {
@@ -367,8 +391,8 @@ test.each(["agent", "terminal"] as const)(
   "%s leader+n/p cycles same-screen tabs without creation or detach",
   async (mode) => {
     // Global tab navigation during input stays scoped to current-worktree tab kinds.
-    const app = await mount(mode),
-      ids = mode === "agent" ? ["a1", "a2", "a3"] : ["shell-1", "shell-2", "shell-3"];
+    const app = await mount(mode);
+    const ids = mode === "agent" ? ["a1", "a2", "a3"] : ["shell-1", "shell-2", "shell-3"];
     try {
       app.leader("p");
       await app.render();
@@ -454,8 +478,12 @@ test("leader+u opens usage and popup c/n/p never changes underlying tabs", async
     app.leader("u");
     await app.render();
     expect(app.renderer.root.findDescendantById("agent-dashboard")?.visible).toBe(true);
+
     const focus = app.renderer.currentFocusedRenderable;
-    for (const key of ["c", "n", "p", "x"]) app.leader(key);
+    for (const key of ["c", "n", "p", "x"]) {
+      app.leader(key);
+    }
+
     await app.render();
 
     expect(app.active()).toBe("a1");
@@ -474,7 +502,10 @@ test.each(["editor", "git"] as const)(
     // Agent/Terminal-specific commands cannot change inactive-screen selection.
     const app = await mount(mode);
     try {
-      for (const key of ["c", "n", "p", "x"]) app.leader(key);
+      for (const key of ["c", "n", "p", "x"]) {
+        app.leader(key);
+      }
+
       await app.render();
 
       expect(app.selection.sessionId).toBe("a1");
@@ -493,11 +524,17 @@ test("Navigation never creates empty tabs and single tabs remain selected", asyn
   try {
     app.selection.selectWorktree("demo:feature");
     await app.render();
-    for (const key of ["n", "p"]) app.leader(key);
+    for (const key of ["n", "p"]) {
+      app.leader(key);
+    }
+
     expect(app.selection.sessionId).toBe("b1");
     app.selection.selectWorktree("demo:empty");
     await app.render();
-    for (const key of ["n", "p"]) app.leader(key);
+    for (const key of ["n", "p"]) {
+      app.leader(key);
+    }
+
     await app.render();
 
     expect(app.selection.sessionId).toBeNull();
@@ -553,7 +590,10 @@ test("Held tab-navigation repeats never replay as text in newly focused inputs",
   const app = await mount();
   const raw = (sequence: string) => {
     const key = parseKeypress(sequence, { useKittyKeyboard: true });
-    if (!key) throw new Error("Invalid Kitty key");
+    if (!key) {
+      throw new Error("Invalid Kitty key");
+    }
+
     app.renderer.keyInput.processParsedKey(key);
   };
   try {

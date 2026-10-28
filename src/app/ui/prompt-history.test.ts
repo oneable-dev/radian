@@ -16,8 +16,8 @@ import type { CompletionResult } from "../../agents/completion.ts";
 async function mount(actions: Partial<WorkbenchActions> = {}) {
   const clock = new ManualClock();
   const app = await createTestRenderer({ width: 120, height: 32, kittyKeyboard: true, clock });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    sent: { id: string; text: string; images: readonly string[] }[] = [];
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const sent: { id: string; text: string; images: readonly string[] }[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession() {},
     onCloseSession() {},
@@ -25,19 +25,28 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     ...actions,
     onPrompt: (id, text, images) => {
       sent.push({ id, text, images: images ?? [] });
+
       return actions.onPrompt?.(id, text, images) ?? ok(undefined);
     },
   });
   const render = async () => {
-    for (let index = 0; index < 8; index++) await Promise.resolve();
+    for (let index = 0; index < 8; index++) {
+      await Promise.resolve();
+    }
+
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
   pressLeader(app, "a");
   await render();
+
   const input = app.renderer.root.findDescendantById("session-prompt");
-  if (!(input instanceof PromptInput)) throw new Error("Missing Agent prompt");
+  if (!(input instanceof PromptInput)) {
+    throw new Error("Missing Agent prompt");
+  }
+
   return {
     ...app,
     clock,
@@ -78,6 +87,7 @@ test.each([120, 60])(
       app.input.value = "unsent\n한글 👨‍👩‍👧‍👦 ";
       app.input.attachFile("/tmp/draft.png");
       app.input.cursorOffset = 2;
+
       const draft = app.input.draft;
 
       // History shortcuts change whole inputs regardless of the current cursor's row.
@@ -86,6 +96,7 @@ test.each([120, 60])(
       await app.history("previous");
       expect(app.input.value).toBe("first\nsecond");
       app.mockInput.pressArrow("left");
+
       const cursor = app.input.cursorOffset;
       await app.history("previous");
       expect(app.input.cursorOffset).toBe(cursor);
@@ -147,8 +158,10 @@ test("Recalled attachments retain their full source and edits never mutate the a
     const source = "full pasted source\n".repeat(100);
     app.input.pasteText(source);
     app.input.attachFile("/tmp/original.png");
-    const draft = app.input.draft,
-      submission = app.input.submission;
+
+    const draft = app.input.draft;
+    const submission = app.input.submission;
+
     app.mockInput.pressEnter();
     await app.render();
 
@@ -259,22 +272,25 @@ test.each(["ready", "loading", "empty", "error"] as const)(
     // A visible completion interaction must never fall through to replacing the whole draft, even without candidates.
     const pending = Promise.withResolvers<Result<CompletionResult, ExpectedError>>();
     const app = await mount({
-      onComplete: async () =>
-        state === "loading"
-          ? pending.promise
-          : state === "error"
-            ? err(new InputError("Lookup failed"))
-            : ok({
-                items:
-                  state === "empty"
-                    ? []
-                    : ["alpha", "beta"].map((value) => ({
-                        kind: "command" as const,
-                        value,
-                        description: value,
-                      })),
-                truncated: false,
-              }),
+      onComplete: async () => {
+        if (state === "loading") {
+          return pending.promise;
+        } else if (state === "error") {
+          return err(new InputError("Lookup failed"));
+        } else {
+          return ok({
+            items:
+              state === "empty"
+                ? []
+                : ["alpha", "beta"].map((value) => ({
+                    kind: "command" as const,
+                    value,
+                    description: value,
+                  })),
+            truncated: false,
+          });
+        }
+      },
     });
     try {
       await app.submit("accepted");
@@ -286,7 +302,10 @@ test.each(["ready", "loading", "empty", "error"] as const)(
 
       // All navigation remains owned by completion, rather than history or native cursor movement.
       await app.history("next");
-      if (state === "ready") expect(app.captureCharFrame()).toContain("→ beta");
+      if (state === "ready") {
+        expect(app.captureCharFrame()).toContain("→ beta");
+      }
+
       await app.history("previous");
       app.mockInput.pressArrow("down");
       app.mockInput.pressArrow("up");
@@ -364,8 +383,9 @@ test("History shortcuts honor remapping and disabling and Help shows the configu
     expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain(
       "<M-p> Input history",
     );
-    const help = keymapHelp(keymap, "prompt", () => true),
-      defaults = defaultKeymap();
+
+    const help = keymapHelp(keymap, "prompt", () => true);
+    const defaults = defaultKeymap();
 
     // Help advertises actual mappings, never implying that bare arrows recall prompts.
     expect(help).toContain("<M-p>");
@@ -385,7 +405,10 @@ test("Held history shortcuts keep navigating without inserting literal control-k
   const app = await mount();
   const raw = (sequence: string) => {
     const key = parseKeypress(sequence, { useKittyKeyboard: true });
-    if (!key) throw new Error("Invalid Kitty key");
+    if (!key) {
+      throw new Error("Invalid Kitty key");
+    }
+
     app.renderer.keyInput.processParsedKey(key);
   };
   try {
@@ -420,6 +443,7 @@ test("Empty history is a no-op and consecutive duplicate inputs occupy only one 
   try {
     app.input.value = "unsent";
     app.input.cursorOffset = 2;
+
     const draft = app.input.draft;
     await app.history("previous");
     await app.history("next");
@@ -507,11 +531,16 @@ test("Long-running sessions keep only the most recent 100 input-history entries"
   // History storage must stay bounded even when a session submits many distinct inputs.
   const app = await mount();
   try {
-    for (let index = 0; index <= 100; index++) await app.submit(`input-${index}`);
+    for (let index = 0; index <= 100; index++) {
+      await app.submit(`input-${index}`);
+    }
+
     app.input.value = "draft";
 
     // Repeated navigation reaches the oldest retained input and clamps there.
-    for (let index = 0; index <= 100; index++) await app.history("previous");
+    for (let index = 0; index <= 100; index++) {
+      await app.history("previous");
+    }
 
     // The evicted first input is not silently retained past the entry budget.
     expect(app.input.value).toBe("input-1");

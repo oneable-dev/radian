@@ -16,8 +16,10 @@ async function mount(onPrompt: NonNullable<WorkbenchActions["onPrompt"]>) {
     onPrompt,
     getSessionDetails: () => ({ status: "working", output: "Existing run", error: null }),
   });
+
   await app.renderOnce();
   pressLeader(app, "a");
+
   return {
     ...app,
     selection,
@@ -35,6 +37,7 @@ test("Repeated Enter before acceptance never duplicates submissions and rejectio
   const sent: string[] = [];
   const app = await mount((_id, text) => {
     sent.push(text);
+
     return pending.promise;
   });
   try {
@@ -79,6 +82,7 @@ test("Uncertain submission outcomes preserve input and snapshot refreshes never 
   let calls = 0;
   const app = await mount(() => {
     calls++;
+
     return err(new ConnectionError("CONNECTION_TIMEOUT", "Action outcome is unknown"));
   });
   try {

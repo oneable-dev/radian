@@ -17,9 +17,9 @@ async function mount(
 ) {
   const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true });
   let repositories = demoWorkspace();
-  const selection = new WorkspaceSelection(repositories),
-    sent: string[] = [],
-    createdFrom: string[] = [];
+  const selection = new WorkspaceSelection(repositories);
+  const sent: string[] = [];
+  const createdFrom: string[] = [];
   const details: Record<string, ExecutionState> = {
     a1: {
       conversationId: "original",
@@ -51,8 +51,12 @@ async function mount(
     },
     async newTab(id) {
       createdFrom.push(id);
+
       const result = await creation;
-      if (!result.ok) return result;
+      if (!result.ok) {
+        return result;
+      }
+
       repositories = repositories.map((repo) => ({
         ...repo,
         worktrees: repo.worktrees.map((tree) =>
@@ -75,6 +79,7 @@ async function mount(
         sections: [],
       };
       selection.replaceSnapshot(repositories);
+
       return result;
     },
     async prompt(id, text) {
@@ -98,6 +103,7 @@ async function mount(
         }));
         selection.replaceSnapshot(repositories);
       }
+
       return ok(undefined);
     },
   };
@@ -109,15 +115,22 @@ async function mount(
     onPrompt: (id, text, images) => submitAgentPrompt(client, selection, id, text, images),
   });
   const render = async () => {
-    for (let index = 0; index < 12; index++) await Promise.resolve();
+    for (let index = 0; index < 12; index++) {
+      await Promise.resolve();
+    }
+
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
-  const input = app.renderer.root.findDescendantById("session-prompt"),
-    scroll = app.renderer.root.findDescendantById("session-transcript");
-  if (!(input instanceof PromptInput) || !(scroll instanceof ScrollBoxRenderable))
+
+  const input = app.renderer.root.findDescendantById("session-prompt");
+  const scroll = app.renderer.root.findDescendantById("session-transcript");
+  if (!(input instanceof PromptInput) || !(scroll instanceof ScrollBoxRenderable)) {
     throw new Error("Missing prompt/transcript");
+  }
+
   return {
     ...app,
     view,
@@ -154,9 +167,10 @@ test("new selects new tabs while preserving existing conversation, runs, reading
     await app.render();
     pressLeader(app, "a");
     await app.render();
-    const oldView = structuredClone(app.view.workViewPreferences.agentViews?.a1),
-      top = app.scroll.scrollTop,
-      original = app.details.a1;
+
+    const oldView = structuredClone(app.view.workViewPreferences.agentViews?.a1);
+    const top = app.scroll.scrollTop;
+    const original = app.details.a1;
 
     await app.submit("/new");
 
@@ -204,8 +218,10 @@ test.each(["a2", "b1"])(
       await app.submit("/new");
       app.selection.selectSession(target === "b1" ? "demo:feature" : "demo:main", target);
       await app.render();
-      const focus = app.renderer.currentFocusedRenderable,
-        draft = app.input.value;
+
+      const focus = app.renderer.currentFocusedRenderable;
+      const draft = app.input.value;
+
       ready.resolve(ok("created"));
       await app.render();
       expect(app.selection.sessionId).toBe(target);

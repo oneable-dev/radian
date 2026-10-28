@@ -19,8 +19,10 @@ class TerminalReader extends EditBufferRenderable {
   handleKeyPress(_event: KeyEvent): boolean {
     return true;
   }
+
   handlePaste(_event: PasteEvent): void {}
 }
+
 type Options = {
   notice: Notice;
   changed(): void;
@@ -71,26 +73,38 @@ export class TerminalCopyMode {
       this.root.cursorColor = styles["ui.focusBorder"].fg;
     });
   }
+
   get active(): boolean {
     return this.root.visible && !this.disposed;
   }
+
   get context(): KeyContext | null {
-    return this.active && this.root.focused
-      ? this.anchor === null
-        ? "terminal-copy"
-        : "terminal-visual"
-      : null;
+    if (this.active && this.root.focused) {
+      if (this.anchor === null) {
+        return "terminal-copy";
+      } else {
+        return "terminal-visual";
+      }
+    } else {
+      return null;
+    }
   }
+
   get status(): string {
-    return !this.active
-      ? ""
-      : this.pending
-        ? "Reading output"
-        : `${this.anchor === null ? "NORMAL" : this.linewise ? "VISUAL LINE" : "VISUAL"} · frozen output`;
+    if (!this.active) {
+      return "";
+    } else if (this.pending) {
+      return "Reading output";
+    } else {
+      return `${this.anchor === null ? "NORMAL" : this.linewise ? "VISUAL LINE" : "VISUAL"} · frozen output`;
+    }
   }
 
   open(read: () => Promise<Result<TerminalText, ExpectedError>>): void {
-    if (this.active || this.disposed) return;
+    if (this.active || this.disposed) {
+      return;
+    }
+
     const generation = ++this.generation;
     this.pending = true;
     this.anchor = null;
@@ -103,15 +117,19 @@ export class TerminalCopyMode {
     this.options.changed();
     void read()
       .then((result) => {
-        if (this.disposed || this.generation !== generation) return;
+        if (this.disposed || this.generation !== generation) {
+          return;
+        }
         if (!result.ok) {
           this.options.notice(`[${result.error.code}] ${result.error.message}`, {
             level: "error",
             source: "Terminal",
           });
           this.close();
+
           return;
         }
+
         this.pending = false;
         this.options.busy(false);
         this.root.setText(result.value.text);
@@ -127,40 +145,54 @@ export class TerminalCopyMode {
         }
       });
   }
+
   command(command: CommandId): void {
-    if (!this.active) return;
+    if (!this.active) {
+      return;
+    }
     if (command === "terminal.copy-input") {
       this.close();
+
       return;
     }
     if (command === "terminal.copy-back") {
-      if (this.anchor === null) this.close();
-      else {
+      if (this.anchor === null) {
+        this.close();
+      } else {
         this.clearSelection();
         this.options.changed();
       }
+
       return;
     }
-    if (this.pending) return;
+    if (this.pending) {
+      return;
+    }
     if (command === "terminal.copy-open-link") {
       this.openCursorLink();
+
       return;
     }
     if (command === "terminal.copy-yank") {
       this.copy();
+
       return;
     }
     if (command === "terminal.copy-visual" || command === "terminal.copy-visual-line") {
       const linewise = command === "terminal.copy-visual-line";
-      if (this.anchor !== null && this.linewise === linewise) this.clearSelection();
-      else {
+      if (this.anchor !== null && this.linewise === linewise) {
+        this.clearSelection();
+      } else {
         this.anchor ??= this.root.cursorOffset;
         this.linewise = linewise;
         this.select();
       }
+
       this.options.changed();
+
       return;
     }
+
     this.root.clearSelection();
     switch (command) {
       case "terminal.copy-left":
@@ -172,13 +204,17 @@ export class TerminalCopyMode {
       case "terminal.copy-up":
       case "terminal.copy-down": {
         const direction = command === "terminal.copy-up" ? -1 : 1;
-        if (this.anchor !== null && this.linewise)
+        if (this.anchor !== null && this.linewise) {
           this.root.setCursor(
             Math.max(0, Math.min(this.root.lineCount - 1, this.root.logicalCursor.row + direction)),
             this.root.logicalCursor.col,
           );
-        else if (direction < 0) this.root.moveCursorUp();
-        else this.root.moveCursorDown();
+        } else if (direction < 0) {
+          this.root.moveCursorUp();
+        } else {
+          this.root.moveCursorDown();
+        }
+
         break;
       }
       case "terminal.copy-word-next":
@@ -208,42 +244,63 @@ export class TerminalCopyMode {
           : Math.max(1, this.root.height - 1);
         const up = command.endsWith("-up");
         for (let index = 0; index < distance; index++) {
-          if (up) this.root.moveCursorUp();
-          else this.root.moveCursorDown();
+          if (up) {
+            this.root.moveCursorUp();
+          } else {
+            this.root.moveCursorDown();
+          }
         }
+
         break;
       }
     }
+
     this.select();
     this.options.changed();
   }
+
   private linkAt(x: number, y: number): string | null {
-    if (!this.active || this.pending) return null;
+    if (!this.active || this.pending) {
+      return null;
+    }
+
     // Ctrl-click does not move OpenTUI's selection cursor. Resolve the clicked
     // cell through the native wrapped viewport without changing reading state.
-    const info = this.root.editorView.getLineInfo(),
-      row = y - this.root.y;
+    const info = this.root.editorView.getLineInfo();
+    const row = y - this.root.y;
     const column = x - this.root.x + this.root.editorView.getViewport().offsetX;
-    const start = info.lineStartCols[row],
-      width = info.lineWidthCols[row];
-    if (start === undefined || width === undefined || column < 0 || column >= width) return null;
+    const start = info.lineStartCols[row];
+    const width = info.lineWidthCols[row];
+    if (start === undefined || width === undefined || column < 0 || column >= width) {
+      return null;
+    }
+
     return textLinkAt(this.root.plainText, this.root.getTextRange(0, start + column).length);
   }
+
   private openCursorLink(): void {
     const offset = this.root.getTextRange(0, this.root.cursorOffset).length;
     const url = textLinkAt(this.root.plainText, offset);
-    if (url) this.options.openLink(url);
+    if (url) {
+      this.options.openLink(url);
+    }
   }
+
   private select(): void {
-    if (this.anchor === null) return;
-    if (!this.linewise) {
-      this.root.setSelectionInclusive(this.anchor, this.root.cursorOffset);
+    if (this.anchor === null) {
       return;
     }
-    const buffer = this.root.editBuffer,
-      row = buffer.offsetToPosition(this.anchor)?.row ?? 0;
-    const first = Math.min(row, this.root.logicalCursor.row),
-      last = Math.max(row, this.root.logicalCursor.row);
+    if (!this.linewise) {
+      this.root.setSelectionInclusive(this.anchor, this.root.cursorOffset);
+
+      return;
+    }
+
+    const buffer = this.root.editBuffer;
+    const row = buffer.offsetToPosition(this.anchor)?.row ?? 0;
+    const first = Math.min(row, this.root.logicalCursor.row);
+    const last = Math.max(row, this.root.logicalCursor.row);
+
     this.root.setSelection(
       buffer.getLineStartOffset(first),
       last + 1 < this.root.lineCount
@@ -251,11 +308,13 @@ export class TerminalCopyMode {
         : buffer.measureText(this.root.plainText),
     );
   }
+
   private clearSelection(): void {
     this.anchor = null;
     this.linewise = false;
     this.root.clearSelection();
   }
+
   private copy(): void {
     const text =
       this.anchor !== null || this.root.hasSelection()
@@ -263,16 +322,22 @@ export class TerminalCopyMode {
         : (this.root.plainText.split("\n")[this.root.logicalCursor.row] ?? "");
     if (!text) {
       this.options.notice("No text to copy");
+
       return;
     }
-    const generation = this.generation,
-      anchor = this.anchor,
-      cursor = this.root.cursorOffset,
-      linewise = this.linewise;
+
+    const generation = this.generation;
+    const anchor = this.anchor;
+    const cursor = this.root.cursorOffset;
+    const linewise = this.linewise;
+
     void Promise.resolve()
       .then(() => this.options.copy?.(text) ?? this.clipboard.copy(text))
       .then((result) => {
-        if (this.disposed || this.generation !== generation) return;
+        if (this.disposed || this.generation !== generation) {
+          return;
+        }
+
         this.options.notice(
           result.ok ? result.value : `[${result.error.code}] ${result.error.message}`,
           { level: result.ok ? "success" : "error", source: "Clipboard" },
@@ -289,9 +354,12 @@ export class TerminalCopyMode {
       })
       .catch((error: unknown) => {
         const message = reportUnexpected(error, "terminal copy");
-        if (!this.disposed) this.options.notice(message, { level: "error", source: "Clipboard" });
+        if (!this.disposed) {
+          this.options.notice(message, { level: "error", source: "Clipboard" });
+        }
       });
   }
+
   private close(): void {
     const focused = this.root.focused;
     this.generation++;
@@ -303,8 +371,12 @@ export class TerminalCopyMode {
     this.options.input(focused);
     this.options.changed();
   }
+
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.disposed = true;
     this.generation++;
     this.root.destroyRecursively();

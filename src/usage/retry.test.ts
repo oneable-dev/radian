@@ -8,14 +8,17 @@ import type { UsageResolver, UsageWindow } from "./model.ts";
 const windows = (usedPercent = 18): UsageWindow[] => [
   { id: "weekly", usedPercent, periodMs: 604800000, resetsAt: 604800000 },
 ];
+
 async function settle() {
-  for (let i = 0; i < 70; i++) await Promise.resolve();
+  for (let i = 0; i < 70; i++) {
+    await Promise.resolve();
+  }
 }
 
 test("Post-success authentication timeouts retain last values and recover without external actions", async () => {
   // Stall only second authentication to reproduce post-sleep lookup delays.
-  const clock = new ManualClock(),
-    gate = Promise.withResolvers<Awaited<ReturnType<UsageResolver>>>();
+  const clock = new ManualClock();
+  const gate = Promise.withResolvers<Awaited<ReturnType<UsageResolver>>>();
   let calls = 0;
   const account = () =>
     ok({ provider: "fixture", key: "account", load: async () => ok(windows()) });
@@ -29,6 +32,7 @@ test("Post-success authentication timeouts retain last values and recover withou
     subscription.read("fixture");
     monitor.setActive(true);
     await settle();
+
     const previous = subscription.read("fixture");
 
     // Failure ten seconds into the 60-second refresh makes the next retry due at 130 seconds.
@@ -72,6 +76,7 @@ for (const stage of ["authentication", "usage"] as const) {
     const failure = err(new UsageError("USAGE_QUERY_FAILED", "Temporary fixture failure"));
     const succeeds = () => {
       calls++;
+
       return calls === 6 || calls === 8;
     };
     const monitor = new UsageMonitor(
@@ -103,6 +108,7 @@ for (const stage of ["authentication", "usage"] as const) {
         await settle();
         expect(calls).toBe(index + 2);
       }
+
       expect(subscription.read("fixture").status).toBe("ready");
       clock.advance(59999);
       await settle();
@@ -131,8 +137,8 @@ for (const stage of ["authentication", "usage"] as const) {
 test("Account-shared retries honor Retry-After without accelerating other providers", async () => {
   // Observe two same-account subscriptions alongside an independent healthy account.
   const clock = new ManualClock();
-  let sharedCalls = 0,
-    quietCalls = 0;
+  let sharedCalls = 0;
+  let quietCalls = 0;
   const monitor = new UsageMonitor(
     async (provider) =>
       ok({
@@ -141,8 +147,10 @@ test("Account-shared retries honor Retry-After without accelerating other provid
         load: async () => {
           if (provider === "quiet") {
             quietCalls++;
+
             return ok(windows());
           }
+
           return ++sharedCalls === 1
             ? err(new UsageError("USAGE_RATE_LIMITED", "Limited", 90000))
             : ok(windows(42));
@@ -151,9 +159,9 @@ test("Account-shared retries honor Retry-After without accelerating other provid
     clock,
     () => 0,
   );
-  const a = monitor.watch(() => {}),
-    b = monitor.watch(() => {}),
-    quiet = monitor.watch(() => {});
+  const a = monitor.watch(() => {});
+  const b = monitor.watch(() => {});
+  const quiet = monitor.watch(() => {});
   try {
     a.read("one");
     b.read("two");
@@ -363,8 +371,8 @@ test("Repeated manual failures retain failure counts and recover automatically a
 
 test("Manual refreshes across subscriptions share one active account lookup", async () => {
   // Delay postfailure manual requests to overlap provider-alias calls.
-  const clock = new ManualClock(),
-    gate = Promise.withResolvers<Result<readonly UsageWindow[], UsageError>>();
+  const clock = new ManualClock();
+  const gate = Promise.withResolvers<Result<readonly UsageWindow[], UsageError>>();
   let calls = 0;
   const monitor = new UsageMonitor(
     async () =>
@@ -377,8 +385,8 @@ test("Manual refreshes across subscriptions share one active account lookup", as
     clock,
     () => 0,
   );
-  const a = monitor.watch(() => {}),
-    b = monitor.watch(() => {});
+  const a = monitor.watch(() => {});
+  const b = monitor.watch(() => {});
   try {
     a.read("one");
     b.read("two");

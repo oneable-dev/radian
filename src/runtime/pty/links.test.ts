@@ -34,8 +34,8 @@ test("Wrapped URLs retain complete targets even when both ends are outside the v
     screen.scrollToLine(2);
 
     // Inspect the scrolled screen without changing its execution cursor or viewport.
-    const before = screen.buffer.active.viewportY,
-      links = terminalLinks(screen);
+    const before = screen.buffer.active.viewportY;
+    const links = terminalLinks(screen);
 
     // Both visible row fragments open the original URL, not a truncated address.
     expect(links).toEqual([

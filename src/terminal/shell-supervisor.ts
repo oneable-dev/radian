@@ -31,16 +31,21 @@ setInterval(() => {}, 60000);
 function deferred<T>() {
   const result = Promise.withResolvers<T>();
   void result.promise.catch(() => {}); // A later lifecycle phase may be the consumer.
+
   return result;
 }
+
 export class ShellHandshake {
   readonly ready = deferred<void>();
   readonly started = deferred<number>();
   readonly frozen = deferred<void>();
+
   constructor(private readonly exited: (code: number) => void) {}
+
   receive(message: unknown): void {
     if (typeof message !== "object" || message === null || !("type" in message)) {
       this.fail(new ProtocolError("Invalid shell supervisor message."));
+
       return;
     }
     switch (message.type) {
@@ -58,6 +63,7 @@ export class ShellHandshake {
           message.pid > 1
         ) {
           this.started.resolve(message.pid);
+
           return;
         }
         break;
@@ -68,6 +74,7 @@ export class ShellHandshake {
           Number.isInteger(message.code)
         ) {
           this.exited(message.code);
+
           return;
         }
         break;
@@ -77,23 +84,30 @@ export class ShellHandshake {
             ? message.message
             : "Shell supervisor failed.",
         );
-        if ("stack" in message && typeof message.stack === "string") cause.stack = message.stack;
+        if ("stack" in message && typeof message.stack === "string") {
+          cause.stack = message.stack;
+        }
+
         this.started.reject(
           "expected" in message && message.expected === true
             ? new PtyError("PTY_UNAVAILABLE", cause.message, { cause })
             : cause,
         );
+
         return;
       }
     }
+
     this.fail(new ProtocolError("Invalid shell supervisor payload."));
   }
+
   fail(error: Error): void {
     this.ready.reject(error);
     this.started.reject(error);
     this.frozen.reject(error);
   }
 }
+
 export async function shellHandshake<T>(task: Promise<T>, phase: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -113,6 +127,8 @@ export async function shellHandshake<T>(task: Promise<T>, phase: string): Promis
       }),
     ]);
   } finally {
-    if (timer) clearTimeout(timer);
+    if (timer) {
+      clearTimeout(timer);
+    }
   }
 }

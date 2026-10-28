@@ -14,7 +14,10 @@ import { expectOk } from "../../testing/results.ts";
 async function until(check: () => Promise<boolean> | boolean) {
   const deadline = Date.now() + 8000;
   while (!(await check())) {
-    if (Date.now() > deadline) throw new Error("Completion runtime observation timed out");
+    if (Date.now() > deadline) {
+      throw new Error("Completion runtime observation timed out");
+    }
+
     await Bun.sleep(15);
   }
 }
@@ -29,6 +32,7 @@ test("Real UI/Unix IPC/SDK Tab only inserts while Enter completes and executes s
   };
   const paths = runtimePaths(fixture.repository.id, true, options.stateRoot);
   const extensions = join(paths.directory, "offline-agent", "extensions");
+
   await mkdir(extensions, { recursive: true });
   await writeFile(
     join(extensions, "probe.ts"),
@@ -36,18 +40,23 @@ test("Real UI/Unix IPC/SDK Tab only inserts while Enter completes and executes s
     pi.registerCommand("completion-probe", { description: "Runtime completion marker", handler: async () => { pi.sendMessage({ customType: "completion-probe", content: "COMMAND_PROBE_EXECUTED", display: true }); } });
   }`,
   );
+
   const client = expectOk(await connectRuntime(fixture.repository, fixture.main, options));
-  if (!client) throw new Error("Missing fixture runtime");
+  if (!client) {
+    throw new Error("Missing fixture runtime");
+  }
+
   const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
   const main = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
   const id = expectOk(await client.create(main.id));
-  const selection = new WorkspaceSelection(client.snapshot.repositories),
-    sent: string[] = [];
+  const selection = new WorkspaceSelection(client.snapshot.repositories);
+  const sent: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {},
     onCloseSession: () => {},
     onPrompt: (sessionId, text) => {
       sent.push(text);
+
       return client.prompt(sessionId, text);
     },
     onComplete: (sessionId, query, signal) => client.complete(sessionId, query, signal),
@@ -59,6 +68,7 @@ test("Real UI/Unix IPC/SDK Tab only inserts while Enter completes and executes s
   const visible = (text: string) =>
     until(async () => {
       await app.renderOnce();
+
       return app.captureCharFrame().includes(text);
     });
   try {
@@ -71,6 +81,7 @@ test("Real UI/Unix IPC/SDK Tab only inserts while Enter completes and executes s
     selection.selectSession(main.id, id);
     await app.renderOnce();
     pressLeader(app, "a");
+
     const input = app.renderer.root.findDescendantById("session-prompt") as PromptInput;
     await app.mockInput.typeText("@work");
     await visible("workspace.txt");

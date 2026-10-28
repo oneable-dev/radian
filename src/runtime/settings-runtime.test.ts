@@ -24,8 +24,8 @@ test.each([
       entry: join(import.meta.dir, "..", "index.ts"),
       config: join(fixture.directory, "settings.json"),
     };
-    const paths = runtimePaths(fixture.repository.id, true, options.stateRoot),
-      tree = fixture.repository.worktrees[0]!;
+    const paths = runtimePaths(fixture.repository.id, true, options.stateRoot);
+    const tree = fixture.repository.worktrees[0]!;
     let client: RuntimeClient | undefined;
     try {
       await privateDirectory(paths.directory);
@@ -37,16 +37,19 @@ test.each([
           sessions: policy,
         }),
       );
+
       const directory = join(paths.directory, "offline-agent", "sessions");
       await mkdir(directory, { recursive: true });
+
       const records: SessionRecord[] = [];
       for (const [id, managed, lifecycle, days] of [
         ["owned", true, "closed", age],
         ["external", false, "closed", 100],
         ["protected", true, "open", 100],
       ] as const) {
-        const closedAt = Date.now() - days * retentionDayMs,
-          file = join(directory, `${id}.jsonl`);
+        const closedAt = Date.now() - days * retentionDayMs;
+        const file = join(directory, `${id}.jsonl`);
+
         await writeFile(
           file,
           JSON.stringify({
@@ -72,6 +75,7 @@ test.each([
           subagents: [],
         });
       }
+
       expectOk(
         await new RuntimeStore(paths).save({
           version: 1,
@@ -84,9 +88,12 @@ test.each([
 
       // CLI-selected unified config paths must reach daemons running under different cwd values.
       const connected = expectOk(await connectRuntime(fixture.repository, fixture.main, options));
-      if (!connected) throw new Error("Missing runtime");
+      if (!connected) {
+        throw new Error("Missing runtime");
+      }
+
       client = connected;
-      if (!client.snapshot.sessionRetention)
+      if (!client.snapshot.sessionRetention) {
         await new Promise<void>((resolve, reject) => {
           const timer = setTimeout(() => {
             unsubscribe();
@@ -100,6 +107,8 @@ test.each([
             }
           });
         });
+      }
+
       const history = expectOk(await client.listHistory(tree.id));
 
       // Recover open runs only, preserve external history, and hide only expired records.
@@ -124,13 +133,18 @@ test.each([
         const pid = running.snapshot.pid;
         expectOk(await running.stopRuntime());
         await running.disconnect();
+
         const deadline = Date.now() + 12000;
         while (pidAlive(pid) || expectOk(await fetchSnapshot(paths))) {
-          // oxlint-disable-next-line eslint/no-unsafe-finally -- A leaked daemon must fail cleanup even after a test failure.
-          if (Date.now() > deadline) throw new Error("Runtime stop timed out");
+          if (Date.now() > deadline) {
+            // oxlint-disable-next-line eslint/no-unsafe-finally -- A leaked daemon must fail cleanup even after a test failure.
+            throw new Error("Runtime stop timed out");
+          }
+
           await Bun.sleep(20);
         }
       }
+
       await fixture.cleanup();
     }
   },

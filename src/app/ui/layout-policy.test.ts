@@ -11,6 +11,7 @@ const scrolls = (node: Renderable): ScrollBoxRenderable[] => [
   ...(node instanceof ScrollBoxRenderable ? [node] : []),
   ...node.getChildren().flatMap(scrolls),
 ];
+
 async function mount(longSessionIds = false) {
   const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
   const items: TerminalInfo[] = Array.from({ length: 8 }, (_, i) => ({
@@ -56,11 +57,16 @@ async function mount(longSessionIds = false) {
     },
   });
   const render = async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
+    for (let i = 0; i < 8; i++) {
+      await Promise.resolve();
+    }
+
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   return {
     ...app,
     view,
@@ -87,9 +93,11 @@ test("Height changes preserve tabs, search, and item spacing while compact layou
     ] as const) {
       app.resize(80, height);
       await app.render();
-      const body = app.get("session-transcript"),
-        composer = app.get("agent-composer"),
-        status = app.get("session-status");
+
+      const body = app.get("session-transcript");
+      const composer = app.get("agent-composer");
+      const status = app.get("session-status");
+
       expect(app.get("workspace-search-box").height).toBe(3);
       expect(app.renderer.root.findDescendantById("work-view-tabs")).toBeUndefined();
       expect(composer.height).toBe(inputHeight);
@@ -114,6 +122,7 @@ test("Agent/Terminal horizontal tab bars stay hidden after resize while selected
     // Enough fixed-width tabs, rather than long labels or removed toolbar buttons, produce real overflow.
     app.resize(80, 24);
     await app.render();
+
     const agent = app.get("agent-session-list") as ScrollBoxRenderable;
     expect(agent.scrollWidth).toBeGreaterThan(agent.viewport.width);
     agent.scrollLeft = 10;
@@ -123,6 +132,7 @@ test("Agent/Terminal horizontal tab bars stay hidden after resize while selected
     app.mockInput.pressKey(" ", { ctrl: true });
     app.mockInput.pressKey("t");
     await app.render();
+
     const tabs = scrolls(app.get("terminal-view"))[0]!;
     expect(tabs.scrollWidth).toBeGreaterThan(tabs.viewport.width);
     for (const width of [60, 120]) {
@@ -134,7 +144,9 @@ test("Agent/Terminal horizontal tab bars stay hidden after resize while selected
       expect(tabs.horizontalScrollBar.visible).toBe(false);
     }
     // Shared policy never changes vertical scrolling or embedded program settings.
-    for (const area of scrolls(app.view.root)) expect(area.horizontalScrollBar.visible).toBe(false);
+    for (const area of scrolls(app.view.root)) {
+      expect(area.horizontalScrollBar.visible).toBe(false);
+    }
   } finally {
     await app.close();
   }

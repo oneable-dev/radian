@@ -8,7 +8,9 @@ export const modelIdentitySchema = Type.Object(
   { provider: identifier, id: identifier },
   { additionalProperties: false },
 );
+
 export type ModelIdentity = Static<typeof modelIdentitySchema>;
+
 export const modelEffortSchema = Type.Union([
   Type.Literal("off"),
   Type.Literal("minimal"),
@@ -18,7 +20,9 @@ export const modelEffortSchema = Type.Union([
   Type.Literal("xhigh"),
   Type.Literal("max"),
 ]);
+
 export type ModelEffort = Static<typeof modelEffortSchema>;
+
 export const modelCatalogQuerySchema = Type.Object(
   { sessionId: identifier, conversationId: identifier },
   { additionalProperties: false },
@@ -40,7 +44,9 @@ export const modelCatalogSchema = Type.Object({
     }),
   ),
 });
+
 export type ModelCatalog = Static<typeof modelCatalogSchema>;
+
 export const modelCommand: CompletionItem = {
   kind: "command",
   value: "model",
@@ -49,7 +55,10 @@ export const modelCommand: CompletionItem = {
 
 // Reserve the host command even on paths without a popup; never bill it as ordinary model input.
 export function parseModelCommand(text: string): Result<boolean, InputError> {
-  if (!/^\/model(?:\s|$)/u.test(text)) return ok(false);
+  if (!/^\/model(?:\s|$)/u.test(text)) {
+    return ok(false);
+  }
+
   return text.slice(6).trim()
     ? err(new InputError("Usage: /model (choose a model from the popup; no arguments)."))
     : ok(true);

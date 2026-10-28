@@ -37,45 +37,71 @@ export class CompletionFileIndex {
   ) {}
 
   read(query: string): Result<CompletionResult, ExpectedError> | undefined {
-    if (this.closed) return err(new CancelledError("File index is closed."));
-    if (this.failure) return err(this.failure);
+    if (this.closed) {
+      return err(new CancelledError("File index is closed."));
+    }
+    if (this.failure) {
+      return err(this.failure);
+    }
+
     return this.items ? ok(filterCompletions(this.items, query.replace(/^\.\//u, ""))) : undefined;
   }
 
   refresh(): Promise<Result<void, ExpectedError>> {
-    if (this.closed) return Promise.resolve(err(new CancelledError("File index is closed.")));
-    if (this.timer) clearTimeout(this.timer);
+    if (this.closed) {
+      return Promise.resolve(err(new CancelledError("File index is closed.")));
+    }
+    if (this.timer) {
+      clearTimeout(this.timer);
+    }
+
     this.timer = undefined;
     this.dirty = true;
     this.force = true;
     this.watchRecoveries = 0;
+
     return this.run();
   }
 
   private run(): Promise<Result<void, ExpectedError>> {
-    if (this.pending) return this.pending;
+    if (this.pending) {
+      return this.pending;
+    }
+
     const task = this.reconcile().finally(() => {
       this.pending = undefined;
-      if (this.dirty && !this.closed) this.invalidate(this.force);
+      if (this.dirty && !this.closed) {
+        this.invalidate(this.force);
+      }
     });
     this.pending = task;
+
     return task;
   }
 
   private async reconcile(): Promise<Result<void, ExpectedError>> {
     do {
       this.dirty = false;
+
       const force = this.force;
       this.force = false;
+
       const names = [...this.names];
       this.names.clear();
-      if (this.closed) return err(new CancelledError());
+      if (this.closed) {
+        return err(new CancelledError());
+      }
+
       // Install before discovery; events observed during the scan cause another pass.
       const root = this.watchDirectory(this.cwd, undefined);
-      if (!root.ok) return this.failed(root.error);
+      if (!root.ok) {
+        return this.failed(root.error);
+      }
       if (force || !this.metadataReady) {
         const metadata = await this.watchMetadata();
-        if (!metadata.ok) return this.failed(metadata.error);
+        if (!metadata.ok) {
+          return this.failed(metadata.error);
+        }
       } else if (names.length && names.length <= 256) {
         // Prefix protects literal leading-colon names from Git pathspec interpretation.
         const ignored = await completionGit(
@@ -85,37 +111,54 @@ export class CompletionFileIndex {
           names.map((name) => `./${name}`).join("\0") + "\0",
           true,
         );
-        if (!ignored.ok) return this.failed(ignored.error);
+        if (!ignored.ok) {
+          return this.failed(ignored.error);
+        }
+
         const excluded = new Set(
           ignored.value
             .split("\0")
             .filter(Boolean)
             .map((name) => name.replace(/^\.\//u, "")),
         );
-        if (names.every((name) => excluded.has(name))) continue;
+        if (names.every((name) => excluded.has(name))) {
+          continue;
+        }
       }
+
       const files = await listCompletionFiles(this.cwd, this.abort.signal);
-      if (this.closed) return err(new CancelledError());
-      if (!files.ok) return this.failed(files.error);
-      if (!this.metadataReady || !this.watchers.has(this.cwd))
+      if (this.closed) {
+        return err(new CancelledError());
+      }
+      if (!files.ok) {
+        return this.failed(files.error);
+      }
+      if (!this.metadataReady || !this.watchers.has(this.cwd)) {
         return this.failed(
           this.failure ??
             new StorageError("File watching stopped during discovery. Use /reload to reconnect."),
         );
+      }
+
       const changed =
         !!this.failure ||
         !this.items ||
         this.items.length !== files.value.length ||
         this.items.some((item, i) => item.value !== files.value[i]);
-      if (changed)
+      if (changed) {
         this.items = files.value.map((value) => ({
           kind: "file",
           value,
           description: "Worktree file",
         }));
+      }
+
       this.failure = undefined;
-      if (changed) this.changed();
+      if (changed) {
+        this.changed();
+      }
     } while (this.dirty && !this.closed);
+
     return ok(undefined);
   }
 
@@ -125,16 +168,27 @@ export class CompletionFileIndex {
       this.failure = error;
       this.changed();
     }
+
     return err(error);
   }
 
   private invalidate(force: boolean, name?: string): void {
-    if (this.closed) return;
+    if (this.closed) {
+      return;
+    }
+
     this.dirty = true;
     this.force ||= force;
-    if (name) this.names.add(name);
-    if (this.pending) return;
-    if (this.timer) clearTimeout(this.timer);
+    if (name) {
+      this.names.add(name);
+    }
+    if (this.pending) {
+      return;
+    }
+    if (this.timer) {
+      clearTimeout(this.timer);
+    }
+
     this.timer = setTimeout(() => {
       this.timer = undefined;
       void this.run().catch((error) => {
@@ -148,64 +202,97 @@ export class CompletionFileIndex {
     path: string,
     accepted: ReadonlySet<string> | undefined,
   ): Result<void, ExpectedError> {
-    if (this.watchers.has(path)) return ok(undefined);
+    if (this.watchers.has(path)) {
+      return ok(undefined);
+    }
     try {
       const watcher = watch(
         path,
         { recursive: accepted === undefined, persistent: false },
         (event, filename) => {
-          if (this.closed) return;
+          if (this.closed) {
+            return;
+          }
+
           const name = filename?.toString();
           if (accepted) {
-            if (!name || accepted.has(name)) this.invalidate(true);
+            if (!name || accepted.has(name)) {
+              this.invalidate(true);
+            }
+
             return;
           }
           if (!name) {
             this.invalidate(true);
+
             return;
           }
-          const absolute = resolve(this.cwd, name),
-            local = relative(this.cwd, absolute);
+
+          const absolute = resolve(this.cwd, name);
+          const local = relative(this.cwd, absolute);
           if (!local || local === ".." || local.startsWith(".." + sep) || local.includes("\0")) {
             this.invalidate(true);
+
             return;
           }
+
           const normalized = local.split(sep).join("/");
           if (normalized === ".git" || normalized.startsWith(".git/")) {
-            if ([".git", ".git/index", ".git/config", ".git/info/exclude"].includes(normalized))
+            if ([".git", ".git/index", ".git/config", ".git/info/exclude"].includes(normalized)) {
               this.invalidate(true);
+            }
+
             return;
           }
-          if (basename(normalized) === ".gitignore") this.invalidate(true);
-          else if (event === "rename") this.invalidate(false, normalized);
+          if (basename(normalized) === ".gitignore") {
+            this.invalidate(true);
+          } else if (event === "rename") {
+            this.invalidate(false, normalized);
+          }
           // Ordinary file-content edits cannot change a path-only completion index.
         },
       );
       watcher.on("error", (error: unknown) => {
-        if (this.closed || this.watchers.get(path) !== watcher) return;
+        if (this.closed || this.watchers.get(path) !== watcher) {
+          return;
+        }
+
         watcher.close();
         this.watchers.delete(path);
         this.metadataReady = false;
+
         const expected = this.watchError(error);
         if (expected) {
           this.failed(expected);
           // Bound automatic recovery; /reload explicitly grants another attempt.
-          if (this.watchRecoveries++ === 0) this.invalidate(true);
-        } else this.unexpected(error);
+          if (this.watchRecoveries++ === 0) {
+            this.invalidate(true);
+          }
+        } else {
+          this.unexpected(error);
+        }
       });
       this.watchers.set(path, watcher);
+
       return ok(undefined);
     } catch (error) {
       const expected = this.watchError(error);
-      if (expected) return err(expected);
+      if (expected) {
+        return err(expected);
+      }
+
       throw error;
     }
   }
 
   private watchError(error: unknown): ExpectedError | null {
     const known = knownError(error);
-    if (known) return known;
+    if (known) {
+      return known;
+    }
+
     const code = systemCode(error);
+
     return code &&
       [
         "ENOSYS",
@@ -226,9 +313,13 @@ export class CompletionFileIndex {
       ["rev-parse", "--path-format=absolute", "--git-common-dir"],
     ]) {
       const result = await completionGit(this.cwd, args, this.abort.signal);
-      if (!result.ok) return result;
+      if (!result.ok) {
+        return result;
+      }
+
       dirs.push(result.value.replace(/\r?\n$/u, ""));
     }
+
     const excludes = await completionGit(
       this.cwd,
       ["config", "--null", "--path", "--get", "core.excludesfile"],
@@ -236,18 +327,28 @@ export class CompletionFileIndex {
       undefined,
       true,
     );
-    if (!excludes.ok) return excludes;
+    if (!excludes.ok) {
+      return excludes;
+    }
+
     // --name-only avoids reading credential/configuration values into the index.
     const origins = await completionGit(
       this.cwd,
       ["config", "--null", "--show-origin", "--name-only", "--list"],
       this.abort.signal,
     );
-    if (!origins.ok) return origins;
-    const originParts = origins.value.split("\0"),
-      included: string[] = [];
-    for (let i = 0; i < originParts.length; i += 2)
-      if (originParts[i]?.startsWith("file:")) included.push(originParts[i]!.slice(5));
+    if (!origins.ok) {
+      return origins;
+    }
+
+    const originParts = origins.value.split("\0");
+    const included: string[] = [];
+    for (let i = 0; i < originParts.length; i += 2) {
+      if (originParts[i]?.startsWith("file:")) {
+        included.push(originParts[i]!.slice(5));
+      }
+    }
+
     const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
     const files = [
       ...included,
@@ -262,72 +363,101 @@ export class CompletionFileIndex {
     ];
     const expanded = new Set<string>();
     for (const file of files.filter(Boolean)) {
-      const path = resolve(this.cwd, file),
-        info = await capture(() => lstat(path));
+      const path = resolve(this.cwd, file);
+      const info = await capture(() => lstat(path));
       if (
         !info.ok &&
         !(
           info.error instanceof StorageError &&
           ["ENOENT", "ENOTDIR"].includes(info.error.systemCode ?? "")
         )
-      )
+      ) {
         return info;
-      if (info.ok && !info.value.isFile() && !info.value.isSymbolicLink()) continue; // e.g. GIT_CONFIG_GLOBAL=/dev/null
+      }
+      if (info.ok && !info.value.isFile() && !info.value.isSymbolicLink()) {
+        continue;
+      } // e.g. GIT_CONFIG_GLOBAL=/dev/null
+
       expanded.add(path);
       if (info.ok && info.value.isSymbolicLink()) {
         const target = await capture(() => realpath(path));
-        if (target.ok) expanded.add(target.value);
-        else if (
+        if (target.ok) {
+          expanded.add(target.value);
+        } else if (
           !(
             target.error instanceof StorageError &&
             ["ENOENT", "ENOTDIR"].includes(target.error.systemCode ?? "")
           )
-        )
+        ) {
           return target;
+        }
       }
     }
+
     const wanted = new Map<string, Set<string>>();
     for (const file of expanded) {
-      let parent = dirname(file),
-        name = basename(file);
+      let parent = dirname(file);
+      let name = basename(file);
       while (true) {
         const info = await capture(() => stat(parent));
-        if (info.ok && info.value.isDirectory()) break;
+        if (info.ok && info.value.isDirectory()) {
+          break;
+        }
         if (
           !info.ok &&
           !(
             info.error instanceof StorageError &&
             ["ENOENT", "ENOTDIR"].includes(info.error.systemCode ?? "")
           )
-        )
+        ) {
           return info;
+        }
+
         name = basename(parent);
         parent = dirname(parent);
       }
+
       const names = wanted.get(parent) ?? new Set<string>();
       names.add(name);
       wanted.set(parent, names);
     }
-    if (this.closed) return err(new CancelledError());
+    if (this.closed) {
+      return err(new CancelledError());
+    }
     for (const [path, watcher] of this.watchers) {
-      if (path === this.cwd) continue;
+      if (path === this.cwd) {
+        continue;
+      }
+
       watcher.close();
       this.watchers.delete(path);
     }
     for (const [path, names] of wanted) {
       const watched = this.watchDirectory(path, names);
-      if (!watched.ok) return watched;
+      if (!watched.ok) {
+        return watched;
+      }
     }
+
     this.metadataReady = true;
+
     return ok(undefined);
   }
 
   dispose(): void {
-    if (this.closed) return;
+    if (this.closed) {
+      return;
+    }
+
     this.closed = true;
     this.abort.abort();
-    if (this.timer) clearTimeout(this.timer);
-    for (const watcher of this.watchers.values()) watcher.close();
+    if (this.timer) {
+      clearTimeout(this.timer);
+    }
+    for (const watcher of this.watchers.values()) {
+      watcher.close();
+    }
+
     this.watchers.clear();
     this.names.clear();
   }

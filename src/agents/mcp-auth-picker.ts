@@ -23,13 +23,17 @@ export class McpAuthPicker {
   async select(
     ui: Pick<ExtensionUIContext, "select" | "notify">,
   ): Promise<Result<string | undefined, ExpectedError>> {
-    if (!this.snapshot)
+    if (!this.snapshot) {
       return err(
         new CapabilityError(
           "The MCP adapter does not provide a server list. Use /mcp-auth <server>.",
         ),
       );
-    if (!this.snapshot.ok) return this.snapshot;
+    }
+    if (!this.snapshot.ok) {
+      return this.snapshot;
+    }
+
     const servers = this.snapshot.value
       .filter(enabledMcpServer)
       .sort(
@@ -39,24 +43,31 @@ export class McpAuthPicker {
       );
     if (!servers.length) {
       ui.notify("No enabled MCP servers are available for authentication.", "info");
+
       return ok(undefined);
     }
+
     const choice = await ui.select(
       "MCP authentication",
       servers.map((server) => server.name),
     );
-    if (choice === undefined) return ok(undefined);
+    if (choice === undefined) {
+      return ok(undefined);
+    }
+
     const current = this.snapshot;
     if (
       !current?.ok ||
       !current.value.some((server) => server.name === choice && enabledMcpServer(server))
-    )
+    ) {
       return err(
         new SessionError(
           "SESSION_CONFLICT",
           "This MCP server is no longer available. Reopen /mcp-auth before authenticating.",
         ),
       );
+    }
+
     return ok(choice);
   }
 

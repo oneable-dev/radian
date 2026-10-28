@@ -22,7 +22,9 @@ const surfaces = [
   "reflog",
   "extension",
 ] as const;
+
 type Surface = (typeof surfaces)[number];
+
 const names = ["Alpha", "Beta", "Gamma", "Delta"];
 const ids: Record<Surface, readonly [string, string]> = {
   workspace: ["workspace-search", "workspace-tree"],
@@ -44,8 +46,8 @@ async function mount(surface: Surface, width = 140, pendingLoad = false) {
     exitOnCtrlC: false,
     clock: new ManualClock(),
   });
-  const repository = demoWorkspace()[0]!,
-    original = repository.worktrees[0]!;
+  const repository = demoWorkspace()[0]!;
+  const original = repository.worktrees[0]!;
   const sessions = names.map((name) => ({
     id: name.toLowerCase(),
     name,
@@ -59,15 +61,15 @@ async function mount(surface: Surface, width = 140, pendingLoad = false) {
     branch: name.toLowerCase(),
     sessions: index ? [] : sessions,
   }));
-  const selection = new WorkspaceSelection([{ ...repository, worktrees: trees }]),
-    omitted = new Set<string>(),
-    accepted: string[] = [],
-    sent: string[] = [];
+  const selection = new WorkspaceSelection([{ ...repository, worktrees: trees }]);
+  const omitted = new Set<string>();
+  const accepted: string[] = [];
+  const sent: string[] = [];
   const visibleNames = () => names.filter((name) => !omitted.has(name));
-  let extensionState: SessionExtensionUi[] = [],
-    request = 0,
-    pending: Promise<void> | undefined,
-    release = () => {};
+  let extensionState: SessionExtensionUi[] = [];
+  let request = 0;
+  let pending: Promise<void> | undefined;
+  let release = () => {};
   const defer = () => {
     const gate = Promise.withResolvers<void>();
     pending = gate.promise;
@@ -76,7 +78,10 @@ async function mount(surface: Surface, width = 140, pendingLoad = false) {
       gate.resolve();
     };
   };
-  if (pendingLoad) defer();
+  if (pendingLoad) {
+    defer();
+  }
+
   const wait = () => pending ?? Promise.resolve();
   const catalog = (worktreeId: string): AccountsCatalog => ({
     revision: 1,
@@ -121,10 +126,12 @@ async function mount(surface: Surface, width = 140, pendingLoad = false) {
     }),
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     onListHistory: async (worktreeId) => {
       await wait();
+
       return ok(
         visibleNames().map((title) => ({
           id: `saved-${title.toLowerCase()}`,
@@ -141,6 +148,7 @@ async function mount(surface: Surface, width = 140, pendingLoad = false) {
       ok({ worktreeId, id, text: "Saved output", truncated: false }),
     onResumeSession: async () => {
       accepted.push("history");
+
       return ok("alpha");
     },
     onListModels: async (_id, conversationId) => {
@@ -160,15 +168,20 @@ async function mount(surface: Surface, width = 140, pendingLoad = false) {
           effort: "low",
         })),
       };
+
       return ok(result);
     },
     onSelectModel: async () => {
       accepted.push("model");
+
       return ok(null);
     },
     onAccountsRequest: async (action) => {
       await wait();
-      if (action.type !== "list") accepted.push(action.type);
+      if (action.type !== "list") {
+        accepted.push(action.type);
+      }
+
       return ok({ kind: "catalog", catalog: catalog(action.worktreeId) });
     },
     getExtensionUi: () => extensionState,
@@ -199,18 +212,23 @@ async function mount(surface: Surface, width = 140, pendingLoad = false) {
   };
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${surface}/${id}`);
+    if (!node) {
+      throw new Error(`Missing ${surface}/${id}`);
+    }
+
     return node;
   };
   const leader = (key: string) => {
     app.mockInput.pressKey(" ", { ctrl: true });
     app.mockInput.pressKey(key);
   };
+
   await render();
+
   const open = async () => {
-    if (surface === "workspace" || surface === "monitor" || surface === "history")
+    if (surface === "workspace" || surface === "monitor" || surface === "history") {
       leader(surface === "workspace" ? "b" : surface === "monitor" ? "s" : "h");
-    else if (surface === "model" || surface === "accounts") {
+    } else if (surface === "model" || surface === "accounts") {
       const prompt = get("session-prompt") as InputRenderable;
       prompt.focus();
       prompt.value = `/${surface}`;
@@ -236,11 +254,13 @@ async function mount(surface: Surface, width = 140, pendingLoad = false) {
       ];
       selection.replaceSnapshot(selection.snapshot);
     }
+
     await render();
   };
   await open();
-  const input = get(ids[surface][0]) as InputRenderable,
-    list = get(ids[surface][1]) as ScrollBoxRenderable;
+
+  const input = get(ids[surface][0]) as InputRenderable;
+  const list = get(ids[surface][1]) as ScrollBoxRenderable;
   const selected = () =>
     list.content
       .getChildren()
@@ -249,6 +269,7 @@ async function mount(surface: Surface, width = 140, pendingLoad = false) {
           node instanceof BoxRenderable &&
           node.backgroundColor.equals(uiTheme(app.renderer).styles["ui.selection"].bg!),
       )?.id;
+
   return {
     ...app,
     view,
@@ -305,6 +326,7 @@ for (const width of [140, 60]) {
           app.mockInput.pressTab();
           await app.render();
         }
+
         expect(app.renderer.currentFocusedRenderable).toBe(app.input);
         expect(app.input.value).toBe("a");
         expect(app.input.cursorOffset).toBe(0);
@@ -346,6 +368,7 @@ test.each(surfaces)(
         expect(app.selected()).toBeDefined();
         expect(app.renderer.currentFocusedRenderable).toBe(app.input);
       }
+
       expect(app.sent).toEqual([]);
       expect(app.accepted).toEqual([]);
     } finally {
@@ -389,6 +412,7 @@ test.each(["history", "model", "accounts"] as const)(
       await app.render();
       app.mockInput.pressKey("n", { ctrl: true });
       await app.render();
+
       const selected = app.selected();
       expect(selected).toBeDefined();
       app.list.focus();

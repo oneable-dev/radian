@@ -16,8 +16,10 @@ test.each(["monitor", "monitor-search"] as const)(
     expect(help).not.toMatch(/preview|<C-o>/iu);
     expect(help).toContain("<C-d>");
     expect(help).toContain("<C-u>");
-    for (const key of ["ctrl+o", "pageup", "pagedown"])
+    for (const key of ["ctrl+o", "pageup", "pagedown"]) {
       expect(keymap.bound(key, context)).toBe(false);
+    }
+
     expect(keymap.hint("history.preview", "history")).toBe("<C-o>");
   },
 );

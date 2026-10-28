@@ -31,6 +31,7 @@ import type { GitDetails, GitReflog, GitSnapshot } from "../model.ts";
 import { GitList, type GitListItem } from "./list.ts";
 
 export type GitBrowserKind = "refs" | "reflog";
+
 const allRefs = "__all_refs__";
 const display = (value: string) =>
   value.replace(
@@ -38,6 +39,7 @@ const display = (value: string) =>
     /[\x00-\x1f\x7f-\x9f]/g,
     (character) => `\\x${character.charCodeAt(0).toString(16).padStart(2, "0")}`,
   );
+
 type Actions = {
   changed(): void;
   close(): void;
@@ -156,6 +158,7 @@ export class GitBrowser {
           : undefined,
     }));
     this.root.add(this.panel);
+
     const theme = uiTheme(renderer);
     theme.scrollbars(this.preview);
     theme.bindStyles(this.root, (styles) => {
@@ -171,15 +174,19 @@ export class GitBrowser {
     this.search.on(InputRenderableEvents.INPUT, this.filter);
     renderer.on("resize", this.resize);
   }
+
   get visible(): boolean {
     return !this.disposed && !this.root.isDestroyed && this.root.visible;
   }
+
   get mode(): GitBrowserKind {
     return this.kind;
   }
+
   get context(): KeyContext {
     return this.search.focused ? "git-search" : "git";
   }
+
   get focusTargets(): Renderable[] {
     return [
       this.search,
@@ -187,35 +194,55 @@ export class GitBrowser {
       ...(this.previewPane.visible ? [this.preview] : []),
     ];
   }
+
   get selectionContext(): GitContext | null {
-    if (!this.list.root.focused) return null;
+    if (!this.list.root.focused) {
+      return null;
+    }
     if (this.kind === "reflog") {
       const event = this.event;
+
       return event ? reflogContext(event) : null;
     }
+
     const ref = this.snapshot?.refs.find((ref) => ref.ref === this.key);
+
     return ref ? refContext(ref) : null;
   }
+
   get selection(): string | null {
     return this.key === allRefs ? null : this.key;
   }
+
   get canOpen(): boolean {
-    if (!this.snapshot || this.loadError || !this.key) return false;
-    if (this.kind === "refs") return true;
+    if (!this.snapshot || this.loadError || !this.key) {
+      return false;
+    }
+    if (this.kind === "refs") {
+      return true;
+    }
+
     const event = this.event;
-    if (!event) return false;
+    if (!event) {
+      return false;
+    }
+
     const result = this.results.get(event.oid);
+
     return result ? result.ok : !this.unexpected.has(event.oid) && this.requestedOid === event.oid;
   }
+
   get selectionRegion(): Renderable[] {
     return [this.list.root.viewport, ...(this.previewPane.visible ? [this.preview.viewport] : [])];
   }
+
   get shortcuts(): FooterShortcut[] {
     const hint = (command: CommandId, label: string) => ({
       key: footerKeyHint(command, this.context, this.actions.hint(command, this.context)),
       label,
     });
     const target = this.selectionContext;
+
     return [
       ...(this.canOpen ? [hint("git.open", this.kind === "refs" ? "Filter" : "Open commit")] : []),
       hint("git.back", "Close"),
@@ -233,6 +260,7 @@ export class GitBrowser {
       ...(this.search.focused && this.search.value ? [hint("git.search-clear", "Clear")] : []),
     ];
   }
+
   show(kind: GitBrowserKind, snapshot: GitSnapshot | undefined, selected: string | null): void {
     this.cancel();
     this.results.clear();
@@ -249,9 +277,13 @@ export class GitBrowser {
     this.filter();
     this.resize();
     this.search.focus();
-    if (!snapshot) this.spinner.start();
+    if (!snapshot) {
+      this.spinner.start();
+    }
+
     this.actions.changed();
   }
+
   update(snapshot: GitSnapshot | undefined, error?: string): void {
     this.cancel();
     this.results.clear();
@@ -259,8 +291,11 @@ export class GitBrowser {
     this.snapshot = snapshot;
     this.loadError = error;
     this.previewSelector = undefined;
-    if (this.visible) this.filter();
+    if (this.visible) {
+      this.filter();
+    }
   }
+
   hide(): void {
     this.cancel();
     this.spinner.cancel();
@@ -270,9 +305,11 @@ export class GitBrowser {
       this.actions.changed();
     }
   }
+
   private get event(): GitReflog | undefined {
     return this.snapshot?.reflog.find((event) => event.selector === this.key);
   }
+
   private cancel(): void {
     this.revision++;
     this.request?.abort();
@@ -281,13 +318,20 @@ export class GitBrowser {
     this.openAfterLoad = undefined;
     this.spinner.stop();
   }
+
   private filter = (): void => {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
+
     this.openAfterLoad = undefined;
-    const matches = createTextMatcher(this.search.value),
-      rows: GitListItem[] = [];
+
+    const matches = createTextMatcher(this.search.value);
+    const rows: GitListItem[] = [];
     if (this.kind === "refs") {
-      if (matches("All refs")) rows.push({ key: allRefs, label: "All refs" });
+      if (matches("All refs")) {
+        rows.push({ key: allRefs, label: "All refs" });
+      }
       for (const [kind, label] of [
         ["local", "Local"],
         ["remote", "Remote"],
@@ -295,9 +339,10 @@ export class GitBrowser {
       ] as const) {
         const refs =
           this.snapshot?.refs.filter((ref) => ref.kind === kind && matches(ref.name)) ?? [];
-        if (refs.length)
+        if (refs.length) {
           rows.push({ key: `heading:${kind}`, label, disabled: true, gapBefore: rows.length > 0 });
-        for (const ref of refs)
+        }
+        for (const ref of refs) {
           rows.push({
             key: ref.ref,
             label: display(`${ref.kind === "tag" ? icons.tag : icons.branch} ${ref.name}`),
@@ -306,10 +351,11 @@ export class GitBrowser {
                 ? "git.currentRef"
                 : "ui.label",
           });
+        }
       }
     } else {
       for (const event of this.snapshot?.reflog ?? []) {
-        if (matches(`${event.selector} ${event.oid} ${event.subject} ${event.date}`))
+        if (matches(`${event.selector} ${event.oid} ${event.subject} ${event.date}`)) {
           rows.push({
             key: event.selector,
             label: [
@@ -318,8 +364,10 @@ export class GitBrowser {
               { text: display(`  ${event.subject}`) },
             ],
           });
+        }
       }
     }
+
     const candidates = rows.filter((row) => !row.disabled);
     this.search.setCounts(
       this.snapshot && !this.loadError
@@ -330,7 +378,10 @@ export class GitBrowser {
           }
         : null,
     );
-    if (!candidates.some((row) => row.key === this.key)) this.key = candidates[0]?.key ?? null;
+    if (!candidates.some((row) => row.key === this.key)) {
+      this.key = candidates[0]?.key ?? null;
+    }
+
     this.list.update(
       rows.length || (this.snapshot && !this.loadError)
         ? rows
@@ -339,19 +390,25 @@ export class GitBrowser {
           : [],
       this.key,
     );
+
     const empty = !!this.snapshot && !this.loadError && !candidates.length;
     this.layout.results.showEmpty(empty ? "No matches" : undefined);
     this.message.visible = !empty && (this.snapshot !== undefined || this.loadError !== undefined);
+
     const noun = this.kind === "refs" ? "result" : "event";
     this.summary = !this.snapshot
       ? "Loading Git data…"
       : `${candidates.length} ${noun}${candidates.length === 1 ? "" : "s"}`;
     this.message.content = this.loadError ?? this.summary;
-    if (this.key) this.list.root.scrollChildIntoView(`git-browser-list:${this.key}`);
+    if (this.key) {
+      this.list.root.scrollChildIntoView(`git-browser-list:${this.key}`);
+    }
+
     this.actions.selected(this.kind, this.selection);
     this.schedulePreview();
     this.actions.changed();
   };
+
   private choose(key: string): void {
     this.openAfterLoad = undefined;
     this.key = key;
@@ -359,15 +416,21 @@ export class GitBrowser {
     this.schedulePreview();
     this.actions.changed();
   }
+
   private schedulePreview(): void {
     if (!this.snapshot && !this.loadError) {
-      if (!this.spinner.root.visible) this.spinner.start();
+      if (!this.spinner.root.visible) {
+        this.spinner.start();
+      }
+
       return;
     }
     if (this.kind !== "reflog") {
       this.spinner.stop();
+
       return;
     }
+
     const event = this.event;
     if (event?.selector !== this.previewSelector) {
       this.previewSelector = event?.selector;
@@ -377,6 +440,7 @@ export class GitBrowser {
     if (!event || this.loadError) {
       this.cancel();
       this.renderPreview();
+
       return;
     }
     if (
@@ -385,11 +449,15 @@ export class GitBrowser {
       this.requestedOid === event.oid
     ) {
       this.renderPreview();
+
       return;
     }
+
     this.cancel();
-    const revision = this.revision,
-      request = new AbortController();
+
+    const revision = this.revision;
+    const request = new AbortController();
+
     this.request = request;
     this.requestedOid = event.oid;
     this.spinner.start();
@@ -397,20 +465,34 @@ export class GitBrowser {
     void this.actions
       .inspect(event, request.signal)
       .then((result) => {
-        if (!this.current(revision, request)) return;
+        if (!this.current(revision, request)) {
+          return;
+        }
+
         this.results.set(event.oid, result);
-        if (this.results.size > 16) this.results.delete(this.results.keys().next().value!);
+        if (this.results.size > 16) {
+          this.results.delete(this.results.keys().next().value!);
+        }
+
         this.renderPreview();
-        if (this.openAfterLoad === this.key && result.ok) this.actions.open(result.value);
+        if (this.openAfterLoad === this.key && result.ok) {
+          this.actions.open(result.value);
+        }
+
         this.openAfterLoad = undefined;
       })
       .catch((error: unknown) => {
-        if (this.disposed) return;
+        if (this.disposed) {
+          return;
+        }
+
         const message = reportUnexpected(error, "Git reflog preview");
         if (this.current(revision, request)) {
           this.unexpected.set(event.oid, message);
-          if (this.unexpected.size > 16)
+          if (this.unexpected.size > 16) {
             this.unexpected.delete(this.unexpected.keys().next().value!);
+          }
+
           this.renderPreview();
         }
       })
@@ -423,6 +505,7 @@ export class GitBrowser {
         }
       });
   }
+
   private current(revision: number, request: AbortController): boolean {
     return (
       this.visible &&
@@ -431,15 +514,17 @@ export class GitBrowser {
       !this.renderer.isDestroyed
     );
   }
+
   private renderPreview(): void {
-    const event = this.event,
-      result = event ? this.results.get(event.oid) : undefined;
+    const event = this.event;
+    const result = event ? this.results.get(event.oid) : undefined;
     const failure =
       result && !result.ok
         ? `[${result.error.code}] ${result.error.message}`
         : event
           ? this.unexpected.get(event.oid)
           : undefined;
+
     this.message.content = this.loadError ?? failure ?? this.summary;
     this.previewBody.showEmpty(!event ? "Select a reflog event" : undefined);
     this.previewText.content = !event
@@ -458,45 +543,62 @@ export class GitBrowser {
         ].join("\n");
     this.actions.changed();
   }
+
   private open(): void {
-    if (!this.snapshot || this.loadError || !this.key) return;
-    if (this.kind === "refs") {
-      this.actions.filter(this.key === allRefs ? null : this.key);
+    if (!this.snapshot || this.loadError || !this.key) {
       return;
     }
-    const event = this.event,
-      result = event ? this.results.get(event.oid) : undefined;
-    if (result?.ok) this.actions.open(result.value);
-    else if (event && this.requestedOid === event.oid) this.openAfterLoad = event.selector;
+    if (this.kind === "refs") {
+      this.actions.filter(this.key === allRefs ? null : this.key);
+
+      return;
+    }
+
+    const event = this.event;
+    const result = event ? this.results.get(event.oid) : undefined;
+    if (result?.ok) {
+      this.actions.open(result.value);
+    } else if (event && this.requestedOid === event.oid) {
+      this.openAfterLoad = event.selector;
+    }
   }
+
   command(command: CommandId): void {
     if (command === "git.back") {
       this.actions.close();
+
       return;
     }
     if (command === "git.search-clear") {
       this.search.clear();
+
       return;
     }
     if (command === "git.search") {
       this.search.focus();
+
       return;
     }
     if (command === "git.open") {
       this.open();
+
       return;
     }
     if (command === "git.preview") {
       this.togglePreview();
+
       return;
     }
+
     const half = command === "git.half-page-up" || command === "git.half-page-down";
     const down =
       command === "git.next" || command === "git.page-down" || command === "git.half-page-down";
     if (this.preview.focused) {
-      if (command === "git.first") this.preview.scrollTo(0);
-      else if (command === "git.last") this.preview.scrollTo(Number.MAX_SAFE_INTEGER);
-      else
+      if (command === "git.first") {
+        this.preview.scrollTo(0);
+      } else if (command === "git.last") {
+        this.preview.scrollTo(Number.MAX_SAFE_INTEGER);
+      } else {
         this.preview.scrollBy(
           (down ? 1 : -1) *
             (half
@@ -505,6 +607,7 @@ export class GitBrowser {
                 ? Math.max(1, this.preview.viewport.height - 1)
                 : 1),
         );
+      }
     } else if (half) {
       const height = this.layout.listHeight;
       if (this.search.focused) {
@@ -512,54 +615,78 @@ export class GitBrowser {
         this.resize();
         this.list.root.focus();
       }
+
       this.list.move(down ? "next" : "previous", halfPageStep(height));
-    } else if (command === "git.first" || command === "git.last")
+    } else if (command === "git.first" || command === "git.last") {
       this.list.move(command === "git.first" ? "first" : "last");
-    else if (command === "git.previous" || command === "git.next")
+    } else if (command === "git.previous" || command === "git.next") {
       this.list.move(down ? "next" : "previous");
-    else if (command === "git.page-up" || command === "git.page-down")
+    } else if (command === "git.page-up" || command === "git.page-down") {
       this.list.move(down ? "next" : "previous", Math.max(1, this.list.root.viewport.height));
+    }
+
     this.actions.changed();
   }
+
   private togglePreview(): void {
-    if (this.kind !== "reflog") return;
+    if (this.kind !== "reflog") {
+      return;
+    }
     if (this.renderer.width < 100) {
       this.compactPreview = !this.compactPreview;
       this.resize();
       (this.compactPreview ? this.preview : this.search).focus();
-    } else if (this.preview.focused) this.search.focus();
-    else this.preview.focus();
+    } else if (this.preview.focused) {
+      this.search.focus();
+    } else {
+      this.preview.focus();
+    }
   }
+
   moveFocus(direction: 1 | -1): void {
     if (this.renderer.width < 100 && this.kind === "reflog") {
       const targets: Renderable[] = [this.search, this.list.root, this.preview];
       const index = targets.indexOf(this.renderer.currentFocusedRenderable!);
       const next = targets[(index + direction + targets.length) % targets.length]!;
+
       this.compactPreview = next === this.preview;
       this.resize();
       next.focus();
     } else {
-      const targets = this.focusTargets,
-        index = targets.indexOf(this.renderer.currentFocusedRenderable!);
+      const targets = this.focusTargets;
+      const index = targets.indexOf(this.renderer.currentFocusedRenderable!);
+
       targets[(index + direction + targets.length) % targets.length]?.focus();
     }
+
     this.actions.changed();
   }
+
   private resize = (): void => {
-    if (this.disposed || this.root.isDestroyed || this.renderer.isDestroyed) return;
-    const availableWidth = this.root.width || this.renderer.width,
-      availableHeight = this.root.height || this.renderer.height - 1;
+    if (this.disposed || this.root.isDestroyed || this.renderer.isDestroyed) {
+      return;
+    }
+
+    const availableWidth = this.root.width || this.renderer.width;
+    const availableHeight = this.root.height || this.renderer.height - 1;
     const size = this.kind === "reflog" ? POPUP_SIZES.expanded : POPUP_SIZES.standard;
     const { height } = centerPopup(this.panel, size, availableWidth, availableHeight);
+
     this.search.fit(Math.max(1, height - 7));
     this.layout.resize(this.renderer.width >= 100, this.compactPreview, this.kind === "reflog");
   };
+
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.hide();
     this.disposed = true;
     this.search.off(InputRenderableEvents.INPUT, this.filter);
     this.renderer.off("resize", this.resize);
-    if (!this.root.isDestroyed) this.root.destroyRecursively();
+    if (!this.root.isDestroyed) {
+      this.root.destroyRecursively();
+    }
   }
 }

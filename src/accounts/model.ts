@@ -5,6 +5,7 @@ import { err, ok, type Result } from "../result.ts";
 
 const id = Type.String({ minLength: 1, maxLength: 4096 });
 const authType = Type.Union([Type.Literal("api_key"), Type.Literal("oauth")]);
+
 export const accountInfoSchema = Type.Object({
   id,
   provider: id,
@@ -12,7 +13,9 @@ export const accountInfoSchema = Type.Object({
   type: authType,
   usedBy: Type.Array(id),
 });
+
 export type AccountInfo = Static<typeof accountInfoSchema>;
+
 export const accountsCatalogSchema = Type.Object({
   revision: Type.Integer({ minimum: 0 }),
   worktreeId: id,
@@ -42,7 +45,9 @@ export const accountsCatalogSchema = Type.Object({
     }),
   ),
 });
+
 export type AccountsCatalog = Static<typeof accountsCatalogSchema>;
+
 const promptSchema = Type.Object({
   id,
   type: Type.Union([
@@ -79,7 +84,9 @@ export const loginViewSchema = Type.Object({
   account: Type.Optional(accountInfoSchema),
   error: Type.Optional(Type.String()),
 });
+
 export type LoginView = Static<typeof loginViewSchema>;
+
 export const accountRequestSchema = Type.Union([
   Type.Object({ type: Type.Literal("list"), worktreeId: id }, { additionalProperties: false }),
   Type.Object(
@@ -146,7 +153,9 @@ export const accountRequestSchema = Type.Union([
     { additionalProperties: false },
   ),
 ]);
+
 export type AccountRequest = Static<typeof accountRequestSchema>;
+
 export const accountReplySchema = Type.Union([
   Type.Object({
     kind: Type.Literal("catalog"),
@@ -155,15 +164,21 @@ export const accountReplySchema = Type.Union([
   }),
   Type.Object({ kind: Type.Literal("login"), login: loginViewSchema }),
 ]);
+
 export type AccountReply = Static<typeof accountReplySchema>;
+
 export const accountsCommand: CompletionItem = {
   kind: "command",
   value: "accounts",
   description: "Switch accounts or sign in to a new account",
 };
+
 export function parseAccountsCommand(text: string): Result<boolean, InputError> {
   const command = text.trim();
-  if (!/^\/accounts(?:\s|$)/u.test(command)) return ok(false);
+  if (!/^\/accounts(?:\s|$)/u.test(command)) {
+    return ok(false);
+  }
+
   return command.slice(9).trim()
     ? err(new InputError("Usage: /accounts (manage accounts in the popup; no arguments)."))
     : ok(true);

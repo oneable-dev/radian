@@ -31,8 +31,8 @@ const workflow = (id: string) => ({
 
 test("Workflow children use their exact agent names instead of task labels without inventing redacted inputs", () => {
   // Identical workflow keys belong to different runs and must not borrow each other's agent names.
-  const events = createEventBus(),
-    display = new PiSubagentDisplay(events, () => {});
+  const events = createEventBus();
+  const display = new PiSubagentDisplay(events, () => {});
   try {
     events.emit("subagent:child-status", {
       type: "subagent.child-status",
@@ -68,8 +68,8 @@ test("Workflow children use their exact agent names instead of task labels witho
 
 test("A single-child receipt binds only its own authored tool input to the concrete status row", () => {
   // The parent knows the actual direct tool input even though lifecycle events redact it.
-  const events = createEventBus(),
-    display = new PiSubagentDisplay(events, () => {});
+  const events = createEventBus();
+  const display = new PiSubagentDisplay(events, () => {});
   try {
     display.handleEvent({
       type: "tool_execution_start",
@@ -121,8 +121,8 @@ test("A single-child receipt binds only its own authored tool input to the concr
 
 test("Redacted lifecycle prompts, invalid events and failed receipts never create input previews", () => {
   // Public events may provide names but do not authorize reconstructing hidden prompts.
-  const events = createEventBus(),
-    display = new PiSubagentDisplay(events, () => {});
+  const events = createEventBus();
+  const display = new PiSubagentDisplay(events, () => {});
   try {
     events.emit("subagent:async-started", {
       id: "direct",
@@ -178,6 +178,7 @@ test("Reset and disposal discard session-local display metadata and unsubscribe 
   });
   const start = () =>
     events.emit("subagent:async-started", { id: "direct", mode: "single", agent: "implementer" });
+
   start();
   expect(display.lookup("direct")?.name).toBe("implementer");
 

@@ -74,8 +74,11 @@ const stateSchema = Type.Object({
     Type.Record(Type.String(), Type.String({ minLength: 1, maxLength: 128 })),
   ),
 });
+
 type State = Static<typeof stateSchema>;
+
 type StoredAccount = State["accounts"][number];
+
 type Login = {
   worktreeId: string;
   view: LoginView;
@@ -85,6 +88,7 @@ type Login = {
   answer?: { id: string; resolve(value: string): void; reject(error: Error): void } | undefined;
   task?: Promise<void>;
 };
+
 export type WorkspaceModels = {
   runtime: ModelRuntime;
   usage: UsageMonitor;
@@ -95,6 +99,7 @@ export type WorkspaceModels = {
   modelsKey?: string;
   modelsTask?: { key: string; ready: Promise<Result<void, ExpectedError>> };
 };
+
 const networkCodes = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
@@ -108,6 +113,7 @@ const externalAuthFailure = (error: unknown) =>
   (error instanceof Error &&
     (error.constructor === Error ||
       (error instanceof TypeError && networkCodes.has(systemCode(error.cause) ?? ""))));
+
 type Options = {
   offline?: boolean;
   defaultCredentials?: CredentialStore;
@@ -129,21 +135,27 @@ export class AccountManager {
   private readonly modelRevisions = new Map<string, number>();
   private readonly logins = new Map<string, Login>();
   private readonly listeners = new Set<() => void>();
+
   get revision(): number {
     return this.state.revision;
   }
+
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
+
     return () => this.listeners.delete(listener);
   }
+
   private active = false;
   private readonly observers = new Set<string>();
   private stopped = false;
   private persistenceWarning = "";
   private deviceIdPersisted = false;
+
   get warning(): string {
     return this.persistenceWarning;
   }
+
   private constructor(
     private readonly directory: string,
     private readonly defaults: ModelRuntime,
@@ -156,7 +168,10 @@ export class AccountManager {
     options: Options = {},
   ): Promise<Result<AccountManager, ExpectedError>> {
     const prepared = await capture(() => privateDirectory(directory));
-    if (!prepared.ok) return prepared;
+    if (!prepared.ok) {
+      return prepared;
+    }
+
     const defaultAuthPath = options.offline ? join(directory, "pi-auth.json") : undefined;
     const defaults = await ModelRuntime.create({
       ...(options.defaultCredentials
@@ -168,21 +183,31 @@ export class AccountManager {
       modelsStore: new InMemoryModelsStore(),
       allowModelNetwork: false,
     });
-    for (const provider of options.providers ?? []) defaults.registerNativeProvider(provider);
+    for (const provider of options.providers ?? []) {
+      defaults.registerNativeProvider(provider);
+    }
+
     const manager = new AccountManager(directory, defaults, options, defaultAuthPath);
     const read = await capture(() => readFile(join(directory, "accounts.json"), "utf8"));
-    if (!read.ok)
+    if (!read.ok) {
       return read.error instanceof StorageError && read.error.systemCode === "ENOENT"
         ? ok(manager)
         : read;
+    }
+
     const parsed = parseJson(read.value, "accounts");
-    if (!parsed.ok || !Value.Check(stateSchema, parsed.value))
+    if (!parsed.ok || !Value.Check(stateSchema, parsed.value)) {
       return err(new StorageError("Invalid account storage. The original file was not replaced."));
+    }
+
     const state = parsed.value;
-    if (new Set(state.accounts.map((account) => account.id)).size !== state.accounts.length)
+    if (new Set(state.accounts.map((account) => account.id)).size !== state.accounts.length) {
       return err(new StorageError("Duplicate account IDs in account storage."));
+    }
+
     manager.state = { ...state, deviceId: state.deviceId ?? crypto.randomUUID() };
     manager.deviceIdPersisted = state.deviceId !== undefined;
+
     return ok(manager);
   }
 
@@ -193,24 +218,32 @@ export class AccountManager {
       () => {},
       () => {},
     );
+
     return task;
   }
+
   private lock<T>(key: string, operation: () => Promise<T>): Promise<T> {
     const task = (this.locks.get(key) ?? Promise.resolve()).then(operation);
     const tail = task.then(
       () => {},
       () => {},
     );
+
     this.locks.set(key, tail);
     void tail.then(() => {
-      if (this.locks.get(key) === tail) this.locks.delete(key);
+      if (this.locks.get(key) === tail) {
+        this.locks.delete(key);
+      }
     });
+
     return task;
   }
+
   private async commit(next: State, publish = true): Promise<Result<void, ExpectedError>> {
     const saved = await capture(async () => {
-      const target = join(this.directory, "accounts.json"),
-        temporary = `${target}.${crypto.randomUUID()}.tmp`;
+      const target = join(this.directory, "accounts.json");
+      const temporary = `${target}.${crypto.randomUUID()}.tmp`;
+
       await withCleanup(
         async () => {
           await writeFile(temporary, JSON.stringify(next), { mode: 0o600, flag: "wx" });
@@ -223,10 +256,16 @@ export class AccountManager {
       this.state = next;
       this.deviceIdPersisted = true;
       this.persistenceWarning = "";
-      if (publish) for (const listener of this.listeners) listener();
+      if (publish) {
+        for (const listener of this.listeners) {
+          listener();
+        }
+      }
     }
+
     return saved;
   }
+
   private selection(
     worktreeId: string,
     provider: string,
@@ -234,17 +273,21 @@ export class AccountManager {
   ): string | undefined {
     return (view?.scope.getStore() ?? this.state.selections[worktreeId])?.[provider];
   }
+
   private account(id: string, provider?: string): StoredAccount {
     const account = this.state.accounts.find(
       (account) => account.id === id && (!provider || account.provider === provider),
     );
-    if (!account)
+    if (!account) {
       throw new AccountError(
         "ACCOUNT_NOT_FOUND",
         "The selected account no longer exists. Select an account explicitly; default authentication was not used.",
       );
+    }
+
     return account;
   }
+
   private info(account: StoredAccount): AccountInfo {
     return {
       id: account.id,
@@ -256,6 +299,7 @@ export class AccountManager {
         .map(([worktree]) => worktree),
     };
   }
+
   private async existingAccount(
     provider: Provider,
   ): Promise<
@@ -266,8 +310,10 @@ export class AccountManager {
       auth = await this.defaults.checkAuth(provider.id);
     } catch (error) {
       const expected = knownError(error);
-      if (expected) return err(expected);
-      if (error instanceof ModelsError)
+      if (expected) {
+        return err(expected);
+      }
+      if (error instanceof ModelsError) {
         return err(
           new AccountError(
             "ACCOUNT_LOGIN_FAILED",
@@ -275,9 +321,13 @@ export class AccountManager {
             { cause: error },
           ),
         );
+      }
+
       throw error;
     }
+
     const label = this.state.existingLabels?.[provider.id];
+
     return ok(
       auth
         ? {
@@ -289,6 +339,7 @@ export class AccountManager {
         : undefined,
     );
   }
+
   async catalog(worktreeId: string): Promise<AccountsCatalog> {
     const { runtime } = await this.workspace(worktreeId);
     // Availability checks discover configured credentials without refreshing OAuth tokens.
@@ -300,6 +351,7 @@ export class AccountManager {
       result.ok && result.value ? [result.value] : [],
     );
     const incomplete = connections.some((result) => !result.ok);
+
     return {
       revision: this.state.revision,
       worktreeId,
@@ -334,6 +386,7 @@ export class AccountManager {
         .filter((provider) => provider.methods.length > 0),
     };
   }
+
   private async defaultCredential(
     provider: string,
     options?: AuthOperationOptions,
@@ -346,22 +399,33 @@ export class AccountManager {
         ? this.options.defaultCredentials.read(provider, options)
         : readStoredCredential(provider, this.defaultAuthPath);
     const stored = await read();
-    if (!refresh && !(stored?.type === "api_key" && stored.key?.startsWith("!"))) return stored;
+    if (!refresh && !(stored?.type === "api_key" && stored.key?.startsWith("!"))) {
+      return stored;
+    }
+
     let auth: Awaited<ReturnType<ModelRuntime["getAuth"]>>;
     try {
       auth = await this.defaults.getAuth(provider, options);
     } catch (error) {
-      if (options?.signal?.aborted) throw new CancelledError();
-      if (externalAuthFailure(error))
+      if (options?.signal?.aborted) {
+        throw new CancelledError();
+      }
+      if (externalAuthFailure(error)) {
         throw new AccountError(
           "ACCOUNT_LOGIN_FAILED",
           "Could not resolve the existing account connection. Check the provider login.",
           { cause: error },
         );
+      }
+
       throw error;
     }
+
     const latest = await read();
-    if (latest?.type === "oauth") return latest;
+    if (latest?.type === "oauth") {
+      return latest;
+    }
+
     return auth
       ? {
           type: "api_key",
@@ -370,17 +434,23 @@ export class AccountManager {
         }
       : undefined;
   }
+
   private credentials(worktreeId: string, view: Pick<WorkspaceModels, "scope">): CredentialStore {
     const read = async (
       provider: string,
       options?: AuthOperationOptions,
     ): Promise<Credential | undefined> => {
-      if (options?.signal?.aborted) throw new CancelledError();
+      if (options?.signal?.aborted) {
+        throw new CancelledError();
+      }
+
       const id = this.selection(worktreeId, provider, view);
+
       return id
         ? structuredClone(this.account(id, provider).credential)
         : this.defaultCredential(provider, options);
     };
+
     return {
       read,
       list: async (options) => {
@@ -389,18 +459,24 @@ export class AccountManager {
         );
         for (const [provider, id] of Object.entries(
           view.scope.getStore() ?? this.state.selections[worktreeId] ?? {},
-        ))
+        )) {
           entries.set(provider, {
             providerId: provider,
             type: this.account(id, provider).credential.type,
           });
+        }
+
         return [...entries.values()];
       },
       modify: (provider, fn, options) => {
         // Capture BEFORE waiting for the lock: switching to B cannot redirect A's refresh write.
         const id = this.selection(worktreeId, provider, view);
+
         return this.lock(id ?? `pi:${provider}`, async () => {
-          if (options?.signal?.aborted) throw new CancelledError();
+          if (options?.signal?.aborted) {
+            throw new CancelledError();
+          }
+
           const current = id
             ? structuredClone(this.account(id, provider).credential)
             : await this.defaultCredential(provider, options, true);
@@ -408,30 +484,41 @@ export class AccountManager {
           try {
             next = await fn(current);
           } catch (error) {
-            if (options?.signal?.aborted) throw new CancelledError();
-            if (externalAuthFailure(error))
+            if (options?.signal?.aborted) {
+              throw new CancelledError();
+            }
+            if (externalAuthFailure(error)) {
               throw new AccountError(
                 "ACCOUNT_LOGIN_FAILED",
                 "Could not refresh the selected account. Open /accounts to check its authentication.",
                 { cause: error },
               );
+            }
+
             throw error;
           }
-          if (!next || JSON.stringify(next) === JSON.stringify(current)) return current;
-          if (!Value.Check(credentialSchema, next))
+          if (!next || JSON.stringify(next) === JSON.stringify(current)) {
+            return current;
+          }
+          if (!Value.Check(credentialSchema, next)) {
             throw new AccountError(
               "ACCOUNT_LOGIN_FAILED",
               "The provider returned an unsupported refreshed credential.",
             );
-          if (!id)
+          }
+          if (!id) {
             throw new CapabilityError(
               "Existing credentials are managed outside Radian. Add an account instead.",
             );
+          }
+
           const saved = await this.serialize(async () => {
             this.account(id, provider);
+
             const state = structuredClone(this.state);
             state.accounts.find((account) => account.id === id)!.credential = next;
             state.revision++;
+
             const persisted = await this.commit(state);
             if (!persisted.ok) {
               // OAuth rotation already happened remotely. Preserve the new token in the one
@@ -440,10 +527,15 @@ export class AccountManager {
               this.persistenceWarning =
                 "Account credentials refreshed in memory, but saving failed. Keep this daemon running and repair account storage before restarting.";
             }
+
             return persisted;
           });
-          if (!saved.ok && saved.error.code !== "STORAGE_FAILED") throw saved.error;
+          if (!saved.ok && saved.error.code !== "STORAGE_FAILED") {
+            throw saved.error;
+          }
+
           this.notifyCredential(id, provider);
+
           return structuredClone(next);
         });
       },
@@ -452,20 +544,25 @@ export class AccountManager {
       },
     };
   }
+
   workspace(worktreeId: string): Promise<WorkspaceModels> {
     let pending = this.workspaces.get(worktreeId);
     if (!pending) {
       pending = this.createWorkspace(worktreeId);
       this.workspaces.set(worktreeId, pending);
       void pending.catch(() => {
-        if (this.workspaces.get(worktreeId) === pending) this.workspaces.delete(worktreeId);
+        if (this.workspaces.get(worktreeId) === pending) {
+          this.workspaces.delete(worktreeId);
+        }
       });
     }
+
     return pending;
   }
+
   private async createWorkspace(worktreeId: string): Promise<WorkspaceModels> {
-    const scope = new AsyncLocalStorage<Readonly<Record<string, string>>>(),
-      catalogs = new Map<string, InMemoryModelsStore>();
+    const scope = new AsyncLocalStorage<Readonly<Record<string, string>>>();
+    const catalogs = new Map<string, InMemoryModelsStore>();
     const view = { scope };
     const store = (provider: string) => {
       const key = `${provider}\0${this.selection(worktreeId, provider, view) ?? "pi"}`;
@@ -474,6 +571,7 @@ export class AccountManager {
         stored = new InMemoryModelsStore();
         catalogs.set(key, stored);
       }
+
       return stored;
     };
     const modelsStore: ModelsStore = {
@@ -489,32 +587,47 @@ export class AccountManager {
         allowModelNetwork: false,
       }),
     );
-    for (const provider of this.options.providers ?? []) runtime.registerNativeProvider(provider);
+    for (const provider of this.options.providers ?? []) {
+      runtime.registerNativeProvider(provider);
+    }
+
     const usage = new UsageMonitor(openAiUsageResolver(runtime));
     usage.setActive(this.active);
+
     return { runtime, usage, scope, catalogs, listeners: new Set() };
   }
+
   setActive(active: boolean, owner = "app"): void {
-    if (active) this.observers.add(owner);
-    else this.observers.delete(owner);
+    if (active) {
+      this.observers.add(owner);
+    } else {
+      this.observers.delete(owner);
+    }
+
     active = this.observers.size > 0;
     this.active = active;
-    for (const pending of this.workspaces.values())
+    for (const pending of this.workspaces.values()) {
       void pending
         .then((view) => view.usage.setActive(active))
         .catch((error) => reportUnexpected(error, "account usage activation"));
+    }
   }
+
   private notifyCredential(id: string, provider: string): void {
-    for (const [worktreeId, pending] of this.workspaces)
+    for (const [worktreeId, pending] of this.workspaces) {
       if (this.selection(worktreeId, provider) === id) {
         void pending
           .then((view) => {
             view.usage.invalidate(provider);
-            for (const listener of view.listeners) listener(provider);
+            for (const listener of view.listeners) {
+              listener(provider);
+            }
           })
           .catch((error) => reportUnexpected(error, "account credential update"));
       }
+    }
   }
+
   // The callback runs in a pinned selection context for its entire asynchronous request.
   async request<T>(
     worktreeId: string,
@@ -522,28 +635,40 @@ export class AccountManager {
   ): Promise<T> {
     const view = await this.workspace(worktreeId);
     const selections = { ...this.state.selections[worktreeId] };
+
     return view.scope.run(selections, () =>
       operation(view.runtime, (provider) =>
         this.selectionIdentity(worktreeId, provider, selections),
       ),
     );
   }
+
   invalidateModels(worktreeId: string): void {
     this.modelRevisions.set(worktreeId, (this.modelRevisions.get(worktreeId) ?? 0) + 1);
   }
+
   async refreshModels(
     worktreeId: string,
     signal?: AbortSignal,
   ): Promise<Result<void, ExpectedError>> {
-    if (signal?.aborted) return err(new CancelledError());
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+
     const view = await this.workspace(worktreeId);
     const selections = Object.keys(this.state.selections[worktreeId] ?? {})
       .sort()
       .map((provider) => [provider, this.selectionIdentity(worktreeId, provider)]);
     const key = JSON.stringify([selections, this.modelRevisions.get(worktreeId) ?? 0]);
-    if (view.modelsKey === key) return ok(undefined);
-    if (view.modelsTask?.key === key) return view.modelsTask.ready;
+    if (view.modelsKey === key) {
+      return ok(undefined);
+    }
+    if (view.modelsTask?.key === key) {
+      return view.modelsTask.ready;
+    }
+
     view.refresh?.abort();
+
     const controller = (view.refresh = new AbortController());
     // Popup closure must not cancel metadata shared by other sessions or attached UIs.
     const ready = view.scope
@@ -554,70 +679,94 @@ export class AccountManager {
             allowNetwork: !this.options.offline,
             signal: controller.signal,
           });
-          if (result.aborted || controller.signal.aborted)
+          if (result.aborted || controller.signal.aborted) {
             return err(new CancelledError("Model metadata refresh was superseded or cancelled."));
-          if (result.errors.size)
+          }
+          if (result.errors.size) {
             return err(
               new ModelSelectionError(
                 "Could not refresh model metadata for the selected authentication. The account selection and running conversations were retained.",
               ),
             );
+          }
+
           view.modelsKey = key;
+
           return ok(undefined);
         },
       )
       .finally(() => {
-        if (view.modelsTask?.ready === ready) delete view.modelsTask;
+        if (view.modelsTask?.ready === ready) {
+          delete view.modelsTask;
+        }
       });
+
     view.modelsTask = { key, ready };
+
     return ready;
   }
+
   selectionIdentity(
     worktreeId: string,
     provider: string,
     selections = this.state.selections[worktreeId],
   ): string {
     const id = selections?.[provider];
+
     return id
       ? `${id}:${createHash("sha256")
           .update(JSON.stringify(this.account(id, provider).credential))
           .digest("hex")}`
       : "pi";
   }
+
   transportScope(sessionId: string, auth: unknown): string {
     return `${sessionId}:auth:${createHash("sha256").update(JSON.stringify(auth)).digest("hex").slice(0, 32)}`;
   }
+
   private async select(
     request: Extract<AccountRequest, { type: "select" }>,
   ): Promise<Result<string | undefined, ExpectedError>> {
     const saved = await this.serialize(async () => {
-      if (request.revision !== this.state.revision)
+      if (request.revision !== this.state.revision) {
         return err(
           new AccountError(
             "ACCOUNT_CONFLICT",
             "Accounts changed. Refresh before applying the selection.",
           ),
         );
+      }
       if (
         request.accountId &&
         !this.state.accounts.some(
           (account) => account.id === request.accountId && account.provider === request.provider,
         )
-      )
+      ) {
         return err(
           new AccountError("ACCOUNT_NOT_FOUND", "That account is not available for this provider."),
         );
-      const state = structuredClone(this.state),
-        selected = (state.selections[request.worktreeId] ??= {});
-      if (request.accountId) selected[request.provider] = request.accountId;
-      else delete selected[request.provider];
+      }
+
+      const state = structuredClone(this.state);
+      const selected = (state.selections[request.worktreeId] ??= {});
+      if (request.accountId) {
+        selected[request.provider] = request.accountId;
+      } else {
+        delete selected[request.provider];
+      }
+
       state.revision++;
+
       return this.commit(state, false);
     });
-    if (!saved.ok) return saved;
+    if (!saved.ok) {
+      return saved;
+    }
+
     const view = await this.workspace(request.worktreeId);
     view.refresh?.abort();
     view.refresh = new AbortController();
+
     const result = await view.scope.run({ ...this.state.selections[request.worktreeId] }, () =>
       view.runtime.refresh({
         providers: [request.provider],
@@ -627,96 +776,128 @@ export class AccountManager {
     );
     // Publish only after the selected-authentication view is ready for background readers.
     view.usage.invalidate(request.provider);
-    for (const listener of view.listeners) listener(request.provider);
-    for (const listener of this.listeners) listener();
+    for (const listener of view.listeners) {
+      listener(request.provider);
+    }
+    for (const listener of this.listeners) {
+      listener();
+    }
+
     return ok(
       result.errors.size || result.aborted
         ? "Account selected, but model metadata refresh did not finish. Reopen /model before selecting a model; the account change was not rolled back."
         : undefined,
     );
   }
+
   private async rename(
     request: Extract<AccountRequest, { type: "rename" }>,
   ): Promise<Result<void, ExpectedError>> {
     const label = request.label.trim();
-    if (!label || label.length > 128)
+    if (!label || label.length > 128) {
       return err(new InputError("Account label must contain 1–128 characters."));
+    }
+
     return this.serialize(async () => {
-      if (request.revision !== this.state.revision)
+      if (request.revision !== this.state.revision) {
         return err(
           new AccountError(
             "ACCOUNT_CONFLICT",
             "Accounts changed. Refresh before renaming an account.",
           ),
         );
+      }
       if (request.accountId === null) {
         const provider = this.defaults.getProvider(request.provider);
-        if (!provider)
+        if (!provider) {
           return err(
             new AccountError("ACCOUNT_NOT_FOUND", "That provider is no longer available."),
           );
+        }
+
         const connection = await this.existingAccount(provider);
-        if (!connection.ok) return connection;
-        if (!connection.value)
+        if (!connection.ok) {
+          return connection;
+        }
+        if (!connection.value) {
           return err(
             new AccountError(
               "ACCOUNT_NOT_FOUND",
               "That existing connection is no longer available.",
             ),
           );
+        }
+
         const state = structuredClone(this.state);
         (state.existingLabels ??= {})[request.provider] = label;
         state.revision++;
+
         return this.commit(state);
       }
-      const state = structuredClone(this.state),
-        account = state.accounts.find(
-          (account) => account.id === request.accountId && account.provider === request.provider,
-        );
-      if (!account)
+
+      const state = structuredClone(this.state);
+      const account = state.accounts.find(
+        (account) => account.id === request.accountId && account.provider === request.provider,
+      );
+      if (!account) {
         return err(
           new AccountError("ACCOUNT_NOT_FOUND", "That account is not available for this provider."),
         );
+      }
+
       account.label = label;
       state.revision++;
+
       return this.commit(state);
     });
   }
+
   private remove(
     request: Extract<AccountRequest, { type: "delete" }>,
   ): Promise<Result<void, ExpectedError>> {
     return this.lock(request.accountId, () =>
       this.serialize(async () => {
-        if (request.revision !== this.state.revision)
+        if (request.revision !== this.state.revision) {
           return err(
             new AccountError(
               "ACCOUNT_CONFLICT",
               "Accounts changed. Refresh before deleting an account.",
             ),
           );
+        }
+
         const account = this.state.accounts.find((account) => account.id === request.accountId);
-        if (!account)
+        if (!account) {
           return err(new AccountError("ACCOUNT_NOT_FOUND", "That account no longer exists."));
-        if (this.info(account).usedBy.length)
+        }
+        if (this.info(account).usedBy.length) {
           return err(
             new AccountError(
               "ACCOUNT_IN_USE",
               "This account is used by a worktree. Switch every affected worktree to another connected account before deleting it.",
             ),
           );
+        }
+
         const state = structuredClone(this.state);
         state.accounts = state.accounts.filter((account) => account.id !== account.id);
         state.revision++;
+
         return this.commit(state);
       }),
     );
   }
+
   async handle(
     request: AccountRequest,
     signal?: AbortSignal,
   ): Promise<Result<AccountReply, ExpectedError>> {
-    if (this.stopped) return err(new CancelledError("Account manager is stopping."));
-    if (signal?.aborted) return err(new CancelledError());
+    if (this.stopped) {
+      return err(new CancelledError("Account manager is stopping."));
+    }
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
     switch (request.type) {
       case "list":
         return ok({
@@ -726,6 +907,7 @@ export class AccountManager {
         });
       case "select": {
         const selected = await this.select(request);
+
         return selected.ok
           ? ok({
               kind: "catalog",
@@ -736,12 +918,14 @@ export class AccountManager {
       }
       case "rename": {
         const renamed = await this.rename(request);
+
         return renamed.ok
           ? ok({ kind: "catalog", catalog: await this.catalog(request.worktreeId) })
           : renamed;
       }
       case "delete": {
         const removed = await this.remove(request);
+
         return removed.ok
           ? ok({ kind: "catalog", catalog: await this.catalog(request.worktreeId) })
           : removed;
@@ -750,43 +934,54 @@ export class AccountManager {
         return this.begin(request);
       default: {
         const flow = this.logins.get(request.flowId);
-        if (!flow || flow.worktreeId !== request.worktreeId)
+        if (!flow || flow.worktreeId !== request.worktreeId) {
           return err(
             new AccountError(
               "ACCOUNT_NOT_FOUND",
               "This login is no longer available. Start a new login.",
             ),
           );
-        if (request.type === "cancel") this.cancel(flow);
-        else if (request.type === "answer") {
-          if (flow.view.status !== "pending" || flow.answer?.id !== request.promptId)
+        }
+        if (request.type === "cancel") {
+          this.cancel(flow);
+        } else if (request.type === "answer") {
+          if (flow.view.status !== "pending" || flow.answer?.id !== request.promptId) {
             return err(
               new AccountError(
                 "ACCOUNT_CONFLICT",
                 "That login prompt has expired. Wait for the current step.",
               ),
             );
+          }
           if (
             flow.view.prompt?.type === "select" &&
             !flow.view.prompt.options?.some((option) => option.id === request.value)
-          )
+          ) {
             return err(new InputError("Choose one of the supported login options."));
+          }
+
           const answer = flow.answer;
           flow.answer = undefined;
           delete flow.view.prompt;
           this.publish(flow);
           answer.resolve(request.value);
-        } else if (flow.view.revision <= request.revision && flow.view.status === "pending")
+        } else if (flow.view.revision <= request.revision && flow.view.status === "pending") {
           await this.wait(flow, signal);
+        }
+
         return ok({ kind: "login", login: structuredClone(flow.view) });
       }
     }
   }
+
   private publish(flow: Login): void {
     flow.view.revision++;
     const listeners = [...flow.listeners];
-    for (const listener of listeners) listener();
+    for (const listener of listeners) {
+      listener();
+    }
   }
+
   private wait(flow: Login, signal?: AbortSignal): Promise<void> {
     return new Promise((resolve) => {
       const done = () => {
@@ -796,13 +991,20 @@ export class AccountManager {
         resolve();
       };
       const timer = setTimeout(done, 25000);
+
       flow.listeners.add(done);
       signal?.addEventListener("abort", done, { once: true });
-      if (signal?.aborted) done();
+      if (signal?.aborted) {
+        done();
+      }
     });
   }
+
   private cancel(flow: Login): void {
-    if (flow.view.status !== "pending") return;
+    if (flow.view.status !== "pending") {
+      return;
+    }
+
     flow.controller.abort();
     flow.answer?.reject(new CancelledError());
     flow.answer = undefined;
@@ -811,9 +1013,12 @@ export class AccountManager {
     flow.view.events = [];
     this.publish(flow);
   }
+
   private prompt(flow: Login, prompt: AuthPrompt): Promise<string> {
-    if (flow.controller.signal.aborted || prompt.signal?.aborted)
+    if (flow.controller.signal.aborted || prompt.signal?.aborted) {
       return Promise.reject(new CancelledError());
+    }
+
     return new Promise((resolve, reject) => {
       const id = crypto.randomUUID();
       const cleanup = () => {
@@ -827,8 +1032,10 @@ export class AccountManager {
           delete flow.view.prompt;
           this.publish(flow);
         }
+
         reject(new CancelledError());
       };
+
       flow.answer = {
         id,
         resolve: (value) => {
@@ -859,41 +1066,53 @@ export class AccountManager {
       this.publish(flow);
     });
   }
+
   private async begin(
     request: Extract<AccountRequest, { type: "login" }>,
   ): Promise<Result<AccountReply, ExpectedError>> {
-    if (!request.label.trim()) return err(new InputError("Account label must not be blank."));
-    if (this.options.offline && !this.options.providers)
+    if (!request.label.trim()) {
+      return err(new InputError("Account label must not be blank."));
+    }
+    if (this.options.offline && !this.options.providers) {
       return err(new CapabilityError("Live account login is disabled in the offline fixture."));
-    if ([...this.logins.values()].some((flow) => flow.view.status === "pending"))
+    }
+    if ([...this.logins.values()].some((flow) => flow.view.status === "pending")) {
       return err(
         new AccountError(
           "ACCOUNT_CONFLICT",
           "Another account login is in progress. Finish or cancel it first.",
         ),
       );
-    const { runtime } = await this.workspace(request.worktreeId),
-      provider = runtime.getProvider(request.provider);
+    }
+
+    const { runtime } = await this.workspace(request.worktreeId);
+    const provider = runtime.getProvider(request.provider);
     if (!this.deviceIdPersisted) {
       const saved = await this.serialize(() => this.commit(this.state));
-      if (!saved.ok) return saved;
+      if (!saved.ok) {
+        return saved;
+      }
     }
-    if ([...this.logins.values()].some((flow) => flow.view.status === "pending"))
+    if ([...this.logins.values()].some((flow) => flow.view.status === "pending")) {
       return err(
         new AccountError(
           "ACCOUNT_CONFLICT",
           "Another account login is in progress. Finish or cancel it first.",
         ),
       );
+    }
+
     const method = request.method === "oauth" ? provider?.auth.oauth : provider?.auth.apiKey;
-    if (!method?.login)
+    if (!method?.login) {
       return err(
         new CapabilityError(
           "This provider does not support that interactive authentication method.",
         ),
       );
-    const id = crypto.randomUUID(),
-      controller = new AbortController();
+    }
+
+    const id = crypto.randomUUID();
+    const controller = new AbortController();
     const flow: Login = {
       worktreeId: request.worktreeId,
       view: { id, revision: 0, status: "pending", events: [] },
@@ -907,6 +1126,7 @@ export class AccountManager {
         15 * 60 * 1000,
       ),
     };
+
     this.logins.set(id, flow);
     flow.task = (async () => {
       let credential: Credential;
@@ -916,23 +1136,29 @@ export class AccountManager {
             signal: controller.signal,
             prompt: (prompt) => this.prompt(flow, prompt),
             notify: (event) => {
-              if (flow.view.status !== "pending") return;
-              if (event.type === "auth_url")
+              if (flow.view.status !== "pending") {
+                return;
+              }
+              if (event.type === "auth_url") {
                 flow.view.events.push({
                   message: event.instructions ?? "Complete login in your browser.",
                   url: event.url,
                 });
-              else if (event.type === "device_code")
+              } else if (event.type === "device_code") {
                 flow.view.events.push({
                   message: `Open the URL and enter this device code.${event.expiresInSeconds ? ` Expires in ${Math.ceil(event.expiresInSeconds / 60)} minute(s).` : ""}`,
                   url: event.verificationUri,
                   code: event.userCode,
                 });
-              else if (event.type === "info") {
+              } else if (event.type === "info") {
                 flow.view.events.push({ message: event.message });
-                for (const link of event.links ?? [])
+                for (const link of event.links ?? []) {
                   flow.view.events.push({ message: link.label ?? "Login link", url: link.url });
-              } else flow.view.events.push({ message: event.message });
+                }
+              } else {
+                flow.view.events.push({ message: event.message });
+              }
+
               flow.view.events = flow.view.events.slice(-16);
               this.publish(flow);
             },
@@ -940,27 +1166,39 @@ export class AccountManager {
           { agentName: "radian", getDeviceId: () => this.state.deviceId! },
         );
       } catch (error) {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted) {
+          return;
+        }
         // Provider OAuth implementations have an exception-based, untyped external-failure contract.
         // Never forward token responses, authorization codes or SDK error messages to shared logs/UI.
-        if (!externalAuthFailure(error) && !knownError(error)) throw error;
+        if (!externalAuthFailure(error) && !knownError(error)) {
+          throw error;
+        }
+
         flow.view.status = "error";
         flow.view.error =
           "Login failed. Check the provider, connection and selected login method, then try again.";
         delete flow.view.prompt;
         this.publish(flow);
+
         return;
       }
-      if (controller.signal.aborted || flow.view.status !== "pending") return;
+      if (controller.signal.aborted || flow.view.status !== "pending") {
+        return;
+      }
+
       const saved = await this.serialize(async () => {
-        if (controller.signal.aborted) return err(new CancelledError());
-        if (!Value.Check(credentialSchema, credential))
+        if (controller.signal.aborted) {
+          return err(new CancelledError());
+        }
+        if (!Value.Check(credentialSchema, credential)) {
           return err(
             new AccountError(
               "ACCOUNT_LOGIN_FAILED",
               "Provider returned an unsupported credential.",
             ),
           );
+        }
         if (
           credential.type === "oauth" &&
           typeof credential.accountId === "string" &&
@@ -980,6 +1218,7 @@ export class AccountManager {
             ),
           );
         }
+
         const account: StoredAccount = {
           id: crypto.randomUUID(),
           provider: request.provider,
@@ -987,9 +1226,12 @@ export class AccountManager {
           credential,
         };
         const state = structuredClone(this.state);
+
         state.accounts.push(account);
         state.revision++;
+
         const saved = await this.commit(state);
+
         return saved.ok ? ok(account) : saved;
       });
       if (saved.ok) {
@@ -1002,6 +1244,7 @@ export class AccountManager {
             ? saved.error.message
             : `[${saved.error.code}] Could not save the new account. Existing accounts and selections were retained.`;
       }
+
       flow.view.events = [];
       delete flow.view.prompt;
       this.publish(flow);
@@ -1012,8 +1255,10 @@ export class AccountManager {
       delete flow.view.prompt;
       this.publish(flow);
     });
+
     return ok({ kind: "login", login: structuredClone(flow.view) });
   }
+
   async stop(): Promise<Result<void, ExpectedError>> {
     this.stopped = true;
     this.listeners.clear();
@@ -1021,16 +1266,20 @@ export class AccountManager {
       this.cancel(flow);
       clearTimeout(flow.timer);
     }
+
     await Promise.all([...this.logins.values()].flatMap((flow) => (flow.task ? [flow.task] : [])));
     this.logins.clear();
+
     const views = await Promise.all(this.workspaces.values());
     for (const view of views) {
       view.refresh?.abort();
       view.listeners.clear();
     }
+
     await Promise.all(views.flatMap((view) => (view.modelsTask ? [view.modelsTask.ready] : [])));
     await Promise.all(views.map((view) => view.usage.stop()));
     await this.saving;
+
     return this.persistenceWarning ? this.commit(this.state) : ok(undefined);
   }
 }

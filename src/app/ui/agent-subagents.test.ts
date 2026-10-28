@@ -26,8 +26,8 @@ const child = (id: string, elapsedMs: number): Subagent => ({
 });
 
 async function mount(width = 120) {
-  const clock = new ManualClock(),
-    app = await createTestRenderer({ width, height: 30, kittyKeyboard: true, clock });
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width, height: 30, kittyKeyboard: true, clock });
   let children: readonly Subagent[] = [];
   let status: ExecutionState["status"] = "working";
   const workspace = () =>
@@ -75,18 +75,27 @@ async function mount(width = 120) {
   };
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
+
   await render();
-  const list = get("subagent-summary"),
-    scroll = get("session-transcript");
-  if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript");
+
+  const list = get("subagent-summary");
+  const scroll = get("session-transcript");
+  if (!(scroll instanceof ScrollBoxRenderable)) {
+    throw new Error("Missing transcript");
+  }
+
   const rows = () =>
     list
       .getChildren()
       .filter((node): node is BoxRenderable => node instanceof BoxRenderable && node.visible);
   const text = (node: TextRenderable) => (node.visible ? node.plainText : "");
+
   return {
     ...app,
     clock,
@@ -125,19 +134,22 @@ test.each([120, 60, 200])(
     try {
       pressLeader(app, "a");
       await app.render();
-      const prompt = app.get("session-prompt"),
-        focus = app.renderer.currentFocusedRenderable;
+
+      const prompt = app.get("session-prompt");
+      const focus = app.renderer.currentFocusedRenderable;
       const inputY = app.get("agent-composer").y;
 
       await app.update([child("writer", 12000), child("reviewer", 24000)]);
 
       // Child rows extend one shared status block without pushing the composer off-screen.
-      const main = app.get("agent-run-status"),
-        group = app.get("transcript-status-row");
+      const main = app.get("agent-run-status");
+      const group = app.get("transcript-status-row");
+
       expect(app.list.y).toBe(main.y + main.height);
       expect(app.headings()).toEqual(["writer · Working (12s)", "reviewer · Working (24s)"]);
       expect(group.height).toBe(main.height + app.list.height);
       expect(app.get("agent-composer").y).toBe(inputY);
+
       const captions = [app.get("agent-run-request") as TextRenderable, ...app.captions()];
       expect(captions).toHaveLength(3);
       for (const caption of captions) {
@@ -148,6 +160,7 @@ test.each([120, 60, 200])(
         );
         expect(caption.plainText).not.toContain("\uFFFD");
       }
+
       app.clock.advance(2000);
       await app.update([child("writer", 12000), child("reviewer", 24000)]);
       expect(app.headings()).toEqual(["writer · Working (14s)", "reviewer · Working (26s)"]);
@@ -162,14 +175,15 @@ test.each([120, 60, 200])(
 
 test("Pi agent names and quoted inputs share a starting column without an extra input indent", async () => {
   // Four direct launches have real authored inputs independent from their task labels.
-  const app = await mount(),
-    events = createEventBus(),
-    display = new PiSubagentDisplay(events, () => {});
+  const app = await mount();
+  const events = createEventBus();
+  const display = new PiSubagentDisplay(events, () => {});
   const names = ["implementer", "issue_writer", "reviewer", "review_fixer"];
   try {
     app.resize(120, 40);
     await app.render();
     pressLeader(app, "a");
+
     const focus = app.renderer.currentFocusedRenderable;
     for (const [index, name] of names.entries()) {
       const task =
@@ -194,6 +208,7 @@ test("Pi agent names and quoted inputs share a starting column without an extra 
         isError: false,
       });
     }
+
     const widget = [
       "PI_SUBAGENT_ASYNC_JSON:" +
         JSON.stringify({
@@ -222,6 +237,7 @@ test("Pi agent names and quoted inputs share a starting column without an extra 
 
     // Each input starts under its agent name, not under an additional indentation level.
     expect(app.headings()).toEqual(names.map((name) => `${name} · Working (9s)`));
+
     const captions = app.captions();
     expect(captions).toHaveLength(4);
     expect(captions[0]!.plainText).toBe("“Check input”");
@@ -230,8 +246,11 @@ test("Pi agent names and quoted inputs share a starting column without an extra 
       expect(caption.x).toBe(heading.x);
       expect(caption.plainText).toStartWith("“");
       expect(Bun.stringWidth(caption.plainText)).toBeLessThanOrEqual(60);
-      if (index > 0) expect(caption.plainText).toEndWith("…”");
+      if (index > 0) {
+        expect(caption.plainText).toEndWith("…”");
+      }
     }
+
     expect(app.captureCharFrame()).not.toContain("Test implementer response");
     expect(app.renderer.currentFocusedRenderable).toBe(focus);
     expect(app.view.promptDrafts.a1).toBe("Retained unsent draft");
@@ -248,8 +267,9 @@ test("Child expansion and removal preserve a paused transcript anchor, caret, an
     pressLeader(app, "a");
     app.scroll.scrollTo(12);
     await app.render();
-    const top = app.scroll.scrollTop,
-      focus = app.renderer.currentFocusedRenderable;
+
+    const top = app.scroll.scrollTop;
+    const focus = app.renderer.currentFocusedRenderable;
     const firstLine = () =>
       app
         .captureCharFrame()
@@ -258,6 +278,7 @@ test("Child expansion and removal preserve a paused transcript anchor, caret, an
         .join("\n")
         .match(/HISTORY_LINE_\d+/u)?.[0];
     const before = firstLine();
+
     expect(before).toBeDefined();
 
     await app.update([child("writer", 1000), child("reviewer", 2000)]);
@@ -281,6 +302,7 @@ test("Children remain visible after the parent settles and terminal durations st
     await app.update([], "complete");
     app.clock.advance(500);
     await app.render();
+
     const idleTimers = app.clock.pendingTimerCount;
     await app.update([child("reviewer", 12000)], "working");
 

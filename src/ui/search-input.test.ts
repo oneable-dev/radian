@@ -9,17 +9,23 @@ test.each([120, 48, 24])(
     // An unloaded picker must not look like an empty catalog or show placeholder instructions.
     const app = await createTestRenderer({ width, height: 10 });
     const input = new SearchInput(app.renderer, { id: "query", title: "Models" });
+
     app.renderer.root.add(input.field);
     input.fit(3);
     input.focus();
+
     const render = async () => {
       await app.renderOnce();
       await app.renderOnce();
     };
     try {
       await render();
+
       const count = input.field.findDescendantById("query-count");
-      if (!(count instanceof TextRenderable)) throw new Error("Missing result count");
+      if (!(count instanceof TextRenderable)) {
+        throw new Error("Missing result count");
+      }
+
       expect(input.placeholder).toBe("");
       expect(input.value).toBe("");
       expect(count.visible).toBe(false);

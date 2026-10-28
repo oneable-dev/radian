@@ -9,12 +9,16 @@ import { ok } from "../../result.ts";
 import { spinnerFrames } from "../../icons.ts";
 
 function visibleText(node: Renderable): string {
-  if (!node.visible) return "";
+  if (!node.visible) {
+    return "";
+  }
+
   return (
     (node instanceof TextRenderable ? node.plainText : "") +
     node.getChildren().map(visibleText).join("")
   );
 }
+
 const loadingGlyphs = new RegExp(`[${spinnerFrames.join("")}▶▷]`, "u");
 
 test.each([
@@ -24,8 +28,8 @@ test.each([
   "%s opens only popups without starting prompt or Fast-tab loading",
   async (command, modalId) => {
     // Query commands must not create run state even in idle Fast sessions.
-    const clock = new ManualClock(),
-      app = await createTestRenderer({ width: 120, height: 28, kittyKeyboard: true, clock });
+    const clock = new ManualClock();
+    const app = await createTestRenderer({ width: 120, height: 28, kittyKeyboard: true, clock });
     const repositories = demoWorkspace().map((repo) => ({
       ...repo,
       worktrees: repo.worktrees.map((tree) => ({
@@ -33,13 +37,14 @@ test.each([
         sessions: tree.sessions.map((session) => ({ ...session, status: null, subagents: [] })),
       })),
     }));
-    const selection = new WorkspaceSelection(repositories),
-      sent: string[] = [];
+    const selection = new WorkspaceSelection(repositories);
+    const sent: string[] = [];
     const view = new Workbench(app.renderer, selection, {
       onNewSession() {},
       onCloseSession() {},
       onPrompt: (_id, text) => {
         sent.push(text);
+
         return ok(undefined);
       },
       getSessionDetails: () => ({
@@ -67,13 +72,20 @@ test.each([
     };
     const get = (id: string) => {
       const node = app.renderer.root.findDescendantById(id);
-      if (!node) throw new Error(`Missing ${id}`);
+      if (!node) {
+        throw new Error(`Missing ${id}`);
+      }
+
       return node;
     };
     try {
       await render();
+
       const prompt = get("session-prompt");
-      if (!(prompt instanceof PromptInput)) throw new Error("Missing Agent input");
+      if (!(prompt instanceof PromptInput)) {
+        throw new Error("Missing Agent input");
+      }
+
       prompt.focus();
       prompt.value = command;
 
@@ -89,6 +101,7 @@ test.each([
       expect(sent).toEqual([]);
       expect(get("agent-run-loading").visible).toBe(false);
       expect(get("transcript-status-row").visible).toBe(false);
+
       const tab = get(`session:${selection.worktree!.id}:${selection.sessionId}`);
       expect(visibleText(tab)).not.toMatch(loadingGlyphs);
       app.mockInput.pressEscape();

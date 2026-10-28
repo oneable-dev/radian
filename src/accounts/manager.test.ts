@@ -18,8 +18,11 @@ import { expectError, expectOk } from "../testing/results.ts";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
-  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  for (const cleanup of cleanups.splice(0).reverse()) {
+    await cleanup();
+  }
 });
+
 function provider(login?: (interaction: ProviderAuthInteraction) => Promise<Credential>): Provider {
   return createProvider({
     id: "fixture",
@@ -41,7 +44,10 @@ function provider(login?: (interaction: ProviderAuthInteraction) => Promise<Cred
               name: "OAuth",
               login: async (interaction) => {
                 const result = await login(interaction);
-                if (result.type !== "oauth") throw new Error("Fixture expected OAuth");
+                if (result.type !== "oauth") {
+                  throw new Error("Fixture expected OAuth");
+                }
+
                 return result;
               },
               refresh: async (credential) => ({ ...credential, expires: Date.now() + 3600000 }),
@@ -60,9 +66,10 @@ function provider(login?: (interaction: ProviderAuthInteraction) => Promise<Cred
     },
   });
 }
+
 async function fixture(providers: readonly Provider[] = [provider()]) {
-  const directory = await mkdtemp(join(tmpdir(), "radian-accounts-")),
-    defaults = new InMemoryCredentialStore();
+  const directory = await mkdtemp(join(tmpdir(), "radian-accounts-"));
+  const defaults = new InMemoryCredentialStore();
   const manager = expectOk(
     await AccountManager.open(directory, {
       offline: true,
@@ -70,19 +77,26 @@ async function fixture(providers: readonly Provider[] = [provider()]) {
       providers,
     }),
   );
+
   cleanups.push(async () => {
     expectOk(await manager.stop());
     await rm(directory, { recursive: true, force: true });
   });
+
   return { directory, defaults, manager };
 }
+
 function login(reply: AccountReply): LoginView {
-  if (reply.kind !== "login") throw new Error("Expected login reply");
+  if (reply.kind !== "login") {
+    throw new Error("Expected login reply");
+  }
+
   return reply.login;
 }
+
 async function finish(manager: AccountManager, view: LoginView, worktreeId = "one") {
   let current = view;
-  while (current.status === "pending")
+  while (current.status === "pending") {
     current = login(
       expectOk(
         await manager.handle({
@@ -93,9 +107,13 @@ async function finish(manager: AccountManager, view: LoginView, worktreeId = "on
         }),
       ),
     );
+  }
+
   expect(current.status).toBe("complete");
+
   return current.account!;
 }
+
 async function add(manager: AccountManager, key: string, worktreeId = "one") {
   const view = login(
     expectOk(
@@ -109,6 +127,7 @@ async function add(manager: AccountManager, key: string, worktreeId = "one") {
     ),
   );
   expect(view.prompt?.type).toBe("secret");
+
   return finish(
     manager,
     login(
@@ -125,6 +144,7 @@ async function add(manager: AccountManager, key: string, worktreeId = "one") {
     worktreeId,
   );
 }
+
 async function select(manager: AccountManager, worktreeId: string, accountId: string | null) {
   return manager.handle({
     type: "select",
@@ -138,19 +158,26 @@ async function select(manager: AccountManager, worktreeId: string, accountId: st
 test("Concurrent model preload requests share metadata until an explicit invalidation", async () => {
   // Sessions in the same worktree must not supersede one another's startup discovery.
   const { manager } = await fixture();
-  const view = await manager.workspace("one"),
-    release = Promise.withResolvers<void>();
+  const view = await manager.workspace("one");
+  const release = Promise.withResolvers<void>();
   const original = view.runtime.refresh.bind(view.runtime);
   const refresh = spyOn(view.runtime, "refresh").mockImplementation(async (options) => {
     await release.promise;
+
     return original(options);
   });
   try {
     const requests = Array.from({ length: 5 }, () => manager.refreshModels("one"));
-    for (let i = 0; i < 10; i++) await Promise.resolve();
+    for (let i = 0; i < 10; i++) {
+      await Promise.resolve();
+    }
+
     expect(refresh).toHaveBeenCalledTimes(1);
     release.resolve();
-    for (const request of requests) expectOk(await request);
+    for (const request of requests) {
+      expectOk(await request);
+    }
+
     expectOk(await manager.refreshModels("one"));
     expect(refresh).toHaveBeenCalledTimes(1);
 
@@ -166,12 +193,13 @@ test("Concurrent model preload requests share metadata until an explicit invalid
 
 test("Account notifications publish safe catalog revisions after accepted changes", async () => {
   // Popup caches subscribe to metadata revisions rather than to stored credentials.
-  const { manager } = await fixture(),
-    revisions: number[] = [];
+  const { manager } = await fixture();
+  const revisions: number[] = [];
   const unsubscribe = manager.subscribe(() => revisions.push(manager.revision));
   try {
     const saved = await add(manager, "private-key");
     expect(revisions.at(-1)).toBe((await manager.catalog("one")).revision);
+
     const before = revisions.length;
     expectOk(await select(manager, "one", saved.id));
 
@@ -190,8 +218,8 @@ test("Adding an account updates the global list without changing selections or P
 
   // Accounts added in one workspace are visible in another.
   const account = await add(manager, "named-key");
-  const other = await manager.catalog("two"),
-    workspace = await manager.workspace("one");
+  const other = await manager.catalog("two");
+  const workspace = await manager.workspace("one");
 
   // Metadata excludes credentials, and adding an account does not overwrite defaults.
   expect(other.accounts.map((account) => account.id)).toContain(account.id);
@@ -205,6 +233,7 @@ test("Account lists distinguish authenticated connections from available provide
   // A supported provider without credentials is not a switchable account.
   const { manager, defaults } = await fixture();
   const before = await manager.catalog("one");
+
   expect(
     before.existingAccounts?.find((account) => account.provider === "fixture"),
   ).toBeUndefined();
@@ -212,6 +241,7 @@ test("Account lists distinguish authenticated connections from available provide
 
   // Discover credentials registered in the existing store.
   await defaults.modify("fixture", async () => ({ type: "api_key", key: "private-existing-key" }));
+
   const connected = await manager.catalog("one");
 
   // Expose authentication types, not tokens or credential copies.
@@ -242,7 +272,9 @@ test.each(["oauth", "api_key"] as const)(
             expires: Date.now() + 3600000,
           }
         : { type, key: "private-existing-key" };
+
     await defaults.modify("fixture", async () => credential);
+
     const before = await manager.catalog("one");
 
     // Rename from one worktree and reopen the metadata with the same external credential store.
@@ -256,6 +288,7 @@ test.each(["oauth", "api_key"] as const)(
         revision: before.revision,
       }),
     );
+
     const reopened = expectOk(
       await AccountManager.open(directory, {
         offline: true,
@@ -270,8 +303,9 @@ test.each(["oauth", "api_key"] as const)(
     cleanups.push(async () => {
       expectOk(await reopened.stop());
     });
-    const other = await reopened.catalog("two"),
-      stored = await readFile(join(directory, "accounts.json"), "utf8");
+
+    const other = await reopened.catalog("two");
+    const stored = await readFile(join(directory, "accounts.json"), "utf8");
 
     // Labels are shared and durable, but never create a named account, selection, or token copy.
     expect(other.existingAccounts).toContainEqual({
@@ -292,11 +326,13 @@ test.each(["oauth", "api_key"] as const)(
 
 test("Renaming a selected named account preserves authentication and worktree selections", async () => {
   // A saved account can be active in another worktree while its label is edited.
-  const { manager } = await fixture(),
-    account = await add(manager, "private-named-key");
+  const { manager } = await fixture();
+  const account = await add(manager, "private-named-key");
+
   expectOk(await select(manager, "two", account.id));
-  const before = await manager.catalog("one"),
-    identity = manager.selectionIdentity("two", "fixture");
+
+  const before = await manager.catalog("one");
+  const identity = manager.selectionIdentity("two", "fixture");
 
   expectOk(
     await manager.handle({
@@ -308,6 +344,7 @@ test("Renaming a selected named account preserves authentication and worktree se
       revision: before.revision,
     }),
   );
+
   const other = await manager.catalog("two");
 
   // Changing a label must not switch credentials or invalidate request identity.
@@ -323,6 +360,7 @@ test("Stale label edits cannot overwrite a newer shared label", async () => {
   // Two worktrees edit the same external connection from the same catalog revision.
   const { manager, defaults } = await fixture();
   await defaults.modify("fixture", async () => ({ type: "api_key", key: "private-existing-key" }));
+
   const before = await manager.catalog("one");
   expectOk(
     await manager.handle({
@@ -353,8 +391,8 @@ test.each([null, "missing"])(
   "Renaming unavailable account %j does not create a label or change storage",
   async (accountId) => {
     // A supported provider without authentication is not an existing account.
-    const { manager } = await fixture(),
-      before = await manager.catalog("one");
+    const { manager } = await fixture();
+    const before = await manager.catalog("one");
 
     const renamed = await manager.handle({
       type: "rename",
@@ -375,9 +413,9 @@ test.each([
   ["Oversized", "x".repeat(129)],
 ])("%s labels are rejected without changing a saved account", async (_name, label) => {
   // Domain validation also protects direct callers that bypass the IPC schema.
-  const { manager } = await fixture(),
-    account = await add(manager, "Original"),
-    before = await manager.catalog("one");
+  const { manager } = await fixture();
+  const account = await add(manager, "Original");
+  const before = await manager.catalog("one");
 
   const renamed = await manager.handle({
     type: "rename",
@@ -396,6 +434,7 @@ test("Label persistence failures retain the accepted label and original authenti
   // Make an existing label durable before blocking the next atomic file replacement.
   const { manager, defaults, directory } = await fixture();
   const credential: Credential = { type: "api_key", key: "private-existing-key" };
+
   await defaults.modify("fixture", async () => credential);
   expectOk(
     await manager.handle({
@@ -407,8 +446,10 @@ test("Label persistence failures retain the accepted label and original authenti
       revision: (await manager.catalog("one")).revision,
     }),
   );
-  const before = await manager.catalog("one"),
-    target = join(directory, "accounts.json");
+
+  const before = await manager.catalog("one");
+  const target = join(directory, "accounts.json");
+
   await rm(target);
   await mkdir(target);
 
@@ -429,9 +470,10 @@ test("Label persistence failures retain the accepted label and original authenti
 
 test("Connection checks preserve saved accounts and return sanitized warnings on failure", async () => {
   // A provider authentication check must not block switching to a valid account.
-  const failing = provider(),
-    { manager } = await fixture([failing]);
+  const failing = provider();
+  const { manager } = await fixture([failing]);
   const account = await add(manager, "saved-account");
+
   failing.auth.apiKey!.check = async () => {
     throw new Error("private-provider-response");
   };
@@ -449,11 +491,13 @@ test("Connection checks preserve saved accounts and return sanitized warnings on
 
 test("Environment authentication appears only while configured", async () => {
   // Use credentials that do not overlap other tests or user settings.
-  const variable = "RADIAN_TEST_ACCOUNT_KEY",
-    previous = process.env[variable],
-    ambient = provider();
+  const variable = "RADIAN_TEST_ACCOUNT_KEY";
+  const previous = process.env[variable];
+  const ambient = provider();
+
   ambient.auth.apiKey!.resolve = async ({ ctx, credential }) => {
     const key = credential?.key || (await ctx.env(variable));
+
     return key ? { auth: { apiKey: key } } : undefined;
   };
   delete process.env[variable];
@@ -467,8 +511,10 @@ test("Environment authentication appears only while configured", async () => {
 
     // Set and unset environment authentication without restarting.
     process.env[variable] = "private-environment-key";
+
     const connected = await manager.catalog("one");
     delete process.env[variable];
+
     const disconnected = await manager.catalog("one");
 
     // Reflect current credentials, not supported providers or stale caches.
@@ -482,22 +528,26 @@ test("Environment authentication appears only while configured", async () => {
       disconnected.existingAccounts?.find((account) => account.provider === "fixture"),
     ).toBeUndefined();
   } finally {
-    if (previous === undefined) delete process.env[variable];
-    else process.env[variable] = previous;
+    if (previous === undefined) {
+      delete process.env[variable];
+    } else {
+      process.env[variable] = previous;
+    }
   }
 });
 
 test("Workspace selections isolate authentication and survive reopening", async () => {
   // Use different keys for two accounts from the same provider.
   const { manager, directory } = await fixture();
-  const a = await add(manager, "key-a"),
-    b = await add(manager, "key-b");
+  const a = await add(manager, "key-a");
+  const b = await add(manager, "key-b");
 
   // Save each workspace selection independently.
   expectOk(await select(manager, "one", a.id));
   expectOk(await select(manager, "two", b.id));
-  const one = await manager.workspace("one"),
-    two = await manager.workspace("two");
+
+  const one = await manager.workspace("one");
+  const two = await manager.workspace("two");
   const reopened = expectOk(
     await AccountManager.open(directory, {
       offline: true,
@@ -505,6 +555,7 @@ test("Workspace selections isolate authentication and survive reopening", async 
       providers: [provider()],
     }),
   );
+
   cleanups.push(async () => {
     expectOk(await reopened.stop());
   });
@@ -520,7 +571,9 @@ test("Deleting active accounts and stale updates fails until explicit deselectio
   // Select the same account in another workspace.
   const { manager } = await fixture();
   const account = await add(manager, "shared");
+
   expectOk(await select(manager, "two", account.id));
+
   const catalog = await manager.catalog("one");
 
   // Attempt deletion while in use and an update with a stale revision.
@@ -567,6 +620,7 @@ test("Missing selected accounts do not silently fall back to default authenticat
       selections: { one: { fixture: "missing" } },
     }),
   );
+
   const reopened = expectOk(
     await AccountManager.open(directory, {
       offline: true,
@@ -593,6 +647,7 @@ test("OAuth URLs and input stay within login operations and cancellation adds no
     provider(async (interaction) => {
       interaction.notify({ type: "auth_url", url: "https://example.test/authorize?state=private" });
       await interaction.prompt({ type: "manual_code", message: "Paste code" });
+
       return {
         type: "oauth",
         access: "secret-access",
@@ -620,6 +675,7 @@ test("OAuth URLs and input stay within login operations and cancellation adds no
     flowId: view.id,
     revision: 0,
   });
+
   expectOk(await manager.handle({ type: "cancel", worktreeId: "one", flowId: view.id }));
 
   // URLs and codes never enter account lists or storage.
@@ -627,6 +683,7 @@ test("OAuth URLs and input stay within login operations and cancellation adds no
   expect(expectError(foreign).code).toBe("ACCOUNT_NOT_FOUND");
   expect((await manager.catalog("one")).accounts).toEqual([]);
   expect(JSON.stringify(await manager.catalog("one"))).not.toContain("state=private");
+
   const stored = await readFile(join(directory, "accounts.json"), "utf8");
   expect(stored).not.toContain("state=private");
   expect(stored).not.toContain("secret-access");
@@ -634,22 +691,25 @@ test("OAuth URLs and input stay within login operations and cancellation adds no
 
 test("Concurrent OAuth refreshes run once and persist to the original account after switching", async () => {
   // Delay A's refresh while both workspaces refresh and one switches to B.
-  const started = Promise.withResolvers<void>(),
-    release = Promise.withResolvers<void>();
-  let refreshed = 0,
-    next = "a";
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let refreshed = 0;
+  let next = "a";
   const oauth = provider(async () => ({
     type: "oauth",
     access: next,
     refresh: `refresh-${next}`,
     expires: 0,
   }));
+
   oauth.auth.oauth!.refresh = async (credential) => {
     refreshed++;
     started.resolve();
     await release.promise;
+
     return { ...credential, access: `${credential.access}-new`, expires: Date.now() + 3600000 };
   };
+
   const { manager, directory } = await fixture([oauth]);
   const a = await finish(
     manager,
@@ -665,7 +725,9 @@ test("Concurrent OAuth refreshes run once and persist to the original account af
       ),
     ),
   );
+
   next = "b";
+
   const b = await finish(
     manager,
     login(
@@ -682,21 +744,25 @@ test("Concurrent OAuth refreshes run once and persist to the original account af
   );
   expectOk(await select(manager, "one", a.id));
   expectOk(await select(manager, "two", a.id));
-  const one = await manager.workspace("one"),
-    two = await manager.workspace("two");
+
+  const one = await manager.workspace("one");
+  const two = await manager.workspace("two");
 
   // Switch only the first workspace to B while A's requests wait.
-  const first = one.runtime.getAuth("fixture"),
-    second = two.runtime.getAuth("fixture");
+  const first = one.runtime.getAuth("fixture");
+  const second = two.runtime.getAuth("fixture");
+
   await started.promise;
   expectOk(await select(manager, "one", b.id));
   release.resolve();
+
   const results = await Promise.all([first, second]);
 
   // Existing requests finish with A without overwriting B's tokens or selection.
   expect(refreshed).toBe(1);
   expect(results.map((result) => result?.auth.apiKey)).toEqual(["a-new", "a-new"]);
   expect((await manager.catalog("one")).selections.fixture).toBe(b.id);
+
   const stored = JSON.parse(await readFile(join(directory, "accounts.json"), "utf8"));
   expect(
     stored.accounts.find((account: { id: string }) => account.id === b.id).credential.access,
@@ -706,9 +772,11 @@ test("Concurrent OAuth refreshes run once and persist to the original account af
 test("Selection persistence failures preserve existing selection and authentication", async () => {
   // Block the destination with a directory to reproduce atomic rename failure.
   const { manager, directory } = await fixture();
-  const a = await add(manager, "key-a"),
-    b = await add(manager, "key-b");
+  const a = await add(manager, "key-a");
+  const b = await add(manager, "key-b");
+
   expectOk(await select(manager, "one", a.id));
+
   const target = join(directory, "accounts.json");
   await rm(target);
   await mkdir(target);
@@ -737,6 +805,7 @@ test("OAuth persistence failures retain rotated tokens in memory and return warn
     refresh: "rotated-refresh",
     expires: Date.now() + 3600000,
   });
+
   const { manager, directory } = await fixture([oauth]);
   const account = await finish(
     manager,
@@ -752,7 +821,9 @@ test("OAuth persistence failures retain rotated tokens in memory and return warn
       ),
     ),
   );
+
   expectOk(await select(manager, "one", account.id));
+
   const target = join(directory, "accounts.json");
   await rm(target);
   await mkdir(target);
@@ -762,8 +833,12 @@ test("OAuth persistence failures retain rotated tokens in memory and return warn
 
   expect(auth?.auth.apiKey).toBe("rotated");
   expect(manager.warning).toContain("saving failed");
+
   const listed = expectOk(await manager.handle({ type: "list", worktreeId: "one" }));
-  if (listed.kind !== "catalog") throw new Error("Expected catalog");
+  if (listed.kind !== "catalog") {
+    throw new Error("Expected catalog");
+  }
+
   expect(listed.warning).toContain("in memory");
   await rm(target, { recursive: true });
   expectOk(await select(manager, "one", account.id));
@@ -803,17 +878,20 @@ test("Concurrent login popups start only one operation and reject empty labels",
 
 test("OAuth installation identifiers remain stable across restarts", async () => {
   // Providers such as ChatGPT require a stable installation ID.
-  const ids: string[] = [],
-    oauth = provider(async () => ({
-      type: "oauth",
-      access: "token",
-      refresh: "refresh",
-      expires: Date.now() + 3600000,
-    }));
+  const ids: string[] = [];
+  const oauth = provider(async () => ({
+    type: "oauth",
+    access: "token",
+    refresh: "refresh",
+    expires: Date.now() + 3600000,
+  }));
+
   oauth.auth.oauth!.login = async (_interaction, options) => {
     ids.push(options!.getDeviceId!());
+
     return { type: "oauth", access: "token", refresh: "refresh", expires: Date.now() + 3600000 };
   };
+
   const { manager, directory } = await fixture([oauth]);
 
   // Reopen the store and recreate SDK login options.
@@ -831,6 +909,7 @@ test("OAuth installation identifiers remain stable across restarts", async () =>
       ),
     ),
   );
+
   const reopened = expectOk(
     await AccountManager.open(directory, {
       offline: true,
@@ -870,10 +949,13 @@ test("Pi default OAuth refreshes once on authentication requests, never during l
     refresh: "unused",
     expires: 0,
   }));
+
   oauth.auth.oauth!.refresh = async (credential) => {
     refreshed++;
+
     return { ...credential, access: "pi-new", expires: Date.now() + 3600000 };
   };
+
   const { manager, defaults } = await fixture([oauth]);
   await defaults.modify("fixture", async () => ({
     type: "oauth",
@@ -889,9 +971,12 @@ test("Pi default OAuth refreshes once on authentication requests, never during l
     name: "Fixture",
     type: "oauth",
   });
-  const one = await manager.workspace("one"),
-    two = await manager.workspace("two");
+
+  const one = await manager.workspace("one");
+  const two = await manager.workspace("two");
+
   expect(refreshed).toBe(0);
+
   const auth = await Promise.all([one.runtime.getAuth("fixture"), two.runtime.getAuth("fixture")]);
 
   expect(refreshed).toBe(1);
@@ -911,6 +996,7 @@ test("OAuth refresh errors never expose SDK tokens at the model boundary", async
   oauth.auth.oauth!.refresh = async () => {
     throw new Error("Remote failure: private-access private-refresh");
   };
+
   const { manager } = await fixture([oauth]);
   const account = await finish(
     manager,
@@ -926,6 +1012,7 @@ test("OAuth refresh errors never expose SDK tokens at the model boundary", async
       ),
     ),
   );
+
   expectOk(await select(manager, "one", account.id));
 
   // Remove secrets from top-level authentication errors shown in UI and conversations.
@@ -934,7 +1021,10 @@ test("OAuth refresh errors never expose SDK tokens at the model boundary", async
   try {
     await view.runtime.getAuth("fixture");
   } catch (error) {
-    if (!(error instanceof Error)) throw error;
+    if (!(error instanceof Error)) {
+      throw error;
+    }
+
     message = error.message;
   }
 
@@ -967,6 +1057,7 @@ test("Duplicate remote OAuth accounts neither save under new names nor overwrite
       ),
     ),
   );
+
   expectOk(await select(manager, "one", account.id));
 
   let duplicate = login(
@@ -980,7 +1071,7 @@ test("Duplicate remote OAuth accounts neither save under new names nor overwrite
       }),
     ),
   );
-  while (duplicate.status === "pending")
+  while (duplicate.status === "pending") {
     duplicate = login(
       expectOk(
         await manager.handle({
@@ -991,6 +1082,7 @@ test("Duplicate remote OAuth accounts neither save under new names nor overwrite
         }),
       ),
     );
+  }
 
   expect(duplicate.status).toBe("error");
   expect(duplicate.error).toContain("already saved");
@@ -1002,6 +1094,7 @@ test("Personalized model lists never reuse another account's persisted cache", a
   // Add account-scoped storage around the SDK's provider-scoped cache.
   const dynamic = provider();
   let models: readonly Model<Api>[] = [];
+
   dynamic.getModels = () => models;
   dynamic.getAllModels = () => models;
   dynamic.refreshModels = async (context) => {
@@ -1010,7 +1103,10 @@ test("Personalized model lists never reuse another account's persisted cache", a
         models = (context.stored?.models ?? []).filter((model) => isModelType(model, "chat"));
       },
     });
-    if (!context.allowNetwork) return;
+    if (!context.allowNetwork) {
+      return;
+    }
+
     const key = context.credential?.type === "api_key" ? context.credential.key : "missing";
     const model: Model<"openai-completions"> = {
       id: `model-${key}`,
@@ -1024,6 +1120,7 @@ test("Personalized model lists never reuse another account's persisted cache", a
       maxTokens: 1024,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     };
+
     await context.publish({
       persist: { models: [model] },
       update: () => {
@@ -1031,15 +1128,17 @@ test("Personalized model lists never reuse another account's persisted cache", a
       },
     });
   };
+
   const { manager } = await fixture([dynamic]);
-  const a = await add(manager, "A"),
-    b = await add(manager, "B");
+  const a = await add(manager, "A");
+  const b = await add(manager, "B");
 
   // Save A's list, switch to B, then return to A.
   expectOk(await select(manager, "one", a.id));
   await manager.request("one", (runtime) =>
     runtime.refresh({ providers: ["fixture"], allowNetwork: true }),
   );
+
   const view = await manager.workspace("one");
   expect(view.runtime.getModels("fixture").map((model) => model.id)).toEqual(["model-A"]);
   expectOk(await select(manager, "one", b.id));
@@ -1078,12 +1177,14 @@ test("OAuth credentials with empty refresh tokens preserve the SDK format", asyn
       ),
     ),
   );
+
   expectOk(await select(manager, "one", account.id));
 
   expect(account.type).toBe("oauth");
   expect((await (await manager.workspace("one")).runtime.getAuth("fixture"))?.auth.apiKey).toBe(
     "provider-access",
   );
+
   const stored = JSON.parse(await readFile(join(directory, "accounts.json"), "utf8"));
   expect(stored.accounts[0].credential).toMatchObject({ type: "oauth", refresh: "" });
 });

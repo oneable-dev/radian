@@ -63,17 +63,21 @@ export type AgentActions = {
   onComplete?: CompletionProvider;
   onImage?: TranscriptImageProvider;
 };
+
 type Button = (label: string, activate: () => void, actionLabel: string) => BoxRenderable;
+
 type PanelOptions = Pick<
   TranscriptOptions,
   "initialViews" | "saveView" | "keyHint" | "initialPosition" | "emptyLogo"
 > & { readOnly?: boolean; idPrefix?: string; snapshotTime?: () => number | undefined };
+
 type PromptHistory = {
   entries: { draft: PromptDraft; bytes: number }[];
   bytes: number;
   selected: number | null;
   draft: PromptDraft | null;
 };
+
 const maximumPromptHistoryEntries = 100;
 const maximumPromptHistoryBytes = 4 * 1024 * 1024;
 
@@ -124,6 +128,7 @@ export class AgentPanel {
   ) {
     const theme = uiTheme(renderer);
     const id = (name: string) => `${transcriptOptions.idPrefix ?? ""}${name}`;
+
     this.root = new BoxRenderable(renderer, {
       id: id("agent-view"),
       onSizeChange: () => this.resizeComposer(),
@@ -146,15 +151,19 @@ export class AgentPanel {
       ...(transcriptOptions.idPrefix ? { idPrefix: transcriptOptions.idPrefix } : {}),
       spinnerStyle: (id) => sessionSpinnerStyle(actions.getSessionDetails?.(id)),
       select: (id) => {
-        if (this.worktree && !transcriptOptions.readOnly)
+        if (this.worktree && !transcriptOptions.readOnly) {
           actions.onSelectSession?.(this.worktree.id, id);
+        }
       },
       create: () => {
-        if (this.worktree && !transcriptOptions.readOnly) actions.onNewSession(this.worktree.id);
+        if (this.worktree && !transcriptOptions.readOnly) {
+          actions.onNewSession(this.worktree.id);
+        }
       },
       close: (id) => {
-        if (this.worktree && !transcriptOptions.readOnly)
+        if (this.worktree && !transcriptOptions.readOnly) {
           actions.onCloseSession?.(this.worktree.id, id);
+        }
       },
       keyHint: (command, context) => transcriptOptions.keyHint?.(command, context) ?? "",
     });
@@ -192,11 +201,13 @@ export class AgentPanel {
       }
     });
     this.runtimePanel.add(this.bottomButton);
+
     const interruptKey = () => transcriptOptions.keyHint?.("agent.interrupt", "prompt") ?? "<Esc>";
     this.runStatus = new RunStatus(renderer, interruptKey, () =>
       this.transcript.prepareLayoutChange(),
     );
     this.pendingMessages = new PendingMessages(renderer, interruptKey);
+
     const transcriptArea = (this.transcriptArea = new BoxRenderable(renderer, {
       id: id("agent-transcript-area"),
       width: "100%",
@@ -218,13 +229,16 @@ export class AgentPanel {
         readOnly: transcriptOptions.readOnly ?? false,
       },
     );
-    for (const [id, draft] of Object.entries(actions.initialDrafts ?? {}))
+    for (const [id, draft] of Object.entries(actions.initialDrafts ?? {})) {
       this.drafts.set(id, draft);
+    }
     for (const [id, draft] of Object.entries(actions.initialInputDrafts ?? {})) {
       this.inputDrafts.set(id, draft);
       this.drafts.set(id, expandPromptDraft(draft, false).text);
     }
+
     this.prompt.on(InputRenderableEvents.INPUT, this.handleDraftInput);
+
     const composer = (this.composer = this.prompt.field);
     this.sessionStatus = new SessionStatus(renderer);
     this.sessionStatus.root.id = id("session-status");
@@ -239,6 +253,7 @@ export class AgentPanel {
       },
       () => this.completionRows(),
     );
+
     const statusRow = (this.statusRow = new BoxRenderable(renderer, {
       id: id("transcript-status-row"),
       width: "100%",
@@ -253,6 +268,7 @@ export class AgentPanel {
     this.runStatus.root.flexShrink = 0;
     statusRow.add(this.runStatus.root);
     statusRow.add(this.children.root);
+
     // Keep completion and telemetry attached to the composer; only the three outer regions use gap.
     const inputArea = new BoxRenderable(renderer, {
       id: id("agent-input-area"),
@@ -284,25 +300,42 @@ export class AgentPanel {
 
   get promptDrafts(): Record<string, string> {
     const drafts = Object.fromEntries(this.drafts);
-    if (!this.disposed && !this.prompt.isDestroyed && this.promptSessionId && this.prompt.value)
+    if (!this.disposed && !this.prompt.isDestroyed && this.promptSessionId && this.prompt.value) {
       drafts[this.promptSessionId] = this.prompt.legacyText;
+    }
+
     return drafts;
   }
+
   get promptInputDrafts(): Record<string, PromptDraft> {
     const drafts = structuredClone(Object.fromEntries(this.inputDrafts));
-    if (!this.disposed && !this.prompt.isDestroyed && this.promptSessionId && this.prompt.value)
+    if (!this.disposed && !this.prompt.isDestroyed && this.promptSessionId && this.prompt.value) {
       drafts[this.promptSessionId] = this.prompt.draft;
+    }
+
     return drafts;
   }
+
   promptDraftFor(id: string): PromptDraft | string | undefined {
-    if (id === this.promptSessionId && !this.disposed) return this.prompt.draft;
+    if (id === this.promptSessionId && !this.disposed) {
+      return this.prompt.draft;
+    }
+
     const draft = this.inputDrafts.get(id);
+
     return draft ? structuredClone(draft) : this.drafts.get(id);
   }
+
   showPreviewDraft(draft: PromptDraft | string | undefined): void {
-    if (!this.transcriptOptions.readOnly || this.disposed) return;
+    if (!this.transcriptOptions.readOnly || this.disposed) {
+      return;
+    }
+
     const signature = JSON.stringify([this.promptSessionId, draft ?? ""]);
-    if (signature === this.previewDraftSignature) return;
+    if (signature === this.previewDraftSignature) {
+      return;
+    }
+
     this.previewDraftSignature = signature;
     this.syncingDraft = true;
     try {
@@ -315,26 +348,37 @@ export class AgentPanel {
             { level: "warning" },
           );
         }
-      } else this.prompt.value = draft ?? "";
+      } else {
+        this.prompt.value = draft ?? "";
+      }
     } finally {
       this.syncingDraft = false;
     }
+
     this.resizeComposer();
   }
+
   get active(): boolean {
     return this.runtimePanel.visible;
   }
+
   get resultVisible(): boolean {
     return this.active && this.transcript.latestVisible;
   }
+
   focusLatest(target: "prompt" | "transcript" = "transcript"): void {
     this.transcript.followLatest();
-    if (target === "prompt") this.prompt.focus();
-    else this.focusTranscript();
+    if (target === "prompt") {
+      this.prompt.focus();
+    } else {
+      this.focusTranscript();
+    }
   }
+
   get sessionId(): string | null {
     return this.promptSessionId;
   }
+
   get canSubmit(): boolean {
     return (
       !this.transcriptOptions.readOnly &&
@@ -346,10 +390,12 @@ export class AgentPanel {
       )
     );
   }
+
   get canInterrupt(): boolean {
     const details = this.promptSessionId
       ? this.actions.getSessionDetails?.(this.promptSessionId)
       : null;
+
     return (
       !this.transcriptOptions.readOnly &&
       this.active &&
@@ -359,59 +405,84 @@ export class AgentPanel {
         (!!this.promptSessionId && this.submitting.has(this.promptSessionId)))
     );
   }
+
   get working(): boolean {
     return (
       !!this.promptSessionId &&
       this.actions.getSessionDetails?.(this.promptSessionId)?.status === "working"
     );
   }
+
   get transcriptShortcuts(): readonly FooterShortcut[] {
     return this.transcript.shortcuts;
   }
+
   get transcriptStatus(): string {
     return this.transcript.footerStatus;
   }
+
   get completionOpen(): boolean {
     return this.completion.engaged;
   }
+
   sessionAvailable(command: CommandId): boolean {
     return (
       !this.transcriptOptions.readOnly && this.root.visible && this.sessions.available(command)
     );
   }
+
   sessionCommand(command: CommandId): void {
-    if (!this.transcriptOptions.readOnly) this.sessions.command(command);
+    if (!this.transcriptOptions.readOnly) {
+      this.sessions.command(command);
+    }
   }
+
   completionAvailable(command: CommandId): boolean {
     return !this.transcriptOptions.readOnly && this.active && this.completion.available(command);
   }
+
   completionCommand(command: CommandId): void {
-    if (!this.transcriptOptions.readOnly) this.completion.command(command);
+    if (!this.transcriptOptions.readOnly) {
+      this.completion.command(command);
+    }
   }
+
   transcriptContext(): KeyContext | null {
     return this.transcript.keyContext();
   }
+
   focusTranscript(): void {
     this.completion.hide();
-    if (this.transcriptScroll.visible) this.transcript.focus();
+    if (this.transcriptScroll.visible) {
+      this.transcript.focus();
+    }
   }
+
   get transcriptFocused(): boolean {
     return this.transcript.focused;
   }
+
   transcriptAvailable(command: CommandId): boolean {
     return this.active && this.transcript.available(command);
   }
+
   transcriptCommand(command: CommandId, key?: KeyEvent): void {
     this.transcript.command(command, key);
   }
+
   transcriptCaptureKey(key: KeyEvent, keymap: Keymap): boolean {
     return this.transcript.captureKey(key, keymap);
   }
+
   cancelTranscriptPending(): void {
     this.transcript.cancelPending();
   }
+
   get focusTargets(): Renderable[] {
-    if (!this.root.visible || !this.worktree) return [];
+    if (!this.root.visible || !this.worktree) {
+      return [];
+    }
+
     return this.active
       ? [this.prompt, ...(this.transcriptScroll.visible ? [this.transcript.focusTarget] : [])]
       : [this.root];
@@ -423,18 +494,24 @@ export class AgentPanel {
     openIds: ReadonlySet<string>,
     visible: boolean,
   ): void {
-    if (this.disposed || this.root.isDestroyed) return;
+    if (this.disposed || this.root.isDestroyed) {
+      return;
+    }
+
     this.rememberScroll();
+
     const emptyFocused = this.root.focused;
     this.root.visible = visible;
     this.worktree = worktree;
     this.sessions.update(worktree?.id ?? null, worktree?.sessions ?? [], selectedId, visible);
+
     const session = worktree?.sessions.find((item) => item.id === selectedId);
     const details = session ? this.actions.getSessionDetails?.(session.id) : null;
     const creationKey =
       worktree && !session && !this.transcriptOptions.readOnly
         ? this.sessions.creationShortcut
         : "";
+
     this.emptyState.update({
       icon: worktree ? icons.robot : icons.folder,
       title: session?.name ?? (worktree ? "No AI sessions" : "No workspace available"),
@@ -445,25 +522,34 @@ export class AgentPanel {
         : "Open radian inside a Git repository.",
       ...(creationKey ? { action: { key: creationKey, label: "New session" } } : {}),
     });
+
     const sessionId = session?.id ?? null;
     const previousConversation = sessionId ? this.conversations.get(sessionId) : undefined;
     const replaced =
       !!details?.conversationId &&
       previousConversation !== undefined &&
       previousConversation !== details.conversationId;
-    if (sessionId && details?.conversationId)
+    if (sessionId && details?.conversationId) {
       this.conversations.set(sessionId, details.conversationId);
+    }
     if (replaced) {
       this.completion.hide();
-      if (sessionId) this.promptHistories.delete(sessionId);
+      if (sessionId) {
+        this.promptHistories.delete(sessionId);
+      }
     }
+
     const switchedSession = sessionId !== this.promptSessionId;
     if (switchedSession) {
       this.completion.hide();
-      if (this.promptSessionId) this.saveDraft();
+      if (this.promptSessionId) {
+        this.saveDraft();
+      }
+
       this.promptSessionId = sessionId;
       this.prompt.setWorkingDirectory(worktree?.path ?? process.cwd());
       this.syncingDraft = true;
+
       const draft = sessionId ? this.inputDrafts.get(sessionId) : undefined;
       if (draft) {
         const restored = this.prompt.restore(draft);
@@ -474,19 +560,35 @@ export class AgentPanel {
             { level: "warning" },
           );
         }
-      } else this.prompt.value = sessionId ? (this.drafts.get(sessionId) ?? "") : "";
+      } else {
+        this.prompt.value = sessionId ? (this.drafts.get(sessionId) ?? "") : "";
+      }
+
       this.syncingDraft = false;
     }
-    for (const id of this.drafts.keys()) if (!openIds.has(id)) this.drafts.delete(id);
-    for (const id of this.inputDrafts.keys()) if (!openIds.has(id)) this.inputDrafts.delete(id);
-    for (const id of this.promptHistories.keys())
-      if (!openIds.has(id)) this.promptHistories.delete(id);
+    for (const id of this.drafts.keys()) {
+      if (!openIds.has(id)) {
+        this.drafts.delete(id);
+      }
+    }
+    for (const id of this.inputDrafts.keys()) {
+      if (!openIds.has(id)) {
+        this.inputDrafts.delete(id);
+      }
+    }
+    for (const id of this.promptHistories.keys()) {
+      if (!openIds.has(id)) {
+        this.promptHistories.delete(id);
+      }
+    }
+
     this.runtimePanel.visible = Boolean(
       visible && session && (this.actions.onPrompt || this.transcriptOptions.readOnly),
     );
     // Only empty content needs a fallback target; active pane ancestors must not intercept input clicks.
     this.root.focusable = visible && !!worktree && !this.active;
     this.completion.prepare(sessionId, worktree?.path, openIds);
+
     const capturedAt = this.transcriptOptions.snapshotTime?.();
     this.runStatus.update(sessionId, details, this.active, capturedAt === undefined);
     this.pending = details?.pendingMessages ?? [];
@@ -496,8 +598,10 @@ export class AgentPanel {
     this.root.gap = 0;
     this.root.alignItems = "stretch";
     this.root.justifyContent = "flex-start";
+
     const output = details?.output ?? "";
     const transcriptFocused = this.transcript.focused;
+
     this.transcript.update(
       sessionId,
       details?.sections,
@@ -506,17 +610,27 @@ export class AgentPanel {
       details?.conversationId,
     );
     this.transcript.retainSessions(openIds);
-    if (this.active && (emptyFocused || (replaced && transcriptFocused))) this.prompt.focus();
+    if (this.active && (emptyFocused || (replaced && transcriptFocused))) {
+      this.prompt.focus();
+    }
     if (!this.active && (this.prompt.focused || transcriptFocused)) {
-      if (visible && worktree) this.root.focus();
-      else this.focusSidebar();
+      if (visible && worktree) {
+        this.root.focus();
+      } else {
+        this.focusSidebar();
+      }
     }
     if (!this.active) {
       this.completion.hide();
       this.prompt.cancelPaste();
-    } else this.completion.refresh();
+    } else {
+      this.completion.refresh();
+    }
+
     this.resizeComposer();
-    if (switchedSession) this.publishDrafts();
+    if (switchedSession) {
+      this.publishDrafts();
+    }
   }
 
   updateMcp(status: McpStatus | undefined): void {
@@ -524,7 +638,10 @@ export class AgentPanel {
   }
 
   private resize = (): void => {
-    if (this.disposed || this.root.isDestroyed) return;
+    if (this.disposed || this.root.isDestroyed) {
+      return;
+    }
+
     const { horizontal } = panelSpacing(this.renderer);
     this.runtimePanel.marginTop = 0;
     // Bleed the surface through the pane inset, keeping its text aligned with the other rows.
@@ -533,7 +650,10 @@ export class AgentPanel {
   };
 
   private resizeComposer = (): void => {
-    if (this.disposed || !this.composer || !this.statusRow || this.prompt.isDestroyed) return;
+    if (this.disposed || !this.composer || !this.statusRow || this.prompt.isDestroyed) {
+      return;
+    }
+
     const requested = this.prompt.requestedRows;
     const menuRowsBeforeLayout = this.completion?.open ? this.completion.root.height : 0;
     const minimumControls =
@@ -542,6 +662,7 @@ export class AgentPanel {
       menuRowsBeforeLayout +
       2;
     const statusBudget = Math.max(0, this.root.height - minimumControls);
+
     this.runStatus.fitRows(Math.max(1, statusBudget));
     this.runStatus.root.visible = this.runStatus.hasContent;
     this.children.fitRows(
@@ -551,6 +672,7 @@ export class AgentPanel {
         Math.max(0, statusBudget - this.runStatus.rows),
       ),
     );
+
     const showStatus = this.runStatus.hasContent || this.children.hasContent;
     const statusRows = this.runStatus.rows + this.children.rows;
     const controls =
@@ -559,11 +681,13 @@ export class AgentPanel {
       statusRows +
       1 +
       menuRowsBeforeLayout;
+
     this.pendingMessages.update(
       this.pending ?? [],
       this.active,
       Math.min(Math.floor(this.root.height / 3), Math.max(0, this.root.height - controls)),
     );
+
     const signature = JSON.stringify([
       this.pendingMessages.rows,
       this.root.height,
@@ -581,8 +705,12 @@ export class AgentPanel {
       this.completion?.open,
       this.completion?.root.height,
     ]);
-    if (signature === this.composerLayout) return;
+    if (signature === this.composerLayout) {
+      return;
+    }
+
     this.composerLayout = signature;
+
     const menuRows = this.completion?.open ? this.completion.root.height : 0;
     const fixedRows =
       (this.sessions.root.visible ? 1 : 0) +
@@ -600,6 +728,7 @@ export class AgentPanel {
       this.layoutGap = gap;
       this.runtimePanel.gap = gap;
     }
+
     const reserved = this.reservedRows(true) + menuRows;
     // The panel allocates space; the shared input alone fits its editor and decoration.
     const available = Math.max(1, this.root.height - reserved - 1);
@@ -615,11 +744,16 @@ export class AgentPanel {
     if (this.composer.height !== height || this.prompt.height !== lines) {
       this.transcript.prepareLayoutChange();
     }
+
     this.prompt.fit(available);
     this.completion?.reflow();
   };
+
   private layoutBottomButton = (): void => {
-    if (this.disposed || this.root.isDestroyed) return;
+    if (this.disposed || this.root.isDestroyed) {
+      return;
+    }
+
     const viewport = this.transcriptScroll.viewport;
     // Use a blank boundary or composer inset, never either occupied row of Working.
     const edge = viewport.y + viewport.height;
@@ -644,10 +778,13 @@ export class AgentPanel {
         "transcript.latest",
         this.transcript.keyContext() ?? "transcript",
       ) ?? "";
+
     this.bottomButton.update(this.active && this.transcript.canFollowLatest, hint, space);
   };
+
   private reservedRows(transcript = this.transcriptArea.visible): number {
     const boundaries = (transcript ? 1 : 0) + (this.statusRows ? 1 : 0);
+
     return (
       (this.sessions.root.visible ? 1 : 0) +
       this.statusRows +
@@ -656,11 +793,15 @@ export class AgentPanel {
       this.layoutGap * boundaries
     );
   }
+
   private completionRows(): number {
     return Math.max(1, this.root.height - this.reservedRows() - this.composer.height);
   }
+
   private saveDraft(): void {
-    if (!this.promptSessionId) return;
+    if (!this.promptSessionId) {
+      return;
+    }
     if (this.prompt.value) {
       this.drafts.set(this.promptSessionId, this.prompt.legacyText);
       this.inputDrafts.set(this.promptSessionId, this.prompt.draft);
@@ -669,15 +810,24 @@ export class AgentPanel {
       this.inputDrafts.delete(this.promptSessionId);
     }
   }
+
   private publishDrafts(): void {
-    if (this.transcriptOptions.readOnly) return;
+    if (this.transcriptOptions.readOnly) {
+      return;
+    }
+
     this.actions.onDraftChange?.(this.promptDrafts, this.promptInputDrafts);
   }
+
   rememberScroll = (): void => {
     this.transcript.rememberScroll();
   };
+
   private handleDraftInput = (): void => {
-    if (this.syncingDraft || !this.promptSessionId) return;
+    if (this.syncingDraft || !this.promptSessionId) {
+      return;
+    }
+
     this.saveDraft();
     this.publishDrafts();
     this.resizeComposer();
@@ -691,16 +841,20 @@ export class AgentPanel {
       history = { entries: [], bytes: 0, selected: null, draft: null };
       this.promptHistories.set(id, history);
     }
+
     return history;
   }
+
   private rememberPrompt(history: PromptHistory, draft: PromptDraft): void {
     const previous = history.entries.at(-1)?.draft;
     // Cursor movement alone does not make two consecutive accepted inputs distinct.
     if (
       previous?.value === draft.value &&
       JSON.stringify(previous.tokens) === JSON.stringify(draft.tokens)
-    )
+    ) {
       return;
+    }
+
     const entry = {
       draft: structuredClone(draft),
       bytes: Buffer.byteLength(JSON.stringify(draft)),
@@ -714,9 +868,12 @@ export class AgentPanel {
         history.bytes > maximumPromptHistoryBytes)
     ) {
       history.bytes -= history.entries.shift()!.bytes;
-      if (history.selected !== null) history.selected = Math.max(0, history.selected - 1);
+      if (history.selected !== null) {
+        history.selected = Math.max(0, history.selected - 1);
+      }
     }
   }
+
   get promptHistoryAvailable(): boolean {
     return (
       !this.transcriptOptions.readOnly &&
@@ -728,13 +885,20 @@ export class AgentPanel {
       !this.submitting.has(this.promptSessionId)
     );
   }
+
   movePromptHistory(direction: -1 | 1): void {
     const id = this.promptSessionId;
-    if (!id || !this.promptHistoryAvailable) return;
-    const history = this.promptHistoryFor(id),
-      current = history.selected ?? history.entries.length;
+    if (!id || !this.promptHistoryAvailable) {
+      return;
+    }
+
+    const history = this.promptHistoryFor(id);
+    const current = history.selected ?? history.entries.length;
     const next = Math.max(0, Math.min(history.entries.length, current + direction));
-    if (next === current) return;
+    if (next === current) {
+      return;
+    }
+
     const original = history.draft ?? this.prompt.draft;
     const target = next === history.entries.length ? original : history.entries[next]!.draft;
     const restored = this.prompt.restore(target);
@@ -742,17 +906,21 @@ export class AgentPanel {
       this.notice(`[${restored.error.code}] Input history could not be restored; draft retained.`, {
         level: "error",
       });
+
       return;
     }
+
     history.selected = next === history.entries.length ? null : next;
     history.draft = history.selected === null ? null : original;
     // Recalling a slash/file/skill input is not a new completion interaction. Editing it can reopen suggestions.
     this.completion.command("completion.dismiss");
     this.changed();
   }
+
   clearPrompt(): void {
     this.completion.hide();
     this.prompt.clear();
+
     const history = this.promptSessionId
       ? this.promptHistories.get(this.promptSessionId)
       : undefined;
@@ -764,28 +932,40 @@ export class AgentPanel {
 
   async interrupt(): Promise<void> {
     const id = this.promptSessionId;
-    if (!id || !this.canInterrupt || !this.actions.onInterrupt) return;
+    if (!id || !this.canInterrupt || !this.actions.onInterrupt) {
+      return;
+    }
+
     const result = await this.actions.onInterrupt(id);
-    if (!result.ok)
+    if (!result.ok) {
       this.notice(`[${result.error.code}] ${result.error.message}`, { level: "error" });
+    }
   }
 
   async submitPrompt(): Promise<void> {
     const id = this.promptSessionId;
-    if (!id || !this.canSubmit || !this.actions.onPrompt) return;
+    if (!id || !this.canSubmit || !this.actions.onPrompt) {
+      return;
+    }
+
     this.submitting.add(id);
     this.changed();
     try {
       const prepared = this.completion.prepareCommandSubmission();
       const ready = typeof prepared === "boolean" ? prepared : await prepared;
-      if (!ready) return;
-      if (this.disposed || this.root.isDestroyed || this.promptSessionId !== id || !this.active)
+      if (!ready) {
         return;
+      }
+      if (this.disposed || this.root.isDestroyed || this.promptSessionId !== id || !this.active) {
+        return;
+      }
+
       this.completion.command("completion.dismiss");
       this.saveDraft();
-      const draft = this.prompt.draft,
-        submission = this.prompt.submission,
-        inputHistory = this.promptHistoryFor(id);
+
+      const draft = this.prompt.draft;
+      const submission = this.prompt.submission;
+      const inputHistory = this.promptHistoryFor(id);
       const fingerprint = (value: PromptDraft | undefined) =>
         value ? JSON.stringify([value.value, value.tokens]) : "";
       const sent = fingerprint(draft);
@@ -794,34 +974,43 @@ export class AgentPanel {
         this.notice(`[${control.error.code}] ${control.error.message} · prompt retained`, {
           level: "error",
         });
+
         return;
       }
+
       const accounts = parseAccountsCommand(submission.text);
       if (!accounts.ok) {
         this.notice(`[${accounts.error.code}] ${accounts.error.message} · prompt retained`, {
           level: "error",
         });
+
         return;
       }
+
       const model = parseModelCommand(submission.text);
       if (!model.ok) {
         this.notice(`[${model.error.code}] ${model.error.message} · prompt retained`, {
           level: "error",
         });
+
         return;
       }
+
       const history = parseHistoryCommand(submission.text);
       if (!history.ok) {
         this.notice(`[${history.error.code}] ${history.error.message} · prompt retained`, {
           level: "error",
         });
+
         return;
       }
+
       const dashboard = parseDashboardCommand(submission.text);
       if (!dashboard.ok) {
         this.notice(`[${dashboard.error.code}] ${dashboard.error.message} · prompt retained`, {
           level: "error",
         });
+
         return;
       }
       // Non-conversation actions must not reset the outgoing conversation's reading position.
@@ -833,8 +1022,10 @@ export class AgentPanel {
         control.value?.action !== "new-tab" &&
         control.value?.action !== "exit" &&
         control.value?.action !== "reload"
-      )
+      ) {
         this.transcript.followLatest();
+      }
+
       let result: Result<void, ExpectedError>;
       if (accounts.value) {
         result = submission.images.length
@@ -846,28 +1037,28 @@ export class AgentPanel {
               ),
             ));
       } else if (dashboard.value) {
-        if (submission.images.length)
+        if (submission.images.length) {
           result = err(
             new InputError("/dashboard does not accept image attachments. Input was retained."),
           );
-        else if (!this.actions.onShowDashboard)
+        } else if (!this.actions.onShowDashboard) {
           result = err(
             new CapabilityError("Dashboard is unavailable in this view. No prompt was sent."),
           );
-        else {
+        } else {
           this.actions.onShowDashboard();
           result = ok(undefined);
         }
       } else if (history.value) {
-        if (submission.images.length)
+        if (submission.images.length) {
           result = err(
             new InputError("/history does not accept image attachments. Input was retained."),
           );
-        else if (!this.actions.onHistory)
+        } else if (!this.actions.onHistory) {
           result = err(
             new CapabilityError("History is unavailable in this view. No prompt was sent."),
           );
-        else {
+        } else {
           this.actions.onHistory();
           result = ok(undefined);
         }
@@ -880,15 +1071,19 @@ export class AgentPanel {
                 "Model selection is unavailable in this view. No prompt was sent.",
               ),
             ));
-      } else result = await this.actions.onPrompt(id, submission.text, submission.images);
+      } else {
+        result = await this.actions.onPrompt(id, submission.text, submission.images);
+      }
       if (!result.ok) {
         this.notice(`[${result.error.code}] ${result.error.message} · prompt retained`, {
           level: "error",
         });
+
         return;
       }
-      if (!this.disposed && this.promptHistories.get(id) === inputHistory)
+      if (!this.disposed && this.promptHistories.get(id) === inputHistory) {
         this.rememberPrompt(inputHistory, draft);
+      }
       if (fingerprint(this.inputDrafts.get(id)) === sent) {
         inputHistory.selected = null;
         inputHistory.draft = null;
@@ -904,6 +1099,7 @@ export class AgentPanel {
           this.prompt.value = "";
           this.syncingDraft = false;
         }
+
         this.publishDrafts();
         this.resizeComposer();
       }
@@ -914,7 +1110,10 @@ export class AgentPanel {
   }
 
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.rememberScroll();
     this.disposed = true;
     this.renderer.off("resize", this.resize);

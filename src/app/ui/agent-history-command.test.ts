@@ -12,10 +12,10 @@ import { Workbench } from "./workbench.ts";
 async function mount(completion = false) {
   const clock = new ManualClock();
   const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    sent: string[] = [],
-    lookups: string[] = [],
-    interrupted: string[] = [];
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const sent: string[] = [];
+  const lookups: string[] = [];
+  const interrupted: string[] = [];
   const state = {
     conversationId: "original",
     status: "working" as const,
@@ -36,15 +36,18 @@ async function mount(completion = false) {
     onCloseSession() {},
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     getSessionDetails: () => state,
     onListHistory: async (id) => {
       lookups.push(id);
+
       return ok([]);
     },
     onInterrupt: async (id) => {
       interrupted.push(id);
+
       return ok(undefined);
     },
     ...(completion
@@ -55,18 +58,26 @@ async function mount(completion = false) {
       : {}),
   });
   const render = async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
+    for (let i = 0; i < 8; i++) {
+      await Promise.resolve();
+    }
+
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
-  const input = app.renderer.root.findDescendantById("session-prompt"),
-    scroll = app.renderer.root.findDescendantById("session-transcript");
-  if (!(input instanceof PromptInput) || !(scroll instanceof ScrollBoxRenderable))
+
+  const input = app.renderer.root.findDescendantById("session-prompt");
+  const scroll = app.renderer.root.findDescendantById("session-transcript");
+  if (!(input instanceof PromptInput) || !(scroll instanceof ScrollBoxRenderable)) {
     throw new Error("Missing prompt/transcript");
+  }
+
   const popup = app.renderer.root.findDescendantById("session-history")!;
   input.focus();
   await render();
+
   return {
     ...app,
     view,
@@ -100,8 +111,9 @@ test("history opens only a popup while preserving active conversations and readi
   try {
     app.scroll.scrollTo(10);
     await app.render();
-    const top = app.scroll.scrollTop,
-      navigation = structuredClone(app.view.workViewPreferences.agentViews?.a1);
+
+    const top = app.scroll.scrollTop;
+    const navigation = structuredClone(app.view.workViewPreferences.agentViews?.a1);
 
     // Submit the command rather than using a shortcut, then close the popup.
     await app.submit("/history");
@@ -171,6 +183,7 @@ test("history with images preserves attachments and commands without opening pop
   try {
     app.input.value = "/history ";
     app.input.attachFile("/tmp/history-fixture.png");
+
     const draft = app.input.draft;
 
     // Submit a history command with attachments.

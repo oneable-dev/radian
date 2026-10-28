@@ -20,7 +20,10 @@ export function completionGit(
   input?: string,
   allowNoMatch = false,
 ): Promise<Result<string, ExpectedError>> {
-  if (signal?.aborted) return Promise.resolve(err(new CancelledError()));
+  if (signal?.aborted) {
+    return Promise.resolve(err(new CancelledError()));
+  }
+
   return new Promise((resolve, reject) => {
     const child = execFile(
       "git",
@@ -43,6 +46,7 @@ export function completionGit(
       (error, stdout) => {
         if (signal?.aborted) {
           resolve(err(new CancelledError()));
+
           return;
         }
         if (error && !(allowNoMatch && error.code === 1)) {
@@ -60,20 +64,29 @@ export function completionGit(
                 ),
               ),
             );
+
             return;
           }
+
           const expected = knownError(error);
-          if (expected) resolve(err(expected));
-          else reject(error);
+          if (expected) {
+            resolve(err(expected));
+          } else {
+            reject(error);
+          }
+
           return;
         }
+
         resolve(ok(stdout));
       },
     );
     if (input !== undefined) {
       child.stdin?.on("error", (error: unknown) => {
         // Git's exit callback owns a closed stdin; unrelated failures keep their original stack.
-        if (!(error instanceof Error && "code" in error && error.code === "EPIPE")) reject(error);
+        if (!(error instanceof Error && "code" in error && error.code === "EPIPE")) {
+          reject(error);
+        }
       });
       child.stdin?.end(input);
     }
@@ -89,6 +102,7 @@ async function fileNames(
     ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
     signal,
   );
+
   return result.ok ? ok([...new Set(result.value.split("\0").filter(Boolean))]) : result;
 }
 
@@ -97,10 +111,14 @@ export async function listCompletionFiles(
   signal?: AbortSignal,
 ): Promise<Result<readonly string[], ExpectedError>> {
   const listed = await fileNames(cwd, signal);
-  if (!listed.ok) return listed;
+  if (!listed.ok) {
+    return listed;
+  }
+
   const present = new Set<string>();
-  let cursor = 0,
-    failure: ExpectedError | undefined;
+  let cursor = 0;
+  let failure: ExpectedError | undefined;
+
   await Promise.all(
     Array.from({ length: Math.min(16, listed.value.length) }, async () => {
       while (cursor < listed.value.length && !signal?.aborted && !failure) {
@@ -112,17 +130,22 @@ export async function listCompletionFiles(
               info.error instanceof StorageError &&
               ["ENOENT", "ENOTDIR"].includes(info.error.systemCode ?? "")
             )
-          )
+          ) {
             failure = info.error;
-        } else if (info.value.isFile() || info.value.isSymbolicLink()) present.add(path);
+          }
+        } else if (info.value.isFile() || info.value.isSymbolicLink()) {
+          present.add(path);
+        }
       }
     }),
   );
-  return signal?.aborted
-    ? err(new CancelledError())
-    : failure
-      ? err(failure)
-      : ok([...present].sort());
+  if (signal?.aborted) {
+    return err(new CancelledError());
+  } else if (failure) {
+    return err(failure);
+  } else {
+    return ok([...present].sort());
+  }
 }
 
 export async function completeFiles(
@@ -131,7 +154,10 @@ export async function completeFiles(
   signal?: AbortSignal,
 ): Promise<Result<CompletionResult, ExpectedError>> {
   const listed = await fileNames(cwd, signal);
-  if (!listed.ok) return listed;
+  if (!listed.ok) {
+    return listed;
+  }
+
   const result = filterCompletions(
     listed.value.map((value) => ({ kind: "file", value, description: "Worktree file" })),
     query.replace(/^\.\//u, ""),
@@ -140,19 +166,29 @@ export async function completeFiles(
   const checked = await Promise.all(
     result.items.map(async (item) => {
       const info = await capture(() => lstat(join(cwd, item.value)));
-      if (!info.ok)
+      if (!info.ok) {
         return info.error instanceof StorageError &&
           ["ENOENT", "ENOTDIR"].includes(info.error.systemCode ?? "")
           ? ok(null)
           : info;
+      }
+
       return ok(info.value.isFile() || info.value.isSymbolicLink() ? item : null);
     }),
   );
-  if (signal?.aborted) return err(new CancelledError());
+  if (signal?.aborted) {
+    return err(new CancelledError());
+  }
+
   const items = [];
   for (const candidate of checked) {
-    if (!candidate.ok) return candidate;
-    if (candidate.value) items.push(candidate.value);
+    if (!candidate.ok) {
+      return candidate;
+    }
+    if (candidate.value) {
+      items.push(candidate.value);
+    }
   }
+
   return ok({ items, truncated: result.truncated });
 }

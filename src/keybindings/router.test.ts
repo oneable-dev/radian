@@ -15,11 +15,13 @@ async function mount(keymap: Keymap = defaultKeymap()) {
     kittyKeyboard: true,
     exitOnCtrlC: false,
   });
-  const a = new InputRenderable(app.renderer, { width: 60 }),
-    b = new InputRenderable(app.renderer, { width: 60 });
+  const a = new InputRenderable(app.renderer, { width: 60 });
+  const b = new InputRenderable(app.renderer, { width: 60 });
+
   app.renderer.root.add(a);
   app.renderer.root.add(b);
   a.focus();
+
   const commands: string[] = [];
   const router = new KeyRouter(
     app.renderer,
@@ -28,7 +30,9 @@ async function mount(keymap: Keymap = defaultKeymap()) {
     (command) => command === "app.detach",
     (command) => commands.push(command),
   );
+
   await app.renderOnce();
+
   return {
     ...app,
     a,
@@ -38,7 +42,10 @@ async function mount(keymap: Keymap = defaultKeymap()) {
     router,
     raw(text: string) {
       const key = parseKeypress(text, { useKittyKeyboard: true });
-      if (!key) throw new Error("Invalid test key");
+      if (!key) {
+        throw new Error("Invalid test key");
+      }
+
       app.renderer.keyInput.processParsedKey(key);
     },
     async close() {
@@ -47,6 +54,7 @@ async function mount(keymap: Keymap = defaultKeymap()) {
     },
   };
 }
+
 const printableLeader = () =>
   expectOk(parseKeymap({ leader: "space r", timeoutMs: 200, bindings: { "button.activate": [] } }));
 
@@ -82,7 +90,10 @@ test.each([
     const app = await mount(keymap);
     try {
       // Enter logical leaders using their configured physical keys.
-      for (const key of input) app.raw(key);
+      for (const key of input) {
+        app.raw(key);
+      }
+
       app.mockInput.pressKey("d");
 
       // Commands run once and leader input never leaks into drafts.
@@ -176,18 +187,23 @@ test.each([
       exitOnCtrlC: false,
     });
     const input = new InputRenderable(app.renderer, { width: 60 });
+
     input.value = "candidate";
     app.renderer.root.add(input);
+
     const surface = new TerminalSurface(app.renderer, "search-clear-terminal");
     app.renderer.root.add(surface.root);
-    const bytes: string[] = [],
-      commands: string[] = [];
+
+    const bytes: string[] = [];
+    const commands: string[] = [];
+
     surface.connect({
       input: (value) => bytes.push(Buffer.from(value).toString("hex")),
       resize() {},
       disconnect: async () => {},
     });
     input.focus();
+
     const router = new KeyRouter(
       app.renderer,
       defaultKeymap(),
@@ -200,7 +216,10 @@ test.each([
     );
     const raw = (event: string) => {
       const key = parseKeypress(event, { useKittyKeyboard: true });
-      if (!key) throw new Error("Invalid Kitty key");
+      if (!key) {
+        throw new Error("Invalid Kitty key");
+      }
+
       app.renderer.keyInput.processParsedKey(key);
     };
     try {
@@ -238,11 +257,13 @@ test.each([
   async (context, searchContext, command) => {
     // Returning to search changes the native input owner while the physical slash key may still be held.
     const app = await createTestRenderer({ width: 60, height: 8, kittyKeyboard: true });
-    const input = new InputRenderable(app.renderer, { width: 60 }),
-      list = new BoxRenderable(app.renderer, { height: 1, focusable: true });
+    const input = new InputRenderable(app.renderer, { width: 60 });
+    const list = new BoxRenderable(app.renderer, { height: 1, focusable: true });
+
     app.renderer.root.add(input);
     app.renderer.root.add(list);
     list.focus();
+
     const router = new KeyRouter(
       app.renderer,
       defaultKeymap(),
@@ -252,7 +273,10 @@ test.each([
     );
     const raw = (event: string) => {
       const key = parseKeypress(event, { useKittyKeyboard: true });
-      if (!key) throw new Error("Invalid Kitty key");
+      if (!key) {
+        throw new Error("Invalid Kitty key");
+      }
+
       app.renderer.keyInput.processParsedKey(key);
     };
     try {
@@ -278,7 +302,9 @@ test("Held account rename keys never become literal edits after label input take
   // The rename command changes focus while its physical key may still be held.
   const app = await createTestRenderer({ width: 60, height: 8, kittyKeyboard: true });
   const input = new InputRenderable(app.renderer, { width: 60 });
+
   app.renderer.root.add(input);
+
   const commands: string[] = [];
   let editing = false;
   const router = new KeyRouter(
@@ -295,7 +321,10 @@ test("Held account rename keys never become literal edits after label input take
   );
   const raw = (event: string) => {
     const key = parseKeypress(event, { useKittyKeyboard: true });
-    if (!key) throw new Error("Invalid Kitty key");
+    if (!key) {
+      throw new Error("Invalid Kitty key");
+    }
+
     app.renderer.keyInput.processParsedKey(key);
   };
   try {
@@ -323,15 +352,19 @@ test("Default Ctrl+C reaches shared native terminals while only leader commands 
     exitOnCtrlC: false,
   });
   const surface = new TerminalSurface(app.renderer, "test-terminal");
+
   app.renderer.root.add(surface.root);
-  const bytes: string[] = [],
-    commands: string[] = [];
+
+  const bytes: string[] = [];
+  const commands: string[] = [];
+
   surface.connect({
     input: (value) => bytes.push(Buffer.from(value).toString("hex")),
     resize: () => {},
     disconnect: async () => {},
   });
   surface.root.focus();
+
   const router = new KeyRouter(
     app.renderer,
     defaultKeymap(),

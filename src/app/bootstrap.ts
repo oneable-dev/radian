@@ -32,27 +32,42 @@ import type { CliOptions as Options } from "./cli.ts";
 export async function main(options: Options): Promise<Result<void, ExpectedError>> {
   if (options.service) {
     const { runRuntime } = await import("../runtime/daemon.ts");
+
     return capture(() => runRuntime(options.offline, options.stateRoot));
   }
+
   const administrative = options.stop || options.status || options.restart;
-  if (administrative) return runAdministrative(options);
+  if (administrative) {
+    return runAdministrative(options);
+  }
+
   const settings = await loadSettings({
     ...options,
     includeWorkspace: !options.demo && !options.offline,
   });
-  if (!settings.ok) return settings;
+  if (!settings.ok) {
+    return settings;
+  }
+
   let repositories: readonly Repository[] = [];
   let discoveryError: string | null = null;
-  if (options.demo) repositories = demoWorkspace();
-  else {
+  if (options.demo) {
+    repositories = demoWorkspace();
+  } else {
     const config = settings.value.workspace;
     if (!config.roots.length) {
       const discovered = await discoverRepository(options.cwd);
-      if (discovered.ok) repositories = [discovered.value];
-      else discoveryError = discovered.error.message;
+      if (discovered.ok) {
+        repositories = [discovered.value];
+      } else {
+        discoveryError = discovered.error.message;
+      }
     } else {
       const discovered = await discoverWorkspace(config);
-      if (!discovered.ok) return discovered;
+      if (!discovered.ok) {
+        return discovered;
+      }
+
       repositories = discovered.value.repositories;
       discoveryError =
         discovered.value.warnings
@@ -61,6 +76,7 @@ export async function main(options: Options): Promise<Result<void, ExpectedError
         (repositories.length ? null : "No Git repositories found in workspace roots.");
     }
   }
+
   const connected =
     !options.demo && repositories.length
       ? await WorkspaceClient.open(repositories, options.cwd, {
@@ -69,15 +85,20 @@ export async function main(options: Options): Promise<Result<void, ExpectedError
           ...(options.config ? { config: options.config } : {}),
         })
       : ok(null);
-  if (!connected.ok) return connected;
+  if (!connected.ok) {
+    return connected;
+  }
+
   const client = connected.value;
   try {
     const selected = client?.snapshot.preferences.selection.worktreeId;
     if (client && selected) {
       const activated = await client.activate(selected);
-      if (!activated.ok)
+      if (!activated.ok) {
         discoveryError = [discoveryError, activated.error.message].filter(Boolean).join(" · ");
+      }
     }
+
     await runUI(
       repositories,
       client,
@@ -86,6 +107,7 @@ export async function main(options: Options): Promise<Result<void, ExpectedError
       settings.value.keymap,
       settings.value.theme,
     );
+
     return ok(undefined);
   } finally {
     await client?.disconnect();
@@ -97,68 +119,93 @@ async function runAdministrative(options: Options): Promise<Result<void, Expecte
   let client: RuntimeClient | null;
   if (options.legacy) {
     const discovered = await discoverRepository(options.cwd);
-    if (!discovered.ok)
+    if (!discovered.ok) {
       return err(new InputError(discovered.error.message, { cause: discovered.error }));
+    }
+
     const connected = await connectRuntime(discovered.value, options.cwd, {
       offline: options.offline,
       ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
       start: false,
     });
-    if (!connected.ok) return connected;
+    if (!connected.ok) {
+      return connected;
+    }
+
     client = connected.value;
     if (client?.snapshot.capabilities?.includes("shared-daemon")) {
       await client.disconnect();
+
       return err(
         new InputError("This repository belongs to the shared daemon. Omit --legacy to manage it."),
       );
     }
   } else {
-    const paths = daemonPaths(options.offline, options.stateRoot),
-      snapshot = await fetchSnapshot(paths);
-    if (!snapshot.ok) return snapshot;
+    const paths = daemonPaths(options.offline, options.stateRoot);
+    const snapshot = await fetchSnapshot(paths);
+    if (!snapshot.ok) {
+      return snapshot;
+    }
+
     client = snapshot.value ? new RuntimeClient(paths, snapshot.value) : null;
   }
   try {
     if (!client && !options.restart) {
       console.log("No running workspace service.");
+
       return ok(undefined);
     }
     if (options.status) {
       console.log(JSON.stringify(client!.snapshot, null, 2));
+
       return ok(undefined);
     }
     if (client) {
-      if (client.snapshot.editors?.some((editor) => !editor.exited))
+      if (client.snapshot.editors?.some((editor) => !editor.exited)) {
         console.error(
           "Stopping the daemon closes Neovim across all owned repositories. Save unsaved buffers first.",
         );
-      if (client.snapshot.terminals?.length)
+      }
+      if (client.snapshot.terminals?.length) {
         console.error("Stopping the daemon closes all owned terminal shells and their jobs.");
-      if (Object.values(client.snapshot.details).some((state) => state.status === "working"))
+      }
+      if (Object.values(client.snapshot.details).some((state) => state.status === "working")) {
         console.error(
           "Stopping the daemon interrupts active Agent work; prompts are not replayed on restart.",
         );
+      }
+
       const stopped = await client.stopRuntime();
-      if (!stopped.ok) return stopped;
+      if (!stopped.ok) {
+        return stopped;
+      }
+
       const deadline = Date.now() + 15000;
       while (true) {
         const snapshot = await fetchSnapshot(client.paths);
-        if (!snapshot.ok) return snapshot;
-        if (!snapshot.value) break;
-        if (snapshot.value.instance !== client.snapshot.instance)
+        if (!snapshot.ok) {
+          return snapshot;
+        }
+        if (!snapshot.value) {
+          break;
+        }
+        if (snapshot.value.instance !== client.snapshot.instance) {
           return err(
             new ConnectionError(
               "CONNECTION_FAILED",
               "Another daemon replaced the stopped instance. It was not stopped again.",
             ),
           );
-        if (Date.now() > deadline)
+        }
+        if (Date.now() > deadline) {
           return err(
             new ConnectionError(
               "CONNECTION_TIMEOUT",
               "Daemon shutdown has not completed; its outcome is not confirmed.",
             ),
           );
+        }
+
         await new Promise<void>((resolve) => setTimeout(resolve, 40));
       }
     }
@@ -167,12 +214,17 @@ async function runAdministrative(options: Options): Promise<Result<void, Expecte
         offline: options.offline,
         ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
       });
-      if (!started.ok) return started;
+      if (!started.ok) {
+        return started;
+      }
+
       console.log(
         "Shared daemon restarted. Stored history and open-session intent were retained; interrupted jobs were not replayed.",
       );
-    } else
+    } else {
       console.log("Workspace service stopped. Open-session state and saved history were retained.");
+    }
+
     return ok(undefined);
   } finally {
     await client?.disconnect();
@@ -202,7 +254,10 @@ async function runUI(
   const preferences: RuntimePreferences = client
     ? structuredClone(client.snapshot.preferences)
     : defaultPreferences();
-  if (client) selection.restore(preferences.selection);
+  if (client) {
+    selection.restore(preferences.selection);
+  }
+
   const renderer = await createCliRenderer({
     exitOnCtrlC: false,
     ...(options.noColor
@@ -215,6 +270,7 @@ async function runUI(
   });
   attachedTheme = uiTheme(renderer);
   attachedTheme.setMonochrome(options.noColor);
+
   let view: InstanceType<typeof Workbench> | undefined;
   let sessionNotifications: InstanceType<typeof SessionNotifications> | undefined;
   const detachHint = keymap.hint("app.detach", "none") || "No detach binding";
@@ -251,17 +307,26 @@ async function runUI(
   const preloaded = client ? new PreloadedData(client, unexpected) : undefined;
   const unsubscribeData = preloaded?.subscribe(() => view?.refreshPreloadedData());
   const preloadCompletions = (): void => {
-    if (!client || !completions) return;
-    const snapshot = client.snapshot,
-      ids = new Set<string>();
-    for (const repo of snapshot.repositories)
-      for (const tree of repo.worktrees)
+    if (!client || !completions) {
+      return;
+    }
+
+    const snapshot = client.snapshot;
+    const ids = new Set<string>();
+    for (const repo of snapshot.repositories) {
+      for (const tree of repo.worktrees) {
         for (const session of tree.sessions) {
           // Do not activate cold repository services just to populate suggestions.
-          if (!snapshot.details[session.id]?.conversationId) continue;
+          if (!snapshot.details[session.id]?.conversationId) {
+            continue;
+          }
+
           ids.add(session.id);
           completions.provider.prepare?.(session.id, tree.path);
         }
+      }
+    }
+
     completions.provider.retain?.(ids);
   };
   const preload = (): void => {
@@ -273,7 +338,9 @@ async function runUI(
   const observe = <T>(task: Promise<Result<T, ExpectedError>>): void => {
     void task
       .then((result) => {
-        if (!result.ok) showFailure(result.error);
+        if (!result.ok) {
+          showFailure(result.error);
+        }
       })
       .catch(unexpected);
   };
@@ -284,16 +351,26 @@ async function runUI(
     const current = selection.state;
     const sessions = { ...preferences.selection.sessions, ...current.sessions };
     for (const tree of selection.snapshot.flatMap((repo) => repo.worktrees)) {
-      if (client?.hasSnapshot(tree.id) && !current.sessions[tree.id]) delete sessions[tree.id];
+      if (client?.hasSnapshot(tree.id) && !current.sessions[tree.id]) {
+        delete sessions[tree.id];
+      }
     }
+
     preferences.selection = { worktreeId: current.worktreeId, sessions };
     if (client && current.worktreeId !== activatedWorktree) {
       activatedWorktree = current.worktreeId;
-      if (activatedWorktree) observe(client.activate(activatedWorktree));
+      if (activatedWorktree) {
+        observe(client.activate(activatedWorktree));
+      }
     }
+
     const key = JSON.stringify(preferences);
-    if (!client || key === lastPreferences) return;
+    if (!client || key === lastPreferences) {
+      return;
+    }
+
     lastPreferences = key;
+
     const state = structuredClone(preferences);
     pendingPreferences = pendingPreferences.then(() => client.savePreferences(state));
     observe(pendingPreferences);
@@ -305,7 +382,10 @@ async function runUI(
     recovery = client.recoveryVersion;
     selection.replaceSnapshot(client.snapshot.repositories, preferences.selection.sessions);
     preload();
-    if (restored) view?.refreshHistory();
+    if (restored) {
+      view?.refreshHistory();
+    }
+
     updateNotice();
   });
   const detach = (): void => {
@@ -321,6 +401,7 @@ async function runUI(
       preferences.inputDrafts = view.promptInputDrafts;
       persist();
     }
+
     const mounted = view;
     view = undefined;
     mounted?.dispose();
@@ -330,8 +411,10 @@ async function runUI(
   try {
     preload();
     renderer.setTerminalTitle("radian");
+
     const palette = await renderer.getPalette({ size: 256, timeout: 200 });
     uiTheme(renderer).configure(palette, theme);
+
     const terminalTheme = new TerminalTheme(renderer, palette);
     view = new Workbench(renderer, selection, {
       keymap,
@@ -340,11 +423,16 @@ async function runUI(
       onNewSession: (worktreeId, onCreated) => {
         if (!client) {
           view?.notify("Demo creation request · no agents running");
+
           return;
         }
+
         observe(
           client.create(worktreeId).then((result) => {
-            if (result.ok) onCreated?.(result.value);
+            if (result.ok) {
+              onCreated?.(result.value);
+            }
+
             return result;
           }),
         );
@@ -352,8 +440,10 @@ async function runUI(
       onCloseSession: (worktreeId, sessionId) => {
         if (client) {
           observe(client.closeSession(sessionId));
+
           return;
         }
+
         selection.replaceSnapshot(
           selection.snapshot.map((repo) => ({
             ...repo,
@@ -375,8 +465,12 @@ async function runUI(
         ? {
             onPrompt: async (id: string, text: string, images?: readonly string[]) => {
               const result = await submitAgentPrompt(client, selection, id, text, images);
-              if (!result.ok || text.trim() !== "/reload") return result;
+              if (!result.ok || text.trim() !== "/reload") {
+                return result;
+              }
+
               preloaded!.reload();
+
               const refreshed = await completions!.refresh(id);
               // SDK reload was accepted. A local indexing failure is a warning, not a rejected action.
               view?.notify(
@@ -385,6 +479,7 @@ async function runUI(
                   : `Resources reloaded, but completion refresh failed [${refreshed.error.code}]: ${refreshed.error.message}`,
                 { level: refreshed.ok ? "success" : "warning", source: "Reload" },
               );
+
               return result;
             },
             onInterrupt: (id: string) => client.interrupt(id),
@@ -444,10 +539,12 @@ async function runUI(
           }
         : {}),
     });
-    if (client)
+    if (client) {
       sessionNotifications = new SessionNotifications(client, (notification) =>
         view?.notifySession(notification),
       );
+    }
+
     updateNotice();
     await renderer.closed;
   } finally {
@@ -459,8 +556,12 @@ async function runUI(
     unsubscribe?.();
     unsubscribeSelection();
     preferences.drafts = view?.promptDrafts ?? preferences.drafts;
-    if (view) preferences.inputDrafts = view.promptInputDrafts;
+    if (view) {
+      preferences.inputDrafts = view.promptInputDrafts;
+    }
+
     persist();
+
     const mounted = view;
     view = undefined;
     mounted?.dispose();
@@ -468,8 +569,10 @@ async function runUI(
     renderer.destroy();
     await renderer.closed;
     await destroyTreeSitterClient();
+
     const saved = await pendingPreferences;
-    if (!saved.ok)
+    if (!saved.ok) {
       console.error(`[${saved.error.code}] Could not save UI preferences: ${saved.error.message}`);
+    }
   }
 }

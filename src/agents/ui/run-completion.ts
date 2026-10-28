@@ -15,9 +15,13 @@ const localTime = new Intl.DateTimeFormat("en-US", {
 
 export function formatRunDuration(milliseconds: number): string {
   const seconds = Math.floor(milliseconds / 1000);
-  if (seconds < 1) return "<1s";
-  const hours = Math.floor(seconds / 3600),
-    minutes = Math.floor((seconds % 3600) / 60);
+  if (seconds < 1) {
+    return "<1s";
+  }
+
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+
   return [hours ? `${hours}h` : "", minutes || hours ? `${minutes}m` : "", `${seconds % 60}s`]
     .filter(Boolean)
     .join(" ");
@@ -36,6 +40,7 @@ export function formatRunCompletion(completion: RunCompletion, timeZone?: string
         timeZone,
       })
     : localTime;
+
   return `${labels[completion.outcome]} ${formatRunDuration(completion.durationMs)} • ${date.format(completion.completedAt)} at ${time.format(completion.completedAt)}`.replace(
     /\s+/g,
     " ",

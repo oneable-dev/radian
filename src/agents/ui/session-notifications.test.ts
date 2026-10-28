@@ -29,25 +29,33 @@ function notification(
     },
   };
 }
+
 async function fixture() {
-  const clock = new ManualClock(),
-    app = await createTestRenderer({ width: 100, height: 24, kittyKeyboard: true, clock });
-  const opened: string[] = [],
-    stack = new SessionNotificationStack(app.renderer, (item) => opened.push(item.id));
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width: 100, height: 24, kittyKeyboard: true, clock });
+  const opened: string[] = [];
+  const stack = new SessionNotificationStack(app.renderer, (item) => opened.push(item.id));
   const input = new InputRenderable(app.renderer, { id: "input", width: 30 });
+
   app.renderer.root.add(input);
   app.renderer.root.add(stack.root);
   input.focus();
+
   const render = async () => {
     await app.renderOnce();
     await app.renderOnce();
   };
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
+
   await render();
+
   return {
     ...app,
     clock,
@@ -67,13 +75,13 @@ test.each(["complete", "error", "unfinished", "cancelled"] as const)(
   "New %s notifications show status colors, summaries, and icon-labeled worktrees/branches without stealing focus",
   async (outcome) => {
     // The input owns focus, and the checkout name differs from both the repository and branch.
-    const app = await fixture(),
-      labels = {
-        complete: "Completed",
-        error: "Failed",
-        unfinished: "Stopped",
-        cancelled: "Cancelled",
-      };
+    const app = await fixture();
+    const labels = {
+      complete: "Completed",
+      error: "Failed",
+      unfinished: "Stopped",
+      cancelled: "Cancelled",
+    };
     try {
       // A passive notification identifies its checkout without taking over input.
       app.stack.show(notification("one", outcome));
@@ -81,8 +89,9 @@ test.each(["complete", "error", "unfinished", "cancelled"] as const)(
       await app.render();
 
       // Worktree and branch each keep their own icon; the repository no longer occupies this row.
-      const card = app.get("session-toast:one"),
-        frame = app.captureCharFrame();
+      const card = app.get("session-toast:one");
+      const frame = app.captureCharFrame();
+
       expect(frame).toContain(`${labels[outcome]} · 42s`);
       expect(frame).toContain("Task one");
       expect(frame).toContain(`${icons.folder} auth-checkout / ${icons.branch} feature/auth`);
@@ -90,11 +99,14 @@ test.each(["complete", "error", "unfinished", "cancelled"] as const)(
       expect(card.x + card.width).toBe(98);
       expect(card.y).toBe(1);
       expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+
       let x = 0;
       const border = app.captureSpans().lines[card.y]!.spans.find((span) => {
         x += span.width;
+
         return x > card.x;
       })!;
+
       expect(border.fg.toInts()).toEqual(
         uiTheme(app.renderer).colors[
           outcome === "complete" ? "success" : outcome === "error" ? "error" : "warning"
@@ -111,8 +123,8 @@ test.each([false, true])(
   "Light theme %s masks notification bodies without recoloring the border-cell underlay",
   async (light) => {
     // A colored code surface behind a card must not be replaced by a fringe outside its thin border.
-    const app = await fixture(),
-      theme = uiTheme(app.renderer);
+    const app = await fixture();
+    const theme = uiTheme(app.renderer);
     const palette = {
       palette: [],
       defaultForeground: light ? "#202020" : "#ECECEC",
@@ -133,6 +145,7 @@ test.each([false, true])(
       height: 23,
       backgroundColor: "#456789",
     });
+
     underlay.add(
       new TextRenderable(app.renderer, {
         content: Array.from({ length: 23 }, () => "UNDERLAY".repeat(14)).join("\n"),
@@ -140,10 +153,13 @@ test.each([false, true])(
       }),
     );
     app.renderer.root.add(underlay, 0);
+
     const background = (x: number, y: number) => {
       let column = 0;
+
       return app.captureSpans().lines[y]!.spans.find((span) => {
         column += span.width;
+
         return column > x;
       })!.bg;
     };
@@ -152,43 +168,52 @@ test.each([false, true])(
 
       // The existing fade and line glyphs still replace covered text instead of overlapping it.
       app.stack.show(notification("edge"));
+
       const borderColors: number[][] = [];
       for (const advance of [80, 80]) {
         app.clock.advance(advance);
         await app.render();
-        const card = app.get("session-toast:edge"),
-          lines = app.captureCharFrame().split("\n");
+
+        const card = app.get("session-toast:edge");
+        const lines = app.captureCharFrame().split("\n");
+
         expect(lines[card.y]!.slice(card.x, card.x + card.width)).toBe(
           "┌" + "─".repeat(card.width - 2) + "┐",
         );
-        for (let y = card.y; y < card.y + card.height; y++)
+        for (let y = card.y; y < card.y + card.height; y++) {
           expect(lines[y]!.slice(card.x, card.x + card.width)).not.toContain("UNDERLAY");
+        }
+
         let column = 0;
         borderColors.push(
           app
             .captureSpans()
             .lines[card.y]!.spans.find((span) => {
               column += span.width;
+
               return column > card.x;
             })!
             .fg.toInts(),
         );
       }
+
       expect(borderColors[0]).not.toEqual(borderColors[1]);
       expect(borderColors[1]).toEqual(theme.styles["status.success"].fg.toInts());
 
       // The body masks covered text, while edge cells preserve the surrounding code background.
-      const card = app.get("session-toast:edge"),
-        geometry = [card.x, card.y, card.width, card.height];
+      const card = app.get("session-toast:edge");
+      const geometry = [card.x, card.y, card.width, card.height];
       for (const y of [card.y, card.y + 2, card.y + card.height - 1]) {
         expect(background(card.x, y).toInts()).toEqual(background(card.x - 1, y).toInts());
         expect(background(card.x + card.width - 1, y).toInts()).toEqual(
           background(card.x + card.width, y).toInts(),
         );
       }
+
       expect(background(card.x + 1, card.y + 1).toInts()).toEqual(
         theme.styles["ui.text"].bg!.toInts(),
       );
+
       const outside = background(card.x - 1, card.y).toInts();
 
       // Explicit body overrides keep the same thin border and do not change its underlay or focus.
@@ -234,20 +259,24 @@ test.each([
       await app.render();
 
       // General notices reserve their last row for source, just as results do for checkout context.
-      const card = app.get("session-toast:message"),
-        resultCard = app.get("session-toast:result"),
-        lines = app.captureCharFrame().split("\n");
+      const card = app.get("session-toast:message");
+      const resultCard = app.get("session-toast:result");
+      const lines = app.captureCharFrame().split("\n");
       const rows = lines
         .slice(card.y + 1, card.y + 4)
         .map((line) => line.slice(card.x + 2, card.x + card.width - 2).trim());
+
       expect(rows).toEqual([label, "Operation summary", "Clipboard"]);
       expect(card.height).toBe(resultCard.height);
       expect(card.width).toBe(resultCard.width);
+
       let x = 0;
       const border = app.captureSpans().lines[card.y]!.spans.find((span) => {
         x += span.width;
+
         return x > card.x;
       })!;
+
       expect(border.fg.toInts()).toEqual(
         uiTheme(app.renderer).styles[`status.${level}`].fg.toInts(),
       );
@@ -285,9 +314,10 @@ test("General notification rows safely truncate Unicode previews and sources thr
       await app.render();
 
       // Only the summary and context are shortened; the source never moves into the heading or body.
-      const card = app.get("session-toast:long"),
-        frame = app.captureCharFrame(),
-        lines = frame.split("\n");
+      const card = app.get("session-toast:long");
+      const frame = app.captureCharFrame();
+      const lines = frame.split("\n");
+
       expect(lines[card.y + 1]).toContain("Custom warning");
       expect(lines[card.y + 1]).not.toContain("Editor");
       expect(lines[card.y + 2]).toContain("한글 👩🏽‍💻");
@@ -299,6 +329,7 @@ test("General notification rows safely truncate Unicode previews and sources thr
       expect(card.height).toBe(5);
       expect(card.x + card.width).toBeLessThanOrEqual(width);
     }
+
     expect(app.renderer.currentFocusedRenderable).toBe(app.input);
   } finally {
     await app.close();
@@ -327,7 +358,10 @@ test("At most three notifications stack and queued failures receive eight second
   // A queued notification's lifetime must not expire while hidden behind the visible three.
   const app = await fixture();
   try {
-    for (const id of ["one", "two", "three"]) app.stack.show(notification(id));
+    for (const id of ["one", "two", "three"]) {
+      app.stack.show(notification(id));
+    }
+
     app.stack.show(notification("four", "error"));
     app.clock.advance(4999);
     await app.render();
@@ -372,6 +406,7 @@ test("Notifications expire without close buttons and never intercept input outsi
     await app.mockInput.typeText("keep typing");
     await app.render();
     expect(app.input.value).toBe("keep typing");
+
     const card = app.get("session-toast:two");
     await app.mockMouse.click(card.x + 2, card.y + 2);
     await app.render();
@@ -385,8 +420,8 @@ test("Notifications expire without close buttons and never intercept input outsi
 
 test("Compact screens reduce stack count and width while safely truncating summaries with control characters", async () => {
   // Narrow terminals cannot fit three five-row cards; summaries can contain untrusted terminal controls.
-  const app = await fixture(),
-    item = notification("one");
+  const app = await fixture();
+  const item = notification("one");
   try {
     app.stack.show({
       ...item,
@@ -401,8 +436,9 @@ test("Compact screens reduce stack count and width while safely truncating summa
     app.clock.advance(160);
     await app.render();
 
-    const card = app.get("session-toast:one"),
-      frame = app.captureCharFrame();
+    const card = app.get("session-toast:one");
+    const frame = app.captureCharFrame();
+
     expect(card.x).toBeGreaterThanOrEqual(0);
     expect(card.x + card.width).toBeLessThanOrEqual(30);
     expect(card.y + card.height).toBeLessThanOrEqual(12);
@@ -424,7 +460,10 @@ test("Closed sessions lose queued and visible notifications and disposal clears 
   // Closing a session or destroying the owner must prevent delayed cards and animation callbacks.
   const app = await fixture();
   try {
-    for (const id of ["one", "two", "three", "four"]) app.stack.show(notification(id));
+    for (const id of ["one", "two", "three", "four"]) {
+      app.stack.show(notification(id));
+    }
+
     app.stack.retain(new Set(["two"]));
     await app.render();
     expect(app.captureCharFrame()).toContain("Task two");

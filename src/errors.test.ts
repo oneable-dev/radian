@@ -91,8 +91,9 @@ for (const [code, expected] of [
       const result = await fetchSnapshot(paths);
 
       // Classification follows the stable OS contract, not the shared message text.
-      if (expected === null) expect(expectOk(result)).toBeNull();
-      else {
+      if (expected === null) {
+        expect(expectOk(result)).toBeNull();
+      } else {
         const error = expectError(result);
         expect(error).toBeInstanceOf(ConnectionError);
         expect(error.code).toBe(expected);
@@ -178,13 +179,14 @@ test("Accepted responses with persistence warnings stay successful and preserve 
 
 test("Successful operations finish cleanup before returning the original value", async () => {
   // Cleanup belongs to the operation even when no exception needs propagation.
-  const value = { saved: true },
-    events: string[] = [];
+  const value = { saved: true };
+  const events: string[] = [];
 
   // Record both phases through the public cleanup boundary.
   const result = await withCleanup(
     async () => {
       events.push("operation");
+
       return value;
     },
     async () => {
@@ -252,14 +254,17 @@ test("Operation and cleanup failures preserve both original and cleanup errors",
   );
 
   expect(failure).toBeInstanceOf(AggregateError);
-  if (!(failure instanceof AggregateError)) throw new Error("Missing aggregate");
+  if (!(failure instanceof AggregateError)) {
+    throw new Error("Missing aggregate");
+  }
+
   expect(failure.errors).toEqual([original, cleanup]);
 });
 
 test("Expected shutdown failures aggregate into CleanupError Results while bugs remain exceptions", async () => {
   // Every owned cleanup is awaited, regardless of earlier failures.
-  const a = new StorageError("a"),
-    b = new SessionError("SESSION_CONFLICT", "b");
+  const a = new StorageError("a");
+  const b = new SessionError("SESSION_CONFLICT", "b");
   const unexpected = new TypeError("cleanup defect");
 
   const result = await collectCleanup(
@@ -269,7 +274,10 @@ test("Expected shutdown failures aggregate into CleanupError Results while bugs 
   const error = expectError(result);
 
   expect(error).toBeInstanceOf(CleanupError);
-  if (!(error instanceof CleanupError)) throw new Error("Missing cleanup failure");
+  if (!(error instanceof CleanupError)) {
+    throw new Error("Missing cleanup failure");
+  }
+
   expect(error.errors).toEqual([a, b]);
   await expect(collectCleanup([Promise.reject(unexpected)], "close failed")).rejects.toBeInstanceOf(
     AggregateError,

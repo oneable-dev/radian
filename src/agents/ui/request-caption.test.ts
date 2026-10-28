@@ -8,6 +8,7 @@ test("Request captions normalize to one line and reserve attachment badge width 
     files: 3,
   };
   const caption = formatRequestCaption(request, 44);
+
   expect(caption).toContain("…  [2 images] [3 files]");
   expect(Bun.stringWidth(caption)).toBeLessThanOrEqual(44);
   expect(request.text).toContain("\n");
@@ -24,8 +25,9 @@ test("Narrow captions replace long filenames with counts and never exceed viewpo
   const request = { text: "Details", images: 2, files: 1, fileName: "A very long filename.ts" };
   expect(formatRequestCaption(request, 20)).toBe("[2 images] [1 file]");
   expect(formatRequestCaption(request, 8)).toBe("[2I 1F]");
-  for (const width of [0, 1, 2, 5, 8, 20, 100])
+  for (const width of [0, 1, 2, 5, 8, 20, 100]) {
     expect(Bun.stringWidth(formatRequestCaption(request, width))).toBeLessThanOrEqual(width);
+  }
 });
 
 test("Korean, combining characters, and emoji truncate visually only at grapheme boundaries", () => {

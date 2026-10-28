@@ -9,6 +9,7 @@ import { uiTheme } from "./theme.ts";
 import type { StyleGroup } from "./theme-styles.ts";
 
 export type InputLayout = Readonly<{ rows: number; height: number }>;
+
 type InputKind = "search" | "prompt";
 
 // The field owns spacing and hit testing; native editors retain caret/selection ownership.
@@ -32,10 +33,13 @@ export class InputField extends BoxRenderable {
       alignItems: "center",
       border: false,
       onMouseDown: (event) => {
-        if (event.button === 0 && !editor.focused) editor.focus();
+        if (event.button === 0 && !editor.focused) {
+          editor.focus();
+        }
       },
     });
     this.add(editor);
+
     const theme = uiTheme(renderer);
     theme.input(
       editor,
@@ -59,6 +63,7 @@ export class InputField extends BoxRenderable {
     // Give editing the last row before spending any space on vertical decoration.
     const padding = Math.min(2, capacity - 1);
     const visibleRows = Math.max(1, Math.min(rows, capacity - padding));
+
     return { rows: visibleRows, height: visibleRows + padding };
   }
 
@@ -66,11 +71,15 @@ export class InputField extends BoxRenderable {
     const layout = this.measure(rows, availableHeight);
     this.editor.height = layout.rows;
     this.height = layout.height;
+
     return layout;
   }
 
   private paint = (): void => {
-    if (this.isDestroyed) return;
+    if (this.isDestroyed) {
+      return;
+    }
+
     const styles = uiTheme(this.renderer).styles;
     const surface =
       this.backgroundStyle ??
@@ -79,12 +88,20 @@ export class InputField extends BoxRenderable {
         : this.editor.focused
           ? "ui.inputFocused"
           : "ui.input");
+
     this.backgroundColor = styles[surface].bg;
   };
+
   private resize = (): void => {
-    if (this.isDestroyed) return;
+    if (this.isDestroyed) {
+      return;
+    }
+
     const inset = horizontalInset(this.renderer.width);
-    if (inset === this.inset) return;
+    if (inset === this.inset) {
+      return;
+    }
+
     this.inset = inset;
     this.paddingLeft = inset;
     this.paddingRight = inset;

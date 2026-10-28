@@ -32,11 +32,13 @@ export type HistoryItem = {
 };
 
 type SavedHistory = HistoryItem & { readonly path: string; readonly requireCwd?: boolean };
+
 type HistoryIndex = {
   readonly cwd: string;
   readonly items: readonly SavedHistory[];
   readonly byId: ReadonlyMap<string, SavedHistory>;
 };
+
 type Discovery = {
   readonly ready: Promise<Result<HistoryIndex, ExpectedError>>;
   readonly signal: AbortSignal | undefined;
@@ -64,17 +66,22 @@ export class SessionHistory {
     signal?: AbortSignal,
   ): Promise<Result<readonly HistoryItem[], ExpectedError>> {
     const saved = await this.index(worktreeId, signal, true);
-    if (!saved.ok) return saved;
+    if (!saved.ok) {
+      return saved;
+    }
+
     // Failed recovery can retain open intent without a live executor owning the SDK file.
     const lifecycles = new Map(
       this.snapshots
         ?.listSessions(worktreeId)
         .map((snapshot) => [snapshot.conversationId ?? snapshot.id, snapshot.lifecycle]),
     );
-    for (const record of this.registry.checkpointRecords)
+    for (const record of this.registry.checkpointRecords) {
       if (record.worktreeId === worktreeId) {
         lifecycles.set(record.state.conversationId ?? record.id, record.lifecycle ?? "open");
       }
+    }
+
     // Keep the full index for ownership-safe resume, direct previews and dashboard totals.
     return ok(
       saved.value.items
@@ -91,65 +98,101 @@ export class SessionHistory {
     savedId: string,
     signal?: AbortSignal,
   ): Promise<Result<HistoryPreview, ExpectedError>> {
-    if (signal?.aborted) return err(new CancelledError());
-    if (this.snapshots?.isExpired?.(worktreeId, savedId))
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+    if (this.snapshots?.isExpired?.(worktreeId, savedId)) {
       return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved session has expired."));
+    }
+
     const tree = repositorySnapshot(this.repositories)
       .flatMap((repo) => repo.worktrees)
       .find((entry) => entry.id === worktreeId);
-    if (!tree)
+    if (!tree) {
       return err(new HistoryError("HISTORY_UNAVAILABLE", "No worktree is available for history."));
+    }
+
     let saved = await this.index(worktreeId, signal);
     // A different caller may have cancelled a shared cold discovery. Retry only that cancelled discovery.
-    if (!saved.ok && saved.error.code === "CANCELLED" && !signal?.aborted)
+    if (!saved.ok && saved.error.code === "CANCELLED" && !signal?.aborted) {
       saved = await this.index(worktreeId, signal);
-    if (signal?.aborted) return err(new CancelledError());
-    if (!saved.ok) return saved;
+    }
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+    if (!saved.ok) {
+      return saved;
+    }
+
     const item = saved.value.byId.get(savedId);
-    if (!item)
+    if (!item) {
       return err(
         new HistoryError(
           "HISTORY_UNAVAILABLE",
           "Saved session is not available in this worktree. Refresh history.",
         ),
       );
+    }
+
     const cwd = await capture(() => realpath(tree.path));
-    if (!cwd.ok) return cwd;
-    if (cwd.value !== saved.value.cwd)
+    if (!cwd.ok) {
+      return cwd;
+    }
+    if (cwd.value !== saved.value.cwd) {
       return err(
         new HistoryError("HISTORY_UNAVAILABLE", "Saved session worktree changed. Refresh history."),
       );
+    }
+
     const current = this.registry.sessionSnapshot(worktreeId, savedId);
-    if (this.snapshots && current) return this.snapshotPreview(current, savedId, cwd.value, signal);
+    if (this.snapshots && current) {
+      return this.snapshotPreview(current, savedId, cwd.value, signal);
+    }
     if (this.snapshots) {
       const snapshot = await this.snapshots.readSession(worktreeId, savedId);
-      if (!snapshot.ok) return snapshot;
-      if (signal?.aborted) return err(new CancelledError());
+      if (!snapshot.ok) {
+        return snapshot;
+      }
+      if (signal?.aborted) {
+        return err(new CancelledError());
+      }
       if (snapshot.value?.sessionFile === item.path) {
         const file = await capture(() => stat(item.path));
-        if (!file.ok) return file;
+        if (!file.ok) {
+          return file;
+        }
         // External SDK writes supersede a closed runtime snapshot's transcript.
         if (
           snapshot.value.updatedAt === undefined ||
           Math.floor(Math.max(file.value.mtimeMs, file.value.ctimeMs)) <= snapshot.value.updatedAt
-        )
+        ) {
           return this.snapshotPreview(snapshot.value, savedId, cwd.value, signal);
+        }
       }
     }
+
     const selectedPath = item.path;
     const path = await capture(() => realpath(selectedPath));
-    if (!path.ok) return path;
-    if (cwd.value !== saved.value.cwd || path.value !== item.path)
+    if (!path.ok) {
+      return path;
+    }
+    if (cwd.value !== saved.value.cwd || path.value !== item.path) {
       return err(
         new HistoryError("HISTORY_UNAVAILABLE", "Saved session location changed. Refresh history."),
       );
+    }
+
     const preview = await readHistoryPreview(path.value, worktreeId, savedId, signal, {
       cwd: cwd.value,
       requireCwd: item.requireCwd ?? !!this.sessionDir,
     });
-    if (!preview.ok) return preview;
+    if (!preview.ok) {
+      return preview;
+    }
+
     const owner = this.registry.historyOwnership(path.value).openSessionId;
     const telemetry = owner ? this.registry.details(owner)?.telemetry : undefined;
+
     return ok(telemetry ? { ...preview.value, telemetry } : preview.value);
   }
 
@@ -162,43 +205,61 @@ export class SessionHistory {
     const snapshotCwd = record.cwd;
     if (snapshotCwd) {
       const scope = await capture(() => realpath(snapshotCwd));
-      if (!scope.ok) return scope;
-      if (scope.value !== cwd)
+      if (!scope.ok) {
+        return scope;
+      }
+      if (scope.value !== cwd) {
         return err(
           new HistoryError(
             "HISTORY_UNAVAILABLE",
             "Saved snapshot belongs to a different worktree. Refresh history.",
           ),
         );
+      }
     }
+
     return signal?.aborted
       ? err(new CancelledError())
       : ok(previewSessionSnapshot(record, savedId));
   }
 
   async resume(worktreeId: string, savedId: string): Promise<Result<string, ExpectedError>> {
-    if (this.snapshots?.isExpired?.(worktreeId, savedId))
+    if (this.snapshots?.isExpired?.(worktreeId, savedId)) {
       return err(new HistoryError("HISTORY_UNAVAILABLE", "Saved session has expired."));
+    }
+
     // Mutating actions always rediscover current membership and writer ownership.
     const saved = await this.index(worktreeId, undefined, true);
-    if (!saved.ok) return saved;
+    if (!saved.ok) {
+      return saved;
+    }
+
     const item = saved.value.byId.get(savedId);
-    if (!item)
+    if (!item) {
       return err(
         new HistoryError(
           "HISTORY_UNAVAILABLE",
           "Saved session is not available in this worktree. Refresh history.",
         ),
       );
-    if (item.unavailableReason)
+    }
+    if (item.unavailableReason) {
       return err(new SessionError("SESSION_CONFLICT", item.unavailableReason));
-    if (item.openSessionId) return ok(item.openSessionId);
+    }
+    if (item.openSessionId) {
+      return ok(item.openSessionId);
+    }
+
     const validated = await validateHistory(item.path);
-    if (!validated.ok) return validated;
+    if (!validated.ok) {
+      return validated;
+    }
+
     const managed =
       this.snapshots
         ?.listSessions(worktreeId)
         .find((snapshot) => snapshot.conversationId === savedId)?.managed === true;
+
     return this.registry.create(worktreeId, item.path, {
       id: crypto.randomUUID(),
       name: item.title,
@@ -210,21 +271,32 @@ export class SessionHistory {
     days: DashboardPeriod,
     signal?: AbortSignal,
   ): Promise<Result<DashboardSnapshot, ExpectedError>> {
-    const now = Date.now(),
-      seen = new Set<string>(),
-      files = new Set<string>(),
-      summaries: DashboardSnapshot[] = [],
-      warnings: string[] = [];
+    const now = Date.now();
+    const seen = new Set<string>();
+    const files = new Set<string>();
+    const summaries: DashboardSnapshot[] = [];
+    const warnings: string[] = [];
     for (const tree of repositorySnapshot(this.repositories).flatMap(
       (repository) => repository.worktrees,
     )) {
-      if (signal?.aborted) return err(new CancelledError());
+      if (signal?.aborted) {
+        return err(new CancelledError());
+      }
+
       const index = await this.index(tree.id, signal, true);
-      if (!index.ok) return index;
+      if (!index.ok) {
+        return index;
+      }
       for (const item of index.value.items) {
-        if (signal?.aborted) return err(new CancelledError());
-        if (files.has(item.path)) continue;
+        if (signal?.aborted) {
+          return err(new CancelledError());
+        }
+        if (files.has(item.path)) {
+          continue;
+        }
+
         files.add(item.path);
+
         const summary = await readDashboardHistory(
           item.path,
           index.value.cwd,
@@ -234,16 +306,24 @@ export class SessionHistory {
           signal,
         );
         if (!summary.ok) {
-          if (summary.error.code === "CANCELLED") return summary;
+          if (summary.error.code === "CANCELLED") {
+            return summary;
+          }
+
           warnings.push(`A conversation was excluded [${summary.error.code}]. Refresh to retry.`);
           continue;
         }
+
         summaries.push(summary.value.snapshot);
-        for (const identity of summary.value.identities) seen.add(identity);
+        for (const identity of summary.value.identities) {
+          seen.add(identity);
+        }
       }
     }
+
     const snapshot = mergeDashboards(summaries, days, now);
     snapshot.warnings = [...new Set([...snapshot.warnings, ...warnings])].slice(0, 100);
+
     return ok(snapshot);
   }
 
@@ -252,26 +332,40 @@ export class SessionHistory {
     signal?: AbortSignal,
     refresh = false,
   ): Promise<Result<HistoryIndex, ExpectedError>> {
-    if (signal?.aborted) return Promise.resolve(err(new CancelledError()));
+    if (signal?.aborted) {
+      return Promise.resolve(err(new CancelledError()));
+    }
+
     const ids = new Set(
       repositorySnapshot(this.repositories).flatMap((repo) =>
         repo.worktrees.map((tree) => tree.id),
       ),
     );
-    for (const id of this.indexes.keys()) if (!ids.has(id)) this.indexes.delete(id);
-    if (!ids.has(worktreeId))
+    for (const id of this.indexes.keys()) {
+      if (!ids.has(id)) {
+        this.indexes.delete(id);
+      }
+    }
+    if (!ids.has(worktreeId)) {
       return Promise.resolve(
         err(new HistoryError("HISTORY_UNAVAILABLE", "No worktree is available for history.")),
       );
+    }
+
     const previous = this.indexes.get(worktreeId);
-    if (!refresh && previous && (previous.valid || !previous.signal?.aborted))
+    if (!refresh && previous && (previous.valid || !previous.signal?.aborted)) {
       return previous.ready;
+    }
+
     const ready = this.discover(worktreeId, signal).then((result) => {
       entry.valid = result.ok;
+
       return result;
     });
     const entry: Discovery = { ready, signal, valid: false };
+
     this.indexes.set(worktreeId, entry);
+
     // Replacing the promise before it resolves also fences out older refreshes.
     return ready;
   }
@@ -280,15 +374,25 @@ export class SessionHistory {
     worktreeId: string,
     signal?: AbortSignal,
   ): Promise<Result<HistoryIndex, ExpectedError>> {
-    if (signal?.aborted) return err(new CancelledError());
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+
     const tree = repositorySnapshot(this.repositories)
       .flatMap((repo) => repo.worktrees)
       .find((entry) => entry.id === worktreeId);
-    if (!tree)
+    if (!tree) {
       return err(new HistoryError("HISTORY_UNAVAILABLE", "No worktree is available for history."));
+    }
+
     const cwd = await capture(() => realpath(tree.path));
-    if (!cwd.ok) return cwd;
-    if (signal?.aborted) return err(new CancelledError());
+    if (!cwd.ok) {
+      return cwd;
+    }
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+
     const sessions = await capture(async () => {
       const owned = (await SessionManager.list(tree.path, this.sessionDir, undefined, signal)).map(
         (session) => ({ ...session, requireCwd: !!this.sessionDir }),
@@ -299,35 +403,59 @@ export class SessionHistory {
             requireCwd: false,
           }))
         : [];
+
       return [...owned, ...legacy];
     });
-    if (!sessions.ok) return sessions;
+    if (!sessions.ok) {
+      return sessions;
+    }
+
     const result: SavedHistory[] = [];
     for (const session of sessions.value) {
-      if (this.snapshots?.isExpired?.(worktreeId, session.id)) continue;
-      if (signal?.aborted) return err(new CancelledError());
+      if (this.snapshots?.isExpired?.(worktreeId, session.id)) {
+        continue;
+      }
+      if (signal?.aborted) {
+        return err(new CancelledError());
+      }
       // A custom directory may be shared by worktrees; cwd metadata must still scope each list.
       if (session.cwd) {
         const savedCwd = await capture(() => realpath(session.cwd));
         if (!savedCwd.ok) {
-          if (savedCwd.error instanceof StorageError && savedCwd.error.systemCode === "ENOENT")
+          if (savedCwd.error instanceof StorageError && savedCwd.error.systemCode === "ENOENT") {
             continue;
+          }
+
           return savedCwd;
         }
-        if (savedCwd.value !== cwd.value) continue;
-      } else if (session.requireCwd) continue;
+        if (savedCwd.value !== cwd.value) {
+          continue;
+        }
+      } else if (session.requireCwd) {
+        continue;
+      }
+
       const path = await capture(() => realpath(session.path));
       if (!path.ok) {
-        if (path.error instanceof StorageError && path.error.systemCode === "ENOENT") continue;
+        if (path.error instanceof StorageError && path.error.systemCode === "ENOENT") {
+          continue;
+        }
+
         return path;
       }
+
       const file = await capture(() => stat(path.value, { bigint: true }));
       if (!file.ok) {
-        if (file.error instanceof StorageError && file.error.systemCode === "ENOENT") continue;
+        if (file.error instanceof StorageError && file.error.systemCode === "ENOENT") {
+          continue;
+        }
+
         return file;
       }
+
       const revision = `${file.value.ino}:${file.value.size}:${file.value.mtimeNs}:${file.value.ctimeNs}`;
       const ownership = this.registry.historyOwnership(path.value);
+
       result.push({
         id: session.id,
         revision,
@@ -343,11 +471,20 @@ export class SessionHistory {
         unavailableReason: ownership.unavailableReason,
       });
     }
-    if (signal?.aborted) return err(new CancelledError());
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+
     result.sort((a, b) => b.modified.localeCompare(a.modified) || a.id.localeCompare(b.id));
+
     // Preserve the same newest-first resolution as the original Array.find for duplicate saved IDs.
     const byId = new Map<string, SavedHistory>();
-    for (const item of result) if (!byId.has(item.id)) byId.set(item.id, item);
+    for (const item of result) {
+      if (!byId.has(item.id)) {
+        byId.set(item.id, item);
+      }
+    }
+
     return ok({ cwd: cwd.value, items: result, byId });
   }
 }

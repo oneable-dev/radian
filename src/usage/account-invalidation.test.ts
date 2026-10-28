@@ -6,18 +6,22 @@ import { ok, type Result } from "../result.ts";
 import type { UsageError } from "../errors.ts";
 
 async function settle() {
-  for (let i = 0; i < 60; i++) await Promise.resolve();
+  for (let i = 0; i < 60; i++) {
+    await Promise.resolve();
+  }
 }
+
 test("Explicit account changes clear usage immediately and reject stale previous-account responses", async () => {
   // Control only external queries to overlap slow A and immediate B results.
-  const clock = new ManualClock(),
-    gate = Promise.withResolvers<Result<readonly UsageWindow[], UsageError>>();
+  const clock = new ManualClock();
+  const gate = Promise.withResolvers<Result<readonly UsageWindow[], UsageError>>();
   let selected = "A";
   const window = (usedPercent: number): UsageWindow[] => [
     { id: "weekly", usedPercent, periodMs: 604800000, resetsAt: 604800000 },
   ];
   const monitor = new UsageMonitor(async () => {
     const account = selected;
+
     return ok({
       provider: "fixture",
       key: account,

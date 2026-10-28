@@ -18,10 +18,10 @@ async function mount(empty = false, keymap?: Keymap) {
     ...repo,
     worktrees: repo.worktrees.map((tree) => ({ ...tree, sessions: empty ? [] : tree.sessions })),
   }));
-  const selection = new WorkspaceSelection(repositories),
-    created: string[] = [],
-    lookups: string[] = [],
-    sent: string[] = [];
+  const selection = new WorkspaceSelection(repositories);
+  const created: string[] = [];
+  const lookups: string[] = [];
+  const sent: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     ...(keymap ? { keymap } : {}),
     onNewSession: (id) => created.push(id),
@@ -39,11 +39,13 @@ async function mount(empty = false, keymap?: Keymap) {
     },
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     initialDrafts: { a1: "preserved prompt" },
     onListHistory: async (id) => {
       lookups.push(id);
+
       return ok([]);
     },
     getSessionDetails: () => ({
@@ -71,17 +73,24 @@ async function mount(empty = false, keymap?: Keymap) {
   });
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
   const render = async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
+    for (let i = 0; i < 8; i++) {
+      await Promise.resolve();
+    }
+
     await app.renderOnce();
     await app.renderOnce();
   };
   // Supplementary-plane Nerd Font glyphs occupy one cell, but two UTF-16 code units.
   const line = (id: string) => {
     const node = get(id);
+
     return truncateCells(app.captureCharFrame().split("\n")[node.y]!.slice(node.x), node.width, "");
   };
   const history = async () => {
@@ -89,7 +98,9 @@ async function mount(empty = false, keymap?: Keymap) {
     app.mockInput.pressKey("h");
     await render();
   };
+
   await render();
+
   return {
     ...app,
     selection,
@@ -118,9 +129,11 @@ test("Remove top-right worktree/create/History buttons and show selected worktre
     expect(app.line("footer-workspace").trim()).toBe(
       `${icons.folder} radian · ${icons.branch} main`,
     );
-    const scope = app.get("footer-workspace"),
-      status = app.get("session-status"),
-      composer = app.get("agent-composer");
+
+    const scope = app.get("footer-workspace");
+    const status = app.get("session-status");
+    const composer = app.get("agent-composer");
+
     expect(scope.y).toBe(app.get("app-footer").y);
     expect(status.y).toBe(composer.y + composer.height);
     expect(status.height).toBe(3);
@@ -183,6 +196,7 @@ test("Creation commands and global History shortcuts remain available without bu
     expect(app.created).toEqual(["demo:main"]);
     pressLeader(app, "a");
     await app.render();
+
     const prompt = app.get("session-prompt");
     await app.history();
     expect(app.get("session-history").visible).toBe(true);
@@ -200,8 +214,9 @@ test("Creation commands and global History shortcuts remain available without bu
 test("Empty Agent views retain a content focus target for creation without focusing tabs", async () => {
   const app = await mount(true);
   try {
-    const content = app.get("agent-view"),
-      list = app.get("agent-session-list");
+    const content = app.get("agent-view");
+    const list = app.get("agent-session-list");
+
     expect(app.renderer.currentFocusedRenderable).toBe(content);
     for (let i = 0; i < 6; i++) {
       app.mockInput.pressTab();
@@ -209,6 +224,7 @@ test("Empty Agent views retain a content focus target for creation without focus
       expect(list.focused).toBe(false);
       expect(list.hasFocusedDescendant).toBe(false);
     }
+
     expect(list.visible).toBe(true);
     expect(app.created).toEqual([]);
     app.mockInput.pressKey(" ", { ctrl: true });
@@ -235,6 +251,7 @@ test("Closing final sessions focuses empty content and preserves creation comman
       })),
     );
     await app.render();
+
     const list = app.get("agent-session-list");
     pressLeader(app, "x");
     await app.render();
@@ -278,8 +295,9 @@ test.each(["default", "custom", "disabled"] as const)(
       // Hints reflect rebinding/disabling and remain empty until explicit requests.
       expect(app.captureCharFrame()).toContain("No AI sessions");
       expect(app.created).toEqual([]);
-      if (mode === "disabled") expect(hint.visible).toBe(false);
-      else {
+      if (mode === "disabled") {
+        expect(hint.visible).toBe(false);
+      } else {
         expect(app.line("agent-empty-state:hint")).toContain("<leader>c");
         app.mockInput.pressKey(mode === "custom" ? "b" : " ", { ctrl: true });
         app.mockInput.pressKey("c");
@@ -295,8 +313,9 @@ test.each(["default", "custom", "disabled"] as const)(
 test("Long Korean/emoji worktrees and branches truncate within one footer row without changing source", async () => {
   const app = await mount();
   try {
-    const name = "한글 👨‍👩‍👧‍👦 é very-long-worktree-name",
-      branch = "feature/한글-👩🏽‍💻-very-long-branch";
+    const name = "한글 👨‍👩‍👧‍👦 é very-long-worktree-name";
+    const branch = "feature/한글-👩🏽‍💻-very-long-branch";
+
     app.selection.replaceSnapshot(
       app.selection.snapshot.map((repo) => ({
         ...repo,
@@ -307,8 +326,10 @@ test("Long Korean/emoji worktrees and branches truncate within one footer row wi
     );
     app.resize(100, 24);
     await app.render();
-    const scope = app.get("footer-workspace") as TextRenderable,
-      text = scope.plainText;
+
+    const scope = app.get("footer-workspace") as TextRenderable;
+    const text = scope.plainText;
+
     expect(scope.height).toBe(1);
     expect(Bun.stringWidth(text)).toBeLessThanOrEqual(scope.width);
     expect(text).toContain("…");
@@ -329,15 +350,19 @@ test("Compact scope displays avoid model/meters while preserving drafts, input f
   try {
     pressLeader(app, "a");
     await app.render();
+
     const prompt = app.get("session-prompt") as PromptInput;
     for (const width of [160, 100, 60, 160]) {
       app.resize(width, 24);
       await app.render();
-      const scope = app.get("footer-workspace"),
-        status = app.get("session-status");
+
+      const scope = app.get("footer-workspace");
+      const status = app.get("session-status");
       const identity = app.get("footer-identity");
+
       expect(scope.visible).toBe(true);
       expect(scope.x).toBe(identity.x + identity.width);
+
       const text = (scope as TextRenderable).plainText;
       expect(text.startsWith(` ${icons.folder} `)).toBe(true);
       expect(text).toContain(` ${icons.branch} `);
@@ -349,6 +374,7 @@ test("Compact scope displays avoid model/meters while preserving drafts, input f
       expect(app.renderer.currentFocusedRenderable).toBe(prompt);
       expect(prompt.value).toBe("preserved prompt");
     }
+
     expect(app.line("footer-workspace").trim()).toBe(
       `${icons.folder} radian · ${icons.branch} main`,
     );

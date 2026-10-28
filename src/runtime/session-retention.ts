@@ -13,6 +13,7 @@ import { err, ok, type Result } from "../result.ts";
 
 export const retentionSweepIntervalMs = 60 * 60 * 1000;
 export const retentionDayMs = 24 * 60 * 60 * 1000;
+
 export function sessionExpired(
   snapshot: SessionSnapshotInfo,
   days: number | null,
@@ -28,10 +29,12 @@ export function sessionExpired(
 }
 
 type Fingerprint = { dev: number; ino: number; size: number; mtimeMs: number };
+
 export type RetainedFile =
   | { kind: "absent" }
   | { kind: "changed" }
   | { kind: "ready"; path: string; fingerprint: Fingerprint };
+
 const sameFile = (a: Fingerprint, b: Fingerprint) =>
   a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
 
@@ -41,44 +44,59 @@ export async function inspectRetainedFile(
   snapshot: SessionSnapshotInfo,
 ): Promise<Result<RetainedFile, ExpectedError>> {
   const path = snapshot.sessionFile;
-  if (!path) return ok({ kind: "absent" });
+  if (!path) {
+    return ok({ kind: "absent" });
+  }
+
   const found = await capture(() => lstat(path));
-  if (!found.ok)
+  if (!found.ok) {
     return found.error instanceof StorageError && found.error.systemCode === "ENOENT"
       ? ok({ kind: "absent" })
       : found;
-  if (!found.value.isFile() || found.value.isSymbolicLink())
+  }
+  if (!found.value.isFile() || found.value.isSymbolicLink()) {
     return err(
       new HistoryError("HISTORY_UNAVAILABLE", "Retention refused a non-regular SDK session file."),
     );
-  if (Math.floor(found.value.mtimeMs) > snapshot.updatedAt) return ok({ kind: "changed" });
+  }
+  if (Math.floor(found.value.mtimeMs) > snapshot.updatedAt) {
+    return ok({ kind: "changed" });
+  }
+
   const canonical = await capture(() => realpath(path));
-  if (!canonical.ok) return canonical;
-  if (canonical.value !== resolve(path))
+  if (!canonical.ok) {
+    return canonical;
+  }
+  if (canonical.value !== resolve(path)) {
     return err(
       new HistoryError(
         "HISTORY_UNAVAILABLE",
         "Retention refused a session path with a changed or symbolic location.",
       ),
     );
+  }
+
   const read = await capture(async () => {
     const file = await open(path, "r");
+
     return withCleanup(
       async () => {
         const stat = await file.stat();
-        if (!sameFile(found.value, stat))
+        if (!sameFile(found.value, stat)) {
           return err(
             new HistoryError("HISTORY_UNAVAILABLE", "Session changed during retention inspection."),
           );
-        const buffer = Buffer.alloc(65536),
-          bytes = await file.read(buffer, 0, buffer.length, 0);
+        }
+
+        const buffer = Buffer.alloc(65536);
+        const bytes = await file.read(buffer, 0, buffer.length, 0);
         const text = buffer
           .subarray(0, bytes.bytesRead)
           .toString("utf8")
           .split(/\r?\n/)
           .find((line) => line.trim());
         const parsed = parseJson(text ?? "", "retained session header");
-        if (!parsed.ok)
+        if (!parsed.ok) {
           return err(
             new HistoryError(
               "HISTORY_CORRUPT",
@@ -86,6 +104,8 @@ export async function inspectRetainedFile(
               { cause: parsed.error },
             ),
           );
+        }
+
         const header = parsed.value;
         if (
           !header ||
@@ -107,6 +127,7 @@ export async function inspectRetainedFile(
             ),
           );
         }
+
         return ok({
           kind: "ready",
           path: canonical.value,
@@ -116,32 +137,40 @@ export async function inspectRetainedFile(
       () => file.close(),
     );
   });
+
   return read.ok ? read.value : read;
 }
 
 export async function deleteRetainedFile(file: RetainedFile): Promise<Result<void, ExpectedError>> {
-  if (file.kind !== "ready") return ok(undefined);
+  if (file.kind !== "ready") {
+    return ok(undefined);
+  }
+
   const found = await capture(() => lstat(file.path));
-  if (!found.ok)
+  if (!found.ok) {
     return found.error instanceof StorageError && found.error.systemCode === "ENOENT"
       ? ok(undefined)
       : found;
+  }
   if (
     !found.value.isFile() ||
     found.value.isSymbolicLink() ||
     !sameFile(file.fingerprint, found.value)
-  )
+  ) {
     return err(
       new HistoryError(
         "HISTORY_UNAVAILABLE",
         "Session changed before retention deletion; no SDK file was removed.",
       ),
     );
+  }
+
   return removeRetentionFile(file.path);
 }
 
 export async function removeRetentionFile(path: string): Promise<Result<void, ExpectedError>> {
   const removed = await capture(() => unlink(path));
+
   return !removed.ok &&
     removed.error instanceof StorageError &&
     removed.error.systemCode === "ENOENT"
@@ -150,9 +179,11 @@ export async function removeRetentionFile(path: string): Promise<Result<void, Ex
 }
 
 type Schedule = (tick: () => void, intervalMs: number) => () => void;
+
 const scheduleInterval: Schedule = (tick, intervalMs) => {
   const timer = setInterval(tick, intervalMs);
   timer.unref();
+
   return () => clearInterval(timer);
 };
 
@@ -161,31 +192,44 @@ export class RetentionScheduler {
   private pending: Promise<void> | undefined;
   private cancel: (() => void) | undefined;
   private stopped = false;
+
   constructor(
     private readonly sweep: () => Promise<Result<number, ExpectedError>>,
     private readonly completed: (result: Result<number, ExpectedError>) => void,
     private readonly unexpected: (error: unknown) => void,
     private readonly schedule: Schedule = scheduleInterval,
   ) {}
+
   async start(): Promise<void> {
     await this.run();
-    if (!this.stopped)
+    if (!this.stopped) {
       this.cancel = this.schedule(() => {
         void this.run().catch(this.unexpected);
       }, retentionSweepIntervalMs);
+    }
   }
+
   run(): Promise<void> {
-    if (this.stopped) return Promise.resolve();
-    if (this.pending) return this.pending;
+    if (this.stopped) {
+      return Promise.resolve();
+    }
+    if (this.pending) {
+      return this.pending;
+    }
+
     const task = Promise.resolve()
       .then(() => this.sweep())
       .then((result) => this.completed(result))
       .finally(() => {
-        if (this.pending === task) this.pending = undefined;
+        if (this.pending === task) {
+          this.pending = undefined;
+        }
       });
     this.pending = task;
+
     return task;
   }
+
   async stop(): Promise<void> {
     this.stopped = true;
     this.cancel?.();

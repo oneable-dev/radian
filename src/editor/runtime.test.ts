@@ -11,10 +11,14 @@ import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 async function until(check: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 8000;
   while (!(await check())) {
-    if (Date.now() > deadline) throw new Error("Editor observation timed out.");
+    if (Date.now() > deadline) {
+      throw new Error("Editor observation timed out.");
+    }
+
     await Bun.sleep(20);
   }
 }
+
 async function screen(frame: EditorFrame) {
   const terminal = new Terminal({
     cols: frame.cols,
@@ -24,6 +28,7 @@ async function screen(frame: EditorFrame) {
   });
   try {
     await new Promise<void>((resolve) => terminal.write(frame.ansi, resolve));
+
     return {
       text: terminal.buffer.active.getLine(0)?.translateToString(true),
       x: terminal.buffer.active.cursorX,
@@ -33,6 +38,7 @@ async function screen(frame: EditorFrame) {
     terminal.dispose();
   }
 }
+
 async function watch(client: RuntimeClient, id: string) {
   let frame: EditorFrame | undefined;
   const errors: unknown[] = [];
@@ -45,11 +51,15 @@ async function watch(client: RuntimeClient, id: string) {
       (error) => errors.push(error),
     ),
   );
+
   return {
     connection,
     errors,
     get frame() {
-      if (!frame) throw new Error("Missing first frame");
+      if (!frame) {
+        throw new Error("Missing first frame");
+      }
+
       return frame;
     },
     async text(value: string) {
@@ -57,6 +67,7 @@ async function watch(client: RuntimeClient, id: string) {
     },
   };
 }
+
 async function setup() {
   const fixture = await createWorktreeFixture();
   const options = {
@@ -65,17 +76,23 @@ async function setup() {
     entry: join(import.meta.dir, "..", "index.ts"),
   };
   const clients: RuntimeClient[] = [];
+
   return {
     ...fixture,
     options,
     async connect() {
       const client = expectOk(await connectRuntime(fixture.repository, fixture.main, options));
-      if (!client) throw new Error("Missing runtime");
+      if (!client) {
+        throw new Error("Missing runtime");
+      }
+
       clients.push(client);
+
       return client;
     },
     async cleanup() {
       await Promise.all(clients.map((client) => client.disconnect()));
+
       const admin = expectOk(
         await connectRuntime(fixture.repository, fixture.main, { ...options, start: false }),
       );
@@ -88,6 +105,7 @@ async function setup() {
             !expectOk(await fetchSnapshot(admin.paths)) && pids.every((pid) => !pidAlive(pid)),
         );
       }
+
       await fixture.cleanup();
     },
   };
@@ -102,8 +120,9 @@ test("Real per-worktree Neovim buffers and cursors survive TUI reconnects with i
     const b = app.repository.worktrees.find((tree) => tree.path === app.feature)!;
     const aid = expectOk(await client.openEditor(a.id));
     const bid = expectOk(await client.openEditor(b.id));
-    const first = await watch(client, aid),
-      second = await watch(client, bid);
+    const first = await watch(client, aid);
+    const second = await watch(client, bid);
+
     await first.text("NVIM");
     await second.text("NVIM");
     first.connection.input(new TextEncoder().encode(":edit workspace.txt\riunsaved-A\x1b"));
@@ -120,8 +139,9 @@ test("Real per-worktree Neovim buffers and cursors survive TUI reconnects with i
     );
     await until(() => Bun.file(join(app.main, "editor-size.txt")).exists());
     expect(await Bun.file(join(app.main, "editor-size.txt")).text()).toBe("93x19\n");
-    const before = await screen(first.frame),
-      pid = first.frame.pid;
+
+    const before = await screen(first.frame);
+    const pid = first.frame.pid;
     const preferences = {
       ...client.snapshot.preferences,
       workViews: {
@@ -129,11 +149,13 @@ test("Real per-worktree Neovim buffers and cursors survive TUI reconnects with i
         agentScroll: { saved: 7 },
       },
     };
+
     expectOk(await client.savePreferences(preferences));
 
     // Disconnect all UI streams without terminating either editor or saving the modified buffers.
     await client.disconnect();
     expect(pidAlive(pid)).toBe(true);
+
     const reconnected = await app.connect();
     const restored = await watch(reconnected, aid);
 
@@ -157,10 +179,11 @@ test("Editor input belongs only to current attachments, never old leases or othe
   // One daemon editor may be observed/reconnected, but concurrent writers cannot steal it.
   const app = await setup();
   try {
-    const client = await app.connect(),
-      other = await app.connect();
+    const client = await app.connect();
+    const other = await app.connect();
     const id = expectOk(await client.openEditor(app.repository.worktrees[0]!.id));
     const initial = await watch(client, id);
+
     await initial.text("NVIM");
     expect(
       expectError(
@@ -171,8 +194,10 @@ test("Editor input belongs only to current attachments, never old leases or othe
         ),
       ).code,
     ).toBe("EDITOR_BUSY");
+
     const oldLease = initial.connection.lease;
     await initial.connection.disconnect();
+
     const next = await watch(other, id);
 
     // A delayed request from the detached UI cannot mutate the new attachment.
@@ -186,6 +211,7 @@ test("Editor input belongs only to current attachments, never old leases or othe
         data: Buffer.from("iLOST").toString("base64"),
       }),
     });
+
     expect(reply.status).toBe(409);
     next.connection.input(new TextEncoder().encode("ikept\x1b"));
     await next.text("kept");
@@ -199,13 +225,15 @@ test("Neovim exit disables auto-restart and coalesces explicit reopen requests",
   // Exiting Neovim is distinct from hiding its view or detaching the TUI.
   const app = await setup();
   try {
-    const client = await app.connect(),
-      tree = app.repository.worktrees[0]!;
+    const client = await app.connect();
+    const tree = app.repository.worktrees[0]!;
     const id = expectOk(await client.openEditor(tree.id));
     const editor = await watch(client, id);
+
     await editor.text("NVIM");
     editor.connection.input(new TextEncoder().encode(":qa!\r"));
     await until(() => editor.frame.exited);
+
     const pid = editor.frame.pid;
     await editor.connection.disconnect();
 
@@ -263,7 +291,7 @@ test("Editor contracts reject invalid bytes/sizes and retain preference compatib
       ),
     ).code,
   ).toBe("INVALID_INPUT");
-  for (const cols of [0, 501, 4.5])
+  for (const cols of [0, 501, 4.5]) {
     expect(
       expectError(
         parseCommand(
@@ -271,15 +299,17 @@ test("Editor contracts reject invalid bytes/sizes and retain preference compatib
         ),
       ).code,
     ).toBe("INVALID_INPUT");
+  }
 });
 
 test("Long-idle editing preserves main and Editor IPC connections", async () => {
   // This exceeds Bun's real default HTTP idle timeout, unlike a mocked stream test.
   const app = await setup();
   try {
-    const client = await app.connect(),
-      id = expectOk(await client.openEditor(app.repository.worktrees[0]!.id));
+    const client = await app.connect();
+    const id = expectOk(await client.openEditor(app.repository.worktrees[0]!.id));
     const editor = await watch(client, id);
+
     await editor.text("NVIM");
     await Bun.sleep(16000);
 

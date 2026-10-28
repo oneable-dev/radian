@@ -7,6 +7,7 @@ import type { PiSessionOptions } from "../agents/pi-session-adapter.ts";
 // These are scripted SDK responses, not a language model or a substitute for live-provider validation.
 export async function offlineRuntime(directory: string): Promise<PiSessionOptions> {
   await mkdir(directory, { recursive: true });
+
   const modelRuntime = await ModelRuntime.create({
     authPath: join(directory, "auth.json"),
     modelsPath: null,
@@ -29,8 +30,12 @@ export async function offlineRuntime(directory: string): Promise<PiSessionOption
       },
     ],
   });
+
   const model = modelRuntime.getModel("radian-offline", "fixture");
-  if (!model) throw new Error("Offline fixture model was not registered.");
+  if (!model) {
+    throw new Error("Offline fixture model was not registered.");
+  }
+
   const streamFn: NonNullable<PiSessionOptions["streamFn"]> = (model, context, options) => {
     const stream = createAssistantMessageEventStream();
     const message = fixtureMessage(model.api, model.provider, model.id);
@@ -46,22 +51,32 @@ export async function offlineRuntime(directory: string): Promise<PiSessionOption
         : "";
     const finish = (aborted = false): void => {
       options?.signal?.removeEventListener("abort", cancel);
-      if (timer) clearTimeout(timer);
-      if (aborted) message.stopReason = "aborted";
-      if (message.stopReason === "aborted")
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (aborted) {
+        message.stopReason = "aborted";
+      }
+      if (message.stopReason === "aborted") {
         stream.push({ type: "error", reason: "aborted", error: message });
-      else if (message.stopReason === "error")
+      } else if (message.stopReason === "error") {
         stream.push({ type: "error", reason: "error", error: message });
-      else stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
+      } else {
+        stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
+      }
+
       stream.end();
     };
     let timer: ReturnType<typeof setTimeout> | undefined;
     const cancel = (): void => finish(true);
+
     stream.push({ type: "start", partial: message });
     if (options?.signal?.aborted) {
       finish(true);
+
       return stream;
     }
+
     options?.signal?.addEventListener("abort", cancel, { once: true });
     if (input === "fail") {
       message.stopReason = "error";
@@ -71,14 +86,19 @@ export async function offlineRuntime(directory: string): Promise<PiSessionOption
       const text = { type: "text" as const, text: "" };
       message.content.push(text);
       stream.push({ type: "text_start", contentIndex: 0, partial: message });
+
       let tick = 0;
       const step = (): void => {
         const delta = `Progress ${++tick}/40\n`;
         text.text += delta;
         stream.push({ type: "text_delta", contentIndex: 0, delta, partial: message });
-        if (tick === 40) finish();
-        else timer = setTimeout(step, 250);
+        if (tick === 40) {
+          finish();
+        } else {
+          timer = setTimeout(step, 250);
+        }
       };
+
       timer = setTimeout(step, 250);
     } else if (["read", "write", "delegate"].includes(input)) {
       const tool =
@@ -104,8 +124,10 @@ export async function offlineRuntime(directory: string): Promise<PiSessionOption
       message.content.push({ type: "text", text: result });
       finish();
     }
+
     return stream;
   };
+
   return {
     agentDir: directory,
     sessionDir: join(directory, "sessions"),

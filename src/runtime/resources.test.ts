@@ -31,11 +31,12 @@ const mockFetch = (
 
 test("Resource requests validate runtime identity and counter values at the IPC boundary", async () => {
   // Only the registered runtime PID may contribute to the live sum.
-  let data: unknown = sample,
-    status = 200;
+  let data: unknown = sample;
+  let status = 200;
   const request = mockFetch(async (input, options) => {
     expect(new URL(input instanceof Request ? input.url : input).pathname).toBe("/resources");
     expect(new Headers(options?.headers).get("X-Radian-Instance")).toBe("resource-runtime");
+
     return Response.json(data, { status });
   });
   const client = new RuntimeClient(paths, snapshot());
@@ -53,6 +54,7 @@ test("Resource requests validate runtime identity and counter values at the IPC 
       data = invalid;
       expect(expectError(await client.resources()).code).toBe("PROTOCOL_ERROR");
     }
+
     data = {
       ok: false,
       error: {
@@ -74,8 +76,8 @@ test("Legacy runtimes and pre-cancelled resource reads never start or restart se
   const request = mockFetch(async () => {
     throw new Error("Unexpected network request");
   });
-  const legacy = new RuntimeClient(paths, snapshot(false)),
-    client = new RuntimeClient(paths, snapshot());
+  const legacy = new RuntimeClient(paths, snapshot(false));
+  const client = new RuntimeClient(paths, snapshot());
   try {
     const unsupported = expectError(await legacy.resources());
     const cancelled = expectError(await client.resources(AbortSignal.abort()));
@@ -102,8 +104,8 @@ test("Closing an in-flight resource request returns typed cancellation", async (
         );
       }),
   );
-  const client = new RuntimeClient(paths, snapshot()),
-    abort = new AbortController();
+  const client = new RuntimeClient(paths, snapshot());
+  const abort = new AbortController();
   try {
     const pending = client.resources(abort.signal);
     abort.abort();

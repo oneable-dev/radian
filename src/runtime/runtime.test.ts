@@ -14,31 +14,43 @@ import { initialGitState } from "../git/model.ts";
 async function until(predicate: () => Promise<boolean> | boolean): Promise<void> {
   const deadline = Date.now() + 12000;
   while (!(await predicate())) {
-    if (Date.now() > deadline) throw new Error("Timed out waiting for observed runtime state.");
+    if (Date.now() > deadline) {
+      throw new Error("Timed out waiting for observed runtime state.");
+    }
+
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
   }
 }
+
 function observed(
   client: RuntimeClient,
   predicate: (snapshot: RuntimeSnapshot) => boolean,
 ): Promise<void> {
-  if (predicate(client.snapshot)) return Promise.resolve();
+  if (predicate(client.snapshot)) {
+    return Promise.resolve();
+  }
+
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       unsubscribe();
       reject(new Error("Runtime event condition timed out."));
     }, 10000);
     const unsubscribe = client.subscribe(() => {
-      if (!predicate(client.snapshot)) return;
+      if (!predicate(client.snapshot)) {
+        return;
+      }
+
       clearTimeout(timer);
       unsubscribe();
       resolve();
     });
   });
 }
+
 function progress(text = ""): number {
   return Math.max(0, ...[...text.matchAll(/Progress (\d+)\/40/g)].map((match) => Number(match[1])));
 }
+
 async function setup() {
   const fixture = await createWorktreeFixture();
   const options = {
@@ -48,14 +60,19 @@ async function setup() {
   };
   const paths = runtimePaths(fixture.repository.id, true, options.stateRoot);
   const clients: RuntimeClient[] = [];
+
   return {
     ...fixture,
     paths,
     options,
     async connect(cwd = fixture.main) {
       const client = expectOk(await connectRuntime(fixture.repository, cwd, options));
-      if (!client) throw new Error("Missing runtime client");
+      if (!client) {
+        throw new Error("Missing runtime client");
+      }
+
       clients.push(client);
+
       return client;
     },
     async stopped(pid: number) {
@@ -63,7 +80,10 @@ async function setup() {
     },
     async manifest(): Promise<RuntimeManifest> {
       const manifest = expectOk(await new RuntimeStore(paths).load(fixture.repository.id));
-      if (!manifest) throw new Error("Missing runtime manifest");
+      if (!manifest) {
+        throw new Error("Missing runtime manifest");
+      }
+
       return manifest;
     },
     async cleanup() {
@@ -76,6 +96,7 @@ async function setup() {
         await existing.disconnect();
         await this.stopped(pid);
       }
+
       await Promise.all(clients.map((client) => client.disconnect()));
       await fixture.cleanup();
     },
@@ -86,11 +107,12 @@ test("Dashboard Unix IPC reads closed SDK runs without conversations or new mode
   // Use only the separate offline daemon owned by this test.
   const app = await setup();
   try {
-    const client = await app.connect(),
-      tree = client.snapshot.repositories
-        .flatMap((repo) => repo.worktrees)
-        .find((tree) => tree.path === app.main)!;
+    const client = await app.connect();
+    const tree = client.snapshot.repositories
+      .flatMap((repo) => repo.worktrees)
+      .find((tree) => tree.path === app.main)!;
     const id = expectOk(await client.create(tree.id));
+
     expectOk(await client.prompt(id, "read"));
     await observed(client, (snapshot) => !!snapshot.details[id]?.result);
     expect(
@@ -99,6 +121,7 @@ test("Dashboard Unix IPC reads closed SDK runs without conversations or new mode
     expect(expectOk(await client.listHistory(tree.id))).toEqual([]);
     expect(expectOk(await client.dashboard(7)).totals.runs).toBe(1);
     expectOk(await client.closeSession(id));
+
     const before = client.snapshot.repositories;
 
     // Exercise host paths, capabilities, response schemas, and persisted aggregation together.
@@ -118,10 +141,11 @@ test("Interrupt IPC merges queued input into one message while retaining session
   // This test owns an isolated daemon; interruption never targets a user runtime.
   const app = await setup();
   try {
-    const client = await app.connect(),
-      tree = app.repository.worktrees.find((item) => item.path === app.main)!;
-    const id = expectOk(await client.create(tree.id)),
-      other = expectOk(await client.create(tree.id));
+    const client = await app.connect();
+    const tree = app.repository.worktrees.find((item) => item.path === app.main)!;
+    const id = expectOk(await client.create(tree.id));
+    const other = expectOk(await client.create(tree.id));
+
     expect(client.snapshot.capabilities).toContain("agent-interrupt");
     expectOk(await client.prompt(id, "slow"));
     expectOk(await client.prompt(other, "slow"));
@@ -133,6 +157,7 @@ test("Interrupt IPC merges queued input into one message while retaining session
         state.details[id]?.pendingMessages?.length === 2 &&
         state.details[other]?.status === "working",
     );
+
     const conversation = client.snapshot.details[id]!.conversationId;
     expectOk(
       await client.savePreferences({
@@ -195,11 +220,13 @@ test("Completion IPC reads only selected-session SDK commands/worktree files wit
     );
     await writeFile(join(app.main, "main-only.ts"), "never load this content");
     await writeFile(join(app.feature, "feature-only.ts"), "other worktree");
+
     const client = await app.connect();
     const main = app.repository.worktrees.find((tree) => tree.path === app.main)!;
     const id = expectOk(await client.create(main.id));
 
     expect(client.snapshot.capabilities).toContain("prompt-completion");
+
     const commands = expectOk(
       await client.complete(id, { kind: "command", query: "lookup-probe" }),
     );
@@ -213,10 +240,12 @@ test("Completion IPC reads only selected-session SDK commands/worktree files wit
     expect(expectOk(await client.complete(id, { kind: "command", query: "probe" })).items).toEqual(
       [],
     );
+
     const files = expectOk(await client.complete(id, { kind: "file", query: "only.ts" }));
     expect(files.items.map((item) => item.value)).toEqual(["main-only.ts"]);
     expectOk(await client.prompt(id, "/lookup-probe"));
     expect((await app.manifest()).records[0]?.state.output).toBe("");
+
     const commandError = expectError(await client.prompt(id, "/lookup-broken"));
     expect(commandError.code).toBe("AGENT_FAILED");
     expect(commandError).toHaveProperty("outcome", "unknown");
@@ -232,10 +261,13 @@ test("Completion IPC reads only selected-session SDK commands/worktree files wit
         headers: { "X-Radian-Instance": instance },
       });
       const body = await response.json();
-      if (!Value.Check(replySchema, body) || body.ok || typeof body.error === "string")
+      if (!Value.Check(replySchema, body) || body.ok || typeof body.error === "string") {
         throw new Error("Expected a typed completion rejection.");
+      }
+
       expect(body.error.code).toBe(code);
     }
+
     expectOk(await client.closeSession(id));
     expect(expectError(await client.complete(id, { kind: "file", query: "" })).code).toBe(
       "SESSION_NOT_OPEN",
@@ -248,9 +280,10 @@ test("Completion IPC reads only selected-session SDK commands/worktree files wit
 test("new IPC adds same-worktree tabs while retaining conversations, queues, and runs", async () => {
   const app = await setup();
   try {
-    const client = await app.connect(),
-      tree = app.repository.worktrees.find((item) => item.path === app.main)!;
+    const client = await app.connect();
+    const tree = app.repository.worktrees.find((item) => item.path === app.main)!;
     const id = expectOk(await client.create(tree.id));
+
     expectOk(await client.prompt(id, "slow"));
     expectOk(await client.prompt(id, "Queued for original"));
     await observed(
@@ -258,8 +291,10 @@ test("new IPC adds same-worktree tabs while retaining conversations, queues, and
       (state) =>
         progress(state.details[id]?.output) > 0 && state.details[id]?.pendingMessages?.length === 1,
     );
-    const conversation = client.snapshot.details[id]!.conversationId,
-      pid = client.snapshot.pid;
+
+    const conversation = client.snapshot.details[id]!.conversationId;
+    const pid = client.snapshot.pid;
+
     expectOk(
       await client.savePreferences({
         ...client.snapshot.preferences,
@@ -303,20 +338,23 @@ test("clear IPC replaces only current conversations while preserving cancellatio
   // The fixture owns the daemon and native processes; no user runtime is stopped.
   const app = await setup();
   try {
-    const client = await app.connect(),
-      tree = app.repository.worktrees.find((item) => item.path === app.main)!;
-    const id = expectOk(await client.create(tree.id)),
-      other = expectOk(await client.create(tree.id));
+    const client = await app.connect();
+    const tree = app.repository.worktrees.find((item) => item.path === app.main)!;
+    const id = expectOk(await client.create(tree.id));
+    const other = expectOk(await client.create(tree.id));
     const terminal = expectOk(await client.createTerminal(tree.id, { cols: 80, rows: 24 }));
     const editor = expectOk(await client.openEditor(tree.id, { cols: 80, rows: 24 }));
+
     await observed(
       client,
       (state) =>
         !!state.terminals?.some((item) => item.id === terminal) &&
         !!state.editors?.some((item) => item.id === editor),
     );
+
     const terminalPid = client.snapshot.terminals!.find((item) => item.id === terminal)!.pid;
     const editorPid = client.snapshot.editors!.find((item) => item.id === editor)!.pid;
+
     expectOk(await client.prompt(id, "slow"));
     expectOk(await client.prompt(other, "slow"));
     await observed(
@@ -324,9 +362,10 @@ test("clear IPC replaces only current conversations while preserving cancellatio
       (state) =>
         progress(state.details[id]?.output) > 0 && progress(state.details[other]?.output) > 0,
     );
-    const previous = client.snapshot.details[id]!.conversationId!,
-      instance = client.snapshot.instance,
-      pid = client.snapshot.pid;
+
+    const previous = client.snapshot.details[id]!.conversationId!;
+    const instance = client.snapshot.instance;
+    const pid = client.snapshot.pid;
 
     expectOk(await client.prompt(id, "/clear"));
     await observed(
@@ -345,8 +384,10 @@ test("clear IPC replaces only current conversations while preserving cancellatio
     expect(client.snapshot.details[other]?.status).toBe("working");
     expect(client.snapshot.terminals?.find((item) => item.id === terminal)?.pid).toBe(terminalPid);
     expect(client.snapshot.editors?.find((item) => item.id === editor)?.pid).toBe(editorPid);
+
     const history = expectOk(await client.listHistory(tree.id));
     expect(history.find((item) => item.id === previous)?.openSessionId).toBeNull();
+
     const preview = expectOk(await client.previewHistory(tree.id, previous));
     expect(preview.text).toContain("slow");
     expect(preview.snapshot?.lifecycle).toBe("closed");
@@ -376,11 +417,15 @@ test("clear IPC replaces only current conversations while preserving cancellatio
         headers: { "X-Radian-Instance": instance },
       });
       const body = await response.json();
-      if (!Value.Check(replySchema, body) || body.ok || typeof body.error === "string")
+      if (!Value.Check(replySchema, body) || body.ok || typeof body.error === "string") {
         throw new Error("Expected a typed stale-conversation rejection");
+      }
+
       expect(body.error.code).toBe("SESSION_CONFLICT");
     }
+
     expect(client.snapshot.details[id]?.sections).toEqual([]);
+
     // Preserve the old typed wire contract for attached clients compiled before /clear existed.
     const current = client.snapshot.details[id]!.conversationId;
     const legacy = await fetch("http://localhost/command", {
@@ -394,6 +439,7 @@ test("clear IPC replaces only current conversations while preserving cancellatio
         conversationId: current,
       }),
     });
+
     expect(legacy.ok).toBe(true);
     await observed(client, (state) => state.details[id]?.conversationId !== current);
     expect(
@@ -410,12 +456,12 @@ test("exit IPC rejects arguments/images and keeps services alive after closing f
   // Create one empty real-runtime tab and verify pre-close validation.
   const app = await setup();
   try {
-    const client = await app.connect(),
-      worktreeId = app.repository.worktrees[0]!.id;
-    const id = expectOk(await client.create(worktreeId)),
-      conversationId = client.snapshot.details[id]!.conversationId!;
-    const pid = client.snapshot.pid,
-      instance = client.snapshot.instance;
+    const client = await app.connect();
+    const worktreeId = app.repository.worktrees[0]!.id;
+    const id = expectOk(await client.create(worktreeId));
+    const conversationId = client.snapshot.details[id]!.conversationId!;
+    const pid = client.snapshot.pid;
+    const instance = client.snapshot.instance;
     for (const command of [
       { type: "prompt", sessionId: id, conversationId, text: "/exit later" },
       { type: "prompt", sessionId: id, conversationId, text: "/exit", images: ["/fixture.png"] },
@@ -434,10 +480,13 @@ test("exit IPC rejects arguments/images and keeps services alive after closing f
         body: JSON.stringify(command),
       });
       const body = await response.json();
-      if (!Value.Check(replySchema, body) || body.ok || typeof body.error === "string")
+      if (!Value.Check(replySchema, body) || body.ok || typeof body.error === "string") {
         throw new Error("Expected invalid exit rejection");
+      }
+
       expect(body.error.code).toBe("INVALID_INPUT");
     }
+
     expect(
       client.snapshot.repositories[0]!.worktrees[0]!.sessions.map((session) => session.id),
     ).toEqual([id]);
@@ -449,6 +498,7 @@ test("exit IPC rejects arguments/images and keeps services alive after closing f
 
     // Empty views do not exit apps; the same process can create new sessions.
     expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions).toEqual([]);
+
     const next = expectOk(await client.create(worktreeId));
     expect(next).not.toBe(id);
     expect(client.snapshot.pid).toBe(pid);
@@ -461,9 +511,10 @@ test("exit IPC rejects arguments/images and keeps services alive after closing f
 test("compact IPC acceptance differs from summary completion and retains conversation/transcript", async () => {
   const app = await setup();
   try {
-    const client = await app.connect(),
-      tree = app.repository.worktrees.find((item) => item.path === app.main)!;
+    const client = await app.connect();
+    const tree = app.repository.worktrees.find((item) => item.path === app.main)!;
     const id = expectOk(await client.create(tree.id));
+
     expect(
       expectOk(await client.complete(id, { kind: "command", query: "" })).items.map(
         (item) => item.value,
@@ -479,8 +530,9 @@ test("compact IPC acceptance differs from summary completion and retains convers
         state.details[id]?.sections?.filter((section) => section.kind === "user").length === 2 &&
         state.details[id]?.status === "complete",
     );
-    const previous = client.snapshot.details[id]!,
-      conversation = previous.conversationId;
+
+    const previous = client.snapshot.details[id]!;
+    const conversation = previous.conversationId;
 
     expectOk(await client.prompt(id, "/compact preserve the current plan"));
     await observed(
@@ -508,6 +560,7 @@ test("Separate processes continue agents/subagents while all UIs detach and reco
     const feature = app.repository.worktrees.find((tree) => tree.path === app.feature)!;
     const a = expectOk(await client.create(main.id));
     const b = expectOk(await client.create(feature.id));
+
     await client.prompt(a, "read");
     await observed(client, (state) => state.details[a]?.status === "complete");
     // SDK metadata survives the real process/IPC boundary without inventing provider quotas.
@@ -524,10 +577,12 @@ test("Separate processes continue agents/subagents while all UIs detach and reco
         progress(state.details[a]?.output) >= 1 &&
         state.repositories[0]?.worktrees[1]?.sessions[0]?.subagents[0]?.status === "working",
     );
+
     const pid = client.snapshot.pid;
     const instance = client.snapshot.instance;
     const child = client.snapshot.repositories[0]!.worktrees[1]!.sessions[0]!.subagents[0]!.id;
     const before = progress(client.snapshot.details[a]?.output);
+
     await client.savePreferences({
       selection: { worktreeId: feature.id, sessions: { [main.id]: a, [feature.id]: b } },
       drafts: { [a]: "retained draft" },
@@ -540,6 +595,7 @@ test("Separate processes continue agents/subagents while all UIs detach and reco
         progress((await app.manifest()).records.find((record) => record.id === a)?.state.output) >
         before,
     );
+
     const reattached = await app.connect(app.feature);
 
     // Warm reattach restores the same process, open IDs, child, latest output and selection.
@@ -551,6 +607,7 @@ test("Separate processes continue agents/subagents while all UIs detach and reco
       child,
     );
     expect(reattached.snapshot.preferences.drafts[a]).toBe("retained draft");
+
     const selection = new WorkspaceSelection(reattached.snapshot.repositories);
     selection.restore(reattached.snapshot.preferences.selection);
     expect(selection.sessionId).toBe(b);
@@ -570,12 +627,16 @@ test("Event connections survive 31 idle seconds and retain same-service history/
     const client = await app.connect();
     const worktree = app.repository.worktrees[0]!.id;
     const id = expectOk(await client.create(worktree));
+
     expectOk(await client.prompt(id, "read"));
     await observed(client, (state) => state.details[id]?.status === "complete");
+
     const instance = client.snapshot.instance;
     const notices: string[] = [];
     const unsubscribe = client.subscribe(() => {
-      if (client.snapshot.notice) notices.push(client.snapshot.notice);
+      if (client.snapshot.notice) {
+        notices.push(client.snapshot.notice);
+      }
     });
 
     // Real elapsed time is intentional: mocked timers cannot exercise Bun's native socket idle timeout.
@@ -587,6 +648,7 @@ test("Event connections survive 31 idle seconds and retain same-service history/
     expect(client.snapshot.notice).toBe("");
     expect(client.snapshot.instance).toBe(instance);
     expect(expectOk(await client.listHistory(worktree))).toEqual([]);
+
     const next = expectOk(await client.create(worktree));
     await observed(client, (state) => !!state.details[next]);
     expect(
@@ -606,6 +668,7 @@ test.each(["close", "exit", "raw-exit"] as const)(
       const client = await app.connect();
       const parent = expectOk(await client.create(app.repository.worktrees[0]!.id));
       const other = expectOk(await client.create(app.repository.worktrees[1]!.id));
+
       await client.prompt(parent, "delegate");
       await client.prompt(other, "slow");
       await observed(
@@ -618,12 +681,14 @@ test.each(["close", "exit", "raw-exit"] as const)(
         async () =>
           !!(await app.manifest()).records.find((record) => record.id === parent)?.sessionFile,
       );
+
       const file = (await app.manifest()).records.find(
         (record) => record.id === parent,
       )!.sessionFile!;
-      const conversation = client.snapshot.details[parent]!.conversationId!,
-        pid = client.snapshot.pid,
-        instance = client.snapshot.instance;
+      const conversation = client.snapshot.details[parent]!.conversationId!;
+      const pid = client.snapshot.pid;
+      const instance = client.snapshot.instance;
+
       expect(client.snapshot.capabilities).toContain("session-exit");
       expect(
         expectOk(await client.complete(parent, { kind: "command", query: "exit" })).items.map(
@@ -636,8 +701,9 @@ test.each(["close", "exit", "raw-exit"] as const)(
         const closing = client.closeSession(parent);
         expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions).toEqual([]);
         expectOk(await closing);
-      } else if (action === "exit") expectOk(await client.prompt(parent, "/exit"));
-      else {
+      } else if (action === "exit") {
+        expectOk(await client.prompt(parent, "/exit"));
+      } else {
         const response = await fetch("http://localhost/command", {
           unix: app.paths.socket,
           method: "POST",
@@ -651,6 +717,7 @@ test.each(["close", "exit", "raw-exit"] as const)(
         });
         expect(response.ok).toBe(true);
       }
+
       await observed(client, (state) => !state.details[parent] && state.closingCount === 0);
 
       // Explicit close cancels its family, unlike detaching a UI, and does not erase conversation files.
@@ -659,6 +726,7 @@ test.each(["close", "exit", "raw-exit"] as const)(
       expect(client.snapshot.instance).toBe(instance);
       expect(client.snapshot.repositories[0]!.worktrees[0]!.sessions).toEqual([]);
       expect(await Bun.file(file).exists()).toBe(true);
+
       const worktreeId = app.repository.worktrees[0]!.id;
       expect(
         expectOk(await client.listHistory(worktreeId)).find((item) => item.id === conversation)
@@ -683,6 +751,7 @@ test("Service restart restores open IDs, history, and selections without replayi
     const a = expectOk(await client.create(app.repository.worktrees[0]!.id));
     const empty = expectOk(await client.create(app.repository.worktrees[0]!.id));
     const running = expectOk(await client.create(app.repository.worktrees[1]!.id));
+
     await client.prompt(a, "read");
     await observed(client, (state) => state.details[a]?.status === "complete");
     await client.prompt(running, "slow");
@@ -694,6 +763,7 @@ test("Service restart restores open IDs, history, and selections without replayi
       },
       drafts: {},
     });
+
     const pid = client.snapshot.pid;
     const instance = client.snapshot.instance;
     const file = (await app.manifest()).records.find((record) => record.id === a)!.sessionFile!;
@@ -702,6 +772,7 @@ test("Service restart restores open IDs, history, and selections without replayi
     await client.stopRuntime();
     await client.disconnect();
     await app.stopped(pid);
+
     const restored = await app.connect();
 
     // A new service restores the same conversations, not forks or automatic model/tool retries.
@@ -734,8 +805,10 @@ test("Existing clients reconnect to explicitly replaced services without replayi
     const client = await app.connect();
     const worktree = app.repository.worktrees[0]!.id;
     const id = expectOk(await client.create(worktree));
+
     expectOk(await client.prompt(id, "read"));
     await observed(client, (state) => state.details[id]?.status === "complete");
+
     const file = (await app.manifest()).records.find((record) => record.id === id)!.sessionFile!;
     const original = await readFile(file, "utf8");
     const pid = client.snapshot.pid;
@@ -745,6 +818,7 @@ test("Existing clients reconnect to explicitly replaced services without replayi
     await app.stopped(pid);
     await until(() => !client.connected);
     expect(expectError(await client.prompt(id, "must not run")).code).toBe("CONNECTION_FAILED");
+
     const replacement = await app.connect();
     await observed(
       client,
@@ -778,12 +852,16 @@ test("Runtime-only disconnects preserve real shells while closing old PTYs for e
       await owner.createTerminal(app.repository.worktrees[0]!.id, { cols: 80, rows: 12 }),
     );
     const shell = owner.snapshot.terminals!.find((item) => item.id === id)!;
+
     relay = Bun.serve({
       unix: relayPaths.socket,
       async fetch(request) {
         const path = new URL(request.url).pathname;
         const body = request.method === "POST" ? await request.text() : undefined;
-        if (body) commands.push((JSON.parse(body) as { type: string }).type);
+        if (body) {
+          commands.push((JSON.parse(body) as { type: string }).type);
+        }
+
         const response = await fetch(request.url, {
           unix: owner.paths.socket,
           method: request.method,
@@ -791,7 +869,10 @@ test("Runtime-only disconnects preserve real shells while closing old PTYs for e
           signal: request.signal,
           ...(body !== undefined ? { body } : {}),
         });
-        if (path !== "/events" || !response.body) return response;
+        if (path !== "/events" || !response.body) {
+          return response;
+        }
+
         const reader = response.body.getReader();
         let closed = false;
         const stream = new ReadableStream<Uint8Array>({
@@ -807,8 +888,12 @@ test("Runtime-only disconnects preserve real shells while closing old PTYs for e
               try {
                 while (!closed) {
                   const chunk = await reader.read();
-                  if (chunk.done) break;
-                  if (!closed) controller.enqueue(chunk.value);
+                  if (chunk.done) {
+                    break;
+                  }
+                  if (!closed) {
+                    controller.enqueue(chunk.value);
+                  }
                 }
                 if (!closed) {
                   closed = true;
@@ -827,11 +912,13 @@ test("Runtime-only disconnects preserve real shells while closing old PTYs for e
             await reader.cancel();
           },
         });
+
         return new Response(stream, { headers: response.headers });
       },
     });
     client = new RuntimeClient(relayPaths, owner.snapshot);
     expectOk(await client.attach());
+
     const failures: unknown[] = [];
     const old = expectOk(
       await client.attachTerminal(
@@ -851,6 +938,7 @@ test("Runtime-only disconnects preserve real shells while closing old PTYs for e
       shell.shellPid,
     );
     expect(pidAlive(shell.shellPid)).toBe(true);
+
     const fresh = expectOk(
       await client.attachTerminal(
         id,
@@ -879,12 +967,17 @@ test("Stale-instance commands and PTY attachments fail before execution while le
       headers: { "X-Radian-Instance": "stale-instance" },
       body: JSON.stringify(command),
     });
+
     expect(response.status).toBe(422);
+
     const rejected = await response.json();
-    if (!Value.Check(replySchema, rejected) || rejected.ok || typeof rejected.error === "string")
+    if (!Value.Check(replySchema, rejected) || rejected.ok || typeof rejected.error === "string") {
       throw new Error("Expected a typed rejection.");
+    }
+
     expect(rejected.error.code).toBe("PROTOCOL_ERROR");
     expect(rejected.error.message).toContain("No action was accepted");
+
     const pty = await fetch("http://localhost/terminal/events?id=missing&lease=stale", {
       unix: client.paths.socket,
       headers: { "X-Radian-Instance": "stale-instance" },
@@ -901,6 +994,7 @@ test("Stale-instance commands and PTY attachments fail before execution while le
       body: JSON.stringify(command),
     });
     const accepted = await legacy.json();
+
     expect(legacy.status).toBe(200);
     expect(Value.Check(replySchema, accepted) && accepted.ok).toBe(true);
   } finally {
@@ -914,7 +1008,9 @@ test("Concurrent connections start one daemon and reclaim stale endpoints after 
   try {
     const clients = await Promise.all([app.connect(), app.connect(), app.connect(app.feature)]);
     const pid = clients[0]!.snapshot.pid;
+
     expect(new Set(clients.map((client) => client.snapshot.pid)).size).toBe(1);
+
     const id = expectOk(await clients[0]!.create(app.repository.worktrees[0]!.id));
     await clients[0]!.prompt(id, "read");
     await observed(clients[0]!, (state) => state.details[id]?.status === "complete");
@@ -924,8 +1020,10 @@ test("Concurrent connections start one daemon and reclaim stale endpoints after 
     process.kill(pid, "SIGKILL");
     await until(() => !pidAlive(pid));
     await Promise.all(clients.map((client) => client.disconnect()));
+
     const reconnected = await Promise.all([app.connect(), app.connect(app.feature)]);
     const recovered = reconnected[0]!;
+
     expect(new Set(reconnected.map((client) => client.snapshot.pid)).size).toBe(1);
 
     // Dead-owner recovery preserves the saved open item while acquiring a new process owner.
@@ -944,10 +1042,13 @@ test.each(["close", "exit"] as const)(
     try {
       const client = await app.connect();
       const id = expectOk(await client.create(app.repository.worktrees[0]!.id));
+
       await client.prompt(id, "read");
       await observed(client, (state) => state.details[id]?.status === "complete");
+
       const file = (await app.manifest()).records.find((record) => record.id === id)!.sessionFile!;
       const pid = client.snapshot.pid;
+
       await client.stopRuntime();
       await client.disconnect();
       await app.stopped(pid);
@@ -979,6 +1080,7 @@ test.each(["inline", "indexed"])(
     const app = await setup();
     try {
       await privateDirectory(app.paths.directory);
+
       const tree = app.repository.worktrees[0]!;
       const archived = {
         id: "archived-tab",
@@ -1003,8 +1105,9 @@ test.each(["inline", "indexed"])(
         records: [archived],
         preferences: { selection: { worktreeId: tree.id, sessions: {} }, drafts: {} },
       };
-      if (format === "inline") await writeFile(app.paths.manifest, JSON.stringify(manifest));
-      else {
+      if (format === "inline") {
+        await writeFile(app.paths.manifest, JSON.stringify(manifest));
+      } else {
         await writeFile(
           archived.sessionFile,
           JSON.stringify({
@@ -1021,6 +1124,7 @@ test.each(["inline", "indexed"])(
       // Restore open intent only and let startup maintenance remove unusable closed bodies.
       const client = await app.connect();
       await observed(client, (state) => !!state.sessionRetention);
+
       const items = expectOk(await client.listHistory(tree.id));
 
       // Neither a visible row, a preview, nor an internal archived snapshot survives.
@@ -1032,6 +1136,7 @@ test.each(["inline", "indexed"])(
       expect(expectError(await client.resume(tree.id, "archived-conversation")).code).toBe(
         "HISTORY_UNAVAILABLE",
       );
+
       const store = new RuntimeStore(app.paths);
       expectOk(await store.load(app.repository.id));
       expect(store.listSessions(tree.id)).toEqual([]);
@@ -1047,11 +1152,13 @@ test("External SDK conversations without snapshots build read-only JSONL preview
   // Conversations predating shared snapshots remain readable.
   const app = await setup();
   try {
-    const client = await app.connect(),
-      tree = app.repository.worktrees[0]!;
-    const directory = join(app.paths.directory, "offline-agent", "sessions"),
-      file = join(directory, "external.jsonl");
+    const client = await app.connect();
+    const tree = app.repository.worktrees[0]!;
+    const directory = join(app.paths.directory, "offline-agent", "sessions");
+    const file = join(directory, "external.jsonl");
+
     await mkdir(directory, { recursive: true });
+
     const timestamp = new Date().toISOString();
     const bytes =
       [
@@ -1078,12 +1185,14 @@ test("External SDK conversations without snapshots build read-only JSONL preview
       ]
         .map((entry) => JSON.stringify(entry))
         .join("\n") + "\n";
+
     await writeFile(file, bytes);
 
     // Browsing History creates neither SDK executors nor new shared snapshots.
     expect(expectOk(await client.listHistory(tree.id)).map((item) => item.id)).toEqual([
       "external",
     ]);
+
     const preview = expectOk(await client.previewHistory(tree.id, "external"));
 
     // Restore only renderer sections without adding conversations or files.
@@ -1094,6 +1203,7 @@ test("External SDK conversations without snapshots build read-only JSONL preview
     ]);
     expect(client.snapshot.details).toEqual({});
     expect(await readFile(file, "utf8")).toBe(bytes);
+
     const store = new RuntimeStore(app.paths);
     expectOk(await store.load(app.repository.id));
     expect(store.listSessions(tree.id)).toEqual([]);
@@ -1106,24 +1216,28 @@ test("Service restart recovers only open sessions while retaining identical clos
   // Use a real SDK conversation and another open tab to verify recovery filtering.
   const app = await setup();
   try {
-    const client = await app.connect(),
-      tree = app.repository.worktrees[0]!;
-    const closed = expectOk(await client.create(tree.id)),
-      open = expectOk(await client.create(tree.id));
+    const client = await app.connect();
+    const tree = app.repository.worktrees[0]!;
+    const closed = expectOk(await client.create(tree.id));
+    const open = expectOk(await client.create(tree.id));
+
     expectOk(await client.prompt(closed, "read"));
     await observed(client, (state) => state.details[closed]?.status === "complete");
-    const before = client.snapshot.details[closed]!,
-      conversation = before.conversationId!;
+
+    const before = client.snapshot.details[closed]!;
+    const conversation = before.conversationId!;
 
     // Fully restart after explicit closed-session persistence completes.
     expectOk(await client.closeSession(closed));
     await observed(client, (state) => !state.details[closed] && state.closingCount === 0);
+
     const pid = client.snapshot.pid;
     expectOk(await client.stopRuntime());
     await client.disconnect();
     await app.stopped(pid);
-    const restored = await app.connect(),
-      preview = expectOk(await restored.previewHistory(tree.id, conversation));
+
+    const restored = await app.connect();
+    const preview = expectOk(await restored.previewHistory(tree.id, conversation));
 
     // Closed runs never instantiate; saved status and conversation appear only in previews.
     expect(Object.keys(restored.snapshot.details)).toEqual([open]);
@@ -1134,9 +1248,11 @@ test("Service restart recovers only open sessions while retaining identical clos
       expectOk(await restored.listHistory(tree.id)).find((item) => item.id === conversation)
         ?.openSessionId,
     ).toBeNull();
+
     const reopened = expectOk(await restored.resume(tree.id, conversation));
     expect(reopened).not.toBe(closed);
     expect(restored.snapshot.details[reopened]?.conversationId).toBe(conversation);
+
     const snapshots = new RuntimeStore(app.paths);
     expectOk(await snapshots.load(app.repository.id));
     expect(
@@ -1160,6 +1276,7 @@ test("IPC history opens worktree-scoped SDK records and returns existing entries
     const feature = app.repository.worktrees[1]!.id;
     const a = expectOk(await client.create(main));
     const b = expectOk(await client.create(feature));
+
     await client.prompt(a, "read");
     await client.prompt(b, "write");
     await observed(
@@ -1167,6 +1284,7 @@ test("IPC history opens worktree-scoped SDK records and returns existing entries
       (state) => state.details[a]?.status === "complete" && state.details[b]?.status === "complete",
     );
     expect(expectOk(await client.listHistory(main))).toEqual([]);
+
     const saved = { id: client.snapshot.details[a]!.conversationId! };
     const file = (await app.manifest()).records.find((record) => record.id === a)!.sessionFile!;
 
@@ -1174,6 +1292,7 @@ test("IPC history opens worktree-scoped SDK records and returns existing entries
     let bytes = await readFile(file, "utf8");
     const count = Object.keys(client.snapshot.details).length;
     const preview = expectOk(await client.previewHistory(main, saved.id));
+
     expect(preview.sections?.[0]).toMatchObject({ kind: "user", text: "read" });
     expect(preview.sections!.length).toBeLessThanOrEqual(15);
     expect(preview.text).toContain("read");
@@ -1204,6 +1323,7 @@ test("IPC history opens worktree-scoped SDK records and returns existing entries
     expect(expectOk(await client.resume(main, saved.id))).toBe(a);
     await client.closeSession(a);
     await observed(client, (state) => state.closingCount === 0 && !state.details[a]);
+
     // Extend only this closed fixture-owned file; a large SDK custom entry must not disable IPC preview.
     const leaf = JSON.parse(bytes.trimEnd().split("\n").at(-1)!).id;
     await appendFile(
@@ -1218,12 +1338,14 @@ test("IPC history opens worktree-scoped SDK records and returns existing entries
       }) + "\n",
     );
     bytes = await readFile(file, "utf8");
+
     const largePreview = expectOk(await client.previewHistory(main, saved.id));
     expect(largePreview.text).toContain("read");
     expect(largePreview.sections!.length).toBeLessThanOrEqual(15);
     expect(largePreview.sections?.at(-1)?.completion).toEqual(preview.sections?.at(-1)?.completion);
     expect(client.snapshot.details[a]).toBeUndefined();
     expect(await readFile(file, "utf8")).toBe(bytes);
+
     const reopened = expectOk(await client.resume(main, saved.id));
 
     // The same file/context appears as another open item, and cross-worktree IDs stay rejected.
@@ -1247,17 +1369,20 @@ test("Active subagent files never execute twice through history", async () => {
     const client = await app.connect();
     const main = app.repository.worktrees[0]!.id;
     const id = expectOk(await client.create(main));
+
     expectOk(await client.prompt(id, "delegate"));
     await observed(
       client,
       (state) =>
         state.repositories[0]?.worktrees[0]?.sessions[0]?.subagents[0]?.status === "working",
     );
+
     let childId: string | undefined;
     await until(async () => {
       childId = (
         await SessionManager.list(app.main, join(app.paths.directory, "offline-agent", "sessions"))
       ).find((entry) => entry.firstMessage === "slow")?.id;
+
       return !!childId;
     });
 
@@ -1281,8 +1406,8 @@ test("Git preferences survive real reconnects and legacy preference saves", asyn
   // The detached runtime owns the warm-reconnect state; UI caches are not enough.
   const app = await setup();
   try {
-    const client = await app.connect(),
-      worktreeId = app.repository.worktrees[0]!.id;
+    const client = await app.connect();
+    const worktreeId = app.repository.worktrees[0]!.id;
     const state = {
       ...initialGitState(),
       selected: "a".repeat(40),
@@ -1302,11 +1427,14 @@ test("Git preferences survive real reconnects and legacy preference saves", asyn
       (snapshot) => snapshot.preferences.gitViews?.[worktreeId]?.diffScroll === 42,
     );
     await client.disconnect();
+
     const reattached = await app.connect();
     expect(reattached.snapshot.preferences.gitViews?.[worktreeId]).toEqual(state);
+
     const legacy = { ...reattached.snapshot.preferences };
     delete legacy.gitViews;
     expectOk(await reattached.savePreferences(legacy));
+
     const later = await app.connect();
 
     expect(later.snapshot.preferences.gitViews?.[worktreeId]).toEqual(state);
@@ -1323,6 +1451,7 @@ test("Accepted-run checkpoint failures return success with warnings instead of r
   try {
     const client = await app.connect();
     const id = expectOk(await client.create(app.repository.worktrees[0]!.id));
+
     await rename(app.paths.manifest, app.paths.manifest + ".backup");
     await mkdir(app.paths.manifest);
     damaged = true;
@@ -1334,12 +1463,15 @@ test("Accepted-run checkpoint failures return success with warnings instead of r
       body: JSON.stringify({ type: "prompt", sessionId: id, text: "slow" }),
     });
     const reply = await response.json();
+
     await observed(client, (state) => progress(state.details[id]?.output) >= 1);
 
     // The caller is not told to retry an already running operation; durability loss is explicit.
     expect(response.status).toBe(200);
-    if (!Value.Check(replySchema, reply) || !reply.ok)
+    if (!Value.Check(replySchema, reply) || !reply.ok) {
       throw new Error("Expected a valid accepted reply.");
+    }
+
     expect(reply.ok).toBe(true);
     expect(reply.warnings?.[0]?.code).toBe("STORAGE_FAILED");
     expect(client.snapshot.details[id]?.status).toBe("working");
@@ -1352,6 +1484,7 @@ test("Accepted-run checkpoint failures return success with warnings instead of r
       await rm(app.paths.manifest, { recursive: true });
       await rename(app.paths.manifest + ".backup", app.paths.manifest);
     }
+
     await app.cleanup();
   }
 }, 20000);

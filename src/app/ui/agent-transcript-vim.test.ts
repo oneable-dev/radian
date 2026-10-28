@@ -19,25 +19,28 @@ import type { TranscriptSection } from "../../agents/transcript.ts";
 function descendants(root: Renderable): Renderable[] {
   return root.getChildren().flatMap((child) => [child, ...descendants(child)]);
 }
+
 async function mount(
   text: string,
   actions: Partial<WorkbenchActions> = {},
   kind: TranscriptSection["kind"] = "user",
 ) {
   const app = await createTestRenderer({ width: 100, height: 30, kittyKeyboard: true });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    copied: string[] = [],
-    sent: string[] = [];
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const copied: string[] = [];
+  const sent: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {},
     onCloseSession: () => {},
     initialDrafts: { a1: "Unsent draft" },
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     onCopyTranscript: async (text) => {
       copied.push(text);
+
       return ok("Copied to clipboard");
     },
     getSessionDetails: () => ({
@@ -54,10 +57,15 @@ async function mount(
   };
   const body = () => {
     const reader = app.renderer.currentFocusedRenderable;
-    if (!(reader instanceof EditBufferRenderable)) throw new Error(`No reader: ${reader?.id}`);
+    if (!(reader instanceof EditBufferRenderable)) {
+      throw new Error(`No reader: ${reader?.id}`);
+    }
+
     return reader;
   };
+
   await render();
+
   return {
     ...app,
     view,
@@ -79,10 +87,15 @@ async function mount(
     },
     async keys(keys: string) {
       for (const key of keys) {
-        if (key === "\n") app.mockInput.pressEnter();
-        else if (/^[A-Z]$/u.test(key)) app.mockInput.pressKey(key.toLowerCase(), { shift: true });
-        else app.mockInput.pressKey(key);
+        if (key === "\n") {
+          app.mockInput.pressEnter();
+        } else if (/^[A-Z]$/u.test(key)) {
+          app.mockInput.pressKey(key.toLowerCase(), { shift: true });
+        } else {
+          app.mockInput.pressKey(key);
+        }
       }
+
       await render();
     },
     search() {
@@ -113,14 +126,12 @@ test.each([
   "Actual keys [$keys] select full objects from interior cursors without source edits",
   async ({ keys, position, expected }) => {
     // Render source matching the target kind through the real native reading surface.
-    const text =
-      keys === "viW"
-        ? "one.two next"
-        : keys === 'vi"'
-          ? 'before "hello world" after'
-          : keys === "vi("
-            ? "outer (one (two) three) tail"
-            : "alpha beta gamma";
+    const sourceByObject: Record<string, string> = {
+      viW: "one.two next",
+      'vi"': 'before "hello world" after',
+      "vi(": "outer (one (two) three) tail",
+    };
+    const text = sourceByObject[keys] ?? "alpha beta gamma";
     const app = await mount(text);
     try {
       await app.read(position);
@@ -165,8 +176,8 @@ test("yiw, yw, and y$ copy distinct ranges without moving reading cursors", asyn
 
 test("yy, y3w, and 2y2w preserve counts and original newlines", async () => {
   // Literal CRLF source must not copy normalized native-buffer LF.
-  const text = "one two three four five\r\nsecond line",
-    app = await mount(text);
+  const text = "one two three four five\r\nsecond line";
+  const app = await mount(text);
   try {
     await app.read();
 
@@ -192,9 +203,9 @@ test("yy, y3w, and 2y2w preserve counts and original newlines", async () => {
 test("3w, 5j, and 3gg honor counts and treat 0 after a digit as part of the count", async () => {
   // Standalone 0 means line start; after a digit it belongs to the count.
   const text =
-      "one two three four five\n" +
-      Array.from({ length: 30 }, (_, index) => `line ${index}`).join("\n"),
-    app = await mount(text);
+    "one two three four five\n" +
+    Array.from({ length: 30 }, (_, index) => `line ${index}`).join("\n");
+  const app = await mount(text);
   try {
     await app.read();
 
@@ -335,12 +346,16 @@ test("Search Ctrl+C clears only queries and empty repeats never interrupt drafts
   const app = await mount("alpha beta", {
     onInterrupt: async () => {
       interrupted++;
+
       return ok(undefined);
     },
   });
   const raw = (sequence: string) => {
     const key = parseKeypress(sequence, { useKittyKeyboard: true });
-    if (!key) throw new Error("Invalid key");
+    if (!key) {
+      throw new Error("Invalid key");
+    }
+
     app.renderer.keyInput.processParsedKey(key);
   };
   try {
@@ -393,6 +408,7 @@ test("Search cancellation preserves original Visual selection and rendered highl
   try {
     await app.read(8);
     await app.keys("viw");
+
     const before = app.cursor();
 
     await app.keys("/");
@@ -441,8 +457,8 @@ test("Streaming appends preserve pending viw/yw while body replacement cancels o
 
 test("Pastes cancel pending yanks and editing keys never modify read-only bodies", async () => {
   // Pasted data and editing commands must not become new Vim actions.
-  const text = "alpha beta gamma",
-    app = await mount(text);
+  const text = "alpha beta gamma";
+  const app = await mount(text);
   try {
     await app.read();
     await app.keys("y");
@@ -470,7 +486,10 @@ test("Shift and held repeats in character arguments never become motions", async
   const app = await mount('before "hello world" after');
   const raw = (sequence: string) => {
     const key = parseKeypress(sequence, { useKittyKeyboard: true });
-    if (!key) throw new Error("Invalid key");
+    if (!key) {
+      throw new Error("Invalid key");
+    }
+
     app.renderer.keyInput.processParsedKey(key);
   };
   try {
@@ -485,6 +504,7 @@ test("Shift and held repeats in character arguments never become motions", async
     app.body().cursorOffset = 0;
     await app.keys("f");
     raw("\x1b[119u");
+
     const cursor = app.cursor();
     raw("\x1b[119;1:2u");
     raw("\x1b[119;1:3u");
@@ -539,12 +559,13 @@ test.each(["user", "assistant"] as const)(
   "y copies mouse-selected %s text and later motion begins a new yank operator",
   async (kind) => {
     // Native mouse selection must not start a new y operator or copy another input's selection.
-    const text = "alpha beta gamma",
-      app = await mount(kind === "assistant" ? `**${text}**` : text, {}, kind);
+    const text = "alpha beta gamma";
+    const app = await mount(kind === "assistant" ? `**${text}**` : text, {}, kind);
     try {
       await app.read();
-      const lines = app.captureCharFrame().split("\n"),
-        y = lines.findIndex((line) => line.includes("beta"));
+
+      const lines = app.captureCharFrame().split("\n");
+      const y = lines.findIndex((line) => line.includes("beta"));
       const x = Bun.stringWidth(lines[y]!.slice(0, lines[y]!.indexOf("beta")));
 
       await app.mockMouse.drag(x, y, x + 3, y);
@@ -571,7 +592,10 @@ test("Held Ctrl+C cancelling character arguments never clears subsequently focus
   const app = await mount("alpha beta");
   const raw = (sequence: string) => {
     const key = parseKeypress(sequence, { useKittyKeyboard: true });
-    if (!key) throw new Error("Invalid key");
+    if (!key) {
+      throw new Error("Invalid key");
+    }
+
     app.renderer.keyInput.processParsedKey(key);
   };
   try {
@@ -627,8 +651,10 @@ test("Rendered Markdown Korean, combining characters, and emoji support viw/yiw 
     expect(app.body().getSelectedText()).toBe("한글");
     app.mockInput.pressEscape();
     await app.render();
-    const text = app.body().plainText,
-      target = text.indexOf("👨");
+
+    const text = app.body().plainText;
+    const target = text.indexOf("👨");
+
     app.body().cursorOffset = app.body().editBuffer.measureText(text.slice(0, target));
 
     await app.keys("yiw");

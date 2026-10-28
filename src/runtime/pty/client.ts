@@ -25,7 +25,9 @@ export type PtyRequest =
   | { type: "detach"; lease: string }
   | { type: "scroll"; lease: string; lines: number }
   | { type: "read"; lease: string };
+
 type Send = (command: PtyRequest) => Promise<Result<unknown, ExpectedError>>;
+
 export class PtyConnection {
   readonly lease = crypto.randomUUID();
   private readonly abort = new AbortController();
@@ -65,15 +67,23 @@ export class PtyConnection {
           ...(this.instance ? { headers: { "X-Radian-Instance": this.instance } } : {}),
         },
       );
-      if (!response.ok) return response;
+      if (!response.ok) {
+        return response;
+      }
       if (!response.value.ok) {
         const body = await readJson(response.value);
-        if (!body.ok) return body;
+        if (!body.ok) {
+          return body;
+        }
+
         return Value.Check(replySchema, body.value) && !body.value.ok
           ? err(remoteError(body.value.error))
           : err(new ProtocolError("Malformed terminal error response."));
       }
-      if (!response.value.body) return err(new ProtocolError("Missing terminal stream."));
+      if (!response.value.body) {
+        return err(new ProtocolError("Missing terminal stream."));
+      }
+
       const ready = Promise.withResolvers<Result<void, ExpectedError>>();
       this.stream = this.consume(response.value.body, () => {
         this.attached = true;
@@ -81,13 +91,19 @@ export class PtyConnection {
       })
         .then((result) => {
           ready.resolve(result);
-          if (!result.ok && this.attached && !this.closing) this.fail(result.error);
+          if (!result.ok && this.attached && !this.closing) {
+            this.fail(result.error);
+          }
         })
         .catch((error: unknown) => {
           ready.reject(error);
-          if (this.attached && !this.closing) this.fail(error);
+          if (this.attached && !this.closing) {
+            this.fail(error);
+          }
         });
+
       const result = await ready.promise;
+
       return timedOut
         ? err(
             new ConnectionError(
@@ -100,7 +116,7 @@ export class PtyConnection {
       const aborted =
         error === this.abort.signal.reason ||
         (error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name));
-      if (timedOut && aborted)
+      if (timedOut && aborted) {
         return err(
           new ConnectionError(
             "CONNECTION_TIMEOUT",
@@ -108,20 +124,25 @@ export class PtyConnection {
             { cause: error },
           ),
         );
-      if (this.closing && aborted)
+      }
+      if (this.closing && aborted) {
         return err(
           new ConnectionError("CONNECTION_FAILED", "Terminal attachment was cancelled.", {
             cause: error,
           }),
         );
+      }
+
       throw error;
     } finally {
       clearTimeout(timer);
     }
   }
+
   input(data: Uint8Array): void {
     if (this.queuedBytes + data.byteLength > 131072) {
       this.fail(new InputError("Terminal input queue is full; further input was not sent."));
+
       return;
     }
     // Preserve raw UTF-8 and escape bytes. Each accepted byte is submitted at most once.
@@ -133,6 +154,7 @@ export class PtyConnection {
       );
     }
   }
+
   resize(cols: number, rows: number): void {
     this.enqueue(
       {
@@ -144,6 +166,7 @@ export class PtyConnection {
       0,
     );
   }
+
   scroll(lines: number): void {
     this.enqueue(
       {
@@ -154,45 +177,70 @@ export class PtyConnection {
       0,
     );
   }
+
   async read(): Promise<Result<TerminalText, ExpectedError>> {
     await this.pending;
-    if (this.failed || this.closing)
+    if (this.failed || this.closing) {
       return err(
         new ConnectionError("CONNECTION_FAILED", "Terminal is disconnected; output was not read."),
       );
+    }
+
     const result = await this.send({ type: "read", lease: this.lease });
-    if (!result.ok) return result;
-    if (this.failed || this.closing)
+    if (!result.ok) {
+      return result;
+    }
+    if (this.failed || this.closing) {
       return err(
         new ConnectionError("CONNECTION_FAILED", "Terminal changed while reading output."),
       );
-    if (typeof result.value !== "string")
+    }
+    if (typeof result.value !== "string") {
       return err(new ProtocolError("Missing terminal output snapshot."));
+    }
+
     const parsed = parseJson(result.value, "terminal output");
-    if (!parsed.ok) return err(new ProtocolError(parsed.error.message));
+    if (!parsed.ok) {
+      return err(new ProtocolError(parsed.error.message));
+    }
+
     return Value.Check(terminalTextSchema, parsed.value)
       ? ok(parsed.value)
       : err(new ProtocolError("Malformed terminal output snapshot."));
   }
+
   private enqueue(command: PtyRequest, bytes: number): void {
-    if (this.failed || this.closing) return;
+    if (this.failed || this.closing) {
+      return;
+    }
+
     this.queuedBytes += bytes;
     this.pending = this.pending
       .then(async () => {
-        if (this.failed) return;
+        if (this.failed) {
+          return;
+        }
+
         const result = await this.send(command);
-        if (!result.ok) this.fail(result.error);
+        if (!result.ok) {
+          this.fail(result.error);
+        }
       })
       .catch((error: unknown) => this.fail(error))
       .finally(() => {
         this.queuedBytes -= bytes;
       });
   }
+
   private fail(error: unknown): void {
-    if (this.failed) return;
+    if (this.failed) {
+      return;
+    }
+
     this.failed = true;
     this.onFailure(error);
   }
+
   invalidate(error: ExpectedError): void {
     this.invalidated = true;
     this.fail(error);
@@ -203,16 +251,21 @@ export class PtyConnection {
       reportUnexpected(error, "PTY invalidation cleanup");
     });
   }
+
   disconnect(): Promise<void> {
     this.closing ??= this.detach();
+
     return this.closing;
   }
+
   private async detach(): Promise<void> {
     try {
       await this.pending;
       if (this.attached && !this.invalidated) {
         const result = await this.send({ type: "detach", lease: this.lease });
-        if (!result.ok && !this.failed) this.fail(result.error);
+        if (!result.ok && !this.failed) {
+          this.fail(result.error);
+        }
       }
     } finally {
       this.abort.abort();
@@ -220,12 +273,13 @@ export class PtyConnection {
       this.finished.resolve();
     }
   }
+
   private async consume(
     body: ReadableStream<Uint8Array>,
     ready: () => void,
   ): Promise<Result<void, ExpectedError>> {
-    const reader = body.getReader(),
-      decoder = new TextDecoder();
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
     let buffer = "";
     try {
       while (!this.abort.signal.aborted) {
@@ -233,38 +287,55 @@ export class PtyConnection {
         try {
           chunk = await reader.read();
         } catch (error) {
-          if (this.abort.signal.aborted) return ok(undefined);
+          if (this.abort.signal.aborted) {
+            return ok(undefined);
+          }
+
           const known = connectionError(error);
-          if (known) return err(known);
+          if (known) {
+            return err(known);
+          }
+
           throw error;
         }
-        if (chunk.done)
+        if (chunk.done) {
           return err(
             new ConnectionError(
               "CONNECTION_FAILED",
               "Terminal stream ended. Reconnect explicitly; input was not replayed.",
             ),
           );
+        }
+
         buffer += decoder.decode(chunk.value, { stream: true });
+
         let newline: number;
         while ((newline = buffer.indexOf("\n")) >= 0) {
           const line = buffer.slice(0, newline);
           buffer = buffer.slice(newline + 1);
-          if (Buffer.byteLength(line) > maxFrameBytes)
+          if (Buffer.byteLength(line) > maxFrameBytes) {
             return err(new ProtocolError("Terminal frame is too large."));
+          }
+
           const parsed = parseJson(line, "terminal frame");
-          if (!parsed.ok) return err(new ProtocolError(parsed.error.message));
-          if (!Value.Check(ptyFrameSchema, parsed.value) || parsed.value.id !== this.id)
+          if (!parsed.ok) {
+            return err(new ProtocolError(parsed.error.message));
+          }
+          if (!Value.Check(ptyFrameSchema, parsed.value) || parsed.value.id !== this.id) {
             return err(new ProtocolError("Terminal frame identity or shape is invalid."));
+          }
           if (parsed.value.revision !== this.revision) {
             this.revision = parsed.value.revision;
             this.onFrame(parsed.value);
           }
+
           ready();
         }
-        if (Buffer.byteLength(buffer) > maxFrameBytes)
+        if (Buffer.byteLength(buffer) > maxFrameBytes) {
           return err(new ProtocolError("Terminal frame is too large."));
+        }
       }
+
       return ok(undefined);
     } finally {
       try {
@@ -273,9 +344,11 @@ export class PtyConnection {
         if (
           !connectionError(error) &&
           !(this.abort.signal.aborted && error instanceof Error && error.name === "AbortError")
-        )
+        ) {
           reportUnexpected(error, "PTY stream cleanup");
+        }
       }
+
       reader.releaseLock();
     }
   }

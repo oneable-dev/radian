@@ -31,11 +31,16 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
   });
   const get = (id: string) => {
     const node = walk(app.renderer.root).find((item) => item.id === id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
+
   await app.renderOnce();
   await app.renderOnce();
+
   return {
     ...app,
     selection,
@@ -48,13 +53,18 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
       const frames: { tree: string | null; first: string | null }[] = [];
       const capture = () => {
         // The workspace picker can cover the first diff line while leaving its last line visible.
-        if (unobscured && get("workspace-picker").visible) return;
+        if (unobscured && get("workspace-picker").visible) {
+          return;
+        }
+
         frames.push({
           tree: selection.worktree?.id ?? null,
           first: app.captureCharFrame().match(pattern)?.[0] ?? null,
         });
       };
+
       app.renderer.on("frame", capture);
+
       return { frames, stop: () => app.renderer.off("frame", capture) };
     },
     async showGit() {
@@ -70,18 +80,25 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
         await app.renderOnce();
         await app.renderOnce();
       }
-      const text = app.captureCharFrame().split("\n"),
-        offset = right ? 36 : 0;
-      const y = text.findIndex((line) => line.indexOf(label, offset) >= 0),
-        x = text[y]?.indexOf(label, offset) ?? -1;
-      if (x < 0) throw new Error(`Missing ${label}\n${app.captureCharFrame()}`);
+
+      const text = app.captureCharFrame().split("\n");
+      const offset = right ? 36 : 0;
+      const y = text.findIndex((line) => line.indexOf(label, offset) >= 0);
+      const x = text[y]?.indexOf(label, offset) ?? -1;
+      if (x < 0) {
+        throw new Error(`Missing ${label}\n${app.captureCharFrame()}`);
+      }
+
       await app.mockMouse.click(x + 1, y);
       await app.renderOnce();
       await app.renderOnce();
     },
     async scroll(id: string, position: number) {
       const target = get(id);
-      if (!(target instanceof ScrollBoxRenderable)) throw new Error(`Not a scroll box: ${id}`);
+      if (!(target instanceof ScrollBoxRenderable)) {
+        throw new Error(`Not a scroll box: ${id}`);
+      }
+
       target.scrollTo(position);
       await app.renderOnce();
       await app.renderOnce();
@@ -94,11 +111,12 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
 }
 
 function gitFixture(counts = { MAIN: 70, FEATURE: 70 }) {
-  const loads: string[] = [],
-    comparisons: string[] = [];
+  const loads: string[] = [];
+  const comparisons: string[] = [];
   const source = (tree: string): GitSource => ({
     load: async () => {
       loads.push(tree);
+
       const count = tree === "MAIN" ? counts.MAIN : counts.FEATURE;
       const commits = Array.from({ length: count }, (_, index) => ({
         oid: (index + 1).toString(16).padStart(40, "0"),
@@ -107,6 +125,7 @@ function gitFixture(counts = { MAIN: 70, FEATURE: 70 }) {
         author: "Ada",
         date: "2026-10-15",
       }));
+
       return ok({
         head: tree,
         headOid: commits[0]!.oid,
@@ -120,6 +139,7 @@ function gitFixture(counts = { MAIN: 70, FEATURE: 70 }) {
     compare: async () => {
       comparisons.push(tree);
       const before = lines(`DIFF${tree}`) + "\n";
+
       return ok({
         before,
         after: before.replace("-050", "-050 modified"),
@@ -128,6 +148,7 @@ function gitFixture(counts = { MAIN: 70, FEATURE: 70 }) {
       });
     },
   });
+
   return {
     loads,
     comparisons,
@@ -144,12 +165,15 @@ test("Agent worktree transitions use saved reading positions from the first visi
   const app = await mount();
   try {
     await app.scroll("session-transcript", 17);
+
     const main = app.first(/MAIN-\d{3}/);
     expect(main).toBe("MAIN-017");
     await app.click(`${icons.folder} radian-ui`);
     await app.scroll("session-transcript", 43);
+
     const feature = app.first(/FEATURE-\d{3}/);
     expect(feature).toBe("FEATURE-043");
+
     const record = app.capture(/(?:MAIN|FEATURE)-\d{3}/);
 
     // Inspect all visible transition frames rather than hiding bugs behind final-state waits.
@@ -247,21 +271,24 @@ test("Long Git list restoration never clamps to placeholders or shorter previous
 
 test("Cached Git lists preserve per-worktree scroll from the first paint while revalidating", async () => {
   // Distinct cached positions must survive fresh repository reads on each worktree return.
-  const fixture = gitFixture(),
-    app = await mount({ git: fixture.git });
+  const fixture = gitFixture();
+  const app = await mount({ git: fixture.git });
   try {
     await app.showGit();
     await app.waitForFrame((frame) => frame.includes("GITMAIN-000"));
     await app.scroll("git-history", 24);
+
     const main = app.first(/GITMAIN-\d{3}/);
     await app.click(`${icons.folder} radian-ui`);
     await app.showGit();
     await app.waitForFrame((frame) => frame.includes("GITFEATURE-000"));
     await app.scroll("git-history", 48);
+
     const feature = app.first(/GITFEATURE-\d{3}/);
     expect(main).not.toBeNull();
     expect(feature).not.toBeNull();
     expect(fixture.loads).toEqual(["MAIN", "FEATURE"]);
+
     const record = app.capture(/GIT(?:MAIN|FEATURE)-\d{3}/);
 
     // Return to both cached worktrees and inspect every frame during revalidation.
@@ -288,14 +315,17 @@ test("Cached Git lists preserve per-worktree scroll from the first paint while r
 
 test("Cached Git diffs preserve saved positions from the first paint while revalidating", async () => {
   // Fresh comparisons must retain each worktree's distinct synchronized reading position.
-  const fixture = gitFixture(),
-    app = await mount({ git: fixture.git });
+  const fixture = gitFixture();
+  const app = await mount({ git: fixture.git });
   const scroll = async (position: number) => {
     const panes = walk(app.get("git-diff")).filter(
       (node): node is CodeRenderable => node instanceof CodeRenderable,
     );
     expect(panes).toHaveLength(2);
-    for (const pane of panes) pane.scrollY = position;
+    for (const pane of panes) {
+      pane.scrollY = position;
+    }
+
     await app.renderOnce();
     await app.renderOnce();
   };
@@ -306,6 +336,7 @@ test("Cached Git diffs preserve saved positions from the first paint while reval
     app.mockInput.pressEnter();
     await app.waitForFrame((frame) => frame.includes("DIFFMAIN-000"));
     await scroll(35);
+
     const main = app.first(/DIFFMAIN-\d{3}/);
     expect(main).toBe("DIFFMAIN-035");
     await app.click(`${icons.folder} radian-ui`);
@@ -315,10 +346,12 @@ test("Cached Git diffs preserve saved positions from the first paint while reval
     app.mockInput.pressEnter();
     await app.waitForFrame((frame) => frame.includes("DIFFFEATURE-000"));
     await scroll(7);
+
     const feature = app.first(/DIFFFEATURE-\d{3}/);
     expect(feature).toBe("DIFFFEATURE-007");
     expect(fixture.loads).toEqual(["MAIN", "FEATURE"]);
     expect(fixture.comparisons).toEqual(["MAIN", "FEATURE"]);
+
     const record = app.capture(/DIFF(?:MAIN|FEATURE)-\d{3}/, true);
 
     // Reopen the cached diffs and observe the first visible frame as new comparisons arrive.

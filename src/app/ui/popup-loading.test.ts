@@ -45,6 +45,7 @@ test.each(surfaces)(
     };
     try {
       await render();
+
       const prompt = node("session-prompt") as InputRenderable;
       prompt.focus();
       prompt.value = command;
@@ -55,8 +56,10 @@ test.each(surfaces)(
       for (const width of [120, 60]) {
         app.resize(width, 30);
         await render();
-        const feedback = node(`${spinner}-feedback`),
-          viewport = app.renderer.root.findDescendantById(body) ?? node("dashboard-body");
+
+        const feedback = node(`${spinner}-feedback`);
+        const viewport = app.renderer.root.findDescendantById(body) ?? node("dashboard-body");
+
         expect(node(spinner).visible).toBe(true);
         expect(feedback.visible).toBe(true);
         expect(feedback.x).toBe(viewport.x + Math.floor((viewport.width - feedback.width) / 2));
@@ -68,6 +71,7 @@ test.each(surfaces)(
           expect(viewport.y).toBe(field.y + field.height);
         }
       }
+
       const focus = app.renderer.currentFocusedRenderable;
 
       // Domain failures replace the central load immediately while the shared minimum-visible tail finishes.

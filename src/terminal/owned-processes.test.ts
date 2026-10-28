@@ -3,9 +3,10 @@ import { OwnedProcesses, type ProcessOperations } from "./owned-processes.ts";
 import { ok } from "../result.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 
-const anchorPid = 2000000000,
-  childPid = anchorPid - 1,
-  otherPid = anchorPid - 2;
+const anchorPid = 2000000000;
+const childPid = anchorPid - 1;
+const otherPid = anchorPid - 2;
+
 function fixture() {
   let alive = true;
   const live = new Set([childPid]);
@@ -24,6 +25,7 @@ function fixture() {
       live.delete(pid);
     },
   };
+
   return {
     ops,
     signals,
@@ -56,6 +58,7 @@ test("Zero session identifiers never establish ownership", () => {
 test("Termination signals only positive children in owned sessions while preserving anchors and unrelated processes", async () => {
   const app = fixture();
   const owner = expectOk(OwnedProcesses.capture(app.anchor, app.ops));
+
   expectOk(await owner.stopChildren());
   expect(app.signals).toEqual([childPid]);
   expect(
@@ -68,8 +71,10 @@ test("Termination signals only positive children in owned sessions while preserv
 test("Missing anchors after lookup abort termination without guessed signals", async () => {
   const app = fixture();
   const owner = expectOk(OwnedProcesses.capture(app.anchor, app.ops));
+
   app.ops.list = async () => {
     app.loseAnchor();
+
     return ok([{ pid: childPid, zombie: false }]);
   };
   expect(expectError(await owner.stopChildren()).code).toBe("PTY_OWNERSHIP_LOST");
@@ -79,8 +84,17 @@ test("Missing anchors after lookup abort termination without guessed signals", a
 test("Changed PID session ownership immediately before signaling skips that PID", async () => {
   const app = fixture();
   let reads = 0;
-  app.ops.sessionId = (pid) =>
-    pid === anchorPid ? anchorPid : pid === childPid && ++reads === 1 ? anchorPid : 42;
+
+  app.ops.sessionId = (pid) => {
+    if (pid === anchorPid) {
+      return anchorPid;
+    } else if (pid === childPid && ++reads === 1) {
+      return anchorPid;
+    } else {
+      return 42;
+    }
+  };
+
   const owner = expectOk(OwnedProcesses.capture(app.anchor, app.ops));
   expectOk(await owner.stopChildren());
   expect(app.signals).toEqual([]);

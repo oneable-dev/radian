@@ -11,6 +11,7 @@ const image = (): ImageContent => ({
   mimeType: "image/png",
   data: tinyPng().toString("base64"),
 });
+
 function deliver(transcript: SessionTranscript, message: UserMessage) {
   transcript.handle({ type: "message_start", message });
   transcript.handle({ type: "message_end", message });
@@ -18,15 +19,16 @@ function deliver(transcript: SessionTranscript, message: UserMessage) {
 
 test("Image attachments project into separate sections without duplicate labels and restore names and originals", () => {
   // Names are display-only custom entries; the original SDK message and image bytes stay intact.
-  const block = image(),
-    message: UserMessage = {
-      role: "user",
-      content: [{ type: "text", text: "[Image #1] Inspect this" }, block],
-      timestamp: 1,
-    };
-  const manager = SessionManager.inMemory("/fixture"),
-    live = new SessionTranscript([]);
+  const block = image();
+  const message: UserMessage = {
+    role: "user",
+    content: [{ type: "text", text: "[Image #1] Inspect this" }, block],
+    timestamp: 1,
+  };
+  const manager = SessionManager.inMemory("/fixture");
+  const live = new SessionTranscript([]);
   const names = live.rememberImages([block], ["/private/screens/design.png"]);
+
   manager.appendCustomEntry(imageNamesEntryType, names);
   manager.appendMessage(message);
   deliver(live, message);
@@ -37,6 +39,7 @@ test("Image attachments project into separate sections without duplicate labels 
       "Inspect this",
       "design.png",
     ]);
+
     const attachment = transcript.sections[1]!;
     expect(attachment.kind).toBe("notice");
     expect(attachment.title).toBe("read");
@@ -47,14 +50,16 @@ test("Image attachments project into separate sections without duplicate labels 
     expect(JSON.stringify(transcript.sections)).not.toContain("/private/");
     expect(JSON.stringify(transcript.sections)).not.toContain("[Image");
   }
+
   expect((message.content as { text?: string }[])[0]?.text).toBe("[Image #1] Inspect this");
   expect(JSON.stringify(names)).not.toContain(block.data);
 });
 
 test("Unnamed images and image-only requests preserve order and counts while returning only real originals", () => {
-  const transcript = new SessionTranscript([]),
-    first = image(),
-    second = { ...image(), data: tinyPng(2).toString("base64") };
+  const transcript = new SessionTranscript([]);
+  const first = image();
+  const second = { ...image(), data: tinyPng(2).toString("base64") };
+
   deliver(transcript, {
     role: "user",
     content: [{ type: "text", text: "[Image #1] [Image #3]" }, first, second],
@@ -87,13 +92,15 @@ test.each([false, true])(
       timestamp: 1,
       content: [{ type: "text", text }, image(), image()],
     };
-    const original = JSON.stringify(message),
-      manager = SessionManager.inMemory("/fixture"),
-      live = new SessionTranscript([]);
+    const original = JSON.stringify(message);
+    const manager = SessionManager.inMemory("/fixture");
+    const live = new SessionTranscript([]);
+
     manager.appendMessage(message);
 
     // Live events and restored history must produce identical user sections.
     deliver(live, message);
+
     const restored = new SessionTranscript(manager.getBranch());
 
     // Body and summary represent the same request; original messages and image sections remain intact.
@@ -108,6 +115,7 @@ test.each([false, true])(
       expect(transcript.sections.filter((section) => section.image)).toHaveLength(2);
       expect(JSON.stringify(transcript.sections)).not.toContain("[Image");
     }
+
     expect(JSON.stringify(message)).toBe(original);
     expect(manager.getBranch().find((entry) => entry.type === "message")?.message).toEqual(message);
   },
@@ -128,8 +136,9 @@ test("Image-only requests with generated guidance summarize counts without empty
 });
 
 test("Plain strings without image blocks never imply attachments or hidden labels", () => {
-  const transcript = new SessionTranscript([]),
-    text = "Explain [Image #1] and [Image: image/png] as literal text";
+  const transcript = new SessionTranscript([]);
+  const text = "Explain [Image #1] and [Image: image/png] as literal text";
+
   deliver(transcript, { role: "user", content: text, timestamp: 1 });
 
   expect(transcript.sections).toHaveLength(1);

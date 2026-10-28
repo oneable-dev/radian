@@ -10,11 +10,13 @@ import type {
 } from "./model.ts";
 
 type Timer = ReturnType<typeof setTimeout> | number;
+
 type Clock = {
   now(): number;
   setTimeout(callback: () => void, delay: number): Timer;
   clearTimeout(timer: Timer): void;
 };
+
 const systemClock: Clock = {
   now: Date.now,
   setTimeout: (callback, delay) => setTimeout(callback, delay),
@@ -32,8 +34,11 @@ const failed = (previous: ProviderUsage, error: ExpectedError): ProviderUsage =>
   status: "error",
   errorCode: error instanceof UsageError ? error.code : "USAGE_QUERY_FAILED",
 });
+
 type RefreshMode = "cached" | UsageRefreshMode;
+
 type RetryState = { failures: number; retryAt: number; retryAfterAt: number };
+
 type AccountCache = {
   snapshot: ProviderUsage;
   attemptedAt: number;
@@ -64,10 +69,13 @@ export class UsageMonitor {
   ) {}
 
   watch(changed: () => void): UsageSubscription {
-    let provider: string | null = null,
-      disposed = false;
+    let provider: string | null = null;
+    let disposed = false;
     const remove = () => {
-      if (provider === null) return;
+      if (provider === null) {
+        return;
+      }
+
       const callbacks = this.watchers.get(provider);
       callbacks?.delete(changed);
       if (!callbacks?.size) {
@@ -79,9 +87,12 @@ export class UsageMonitor {
         this.providerRetries.delete(provider);
       }
     };
+
     return {
       read: (next) => {
-        if (this.stopped) return empty(next ?? "", "unavailable");
+        if (this.stopped) {
+          return empty(next ?? "", "unavailable");
+        }
         if (!disposed && next !== provider) {
           remove();
           provider = next;
@@ -92,15 +103,21 @@ export class UsageMonitor {
             void this.refresh(provider);
           }
         }
+
         return provider === null
           ? empty("", "unavailable")
           : (this.snapshots.get(provider) ?? empty(provider));
       },
       refresh: (mode = "automatic") => {
-        if (!disposed && provider !== null) void this.refresh(provider, mode);
+        if (!disposed && provider !== null) {
+          void this.refresh(provider, mode);
+        }
       },
       dispose: () => {
-        if (disposed) return;
+        if (disposed) {
+          return;
+        }
+
         disposed = true;
         remove();
         this.schedule();
@@ -114,48 +131,76 @@ export class UsageMonitor {
     this.accountKeys.delete(provider);
     this.providerRetries.delete(provider);
     this.publish(provider, empty(provider));
-    if (this.watchers.has(provider)) void this.refresh(provider, "automatic");
+    if (this.watchers.has(provider)) {
+      void this.refresh(provider, "automatic");
+    }
   }
 
   setActive(active: boolean): void {
-    if (this.active === active || this.stopped) return;
+    if (this.active === active || this.stopped) {
+      return;
+    }
+
     this.active = active;
     this.nextPollAt = active ? this.clock.now() + intervalMs : null;
-    if (active) for (const provider of this.watchers.keys()) void this.refresh(provider);
+    if (active) {
+      for (const provider of this.watchers.keys()) {
+        void this.refresh(provider);
+      }
+    }
+
     this.schedule();
   }
 
   private refresh(provider: string, mode: RefreshMode = "cached"): Promise<void> {
-    if (this.stopped) return Promise.resolve();
+    if (this.stopped) {
+      return Promise.resolve();
+    }
+
     const existing = this.pending.get(provider);
-    if (existing) return existing;
-    if (this.clock.now() < this.retryAt(provider, mode)) return Promise.resolve();
+    if (existing) {
+      return existing;
+    }
+    if (this.clock.now() < this.retryAt(provider, mode)) {
+      return Promise.resolve();
+    }
+
     // Defer callbacks until registration/reading a snapshot has finished, avoiding recursive publication.
     const generation = this.generations.get(provider) ?? 0;
     const task = Promise.resolve()
       .then(() => this.perform(provider, mode, generation))
       .catch((error: unknown) => {
         reportUnexpected(error, "usage refresh");
-        if ((this.generations.get(provider) ?? 0) === generation)
+        if ((this.generations.get(provider) ?? 0) === generation) {
           this.fail(
             provider,
             new UsageError("USAGE_QUERY_FAILED", "Unexpected usage refresh failure."),
           );
+        }
       })
       .finally(() => {
-        if (this.pending.get(provider) === task) this.pending.delete(provider);
+        if (this.pending.get(provider) === task) {
+          this.pending.delete(provider);
+        }
+
         this.jobs.delete(task);
         this.schedule();
       });
+
     this.pending.set(provider, task);
     this.jobs.add(task);
+
     return task;
   }
 
   private async perform(provider: string, mode: RefreshMode, generation: number): Promise<void> {
-    if (this.stopped || (this.generations.get(provider) ?? 0) !== generation) return;
+    if (this.stopped || (this.generations.get(provider) ?? 0) !== generation) {
+      return;
+    }
+
     const controller = new AbortController();
     this.controllers.add(controller);
+
     const timeout = this.clock.setTimeout(
       () => controller.abort(new UsageError("USAGE_TIMEOUT", "Usage lookup timed out.")),
       10000,
@@ -176,20 +221,27 @@ export class UsageMonitor {
       (error: unknown): Result<ProviderUsage, ExpectedError> => {
         // This is the background host boundary, not ordinary provider/input error classification.
         reportUnexpected(error, "usage source");
+
         return err(new UsageError("USAGE_QUERY_FAILED", "Unexpected usage lookup failure."));
       },
     );
     try {
       const result = await Promise.race([lookup, abort]);
-      if (this.stopped || (this.generations.get(provider) ?? 0) !== generation) return;
+      if (this.stopped || (this.generations.get(provider) ?? 0) !== generation) {
+        return;
+      }
       if (result.ok) {
         this.providerRetries.delete(provider);
         this.publish(provider, result.value);
-      } else if (!(result.error instanceof CancelledError)) this.fail(provider, result.error);
+      } else if (!(result.error instanceof CancelledError)) {
+        this.fail(provider, result.error);
+      }
     } finally {
       this.clock.clearTimeout(timeout);
       this.controllers.delete(controller);
-      if (aborted) controller.signal.removeEventListener("abort", aborted);
+      if (aborted) {
+        controller.signal.removeEventListener("abort", aborted);
+      }
     }
   }
 
@@ -199,22 +251,34 @@ export class UsageMonitor {
     signal: AbortSignal,
     generation: number,
   ): Promise<Result<ProviderUsage, ExpectedError>> {
-    if (this.stopped || signal.aborted) return err(new CancelledError());
-    const resolved = await this.resolve(provider, signal);
-    if (this.stopped || signal.aborted || (this.generations.get(provider) ?? 0) !== generation)
+    if (this.stopped || signal.aborted) {
       return err(new CancelledError());
-    if (!resolved.ok) return resolved;
+    }
+
+    const resolved = await this.resolve(provider, signal);
+    if (this.stopped || signal.aborted || (this.generations.get(provider) ?? 0) !== generation) {
+      return err(new CancelledError());
+    }
+    if (!resolved.ok) {
+      return resolved;
+    }
+
     const account = resolved.value;
     if (!account) {
       this.accountKeys.delete(provider);
+
       return { ok: true, value: empty(provider, "unavailable") };
     }
     if (this.accountKeys.get(provider) !== account.key) {
       this.accountKeys.set(provider, account.key);
       this.publish(provider, empty(account.provider));
     }
+
     const cached = this.accounts.get(account.key);
-    if (cached?.pending) return { ok: true, value: await cached.pending };
+    if (cached?.pending) {
+      return { ok: true, value: await cached.pending };
+    }
+
     const now = this.clock.now();
     const expired = cached?.snapshot.windows.some(
       (window) => window.resetsAt !== null && window.resetsAt <= now,
@@ -224,20 +288,31 @@ export class UsageMonitor {
     if (cached && (now < (retryAt ?? 0) || (!expired && now - cached.attemptedAt < cacheMs))) {
       return { ok: true, value: cached.snapshot };
     }
+
     const entry: AccountCache = cached ?? { snapshot: empty(account.provider), attemptedAt: now };
     entry.attemptedAt = now;
+
     const releasePending = () => {
-      if (entry.pending === job) delete entry.pending;
+      if (entry.pending === job) {
+        delete entry.pending;
+      }
     };
     const job = this.load(account, signal, entry)
       .then(({ snapshot, retry }) => {
         if (!this.stopped && !signal.aborted && entry.pending === job) {
           entry.snapshot = snapshot;
-          if (retry) entry.retry = retry;
-          else delete entry.retry;
-          for (const [name, key] of this.accountKeys)
-            if (key === account.key) this.publish(name, snapshot);
+          if (retry) {
+            entry.retry = retry;
+          } else {
+            delete entry.retry;
+          }
+          for (const [name, key] of this.accountKeys) {
+            if (key === account.key) {
+              this.publish(name, snapshot);
+            }
+          }
         }
+
         return snapshot;
       })
       .catch((error: unknown) => {
@@ -246,16 +321,21 @@ export class UsageMonitor {
           entry.snapshot = failed(entry.snapshot, failure);
           entry.retry = this.backoff(entry.retry, failure);
         }
+
         throw error;
       })
       .finally(() => {
         releasePending();
         signal.removeEventListener("abort", releasePending);
       });
+
     entry.pending = job;
     this.accounts.set(account.key, entry);
     signal.addEventListener("abort", releasePending, { once: true });
-    if (signal.aborted) releasePending();
+    if (signal.aborted) {
+      releasePending();
+    }
+
     return { ok: true, value: await job };
   }
 
@@ -265,11 +345,13 @@ export class UsageMonitor {
     previous: AccountCache,
   ): Promise<{ snapshot: ProviderUsage; retry?: RetryState }> {
     const result = await account.load(signal);
-    if (!result.ok)
+    if (!result.ok) {
       return {
         snapshot: failed(previous.snapshot, result.error),
         retry: this.backoff(previous.retry, result.error),
       };
+    }
+
     return {
       snapshot: {
         provider: account.provider,
@@ -287,6 +369,7 @@ export class UsageMonitor {
     const delay = Math.min(maxBackoffMs, Math.round(base * (1 + this.random() * 0.1)));
     const retryAfter = error instanceof UsageError ? (error.retryAfterMs ?? 0) : 0;
     const now = this.clock.now();
+
     return {
       failures,
       retryAt: now + Math.max(delay, retryAfter),
@@ -300,52 +383,81 @@ export class UsageMonitor {
   }
 
   private retryAt(provider: string, mode: RefreshMode = "cached"): number {
-    const key = this.accountKeys.get(provider),
-      account = key === undefined ? undefined : this.accounts.get(key);
+    const key = this.accountKeys.get(provider);
+    const account = key === undefined ? undefined : this.accounts.get(key);
     // Explicit reloads bypass our backoff, never a server-imposed Retry-After deadline.
     const deadline = (retry: RetryState | undefined) =>
       (mode === "manual" ? retry?.retryAfterAt : retry?.retryAt) ?? 0;
+
     return Math.max(deadline(this.providerRetries.get(provider)), deadline(account?.retry));
   }
 
   private nextRefreshAt(provider: string, now: number): number {
     const retryAt = this.retryAt(provider);
-    if (retryAt) return retryAt;
+    if (retryAt) {
+      return retryAt;
+    }
+
     const resets = (this.snapshots.get(provider)?.windows ?? []).flatMap((window: UsageWindow) =>
       window.resetsAt !== null && window.resetsAt > now ? [window.resetsAt] : [],
     );
+
     return Math.min(this.nextPollAt ?? now + intervalMs, ...resets);
   }
 
   private publish(provider: string, snapshot: ProviderUsage): void {
-    if (this.stopped) return;
-    if (JSON.stringify(this.snapshots.get(provider)) === JSON.stringify(snapshot)) return;
+    if (this.stopped) {
+      return;
+    }
+    if (JSON.stringify(this.snapshots.get(provider)) === JSON.stringify(snapshot)) {
+      return;
+    }
+
     this.snapshots.set(provider, snapshot);
+
     // Subscribers may unsubscribe or add listeners while handling this publication.
     const watchers = [...(this.watchers.get(provider) ?? [])];
-    for (const changed of watchers) changed();
+    for (const changed of watchers) {
+      changed();
+    }
   }
 
   private schedule(): void {
-    if (this.timer !== undefined) this.clock.clearTimeout(this.timer);
+    if (this.timer !== undefined) {
+      this.clock.clearTimeout(this.timer);
+    }
+
     this.timer = undefined;
     if (this.stopped || !this.active || !this.watchers.size) {
       this.nextPollAt = null;
+
       return;
     }
+
     const now = this.clock.now();
     this.nextPollAt ??= now + intervalMs;
+
     const scheduled = [...this.watchers.keys()]
       .filter((provider) => !this.pending.has(provider))
       .map((provider) => ({ provider, at: this.nextRefreshAt(provider, now) }));
-    if (!scheduled.length) return; // Pending lookups own their timeout and reschedule on settlement.
+    if (!scheduled.length) {
+      return;
+    } // Pending lookups own their timeout and reschedule on settlement.
+
     const delay = Math.max(1000, Math.min(2147483647, ...scheduled.map(({ at }) => at - now)));
     this.timer = this.clock.setTimeout(() => {
       this.timer = undefined;
+
       const now = this.clock.now();
-      if (this.nextPollAt !== null && this.nextPollAt <= now) this.nextPollAt = now + intervalMs;
-      for (const { provider, at } of scheduled)
-        if (at <= now && this.watchers.has(provider)) void this.refresh(provider, "automatic");
+      if (this.nextPollAt !== null && this.nextPollAt <= now) {
+        this.nextPollAt = now + intervalMs;
+      }
+      for (const { provider, at } of scheduled) {
+        if (at <= now && this.watchers.has(provider)) {
+          void this.refresh(provider, "automatic");
+        }
+      }
+
       // Skipping a lookup during backoff must not terminate periodic polling.
       this.schedule();
     }, delay);
@@ -353,8 +465,13 @@ export class UsageMonitor {
 
   async stop(): Promise<void> {
     this.stopped = true;
-    if (this.timer !== undefined) this.clock.clearTimeout(this.timer);
-    for (const controller of this.controllers) controller.abort();
+    if (this.timer !== undefined) {
+      this.clock.clearTimeout(this.timer);
+    }
+    for (const controller of this.controllers) {
+      controller.abort();
+    }
+
     await Promise.all(this.jobs);
     this.watchers.clear();
     this.accounts.clear();

@@ -81,6 +81,7 @@ const oneShot = new Set<CommandId>([
   "agent.inspect",
   "git.inspect",
 ]);
+
 type Pending = {
   owner: Renderable | null;
   events: KeyEvent[];
@@ -88,11 +89,13 @@ type Pending = {
   held: Set<string>;
   candidates: readonly Binding[];
 };
+
 export class KeyRouter {
   private pending: Pending | undefined;
   private timer: ReturnType<CliRenderer["clock"]["setTimeout"]> | undefined;
   private readonly consumed = new Map<string, boolean>();
   private disposed = false;
+
   constructor(
     private readonly renderer: CliRenderer,
     readonly keymap: Keymap,
@@ -107,18 +110,27 @@ export class KeyRouter {
     renderer.keyInput.prependListener("paste", this.flush);
     renderer.on("focused_renderable", this.focusChanged);
   }
+
   private consume(key: KeyEvent): void {
     key.preventDefault();
     key.stopPropagation();
   }
+
   private press = (key: KeyEvent): void => {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     const repeated = key.eventType === "repeat" || key.repeated === true;
     if (repeated && this.consumed.get(key.name)) {
       this.consume(key);
+
       return;
     }
-    if (!repeated) this.consumed.delete(key.name);
+    if (!repeated) {
+      this.consumed.delete(key.name);
+    }
+
     const token = keyToken(key);
     // A transient selection owns only its explicitly scoped keys, not app/native navigation.
     const overlay = !this.pending ? this.overlayContext?.() : null;
@@ -131,15 +143,20 @@ export class KeyRouter {
     if (!this.pending && !overlayBindings.length && this.capture?.(key)) {
       this.consume(key);
       this.consumed.set(key.name, true);
+
       return;
     }
     if (!this.pending) {
       let candidates = overlayBindings;
-      if (!candidates.length)
+      if (!candidates.length) {
         candidates = this.keymap.bindings.filter(
           (binding) => binding.keys[0] === token && inScope(binding.scope, this.context()),
         );
-      if (!candidates.length) return;
+      }
+      if (!candidates.length) {
+        return;
+      }
+
       this.pending = {
         owner: this.renderer.currentFocusedRenderable ?? null,
         events: [],
@@ -148,39 +165,57 @@ export class KeyRouter {
         candidates,
       };
     }
+
     const pending = this.pending;
     this.consume(key);
     pending.events.push(new KeyEvent(key));
-    if (repeated && pending.held.has(key.name)) return; // Preserve repetitions for a literal replay, not multiple app actions.
+    if (repeated && pending.held.has(key.name)) {
+      return;
+    } // Preserve repetitions for a literal replay, not multiple app actions.
+
     pending.held.add(key.name);
     pending.keys.push(token);
+
     const candidates = pending.candidates.filter(
       (binding) => binding.keys[pending.keys.length - 1] === token,
     );
     const complete = candidates.find((binding) => binding.keys.length === pending.keys.length);
     if (complete) {
       this.clear();
+
       const once = complete.keys.length > 1 || oneShot.has(complete.command);
       // A held one-shot key must not resubmit or become a different action after its context changes.
-      for (const name of pending.held) this.consumed.set(name, once);
+      for (const name of pending.held) {
+        this.consumed.set(name, once);
+      }
       // A configured command with an unavailable target is still an app command.
       // Never turn a disabled close/focus action into literal edits in Neovim/a shell.
-      if (this.available(complete.command)) this.execute(complete.command, key);
+      if (this.available(complete.command)) {
+        this.execute(complete.command, key);
+      }
+
       return;
     }
     if (!candidates.length) {
       this.flush();
+
       return;
     }
+
     pending.candidates = candidates;
-    if (this.timer !== undefined) this.renderer.clock.clearTimeout(this.timer);
+    if (this.timer !== undefined) {
+      this.renderer.clock.clearTimeout(this.timer);
+    }
+
     this.timer = this.renderer.clock.setTimeout(this.flush, this.keymap.timeoutMs);
   };
+
   private release = (key: KeyEvent): void => {
     if (this.pending?.held.has(key.name)) {
       this.consume(key);
       this.pending.held.delete(key.name);
       this.pending.events.push(new KeyEvent(key));
+
       return;
     }
     if (this.consumed.has(key.name)) {
@@ -188,36 +223,59 @@ export class KeyRouter {
       this.consumed.delete(key.name);
     }
   };
+
   private focusChanged = (): void => {
-    if (this.pending && this.pending.owner !== this.renderer.currentFocusedRenderable) this.flush();
+    if (this.pending && this.pending.owner !== this.renderer.currentFocusedRenderable) {
+      this.flush();
+    }
   };
+
   // Paste first flushes any prefix, then goes through the ordinary paste path. Its text
   // is never interpreted as app bindings. Replay retains its original target and order.
   flush = (): void => {
     const pending = this.pending;
     this.clear();
-    if (pending) this.forward(pending);
+    if (pending) {
+      this.forward(pending);
+    }
   };
+
   private forward(pending: Pending): void {
     const target = pending.owner;
-    if (!target || target.isDestroyed) return;
+    if (!target || target.isDestroyed) {
+      return;
+    }
     for (const key of pending.events) {
-      if (target.isDestroyed) return;
+      if (target.isDestroyed) {
+        return;
+      }
       if (key.eventType === "release") {
-        if (target instanceof EmbeddedTerminalRenderable) target.handleKeyPress(key);
+        if (target instanceof EmbeddedTerminalRenderable) {
+          target.handleKeyPress(key);
+        }
       } else {
         target.onKeyDown?.(key);
-        if (!key.defaultPrevented) target.handleKeyPress?.(key);
+        if (!key.defaultPrevented) {
+          target.handleKeyPress?.(key);
+        }
       }
     }
   }
+
   private clear(): void {
-    if (this.timer !== undefined) this.renderer.clock.clearTimeout(this.timer);
+    if (this.timer !== undefined) {
+      this.renderer.clock.clearTimeout(this.timer);
+    }
+
     this.timer = undefined;
     this.pending = undefined;
   }
+
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.flush();
     this.disposed = true;
     this.renderer.keyInput.off("keypress", this.press);

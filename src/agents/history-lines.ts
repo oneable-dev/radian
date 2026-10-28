@@ -3,18 +3,23 @@ import { CancelledError, HistoryError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 
 type Line = { readonly start: number; readonly end: number };
+
 export const historyReadChunk = 64 * 1024;
 
 export function historyReadFailure(
   signal: AbortSignal | undefined,
   deadline: number,
 ): ExpectedError | undefined {
-  if (signal?.aborted) return new CancelledError();
-  if (Date.now() >= deadline)
+  if (signal?.aborted) {
+    return new CancelledError();
+  }
+  if (Date.now() >= deadline) {
     return new HistoryError(
       "HISTORY_UNAVAILABLE",
       "Recent history lookup timed out. The session remains available to open explicitly.",
     );
+  }
+
   return undefined;
 }
 
@@ -31,22 +36,28 @@ export async function readHistoryBytes(
   let offset = 0;
   while (offset < length) {
     const failure = historyReadFailure(signal, deadline);
-    if (failure) return err(failure);
+    if (failure) {
+      return err(failure);
+    }
+
     const read = await file.read(
       bytes,
       offset,
       Math.min(historyReadChunk, length - offset),
       start + offset,
     );
-    if (!read.bytesRead)
+    if (!read.bytesRead) {
       return err(
         new HistoryError(
           "HISTORY_UNAVAILABLE",
           "Saved conversation changed while reading its preview. Refresh history.",
         ),
       );
+    }
+
     offset += read.bytesRead;
   }
+
   return ok(bytes);
 }
 
@@ -58,22 +69,32 @@ export async function* reverseHistoryLines(
   signal: AbortSignal | undefined,
   deadline: number,
 ): AsyncGenerator<Result<Line, ExpectedError>> {
-  let position = size,
-    end = size;
+  let position = size;
+  let end = size;
   while (position > 0) {
     const start = Math.max(0, position - historyReadChunk);
     const read = await readHistoryBytes(file, start, position - start, signal, deadline);
     if (!read.ok) {
       yield read;
+
       return;
     }
     for (let index = read.value.length - 1; index >= 0; index--) {
-      if (read.value[index] !== 10) continue;
+      if (read.value[index] !== 10) {
+        continue;
+      }
+
       const next = start + index + 1;
-      if (next < end) yield ok({ start: next, end });
+      if (next < end) {
+        yield ok({ start: next, end });
+      }
+
       end = start + index;
     }
+
     position = start;
   }
-  if (end > 0) yield ok({ start: 0, end });
+  if (end > 0) {
+    yield ok({ start: 0, end });
+  }
 }

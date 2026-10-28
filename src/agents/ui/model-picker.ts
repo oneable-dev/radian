@@ -30,6 +30,7 @@ import { halfPageStep } from "../../ui/navigation.ts";
 import { createTextMatcher } from "../../search.ts";
 
 type Scope = { sessionId: string; conversationId: string };
+
 export type ModelPickerActions = {
   list?: (
     sessionId: string,
@@ -52,6 +53,7 @@ export type ModelPickerActions = {
   fallback: () => void;
   keyHint: (command: CommandId, context: KeyContext) => string;
 };
+
 const sameModel = (left: ModelIdentity | null | undefined, right: ModelIdentity | undefined) =>
   !!left && !!right && left.provider === right.provider && left.id === right.id;
 
@@ -185,29 +187,41 @@ export class ModelPicker {
   get visible(): boolean {
     return !this.disposed && !this.root.isDestroyed && this.root.visible;
   }
+
   get changing(): boolean {
     return this.applying;
   }
+
   get context(): KeyContext {
-    return this.search.focused
-      ? "model-search"
-      : this.effort.focused || this.effort.hasFocusedDescendant
-        ? "model-effort"
-        : "model";
+    if (this.search.focused) {
+      return "model-search";
+    }
+
+    if (this.effort.focused || this.effort.hasFocusedDescendant) {
+      return "model-effort";
+    }
+
+    return "model";
   }
+
   get focusTargets(): Renderable[] {
     return [this.search, this.list, ...(this.effort.focusable ? [this.effort] : [])];
   }
+
   private get selectedEffort(): ModelEffort | undefined {
     const model = this.filtered[this.cursor];
-    if (!model) return undefined;
+    if (!model) {
+      return undefined;
+    }
+
     const draft = this.effortDrafts.get(JSON.stringify([model.provider, model.id]));
-    return draft !== undefined && model.efforts.includes(draft)
-      ? draft
-      : model.efforts.includes(model.effort)
-        ? model.effort
-        : undefined;
+    if (draft !== undefined && model.efforts.includes(draft)) {
+      return draft;
+    }
+
+    return model.efforts.includes(model.effort) ? model.effort : undefined;
   }
+
   get shortcuts(): readonly FooterShortcut[] {
     return (
       [
@@ -231,7 +245,10 @@ export class ModelPicker {
   }
 
   show(scope: Scope): void {
-    if (this.disposed || this.root.isDestroyed) return;
+    if (this.disposed || this.root.isDestroyed) {
+      return;
+    }
+
     this.owner = this.renderer.currentFocusedRenderable ?? undefined;
     this.scope = scope;
     this.catalog = undefined;
@@ -244,39 +261,62 @@ export class ModelPicker {
     this.filter();
     this.resize();
     this.search.focus();
+
     const cached = this.actions.cached?.(scope.sessionId, scope.conversationId);
-    if (cached) this.accept(cached, scope);
-    else this.launch(() => this.load());
+    if (cached) {
+      this.accept(cached, scope);
+    } else {
+      this.launch(() => this.load());
+    }
   }
+
   updateData(): void {
-    if (!this.visible || !this.scope || this.loading || this.applying) return;
+    if (!this.visible || !this.scope || this.loading || this.applying) {
+      return;
+    }
+
     const cached = this.actions.cached?.(this.scope.sessionId, this.scope.conversationId);
-    if (cached && (!cached.ok || cached.value !== this.catalog)) this.accept(cached, this.scope);
+    if (cached && (!cached.ok || cached.value !== this.catalog)) {
+      this.accept(cached, this.scope);
+    }
   }
+
   hide(restoreFocus = true): void {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
+
     this.root.visible = false;
     this.revision++;
     this.request?.abort();
     this.spinner.cancel();
     this.loading = false;
-    if (this.applying)
+    if (this.applying) {
       this.actions.notice(
         "Model selection is still settling. Closing the popup does not undo an accepted change; check the session model before retrying.",
         { level: "warning" },
       );
+    }
+
     const owner = this.owner;
     this.owner = undefined;
     this.scope = undefined;
     if (restoreFocus) {
       let visible = !!owner && !owner.isDestroyed;
-      for (let node = owner; node; node = node.parent as Renderable | undefined)
+      for (let node = owner; node; node = node.parent as Renderable | undefined) {
         visible &&= node.visible;
-      if (visible && owner) owner.focus();
-      else this.actions.fallback();
+      }
+
+      if (visible && owner) {
+        owner.focus();
+      } else {
+        this.actions.fallback();
+      }
     }
+
     this.actions.changed();
   }
+
   updateScope(
     sessionId: string | null,
     conversationId: string | undefined,
@@ -287,15 +327,19 @@ export class ModelPicker {
       (!visible ||
         sessionId !== this.scope?.sessionId ||
         conversationId !== this.scope?.conversationId)
-    )
+    ) {
       this.hide();
+    }
   }
+
   private current(revision: number): boolean {
     return this.visible && revision === this.revision;
   }
+
   private launch(operation: () => Promise<void>): void {
-    const pending = operation(),
-      revision = this.revision;
+    const pending = operation();
+    const revision = this.revision;
+
     void pending.catch((error: unknown) => {
       const message = reportUnexpected(error, "model picker");
       if (this.current(revision)) {
@@ -305,11 +349,16 @@ export class ModelPicker {
       }
     });
   }
+
   private async load(refresh = false): Promise<void> {
     const scope = this.scope;
-    if (!scope || !this.actions.list || this.applying) return;
+    if (!scope || !this.actions.list || this.applying) {
+      return;
+    }
+
     const revision = ++this.revision;
     this.request?.abort();
+
     const request = (this.request = new AbortController());
     this.loading = true;
     this.loadError = undefined;
@@ -317,6 +366,7 @@ export class ModelPicker {
     this.spinner.start();
     this.message.content = "";
     this.actions.changed();
+
     let result: Result<ModelCatalog, ExpectedError>;
     try {
       result = await this.actions.list(
@@ -332,9 +382,14 @@ export class ModelPicker {
         this.actions.changed();
       }
     }
-    if (!this.current(revision)) return;
+
+    if (!this.current(revision)) {
+      return;
+    }
+
     this.accept(result, scope);
   }
+
   private accept(result: Result<ModelCatalog, ExpectedError>, scope: Scope): void {
     if (!result.ok || result.value.conversationId !== scope.conversationId) {
       this.loadError = !result.ok
@@ -343,24 +398,32 @@ export class ModelPicker {
       this.catalog = undefined;
       this.filtered = [];
       this.filter();
+
       return;
     }
+
     this.catalog = result.value;
     this.filter();
   }
+
   private filter = (): void => {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
+
     const selected = this.filtered[this.cursor] ?? this.catalog?.current;
     const matchesText = createTextMatcher(this.search.value);
     const matches =
       this.catalog?.models.filter((model) =>
         matchesText(`${model.name} ${model.provider}/${model.id}`),
       ) ?? [];
+
     this.search.setCounts(
       this.catalog && !this.loading && !this.loadError
         ? { matched: matches.length, total: this.catalog.models.length }
         : null,
     );
+
     // Keep the current model visible even when a large provider catalog needs display bounds.
     const current = matches.find((model) => sameModel(this.catalog?.current, model));
     this.filtered = current
@@ -370,7 +433,10 @@ export class ModelPicker {
       0,
       this.filtered.findIndex((model) => sameModel(selected, model)),
     );
-    for (const row of this.rows) row.destroyRecursively();
+    for (const row of this.rows) {
+      row.destroyRecursively();
+    }
+
     this.rows.length = 0;
     this.filtered.forEach((model, index) => {
       const row = new BoxRenderable(this.renderer, {
@@ -403,6 +469,7 @@ export class ModelPicker {
         wrapMode: "none",
         selectable: false,
       });
+
       uiTheme(this.renderer).bindStyles(row, (styles) => {
         paintText(label, styles["ui.label"]);
         paintText(metadata, styles["ui.muted"]);
@@ -412,19 +479,26 @@ export class ModelPicker {
       this.rows.push(row);
       this.list.add(row);
     });
-    this.message.content =
-      this.loadError ??
-      (this.loading
-        ? ""
-        : !this.catalog
-          ? ""
-          : !this.catalog.models.length
-            ? "No available models. Configure provider authentication in Pi first."
-            : !matches.length
-              ? "No matching models"
-              : `${matches.length} models${matches.length > 200 ? " · showing first 200; refine search" : ""} · changes apply only to this session`);
+
+    let message = this.loadError;
+    if (message === undefined) {
+      if (this.loading || !this.catalog) {
+        message = "";
+      } else if (!this.catalog.models.length) {
+        message = "No available models. Configure provider authentication in Pi first.";
+      } else if (!matches.length) {
+        message = "No matching models";
+      } else {
+        const limitNotice = matches.length > 200 ? " · showing first 200; refine search" : "";
+        message = `${matches.length} models${limitNotice} · changes apply only to this session`;
+      }
+    }
+
+    this.message.content = message;
+
     const empty = !!this.catalog && !this.filtered.length && !this.loadError && !this.loading;
     const hasModels = !!this.catalog?.models.length;
+
     this.layout.results.showEmpty(
       empty ? (hasModels ? "No matching models" : "No available models") : undefined,
       empty && !hasModels ? "Configure provider authentication in Pi first." : undefined,
@@ -433,60 +507,88 @@ export class ModelPicker {
     this.list.scrollTo(0);
     this.paint();
   };
+
   private paint(): void {
-    if (!this.rows) return;
+    if (!this.rows) {
+      return;
+    }
+
     const styles = uiTheme(this.renderer).styles;
     this.rows.forEach((row, index) => {
       row.backgroundColor = styles[index === this.cursor ? "ui.selection" : "ui.popup"].bg;
     });
+
     const row = this.rows[this.cursor];
-    if (row) this.list.scrollChildIntoView(row.id);
+    if (row) {
+      this.list.scrollChildIntoView(row.id);
+    }
+
     this.paintEffort();
     this.actions.changed();
   }
+
   private paintEffort(): void {
-    if (!this.effort || this.effort.isDestroyed) return;
-    const model = this.filtered[this.cursor],
-      levels = model?.efforts ?? [],
-      selected = this.selectedEffort;
+    if (!this.effort || this.effort.isDestroyed) {
+      return;
+    }
+
+    const model = this.filtered[this.cursor];
+    const levels = model?.efforts ?? [];
+    const selected = this.selectedEffort;
+
     this.effort.visible = !!model;
+
     const editable = !this.loading && !this.applying && levels.length > 1;
     this.effort.focusable = editable;
+
     const keys = [
       this.actions.keyHint("model.effort-less", "model-effort"),
       this.actions.keyHint("model.effort-more", "model-effort"),
     ]
       .filter(Boolean)
       .join("/");
-    this.effortLabel.content =
-      !model || selected === undefined
-        ? "Effort unavailable"
-        : !model.reasoning
-          ? "Effort · not supported (off)"
-          : levels.length === 1
-            ? `Effort · ${selected} (fixed)`
-            : `Effort${keys ? ` · ${keys}` : ""}`;
+    if (!model || selected === undefined) {
+      this.effortLabel.content = "Effort unavailable";
+    } else if (!model.reasoning) {
+      this.effortLabel.content = "Effort · not supported (off)";
+    } else if (levels.length === 1) {
+      this.effortLabel.content = `Effort · ${selected} (fixed)`;
+    } else {
+      this.effortLabel.content = `Effort${keys ? ` · ${keys}` : ""}`;
+    }
+
     paintText(this.effortLabel, uiTheme(this.renderer).styles["ui.muted"]);
+
     const signature = editable || levels.length > 1 ? levels.join(",") : "";
     if (signature !== this.effortSignature) {
       const focused = this.effort.hasFocusedDescendant;
       this.effortSignature = signature;
-      for (const button of this.effortButtons.values()) button.destroyRecursively();
+      for (const button of this.effortButtons.values()) {
+        button.destroyRecursively();
+      }
+
       this.effortButtons.clear();
-      if (signature)
+
+      if (signature) {
         for (const level of levels) {
           const button = new Button(this.renderer, level, () => this.setEffort(level));
           button.id = `model-effort:${level}`;
           this.effortButtons.set(level, button);
           this.effortOptions.add(button);
         }
-      if (focused && editable) this.effort.focus();
+      }
+
+      if (focused && editable) {
+        this.effort.focus();
+      }
     }
+
     this.effortOptions.visible = this.effortButtons.size > 0;
     for (const [level, button] of this.effortButtons) {
       button.active = level === selected;
       button.setLabel(level === selected ? `[${level}]` : level);
     }
+
     const styles = uiTheme(this.renderer).styles;
     this.effort.backgroundColor =
       styles[
@@ -494,29 +596,42 @@ export class ModelPicker {
           ? "ui.selectionInactive"
           : "ui.popup"
       ].bg;
-    if (!editable && (this.effort.focused || this.effort.hasFocusedDescendant)) this.list.focus();
+    if (!editable && (this.effort.focused || this.effort.hasFocusedDescendant)) {
+      this.list.focus();
+    }
   }
+
   private setEffort(level: ModelEffort): void {
     const model = this.filtered[this.cursor];
-    if (!model || this.loading || this.applying || !model.efforts.includes(level)) return;
+    if (!model || this.loading || this.applying || !model.efforts.includes(level)) {
+      return;
+    }
+
     this.effortDrafts.set(JSON.stringify([model.provider, model.id]), level);
     this.paint();
   }
+
   private moveEffort(direction: -1 | 1): void {
-    const model = this.filtered[this.cursor],
-      selected = this.selectedEffort;
-    if (!model || selected === undefined || this.loading || this.applying) return;
+    const model = this.filtered[this.cursor];
+    const selected = this.selectedEffort;
+    if (!model || selected === undefined || this.loading || this.applying) {
+      return;
+    }
+
     const index = Math.max(
       0,
       Math.min(model.efforts.length - 1, model.efforts.indexOf(selected) + direction),
     );
     const level = model.efforts[index];
-    if (level !== undefined) this.setEffort(level);
+    if (level !== undefined) {
+      this.setEffort(level);
+    }
   }
+
   private async choose(): Promise<void> {
-    const scope = this.scope,
-      model = this.filtered[this.cursor],
-      effort = this.selectedEffort;
+    const scope = this.scope;
+    const model = this.filtered[this.cursor];
+    const effort = this.selectedEffort;
     if (
       !scope ||
       !model ||
@@ -524,13 +639,16 @@ export class ModelPicker {
       !this.actions.select ||
       this.loading ||
       this.applying
-    )
+    ) {
       return;
+    }
+
     const revision = this.revision;
     this.applying = true;
     this.spinner.start();
     this.message.content = "Applying model and effort…";
     this.paint();
+
     let result: Result<string | null, ExpectedError>;
     try {
       result = await this.actions.select(
@@ -546,11 +664,15 @@ export class ModelPicker {
         this.paint();
       }
     }
-    if (!this.current(revision)) return;
-    if (!result.ok) {
-      this.message.content = `[${result.error.code}] ${result.error.message}`;
+    if (!this.current(revision)) {
       return;
     }
+    if (!result.ok) {
+      this.message.content = `[${result.error.code}] ${result.error.message}`;
+
+      return;
+    }
+
     this.hide();
     this.actions.notice(
       result.value ??
@@ -558,55 +680,85 @@ export class ModelPicker {
       { level: "success" },
     );
   }
+
   command(command: CommandId): void {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
     if (command === "model.dismiss") {
       this.hide();
+
       return;
     }
     if (command === "model.select") {
       this.launch(() => this.choose());
+
       return;
     }
     if (command === "model.refresh") {
       this.launch(() => this.load(true));
+
       return;
     }
     if (command === "model.search") {
       this.search.focus();
       this.actions.changed();
+
       return;
     }
     if (command === "model.effort-less" || command === "model.effort-more") {
       this.moveEffort(command === "model.effort-less" ? -1 : 1);
+
       return;
     }
+
     const halfPage = command === "model.half-page-up" || command === "model.half-page-down";
-    if (halfPage && this.search.focused) this.list.focus();
-    if (this.loading || this.applying) return;
-    if (command === "model.first") this.cursor = 0;
-    else if (command === "model.last") this.cursor = this.filtered.length - 1;
-    else if (command === "model.previous" || command === "model.next")
+    if (halfPage && this.search.focused) {
+      this.list.focus();
+    }
+    if (this.loading || this.applying) {
+      return;
+    }
+
+    if (command === "model.first") {
+      this.cursor = 0;
+    } else if (command === "model.last") {
+      this.cursor = this.filtered.length - 1;
+    } else if (command === "model.previous" || command === "model.next") {
       this.cursor += command === "model.previous" ? -1 : 1;
-    else if (halfPage)
+    } else if (halfPage) {
       this.cursor +=
         (command === "model.half-page-up" ? -1 : 1) * halfPageStep(this.list.viewport.height, 2);
-    else return;
+    } else {
+      return;
+    }
+
     this.cursor = Math.max(0, Math.min(this.filtered.length - 1, this.cursor));
     this.paint();
   }
+
   private keepFocus = (): void => {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
     for (
       let node = this.renderer.currentFocusedRenderable;
       node;
       node = node.parent as Renderable | null
-    )
-      if (node === this.root) return;
+    ) {
+      if (node === this.root) {
+        return;
+      }
+    }
+
     this.search.focus();
   };
+
   private resize = (): void => {
-    if (this.disposed || this.root.isDestroyed) return;
+    if (this.disposed || this.root.isDestroyed) {
+      return;
+    }
+
     const { height } = centerPopup(
       this.panel,
       POPUP_SIZES.standard,
@@ -615,8 +767,12 @@ export class ModelPicker {
     );
     this.search.fit(height - 6);
   };
+
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.hide(false);
     this.disposed = true;
     this.request?.abort();
@@ -624,6 +780,8 @@ export class ModelPicker {
     this.renderer.off("resize", this.resize);
     this.renderer.off("focused_renderable", this.keepFocus);
     this.search.off(InputRenderableEvents.INPUT, this.filter);
-    if (!this.root.isDestroyed) this.root.destroyRecursively();
+    if (!this.root.isDestroyed) {
+      this.root.destroyRecursively();
+    }
   }
 }

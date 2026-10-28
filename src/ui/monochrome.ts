@@ -20,6 +20,7 @@ export function monochromeFrame(
   const backgrounds = candidates.filter(
     (selected) => panel && selected.some((channel, index) => index < 3 && channel !== panel[index]),
   );
+
   buffer.withBuffers(({ fg, bg, attributes }) => {
     for (let offset = 0, cell = 0; offset < fg.length; offset += 4, cell++) {
       if (
@@ -29,8 +30,10 @@ export function monochromeFrame(
             (bg[offset + 1]! & 255) === selected[1] &&
             (bg[offset + 2]! & 255) === selected[2],
         )
-      )
+      ) {
         attributes[cell] = attributes[cell]! | TextAttributes.INVERSE;
+      }
+
       fg.set(foreground, offset);
       bg.set(background, offset);
     }

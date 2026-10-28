@@ -20,8 +20,11 @@ export const runCompletionSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
 export type RunCompletion = Static<typeof runCompletionSchema>;
+
 export type RunClock = { wallTime(): number; monotonicTime(): number };
+
 export const systemRunClock: RunClock = {
   wallTime: () => Date.now(),
   monotonicTime: () => performance.now(),

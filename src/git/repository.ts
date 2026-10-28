@@ -22,9 +22,15 @@ const unavailable = (message: string) => err(new GitError("GIT_PREVIEW_UNAVAILAB
 const oidPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 function parseCommits(output: string): Result<GitCommit[], GitError> {
-  if (!output) return ok([]);
+  if (!output) {
+    return ok([]);
+  }
+
   const fields = output.split("\0");
-  if (fields.pop() !== "" || fields.length % 5) return protocol("Malformed Git log records.");
+  if (fields.pop() !== "" || fields.length % 5) {
+    return protocol("Malformed Git log records.");
+  }
+
   const commits: GitCommit[] = [];
   for (let i = 0; i < fields.length; i += 5) {
     const [oid, parents, subject, author, date] = fields.slice(i, i + 5) as [
@@ -34,9 +40,13 @@ function parseCommits(output: string): Result<GitCommit[], GitError> {
       string,
       string,
     ];
-    if (!oidPattern.test(oid)) return protocol("Malformed commit identity.");
+    if (!oidPattern.test(oid)) {
+      return protocol("Malformed commit identity.");
+    }
+
     commits.push({ oid, parents: parents ? parents.split(" ") : [], subject, author, date });
   }
+
   return ok(commits);
 }
 
@@ -44,38 +54,53 @@ function parseRefs(output: string): Result<GitRef[], GitError> {
   const refs: GitRef[] = [];
   for (const line of output.split("\n").filter(Boolean)) {
     const [ref, direct, peeled] = line.split("\0");
-    if (!ref || !direct) return protocol("Malformed Git reference.");
+    if (!ref || !direct) {
+      return protocol("Malformed Git reference.");
+    }
+
     const kind = ref.startsWith("refs/heads/")
       ? "local"
       : ref.startsWith("refs/remotes/")
         ? "remote"
         : "tag";
     const name = ref.replace(/^refs\/(heads|remotes|tags)\//, "");
-    if (kind === "remote" && name.endsWith("/HEAD")) continue;
+    if (kind === "remote" && name.endsWith("/HEAD")) {
+      continue;
+    }
+
     refs.push({ kind, name, ref, oid: peeled || direct });
   }
+
   return ok(refs);
 }
 
 export function parseStatus(output: string): Result<GitFile[], GitError> {
   const records = output.split("\0");
   const files: GitFile[] = [];
-  if (records.pop() !== "") return protocol("Unterminated Git status record.");
+  if (records.pop() !== "") {
+    return protocol("Unterminated Git status record.");
+  }
   for (let i = 0; i < records.length; i++) {
     const record = records[i]!;
-    if (record.length < 4 || record[2] !== " ") return protocol("Malformed Git status record.");
-    const x = record[0]!,
-      y = record[1]!,
-      path = record.slice(3);
+    if (record.length < 4 || record[2] !== " ") {
+      return protocol("Malformed Git status record.");
+    }
+
+    const x = record[0]!;
+    const y = record[1]!;
+    const path = record.slice(3);
     const conflicted = ["DD", "AU", "UD", "UA", "DU", "AA", "UU"].includes(x + y);
     let originalPath: string | undefined;
     if (/[RC]/.test(x + y)) {
       originalPath = records[++i];
-      if (!originalPath) return protocol("Missing rename source.");
+      if (!originalPath) {
+        return protocol("Missing rename source.");
+      }
     }
-    if (x === "?") files.push({ kind: "untracked", status: "?", path });
-    else {
-      if (x !== " ")
+    if (x === "?") {
+      files.push({ kind: "untracked", status: "?", path });
+    } else {
+      if (x !== " ") {
         files.push({
           kind: "staged",
           status: x,
@@ -83,7 +108,8 @@ export function parseStatus(output: string): Result<GitFile[], GitError> {
           ...(originalPath ? { originalPath } : {}),
           ...(conflicted ? { conflicted: true } : {}),
         });
-      if (y !== " ")
+      }
+      if (y !== " ") {
         files.push({
           kind: "unstaged",
           status: y,
@@ -91,23 +117,33 @@ export function parseStatus(output: string): Result<GitFile[], GitError> {
           ...(originalPath ? { originalPath } : {}),
           ...(conflicted ? { conflicted: true } : {}),
         });
+      }
     }
   }
+
   return ok(files);
 }
 
 function parseFiles(output: string, commit: GitCommit): Result<GitFile[], GitError> {
   const fields = output.split("\0");
-  if (fields.pop() !== "") return protocol("Unterminated changed-file record.");
+  if (fields.pop() !== "") {
+    return protocol("Unterminated changed-file record.");
+  }
+
   const files: GitFile[] = [];
   for (let i = 0; i < fields.length;) {
-    const status = fields[i++],
-      first = fields[i++];
-    if (!status || !/^[AMDRCTUXB][0-9]*$/.test(status) || !first)
+    const status = fields[i++];
+    const first = fields[i++];
+    if (!status || !/^[AMDRCTUXB][0-9]*$/.test(status) || !first) {
       return protocol("Malformed changed-file record.");
+    }
+
     const renamed = /^[RC]/.test(status);
     const path = renamed ? fields[i++] : first;
-    if (!path) return protocol("Missing changed-file path.");
+    if (!path) {
+      return protocol("Missing changed-file path.");
+    }
+
     files.push({
       kind: "commit",
       status: status[0]!,
@@ -116,6 +152,7 @@ function parseFiles(output: string, commit: GitCommit): Result<GitFile[], GitErr
       ...(renamed ? { originalPath: first } : {}),
     });
   }
+
   return ok(files);
 }
 
@@ -127,7 +164,10 @@ export class GitRepository implements GitSource {
     signal: AbortSignal,
     allowedCodes: readonly number[] = [0],
   ): Promise<Result<string, ExpectedError>> {
-    if (signal.aborted) return err(new CancelledError());
+    if (signal.aborted) {
+      return err(new CancelledError());
+    }
+
     const started = await capture(async () =>
       Bun.spawn(
         [
@@ -156,15 +196,22 @@ export class GitRepository implements GitSource {
         },
       ),
     );
-    if (!started.ok) return started;
+    if (!started.ok) {
+      return started;
+    }
+
     const child = started.value;
     let failure: ExpectedError | undefined;
     const cancel = () => {
       failure ??= new CancelledError();
       child.kill();
     };
+
     signal.addEventListener("abort", cancel, { once: true });
-    if (signal.aborted) cancel();
+    if (signal.aborted) {
+      cancel();
+    }
+
     const timer = setTimeout(() => {
       failure ??= new GitError("GIT_QUERY_FAILED", "Git query timed out.");
       child.kill();
@@ -180,17 +227,26 @@ export class GitRepository implements GitSource {
             "Git output exceeds the display limit; no partial result was used.",
           );
           child.kill();
-        } else chunks.push(chunk);
+        } else {
+          chunks.push(chunk);
+        }
       }
+
       return Buffer.concat(chunks).toString("utf8");
     };
     try {
       const collected = await capture(async () =>
         Promise.all([collect(child.stdout), collect(child.stderr), child.exited]),
       );
-      if (!collected.ok) return collected;
+      if (!collected.ok) {
+        return collected;
+      }
+
       const [stdout, stderr, code] = collected.value;
-      if (failure) return err(failure);
+      if (failure) {
+        return err(failure);
+      }
+
       return allowedCodes.includes(code)
         ? ok(stdout)
         : err(
@@ -199,7 +255,10 @@ export class GitRepository implements GitSource {
     } finally {
       clearTimeout(timer);
       signal.removeEventListener("abort", cancel);
-      if (child.exitCode === null && child.signalCode === null) child.kill();
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill();
+      }
+
       await child.exited;
     }
   }
@@ -210,7 +269,10 @@ export class GitRepository implements GitSource {
     signal: AbortSignal,
   ): Promise<Result<GitSnapshot, ExpectedError>> {
     const head = await this.run(["rev-parse", "--verify", "--quiet", "HEAD"], signal, [0, 1]);
-    if (!head.ok) return head;
+    if (!head.ok) {
+      return head;
+    }
+
     const headOid = head.value.trim() || null;
     const results = await Promise.all([
       this.run(
@@ -245,28 +307,46 @@ export class GitRepository implements GitSource {
         : Promise.resolve(ok("")),
       this.run(["symbolic-ref", "--quiet", "--short", "HEAD"], signal, [0, 1]),
     ]);
-    for (const result of results) if (!result.ok) return result;
+    for (const result of results) {
+      if (!result.ok) {
+        return result;
+      }
+    }
+
     const [log, references, status, events, branch] = results.map((result) =>
       result.ok ? result.value : "",
     );
     const commits = parseCommits(log!);
-    if (!commits.ok) return commits;
+    if (!commits.ok) {
+      return commits;
+    }
+
     const files = parseStatus(status!);
-    if (!files.ok) return files;
+    if (!files.ok) {
+      return files;
+    }
+
     const refs = parseRefs(references!);
-    if (!refs.ok) return refs;
+    if (!refs.ok) {
+      return refs;
+    }
+
     const reflog: GitReflog[] = [];
     if (events) {
       const fields = events.split("\0");
-      if (fields.pop() !== "" || fields.length % 4) return protocol("Malformed reflog records.");
-      for (let i = 0; i < fields.length; i += 4)
+      if (fields.pop() !== "" || fields.length % 4) {
+        return protocol("Malformed reflog records.");
+      }
+      for (let i = 0; i < fields.length; i += 4) {
         reflog.push({
           oid: fields[i]!,
           selector: fields[i + 1]!,
           subject: fields[i + 2]!,
           date: fields[i + 3]!,
         });
+      }
     }
+
     return ok({
       commits: commits.value,
       refs: refs.value,
@@ -278,7 +358,10 @@ export class GitRepository implements GitSource {
   }
 
   async lookup(oid: string, signal: AbortSignal): Promise<Result<GitDetails, ExpectedError>> {
-    if (!oidPattern.test(oid)) return protocol("Invalid commit identity.");
+    if (!oidPattern.test(oid)) {
+      return protocol("Invalid commit identity.");
+    }
+
     const record = await this.run(
       [
         "log",
@@ -291,10 +374,18 @@ export class GitRepository implements GitSource {
       ],
       signal,
     );
-    if (!record.ok) return record;
+    if (!record.ok) {
+      return record;
+    }
+
     const commits = parseCommits(record.value);
-    if (!commits.ok) return commits;
-    if (commits.value.length !== 1) return protocol("Expected one target commit.");
+    if (!commits.ok) {
+      return commits;
+    }
+    if (commits.value.length !== 1) {
+      return protocol("Expected one target commit.");
+    }
+
     return this.details(commits.value[0]!, signal);
   }
 
@@ -302,7 +393,10 @@ export class GitRepository implements GitSource {
     commit: GitCommit,
     signal: AbortSignal,
   ): Promise<Result<GitDetails, ExpectedError>> {
-    if (!oidPattern.test(commit.oid)) return protocol("Invalid commit identity.");
+    if (!oidPattern.test(commit.oid)) {
+      return protocol("Invalid commit identity.");
+    }
+
     const [message, names, references] = await Promise.all([
       this.run(["show", "--no-show-signature", "-s", "--format=%B", commit.oid], signal),
       this.run(
@@ -341,19 +435,34 @@ export class GitRepository implements GitSource {
         signal,
       ),
     ]);
-    if (!message.ok) return message;
-    if (!names.ok) return names;
-    if (!references.ok) return references;
+    if (!message.ok) {
+      return message;
+    }
+    if (!names.ok) {
+      return names;
+    }
+    if (!references.ok) {
+      return references;
+    }
+
     const files = parseFiles(names.value, commit);
-    if (!files.ok) return files;
+    if (!files.ok) {
+      return files;
+    }
+
     const branches = parseRefs(references.value);
-    if (!branches.ok) return branches;
+    if (!branches.ok) {
+      return branches;
+    }
+
     return ok({ commit, message: message.value, files: files.value, branches: branches.value });
   }
 
   async compare(file: GitFile, signal: AbortSignal): Promise<Result<GitComparison, ExpectedError>> {
-    if (file.conflicted || /[U]/.test(file.status))
+    if (file.conflicted || /[U]/.test(file.status)) {
       return unavailable("Unmerged file: three-way conflict resolution is not supported.");
+    }
+
     const added = file.status === "A" || file.kind === "untracked";
     const deleted = file.status === "D";
     const base =
@@ -364,7 +473,10 @@ export class GitRepository implements GitSource {
           : "";
     const next =
       file.kind === "commit" ? file.commit?.oid : file.kind === "staged" ? "" : "worktree";
-    if (next === undefined) return protocol("Missing comparison commit.");
+    if (next === undefined) {
+      return protocol("Missing comparison commit.");
+    }
+
     // A staged rename followed by an unstaged edit compares index:new, not index:old.
     const oldPath =
       file.kind === "unstaged" && !/[RC]/.test(file.status)
@@ -376,17 +488,24 @@ export class GitRepository implements GitSource {
       this.content(beforeRevision, oldPath, signal),
       this.content(afterRevision, file.path, signal),
     ]);
-    if (!before.ok) return before;
-    if (!after.ok) return after;
+    if (!before.ok) {
+      return before;
+    }
+    if (!after.ok) {
+      return after;
+    }
     if (
       (before.value.match(/\n/g)?.length ?? 0) + (after.value.match(/\n/g)?.length ?? 0) >
       maxPreviewLines
-    )
+    ) {
       return unavailable(
         `File exceeds the ${maxPreviewLines}-line comparison limit; no partial file was displayed.`,
       );
-    if (before.value.includes("\0") || after.value.includes("\0"))
+    }
+    if (before.value.includes("\0") || after.value.includes("\0")) {
       return unavailable("Binary file: text comparison unavailable.");
+    }
+
     return ok({
       before: before.value,
       after: after.value,
@@ -400,52 +519,81 @@ export class GitRepository implements GitSource {
     path: string,
     signal: AbortSignal,
   ): Promise<Result<string, ExpectedError>> {
-    if (!path || isAbsolute(path) || path.split("/").includes("..") || path.includes("\0"))
+    if (!path || isAbsolute(path) || path.split("/").includes("..") || path.includes("\0")) {
       return protocol("Unsafe file path.");
-    if (revision === "empty") return ok("");
-    if (signal.aborted) return err(new CancelledError());
+    }
+    if (revision === "empty") {
+      return ok("");
+    }
+    if (signal.aborted) {
+      return err(new CancelledError());
+    }
     if (revision === "worktree") {
       return capture(async () => {
         const location = join(this.cwd, path);
         const info = await lstat(location);
-        if (info.isSymbolicLink()) return readlink(location);
-        if (!info.isFile())
+        if (info.isSymbolicLink()) {
+          return readlink(location);
+        }
+        if (!info.isFile()) {
           throw new GitError(
             "GIT_PREVIEW_UNAVAILABLE",
             "Non-file change: text comparison unavailable.",
           );
+        }
+
         const handle = await open(location, constants.O_RDONLY | constants.O_NOFOLLOW);
         try {
           const buffer = Buffer.alloc(maxPreviewBytes + 1);
           let size = 0;
           while (size < buffer.length) {
-            if (signal.aborted) throw new CancelledError();
+            if (signal.aborted) {
+              throw new CancelledError();
+            }
+
             const { bytesRead } = await handle.read(buffer, size, buffer.length - size, size);
-            if (!bytesRead) break;
+            if (!bytesRead) {
+              break;
+            }
+
             size += bytesRead;
           }
-          if (size > maxPreviewBytes)
+          if (size > maxPreviewBytes) {
             throw new GitError(
               "GIT_PREVIEW_UNAVAILABLE",
               "File exceeds the 1 MiB preview limit; no partial file was displayed.",
             );
+          }
+
           return buffer.subarray(0, size).toString("utf8");
         } finally {
           await handle.close();
         }
       });
     }
+
     const spec = `${revision}:${path}`;
     const size = await this.run(["cat-file", "-s", spec], signal);
-    if (!size.ok) return size;
+    if (!size.ok) {
+      return size;
+    }
+
     const bytes = Number(size.value.trim());
-    if (!Number.isSafeInteger(bytes) || bytes < 0) return protocol("Malformed Git blob size.");
-    if (bytes > maxPreviewBytes)
+    if (!Number.isSafeInteger(bytes) || bytes < 0) {
+      return protocol("Malformed Git blob size.");
+    }
+    if (bytes > maxPreviewBytes) {
       return unavailable("File exceeds the 1 MiB preview limit; no partial file was displayed.");
+    }
+
     const type = await this.run(["cat-file", "-t", spec], signal);
-    if (!type.ok) return type;
-    if (type.value.trim() !== "blob")
+    if (!type.ok) {
+      return type;
+    }
+    if (type.value.trim() !== "blob") {
       return unavailable("Non-blob change (for example a gitlink): text comparison unavailable.");
+    }
+
     return this.run(["show", "--no-ext-diff", "--no-textconv", spec], signal);
   }
 }

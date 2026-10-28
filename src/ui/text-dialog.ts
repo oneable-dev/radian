@@ -105,9 +105,15 @@ export class TextDialog {
   get visible(): boolean {
     return !this.disposed && !this.root.isDestroyed && this.root.visible;
   }
+
   show(content: DialogContent): void {
-    if (this.disposed || this.root.isDestroyed) return;
-    if (!this.visible) this.owner = this.renderer.currentFocusedRenderable ?? undefined;
+    if (this.disposed || this.root.isDestroyed) {
+      return;
+    }
+    if (!this.visible) {
+      this.owner = this.renderer.currentFocusedRenderable ?? undefined;
+    }
+
     this.revision++;
     this.content = content;
     this.body.content = content.text;
@@ -119,31 +125,46 @@ export class TextDialog {
     this.scroll.focus();
     this.changed();
   }
+
   hide(): void {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
+
     this.revision++;
     this.root.visible = false;
     this.content = undefined;
+
     const owner = this.owner;
     this.owner = undefined;
+
     let restored = false;
     if (owner && !owner.isDestroyed) {
       let visible = true;
-      for (let node: Renderable | null = owner; node; node = node.parent as Renderable | null)
+      for (let node: Renderable | null = owner; node; node = node.parent as Renderable | null) {
         visible &&= node.visible;
+      }
       if (visible) {
         owner.focus();
         restored = this.renderer.currentFocusedRenderable === owner;
       }
     }
-    if (!restored) this.fallback();
+    if (!restored) {
+      this.fallback();
+    }
+
     this.changed();
   }
+
   moveFocus(): void {
     this.scroll.focus();
   }
+
   command(command: CommandId): void {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
+
     const page = Math.max(1, this.scroll.viewport.height - 1);
     switch (command) {
       case "dialog.dismiss":
@@ -178,17 +199,25 @@ export class TextDialog {
         break;
     }
   }
+
   copyContent(text: string): Promise<Result<string, ExpectedError>> {
     return this.copySource?.(text) ?? this.clipboard.copy(text);
   }
+
   private copy(): void {
-    const content = this.content,
-      revision = this.revision;
-    if (!content || content.copy === false) return;
+    const content = this.content;
+    const revision = this.revision;
+    if (!content || content.copy === false) {
+      return;
+    }
+
     void Promise.resolve()
       .then(() => this.copyContent(content.copyText ?? content.text))
       .then((result) => {
-        if (!this.visible || revision !== this.revision) return;
+        if (!this.visible || revision !== this.revision) {
+          return;
+        }
+
         this.status.content = result.ok
           ? result.value
           : `[${result.error.code}] ${result.error.message}`;
@@ -202,22 +231,37 @@ export class TextDialog {
         }
       });
   }
+
   private keepFocus = (): void => {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
     for (
       let node = this.renderer.currentFocusedRenderable;
       node;
       node = node.parent as Renderable | null
-    )
-      if (node === this.root) return;
+    ) {
+      if (node === this.root) {
+        return;
+      }
+    }
+
     this.scroll.focus();
   };
+
   private resize = (): void => {
-    if (this.disposed || this.root.isDestroyed) return;
+    if (this.disposed || this.root.isDestroyed) {
+      return;
+    }
+
     centerPopup(this.panel, POPUP_SIZES.expanded, this.renderer.width, this.renderer.height);
   };
+
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.disposed = true;
     this.revision++;
     this.owner = undefined;

@@ -10,12 +10,14 @@ import { expectError, expectOk } from "../testing/results.ts";
 
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), "radian-dashboard-"));
-  const cwd = join(directory, "project"),
-    other = join(directory, "other"),
-    sessions = join(directory, "sessions");
+  const cwd = join(directory, "project");
+  const other = join(directory, "other");
+  const sessions = join(directory, "sessions");
+
   await Promise.all([mkdir(cwd), mkdir(other), mkdir(sessions)]);
-  const now = Date.now() - 1000,
-    timestamp = new Date(now).toISOString();
+
+  const now = Date.now() - 1000;
+  const timestamp = new Date(now).toISOString();
   const entries = (id: string, path = cwd) => [
     { type: "session", version: 3, id, cwd: path, timestamp },
     {
@@ -57,8 +59,10 @@ async function fixture() {
         .map((entry) => JSON.stringify(entry))
         .join("\n") + "\n",
     );
+
     return file;
   };
+
   return {
     directory,
     cwd,
@@ -77,8 +81,8 @@ test("Saved usage is read-only and rejects other workspaces and cancelled lookup
   // Prepare readable statistics without write permissions or an SDK runner.
   const app = await fixture();
   try {
-    const path = await app.save("saved"),
-      before = await readFile(path, "utf8");
+    const path = await app.save("saved");
+    const before = await readFile(path, "utf8");
 
     // Verify scope, cancellation, and aggregation at the file boundary.
     const summary = expectOk(await readDashboardHistory(path, app.cwd, 7, Date.now(), new Set()));
@@ -117,8 +121,10 @@ test("Shared SDK directories scope by project and warn about partially corrupt c
   try {
     await app.save("valid");
     await app.save("foreign", app.other);
+
     const corrupt = await app.save("corrupt");
     await writeFile(corrupt, (await readFile(corrupt, "utf8")) + "{invalid-json}\n");
+
     const history = new SessionHistory(repositories, registry, app.sessions);
 
     // Aggregate member paths through real SDK discovery.
@@ -152,6 +158,7 @@ test("Forked histories count shared ancestors only once across conversation file
   });
   try {
     await app.save("original");
+
     const fork = app.entries("original");
     fork[0] = { ...fork[0]!, id: "fork" };
     await writeFile(

@@ -7,9 +7,12 @@ const context = (text: string, cursor = 0, visual = false): VimContext => ({
   cursor,
   visual,
 });
+
 function selected(model: VimText, effect: VimEffect): string {
-  if (effect.type !== "select" && effect.type !== "yank")
+  if (effect.type !== "select" && effect.type !== "yank") {
     throw new Error(`Expected range, received ${effect.type}`);
+  }
+
   return model.text.slice(effect.range.start, effect.range.end);
 }
 
@@ -173,8 +176,8 @@ test.each([
     // Distinguish inclusive Visual selections from exclusive yank ranges.
     const model = new VimText("alpha beta\ngamma delta");
 
-    const move = model.move(cursor, motion, count),
-      range = model.motionRange(cursor, move);
+    const move = model.move(cursor, motion, count);
+    const range = model.motionRange(cursor, move);
 
     expect(model.text.slice(range.start, range.end)).toBe(expected);
   },
@@ -207,12 +210,12 @@ test.each([
 
 test("w/b count empty lines as words but skip whitespace-only lines", () => {
   // Vim empty-line boundaries differ from simple whitespace tokenization.
-  const model = new VimText("alpha\n\nbeta"),
-    spaced = new VimText("alpha\n   \nbeta");
+  const model = new VimText("alpha\n\nbeta");
+  const spaced = new VimText("alpha\n   \nbeta");
 
-  const first = model.move(0, "word-next"),
-    second = model.move(0, "word-next", 2),
-    back = model.move(7, "word-previous");
+  const first = model.move(0, "word-next");
+  const second = model.move(0, "word-next", 2);
+  const back = model.move(7, "word-previous");
 
   expect(first.position).toBe(6);
   expect(second.position).toBe(7);
@@ -223,14 +226,16 @@ test("w/b count empty lines as words but skip whitespace-only lines", () => {
 
 test("viw and yiw share objects while separating selection from copying", () => {
   // v + i + w inside a word must not include the next word's first character.
-  const visual = context("alpha beta gamma", 8, true),
-    normal = context(visual.model.text, 8),
-    vim = new TranscriptVim();
+  const visual = context("alpha beta gamma", 8, true);
+  const normal = context(visual.model.text, 8);
+  const vim = new TranscriptVim();
 
   vim.command("inner", visual);
+
   const selection = vim.character("w", visual);
   vim.command("yank", normal);
   vim.command("inner", normal);
+
   const yank = vim.character("w", normal);
 
   expect(selection.type).toBe("select");
@@ -242,15 +247,17 @@ test("viw and yiw share objects while separating selection from copying", () => 
 
 test("Operator counts multiply and yy copies from the current line through its actual newline", () => {
   // 2y2w spans four words without directly changing cursor or text.
-  const state = context("one two three four five\nsecond line", 0),
-    vim = new TranscriptVim();
+  const state = context("one two three four five\nsecond line", 0);
+  const vim = new TranscriptVim();
 
   vim.digit("2");
   vim.command("yank", state);
   vim.digit("2");
+
   const words = vim.command("word-next", state);
   vim.digit("2");
   vim.command("yank", state);
+
   const lines = vim.command("yank", state);
 
   expect(selected(state.model, words)).toBe("one two three four ");
@@ -260,15 +267,19 @@ test("Operator counts multiply and yy copies from the current line through its a
 
 test("Motion counts and invalid-prefix cancellation never leak state into later commands", () => {
   // Unsupported edits and stale operators must not turn later motions into copying.
-  const state = context("one two three four"),
-    vim = new TranscriptVim();
+  const state = context("one two three four");
+  const vim = new TranscriptVim();
 
   vim.digit("3");
+
   const move = vim.command("word-next", state);
   vim.command("yank", state);
   vim.cancel();
+
   const next = vim.command("word-next", state);
-  for (let index = 0; index < 20; index++) vim.digit("9");
+  for (let index = 0; index < 20; index++) {
+    vim.digit("9");
+  }
 
   expect(move).toEqual({ type: "move", position: 14 });
   expect(next).toEqual({ type: "move", position: 4 });
@@ -281,6 +292,7 @@ test("Yank starts at current grapheme boundaries after combining characters stre
   // A pending UTF-16 index can end up inside a newly combined grapheme.
   const vim = new TranscriptVim();
   vim.command("yank", context("e", 1));
+
   const updated = context("é tail", 2);
 
   const effect = vim.command("word-next", updated);
@@ -291,10 +303,11 @@ test("Yank starts at current grapheme boundaries after combining characters stre
 
 test("f/t and semicolon/comma repeats never get stuck on adjacent targets", () => {
   // Repeating t must advance past the adjacent previous target.
-  const model = new VimText("a.b.c.d"),
-    vim = new TranscriptVim();
+  const model = new VimText("a.b.c.d");
+  const vim = new TranscriptVim();
 
   vim.command("till-forward", { model, cursor: 0, visual: false });
+
   const first = vim.character(".", { model, cursor: 0, visual: false });
   const next = vim.command("find-repeat", { model, cursor: 0, visual: false });
   const back = vim.command("find-reverse", { model, cursor: 2, visual: false });
@@ -307,13 +320,13 @@ test("f/t and semicolon/comma repeats never get stuck on adjacent targets", () =
 
 test("Search wraps bidirectionally after the current position and respects word boundaries", () => {
   // Test literal dots independently from whole-word substring restrictions.
-  const model = new VimText("alpha beta alpha betamax alpha"),
-    literal = new VimText("a.b aXb");
+  const model = new VimText("alpha beta alpha betamax alpha");
+  const literal = new VimText("a.b aXb");
 
-  const forward = model.search(0, "alpha", 1, 2),
-    backward = model.search(0, "alpha", -1);
-  const word = model.search(0, "beta", 1, 1, true),
-    dot = literal.search(0, "a.b", 1);
+  const forward = model.search(0, "alpha", 1, 2);
+  const backward = model.search(0, "alpha", -1);
+  const word = model.search(0, "beta", 1, 1, true);
+  const dot = literal.search(0, "a.b", 1);
 
   expect(forward).toBe(25);
   expect(backward).toBe(25);
@@ -324,13 +337,13 @@ test("Search wraps bidirectionally after the current position and respects word 
 
 test("n/N preserve original search direction and empty searches repeat the previous query", () => {
   // Reverse repetition must not change the original search direction.
-  const vim = new TranscriptVim(),
-    state = context("one two one two one", 8);
+  const vim = new TranscriptVim();
+  const state = context("one two one two one", 8);
 
-  const first = vim.submitSearch("one", -1, state),
-    reverse = vim.command("search-previous", state);
-  const next = vim.command("search-next", state),
-    empty = vim.submitSearch("", 1, state);
+  const first = vim.submitSearch("one", -1, state);
+  const reverse = vim.command("search-previous", state);
+  const next = vim.command("search-next", state);
+  const empty = vim.submitSearch("", 1, state);
 
   expect(first).toEqual({ type: "move", position: 0 });
   expect(reverse).toEqual({ type: "move", position: 16 });

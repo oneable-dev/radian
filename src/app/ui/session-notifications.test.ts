@@ -12,8 +12,8 @@ import { ok } from "../../result.ts";
 import { icons } from "../../icons.ts";
 
 async function fixture(workView: WorkView = "agent") {
-  const clock = new ManualClock(),
-    app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
   let snapshot: WorkspaceSnapshot = {
     repositories: ["one", "two"].map((id) => ({
       id,
@@ -43,9 +43,9 @@ async function fixture(workView: WorkView = "agent") {
     closingCount: 0,
     notice: "",
   };
-  const listeners = new Set<() => void>(),
-    acknowledged: string[] = [],
-    selection = new WorkspaceSelection(snapshot.repositories);
+  const listeners = new Set<() => void>();
+  const acknowledged: string[] = [];
+  const selection = new WorkspaceSelection(snapshot.repositories);
   const publish = (id: string, state: ExecutionState) => {
     snapshot = {
       ...snapshot,
@@ -55,8 +55,12 @@ async function fixture(workView: WorkView = "agent") {
         worktrees: repo.worktrees.map((tree) => ({
           ...tree,
           sessions: tree.sessions.map((session) => {
-            if (session.id !== id) return session;
+            if (session.id !== id) {
+              return session;
+            }
+
             const { result: _result, attention: _attention, ...rest } = session;
+
             return {
               ...rest,
               status: state.status,
@@ -68,7 +72,9 @@ async function fixture(workView: WorkView = "agent") {
       })),
     };
     selection.replaceSnapshot(snapshot.repositories);
-    for (const listener of listeners) listener();
+    for (const listener of listeners) {
+      listener();
+    }
   };
   const view = new Workbench(app.renderer, selection, {
     onNewSession() {},
@@ -79,8 +85,10 @@ async function fixture(workView: WorkView = "agent") {
     getSessionDetails: (id) => snapshot.details[id] ?? null,
     onAcknowledge: async (id, _conversation, resultId) => {
       acknowledged.push(resultId);
+
       const { attention: _attention, ...read } = snapshot.details[id]!;
       publish(id, read);
+
       return ok(undefined);
     },
   });
@@ -92,6 +100,7 @@ async function fixture(workView: WorkView = "agent") {
       recoveryVersion: 0,
       subscribe(listener) {
         listeners.add(listener);
+
         return () => {
           listeners.delete(listener);
         };
@@ -130,11 +139,16 @@ async function fixture(workView: WorkView = "agent") {
   };
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
   const toast = () => get("session-notifications").getChildren()[0]!;
+
   await render();
+
   return {
     ...app,
     clock,
@@ -159,8 +173,8 @@ test.each(["agent", "editor", "git", "terminal"] as const)(
   "%s screens show other-repository notifications while preserving selection, focus, and drafts",
   async (workView) => {
     // The other repository finishes while the current work view keeps ownership of input.
-    const app = await fixture(workView),
-      owner = app.renderer.currentFocusedRenderable;
+    const app = await fixture(workView);
+    const owner = app.renderer.currentFocusedRenderable;
     try {
       app.complete();
       app.clock.advance(160);
@@ -224,6 +238,7 @@ test.each(["agent", "editor", "git", "terminal"] as const)(
       expect(app.get("workspace-picker").visible).toBe(true);
       app.complete("unfinished");
       await app.render();
+
       const toast = app.toast();
       await app.mockMouse.click(toast.x + 2, toast.y + 2);
       await app.render();
@@ -259,6 +274,7 @@ test("Replaced conversations are neither navigated to nor acknowledged by stale 
     await app.render();
     app.publish("two", { ...app.state("two"), conversationId: "replacement" });
     await app.render();
+
     const toast = app.toast();
     await app.mockMouse.click(toast.x + 2, toast.y + 2);
     await app.render();

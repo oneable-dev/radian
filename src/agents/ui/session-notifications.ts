@@ -13,6 +13,7 @@ import { messageLabels, messageText, type Message } from "../../ui/messages.ts";
 type Notification = SessionNotification | Message;
 
 type Timer = ReturnType<CliRenderer["clock"]["setTimeout"]>;
+
 type Toast = {
   notification: Notification;
   root: BoxRenderable;
@@ -23,6 +24,7 @@ type Toast = {
   intensity: number;
   animation?: Timer;
 };
+
 const labels = {
   complete: "Completed",
   error: "Failed",
@@ -64,7 +66,9 @@ export class SessionNotificationStack {
     });
     this.root.on(RenderableEvents.DESTROYED, () => this.dispose());
     uiTheme(renderer).bind(this.root, () => {
-      for (const toast of this.visible) this.paint(toast);
+      for (const toast of this.visible) {
+        this.paint(toast);
+      }
     });
     renderer.on("resize", this.resize);
     this.resize();
@@ -75,30 +79,46 @@ export class SessionNotificationStack {
       this.disposed ||
       this.pending.some((item) => item.id === notification.id) ||
       this.visible.some((item) => item.notification.id === notification.id)
-    )
+    ) {
       return;
+    }
+
     this.pending.push(notification);
     this.pump();
   }
 
   setHidden(hidden: boolean): void {
     this.hidden = hidden;
-    if (!this.disposed) this.root.visible = !hidden && this.visible.length > 0;
+    if (!this.disposed) {
+      this.root.visible = !hidden && this.visible.length > 0;
+    }
   }
 
   retain(sessionIds: ReadonlySet<string>): void {
-    for (let index = this.pending.length - 1; index >= 0; index--)
-      if (isClosedSession(this.pending[index]!, sessionIds)) this.pending.splice(index, 1);
+    for (let index = this.pending.length - 1; index >= 0; index--) {
+      if (isClosedSession(this.pending[index]!, sessionIds)) {
+        this.pending.splice(index, 1);
+      }
+    }
+
     // Removal mutates the live array; retain a snapshot so adjacent cards are not skipped.
     const visible = [...this.visible];
-    for (const toast of visible)
-      if (isClosedSession(toast.notification, sessionIds)) this.remove(toast);
+    for (const toast of visible) {
+      if (isClosedSession(toast.notification, sessionIds)) {
+        this.remove(toast);
+      }
+    }
+
     this.pump();
   }
 
   private resize = (): void => {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.root.right = this.renderer.width > 54 ? 2 : 1;
+
     const top = this.renderer.height > 6 ? 1 : 0;
     this.root.top = top;
     this.root.width = Math.max(1, Math.min(52, this.renderer.width - 2));
@@ -109,14 +129,21 @@ export class SessionNotificationStack {
       this.pending.unshift(toast.notification);
       this.remove(toast);
     }
-    for (const toast of this.visible) this.paint(toast);
+    for (const toast of this.visible) {
+      this.paint(toast);
+    }
+
     this.pump();
   };
 
   private pump(): void {
-    if (this.disposed) return;
-    while (this.visible.length < this.capacity && this.pending.length)
+    if (this.disposed) {
+      return;
+    }
+    while (this.visible.length < this.capacity && this.pending.length) {
       this.mount(this.pending.shift()!);
+    }
+
     this.root.visible = !this.hidden && this.visible.length > 0;
     this.root.height = Math.max(0, this.visible.length * 6 - 1);
   }
@@ -131,7 +158,10 @@ export class SessionNotificationStack {
       border: true,
       paddingX: 1,
       onMouseDown: (event) => {
-        if (event.button !== 0) return;
+        if (event.button !== 0) {
+          return;
+        }
+
         event.preventDefault();
         event.stopPropagation();
         this.dismiss(notification.id);
@@ -165,11 +195,13 @@ export class SessionNotificationStack {
       wrapMode: "none",
       selectable: false,
     });
+
     header.add(heading);
     root.add(header);
     root.add(task);
     root.add(location);
     this.root.add(root);
+
     const brief =
       "result" in notification
         ? notification.result.outcome === "complete"
@@ -179,24 +211,36 @@ export class SessionNotificationStack {
       brief ? 5000 : 8000,
     );
     const toast: Toast = { notification, root, heading, task, location, expiry, intensity: 0.5 };
+
     this.visible.push(toast);
     this.paint(toast);
+
     const started = this.renderer.clock.now();
     const animate = (): void => {
-      if (this.disposed || root.isDestroyed) return;
+      if (this.disposed || root.isDestroyed) {
+        return;
+      }
+
       const progress = Math.min(1, (this.renderer.clock.now() - started) / 160);
       toast.intensity = 0.5 + progress * 0.5;
       this.paint(toast);
-      if (progress < 1) toast.animation = this.renderer.clock.setTimeout(animate, 40);
-      else delete toast.animation;
+      if (progress < 1) {
+        toast.animation = this.renderer.clock.setTimeout(animate, 40);
+      } else {
+        delete toast.animation;
+      }
     };
+
     toast.animation = this.renderer.clock.setTimeout(animate, 40);
   }
 
   private paint(toast: Toast): void {
-    if (this.disposed || toast.root.isDestroyed) return;
-    const theme = uiTheme(this.renderer),
-      styles = theme.styles;
+    if (this.disposed || toast.root.isDestroyed) {
+      return;
+    }
+
+    const theme = uiTheme(this.renderer);
+    const styles = theme.styles;
     const group: StyleGroup =
       "result" in toast.notification
         ? colors[toast.notification.result.outcome]
@@ -208,11 +252,13 @@ export class SessionNotificationStack {
         ? style
         : { ...style, fg: blendColors(background, style.fg, toast.intensity) };
     const status = fade(styles[group]);
+
     toast.root.backgroundColor = styles["ui.popup"].bg;
     toast.root.borderColor = status.fg;
     paintText(toast.heading, status);
     paintText(toast.task, fade(styles["ui.label"]));
     paintText(toast.location, fade(styles["ui.muted"]));
+
     // Layout getters still describe the previous frame when a card first arrives.
     const width = Math.max(0, Math.min(52, this.renderer.width - 2) - 4);
     if (!("result" in toast.notification)) {
@@ -223,14 +269,19 @@ export class SessionNotificationStack {
       );
       toast.task.content = truncateCells(singleLine(messageText(item.text)), width);
       toast.location.content = truncateCells(singleLine(messageText(item.source)), width);
+
       return;
     }
+
     const { result, durationMs } = toast.notification;
     const elapsed = durationMs === undefined ? "" : ` · ${formatRunDuration(durationMs)}`;
+
     toast.heading.content = truncateCells(labels[result.outcome] + elapsed, width);
     toast.task.content = truncateCells(excerpt(result.request?.text || "AI session"), width);
-    const worktree = excerpt(toast.notification.worktree),
-      branch = excerpt(toast.notification.branch ?? "detached HEAD");
+
+    const worktree = excerpt(toast.notification.worktree);
+    const branch = excerpt(toast.notification.branch ?? "detached HEAD");
+
     toast.location.content = truncateCells(
       `${icons.folder} ${worktree} / ${icons.branch} ${branch}`,
       width,
@@ -239,25 +290,40 @@ export class SessionNotificationStack {
 
   private dismiss(id: string): void {
     const toast = this.visible.find((item) => item.notification.id === id);
-    if (toast) this.remove(toast);
+    if (toast) {
+      this.remove(toast);
+    }
+
     this.pump();
   }
 
   private remove(toast: Toast): void {
     this.renderer.clock.clearTimeout(toast.expiry);
-    if (toast.animation !== undefined) this.renderer.clock.clearTimeout(toast.animation);
+    if (toast.animation !== undefined) {
+      this.renderer.clock.clearTimeout(toast.animation);
+    }
+
     this.visible.splice(this.visible.indexOf(toast), 1);
     toast.root.destroyRecursively();
   }
 
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.disposed = true;
     this.renderer.off("resize", this.resize);
+
     const visible = [...this.visible];
-    for (const toast of visible) this.remove(toast);
+    for (const toast of visible) {
+      this.remove(toast);
+    }
+
     this.pending.length = 0;
-    if (!this.root.isDestroyed) this.root.destroyRecursively();
+    if (!this.root.isDestroyed) {
+      this.root.destroyRecursively();
+    }
   }
 }
 

@@ -44,6 +44,7 @@ const sections = (): TranscriptSection[] => [
     status: "streaming",
   },
 ];
+
 async function mount(initial = sections(), actions: Partial<WorkbenchActions> = {}) {
   const app = await createTestRenderer({
     width: 120,
@@ -53,18 +54,20 @@ async function mount(initial = sections(), actions: Partial<WorkbenchActions> = 
   });
   const selection = new WorkspaceSelection(demoWorkspace());
   let current = initial;
-  const copied: string[] = [],
-    sent: string[] = [];
+  const copied: string[] = [];
+  const sent: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {},
     onCloseSession: () => {},
     initialDrafts: { a1: "retained draft" },
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     onCopyTranscript: async (text) => {
       copied.push(text);
+
       return ok("Copied to clipboard");
     },
     getSessionDetails: () => ({
@@ -79,7 +82,9 @@ async function mount(initial = sections(), actions: Partial<WorkbenchActions> = 
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   return {
     ...app,
     view,
@@ -184,8 +189,13 @@ test.each([0, 1, 2, 3])(
     const app = await mount();
     try {
       await app.transcript();
-      for (let i = 0; i < index; i++) app.mockInput.pressKey("j");
-      if (sections()[index]!.kind === "tool") app.mockInput.pressKey("o", { ctrl: true });
+      for (let i = 0; i < index; i++) {
+        app.mockInput.pressKey("j");
+      }
+      if (sections()[index]!.kind === "tool") {
+        app.mockInput.pressKey("o", { ctrl: true });
+      }
+
       app.mockInput.pressEnter();
       app.mockInput.pressKey("HOME");
       await app.copyLine();
@@ -243,6 +253,7 @@ test("Streaming preserves selection, cursors, and folding while only latest-navi
     app.mockInput.pressKey("v");
     app.mockInput.pressKey("l");
     await app.render();
+
     const before = app.state();
     const next = [
       ...initial,
@@ -254,6 +265,7 @@ test("Streaming preserves selection, cursors, and folding while only latest-navi
         status: "streaming" as const,
       },
     ];
+
     await app.update(next);
 
     expect(app.state()?.selectedId).toBe("user");
@@ -342,6 +354,7 @@ test("Serialized navigation restores folding, selections, and cursors in new UIs
   } finally {
     await app.close();
   }
+
   const next = await mount(undefined, { initialWorkViews: preferences! });
   try {
     pressLeader(next, "[");
@@ -374,6 +387,7 @@ test("Body commands respect user keymaps while pending prefixes and pastes never
     await app.transcript();
     app.mockInput.pressEnter();
     app.mockInput.pressKey("s");
+
     const body = app.renderer.currentFocusedRenderable as EditBufferRenderable;
     expect(body.cursorOffset).toBe(2);
     app.mockInput.pressKey("l");
@@ -418,6 +432,7 @@ test("Earlier section growth preserves reading-body screen positions and selecti
     app.mockInput.pressKey("v");
     app.mockInput.pressKey("l");
     await app.render();
+
     const y = app
       .captureCharFrame()
       .split("\n")
@@ -512,6 +527,7 @@ test("Compact help scrolls and returns to existing body navigation on close", as
     expect(app.captureCharFrame().split("\n")[11]).toContain("AGENT");
     app.mockInput.pressKey("END");
     await app.render();
+
     const area = app.renderer.root.findDescendantById("session-transcript")! as ScrollBoxRenderable;
     const helpText = () =>
       app
@@ -529,6 +545,7 @@ test("Compact help scrolls and returns to existing body navigation on close", as
       expect(area.scrollTop).toBe(Math.max(0, previous - 1));
       tail = `${helpText()} ${tail}`;
     } while (!tail.includes("close help") && area.scrollTop > 0);
+
     expect(tail).toContain("close help");
 
     app.mockInput.pressEscape();
@@ -582,6 +599,7 @@ test("Word, line, and section motions select full source and dollar keys follow 
   try {
     await app.transcript();
     app.mockInput.pressEnter();
+
     const body = app.renderer.currentFocusedRenderable as EditBufferRenderable;
     app.mockInput.pressKey("w");
     expect(body.cursorOffset).toBe(6);
@@ -632,8 +650,10 @@ test("Following selects new sections while actual upward scrolling fixes selecti
 
     pressLeader(app, "[");
     await app.render();
+
     const area = app.renderer.root.findDescendantById("session-transcript")! as ScrollBoxRenderable;
     const previous = area.scrollTop;
+
     expect(previous).toBeGreaterThan(0);
     await app.mockMouse.scroll(area.x + 2, area.y + 2, "up");
     await app.render();

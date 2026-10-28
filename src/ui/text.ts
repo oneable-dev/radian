@@ -6,17 +6,29 @@ export function singleLine(text: string): string {
 }
 
 export function truncateCells(text: string, width: number, suffix = "…"): string {
-  if (width <= 0) return "";
-  if (Bun.stringWidth(text) <= width) return text;
+  if (width <= 0) {
+    return "";
+  }
+  if (Bun.stringWidth(text) <= width) {
+    return text;
+  }
+
   const budget = width - Bun.stringWidth(suffix);
-  if (budget < 0) return "";
-  let result = "",
-    used = 0;
+  if (budget < 0) {
+    return "";
+  }
+
+  let result = "";
+  let used = 0;
   for (const { segment } of graphemes.segment(text)) {
     const cells = Bun.stringWidth(segment);
-    if (used + cells > budget) break;
+    if (used + cells > budget) {
+      break;
+    }
+
     result += segment;
     used += cells;
   }
+
   return result.trimEnd() + suffix;
 }

@@ -9,8 +9,11 @@ import type { AccountsCatalog } from "../accounts/model.ts";
 import { expectOk } from "../testing/results.ts";
 
 type Client = ConstructorParameters<typeof PreloadedData>[0];
+
 const flush = async () => {
-  for (let i = 0; i < 40; i++) await Promise.resolve();
+  for (let i = 0; i < 40; i++) {
+    await Promise.resolve();
+  }
 };
 const model: ModelCatalog = {
   conversationId: "conversation",
@@ -38,6 +41,7 @@ const item = (
   openSessionId: null,
   unavailableReason: null,
 });
+
 function fixture(overrides: Partial<Client> = {}) {
   const calls = {
     models: [] as string[],
@@ -67,18 +71,22 @@ function fixture(overrides: Partial<Client> = {}) {
     completionIdentity: () => "conversation:0",
     models: async (id) => {
       calls.models.push(id);
+
       return ok(model);
     },
     accounts: async (request) => {
       calls.accounts.push(request.worktreeId);
+
       return ok({ kind: "catalog", catalog: account(request.worktreeId) });
     },
     listHistory: async (tree) => {
       calls.history.push(tree);
+
       return ok(rows);
     },
     previewHistory: async (tree, id) => {
       calls.previews.push(id);
+
       return ok({ worktreeId: tree, id, text: `Preview ${id}`, truncated: false });
     },
     ...overrides,
@@ -90,6 +98,7 @@ function fixture(overrides: Partial<Client> = {}) {
     data.preloadAccounts();
     data.preloadHistory();
   };
+
   return {
     client,
     calls,
@@ -119,7 +128,10 @@ test("Startup preloads active catalogs and previews without activating cold work
     expect(app.data.previews.read("demo:main", "second")?.kind).toBe("ready");
 
     // Repeated runtime snapshots and popup reads must not repeat discovery.
-    for (let i = 0; i < 10; i++) app.preload();
+    for (let i = 0; i < 10; i++) {
+      app.preload();
+    }
+
     await app.data.listHistory("demo:main");
     await app.data.listModels("a1", "conversation");
     await flush();
@@ -177,20 +189,23 @@ test("Unexpected preload failures are reported once while retaining their origin
 test("Closing a popup cancels its wait without cancelling shared startup preparation", async () => {
   // A slow shared request should survive one popup closing and be reusable later.
   const pending = Promise.withResolvers<Result<ModelCatalog, ExpectedError>>();
-  let request: AbortSignal | undefined,
-    calls = 0;
+  let request: AbortSignal | undefined;
+  let calls = 0;
   const app = fixture({
     models: async (_id, _conversation, signal) => {
       calls++;
       request = signal;
+
       return pending.promise;
     },
   });
   try {
     app.data.preloadModels();
     await flush();
+
     const popup = new AbortController();
     const waiting = app.data.listModels("a1", "conversation", popup.signal);
+
     popup.abort();
     expect((await waiting).ok).toBe(false);
     expect(request?.aborted).toBe(false);
@@ -228,6 +243,7 @@ test("Account generations fence old model replies and reload the affected catalo
   const app = fixture({
     models: async (_id, _conversation, signal) => {
       signals.push(signal!);
+
       return ++requests === 1 ? pending.promise : ok(fresh);
     },
   });
@@ -274,11 +290,12 @@ test("History changes reload only changed previews while retaining unchanged cac
 
 test("Manual refresh and reload replace cached data without silently retrying cached failures", async () => {
   // Expected discovery failures remain inspectable until a deliberate refresh or invalidation.
-  let healthy = false,
-    calls = 0;
+  let healthy = false;
+  let calls = 0;
   const app = fixture({
     listHistory: async () => {
       calls++;
+
       return healthy
         ? ok([item("recovered")])
         : err(new HistoryError("HISTORY_UNAVAILABLE", "Unavailable history"));
@@ -315,9 +332,11 @@ test("Disposal cancels background reads and late completions cannot revive cache
   const app = fixture({
     models: async (_id, _conversation, abort) => {
       signal = abort;
+
       return pending.promise;
     },
   });
+
   app.data.preloadModels();
   await flush();
   app.data.dispose();

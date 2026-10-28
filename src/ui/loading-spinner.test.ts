@@ -5,15 +5,18 @@ import { LoadingSpinner } from "./loading-spinner.ts";
 import { uiTheme } from "./theme.ts";
 
 const glyph = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/;
+
 async function mount() {
   const clock = new ManualClock();
   const app = await createTestRenderer({ width: 30, height: 4, clock });
   const heading = new BoxRenderable(app.renderer, { height: 1, flexDirection: "row" });
   const spinner = new LoadingSpinner(app.renderer);
+
   heading.add(new TextRenderable(app.renderer, { content: "Loading ", height: 1 }));
   heading.add(spinner.root);
   app.renderer.root.add(heading);
   await app.renderOnce();
+
   return {
     ...app,
     clock,
@@ -56,14 +59,16 @@ test("Fast spinners cycle yellow arrows rightward inside fixed three-cell slots"
     app.spinner.setStyle("fast");
     app.spinner.start();
     await app.renderOnce();
-    const x = app.spinner.root.x,
-      width = app.spinner.root.width;
+
+    const x = app.spinner.root.x;
+    const width = app.spinner.root.width;
 
     for (const expected of ["▶▷▷", "▷▶▷", "▷▷▶", "▶▷▷"]) {
       expect(app.spinner.root.plainText).toBe(expected);
       expect(app.spinner.root.x).toBe(x);
       expect(app.spinner.root.width).toBe(3);
       expect(width).toBe(3);
+
       const spans = app.captureSpans().lines[app.spinner.root.y]!.spans;
       expect(spans.find((span) => span.text.includes("▶"))!.fg.toInts()).toEqual(
         uiTheme(app.renderer).colors.number.toInts(),
@@ -116,6 +121,7 @@ test("Circle-fill spinners use one cell without padding and loop without resetti
     app.spinner.setStyle("circle-fill");
     app.spinner.start();
     await app.renderOnce();
+
     const x = app.spinner.root.x;
 
     // Every fill stage and its wraparound render the glyph without surrounding whitespace.
@@ -135,6 +141,7 @@ test("Circle-fill spinners use one cell without padding and loop without resetti
       expect(app.spinner.root.x).toBe(x);
       await app.advance(80);
     }
+
     app.spinner.cancel();
     await app.renderOnce();
     expect(app.clock.pendingTimerCount).toBe(0);
@@ -229,7 +236,10 @@ for (const completed of [false, true]) {
     const app = await mount();
     try {
       app.spinner.start();
-      if (completed) app.spinner.stop();
+      if (completed) {
+        app.spinner.stop();
+      }
+
       await app.advance(100);
 
       app.heading.destroyRecursively();
@@ -252,6 +262,7 @@ test("Independent UI spinners each honor their own 500ms minimum", async () => {
   // The shared policy must not couple independent screens or loading indicators through global state.
   const app = await mount();
   const second = new LoadingSpinner(app.renderer);
+
   app.renderer.root.add(second.root);
   try {
     app.spinner.start();

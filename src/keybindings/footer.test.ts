@@ -102,8 +102,8 @@ test.each([
     );
 
     // Compact only footers while retaining actual overridden bindings.
-    const key = map.hint(command, context),
-      hint = footerKeyHint(command, context, key);
+    const key = map.hint(command, context);
+    const hint = footerKeyHint(command, context, key);
 
     // Hidden hints must not disable functionality.
     expect(key).toBe("<M-z>");

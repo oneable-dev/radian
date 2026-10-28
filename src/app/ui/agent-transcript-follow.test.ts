@@ -25,9 +25,11 @@ const section = (
 const history = [
   section("history", Array.from({ length: 70 }, (_, i) => `OLD-LINE-${i}`).join("\n")),
 ];
+
 function children(node: Renderable): Renderable[] {
   return node.getChildren().flatMap((child) => [child, ...children(child)]);
 }
+
 async function mount(
   options: {
     paused?: boolean;
@@ -50,8 +52,8 @@ async function mount(
         ),
       })),
     }));
-  const selection = new WorkspaceSelection(snapshot()),
-    sent: string[] = [];
+  const selection = new WorkspaceSelection(snapshot());
+  const sent: string[] = [];
   const data: Record<string, readonly TranscriptSection[]> = {
     a1: options.completed
       ? [
@@ -88,9 +90,13 @@ async function mount(
     },
     onPrompt: (id, text) => {
       sent.push(`${id}:${text}`);
-      if (options.onPrompt) return options.onPrompt(id, text);
+      if (options.onPrompt) {
+        return options.onPrompt(id, text);
+      }
+
       data[id] = [...(data[id] ?? []), section(`prompt-${sent.length}`, text, "user")];
       selection.replaceSnapshot(snapshot());
+
       return ok(undefined);
     },
     getSessionDetails: (id) => ({
@@ -115,9 +121,14 @@ async function mount(
       await render();
     }
   };
+
   await settled();
+
   const scroll = app.renderer.root.findDescendantById("session-transcript");
-  if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript");
+  if (!(scroll instanceof ScrollBoxRenderable)) {
+    throw new Error("Missing transcript");
+  }
+
   return {
     ...app,
     view,
@@ -146,6 +157,7 @@ async function mount(
     },
   };
 }
+
 const bottom = (scroll: ScrollBoxRenderable) =>
   Math.max(0, scroll.scrollHeight - scroll.viewport.height);
 
@@ -170,6 +182,7 @@ test("Long AI conversations use full width without vertical scrollbars while ret
       "up",
     );
     await app.settled();
+
     const position = app.scroll.scrollTop;
     expect(position).toBeLessThan(bottom(app.scroll));
     expect(app.state()?.follow).toBe(false);
@@ -236,6 +249,7 @@ test.each([false, true])(
       pressLeader(app, "a");
       await app.mockInput.typeText("Unsent draft");
       await app.settled();
+
       const composer = app.renderer.root.findDescendantById("agent-composer")!;
       const prompt = app.renderer.root.findDescendantById("session-prompt")!;
       const status = app.renderer.root.findDescendantById("transcript-status-row")!;
@@ -247,14 +261,19 @@ test.each([false, true])(
         composer.y,
         prompt.y,
       ];
+
       expect(app.captureCharFrame()).not.toContain("Back to bottom");
 
       // Scrolling up reveals clickable controls; right-click is not navigation.
       await app.mockMouse.scroll(app.scroll.x + 3, app.scroll.y + 3, "up");
       await app.settled();
       expect(app.captureCharFrame()).toContain("↓ Back to bottom · G");
+
       const button = app.renderer.root.findDescendantById("transcript-bottom-button");
-      if (!button) throw new Error("Missing back-to-bottom button");
+      if (!button) {
+        throw new Error("Missing back-to-bottom button");
+      }
+
       const viewport = app.scroll.viewport;
       expect(
         Math.abs(button.x + button.width / 2 - viewport.x - viewport.width / 2),
@@ -262,13 +281,17 @@ test.each([false, true])(
       expect(button.y).toBe(viewport.y + viewport.height);
       expect(button.y + 1).toBe(app.renderer.root.findDescendantById("agent-run-status")!.y);
       expect(button.height).toBe(1);
+
       let end = 0;
       const cell = app.captureSpans().lines[button.y]!.spans.find((span) => {
         end += span.width;
+
         return end > button.x + 1;
       })!;
+
       expect(cell.bg.toInts()).toEqual(uiTheme(app.renderer).colors.selected.toInts());
       expect(cell.fg.toInts()).toEqual(uiTheme(app.renderer).colors.accent.toInts());
+
       const frame = app.captureCharFrame().split("\n");
       expect(frame[viewport.y + viewport.height - 1]).toMatch(/OLD-LINE-\d+/);
       expect(frame[button.y + 2]).toContain("UI review · Working");
@@ -280,6 +303,7 @@ test.each([false, true])(
         composer.y,
         prompt.y,
       ]).toEqual(geometry);
+
       const position = app.scroll.scrollTop;
       await app.mockMouse.click(button.x, button.y, 2);
       await app.settled();
@@ -339,8 +363,11 @@ test("Disabling bottom-navigation keys retains clickable controls without mislea
   try {
     expect(app.captureCharFrame()).toContain("↓ Back to bottom");
     expect(app.captureCharFrame()).not.toContain("Back to bottom ·");
+
     const button = app.renderer.root.findDescendantById("transcript-bottom-button");
-    if (!button) throw new Error("Missing back-to-bottom button");
+    if (!button) {
+      throw new Error("Missing back-to-bottom button");
+    }
 
     // Right padding remains clickable without shortcuts.
     await app.mockMouse.click(button.x + button.width - 1, button.y);
@@ -396,12 +423,19 @@ test("Reading cursors stay clear of return controls and clicking clears selectio
     app.mockInput.pressKey("HOME");
     app.mockInput.pressEnter();
     await app.settled();
+
     const body = app.renderer.currentFocusedRenderable;
-    if (!(body instanceof EditBufferRenderable)) throw new Error("Missing source reader");
+    if (!(body instanceof EditBufferRenderable)) {
+      throw new Error("Missing source reader");
+    }
 
     // Source cursors never hide beneath floating controls near viewport bottoms.
-    for (let i = 0; i < app.scroll.viewport.height; i++) app.mockInput.pressKey("j");
+    for (let i = 0; i < app.scroll.viewport.height; i++) {
+      app.mockInput.pressKey("j");
+    }
+
     await app.settled();
+
     const button = app.renderer.root.findDescendantById("transcript-bottom-button")!;
     expect(app.captureCharFrame()).toContain("Back to bottom");
     expect(body.y + body.visualCursor.visualRow).toBeLessThan(button.y);
@@ -428,8 +462,10 @@ test("Narrow layouts center controls in existing gaps and hide them when height 
   try {
     app.resize(60, 18);
     await app.settled();
+
     const button = app.renderer.root.findDescendantById("transcript-bottom-button")!;
     const viewport = app.scroll.viewport;
+
     expect(app.captureCharFrame()).toContain("Back to bottom");
     expect(
       Math.abs(button.x + button.width / 2 - viewport.x - viewport.width / 2),
@@ -459,6 +495,7 @@ test("Absent run-status rows place return controls only in existing gaps above i
     const prompt = app.renderer.root.findDescendantById("session-prompt")!;
     const button = app.renderer.root.findDescendantById("transcript-bottom-button")!;
     const geometry = [app.scroll.viewport.height, app.scroll.scrollHeight, composer.y, prompt.y];
+
     expect(status.visible).toBe(false);
     expect(app.captureCharFrame()).toContain("Back to bottom");
 
@@ -542,12 +579,15 @@ test.each(["shift+g", "ctrl+end", "g e"] as const)(
       pressLeader(app, "[");
       await app.settled();
 
-      if (key === "shift+g") app.mockInput.pressKey("g", { shift: true });
-      else if (key === "ctrl+end") app.mockInput.pressKey("END", { ctrl: true });
-      else {
+      if (key === "shift+g") {
+        app.mockInput.pressKey("g", { shift: true });
+      } else if (key === "ctrl+end") {
+        app.mockInput.pressKey("END", { ctrl: true });
+      } else {
         app.mockInput.pressKey("g");
         app.mockInput.pressKey("e");
       }
+
       await app.settled();
 
       // The actual final line is visible, and future output continues following without another key.
@@ -577,8 +617,12 @@ test("Source selection at bottom pauses following and clearing resumes with curs
     await app.settled();
     expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
     expect(app.state()?.follow).toBe(true);
+
     const body = app.renderer.currentFocusedRenderable;
-    if (!(body instanceof EditBufferRenderable)) throw new Error("Missing source reader");
+    if (!(body instanceof EditBufferRenderable)) {
+      throw new Error("Missing source reader");
+    }
+
     const cursor = body.cursorOffset;
     app.mockInput.pressKey("v");
     await app.settled();
@@ -610,6 +654,7 @@ test("New content during selection requires reaching bottom again rather than ju
     expect(app.state()?.follow).toBe(true);
     app.mockInput.pressKey("v", { shift: true });
     await app.settled();
+
     const position = app.scroll.scrollTop;
     await app.update([...history, section("tail", "WAITING_OUTPUT\n".repeat(30))]);
     expect(app.state()?.follow).toBe(false);
@@ -630,9 +675,10 @@ test("New content during selection requires reaching bottom again rather than ju
 test("Rendered Markdown mouse selections are protected and clearing resumes according to bottom position", async () => {
   const app = await mount();
   try {
-    const rows = app.captureCharFrame().split("\n"),
-      y = rows.findIndex((line) => line.includes("OLD-LINE-69"));
+    const rows = app.captureCharFrame().split("\n");
+    const y = rows.findIndex((line) => line.includes("OLD-LINE-69"));
     const x = rows[y]!.indexOf("OLD-LINE-69");
+
     await app.mockMouse.drag(x, y, x + 4, y);
     await app.settled();
     expect(app.renderer.getSelection()?.getSelectedText()).toContain("OLD");
@@ -669,6 +715,7 @@ test("Growing Markdown, expanded tools, and completion rows keep latest output a
   try {
     expect(app.state()?.follow).toBe(true);
     expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
+
     const growing = section(
       "stream",
       "### Response\n\n" + "Streamed line\n".repeat(45) + "MARKDOWN_TAIL",
@@ -677,6 +724,7 @@ test("Growing Markdown, expanded tools, and completion rows keep latest output a
     expect(app.state()?.follow).toBe(true);
     expect(app.scroll.scrollTop).toBe(bottom(app.scroll));
     expect(app.captureCharFrame()).toContain("MARKDOWN_TAIL");
+
     const tool = {
       ...section(
         "tool",
@@ -741,6 +789,7 @@ test("Wheel-reading history preserves position during streaming and new submissi
     await app.mockMouse.scroll(app.scroll.x + 3, app.scroll.y + 3, "up");
     await app.settled();
     expect(app.state()?.follow).toBe(false);
+
     const position = app.scroll.scrollTop;
     await app.update([...history, section("background", "BACKGROUND_TAIL\n".repeat(30))]);
     expect(app.state()?.follow).toBe(false);
@@ -765,6 +814,7 @@ test("Right-edge wheel reading takes precedence over pending automatic scrolls",
     await app.settled();
     expect(app.state()?.follow).toBe(false);
     expect(app.scroll.scrollTop).toBeLessThan(bottom(app.scroll));
+
     const position = app.scroll.scrollTop;
     await app.update([...history, section("late", "LATE_TOOL_RESULTS\n".repeat(30))]);
     expect(app.scroll.scrollTop).toBe(position);
@@ -830,6 +880,7 @@ test("Late submission acceptance after session switching preserves current scrol
     pressLeader(app, "[");
     app.mockInput.pressKey("HOME");
     await app.settled();
+
     const position = app.scroll.scrollTop;
     gate.resolve(ok(undefined));
     await app.settled();
@@ -852,6 +903,7 @@ test("Late acceptance and output never resume following after users restart hist
     pressLeader(app, "[");
     app.mockInput.pressKey("HOME");
     await app.settled();
+
     const position = app.scroll.scrollTop;
     gate.resolve(ok(undefined));
     await app.update([...history, section("late", "LATE_RESPONSE\n".repeat(40))]);

@@ -32,6 +32,7 @@ test("Monitors collect active and unread sessions across repositories and priori
     request: { text: "Fix authentication", images: 0, files: 0 },
   };
   const input = repositories([session("read"), active, unread, session("cancelled", null)]);
+
   input.push({
     id: "other",
     name: "Backend",

@@ -3,10 +3,11 @@ import { Messages, messageText } from "./messages.ts";
 
 test("Message retention keeps the latest 500 complete originals and ignores blank notices", () => {
   // Retention is bounded by entries, never by a message's visible preview length.
-  const messages = new Messages(),
-    original = "Detailed cause\n".repeat(1000);
-  for (let index = 0; index < 500; index++)
+  const messages = new Messages();
+  const original = "Detailed cause\n".repeat(1000);
+  for (let index = 0; index < 500; index++) {
     messages.add(`Old ${index}`, index, { level: "warning" });
+  }
 
   messages.add(original, 1000, { level: "error", source: "Editor" });
   messages.add(" \n ", 1001, { level: "warning" });
@@ -44,11 +45,13 @@ test.each([undefined, "info"] as const)(
     messages.add("Retained warning", 0, { level: "warning" });
 
     // A stream larger than retention capacity is discarded, including its supplied result ID.
-    for (let index = 0; index < 600; index++)
+    for (let index = 0; index < 600; index++) {
       messages.add("Routine information", index + 1, {
         id: index === 599 ? "shared-id" : `ignored:${index}`,
         ...(level ? { level } : {}),
       });
+    }
+
     const accepted = messages.add("Copied to clipboard", 601, {
       level: "success",
       id: "shared-id",

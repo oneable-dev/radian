@@ -7,7 +7,10 @@ import { connectRuntime, type RuntimeClient } from "./client.ts";
 import { daemonPaths, pidAlive, RuntimeStore, runtimePaths } from "./storage.ts";
 
 function observed(client: RuntimeClient, predicate: () => boolean): Promise<void> {
-  if (predicate()) return Promise.resolve();
+  if (predicate()) {
+    return Promise.resolve();
+  }
+
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       unsubscribe();
@@ -25,10 +28,11 @@ function observed(client: RuntimeClient, predicate: () => boolean): Promise<void
 
 test("Unix IPC selects an MCP auth server before its callback dialog without persisting either answer", async () => {
   // All processes, extension files and authentication-like data belong to this isolated offline runtime.
-  const fixture = await createWorktreeFixture(),
-    stateRoot = join(fixture.directory, "state");
-  const paths = runtimePaths(fixture.repository.id, true, stateRoot),
-    extensions = join(paths.directory, "offline-agent", "extensions");
+  const fixture = await createWorktreeFixture();
+  const stateRoot = join(fixture.directory, "state");
+  const paths = runtimePaths(fixture.repository.id, true, stateRoot);
+  const extensions = join(paths.directory, "offline-agent", "extensions");
+
   await mkdir(extensions, { recursive: true });
   await writeFile(
     join(extensions, "ui.ts"),
@@ -43,17 +47,23 @@ test("Unix IPC selects an MCP auth server before its callback dialog without per
     } });
   }`,
   );
+
   const options = { offline: true, stateRoot, entry: join(import.meta.dir, "..", "index.ts") };
   const client = expectOk(await connectRuntime(fixture.repository, fixture.main, options));
-  if (!client) throw new Error("Missing fixture runtime");
+  if (!client) {
+    throw new Error("Missing fixture runtime");
+  }
+
   let reconnect: RuntimeClient | null = null;
   try {
     const id = expectOk(await client.create(fixture.repository.worktrees[0]!.id));
     expectOk(await client.prompt(id, "read"));
     await observed(client, () => !!client.snapshot.details[id]?.result);
+
     const conversation = client.snapshot.details[id]!.conversationId!;
     const current = () => client.snapshot.extensionUi?.find((state) => state.sessionId === id);
     const before = client.snapshot.details[id]?.sections;
+
     expect(current()?.mcp).toEqual({ servers: 1, needsAuth: 1, errors: 0 });
 
     // Admission must complete while the handler is still waiting for its UI response.
@@ -67,6 +77,7 @@ test("Unix IPC selects an MCP auth server before its callback dialog without per
       }),
     );
     await observed(client, () => current()?.dialog?.kind === "input");
+
     const requestId = current()!.dialog!.id;
     expect(client.snapshot.capabilities).toContain("extension-ui");
     expect(
@@ -94,6 +105,7 @@ test("Unix IPC selects an MCP auth server before its callback dialog without per
       });
       expect(response.status).toBe(422);
     }
+
     expectOk(
       await client.answerExtensionUi(id, conversation, {
         requestId,
@@ -118,15 +130,17 @@ test("Unix IPC selects an MCP auth server before its callback dialog without per
 
     // Force a checkpoint and inspect both storage layers and the actual daemon log.
     expectOk(await client.savePreferences(client.snapshot.preferences));
+
     const manifest = expectOk(await new RuntimeStore(paths).load(fixture.repository.id))!;
     const record = manifest.records.find((record) => record.id === id)!;
-    const sdk = await readFile(record.sessionFile!, "utf8"),
-      log = await readFile(daemonPaths(true, stateRoot).log, "utf8");
+    const sdk = await readFile(record.sessionFile!, "utf8");
+    const log = await readFile(daemonPaths(true, stateRoot).log, "utf8");
     for (const content of [JSON.stringify(manifest), sdk, log]) {
       expect(content).not.toContain("private-ipc-callback");
       expect(content).not.toContain("private-auth-link");
       expect(content).not.toContain("needsAuth");
     }
+
     expect(client.snapshot.details[id]?.sections).toEqual(before);
 
     // Losing the last client cancels the pending request; reattachment must not resurrect it.
@@ -134,7 +148,10 @@ test("Unix IPC selects an MCP auth server before its callback dialog without per
     await observed(client, () => current()?.dialog?.kind === "select");
     await client.disconnect();
     reconnect = expectOk(await connectRuntime(fixture.repository, fixture.main, options));
-    if (!reconnect) throw new Error("Missing reconnected fixture runtime");
+    if (!reconnect) {
+      throw new Error("Missing reconnected fixture runtime");
+    }
+
     await observed(
       reconnect,
       () => !reconnect!.snapshot.extensionUi?.some((state) => state.dialog),
@@ -146,13 +163,20 @@ test("Unix IPC selects an MCP auth server before its callback dialog without per
       errors: 0,
     });
   } finally {
-    const owner = reconnect ?? client,
-      pid = owner.snapshot.pid;
-    if (owner.connected) expectOk(await owner.stopRuntime());
+    const owner = reconnect ?? client;
+    const pid = owner.snapshot.pid;
+    if (owner.connected) {
+      expectOk(await owner.stopRuntime());
+    }
+
     await owner.disconnect();
     await client.disconnect();
+
     const deadline = Date.now() + 8000;
-    while (pidAlive(pid) && Date.now() < deadline) await Bun.sleep(20);
+    while (pidAlive(pid) && Date.now() < deadline) {
+      await Bun.sleep(20);
+    }
+
     expect(pidAlive(pid)).toBe(false);
     await fixture.cleanup();
   }

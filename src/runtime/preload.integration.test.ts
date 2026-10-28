@@ -12,7 +12,10 @@ function until(
   subscribe: (listener: () => void) => () => void,
   predicate: () => boolean,
 ): Promise<void> {
-  if (predicate()) return Promise.resolve();
+  if (predicate()) {
+    return Promise.resolve();
+  }
+
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       unsubscribe();
@@ -37,6 +40,7 @@ test("Real history and account events refresh preloaded data without opening pop
     entry: join(import.meta.dir, "..", "index.ts"),
   };
   const accountDirectory = daemonPaths(true, options.stateRoot).directory;
+
   await privateDirectory(accountDirectory);
   await writeFile(
     join(accountDirectory, "accounts.json"),
@@ -55,15 +59,19 @@ test("Real history and account events refresh preloaded data without opening pop
     }),
     { mode: 0o600 },
   );
+
   const workspace = expectOk(
     await WorkspaceClient.open([fixture.repository], fixture.main, options),
   );
   const tree = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
-  let data: PreloadedData | undefined, unsubscribe: (() => void) | undefined;
+  let data: PreloadedData | undefined;
+  let unsubscribe: (() => void) | undefined;
   try {
     expectOk(await workspace.activate(tree.id));
+
     const errors: unknown[] = [];
     data = new PreloadedData(workspace, (error) => errors.push(error));
+
     const preload = () => {
       data!.preloadAccounts();
       data!.preloadHistory();
@@ -75,8 +83,9 @@ test("Real history and account events refresh preloaded data without opening pop
       () => !!data!.cachedHistory(tree.id),
     );
     expect(expectOk(data.cachedHistory(tree.id)!)).toEqual([]);
-    const revision = workspace.dataIdentity(tree.id, "history"),
-      id = crypto.randomUUID();
+
+    const revision = workspace.dataIdentity(tree.id, "history");
+    const id = crypto.randomUUID();
     const path = join(
       runtimePaths(fixture.repository.id, true, options.stateRoot).directory,
       "offline-agent",
@@ -108,6 +117,7 @@ test("Real history and account events refresh preloaded data without opening pop
       (listener) => data!.subscribe(listener),
       () => {
         const result = data!.cachedHistory(tree.id);
+
         return !!result?.ok && result.value.some((item) => item.id === id);
       },
     );
@@ -116,6 +126,7 @@ test("Real history and account events refresh preloaded data without opening pop
       () => data!.previews.read(tree.id, id)?.kind === "ready",
     );
     expect(workspace.dataIdentity(tree.id, "history")).not.toBe(revision);
+
     const first = data.previews.read(tree.id, id);
     expect(first?.kind === "ready" && JSON.stringify(first.value)).toContain(
       "Initial external question",
@@ -127,6 +138,7 @@ test("Real history and account events refresh preloaded data without opening pop
       (listener) => data!.previews.subscribe(listener),
       () => {
         const state = data!.previews.read(tree.id, id);
+
         return (
           state?.kind === "ready" &&
           JSON.stringify(state.value).includes("Updated external question")
@@ -138,6 +150,7 @@ test("Real history and account events refresh preloaded data without opening pop
       (listener) => data!.subscribe(listener),
       () => {
         const result = data!.cachedHistory(tree.id);
+
         return !!result?.ok && !result.value.some((item) => item.id === id);
       },
     );
@@ -148,6 +161,7 @@ test("Real history and account events refresh preloaded data without opening pop
       (listener) => data!.subscribe(listener),
       () => !!data!.cachedAccounts(tree.id)?.ok,
     );
+
     const catalog = expectOk(data.cachedAccounts(tree.id)!);
     expectOk(
       await workspace.accounts({
@@ -163,6 +177,7 @@ test("Real history and account events refresh preloaded data without opening pop
       (listener) => data!.subscribe(listener),
       () => {
         const next = data!.cachedAccounts(tree.id);
+
         return !!next?.ok && next.value.accounts[0]?.label === "Updated label";
       },
     );
@@ -172,6 +187,7 @@ test("Real history and account events refresh preloaded data without opening pop
     unsubscribe?.();
     data?.dispose();
     await workspace.disconnect();
+
     const client = expectOk(
       await connectRuntime(fixture.repository, fixture.main, { ...options, start: false }),
     );
@@ -179,10 +195,15 @@ test("Real history and account events refresh preloaded data without opening pop
       const pid = client.snapshot.pid;
       expectOk(await client.stopRuntime());
       await client.disconnect();
+
       const deadline = Date.now() + 8000;
-      while (pidAlive(pid) && Date.now() < deadline) await Bun.sleep(20);
+      while (pidAlive(pid) && Date.now() < deadline) {
+        await Bun.sleep(20);
+      }
+
       expect(pidAlive(pid)).toBe(false);
     }
+
     await fixture.cleanup();
   }
 }, 25000);

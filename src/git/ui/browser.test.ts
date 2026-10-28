@@ -33,8 +33,8 @@ test.each(["refs", "reflog"] as const)(
         },
       ],
     };
-    const app = await createTestRenderer({ width: 120, height: 28, clock: new ManualClock() }),
-      applied: (string | null)[] = [];
+    const app = await createTestRenderer({ width: 120, height: 28, clock: new ManualClock() });
+    const applied: (string | null)[] = [];
     const browser = new GitBrowser(app.renderer, {
       changed() {},
       close() {},
@@ -44,6 +44,7 @@ test.each(["refs", "reflog"] as const)(
       inspect: async () => err(new InputError("Fixture preview unavailable")),
       hint: (command, context) => defaultKeymap().hint(command, context),
     });
+
     app.renderer.root.add(browser.root);
     try {
       browser.show(kind, snapshot, null);
@@ -75,8 +76,8 @@ test.each(["refs", "reflog"] as const)(
   "%s preserves loading while searching pending snapshots and shows results immediately",
   async (kind) => {
     // Distinguish pending lookups from genuinely empty results.
-    const clock = new ManualClock(),
-      app = await createTestRenderer({ width: 120, height: 28, clock });
+    const clock = new ManualClock();
+    const app = await createTestRenderer({ width: 120, height: 28, clock });
     let lookups = 0;
     const browser = new GitBrowser(app.renderer, {
       changed() {},
@@ -86,10 +87,12 @@ test.each(["refs", "reflog"] as const)(
       open() {},
       inspect: async () => {
         lookups++;
+
         return err(new InputError("Unexpected target lookup"));
       },
       hint: (command, context) => defaultKeymap().hint(command, context),
     });
+
     app.renderer.root.add(browser.root);
     try {
       browser.show(kind, undefined, null);
@@ -100,8 +103,10 @@ test.each(["refs", "reflog"] as const)(
       // Typing never cancels active Git lookup ownership or spinners.
       clock.advance(800);
       await app.renderOnce();
+
       const walk = (node: Renderable): Renderable[] => [node, ...node.getChildren().flatMap(walk)];
       const spinner = walk(browser.root).find((node) => node.id === "git-browser-loading");
+
       expect(spinner?.visible).toBe(true);
       expect(app.captureCharFrame()).toContain("Loading Git data");
       browser.update({ commits: [], refs: [], files: [], reflog: [], head: "", headOid: null });

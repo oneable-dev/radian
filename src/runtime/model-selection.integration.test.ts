@@ -15,30 +15,40 @@ test("Real model-selection IPC preserves conversation/authentication runtimes wi
       entry: join(import.meta.dir, "..", "index.ts"),
     }),
   );
-  if (!connected) throw new Error("Missing fixture runtime");
+  if (!connected) {
+    throw new Error("Missing fixture runtime");
+  }
   try {
     const tree = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
     const session = expectOk(await connected.create(tree.id));
+
     // Query catalogs using conversation IDs supplied by session-creation snapshots.
     await new Promise<void>((resolve, reject) => {
       if (connected.snapshot.details[session]?.conversationId) {
         resolve();
+
         return;
       }
+
       const timer = setTimeout(() => {
         unsubscribe();
         reject(new Error("Missing session snapshot"));
       }, 8000);
       const unsubscribe = connected.subscribe(() => {
-        if (!connected.snapshot.details[session]?.conversationId) return;
+        if (!connected.snapshot.details[session]?.conversationId) {
+          return;
+        }
+
         clearTimeout(timer);
         unsubscribe();
         resolve();
       });
     });
+
     const conversation = connected.snapshot.details[session]!.conversationId!;
     expect(connected.snapshot.capabilities).toContain("model-selection");
     expect(connected.snapshot.capabilities).toContain("model-effort");
+
     const catalog = expectOk(await connected.models(session, conversation));
     expect(catalog.current).toEqual({ provider: "radian-offline", id: "fixture" });
     expect(
@@ -90,8 +100,12 @@ test("Real model-selection IPC preserves conversation/authentication runtimes wi
     const pid = connected.snapshot.pid;
     await connected.stopRuntime();
     await connected.disconnect();
+
     const deadline = Date.now() + 8000;
-    while (pidAlive(pid) && Date.now() < deadline) await Bun.sleep(20);
+    while (pidAlive(pid) && Date.now() < deadline) {
+      await Bun.sleep(20);
+    }
+
     expect(pidAlive(pid)).toBe(false);
     await fixture.cleanup();
   }

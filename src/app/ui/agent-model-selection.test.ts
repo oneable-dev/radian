@@ -42,13 +42,18 @@ const catalog: ModelCatalog = {
     },
   ],
 };
+
 async function mount(overrides: Partial<WorkbenchActions> = {}) {
   const clock = new ManualClock();
   const app = await createTestRenderer({ width: 120, height: 28, kittyKeyboard: true, clock });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    sent: string[] = [],
-    changes: { id: string; conversation: string; model: ModelIdentity; effort?: ModelEffort }[] =
-      [];
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const sent: string[] = [];
+  const changes: {
+    id: string;
+    conversation: string;
+    model: ModelIdentity;
+    effort?: ModelEffort;
+  }[] = [];
   let state: ExecutionState = {
     conversationId: "first",
     status: "complete",
@@ -68,6 +73,7 @@ async function mount(overrides: Partial<WorkbenchActions> = {}) {
     onCloseSession() {},
     onPrompt: async (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     onComplete: async () => ok({ items: [modelCommand], truncated: false }),
@@ -85,13 +91,17 @@ async function mount(overrides: Partial<WorkbenchActions> = {}) {
         },
       };
       selection.replaceSnapshot(selection.snapshot);
+
       return ok(null);
     },
     ...overrides,
   });
   const get = (id: string) => {
     const item = app.renderer.root.findDescendantById(id);
-    if (!item) throw new Error(`Missing ${id}`);
+    if (!item) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return item;
   };
   const prompt = get("session-prompt") as InputRenderable;
@@ -99,9 +109,11 @@ async function mount(overrides: Partial<WorkbenchActions> = {}) {
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
   prompt.focus();
   await render();
+
   return {
     ...app,
     view,
@@ -198,6 +210,7 @@ test("Model-row clicks preview only and Enter applies without buttons", async ()
   const app = await mount();
   try {
     await app.open();
+
     const row = app.get('model:["other","target"]');
 
     // Clicking only previews; inspect effort before confirming by command.
@@ -208,6 +221,7 @@ test("Model-row clicks preview only and Enter applies without buttons", async ()
     // Separate preview from application without action rows or close icons.
     expect(app.renderer.root.findDescendantById("model-apply")).toBeUndefined();
     expect(app.renderer.root.findDescendantById("model-cancel")).toBeUndefined();
+
     const panel = app.get("model-dialog");
     expect(app.captureCharFrame().split("\n")[panel.y + 1]).not.toContain("×");
     app.mockInput.pressEnter();
@@ -319,7 +333,10 @@ test("Search keeps hjkl literal while Ctrl+N/P moves candidates", async () => {
     await app.mockInput.typeText("hjkl");
     await app.render();
     expect((app.get("model-search") as InputRenderable).value).toBe("hjkl");
-    for (let index = 0; index < 4; index++) app.mockInput.pressBackspace();
+    for (let index = 0; index < 4; index++) {
+      app.mockInput.pressBackspace();
+    }
+
     await app.mockInput.typeText("model");
     await app.render();
 
@@ -421,6 +438,7 @@ test("Popup Esc closes and restores input without changing models or interruptin
     }),
     onInterrupt: async (id) => {
       interrupted.push(id);
+
       return ok(undefined);
     },
   });
@@ -477,6 +495,7 @@ test("Closed popups ignore late model lists and immediately clean loading timers
   const app = await mount({
     onListModels: async (_id, _conversation, abort) => {
       signal = abort;
+
       return gate.promise;
     },
   });
@@ -524,6 +543,7 @@ test("Model lookup failures, no matches, and unauthenticated empty lists stay di
   } finally {
     await app.close();
   }
+
   const empty = await mount({ onListModels: async () => ok({ ...catalog, models: [] }) });
   try {
     await empty.open();
@@ -543,10 +563,15 @@ test.each(["tab", "conversation"] as const)(
       app.mockInput.pressArrow("down");
       app.mockInput.pressEnter();
       await app.render();
-      if (change === "tab") app.selection.selectSession("demo:main", "a2");
-      else app.update({ conversationId: "replacement", status: null, output: "", error: null });
+      if (change === "tab") {
+        app.selection.selectSession("demo:main", "a2");
+      } else {
+        app.update({ conversationId: "replacement", status: null, output: "", error: null });
+      }
+
       await app.render();
       expect(app.get("model-picker").visible).toBe(false);
+
       const focus = app.renderer.currentFocusedRenderable;
 
       gate.resolve(ok(null));
@@ -579,8 +604,9 @@ test("Many effort options wrap within narrow layouts and remain selectable and a
     await app.open();
     app.resize(46, 12);
     await app.render();
-    const panel = app.get("model-dialog"),
-      maximum = app.get("model-effort:max");
+
+    const panel = app.get("model-dialog");
+    const maximum = app.get("model-effort:max");
 
     await app.mockMouse.click(maximum.x + 1, maximum.y);
     await app.render();
@@ -607,6 +633,7 @@ test("Model popups remain onscreen in narrow layouts and preserve searches acros
     await app.render();
     app.resize(46, 12);
     await app.render();
+
     const panel = app.get("model-dialog");
     expect(panel.x).toBeGreaterThanOrEqual(0);
     expect(panel.y).toBeGreaterThanOrEqual(0);

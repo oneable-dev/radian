@@ -16,9 +16,10 @@ export {
 } from "./theme-style-config.ts";
 
 export type UiStyle = Readonly<{ fg: RGBA; bg: RGBA | undefined; attributes: number }>;
+
 const style = (fg: RGBA, bg?: RGBA, attributes = 0): UiStyle => ({ fg, bg, attributes });
-const bold = TextAttributes.BOLD,
-  underline = TextAttributes.UNDERLINE;
+const bold = TextAttributes.BOLD;
+const underline = TextAttributes.UNDERLINE;
 
 // Shared defaults are intentional; popup backgrounds follow Normal unless explicitly overridden.
 const definitions = {
@@ -124,6 +125,7 @@ const definitions = {
 } satisfies Record<StyleGroup, (colors: UiColors) => UiStyle>;
 
 export type UiStyles = Readonly<Record<StyleGroup, UiStyle>>;
+
 export const selectionGroups = [
   "ui.selection",
   "ui.selectionInactive",
@@ -140,6 +142,7 @@ export const selectionGroups = [
 
 export function resolveStyles(colors: UiColors, overrides: StyleOverrides = {}): UiStyles {
   const normalBackground = overrides["ui.text"]?.bg;
+
   return Object.fromEntries(
     styleGroups.map((group) => {
       const base = definitions[group](colors);
@@ -155,9 +158,11 @@ export function resolveStyles(colors: UiColors, overrides: StyleOverrides = {}):
         ["italic", TextAttributes.ITALIC],
         ["underline", underline],
       ] as const) {
-        if (value[key] !== undefined)
+        if (value[key] !== undefined) {
           attributes = value[key] ? attributes | flag : attributes & ~flag;
+        }
       }
+
       return [
         group,
         {
@@ -193,6 +198,7 @@ export function paintText(node: TextBufferRenderable, value: UiStyle): void {
   node.bg = value.bg;
   node.attributes = value.attributes;
 }
+
 export const styleChunk = (text: string, value: UiStyle): TextChunk => ({
   __isChunk: true,
   text,
@@ -220,6 +226,7 @@ export function codeStyles(styles: UiStyles): Record<string, StyleDefinitionInpu
     constant: "syntax.constant",
     operator: "syntax.operator",
   } as const;
+
   return Object.fromEntries(
     Object.entries(tokens).map(([token, group]) => [token, syntaxDefinition(styles[group])]),
   );

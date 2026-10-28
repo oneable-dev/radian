@@ -44,19 +44,27 @@ type Entry = { registration: RepositoryRegistration; host: RepositoryHost };
 export async function runRuntime(offline: boolean, stateRoot?: string): Promise<void> {
   const paths = daemonPaths(offline, stateRoot);
   await privateDirectory(paths.directory);
+
   const release = await acquireRuntime(paths);
-  if (!release) return;
+  if (!release) {
+    return;
+  }
+
   const daemon = new SharedDaemon(paths, offline, stateRoot);
   let server: Bun.Server<undefined> | undefined;
-  const stopped = Promise.withResolvers<void>(),
-    stop = () => stopped.resolve();
+  const stopped = Promise.withResolvers<void>();
+  const stop = () => stopped.resolve();
+
   daemon.onStop = stop;
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);
   await withCleanup(
     async () => {
       const loaded = await daemon.load();
-      if (!loaded.ok) throw loaded.error;
+      if (!loaded.ok) {
+        throw loaded.error;
+      }
+
       server = Bun.serve({ unix: paths.socket, fetch: (request) => daemon.fetch(request) });
       await chmod(paths.socket, 0o600);
       await daemon.restore();
@@ -69,7 +77,9 @@ export async function runRuntime(offline: boolean, stateRoot?: string): Promise<
         await withCleanup(
           async () => {
             const result = await daemon.stop();
-            if (!result.ok) throw result.error;
+            if (!result.ok) {
+              throw result.error;
+            }
           },
           async () => {
             await server?.stop(true);
@@ -83,6 +93,7 @@ export async function runRuntime(offline: boolean, stateRoot?: string): Promise<
 class SharedDaemon {
   readonly instance = crypto.randomUUID();
   onStop: () => void = () => {};
+
   private readonly entries = new Map<string, Entry>();
   private readonly pending = new Map<string, Promise<Result<RepositoryHost, ExpectedError>>>();
   private saved: DaemonRegistry = { version: 1, repositories: [] };
@@ -100,23 +111,33 @@ class SharedDaemon {
 
   async load(): Promise<Result<void, ExpectedError>> {
     const accounts = await AccountManager.open(this.paths.directory, { offline: this.offline });
-    if (!accounts.ok) return accounts;
+    if (!accounts.ok) {
+      return accounts;
+    }
+
     this.accounts = accounts.value;
+
     const read = await capture(() => readFile(this.paths.manifest, "utf8"));
     if (!read.ok) {
       if (read.error instanceof StorageError && read.error.systemCode === "ENOENT") {
         this.loaded = true;
+
         return ok(undefined);
       }
+
       return read;
     }
+
     const json = parseJson(read.value, "shared daemon registry");
-    if (!json.ok || !Value.Check(daemonRegistrySchema, json.value))
+    if (!json.ok || !Value.Check(daemonRegistrySchema, json.value)) {
       return err(
         new StorageError("Invalid shared daemon registry. The original file was not overwritten."),
       );
+    }
+
     this.saved = json.value;
     this.loaded = true;
+
     return ok(undefined);
   }
 
@@ -135,37 +156,48 @@ class SharedDaemon {
           }
           if (registration.active) {
             const activated = await result.value.activate();
-            if (!activated.ok)
+            if (!activated.ok) {
               this.warning = `[${activated.error.code}] ${activated.error.message}`;
+            }
           }
         }
       }),
     );
-    for (const outcome of outcomes)
-      if (outcome.status === "rejected")
+    for (const outcome of outcomes) {
+      if (outcome.status === "rejected") {
         this.warning = reportUnexpected(outcome.reason, "repository recovery");
+      }
+    }
   }
 
   private register(
     registration: RepositoryRegistration,
   ): Promise<Result<RepositoryHost, ExpectedError>> {
-    if (this.stopped)
+    if (this.stopped) {
       return Promise.resolve(
         err(new SessionError("RUNTIME_STOPPING", "Shared daemon is stopping.")),
       );
+    }
+
     const existing = this.entries.get(registration.repositoryId);
-    if (existing) return this.matchConfig(existing, registration);
+    if (existing) {
+      return this.matchConfig(existing, registration);
+    }
+
     const pending = this.pending.get(registration.repositoryId);
-    if (pending)
+    if (pending) {
       return pending.then((result) =>
         result.ok
           ? this.matchConfig(this.entries.get(registration.repositoryId)!, registration)
           : result,
       );
+    }
+
     const opening = this.openRepository(registration).finally(() => {
       this.pending.delete(registration.repositoryId);
     });
     this.pending.set(registration.repositoryId, opening);
+
     return opening;
   }
 
@@ -174,13 +206,17 @@ class SharedDaemon {
     registration: RepositoryRegistration,
   ): Promise<Result<RepositoryHost, ExpectedError>> {
     const discovered = await discoverRepository(registration.cwd);
-    if (!discovered.ok) return discovered;
-    if (discovered.value.id !== registration.repositoryId)
+    if (!discovered.ok) {
+      return discovered;
+    }
+    if (discovered.value.id !== registration.repositoryId) {
       return err(
         new ProtocolError(
           "Repository registration identity does not match its Git common directory.",
         ),
       );
+    }
+
     return entry.registration.config === registration.config
       ? ok(entry.host)
       : err(
@@ -194,13 +230,17 @@ class SharedDaemon {
     registration: RepositoryRegistration,
   ): Promise<Result<RepositoryHost, ExpectedError>> {
     const discovered = await discoverRepository(registration.cwd);
-    if (!discovered.ok) return discovered;
-    if (discovered.value.id !== registration.repositoryId)
+    if (!discovered.ok) {
+      return discovered;
+    }
+    if (discovered.value.id !== registration.repositoryId) {
       return err(
         new ProtocolError(
           "Repository registration identity does not match its Git common directory.",
         ),
       );
+    }
+
     const canonical = { ...registration, cwd: discovered.value.id };
     const opened = await RepositoryHost.open(
       discovered.value,
@@ -212,13 +252,18 @@ class SharedDaemon {
       () => this.persist(),
       this.accounts,
     );
-    if (!opened.ok) return opened;
+    if (!opened.ok) {
+      return opened;
+    }
+
     this.entries.set(registration.repositoryId, { registration: canonical, host: opened.value });
+
     return opened;
   }
 
   private get snapshot(): RuntimeSnapshot {
     const snapshots = [...this.entries.values()].map((entry) => entry.host.snapshot);
+
     return {
       version: protocolVersion,
       pid: process.pid,
@@ -245,35 +290,53 @@ class SharedDaemon {
   async fetch(request: Request): Promise<Response> {
     try {
       const path = new URL(request.url).pathname;
-      if (path === "/snapshot" && request.method === "GET") return Response.json(this.snapshot);
-      if (this.stopped)
+      if (path === "/snapshot" && request.method === "GET") {
+        return Response.json(this.snapshot);
+      }
+      if (this.stopped) {
         return rejected(new SessionError("RUNTIME_STOPPING", "Shared daemon is stopping."));
+      }
+
       const expected = request.headers.get("X-Radian-Instance");
-      if (expected && expected !== this.instance)
+      if (expected && expected !== this.instance) {
         return rejected(
           new ProtocolError("Shared daemon instance changed. No action was accepted."),
         );
-      if (request.method !== "POST" || !["/repositories", "/command"].includes(path))
+      }
+      if (request.method !== "POST" || !["/repositories", "/command"].includes(path)) {
         return new Response("Not found", { status: 404 });
-      if (expected !== this.instance)
+      }
+      if (expected !== this.instance) {
         return rejected(new ProtocolError("Current shared daemon identity is required."));
-      if (Number(request.headers.get("content-length")) > maxFrameBytes)
+      }
+      if (Number(request.headers.get("content-length")) > maxFrameBytes) {
         return rejected(new InputError("Request is too large."));
+      }
+
       const text = await request.text();
-      if (Buffer.byteLength(text) > maxFrameBytes)
+      if (Buffer.byteLength(text) > maxFrameBytes) {
         return rejected(new InputError("Request is too large."));
+      }
       if (path === "/repositories") {
         const json = parseJson(text, "repository registration");
-        if (!json.ok) return rejected(json.error);
-        if (!Value.Check(repositoryRegistrationSchema, json.value))
+        if (!json.ok) {
+          return rejected(json.error);
+        }
+        if (!Value.Check(repositoryRegistrationSchema, json.value)) {
           return rejected(new InputError("Malformed repository registration."));
+        }
+
         const registration = {
           ...json.value,
           ...(json.value.config ? { config: resolve(json.value.config) } : {}),
         };
         const registered = await this.register(registration);
-        if (!registered.ok) return rejected(registered.error);
+        if (!registered.ok) {
+          return rejected(registered.error);
+        }
+
         const saved = await this.persist();
+
         return Response.json({
           ok: true,
           value: null,
@@ -286,18 +349,25 @@ class SharedDaemon {
             : {}),
         });
       }
+
       const command = parseCommand(text);
-      if (!command.ok) return rejected(command.error);
-      if (command.value.type !== "stop")
+      if (!command.ok) {
+        return rejected(command.error);
+      }
+      if (command.value.type !== "stop") {
         return rejected(
           new InputError(
             "The shared endpoint only accepts stop; repository commands require their repository endpoint.",
           ),
         );
+      }
+
       setTimeout(() => this.onStop(), 20);
+
       return Response.json({ ok: true, value: null });
     } catch (error) {
       reportUnexpected(error, "shared daemon request");
+
       return Response.json(
         {
           ok: false,
@@ -316,12 +386,15 @@ class SharedDaemon {
     const registrations = new Map(
       this.saved.repositories.map((registration) => [registration.repositoryId, registration]),
     );
-    for (const { registration, host } of this.entries.values())
+    for (const { registration, host } of this.entries.values()) {
       registrations.set(registration.repositoryId, {
         ...registration,
         active: host.active || registrations.get(registration.repositoryId)?.active === true,
       });
+    }
+
     this.saved = { version: 1, repositories: [...registrations.values()] };
+
     const text = JSON.stringify(this.saved);
     this.saving = this.saving.then(() =>
       capture(async () => {
@@ -335,9 +408,12 @@ class SharedDaemon {
         );
       }),
     );
+
     return this.saving.then((result) => {
-      if (!result.ok)
+      if (!result.ok) {
         this.warning = `Shared daemon registry persistence failed: ${result.error.message}`;
+      }
+
       return result;
     });
   }
@@ -345,6 +421,7 @@ class SharedDaemon {
   async stop(): Promise<Result<void, ExpectedError>> {
     this.stopped = true;
     await Promise.allSettled(this.pending.values());
+
     // Persist active intent before any repository releases its resources.
     const saved = this.loaded ? await this.persist() : ok(undefined);
     const stopped = await collectCleanup(
@@ -352,6 +429,7 @@ class SharedDaemon {
       "Shared daemon shutdown failed.",
     );
     const accounts = this.accounts ? await this.accounts.stop() : ok(undefined);
+
     return collectCleanup(
       [Promise.resolve(stopped), Promise.resolve(accounts)],
       "Shared daemon account shutdown failed.",

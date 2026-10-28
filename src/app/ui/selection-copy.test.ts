@@ -13,9 +13,11 @@ import { pressLeader } from "../../testing/keys.ts";
 import type { WorkView } from "../../runtime/protocol.ts";
 
 const text = "copy this 한글 é 😀";
+
 function descendants(root: Renderable): Renderable[] {
   return root.getChildren().flatMap((child) => [child, ...descendants(child)]);
 }
+
 async function mount(mode: WorkView = "agent", keymap: Keymap = defaultKeymap("linux")) {
   const app = await createTestRenderer({
     width: 100,
@@ -23,12 +25,13 @@ async function mount(mode: WorkView = "agent", keymap: Keymap = defaultKeymap("l
     kittyKeyboard: true,
     exitOnCtrlC: false,
   });
-  const copied: string[] = [],
-    inputs: string[] = [],
-    prompts: string[] = [];
+  const copied: string[] = [];
+  const inputs: string[] = [];
+  const prompts: string[] = [];
   const boundary = {
     copy: async (value: string): Promise<Result<string, ExpectedError>> => {
       copied.push(value);
+
       return ok("Copied to clipboard");
     },
   };
@@ -48,6 +51,7 @@ async function mount(mode: WorkView = "agent", keymap: Keymap = defaultKeymap("l
     keymap,
     onPrompt: (_id, value) => {
       prompts.push(value);
+
       return ok(undefined);
     },
     onCopyTranscript: (value) => boundary.copy(value),
@@ -75,12 +79,14 @@ async function mount(mode: WorkView = "agent", keymap: Keymap = defaultKeymap("l
       create: async () => ok("shell"),
       close: async () => ok(undefined),
       attach: async (_id, receive) => {
-        let cols = 100,
-          rows = 28,
-          revision = 0;
+        let cols = 100;
+        let rows = 28;
+        let revision = 0;
         const send = () =>
           receive({ ...terminal, cols, rows, revision: revision++, ansi: `\x1bc${text}` });
+
         send();
+
         return ok({
           input: (bytes) => inputs.push(Buffer.from(bytes).toString()),
           resize: (width, height) => {
@@ -97,6 +103,7 @@ async function mount(mode: WorkView = "agent", keymap: Keymap = defaultKeymap("l
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
   await render();
   await Promise.all(
@@ -105,12 +112,17 @@ async function mount(mode: WorkView = "agent", keymap: Keymap = defaultKeymap("l
       .map((node) => node.highlightingDone),
   );
   await render();
+
   const position = (label: string) => {
-    const lines = app.captureCharFrame().split("\n"),
-      y = lines.findIndex((line) => line.includes(label));
-    if (y < 0) throw new Error(`Missing ${label}\n${app.captureCharFrame()}`);
+    const lines = app.captureCharFrame().split("\n");
+    const y = lines.findIndex((line) => line.includes(label));
+    if (y < 0) {
+      throw new Error(`Missing ${label}\n${app.captureCharFrame()}`);
+    }
+
     return { x: Bun.stringWidth(lines[y]!.slice(0, lines[y]!.indexOf(label))), y };
   };
+
   return {
     ...app,
     view,
@@ -122,7 +134,10 @@ async function mount(mode: WorkView = "agent", keymap: Keymap = defaultKeymap("l
     position,
     raw(value: string) {
       const key = parseKeypress(value, { useKittyKeyboard: true });
-      if (!key) throw new Error("Invalid keyboard event");
+      if (!key) {
+        throw new Error("Invalid keyboard event");
+      }
+
       app.renderer.keyInput.processParsedKey(key);
     },
     async select() {
@@ -137,7 +152,7 @@ async function mount(mode: WorkView = "agent", keymap: Keymap = defaultKeymap("l
   };
 }
 
-for (const mode of ["agent", "terminal"] as const)
+for (const mode of ["agent", "terminal"] as const) {
   for (const [platform, shortcut, event] of [
     ["darwin", "Cmd+C", "\x1b[99;9u"],
     ["win32", "Ctrl+C", "\x03"],
@@ -148,9 +163,11 @@ for (const mode of ["agent", "terminal"] as const)
       const app = await mount(mode, defaultKeymap(platform));
       try {
         await app.select();
+
         const focus = app.renderer.currentFocusedRenderable;
-        const selected = app.renderer.getSelection(),
-          original = selected?.getSelectedText();
+        const selected = app.renderer.getSelection();
+        const original = selected?.getSelectedText();
+
         expect(original).toContain(text);
         expect(app.copied).toEqual([]);
 
@@ -171,6 +188,7 @@ for (const mode of ["agent", "terminal"] as const)
       }
     });
   }
+}
 
 test.each(["agent", "terminal"] as const)(
   "macOS %s Ctrl+C remains native even with a drag selection",
@@ -179,15 +197,20 @@ test.each(["agent", "terminal"] as const)(
     const app = await mount(mode, defaultKeymap("darwin"));
     try {
       await app.select();
-      if (mode === "agent") app.renderer.root.findDescendantById("session-prompt")!.focus();
+      if (mode === "agent") {
+        app.renderer.root.findDescendantById("session-prompt")!.focus();
+      }
 
       app.mockInput.pressCtrlC();
       await app.render();
 
       expect(app.copied).toEqual([]);
       expect(app.prompts).toEqual([]);
-      if (mode === "terminal") expect(app.inputs).toEqual(["\x03"]);
-      else expect(app.view.promptDrafts.a1 ?? "").toBe("");
+      if (mode === "terminal") {
+        expect(app.inputs).toEqual(["\x03"]);
+      } else {
+        expect(app.view.promptDrafts.a1 ?? "").toBe("");
+      }
     } finally {
       await app.close();
     }
@@ -219,7 +242,9 @@ test.each(["agent", "terminal"] as const)(
       if (mode === "terminal") {
         const { x, y } = app.position(text);
         await app.mockMouse.click(x, y);
-      } else app.renderer.root.findDescendantById("session-prompt")!.focus();
+      } else {
+        app.renderer.root.findDescendantById("session-prompt")!.focus();
+      }
 
       app.mockInput.pressCtrlC();
       await app.render();
@@ -227,8 +252,11 @@ test.each(["agent", "terminal"] as const)(
       // Copy interception must not turn ordinary input clearing/interruption into a no-op.
       expect(app.copied).toEqual([]);
       expect(app.prompts).toEqual([]);
-      if (mode === "terminal") expect(app.inputs).toEqual(["\x03"]);
-      else expect(app.view.promptDrafts.a1 ?? "").toBe("");
+      if (mode === "terminal") {
+        expect(app.inputs).toEqual(["\x03"]);
+      } else {
+        expect(app.view.promptDrafts.a1 ?? "").toBe("");
+      }
     } finally {
       await app.close();
     }
@@ -247,8 +275,10 @@ test.each(["prompt", "search"] as const)(
         await app.mockInput.typeText("literal query");
         await app.render();
       }
-      const label = surface === "prompt" ? "Retain this draft" : "literal query",
-        { x, y } = app.position(label);
+
+      const label = surface === "prompt" ? "Retain this draft" : "literal query";
+      const { x, y } = app.position(label);
+
       await app.mockMouse.drag(x, y, x + 5, y);
       await app.render();
 
@@ -375,6 +405,7 @@ test("Read-only dialog drag selections copy only their highlighted text", async 
   try {
     pressLeader(app, "?");
     await app.render();
+
     const { x, y } = app.position("Current context:");
     await app.mockMouse.drag(x, y, x + "Current".length - 1, y);
     await app.render();

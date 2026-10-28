@@ -7,12 +7,13 @@ import { sessionResourceLoader } from "./resource-loader.ts";
 
 test("pi-accounts is excluded before import on initial load and reload without affecting other extensions or settings", async () => {
   // Imports have side effects; hiding handlers alone cannot block the resource.
-  const directory = await mkdtemp(join(tmpdir(), "radian-resource-filter-")),
-    agent = join(directory, "agent"),
-    legacy = join(directory, "pi-accounts", "index.ts");
-  const marker = join(directory, "legacy-imported"),
-    normal = join(directory, "normal.ts"),
-    normalMarker = join(directory, "normal-loaded");
+  const directory = await mkdtemp(join(tmpdir(), "radian-resource-filter-"));
+  const agent = join(directory, "agent");
+  const legacy = join(directory, "pi-accounts", "index.ts");
+  const marker = join(directory, "legacy-imported");
+  const normal = join(directory, "normal.ts");
+  const normalMarker = join(directory, "normal-loaded");
+
   await mkdir(agent);
   await mkdir(join(directory, "pi-accounts"));
   await writeFile(
@@ -23,8 +24,10 @@ test("pi-accounts is excluded before import on initial load and reload without a
     normal,
     `import {writeFileSync} from "node:fs"; export default function(pi) {writeFileSync(${JSON.stringify(normalMarker)}, "loaded"); pi.registerCommand("normal", {handler:async()=>{}});}`,
   );
+
   const settings = JSON.stringify({ extensions: [legacy, normal] });
   await writeFile(join(agent, "settings.json"), settings);
+
   const loader = sessionResourceLoader({
     cwd: directory,
     agentDir: agent,

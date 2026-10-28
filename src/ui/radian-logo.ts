@@ -56,16 +56,23 @@ export class RadianLogo extends BoxRenderable {
   }
 
   private resizeMark(): void {
-    if (!this.mark || this.isDestroyed) return;
+    if (!this.mark || this.isDestroyed) {
+      return;
+    }
+
     const compact = this.width < width || this.height < lines.length;
     const content = compact
       ? this.width >= compactWordmark.length
         ? compactWordmark
         : "R"
       : artwork;
+
     this.mark.width = compact ? Bun.stringWidth(content) : width;
     this.mark.height = compact ? 1 : lines.length;
-    if (this.mark.plainText !== content) this.mark.content = content;
+    if (this.mark.plainText !== content) {
+      this.mark.content = content;
+    }
+
     this.version.visible = this.width >= this.version.width && this.height >= this.mark.height + 2;
     this.gap = this.version.visible ? 1 : 0;
   }

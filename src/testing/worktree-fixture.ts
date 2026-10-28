@@ -7,6 +7,7 @@ export async function createWorktreeFixture() {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "radian-worktrees-")));
   const main = join(directory, "main");
   const feature = join(directory, "feature");
+
   async function git(cwd: string, args: string[]): Promise<void> {
     const child = Bun.spawn(
       [
@@ -30,8 +31,11 @@ export async function createWorktreeFixture() {
       new Response(child.stderr).text(),
       child.exited,
     ]);
-    if (code !== 0) throw new Error(`${output}${error}`);
+    if (code !== 0) {
+      throw new Error(`${output}${error}`);
+    }
   }
+
   try {
     await mkdir(main);
     await git(main, ["init", "--initial-branch=main"]);
@@ -41,8 +45,12 @@ export async function createWorktreeFixture() {
     await git(main, ["worktree", "add", "-b", "feature/probe", feature]);
     await writeFile(join(feature, "workspace.txt"), "feature-worktree-marker\n");
     await git(feature, ["commit", "-am", "Create feature worktree marker"]);
+
     const repository = await discoverRepository(main);
-    if (!repository.ok) throw repository.error;
+    if (!repository.ok) {
+      throw repository.error;
+    }
+
     return {
       directory,
       main,
@@ -60,7 +68,9 @@ export async function createWorktreeFixture() {
 if (import.meta.main) {
   const fixture = await createWorktreeFixture();
   const entry = join(import.meta.dir, "..", "index.ts");
+
   console.log(`Created an isolated repository and linked worktree:\n${fixture.directory}\n`);
+
   const launch = `bun ${JSON.stringify(entry)} --test-runtime --state-dir ${JSON.stringify(join(fixture.directory, "state"))}`;
   console.log(`cd ${JSON.stringify(fixture.main)}\n${launch}`);
   console.log(

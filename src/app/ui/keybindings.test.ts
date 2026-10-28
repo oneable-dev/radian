@@ -29,6 +29,7 @@ test("Workspace j/k browses and Enter switches while identical input characters 
       ),
     onResumeSession: async (tree, id) => {
       opened.push(id);
+
       return ok(tree === "demo:main" ? "a1" : "b1");
     },
   });
@@ -96,6 +97,7 @@ test("User keymaps apply consistently to tree commands, disabling, footers, and 
   });
   try {
     await app.renderOnce();
+
     const footer = () => app.captureCharFrame().split("\n")[23]!;
     app.mockInput.pressKey("b", { ctrl: true });
     app.mockInput.pressKey("b");

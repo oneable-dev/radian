@@ -11,8 +11,8 @@ import { uiTheme } from "../../ui/theme.ts";
 import { icons } from "../../icons.ts";
 
 async function fixture(options: Partial<WorkbenchActions> = {}) {
-  const clock = new ManualClock(),
-    app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
   const result = {
     id: "result-b",
     outcome: "complete" as const,
@@ -40,10 +40,10 @@ async function fixture(options: Partial<WorkbenchActions> = {}) {
         : tree,
     ),
   }));
-  const selection = new WorkspaceSelection(repositories),
-    acknowledged: string[] = [],
-    submitted: string[] = [],
-    lookups: string[] = [];
+  const selection = new WorkspaceSelection(repositories);
+  const acknowledged: string[] = [];
+  const submitted: string[] = [];
+  const lookups: string[] = [];
   const states: Record<string, ExecutionState> = {
     a1: { conversationId: "conv-a", status: "working", output: "ACTIVE BODY", error: null },
     b1: {
@@ -78,32 +78,41 @@ async function fixture(options: Partial<WorkbenchActions> = {}) {
     initialDrafts: { a1: "KEEP_DRAFT" },
     onPrompt: (_id, text) => {
       submitted.push(text);
+
       return ok(undefined);
     },
     getSessionDetails: (id) => {
       lookups.push(id);
+
       return states[id] ?? null;
     },
     onAcknowledge: async (id, _conversation, resultId) => {
       acknowledged.push(resultId);
+
       const state = states[id];
       if (state?.attention?.id === resultId) {
         const { attention: _attention, ...next } = state;
         states[id] = next;
       }
+
       selection.replaceSnapshot(
         selection.snapshot.map((repo) => ({
           ...repo,
           worktrees: repo.worktrees.map((tree) => ({
             ...tree,
             sessions: tree.sessions.map((session) => {
-              if (session.id !== id || session.attention?.id !== resultId) return session;
+              if (session.id !== id || session.attention?.id !== resultId) {
+                return session;
+              }
+
               const { attention: _attention, ...next } = session;
+
               return next;
             }),
           })),
         })),
       );
+
       return ok(undefined);
     },
     ...options,
@@ -114,14 +123,19 @@ async function fixture(options: Partial<WorkbenchActions> = {}) {
   };
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
   const leader = (key: string) => {
     app.mockInput.pressKey(" ", { ctrl: true });
     app.mockInput.pressKey(key);
   };
+
   await render();
+
   return {
     ...app,
     clock,
@@ -145,9 +159,10 @@ test("Workspace popups preserve work width and switch only on Enter after substr
   // Start with current sessions and drafts open without a permanent sidebar.
   const app = await fixture();
   try {
-    const pane = app.get("work-panel"),
-      width = pane.width,
-      prompt = app.get("session-prompt");
+    const pane = app.get("work-panel");
+    const width = pane.width;
+    const prompt = app.get("session-prompt");
+
     expect(width).toBe(120);
     expect(app.get("workspace-picker").visible).toBe(false);
 
@@ -191,6 +206,7 @@ test("Workspace popup Esc/Tab preserve original focus, selection, and conversati
         app.renderer.currentFocusedRenderable?.id ?? "",
       );
     }
+
     await app.mockMouse.click(0, 0);
     await app.render();
     expect(app.get("workspace-picker").visible).toBe(true);
@@ -219,13 +235,21 @@ test.each([
     try {
       app.leader("b");
       await app.mockInput.typeText("radian");
-      if (focus === "workspace") app.mockInput.pressTab();
+      if (focus === "workspace") {
+        app.mockInput.pressTab();
+      }
+
       await app.render();
+
       const input = app.get("workspace-search") as InputRenderable;
       const move = (next: boolean) => {
-        if (navigation === "control") app.mockInput.pressKey(next ? "n" : "p", { ctrl: true });
-        else if (navigation === "arrows") app.mockInput.pressArrow(next ? "down" : "up");
-        else app.mockInput.pressKey(next ? "j" : "k");
+        if (navigation === "control") {
+          app.mockInput.pressKey(next ? "n" : "p", { ctrl: true });
+        } else if (navigation === "arrows") {
+          app.mockInput.pressArrow(next ? "down" : "up");
+        } else {
+          app.mockInput.pressKey(next ? "j" : "k");
+        }
       };
 
       // Move down twice; a single round-trip cannot detect missing previous/next bindings.
@@ -259,6 +283,7 @@ test("Search focus changes preserve open-popup input and only reopening after se
     app.leader("b");
     await app.mockInput.typeText("-ui");
     await app.render();
+
     const input = app.get("workspace-search") as InputRenderable;
     app.mockInput.pressTab();
     openWorkspaceSearch(app);
@@ -314,15 +339,17 @@ test("Monitor candidates show status and scope above muted quoted requests", asy
     await app.render();
 
     // Candidates follow search directly; each status stays beside its scope, not the request.
-    const list = app.get("monitor-list"),
-      search = app.get("monitor-search-field"),
-      row = app.get("monitor:b1"),
-      next = app.get("monitor:a1");
-    const caption = app.get("monitor-caption:b1"),
-      scope = app.get("monitor-scope:b1"),
-      marker = app.get("monitor-status:b1");
-    if (!(caption instanceof TextRenderable) || !(scope instanceof TextRenderable))
+    const list = app.get("monitor-list");
+    const search = app.get("monitor-search-field");
+    const row = app.get("monitor:b1");
+    const next = app.get("monitor:a1");
+    const caption = app.get("monitor-caption:b1");
+    const scope = app.get("monitor-scope:b1");
+    const marker = app.get("monitor-status:b1");
+    if (!(caption instanceof TextRenderable) || !(scope instanceof TextRenderable)) {
       throw new Error("Missing session labels");
+    }
+
     expect(row.height).toBe(2);
     expect(next.height).toBe(2);
     expect(next.y).toBe(row.y + 2);
@@ -338,6 +365,7 @@ test("Monitor candidates show status and scope above muted quoted requests", asy
     expect(marker.visible).toBe(true);
     expect(app.get("monitor-status:a1").visible).toBe(true);
     expect(app.get("monitor-message").visible).toBe(false);
+
     const listText = app
       .captureCharFrame()
       .split("\n")
@@ -347,6 +375,7 @@ test("Monitor candidates show status and scope above muted quoted requests", asy
     expect(listText).not.toMatch(
       /Needs attention|Working|Completed|sessions ·|Preview does not|radian \[demo\]/u,
     );
+
     const styles = uiTheme(app.renderer).styles;
     const scopeSpan = app
       .captureSpans()
@@ -354,6 +383,7 @@ test("Monitor candidates show status and scope above muted quoted requests", asy
     const requestSpan = app
       .captureSpans()
       .lines[caption.y]!.spans.find((span) => span.text.includes("“Fix authentication”"));
+
     expect(scopeSpan?.fg.toInts()).toEqual(styles["ui.label"].fg.toInts());
     expect(requestSpan?.fg.toInts()).toEqual(styles["ui.muted"].fg.toInts());
     expect(scopeSpan?.bg.toInts()).toEqual(styles["ui.selection"].bg!.toInts());
@@ -389,18 +419,22 @@ test("Long Unicode monitor captions retain both scope fields through resize with
     await app.mockInput.typeText("unicode-target");
     app.mockInput.pressArrow("left");
     await app.render();
-    const search = app.get("monitor-search") as InputRenderable,
-      caret = search.cursorOffset,
-      row = app.get("monitor:b1");
+
+    const search = app.get("monitor-search") as InputRenderable;
+    const caret = search.cursorOffset;
+    const row = app.get("monitor:b1");
 
     // Scope columns remain present even when the request and scope names all need truncation.
     for (const width of [320, 140, 60, 240, 180]) {
       app.resize(width, 30);
       await app.render();
-      const caption = app.get("monitor-caption:b1"),
-        scope = app.get("monitor-scope:b1");
-      if (!(caption instanceof TextRenderable) || !(scope instanceof TextRenderable))
+
+      const caption = app.get("monitor-caption:b1");
+      const scope = app.get("monitor-scope:b1");
+      if (!(caption instanceof TextRenderable) || !(scope instanceof TextRenderable)) {
         throw new Error("Missing session labels");
+      }
+
       const parts = scope.plainText.split(" · ");
       expect(parts).toHaveLength(2);
       expect(parts.every((part) => part.length > 0)).toBe(true);
@@ -418,6 +452,7 @@ test("Long Unicode monitor captions retain both scope fields through resize with
       expect(search.value).toBe("unicode-target");
       expect(search.cursorOffset).toBe(caret);
     }
+
     app.mockInput.pressEnter();
     await app.render();
     expect(app.selection.sessionId).toBe("b1");
@@ -430,8 +465,8 @@ test("Long Unicode monitor captions retain both scope fields through resize with
 
 test("Monitor row loading follows Fast and compaction state without losing caption space or selection", async () => {
   // The same background session changes modes without replacing its list candidate.
-  const app = await fixture(),
-    original = app.states.b1!;
+  const app = await fixture();
+  const original = app.states.b1!;
   const update = async (fast: boolean, activity?: ExecutionState["activity"]) => {
     app.states.b1 = {
       ...original,
@@ -461,6 +496,7 @@ test("Monitor row loading follows Fast and compaction state without losing capti
   };
   const glyphs = () => {
     const node = app.get("monitor-status:b1");
+
     return app
       .captureCharFrame()
       .split("\n")
@@ -471,12 +507,14 @@ test("Monitor row loading follows Fast and compaction state without losing capti
     await update(true);
     app.leader("s");
     await app.render();
-    const row = app.get("monitor:b1"),
-      marker = app.get("monitor-status:b1"),
-      scope = app.get("monitor-scope:b1"),
-      caption = app.get("monitor-caption:b1");
-    if (!(caption instanceof TextRenderable) || !(scope instanceof TextRenderable))
+
+    const row = app.get("monitor:b1");
+    const marker = app.get("monitor-status:b1");
+    const scope = app.get("monitor-scope:b1");
+    const caption = app.get("monitor-caption:b1");
+    if (!(caption instanceof TextRenderable) || !(scope instanceof TextRenderable)) {
       throw new Error("Missing session labels");
+    }
 
     // Fast uses the session's three-cell arrows and active-arrow theme color, not the default spinner.
     expect(glyphs()).toBe("▶▷▷");
@@ -485,6 +523,7 @@ test("Monitor row loading follows Fast and compaction state without losing capti
     expect(scope.y).toBe(marker.y);
     expect(caption.x).toBe(row.x);
     expect(caption.y).toBe(marker.y + 1);
+
     const arrow = app.captureSpans().lines[marker.y]!.spans.find((span) => span.text.includes("▶"));
     expect(arrow?.fg.toInts()).toEqual(uiTheme(app.renderer).styles["metadata.fastOn"].fg.toInts());
     app.clock.advance(80);
@@ -597,7 +636,10 @@ test.each(["search", "list"] as const)(
       // Both search and list confirmation must hand keyboard ownership to the selected session's input.
       app.leader("s");
       await app.mockInput.typeText("auth");
-      if (focus === "list") app.mockInput.pressTab();
+      if (focus === "list") {
+        app.mockInput.pressTab();
+      }
+
       await app.render();
       app.mockInput.pressEnter();
       await app.render();
@@ -645,8 +687,9 @@ test("Monitor popups share standard picker dimensions and stay centered through 
     ] as const) {
       app.resize(width, height);
       await app.render();
-      const panel = app.get("monitor-dialog"),
-        list = app.get("monitor-list") as ScrollBoxRenderable;
+
+      const panel = app.get("monitor-dialog");
+      const list = app.get("monitor-list") as ScrollBoxRenderable;
 
       // The frame remains centered and leaves enough height for complete session candidates.
       expect(panel.width).toBe(columns);
@@ -656,6 +699,7 @@ test("Monitor popups share standard picker dimensions and stay centered through 
       expect(list.viewport.height).toBeGreaterThanOrEqual(2);
       expect(app.renderer.currentFocusedRenderable?.id).toBe("monitor-search");
     }
+
     expect(app.selection.sessionId).toBe("a1");
     expect(app.acknowledged).toEqual([]);
     expect(app.submitted).toEqual([]);
@@ -666,14 +710,16 @@ test("Monitor popups share standard picker dimensions and stay centered through 
 
 test("Monitor search shares popup backgrounds through focus, resize and theme updates", async () => {
   // Distinct input colors must not create a separate surface inside the monitor's search border.
-  const app = await fixture(),
-    theme = uiTheme(app.renderer);
+  const app = await fixture();
+  const theme = uiTheme(app.renderer);
   const background = (x: number, y: number) => {
     let column = 0;
+
     return app
       .captureSpans()
       .lines[y]!.spans.find((span) => {
         column += span.width;
+
         return column > x;
       })!
       .bg.toInts();
@@ -683,8 +729,9 @@ test("Monitor search shares popup backgrounds through focus, resize and theme up
     await app.mockInput.typeText("radian");
     app.mockInput.pressArrow("left");
     await app.render();
-    const search = app.get("monitor-search") as InputRenderable,
-      caret = search.cursorOffset;
+
+    const search = app.get("monitor-search") as InputRenderable;
+    const caret = search.cursorOffset;
 
     // Existing search nodes must follow both palette changes and explicit popup backgrounds without remounting.
     for (const light of [false, true]) {
@@ -714,13 +761,17 @@ test("Monitor search shares popup backgrounds through focus, resize and theme up
         search.focus();
         await app.render();
         for (const focus of ["search", "results"]) {
-          if (focus === "results") app.mockInput.pressTab();
+          if (focus === "results") {
+            app.mockInput.pressTab();
+          }
+
           await app.render();
-          const field = app.get("monitor-search-field"),
-            prompt = app.get("monitor-search-prompt"),
-            count = app.get("monitor-search-count");
-          const row = app.get("monitor:a1"),
-            expected = theme.styles["ui.popup"].bg!.toInts();
+
+          const field = app.get("monitor-search-field");
+          const prompt = app.get("monitor-search-prompt");
+          const count = app.get("monitor-search-count");
+          const row = app.get("monitor:a1");
+          const expected = theme.styles["ui.popup"].bg!.toInts();
 
           // Editor text, padding, prompt, count and border rows share the unselected list's surface in either focus state.
           expect(background(row.x, row.y)).toEqual(expected);
@@ -731,8 +782,10 @@ test("Monitor search shares popup backgrounds through focus, resize and theme up
             [count.x, count.y],
             [field.x + 2, field.y],
             [field.x + 2, field.y + field.height - 1],
-          ] as const)
+          ] as const) {
             expect(background(x, y)).toEqual(expected);
+          }
+
           expect(app.renderer.currentFocusedRenderable?.id).toBe(
             focus === "search" ? "monitor-search" : "monitor-list",
           );
@@ -741,6 +794,7 @@ test("Monitor search shares popup backgrounds through focus, resize and theme up
         }
       }
     }
+
     expect(app.selection.sessionId).toBe("a1");
     expect(app.view.promptDrafts.a1).toBe("KEEP_DRAFT");
     expect(app.acknowledged).toEqual([]);
@@ -759,12 +813,14 @@ test.each([120, 60])(
       app.resize(width, 30);
       app.leader("s");
       await app.render();
-      const search = app.get("monitor-search") as InputRenderable,
-        field = app.get("monitor-search-field");
-      const prompt = app.get("monitor-search-prompt"),
-        count = app.get("monitor-search-count");
-      if (!(prompt instanceof TextRenderable) || !(count instanceof TextRenderable))
+
+      const search = app.get("monitor-search") as InputRenderable;
+      const field = app.get("monitor-search-field");
+      const prompt = app.get("monitor-search-prompt");
+      const count = app.get("monitor-search-count");
+      if (!(prompt instanceof TextRenderable) || !(count instanceof TextRenderable)) {
         throw new Error("Missing monitor search decoration");
+      }
 
       // Only the search bar is framed; the title is centered in its top border and the count stays at the right edge.
       const line = app
@@ -831,15 +887,18 @@ test("Monitor keeps a titled search above borderless results through resize with
     await app.mockInput.typeText("auth");
     app.mockInput.pressArrow("left");
     await app.render();
-    const search = app.get("monitor-search") as InputRenderable,
-      caret = search.cursorOffset;
+
+    const search = app.get("monitor-search") as InputRenderable;
+    const caret = search.cursorOffset;
 
     // Crossing the former preview breakpoint must never hide results or restore preview commands.
     for (const width of [180, 99, 60, 140]) {
       app.resize(width, 30);
       await app.render();
-      const panel = app.get("monitor-dialog"),
-        list = app.get("monitor-list");
+
+      const panel = app.get("monitor-dialog");
+      const list = app.get("monitor-list");
+
       app.mockInput.pressKey("o", { ctrl: true });
       await app.render();
 
@@ -851,8 +910,10 @@ test("Monitor keeps a titled search above borderless results through resize with
       expect(list.visible).toBe(true);
       expect(list.x).toBe(panel.x + 1);
       expect(list.width).toBe(panel.width - 2);
+
       const lines = app.captureCharFrame().split("\n");
       expect(lines[field.y]!.slice(field.x, field.x + field.width)).toContain("Sessions");
+
       const resultText = lines
         .slice(field.y + field.height, panel.y + panel.height)
         .map((line) => line.slice(panel.x, panel.x + panel.width))
@@ -862,6 +923,7 @@ test("Monitor keeps a titled search above borderless results through resize with
       expect(app.renderer.root.findDescendantById("monitor-preview-agent-view")).toBeUndefined();
       expect(app.captureCharFrame()).not.toContain("PREVIEW_RESULT");
       expect(app.captureCharFrame()).not.toContain("BACKGROUND_DRAFT");
+
       const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
       expect(footer).not.toMatch(/Preview|<C-o>|Page/u);
       expect(search.value).toBe("auth");
@@ -872,6 +934,7 @@ test("Monitor keeps a titled search above borderless results through resize with
         expect(app.renderer.currentFocusedRenderable).toBe(index % 2 === 0 ? list : search);
       }
     }
+
     app.mockInput.pressEscape();
     await app.render();
 
@@ -892,6 +955,7 @@ test("Monitor updates retain list nodes without displaying conversation output o
   try {
     app.leader("s");
     await app.render();
+
     const row = app.get("monitor:b1");
     app.states.b1 = {
       ...app.states.b1!,
@@ -942,23 +1006,27 @@ test("Stopped tabs prioritize one question mark over bells regardless of acknowl
       })),
     );
     await app.render();
-    const tab = app.get("session:demo:main:a2"),
-      region = () =>
-        app
-          .captureCharFrame()
-          .split("\n")
-          [tab.y]!.slice(tab.x, tab.x + tab.width);
+
+    const tab = app.get("session:demo:main:a2");
+    const region = () =>
+      app
+        .captureCharFrame()
+        .split("\n")
+        [tab.y]!.slice(tab.x, tab.x + tab.width);
 
     expect(region()).toBe("  2. ? a2       × ");
     expect(
       app.selection.worktree?.sessions.find((session) => session.id === "a2")?.attention?.id,
     ).toBe("stopped");
+
     const colorAt = (column: number) => {
       let x = 0;
+
       return app
         .captureSpans()
         .lines[tab.y]!.spans.find((span) => {
           x += span.width;
+
           return x > column;
         })!
         .fg.toInts();
@@ -970,8 +1038,12 @@ test("Stopped tabs prioritize one question mark over bells regardless of acknowl
         worktrees: repo.worktrees.map((tree) => ({
           ...tree,
           sessions: tree.sessions.map((session) => {
-            if (session.id !== "a2") return session;
+            if (session.id !== "a2") {
+              return session;
+            }
+
             const { attention: _attention, ...next } = session;
+
             return next;
           }),
         })),
@@ -1008,6 +1080,7 @@ test("Background and historical positions acknowledge only when results actually
     };
     app.selection.replaceSnapshot(app.selection.snapshot);
     await app.render();
+
     const scroll = app.get("session-transcript") as ScrollBoxRenderable;
     scroll.scrollTo(0);
     await app.render();
@@ -1049,8 +1122,12 @@ test("Large monitors report rendering limits and search still reaches later sess
     await app.render();
     // Candidate limits remain visible even without a preview column.
     expect(app.captureCharFrame()).toContain("Showing first 200 of 252 sessions");
+
     const message = app.get("monitor-message");
-    if (!(message instanceof TextRenderable)) throw new Error("Missing monitor summary");
+    if (!(message instanceof TextRenderable)) {
+      throw new Error("Missing monitor summary");
+    }
+
     expect(message.plainText).toBe("Showing first 200 of 252 sessions; refine search");
     expect((app.get("monitor-search-count") as TextRenderable).plainText).toBe("252/252");
     expect(app.renderer.root.findDescendantById("monitor:bulk-249")).toBeUndefined();

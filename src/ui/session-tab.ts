@@ -40,7 +40,10 @@ export class SessionTab {
       gap: 1,
       focusable: false,
       onMouseDown: (event) => {
-        if (event.button !== 0) return;
+        if (event.button !== 0) {
+          return;
+        }
+
         event.preventDefault();
         event.stopPropagation();
         options.select();
@@ -70,13 +73,19 @@ export class SessionTab {
     this.closeButton.focusable = false;
     // Closing an inactive tab must not first select it or steal native input focus.
     this.closeButton.onMouseDown = (event) => {
-      if (event.button !== 0) return;
+      if (event.button !== 0) {
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
       options.close();
     };
     this.root.add(this.number);
-    if (options.leading) this.root.add(options.leading);
+    if (options.leading) {
+      this.root.add(options.leading);
+    }
+
     this.root.add(this.title);
     this.root.add(this.closeButton);
     uiTheme(renderer).bindStyles(this.root, () => this.paint());
@@ -108,6 +117,7 @@ export class SessionTab {
   private refreshLabel(): void {
     // The left inset and close control take priority if the number cannot fit.
     this.number.visible = this.width >= this.number.width + 2;
+
     const leading = this.options.leading;
     const controls =
       1 +
@@ -116,16 +126,22 @@ export class SessionTab {
       1;
     const gaps = 1 + Number(this.number.visible) + Number(!!leading?.visible);
     const gap = this.width >= controls + gaps + 2 ? 1 : 0;
+
     this.root.paddingLeft = 1 + gap;
     this.root.paddingRight = gap;
     this.root.gap = gap;
+
     const reserved = controls + gap * (gaps + 2);
     const width = Math.max(0, this.width - reserved);
+
     this.title.content = truncateCells(this.label, width);
   }
 
   private paint = (): void => {
-    if (this.root.isDestroyed) return;
+    if (this.root.isDestroyed) {
+      return;
+    }
+
     const styles = uiTheme(this.renderer).styles;
     this.root.backgroundColor = styles[this.active ? "ui.selectionInactive" : "ui.text"].bg;
     paintText(this.number, styles[this.active ? "ui.tabActive" : "ui.muted"]);

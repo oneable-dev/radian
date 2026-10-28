@@ -15,10 +15,14 @@ const imageDraft = (path: string): PromptDraft => ({
   tokens: [{ start: 8, end: 18, part: { kind: "image", index: 1, path } }],
   next: { image: 2, file: 1, paste: 1 },
 });
+
 async function until(check: () => boolean | Promise<boolean>) {
   const deadline = Date.now() + 8000;
   while (!(await check())) {
-    if (Date.now() > deadline) throw new Error("Input draft runtime observation timed out");
+    if (Date.now() > deadline) {
+      throw new Error("Input draft runtime observation timed out");
+    }
+
     await Bun.sleep(15);
   }
 }
@@ -69,26 +73,33 @@ test("Real IPC attachment drafts restore after reconnect and legacy input replac
   };
   const paths = runtimePaths(fixture.repository.id, true, options.stateRoot);
   let client = expectOk(await connectRuntime(fixture.repository, fixture.main, options));
-  if (!client) throw new Error("Missing runtime");
+  if (!client) {
+    throw new Error("Missing runtime");
+  }
   try {
     const main = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
-    const id = expectOk(await client.create(main.id)),
-      draft = imageDraft(join(fixture.main, "image.png"));
+    const id = expectOk(await client.create(main.id));
+    const draft = imageDraft(join(fixture.main, "image.png"));
     const preferences = structuredClone(client.snapshot.preferences);
+
     preferences.drafts[id] = expandPromptDraft(draft, false).text;
     preferences.inputDrafts = { [id]: draft };
     expectOk(await client.savePreferences(preferences));
     await until(() => Boolean(client!.snapshot.preferences.inputDrafts?.[id]));
+
     const pid = client.snapshot.pid;
     await client.disconnect();
     client = expectOk(
       await connectRuntime(fixture.repository, fixture.main, { ...options, start: false }),
     );
-    if (!client) throw new Error("Runtime was lost");
+    if (!client) {
+      throw new Error("Runtime was lost");
+    }
 
     expect(client.snapshot.pid).toBe(pid);
     expect(client.snapshot.preferences.inputDrafts?.[id]).toEqual(draft);
     expect(client.snapshot.details[id]?.output).toBe("");
+
     const legacy = structuredClone(client.snapshot.preferences);
     delete legacy.inputDrafts;
     legacy.drafts[id] = "new input from old client";
@@ -110,6 +121,7 @@ test("Real IPC attachment drafts restore after reconnect and legacy input replac
       await client.disconnect();
       await until(async () => !expectOk(await fetchSnapshot(paths)));
     }
+
     await fixture.cleanup();
   }
 }, 20000);

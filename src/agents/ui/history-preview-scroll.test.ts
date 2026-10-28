@@ -61,6 +61,7 @@ async function mount(preloaded: boolean, snapshot: boolean) {
           }
         : {}),
     };
+
     return ok(value);
   };
   const previews = new HistoryPreviewCache(
@@ -75,10 +76,14 @@ async function mount(preloaded: boolean, snapshot: boolean) {
       "demo:main",
       rows.map((item) => ({ id: item.id, revision: "1" })),
     );
-    for (let pass = 0; pass < 40; pass++) await Promise.resolve();
+    for (let pass = 0; pass < 40; pass++) {
+      await Promise.resolve();
+    }
+
     expect(previews.read("demo:main", "first")?.kind).toBe("ready");
     expect(previews.read("demo:main", "second")?.kind).toBe("ready");
   }
+
   const view = new Workbench(app.renderer, new WorkspaceSelection(demoWorkspace()), {
     onNewSession() {},
     onCloseSession() {},
@@ -112,9 +117,14 @@ async function mount(preloaded: boolean, snapshot: boolean) {
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   const node = app.renderer.root.findDescendantById("history-preview");
-  if (!(node instanceof ScrollBoxRenderable)) throw new Error("Missing history preview");
+  if (!(node instanceof ScrollBoxRenderable)) {
+    throw new Error("Missing history preview");
+  }
+
   return {
     ...app,
     preview: node,
@@ -135,7 +145,7 @@ async function mount(preloaded: boolean, snapshot: boolean) {
   };
 }
 
-for (const preloaded of [false, true])
+for (const preloaded of [false, true]) {
   for (const snapshot of [false, true]) {
     test(`History revisits retain the latest position with preloaded=${preloaded} and snapshot=${snapshot}`, async () => {
       // Every conversation exceeds the viewport, including when all bodies are ready before opening.
@@ -164,6 +174,7 @@ for (const preloaded of [false, true])
       }
     });
   }
+}
 
 test.each([false, true])(
   "History preserves a manually scrolled position across revisits with preloaded=%s",
@@ -174,6 +185,7 @@ test.each([false, true])(
       await app.open();
       app.preview.scrollTo(20);
       await app.render();
+
       const position = app.preview.scrollTop;
       expect(position).toBeGreaterThan(0);
       expect(position).toBeLessThan(app.preview.scrollHeight - app.preview.viewport.height);

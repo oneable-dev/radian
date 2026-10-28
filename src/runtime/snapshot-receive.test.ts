@@ -27,6 +27,7 @@ const state = (): RuntimeSnapshot => ({
   preferences: structuredClone(emptyPreferences),
   capabilities: ["history", "prompt-images"],
 });
+
 function stubFetch(implementation: () => Promise<Response>) {
   return spyOn(globalThis, "fetch").mockImplementation(
     Object.assign(implementation, { preconnect: fetch.preconnect }),
@@ -47,12 +48,15 @@ test("Receive legacy snapshots without summaries alongside new snapshots with at
       session: { status: "complete" as const, output: "", error: null, sections: [legacy] },
     },
   };
+
   expect(expectOk(parseSnapshot(snapshot)).details.session?.sections?.[0]?.request).toBeUndefined();
+
   const request = { text: "Inspect", images: 2, files: 1, fileName: "panel.ts" };
   const current = {
     ...snapshot,
     details: { session: { ...snapshot.details.session, sections: [{ ...legacy, request }] } },
   };
+
   expect(expectOk(parseSnapshot(current)).details.session?.sections?.[0]?.request).toEqual(request);
   expect(
     expectError(
@@ -119,14 +123,18 @@ test("Initial HTTP snapshots preserve multiple sessions exceeding 8 MiB", async 
     ),
   };
   const bytes = encoder.encode(JSON.stringify(large));
+
   expect(bytes.byteLength).toBeGreaterThan(maxFrameBytes);
+
   const fetchMock = stubFetch(
     async () =>
       new Response(
         new ReadableStream<Uint8Array>({
           start(controller) {
-            for (let offset = 0; offset < bytes.length; offset += 65533)
+            for (let offset = 0; offset < bytes.length; offset += 65533) {
               controller.enqueue(bytes.subarray(offset, offset + 65533));
+            }
+
             controller.close();
           },
         }),
@@ -180,6 +188,7 @@ test("Responses without Content-Length enforce actual byte limits and clean acti
       },
     }),
   );
+
   expect(expectError(await readJson(response, { maximumBytes: 16 })).code).toBe("PROTOCOL_ERROR");
   expect(cancelled).toBe(true);
 });
@@ -204,6 +213,7 @@ test("Invalid UTF-8 never becomes replacement characters and network failures di
   expect(expectError(await readJson(new Response(Uint8Array.of(0xff)))).code).toBe(
     "PROTOCOL_ERROR",
   );
+
   const connection = Object.assign(new Error("fixture reset"), { code: "ECONNRESET" });
   const failed = (error: Error) =>
     new Response(
@@ -213,7 +223,9 @@ test("Invalid UTF-8 never becomes replacement characters and network failures di
         },
       }),
     );
+
   expect(expectError(await readJson(failed(connection))).code).toBe("CONNECTION_FAILED");
+
   const defect = new TypeError("fixture programming defect");
   await expect(readJson(failed(defect))).rejects.toBe(defect);
 });

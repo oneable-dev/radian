@@ -20,6 +20,7 @@ async function mount(width = 100, height = 8) {
   const body = new BoxRenderable(app.renderer, { flexGrow: 1, minHeight: 0 });
   const input = new InputRenderable(app.renderer, { width: "100%", value: "draft" });
   const footer = new Footer(app.renderer);
+
   body.add(input);
   screen.add(body);
   screen.add(footer.root);
@@ -30,6 +31,7 @@ async function mount(width = 100, height = 8) {
   ]);
   input.focus();
   await app.renderOnce();
+
   return {
     ...app,
     footer,
@@ -77,18 +79,24 @@ test("Workspace context uses existing icons and a middle dot without separate ba
     expect(app.line().trimStart()).toStartWith(
       `AGENT  ${icons.folder} auth-checkout · ${icons.branch} feature/auth`,
     );
-    const identity = app.renderer.root.findDescendantById("footer-identity")!,
-      workspace = app.renderer.root.findDescendantById("footer-workspace")!;
+
+    const identity = app.renderer.root.findDescendantById("footer-identity")!;
+    const workspace = app.renderer.root.findDescendantById("footer-workspace")!;
     const styles = uiTheme(app.renderer).styles;
+
     expect(styles["footer.worktree"].bg).toBeUndefined();
     expect(styles["footer.branch"].bg).toBeUndefined();
+
     let column = 0;
     for (const span of app.captureSpans().lines[workspace.y]!.spans) {
       const end = column + span.width;
-      if (column < workspace.x + workspace.width && end > workspace.x)
+      if (column < workspace.x + workspace.width && end > workspace.x) {
         expect(span.bg.toInts()).toEqual(styles["footer.identity"].bg!.toInts());
+      }
+
       column = end;
     }
+
     expect(workspace.x).toBe(identity.x + identity.width);
     expect(app.line().trimEnd()).toEndWith("<leader>b Workspace");
     for (const view of ["AGENT", "EDITOR", "GIT", "TERMINAL"]) {
@@ -99,6 +107,7 @@ test("Workspace context uses existing icons and a middle dot without separate ba
       expect(app.line()).toContain("feature/auth");
       expect(workspace.x).toBe(identity.x + identity.width);
     }
+
     app.footer.setWorkspace({ name: "auth-checkout", branch: null });
     await app.renderOnce();
     expect(app.line()).toContain("detached HEAD");
@@ -122,6 +131,7 @@ test("View labels keep exactly one space on both sides at every width", async ()
         expect(identity.width).toBe(view.length + 2);
       }
     }
+
     expect(app.renderer.currentFocusedRenderable).toBe(app.input);
     expect(app.input.value).toBe("draft");
   } finally {
@@ -142,8 +152,12 @@ test("Narrow Unicode workspaces truncate safely and restore after resize", async
       expect(app.footer.root.height).toBe(1);
       expect(app.input.value).toBe("draft");
       expect(app.renderer.currentFocusedRenderable).toBe(app.input);
-      if (width >= 20) expect(app.line()).toContain("TERMINAL");
-      if (width >= 40) expect(app.line()).toContain("…");
+      if (width >= 20) {
+        expect(app.line()).toContain("TERMINAL");
+      }
+      if (width >= 40) {
+        expect(app.line()).toContain("…");
+      }
     }
   } finally {
     await app.dispose();
@@ -179,15 +193,20 @@ test("Footer mode background is uniform and follows terminal palettes", async ()
       app.renderer.emit("palette", palette(light));
       await app.renderOnce();
 
-      const identity = app.renderer.root.findDescendantById("footer-identity")!,
-        styles = uiTheme(app.renderer).styles;
+      const identity = app.renderer.root.findDescendantById("footer-identity")!;
+      const styles = uiTheme(app.renderer).styles;
+
       expect(styles["footer.mode"].fg.intent).toBe("rgb");
+
       let x = 0;
       for (const span of app.captureSpans().lines[app.footer.bar.y]!.spans) {
-        if (x < identity.width)
+        if (x < identity.width) {
           expect(span.bg.toInts()).toEqual(styles["footer.mode"].bg!.toInts());
+        }
+
         x += span.width;
       }
+
       expect(identity.x).toBe(0);
       expect(app.line().indexOf("AGENT")).toBe(1);
     }
@@ -204,6 +223,7 @@ test("Active shortcut labels use normal text contrast while disabled keys stay m
     const label = app
       .captureSpans()
       .lines[app.footer.bar.y]!.spans.find((span) => span.text.includes("Run"))!;
+
     expect(label.fg.toInts()).toEqual(uiTheme(app.renderer).colors.text.toInts());
     app.footer.setShortcuts([
       { key: "<CR>", label: "Run", disabled: true },
@@ -243,6 +263,7 @@ test("Passive footer clicks and height changes preserve drafts and focus", async
     expect(app.input.value).toBe("draft");
     expect(app.body.y + app.body.height).toBe(app.footer.bar.y);
     expect(app.footer.root.height).toBe(1);
+
     const before = app.renderer.listenerCount("resize");
     app.footer.root.destroyRecursively();
     expect(app.renderer.listenerCount("resize")).toBe(before - 1);

@@ -24,29 +24,42 @@ class ControlledExecutor implements SessionExecutor {
   promptCalls = 0;
   failClose = false;
   readonly sessionFile: string | undefined;
+
   constructor(sessionFile?: string) {
     this.sessionFile = sessionFile;
   }
+
   subscribe(listener: () => void) {
     this.listeners.add(listener);
+
     return () => {
       this.listeners.delete(listener);
     };
   }
+
   async prompt(): Promise<Result<void, ExpectedError>> {
     this.promptCalls++;
     this.update({ status: "working", output: "running", error: null });
+
     return ok(undefined);
   }
+
   update(state: ExecutionState) {
     this.state = state;
-    for (const listener of this.listeners) listener();
+    for (const listener of this.listeners) {
+      listener();
+    }
   }
+
   async close(): Promise<Result<void, ExpectedError>> {
     this.closeCalls++;
     this.closeStarted.resolve();
-    if (this.failClose) return err(new StorageError("controlled cleanup failure"));
+    if (this.failClose) {
+      return err(new StorageError("controlled cleanup failure"));
+    }
+
     await this.finishClose.promise;
+
     return ok(undefined);
   }
 }
@@ -62,10 +75,12 @@ function setup() {
     const executor = new ControlledExecutor(context.sessionFile);
     contexts.push(context);
     executors.push(executor);
+
     return executor;
   });
   const selection = new WorkspaceSelection(registry.snapshot);
   const unsubscribe = registry.subscribe(() => selection.replaceSnapshot(registry.snapshot));
+
   return {
     registry,
     selection,
@@ -88,6 +103,7 @@ test("Worktree switching and background updates never close or recreate existing
   try {
     const a = expectOk(await app.registry.create("demo:main"));
     const b = expectOk(await app.registry.create("demo:feature"));
+
     expectOk(await app.registry.prompt(a, "continue"));
 
     // Leaving A does not unsubscribe A's background events.
@@ -112,6 +128,7 @@ test("Closing hides entries immediately, retains handles through cleanup, and co
   try {
     const a = expectOk(await app.registry.create("demo:main"));
     const b = expectOk(await app.registry.create("demo:main"));
+
     app.selection.selectSession("demo:main", a);
 
     // The display changes synchronously, before the executor acknowledges cancellation.
@@ -143,8 +160,8 @@ test("Closed snapshots preserve final conversations and pre-close status until p
   // History retains pre-close presentation even if cleanup clears Fast telemetry.
   const app = setup();
   try {
-    const id = expectOk(await app.registry.create("demo:main")),
-      executor = app.executors[0]!;
+    const id = expectOk(await app.registry.create("demo:main"));
+    const executor = app.executors[0]!;
     const telemetry = {
       provider: "fixture",
       model: "model",
@@ -153,11 +170,13 @@ test("Closed snapshots preserve final conversations and pre-close status until p
       context: null,
       weekly: null,
     };
+
     executor.update({ status: "working", output: "Before close", error: null, telemetry });
 
     // Cleanup produces a newer closed snapshot while the first save is pending.
-    const closing = app.registry.close(id),
-      firstCheckpoint = app.registry.checkpointRecords;
+    const closing = app.registry.close(id);
+    const firstCheckpoint = app.registry.checkpointRecords;
+
     await executor.closeStarted.promise;
     executor.update({ status: "complete", output: "Final settled output", error: null });
     executor.finishClose.resolve();
@@ -184,16 +203,19 @@ test("Closed snapshots preserve final conversations and pre-close status until p
 
 test("Resume clears closedAt, reclosing refreshes it, and cleanup reservations block new SDK writers", async () => {
   // Resuming the same SDK conversation must not reuse creation or previous close times.
-  const directory = await mkdtemp(join(tmpdir(), "radian-retention-registry-")),
-    path = join(directory, "saved.jsonl");
+  const directory = await mkdtemp(join(tmpdir(), "radian-retention-registry-"));
+  const path = join(directory, "saved.jsonl");
+
   await writeFile(path, JSON.stringify({ type: "session" }) + "\n");
+
   const file = await realpath(path);
   const repositories = demoWorkspace();
-  let time = 1000,
-    factories = 0;
+  let time = 1000;
+  let factories = 0;
   const clock = spyOn(Date, "now").mockImplementation(() => time);
   const registry = new SessionRegistry(repositories, async () => {
     factories++;
+
     return {
       savedSessionId: "saved",
       sessionFile: file,
@@ -207,17 +229,20 @@ test("Resume clears closedAt, reclosing refreshes it, and cleanup reservations b
     const first = expectOk(await registry.create("demo:main"));
     expect(registry.records[0]?.managed).toBe(true);
     expectOk(await registry.close(first));
+
     const old = registry.checkpointRecords[0]!;
     expect(old.closedAt).toBe(1000);
 
     // Resuming in another tab removes expiry; closing again establishes a new retention origin.
     time = 2000;
+
     const second = expectOk(
       await registry.create("demo:main", file, { id: "reopened", name: "Saved", managed: true }),
     );
     expect(registry.records[0]?.closedAt).toBeNull();
     time = 3000;
     expectOk(await registry.close(second));
+
     const closed = registry.checkpointRecords[0]!;
     const info = {
       ...closed,
@@ -231,8 +256,12 @@ test("Resume clears closedAt, reclosing refreshes it, and cleanup reservations b
     // Reject stale deletion candidates and block SDK writers during valid cleanup reservations.
     expect(closed.closedAt).toBe(3000);
     expect(registry.reserveSnapshotCleanup({ ...info, closedAt: 1000 }, file)).toBeNull();
+
     const release = registry.reserveSnapshotCleanup(info, file);
-    if (!release) throw new Error("Missing cleanup reservation");
+    if (!release) {
+      throw new Error("Missing cleanup reservation");
+    }
+
     expect(expectError(await registry.create("demo:main", file)).code).toBe("SESSION_CONFLICT");
     expect(factories).toBe(2);
     release();
@@ -252,10 +281,12 @@ test("Parent and child cancellation start together to avoid parent-waits-for-chi
     const id = expectOk(await app.registry.create("demo:main"));
     const started = Promise.withResolvers<void>();
     const unsubscribe = app.registry.subscribe(() => {
-      if (app.registry.snapshot[0]?.worktrees[0]?.sessions[0]?.subagents[0]?.status === "working")
+      if (app.registry.snapshot[0]?.worktrees[0]?.sessions[0]?.subagents[0]?.status === "working") {
         started.resolve();
+      }
     });
     const child = app.contexts[0]!.spawnSubagent("child", "task");
+
     // The child prompt finishes but its owned cleanup has not yet completed.
     await started.promise;
     unsubscribe();
@@ -303,14 +334,18 @@ test("Shutdown cleans up late-created runs without resurrecting open entries", a
   // Factory completion is under test control rather than a timing-dependent sleep.
   const ready = Promise.withResolvers<SessionExecutor>();
   const executor = new ControlledExecutor();
+
   executor.finishClose.resolve();
+
   const registry = new SessionRegistry(demoWorkspace(), () => ready.promise);
   const creation = registry.create("demo:main");
   const creationOutcome = creation;
 
   // Shutdown takes ownership before the factory supplies its handle.
   const shutdown = registry.shutdown();
+
   ready.resolve(executor);
+
   const [creationResult, shutdownResult] = await Promise.all([creationOutcome, shutdown]);
   expect(expectError(creationResult).code).toBe("CANCELLED");
   expectOk(shutdownResult);
@@ -326,12 +361,18 @@ test("Late child creation during parent closure is cleaned up without execution"
   const childReady = Promise.withResolvers<SessionExecutor>();
   const parent = new ControlledExecutor();
   const child = new ControlledExecutor();
+
   parent.finishClose.resolve();
   child.finishClose.resolve();
+
   let context: SessionContext | undefined;
   const registry = new SessionRegistry(demoWorkspace(), async (input) => {
-    if (input.role === "subagent") return childReady.promise;
+    if (input.role === "subagent") {
+      return childReady.promise;
+    }
+
     context = input;
+
     return parent;
   });
   const id = expectOk(await registry.create("demo:main"));
@@ -340,7 +381,9 @@ test("Late child creation during parent closure is cleaned up without execution"
 
   // Close removes the root immediately, then awaits the pending child's eventual handle.
   const closing = registry.close(id);
+
   childReady.resolve(child);
+
   const [closed, spawnResult] = await Promise.all([closing, spawnOutcome]);
   expectOk(closed);
   expect(expectError(spawnResult).code).toBe("SESSION_NOT_OPEN");
@@ -362,14 +405,17 @@ test("Duplicate file and symlink opens remain blocked until cleanup completes", 
   try {
     await writeFile(file, "existing history\n");
     await symlink(file, alias);
+
     const id = expectOk(await registry.create("demo:main", file));
 
     // A closing row is hidden, but its writer reservation remains until cleanup completes.
     expect(expectError(await registry.create("demo:main", alias)).code).toBe("SESSION_CONFLICT");
+
     const closing = registry.close(id);
     expect(expectError(await registry.create("demo:main", alias)).code).toBe("SESSION_CONFLICT");
     executor.finishClose.resolve();
     await closing;
+
     const reopened = expectOk(await registry.create("demo:main", alias));
 
     // Reopening uses the original file instead of cloning or deleting it.
@@ -393,7 +439,9 @@ test("Runtime recovery uses fresh SDK telemetry instead of saved Fast and weekly
     context: { usedTokens: 1000, maxTokens: 200000 },
     weekly: null,
   };
+
   executor.state = { status: "complete", output: "", error: null, telemetry: fresh };
+
   const registry = new SessionRegistry(demoWorkspace(), async () => executor);
   try {
     expectOk(
@@ -459,8 +507,8 @@ test("Creation failure leaves worktrees empty without automatic recreation", asy
 
 test("Observed Pi children never acquire owned handles or return as phantom workers after recovery", async () => {
   // Extension observations may be working even though the main SDK session is settled.
-  const app = setup(),
-    recovered = setup();
+  const app = setup();
+  const recovered = setup();
   try {
     const id = expectOk(await app.registry.create("demo:main"));
     app.executors[0]!.update({
@@ -471,6 +519,7 @@ test("Observed Pi children never acquire owned handles or return as phantom work
         { id: "pi/fixture", name: "Pi reviewer", status: "working", source: "pi" },
       ],
     });
+
     const record = app.registry.records[0]!;
     expect(app.registry.snapshot[0]!.worktrees[0]!.sessions[0]!.subagents).toHaveLength(1);
 
@@ -490,12 +539,18 @@ test("Subagent creation failures remain visible in parent snapshots rather than 
   // A child factory failure has no executor state from which to infer its outcome.
   const parent = new ControlledExecutor();
   parent.finishClose.resolve();
+
   let context: SessionContext | undefined;
   const registry = new SessionRegistry(demoWorkspace(), async (input) => {
-    if (input.role === "subagent") throw new StorageError("child setup failed");
+    if (input.role === "subagent") {
+      throw new StorageError("child setup failed");
+    }
+
     context = input;
+
     return parent;
   });
+
   await registry.create("demo:main");
 
   // Delegation surfaces the setup error and retains a normalized failure outcome.

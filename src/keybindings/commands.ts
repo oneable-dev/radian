@@ -41,9 +41,13 @@ export const contexts = [
   "dialog",
   "none",
 ] as const;
+
 export type KeyContext = (typeof contexts)[number];
+
 export type KeyScope = KeyContext | "global" | "app" | "pty";
+
 export type BindingInput = { keys: string; scope: KeyScope };
+
 const key = (keys: string, scope: KeyScope = "global"): BindingInput => ({ keys, scope });
 
 const messageContexts = ["messages", "messages-search"] as const;
@@ -550,19 +554,31 @@ export const defaultBindings = (platform: NodeJS.Platform = process.platform) =>
       key("space", "git-tabs"),
     ],
   }) satisfies Record<string, readonly BindingInput[]>;
+
 export type CommandId = keyof ReturnType<typeof defaultBindings>;
+
 const registeredCommands = defaultBindings();
 export const commandIds = Object.keys(registeredCommands) as CommandId[];
 const tabSelectionCommands = commandIds.filter((command) => command.startsWith("tab.select-"));
+
 export function tabIndex(command: CommandId): number {
   return tabSelectionCommands.indexOf(command);
 }
+
 export function isCommand(value: string): value is CommandId {
   return Object.hasOwn(registeredCommands, value);
 }
+
 export function inScope(scope: KeyScope, context: KeyContext): boolean {
-  if (scope === "global") return true;
-  if (scope === "pty") return context === "editor" || context === "terminal";
-  if (scope === "app") return context !== "editor" && context !== "terminal";
+  if (scope === "global") {
+    return true;
+  }
+  if (scope === "pty") {
+    return context === "editor" || context === "terminal";
+  }
+  if (scope === "app") {
+    return context !== "editor" && context !== "terminal";
+  }
+
   return scope === context;
 }

@@ -62,31 +62,45 @@ export async function openRepositoryRuntime(
   sharedAccounts?: AccountManager,
 ): Promise<Result<WorkspaceRuntime, ExpectedError>> {
   const settings = await loadSessionSettings(configPath);
-  if (!settings.ok) return settings;
+  if (!settings.ok) {
+    return settings;
+  }
+
   const discovered = await discoverRepository(repositoryId);
-  if (!discovered.ok) return discovered;
-  const repository = discovered.value,
-    paths = runtimePaths(repository.id, offline, stateRoot),
-    store = new RuntimeStore(paths);
+  if (!discovered.ok) {
+    return discovered;
+  }
+
+  const repository = discovered.value;
+  const paths = runtimePaths(repository.id, offline, stateRoot);
+  const store = new RuntimeStore(paths);
   const loaded = await store.load(repository.id);
-  if (!loaded.ok) return loaded;
-  const manifest = loaded.value,
-    catalog = new RepositoryCatalog(mergeRepositories(repository, manifest));
+  if (!loaded.ok) {
+    return loaded;
+  }
+
+  const manifest = loaded.value;
+  const catalog = new RepositoryCatalog(mergeRepositories(repository, manifest));
   const options = offline
     ? await offlineRuntime(join(paths.directory, "offline-agent"))
     : undefined;
   const openedAccounts = sharedAccounts
     ? ok(sharedAccounts)
     : await AccountManager.open(daemonPaths(offline, stateRoot).directory, { offline });
-  if (!openedAccounts.ok) return openedAccounts;
+  if (!openedAccounts.ok) {
+    return openedAccounts;
+  }
+
   const accounts = openedAccounts.value;
   const modelRuntime = options?.modelRuntime;
   let runtime: WorkspaceRuntime | undefined;
   let ready = false;
+
   return withCleanup(
     async () => {
       const requestedSessionDir = options?.sessionDir ?? join(paths.directory, "sdk-sessions");
       await privateDirectory(requestedSessionDir);
+
       const sessionDir = await realpath(requestedSessionDir);
       const registry = new SessionRegistry(
         catalog,
@@ -97,6 +111,7 @@ export async function openRepositoryRuntime(
           ...(!offline ? { accounts } : {}),
         }),
       );
+
       runtime = new WorkspaceRuntime(
         instance,
         registry,
@@ -116,16 +131,23 @@ export async function openRepositoryRuntime(
       await runtime.watchHistory(sessionDir);
       runtime.startRetention();
       ready = true;
+
       return ok(runtime);
     },
     async () => {
-      if (ready) return;
+      if (ready) {
+        return;
+      }
       if (runtime) {
         const stopped = await runtime.stop();
-        if (!stopped.ok) throw stopped.error;
+        if (!stopped.ok) {
+          throw stopped.error;
+        }
       } else if (!sharedAccounts) {
         const stopped = await accounts.stop();
-        if (!stopped.ok) throw stopped.error;
+        if (!stopped.ok) {
+          throw stopped.error;
+        }
       }
     },
   );
@@ -133,6 +155,7 @@ export async function openRepositoryRuntime(
 
 export class WorkspaceRuntime {
   onStop: () => void = () => {};
+
   stopped = false;
   private preferences: RuntimePreferences;
   private readonly subscribers = new Set<() => void>();
@@ -155,6 +178,7 @@ export class WorkspaceRuntime {
   private retentionWarning = "";
   private retention: RetentionScheduler | undefined;
   private retentionStatus: RuntimeSnapshot["sessionRetention"];
+
   private get repositoryId(): string {
     return this.repository.id;
   }
@@ -188,42 +212,57 @@ export class WorkspaceRuntime {
 
   subscribe(listener: () => void): () => void {
     this.subscribers.add(listener);
+
     return () => this.subscribers.delete(listener);
   }
+
   setObserved(active: boolean): void {
     this.accounts?.setActive(active, this.instance);
     this.registry.setUiActive(active);
   }
 
   startRetention(): void {
-    let configuredFile = this.configPath,
-      retentionDays: number | null = 30;
+    let configuredFile = this.configPath;
+    let retentionDays: number | null = 30;
+
     this.retention = new RetentionScheduler(
       async () => {
         const settings = await loadSessionSettings(configuredFile);
-        if (!settings.ok) return settings;
+        if (!settings.ok) {
+          return settings;
+        }
         // Once observed, a missing policy file is an error, not a surprise return to destructive defaults.
-        if (settings.value.exists) configuredFile = settings.value.path;
+        if (settings.value.exists) {
+          configuredFile = settings.value.path;
+        }
+
         retentionDays = settings.value.retentionDays;
+
         return this.store.pruneExpired(retentionDays, (snapshot, file) =>
           this.stopped ? null : this.registry.reserveSnapshotCleanup(snapshot, file),
         );
       },
       (result) => {
         this.invalidateHistory();
-        if (!result.ok && result.error.code !== "INVALID_INPUT")
+        if (!result.ok && result.error.code !== "INVALID_INPUT") {
           console.error(
             `[radian:${result.error.code}] Session retention cleanup failed`,
             result.error,
           );
+        }
+
         const warning = result.ok
           ? ""
           : `Session cleanup [${result.error.code}]: ${result.error.message}`;
         const changed = warning !== this.retentionWarning || result.ok;
-        if (result.ok)
+        if (result.ok) {
           this.retentionStatus = { retentionDays, lastSweepAt: Date.now(), removed: result.value };
+        }
+
         this.retentionWarning = warning;
-        if (changed) this.changed();
+        if (changed) {
+          this.changed();
+        }
       },
       (error) => {
         this.retentionWarning = reportUnexpected(error, "session retention");
@@ -241,12 +280,16 @@ export class WorkspaceRuntime {
     this.watcher = new RepositoryWatcher(
       this.repository,
       (result) => {
-        if (this.stopped) return;
+        if (this.stopped) {
+          return;
+        }
         if (result.ok) {
           this.repository = result.value;
           this.discoveryWarning = "";
-        } else
+        } else {
           this.discoveryWarning = `Worktree discovery failed [${result.error.code}]: ${result.error.message}. Previous entries were retained.`;
+        }
+
         this.changed();
       },
       (error) => {
@@ -304,12 +347,17 @@ export class WorkspaceRuntime {
   ): Promise<void> {
     // Saved tab IDs determine position; conversation indexes only determine recovery membership.
     const savedOrder = new Map<string, number>();
-    for (const repo of repositories)
-      for (const tree of repo.worktrees)
+    for (const repo of repositories) {
+      for (const tree of repo.worktrees) {
         for (const session of tree.sessions) {
           const key = JSON.stringify([tree.id, session.id]);
-          if (!savedOrder.has(key)) savedOrder.set(key, savedOrder.size);
+          if (!savedOrder.has(key)) {
+            savedOrder.set(key, savedOrder.size);
+          }
         }
+      }
+    }
+
     const rank = (record: SessionRecord) =>
       savedOrder.get(JSON.stringify([record.worktreeId, record.id])) ?? Number.MAX_SAFE_INTEGER;
     const open = records
@@ -332,6 +380,7 @@ export class WorkspaceRuntime {
           status: "failure" as const,
           error: `Could not restore: ${restored.error.message}`,
         };
+
         delete state.telemetry;
         this.failedRecovery.set(record.id, {
           ...record,
@@ -343,14 +392,19 @@ export class WorkspaceRuntime {
         });
       }
     }
+
     this.initializing = false;
     this.reconcileCatalog();
+
     const saved = await this.checkpoint();
-    if (!saved.ok) throw saved.error;
+    if (!saved.ok) {
+      throw saved.error;
+    }
   }
 
   private get repositories(): readonly Repository[] {
     const failed = [...this.failedRecovery.values()];
+
     return this.registry.snapshot.map((repo) => ({
       ...repo,
       worktrees: repo.worktrees.map((tree) => ({
@@ -385,6 +439,7 @@ export class WorkspaceRuntime {
         record.state,
       ]),
     );
+
     return {
       version: protocolVersion,
       pid: process.pid,
@@ -453,54 +508,79 @@ export class WorkspaceRuntime {
       const path = new URL(request.url).pathname;
       const expectedInstance = request.headers.get("X-Radian-Instance");
       if (path === "/accounts" && request.method === "POST") {
-        if (!this.accounts || expectedInstance !== this.instance)
+        if (!this.accounts || expectedInstance !== this.instance) {
           return this.rejected(
             new ProtocolError("Account management requires the current runtime instance."),
           );
+        }
+
         const text = await request.text();
-        if (Buffer.byteLength(text) > maxFrameBytes)
+        if (Buffer.byteLength(text) > maxFrameBytes) {
           return this.rejected(new InputError("Account request is too large."));
+        }
+
         const parsed = parseJson(text, "account request");
-        if (!parsed.ok) return this.rejected(parsed.error);
-        if (!Value.Check(accountRequestSchema, parsed.value))
+        if (!parsed.ok) {
+          return this.rejected(parsed.error);
+        }
+        if (!Value.Check(accountRequestSchema, parsed.value)) {
           return this.rejected(new InputError("Malformed account request."));
+        }
+
         const command = parsed.value;
-        if (!this.repository.worktrees.some((tree) => tree.id === command.worktreeId))
+        if (!this.repository.worktrees.some((tree) => tree.id === command.worktreeId)) {
           return this.rejected(new InputError("Worktree does not belong to this repository."));
+        }
+
         const result = await this.accounts.handle(command, request.signal);
+
         return result.ok ? Response.json(result.value) : this.rejected(result.error);
       }
-      if (expectedInstance && expectedInstance !== this.instance)
+      if (expectedInstance && expectedInstance !== this.instance) {
         return this.rejected(
           new ProtocolError(
             "Runtime instance changed; refresh the connection before retrying. No action was accepted.",
           ),
         );
-      if (path === "/snapshot" && request.method === "GET") return Response.json(this.snapshot);
-      if (path === "/events" && request.method === "GET") return this.events();
+      }
+      if (path === "/snapshot" && request.method === "GET") {
+        return Response.json(this.snapshot);
+      }
+      if (path === "/events" && request.method === "GET") {
+        return this.events();
+      }
       if ((path === "/editor/events" || path === "/terminal/events") && request.method === "GET") {
         const params = new URL(request.url).searchParams;
-        const id = params.get("id"),
-          lease = params.get("lease");
-        if (!id || !lease || id.length > 4096 || lease.length > 4096)
+        const id = params.get("id");
+        const lease = params.get("lease");
+        if (!id || !lease || id.length > 4096 || lease.length > 4096) {
           return this.rejected(new InputError("Missing editor attachment identity."));
+        }
+
         const attached =
           path === "/editor/events"
             ? this.editors.attach(id, lease)
             : this.terminals.attach(id, lease);
+
         return attached.ok ? attached.value : this.rejected(attached.error);
       }
       if (path === "/images" && request.method === "GET") {
-        if (expectedInstance !== this.instance)
+        if (expectedInstance !== this.instance) {
           return this.rejected(
             new ProtocolError("Image preview requires the current runtime instance identity."),
           );
-        if (this.stopped)
+        }
+        if (this.stopped) {
           return this.rejected(new SessionError("RUNTIME_STOPPING", "Runtime is stopping."));
+        }
+
         const query = Object.fromEntries(new URL(request.url).searchParams);
-        if (!Value.Check(transcriptImageQuerySchema, query))
+        if (!Value.Check(transcriptImageQuerySchema, query)) {
           return this.rejected(new InputError("Malformed image preview query."));
+        }
+
         const image = this.registry.imageData(query.sessionId, query.imageId);
+
         return image.ok
           ? new Response(image.value.bytes, {
               headers: {
@@ -512,100 +592,147 @@ export class WorkspaceRuntime {
           : this.rejected(image.error);
       }
       if (path === "/models" && request.method === "GET") {
-        if (expectedInstance !== this.instance)
+        if (expectedInstance !== this.instance) {
           return this.rejected(
             new ProtocolError("Model lookup requires the current runtime instance identity."),
           );
-        if (this.stopped)
+        }
+        if (this.stopped) {
           return this.rejected(new SessionError("RUNTIME_STOPPING", "Runtime is stopping."));
+        }
+
         const query = Object.fromEntries(new URL(request.url).searchParams);
-        if (!Value.Check(modelCatalogQuerySchema, query))
+        if (!Value.Check(modelCatalogQuerySchema, query)) {
           return this.rejected(new InputError("Malformed model catalog query."));
+        }
+
         const result = await this.registry.models(
           query.sessionId,
           query.conversationId,
           request.signal,
           new URL(request.url).searchParams.get("refresh") === "true",
         );
+
         return result.ok ? Response.json(result.value) : this.rejected(result.error);
       }
       if (path === "/completion-catalog" && request.method === "GET") {
-        if (expectedInstance !== this.instance)
+        if (expectedInstance !== this.instance) {
           return this.rejected(
             new ProtocolError("Catalog requires the current runtime instance identity."),
           );
-        if (this.stopped)
+        }
+        if (this.stopped) {
           return this.rejected(new SessionError("RUNTIME_STOPPING", "Runtime is stopping."));
+        }
+
         const query = Object.fromEntries(new URL(request.url).searchParams);
-        if (!Value.Check(completionCatalogQuerySchema, query))
+        if (!Value.Check(completionCatalogQuerySchema, query)) {
           return this.rejected(new InputError("Malformed completion catalog query."));
+        }
+
         const result = this.registry.catalog(query.sessionId, query.conversationId);
+
         return result.ok ? Response.json(result.value) : this.rejected(result.error);
       }
       if (path === "/completions" && request.method === "GET") {
-        if (expectedInstance !== this.instance)
+        if (expectedInstance !== this.instance) {
           return this.rejected(
             new ProtocolError("Completion requires the current runtime instance identity."),
           );
-        if (this.stopped)
+        }
+        if (this.stopped) {
           return this.rejected(new SessionError("RUNTIME_STOPPING", "Runtime is stopping."));
+        }
+
         const query = Object.fromEntries(new URL(request.url).searchParams);
-        if (!Value.Check(completionQuerySchema, query))
+        if (!Value.Check(completionQuerySchema, query)) {
           return this.rejected(new InputError("Malformed completion query."));
+        }
+
         const result = await this.registry.complete(query.sessionId, query, request.signal);
+
         return result.ok ? Response.json(result.value) : this.rejected(result.error);
       }
       if (path === "/dashboard" && request.method === "GET") {
-        if (expectedInstance !== this.instance)
+        if (expectedInstance !== this.instance) {
           return this.rejected(
             new ProtocolError("Dashboard requires the current runtime instance identity."),
           );
-        if (this.stopped)
+        }
+        if (this.stopped) {
           return this.rejected(new SessionError("RUNTIME_STOPPING", "Runtime is stopping."));
-        const params = new URL(request.url).searchParams,
-          days = Number(params.get("days"));
+        }
+
+        const params = new URL(request.url).searchParams;
+        const days = Number(params.get("days"));
         const period = dashboardPeriods.find((period) => period === days);
-        if (!period || [...params.keys()].some((key) => key !== "days"))
+        if (!period || [...params.keys()].some((key) => key !== "days")) {
           return this.rejected(new InputError("Dashboard period must be 1, 7 or 30 days."));
+        }
+
         const result = await this.history.dashboard(period, request.signal);
+
         return result.ok ? Response.json(result.value) : this.rejected(result.error);
       }
       if (path === "/history/preview" && request.method === "GET") {
-        if (expectedInstance !== this.instance)
+        if (expectedInstance !== this.instance) {
           return this.rejected(
             new ProtocolError("History preview requires the current runtime instance identity."),
           );
-        if (this.stopped)
+        }
+        if (this.stopped) {
           return this.rejected(new SessionError("RUNTIME_STOPPING", "Runtime is stopping."));
+        }
+
         const query = Object.fromEntries(new URL(request.url).searchParams);
-        if (!Value.Check(historyPreviewQuerySchema, query))
+        if (!Value.Check(historyPreviewQuerySchema, query)) {
           return this.rejected(new InputError("Malformed history preview query."));
+        }
+
         const preview = await this.history.preview(query.worktreeId, query.savedId, request.signal);
+
         return preview.ok ? Response.json(preview.value) : this.rejected(preview.error);
       }
       if (path === "/history" && request.method === "GET") {
         const worktreeId = new URL(request.url).searchParams.get("worktreeId");
-        if (!worktreeId) return this.rejected(new InputError("Missing worktree for history."));
+        if (!worktreeId) {
+          return this.rejected(new InputError("Missing worktree for history."));
+        }
+
         const history = await this.history.list(worktreeId, request.signal);
+
         return history.ok ? Response.json(history.value) : this.rejected(history.error);
       }
-      if (path !== "/command" || request.method !== "POST")
+      if (path !== "/command" || request.method !== "POST") {
         return new Response("Not found", { status: 404 });
-      if (Number(request.headers.get("content-length")) > maxFrameBytes)
+      }
+      if (Number(request.headers.get("content-length")) > maxFrameBytes) {
         return this.rejected(new InputError("Command is too large."));
+      }
+
       const text = await request.text();
-      if (Buffer.byteLength(text) > maxFrameBytes)
+      if (Buffer.byteLength(text) > maxFrameBytes) {
         return this.rejected(new InputError("Command is too large."));
+      }
+
       const command = parseCommand(text);
-      if (!command.ok) return this.rejected(command.error);
-      if (command.value.type === "extension-ui-response" && expectedInstance !== this.instance)
+      if (!command.ok) {
+        return this.rejected(command.error);
+      }
+      if (command.value.type === "extension-ui-response" && expectedInstance !== this.instance) {
         return this.rejected(
           new ProtocolError("Extension answers require the current runtime instance identity."),
         );
-      if (this.stopped)
+      }
+      if (this.stopped) {
         return this.rejected(new SessionError("RUNTIME_STOPPING", "Runtime is stopping."));
+      }
+
       const result = await this.command(command.value);
-      if (!result.ok) return this.rejected(result.error);
+      if (!result.ok) {
+        return this.rejected(result.error);
+      }
+
       // Commands above have already been accepted. A checkpoint failure is NOT a rejected action.
       // Keystrokes/resize affect the live editor only, never the manifest or a replay log.
       const transient = [
@@ -620,6 +747,7 @@ export class WorkspaceRuntime {
         "terminal-detach",
       ].includes(command.value.type);
       const checkpoint = transient ? ok(undefined) : await this.checkpoint();
+
       return Response.json({
         ok: true,
         value: result.value,
@@ -627,6 +755,7 @@ export class WorkspaceRuntime {
       });
     } catch (error) {
       reportUnexpected(error, "runtime request");
+
       return Response.json(
         {
           ok: false,
@@ -644,7 +773,10 @@ export class WorkspaceRuntime {
 
   private rejected(error: ExpectedError): Response {
     const status = errorStatus(error);
-    if (status >= 500) console.error(`[radian:${error.code}] Runtime operation failed`, error);
+    if (status >= 500) {
+      console.error(`[radian:${error.code}] Runtime operation failed`, error);
+    }
+
     return Response.json({ ok: false, error: wireError(error) }, { status });
   }
 
@@ -656,6 +788,7 @@ export class WorkspaceRuntime {
           command.conversationId,
           command.response,
         );
+
         return answered.ok ? ok(null) : answered;
       }
       case "create": {
@@ -665,67 +798,84 @@ export class WorkspaceRuntime {
         return this.history.resume(command.worktreeId, command.savedId);
       }
       case "close": {
-        if (this.failedRecovery.delete(command.sessionId)) this.changed();
-        else this.observe(this.registry.close(command.sessionId));
+        if (this.failedRecovery.delete(command.sessionId)) {
+          this.changed();
+        } else {
+          this.observe(this.registry.close(command.sessionId));
+        }
+
         return ok(null);
       }
       case "acknowledge": {
         const failed = this.failedRecovery.get(command.sessionId);
         if (failed) {
-          if (failed.state.conversationId !== command.conversationId)
+          if (failed.state.conversationId !== command.conversationId) {
             return err(
               new SessionError(
                 "SESSION_CONFLICT",
                 "Conversation changed. No result was acknowledged.",
               ),
             );
+          }
           if (failed.state.attention?.id === command.resultId) {
             const { attention: _attention, ...state } = failed.state;
             this.failedRecovery.set(failed.id, { ...failed, state });
             this.changed();
           }
+
           return ok(null);
         }
+
         const result = this.registry.acknowledge(
           command.sessionId,
           command.conversationId,
           command.resultId,
         );
+
         return result.ok ? ok(null) : result;
       }
       case "interrupt": {
         const state = this.registry.details(command.sessionId);
-        if (!state) return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
-        if (state.conversationId !== command.conversationId)
+        if (!state) {
+          return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
+        }
+        if (state.conversationId !== command.conversationId) {
           return err(
             new SessionError(
               "SESSION_CONFLICT",
               "This tab changed conversations. No interrupt was accepted.",
             ),
           );
+        }
+
         const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
         let admitted = false;
         const run = this.registry.interrupt(command.sessionId, () => {
           admitted = true;
           accepted.resolve(ok(undefined));
         });
+
         void run.then(
           (result) => {
-            if (!admitted) accepted.resolve(result);
-            else if (!result.ok) {
+            if (!admitted) {
+              accepted.resolve(result);
+            } else if (!result.ok) {
               this.notice = `[${result.error.code}] Interrupt did not finish: ${result.error.message}`;
               this.changed();
             }
           },
           (error: unknown) => {
-            if (!admitted) accepted.reject(error);
-            else {
+            if (!admitted) {
+              accepted.reject(error);
+            } else {
               this.notice = reportUnexpected(error, "agent interruption");
               this.changed();
             }
           },
         );
+
         const result = await accepted.promise;
+
         return result.ok ? ok(null) : result;
       }
       case "model-select":
@@ -738,52 +888,68 @@ export class WorkspaceRuntime {
       case "session-control": {
         // Old clients used wire "new" for in-place replacement. Never silently change that contract.
         const action = command.action === "new" ? "clear" : command.action;
-        if (action !== "compact" && command.instructions?.trim())
+        if (action !== "compact" && command.instructions?.trim()) {
           return err(
             new InputError(`Usage: /${action === "new-tab" ? "new" : action} (no arguments).`),
           );
+        }
+
         const control: SessionControl =
           action === "compact"
             ? { action, ...(command.instructions ? { instructions: command.instructions } : {}) }
             : { action };
+
         return this.sessionControl(command.sessionId, control, command.conversationId);
       }
       case "prompt": {
         const control = parseSessionControl(command.text);
-        if (!control.ok) return control;
+        if (!control.ok) {
+          return control;
+        }
         if (control.value) {
-          if (command.images?.length)
+          if (command.images?.length) {
             return err(
               new InputError(
                 `/${control.value.action === "new-tab" ? "new" : control.value.action} does not accept image attachments.`,
               ),
             );
+          }
+
           return this.sessionControl(command.sessionId, control.value, command.conversationId);
         }
-        if (this.failedRecovery.has(command.sessionId))
+        if (this.failedRecovery.has(command.sessionId)) {
           return err(
             new SessionError("SESSION_NOT_OPEN", "This session needs recovery before it can run."),
           );
+        }
+
         const state = this.registry.details(command.sessionId);
-        if (!state) return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
-        if (command.conversationId && command.conversationId !== state.conversationId)
+        if (!state) {
+          return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
+        }
+        if (command.conversationId && command.conversationId !== state.conversationId) {
           return err(
             new SessionError(
               "SESSION_CONFLICT",
               "This tab changed conversations. Input was retained; review the new session before submitting again.",
             ),
           );
+        }
         if (
           command.resourceRevision !== undefined &&
           command.resourceRevision !== (state.resourceRevision ?? 0)
-        )
+        ) {
           return err(
             new SessionError(
               "SESSION_CONFLICT",
               "Session resources changed. Let suggestions refresh before retrying. No model prompt was sent.",
             ),
           );
-        if (!command.text.trim()) return err(new InputError("A prompt must not be empty."));
+        }
+        if (!command.text.trim()) {
+          return err(new InputError("A prompt must not be empty."));
+        }
+
         const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
         let admitted = false;
         const run = this.registry.prompt(
@@ -795,21 +961,27 @@ export class WorkspaceRuntime {
           },
           command.images,
         );
+
         // Rejection before admission belongs to the caller. Accepted model/tool
         // failures already belong to the session transcript, not the global footer.
         void run.then(
           (result) => {
-            if (!admitted) accepted.resolve(result);
+            if (!admitted) {
+              accepted.resolve(result);
+            }
           },
           (error: unknown) => {
-            if (!admitted) accepted.reject(error);
-            else {
+            if (!admitted) {
+              accepted.reject(error);
+            } else {
               this.notice = reportUnexpected(error, "agent execution");
               this.changed();
             }
           },
         );
+
         const result = await accepted.promise;
+
         return result.ok ? ok(null) : result;
       }
       case "preferences": {
@@ -830,8 +1002,10 @@ export class WorkspaceRuntime {
               )
             : undefined);
         const drafts = { ...command.preferences.drafts };
-        for (const [id, draft] of Object.entries(inputDrafts ?? {}))
+        for (const [id, draft] of Object.entries(inputDrafts ?? {})) {
           drafts[id] = expandPromptDraft(draft, false).text;
+        }
+
         this.preferences = {
           ...command.preferences,
           drafts,
@@ -841,6 +1015,7 @@ export class WorkspaceRuntime {
           ...(gitViews ? { gitViews } : {}),
           ...(agentViews ? { agentViews } : {}),
         };
+
         return ok(null);
       }
       case "terminal-create":
@@ -857,6 +1032,7 @@ export class WorkspaceRuntime {
           command.lease,
           Buffer.from(command.data, "base64"),
         );
+
         return result.ok ? ok(null) : result;
       }
       case "terminal-resize": {
@@ -866,10 +1042,12 @@ export class WorkspaceRuntime {
           command.cols,
           command.rows,
         );
+
         return result.ok ? ok(null) : result;
       }
       case "terminal-read": {
         const result = await this.terminals.read(command.terminalId, command.lease);
+
         return result.ok ? ok(JSON.stringify(result.value)) : result;
       }
       case "terminal-scroll": {
@@ -878,6 +1056,7 @@ export class WorkspaceRuntime {
           command.lease,
           command.lines,
         );
+
         return result.ok ? ok(null) : result;
       }
       case "editor-open":
@@ -894,6 +1073,7 @@ export class WorkspaceRuntime {
           command.lease,
           Buffer.from(command.data, "base64"),
         );
+
         return result.ok ? ok(null) : result;
       }
       case "editor-resize": {
@@ -903,6 +1083,7 @@ export class WorkspaceRuntime {
           command.cols,
           command.rows,
         );
+
         return result.ok ? ok(null) : result;
       }
       case "stop":
@@ -917,26 +1098,36 @@ export class WorkspaceRuntime {
     expectedConversation?: string,
   ): Promise<Result<string | null, ExpectedError>> {
     const failed = this.failedRecovery.get(id);
-    if (failed && control.action !== "exit")
+    if (failed && control.action !== "exit") {
       return err(new SessionError("SESSION_NOT_OPEN", "This session needs recovery first."));
+    }
+
     const state = failed?.state ?? this.registry.details(id);
-    if (!state) return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
-    if (control.action !== "compact" && !expectedConversation)
+    if (!state) {
+      return err(new SessionError("SESSION_NOT_OPEN", "Session is not open."));
+    }
+    if (control.action !== "compact" && !expectedConversation) {
       return err(
         new SessionError(
           "SESSION_CONFLICT",
           "Current conversation identity is required. No command was accepted.",
         ),
       );
-    if (expectedConversation && state.conversationId !== expectedConversation)
+    }
+    if (expectedConversation && state.conversationId !== expectedConversation) {
       return err(
         new SessionError(
           "SESSION_CONFLICT",
           "This tab changed conversations. No command was accepted.",
         ),
       );
-    if (control.action === "exit") return this.command({ type: "close", sessionId: id });
-    if (control.action === "new-tab") return this.registry.newTab(id);
+    }
+    if (control.action === "exit") {
+      return this.command({ type: "close", sessionId: id });
+    }
+    if (control.action === "new-tab") {
+      return this.registry.newTab(id);
+    }
     if (control.action === "reload") {
       const result = await this.registry.reload(id);
       if (result.ok) {
@@ -947,8 +1138,10 @@ export class WorkspaceRuntime {
             : "";
         this.invalidateHistory();
       }
+
       return result.ok ? ok(null) : result;
     }
+
     const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
     let admitted = false;
     const accept = () => {
@@ -959,29 +1152,39 @@ export class WorkspaceRuntime {
       control.action === "clear"
         ? this.registry.clearSession(id, accept)
         : this.registry.compact(id, control.instructions, accept);
+
     void run.then(
       (result) => {
-        if (!admitted) accepted.resolve(result);
-        else if (!result.ok && control.action === "clear") {
+        if (!admitted) {
+          accepted.resolve(result);
+        } else if (!result.ok && control.action === "clear") {
           this.notice = `[${result.error.code}] Session replacement did not finish: ${result.error.message}`;
           this.changed();
         }
         if (result.ok && control.action === "clear") {
           // A tab is stable, but source cursors/folds/scroll belong to its old conversation.
-          if (this.preferences.agentViews) delete this.preferences.agentViews[id];
-          if (this.preferences.workViews) delete this.preferences.workViews.agentScroll[id];
+          if (this.preferences.agentViews) {
+            delete this.preferences.agentViews[id];
+          }
+          if (this.preferences.workViews) {
+            delete this.preferences.workViews.agentScroll[id];
+          }
+
           this.changed();
         }
       },
       (error: unknown) => {
-        if (!admitted) accepted.reject(error);
-        else {
+        if (!admitted) {
+          accepted.reject(error);
+        } else {
           this.notice = reportUnexpected(error, "session control");
           this.changed();
         }
       },
     );
+
     const result = await accepted.promise;
+
     return result.ok ? ok(null) : result;
   }
 
@@ -991,6 +1194,7 @@ export class WorkspaceRuntime {
       (send) => {
         this.subscribers.add(send);
         this.setObserved(true);
+
         return () => {
           this.subscribers.delete(send);
           this.setObserved(this.subscribers.size > 0);
@@ -1013,13 +1217,20 @@ export class WorkspaceRuntime {
         this.historyWatcher?.invalidate();
       }
     }
-    for (const subscriber of this.subscribers) subscriber();
-    if (this.initializing || this.stopped || this.checkpointTimer) return;
+    for (const subscriber of this.subscribers) {
+      subscriber();
+    }
+    if (this.initializing || this.stopped || this.checkpointTimer) {
+      return;
+    }
+
     this.checkpointTimer = setTimeout(() => {
       this.checkpointTimer = undefined;
       void this.checkpoint().catch((error: unknown) => {
         this.persistenceError = reportUnexpected(error, "checkpoint");
-        for (const subscriber of this.subscribers) subscriber();
+        for (const subscriber of this.subscribers) {
+          subscriber();
+        }
       });
     }, 100);
   }
@@ -1028,11 +1239,13 @@ export class WorkspaceRuntime {
     void task
       .then((result) => {
         if (!result.ok && !(result.error instanceof CancelledError)) {
-          if (errorStatus(result.error) >= 500)
+          if (errorStatus(result.error) >= 500) {
             console.error(
               `[radian:${result.error.code}] Background operation failed`,
               result.error,
             );
+          }
+
           this.notice = result.error.message;
           this.changed();
         }
@@ -1042,6 +1255,7 @@ export class WorkspaceRuntime {
         this.changed();
       });
   }
+
   private async checkpoint(manifest?: RuntimeManifest): Promise<Result<void, ExpectedError>> {
     const checkpoint = manifest ?? {
       version: protocolVersion,
@@ -1051,23 +1265,39 @@ export class WorkspaceRuntime {
       preferences: this.preferences,
     };
     const saved = await this.store.save(checkpoint);
-    if (saved.ok) this.registry.acknowledgeCheckpoint(checkpoint.records);
-    if (!saved.ok && !this.persistenceError)
+    if (saved.ok) {
+      this.registry.acknowledgeCheckpoint(checkpoint.records);
+    }
+    if (!saved.ok && !this.persistenceError) {
       console.error(`[radian:${saved.error.code}] Checkpoint failed`, saved.error);
+    }
+
     this.persistenceError = saved.ok ? "" : `Runtime persistence failed: ${saved.error.message}`;
-    if (!saved.ok) for (const subscriber of this.subscribers) subscriber();
+    if (!saved.ok) {
+      for (const subscriber of this.subscribers) {
+        subscriber();
+      }
+    }
+
     return saved;
   }
 
   async stop(): Promise<Result<void, ExpectedError>> {
-    if (this.stopped) return ok(undefined);
+    if (this.stopped) {
+      return ok(undefined);
+    }
+
     this.stopped = true;
     this.setObserved(false);
     await this.retention?.stop();
-    if (this.checkpointTimer) clearTimeout(this.checkpointTimer);
+    if (this.checkpointTimer) {
+      clearTimeout(this.checkpointTimer);
+    }
+
     this.unsubscribe();
     this.unsubscribeAccounts?.();
     this.historyWatcher?.stop();
+
     // Stopping the service is NOT explicit session close. Freeze open intent before teardown emits removals.
     const manifest: RuntimeManifest = {
       version: protocolVersion,
@@ -1095,11 +1325,15 @@ export class WorkspaceRuntime {
     const finished = this.registry.checkpointRecords.filter(
       (record) => !openIntent.has(sessionRecordKey(record)),
     );
-    if (!finished.length) return stopped;
+    if (!finished.length) {
+      return stopped;
+    }
+
     // Persist children that settled during shutdown without turning the frozen open main tabs into closed tabs.
     const records = new Map(
       [...manifest.records, ...finished].map((record) => [sessionRecordKey(record), record]),
     );
+
     return collectCleanup(
       [Promise.resolve(stopped), this.checkpoint({ ...manifest, records: [...records.values()] })],
       "Final session checkpoint or runtime shutdown failed.",
@@ -1111,8 +1345,10 @@ function mergeRepositories(current: Repository, manifest: RuntimeManifest | null
   const worktrees = [...current.worktrees];
   const needed = new Set(manifest?.records.map((record) => record.worktreeId));
   for (const tree of manifest?.repositories.flatMap((repo) => repo.worktrees) ?? []) {
-    if (needed.has(tree.id) && !worktrees.some((known) => known.id === tree.id))
+    if (needed.has(tree.id) && !worktrees.some((known) => known.id === tree.id)) {
       worktrees.push({ ...tree, sessions: [] });
+    }
   }
+
   return [{ ...current, worktrees }];
 }

@@ -17,14 +17,15 @@ const tree: Worktree = {
   ],
 };
 const openIds = new Set(["a", "b"]);
+
 async function mount(
   actions: Partial<AgentActions> = {},
   scroll: Record<string, number> = {},
   options: ConstructorParameters<typeof AgentPanel>[8] = {},
 ) {
   const app = await createTestRenderer({ width: 80, height: 18, kittyKeyboard: true });
-  const notices: string[] = [],
-    saved: Record<string, number> = {};
+  const notices: string[] = [];
+  const saved: Record<string, number> = {};
   const panel = new AgentPanel(
     app.renderer,
     {
@@ -41,6 +42,7 @@ async function mount(
         onMouseDown: activate,
       });
       button.add(new TextRenderable(app.renderer, { content: label }));
+
       return button;
     },
     (notice) => notices.push(notice),
@@ -52,10 +54,12 @@ async function mount(
     },
     options,
   );
+
   app.renderer.root.add(panel.root);
   panel.update(tree, "a", openIds, true);
   await app.renderOnce();
   await app.renderOnce();
+
   return {
     ...app,
     panel,
@@ -95,10 +99,12 @@ test("Read-only Agent panels block send, interrupt, and creation despite provide
       initialDrafts: { a: "Saved draft" },
       onPrompt: () => {
         actions.push("prompt");
+
         return ok(undefined);
       },
       onInterrupt: async () => {
         actions.push("interrupt");
+
         return ok(undefined);
       },
       onNewSession: () => actions.push("create"),
@@ -118,6 +124,7 @@ test("Read-only Agent panels block send, interrupt, and creation despite provide
     app.panel.sessionCommand("session.close");
     app.panel.movePromptHistory(-1);
     app.panel.movePromptHistory(1);
+
     const close = app.renderer.root.findDescendantById("close-session:a")!;
     await app.mockMouse.click(close.x, close.y);
     await app.renderOnce();
@@ -145,12 +152,14 @@ test("Late Agent submission acceptance never clears another session's draft", as
   const app = await mount({
     onPrompt: (id, text) => {
       sent.push({ id, text });
+
       return pending.promise;
     },
   });
   try {
     app.panel.prompt.focus();
     await app.mockInput.typeText("first");
+
     const submission = app.panel.submitPrompt();
     await app.panel.submitPrompt();
     app.panel.update(tree, "b", openIds, true);

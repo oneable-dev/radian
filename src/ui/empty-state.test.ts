@@ -8,18 +8,26 @@ import { icons } from "../icons.ts";
 async function mount() {
   const app = await createTestRenderer({ width: 80, height: 20 });
   const state = new EmptyState(app.renderer, "empty");
+
   app.renderer.root.add(state.root);
+
   const render = async () => {
     await app.renderOnce();
     await app.renderOnce();
   };
   const get = (name: string) => {
     const node = app.renderer.root.findDescendantById(`empty:${name}`);
-    if (!(node instanceof TextRenderable)) throw new Error(`Missing ${name}`);
+    if (!(node instanceof TextRenderable)) {
+      throw new Error(`Missing ${name}`);
+    }
+
     return node;
   };
   const icon = state.root.findDescendantById("empty:icon");
-  if (!(icon instanceof StateIcon)) throw new Error("Missing state icon");
+  if (!(icon instanceof StateIcon)) {
+    throw new Error("Missing state icon");
+  }
+
   return { ...app, state, icon, render, get };
 }
 
@@ -36,17 +44,20 @@ test("Empty views center icons, titles, and actual creation shortcuts", async ()
     await app.render();
 
     // Center the enlarged icon and guidance as one group without adding focus targets.
-    const icon = app.icon,
-      title = app.get("title"),
-      hint = app.get("hint");
+    const icon = app.icon;
+    const title = app.get("title");
+    const hint = app.get("hint");
+
     expect(title.plainText).toBe("No terminals");
     expect(hint.plainText).toBe("Ctrl+Space → n New terminal");
     expect(icon.height).toBe(3);
     expect(title.y).toBe(icon.y + icon.height + 1);
     expect(hint.y).toBe(title.y + 2);
     expect(Math.abs((icon.y + hint.y + 1) / 2 - app.state.root.height / 2)).toBeLessThanOrEqual(1);
-    for (const node of [icon, title, hint])
+    for (const node of [icon, title, hint]) {
       expect(Math.abs(node.x + node.width / 2 - app.state.root.width / 2)).toBeLessThanOrEqual(1);
+    }
+
     expect(app.renderer.currentFocusedRenderable).toBeNull();
   } finally {
     await app.dispose();
@@ -72,9 +83,10 @@ test.each(["blocks", "kitty"] as const)(
         app.resize(width, 24);
         await app.render();
 
-        const title = app.get("title"),
-          hint = app.get("hint");
+        const title = app.get("title");
+        const hint = app.get("hint");
         const center = title.x + title.width / 2;
+
         expect(app.icon.x + app.icon.width / 2).toBe(center);
         expect(hint.x + hint.width / 2).toBe(center);
         expect(Math.abs(center - app.state.root.width / 2)).toBeLessThanOrEqual(0.5);
@@ -106,9 +118,13 @@ test("Responsive state icons grow with wide panes while keeping descriptions and
       await app.render();
 
       expect(app.icon.height).toBe(rows);
-      if (rows > 1) expect(app.icon.width).toBe(rows * 2);
-      const description = app.get("description"),
-        hint = app.get("hint");
+      if (rows > 1) {
+        expect(app.icon.width).toBe(rows * 2);
+      }
+
+      const description = app.get("description");
+      const hint = app.get("hint");
+
       expect(description.visible).toBe(true);
       expect(hint.visible).toBe(true);
       expect(description.plainText).toContain("Start a session");

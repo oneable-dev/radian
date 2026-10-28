@@ -29,12 +29,16 @@ import {
 
 const now = 1800000000000;
 const release = () => () => {};
+
 async function fixture() {
-  const root = await realpath(await mkdtemp(join(tmpdir(), "radian-retention-"))),
-    cwd = join(root, "worktree");
+  const root = await realpath(await mkdtemp(join(tmpdir(), "radian-retention-")));
+  const cwd = join(root, "worktree");
+
   await mkdir(cwd);
+
   const paths = runtimePaths("repo", true, join(root, "state"));
   await privateDirectory(paths.directory);
+
   const store = new RuntimeStore(paths);
   const manifest = (records: readonly SessionRecord[]): RuntimeManifest => ({
     version: 1,
@@ -43,6 +47,7 @@ async function fixture() {
     preferences: structuredClone(emptyPreferences),
     records,
   });
+
   return {
     root,
     cwd,
@@ -50,10 +55,12 @@ async function fixture() {
     store,
     manifest,
     async record(id: string, age = 31, managed = true): Promise<SessionRecord> {
-      const closedAt = now - age * retentionDayMs,
-        sessionFile = join(root, `${id}.jsonl`);
+      const closedAt = now - age * retentionDayMs;
+      const sessionFile = join(root, `${id}.jsonl`);
+
       await writeFile(sessionFile, JSON.stringify({ type: "session", version: 3, id, cwd }) + "\n");
       await utimes(sessionFile, closedAt / 1000, closedAt / 1000);
+
       return {
         id,
         name: `Private title ${id}`,
@@ -75,6 +82,7 @@ async function fixture() {
     },
     async snapshotFile(id: string) {
       const index = JSON.parse(await readFile(paths.manifest, "utf8"));
+
       return join(
         paths.directory,
         "sessions",
@@ -91,10 +99,11 @@ test("Only owned sessions closed for 30 days lose both JSONL and snapshots", asy
   // Protect open, external, and recently closed sessions despite old records.
   const app = await fixture();
   try {
-    const expired = await app.record("expired"),
-      open = { ...(await app.record("open")), lifecycle: "open" as const, closedAt: null };
-    const external = await app.record("external", 31, false),
-      recent = await app.record("recent", 29);
+    const expired = await app.record("expired");
+    const open = { ...(await app.record("open")), lifecycle: "open" as const, closedAt: null };
+    const external = await app.record("external", 31, false);
+    const recent = await app.record("recent", 29);
+
     expectOk(await app.store.save(app.manifest([expired, open, external, recent])));
 
     // Verify default retention against actual temporary files only.
@@ -105,8 +114,10 @@ test("Only owned sessions closed for 30 days lose both JSONL and snapshots", asy
     expect(app.store.isExpired("tree", "expired")).toBe(true);
     expect(app.store.listSessions("tree")).toHaveLength(3);
     expect(expectOk(await app.store.readSession("tree", "expired"))).toBeNull();
-    for (const record of [open, external, recent])
+    for (const record of [open, external, recent]) {
       expect(await Bun.file(record.sessionFile!).exists()).toBe(true);
+    }
+
     expect(await readdir(join(app.paths.directory, "sessions"))).toHaveLength(3);
     expect(await readFile(app.paths.manifest, "utf8")).not.toContain("Private title expired");
     expectOk(await app.store.save(app.manifest([expired, open])));
@@ -127,6 +138,7 @@ test("Resume clears expiry and reclosing restarts retention from the new close d
     // Protect resumed sessions and prevent ordinary saves from extending reclosed expiry.
     expectOk(await app.store.save(app.manifest([{ ...old, lifecycle: "open", closedAt: null }])));
     expect(expectOk(await app.store.pruneExpired(30, release, now))).toBe(0);
+
     const closed = { ...old, closedAt: now, updatedAt: now };
     expectOk(await app.store.save(app.manifest([closed])));
     expectOk(
@@ -237,6 +249,7 @@ test.each(["identity", "worktree", "symlink"])(
         );
         await utimes(record.sessionFile!, record.closedAt! / 1000, record.closedAt! / 1000);
       }
+
       expectOk(await app.store.save(app.manifest([record])));
 
       // Report validation failures without starting file deletion.
@@ -264,6 +277,7 @@ test("SDK changes immediately before deletion abort cleanup and undo expiry mark
         30,
         () => {
           appendFileSync(record.sessionFile!, "NEW DATA\n");
+
           return () => {};
         },
         now,
@@ -285,6 +299,7 @@ test("Restart after partial deletion finishes cleanup without JSONL fallback res
   try {
     const record = await app.record("partial");
     expectOk(await app.store.save(app.manifest([record])));
+
     const path = await app.snapshotFile("partial");
 
     // Replace read snapshots with directories so only final removal fails.
@@ -294,12 +309,14 @@ test("Restart after partial deletion finishes cleanup without JSONL fallback res
         () => {
           renameSync(path, path + ".backup");
           mkdirSync(path);
+
           return () => {};
         },
         now,
       ),
     );
     const restored = new RuntimeStore(app.paths);
+
     expectOk(await restored.load("repo"));
 
     // Persist deletion intent so already-started cleanup completes even if policy is disabled.
@@ -321,18 +338,21 @@ test.each(["missing", "unassigned"])(
     // Empty or deleted conversations must not become permanent preview-only archives.
     const app = await fixture();
     try {
-      const closed = await app.record("closed"),
-        open = { ...(await app.record("open")), lifecycle: "open" as const, closedAt: null };
+      const closed = await app.record("closed");
+      const open = { ...(await app.record("open")), lifecycle: "open" as const, closedAt: null };
+
       await rm(closed.sessionFile!);
       await rm(open.sessionFile!);
+
       const { sessionFile: _source, ...withoutFile } = closed;
 
       // A closed record needs an original conversation; an open record still carries recovery intent.
       expectOk(
         await app.store.save(app.manifest([kind === "unassigned" ? withoutFile : closed, open])),
       );
-      const restored = new RuntimeStore(app.paths),
-        loaded = expectOk(await restored.load("repo"));
+
+      const restored = new RuntimeStore(app.paths);
+      const loaded = expectOk(await restored.load("repo"));
 
       // Remove closed bodies and index entries without losing the open session's last state.
       expect(app.store.listSessions("tree").map((record) => record.id)).toEqual(["open"]);
@@ -353,6 +373,7 @@ test("Closing an open recovery snapshot without an original removes its stored b
     const open = { ...(await app.record("empty")), lifecycle: "open" as const, closedAt: null };
     await rm(open.sessionFile!);
     expectOk(await app.store.save(app.manifest([open])));
+
     const path = await app.snapshotFile("empty");
 
     // A checkpoint without that open tab records explicit closed intent.
@@ -370,11 +391,12 @@ test("Closing an open recovery snapshot without an original removes its stored b
 
 test("Maintenance preserves snapshots when permissions prevent checking their SDK originals", async () => {
   // An inaccessible original is not proof that the conversation no longer exists.
-  const app = await fixture(),
-    blocked = join(app.root, "blocked");
+  const app = await fixture();
+  const blocked = join(app.root, "blocked");
   try {
     const record = await app.record("inaccessible");
     await mkdir(blocked);
+
     const sessionFile = join(blocked, "original.jsonl");
     renameSync(record.sessionFile!, sessionFile);
     expectOk(await app.store.save(app.manifest([{ ...record, sessionFile }])));
@@ -395,9 +417,11 @@ test("Maintenance removes orphaned closed snapshots even with unlimited retentio
   // Existing archives may outlive originals deleted by an external application.
   const app = await fixture();
   try {
-    const orphan = await app.record("orphan", 1, false),
-      saved = await app.record("saved", 1, false);
+    const orphan = await app.record("orphan", 1, false);
+    const saved = await app.record("saved", 1, false);
+
     expectOk(await app.store.save(app.manifest([orphan, saved])));
+
     const path = await app.snapshotFile("orphan");
     await rm(orphan.sessionFile!);
 
@@ -440,6 +464,7 @@ test("Interrupted orphan cleanup retries after its snapshot was removed but inde
   try {
     const record = await app.record("interrupted");
     expectOk(await app.store.save(app.manifest([record])));
+
     const path = await app.snapshotFile("interrupted");
     await rm(record.sessionFile!);
     renameSync(app.paths.manifest, app.paths.manifest + ".backup");
@@ -449,6 +474,7 @@ test("Interrupted orphan cleanup retries after its snapshot was removed but inde
     const failure = expectError(await app.store.pruneExpired(null, release, now));
     await rm(app.paths.manifest, { recursive: true });
     renameSync(app.paths.manifest + ".backup", app.paths.manifest);
+
     const restored = new RuntimeStore(app.paths);
     expectOk(await restored.load("repo"));
 
@@ -464,10 +490,10 @@ test("Interrupted orphan cleanup retries after its snapshot was removed but inde
 
 test("Scheduled cleanup runs once at startup and hourly without overlapping work", async () => {
   // Verify scheduling and deduplication without waiting a real hour.
-  let tick: (() => void) | undefined,
-    interval = 0,
-    canceled = 0,
-    calls = 0;
+  let tick: (() => void) | undefined;
+  let interval = 0;
+  let canceled = 0;
+  let calls = 0;
   const pending = Promise.withResolvers<ReturnType<typeof ok<number>>>();
   const scheduler = new RetentionScheduler(
     () => (++calls === 1 ? Promise.resolve(ok(0)) : pending.promise),
@@ -478,20 +504,24 @@ test("Scheduled cleanup runs once at startup and hourly without overlapping work
     (callback, ms) => {
       tick = callback;
       interval = ms;
+
       return () => {
         canceled++;
       };
     },
   );
+
   await scheduler.start();
   expect(calls).toBe(1);
   expect(interval).toBe(retentionSweepIntervalMs);
 
   // Extra ticks share long-running scans and shutdown waits for cleanup.
   tick!();
+
   const active = scheduler.run();
   tick!();
   await Promise.resolve();
+
   const stopped = scheduler.stop();
   pending.resolve(ok(1));
   await Promise.all([active, stopped]);
@@ -504,13 +534,16 @@ test("Scheduled cleanup runs once at startup and hourly without overlapping work
 
 test("Runtime rereads policy changes for unlimited, corrupt, and revised retention settings", async () => {
   // Reread each cleanup cycle so policies change without runtime restart.
-  const app = await fixture(),
-    config = join(app.root, "settings.json"),
-    outcomes: string[] = [];
+  const app = await fixture();
+  const config = join(app.root, "settings.json");
+  const outcomes: string[] = [];
   const scheduler = new RetentionScheduler(
     async () => {
       const settings = await loadSessionSettings(config);
-      if (!settings.ok) return settings;
+      if (!settings.ok) {
+        return settings;
+      }
+
       return app.store.pruneExpired(settings.value.retentionDays, release, now);
     },
     (result) => outcomes.push(result.ok ? `removed:${result.value}` : result.error.code),

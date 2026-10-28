@@ -88,6 +88,7 @@ const labels: Partial<Record<CommandId, string>> = {
   "dashboard.dismiss": "Close Agent dashboard",
   "dashboard.refresh": "Refresh saved statistics",
 };
+
 export function keymapHelp(
   keymap: Keymap,
   context: KeyContext,
@@ -108,31 +109,43 @@ export function keymapHelp(
         !inScope(binding.scope, context) ||
         !available(binding.command) ||
         isImplicitArrowBinding(binding)
-      )
+      ) {
         continue;
+      }
+
       const keys = groups.get(binding.command) ?? [];
       const key = formatKeys(binding.displayKeys);
-      if (!keys.includes(key)) keys.push(key);
+      if (!keys.includes(key)) {
+        keys.push(key);
+      }
+
       groups.set(binding.command, keys);
     }
-    const family = context.startsWith("prompt")
-      ? "agent"
-      : context.startsWith("history")
-        ? "history"
-        : context.startsWith("transcript")
-          ? "transcript"
-          : context.split("-")[0];
+
+    let family: string | undefined;
+    if (context.startsWith("prompt")) {
+      family = "agent";
+    } else if (context.startsWith("history")) {
+      family = "history";
+    } else if (context.startsWith("transcript")) {
+      family = "transcript";
+    } else {
+      family = context.split("-")[0];
+    }
     const entries = [...groups];
-    if (!global)
+    if (!global) {
       entries.sort(
         ([a], [b]) => Number(b.startsWith(family + ".")) - Number(a.startsWith(family + ".")),
       );
+    }
+
     return (
       entries
         .map(([command, keys]) => {
-          const key = keys.join(" / "),
-            description = labels[command] ?? command.replaceAll(".", " ").replaceAll("-", " ");
+          const key = keys.join(" / ");
+          const description = labels[command] ?? command.replaceAll(".", " ").replaceAll("-", " ");
           const width = Bun.stringWidth(key);
+
           return width < 28
             ? key + " ".repeat(28 - width) + description
             : `${key}\n  ${description}`;
@@ -144,5 +157,6 @@ export function keymapHelp(
   const selectionHelp = selectionKeys
     ? `${selectionKeys} copies visible selected text without clearing drafts or interrupting the embedded program. With no text selected, ordinary input bindings remain active. Command/Super keys must be forwarded by the host terminal; terminal-owned Copy shortcuts cannot be intercepted by Radian.`
     : "Selection copying has no configured binding.";
+
   return `Current context: ${context}\n<leader>: ${formatKeys(keymap.leader)}\n\n${rows(false)}\n\nApplication shortcuts\n\n${rows(true)}\n\nText selection\n\n${selectionHelp}\n\nInput ownership\n\n<CR> sends the current Agent input, even with suggestions open; <Tab> inserts the selected completion. <S-CR> inserts a newline (<M-CR> is an alternative). Paste never sends automatically.\n\nWithout a text selection, unbound input, mouse and paste in Editor/Terminal belong to the embedded program. <F1> stays native there. The configured application leader remains available. Ctrl+click on an HTTP(S) URL in Terminal opens the default browser.\n\nThe active keybindings are shown above, including user overrides. Read-only details use j/k and <PageUp>/<PageDown>; <Esc> returns to the previous focus.`;
 }

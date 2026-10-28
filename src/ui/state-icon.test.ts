@@ -15,20 +15,25 @@ import { styleBackground } from "./theme-styles.ts";
 async function mount() {
   const app = await createTestRenderer({ width: 80, height: 20 });
   const icon = new StateIcon(app.renderer, "state-icon");
+
   app.renderer.root.add(icon);
-  const image = icon.findDescendantById("state-icon:image"),
-    glyph = icon.findDescendantById("state-icon:glyph"),
-    raster = icon.findDescendantById("state-icon:raster");
+
+  const image = icon.findDescendantById("state-icon:image");
+  const glyph = icon.findDescendantById("state-icon:glyph");
+  const raster = icon.findDescendantById("state-icon:raster");
   if (
     !(image instanceof ImageRenderable) ||
     !(glyph instanceof TextRenderable) ||
     !(raster instanceof TextRenderable)
-  )
+  ) {
     throw new Error("Missing state icon renderers");
+  }
+
   const render = async () => {
     await app.renderOnce();
     await app.renderOnce();
   };
+
   return { ...app, icon, image, glyph, raster, render };
 }
 
@@ -54,7 +59,9 @@ test.each([icons.robot, icons.terminal, icons.folder])(
       expect(app.captureCharFrame()).toContain(symbol);
       expect(app.image.visible).toBe(false);
       expect(app.glyph.visible).toBe(true);
-      if (symbol === icons.robot) expect(app.glyph.plainText).toBe(icons.model);
+      if (symbol === icons.robot) {
+        expect(app.glyph.plainText).toBe(icons.model);
+      }
     } finally {
       await app.dispose();
     }
@@ -67,6 +74,7 @@ test("Enlarged state icons follow theme colors and do not paint through opaque p
   try {
     const theme = uiTheme(app.renderer);
     setRendererCapabilities(app.renderer, { kitty_graphics: true, image_protocol: "kitty" });
+
     const palette = {
       palette: [],
       defaultForeground: null,
@@ -82,12 +90,14 @@ test("Enlarged state icons follow theme colors and do not paint through opaque p
     theme.configure(palette, { styles: { "ui.muted": { fg: "#224466" } } });
     app.icon.update(icons.robot, 6);
     await app.render();
+
     const before = app.image.image!.raw().data.slice();
 
     theme.configure(palette, { styles: { "ui.muted": { fg: "#AA8844" } } });
     await app.render();
 
     expect(app.image.image!.raw().data).not.toEqual(before);
+
     const pixels = app.image.image!.raw().data;
     expect(
       pixels.some(
@@ -101,6 +111,7 @@ test("Enlarged state icons follow theme colors and do not paint through opaque p
     expect(app.icon.height).toBe(6);
     setRendererCapabilities(app.renderer, { kitty_graphics: false, image_protocol: "blocks" });
     await app.render();
+
     const popup = new BoxRenderable(app.renderer, {
       position: "absolute",
       left: 0,
@@ -165,6 +176,7 @@ test("Native image allocation failures retain a font-derived raster across repea
   // Expected resource exhaustion must not erase the meaning or size of an empty-state icon.
   const app = await mount();
   setRendererCapabilities(app.renderer, { kitty_graphics: true, image_protocol: "kitty" });
+
   const allocation = spyOn(NativeImage, "fromRgba").mockImplementation(() => {
     throw new ImageError(6);
   });

@@ -28,22 +28,25 @@ const answer = (value?: RunCompletion): TranscriptSection => ({
 });
 const descendants = (node: Renderable): Renderable[] =>
   node.getChildren().flatMap((child) => [child, ...descendants(child)]);
+
 async function mount(initial: TranscriptSection[]) {
   const app = await createTestRenderer({ width: 140, height: 40, kittyKeyboard: true });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    copies: string[] = [],
-    runs: string[] = [];
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const copies: string[] = [];
+  const runs: string[] = [];
   let sections = initial;
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {},
     onCloseSession: () => {},
     onPrompt: (_id, text) => {
       runs.push(text);
+
       return ok(undefined);
     },
     initialDrafts: { a1: "Keep this draft" },
     onCopyTranscript: async (text) => {
       copies.push(text);
+
       return ok("Copied to clipboard");
     },
     getSessionDetails: () => ({ status: "complete", error: null, output: "", sections }),
@@ -58,7 +61,9 @@ async function mount(initial: TranscriptSection[]) {
     );
     await app.renderOnce();
   };
+
   await render();
+
   return {
     ...app,
     view,
@@ -83,17 +88,23 @@ test("Only settled requests show gray duration and completion time beneath their
   try {
     expect(app.captureCharFrame()).not.toContain("Worked for");
     await app.update([answer(completion)]);
+
     // Supplementary rows create neither selectable sections nor answer source text.
-    const frame = app.captureCharFrame(),
-      rows = frame.split("\n");
+    const frame = app.captureCharFrame();
+    const rows = frame.split("\n");
+
     expect(frame).toContain("Worked for 1m 30s • Sep 19 at 10:55 AM");
-    const bodyY = rows.findIndex((line) => line.includes("FINAL_ANSWER")),
-      footerY = rows.findIndex((line) => line.includes("Worked for"));
+
+    const bodyY = rows.findIndex((line) => line.includes("FINAL_ANSWER"));
+    const footerY = rows.findIndex((line) => line.includes("Worked for"));
+
     expect(footerY).toBeGreaterThan(bodyY + 1);
+
     const span = app
       .captureSpans()
       .lines[footerY]!.spans.find((span) => span.text.includes("Worked for"))!;
     const [r, g, b] = span.fg.toInts();
+
     expect(r).toBe(g);
     expect(g).toBe(b);
     expect(span.bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
@@ -143,9 +154,11 @@ test("Later requests, streaming, and resize leave old completion once on its ori
     ]);
     await app.render();
     await app.render();
-    const frame = app.captureCharFrame(),
-      scroll = app.renderer.root.findDescendantById("session-transcript")!;
+
+    const frame = app.captureCharFrame();
+    const scroll = app.renderer.root.findDescendantById("session-transcript")!;
     const rows = frame.split("\n").slice(scroll.y, scroll.y + scroll.height);
+
     expect(rows.filter((line) => line.includes("Worked for"))).toHaveLength(1);
     expect(rows.findIndex((line) => line.includes("Worked for"))).toBeLessThan(
       rows.findIndex((line) => line.includes("Next request")),
@@ -179,8 +192,10 @@ test("Completion request rows stay tied to their answers, not later requests or 
         .map((node) => node.plainText);
     // Completion captions quote only the request, matching the running-request banner.
     expect(footers()[0]).toBe("Worked for 1m 30s • Sep 19 at 10:55 AM\n“Review tab icons”");
-    const rows = app.captureCharFrame().split("\n"),
-      y = rows.findIndex((line) => line.includes("Worked for"));
+
+    const rows = app.captureCharFrame().split("\n");
+    const y = rows.findIndex((line) => line.includes("Worked for"));
+
     expect(rows[y]).not.toContain("Review tab icons");
     expect(rows[y + 1]).toContain("“Review tab icons”");
     await app.update([
@@ -328,11 +343,13 @@ test("Completion request truncation updates on resize while retaining duration, 
       )!;
     app.resize(240, 40);
     await app.render();
+
     const wide = footer().plainText;
     expect(wide.split("\n")[1]).toStartWith("“");
     expect(wide.split("\n")[1]).toEndWith("…”");
     app.resize(120, 40);
     await app.render();
+
     const narrow = footer().plainText;
     expect(narrow.split("\n")[0]).toBe("Worked for 1m 30s • Sep 19 at 10:55 AM");
     expect(narrow.split("\n")[1]).toStartWith("“Review");
@@ -390,11 +407,13 @@ test("Completion request subrows retain image/file badges and truncate only long
   try {
     app.resize(120, 40);
     await app.render();
+
     const footer = descendants(app.renderer.root).find(
       (node): node is TextRenderable =>
         node instanceof TextRenderable && node.plainText.startsWith("Worked for"),
     )!;
     const [metadata, caption] = footer.plainText.split("\n");
+
     expect(metadata).toBe("Worked for 1m 30s • Sep 19 at 10:55 AM");
     expect(caption).toStartWith("“Inspect");
     expect(caption).toContain("…”  [2 images] [3 files]");
@@ -418,6 +437,7 @@ test("User sections and completion requests hide internal image guidance while p
   // SDK messages contain original input and image-processing guidance before projection.
   const transcript = new SessionTranscript([]);
   const input = 'Review both images [Image #1] [Image #2] @"/tmp/a.ts" @"/tmp/b.ts"';
+
   transcript.handle({
     type: "message_end",
     message: {

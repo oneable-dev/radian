@@ -37,11 +37,11 @@ test.skipIf(process.platform === "win32")(
   "Default-browser commands receive complete URLs as single arguments without shell interpretation",
   async () => {
     // Prepend PATH with an OS-command stub recording arguments instead of launching browsers.
-    const directory = await mkdtemp(join(tmpdir(), "radian-browser-")),
-      captured = join(directory, "args");
+    const directory = await mkdtemp(join(tmpdir(), "radian-browser-"));
+    const captured = join(directory, "args");
     const command = process.platform === "darwin" ? "open" : "xdg-open";
-    const previousPath = process.env.PATH,
-      previousCapture = process.env.RADIAN_TEST_BROWSER_ARGS;
+    const previousPath = process.env.PATH;
+    const previousCapture = process.env.RADIAN_TEST_BROWSER_ARGS;
     const url = "https://example.invalid/?next=$(echo%20unsafe)&quoted='value'";
     try {
       await writeFile(
@@ -59,10 +59,17 @@ test.skipIf(process.platform === "win32")(
       expect(expectOk(result)).toBeUndefined();
       expect(await readFile(captured, "utf8")).toBe(url + "\n");
     } finally {
-      if (previousPath === undefined) delete process.env.PATH;
-      else process.env.PATH = previousPath;
-      if (previousCapture === undefined) delete process.env.RADIAN_TEST_BROWSER_ARGS;
-      else process.env.RADIAN_TEST_BROWSER_ARGS = previousCapture;
+      if (previousPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
+      if (previousCapture === undefined) {
+        delete process.env.RADIAN_TEST_BROWSER_ARGS;
+      } else {
+        process.env.RADIAN_TEST_BROWSER_ARGS = previousCapture;
+      }
+
       await rm(directory, { recursive: true, force: true });
     }
   },

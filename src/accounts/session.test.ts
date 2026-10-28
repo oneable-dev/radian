@@ -18,9 +18,13 @@ import { err } from "../result.ts";
 import { CapabilityError } from "../errors.ts";
 
 function login(reply: AccountReply): LoginView {
-  if (reply.kind !== "login") throw new Error("Expected login");
+  if (reply.kind !== "login") {
+    throw new Error("Expected login");
+  }
+
   return reply.login;
 }
+
 async function add(manager: AccountManager, key: string) {
   let flow = login(
     expectOk(
@@ -44,7 +48,7 @@ async function add(manager: AccountManager, key: string) {
       }),
     ),
   );
-  while (flow.status === "pending")
+  while (flow.status === "pending") {
     flow = login(
       expectOk(
         await manager.handle({
@@ -55,9 +59,13 @@ async function add(manager: AccountManager, key: string) {
         }),
       ),
     );
+  }
+
   expect(flow.status).toBe("complete");
+
   return flow.account!.id;
 }
+
 async function select(manager: AccountManager, worktreeId: string, accountId: string) {
   expectOk(
     await manager.handle({
@@ -73,11 +81,11 @@ async function select(manager: AccountManager, worktreeId: string, accountId: st
 test("Switching accounts mid-response preserves requests, tools, and conversations until the next model call", async () => {
   // Use real SDK sessions and file tools, replacing only model transport locally.
   const directory = await mkdtemp(join(tmpdir(), "radian-account-session-"));
-  const started = Promise.withResolvers<void>(),
-    finish = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
   const calls: { key: string | undefined; sessionId: string | undefined }[] = [];
-  let reads = 0,
-    oldQuota: unknown;
+  let reads = 0;
+  let oldQuota: unknown;
   const model: Model<"openai-codex-responses"> = {
     id: "fixture-model",
     name: "Fixture",
@@ -91,9 +99,10 @@ test("Switching accounts mid-response preserves requests, tools, and conversatio
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   };
   const stream = (selected: typeof model, _context: unknown, options?: SimpleStreamOptions) => {
-    const output = createAssistantMessageEventStream(),
-      message = fixtureMessage(selected.api, selected.provider, selected.id),
-      first = calls.length === 0;
+    const output = createAssistantMessageEventStream();
+    const message = fixtureMessage(selected.api, selected.provider, selected.id);
+    const first = calls.length === 0;
+
     calls.push({ key: options?.apiKey, sessionId: options?.sessionId });
     output.push({ type: "start", partial: message });
     void (async () => {
@@ -102,6 +111,7 @@ test("Switching accounts mid-response preserves requests, tools, and conversatio
         started.resolve();
         await finish.promise;
       }
+
       await options?.onResponse?.(
         {
           status: 200,
@@ -113,7 +123,9 @@ test("Switching accounts mid-response preserves requests, tools, and conversatio
         },
         selected,
       );
-      if (first) oldQuota = executor?.state.telemetry?.weekly ?? null;
+      if (first) {
+        oldQuota = executor?.state.telemetry?.weekly ?? null;
+      }
       if (first) {
         message.content.push({
           type: "toolCall",
@@ -126,9 +138,11 @@ test("Switching accounts mid-response preserves requests, tools, and conversatio
         message.content.push({ type: "text", text: "Finished with the new account." });
         message.stopReason = "stop";
       }
+
       output.push({ type: "done", reason: first ? "toolUse" : "stop", message });
       output.end();
     })();
+
     return output;
   };
   const provider = createProvider({
@@ -158,8 +172,10 @@ test("Switching accounts mid-response preserves requests, tools, and conversatio
   let executor: Awaited<ReturnType<ReturnType<typeof piSessionFactory>>> | undefined;
   try {
     await writeFile(join(directory, "workspace.txt"), "Retained tool result");
-    const a = await add(manager, "key-secret-A"),
-      b = await add(manager, "key-secret-B");
+
+    const a = await add(manager, "key-secret-A");
+    const b = await add(manager, "key-secret-B");
+
     await select(manager, "one", a);
     await select(manager, "two", a);
     executor = await piSessionFactory({
@@ -173,6 +189,7 @@ test("Switching accounts mid-response preserves requests, tools, and conversatio
       role: "main",
       spawnSubagent: async () => err(new CapabilityError("No child expected")),
     });
+
     const unsubscribe = executor.subscribe(() => {
       reads =
         executor!.state.sections?.filter(
@@ -182,6 +199,7 @@ test("Switching accounts mid-response preserves requests, tools, and conversatio
 
     // Delay A's response and switch only the first workspace to B.
     const pending = executor.prompt("Read workspace.txt and finish.");
+
     await started.promise;
     await select(manager, "one", b);
     expect((await (await manager.workspace("two")).runtime.getAuth("fixture"))?.auth.apiKey).toBe(
@@ -206,6 +224,7 @@ test("Switching accounts mid-response preserves requests, tools, and conversatio
     expect(reads).toBe(1);
     expect(oldQuota).toBeNull();
     expect(executor.state.telemetry?.weekly?.remainingPercent).toBe(70);
+
     const saved = await readFile(executor.sessionFile!, "utf8");
     expect(saved).not.toContain("key-secret-A");
     expect(saved).not.toContain("key-secret-B");

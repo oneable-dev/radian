@@ -13,6 +13,7 @@ function cancelled(partial: boolean): ExecutionState {
   let now = 1000;
   const transcript = new SessionTranscript([], { wallTime: () => now, monotonicTime: () => now });
   const assistant = fixtureMessage("openai-responses", "fixture", "fixture");
+
   assistant.stopReason = "aborted";
   assistant.errorMessage = "Request was aborted";
   assistant.content = partial ? [{ type: "text", text: "Partial response kept" }] : [];
@@ -29,6 +30,7 @@ function cancelled(partial: boolean): ExecutionState {
   transcript.handle({ type: "message_end", message: assistant });
   now += 1200;
   transcript.handle({ type: "agent_settled", aborted: true });
+
   return {
     conversationId: "cancelled-conversation",
     status: null,
@@ -40,8 +42,8 @@ function cancelled(partial: boolean): ExecutionState {
 
 async function mount(state: ExecutionState) {
   const app = await createTestRenderer({ width: 140, height: 30, kittyKeyboard: true });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    copies: string[] = [];
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const copies: string[] = [];
   const states: Record<string, ExecutionState> = {
     a1: state,
     a2: { conversationId: "other", status: null, output: "", error: null, sections: [] },
@@ -52,6 +54,7 @@ async function mount(state: ExecutionState) {
     onPrompt: () => ok(undefined),
     onCopyTranscript: async (text) => {
       copies.push(text);
+
       return ok("Copied");
     },
     initialDrafts: { a1: "Unsent draft" },
@@ -64,13 +67,16 @@ async function mount(state: ExecutionState) {
   const get = (id: string) => app.renderer.root.findDescendantById(id)!;
   const transcript = () => {
     const node = get("session-transcript");
+
     return app
       .captureCharFrame()
       .split("\n")
       .slice(node.y, node.y + node.height)
       .join("\n");
   };
+
   await render();
+
   return {
     ...app,
     view,
@@ -97,8 +103,8 @@ test.each([false, true])(
     // Use the real SDK-event projection so the screenshot's empty aborted response is covered too.
     const app = await mount(cancelled(partial));
     try {
-      const label = app.get("agent-run-status-text"),
-        status = app.get("agent-run-status");
+      const label = app.get("agent-run-status-text");
+      const status = app.get("agent-run-status");
       const row = app
         .captureCharFrame()
         .split("\n")
@@ -113,7 +119,10 @@ test.each([false, true])(
       expect(app.captureCharFrame()).not.toContain("[Agent error]");
       expect(app.captureCharFrame()).not.toContain("Request was aborted");
       expect(app.captureCharFrame()).not.toContain("[Cancelled]");
-      if (partial) expect(app.transcript()).toContain("Partial response kept");
+      if (partial) {
+        expect(app.transcript()).toContain("Partial response kept");
+      }
+
       expect(app.view.promptDrafts.a1).toBe("Unsent draft");
 
       // A different conversation must not inherit this outcome; returning restores the original duration.
@@ -139,17 +148,17 @@ test.each([false, true])(
 
 test("Legacy runtime cancellation cards stay hidden with duration above input", async () => {
   // Compatibility uses the structured cancellation status, never message-text classification.
-  const state = cancelled(false),
-    sections = state.sections!.map((section) =>
-      section.status === "cancelled"
-        ? {
-            ...section,
-            title: "Agent error",
-            text: "Request was aborted",
-            error: "Request was aborted",
-          }
-        : section,
-    );
+  const state = cancelled(false);
+  const sections = state.sections!.map((section) =>
+    section.status === "cancelled"
+      ? {
+          ...section,
+          title: "Agent error",
+          text: "Request was aborted",
+          error: "Request was aborted",
+        }
+      : section,
+  );
   const app = await mount({ ...state, sections });
   try {
     expect(app.captureCharFrame()).toContain("Cancelled (1s)");
@@ -161,18 +170,18 @@ test("Legacy runtime cancellation cards stay hidden with duration above input", 
 });
 
 test("Response-free cancellation preserves timing persistence warnings without error cards", async () => {
-  const state = cancelled(false),
-    sections = state.sections!.map((section) =>
-      section.completion
-        ? {
-            ...section,
-            completion: {
-              ...section.completion,
-              warning: "[STORAGE_FAILED] Cancellation timing could not be saved.",
-            },
-          }
-        : section,
-    );
+  const state = cancelled(false);
+  const sections = state.sections!.map((section) =>
+    section.completion
+      ? {
+          ...section,
+          completion: {
+            ...section.completion,
+            warning: "[STORAGE_FAILED] Cancellation timing could not be saved.",
+          },
+        }
+      : section,
+  );
   const app = await mount({ ...state, sections });
   try {
     expect(app.captureCharFrame()).toContain("Cancelled (1s)");
@@ -186,8 +195,8 @@ test("Response-free cancellation preserves timing persistence warnings without e
 });
 
 test("Previous cancellation history never mixes with new Working states or completion footers", async () => {
-  const state = cancelled(true),
-    app = await mount(state);
+  const state = cancelled(true);
+  const app = await mount(state);
   try {
     // A new delivered request starts a new status scope, not a continuation of the cancellation.
     app.update({

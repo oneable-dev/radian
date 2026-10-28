@@ -11,8 +11,8 @@ type Creation = { worktreeId: string; onCreated: ((sessionId: string) => void) |
 async function mount() {
   const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true });
   const selection = new WorkspaceSelection(demoWorkspace());
-  const creations: Creation[] = [],
-    prompts: { id: string; text: string }[] = [];
+  const creations: Creation[] = [];
+  const prompts: { id: string; text: string }[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: (worktreeId: string, onCreated?: (sessionId: string) => void) => {
       creations.push({ worktreeId, onCreated });
@@ -21,6 +21,7 @@ async function mount() {
     initialDrafts: { a1: "Original draft", a2: "Second draft", b1: "Feature draft" },
     onPrompt: (id, text) => {
       prompts.push({ id, text });
+
       return ok(undefined);
     },
     getSessionDetails: (id) => ({
@@ -31,13 +32,21 @@ async function mount() {
     }),
   });
   const render = async () => {
-    for (let index = 0; index < 12; index++) await Promise.resolve();
+    for (let index = 0; index < 12; index++) {
+      await Promise.resolve();
+    }
+
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   const input = app.renderer.root.findDescendantById("session-prompt");
-  if (!(input instanceof PromptInput)) throw new Error("Missing session prompt");
+  if (!(input instanceof PromptInput)) {
+    throw new Error("Missing session prompt");
+  }
+
   return {
     ...app,
     selection,
@@ -52,7 +61,10 @@ async function mount() {
     },
     async created(index: number, sessionId: string) {
       const request = creations[index];
-      if (!request) throw new Error("Missing session creation request");
+      if (!request) {
+        throw new Error("Missing session creation request");
+      }
+
       selection.replaceSnapshot(
         selection.snapshot.map((repo) => ({
           ...repo,
@@ -85,7 +97,9 @@ test.each(["prompt", "transcript"] as const)(
     // Both creation entry points must target the new conversation, not the previous draft.
     const app = await mount();
     try {
-      if (source === "transcript") app.leader("[");
+      if (source === "transcript") {
+        app.leader("[");
+      }
 
       // Creation is asynchronous, so edits made before it finishes must remain in the old session.
       app.leader("c");
@@ -181,11 +195,13 @@ test.each(["session", "worktree", "editor", "popup", "focus", "tab-roundtrip"] a
           app.leader("[");
           break;
       }
+
       await app.render();
-      const selected = app.selection.sessionId,
-        tree = app.selection.worktree?.id;
-      const focused = app.renderer.currentFocusedRenderable,
-        draft = app.input.value;
+
+      const selected = app.selection.sessionId;
+      const tree = app.selection.worktree?.id;
+      const focused = app.renderer.currentFocusedRenderable;
+      const draft = app.input.value;
       const views = app.view.workViewPreferences.active;
 
       // A successful background creation still adds its tab, but cannot restore its old UI context.

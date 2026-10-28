@@ -13,13 +13,20 @@ export function piSubagentsFromWidget(
   content: readonly string[] | undefined,
   lookup?: (id: string, parent?: string) => Pick<Subagent, "name" | "request"> | undefined,
 ): Result<readonly Subagent[], ProtocolError> {
-  if (!content) return ok([]);
+  if (!content) {
+    return ok([]);
+  }
+
   const line = content[0];
-  if (content.length !== 1 || !line?.startsWith(prefix) || line.length > 131072)
+  if (content.length !== 1 || !line?.startsWith(prefix) || line.length > 131072) {
     return err(new ProtocolError("Invalid Pi subagent status widget."));
+  }
+
   const parsed = parseJson(line.slice(prefix.length), "Pi subagent status");
-  if (!parsed.ok)
+  if (!parsed.ok) {
     return err(new ProtocolError("Invalid Pi subagent status JSON.", { cause: parsed.error }));
+  }
+
   const snapshot = parsed.value;
   if (
     !record(snapshot) ||
@@ -27,12 +34,15 @@ export function piSubagentsFromWidget(
     snapshot.version !== 1 ||
     !timestamp(snapshot.generatedAt) ||
     !Array.isArray(snapshot.runs)
-  )
+  ) {
     return err(new ProtocolError("Unsupported Pi subagent status snapshot."));
-  const generatedAt = snapshot.generatedAt,
-    result: Subagent[] = [],
-    seen = new Set<string>();
+  }
+
+  const generatedAt = snapshot.generatedAt;
+  const result: Subagent[] = [];
+  const seen = new Set<string>();
   let visited = 0;
+
   function visit(
     node: unknown,
     path: string,
@@ -50,27 +60,38 @@ export function piSubagentsFromWidget(
       typeof node.label !== "string" ||
       node.label.length > 4096 ||
       typeof node.state !== "string"
-    )
+    ) {
       return false;
-    if (node.children !== undefined && !Array.isArray(node.children)) return false;
+    }
+    if (node.children !== undefined && !Array.isArray(node.children)) {
+      return false;
+    }
+
     const children = Array.isArray(node.children) ? node.children : [];
-    const nodeId = node.id,
-      id = `${path}/${nodeId}`;
-    if (id.length > 4096) return false;
-    if (node.kind === "host-step" || !["workflow", "subagent", "step"].includes(String(node.kind)))
+    const nodeId = node.id;
+    const id = `${path}/${nodeId}`;
+    if (id.length > 4096) {
+      return false;
+    }
+    if (
+      node.kind === "host-step" ||
+      !["workflow", "subagent", "step"].includes(String(node.kind))
+    ) {
       return true;
+    }
+
     const stepWrapper =
       node.kind === "subagent" && children.some((child) => record(child) && child.kind === "step");
     const display = lookup?.(nodeId, parent) ?? inherited;
     if (node.kind !== "workflow" && !stepWrapper) {
-      const status =
-        node.state === "running"
-          ? "working"
-          : node.state === "complete"
-            ? "complete"
-            : ["failed", "partial", "rejected"].includes(node.state)
-              ? "failure"
-              : null;
+      let status: Subagent["status"] = null;
+      if (node.state === "running") {
+        status = "working";
+      } else if (node.state === "complete") {
+        status = "complete";
+      } else if (["failed", "partial", "rejected"].includes(node.state)) {
+        status = "failure";
+      }
       const phase =
         node.state === "queued" ||
         node.state === "paused" ||
@@ -79,8 +100,12 @@ export function piSubagentsFromWidget(
         node.state === "partial"
           ? node.state
           : undefined;
-      const end =
-        node.state === "running" ? generatedAt : timestamp(node.endedAt) ? node.endedAt : undefined;
+      let end: number | undefined;
+      if (node.state === "running") {
+        end = generatedAt;
+      } else if (timestamp(node.endedAt)) {
+        end = node.endedAt;
+      }
       if (!seen.has(id)) {
         seen.add(id);
         result.push({
@@ -101,11 +126,15 @@ export function piSubagentsFromWidget(
         });
       }
     }
+
     return children.every((child) =>
       visit(child, id, depth + 1, nodeId, stepWrapper ? display : undefined),
     );
   }
-  if (!snapshot.runs.every((node) => visit(node, "pi", 0)))
+
+  if (!snapshot.runs.every((node) => visit(node, "pi", 0))) {
     return err(new ProtocolError("Invalid Pi subagent status node."));
+  }
+
   return ok(result);
 }

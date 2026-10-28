@@ -66,7 +66,10 @@ export class PendingMessages {
       visible && messages.length ? Math.min(Math.max(0, maximumRows), 2 + messages.length) : 0;
     const show = height > 0;
     const signature = JSON.stringify([messages, show, height]);
-    if (signature === this.signature) return;
+    if (signature === this.signature) {
+      return;
+    }
+
     this.signature = signature;
     this.messages = messages;
     this.root.visible = show;
@@ -75,7 +78,9 @@ export class PendingMessages {
     this.root.paddingBottom = height >= 3 ? 1 : 0;
     this.heading.visible = show;
     this.scroll.visible = height >= 2;
-    while (this.items.length > messages.length) this.items.pop()!.destroy();
+    while (this.items.length > messages.length) {
+      this.items.pop()!.destroy();
+    }
     while (this.items.length < messages.length) {
       const item = new TextRenderable(this.renderer, {
         height: 1,
@@ -86,25 +91,32 @@ export class PendingMessages {
       this.items.push(item);
       this.scroll.add(item);
     }
+
     this.paint();
   }
 
   private paint(): void {
-    if (this.root.isDestroyed || !this.heading || !this.scroll) return;
-    const styles = uiTheme(this.renderer).styles,
-      width = this.root.width;
+    if (this.root.isDestroyed || !this.heading || !this.scroll) {
+      return;
+    }
+
+    const styles = uiTheme(this.renderer).styles;
+    const width = this.root.width;
     const key = this.interruptKey();
     let title = "Messages will be sent after the current response and tools finish";
-    let beforeKey = " (press ",
-      afterKey = " to interrupt and send immediately)";
+    let beforeKey = " (press ";
+    let afterKey = " to interrupt and send immediately)";
     const fits = () =>
       Bun.stringWidth(`• ${title}${key ? beforeKey + key + afterKey : ""}`) <= width;
-    if (!fits()) title = "Messages waiting to be sent";
+    if (!fits()) {
+      title = "Messages waiting to be sent";
+    }
     if (!fits()) {
       title = "Messages waiting";
       beforeKey = " (";
       afterKey = ": interrupt & send)";
     }
+
     const showHint = !!key && fits();
     this.heading.content = new StyledText([
       styleChunk(truncateCells("• ", width), styles["ui.muted"]),
@@ -120,6 +132,7 @@ export class PendingMessages {
           ]
         : []),
     ]);
+
     const itemWidth = this.scroll.viewport.width;
     this.items.forEach((item, index) => {
       item.content = new StyledText([

@@ -23,17 +23,25 @@ import {
 } from "./storage.ts";
 
 const entry = join(import.meta.dir, "..", "index.ts");
+
 async function until(predicate: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 10000;
   while (!(await predicate())) {
-    if (Date.now() > deadline) throw new Error("Shared daemon observation timed out.");
+    if (Date.now() > deadline) {
+      throw new Error("Shared daemon observation timed out.");
+    }
+
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
   }
 }
+
 async function stop(stateRoot: string): Promise<void> {
-  const paths = daemonPaths(true, stateRoot),
-    snapshot = expectOk(await fetchSnapshot(paths));
-  if (!snapshot) return;
+  const paths = daemonPaths(true, stateRoot);
+  const snapshot = expectOk(await fetchSnapshot(paths));
+  if (!snapshot) {
+    return;
+  }
+
   const client = new RuntimeClient(paths, snapshot);
   try {
     expectOk(await client.stopRuntime());
@@ -45,10 +53,10 @@ async function stop(stateRoot: string): Promise<void> {
 
 test("Concurrent registrations across repositories share one process with isolated storage and instances", async () => {
   // Connect two independent repositories concurrently to one state root.
-  const a = await createWorktreeFixture(),
-    b = await createWorktreeFixture();
-  const stateRoot = join(a.directory, "state"),
-    options = { offline: true, stateRoot, entry, start: false, register: true };
+  const a = await createWorktreeFixture();
+  const b = await createWorktreeFixture();
+  const stateRoot = join(a.directory, "state");
+  const options = { offline: true, stateRoot, entry, start: false, register: true };
   const clients: RuntimeClient[] = [];
   try {
     // Competing startup requests converge on per-repository channels in one daemon.
@@ -56,9 +64,13 @@ test("Concurrent registrations across repositories share one process with isolat
       [a, b, a, b].map((fixture) => connectRuntime(fixture.repository, fixture.main, options)),
     )) {
       const connected = expectOk(client);
-      if (!connected) throw new Error("Missing catalog client.");
+      if (!connected) {
+        throw new Error("Missing catalog client.");
+      }
+
       clients.push(connected);
     }
+
     const daemon = expectOk(await fetchSnapshot(daemonPaths(true, stateRoot)))!;
 
     // Shared management PID still preserves storage, instance, and SDK lifetimes.
@@ -68,8 +80,10 @@ test("Concurrent registrations across repositories share one process with isolat
       runtimePaths(b.repository.id, true, stateRoot).directory,
     );
     expect(daemon.repositories).toHaveLength(2);
-    for (const client of clients)
+    for (const client of clients) {
       expect(client.snapshot.capabilities).toContain("repository-catalog");
+    }
+
     expect(daemon.details).toEqual({});
     expect(daemon.editors).toEqual([]);
     expect(daemon.terminals).toEqual([]);
@@ -80,6 +94,7 @@ test("Concurrent registrations across repositories share one process with isolat
       expect(resources.pid).toBe(daemon.pid);
       expect(resources.rssBytes).toBeGreaterThan(0);
       expect(resources.cpuMicros).toBeGreaterThanOrEqual(0);
+
       const unchanged = expectOk(
         await fetchSnapshot(runtimePaths(client.snapshot.repositoryId, true, stateRoot)),
       )!;
@@ -87,6 +102,7 @@ test("Concurrent registrations across repositories share one process with isolat
       expect(unchanged.capabilities).not.toContain("agent-dashboard");
       expect(unchanged.details).toEqual({});
     }
+
     const unfenced = await fetch("http://localhost/resources", {
       unix: runtimePaths(a.repository.id, true, stateRoot).socket,
     });
@@ -110,10 +126,17 @@ test("Concurrent registrations across repositories share one process with isolat
         body: JSON.stringify(body),
       });
       const rejected = await response.json();
-      if (!Value.Check(replySchema, rejected) || rejected.ok || typeof rejected.error === "string")
+      if (
+        !Value.Check(replySchema, rejected) ||
+        rejected.ok ||
+        typeof rejected.error === "string"
+      ) {
         throw new Error("Expected a typed registration rejection.");
+      }
+
       expect(rejected.error.code).toBe(code);
     }
+
     expect(expectOk(await fetchSnapshot(daemonPaths(true, stateRoot)))!.pid).toBe(daemon.pid);
     expect(expectOk(await fetchSnapshot(daemonPaths(true, stateRoot)))!.repositories).toHaveLength(
       2,
@@ -136,13 +159,14 @@ test("Concurrent registrations across repositories share one process with isolat
 
 test("Shared daemon catalogs detect worktrees without TUIs and retain drafts through activation", async () => {
   // Register SDK-free repositories and save only UI drafts.
-  const fixture = await createWorktreeFixture(),
-    stateRoot = join(fixture.directory, "state");
-  const options = { offline: true, stateRoot, entry },
-    paths = runtimePaths(fixture.repository.id, true, stateRoot);
+  const fixture = await createWorktreeFixture();
+  const stateRoot = join(fixture.directory, "state");
+  const options = { offline: true, stateRoot, entry };
+  const paths = runtimePaths(fixture.repository.id, true, stateRoot);
   let workspace: WorkspaceClient | undefined;
   try {
     await privateDirectory(paths.directory);
+
     const saved = defaultPreferences();
     saved.selection.sessions[fixture.main] = "saved";
     saved.drafts.saved = "previous draft";
@@ -156,9 +180,11 @@ test("Shared daemon catalogs detect worktrees without TUIs and retain drafts thr
       }),
     );
     workspace = expectOk(await WorkspaceClient.open([fixture.repository], fixture.main, options));
+
     const preferences = workspace.snapshot.preferences;
     preferences.drafts.saved = "keep cold draft";
     expectOk(await workspace.savePreferences(preferences));
+
     const catalog = expectOk(await fetchSnapshot(paths))!;
     await workspace.disconnect();
     workspace = undefined;
@@ -176,6 +202,7 @@ test("Shared daemon catalogs detect worktrees without TUIs and retain drafts thr
     workspace = expectOk(await WorkspaceClient.open([fixture.repository], fixture.main, options));
     expect(expectOk(await fetchSnapshot(paths))!.capabilities).toContain("repository-catalog");
     expectOk(await workspace.activate(added));
+
     const active = expectOk(await fetchSnapshot(paths))!;
     expect(active.pid).toBe(catalog.pid);
     expect(active.instance).toBe(catalog.instance);
@@ -190,12 +217,17 @@ test("Shared daemon catalogs detect worktrees without TUIs and retain drafts thr
 
 test("Shared daemons never steal live legacy ownership or overwrite saved files", async () => {
   // Prepare actual lock files representing legacy state ownership.
-  const fixture = await createWorktreeFixture(),
-    stateRoot = join(fixture.directory, "state");
+  const fixture = await createWorktreeFixture();
+  const stateRoot = join(fixture.directory, "state");
   const paths = runtimePaths(fixture.repository.id, true, stateRoot);
+
   await privateDirectory(paths.directory);
+
   const release = await acquireRuntime(paths);
-  if (!release) throw new Error("Missing fixture ownership.");
+  if (!release) {
+    throw new Error("Missing fixture ownership.");
+  }
+
   const original = "legacy-owned-data";
   await writeFile(paths.manifest, original, { mode: 0o600 });
   try {
@@ -221,12 +253,17 @@ test("Shared daemons never steal live legacy ownership or overwrite saved files"
 
 test("Closing shared owners block registration until sockets/locks release before fresh startup", async () => {
   // Prepare live ownership and management sockets that outlast repository channels.
-  const fixture = await createWorktreeFixture(),
-    stateRoot = join(fixture.directory, "state"),
-    paths = daemonPaths(true, stateRoot);
+  const fixture = await createWorktreeFixture();
+  const stateRoot = join(fixture.directory, "state");
+  const paths = daemonPaths(true, stateRoot);
+
   await privateDirectory(paths.directory);
+
   const release = await acquireRuntime(paths);
-  if (!release) throw new Error("Missing shutdown fixture ownership.");
+  if (!release) {
+    throw new Error("Missing shutdown fixture ownership.");
+  }
+
   const closing: RuntimeSnapshot = {
     version: 1,
     pid: process.pid,
@@ -240,18 +277,20 @@ test("Closing shared owners block registration until sockets/locks release befor
     preferences: defaultPreferences(),
     notice: "",
   };
-  let probes = 0,
-    settled = false;
+  let probes = 0;
+  let settled = false;
   let server: Bun.Server<undefined> | undefined = Bun.serve({
     unix: paths.socket,
     fetch: () => {
       probes++;
+
       return Response.json(closing);
     },
   });
   const starting = ensureSharedDaemon({ offline: true, stateRoot, entry });
   const observed = starting.then((result) => {
     settled = true;
+
     return result;
   });
   try {
@@ -261,6 +300,7 @@ test("Closing shared owners block registration until sockets/locks release befor
     await server.stop(true);
     server = undefined;
     await release();
+
     const started = expectOk(await observed);
 
     // Successors are fresh live processes and never killed existing owners.
@@ -279,10 +319,11 @@ test("Closing shared owners block registration until sockets/locks release befor
 
 test("Corrupt shared registrations survive startup failures and cleanup without empty overwrites", async () => {
   // Supply incompatible registration files to real daemon entry points.
-  const fixture = await createWorktreeFixture(),
-    stateRoot = join(fixture.directory, "state"),
-    paths = daemonPaths(true, stateRoot);
+  const fixture = await createWorktreeFixture();
+  const stateRoot = join(fixture.directory, "state");
+  const paths = daemonPaths(true, stateRoot);
   const original = '{"version":99,"repositories":[]}';
+
   await privateDirectory(paths.directory);
   await writeFile(paths.manifest, original, { mode: 0o600 });
   try {
@@ -310,11 +351,14 @@ test("Corrupt shared registrations survive startup failures and cleanup without 
 
 test("runtime restart replaces shared processes outside Git and restores registered catalogs", async () => {
   // Prepare restart commands from cwd unrelated to registered repositories.
-  const fixture = await createWorktreeFixture(),
-    stateRoot = join(fixture.directory, "state"),
-    options = { offline: true, stateRoot, entry, start: false, register: true };
+  const fixture = await createWorktreeFixture();
+  const stateRoot = join(fixture.directory, "state");
+  const options = { offline: true, stateRoot, entry, start: false, register: true };
   const client = expectOk(await connectRuntime(fixture.repository, fixture.main, options));
-  if (!client) throw new Error("Missing catalog.");
+  if (!client) {
+    throw new Error("Missing catalog.");
+  }
+
   const before = client.snapshot;
   await client.disconnect();
   try {
@@ -338,6 +382,7 @@ test("runtime restart replaces shared processes outside Git and restores registe
         expectOk(await fetchSnapshot(runtimePaths(fixture.repository.id, true, stateRoot))) !==
         null,
     );
+
     const after = expectOk(
       await fetchSnapshot(runtimePaths(fixture.repository.id, true, stateRoot)),
     )!;

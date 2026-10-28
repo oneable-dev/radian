@@ -23,6 +23,7 @@ export type { CompletionProvider } from "../completion-cache.ts";
 import type { PromptInput } from "../../ui/prompt-input.ts";
 
 type LookupContext = { sessionId: string; target: CompletionTarget; lookup: string; scope: string };
+
 const debounceMs = 150;
 
 // The input keeps focus. This menu owns only suggestions and never submits a prompt or executes a command.
@@ -99,10 +100,16 @@ export class CompletionMenu {
         wrapMode: "none",
         selectable: false,
         onMouseDown: (event) => {
-          if (event.button !== 0) return;
+          if (event.button !== 0) {
+            return;
+          }
+
           event.preventDefault();
           event.stopPropagation();
-          if (!this.available("completion.accept")) return;
+          if (!this.available("completion.accept")) {
+            return;
+          }
+
           this.selected = this.first + index;
           this.accept();
         },
@@ -110,6 +117,7 @@ export class CompletionMenu {
       this.rows.push(row);
       this.root.add(row);
     }
+
     this.root.add(this.heading);
     this.root.add(this.spinner.root);
     uiTheme(renderer).bindStyles(this.root, (styles) => {
@@ -134,18 +142,24 @@ export class CompletionMenu {
 
   prepare(sessionId: string | null, cwd: string | undefined, retained: ReadonlySet<string>): void {
     this.provider?.retain?.(retained);
-    if (sessionId && cwd) this.provider?.prepare?.(sessionId, cwd);
+    if (sessionId && cwd) {
+      this.provider?.prepare?.(sessionId, cwd);
+    }
   }
+
   get open(): boolean {
     return this.root.visible;
   }
+
   // Claim Tab/Esc immediately after a trigger, before the menu's queued render can update focus context.
   get engaged(): boolean {
     return this.context() !== null;
   }
+
   private signature(): string {
     return JSON.stringify([this.sessionId(), this.input.value, this.input.cursorOffset]);
   }
+
   private context(): LookupContext | null {
     if (
       this.disposed ||
@@ -154,13 +168,16 @@ export class CompletionMenu {
       !this.provider ||
       !this.input.focused ||
       this.signature() === this.dismissed
-    )
+    ) {
       return null;
+    }
+
     const sessionId = this.sessionId();
     const target = completionTarget(
       this.input.value,
       this.input.editBuffer.getTextRange(0, this.input.cursorOffset).length,
     );
+
     return sessionId && target
       ? {
           sessionId,
@@ -170,54 +187,80 @@ export class CompletionMenu {
         }
       : null;
   }
+
   private fresh(context: LookupContext): boolean {
     return this.open && !this.pending && this.resolvedLookup === context.lookup;
   }
+
   refresh = (): void => {
-    if (this.queued || this.disposed || this.root.isDestroyed || this.input.isDestroyed) return;
+    if (this.queued || this.disposed || this.root.isDestroyed || this.input.isDestroyed) {
+      return;
+    }
+
     this.queued = true;
     queueMicrotask(() => {
       this.queued = false;
-      if (!this.disposed) this.update();
+      if (!this.disposed) {
+        this.update();
+      }
     });
   };
+
   private update(): void {
-    const context = this.context(),
-      provider = this.provider;
+    const context = this.context();
+    const provider = this.provider;
     if (!context || !provider) {
       this.hide();
+
       return;
     }
-    if (this.open && this.lookup === context.lookup && this.readVersion === this.sourceVersion)
+    if (this.open && this.lookup === context.lookup && this.readVersion === this.sourceVersion) {
       return;
+    }
+
     this.readVersion = this.sourceVersion;
+
     const cached = provider.read?.(context.sessionId, context.target);
     if (cached) {
       const changedQuery = this.lookup !== context.lookup;
       this.cancelRequest();
-      if (changedQuery) this.generation++;
-      if (this.scope !== context.scope) this.clearResults();
+      if (changedQuery) {
+        this.generation++;
+      }
+      if (this.scope !== context.scope) {
+        this.clearResults();
+      }
+
       this.scope = context.scope;
       this.lookup = context.lookup;
       this.root.visible = true;
       this.spinner.stop();
       this.receive(context, cached);
+
       return;
     }
-    if (this.open && this.lookup === context.lookup && this.pending) return;
+    if (this.open && this.lookup === context.lookup && this.pending) {
+      return;
+    }
+
     this.cancelRequest();
+
     const ready = (this.requestReady = Promise.withResolvers<void>());
-    const abort = (this.abort = new AbortController()),
-      generation = ++this.generation;
+    const abort = (this.abort = new AbortController());
+    const generation = ++this.generation;
     if (this.scope !== context.scope) {
       this.result = { items: [], truncated: false };
       this.selected = 0;
       this.first = 0;
       this.resolvedLookup = "";
     }
+
     this.scope = context.scope;
     this.lookup = context.lookup;
-    if (!this.pending) this.spinner.start();
+    if (!this.pending) {
+      this.spinner.start();
+    }
+
     this.pending = true;
     this.message = this.result.items.length ? "" : "Loading…";
     this.root.visible = true;
@@ -227,14 +270,23 @@ export class CompletionMenu {
       this.timer = undefined;
       void Promise.resolve()
         .then(async () => {
-          if (!this.current(generation, abort, context.lookup)) return;
+          if (!this.current(generation, abort, context.lookup)) {
+            return;
+          }
+
           const result = await provider(context.sessionId, context.target, abort.signal);
-          if (!this.current(generation, abort, context.lookup)) return;
+          if (!this.current(generation, abort, context.lookup)) {
+            return;
+          }
+
           this.spinner.stop();
           this.receive(context, result);
         })
         .catch((error: unknown) => {
-          if (!this.current(generation, abort, context.lookup)) return;
+          if (!this.current(generation, abort, context.lookup)) {
+            return;
+          }
+
           this.pending = false;
           this.spinner.stop();
           this.clearResults();
@@ -245,6 +297,7 @@ export class CompletionMenu {
         .finally(() => ready.resolve());
     }, debounceMs);
   }
+
   private receive(context: LookupContext, result: Result<CompletionResult, ExpectedError>): void {
     this.pending = false;
     if (result.ok) {
@@ -257,6 +310,7 @@ export class CompletionMenu {
           : context.target.kind === "command"
             ? result.value.items.filter((item) => item.kind !== "skill")
             : result.value.items;
+
       this.result = { items, truncated: result.value.truncated };
       this.resolvedLookup = context.lookup;
       this.selected = Math.max(
@@ -268,14 +322,17 @@ export class CompletionMenu {
         : `No matches${result.value.truncated ? " in the first page · refine search" : ""}`;
     } else if (result.error.code === "CANCELLED") {
       this.hide();
+
       return;
     } else {
       this.clearResults();
       this.message = `[${result.error.code}] ${result.error.message}`;
     }
+
     this.paint();
     this.changed();
   }
+
   private current(generation: number, abort: AbortController, lookup: string): boolean {
     return (
       !this.disposed &&
@@ -284,76 +341,116 @@ export class CompletionMenu {
       this.context()?.lookup === lookup
     );
   }
+
   private clearResults(): void {
     this.result = { items: [], truncated: false };
     this.resolvedLookup = "";
     this.selected = 0;
     this.first = 0;
   }
+
   // Enter executes the focused command or Skill; Tab remains insertion-only.
   // Resolve synchronously when possible so ordinary prompt submission captures its draft immediately.
   prepareCommandSubmission(): boolean | Promise<boolean> {
     const context = this.context();
-    if (!context || context.target.kind === "file") return true;
-    this.update();
-    const item = this.result.items[this.selected];
-    if (!this.open || this.scope !== context.scope || !item || item.kind === "file") return true;
-    if (this.fresh(context)) {
-      this.accept(false);
+    if (!context || context.target.kind === "file") {
       return true;
     }
-    const ready = this.requestReady,
-      generation = this.generation,
-      signature = this.signature();
-    if (!ready) return false;
+
+    this.update();
+
+    const item = this.result.items[this.selected];
+    if (!this.open || this.scope !== context.scope || !item || item.kind === "file") {
+      return true;
+    }
+    if (this.fresh(context)) {
+      this.accept(false);
+
+      return true;
+    }
+
+    const ready = this.requestReady;
+    const generation = this.generation;
+    const signature = this.signature();
+    if (!ready) {
+      return false;
+    }
+
     return ready.promise.then(() => {
       if (
         this.disposed ||
         generation !== this.generation ||
         signature !== this.signature() ||
         !this.available("completion.accept")
-      )
+      ) {
         return false;
+      }
+
       const selected = this.result.items[this.selected];
       // Do not turn a pending Enter into execution of a different newly focused command.
-      if (selected?.kind !== item.kind || selected.value !== item.value) return false;
+      if (selected?.kind !== item.kind || selected.value !== item.value) {
+        return false;
+      }
+
       this.accept(false);
+
       return true;
     });
   }
+
   available(command: CommandId): boolean {
     const context = this.context();
-    if (!context) return false;
-    if (command === "completion.dismiss") return true;
-    if (!this.open || !this.result.items.length || this.scope !== context.scope) return false;
+    if (!context) {
+      return false;
+    }
+    if (command === "completion.dismiss") {
+      return true;
+    }
+    if (!this.open || !this.result.items.length || this.scope !== context.scope) {
+      return false;
+    }
+
     return command === "completion.accept"
       ? this.fresh(context)
       : command === "completion.next" || command === "completion.previous";
   }
+
   command(command: CommandId): void {
-    if (!this.available(command)) return;
+    if (!this.available(command)) {
+      return;
+    }
     if (command === "completion.dismiss") {
       this.dismissed = this.signature();
       this.hide();
+
       return;
     }
     if (command === "completion.accept") {
       this.accept();
+
       return;
     }
+
     this.selected =
       (this.selected + (command === "completion.previous" ? -1 : 1) + this.result.items.length) %
       this.result.items.length;
     this.paint();
   }
+
   private accept(addTrailingSpace = true): void {
-    const context = this.context(),
-      item = this.result.items[this.selected];
-    if (!context || !this.fresh(context) || !item) return;
+    const context = this.context();
+    const item = this.result.items[this.selected];
+    if (!context || !this.fresh(context) || !item) {
+      return;
+    }
     if (item.kind === "file") {
       const trailing = context.target.end === this.input.value.length;
-      if (!this.input.attachFile(item.value, context.target.start, context.target.end)) return;
-      if (trailing) this.input.insertText(" ");
+      if (!this.input.attachFile(item.value, context.target.start, context.target.end)) {
+        return;
+      }
+      if (trailing) {
+        this.input.insertText(" ");
+      }
     } else {
       const inserted = insertCompletion(this.input.value, context.target, item);
       const replacement = inserted.text.slice(context.target.start, inserted.cursor);
@@ -362,13 +459,19 @@ export class CompletionMenu {
         !addTrailingSpace && context.target.end === this.input.value.length
           ? replacement.slice(0, -1)
           : replacement;
+
       this.input.replaceRange(context.target.start, context.target.end, suffix);
     }
+
     this.dismissed = this.signature();
     this.hide();
   }
+
   private paint = (): void => {
-    if (this.disposed || !this.root || this.root.isDestroyed || !this.open) return;
+    if (this.disposed || !this.root || this.root.isDestroyed || !this.open) {
+      return;
+    }
+
     const budget = Math.max(
       1,
       Math.min(6, Math.floor(this.renderer.height / 4), this.availableRows()),
@@ -376,15 +479,19 @@ export class CompletionMenu {
     const overflow = this.result.items.length > Math.min(this.rows.length, budget);
     const showSummary =
       !this.result.items.length || (budget > 1 && (overflow || this.result.truncated));
+
     this.heading.visible = showSummary;
+
     const count = Math.min(
       this.result.items.length,
       this.rows.length,
       budget - Number(showSummary),
     );
     this.first = Math.min(this.first, this.selected);
-    if (count > 0 && this.selected >= this.first + count)
+    if (count > 0 && this.selected >= this.first + count) {
       this.first = Math.max(0, this.selected - count + 1);
+    }
+
     const height = count + Number(showSummary);
     // The native getter may still report the previous layout; the setter ignores unchanged styles.
     this.root.height = height;
@@ -392,6 +499,7 @@ export class CompletionMenu {
       this.message ||
         `(${this.selected + 1}/${this.result.items.length}${this.result.truncated ? "+" : ""})${this.result.truncated ? " · refine search" : ""}${this.pending ? " · Updating…" : ""}`,
     );
+
     const styles = uiTheme(this.renderer).styles;
     // Measure terminal cells, not UTF-16 lengths, so Unicode labels share one description column.
     const width = Math.max(0, this.root.width - 2);
@@ -408,7 +516,10 @@ export class CompletionMenu {
     for (const [index, row] of this.rows.entries()) {
       const item = this.result.items[this.first + index];
       row.visible = index < count && !!item;
-      if (!row.visible || !item) continue;
+      if (!row.visible || !item) {
+        continue;
+      }
+
       const selected = this.first + index === this.selected;
       const marker = truncateCells(selected ? "→ " : "  ", width, "");
       const label = truncateCells(labels[this.first + index]!, labelWidth);
@@ -416,6 +527,7 @@ export class CompletionMenu {
         ? " ".repeat(labelWidth - Bun.stringWidth(label) + 2) +
           truncateCells(singleLine(item.description), Math.max(0, width - labelWidth - 4))
         : "";
+
       row.content = new StyledText([
         styleChunk(marker + label, styles[selected ? "completion.selected" : "completion.item"]),
         styleChunk(
@@ -426,20 +538,27 @@ export class CompletionMenu {
       row.bg = styles[selected ? "completion.selected" : "completion.item"].bg;
     }
   };
+
   reflow(): void {
     this.paint();
   }
+
   private cancelRequest(): void {
-    if (this.timer !== undefined) this.renderer.clock.clearTimeout(this.timer);
+    if (this.timer !== undefined) {
+      this.renderer.clock.clearTimeout(this.timer);
+    }
+
     this.timer = undefined;
     this.abort?.abort();
     this.abort = undefined;
     this.requestReady?.resolve();
     this.requestReady = undefined;
   }
+
   private blur = (): void => {
     this.hide();
   };
+
   hide(): void {
     this.generation++;
     this.cancelRequest();
@@ -448,15 +567,22 @@ export class CompletionMenu {
     this.scope = "";
     this.clearResults();
     this.spinner.cancel();
+
     const wasOpen = this.open;
     if (!this.root.isDestroyed) {
       this.root.visible = false;
       this.root.height = 0;
     }
-    if (wasOpen) this.changed();
+    if (wasOpen) {
+      this.changed();
+    }
   }
+
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.disposed = true;
     this.unsubscribeSource?.();
     this.hide();

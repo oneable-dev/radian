@@ -133,7 +133,9 @@ const surfaces = [
     title: "No content",
   },
 ] as const;
+
 type Surface = (typeof surfaces)[number]["name"];
+
 const searches: Partial<
   Record<Surface, { id: string; title: string; counts: string; status?: string }>
 > = {
@@ -160,17 +162,19 @@ async function mount(name: Surface, width: number, height: number) {
     kittyKeyboard: true,
     clock: new ManualClock(),
   });
-  const hints = defaultKeymap(),
-    hint = (command: CommandId, context: KeyContext) => hints.hint(command, context);
-  const noop = () => {},
-    common = { changed: noop, fallback: noop, notice: noop, keyHint: hint };
+  const hints = defaultKeymap();
+  const hint = (command: CommandId, context: KeyContext) => hints.hint(command, context);
+  const noop = () => {};
+  const common = { changed: noop, fallback: noop, notice: noop, keyHint: hint };
   const tree = demoWorkspace()[0]!.worktrees[0]!;
   const snapshot = { commits: [], refs: [], reflog: [], files: [], head: "main", headOid: null };
   const render = async () => {
-    for (let pass = 0; pass < 4; pass++) await app.renderOnce();
+    for (let pass = 0; pass < 4; pass++) {
+      await app.renderOnce();
+    }
   };
-  let panel: { root: BoxRenderable; dispose(): void },
-    revealPreview = noop;
+  let panel: { root: BoxRenderable; dispose(): void };
+  let revealPreview = noop;
   if (name === "workspace") {
     panel = new Workbench(app.renderer, new WorkspaceSelection([]), {
       onNewSession: noop,
@@ -233,7 +237,10 @@ async function mount(name: Surface, width: number, height: number) {
     panel = browser;
     app.renderer.root.add(panel.root);
     browser.show(name, snapshot, null);
-    if (name === "refs") browser.search.value = "missing-ref";
+    if (name === "refs") {
+      browser.search.value = "missing-ref";
+    }
+
     revealPreview = () => browser.command("git.preview");
   } else if (name === "changes") {
     const source = {
@@ -308,12 +315,18 @@ async function mount(name: Surface, width: number, height: number) {
     app.renderer.root.add(panel.root);
     dialog.show({ title: "Details", text: "" });
   }
+
   await render();
+
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
+
   return {
     ...app,
     get,
@@ -335,8 +348,8 @@ test.each(surfaces.filter((surface) => "preset" in surface))(
     const search = searchId ? (app.get(searchId) as SearchInput) : undefined;
     const focus = app.renderer.currentFocusedRenderable;
     try {
-      const panel = app.get(surface.panel),
-        expanded = surface.preset === "expanded";
+      const panel = app.get(surface.panel);
+      const expanded = surface.preset === "expanded";
       const geometry = [panel.x, panel.y, panel.width, panel.height];
 
       // Filtering must not shrink the frame or move the input caret.
@@ -344,6 +357,7 @@ test.each(surfaces.filter((surface) => "preset" in surface))(
         search.value = "no-match-hjkl";
         search.cursorOffset = 3;
       }
+
       await app.render();
 
       expect([panel.x, panel.y, panel.width, panel.height]).toEqual(geometry);
@@ -383,12 +397,18 @@ for (const [width, height] of [
       // Each feature supplies its own state while the shared body owns cell-accurate placement.
       const app = await mount(surface.name, width, height);
       const centered = (id: string, expected?: string) => {
-        const body = app.get(id),
-          title = app.get(`${id}-empty:title`),
-          description = app.get(`${id}-empty:description`);
-        if (!(title instanceof TextRenderable)) throw new Error("Missing empty-state title");
+        const body = app.get(id);
+        const title = app.get(`${id}-empty:title`);
+        const description = app.get(`${id}-empty:description`);
+        if (!(title instanceof TextRenderable)) {
+          throw new Error("Missing empty-state title");
+        }
+
         expect(app.get(`${id}-empty`).visible).toBe(true);
-        if (expected) expect(title.plainText).toContain(expected);
+        if (expected) {
+          expect(title.plainText).toContain(expected);
+        }
+
         const bottom = description.visible
           ? description.y + description.height
           : title.y + title.height;
@@ -396,15 +416,18 @@ for (const [width, height] of [
           0.5,
         );
         expect(Math.abs((title.y + bottom) / 2 - body.y - body.height / 2)).toBeLessThanOrEqual(1);
+
         const frame = app.captureCharFrame().split("\n");
         expect(frame[title.y]?.slice(title.x, title.x + title.width).trim()).toBe(title.plainText);
       };
       try {
         // Content starts at the first available row, with no hidden or reserved title row.
-        const panel = app.get(surface.panel),
-          content = app.get(surface.content);
+        const panel = app.get(surface.panel);
+        const content = app.get(surface.content);
         const spec = searches[surface.name];
+
         expect(content.y).toBe(panel.y + (spec ? 0 : 1));
+
         const popupText = app
           .captureCharFrame()
           .split("\n")
@@ -414,10 +437,14 @@ for (const [width, height] of [
         if (spec) {
           // Shared picker chrome identifies the surface without placeholder text or a dedicated title row.
           const input = app.get(spec.id);
-          if (!(input instanceof SearchInput)) throw new Error("Missing shared search");
-          const body = app.get(surface.body),
-            list = body.getChildren()[0]!,
-            status = spec.status ? app.get(spec.status) : undefined;
+          if (!(input instanceof SearchInput)) {
+            throw new Error("Missing shared search");
+          }
+
+          const body = app.get(surface.body);
+          const list = body.getChildren()[0]!;
+          const status = spec.status ? app.get(spec.status) : undefined;
+
           expect(input.field.title).toBe(` ${spec.title} `);
           expect(input.placeholder).toBe("");
           expect(app.captureCharFrame().split("\n")[input.field.y]).toContain(spec.title);
@@ -428,7 +455,9 @@ for (const [width, height] of [
           expect(body.y).toBe(
             input.field.y + input.field.height + (status?.visible ? status.height : 0),
           );
-        } else expect(popupText).not.toContain(surface.header);
+        } else {
+          expect(popupText).not.toContain(surface.header);
+        }
 
         // Empty data and unmatched queries must not turn into disabled candidate rows.
         centered(surface.body, surface.title);
@@ -437,6 +466,7 @@ for (const [width, height] of [
             app.revealPreview();
             await app.render();
           }
+
           centered(surface.preview);
         }
 
@@ -445,8 +475,12 @@ for (const [width, height] of [
           expect(app.get("history-preview-agent-view").visible).toBe(false);
           expect(app.captureCharFrame()).not.toContain("Read-only preview");
         }
-        if (surface.name === "model") expect(app.get("model-effort").visible).toBe(false);
-        if (surface.name === "accounts") expect(app.captureCharFrame()).toContain("+ Add account");
+        if (surface.name === "model") {
+          expect(app.get("model-effort").visible).toBe(false);
+        }
+        if (surface.name === "accounts") {
+          expect(app.captureCharFrame()).toContain("+ Add account");
+        }
       } finally {
         await app.close();
       }

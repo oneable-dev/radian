@@ -19,24 +19,27 @@ import type { TranscriptSection } from "../../agents/transcript.ts";
 function descendants(root: Renderable): Renderable[] {
   return root.getChildren().flatMap((child) => [child, ...descendants(child)]);
 }
+
 async function mount(
   text: string,
   actions: Partial<WorkbenchActions> = {},
   kind: TranscriptSection["kind"] = "assistant",
 ) {
   const app = await createTestRenderer({ width: 110, height: 30, kittyKeyboard: true });
-  const opened: string[] = [],
-    sent: string[] = [];
+  const opened: string[] = [];
+  const sent: string[] = [];
   const view = new Workbench(app.renderer, new WorkspaceSelection(demoWorkspace()), {
     onNewSession: () => {},
     onCloseSession: () => {},
     initialDrafts: { a1: "Keep this draft" },
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     onOpenTranscriptUrl: async (url) => {
       opened.push(url);
+
       return ok(undefined);
     },
     getSessionDetails: () => ({
@@ -51,7 +54,9 @@ async function mount(
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   return {
     ...app,
     view,
@@ -73,17 +78,28 @@ async function mount(
       app.mockInput.pressKey("HOME");
       app.mockInput.pressEnter();
       await render();
+
       const body = app.renderer.currentFocusedRenderable;
-      if (!(body instanceof EditBufferRenderable)) throw new Error("Missing source cursor");
+      if (!(body instanceof EditBufferRenderable)) {
+        throw new Error("Missing source cursor");
+      }
+
       const offset = body.plainText.indexOf(at);
-      if (offset < 0) throw new Error(`Missing source text ${at}`);
+      if (offset < 0) {
+        throw new Error(`Missing source text ${at}`);
+      }
+
       body.cursorOffset = body.editBuffer.measureText(body.plainText.slice(0, offset));
+
       return body;
     },
     position(label: string) {
-      const lines = app.captureCharFrame().split("\n"),
-        y = lines.findIndex((line) => line.includes(label));
-      if (y < 0) throw new Error(`Missing ${label}`);
+      const lines = app.captureCharFrame().split("\n");
+      const y = lines.findIndex((line) => line.includes(label));
+      if (y < 0) {
+        throw new Error(`Missing ${label}`);
+      }
+
       return { x: Bun.stringWidth(lines[y]!.slice(0, lines[y]!.indexOf(label))), y };
     },
     async gx() {
@@ -102,8 +118,8 @@ test("gx on Markdown labels after Unicode opens targets while preserving source 
   // Labels differ from URLs; prefix cell widths differ from JS string lengths.
   const app = await mount("한글 👨‍👩‍👧‍👦 é [문서 보기](https://example.invalid/docs?q=one&next=two)");
   try {
-    const body = await app.source("문서 보기"),
-      cursor = body.cursorOffset;
+    const body = await app.source("문서 보기");
+    const cursor = body.cursorOffset;
 
     // Send only the link under the reading cursor to the external browser.
     await app.gx();
@@ -127,6 +143,7 @@ test("Plain-URL gx and Visual selection preserve selected text while opening bro
     const body = await app.source("http://");
     app.mockInput.pressKey("v");
     app.mockInput.pressKey("l");
+
     const selection = body.getSelectedText();
 
     await app.gx();
@@ -147,6 +164,7 @@ test.each(["assistant", "thinking"] as const)(
     const app = await mount("[Open documentation](https://example.invalid/docs)", {}, kind);
     try {
       await app.settled();
+
       const { x, y } = app.position("Open documentation");
 
       await app.mockMouse.click(x + 2, y);
@@ -169,6 +187,7 @@ test("Dragging links to select or right-clicking never opens browsers", async ()
   const app = await mount("[Selectable documentation](https://example.invalid/docs)");
   try {
     await app.settled();
+
     const { x, y } = app.position("Selectable documentation");
 
     await app.mockMouse.drag(x + 1, y, x + 8, y);
@@ -223,6 +242,7 @@ test("Browser failures show notifications without automatic retries", async () =
   const app = await mount("https://example.invalid", {
     onOpenTranscriptUrl: async () => {
       attempts++;
+
       return err(new BrowserError("No browser handler"));
     },
   });
@@ -250,6 +270,7 @@ test("Remapping link opening to o keeps prompt gx literal and updates help", asy
   try {
     pressLeader(app, "a");
     await app.mockInput.typeText("gx");
+
     const body = await app.source("https://");
 
     await app.gx();
@@ -276,6 +297,7 @@ test("Clicking continuation rows opens complete wrapped URLs", async () => {
   try {
     app.resize(55, 30);
     await app.render();
+
     const { x, y } = app.position("wrapped-target");
 
     // Use the actual clicked reading cursor, not the first row.
@@ -293,6 +315,7 @@ test("Non-link characters and blank URL-trailing space never open another addres
   const app = await mount("Before http://localhost:3000", {}, "user");
   try {
     await app.source("Before");
+
     const { x, y } = app.position("http://localhost:3000");
 
     await app.gx();
@@ -317,11 +340,13 @@ test("Modified link clicks are not intercepted as app browser commands", async (
   const app = await mount("[Modified documentation](https://example.invalid/docs)");
   try {
     await app.settled();
+
     const { x, y } = app.position("Modified documentation");
 
     for (const modifiers of [{ ctrl: true }, { shift: true }, { alt: true }]) {
       await app.mockMouse.click(x + 2, y, 0, { modifiers });
     }
+
     await app.render();
 
     expect(app.opened).toEqual([]);
@@ -340,7 +365,10 @@ test("Holding remapped o opens once and consumes repeats across focus changes", 
   const app = await mount("https://example.invalid", { keymap });
   const raw = (sequence: string) => {
     const key = parseKeypress(sequence, { useKittyKeyboard: true });
-    if (!key) throw new Error("Invalid Kitty key");
+    if (!key) {
+      throw new Error("Invalid Kitty key");
+    }
+
     app.renderer.keyInput.processParsedKey(key);
   };
   try {

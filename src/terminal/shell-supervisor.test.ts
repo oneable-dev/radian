@@ -10,6 +10,7 @@ test("Expected supervisor spawn failures retain causes and keep cleanup handshak
     message: "Permission denied",
     stack: "remote spawn stack",
   });
+
   const error = await state.started.promise.catch((value: unknown) => value);
   expect(error).toBeInstanceOf(PtyError);
   expect((error as PtyError).cause).toBeInstanceOf(Error);
@@ -26,6 +27,7 @@ test("Supervisor programming bugs never become expected input errors", async () 
     message: "unexpected defect",
     stack: "original remote stack",
   });
+
   const error = await state.started.promise.catch((value: unknown) => value);
   expect(error).toBeInstanceOf(Error);
   expect(error).not.toBeInstanceOf(PtyError);

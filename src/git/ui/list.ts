@@ -19,7 +19,9 @@ import { truncateCells } from "../../ui/text.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 
 type GitListSpan = { text: string; color?: StyleGroup };
+
 type HistoryDecoration = { refs: readonly string[]; color: StyleGroup; nodeColumn: number };
+
 export type GitListItem = {
   key: string;
   label: string | readonly GitListSpan[];
@@ -30,6 +32,7 @@ export type GitListItem = {
   disabled?: boolean;
   gapBefore?: boolean;
 };
+
 type Annotation = {
   item: GitListItem;
   gutter: BoxRenderable;
@@ -39,6 +42,7 @@ type Annotation = {
   link: TextRenderable;
   indent: BoxRenderable;
 };
+
 const styledText = (spans: readonly GitListSpan[], styles: UiStyles) =>
   new StyledText(spans.map((span) => styleChunk(span.text, styles[span.color ?? "ui.label"])));
 
@@ -78,48 +82,68 @@ export class GitList {
     this.root.on("focused", () => this.highlight());
     this.root.on("blurred", () => this.highlight());
   }
+
   get selectedKey(): string | null {
     return this.selected;
   }
+
   get selectedOffset(): number | undefined {
     return this.offsets.get(this.selected ?? "");
   }
+
   get rowsHeight(): number {
     return this.rowExtent;
   }
+
   setTailHeight(height: number): void {
     this.tail.height = Math.max(0, Math.round(height));
   }
+
   get selectedRow(): Readonly<{ y: number; height: number }> | undefined {
     return this.rows.get(this.selected ?? "");
   }
+
   get selectedColor(): StyleGroup | undefined {
     return this.annotations.get(this.selected ?? "")?.item.history?.color;
   }
 
   // Focus expansion changes only column geometry, never row identity or graph height.
   setRefWidth(width: number, expanded: string | null): void {
-    if (width === this.refWidth && expanded === this.expandedRef) return;
-    const resized = width !== this.refWidth,
-      previous = this.expandedRef;
+    if (width === this.refWidth && expanded === this.expandedRef) {
+      return;
+    }
+
+    const resized = width !== this.refWidth;
+    const previous = this.expandedRef;
+
     this.refWidth = width;
     this.expandedRef = expanded;
     if (resized) {
-      for (const annotation of this.annotations.values()) this.paintAnnotation(annotation);
-    } else
+      for (const annotation of this.annotations.values()) {
+        this.paintAnnotation(annotation);
+      }
+    } else {
       for (const key of [previous, expanded]) {
         const annotation = this.annotations.get(key ?? "");
-        if (annotation) this.paintAnnotation(annotation);
+        if (annotation) {
+          this.paintAnnotation(annotation);
+        }
       }
+    }
   }
+
   update(items: readonly GitListItem[], selected: string | null): void {
     const previous = this.selected;
     this.items = items;
     this.selected = selected;
+
     const signature = JSON.stringify(items);
     if (signature !== this.signature) {
       this.signature = signature;
-      for (const row of this.rows.values()) row.destroyRecursively();
+      for (const row of this.rows.values()) {
+        row.destroyRecursively();
+      }
+
       this.rows.clear();
       this.annotations.clear();
       this.offsets.clear();
@@ -128,6 +152,7 @@ export class GitList {
         this.rowExtent += item.gapBefore ? 1 : 0;
         this.offsets.set(item.key, this.rowExtent);
         this.rowExtent += item.connector ? 2 : 1;
+
         let down: { x: number; y: number } | undefined;
         const row = new BoxRenderable(this.renderer, {
           id: `${this.root.id}:${item.key}`,
@@ -136,7 +161,9 @@ export class GitList {
           marginTop: item.gapBefore ? 1 : 0,
           flexDirection: "column",
           onMouseDown: (event) => {
-            if (event.button === 0) down = { x: event.x, y: event.y };
+            if (event.button === 0) {
+              down = { x: event.x, y: event.y };
+            }
           },
           onMouseUp: (event) => {
             if (
@@ -147,11 +174,15 @@ export class GitList {
               item.disabled
             ) {
               down = undefined;
+
               return;
             }
+
             down = undefined;
             this.select(item.key);
-            if (this.activateOnClick) this.activate(item.key);
+            if (this.activateOnClick) {
+              this.activate(item.key);
+            }
           },
         });
         const line = new BoxRenderable(this.renderer, {
@@ -181,9 +212,11 @@ export class GitList {
             wrapMode: "none",
             flexShrink: 0,
           });
+
           gutter.add(ref);
           gutter.add(leader);
           line.add(gutter);
+
           const node = new TextRenderable(this.renderer, {
             id: `${row.id}:graph`,
             height: 1,
@@ -199,6 +232,7 @@ export class GitList {
             selectable: false,
             flexShrink: 0,
           });
+
           line.add(node);
           line.add(link);
           line.add(
@@ -209,13 +243,17 @@ export class GitList {
               flexShrink: 0,
             }),
           );
+
           const indent = new BoxRenderable(this.renderer, {
             width: this.refWidth,
             height: 1,
             flexShrink: 0,
           });
           this.annotations.set(item.key, { item, gutter, ref, leader, node, link, indent });
-        } else if (item.graph) line.add(this.graph(item.graph, item.graph.length));
+        } else if (item.graph) {
+          line.add(this.graph(item.graph, item.graph.length));
+        }
+
         const label = new TextRenderable(this.renderer, {
           id: `${row.id}:label`,
           height: 1,
@@ -238,7 +276,9 @@ export class GitList {
               ? this.selectionColor
               : styles[this.surface].bg;
           const annotation = this.annotations.get(item.key);
-          if (annotation) this.paintAnnotation(annotation);
+          if (annotation) {
+            this.paintAnnotation(annotation);
+          }
         });
         line.add(label);
         row.add(line);
@@ -249,32 +289,40 @@ export class GitList {
             flexShrink: 0,
           });
           const annotation = this.annotations.get(item.key);
-          if (annotation) bottom.add(annotation.indent);
+          if (annotation) {
+            bottom.add(annotation.indent);
+          }
+
           bottom.add(this.graph(item.connector));
           row.add(bottom);
         }
+
         this.root.add(row);
         this.rows.set(item.key, row);
       }
+
       // Only the shared history viewport scrolls when an expanded details card is taller than its rows.
       this.root.remove(this.tail);
       this.root.add(this.tail);
     }
+
     this.highlight(previous);
   }
+
   private paintAnnotation(annotation: Annotation): void {
-    const { item, gutter, ref, leader, node, link, indent } = annotation,
-      decoration = item.history!;
-    const styles = uiTheme(this.renderer).styles,
-      color = styles[decoration.color];
+    const { item, gutter, ref, leader, node, link, indent } = annotation;
+    const decoration = item.history!;
+    const styles = uiTheme(this.renderer).styles;
+    const color = styles[decoration.color];
     const expanded = item.key === this.expandedRef;
     const connected = decoration.refs.length > 0 || expanded;
     const first = decoration.refs[0] ?? (expanded ? `Commit ${item.key.slice(0, 7)}` : "");
     const suffix = decoration.refs.length > 1 ? ` +${decoration.refs.length - 1}` : "";
     const caption =
       truncateCells(first, Math.max(0, this.refWidth - 3 - Bun.stringWidth(suffix))) + suffix;
-    const length = Bun.stringWidth(caption),
-      remaining = Math.max(0, this.refWidth - length);
+    const length = Bun.stringWidth(caption);
+    const remaining = Math.max(0, this.refWidth - length);
+
     gutter.width = this.refWidth;
     indent.width = this.refWidth;
     ref.content = caption;
@@ -285,23 +333,27 @@ export class GitList {
     leader.width = remaining;
     leader.content = connected && remaining ? ` ${"─".repeat(remaining - 1)}` : "";
     paintText(leader, color);
+
     const selected = item.key === this.selected;
     const band = blendColors(
       styleBackground(styles[this.surface]),
       color.fg,
       selected ? (this.root.focused ? 0.56 : 0.44) : 0.32,
     );
+
     node.content = new StyledText(
       item.graph!.map((cell, index) => {
         const left = connected && index < decoration.nodeColumn;
         const text = cell.text === " " && left ? "─" : cell.text;
         const style = styles[cell.color ?? (left ? decoration.color : "ui.label")];
+
         return styleChunk(text, index >= decoration.nodeColumn ? { ...style, bg: band } : style);
       }),
     );
     paintText(link, color);
     link.bg = band;
   }
+
   private graph(cells: GraphCell[], width?: number): TextRenderable {
     const text = new TextRenderable(this.renderer, {
       ...(width ? { width } : {}),
@@ -312,42 +364,61 @@ export class GitList {
     uiTheme(this.renderer).bindStyles(text, (styles) => {
       text.content = styledText(cells, styles);
     });
+
     return text;
   }
+
   private get selectionColor() {
     const styles = uiTheme(this.renderer).styles;
+
     return styles[
       this.surface === "ui.popup" || this.root.focused ? "ui.selection" : "ui.selectionInactive"
     ].bg;
   }
+
   private highlight(previous: string | null = this.selected): void {
-    if (this.root.isDestroyed || this.renderer.isDestroyed) return;
+    if (this.root.isDestroyed || this.renderer.isDestroyed) {
+      return;
+    }
+
     const styles = uiTheme(this.renderer).styles;
-    for (const [key, row] of this.rows)
+    for (const [key, row] of this.rows) {
       row.backgroundColor =
         !this.annotations.has(key) && key === this.selected
           ? this.selectionColor
           : styles[this.surface].bg;
+    }
     for (const key of new Set([previous, this.selected])) {
       const annotation = this.annotations.get(key ?? "");
-      if (annotation) this.paintAnnotation(annotation);
+      if (annotation) {
+        this.paintAnnotation(annotation);
+      }
     }
   }
+
   select(key: string): void {
-    if (this.items.find((item) => item.key === key)?.disabled) return;
+    if (this.items.find((item) => item.key === key)?.disabled) {
+      return;
+    }
+
     const previous = this.selected;
     this.selected = key;
     this.highlight(previous);
     this.root.scrollChildIntoView(`${this.root.id}:${key}`);
     this.choose(key);
   }
+
   moveHalfPage(direction: -1 | 1): void {
     const stride = this.rows.get(this.selected ?? "")?.height ?? 1;
     this.move(direction < 0 ? "previous" : "next", halfPageStep(this.root.viewport.height, stride));
   }
+
   move(direction: "previous" | "next" | "first" | "last", count = 1): void {
     const items = this.items.filter((item) => !item.disabled);
-    if (!items.length) return;
+    if (!items.length) {
+      return;
+    }
+
     const current = items.findIndex((item) => item.key === this.selected);
     const next =
       direction === "first"
@@ -358,10 +429,13 @@ export class GitList {
               0,
               Math.min(items.length - 1, current + (direction === "previous" ? -count : count)),
             );
+
     this.select(items[next]!.key);
   }
+
   open(): void {
-    if (this.selected && this.items.some((item) => item.key === this.selected && !item.disabled))
+    if (this.selected && this.items.some((item) => item.key === this.selected && !item.disabled)) {
       this.activate(this.selected);
+    }
   }
 }

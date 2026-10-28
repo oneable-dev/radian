@@ -24,19 +24,21 @@ async function mount(
       sessions: tree.sessions.map((session) => ({ ...session, subagents: [] })),
     })),
   }));
-  const selection = new WorkspaceSelection(workspace),
-    copies: string[] = [],
-    prompts: string[] = [];
+  const selection = new WorkspaceSelection(workspace);
+  const copies: string[] = [];
+  const prompts: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {},
     onCloseSession: () => {},
     initialDrafts: { a1: "Keep my draft" },
     onPrompt: (_id, text) => {
       prompts.push(text);
+
       return ok(undefined);
     },
     onCopyTranscript: async (text) => {
       copies.push(text);
+
       return ok("Copied");
     },
     getSessionDetails: () => ({
@@ -50,15 +52,23 @@ async function mount(
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   const scroll = app.renderer.root.findDescendantById("session-transcript");
-  if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript viewport");
+  if (!(scroll instanceof ScrollBoxRenderable)) {
+    throw new Error("Missing transcript viewport");
+  }
+
   const cards = () =>
     scroll.content
       .getChildren()
       .filter((child): child is BoxRenderable => child instanceof BoxRenderable);
   const card = cards()[0];
-  if (!card) throw new Error("Missing transcript section");
+  if (!card) {
+    throw new Error("Missing transcript section");
+  }
+
   return {
     ...app,
     view,
@@ -82,8 +92,9 @@ async function mount(
 
 function expectVerticalInsets(card: BoxRenderable, inset = 1): void {
   const children = card.getChildren().filter((child) => child.visible);
-  const first = children[0]!,
-    last = children.at(-1)!;
+  const first = children[0]!;
+  const last = children.at(-1)!;
+
   expect(first.y - card.y).toBe(inset);
   expect(card.y + card.height - last.y - last.height).toBe(inset);
 }
@@ -156,15 +167,17 @@ test.each([120, 60])(
     const expectVisibleGaps = () => {
       const [, , tool, answer, compact] = app.cards();
       const content = answer!.getChildren().filter((child) => child.visible);
-      const first = content[0]!,
-        last = content.at(-1)!;
+      const first = content[0]!;
+      const last = content.at(-1)!;
       const composer = app.renderer.root.findDescendantById("agent-composer")!;
+
       // Check the visible text/surface boundaries, not only boxes with invisible internal padding.
       expect({
         toolToAnswer: first.y - tool!.y - tool!.height,
         answerToCompact: compact!.y - last.y - last.height,
         compactToComposer: composer.y - compact!.y - compact!.height,
       }).toEqual({ toolToAnswer: 1, answerToCompact: 1, compactToComposer: 1 });
+
       // The existing boundary row holds the focused section's bottom edge, never extra padding.
       const outlined =
         app.scroll.focused && app.view.workViewPreferences.agentViews?.a1?.selectedId === "compact";
@@ -235,12 +248,16 @@ test.each([120, 60])(
       const cards = app.cards();
       expect(cards).toHaveLength(mixed.length);
       expect(cards[0]!.y - app.scroll.content.y).toBe(1);
+
       const insets = [1, 0, 0, 1, 1, 1, 1];
       for (const [index, card] of cards.entries()) {
         expectVerticalInsets(card, insets[index]);
         const next = cards[index + 1];
-        if (next) expect(next.y - card.y - card.height).toBe(1);
+        if (next) {
+          expect(next.y - card.y - card.height).toBe(1);
+        }
       }
+
       const last = cards.at(-1)!;
       expect(app.scroll.scrollHeight - (last.y + last.height - app.scroll.content.y)).toBe(0);
     };
@@ -266,6 +283,7 @@ test.each([120, 60])(
       // Help is not a transcript section and must not lose scarce viewport rows to its gutters.
       app.mockInput.pressKey("F1");
       await app.render();
+
       const help = app.scroll.content.getChildren().find((node) => node.visible)!;
       expect(help.y).toBe(app.scroll.content.y);
       expect(app.scroll.scrollHeight).toBe(help.height);
@@ -313,18 +331,22 @@ test.each(["assistant", "thinking"] as const)(
           line.slice(app.scroll.viewport.x, app.scroll.viewport.x + app.scroll.viewport.width),
         );
       const body = lines.findIndex((line) => line.includes("PROSE_BODY"));
+
       expect(lines.join("\n")).not.toContain("ECONNRESET");
       expect(lines.join("\n")).not.toContain("ERROR_END");
       expect(body - toolCard!.y - toolCard!.height).toBe(1);
+
       // Only the existing section boundary becomes an outline when prose is selected.
       const outlined =
         (app.scroll.focused || app.scroll.hasFocusedDescendant) &&
         app.view.workViewPreferences.agentViews?.a1?.selectedId === "prose";
       expect(lines[body - 1]!.trim()).toBe(outlined ? "─".repeat(app.scroll.viewport.width) : "");
       expectVerticalInsets(proseCard!, 0);
+
       const content = proseCard!.getChildren().filter((child) => child.visible);
-      for (let index = 1; index < content.length; index++)
+      for (let index = 1; index < content.length; index++) {
         expect(content[index]!.y - content[index - 1]!.y - content[index - 1]!.height).toBe(1);
+      }
     };
     try {
       // Resizing and Markdown/source switching must keep error metadata hidden.
@@ -342,6 +364,7 @@ test.each(["assistant", "thinking"] as const)(
         await app.render();
         expectBodyGaps();
       }
+
       await app.update([
         tool,
         {
@@ -375,9 +398,12 @@ test("Plain/structured transitions never duplicate gaps and section margins", as
     expect(app.cards()[0]!.height).toBe(1);
     expect(app.captureCharFrame()).toContain("LEGACY_OUTPUT");
     await app.update(sections);
+
     const cards = app.cards();
-    for (let index = 1; index < cards.length; index++)
+    for (let index = 1; index < cards.length; index++) {
       expect(cards[index]!.y - cards[index - 1]!.y - cards[index - 1]!.height).toBe(1);
+    }
+
     expect(app.view.promptDrafts.a1).toBe("Keep my draft");
     expect(app.prompts).toEqual([]);
   } finally {
@@ -404,14 +430,19 @@ test.each(sections)(
         expectVerticalInsets(app.card, inset);
         expect(app.card.height).toBe(inset ? (section.id === "notice" ? 5 : 3) : 1);
         expect(app.card.y - app.scroll.content.y).toBe(app.scroll.viewport.height > 1 ? 1 : 0);
-        if (!inset) expect(app.captureCharFrame()).toContain(section.text);
+        if (!inset) {
+          expect(app.captureCharFrame()).toContain(section.text);
+        }
+
         expect(app.captureCharFrame().split("\n")[height - 1]).toContain("AGENT");
         expect(app.view.promptDrafts.a1).toBe("Keep my draft");
       }
+
       const frame = app.captureCharFrame().split("\n");
       for (const y of inset ? [app.card.y, app.card.y + app.card.height - 1] : []) {
         expect(frame[y]!.slice(app.card.x, app.card.x + app.card.width).trim()).toBe("");
       }
+
       expect(app.prompts).toEqual([]);
     } finally {
       await app.close();
@@ -474,14 +505,17 @@ test.each([120, 60])(
     try {
       app.resize(width, 24);
       await app.render();
+
       const expectResultGap = () => {
         const lines = app
           .captureCharFrame()
           .split("\n")
           .map((line) => line.slice(app.card.x, app.card.x + app.card.width));
         expect(lines.join("\n")).not.toContain("Command exited with code 1");
+
         const commandEnd = lines.findIndex((line) => line.includes("false"));
         expect(commandEnd).toBeGreaterThan(0);
+
         const result = lines.findIndex((line) => line.includes("RAW_TOOL_RESULT"));
         if (result >= 0) {
           expect(result - commandEnd).toBe(2);

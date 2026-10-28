@@ -25,11 +25,11 @@ async function mount(initial?: WorkViewPreferences, clock?: ManualClock, keymap?
   let items: TerminalInfo[] = [];
   let sequence = 0;
   const failures: ((error: unknown) => void)[] = [];
-  const created: string[] = [],
-    closed: string[] = [],
-    inputs: string[] = [],
-    detaches: string[] = [],
-    commands: string[] = [];
+  const created: string[] = [];
+  const closed: string[] = [];
+  const inputs: string[] = [];
+  const detaches: string[] = [];
+  const commands: string[] = [];
   const actions: TerminalActions = {
     list: () => items,
     create: async (tree) => {
@@ -45,20 +45,23 @@ async function mount(initial?: WorkViewPreferences, clock?: ManualClock, keymap?
         exitCode: null,
       });
       selection.replaceSnapshot(selection.snapshot);
+
       return ok(id);
     },
     close: async (id) => {
       closed.push(id);
       items = items.filter((item) => item.id !== id);
       selection.replaceSnapshot(selection.snapshot);
+
       return ok(undefined);
     },
     attach: async (id, receive, failed) => {
       failures.push(failed);
-      let revision = 0,
-        offset = 0,
-        cols = 80,
-        rows = 24;
+
+      let revision = 0;
+      let offset = 0;
+      let cols = 80;
+      let rows = 24;
       const send = () => {
         const item = items.find((item) => item.id === id)!;
         receive({
@@ -70,7 +73,9 @@ async function mount(initial?: WorkViewPreferences, clock?: ManualClock, keymap?
           scrollback: { offset, available: 100, enabled: true },
         });
       };
+
       send();
+
       return ok({
         input: (data) => inputs.push(Buffer.from(data).toString("hex")),
         resize: (width, height) => {
@@ -96,7 +101,9 @@ async function mount(initial?: WorkViewPreferences, clock?: ManualClock, keymap?
     ...(initial ? { initialWorkViews: initial } : {}),
     ...(keymap ? { keymap } : {}),
   });
+
   await app.renderOnce();
+
   return {
     ...app,
     selection,
@@ -132,18 +139,25 @@ async function mount(initial?: WorkViewPreferences, clock?: ManualClock, keymap?
         await app.renderOnce();
         await app.renderOnce();
       }
+
       const lines = app.captureCharFrame().split("\n");
       const start = right ? app.renderer.root.findDescendantById("work-panel")!.x : 0;
-      const y = lines.findIndex((line) => line.indexOf(text, start) >= 0),
-        x = lines[y]?.indexOf(text, start) ?? -1;
-      if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+      const y = lines.findIndex((line) => line.indexOf(text, start) >= 0);
+      const x = lines[y]?.indexOf(text, start) ?? -1;
+      if (x < 0) {
+        throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+      }
+
       await app.mockMouse.click(x, y);
       await app.renderOnce();
     },
     async visible(text: string) {
       const deadline = Date.now() + 3000;
       while (!app.captureCharFrame().includes(text)) {
-        if (Date.now() > deadline) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+        if (Date.now() > deadline) {
+          throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+        }
+
         await app.renderOnce();
         await Bun.sleep(1);
       }
@@ -200,20 +214,25 @@ test("Disconnected Terminal guidance stays centered and Enter reconnects the sel
       app.resize(width, height);
       await app.renderOnce();
       await app.renderOnce();
+
       const viewport = app.renderer.root.findDescendantById("terminal-viewport")!;
       const lines = app.captureCharFrame().split("\n");
       const messageY = lines.findIndex((line) => line.includes("Terminal unavailable"));
       const actionY = lines.findIndex((line) => line.includes("Reconnect"));
+
       expect(app.captureCharFrame()).toContain("Terminal unavailable");
       expect(app.captureCharFrame()).toContain("Reconnect");
       for (const y of [messageY, actionY]) {
         expect(y).toBeGreaterThan(viewport.y);
+
         const text = y === messageY ? "Terminal unavailable · reconnect explicitly" : "Reconnect";
         const x = lines[y]!.indexOf(text);
+
         expect(
           Math.abs(x + text.length / 2 - (viewport.x + viewport.width / 2)),
         ).toBeLessThanOrEqual(1);
       }
+
       expect(
         Math.abs((messageY + actionY + 1) / 2 - (viewport.y + viewport.height / 2)),
       ).toBeLessThanOrEqual(1);
@@ -281,13 +300,15 @@ test("Terminal Ctrl+N/P reaches shells without creating tabs", async () => {
 
 test("Snapshots and creation shortcuts during default startup never duplicate terminals", async () => {
   // Delay the first request at slow shell startup boundaries.
-  const app = await mount(),
-    ready = Promise.withResolvers<void>();
+  const app = await mount();
+  const ready = Promise.withResolvers<void>();
   const create = app.actions.create;
   let attempts = 0;
+
   app.actions.create = async (tree, size) => {
     attempts++;
     await ready.promise;
+
     return create(tree, size);
   };
   try {
@@ -335,11 +356,13 @@ test.each(["before-layout", "during-startup"] as const)(
   "Search opened at %s retains query/focus through late default-shell creation",
   async (timing) => {
     // Allow search input while startup responses remain pending.
-    const app = await mount(),
-      ready = Promise.withResolvers<void>();
+    const app = await mount();
+    const ready = Promise.withResolvers<void>();
     const create = app.actions.create;
+
     app.actions.create = async (tree, size) => {
       await ready.promise;
+
       return create(tree, size);
     };
     try {
@@ -353,6 +376,7 @@ test.each(["before-layout", "during-startup"] as const)(
       app.leader("b");
       await app.mockInput.typeText("feature");
       await app.renderOnce();
+
       const focused = app.renderer.currentFocusedRenderable;
       ready.resolve();
       await app.visible("Shell shell-1");
@@ -371,9 +395,10 @@ test.each(["before-layout", "during-startup"] as const)(
 
 test("Default-shell failures never auto-retry and leader+c explicitly requests recovery", async () => {
   // Reject only the first startup with an operational error.
-  const app = await mount(),
-    create = app.actions.create;
+  const app = await mount();
+  const create = app.actions.create;
   let attempts = 0;
+
   app.actions.create = async (tree, size) =>
     ++attempts === 1
       ? err(new PtyError("PTY_UNAVAILABLE", "Shell startup denied."))
@@ -420,10 +445,12 @@ test.each(["disabled", "rebound"] as const)(
       // Defaults return to native input and hints show actual keys only.
       expect(app.inputs).toContain("0e");
       expect(app.created).toHaveLength(1);
+
       const footer = app.captureCharFrame().trimEnd().split("\n").at(-1)!;
       expect(footer).not.toContain("<C-n>");
-      if (mode === "disabled") expect(footer).not.toContain("New terminal");
-      else {
+      if (mode === "disabled") {
+        expect(footer).not.toContain("New terminal");
+      } else {
         expect(footer).toContain("<M-n> New terminal");
         app.mockInput.pressKey("n", { meta: true });
         await app.visible("Shell shell-2");
@@ -442,12 +469,15 @@ test.each(["arrows", "vim", "control"] as const)(
     const app = await mount();
     const tab = (id: string) =>
       app.renderer.root.findDescendantById(`terminal-tab:${id}`)!.getChildren()[0]!;
-    const move = (next: boolean) =>
-      navigation === "arrows"
-        ? app.mockInput.pressArrow(next ? "right" : "left")
-        : navigation === "control"
-          ? app.mockInput.pressKey(next ? "n" : "p", { ctrl: true })
-          : app.mockInput.pressKey(next ? "l" : "h");
+    const move = (next: boolean) => {
+      if (navigation === "arrows") {
+        return app.mockInput.pressArrow(next ? "right" : "left");
+      } else if (navigation === "control") {
+        return app.mockInput.pressKey(next ? "n" : "p", { ctrl: true });
+      } else {
+        return app.mockInput.pressKey(next ? "l" : "h");
+      }
+    };
     try {
       await app.createTerminal();
       await app.visible("Shell shell-1");
@@ -515,17 +545,20 @@ test("Terminal viewports fill work panels without upper tabs and resize never re
       app.resize(width, height);
       await app.renderOnce();
       await app.renderOnce();
+
       const viewport = app.renderer.root.findDescendantById("terminal-viewport")!;
       const terminal = app.renderer.root.findDescendantById("shell-terminal")!;
 
       // Neither panel padding nor a stale VT size may leave an unused bottom row.
       const panel = app.renderer.root.findDescendantById("work-panel")!;
+
       expect(viewport.y).toBe(panel.y + 1); // Only the process-tab row remains.
       expect(viewport.y + viewport.height).toBe(panel.y + panel.height);
       expect(terminal.y + terminal.height).toBe(panel.y + panel.height);
       expect(terminal.height).toBe(viewport.height);
       expect(app.renderer.currentFocusedRenderable).toBe(terminal);
     }
+
     expect(app.created).toEqual(["demo:main"]);
     expect(app.closed).toEqual([]);
   } finally {
@@ -537,17 +570,20 @@ test("Process-title updates never recreate terminals, focus, or tab instances", 
   const clock = new ManualClock();
   const app = await mount(undefined, clock);
   let process = "zsh";
+
   app.actions.titles = async (items) =>
     ok(Object.fromEntries(items.map((item) => [item.id, process])));
   try {
     await app.createTerminal();
     await app.visible("zsh");
+
     const terminal = app.renderer.root.findDescendantById("shell-terminal")!;
     const tab = app.renderer.root.findDescendantById("terminal-tab:shell-1")!;
     const detached = app.detaches.length;
     const number = app.renderer.root.findDescendantById(
       "terminal-session:shell-1:number",
     ) as TextRenderable;
+
     expect(number.plainText).toBe("1.");
     process = "nvim";
     clock.advance(750);
@@ -571,8 +607,10 @@ test("Hiding terminals cancels title lookups and late responses preserve Git vie
   const app = await mount(undefined, clock);
   const pending = Promise.withResolvers<ReturnType<typeof ok<Record<string, string>>>>();
   let signal: AbortSignal | undefined;
+
   app.actions.titles = async (_items, value) => {
     signal = value;
+
     return pending.promise;
   };
   try {
@@ -596,10 +634,13 @@ test("Hiding terminals cancels title lookups and late responses preserve Git vie
 test("Legacy Terminal number prefixes hide while shell process names remain", async () => {
   const app = await mount();
   const create = app.actions.create;
+
   app.actions.create = async (tree, size) => {
     const result = await create(tree, size);
-    if (result.ok)
+    if (result.ok) {
       app.actions.list().find((item) => item.id === result.value)!.title = "Terminal 1 · zsh";
+    }
+
     return result;
   };
   try {
@@ -683,6 +724,7 @@ test.each(["default", "custom", "disabled"] as const)(
     try {
       leader("t");
       await app.visible("Shell shell-1");
+
       const close = app.renderer.root.findDescendantById("close-terminal:shell-1")!;
 
       // Close final tabs without automatic creation.
@@ -696,11 +738,13 @@ test.each(["default", "custom", "disabled"] as const)(
       const hint = app.renderer.root.findDescendantById(
         "terminal-empty-state:hint",
       ) as TextRenderable;
+
       expect(empty.visible).toBe(true);
       expect(app.created).toHaveLength(1);
       expect(app.renderer.currentFocusedRenderable?.id).toBe("terminal-view");
-      if (mode === "disabled") expect(hint.visible).toBe(false);
-      else {
+      if (mode === "disabled") {
+        expect(hint.visible).toBe(false);
+      } else {
         expect(hint.plainText).toContain("<leader>c");
         expect(hint.y).toBeGreaterThan(empty.y);
         leader("c");
@@ -725,11 +769,13 @@ test("Number shortcuts select current-worktree Terminal order without creating m
     expect(app.created).toEqual(["demo:main"]);
     app.leader("c");
     await app.visible("Shell shell-2");
+
     const creations = [...app.created];
 
     app.leader("1");
     await app.visible("Shell shell-1");
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-1");
+
     const terminal = app.renderer.root.findDescendantById("shell-terminal");
     app.leader("1");
     await app.renderOnce();
@@ -770,6 +816,7 @@ test("Closing earlier terminals renumbers tabs and numeric switching sends no PT
     expect(number("shell-1")).toBe("1.");
     expect(number("shell-2")).toBe("2.");
     expect(number("shell-3")).toBe("3.");
+
     const terminal = app.renderer.root.findDescendantById("shell-terminal")!;
     const tab = app.renderer.root.findDescendantById("terminal-session:shell-2")!;
 
@@ -874,6 +921,7 @@ test("Ctrl+C stays native while leaders control detach, tab switching, and log s
     app.leader("1");
     await app.visible("Shell shell-1");
     app.mockInput.pressCtrlC();
+
     const page = app.renderer.root.findDescendantById("shell-terminal")!.height - 1;
     app.renderer.keyInput.processParsedKey(parseKeypress("\x1b[5;2~")!);
     await app.visible(`log ${page}`);
@@ -899,16 +947,20 @@ test("Terminal tabs show only active selection through backgrounds without focus
     app.leader("c");
     await app.visible("Shell shell-2");
     await app.renderOnce();
+
     const first = app.renderer.root.findDescendantById("terminal-tab:shell-1")!.getChildren()[0]!;
     const second = app.renderer.root.findDescendantById("terminal-tab:shell-2")!.getChildren()[0]!;
     const cell = (tab: typeof first) => {
       let x = 0;
+
       return app.captureSpans().lines[tab.y]!.spans.find((span) => {
         x += span.width;
+
         return x > tab.x + 1;
       })!;
     };
     const colors = uiTheme(app.renderer).colors;
+
     expect(cell(second).bg.toInts()).toEqual(colors.surface.toInts());
     expect(cell(second).attributes & TextAttributes.UNDERLINE).toBe(0);
 
@@ -940,10 +992,11 @@ test("Terminal tabs show only active selection through backgrounds without focus
 
 test("AI/Terminal tabs share 18-cell frames and right close positions regardless of names/status", async () => {
   // Compare AI geometry with short/long terminal names in the same work area.
-  const clock = new ManualClock(),
-    app = await mount(undefined, clock);
+  const clock = new ManualClock();
+  const app = await mount(undefined, clock);
   const agent = app.renderer.root.findDescendantById("session:demo:main:a1")!;
   const agentWidth = agent.width;
+
   app.actions.titles = async (items) =>
     ok(
       Object.fromEntries(
@@ -957,9 +1010,11 @@ test("AI/Terminal tabs share 18-cell frames and right close positions regardless
     app.leader("c");
     await app.visible("Shell shell-2");
     await app.renderOnce();
+
     const first = app.renderer.root.findDescendantById("terminal-session:shell-1")!;
     const second = app.renderer.root.findDescendantById("terminal-session:shell-2")!;
     const title = app.renderer.root.findDescendantById(`${second.id}:title`) as TextRenderable;
+
     app.resize(60, 12);
     await app.renderOnce();
     await app.renderOnce();
@@ -977,6 +1032,7 @@ test("AI/Terminal tabs share 18-cell frames and right close positions regardless
       expect(close.width).toBe(1);
       expect(close.x + close.width).toBe(tab.x + tab.width - 1);
     }
+
     expect(title.plainText).toEndWith("…");
     expect(title.plainText).not.toContain("\uFFFD");
     expect(app.created).toHaveLength(2);
@@ -994,8 +1050,9 @@ test("Unselected terminal close buttons affect only their tab without changing a
     await app.visible("Shell shell-1");
     app.leader("c");
     await app.visible("Shell shell-2");
-    const terminal = app.renderer.root.findDescendantById("shell-terminal")!,
-      detaches = [...app.detaches];
+
+    const terminal = app.renderer.root.findDescendantById("shell-terminal")!;
+    const detaches = [...app.detaches];
     const close = app.renderer.root.findDescendantById("close-terminal:shell-1")!;
 
     // Click inactive-tab closure directly.
@@ -1024,8 +1081,10 @@ test("Rejected inactive-terminal closure notifies while preserving active input/
     await app.visible("Shell shell-1");
     app.leader("c");
     await app.visible("Shell shell-2");
+
     const terminal = app.renderer.root.findDescendantById("shell-terminal")!;
     const close = app.renderer.root.findDescendantById("close-terminal:shell-1")!;
+
     app.actions.close = async () => err(new PtyError("PTY_BUSY", "Cleanup was rejected."));
 
     // Request closure of first tabs rather than active shells.
@@ -1054,24 +1113,28 @@ test("Rejected inactive-terminal closure notifies while preserving active input/
 
 test("Late terminal attachments after tab clicks never steal popup focus", async () => {
   // Reattaching an existing shell may finish after the user opens a popup.
-  const app = await mount(),
-    ready = Promise.withResolvers<void>();
+  const app = await mount();
+  const ready = Promise.withResolvers<void>();
   try {
     await app.showView("t");
     await app.visible("Shell shell-1");
     app.leader("c");
     await app.visible("Shell shell-2");
+
     const attach = app.actions.attach;
     app.actions.attach = async (...args) => {
       await ready.promise;
+
       return attach(...args);
     };
+
     const tab = app.renderer.root.findDescendantById("terminal-session:shell-1")!;
 
     // The click starts attachment, but subsequent workspace navigation owns focus.
     await app.mockMouse.click(tab.x, tab.y);
     app.leader("b");
     await app.renderOnce();
+
     const popup = app.renderer.currentFocusedRenderable;
     ready.resolve();
     await app.visible("Shell shell-1");
@@ -1098,6 +1161,7 @@ test("Closing final terminals leaves valid empty content focus and leader+c reco
   try {
     await app.showView("t");
     await app.visible("Shell shell-1");
+
     const close = app.renderer.root.findDescendantById("close-terminal:shell-1")!;
 
     // Final closure creates no automatic replacement shells.
@@ -1126,8 +1190,10 @@ test("Multiple subtabs and compact layouts show only selected tabs with per-tab 
       app.leader("c");
       await app.visible(`Shell shell-${i}`);
     }
+
     await app.renderOnce();
     expect(app.captureCharFrame()).toContain("Terminal 6");
+
     const selectedTab = app
       .captureSpans()
       .lines.flatMap((line) => line.spans)
@@ -1137,6 +1203,7 @@ test("Multiple subtabs and compact layouts show only selected tabs with per-tab 
     app.resize(60, 12);
     await app.renderOnce();
     await app.renderOnce();
+
     const row = app
       .captureCharFrame()
       .split("\n")
@@ -1145,8 +1212,10 @@ test("Multiple subtabs and compact layouts show only selected tabs with per-tab 
     expect(row).not.toContain("+ New");
     expect(row).not.toContain("Close");
     expect(row).toContain("×");
+
     const tab = app.renderer.root.findDescendantById("terminal-session:shell-6")!;
     const close = app.renderer.root.findDescendantById("close-terminal:shell-6")!;
+
     expect(tab.width).toBe(18);
     expect(close.x + close.width).toBe(tab.x + tab.width - 1);
     expect(close.x + close.width).toBeLessThanOrEqual(app.renderer.width);
@@ -1159,8 +1228,10 @@ test("Late terminal creation never steals other-worktree Git screens or selectio
   const app = await mount();
   const ready = Promise.withResolvers<ReturnType<typeof ok<string>>>();
   const create = app.actions.create;
+
   app.actions.create = async (tree, size) => {
     await ready.promise;
+
     return create(tree, size);
   };
   try {

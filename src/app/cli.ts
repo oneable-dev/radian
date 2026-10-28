@@ -20,6 +20,7 @@ export type CliOptions = {
   theme: string | undefined;
   workspaceConfig: string | undefined;
 };
+
 type RawOptions = {
   demo?: boolean;
   testRuntime?: boolean;
@@ -35,6 +36,7 @@ type RawOptions = {
   workspaceConfig?: string;
   legacy?: boolean;
 };
+
 export type CliAction = { kind: "output"; text: string } | { kind: "run"; options: CliOptions };
 
 // Parsing is isolated from discovery, SDK initialization and process exit. Help and
@@ -43,9 +45,9 @@ export function parseCli(
   args: readonly string[],
   context: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): Result<CliAction, InputError> {
-  let output = "",
-    errors = "",
-    operation: "status" | "stop" | "restart" | undefined;
+  let output = "";
+  let errors = "";
+  let operation: "status" | "stop" | "restart" | undefined;
   const program = new Command()
     .name("radian")
     .description("A terminal AI development workbench powered by Pi Agent.")
@@ -88,6 +90,7 @@ export function parseCli(
     .command("runtime")
     .helpCommand(true)
     .description("Manage the shared daemon for the selected state directory and live/test mode");
+
   runtime
     .command("status")
     .description("Print the existing shared daemon snapshot without starting it")
@@ -112,29 +115,38 @@ export function parseCli(
   try {
     program.parse([...args], { from: "user" });
   } catch (error) {
-    if (!(error instanceof CommanderError)) throw error;
+    if (!(error instanceof CommanderError)) {
+      throw error;
+    }
     if (
       error.exitCode === 0 &&
       ["commander.helpDisplayed", "commander.help", "commander.version"].includes(error.code)
-    )
+    ) {
       return ok({ kind: "output", text: output || errors });
+    }
+
     return err(new InputError((errors || error.message).trim(), { cause: error }));
   }
+
   const raw = program.opts<RawOptions>();
   const statuses = [
     operation,
     raw.runtimeStatus ? "status" : undefined,
     raw.stopRuntime ? "stop" : undefined,
   ].filter((value) => value !== undefined);
-  if (new Set(statuses).size > 1 || (raw.runtimeService && statuses.length))
+  if (new Set(statuses).size > 1 || (raw.runtimeService && statuses.length)) {
     return err(new InputError("Choose exactly one runtime operation."));
+  }
+
   const administrative = statuses[0];
-  if (raw.legacy && (!administrative || administrative === "restart"))
+  if (raw.legacy && (!administrative || administrative === "restart")) {
     return err(new InputError("--legacy is supported only with runtime status or runtime stop."));
-  if (raw.demo && (raw.testRuntime || raw.runtimeService || administrative))
+  }
+  if (raw.demo && (raw.testRuntime || raw.runtimeService || administrative)) {
     return err(
       new InputError("--demo cannot be combined with test-runtime or runtime operations."),
     );
+  }
   for (const [name, path] of Object.entries({
     "--runtime-cwd": raw.runtimeCwd,
     "--state-dir": raw.stateDir,
@@ -143,10 +155,13 @@ export function parseCli(
     "--theme": raw.theme,
     "--workspace-config": raw.workspaceConfig,
   })) {
-    if (path !== undefined && (!path || path.includes("\0")))
+    if (path !== undefined && (!path || path.includes("\0"))) {
       return err(new InputError(`${name} requires a nonempty local path.`));
+    }
   }
+
   const base = context.cwd ?? process.cwd();
+
   return ok({
     kind: "run",
     options: {
@@ -172,18 +187,23 @@ export function checkInteractiveHost(
   options: CliOptions,
   host: { stdinTTY: boolean; stdoutTTY: boolean; term: string | undefined },
 ): Result<void, InputError> {
-  if (options.service || options.status || options.stop || options.restart) return ok(undefined);
-  if (!host.stdinTTY || !host.stdoutTTY)
+  if (options.service || options.status || options.stop || options.restart) {
+    return ok(undefined);
+  }
+  if (!host.stdinTTY || !host.stdoutTTY) {
     return err(
       new InputError(
         "Interactive mode requires a TTY for stdin and stdout. Use --help, --version or 'runtime status' in scripts.",
       ),
     );
-  if (host.term === "dumb")
+  }
+  if (host.term === "dumb") {
     return err(
       new InputError(
         "Interactive mode requires a cursor-addressable UTF-8 terminal; TERM=dumb is unsupported. Help, version and runtime commands remain available.",
       ),
     );
+  }
+
   return ok(undefined);
 }

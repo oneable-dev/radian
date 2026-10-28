@@ -18,9 +18,9 @@ import { defaultKeymap } from "../../keybindings/config.ts";
 
 async function mount(options: ConstructorParameters<typeof PromptInput>[3] = {}) {
   const app = await createTestRenderer({ width: 80, height: 10, kittyKeyboard: true });
-  const notices: string[] = [],
-    levels: NoticeOptions["level"][] = [],
-    details: DialogContent[] = [];
+  const notices: string[] = [];
+  const levels: NoticeOptions["level"][] = [];
+  const details: DialogContent[] = [];
   const input = new PromptInput(
     app.renderer,
     (message, options) => {
@@ -30,9 +30,11 @@ async function mount(options: ConstructorParameters<typeof PromptInput>[3] = {})
     (content) => details.push(content),
     options,
   );
+
   app.renderer.root.add(input.field);
   input.focus();
   await app.renderOnce();
+
   return {
     ...app,
     input,
@@ -51,13 +53,14 @@ test.each(["", "/", "@"])(
   async (prefix) => {
     // Only OS clipboard contents are replaced; the real keymap, router, menu and attachment conversion stay active.
     const directory = await mkdtemp(join(tmpdir(), "radian-clipboard-keys-"));
-    let reads = 0,
-      paste: Promise<void> | undefined;
+    let reads = 0;
+    let paste: Promise<void> | undefined;
     const app = await mount({
       cacheRoot: directory,
       clipboard: {
         read: async () => {
           reads++;
+
           return ok({ mimeType: "image/png", bytes: tinyPng() });
         },
         dispose: async () => {},
@@ -70,14 +73,18 @@ test.each(["", "/", "@"])(
       async () => ok({ items: [], truncated: false }),
       () => {},
     );
+
     app.renderer.root.add(menu.root);
+
     const router = new KeyRouter(
       app.renderer,
       defaultKeymap(),
       () => (menu.engaged ? "prompt-completion" : "prompt"),
       (command) => command === "agent.paste",
       (command) => {
-        if (command === "agent.paste") paste = app.input.pasteClipboard();
+        if (command === "agent.paste") {
+          paste = app.input.pasteClipboard();
+        }
       },
     );
     try {
@@ -88,13 +95,17 @@ test.each(["", "/", "@"])(
       // Completion ownership must not swallow the paste shortcut while / or @ suggestions are open.
       app.mockInput.pressKey("v", { ctrl: true });
       expect(paste).toBeDefined();
-      if (!paste) throw new Error("Clipboard paste shortcut was not routed");
+      if (!paste) {
+        throw new Error("Clipboard paste shortcut was not routed");
+      }
+
       await paste;
       await app.renderOnce();
 
       // The original prefix remains, and the image is retained as private bytes rather than submitted or exposed as a path.
       expect(reads).toBe(1);
       expect(app.input.value).toBe(`${prefix}[Image #1]`);
+
       const path = app.input.submission.images[0]!;
       expect(path.startsWith(directory)).toBe(true);
       expect(await readFile(path)).toEqual(tinyPng());
@@ -119,6 +130,7 @@ test("Read-only prompts ignore keys and pastes without reading OS clipboards", a
     clipboard: {
       read: async () => {
         reads++;
+
         return ok({ mimeType: "image/png", bytes: tinyPng() });
       },
       dispose: async () => {},
@@ -161,9 +173,11 @@ test("Clipboard images display numbers and reference private files retained in d
     await app.input.pasteClipboard();
     expect(app.input.value).toBe("[Image #1]");
     expect(app.input.pending).toBe(false);
+
     const path = app.input.submission.images[0]!;
     expect(path.startsWith(directory)).toBe(true);
     expect(await readFile(path)).toEqual(tinyPng());
+
     const saved = app.input.draft;
     app.input.value = "";
     expect(app.input.restore(saved).ok).toBe(true);
@@ -242,6 +256,7 @@ test("Moving the caret during clipboard reads prevents misplaced insertion and o
   const app = await mount({ clipboard: { read: () => gate.promise, dispose: async () => {} } });
   try {
     await app.mockInput.typeText("before");
+
     const pending = app.input.pasteClipboard();
     app.mockInput.pressArrow("left");
     gate.resolve(ok({ mimeType: "text/plain", bytes: new TextEncoder().encode("paste") }));
@@ -351,10 +366,13 @@ test("Korean/emoji edits around attachments preserve source positions and caret 
     await app.mockInput.pasteBracketedText(text);
     await app.mockInput.typeText(" 뒤");
     app.mockInput.pressArrow("left");
+
     const cursor = app.input.cursorOffset;
-    const saved = app.input.draft,
-      expanded = app.input.submission.text;
+    const saved = app.input.draft;
+    const expanded = app.input.submission.text;
+
     app.input.value = "another session";
+
     const restored = app.input.restore(saved);
 
     expect(restored.ok).toBe(true);
@@ -392,6 +410,7 @@ test("Attachment details are read-only and Backspace removes only the selected i
   try {
     app.input.attachFile("/tmp/one.txt");
     app.input.attachFile("/tmp/two.png");
+
     const draft = app.input.draft;
 
     // View source without deletion actions, then use ordinary input deletion.
@@ -417,6 +436,7 @@ test("Completion replaces only its target range without losing attachments", asy
   try {
     app.input.attachFile("/tmp/image.png");
     await app.mockInput.typeText(" /mode");
+
     const start = app.input.value.indexOf("/mode");
     app.input.replaceRange(start, app.input.value.length, "/model ");
 

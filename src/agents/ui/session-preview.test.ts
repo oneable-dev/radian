@@ -112,9 +112,9 @@ async function renderSession(
   height: number,
 ) {
   const app = await createTestRenderer({ width, height, clock: new ManualClock() });
-  const keymap = defaultKeymap(),
-    keyHint = keymap.hint.bind(keymap),
-    noop = () => {};
+  const keymap = defaultKeymap();
+  const keyHint = keymap.hint.bind(keymap);
+  const noop = () => {};
   const tree: Worktree = {
     id: "tree",
     path: "/fixture",
@@ -138,7 +138,8 @@ async function renderSession(
     ],
   };
   const details = (id: string) => (id === "session" ? state : null);
-  let surface: SessionPreview | undefined, panel: AgentPanel;
+  let surface: SessionPreview | undefined;
+  let panel: AgentPanel;
   if (preview) {
     surface = new SessionPreview(app.renderer, "fixture", {
       notice: noop,
@@ -170,6 +171,7 @@ async function renderSession(
     app.renderer.root.add(panel.root);
     panel.update(tree, "session", new Set(tree.sessions.map((session) => session.id)), true);
   }
+
   const render = async () => {
     await app.renderOnce();
     await app.renderOnce();
@@ -183,8 +185,9 @@ async function renderSession(
   };
   try {
     await render();
-    const frame = app.captureCharFrame(),
-      height = panel.transcriptScroll.scrollHeight;
+
+    const frame = app.captureCharFrame();
+    const height = panel.transcriptScroll.scrollHeight;
     const colors = app.captureSpans().lines.map((line) =>
       line.spans.map((span) => ({
         text: span.text,
@@ -193,12 +196,18 @@ async function renderSession(
         background: span.bg.toInts(),
       })),
     );
+
     panel.transcriptScroll.scrollTo(0);
     await render();
+
     return { frame, colors, height, top: app.captureCharFrame() };
   } finally {
-    if (surface) surface.dispose();
-    else panel.dispose();
+    if (surface) {
+      surface.dispose();
+    } else {
+      panel.dispose();
+    }
+
     await app.dispose();
   }
 }

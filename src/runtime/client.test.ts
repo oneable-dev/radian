@@ -25,28 +25,42 @@ const snapshot = (): RuntimeSnapshot => ({
   capabilities: ["history"],
 });
 const encoder = new TextEncoder();
+
 type RuntimeRequestOptions = Omit<NonNullable<Parameters<typeof fetch>[1]>, "body"> & {
   body?: string | null;
 };
+
 function stubFetch(
   implementation: (input: string | URL, options?: RuntimeRequestOptions) => Promise<Response>,
 ) {
   // The runtime wire protocol uses explicit URLs and serialized JSON, not Request or streaming bodies.
   const request = (input: Parameters<typeof fetch>[0], options?: Parameters<typeof fetch>[1]) => {
-    if (input instanceof Request) throw new TypeError("Expected an explicit runtime request URL.");
-    if (!options) return implementation(input);
+    if (input instanceof Request) {
+      throw new TypeError("Expected an explicit runtime request URL.");
+    }
+    if (!options) {
+      return implementation(input);
+    }
+
     const { body, ...init } = options;
-    if (body != null && typeof body !== "string")
+    if (body != null && typeof body !== "string") {
       throw new TypeError("Expected a serialized runtime request body.");
+    }
+
     return implementation(input, { ...init, ...(body === undefined ? {} : { body }) });
   };
+
   return spyOn(globalThis, "fetch").mockImplementation(
     Object.assign(request, { preconnect: fetch.preconnect }),
   );
 }
+
 async function settle(): Promise<void> {
-  for (let i = 0; i < 40; i++) await Promise.resolve();
+  for (let i = 0; i < 40; i++) {
+    await Promise.resolve();
+  }
 }
+
 async function advance(milliseconds: number): Promise<void> {
   jest.advanceTimersByTime(milliseconds);
   await settle();
@@ -67,24 +81,31 @@ function events(value: unknown, signal?: AbortSignal | null, chunkBytes = Number
   };
   const enqueue = (value: unknown) => {
     const bytes = encoder.encode(JSON.stringify(value) + "\n");
-    for (let offset = 0; offset < bytes.length; offset += chunkBytes)
+    for (let offset = 0; offset < bytes.length; offset += chunkBytes) {
       controller.enqueue(bytes.subarray(offset, offset + chunkBytes));
+    }
   };
   const response = new Response(
     new ReadableStream<Uint8Array>({
       start(stream) {
         controller = stream;
         signal?.addEventListener("abort", aborted, { once: true });
-        if (signal?.aborted) aborted();
-        else if (value !== undefined) enqueue(value);
+        if (signal?.aborted) {
+          aborted();
+        } else if (value !== undefined) {
+          enqueue(value);
+        }
       },
       cancel: remove,
     }),
   );
+
   return {
     response,
     frame(value: unknown) {
-      if (open) enqueue(value);
+      if (open) {
+        enqueue(value);
+      }
     },
     end() {
       if (open) {
@@ -105,14 +126,15 @@ test("Raw history never becomes model prompts or other requests even on legacy s
   // Protect host commands in popup-free API calls and legacy services.
   const state = snapshot();
   state.capabilities = [];
+
   const mocked = stubFetch(async () => {
     throw new Error("History commands must not transmit");
   });
   const client = new RuntimeClient(paths, state);
   try {
     // Reject valid commands and invalid arguments before transport.
-    const history = await client.prompt("session", "/history"),
-      invalid = await client.prompt("session", "/history recent");
+    const history = await client.prompt("session", "/history");
+    const invalid = await client.prompt("session", "/history recent");
 
     // Distinguish rejection reasons without model submission or automatic restart.
     expect(expectError(history).code).toBe("UNSUPPORTED_CAPABILITY");
@@ -126,8 +148,8 @@ test("Raw history never becomes model prompts or other requests even on legacy s
 
 test("Legacy account services reject label edits before transport without restarting or changing state", async () => {
   // Existing account-switching services may still be running jobs on an older version.
-  const state = { ...snapshot(), capabilities: ["accounts"] },
-    before = structuredClone(state);
+  const state = { ...snapshot(), capabilities: ["accounts"] };
+  const before = structuredClone(state);
   const mocked = stubFetch(async () => {
     throw new Error("Legacy services must not receive label edits");
   });
@@ -174,10 +196,12 @@ test("Session state above 8 MiB preserves conversations, drafts, and History con
     },
   };
   expect(Buffer.byteLength(JSON.stringify(large))).toBeGreaterThan(maxFrameBytes);
+
   const requests: string[] = [];
   const fetchMock = stubFetch(async (input, options) => {
     const path = new URL(String(input)).pathname;
     requests.push(path);
+
     return path === "/events" ? events(large, options?.signal, 65533).response : Response.json([]);
   });
   const client = new RuntimeClient(paths, snapshot());
@@ -208,6 +232,7 @@ test("Legacy new, clear, exit, and compact never fall back to model prompts or a
     for (const text of ["/new", "/clear", "/exit", "/compact", "/compact preserve this plan"]) {
       expect(expectError(await client.prompt("session", text)).code).toBe("UNSUPPORTED_CAPABILITY");
     }
+
     expect(fetchMock).not.toHaveBeenCalled();
   } finally {
     await client.disconnect();
@@ -228,8 +253,10 @@ test("Session-controls-only services never receive destructive legacy new for ne
   });
   const client = new RuntimeClient(paths, state);
   try {
-    for (const text of ["/new", "/clear"])
+    for (const text of ["/new", "/clear"]) {
       expect(expectError(await client.prompt("session", text)).code).toBe("UNSUPPORTED_CAPABILITY");
+    }
+
     expect(expectError(await client.newTab("session")).code).toBe("UNSUPPORTED_CAPABILITY");
     expect(fetchMock).not.toHaveBeenCalled();
   } finally {
@@ -269,22 +296,28 @@ test.each(["newTab", "create"] as const)(
     const fetchMock = stubFetch(async (input, options) => {
       if (new URL(String(input)).pathname === "/events") {
         stream = events(state, options?.signal);
+
         return stream.response;
       }
+
       sent.push(JSON.parse(String(options?.body)));
+
       return Response.json({ ok: true, value: "created" });
     });
     const client = new RuntimeClient(paths, state);
     try {
       expectOk(await client.attach());
+
       let resolved = false;
       // A caller must be able to select the returned session immediately after creation resolves.
       const creating = (
         action === "create" ? client.create("tree") : client.newTab("session")
       ).then((result) => {
         resolved = true;
+
         return result;
       });
+
       await settle();
       expect(resolved).toBe(false);
       stream!.frame({
@@ -333,10 +366,11 @@ test.each(["newTab", "create"] as const)(
 test("Interrupt validates capabilities/current conversation IDs and targets only exact sessions", async () => {
   // An older service must not receive an unknown command or be restarted automatically.
   const details: Record<string, RuntimeSnapshot["details"][string]> = {};
-  const state = { ...snapshot(), details },
-    sent: unknown[] = [];
+  const state = { ...snapshot(), details };
+  const sent: unknown[] = [];
   const fetchMock = stubFetch(async (_input, options) => {
     sent.push(JSON.parse(String(options?.body)));
+
     return Response.json({ ok: true, value: null });
   });
   const client = new RuntimeClient(paths, state);
@@ -373,6 +407,7 @@ test("exit sends no close requests with only old tab capabilities or missing con
     // Check close capabilities and conversation IDs separately.
     const unsupported = await client.prompt("session", "/exit");
     state.capabilities.push("session-exit");
+
     const missingConversation = await client.prompt("session", "/exit");
 
     // Never fall back to unconditional closure of legacy services or replaced conversations.
@@ -397,6 +432,7 @@ test("clear/exit/compact and ordinary input target current conversation IDs with
   const sent: unknown[] = [];
   const fetchMock = stubFetch(async (_input, options) => {
     sent.push(JSON.parse(String(options?.body)));
+
     return Response.json({ ok: true, value: null });
   });
   const client = new RuntimeClient(paths, state);
@@ -478,9 +514,11 @@ test("Legacy runtime images and large input fail preservably without sending or 
 test("Image-capable runtimes receive explicit image references in the same prompt command", async () => {
   const state = snapshot();
   state.capabilities = ["prompt-images"];
+
   const sent: unknown[] = [];
   const fetchMock = stubFetch(async (_input, options) => {
     sent.push(JSON.parse(String(options?.body)));
+
     return Response.json({ ok: true, value: null });
   });
   const client = new RuntimeClient(paths, state);
@@ -520,10 +558,12 @@ for (const registered of [false, true]) {
   test(`Existing /fast registration ${registered} is checked read-only and commands send only when registered`, async () => {
     const state = snapshot();
     state.capabilities = ["prompt-completion"];
+
     const requests: string[] = [];
     const fetchMock = stubFetch(async (input) => {
       const path = new URL(String(input)).pathname;
       requests.push(path);
+
       return path === "/completions"
         ? Response.json({
             items: registered
@@ -537,8 +577,12 @@ for (const registered of [false, true]) {
     try {
       const result = await client.prompt("session", "/fast off");
 
-      if (registered) expectOk(result);
-      else expect(expectError(result).code).toBe("UNSUPPORTED_CAPABILITY");
+      if (registered) {
+        expectOk(result);
+      } else {
+        expect(expectError(result).code).toBe("UNSUPPORTED_CAPABILITY");
+      }
+
       expect(requests).toEqual(registered ? ["/completions", "/command"] : ["/completions"]);
     } finally {
       await client.disconnect();
@@ -570,9 +614,9 @@ test("Legacy services never receive catalogs, reload, or dollar syntax as prompt
   });
   const client = new RuntimeClient(paths, snapshot());
   try {
-    const catalog = await client.catalog("session"),
-      reload = await client.prompt("session", "/reload"),
-      skill = await client.prompt("session", "$review-code");
+    const catalog = await client.catalog("session");
+    const reload = await client.prompt("session", "/reload");
+    const skill = await client.prompt("session", "$review-code");
 
     expect(expectError(catalog).code).toBe("UNSUPPORTED_CAPABILITY");
     expect(expectError(reload).code).toBe("UNSUPPORTED_CAPABILITY");
@@ -596,7 +640,10 @@ test("Full catalogs validate beyond 100 entries and reject wrong conversations o
     expect(url.pathname).toBe("/completion-catalog");
     expect(url.searchParams.get("conversationId")).toBe("conversation");
     expect(new Headers(options?.headers).get("X-Radian-Instance")).toBe("first");
-    if (mode === "replaced") details.session.conversationId = "replacement";
+    if (mode === "replaced") {
+      details.session.conversationId = "replacement";
+    }
+
     return Response.json(
       mode === "malformed"
         ? { conversationId: "wrong", items: [] }
@@ -615,8 +662,10 @@ test("Full catalogs validate beyond 100 entries and reject wrong conversations o
   try {
     const catalog = expectOk(await client.catalog("session"));
     mode = "malformed";
+
     const malformed = await client.catalog("session");
     mode = "replaced";
+
     const replaced = await client.catalog("session");
 
     expect(catalog.items).toHaveLength(150);
@@ -631,6 +680,7 @@ test("Full catalogs validate beyond 100 entries and reject wrong conversations o
 test("Completion uses instance-fenced read requests and rejects invalid candidates", async () => {
   const state = snapshot();
   state.capabilities = ["prompt-completion"];
+
   let malformed = false;
   const requests: string[] = [];
   const fetchMock = stubFetch(async (input, options) => {
@@ -638,6 +688,7 @@ test("Completion uses instance-fenced read requests and rejects invalid candidat
     requests.push(url.pathname);
     expect(url.searchParams.get("query")).toBe("문서/a b");
     expect(new Headers(options?.headers).get("X-Radian-Instance")).toBe("first");
+
     return Response.json(
       malformed
         ? { items: [{ value: "missing-kind" }], truncated: false }
@@ -667,6 +718,7 @@ test("Completion uses instance-fenced read requests and rejects invalid candidat
 test("User-cancelled completion fetches return CANCELLED instead of exceptions or empty success", async () => {
   const state = snapshot();
   state.capabilities = ["prompt-completion"];
+
   const fetchMock = stubFetch(
     async (_input, options) =>
       new Promise((_resolve, reject) => {
@@ -691,11 +743,14 @@ for (const failure of ["eof", "reset"] as const) {
   test(`Event ${failure} recovers with fresh snapshots without replaying mutations`, async () => {
     // Only the transport boundary is replaced; public client actions and stream parsing remain real.
     jest.useFakeTimers();
+
     const initial = snapshot();
     initial.capabilities = [];
+
     const fresh = snapshot();
     fresh.instance = "restarted";
     fresh.preferences.drafts = { session: "restored" };
+
     const streams: ReturnType<typeof events>[] = [];
     const commands: string[] = [];
     const fetchMock = stubFetch(async (input, options) => {
@@ -703,14 +758,19 @@ for (const failure of ["eof", "reset"] as const) {
       if (path === "/events") {
         const stream = events(streams.length ? fresh : initial, options?.signal);
         streams.push(stream);
+
         return stream.response;
       }
-      if (path === "/history") return Response.json([]);
+      if (path === "/history") {
+        return Response.json([]);
+      }
+
       const command = JSON.parse(String(options?.body));
       commands.push(command.type);
-      if (command.type === "prompt")
+      if (command.type === "prompt") {
         throw Object.assign(new Error("Acknowledgement lost"), { code: "ECONNRESET" });
-      if (command.type === "create")
+      }
+      if (command.type === "create") {
         streams[0]!.frame({
           ...initial,
           repositories: [
@@ -732,6 +792,8 @@ for (const failure of ["eof", "reset"] as const) {
             session: { conversationId: "original", status: null, output: "", error: null },
           },
         });
+      }
+
       return Response.json({ ok: true, value: command.type === "create" ? "session" : null });
     });
     const client = new RuntimeClient(paths, initial);
@@ -744,8 +806,12 @@ for (const failure of ["eof", "reset"] as const) {
       expectOk(await client.closeSession("session"));
 
       // EOF and reset both permit read-only resubscription, never a replay of an uncertain action.
-      if (failure === "eof") streams[0]!.end();
-      else streams[0]!.fail(Object.assign(new Error("stream reset"), { code: "ECONNRESET" }));
+      if (failure === "eof") {
+        streams[0]!.end();
+      } else {
+        streams[0]!.fail(Object.assign(new Error("stream reset"), { code: "ECONNRESET" }));
+      }
+
       await settle();
       expect(client.snapshot.notice).toContain("Reconnecting");
       expect(expectError(await client.create("worktree")).code).toBe("CONNECTION_FAILED");
@@ -768,10 +834,12 @@ for (const failure of ["eof", "reset"] as const) {
 test("Short repeated connections never reset retry budgets indefinitely after one snapshot", async () => {
   // A peer that accepts a stream and immediately closes must not cause an endless reconnect loop.
   jest.useFakeTimers();
+
   const streams: ReturnType<typeof events>[] = [];
   const fetchMock = stubFetch(async (_input, options) => {
     const stream = events(snapshot(), options?.signal);
     streams.push(stream);
+
     return stream.response;
   });
   const client = new RuntimeClient(paths, snapshot());
@@ -784,6 +852,7 @@ test("Short repeated connections never reset retry budgets indefinitely after on
       await settle();
       await advance(delay);
     }
+
     streams.at(-1)!.end();
     await settle();
     await advance(60000);
@@ -803,10 +872,12 @@ test("Short repeated connections never reset retry budgets indefinitely after on
 test("Services without initial snapshots obey connection deadlines and retry budgets", async () => {
   // HTTP headers alone do not prove that a valid event subscription is ready.
   jest.useFakeTimers();
+
   const streams: ReturnType<typeof events>[] = [];
   const fetchMock = stubFetch(async (_input, options) => {
     const stream = events(streams.length ? undefined : snapshot(), options?.signal);
     streams.push(stream);
+
     return stream.response;
   });
   const client = new RuntimeClient(paths, snapshot());
@@ -820,6 +891,7 @@ test("Services without initial snapshots obey connection deadlines and retry bud
       await advance(delay);
       await advance(2000);
     }
+
     await advance(60000);
 
     expect(streams).toHaveLength(5);
@@ -835,6 +907,7 @@ test("Services without initial snapshots obey connection deadlines and retry bud
 test("UI detach cancels reconnect waits and prevents further connections", async () => {
   // Detaching is a terminal client action, unlike an accidental transport failure.
   jest.useFakeTimers();
+
   const stream = events(snapshot());
   const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(stream.response);
   const client = new RuntimeClient(paths, snapshot());
@@ -858,6 +931,7 @@ test("UI detach cancels reconnect waits and prevents further connections", async
 test("Detaching while awaiting first snapshots ends connection work and timers", async () => {
   // A stalled initial handshake must not prevent the configured detach action from disposing the client.
   jest.useFakeTimers();
+
   const fetchMock = stubFetch(
     async (_input, options) => events(undefined, options?.signal).response,
   );
@@ -867,6 +941,7 @@ test("Detaching while awaiting first snapshots ends connection work and timers",
     await settle();
 
     await client.disconnect();
+
     const result = await attached;
     await advance(60000);
 
@@ -883,10 +958,15 @@ for (const mismatch of ["repository", "mode"] as const) {
   test(`Reconnect target ${mismatch} mismatches block commands and retries`, async () => {
     // A replacement instance is allowed only within the original workspace identity and live/test mode.
     jest.useFakeTimers();
+
     const first = events(snapshot());
     const other = snapshot();
-    if (mismatch === "repository") other.repositoryId = "/other/.git";
-    else other.mode = "live";
+    if (mismatch === "repository") {
+      other.repositoryId = "/other/.git";
+    } else {
+      other.mode = "live";
+    }
+
     const fetchMock = spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(first.response)
       .mockResolvedValueOnce(events(other).response);
@@ -914,10 +994,12 @@ for (const mismatch of ["repository", "mode"] as const) {
 test("Stable connections grant fresh reconnect budgets after later disconnects", async () => {
   // A previous brief outage should not permanently consume the budget for later independent outages.
   jest.useFakeTimers();
+
   const streams: ReturnType<typeof events>[] = [];
   const fetchMock = stubFetch(async (_input, options) => {
     const stream = events(snapshot(), options?.signal);
     streams.push(stream);
+
     return stream.response;
   });
   const client = new RuntimeClient(paths, snapshot());
@@ -946,6 +1028,7 @@ test("Stable connections grant fresh reconnect budgets after later disconnects",
 test("Event-connection permission failures return typed errors without retries", async () => {
   // Retrying a permission denial cannot repair ownership and must not launch another service.
   jest.useFakeTimers();
+
   const original = Object.assign(new Error("permission denied"), { code: "EACCES" });
   const fetchMock = spyOn(globalThis, "fetch").mockRejectedValue(original);
   const client = new RuntimeClient(paths, snapshot());
@@ -966,6 +1049,7 @@ test("Event-connection permission failures return typed errors without retries",
 test("Initial connection bugs propagate identical exceptions without reconnecting", async () => {
   // The initiating caller owns diagnostics until a client is attached successfully.
   jest.useFakeTimers();
+
   const defect = new TypeError("initial attachment defect");
   const fetchMock = spyOn(globalThis, "fetch").mockRejectedValue(defect);
   const client = new RuntimeClient(paths, snapshot());
@@ -984,6 +1068,7 @@ test("Initial connection bugs propagate identical exceptions without reconnectin
 test("Unexpected stream errors log original causes instead of hiding behind retries", async () => {
   // An internal defect is not a transient connection error even if it occurs while reading a stream.
   jest.useFakeTimers();
+
   const defect = new TypeError("unexpected stream defect");
   const stream = events(snapshot());
   const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(stream.response);
@@ -1010,8 +1095,10 @@ test("Unexpected stream errors log original causes instead of hiding behind retr
 test("Recovery to identical runtimes never replays disconnected PTY input or detach", async () => {
   // One input is already in flight; later keys have not crossed the transport boundary.
   jest.useFakeTimers();
+
   const state = snapshot();
   state.capabilities = ["history", "terminal-tabs"];
+
   const mainStreams: ReturnType<typeof events>[] = [];
   const commands: { type: string; data?: string; lease?: string }[] = [];
   const acknowledgement = Promise.withResolvers<Response>();
@@ -1021,6 +1108,7 @@ test("Recovery to identical runtimes never replays disconnected PTY input or det
     if (path === "/events") {
       const stream = events(state, options?.signal);
       mainStreams.push(stream);
+
       return stream.response;
     }
     if (path === "/terminal/events") {
@@ -1036,17 +1124,23 @@ test("Recovery to identical runtimes never replays disconnected PTY input or det
         ansi: "",
       };
       expect(new Headers(options?.headers).get("X-Radian-Instance")).toBe("first");
+
       return events(frame, options?.signal).response;
     }
+
     const command = JSON.parse(String(options?.body));
     commands.push(command);
-    if (command.type === "terminal-input" && ++inputs === 1) return acknowledgement.promise;
+    if (command.type === "terminal-input" && ++inputs === 1) {
+      return acknowledgement.promise;
+    }
+
     return Response.json({ ok: true, value: null });
   });
   const client = new RuntimeClient(paths, state);
   const failures: unknown[] = [];
   try {
     expectOk(await client.attach());
+
     const old = expectOk(
       await client.attachTerminal(
         "shell",
@@ -1071,6 +1165,7 @@ test("Recovery to identical runtimes never replays disconnected PTY input or det
     expect(commands.map((command) => command.type)).toEqual(["terminal-input"]);
     expect(Buffer.from(commands[0]!.data!, "base64").toString()).toBe("sent-once");
     expect(failures).toHaveLength(1);
+
     const fresh = expectOk(
       await client.attachTerminal(
         "shell",
@@ -1096,8 +1191,10 @@ test("Recovery to identical runtimes never replays disconnected PTY input or det
 
 test("Detach during pending PTY input stops reconnection immediately and flushes only final preferences", async () => {
   jest.useFakeTimers();
+
   const state = snapshot();
   state.capabilities = ["terminal-tabs"];
+
   const acknowledgement = Promise.withResolvers<Response>();
   const commands: string[] = [];
   let subscriptions = 0;
@@ -1105,9 +1202,10 @@ test("Detach during pending PTY input stops reconnection immediately and flushes
     const path = new URL(String(input)).pathname;
     if (path === "/events") {
       subscriptions++;
+
       return events(state, options?.signal).response;
     }
-    if (path === "/terminal/events")
+    if (path === "/terminal/events") {
       return events(
         {
           id: "shell",
@@ -1122,8 +1220,11 @@ test("Detach during pending PTY input stops reconnection immediately and flushes
         },
         options?.signal,
       ).response;
+    }
+
     const command = JSON.parse(String(options?.body));
     commands.push(command.type);
+
     return command.type === "terminal-input"
       ? acknowledgement.promise
       : Response.json({ ok: true, value: null });
@@ -1131,6 +1232,7 @@ test("Detach during pending PTY input stops reconnection immediately and flushes
   const client = new RuntimeClient(paths, state);
   try {
     expectOk(await client.attach());
+
     const terminal = expectOk(
       await client.attachTerminal(
         "shell",
@@ -1175,11 +1277,14 @@ test.each(["supported", "unsupported", "malformed"] as const)(
       "terminal-tabs",
       ...(mode === "unsupported" ? [] : ["terminal-copy-mode"]),
     ];
+
     const commands: string[] = [];
     const fetchMock = stubFetch(async (input, options) => {
       const path = new URL(String(input)).pathname;
-      if (path === "/events") return events(state, options?.signal).response;
-      if (path === "/terminal/events")
+      if (path === "/events") {
+        return events(state, options?.signal).response;
+      }
+      if (path === "/terminal/events") {
         return events(
           {
             id: "shell",
@@ -1194,8 +1299,11 @@ test.each(["supported", "unsupported", "malformed"] as const)(
           },
           options?.signal,
         ).response;
+      }
+
       const command = JSON.parse(String(options?.body));
       commands.push(command.type);
+
       return Response.json({
         ok: true,
         value:
@@ -1206,10 +1314,11 @@ test.each(["supported", "unsupported", "malformed"] as const)(
             : null,
       });
     });
-    const client = new RuntimeClient(paths, state),
-      failures: unknown[] = [];
+    const client = new RuntimeClient(paths, state);
+    const failures: unknown[] = [];
     try {
       expectOk(await client.attach());
+
       const terminal = expectOk(
         await client.attachTerminal(
           "shell",
@@ -1219,11 +1328,14 @@ test.each(["supported", "unsupported", "malformed"] as const)(
       );
 
       const result = await terminal.read();
-      if (mode === "supported") expect(expectOk(result).text).toBe("old output");
-      else
+      if (mode === "supported") {
+        expect(expectOk(result).text).toBe("old output");
+      } else {
         expect(expectError(result).code).toBe(
           mode === "unsupported" ? "UNSUPPORTED_CAPABILITY" : "PROTOCOL_ERROR",
         );
+      }
+
       terminal.input(encoder.encode("still interactive"));
       await settle();
 
@@ -1241,22 +1353,31 @@ test.each(["supported", "unsupported", "malformed"] as const)(
 test("Detach while awaiting first PTY headers returns cancellation without sending commands", async () => {
   const state = snapshot();
   state.capabilities = ["terminal-tabs"];
+
   const commands: string[] = [];
   const fetchMock = stubFetch(async (input, options) => {
-    if (new URL(String(input)).pathname === "/events")
+    if (new URL(String(input)).pathname === "/events") {
       return events(state, options?.signal).response;
-    if (new URL(String(input)).pathname === "/terminal/events")
+    }
+    if (new URL(String(input)).pathname === "/terminal/events") {
       return new Promise((_resolve, reject) => {
         const aborted = () => reject(options?.signal?.reason);
-        if (options?.signal?.aborted) aborted();
-        else options?.signal?.addEventListener("abort", aborted, { once: true });
+        if (options?.signal?.aborted) {
+          aborted();
+        } else {
+          options?.signal?.addEventListener("abort", aborted, { once: true });
+        }
       });
+    }
+
     commands.push(String(options?.body));
+
     return Response.json({ ok: true, value: null });
   });
   const client = new RuntimeClient(paths, state);
   try {
     expectOk(await client.attach());
+
     const pending = client.attachTerminal(
       "shell",
       () => {},
@@ -1274,12 +1395,16 @@ test("Detach while awaiting first PTY headers returns cancellation without sendi
 
 test("Programming bugs concurrent with handshake timeouts never become timeout errors", async () => {
   jest.useFakeTimers();
+
   const defect = new TypeError("defect racing timeout");
   const fetchMock = stubFetch(
     async (_input, options) =>
       new Promise((_resolve, reject) => {
-        if (options?.signal?.aborted) reject(defect);
-        else options?.signal?.addEventListener("abort", () => reject(defect), { once: true });
+        if (options?.signal?.aborted) {
+          reject(defect);
+        } else {
+          options?.signal?.addEventListener("abort", () => reject(defect), { once: true });
+        }
       }),
   );
   const client = new RuntimeClient(paths, snapshot());
@@ -1299,6 +1424,7 @@ test("Programming bugs concurrent with handshake timeouts never become timeout e
 
 test("Instance changes within one stream are rejected without retries", async () => {
   jest.useFakeTimers();
+
   const stream = events(snapshot());
   const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(stream.response);
   const client = new RuntimeClient(paths, snapshot());

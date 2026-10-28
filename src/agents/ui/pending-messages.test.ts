@@ -7,7 +7,9 @@ import { PendingMessages } from "./pending-messages.ts";
 async function mount(width = 120, key = "<Esc>") {
   const app = await createTestRenderer({ width, height: 8 });
   const pending = new PendingMessages(app.renderer, () => key);
+
   app.renderer.root.add(pending.root);
+
   const render = async () => {
     await app.renderOnce();
     await app.renderOnce();
@@ -17,6 +19,7 @@ async function mount(width = 120, key = "<Esc>") {
       .captureCharFrame()
       .split("\n")
       .map((line) => line.trimEnd());
+
   return {
     ...app,
     pending,
@@ -77,10 +80,11 @@ test("Queued hints and messages use normal text while help/connectors dim and on
     await app.render();
 
     // Verify title, help, and connector contrast through actual rendered terminal spans.
-    const colors = uiTheme(app.renderer).colors,
-      lines = app.captureSpans().lines;
-    const heading = lines[0]!.spans,
-      message = lines[1]!.spans;
+    const colors = uiTheme(app.renderer).colors;
+    const lines = app.captureSpans().lines;
+    const heading = lines[0]!.spans;
+    const message = lines[1]!.spans;
+
     expect(app.rows()[0]).toEndWith("(press <C-x> to interrupt and send immediately)");
     expect(heading.find((span) => span.text.includes("Messages"))!.fg.toInts()).toEqual(
       colors.text.toInts(),
@@ -133,8 +137,11 @@ test("Queued-list scrollbars never obscure attachment badges or connectors", asy
       4,
     );
     await app.render();
+
     const list = app.renderer.root.findDescendantById("agent-pending-list");
-    if (!(list instanceof ScrollBoxRenderable)) throw new Error("Missing pending list");
+    if (!(list instanceof ScrollBoxRenderable)) {
+      throw new Error("Missing pending list");
+    }
 
     // Truncate within the viewport excluding scrollbars, not the full container width.
     const row = app
@@ -161,8 +168,13 @@ test.each([0, 1, 2, 3])(
 
       // Even two rows show title then message without a separate help row.
       expect(app.pending.rows).toBe(maximumRows);
-      if (maximumRows > 0) expect(app.rows()[0]).toStartWith("• Messages");
-      if (maximumRows >= 2) expect(app.rows()[1]).toBe("  ↳ Waiting message");
+      if (maximumRows > 0) {
+        expect(app.rows()[0]).toStartWith("• Messages");
+      }
+      if (maximumRows >= 2) {
+        expect(app.rows()[1]).toBe("  ↳ Waiting message");
+      }
+
       expect(
         app
           .rows()

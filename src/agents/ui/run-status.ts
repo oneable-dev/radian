@@ -26,27 +26,32 @@ type Display = {
 };
 
 function display(state: ExecutionState | null | undefined): Display {
-  if (state?.status === "working" && state.activity === "compacting")
+  if (state?.status === "working" && state.activity === "compacting") {
     return { label: "Compacting context", detail: "", color: "status.working" };
+  }
+
   const sections = state?.sections ?? [];
   const index = sections.findLastIndex((section) => requestForSection(section) !== undefined);
   const section = index >= 0 ? sections[index] : undefined;
-  const summary = requestForSection(section),
-    request = summary?.text ?? "";
+  const summary = requestForSection(section);
+  const request = summary?.text ?? "";
   const detail = request ? ` “${request}”` : "";
-  if (state?.status === "working")
+  if (state?.status === "working") {
     return {
       label: "Working",
       detail,
       color: "status.working",
       ...(summary ? { request: summary } : {}),
     };
-  if (state?.status === "failure")
+  }
+  if (state?.status === "failure") {
     return {
       label: "Failed",
       detail: state.error ? `: ${singleLine(state.error)}` : detail,
       color: "status.error",
     };
+  }
+
   const turn = sections.slice(Math.max(0, index));
   const completion = turn.findLast((item) => item.completion)?.completion;
   const outcome = state?.result?.outcome ?? completion?.outcome;
@@ -57,7 +62,7 @@ function display(state: ExecutionState | null | undefined): Display {
         item.status === "cancelled" &&
         (item.title === "Agent error" || !item.text)),
   );
-  if (outcome === "cancelled" || (!outcome && assistant?.status === "cancelled"))
+  if (outcome === "cancelled" || (!outcome && assistant?.status === "cancelled")) {
     return {
       label: "Cancelled",
       detail,
@@ -65,25 +70,34 @@ function display(state: ExecutionState | null | undefined): Display {
       ...(summary ? { request: summary } : {}),
       ...(completion ? { durationMs: completion.durationMs } : {}),
     };
-  if (outcome === "unfinished" || (!outcome && assistant?.status === "unfinished"))
+  }
+  if (outcome === "unfinished" || (!outcome && assistant?.status === "unfinished")) {
     return { label: "Stopped", detail, color: "status.error" };
-  if (outcome === "error" || state?.error)
+  }
+  if (outcome === "error" || state?.error) {
     return {
       label: "Failed",
       detail: state?.error ? `: ${singleLine(state.error)}` : detail,
       color: "status.error",
     };
+  }
+
   return { label: "", detail: "", color: "status.unknown" };
 }
 
 function workingChunks(label: string, phase: number | null, styles: UiStyles): TextChunk[] {
   const style = styles["metadata.fastOn"];
-  if (phase === null || phase <= 0 || phase >= 0.6) return [styleChunk(label, style)];
-  const radius = 2,
-    head = ((Bun.stringWidth(label) + radius * 2) * phase) / 0.6 - radius;
+  if (phase === null || phase <= 0 || phase >= 0.6) {
+    return [styleChunk(label, style)];
+  }
+
+  const radius = 2;
+  const head = ((Bun.stringWidth(label) + radius * 2) * phase) / 0.6 - radius;
   const highlight = blendColors(style.fg, styles["ui.text"].fg, 0.9);
+
   return Array.from(label, (glyph, index) => {
     const intensity = Math.max(0, 1 - Math.abs(index + 0.5 - head) / radius);
+
     return {
       ...styleChunk(glyph, style),
       fg: blendColors(style.fg, highlight, intensity * intensity),
@@ -126,6 +140,7 @@ export class RunStatus {
       flexDirection: "column",
       onSizeChange: () => this.paint(),
     });
+
     const heading = new BoxRenderable(renderer, {
       width: "100%",
       height: 1,
@@ -162,7 +177,10 @@ export class RunStatus {
     this.root.add(this.caption);
     this.animation = new FastModeAnimation(renderer, this.root, (frame) => {
       const phase = frame?.phase ?? null;
-      if (phase === this.phase) return;
+      if (phase === this.phase) {
+        return;
+      }
+
       this.phase = phase;
       this.paint();
     });
@@ -173,13 +191,17 @@ export class RunStatus {
   get hasContent(): boolean {
     return this.root.visible && (!!this.current.label || this.spinner.root.visible);
   }
+
   get rows(): number {
     return this.hasContent ? this.rowCount : 0;
   }
 
   fitRows(available: number): void {
     const allowed = available >= 2;
-    if (allowed === this.captionAllowed) return;
+    if (allowed === this.captionAllowed) {
+      return;
+    }
+
     this.captionAllowed = allowed;
     this.paint();
   }
@@ -190,7 +212,10 @@ export class RunStatus {
     visible: boolean,
     animate = true,
   ): void {
-    if (this.disposed || this.root.isDestroyed) return;
+    if (this.disposed || this.root.isDestroyed) {
+      return;
+    }
+
     const scope = sessionId ? JSON.stringify([sessionId, state?.conversationId]) : null;
     if (scope !== this.scope || !visible) {
       this.spinner.cancel();
@@ -198,9 +223,11 @@ export class RunStatus {
       this.stopTimer();
       this.timing = undefined;
     }
+
     this.scope = scope;
     this.root.visible = visible;
     this.current = display(state);
+
     const running = visible && state?.status === "working";
     this.fast = running && this.current.label === "Working" && state?.telemetry?.fast === true;
     this.spinner.setStyle(
@@ -210,7 +237,9 @@ export class RunStatus {
       this.spinner.start();
       this.elapsed = 0;
       this.sampledAt = this.renderer.clock.now();
-    } else if (!running && this.running) this.spinner.stop();
+    } else if (!running && this.running) {
+      this.spinner.stop();
+    }
     if (
       running &&
       state?.runTiming &&
@@ -221,22 +250,30 @@ export class RunStatus {
       this.elapsed = state.runTiming.elapsedMs;
       this.sampledAt = this.renderer.clock.now();
     }
+
     this.running = running;
-    if (running && this.timer === undefined)
+    if (running && this.timer === undefined) {
       this.timer = this.renderer.clock.setInterval(() => this.paint(), 1000);
-    else if (!running) this.stopTimer();
+    } else if (!running) {
+      this.stopTimer();
+    }
+
     this.animation.update(this.fast, animate);
     this.paint();
   }
 
   private paint(): void {
-    if (!this.root || this.root.isDestroyed || !this.text || !this.caption || this.disposed) return;
+    if (!this.root || this.root.isDestroyed || !this.text || !this.caption || this.disposed) {
+      return;
+    }
+
     const styles = uiTheme(this.renderer).styles;
     paintText(this.spinner.root, styles["status.working"]);
     this.text.visible = !!this.current.label;
+
     const prefix = this.spinner.root.visible ? this.spinner.columns + 1 : 0;
-    const width = Math.max(0, this.root.width - prefix),
-      request = this.current.request;
+    const width = Math.max(0, this.root.width - prefix);
+    const request = this.current.request;
     const split = !!(
       this.running &&
       this.captionAllowed &&
@@ -249,6 +286,7 @@ export class RunStatus {
       this.rowCount = rows;
       this.root.height = rows;
     }
+
     const seconds = Math.floor(
       (this.elapsed + Math.max(0, this.renderer.clock.now() - this.sampledAt)) / 1000,
     );
@@ -269,8 +307,9 @@ export class RunStatus {
     const caption = request
       ? formatWorkRequest(request, this.root.width, split ? this.root.width : remaining - 1)
       : "";
-    const statusLabel = label.slice(0, this.current.label.length),
-      elapsedLabel = label.slice(this.current.label.length);
+    const statusLabel = label.slice(0, this.current.label.length);
+    const elapsedLabel = label.slice(this.current.label.length);
+
     this.text.content = new StyledText([
       ...(this.fast
         ? workingChunks(statusLabel, this.phase, styles)
@@ -305,11 +344,18 @@ export class RunStatus {
   }
 
   private stopTimer(): void {
-    if (this.timer !== undefined) this.renderer.clock.clearInterval(this.timer);
+    if (this.timer !== undefined) {
+      this.renderer.clock.clearInterval(this.timer);
+    }
+
     this.timer = undefined;
   }
+
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.disposed = true;
     this.animation.dispose();
     this.spinner.cancel();

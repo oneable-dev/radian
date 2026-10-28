@@ -5,8 +5,8 @@ import { RepositoryCatalog } from "./catalog.ts";
 test("Replacing worktree catalogs preserves fresh metadata and deleted worktrees still in use", () => {
   // An open resource still owns a removed worktree, while another removed worktree is idle.
   const original = demoWorkspace()[0]!;
-  const active = original.worktrees[1]!,
-    idle = original.worktrees[2]!;
+  const active = original.worktrees[1]!;
+  const idle = original.worktrees[2]!;
   const catalog = new RepositoryCatalog([original]);
   const added = {
     ...idle,
@@ -36,10 +36,11 @@ test("Replacing worktree catalogs preserves fresh metadata and deleted worktrees
 
 test("Closing final resources removes Git-deleted worktrees from catalogs", () => {
   // The previously retained metadata must not outlive its final owner.
-  const original = demoWorkspace()[0]!,
-    active = original.worktrees[1]!;
+  const original = demoWorkspace()[0]!;
+  const active = original.worktrees[1]!;
   const discovered = { ...original, worktrees: [original.worktrees[0]!] };
   const catalog = new RepositoryCatalog([original]);
+
   catalog.replace([discovered], new Set([active.id]));
 
   catalog.replace([discovered], new Set());

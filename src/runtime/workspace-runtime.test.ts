@@ -10,32 +10,37 @@ import { WorkspaceClient } from "./workspace-client.ts";
 async function until(predicate: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 12000;
   while (!(await predicate())) {
-    if (Date.now() > deadline) throw new Error("Workspace runtime observation timed out.");
+    if (Date.now() > deadline) {
+      throw new Error("Workspace runtime observation timed out.");
+    }
+
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
   }
 }
 
 test("Two repositories share one daemon while SDK, shells, and storage stay isolated across full restart", async () => {
   // Run only two temporary Git repositories and offline SDKs, never user services.
-  const a = await createWorktreeFixture(),
-    b = await createWorktreeFixture();
+  const a = await createWorktreeFixture();
+  const b = await createWorktreeFixture();
   const options = {
     offline: true,
     stateRoot: join(a.directory, "state"),
     entry: join(import.meta.dir, "..", "index.ts"),
   };
   const repositories = [a.repository, b.repository];
-  const aTree = a.repository.worktrees.find((tree) => tree.path === a.main)!,
-    bTree = b.repository.worktrees.find((tree) => tree.path === b.main)!;
-  const aPaths = runtimePaths(a.repository.id, true, options.stateRoot),
-    bPaths = runtimePaths(b.repository.id, true, options.stateRoot);
+  const aTree = a.repository.worktrees.find((tree) => tree.path === a.main)!;
+  const bTree = b.repository.worktrees.find((tree) => tree.path === b.main)!;
+  const aPaths = runtimePaths(a.repository.id, true, options.stateRoot);
+  const bPaths = runtimePaths(b.repository.id, true, options.stateRoot);
   let workspace: WorkspaceClient | undefined;
   try {
     await writeFile(join(a.main, "workspace.txt"), "isolated-repository-A");
     await writeFile(join(b.main, "workspace.txt"), "isolated-repository-B");
     workspace = expectOk(await WorkspaceClient.open(repositories, a.main, options));
-    const aCatalog = expectOk(await fetchSnapshot(aPaths))!,
-      bCatalog = expectOk(await fetchSnapshot(bPaths))!;
+
+    const aCatalog = expectOk(await fetchSnapshot(aPaths))!;
+    const bCatalog = expectOk(await fetchSnapshot(bPaths))!;
+
     expect(aCatalog.pid).toBe(bCatalog.pid);
     expect(aCatalog.capabilities).toContain("repository-catalog");
     expect(bCatalog.capabilities).toContain("repository-catalog");
@@ -44,8 +49,10 @@ test("Two repositories share one daemon while SDK, shells, and storage stay isol
 
     // Activating A must not initialize B's SDK in the shared daemon.
     expectOk(await workspace.activate(aTree.id));
+
     const aId = expectOk(await workspace.create(aTree.id));
     expect(expectOk(await fetchSnapshot(bPaths))!.capabilities).toContain("repository-catalog");
+
     const bId = expectOk(await workspace.create(bTree.id));
     expectOk(await workspace.prompt(aId, "read"));
     expectOk(await workspace.prompt(bId, "read"));
@@ -67,16 +74,20 @@ test("Two repositories share one daemon while SDK, shells, and storage stay isol
         (error) => failures.push(error),
       ),
     );
+
     connection.input(Buffer.from("printf pool-terminal-b > route-check.txt\r"));
     await until(() => Bun.file(join(b.main, "route-check.txt")).exists());
     expect(await readFile(join(b.main, "route-check.txt"), "utf8")).toBe("pool-terminal-b");
     expect(await Bun.file(join(a.main, "route-check.txt")).exists()).toBe(false);
     expect(failures).toEqual([]);
+
     const shellPid = workspace.snapshot.terminals!.find((shell) => shell.id === terminal)!.shellPid;
-    const aPid = expectOk(await fetchSnapshot(aPaths))!.pid,
-      bPid = expectOk(await fetchSnapshot(bPaths))!.pid;
+    const aPid = expectOk(await fetchSnapshot(aPaths))!.pid;
+    const bPid = expectOk(await fetchSnapshot(bPaths))!.pid;
+
     expect(aPid).toBe(bPid);
     expect(aPaths.directory).not.toBe(bPaths.directory);
+
     const preferences = workspace.snapshot.preferences;
     preferences.selection = {
       worktreeId: bTree.id,
@@ -102,6 +113,7 @@ test("Two repositories share one daemon while SDK, shells, and storage stay isol
     // Management commands target shared daemons and all repositories regardless of cwd.
     const config = join(a.directory, "workspace.json");
     await writeFile(config, JSON.stringify({ roots: [a.directory, b.directory] }));
+
     const administrative = async (command: string): Promise<string> => {
       const child = Bun.spawn(
         [
@@ -123,10 +135,14 @@ test("Two repositories share one daemon while SDK, shells, and storage stay isol
         new Response(child.stderr).text(),
         child.exited,
       ]);
-      if (code !== 0) throw new Error(error);
+      if (code !== 0) {
+        throw new Error(error);
+      }
+
       return output;
     };
     const status = JSON.parse(await administrative("--runtime-status"));
+
     expect(status.repositoryId).toBe("radian:shared");
     expect(status.repositories.map((repo: { id: string }) => repo.id).sort()).toEqual(
       [a.repository.id, b.repository.id].sort(),
@@ -161,6 +177,7 @@ test("Two repositories share one daemon while SDK, shells, and storage stay isol
         await client.disconnect();
         await until(() => !pidAlive(pid));
       }
+
       await fixture.cleanup();
     }
   }

@@ -2,6 +2,7 @@ import { Type } from "typebox";
 
 const position = Type.Integer({ minimum: 0, maximum: 10000000 });
 const target = Type.Union([Type.String({ maxLength: 4096 }), Type.Null()]);
+
 export const gitViewsSchema = Type.Record(
   Type.String(),
   Type.Object({

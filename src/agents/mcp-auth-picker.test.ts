@@ -25,11 +25,13 @@ test("MCP authentication lists enabled servers with those needing authentication
       server("flagged", "cached", true),
     ],
   });
+
   let options: string[] = [];
 
   const chosen = await picker.select(
     ui(async (_title, candidates) => {
       options = candidates;
+
       return "vercel";
     }),
   );
@@ -58,6 +60,7 @@ test("MCP authentication rejects servers disabled while the selector is open", a
   const chosen = await picker.select(
     ui(async () => {
       picker.eventBus.emit(channel, { version: 1, servers: [server("vercel", "disabled", true)] });
+
       return "vercel";
     }),
   );
@@ -70,13 +73,15 @@ test("MCP authentication reports an empty enabled list without opening a selecto
   // An initialized empty catalog differs from an unavailable integration contract.
   const picker = new McpAuthPicker();
   picker.eventBus.emit(channel, { version: 1, servers: [] });
-  let message = "",
-    selections = 0;
+
+  let message = "";
+  let selections = 0;
 
   const chosen = await picker.select(
     ui(
       async () => {
         selections++;
+
         return undefined;
       },
       (text) => {
@@ -103,6 +108,7 @@ test.each([
     picker.eventBus.emit(channel, { version: 1, servers: [server("vercel")] });
 
     picker.eventBus.emit(channel, snapshot);
+
     const chosen = await picker.select(
       ui(async () => {
         throw new Error("Invalid snapshots must not open a selector");
@@ -120,6 +126,7 @@ test("MCP reload resets the catalog and disposal stops status observation", asyn
   picker.eventBus.emit(channel, { version: 1, servers: [server("vercel")] });
 
   picker.reset();
+
   const chosen = await picker.select(
     ui(async () => {
       throw new Error("Missing catalogs must not open a selector");
@@ -129,6 +136,7 @@ test("MCP reload resets the catalog and disposal stops status observation", asyn
   picker.eventBus.emit(channel, { version: 1, servers: [server("stale")] });
 
   expect(expectError(chosen).code).toBe("UNSUPPORTED_CAPABILITY");
+
   const disposed = await picker.select(
     ui(async () => {
       throw new Error("Disposed pickers must not observe new catalogs");

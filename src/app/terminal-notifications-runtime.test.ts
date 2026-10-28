@@ -8,8 +8,8 @@ import { pidAlive } from "../runtime/storage.ts";
 // The PTY captures notification bytes rather than displaying OS notifications.
 test("Real service completion reaches connected CLI UI and terminal notifications before clean detach", async () => {
   // Connect real Git, SDK, IPC, and TUI; replace only model responses with offline fixtures.
-  const fixture = await createWorktreeFixture(),
-    entry = join(import.meta.dir, "..", "index.ts");
+  const fixture = await createWorktreeFixture();
+  const entry = join(import.meta.dir, "..", "index.ts");
   const stateRoot = join(fixture.directory, "state");
   let client: RuntimeClient | undefined;
   let child: Bun.Subprocess | undefined;
@@ -19,11 +19,14 @@ test("Real service completion reaches connected CLI UI and terminal notification
       expectOk(
         await connectRuntime(fixture.repository, fixture.main, { offline: true, stateRoot, entry }),
       ) ?? undefined;
-    if (!client) throw new Error("Missing offline runtime.");
+    if (!client) {
+      throw new Error("Missing offline runtime.");
+    }
+
     const worktree = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
     const id = expectOk(await client.create(worktree.id));
-    const ready = Promise.withResolvers<void>(),
-      notified = Promise.withResolvers<void>();
+    const ready = Promise.withResolvers<void>();
+    const notified = Promise.withResolvers<void>();
     const decoder = new TextDecoder();
     const deadline = setTimeout(() => {
       const error = new Error(
@@ -50,14 +53,18 @@ test("Real service completion reaches connected CLI UI and terminal notification
           name: "xterm-ghostty",
           data: (_terminal, bytes) => {
             raw += decoder.decode(bytes, { stream: true });
+
             // Detect readiness through app, work-view, and session status, not default shortcut hints.
             const screen = Bun.stripANSI(raw);
-            if (screen.includes("AGENT") && screen.includes("context")) ready.resolve();
+            if (screen.includes("AGENT") && screen.includes("context")) {
+              ready.resolve();
+            }
             if (
               raw.includes("\x1b]777;notify;Radian · Task completed;") &&
               raw.includes("Completed")
-            )
+            ) {
               notified.resolve();
+            }
           },
         },
       });
@@ -68,12 +75,14 @@ test("Real service completion reaches connected CLI UI and terminal notification
       expectOk(await client.prompt(id, "read"));
       await observed;
       child.terminal?.write("\x00d");
+
       const code = await child.exited;
 
       // The real service drives both the in-app card and native delivery without changing detach ownership.
       expect(raw).toContain("Completed");
       // oxlint-disable-next-line eslint/no-control-regex -- Assert the exact OSC notification protocol on the captured PTY.
       expect(raw.match(/\x1b\]777;notify;Radian · Task completed;/gu)).toHaveLength(1);
+
       const notification = raw.match(
         // oxlint-disable-next-line eslint/no-control-regex -- OSC payloads terminate at ESC or BEL, not arbitrary text boundaries.
         /\x1b\]777;notify;Radian · Task completed;([^\x1b\x07]*)\x1b\\/u,
@@ -89,7 +98,10 @@ test("Real service completion reaches connected CLI UI and terminal notification
     }
   } finally {
     if (child) {
-      if (child.exitCode === null) child.kill("SIGTERM");
+      if (child.exitCode === null) {
+        child.kill("SIGTERM");
+      }
+
       await child.exited;
       child.terminal?.close();
     }
@@ -97,13 +109,18 @@ test("Real service completion reaches connected CLI UI and terminal notification
       const pid = client.snapshot.pid;
       expectOk(await client.stopRuntime());
       await client.disconnect();
+
       const deadline = Date.now() + 10000;
       while (expectOk(await fetchSnapshot(client.paths)) || pidAlive(pid)) {
-        // oxlint-disable-next-line eslint/no-unsafe-finally -- A leaked daemon must fail cleanup even after a test failure.
-        if (Date.now() > deadline) throw new Error("Offline runtime did not stop.");
+        if (Date.now() > deadline) {
+          // oxlint-disable-next-line eslint/no-unsafe-finally -- A leaked daemon must fail cleanup even after a test failure.
+          throw new Error("Offline runtime did not stop.");
+        }
+
         await new Promise<void>((resolve) => setTimeout(resolve, 20));
       }
     }
+
     await fixture.cleanup();
   }
 }, 25000);

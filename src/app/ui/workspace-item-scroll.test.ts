@@ -12,9 +12,10 @@ const texts = (node: Renderable): TextRenderable[] => [
   ...(node instanceof TextRenderable ? [node] : []),
   ...node.getChildren().flatMap(texts),
 ];
+
 async function mount() {
-  const clock = new ManualClock(),
-    app = await createTestRenderer({ width: 60, height: 20, kittyKeyboard: true, clock });
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width: 60, height: 20, kittyKeyboard: true, clock });
   const repository = demoWorkspace()[0]!;
   const selection = new WorkspaceSelection([
     {
@@ -41,6 +42,7 @@ async function mount() {
     onCloseSession: () => actions.push("close"),
     onPrompt: () => {
       actions.push("prompt");
+
       return ok(undefined);
     },
     initialDrafts: { a1: "preserved draft" },
@@ -57,9 +59,11 @@ async function mount() {
     await app.renderOnce();
     await app.renderOnce();
   };
+
   openWorkspaceSearch(app);
   app.mockInput.pressTab();
   await render();
+
   const item = app.renderer.root.findDescendantById("worktree:demo:main")!;
   const content = item.findDescendantById("worktree:demo:main:label")!;
   const lines = () =>
@@ -68,6 +72,7 @@ async function mount() {
       .split("\n")
       .slice(content.y, content.y + 2)
       .map((line) => line.slice(item.x, item.x + item.width));
+
   return {
     ...app,
     clock,
@@ -94,11 +99,13 @@ test("Horizontal folder scrolling moves same-worktree branches by identical offs
     const before = app.lines();
     await app.mockMouse.scroll(app.item.x + 6, app.label().y, "right");
     await app.render();
+
     const first = app.lines();
     expect(first[0]).not.toBe(before[0]);
     expect(first[1]).not.toBe(before[1]);
     expect(app.label().plainText).toContain("\n");
     expect(app.label().height).toBe(2);
+
     const offset = app.label().scrollX;
 
     await app.mockMouse.scroll(app.item.x + 6, app.label().y + 1, "right");
@@ -119,15 +126,19 @@ test("Horizontal scroll over fixed status moves both rows while status stays fix
   try {
     const slot = app.item.findDescendantById("worktree:demo:main:status")!;
     const body = app.item.findDescendantById("worktree:demo:main:body")!;
+
     // Natural long-name widths must not push selection backgrounds or fixed status outside the list.
     expect(body.x).toBe(app.item.x);
     expect(body.width).toBe(app.item.width);
     expect(slot.x + slot.width).toBe(app.item.x + app.item.width);
     expect(slot.height).toBe(2);
     expect(slot.y).toBe(app.label().y);
-    const status = slot.getChildren()[0]!,
-      geometry = [slot.x, slot.y, slot.width, slot.height];
+
+    const status = slot.getChildren()[0]!;
+    const geometry = [slot.x, slot.y, slot.width, slot.height];
+
     expect(status.visible).toBe(false);
+
     const before = app.lines();
     await app.mockMouse.scroll(slot.x, slot.y + 1, "right");
     await app.render();
@@ -147,10 +158,12 @@ test("Sidebar shows only static errors during execution while Agent spinners rem
   const app = await mount();
   try {
     // The sidebar is navigation; execution feedback belongs to the Agent work surface.
-    const sidebar = app.renderer.root.findDescendantById("workspace-sidebar")!,
-      frames = new Set<string>(spinnerFrames);
+    const sidebar = app.renderer.root.findDescendantById("workspace-sidebar")!;
+    const frames = new Set<string>(spinnerFrames);
+
     expect(texts(sidebar).some((text) => frames.has(text.plainText))).toBe(false);
     expect(app.renderer.root.findDescendantById("agent-run-loading")!.visible).toBe(true);
+
     const before = app.lines();
     app.clock.advance(160);
     await app.render();
@@ -205,14 +218,17 @@ test("Horizontal offsets survive snapshots and clamp for shorter names or wider 
   try {
     await app.mockMouse.scroll(app.item.x + 6, app.label().y, "right");
     await app.render();
-    const label = app.label(),
-      offset = label.scrollX;
+
+    const label = app.label();
+    const offset = label.scrollX;
+
     app.selection.replaceSnapshot(app.selection.snapshot);
     await app.render();
     expect(app.label()).toBe(label);
     expect(label.scrollX).toBe(offset);
     label.scrollX = 1000;
     await app.render();
+
     const narrowOffset = label.scrollX;
     expect(narrowOffset).toBeGreaterThan(0);
     app.resize(120, 20);
@@ -254,8 +270,10 @@ test("After horizontal scrolling, branch clicks open one worktree and vertical w
     expect(app.actions).toEqual([]);
     app.resize(60, 12);
     await app.render();
-    const tree = app.renderer.root.findDescendantById("workspace-tree")! as ScrollBoxRenderable,
-      top = tree.scrollTop;
+
+    const tree = app.renderer.root.findDescendantById("workspace-tree")! as ScrollBoxRenderable;
+    const top = tree.scrollTop;
+
     await app.mockMouse.scroll(app.item.x + 6, app.label().y + 1, "down");
     await app.render();
     expect(tree.scrollTop).toBeGreaterThan(top);
@@ -271,6 +289,7 @@ test("Short folders and long branches share viewports with Korean, emoji, and ne
     const rawName = "short-folder\n한글 👨‍👩‍👧‍👦 é";
     // The branch must scroll past the entire shorter folder name regardless of the shared popup width.
     const branch = "branch-" + "0123456789-".repeat(8) + "TAIL";
+
     app.selection.replaceSnapshot(
       app.selection.snapshot.map((repo) => ({
         ...repo,
@@ -280,6 +299,7 @@ test("Short folders and long branches share viewports with Korean, emoji, and ne
       })),
     );
     await app.render();
+
     const label = app.label();
     expect(label.plainText).toContain("short-folder 한글 👨‍👩‍👧‍👦 é\n");
     expect(label.lineCount).toBe(2);

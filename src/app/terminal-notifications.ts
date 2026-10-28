@@ -6,9 +6,12 @@ import type { TranscriptSection } from "../agents/transcript.ts";
 import { singleLine, truncateCells } from "../ui/text.ts";
 
 type Source = Pick<WorkspaceClient, "snapshot" | "recoveryVersion" | "subscribe">;
+
 type Terminal = Pick<EventEmitter, "on" | "off" | "once"> &
   Pick<CliRenderer, "isDestroyed" | "triggerNotification">;
+
 type ObservedSession = { conversationId: string | undefined; completions: Set<string> };
+
 type Notification = { title: string; body: string };
 
 // Notifications belong to an attached terminal, never the detached service. Only
@@ -36,11 +39,16 @@ export class TerminalNotifications {
   private focus = (): void => {
     this.focused = true;
   };
+
   private blur = (): void => {
     this.focused = false;
   };
+
   private changed = (): void => {
-    if (this.disposed || this.terminal.isDestroyed) return;
+    if (this.disposed || this.terminal.isDestroyed) {
+      return;
+    }
+
     const restored = this.recovery !== this.source.recoveryVersion;
     this.recovery = this.source.recoveryVersion;
     this.update(restored);
@@ -50,25 +58,36 @@ export class TerminalNotifications {
     const snapshot = this.source.snapshot;
     const next = new Map<string, ObservedSession>();
     const notifications: Notification[] = [];
-    for (const repository of snapshot.repositories)
-      for (const worktree of repository.worktrees)
+    for (const repository of snapshot.repositories) {
+      for (const worktree of repository.worktrees) {
         for (const session of worktree.sessions) {
           const state = snapshot.details[session.id];
           const previous = this.observed.get(session.id);
           if (!state?.sections) {
-            if (previous) next.set(session.id, previous);
+            if (previous) {
+              next.set(session.id, previous);
+            }
+
             continue;
           }
+
           const initial = baseline || !previous || previous.conversationId !== state.conversationId;
           const completions = new Set<string>();
           let request: string | undefined;
           for (const section of state.sections) {
             const delivered = requestExcerpt(section);
-            if (delivered !== undefined) request = delivered;
+            if (delivered !== undefined) {
+              request = delivered;
+            }
+
             const completion = section.completion;
-            if (!completion) continue;
+            if (!completion) {
+              continue;
+            }
+
             const excerpt = request;
             request = undefined; // Never borrow another run's request.
+
             // Persistence warnings are not another run or a reason to alert again.
             const key = JSON.stringify([
               section.id,
@@ -82,13 +101,16 @@ export class TerminalNotifications {
               initial ||
               previous.completions.has(key) ||
               (completion.outcome !== "complete" && completion.outcome !== "error")
-            )
+            ) {
               continue;
+            }
+
             // Only a short delivered-request excerpt and run time belong in the body;
             // project/worktree/session identifiers, responses and raw errors do not.
-            const summary = notificationSummary(excerpt ?? ""),
-              elapsed = duration(completion);
+            const summary = notificationSummary(excerpt ?? "");
+            const elapsed = duration(completion);
             const body = summary ? `${summary} · ${elapsed}` : elapsed;
+
             notifications.push({
               title:
                 completion.outcome === "complete"
@@ -97,17 +119,25 @@ export class TerminalNotifications {
               body,
             });
           }
+
           next.set(session.id, { conversationId: state.conversationId, completions });
         }
+      }
+    }
+
     // Consume even focused/unsupported deliveries so blur, heartbeat or warning
     // updates cannot replay them. Commit before crossing the SDK output boundary.
     this.observed = next;
-    if (this.focused === true) return;
+    if (this.focused === true) {
+      return;
+    }
     for (const notification of notifications) {
       try {
         // False means the terminal did not accept this best-effort notification;
         // true is not an acknowledgement from the OS notification center.
-        if (!this.terminal.triggerNotification(notification.body, notification.title)) continue;
+        if (!this.terminal.triggerNotification(notification.body, notification.title)) {
+          continue;
+        }
       } catch (error) {
         this.unexpected(error);
       }
@@ -115,7 +145,10 @@ export class TerminalNotifications {
   }
 
   dispose = (): void => {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.disposed = true;
     this.unsubscribe();
     this.observed.clear();
@@ -132,7 +165,10 @@ function requestExcerpt(
     readonly request?: { readonly text: string };
   },
 ): string | undefined {
-  if (section.kind !== "user" && section.skillName === undefined) return undefined;
+  if (section.kind !== "user" && section.skillName === undefined) {
+    return undefined;
+  }
+
   return (
     section.request?.text ??
     (section.skillName !== undefined ? `/skill:${section.skillName}` : section.text)
@@ -147,9 +183,13 @@ function notificationSummary(value: string): string {
 
 function duration(completion: RunCompletion): string {
   const seconds = Math.floor(completion.durationMs / 1000);
-  if (seconds < 1) return "<1s";
-  const hours = Math.floor(seconds / 3600),
-    minutes = Math.floor((seconds % 3600) / 60);
+  if (seconds < 1) {
+    return "<1s";
+  }
+
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+
   return [hours ? `${hours}h` : "", minutes || hours ? `${minutes}m` : "", `${seconds % 60}s`]
     .filter(Boolean)
     .join(" ");

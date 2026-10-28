@@ -15,7 +15,10 @@ import { Workbench } from "./workbench.ts";
 async function until(check: () => Promise<boolean> | boolean) {
   const deadline = Date.now() + 8000;
   while (!(await check())) {
-    if (Date.now() > deadline) throw new Error("Catalog runtime observation timed out");
+    if (Date.now() > deadline) {
+      throw new Error("Catalog runtime observation timed out");
+    }
+
     await Bun.sleep(15);
   }
 }
@@ -29,15 +32,15 @@ test("Real UI/IPC/SDK reuse full catalogs across reload, file moves, and dollar 
     entry: join(import.meta.dir, "..", "..", "index.ts"),
   };
   const paths = runtimePaths(fixture.repository.id, true, options.stateRoot);
-  const extensions = join(paths.directory, "offline-agent", "extensions"),
-    skills = join(fixture.directory, "skills");
-  let client: RuntimeClient | null = null,
-    app: Awaited<ReturnType<typeof createTestRenderer>> | undefined;
-  let cache: CompletionCache | undefined,
-    view: Workbench | undefined,
-    unsubscribe: (() => void) | undefined;
-  const unexpected: unknown[] = [],
-    sent: string[] = [];
+  const extensions = join(paths.directory, "offline-agent", "extensions");
+  const skills = join(fixture.directory, "skills");
+  let client: RuntimeClient | null = null;
+  let app: Awaited<ReturnType<typeof createTestRenderer>> | undefined;
+  let cache: CompletionCache | undefined;
+  let view: Workbench | undefined;
+  let unsubscribe: (() => void) | undefined;
+  const unexpected: unknown[] = [];
+  const sent: string[] = [];
   let catalogs = 0;
   try {
     await mkdir(extensions, { recursive: true });
@@ -50,23 +53,32 @@ test("Real UI/IPC/SDK reuse full catalogs across reload, file moves, and dollar 
     }`,
     );
     client = expectOk(await connectRuntime(fixture.repository, fixture.main, options));
-    if (!client) throw new Error("Missing fixture runtime");
-    const runtime = client,
-      main = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
+    if (!client) {
+      throw new Error("Missing fixture runtime");
+    }
+
+    const runtime = client;
+    const main = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
     const id = expectOk(await runtime.create(main.id));
+
     await until(() => !!runtime.snapshot.details[id]?.conversationId);
+
     const originalConversation = runtime.snapshot.details[id]!.conversationId;
     expect(expectOk(await runtime.catalog(id)).items.length).toBeGreaterThan(150);
     app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
-    const renderer = app,
-      selection = new WorkspaceSelection(runtime.snapshot.repositories);
+
+    const renderer = app;
+    const selection = new WorkspaceSelection(runtime.snapshot.repositories);
+
     cache = new CompletionCache(
       (sessionId, signal) => {
         catalogs++;
+
         return runtime.catalog(sessionId, signal);
       },
       (sessionId) => {
         const state = runtime.snapshot.details[sessionId];
+
         return JSON.stringify([
           runtime.snapshot.instance,
           state?.conversationId,
@@ -75,6 +87,7 @@ test("Real UI/IPC/SDK reuse full catalogs across reload, file moves, and dollar 
       },
       (error) => unexpected.push(error),
     );
+
     const completions = cache;
     view = new Workbench(renderer.renderer, selection, {
       onNewSession() {},
@@ -83,6 +96,7 @@ test("Real UI/IPC/SDK reuse full catalogs across reload, file moves, and dollar 
       onPrompt: async (sessionId, text) => {
         sent.push(text);
         const result = await runtime.prompt(sessionId, text);
+
         return result.ok && text === "/reload" ? completions.refresh(sessionId) : result;
       },
       getSessionDetails: (sessionId) => runtime.snapshot.details[sessionId] ?? null,
@@ -91,11 +105,16 @@ test("Real UI/IPC/SDK reuse full catalogs across reload, file moves, and dollar 
     selection.selectSession(main.id, id);
     await renderer.renderOnce();
     pressLeader(renderer, "a");
+
     const input = renderer.renderer.root.findDescendantById("session-prompt");
-    if (!(input instanceof PromptInput)) throw new Error("Missing prompt");
+    if (!(input instanceof PromptInput)) {
+      throw new Error("Missing prompt");
+    }
+
     const visible = (text: string) =>
       until(async () => {
         await renderer.renderOnce();
+
         return renderer.captureCharFrame().includes(text);
       });
     await until(
@@ -126,11 +145,13 @@ test("Real UI/IPC/SDK reuse full catalogs across reload, file moves, and dollar 
     renderer.mockInput.pressEnter();
     await until(async () => {
       await renderer.renderOnce();
+
       return input.value === "" && runtime.snapshot.details[id]?.resourceRevision === 1;
     });
     expect(catalogs).toBe(2);
     expect(runtime.snapshot.details[id]?.conversationId).toBe(originalConversation);
     expect(runtime.snapshot.details[id]?.output).toBe("");
+
     // Server revision checks reject another UI's stale catalog commands before model delivery.
     const stale = await fetch("http://localhost/command", {
       unix: paths.socket,
@@ -194,6 +215,7 @@ test("Real UI/IPC/SDK reuse full catalogs across reload, file moves, and dollar 
       await client.disconnect();
       await until(async () => !expectOk(await fetchSnapshot(paths)));
     }
+
     await fixture.cleanup();
   }
 }, 30000);

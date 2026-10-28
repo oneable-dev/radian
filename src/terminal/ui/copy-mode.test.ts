@@ -28,21 +28,22 @@ async function mount(text = "alpha beta\n한글 👨‍👩‍👧‍👦 é\nl
     exited: false,
     exitCode: null,
   };
-  const inputs: string[] = [],
-    copied: string[] = [],
-    sizes: string[] = [];
+  const inputs: string[] = [];
+  const copied: string[] = [];
+  const sizes: string[] = [];
   const boundary = {
     read: async (): Promise<Result<TerminalText, ExpectedError>> =>
       ok({ text, cursor: { row: 0, column: 0 } }),
     copy: async (text: string): Promise<Result<string, ExpectedError>> => {
       copied.push(text);
+
       return ok("Copied to clipboard");
     },
   };
-  let receive: ((frame: PtyFrame) => void) | undefined,
-    cols = 80,
-    rows = 24,
-    revision = 0;
+  let receive: ((frame: PtyFrame) => void) | undefined;
+  let cols = 80;
+  let rows = 24;
+  let revision = 0;
   const send = (output = "LIVE SHELL") =>
     receive?.({
       ...terminal,
@@ -99,6 +100,7 @@ async function mount(text = "alpha beta\n한글 👨‍👩‍👧‍👦 é\nl
       attach: async (_id, frame) => {
         receive = frame;
         send();
+
         return ok({
           input: (bytes) => inputs.push(Buffer.from(bytes).toString("hex")),
           read: () => boundary.read(),
@@ -117,10 +119,13 @@ async function mount(text = "alpha beta\n한글 👨‍👩‍👧‍👦 é\nl
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
   await render();
+
   const reader = () =>
     app.renderer.root.findDescendantById("terminal-copy")! as EditBufferRenderable;
+
   return {
     ...app,
     view,
@@ -136,7 +141,10 @@ async function mount(text = "alpha beta\n한글 👨‍👩‍👧‍👦 é\nl
       if (custom) {
         app.mockInput.pressKey("b", { ctrl: true });
         app.mockInput.pressKey("r");
-      } else pressLeader(app, "[");
+      } else {
+        pressLeader(app, "[");
+      }
+
       await render();
     },
     async close() {
@@ -201,9 +209,14 @@ test.each(["vim", "arrow", "control"] as const)(
     const app = await mount();
     try {
       await app.open();
-      if (navigation === "vim") app.mockInput.pressKey("j");
-      else if (navigation === "arrow") app.mockInput.pressArrow("down");
-      else app.mockInput.pressKey("n", { ctrl: true });
+      if (navigation === "vim") {
+        app.mockInput.pressKey("j");
+      } else if (navigation === "arrow") {
+        app.mockInput.pressArrow("down");
+      } else {
+        app.mockInput.pressKey("n", { ctrl: true });
+      }
+
       app.mockInput.pressKey("0");
       app.mockInput.pressKey("v");
       app.mockInput.pressKey("l");
@@ -277,8 +290,9 @@ test("Copy failures preserve selection and Esc clears selection before a later p
 
 test("Esc during pending reads prevents late navigation reopening", async () => {
   // Slow responses cannot restore closed modes or steal other-screen focus.
-  const app = await mount(),
-    pending = Promise.withResolvers<Result<TerminalText, ExpectedError>>();
+  const app = await mount();
+  const pending = Promise.withResolvers<Result<TerminalText, ExpectedError>>();
+
   app.boundary.read = () => pending.promise;
   try {
     await app.open();
@@ -335,13 +349,15 @@ test("Native Esc and Ctrl+C/T/E reach embedded programs unchanged", async () => 
 
 test("Read failures preserve popup focus and closing resumes shell input", async () => {
   // Users can open other surfaces while asynchronous reads fail.
-  const app = await mount(),
-    pending = Promise.withResolvers<Result<TerminalText, ExpectedError>>();
+  const app = await mount();
+  const pending = Promise.withResolvers<Result<TerminalText, ExpectedError>>();
+
   app.boundary.read = () => pending.promise;
   try {
     await app.open();
     pressLeader(app, "?");
     await app.render();
+
     const focus = app.renderer.currentFocusedRenderable;
     pending.resolve(err(new PtyError("PTY_BUSY", "Attachment changed")));
     await app.render();
@@ -364,7 +380,10 @@ test("Repeated Esc never replays as shell Esc after mode return", async () => {
   const app = await mount();
   const raw = (data: string) => {
     const parsed = parseKeypress(data, { useKittyKeyboard: true });
-    if (!parsed) throw new Error("Invalid Kitty key");
+    if (!parsed) {
+      throw new Error("Invalid Kitty key");
+    }
+
     app.renderer.keyInput.processParsedKey(parsed);
   };
   try {

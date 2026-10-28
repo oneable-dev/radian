@@ -32,16 +32,17 @@ async function mount(output: string, keymap?: Keymap) {
     exited: false,
     exitCode: null,
   };
-  const inputs: string[] = [],
-    opened: string[] = [];
+  const inputs: string[] = [];
+  const opened: string[] = [];
   const boundary = {
     open: async (url: string): Promise<Result<void, ExpectedError>> => {
       opened.push(url);
+
       return ok(undefined);
     },
   };
-  let receive: ((frame: PtyFrame) => void) | undefined,
-    revision = 0;
+  let receive: ((frame: PtyFrame) => void) | undefined;
+  let revision = 0;
   const send = (links: TerminalLink[] = terminalLinks(screen)) =>
     receive?.({
       ...terminal,
@@ -69,6 +70,7 @@ async function mount(output: string, keymap?: Keymap) {
       attach: async (_id, frame) => {
         receive = frame;
         send();
+
         return ok({
           input: (bytes) => inputs.push(Buffer.from(bytes).toString()),
           read: async () => ok(terminalText(screen)),
@@ -91,9 +93,11 @@ async function mount(output: string, keymap?: Keymap) {
     send();
     await render();
   };
+
   await render();
   await render();
   await display(output);
+
   return {
     ...app,
     view,
@@ -105,20 +109,31 @@ async function mount(output: string, keymap?: Keymap) {
     render,
     display,
     position(label: string) {
-      const lines = app.captureCharFrame().split("\n"),
-        y = lines.findIndex((line) => line.includes(label));
-      if (y < 0) throw new Error(`Missing ${label}\n${app.captureCharFrame()}`);
+      const lines = app.captureCharFrame().split("\n");
+      const y = lines.findIndex((line) => line.includes(label));
+      if (y < 0) {
+        throw new Error(`Missing ${label}\n${app.captureCharFrame()}`);
+      }
+
       return { x: Bun.stringWidth(lines[y]!.slice(0, lines[y]!.indexOf(label))), y };
     },
     async read(at: string) {
       pressLeader(app, "[");
       await render();
+
       const reader = app.renderer.currentFocusedRenderable;
-      if (!(reader instanceof EditBufferRenderable)) throw new Error("Missing terminal reader");
+      if (!(reader instanceof EditBufferRenderable)) {
+        throw new Error("Missing terminal reader");
+      }
+
       const offset = reader.plainText.indexOf(at);
-      if (offset < 0) throw new Error(`Missing ${at}`);
+      if (offset < 0) {
+        throw new Error(`Missing ${at}`);
+      }
+
       reader.cursorOffset = reader.editBuffer.measureText(reader.plainText.slice(0, offset));
       await render();
+
       return reader;
     },
     async gx() {
@@ -133,6 +148,7 @@ async function mount(output: string, keymap?: Keymap) {
     },
   };
 }
+
 const control = { modifiers: { ctrl: true } };
 
 test("Ctrl-click opens terminal URLs after Unicode without sending shell input", async () => {
@@ -199,8 +215,11 @@ test.each(["click", "drag"] as const)(
     const app = await mount("https://example.invalid");
     try {
       const { x, y } = app.position("https://");
-      if (gesture === "drag") await app.mockMouse.drag(x + 8, y, x + 15, y);
-      else await app.mockMouse.click(x + 2, y);
+      if (gesture === "drag") {
+        await app.mockMouse.drag(x + 8, y, x + 15, y);
+      } else {
+        await app.mockMouse.click(x + 2, y);
+      }
 
       await app.mockMouse.click(x + 3, y, 0, control);
       await app.waitFor(() => app.opened.length === 1);
@@ -222,6 +241,7 @@ test.each(["javascript:alert(1)", "file:///tmp/private", "data:text/html,unsafe"
     try {
       app.send([{ url, cells: [{ row: 0, start: 0, end: 21 }] }]);
       await app.render();
+
       const { x, y } = app.position("https://");
 
       await app.mockMouse.click(x + 2, y, 0, control);
@@ -267,7 +287,9 @@ test.each(["fresh", "selected"] as const)(
     const app = await mount("https://old.invalid");
     try {
       const { x, y } = app.position("https://");
-      if (state === "selected") await app.mockMouse.drag(x + 8, y, x + 12, y);
+      if (state === "selected") {
+        await app.mockMouse.drag(x + 8, y, x + 12, y);
+      }
 
       await app.mockMouse.pressDown(x + 2, y, 0, control);
       await app.display("https://new.invalid");
@@ -308,11 +330,13 @@ test("Terminal gx preserves Visual selections and stays literal in ordinary shel
     await app.gx();
     expect(app.inputs.join("")).toBe("gx");
     app.inputs.length = 0;
+
     const reader = await app.read("https://");
     app.mockInput.pressKey("v");
     app.mockInput.pressKey("l");
-    const selection = reader.getSelectedText(),
-      cursor = reader.cursorOffset;
+
+    const selection = reader.getSelectedText();
+    const cursor = reader.cursorOffset;
 
     await app.gx();
     await app.waitFor(() => app.opened.length === 1);
@@ -333,6 +357,7 @@ test("Ctrl-click also opens links in frozen terminal output", async () => {
   const app = await mount("https://example.invalid");
   try {
     await app.read("https://");
+
     const { x, y } = app.position("https://");
     await app.display("different live output");
 
@@ -351,8 +376,10 @@ test("Browser failures report errors without retrying or interrupting terminal i
   // A missing desktop browser is an expected host failure, not a rejected shell command.
   const app = await mount("https://example.invalid");
   let attempts = 0;
+
   app.boundary.open = async () => {
     attempts++;
+
     return err(new BrowserError("No browser handler"));
   };
   try {

@@ -40,22 +40,25 @@ const catalog: AccountsCatalog = {
     },
   ],
 };
+
 async function mount(overrides: Partial<WorkbenchActions> = {}) {
-  const clock = new ManualClock(),
-    app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    sent: string[] = [],
-    requests: AccountRequest[] = [];
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const sent: string[] = [];
+  const requests: AccountRequest[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession() {},
     onCloseSession() {},
     onPrompt: async (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     onComplete: async () => ok({ items: [accountsCommand], truncated: false }),
     onAccountsRequest: async (request) => {
       requests.push(request);
+
       return ok({
         kind: "catalog",
         catalog: { ...structuredClone(catalog), worktreeId: request.worktreeId },
@@ -65,7 +68,10 @@ async function mount(overrides: Partial<WorkbenchActions> = {}) {
   });
   const get = (id: string) => {
     const item = app.renderer.root.findDescendantById(id);
-    if (!item) throw new Error(`Missing ${id}`);
+    if (!item) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return item;
   };
   const render = async () => {
@@ -73,8 +79,10 @@ async function mount(overrides: Partial<WorkbenchActions> = {}) {
     await app.renderOnce();
   };
   const prompt = get("session-prompt") as InputRenderable;
+
   await render();
   prompt.focus();
+
   return {
     ...app,
     view,
@@ -157,6 +165,7 @@ test("The initial account list shows saved accounts and lists unauthenticated pr
   try {
     // Do not invent unauthenticated defaults in the account switcher.
     await app.open();
+
     const frame = app.captureCharFrame();
     expect(frame).toContain("Fixture · Personal");
     expect(frame).not.toContain("Other Service");
@@ -214,8 +223,10 @@ test.each(["oauth", "api_key"] as const)(
     const app = await mount({
       onAccountsRequest: async (request) => {
         calls.push(request);
-        if (request.type === "select" && request.accountId === null)
+        if (request.type === "select" && request.accountId === null) {
           delete connected.selections[request.provider];
+        }
+
         return ok({ kind: "catalog", catalog: { ...connected, worktreeId: request.worktreeId } });
       },
     });
@@ -237,6 +248,7 @@ test.each(["oauth", "api_key"] as const)(
         accountId: null,
         worktreeId: app.selection.worktree!.id,
       });
+
       const frame = app.captureCharFrame();
       expect(frame).toContain(
         `${type === "oauth" ? "Existing login" : "Existing API key"} [Active]`,
@@ -266,10 +278,15 @@ test.each(["oauth", "api_key", "named"] as const)(
       onAccountsRequest: async (request) => {
         calls.push(request);
         if (request.type === "rename") {
-          if (request.accountId === null) connected.existingAccounts![0]!.label = request.label;
-          else connected.accounts[0]!.label = request.label;
+          if (request.accountId === null) {
+            connected.existingAccounts![0]!.label = request.label;
+          } else {
+            connected.accounts[0]!.label = request.label;
+          }
+
           connected.revision++;
         }
+
         return ok({ kind: "catalog", catalog: { ...connected, worktreeId: request.worktreeId } });
       },
     });
@@ -277,13 +294,17 @@ test.each(["oauth", "api_key", "named"] as const)(
       await app.open();
       expect(app.captureCharFrame()).not.toContain("Rename account");
       app.mockInput.pressKey("n", { ctrl: true });
-      if (target === "named") app.mockInput.pressKey("j");
+      if (target === "named") {
+        app.mockInput.pressKey("j");
+      }
+
       await app.render();
       expect(app.captureCharFrame()).toContain("r Rename account");
 
       // Enter a label through native editing; only Enter accepts the change.
       app.mockInput.pressKey("r");
       await app.render();
+
       const input = app.get("accounts-input") as InputRenderable;
       expect(app.renderer.currentFocusedRenderable).toBe(input);
       expect(input.value).toBe(
@@ -330,6 +351,7 @@ test("Cancelling label edits preserves the existing account and native text entr
   const app = await mount({
     onAccountsRequest: async (request) => {
       calls.push(request);
+
       return ok({ kind: "catalog", catalog: { ...connected, worktreeId: request.worktreeId } });
     },
   });
@@ -378,11 +400,13 @@ test.each(["label", "rename", "delete"] as const)(
         app.mockInput.pressKey(stage === "rename" ? "r" : "x");
         await app.render();
       }
+
       const input = app.get("accounts-input") as InputRenderable;
       if (stage !== "delete") {
         input.value = "unsubmitted-hjkl";
         input.cursorOffset = 4;
       }
+
       const focus = app.renderer.currentFocusedRenderable;
 
       // Compact geometry and native text ownership survive small-terminal shrink/grow cycles.
@@ -404,6 +428,7 @@ test.each(["label", "rename", "delete"] as const)(
           expect(input.value).toBe("unsubmitted-hjkl");
           expect(input.cursorOffset).toBe(4);
         }
+
         expect(app.requests.map((request) => request.type)).toEqual(["list"]);
       }
 
@@ -465,7 +490,10 @@ test("Failed label saves retain the draft for retry instead of claiming a succes
   const app = await mount({
     onAccountsRequest: async (request) => {
       calls.push(request);
-      if (request.type === "rename") return err(new StorageError("Fixture label save failed"));
+      if (request.type === "rename") {
+        return err(new StorageError("Fixture label save failed"));
+      }
+
       return ok({ kind: "catalog", catalog: { ...catalog, worktreeId: request.worktreeId } });
     },
   });
@@ -551,6 +579,7 @@ test("The GPT icon retains its scale and colors behind the undimmed accounts pop
     }),
   });
   const draw = spyOn(OptimizedBuffer.prototype, "drawImage").mockReturnValue(true);
+
   setRendererCapabilities(app.renderer, { kitty_graphics: true, image_protocol: "kitty" });
   Object.defineProperty(app.renderer, "resolution", {
     configurable: true,
@@ -563,16 +592,19 @@ test("The GPT icon retains its scale and colors behind the undimmed accounts pop
     app.resize(120, 48);
     await app.render();
     expect(draw).toHaveBeenCalled();
-    const original = draw.mock.calls.at(-1)!,
-      pixels = original[0].raw().data.slice(),
-      geometry = original.slice(3, 7);
+
+    const original = draw.mock.calls.at(-1)!;
+    const pixels = original[0].raw().data.slice();
+    const geometry = original.slice(3, 7);
 
     // Uncovered telemetry keeps its colors because the default modal backdrop adds no tint.
     await app.open();
     await app.render();
+
     const icon = app.get("usage-provider-icon");
     expect(app.captureCharFrame().split("\n")[icon.y]).not.toContain(icons.openai);
     expect(app.captureCharFrame().split("\n")[icon.y]).toContain("73% used");
+
     const uncovered = draw.mock.calls.at(-1)!;
     expect(uncovered.slice(3, 7)).toEqual(geometry);
     expect(uncovered[0].raw().data).toEqual(pixels);
@@ -604,6 +636,7 @@ test("Add-account lists show display names on one line and preserve authenticati
   const app = await mount({
     onAccountsRequest: async (request) => {
       calls.push(request);
+
       return ok({
         kind: "catalog",
         catalog: { ...catalog, providers: [provider], worktreeId: request.worktreeId },
@@ -622,9 +655,10 @@ test("Add-account lists show display names on one line and preserve authenticati
     await app.render();
 
     // Authentication methods also omit empty secondary rows and internal values.
-    const frame = app.captureCharFrame(),
-      key = app.get("accounts-row:api_key"),
-      oauth = app.get("accounts-row:oauth");
+    const frame = app.captureCharFrame();
+    const key = app.get("accounts-row:api_key");
+    const oauth = app.get("accounts-row:oauth");
+
     expect(frame).toContain("API key");
     expect(frame).toContain("Sign in with ChatGPT");
     expect(frame).not.toContain("api_key");
@@ -659,6 +693,7 @@ test("Esc steps back through account name, authentication method, and provider s
       app.mockInput.pressEnter();
       await app.render();
     }
+
     await app.mockInput.typeText("Unsubmitted label");
     await app.render();
 
@@ -717,8 +752,9 @@ test.each([
       await app.render();
       await app.mockInput.typeText("Service");
       await app.render();
-      const search = app.get("accounts-search") as InputRenderable,
-        caret = search.cursorOffset;
+
+      const search = app.get("accounts-search") as InputRenderable;
+      const caret = search.cursorOffset;
       const jump = Math.max(
         1,
         Math.floor((app.get("accounts-list") as ScrollBoxRenderable).viewport.height / 2),
@@ -765,6 +801,7 @@ test("Account search supports Ctrl+N/P and half-page navigation while preserving
   const app = await mount({
     onAccountsRequest: async (request) => {
       calls.push(request);
+
       return ok({ kind: "catalog", catalog: { ...many, worktreeId: request.worktreeId } });
     },
   });
@@ -774,8 +811,9 @@ test("Account search supports Ctrl+N/P and half-page navigation while preserving
     await app.render();
     await app.mockInput.typeText("Account");
     await app.render();
-    const search = app.get("accounts-search") as InputRenderable,
-      caret = search.cursorOffset;
+
+    const search = app.get("accounts-search") as InputRenderable;
+    const caret = search.cursorOffset;
 
     // Move candidates from input focus, then hand off focus with a half-page jump.
     app.mockInput.pressKey("n", { ctrl: true });
@@ -793,7 +831,10 @@ test("Account search supports Ctrl+N/P and half-page navigation while preserving
     // Navigate by candidates; the next request selects an account after the first.
     const selected = calls.find((request) => request.type === "select");
     expect(selected?.type).toBe("select");
-    if (selected?.type === "select") expect(selected.accountId).not.toBe("account-0");
+    if (selected?.type === "select") {
+      expect(selected.accountId).not.toBe("account-0");
+    }
+
     expect(app.sent).toEqual([]);
   } finally {
     await app.close();
@@ -828,8 +869,8 @@ test("Ctrl+C on empty account search keeps the popup open and h/j/k/l literal", 
 
 test("API key input stays masked and reaches only the SDK login request", async () => {
   // Use bounded operation responses for secret prompts and polling instead of a server.
-  const calls: AccountRequest[] = [],
-    waiting = Promise.withResolvers<Result<AccountReply, ExpectedError>>();
+  const calls: AccountRequest[] = [];
+  const waiting = Promise.withResolvers<Result<AccountReply, ExpectedError>>();
   const flow: LoginView = {
     id: "flow",
     revision: 1,
@@ -840,14 +881,17 @@ test("API key input stays masked and reaches only the SDK login request", async 
   const app = await mount({
     onAccountsRequest: async (request, signal) => {
       calls.push(request);
-      if (request.type === "login") return ok({ kind: "login", login: structuredClone(flow) });
+      if (request.type === "login") {
+        return ok({ kind: "login", login: structuredClone(flow) });
+      }
       if (request.type === "poll") {
         signal?.addEventListener("abort", () => waiting.resolve(err(new CancelledError())), {
           once: true,
         });
+
         return waiting.promise;
       }
-      if (request.type === "answer")
+      if (request.type === "answer") {
         return ok({
           kind: "login" as const,
           login: {
@@ -857,6 +901,8 @@ test("API key input stays masked and reaches only the SDK login request", async 
             account: catalog.accounts[0]!,
           },
         });
+      }
+
       return ok({ kind: "catalog", catalog: { ...catalog, worktreeId: request.worktreeId } });
     },
   });
@@ -867,6 +913,7 @@ test("API key input stays masked and reaches only the SDK login request", async 
       app.mockInput.pressEnter();
       await app.render();
     }
+
     expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-secret");
     await app.mockInput.typeText("sk-private-key");
     await app.render();
@@ -895,10 +942,10 @@ test("API key input stays masked and reaches only the SDK login request", async 
 
 test("OAuth provides browser, URL, code, and cancel commands without buttons in compact layouts", async () => {
   // Provide a URL and code for failed automatic opening and manual authentication.
-  const calls: AccountRequest[] = [],
-    opened: string[] = [],
-    copied: string[] = [],
-    waiting = Promise.withResolvers<Result<AccountReply, ExpectedError>>();
+  const calls: AccountRequest[] = [];
+  const opened: string[] = [];
+  const copied: string[] = [];
+  const waiting = Promise.withResolvers<Result<AccountReply, ExpectedError>>();
   const flow: LoginView = {
     id: "oauth",
     revision: 1,
@@ -908,21 +955,27 @@ test("OAuth provides browser, URL, code, and cancel commands without buttons in 
   const app = await mount({
     onOpenLoginUrl: async (url) => {
       opened.push(url);
+
       return err(new BrowserError("Copy the login URL and open it manually."));
     },
     onCopyTranscript: async (text) => {
       copied.push(text);
+
       return ok("Copied");
     },
     onAccountsRequest: async (request, signal) => {
       calls.push(request);
-      if (request.type === "login") return ok({ kind: "login", login: flow });
+      if (request.type === "login") {
+        return ok({ kind: "login", login: flow });
+      }
       if (request.type === "poll") {
         signal?.addEventListener("abort", () => waiting.resolve(err(new CancelledError())), {
           once: true,
         });
+
         return waiting.promise;
       }
+
       return ok({ kind: "catalog", catalog: { ...catalog, worktreeId: request.worktreeId } });
     },
   });
@@ -951,8 +1004,10 @@ test("OAuth provides browser, URL, code, and cancel commands without buttons in 
       "accounts-browser",
       "accounts-copy-url",
       "accounts-copy-code",
-    ])
+    ]) {
       expect(app.renderer.root.findDescendantById(id)).toBeUndefined();
+    }
+
     expect(app.captureCharFrame()).toContain("ABCD-EFGH");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-login-details");
     app.mockInput.pressKey("y");
@@ -980,12 +1035,15 @@ test("OAuth provides browser, URL, code, and cancel commands without buttons in 
 
 test("Closing before login starts cancels late operations without reopening the popup", async () => {
   // The request was already sent; cancel once its operation ID arrives.
-  const waiting = Promise.withResolvers<Result<AccountReply, ExpectedError>>(),
-    calls: AccountRequest[] = [];
+  const waiting = Promise.withResolvers<Result<AccountReply, ExpectedError>>();
+  const calls: AccountRequest[] = [];
   const app = await mount({
     onAccountsRequest: async (request) => {
       calls.push(request);
-      if (request.type === "login") return waiting.promise;
+      if (request.type === "login") {
+        return waiting.promise;
+      }
+
       return ok({ kind: "catalog", catalog: { ...catalog, worktreeId: request.worktreeId } });
     },
   });

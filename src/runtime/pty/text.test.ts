@@ -28,6 +28,7 @@ test("Scrollback reads never move actual viewports or execution cursors", async 
   try {
     await write(screen, Array.from({ length: 12 }, (_, index) => `line ${index}`).join("\r\n"));
     screen.scrollLines(-4);
+
     const before = {
       viewport: screen.buffer.active.viewportY,
       row: screen.buffer.active.cursorY,

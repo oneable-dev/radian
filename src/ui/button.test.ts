@@ -14,11 +14,13 @@ test("Active-tab underlines persist when other tabs gain focus and move only on 
   });
   const agent = new Button(app.renderer, "Agent", () => {});
   const git = new Button(app.renderer, "Git", () => {});
+
   row.add(agent);
   row.add(git);
   app.renderer.root.add(row);
   agent.active = true;
   git.active = false;
+
   const span = (text: string) =>
     app.captureSpans().lines[0]!.spans.find((item) => item.text === text)!;
   try {
@@ -49,24 +51,30 @@ test.each(["work-tab", "session-tab"] as const)(
   "%s separates underline/background emphasis according to focus and active selection",
   async (variant) => {
     // Shared buttons do not imply identical emphasis for work tabs and session subtabs.
-    const app = await createTestRenderer({ width: 50, height: 4 }),
-      theme = uiTheme(app.renderer);
+    const app = await createTestRenderer({ width: 50, height: 4 });
+    const theme = uiTheme(app.renderer);
     const row = new BoxRenderable(app.renderer, { height: 1, flexDirection: "row" });
+
     theme.bind(row, (colors) => {
       row.backgroundColor = colors.panel;
     });
+
     const calls: string[] = [];
     const first = new Button(app.renderer, "First", () => calls.push("first"), variant);
     const second = new Button(app.renderer, "Second", () => calls.push("second"), variant);
     const outside = new Button(app.renderer, "Action", () => calls.push("action"));
+
     row.add(first);
     row.add(second);
     row.add(outside);
     app.renderer.root.add(row);
+
     const cell = (button: Button) => {
       let x = 0;
+
       return app.captureSpans().lines[button.y]!.spans.find((span) => {
         x += span.width;
+
         return x > button.x + 1;
       })!;
     };
@@ -90,6 +98,7 @@ test.each(["work-tab", "session-tab"] as const)(
         // Keyboard focus on inactive tabs never changes actual active selection.
         second.focus();
         await app.renderOnce();
+
         const colors = theme.colors;
         expect(cell(first).attributes & TextAttributes.BOLD).not.toBe(0);
         expect(cell(second).attributes & TextAttributes.BOLD).toBe(0);
@@ -121,6 +130,7 @@ test.each(["work-tab", "session-tab"] as const)(
         );
         expect(cell(outside).bg.toInts()).toEqual(colors.selected.toInts());
       }
+
       expect(calls).toEqual([]);
     } finally {
       await app.dispose();
@@ -135,6 +145,7 @@ test("Button horizontal padding is clickable while right-click never activates",
   const button = new Button(app.renderer, "New", () => {
     calls.push("new");
   });
+
   app.renderer.root.add(button);
   await app.renderOnce();
   try {

@@ -27,15 +27,21 @@ class Source {
     closingCount: 0,
     notice: "",
   };
+
   subscribe(listener: () => void) {
     this.listeners.add(listener);
+
     return () => {
       this.listeners.delete(listener);
     };
   }
+
   changed() {
-    for (const listener of this.listeners) listener();
+    for (const listener of this.listeners) {
+      listener();
+    }
   }
+
   publish(id: string, state: ExecutionState) {
     this.snapshot = {
       ...this.snapshot,
@@ -45,8 +51,12 @@ class Source {
         worktrees: repo.worktrees.map((tree) => ({
           ...tree,
           sessions: tree.sessions.map((session) => {
-            if (session.id !== id) return session;
+            if (session.id !== id) {
+              return session;
+            }
+
             const { result: _result, attention: _attention, ...rest } = session;
+
             return {
               ...rest,
               status: state.status,
@@ -60,6 +70,7 @@ class Source {
     this.changed();
   }
 }
+
 function working(): ExecutionState {
   return {
     conversationId: "conversation",
@@ -68,6 +79,7 @@ function working(): ExecutionState {
     error: null,
   };
 }
+
 function result(
   id: string,
   outcome: SessionResult["outcome"] = "complete",
@@ -81,6 +93,7 @@ function result(
     ...(cancellation ? { cancellation } : {}),
   };
 }
+
 function settled(value: SessionResult): ExecutionState {
   return {
     ...working(),
@@ -105,9 +118,11 @@ function settled(value: SessionResult): ExecutionState {
     ],
   };
 }
+
 function fixture(source = new Source()) {
-  const sent: SessionNotification[] = [],
-    notifications = new SessionNotifications(source, (notification) => sent.push(notification));
+  const sent: SessionNotification[] = [];
+  const notifications = new SessionNotifications(source, (notification) => sent.push(notification));
+
   return { source, sent, notifications };
 }
 
@@ -115,10 +130,11 @@ test.each(["complete", "error", "unfinished", "cancelled"] as const)(
   "New %s results from other repositories deliver once regardless of acknowledgement",
   (outcome) => {
     // The selected repository is unrelated to delivery; the other session already exists at attachment.
-    const app = fixture(),
-      finished = settled(result("new", outcome));
+    const app = fixture();
+    const finished = settled(result("new", outcome));
     try {
       app.source.publish("two", finished);
+
       const { attention: _attention, ...read } = finished;
       app.source.publish("two", read);
       app.source.changed();
@@ -154,6 +170,7 @@ test.each(["feature/auth", null])(
         worktrees: repo.worktrees.map((tree) => ({ ...tree, name: "auth-checkout", branch })),
       })),
     };
+
     const app = fixture(source);
     try {
       // The newly completed result captures the checkout metadata from its own workspace.
@@ -176,9 +193,11 @@ test.each(["user", "lifecycle"] as const)(
   "%s cancellation preserves existing bells without creating popups",
   (cancellation) => {
     // A previous unread result can survive deliberate cancellation of a later run.
-    const source = new Source(),
-      old = result("old");
+    const source = new Source();
+    const old = result("old");
+
     source.publish("two", settled(old));
+
     const app = fixture(source);
     try {
       source.publish("two", {
@@ -197,9 +216,9 @@ test.each(["user", "lifecycle"] as const)(
 
 test("New runs remain distinct when starting and completing with an existing bell", () => {
   // Boolean unread transitions would miss the second completion or replay the first on restart.
-  const app = fixture(),
-    first = result("first"),
-    second = result("second");
+  const app = fixture();
+  const first = result("first");
+  const second = result("second");
   try {
     app.source.publish("two", settled(first));
     app.source.publish("two", { ...working(), attention: first });
@@ -230,6 +249,7 @@ test("Initial history, conversation replacement, and reconnection never replay o
   // A restored bell is persistent unread state, not a fresh transient delivery.
   const source = new Source();
   source.publish("two", settled(result("history")));
+
   const app = fixture(source);
   try {
     source.changed();
@@ -269,6 +289,7 @@ test("Individual messages, tools, child state, and persistence warnings never cr
     };
     app.source.changed();
     expect(app.sent).toEqual([]);
+
     const finished = settled(result("settled"));
     app.source.publish("two", finished);
     app.source.publish("two", {
@@ -287,8 +308,8 @@ test("Individual messages, tools, child state, and persistence warnings never cr
 
 test("Synchronous callback snapshots and disposal never replay the same result", () => {
   // Commit observation before invoking UI callbacks that can publish acknowledgements.
-  const source = new Source(),
-    sent: SessionNotification[] = [];
+  const source = new Source();
+  const sent: SessionNotification[] = [];
   const notifications = new SessionNotifications(source, (notification) => {
     sent.push(notification);
     source.changed();

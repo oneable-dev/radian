@@ -15,21 +15,34 @@ const compressed = {
     "eJzt2ltIVEEYB/DZNCsvlJYkCZUhaBfIMCy6PZkX8pZIGL3UY/USgfrkQ4+mRRZdCCIhu6APkkhZWWBKrVbWQxmW7mppD2sIW3nZ1XVa2znn6O7OnjkzZ4Li+z/uzHy/b8+es3v0DEIQCAQCgUAg3ljSTl5/+t424p/vw+1nkqXrSdVfMD2eunipeuKtmRD6XEZ2SuRP/NTRvRnfL0tf1qCvezOZJYdf0cnEy2og8gUjL6cBy/0FhONDj1/ejkptoEyr7mkqWRmsw8NT8hpIcam1n2+mTcqT10CrWrlqEX1W5rikBnaodStDztv7Q04Dd5WqdToTM8ZkNBAzQWoORulNTXNIaKBQKVmqP3fjN/MbOE8KDoU499QkD2kN5EbrZjFDySekXg1Tt+v6sZG4h9svHooNWdFGphYw+WhNr6EG5uJqDvWz6SSzUtl8FP/OcAMYd9PvHJSbjgRGH8V+5GhgtjaCUk6ZsYrVL57m8DF+tdocv8jNxWM8kGSGX8jLY9wf9AgY8wv4eYy7gn0fGPLztZ9qV0mCbtZuK700PK+Bc4J+nsa7Gb8vUFhJn7rIky7kH+DgvYmoUZd1ivi5U1y8N8c8ysJ9/H4ON4/QcWVlA7efLcAjVE+WTkRz+lmTIjyK/0UW59P8zHR6tmdWu4V4hGrJ6iqazxo+HmWQ5Q8EfU4ehZE/r/vEfF4eoR5fgTEhn59Hj30VXCL+eMDZy54WUkPA703j58V9R8USAV7X/zpEz+CnjisHhXR9n/n+D3zwwQcffPDBBx988MEHH3zwwQcf/H/KV54/Uh7PmZaHPmbG/3Xl+WuKZN/qY5z+r9uJnyeXt5DNE3b/gTbiB/xj3txsJUyb/4Cy/2DAItU/S5gL/gNFygVQLJOPc9IUdf/J56US/RsEmVweMHRPOQDX5PFHFKMxcEzbf3RaFp+jPjjdE2RU239VKeccPKryz4INz9t/1rrBfD1R/YDx9JagM8qxNqM+V3cblJFEZt/UnpvSNphZmvG8zNi6O0xKt23BltpHtC1OUVb8F/ImhnqY4l7K51+H2r4c2SSbb6G/+z85NaFfgz9TZbqX9vrGWVn6bBPTdZ162aFfy3hGr25i0ecSvqv8ttXucJoUh916p2J3OKsOgUAgEAjkP89vrC1F4g==",
 } as const;
 const masks = new Map<string, Uint8Array>();
+
 export function stateIconMask(glyph: string): Uint8Array | undefined {
-  const name =
-    glyph === icons.robot
-      ? "robot"
-      : glyph === icons.terminal
-        ? "terminal"
-        : glyph === icons.folder
-          ? "folder"
-          : undefined;
-  if (!name) return undefined;
+  let name: keyof typeof compressed | undefined;
+  switch (glyph) {
+    case icons.robot:
+      name = "robot";
+      break;
+    case icons.terminal:
+      name = "terminal";
+      break;
+    case icons.folder:
+      name = "folder";
+      break;
+  }
+
+  if (!name) {
+    return undefined;
+  }
+
   let mask = masks.get(name);
   if (!mask) {
     mask = inflateSync(Buffer.from(compressed[name], "base64"));
-    if (mask.length !== stateIconSize ** 2) throw new Error("Invalid embedded state icon mask.");
+    if (mask.length !== stateIconSize ** 2) {
+      throw new Error("Invalid embedded state icon mask.");
+    }
+
     masks.set(name, mask);
   }
+
   return mask;
 }

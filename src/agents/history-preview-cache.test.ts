@@ -11,7 +11,9 @@ const preview = (id: string, worktreeId = "tree"): HistoryPreview => ({
   truncated: false,
 });
 const flush = async () => {
-  for (let i = 0; i < 12; i++) await Promise.resolve();
+  for (let i = 0; i < 12; i++) {
+    await Promise.resolve();
+  }
 };
 const unexpected = (error: unknown): string => {
   throw error;
@@ -20,11 +22,12 @@ const unexpected = (error: unknown): string => {
 test("Concurrent previews share requests and completed previews reuse cache without timers", async () => {
   // Repeated selection during a file read must not duplicate I/O.
   const pending = Promise.withResolvers<Result<HistoryPreview, HistoryError>>();
-  let calls = 0,
-    changed = 0;
+  let calls = 0;
+  let changed = 0;
   const cache = new HistoryPreviewCache(
     async () => {
       calls++;
+
       return pending.promise;
     },
     () => {
@@ -54,23 +57,28 @@ test("Concurrent previews share requests and completed previews reuse cache with
 
 test("Preview concurrency is limited to two with only the latest queued selection", async () => {
   // Do not read every transient selection in FIFO order.
-  const requests: string[] = [],
-    pending = new Map<
-      string,
-      ReturnType<typeof Promise.withResolvers<Result<HistoryPreview, HistoryError>>>
-    >();
+  const requests: string[] = [];
+  const pending = new Map<
+    string,
+    ReturnType<typeof Promise.withResolvers<Result<HistoryPreview, HistoryError>>>
+  >();
   const cache = new HistoryPreviewCache(
     async (_tree, id) => {
       requests.push(id);
+
       const task = Promise.withResolvers<Result<HistoryPreview, HistoryError>>();
       pending.set(id, task);
+
       return task.promise;
     },
     () => {},
     unexpected,
   );
   try {
-    for (const id of ["a", "b", "c", "d"]) cache.select("tree", id);
+    for (const id of ["a", "b", "c", "d"]) {
+      cache.select("tree", id);
+    }
+
     await flush();
     expect(requests).toEqual(["a", "b"]);
     expect(cache.read("tree", "c")).toBeUndefined();
@@ -88,7 +96,10 @@ test("Preview concurrency is limited to two with only the latest queued selectio
     expect(cache.select("tree", "a")).toEqual({ kind: "ready", value: preview("a") });
   } finally {
     cache.clear();
-    for (const [id, task] of pending) task.resolve(ok(preview(id)));
+    for (const [id, task] of pending) {
+      task.resolve(ok(preview(id)));
+    }
+
     await flush();
   }
 });
@@ -101,6 +112,7 @@ test("Old responses cannot overwrite new cache entries after clearing and reload
   const cache = new HistoryPreviewCache(
     async (_tree, id, signal) => {
       signals.push(signal);
+
       return ++calls === 1 ? old.promise : ok({ ...preview(id), text: "Fresh" });
     },
     () => {},
@@ -133,6 +145,7 @@ test("Identical saved IDs in different worktrees use separate cache slots and pr
   const cache = new HistoryPreviewCache(
     async (tree, id) => {
       calls++;
+
       return tree === "gone" ? err(failure) : ok(preview(id, tree));
     },
     () => {},
@@ -164,6 +177,7 @@ test("Capacity eviction removes old results but preserves current selection and 
       cache.select("tree", id);
       await flush();
     }
+
     expect(cache.read("tree", "a")).toBeUndefined();
     expect(cache.read("tree", "b")?.kind).toBe("ready");
     expect(cache.read("tree", "c")?.kind).toBe("ready");
@@ -178,6 +192,7 @@ test("Background previews are ready before selection and invalidate only changed
   const cache = new HistoryPreviewCache(
     async (tree, id) => {
       calls.push(id);
+
       return ok(preview(id, tree));
     },
     () => {},
@@ -215,6 +230,7 @@ test("Background preload preserves newest previews when its memory budget is ful
   const cache = new HistoryPreviewCache(
     async (tree, id) => {
       calls.push(id);
+
       return ok({ ...preview(id, tree), text });
     },
     () => {},
@@ -231,7 +247,10 @@ test("Background preload preserves newest previews when its memory budget is ful
     // The two prepared recent bodies stay ready; stopped background work is not left pending.
     expect(cache.read("tree", "newest")?.kind).toBe("ready");
     expect(cache.read("tree", "recent")?.kind).toBe("ready");
-    for (const id of ["older", "oldest", "queued"]) expect(cache.read("tree", id)).toBeUndefined();
+    for (const id of ["older", "oldest", "queued"]) {
+      expect(cache.read("tree", id)).toBeUndefined();
+    }
+
     expect(calls).toEqual(["newest", "recent", "older", "oldest"]);
     expect(cache.select("tree", "newest").kind).toBe("ready");
     expect(calls).toHaveLength(4);
@@ -280,16 +299,18 @@ test("A slow newest preview keeps priority over older background results that fi
 
 test("Visible selection takes priority over queued background previews within two read slots", async () => {
   // Startup preparation must not force the user to wait behind a long FIFO queue.
-  const calls: string[] = [],
-    pending = new Map<
-      string,
-      ReturnType<typeof Promise.withResolvers<Result<HistoryPreview, HistoryError>>>
-    >();
+  const calls: string[] = [];
+  const pending = new Map<
+    string,
+    ReturnType<typeof Promise.withResolvers<Result<HistoryPreview, HistoryError>>>
+  >();
   const cache = new HistoryPreviewCache(
     async (_tree, id) => {
       calls.push(id);
+
       const task = Promise.withResolvers<Result<HistoryPreview, HistoryError>>();
       pending.set(id, task);
+
       return task.promise;
     },
     () => {},
@@ -308,15 +329,18 @@ test("Visible selection takes priority over queued background previews within tw
     expect(calls).toEqual(["a", "b", "d"]);
   } finally {
     cache.clear();
-    for (const [id, task] of pending) task.resolve(ok(preview(id)));
+    for (const [id, task] of pending) {
+      task.resolve(ok(preview(id)));
+    }
+
     await flush();
   }
 });
 
 test("Unexpected failures reach the UI boundary unchanged instead of becoming lookup errors", async () => {
   // Programming errors must remain observable for logging, not become empty previews.
-  const error = new TypeError("Broken loader"),
-    reported: unknown[] = [];
+  const error = new TypeError("Broken loader");
+  const reported: unknown[] = [];
   const cache = new HistoryPreviewCache(
     async () => {
       throw error;
@@ -324,6 +348,7 @@ test("Unexpected failures reach the UI boundary unchanged instead of becoming lo
     () => {},
     (failure) => {
       reported.push(failure);
+
       return "Unexpected preview failure";
     },
   );

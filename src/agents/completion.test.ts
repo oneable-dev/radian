@@ -59,6 +59,7 @@ test("Commands and quoted paths return completion text and caret positions witho
     value: 'a "b"\\c.ts',
     description: "",
   });
+
   expect(command).toEqual({ text: "/mcp ", cursor: 5 });
   expect(file.text).toBe('@"a \\"b\\"\\\\c.ts" ');
   expect(file.cursor).toBe(file.text.length);
@@ -121,6 +122,7 @@ test("Filtering ignores case, prioritizes prefixes, and reports truncation", () 
     (value) => ({ kind: "command" as const, value, description: "" }),
   );
   const result = filterCompletions(items, "MCP");
+
   expect(result.items[0]?.value).toBe("mcp");
   expect(result.items).toHaveLength(100);
   expect(result.truncated).toBe(true);
@@ -150,8 +152,8 @@ test("Full catalogs separate commands from skills and search beyond the first 10
 
 test("Dollar completion preserves dollar syntax and converts skill syntax only on invocation", () => {
   // Selecting skills does not execute input or corrupt trailing instructions.
-  const text = "$rev inspect this code",
-    target = completionTarget(text, 4)!;
+  const text = "$rev inspect this code";
+  const target = completionTarget(text, 4)!;
 
   const inserted = insertCompletion(text, target, {
     kind: "skill",
@@ -171,6 +173,7 @@ test("Dollar completion preserves dollar syntax and converts skill syntax only o
     "$(pwd)",
     "/skill:review-code",
     "````\n$review-code",
-  ])
+  ]) {
     expect(expandSkillInvocation(ordinary)).toBe(ordinary);
+  }
 });

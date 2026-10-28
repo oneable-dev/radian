@@ -64,9 +64,14 @@ async function mount(initial: readonly TranscriptSection[] = sections, width = 1
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   const scroll = app.renderer.root.findDescendantById("session-transcript");
-  if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript viewport");
+  if (!(scroll instanceof ScrollBoxRenderable)) {
+    throw new Error("Missing transcript viewport");
+  }
+
   const cards = () =>
     scroll.content
       .getChildren()
@@ -75,20 +80,24 @@ async function mount(initial: readonly TranscriptSection[] = sections, width = 1
     let column = 0;
     const span = app.captureSpans().lines[y]!.spans.find((span) => {
       column += span.width;
+
       return column > x;
     });
-    if (!span) throw new Error(`Missing rendered cell at ${x}, ${y}`);
+    if (!span) {
+      throw new Error(`Missing rendered cell at ${x}, ${y}`);
+    }
+
     return span;
   };
   const background = (x: number, y: number) => cell(x, y).bg;
   const foreground = (x: number, y: number) => cell(x, y).fg;
   const expectMarker = (index?: number) => {
     const card = index === undefined ? undefined : cards()[index]!;
-    const viewport = scroll.viewport,
-      accent = uiTheme(app.renderer).styles["ui.focusBorder"].fg;
-    const frame = app.captureCharFrame().split("\n"),
-      left = viewport.x - 1,
-      right = viewport.x + viewport.width;
+    const viewport = scroll.viewport;
+    const accent = uiTheme(app.renderer).styles["ui.focusBorder"].fg;
+    const frame = app.captureCharFrame().split("\n");
+    const left = viewport.x - 1;
+    const right = viewport.x + viewport.width;
     const visible =
       !!card && card.y < viewport.y + viewport.height && card.y + card.height > viewport.y;
     for (let y = viewport.y; y < viewport.y + viewport.height; y++) {
@@ -97,10 +106,15 @@ async function mount(initial: readonly TranscriptSection[] = sections, width = 1
         expect(foreground(x, y).equals(accent)).toBe(marked);
         // Focus is a line, not a solid background bar or a tint on the section body.
         expect(background(x, y).equals(accent)).toBe(false);
-        if (marked && y >= card.y && y < card.y + card.height) expect(frame[y]![x]).toBe("│");
+        if (marked && y >= card.y && y < card.y + card.height) {
+          expect(frame[y]![x]).toBe("│");
+        }
       }
+
       expect(background(viewport.x, y).equals(accent)).toBe(false);
-      if (viewport.x >= 2) expect(background(viewport.x - 2, y).equals(accent)).toBe(false);
+      if (viewport.x >= 2) {
+        expect(background(viewport.x - 2, y).equals(accent)).toBe(false);
+      }
     }
     if (visible) {
       const bottomButton = app.renderer.root.findDescendantById("transcript-bottom-button");
@@ -112,13 +126,16 @@ async function mount(initial: readonly TranscriptSection[] = sections, width = 1
           y < viewport.y ||
           y > viewport.y + viewport.height ||
           (y === viewport.y + viewport.height && bottomButton?.visible)
-        )
+        ) {
           continue;
+        }
+
         expect(frame[y]!.slice(left, right + 1)).toBe(start + "─".repeat(viewport.width) + end);
         expect(foreground(viewport.x, y).equals(accent)).toBe(true);
       }
     }
   };
+
   return {
     ...app,
     view,
@@ -129,9 +146,12 @@ async function mount(initial: readonly TranscriptSection[] = sections, width = 1
     expectMarker,
     render,
     position(text: string) {
-      const lines = app.captureCharFrame().split("\n"),
-        y = lines.findIndex((line) => line.includes(text));
-      if (y < 0) throw new Error(`Missing rendered text: ${text}`);
+      const lines = app.captureCharFrame().split("\n");
+      const y = lines.findIndex((line) => line.includes(text));
+      if (y < 0) {
+        throw new Error(`Missing rendered text: ${text}`);
+      }
+
       return { x: Bun.stringWidth(lines[y]!.slice(0, lines[y]!.indexOf(text))), y };
     },
     async focus() {
@@ -166,22 +186,29 @@ test.each([120, 60])(
               app.background(card.x + 1, card.y + y).toInts(),
             ),
           );
-      const before = geometry(),
-        beforeBackgrounds = backgrounds();
+      const before = geometry();
+      const beforeBackgrounds = backgrounds();
+
       app.expectMarker();
 
       // Both standard navigation styles, plus Vim keys, move the same section indicator.
       await app.focus();
       app.expectMarker(0);
       expect(backgrounds()).toEqual(beforeBackgrounds);
+
       const nextKeys = ["ctrl+n", "ARROW_DOWN", "j", "ctrl+n", "ARROW_DOWN"];
       for (const [index, key] of nextKeys.entries()) {
-        if (key === "ctrl+n") app.mockInput.pressKey("n", { ctrl: true });
-        else app.mockInput.pressKey(key);
+        if (key === "ctrl+n") {
+          app.mockInput.pressKey("n", { ctrl: true });
+        } else {
+          app.mockInput.pressKey(key);
+        }
+
         await app.render();
         app.expectMarker(index + 1);
         expect(backgrounds()).toEqual(beforeBackgrounds);
       }
+
       app.mockInput.pressKey("p", { ctrl: true });
       await app.render();
       app.expectMarker(4);
@@ -216,8 +243,12 @@ test.each([sections[0]!, sections[1]!, sections[2]!, sections[5]!])(
       app.mockInput.pressEnter();
       app.mockInput.pressKey("l");
       await app.render();
+
       const reader = app.renderer.currentFocusedRenderable;
-      if (!(reader instanceof EditBufferRenderable)) throw new Error("Missing reading cursor");
+      if (!(reader instanceof EditBufferRenderable)) {
+        throw new Error("Missing reading cursor");
+      }
+
       const offset = reader.cursorOffset;
       expect(offset).toBeGreaterThan(0);
       expect(app.renderer.getCursorState().visible).toBe(true);
@@ -353,6 +384,7 @@ test.each([
       await app.render();
       expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
       expect(app.view.workViewPreferences.agentViews?.a1?.selectedId).toBe("user");
+
       const { x, y } = app.position("CLICKED_BODY");
 
       // Native prose clicks select a section without changing its layout or entering text-editing mode.
@@ -371,8 +403,10 @@ test.each([
 
       // Enter and subsequent keyboard navigation operate on the clicked content, never the old tail or draft.
       const reader = app.renderer.currentFocusedRenderable;
-      if (!(reader instanceof EditBufferRenderable))
+      if (!(reader instanceof EditBufferRenderable)) {
         throw new Error("Missing clicked section reader");
+      }
+
       expect(reader.plainText).toContain("CLICKED_BODY");
       expect(reader.plainText).not.toContain("**");
       expect(app.view.promptDrafts.a1).toBe("Keep my draft");
@@ -402,14 +436,21 @@ test.each(["click", "drag"] as const)(
         app.mockInput.pressKey("v");
         await app.render();
         expect(app.view.workViewPreferences.agentViews?.a1?.mode).toBe("visual");
+
         const previous = app.renderer.currentFocusedRenderable;
-        if (!(previous instanceof EditBufferRenderable))
+        if (!(previous instanceof EditBufferRenderable)) {
           throw new Error("Missing previous Visual reader");
+        }
+
         const { x, y } = app.position(label);
 
         // Either pointer gesture exits the unrelated reading mode without cancelling its own new native selection.
-        if (gesture === "drag") await app.mockMouse.drag(x + 2, y, x + 6, y);
-        else await app.mockMouse.click(x + 2, y);
+        if (gesture === "drag") {
+          await app.mockMouse.drag(x + 2, y, x + 6, y);
+        } else {
+          await app.mockMouse.click(x + 2, y);
+        }
+
         await app.render();
 
         expect(app.renderer.currentFocusedRenderable).toBe(app.scroll);
@@ -418,8 +459,10 @@ test.each(["click", "drag"] as const)(
         expect(app.renderer.getCursorState().visible).toBe(false);
         app.expectMarker(1);
         expect(previous.hasSelection()).toBe(false);
-        if (gesture === "drag")
+        if (gesture === "drag") {
           expect(app.renderer.getSelection()?.getSelectedText()).toContain(label.slice(2, 5));
+        }
+
         expect(app.view.promptDrafts.a1).toBe("Keep my draft");
       }
     } finally {
@@ -453,20 +496,27 @@ test.each([
       await app.render();
       pressLeader(app, "a");
       await app.render();
-      const top = app.scroll.scrollTop,
-        { x, y } = app.position("LONG_LINE_30");
+
+      const top = app.scroll.scrollTop;
+      const { x, y } = app.position("LONG_LINE_30");
 
       // Focusing rendered prose must preserve native text selection and the existing scroll position.
-      if (gesture === "drag") await app.mockMouse.drag(x + 1, y, x + 7, y);
-      else await app.mockMouse.click(x + 2, y);
+      if (gesture === "drag") {
+        await app.mockMouse.drag(x + 1, y, x + 7, y);
+      } else {
+        await app.mockMouse.click(x + 2, y);
+      }
+
       await app.render();
 
       expect(app.renderer.currentFocusedRenderable).toBe(app.scroll);
       expect(app.view.workViewPreferences.agentViews?.a1?.selectedId).toBe("long");
       expect(app.scroll.scrollTop).toBe(top);
       app.expectMarker(0);
-      if (gesture === "drag")
+      if (gesture === "drag") {
         expect(app.renderer.getSelection()?.getSelectedText()).toContain("ONG");
+      }
+
       expect(app.view.promptDrafts.a1).toBe("Keep my draft");
     } finally {
       await app.close();
@@ -482,6 +532,7 @@ test("Secondary and modified Markdown clicks do not change the selected section"
     app.mockInput.pressKey("END");
     pressLeader(app, "a");
     await app.render();
+
     const { x, y } = app.position("ASSISTANT_BODY");
 
     // Neither a secondary click nor a modified left click should activate the pointed-at section.
@@ -489,6 +540,7 @@ test("Secondary and modified Markdown clicks do not change the selected section"
     for (const modifiers of [{ ctrl: true }, { shift: true }, { alt: true }]) {
       await app.mockMouse.click(x + 2, y, 0, { modifiers });
     }
+
     await app.render();
 
     expect(app.view.workViewPreferences.agentViews?.a1?.selectedId).toBe("user");
@@ -508,6 +560,7 @@ test("Clicking and expanding tool headers or selecting bodies outlines the full 
     await app.mockMouse.click(heading.x, heading.y);
     await app.render();
     app.expectMarker(2);
+
     const foldedHeight = tool.height;
     app.mockInput.pressKey("o", { ctrl: true });
     await app.render();
@@ -557,8 +610,9 @@ test("Scroll, resize, and streaming clip section borders without covering adjace
     app.expectMarker(0);
 
     // A partial section stops before the following section, composer, and session tabs.
-    const viewport = app.scroll.viewport,
-      accent = uiTheme(app.renderer).styles["ui.focusBorder"].fg;
+    const viewport = app.scroll.viewport;
+    const accent = uiTheme(app.renderer).styles["ui.focusBorder"].fg;
+
     expect(app.background(viewport.x - 1, viewport.y - 1).equals(accent)).toBe(false);
     expect(app.background(viewport.x - 1, viewport.y + viewport.height).equals(accent)).toBe(false);
     app.mockInput.pressKey("n", { ctrl: true });
@@ -583,8 +637,10 @@ test.each([120, 60])(
     const app = await mount([long, sections[0]!], width);
     try {
       await app.focus();
-      const card = app.cards()[0]!,
-        viewport = app.scroll.viewport;
+
+      const card = app.cards()[0]!;
+      const viewport = app.scroll.viewport;
+
       app.scroll.scrollTo(
         app.scroll.scrollTop + card.y + card.height - viewport.y - viewport.height,
       );
@@ -592,6 +648,7 @@ test.each([120, 60])(
 
       // The return command keeps its existing row instead of being overwritten by the bottom edge.
       expect(card.y + card.height).toBe(viewport.y + viewport.height);
+
       const button = app.renderer.root.findDescendantById("transcript-bottom-button")!;
       expect(button.visible).toBe(true);
       app.expectMarker(0);
@@ -639,19 +696,25 @@ test.each([120, 60])(
     );
     const raw = (sequence: string) => {
       const key = parseKeypress(sequence, { useKittyKeyboard: true });
-      if (!key) throw new Error("Invalid Kitty key");
+      if (!key) {
+        throw new Error("Invalid Kitty key");
+      }
+
       app.renderer.keyInput.processParsedKey(key);
     };
     const expectSelected = (index: number) => {
       expect(app.view.workViewPreferences.agentViews?.a1?.selectedId).toBe(`section-${index}`);
-      const card = app.cards()[index]!,
-        viewport = app.scroll.viewport;
+
+      const card = app.cards()[index]!;
+      const viewport = app.scroll.viewport;
+
       expect(card.y).toBeGreaterThanOrEqual(viewport.y);
       expect(card.y + card.height).toBeLessThanOrEqual(viewport.y + viewport.height);
       app.expectMarker(index);
     };
     try {
       await app.focus();
+
       const step = Math.max(1, Math.floor(app.scroll.viewport.height / 4));
 
       app.mockInput.pressKey("d", { ctrl: true });
@@ -701,6 +764,7 @@ test("Section borders immediately follow theme ui.focusBorder changes", async ()
   };
   try {
     await app.focus();
+
     const before = app.foreground(app.scroll.viewport.x - 1, app.cards()[0]!.y);
 
     uiTheme(app.renderer).configure(palette, { styles: { "ui.focusBorder": { fg: "#F08020" } } });
@@ -708,6 +772,7 @@ test("Section borders immediately follow theme ui.focusBorder changes", async ()
 
     // The same gutter updates without moving the selected section or requiring a focus cycle.
     app.expectMarker(0);
+
     const after = app.foreground(app.scroll.viewport.x - 1, app.cards()[0]!.y);
     expect(after.toInts().slice(0, 3)).toEqual([240, 128, 32]);
     expect(after.equals(before)).toBe(false);

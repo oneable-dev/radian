@@ -17,15 +17,21 @@ type ProcessRow = {
   foreground: number;
   command: string;
 };
+
 type Inspect = (signal: AbortSignal) => Promise<Result<string, ExpectedError>>;
+
 export type TerminalTitles = Readonly<Record<string, string>>;
 
 function inspectProcesses(signal: AbortSignal): Promise<Result<string, ExpectedError>> {
-  if (signal.aborted) return Promise.resolve(err(new CancelledError()));
-  if (process.platform !== "darwin" && process.platform !== "linux")
+  if (signal.aborted) {
+    return Promise.resolve(err(new CancelledError()));
+  }
+  if (process.platform !== "darwin" && process.platform !== "linux") {
     return Promise.resolve(
       err(new CapabilityError("Process titles require a local POSIX terminal.")),
     );
+  }
+
   return new Promise((resolve, reject) => {
     // Executable names only: never collect command arguments, which can contain credentials.
     execFile(
@@ -35,10 +41,12 @@ function inspectProcesses(signal: AbortSignal): Promise<Result<string, ExpectedE
       (error, text) => {
         if (!error) {
           resolve(ok(text));
+
           return;
         }
         if (signal.aborted) {
           resolve(err(new CancelledError()));
+
           return;
         }
         if (
@@ -56,8 +64,10 @@ function inspectProcesses(signal: AbortSignal): Promise<Result<string, ExpectedE
               ),
             ),
           );
+
           return;
         }
+
         reject(error);
       },
     );
@@ -71,21 +81,33 @@ export async function readTerminalProcessTitles(
   signal: AbortSignal,
   inspect: Inspect = inspectProcesses,
 ): Promise<Result<TerminalTitles, ExpectedError>> {
-  if (signal.aborted) return err(new CancelledError());
-  if (!items.length) return ok({});
+  if (signal.aborted) {
+    return err(new CancelledError());
+  }
+  if (!items.length) {
+    return ok({});
+  }
+
   const result = await inspect(signal);
-  if (!result.ok) return result;
-  if (signal.aborted) return err(new CancelledError());
+  if (!result.ok) {
+    return result;
+  }
+  if (signal.aborted) {
+    return err(new CancelledError());
+  }
+
   const rows: ProcessRow[] = [];
   for (const line of result.value.split("\n").filter((line) => line.trim())) {
     const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+(.+)$/.exec(line);
-    if (!match)
+    if (!match) {
       return err(
         new PtyError(
           "PTY_UNAVAILABLE",
           "Unexpected process-name response; existing terminal labels were retained.",
         ),
       );
+    }
+
     rows.push({
       pid: Number(match[1]),
       parent: Number(match[2]),
@@ -94,26 +116,34 @@ export async function readTerminalProcessTitles(
       command: match[5]!.trim(),
     });
   }
-  if (!rows.length)
+  if (!rows.length) {
     return err(
       new PtyError(
         "PTY_UNAVAILABLE",
         "Empty process-name response; existing terminal labels were retained.",
       ),
     );
+  }
+
   const byPid = new Map(rows.map((row) => [row.pid, row]));
   const titles: Record<string, string> = {};
   for (const item of items) {
     const shell = byPid.get(item.shellPid);
     // Do not label a recycled PID belonging to a different supervisor.
-    if (!shell || shell.parent !== item.pid || item.exited || shell.foreground < 2) continue;
+    if (!shell || shell.parent !== item.pid || item.exited || shell.foreground < 2) {
+      continue;
+    }
+
     const candidates = rows.filter((row) => row.group === shell.foreground);
     // A freshly launched shell may briefly inherit its supervisor's foreground group.
     const foreground =
       shell.foreground === item.pid
         ? shell
         : (candidates.find((row) => row.pid === shell.foreground) ?? candidates[0]);
-    if (!foreground) continue;
+    if (!foreground) {
+      continue;
+    }
+
     const title = Array.from(
       basename(foreground.command)
         // oxlint-disable-next-line eslint/no-control-regex -- Process names are untrusted terminal labels; keep only printable code points.
@@ -122,7 +152,10 @@ export async function readTerminalProcessTitles(
     )
       .slice(0, 80)
       .join("");
-    if (title) titles[item.id] = title;
+    if (title) {
+      titles[item.id] = title;
+    }
   }
+
   return ok(titles);
 }

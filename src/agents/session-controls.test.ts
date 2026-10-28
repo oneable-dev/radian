@@ -6,6 +6,7 @@ test("Completion descriptions match parsing for new-tab, clear, exit, reload, an
   // Host-reserved commands must not be shadowed by SDK commands with different meanings.
   const names = sessionControlCommands.map((item) => item.value);
   const actions = names.map((name) => expectOk(parseSessionControl(`/${name}`))?.action);
+
   expect(names).toEqual(["new", "clear", "exit", "reload", "compact"]);
   expect(actions).toEqual(["new-tab", "clear", "exit", "reload", "compact"]);
   expect(sessionControlCommands.find((item) => item.value === "new")?.description).toContain(

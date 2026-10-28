@@ -10,15 +10,16 @@ import { parseKeymap } from "../../keybindings/config.ts";
 import { expectOk } from "../../testing/results.ts";
 
 async function mount(actions: Partial<WorkbenchActions> = {}) {
-  const clock = new ManualClock(),
-    app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true, clock });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    requests: string[] = [];
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true, clock });
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const requests: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => requests.push("new"),
     onCloseSession: () => requests.push("close"),
     onPrompt: () => {
       requests.push("prompt");
+
       return ok(undefined);
     },
     initialDrafts: { a1: "main draft" },
@@ -33,12 +34,18 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
+
   return {
     ...app,
     clock,
@@ -67,8 +74,9 @@ test("Legacy leader b toggles only workspace popups without resizing work areas"
   // Retain legacy command IDs without creating permanent panels.
   const app = await mount();
   try {
-    const pane = app.get("work-panel"),
-      tree = app.get("workspace-tree");
+    const pane = app.get("work-panel");
+    const tree = app.get("workspace-tree");
+
     expect(app.get("workspace-picker").visible).toBe(false);
     expect(pane.width).toBe(120);
 
@@ -92,13 +100,15 @@ test("Popup cancellation preserves original input carets and transcript scroll",
   // Popup open/close must not recreate existing Agent renderables.
   const app = await mount();
   try {
-    const prompt = app.get("session-prompt") as InputRenderable,
-      scroll = app.get("session-transcript") as ScrollBoxRenderable;
+    const prompt = app.get("session-prompt") as InputRenderable;
+    const scroll = app.get("session-transcript") as ScrollBoxRenderable;
+
     prompt.focus();
     scroll.scrollTo(31);
     await app.render();
-    const top = scroll.scrollTop,
-      cursor = prompt.cursorOffset;
+
+    const top = scroll.scrollTop;
+    const cursor = prompt.cursorOffset;
 
     await app.toggle();
     app.mockInput.pressEscape();
@@ -148,6 +158,7 @@ test("While History is open, other popup commands preserve lists, scroll, and se
   const app = await mount({
     onListHistory: async () => {
       lookups++;
+
       return ok(
         Array.from({ length: 30 }, (_, i) => ({
           id: `saved-${i}`,
@@ -164,9 +175,11 @@ test("While History is open, other popup commands preserve lists, scroll, and se
   try {
     app.leader("h");
     await app.render();
+
     const list = app.get("history-list") as ScrollBoxRenderable;
     list.scrollTo(20);
     await app.render();
+
     const top = list.scrollTop;
 
     app.leader("b");
@@ -189,6 +202,7 @@ test("Popup toggles and reconnection never query closed History", async () => {
   const app = await mount({
     onListHistory: async () => {
       lookups++;
+
       return ok([]);
     },
   });

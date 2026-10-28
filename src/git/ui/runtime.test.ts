@@ -17,8 +17,8 @@ test("Real Git commit a requests queue in the same SDK session while preserving 
   // Only provider output is controlled: repository, Git process, SDK queue and TUI are real.
   const fixture = await createWorktreeFixture();
   const options = await offlineRuntime(join(fixture.directory, "agent"));
-  const started = Promise.withResolvers<void>(),
-    release = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
   const modelInputs: string[] = [];
   const registry = new SessionRegistry(
     [fixture.repository],
@@ -35,18 +35,25 @@ test("Real Git commit a requests queue in the same SDK session while preserving 
                   .map((part) => part.text)
                   .join("")
             : "";
+
         modelInputs.push(text);
-        if (text !== "hold initial response") return options.streamFn!(model, context, request);
-        const stream = createAssistantMessageEventStream(),
-          message = fixtureMessage(model.api, model.provider, model.id);
+        if (text !== "hold initial response") {
+          return options.streamFn!(model, context, request);
+        }
+
+        const stream = createAssistantMessageEventStream();
+        const message = fixtureMessage(model.api, model.provider, model.id);
+
         stream.push({ type: "start", partial: message });
         started.resolve();
+
         const finish = () => {
           message.content = [{ type: "text", text: "Initial response finished" }];
           stream.push({ type: "done", reason: "stop", message });
           stream.end();
         };
         void release.promise.then(finish);
+
         return stream;
       },
     }),
@@ -59,7 +66,9 @@ test("Real Git commit a requests queue in the same SDK session while preserving 
     const worktree = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
     const id = expectOk(await registry.create(worktree.id));
     const running = registry.prompt(id, "hold initial response");
+
     await started.promise;
+
     const source = new GitRepository(fixture.main);
     const snapshot = expectOk(await source.load(null, 300, new AbortController().signal));
     const selected = snapshot.commits[0]!;
@@ -68,8 +77,10 @@ test("Real Git commit a requests queue in the same SDK session while preserving 
       void registry
         .prompt(session, text, () => accepted.resolve(ok(undefined)))
         .then(accepted.resolve, accepted.reject);
+
       return accepted.promise;
     };
+
     view = new Workbench(app.renderer, selection, {
       onNewSession: () => {},
       onCloseSession: () => {},
@@ -84,11 +95,15 @@ test("Real Git commit a requests queue in the same SDK session while preserving 
       },
     });
     await app.renderOnce();
+
     const click = async (text: string) => {
-      const lines = app.captureCharFrame().split("\n"),
-        y = lines.findIndex((line) => line.includes(text)),
-        x = lines[y]?.indexOf(text) ?? -1;
-      if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+      const lines = app.captureCharFrame().split("\n");
+      const y = lines.findIndex((line) => line.includes(text));
+      const x = lines[y]?.indexOf(text) ?? -1;
+      if (x < 0) {
+        throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+      }
+
       await app.mockMouse.click(x + 1, y);
       await app.renderOnce();
     };

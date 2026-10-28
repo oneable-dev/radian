@@ -20,8 +20,12 @@ const surfaces = [
 ] as const;
 const walk = (node: Renderable): Renderable[] => [node, ...node.getChildren().flatMap(walk)];
 const within = (node: Renderable | null, parent: Renderable): boolean => {
-  for (let current = node; current; current = current.parent as Renderable | null)
-    if (current === parent) return true;
+  for (let current = node; current; current = current.parent as Renderable | null) {
+    if (current === parent) {
+      return true;
+    }
+  }
+
   return false;
 };
 
@@ -41,6 +45,7 @@ test.each(surfaces)(
       onCloseSession() {},
       onPrompt: (_id, text) => {
         sent.push(text);
+
         return ok(undefined);
       },
       getSessionDetails: () => ({
@@ -84,18 +89,28 @@ test.each(surfaces)(
     });
     const get = (id: string) => {
       const node = app.renderer.root.findDescendantById(id);
-      if (!node) throw new Error(`Missing ${id}`);
+      if (!node) {
+        throw new Error(`Missing ${id}`);
+      }
+
       return node;
     };
     const render = async () => {
-      for (let i = 0; i < 8; i++) await Promise.resolve();
+      for (let i = 0; i < 8; i++) {
+        await Promise.resolve();
+      }
+
       await app.renderOnce();
       await app.renderOnce();
     };
     try {
       await render();
+
       const input = get("session-prompt");
-      if (!(input instanceof PromptInput)) throw new Error("Missing prompt");
+      if (!(input instanceof PromptInput)) {
+        throw new Error("Missing prompt");
+      }
+
       input.focus();
       input.value = "Retained draft";
       if ("command" in surface) {
@@ -104,8 +119,12 @@ test.each(surfaces)(
       } else if ("leader" in surface) {
         app.mockInput.pressKey(" ", { ctrl: true });
         app.mockInput.pressKey(surface.leader);
-      } else app.mockInput.pressKey("F1");
+      } else {
+        app.mockInput.pressKey("F1");
+      }
+
       await render();
+
       const draft = input.draft;
 
       // Resize and Tab direction changes navigate content, search, and state choices instead of buttons.
@@ -115,6 +134,7 @@ test.each(surfaces)(
       ] as const) {
         app.resize(width, height);
         await render();
+
         const panel = get(surface.panel);
         expect(panel.visible).toBe(true);
         expect(
@@ -123,19 +143,24 @@ test.each(surfaces)(
             .split("\n")
             [panel.y]?.slice(panel.x, panel.x + panel.width),
         ).not.toContain("×");
+
         // A faithful session preview includes inert tab close glyphs, not popup close controls.
         const buttons = walk(panel).filter((node): node is Button => node instanceof Button);
         const previewClose = (node: Button) => node.id.startsWith("history-preview-close-session:");
+
         expect(
           buttons.filter((node) => !node.id.startsWith("model-effort:") && !previewClose(node)),
         ).toEqual([]);
-        for (const button of buttons.filter(previewClose)) expect(button.focusable).toBe(false);
+        for (const button of buttons.filter(previewClose)) {
+          expect(button.focusable).toBe(false);
+        }
         for (let i = 0; i < 4; i++) {
           app.mockInput.pressTab({ shift: i % 2 === 1 });
           await render();
           expect(within(app.renderer.currentFocusedRenderable, panel)).toBe(true);
         }
       }
+
       app.mockInput.pressEscape();
       await render();
 

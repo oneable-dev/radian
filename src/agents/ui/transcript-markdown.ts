@@ -41,18 +41,25 @@ export function updateTranscriptMarkdownStyles(
           }
         : value,
     );
-  for (const [name, value] of Object.entries(codeStyles(styles))) register(name, value);
+  for (const [name, value] of Object.entries(codeStyles(styles))) {
+    register(name, value);
+  }
+
   register("markup", syntaxDefinition(styles["syntax.text"]));
   register("conceal", syntaxDefinition(styles["markup.tableBorder"]));
   register("markup.heading", syntaxDefinition(styles["markup.heading"]));
-  for (const depth of [1, 2, 3, 4, 5, 6] as const)
+  for (const depth of [1, 2, 3, 4, 5, 6] as const) {
     register(`markup.heading.${depth}`, syntaxDefinition(styles[`markup.heading.${depth}`]));
+  }
+
   register("markup.strong", syntaxDefinition(styles["markup.strong"]));
   register("markup.italic", syntaxDefinition(styles["markup.italic"]));
-  for (const name of ["markup.raw", "markup.raw.block"])
+  for (const name of ["markup.raw", "markup.raw.block"]) {
     register(name, syntaxDefinition(styles["markup.inlineCode"]));
-  for (const name of ["markup.link", "markup.link.url", "markup.link.label"])
+  }
+  for (const name of ["markup.link", "markup.link.url", "markup.link.label"]) {
     register(name, syntaxDefinition(styles["markup.link"]));
+  }
 }
 
 // Markdown always owns the display. The reader projects native visible text and
@@ -93,9 +100,15 @@ export class TranscriptMarkdown {
         cellPaddingY: 0,
       },
       renderNode: (token, context) => {
-        if (token.type !== "table") return undefined;
+        if (token.type !== "table") {
+          return undefined;
+        }
+
         const original = context.defaultRender();
-        if (!(original instanceof TextTableRenderable)) return original;
+        if (!(original instanceof TextTableRenderable)) {
+          return original;
+        }
+
         const selection = theme.styles["transcript.selection"];
         const table = new TranscriptTable(renderer, {
           width: "100%",
@@ -117,7 +130,9 @@ export class TranscriptMarkdown {
           ...(selection.bg ? { selectionBg: selection.bg } : {}),
           selectionFg: selection.fg,
         });
+
         original.destroyRecursively();
+
         return table;
       },
       renderBefore: () => this.paintLeaves(theme.styles),
@@ -130,6 +145,7 @@ export class TranscriptMarkdown {
     theme.bindStyles(this.root, (styles) => {
       this.changing();
       this.styles = styles;
+
       const value = styles[this.thinking ? "transcript.thinking" : "ui.text"];
       this.root.fg = value.fg;
       this.root.bg = value.bg;
@@ -142,7 +158,10 @@ export class TranscriptMarkdown {
   }
 
   update(source: string, streaming: boolean): void {
-    if (this.root.isDestroyed || (source === this.source && streaming === this.streaming)) return;
+    if (this.root.isDestroyed || (source === this.source && streaming === this.streaming)) {
+      return;
+    }
+
     this.changing();
     this.source = source;
     this.streaming = streaming;
@@ -169,7 +188,7 @@ export class TranscriptMarkdown {
   }
 
   private paintLeaves(styles: UiStyles): void {
-    for (const child of descendants(this.root))
+    for (const child of descendants(this.root)) {
       if (child instanceof TextBufferRenderable) {
         child.selectable = this.selectable;
         child.attributes = this.thinking
@@ -177,32 +196,45 @@ export class TranscriptMarkdown {
           : styles["ui.text"].attributes;
         child.selectionBg = styles["transcript.selection"].bg;
         child.selectionFg = styles["transcript.selection"].fg;
-        if (this.thinking) child.fg = styles["transcript.thinking"].fg;
+        if (this.thinking) {
+          child.fg = styles["transcript.thinking"].fg;
+        }
         if (child instanceof CodeRenderable) {
           child.wrapMode = "word";
           // Fenced contents are already plain code, so paint them before syntax highlighting settles.
-          if (child.filetype !== "markdown") child.drawUnstyledText = true;
+          if (child.filetype !== "markdown") {
+            child.drawUnstyledText = true;
+          }
         }
       }
+    }
   }
 
   private settle(): void {
-    if (this.streaming || !this.root.streaming || this.settling === this.revision) return;
+    if (this.streaming || !this.root.streaming || this.settling === this.revision) {
+      return;
+    }
+
     const revision = (this.settling = this.revision);
     // Code highlight work begins in the native lifecycle pass, before this
     // after-paint hook. Finalize only the same completed revision afterward.
     const highlights = descendants(this.root)
       .filter((child): child is CodeRenderable => child instanceof CodeRenderable)
       .map((child) => child.highlightingDone);
+
     void Promise.all(highlights)
       .then(() => {
-        if (this.root.isDestroyed || revision !== this.revision) return;
+        if (this.root.isDestroyed || revision !== this.revision) {
+          return;
+        }
+
         this.changing();
         this.root.streaming = false;
       })
       .catch((error: unknown) => {
-        if (!this.root.isDestroyed && revision === this.revision)
+        if (!this.root.isDestroyed && revision === this.revision) {
           this.notice(reportUnexpected(error, "transcript markdown"), { level: "error" });
+        }
       });
   }
 }

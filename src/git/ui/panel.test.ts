@@ -73,6 +73,7 @@ const comparison = (): GitComparison => {
     Array.from({ length: 70 }, (_, i) => `const line${String(i).padStart(2, "0")} = ${i};`).join(
       "\n",
     ) + "\n";
+
   return {
     before,
     after: before.replace("line30 = 30", "line30 = 300"),
@@ -97,14 +98,15 @@ async function mount(
     ...(options.clock ? { clock: options.clock } : {}),
   });
   const selection = new WorkspaceSelection(demoWorkspace());
-  const copies: string[] = [],
-    requests: { id: string; text: string }[] = [],
-    loads: string[] = [],
-    creations: string[] = [];
+  const copies: string[] = [];
+  const requests: { id: string; text: string }[] = [];
+  const loads: string[] = [];
+  const creations: string[] = [];
   const highlighter = new MockTreeSitterClient({ autoResolveTimeout: 0 });
   const source: GitSource = options.source ?? {
     load: async (ref) => {
       loads.push(ref ?? "all");
+
       return ok(snapshot());
     },
     details: async (selected) =>
@@ -124,14 +126,17 @@ async function mount(
     treeSitterClient: highlighter,
     createSession: async (id) => {
       creations.push(id);
+
       return ok("new-session");
     },
     prompt: (id, text) => {
       requests.push({ id, text });
+
       return ok(undefined);
     },
     copy: async (text) => {
       copies.push(text);
+
       return ok("Copied to clipboard");
     },
     ...options.actions,
@@ -149,20 +154,29 @@ async function mount(
   const walk = (node: Renderable): Renderable[] => [node, ...node.getChildren().flatMap(walk)];
   const get = (id: string) => {
     const result = walk(app.renderer.root).find((node) => node.id === id);
-    if (!result) throw new Error(`Missing ${id}`);
+    if (!result) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return result;
   };
+
   await app.renderOnce();
+
   const click = async (text: string) => {
     if (text.startsWith(icons.folder)) {
       openWorkspaceSearch(app);
       app.mockInput.pressCtrlC();
       await app.renderOnce();
     }
+
     const lines = app.captureCharFrame().split("\n");
-    const y = lines.findIndex((line) => line.includes(text)),
-      x = lines[y]?.indexOf(text) ?? -1;
-    if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+    const y = lines.findIndex((line) => line.includes(text));
+    const x = lines[y]?.indexOf(text) ?? -1;
+    if (x < 0) {
+      throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+    }
+
     await app.mockMouse.click(x + Math.min(1, text.length - 1), y);
     await app.renderOnce();
   };
@@ -172,7 +186,10 @@ async function mount(
     await app.renderOnce();
     await app.renderOnce();
   };
-  if (!options.initial?.active["demo:main"]) await showGit();
+  if (!options.initial?.active["demo:main"]) {
+    await showGit();
+  }
+
   await app.waitForFrame(
     (frame) =>
       frame.includes("Working tree") ||
@@ -180,15 +197,20 @@ async function mount(
       get("git-details-card").visible ||
       frame.includes("HEAD@{"),
   );
+
   const positionIn = (id: string, text: string) => {
-    const region = get(id),
-      lines = app.captureCharFrame().split("\n");
+    const region = get(id);
+    const lines = app.captureCharFrame().split("\n");
     for (let y = region.y; y < region.y + region.height; y++) {
       const offset = lines[y]?.slice(region.x, region.x + region.width).indexOf(text) ?? -1;
-      if (offset >= 0) return { x: region.x + offset, y };
+      if (offset >= 0) {
+        return { x: region.x + offset, y };
+      }
     }
+
     throw new Error(`Missing ${text} in ${id}\n${app.captureCharFrame()}`);
   };
+
   return {
     ...app,
     view,
@@ -211,9 +233,13 @@ async function mount(
       let x = 0;
       const span = app.captureSpans().lines[position.y]!.spans.find((item) => {
         x += item.width;
+
         return x > position.x;
       });
-      if (!span) throw new Error(`Missing colored text ${text} in ${id}`);
+      if (!span) {
+        throw new Error(`Missing colored text ${text} in ${id}`);
+      }
+
       return span;
     },
     codes: () =>
@@ -273,25 +299,34 @@ test.each(["refs", "reflog"] as const)(
     // Refs without previews keep full-width search; only Reflog splits into columns.
     const app = await mount();
     try {
-      if (mode === "refs") await app.openRefs();
-      else await app.openReflog();
+      if (mode === "refs") {
+        await app.openRefs();
+      } else {
+        await app.openReflog();
+      }
+
       const input = app.get("git-browser-search");
-      if (!(input instanceof SearchInput)) throw new Error("Missing Git search");
+      if (!(input instanceof SearchInput)) {
+        throw new Error("Missing Git search");
+      }
+
       await app.mockInput.typeText(mode === "refs" ? "main" : "login");
       app.mockInput.pressArrow("left");
       await app.renderOnce();
-      const value = input.value,
-        cursor = input.cursorOffset;
+
+      const value = input.value;
+      const cursor = input.cursorOffset;
 
       // Crossing breakpoints in both directions keeps search aligned with list columns.
       for (const width of [160, 100, 99, 60, 160]) {
         app.resize(width, 32);
         await app.renderOnce();
         await app.renderOnce();
-        const field = input.field,
-          list = app.get("git-browser-list"),
-          preview = app.get("git-reflog-preview-pane"),
-          message = app.get("git-browser-status");
+
+        const field = input.field;
+        const list = app.get("git-browser-list");
+        const preview = app.get("git-reflog-preview-pane");
+        const message = app.get("git-browser-status");
 
         // Search and result hints must not extend over right-side previews.
         expect(field.x + 1).toBe(list.x);
@@ -304,14 +339,17 @@ test.each(["refs", "reflog"] as const)(
           expect(field.x + field.width).toBe(preview.x);
           expect(preview.y).toBe(field.y);
           expect(preview.y + preview.height).toBe(list.y + list.height);
+
           const lines = app.captureCharFrame().split("\n");
           expect(lines[field.y]![preview.x]).toBe("│");
           expect(lines[message.y]![preview.x]).toBe("│");
         }
+
         expect(input.value).toBe(value);
         expect(input.cursorOffset).toBe(cursor);
         expect(app.renderer.currentFocusedRenderable).toBe(input);
       }
+
       expect(app.view.promptDrafts.a1).toBe("existing Agent draft");
       expect(app.requests).toEqual([]);
     } finally {
@@ -336,6 +374,7 @@ test("Reflog previews distinguish event/commit times and open absent commits in 
     files: [{ kind: "commit", status: "M", path: "lost.txt", commit: lost }],
   };
   const data = snapshot();
+
   data.reflog = [
     {
       oid: lost.oid,
@@ -344,8 +383,9 @@ test("Reflog previews distinguish event/commit times and open absent commits in 
       subject: "commit: Lost change",
     },
   ];
-  const lookedUp: string[] = [],
-    compared: GitFile[] = [];
+
+  const lookedUp: string[] = [];
+  const compared: GitFile[] = [];
   const app = await mount({
     source: {
       load: async () => ok(data),
@@ -353,10 +393,12 @@ test("Reflog previews distinguish event/commit times and open absent commits in 
         ok({ commit: selected, message: "Main details", files: [], branches: [] }),
       lookup: async (oid) => {
         lookedUp.push(oid);
+
         return ok(details);
       },
       compare: async (file) => {
         compared.push(file);
+
         return ok({
           before: "old lost content\n",
           after: "only in lost commit\n",
@@ -369,12 +411,17 @@ test("Reflog previews distinguish event/commit times and open absent commits in 
   try {
     await app.chooseCommit();
     await app.waitForFrame((frame) => frame.includes("Main details"));
+
     const before = structuredClone(app.view.workViewPreferences.gitViews?.["demo:main"]);
 
     await app.openReflog();
     await app.waitForFrame((frame) => frame.includes("Complete lost commit message"));
+
     const preview = app.get("git-reflog-preview-text");
-    if (!(preview instanceof TextRenderable)) throw new Error("Missing reflog preview");
+    if (!(preview instanceof TextRenderable)) {
+      throw new Error("Missing reflog preview");
+    }
+
     expect(preview.plainText).toContain("Occurred: 2026-10-21");
     expect(preview.plainText).toContain("Date: 2026-10-10");
     expect(preview.plainText).toContain("Target commit");
@@ -386,6 +433,7 @@ test("Reflog previews distinguish event/commit times and open absent commits in 
     expect(app.get("git-changes").visible).toBe(true);
     expect(compared[0]?.commit).toEqual(lost);
     expect(app.captureCharFrame()).not.toContain("ccccccc · Lost change");
+
     const saved = app.view.workViewPreferences.gitViews?.["demo:main"];
     expect(saved?.selected).toBe(before?.selected);
     expect(saved?.file).toBe(before?.file);
@@ -404,13 +452,15 @@ test("Reflog previews distinguish event/commit times and open absent commits in 
 
 test("Enter intent survives loading Reflog previews and opens the ready target commit", async () => {
   // Enter before metadata arrival must not discard valid selection intent.
-  const target = { ...commit, oid: "c".repeat(40), subject: "Delayed target" },
-    data = snapshot();
+  const target = { ...commit, oid: "c".repeat(40), subject: "Delayed target" };
+  const data = snapshot();
+
   data.reflog = [
     { oid: target.oid, selector: "HEAD@{0}", date: "2026-10-21", subject: "delayed event" },
   ];
-  const pending = Promise.withResolvers<Result<GitDetails, ExpectedError>>(),
-    compared: GitFile[] = [];
+
+  const pending = Promise.withResolvers<Result<GitDetails, ExpectedError>>();
+  const compared: GitFile[] = [];
   const app = await mount({
     source: {
       load: async () => ok(data),
@@ -419,6 +469,7 @@ test("Enter intent survives loading Reflog previews and opens the ready target c
         ok({ commit: selected, message: selected.subject, files: [], branches: [] }),
       compare: async (file) => {
         compared.push(file);
+
         return ok({
           before: "previous content\n",
           after: "Ready delayed commit\n",
@@ -459,15 +510,17 @@ test("Enter intent survives loading Reflog previews and opens the ready target c
 
 test("Late Reflog previews never overwrite new events and shared commits reuse lookups", async () => {
   // Events pointing to the same commit retain distinct descriptions.
-  const slow: GitCommit = { ...commit, oid: "c".repeat(40) },
-    fresh: GitCommit = { ...commit, oid: "d".repeat(40) };
+  const slow: GitCommit = { ...commit, oid: "c".repeat(40) };
+  const fresh: GitCommit = { ...commit, oid: "d".repeat(40) };
   const data = snapshot();
+
   data.reflog = [slow, fresh, fresh].map((target, index) => ({
     oid: target.oid,
     selector: `HEAD@{${index}}`,
     date: "2026-10-21",
     subject: `event ${index}`,
   }));
+
   const pending = Promise.withResolvers<Result<GitDetails, ExpectedError>>();
   let previousSignal: AbortSignal | undefined;
   const reads: string[] = [];
@@ -481,8 +534,10 @@ test("Late Reflog previews never overwrite new events and shared commits reuse l
         reads.push(oid);
         if (oid === slow.oid) {
           previousSignal = signal;
+
           return pending.promise;
         }
+
         return ok({ commit: fresh, message: "Fresh target", files: [], branches: [] });
       },
     },
@@ -498,7 +553,10 @@ test("Late Reflog previews never overwrite new events and shared commits reuse l
     await app.renderOnce();
 
     const preview = app.get("git-reflog-preview-text");
-    if (!(preview instanceof TextRenderable)) throw new Error("Missing reflog preview");
+    if (!(preview instanceof TextRenderable)) {
+      throw new Error("Missing reflog preview");
+    }
+
     expect(previousSignal?.aborted).toBe(true);
     expect(preview.plainText).toContain("Event HEAD@{2}");
     expect(preview.plainText).toContain("event 2");
@@ -514,11 +572,13 @@ test("Late Reflog previews never overwrite new events and shared commits reuse l
 
 test("Closing after Enter during preview loading prevents late Changes reopening and cleans timers", async () => {
   // Read completion does not imply reopening user-dismissed modals.
-  const target = { ...commit, oid: "c".repeat(40) },
-    data = snapshot();
+  const target = { ...commit, oid: "c".repeat(40) };
+  const data = snapshot();
+
   data.reflog = [
     { oid: target.oid, selector: "HEAD@{0}", date: "2026-10-21", subject: "lost event" },
   ];
+
   const pending = Promise.withResolvers<Result<GitDetails, ExpectedError>>();
   let signal: AbortSignal | undefined;
   const app = await mount({
@@ -529,6 +589,7 @@ test("Closing after Enter during preview loading prevents late Changes reopening
       compare: async () => ok(comparison()),
       lookup: (_oid, current) => {
         signal = current;
+
         return pending.promise;
       },
     },
@@ -560,11 +621,13 @@ test.each([160, 60])(
   "%d-column Reflog failures show errors, block empty Enter details, and retry with r",
   async (width) => {
     // Treating failed commits as empty changes misrepresents recovery targets.
-    const target = { ...commit, oid: "c".repeat(40) },
-      data = snapshot();
+    const target = { ...commit, oid: "c".repeat(40) };
+    const data = snapshot();
+
     data.reflog = [
       { oid: target.oid, selector: "HEAD@{0}", date: "2026-10-21", subject: "lost event" },
     ];
+
     let reads = 0;
     const app = await mount({
       source: {
@@ -591,9 +654,13 @@ test.each([160, 60])(
       app.mockInput.pressKey("r");
       await app.waitFor(() => {
         const text = app.get("git-reflog-preview-text");
+
         return text instanceof TextRenderable && text.plainText.includes("Recovered preview");
       });
-      if (width < 100) app.mockInput.pressKey("o", { ctrl: true });
+      if (width < 100) {
+        app.mockInput.pressKey("o", { ctrl: true });
+      }
+
       await app.renderOnce();
 
       expect(reads).toBe(2);
@@ -618,6 +685,7 @@ test.each(["refs", "reflog"] as const)(
       oid: commit.oid,
     });
     data.reflog[0] = { ...data.reflog[0]!, subject: "commit: hjklay" };
+
     const app = await mount({
       source: {
         load: async () => ok(data),
@@ -627,12 +695,20 @@ test.each(["refs", "reflog"] as const)(
       },
     });
     try {
-      if (mode === "refs") await app.openRefs();
-      else await app.openReflog();
+      if (mode === "refs") {
+        await app.openRefs();
+      } else {
+        await app.openReflog();
+      }
+
       await app.mockInput.typeText("hjklay");
       await app.renderOnce();
+
       const input = app.get("git-browser-search");
-      if (!(input instanceof SearchInput)) throw new Error("Missing Git search");
+      if (!(input instanceof SearchInput)) {
+        throw new Error("Missing Git search");
+      }
+
       const cursor = input.cursorOffset;
 
       app.mockInput.pressKey("l", { ctrl: true });
@@ -643,6 +719,7 @@ test.each(["refs", "reflog"] as const)(
       expect(app.copies).toEqual([]);
       app.mockInput.pressCtrlC();
       await app.renderOnce();
+
       const selected = app.view.workViewPreferences.gitViews?.["demo:main"];
       app.mockInput.pressCtrlC();
       await app.renderOnce();
@@ -683,6 +760,7 @@ test.each(
       subject: `candidate event ${index}`,
       date: "2026-10-21",
     }));
+
     const app = await mount({
       source: {
         load: async () => ok(data),
@@ -693,21 +771,36 @@ test.each(
     });
     const raw = (value: string) => {
       const parsed = parseKeypress(value, { useKittyKeyboard: true });
-      if (!parsed) throw new Error("Invalid Kitty key");
+      if (!parsed) {
+        throw new Error("Invalid Kitty key");
+      }
+
       app.renderer.keyInput.processParsedKey(parsed);
     };
     try {
       app.resize(width, 32);
       await app.renderOnce();
-      if (mode === "refs") await app.openRefs();
-      else await app.openReflog();
+      if (mode === "refs") {
+        await app.openRefs();
+      } else {
+        await app.openReflog();
+      }
+
       await app.mockInput.typeText("candidate");
-      for (let index = 0; index < 10; index++) app.mockInput.pressKey("n", { ctrl: true });
+      for (let index = 0; index < 10; index++) {
+        app.mockInput.pressKey("n", { ctrl: true });
+      }
+
       await app.renderOnce();
-      const input = app.get("git-browser-search"),
-        list = app.get("git-browser-list") as ScrollBoxRenderable;
-      if (!(input instanceof SearchInput)) throw new Error("Missing Git search");
+
+      const input = app.get("git-browser-search");
+      const list = app.get("git-browser-list") as ScrollBoxRenderable;
+      if (!(input instanceof SearchInput)) {
+        throw new Error("Missing Git search");
+      }
+
       input.cursorOffset = 2;
+
       const step = Math.max(1, Math.floor(list.viewport.height / 2));
       if (mode === "reflog" && width < 100) {
         app.mockInput.pressKey("o", { ctrl: true });
@@ -727,6 +820,7 @@ test.each(
       expect(app.renderer.currentFocusedRenderable).toBe(list);
       expect(input.value).toBe("candidate");
       expect(input.cursorOffset).toBe(2);
+
       const key =
         mode === "refs" ? `refs/heads/candidate-${10 + 2 * step}` : `HEAD@{${10 + 2 * step}}`;
       expect(
@@ -734,6 +828,7 @@ test.each(
           ? app.view.workViewPreferences.gitViews?.["demo:main"]?.refSelected
           : app.view.workViewPreferences.gitViews?.["demo:main"]?.reflogSelected,
       ).toBe(key);
+
       const row = app.get(`git-browser-list:${key}`);
       expect(row.y).toBeGreaterThanOrEqual(list.viewport.y);
       expect(row.y + row.height).toBeLessThanOrEqual(list.viewport.y + list.viewport.height);
@@ -767,8 +862,10 @@ test.each([160, 60])(
       await app.openReflog();
       app.mockInput.pressKey("o", { ctrl: true });
       await app.renderOnce();
-      const preview = app.get("git-reflog-preview") as ScrollBoxRenderable,
-        selected = app.view.workViewPreferences.gitViews?.["demo:main"]?.reflogSelected;
+
+      const preview = app.get("git-reflog-preview") as ScrollBoxRenderable;
+      const selected = app.view.workViewPreferences.gitViews?.["demo:main"]?.reflogSelected;
+
       expect(app.renderer.currentFocusedRenderable).toBe(preview);
 
       app.mockInput.pressKey("d", { ctrl: true });
@@ -826,6 +923,7 @@ test("Left ref labels connect to graph nodes and graph/message bands share color
     { kind: "remote", name: "origin/main", ref: "refs/remotes/origin/main", oid: commit.oid },
     { kind: "tag", name: "v1", ref: "refs/tags/v1", oid: commit.oid },
   ];
+
   const app = await mount({
     source: {
       load: async () => ok(data),
@@ -836,10 +934,10 @@ test("Left ref labels connect to graph nodes and graph/message bands share color
   });
   try {
     const prefix = `git-history:${commit.oid}`;
-    const refs = app.positionIn("git-history", `HEAD → ${icons.branch} main +2`),
-      graph = app.get(`${prefix}:graph`);
-    const link = app.get(`${prefix}:message-link`),
-      label = app.get(`${prefix}:label`);
+    const refs = app.positionIn("git-history", `HEAD → ${icons.branch} main +2`);
+    const graph = app.get(`${prefix}:graph`);
+    const link = app.get(`${prefix}:message-link`);
+    const label = app.get(`${prefix}:label`);
 
     // Connectors never replace messages or commit parent relationships.
     expect(refs.y).toBe(graph.y);
@@ -853,15 +951,19 @@ test("Left ref labels connect to graph nodes and graph/message bands share color
     expect(link.x).toBe(graph.x + graph.width);
     expect(label.x).toBe(link.x + link.width + 2);
     expect(link instanceof TextRenderable && link.plainText).toBe("    ");
-    if (!(graph instanceof TextRenderable) || !(link instanceof TextRenderable))
+    if (!(graph instanceof TextRenderable) || !(link instanceof TextRenderable)) {
       throw new Error("Missing graph band");
+    }
+
     expect(graph.plainText.slice(graph.plainText.indexOf("●") + 1).trim()).toBe("");
+
     const foreground = app.spanIn("git-history", "aaaaaaa").fg;
     const previousBand = blendColors(uiTheme(app.renderer).colors.panel, foreground, 0.16);
     const distance = (values: readonly number[]) =>
       values
         .slice(0, 3)
         .reduce((sum, value, index) => sum + (value - foreground.toInts()[index]!) ** 2, 0);
+
     expect(distance(link.bg.toInts())).toBeLessThan(distance(previousBand.toInts()));
     expect(app.spanIn("git-history", `HEAD → ${icons.branch} main +2`).fg.toInts()).toEqual(
       app.spanIn("git-history", "aaaaaaa").fg.toInts(),
@@ -887,7 +989,10 @@ test.each([160, 60])(
       await app.renderOnce();
 
       const caption = app.get(`git-history:${commit.oid}:refs`);
-      if (!(caption instanceof TextRenderable)) throw new Error("Missing HEAD ref label");
+      if (!(caption instanceof TextRenderable)) {
+        throw new Error("Missing HEAD ref label");
+      }
+
       expect(caption.plainText).toBe(`HEAD → ${icons.branch} main`);
       expect(app.positionIn("git-history", `${icons.branch} main`).y).toBe(caption.y);
       expect(app.requests).toEqual([]);
@@ -910,7 +1015,9 @@ test("Detached HEAD labels never invent current-branch icons", async () => {
   });
   try {
     const caption = app.get(`git-history:${commit.oid}:refs`);
-    if (!(caption instanceof TextRenderable)) throw new Error("Missing HEAD ref label");
+    if (!(caption instanceof TextRenderable)) {
+      throw new Error("Missing HEAD ref label");
+    }
 
     expect(caption.plainText).toStartWith("HEAD (detached)");
     expect(caption.plainText).not.toContain(icons.branch);
@@ -933,13 +1040,18 @@ test.each([
     let end = 0;
     const span = app.captureSpans().lines[y]!.spans.find((item) => {
       end += item.width;
+
       return end > x;
     });
-    if (!span) throw new Error(`Missing cell ${x},${y}`);
+    if (!span) {
+      throw new Error(`Missing cell ${x},${y}`);
+    }
+
     return span;
   };
   const bandBackground = (prefix: string) => {
     const graph = app.get(`${prefix}:graph`);
+
     return cell(graph.x + 1, graph.y).bg;
   };
   try {
@@ -959,25 +1071,31 @@ test.each([
     app.get("git-history").focus();
     await app.renderOnce();
     await app.renderOnce();
+
     const neutral = uiTheme(app.renderer).styles["ui.text"].bg!.toInts();
-    const working = "git-history:__working_tree__",
-      prefix = `git-history:${commit.oid}`;
-    const idleBand = bandBackground(prefix).toInts(),
-      foreground = app.spanIn("git-history", "aaaaaaa").fg.toInts();
+    const working = "git-history:__working_tree__";
+    const prefix = `git-history:${commit.oid}`;
+    const idleBand = bandBackground(prefix).toInts();
+    const foreground = app.spanIn("git-history", "aaaaaaa").fg.toInts();
     const distance = (values: readonly number[]) =>
       values.slice(0, 3).reduce((sum, value, index) => sum + (value - foreground[index]!) ** 2, 0);
     const expectBandOnly = (key: string) => {
-      const graph = app.get(`${key}:graph`),
-        band = app.get(`${key}:message-link`),
-        label = app.get(`${key}:label`);
+      const graph = app.get(`${key}:graph`);
+      const band = app.get(`${key}:message-link`);
+      const label = app.get(`${key}:label`);
       const tint = bandBackground(key).toInts();
+
       expect(cell(graph.x, graph.y).bg.toInts()).toEqual(neutral);
-      for (let x = graph.x + 1; x < band.x + band.width; x++)
+      for (let x = graph.x + 1; x < band.x + band.width; x++) {
         expect(cell(x, graph.y).bg.toInts()).toEqual(tint);
-      for (let x = band.x + band.width; x < label.x + label.width; x++)
+      }
+      for (let x = band.x + band.width; x < label.x + label.width; x++) {
         expect(cell(x, label.y).bg.toInts()).toEqual(neutral);
-      for (let x = graph.x; x < label.x + label.width; x++)
+      }
+      for (let x = graph.x; x < label.x + label.width; x++) {
         expect(cell(x, graph.y + 1).bg.toInts()).toEqual(neutral);
+      }
+
       expect(label.x - band.x - band.width).toBe(2);
       expect(
         app
@@ -989,6 +1107,7 @@ test.each([
 
     // Working tree shares the solid band, while its hollow node and dotted parent lane remain distinct.
     const workingBand = bandBackground(working).toInts();
+
     expect(distance(workingBand)).toBeLessThan(distance(idleBand));
     expectBandOnly(working);
     expect(app.captureCharFrame()).toContain("◌");
@@ -997,6 +1116,7 @@ test.each([
     // Choosing a commit softens Working tree's solid band without removing it.
     await app.chooseCommit();
     await app.renderOnce();
+
     const focusedBand = bandBackground(prefix).toInts();
     expect(distance(focusedBand)).toBeLessThan(distance(idleBand));
     expectBandOnly(prefix);
@@ -1007,6 +1127,7 @@ test.each([
     // Losing focus softens, but does not erase, the selected commit's band.
     app.get("git-history").blur();
     await app.renderOnce();
+
     const inactiveBand = bandBackground(prefix).toInts();
     expect(distance(inactiveBand)).toBeGreaterThan(distance(focusedBand));
     expect(distance(inactiveBand)).toBeLessThan(distance(idleBand));
@@ -1020,6 +1141,7 @@ test.each([
     await app.renderOnce();
     await app.renderOnce();
     expect(bandBackground(prefix).toInts()).toEqual(idleBand);
+
     const next = `git-history:${rootCommit.oid}`;
     expect(distance(bandBackground(next).toInts())).toBeLessThan(distance(idleBand));
     expectBandOnly(next);
@@ -1037,9 +1159,10 @@ test("Branching ref labels and message connectors preserve other lanes and both 
     subject: "Side commit",
     parents: ["d".repeat(40)],
   };
-  const left = { ...rootCommit, parents: ["d".repeat(40)] },
-    base = { ...rootCommit, oid: "d".repeat(40), subject: "Base commit" };
+  const left = { ...rootCommit, parents: ["d".repeat(40)] };
+  const base = { ...rootCommit, oid: "d".repeat(40), subject: "Base commit" };
   const data = snapshot();
+
   data.commits = [{ ...commit, parents: [left.oid, side.oid] }, left, side, base];
   data.refs.push({
     kind: "local",
@@ -1047,6 +1170,7 @@ test("Branching ref labels and message connectors preserve other lanes and both 
     ref: "refs/heads/feature/topic",
     oid: side.oid,
   });
+
   const app = await mount({
     source: {
       load: async () => ok(data),
@@ -1061,9 +1185,11 @@ test("Branching ref labels and message connectors preserve other lanes and both 
     },
   });
   try {
-    const sideGraph = app.get(`git-history:${side.oid}:graph`),
-      mainGraph = app.get(`git-history:${commit.oid}:graph`);
-    if (!(sideGraph instanceof TextRenderable)) throw new Error("Missing side graph");
+    const sideGraph = app.get(`git-history:${side.oid}:graph`);
+    const mainGraph = app.get(`git-history:${commit.oid}:graph`);
+    if (!(sideGraph instanceof TextRenderable)) {
+      throw new Error("Missing side graph");
+    }
 
     expect(sideGraph.plainText).toMatch(/│──● /u);
     expect(app.captureCharFrame()).toContain("├──╮");
@@ -1097,6 +1223,7 @@ test("Long Korean/emoji ref labels truncate by cells and retain additional-ref c
     { kind: "remote", name: "origin/topic", ref: "refs/remotes/origin/topic", oid: rootCommit.oid },
     { kind: "tag", name: "v1", ref: "refs/tags/v1", oid: rootCommit.oid },
   ];
+
   const app = await mount({
     source: {
       load: async () => ok(data),
@@ -1110,9 +1237,12 @@ test("Long Korean/emoji ref labels truncate by cells and retain additional-ref c
     await app.renderOnce();
     await app.renderOnce();
 
-    const refs = app.get(`git-history:${rootCommit.oid}:refs`),
-      graph = app.get(`git-history:${rootCommit.oid}:graph`);
-    if (!(refs instanceof TextRenderable)) throw new Error("Missing ref caption");
+    const refs = app.get(`git-history:${rootCommit.oid}:refs`);
+    const graph = app.get(`git-history:${rootCommit.oid}:graph`);
+    if (!(refs instanceof TextRenderable)) {
+      throw new Error("Missing ref caption");
+    }
+
     expect(refs.plainText).toContain("… +2");
     expect(refs.plainText).not.toContain("�");
     expect(Bun.stringWidth(refs.plainText)).toBeLessThan(graph.x - refs.x);
@@ -1127,16 +1257,17 @@ test("Opening and closing commit details retains reserved left width and graph-r
   // Detail cards sit outside graph layout and must not shift other commit rows.
   const app = await mount();
   try {
-    const prefix = `git-history:${commit.oid}`,
-      row = app.get(prefix),
-      graph = app.get(`${prefix}:graph`);
-    const reserved = graph.x,
-      position = [row.y, row.height];
+    const prefix = `git-history:${commit.oid}`;
+    const row = app.get(prefix);
+    const graph = app.get(`${prefix}:graph`);
+    const reserved = graph.x;
+    const position = [row.y, row.height];
 
     await app.chooseCommit();
     await app.waitForFrame((frame) => frame.includes("Full explanation of the change."));
-    const card = app.get("git-details-card"),
-      anchor = app.get("git-details-anchor");
+
+    const card = app.get("git-details-card");
+    const anchor = app.get("git-details-anchor");
 
     expect(card.visible).toBe(true);
     expect(graph.x).toBe(reserved);
@@ -1163,12 +1294,15 @@ test.each(["arrows", "vim", "control"] as const)(
   async (navigation) => {
     // Cardless Working tree uses the same column width as card-bearing commits.
     const app = await mount();
-    const move = (next: boolean) =>
-      navigation === "arrows"
-        ? app.mockInput.pressArrow(next ? "down" : "up")
-        : navigation === "control"
-          ? app.mockInput.pressKey(next ? "n" : "p", { ctrl: true })
-          : app.mockInput.pressKey(next ? "j" : "k");
+    const move = (next: boolean) => {
+      if (navigation === "arrows") {
+        return app.mockInput.pressArrow(next ? "down" : "up");
+      } else if (navigation === "control") {
+        return app.mockInput.pressKey(next ? "n" : "p", { ctrl: true });
+      } else {
+        return app.mockInput.pressKey(next ? "j" : "k");
+      }
+    };
     try {
       for (const width of [160, 60]) {
         app.resize(width, 32);
@@ -1176,8 +1310,9 @@ test.each(["arrows", "vim", "control"] as const)(
         app.mockInput.pressKey("HOME");
         await app.renderOnce();
         await app.renderOnce();
-        const graphX = app.get(`git-history:${commit.oid}:graph`).x,
-          messageX = app.get(`git-history:${commit.oid}:label`).x;
+
+        const graphX = app.get(`git-history:${commit.oid}:graph`).x;
+        const messageX = app.get(`git-history:${commit.oid}:label`).x;
 
         // Only card visibility changes; graph/message x coordinates stay fixed.
         for (const next of [true, false, true]) {
@@ -1190,11 +1325,13 @@ test.each(["arrows", "vim", "control"] as const)(
           expect(app.get("git-history:__working_tree__:graph").x).toBe(graphX);
           expect(app.get("git-history:__working_tree__:label").x).toBe(messageX);
         }
+
         app.get("git-history").blur();
         await app.renderOnce();
         expect(app.get("git-details-card").visible).toBe(false);
         expect(app.get(`git-history:${commit.oid}:graph`).x).toBe(graphX);
       }
+
       expect(app.requests).toEqual([]);
     } finally {
       await app.close();
@@ -1211,6 +1348,7 @@ test("Detail branches, remotes, and tags show only refs directly targeting selec
     { kind: "tag", name: "old-tag", ref: "refs/tags/old-tag", oid: rootCommit.oid },
     { kind: "tag", name: "new-tag", ref: "refs/tags/new-tag", oid: commit.oid },
   ];
+
   const app = await mount({
     source: {
       load: async () => ok(data),
@@ -1229,16 +1367,22 @@ test("Detail branches, remotes, and tags show only refs directly targeting selec
     await app.waitForFrame((frame) => frame.includes("Message for Initial login"));
 
     const text = app.get("git-detail-text");
-    if (!(text instanceof TextRenderable)) throw new Error("Missing commit details");
+    if (!(text instanceof TextRenderable)) {
+      throw new Error("Missing commit details");
+    }
+
     expect(text.plainText).toContain("Branches: —");
     expect(text.plainText).toContain("Remotes: —");
     expect(text.plainText).toContain("Tags: old-tag");
     expect(text.plainText).not.toContain("new-tag");
     expect(text.plainText).not.toContain("HEAD");
-    const tip = app.get(`git-history:${commit.oid}:refs`),
-      ancestor = app.get(`git-history:${rootCommit.oid}:refs`);
-    if (!(tip instanceof TextRenderable) || !(ancestor instanceof TextRenderable))
+
+    const tip = app.get(`git-history:${commit.oid}:refs`);
+    const ancestor = app.get(`git-history:${rootCommit.oid}:refs`);
+    if (!(tip instanceof TextRenderable) || !(ancestor instanceof TextRenderable)) {
       throw new Error("Missing ref labels");
+    }
+
     expect(tip.plainText).toContain("main");
     expect(ancestor.plainText).not.toContain("main");
 
@@ -1257,15 +1401,16 @@ test("Detail branches, remotes, and tags show only refs directly targeting selec
 
 test("Stable left-detail geometry never requests additional renders during screen refresh", async () => {
   // Resetting text or borders on every position correction would schedule endless frames.
-  const clock = new ManualClock(),
-    app = await mount({ clock });
-  let cardRender: ReturnType<typeof spyOn<Renderable, "requestRender">> | undefined,
-    anchorRender: ReturnType<typeof spyOn<Renderable, "requestRender">> | undefined;
+  const clock = new ManualClock();
+  const app = await mount({ clock });
+  let cardRender: ReturnType<typeof spyOn<Renderable, "requestRender">> | undefined;
+  let anchorRender: ReturnType<typeof spyOn<Renderable, "requestRender">> | undefined;
   try {
     await app.chooseCommit();
     clock.advance(500);
     await app.renderOnce();
     await app.renderOnce();
+
     const card = app.get("git-details-card");
     cardRender = spyOn(card, "requestRender");
     anchorRender = spyOn(app.get("git-details-anchor"), "requestRender");
@@ -1278,8 +1423,12 @@ test("Stable left-detail geometry never requests additional renders during scree
     expect(app.get("git-loading").visible).toBe(false);
     expect(cardRender).not.toHaveBeenCalled();
     expect(anchorRender).not.toHaveBeenCalled();
+
     const text = app.get("git-detail-text");
-    if (!(text instanceof TextRenderable)) throw new Error("Missing details body");
+    if (!(text instanceof TextRenderable)) {
+      throw new Error("Missing details body");
+    }
+
     expect(card.height).toBe(text.virtualLineCount + 2);
   } finally {
     cardRender?.mockRestore();
@@ -1307,10 +1456,13 @@ test("Details fully expand messages beyond old height caps without internal scro
     await app.chooseCommit();
     await app.waitForFrame((frame) => frame.includes("Expanded message 14"));
 
-    const card = app.get("git-details-card"),
-      body = app.get("git-details"),
-      text = app.get("git-detail-text");
-    if (!(text instanceof TextRenderable)) throw new Error("Missing details body");
+    const card = app.get("git-details-card");
+    const body = app.get("git-details");
+    const text = app.get("git-detail-text");
+    if (!(text instanceof TextRenderable)) {
+      throw new Error("Missing details body");
+    }
+
     expect(body instanceof ScrollBoxRenderable).toBe(false);
     expect(card.height).toBe(text.virtualLineCount + 2);
     expect(text.height).toBe(text.virtualLineCount);
@@ -1340,9 +1492,11 @@ test("Oversized details fully expand and use shared Commits scrolling to read/co
     await app.chooseCommit();
     app.mockInput.pressTab();
     await app.renderOnce();
-    const history = app.get("git-history") as ScrollBoxRenderable,
-      card = app.get("git-details-card"),
-      body = app.get("git-details");
+
+    const history = app.get("git-history") as ScrollBoxRenderable;
+    const card = app.get("git-details-card");
+    const body = app.get("git-details");
+
     expect(body instanceof ScrollBoxRenderable).toBe(false);
     expect(card.height).toBeGreaterThan(history.height);
 
@@ -1361,6 +1515,7 @@ test("Oversized details fully expand and use shared Commits scrolling to read/co
     expect(app.captureCharFrame()).toContain("Last detail line");
     expect(app.renderer.currentFocusedRenderable).toBe(body);
     expect(card.visible).toBe(true);
+
     const { x, y } = app.positionIn("git-details", "Last detail line");
     await app.mockMouse.drag(x, y, x + 3, y);
     await app.waitFor(() => app.copies.length > 0);
@@ -1388,6 +1543,7 @@ test("Detail cards omit duplicate titles and show actual branches/tags above aut
     { kind: "remote", name: "origin/main", ref: "refs/remotes/origin/main", oid: commit.oid },
     { kind: "tag", name: "release/current", ref: "refs/tags/release/current", oid: commit.oid },
   ];
+
   const app = await mount({
     source: {
       load: async () => ok(data),
@@ -1405,8 +1561,9 @@ test("Detail cards omit duplicate titles and show actual branches/tags above aut
     await app.chooseCommit();
     await app.waitForFrame((frame) => frame.includes("Full commit message"));
 
-    const card = app.get("git-details-card"),
-      text = app.get("git-detail-text");
+    const card = app.get("git-details-card");
+    const text = app.get("git-detail-text");
+
     expect(app.captureCharFrame()).not.toContain("Commit details");
     expect(text.y).toBe(card.y + 1);
     expect(app.captureCharFrame()).toContain("Branches: main, feature/topic");
@@ -1428,6 +1585,7 @@ test("Left details show all matching refs while excluding other commits' refs", 
     { kind: "remote", name: "origin/main", ref: "refs/remotes/origin/main", oid: commit.oid },
     { kind: "tag", name: "release/current", ref: "refs/tags/release/current", oid: commit.oid },
   );
+
   const app = await mount({
     source: {
       load: async () => ok(data),
@@ -1446,7 +1604,10 @@ test("Left details show all matching refs while excluding other commits' refs", 
     await app.waitForFrame((frame) => frame.includes("Full message"));
 
     const text = app.get("git-detail-text");
-    if (!(text instanceof TextRenderable)) throw new Error("Missing commit details");
+    if (!(text instanceof TextRenderable)) {
+      throw new Error("Missing commit details");
+    }
+
     expect(text.plainText).toContain("HEAD → main");
     expect(text.plainText).toContain("Branches: main");
     expect(text.plainText).toContain("Remotes: origin/main");
@@ -1464,6 +1625,7 @@ test.each(["arrows", "vim", "control"] as const)(
     // Ordinary commits away from branch tips also expose details when focused.
     const data = snapshot();
     data.refs = data.refs.filter((ref) => ref.oid === commit.oid);
+
     const app = await mount({
       source: {
         load: async () => ok(data),
@@ -1480,13 +1642,21 @@ test.each(["arrows", "vim", "control"] as const)(
     try {
       await app.chooseCommit();
 
-      if (navigation === "arrows") app.mockInput.pressArrow("down");
-      else if (navigation === "control") app.mockInput.pressKey("n", { ctrl: true });
-      else app.mockInput.pressKey("j");
+      if (navigation === "arrows") {
+        app.mockInput.pressArrow("down");
+      } else if (navigation === "control") {
+        app.mockInput.pressKey("n", { ctrl: true });
+      } else {
+        app.mockInput.pressKey("j");
+      }
+
       await app.waitForFrame((frame) => frame.includes("Message for Initial login"));
 
       const text = app.get("git-detail-text");
-      if (!(text instanceof TextRenderable)) throw new Error("Missing commit details");
+      if (!(text instanceof TextRenderable)) {
+        throw new Error("Missing commit details");
+      }
+
       expect(text.plainText).toContain(rootCommit.oid);
       expect(text.plainText).not.toContain("HEAD");
       expect(text.plainText).toContain("Branches: —");
@@ -1506,8 +1676,9 @@ test("Tab reads details and Esc returns without losing selection or hash actions
   const app = await mount();
   try {
     await app.chooseCommit();
-    const list = app.get("git-history") as ScrollBoxRenderable,
-      position = list.scrollTop;
+
+    const list = app.get("git-history") as ScrollBoxRenderable;
+    const position = list.scrollTop;
 
     app.mockInput.pressTab();
     await app.renderOnce();
@@ -1538,8 +1709,10 @@ test("Rapid commit navigation prevents late details from overwriting current ref
       details: async (selected, signal) => {
         if (selected.oid === commit.oid) {
           previousSignal = signal;
+
           return pending.promise;
         }
+
         return ok({ commit: selected, message: "Current commit message", files: [], branches: [] });
       },
     },
@@ -1554,7 +1727,10 @@ test("Rapid commit navigation prevents late details from overwriting current ref
     await app.renderOnce();
 
     const text = app.get("git-detail-text");
-    if (!(text instanceof TextRenderable)) throw new Error("Missing commit details");
+    if (!(text instanceof TextRenderable)) {
+      throw new Error("Missing commit details");
+    }
+
     expect(previousSignal?.aborted).toBe(true);
     expect(text.plainText).toContain(rootCommit.oid);
     expect(text.plainText).not.toContain("Obsolete commit message");
@@ -1585,10 +1761,12 @@ test("Changes round-trips retain left-detail message reading positions", async (
     await app.chooseCommit();
     app.mockInput.pressTab();
     await app.renderOnce();
+
     const history = app.get("git-history") as ScrollBoxRenderable;
     app.mockInput.pressKey("d", { ctrl: true });
     app.mockInput.pressKey("d", { ctrl: true });
     await app.renderOnce();
+
     const position = history.scrollTop;
     expect(position).toBeGreaterThan(0);
 
@@ -1713,6 +1891,7 @@ test("Scrolling selected commits offscreen hides details and removes hidden-body
       parents: [],
     })),
   );
+
   const app = await mount({
     source: {
       load: async () => ok(data),
@@ -1759,13 +1938,19 @@ test("Narrow left details retain full heights without changing graph-row heights
       app.resize(width, height);
       await app.renderOnce();
       await app.renderOnce();
-      const card = app.get("git-details-card"),
-        history = app.get("git-history"),
-        row = app.get(`git-history:${rootCommit.oid}`);
+
+      const card = app.get("git-details-card");
+      const history = app.get("git-history");
+      const row = app.get(`git-history:${rootCommit.oid}`);
+
       expect(card.visible).toBe(true);
       expect(card.y).toBeGreaterThanOrEqual(history.y);
+
       const text = app.get("git-detail-text");
-      if (!(text instanceof TextRenderable)) throw new Error("Missing details body");
+      if (!(text instanceof TextRenderable)) {
+        throw new Error("Missing details body");
+      }
+
       expect(card.height).toBe(text.virtualLineCount + 2);
       expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("GIT");
       expect(card.x + card.width).toBeLessThanOrEqual(
@@ -1774,6 +1959,7 @@ test("Narrow left details retain full heights without changing graph-row heights
       expect(row.height).toBe(2);
       expect(app.get(`git-history:${rootCommit.oid}:label`).width).toBeGreaterThan(12);
     }
+
     expect(app.requests).toEqual([]);
   } finally {
     await app.close();
@@ -1803,6 +1989,7 @@ test.each(["arrows", "vim", "control"] as const)(
           const before =
             Array.from({ length: 70 }, (_, index) => `${file.path} line ${index}`).join("\n") +
             "\n";
+
           return ok({
             before,
             after: before + "added\n",
@@ -1812,12 +1999,15 @@ test.each(["arrows", "vim", "control"] as const)(
         },
       },
     });
-    const move = (next: boolean) =>
-      navigation === "arrows"
-        ? app.mockInput.pressArrow(next ? "down" : "up")
-        : navigation === "control"
-          ? app.mockInput.pressKey(next ? "n" : "p", { ctrl: true })
-          : app.mockInput.pressKey(next ? "j" : "k");
+    const move = (next: boolean) => {
+      if (navigation === "arrows") {
+        return app.mockInput.pressArrow(next ? "down" : "up");
+      } else if (navigation === "control") {
+        return app.mockInput.pressKey(next ? "n" : "p", { ctrl: true });
+      } else {
+        return app.mockInput.pressKey(next ? "j" : "k");
+      }
+    };
     try {
       await app.chooseCommit();
       await app.openChanges();
@@ -1855,6 +2045,7 @@ test("Empty-commit details remain readable in lists and Changes shows only empty
         ok({ commit: selected, message: "Empty commit explanation", files: [], branches: [] }),
       compare: async () => {
         comparisons++;
+
         return ok(comparison());
       },
     },
@@ -1882,8 +2073,8 @@ test("Empty-commit details remain readable in lists and Changes shows only empty
 
 test("Changes results appear immediately while spinners honor minimums and clean timers on close", async () => {
   // Delay only comparisons while observing actual popup spinner lifetimes.
-  const clock = new ManualClock(),
-    pending = Promise.withResolvers<Result<GitComparison, ExpectedError>>();
+  const clock = new ManualClock();
+  const pending = Promise.withResolvers<Result<GitComparison, ExpectedError>>();
   const app = await mount({
     clock,
     source: {
@@ -1896,6 +2087,7 @@ test("Changes results appear immediately while spinners honor minimums and clean
   });
   try {
     await app.openWorkingTree();
+
     const spinner = app.get("git-changes-loading");
     expect(spinner.visible).toBe(true);
     expect(app.captureCharFrame()).toContain("M loading.txt");
@@ -1937,6 +2129,7 @@ test("Closing during detail lookup prevents late popup or diff reopening", async
       details: () => pending.promise,
       compare: async () => {
         comparisons++;
+
         return ok(comparison());
       },
     },
@@ -1990,8 +2183,10 @@ test("Rapid file switching prevents old comparisons from overwriting new diffs",
       compare: async (file, signal) => {
         if (file.path === "slow.txt") {
           previousSignal = signal;
+
           return pending.promise;
         }
+
         return ok({
           before: "Fresh comparison\n",
           after: "Fresh comparison updated\n",
@@ -2094,6 +2289,7 @@ test("After Changes closes, commit text drags copy lists rather than hidden diff
     await app.waitForFrame((frame) => frame.includes("const line00"));
     app.mockInput.pressEscape();
     await app.renderOnce();
+
     const { x, y } = app.positionIn("git-history", `HEAD → ${icons.branch} main`);
 
     await app.mockMouse.drag(x, y, x + 3, y);
@@ -2149,11 +2345,16 @@ test.each([
       app.mockInput.pressKey(" ", { ctrl: true });
       app.mockInput.pressKey("a");
       await render();
+
       const live = app.get("session-prompt");
-      if (!(live instanceof PromptInput)) throw new Error("Missing Agent prompt");
+      if (!(live instanceof PromptInput)) {
+        throw new Error("Missing Agent prompt");
+      }
+
       live.value = "first\nsecond";
       live.focus();
       await render();
+
       const expected = appearance(live);
 
       // Git reuses the same field rather than building a separate editor.
@@ -2161,8 +2362,12 @@ test.each([
       await app.chooseCommit();
       app.mockInput.pressKey("a");
       await render();
+
       const input = app.get("git-prompt");
-      if (!(input instanceof PromptInput)) throw new Error("Missing Git prompt");
+      if (!(input instanceof PromptInput)) {
+        throw new Error("Missing Git prompt");
+      }
+
       input.value = "first\nsecond";
       await render();
       expect(appearance(input)).toEqual(expected);
@@ -2197,10 +2402,11 @@ test.each([
 test("Git paste loading uses shared Prompt right padding and cleans immediately on close", async () => {
   // Control only OS clipboards while using real fields, routing, and shared spinners.
   const clock = new ManualClock();
-  let pending = Promise.withResolvers<Result<ClipboardRepresentation, ExpectedError>>(),
-    signal: AbortSignal | undefined;
+  let pending = Promise.withResolvers<Result<ClipboardRepresentation, ExpectedError>>();
+  let signal: AbortSignal | undefined;
   const read = spyOn(Clipboard.prototype, "read").mockImplementation((current) => {
     signal = current;
+
     return pending.promise;
   });
   const app = await mount({ clock });
@@ -2212,10 +2418,15 @@ test("Git paste loading uses shared Prompt right padding and cleans immediately 
     await app.chooseCommit();
     app.mockInput.pressKey("a");
     await render();
+
     const input = app.get("git-prompt");
-    if (!(input instanceof PromptInput)) throw new Error("Missing Git prompt");
+    if (!(input instanceof PromptInput)) {
+      throw new Error("Missing Git prompt");
+    }
+
     input.value = "draft";
     await render();
+
     const geometry = () => [
       input.field.y,
       input.field.height,
@@ -2271,14 +2482,15 @@ test("Git commit Ctrl+D/U jumps selection by half-pages without querying skipped
     subject: `Candidate ${index}`,
     parents: [],
   }));
-  const data = { ...snapshot(), headOid: commits[0]!.oid, commits },
-    lookups: string[] = [];
+  const data = { ...snapshot(), headOid: commits[0]!.oid, commits };
+  const lookups: string[] = [];
   const app = await mount({
     source: {
       load: async () => ok(data),
       compare: async () => ok(comparison()),
       details: async (selected) => {
         lookups.push(selected.oid);
+
         return ok({ commit: selected, message: selected.subject, files: [], branches: [] });
       },
     },
@@ -2289,6 +2501,7 @@ test("Git commit Ctrl+D/U jumps selection by half-pages without querying skipped
       1,
       Math.floor(list.viewport.height / (2 * app.get("git-history:__working_tree__").height)),
     );
+
     list.focus();
 
     app.mockInput.pressKey("d", { ctrl: true });
@@ -2326,11 +2539,14 @@ test("Git details and both diffs scroll focused bodies by half-pages", async () 
   });
   try {
     await app.chooseCommit();
-    const details = app.get("git-details"),
-      history = app.get("git-history") as ScrollBoxRenderable;
+
+    const details = app.get("git-details");
+    const history = app.get("git-history") as ScrollBoxRenderable;
+
     details.focus();
     history.scrollTo(0);
     await app.renderOnce();
+
     const half = Math.floor(history.viewport.height / 2);
 
     app.mockInput.pressKey("d", { ctrl: true });
@@ -2345,9 +2561,13 @@ test("Git details and both diffs scroll focused bodies by half-pages", async () 
     await app.waitFor(() => app.codes().length === 2);
     await app.renderOnce();
     app.get("git-diff").focus();
-    const panes = app.codes(),
-      distance = Math.floor(panes[0]!.height / 2);
-    for (const pane of panes) pane.scrollY = 0;
+
+    const panes = app.codes();
+    const distance = Math.floor(panes[0]!.height / 2);
+    for (const pane of panes) {
+      pane.scrollY = 0;
+    }
+
     app.mockInput.pressKey("d", { ctrl: true });
     await app.renderOnce();
 
@@ -2367,18 +2587,25 @@ test.each(["arrows", "vim", "control"] as const)(
   async (navigation) => {
     // Search and results share candidate cursors.
     const app = await mount();
-    const move = (next: boolean) =>
-      navigation === "arrows"
-        ? app.mockInput.pressArrow(next ? "down" : "up")
-        : navigation === "control"
-          ? app.mockInput.pressKey(next ? "n" : "p", { ctrl: true })
-          : app.mockInput.pressKey(next ? "j" : "k");
+    const move = (next: boolean) => {
+      if (navigation === "arrows") {
+        return app.mockInput.pressArrow(next ? "down" : "up");
+      } else if (navigation === "control") {
+        return app.mockInput.pressKey(next ? "n" : "p", { ctrl: true });
+      } else {
+        return app.mockInput.pressKey(next ? "j" : "k");
+      }
+    };
     try {
       await app.openRefs();
       await app.mockInput.typeText("main");
       await app.renderOnce();
+
       const input = app.get("git-browser-search");
-      if (!(input instanceof SearchInput)) throw new Error("Missing Git search");
+      if (!(input instanceof SearchInput)) {
+        throw new Error("Missing Git search");
+      }
+
       input.cursorOffset = 2;
 
       app.mockInput.pressKey("n", { ctrl: true });
@@ -2428,6 +2655,7 @@ test("Reflog search matches events, hashes, and times while unmatched Enter open
       subject: "checkout: moving from main to feature/topic",
     },
   ];
+
   const app = await mount({
     source: {
       load: async () => ok(data),
@@ -2438,14 +2666,18 @@ test("Reflog search matches events, hashes, and times while unmatched Enter open
   });
   try {
     await app.openReflog();
+
     const input = app.get("git-browser-search");
-    if (!(input instanceof SearchInput)) throw new Error("Missing Git search");
+    if (!(input instanceof SearchInput)) {
+      throw new Error("Missing Git search");
+    }
 
     for (const query of ["checkout main", rootCommit.oid.slice(0, 12), "2026-10-20", "HEAD@{1}"]) {
       input.value = query;
       await app.renderOnce();
       expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.reflogSelected).toBe("HEAD@{1}");
     }
+
     input.value = "no such event";
     await app.renderOnce();
     app.mockInput.pressEnter();
@@ -2491,6 +2723,7 @@ test("Git Agent requests preserve multiline/collapsed source and image reference
     actions: {
       prompt: (_id, text, images) => {
         sent.push({ text, images: images ?? [] });
+
         return ok(undefined);
       },
     },
@@ -2499,8 +2732,12 @@ test("Git Agent requests preserve multiline/collapsed source and image reference
     await app.chooseCommit();
     app.mockInput.pressKey("a");
     await app.renderOnce();
+
     const input = app.get("git-prompt");
-    if (!(input instanceof PromptInput)) throw new Error("Missing Git prompt");
+    if (!(input instanceof PromptInput)) {
+      throw new Error("Missing Git prompt");
+    }
+
     const original = "Long Git request\n".repeat(100);
     await app.mockInput.pasteBracketedText(original);
     app.mockInput.pressEnter({ shift: true });
@@ -2580,14 +2817,15 @@ test.each(["view", "worktree"] as const)(
   "Returning to a cached Git %s reloads files and the selected comparison without losing reading position",
   async (target) => {
     // A status-identical edit still needs a fresh comparison when the cached screen returns.
-    let data = snapshot(),
-      revision = "before return",
-      reads = 0,
-      comparisons = 0;
+    let data = snapshot();
+    let revision = "before return";
+    let reads = 0;
+    let comparisons = 0;
     const app = await mount({
       source: {
         load: async () => {
           reads++;
+
           return ok(structuredClone(data));
         },
         details: async (selected) =>
@@ -2595,6 +2833,7 @@ test.each(["view", "worktree"] as const)(
         compare: async () => {
           comparisons++;
           const diff = comparison();
+
           return ok({
             ...diff,
             after: diff.after.replace("line69 = 69", `line69 = '${revision}'`),
@@ -2608,13 +2847,17 @@ test.each(["view", "worktree"] as const)(
       app.get("git-diff").focus();
       app.mockInput.pressKey("END");
       await app.renderOnce();
+
       const scroll = app.codes()[0]!.scrollY;
       expect(scroll).toBeGreaterThan(0);
       if (target === "view") {
         app.mockInput.pressKey(" ", { ctrl: true });
         app.mockInput.pressKey("a");
         await app.renderOnce();
-      } else await app.click(`${icons.folder} radian-ui`);
+      } else {
+        await app.click(`${icons.folder} radian-ui`);
+      }
+
       data = {
         ...snapshot(),
         files: [...snapshot().files, { kind: "untracked", status: "?", path: "fresh.txt" }],
@@ -2622,8 +2865,12 @@ test.each(["view", "worktree"] as const)(
       revision = "after return";
 
       // Returning must revalidate the snapshot as well as an already cached file diff.
-      if (target === "view") await app.showGit();
-      else await app.click(`${icons.folder} radian`);
+      if (target === "view") {
+        await app.showGit();
+      } else {
+        await app.click(`${icons.folder} radian`);
+      }
+
       await app.waitForFrame((frame) => frame.includes("after return"));
 
       // View identities and synchronized scroll survive while external edits become visible.
@@ -2647,13 +2894,14 @@ test.each(["terminal", "workspace"] as const)(
   "Git %s focus return refreshes status-identical edits and preserves diff focus",
   async (target) => {
     // Porcelain status alone cannot reveal another edit to the same modified file.
-    let revision = "original focus",
-      reads = 0,
-      comparisons = 0;
+    let revision = "original focus";
+    let reads = 0;
+    let comparisons = 0;
     const app = await mount({
       source: {
         load: async () => {
           reads++;
+
           return ok(snapshot());
         },
         details: async (selected) =>
@@ -2661,6 +2909,7 @@ test.each(["terminal", "workspace"] as const)(
         compare: async () => {
           comparisons++;
           const diff = comparison();
+
           return ok({
             ...diff,
             after: diff.after.replace("line69 = 69", `line69 = '${revision}'`),
@@ -2674,17 +2923,24 @@ test.each(["terminal", "workspace"] as const)(
       app.get("git-diff").focus();
       app.mockInput.pressKey("END");
       await app.renderOnce();
+
       const scroll = app.codes()[0]!.scrollY;
-      if (target === "terminal") app.renderer.emit("blur");
-      else {
+      if (target === "terminal") {
+        app.renderer.emit("blur");
+      } else {
         openWorkspaceSearch(app);
         await app.renderOnce();
       }
+
       revision = "updated focus";
 
       // Native terminal focus and app-owned overlay focus are distinct return paths.
-      if (target === "terminal") app.renderer.emit("focus");
-      else app.mockInput.pressEscape();
+      if (target === "terminal") {
+        app.renderer.emit("focus");
+      } else {
+        app.mockInput.pressEscape();
+      }
+
       await app.waitForFrame((frame) => frame.includes("updated focus"));
 
       // Refresh must not move focus or reset either column to the top.
@@ -2703,31 +2959,37 @@ test.each(["arrows", "vim", "control"] as const)(
   "Git %s navigation reads only newly selected previews, not the repository snapshot",
   async (navigation) => {
     // Navigation owns preview selection; it must not act as an implicit full refresh.
-    let reads = 0,
-      details = 0,
-      comparisons = 0;
+    let reads = 0;
+    let details = 0;
+    let comparisons = 0;
     const app = await mount({
       source: {
         load: async () => {
           reads++;
+
           return ok(snapshot());
         },
         details: async (selected) => {
           details++;
+
           return ok({ commit: selected, message: selected.subject, files: [], branches: [] });
         },
         compare: async () => {
           comparisons++;
+
           return ok(comparison());
         },
       },
     });
-    const move = (down: boolean) =>
-      navigation === "arrows"
-        ? app.mockInput.pressArrow(down ? "down" : "up")
-        : navigation === "control"
-          ? app.mockInput.pressKey(down ? "n" : "p", { ctrl: true })
-          : app.mockInput.pressKey(down ? "j" : "k");
+    const move = (down: boolean) => {
+      if (navigation === "arrows") {
+        return app.mockInput.pressArrow(down ? "down" : "up");
+      } else if (navigation === "control") {
+        return app.mockInput.pressKey(down ? "n" : "p", { ctrl: true });
+      } else {
+        return app.mockInput.pressKey(down ? "j" : "k");
+      }
+    };
     try {
       app.get("git-history").focus();
       move(false);
@@ -2782,16 +3044,18 @@ test.each(["arrows", "vim", "control"] as const)(
 test("Overlapping focus returns share one reload and hidden Git views ignore terminal focus", async () => {
   // A delayed focus reload must not be restarted by the accompanying focus handoff.
   const pending = Promise.withResolvers<Result<GitSnapshot, ExpectedError>>();
-  let reads = 0,
-    signal: AbortSignal | undefined;
+  let reads = 0;
+  let signal: AbortSignal | undefined;
   const app = await mount({
     source: {
       load: async (_ref, _limit, current) => {
         reads++;
         if (reads === 2) {
           signal = current;
+
           return pending.promise;
         }
+
         return ok(snapshot());
       },
       details: async (selected) =>
@@ -2814,6 +3078,7 @@ test("Overlapping focus returns share one reload and hidden Git views ignore ter
     app.mockInput.pressKey("a");
     await app.renderOnce();
     app.renderer.emit("focus");
+
     const stale = snapshot();
     stale.commits[0] = { ...commit, subject: "Hidden stale snapshot" };
     pending.resolve(ok(stale));
@@ -2839,9 +3104,9 @@ test.each(["before", "during"] as const)(
     // Even sources ignoring AbortSignal must not restore stale text for the same selected file.
     const pendingLoad = Promise.withResolvers<Result<GitSnapshot, ExpectedError>>();
     const pendingDiff = Promise.withResolvers<Result<GitComparison, ExpectedError>>();
-    let reads = 0,
-      comparisons = 0,
-      signal: AbortSignal | undefined;
+    let reads = 0;
+    let comparisons = 0;
+    let signal: AbortSignal | undefined;
     const app = await mount({
       source: {
         load: async () => (++reads === 2 ? pendingLoad.promise : ok(snapshot())),
@@ -2851,8 +3116,10 @@ test.each(["before", "during"] as const)(
           comparisons++;
           if (comparisons === (timing === "before" ? 1 : 2)) {
             signal = current;
+
             return pendingDiff.promise;
           }
+
           return ok({
             before: "Latest comparison\n",
             after: "Latest comparison updated\n",
@@ -2871,6 +3138,7 @@ test.each(["before", "during"] as const)(
         app.mockInput.pressArrow("down");
         await app.renderOnce();
       }
+
       pendingLoad.resolve(ok(snapshot()));
       await app.waitForFrame((frame) => frame.includes("Latest comparison"));
       pendingDiff.resolve(
@@ -2902,20 +3170,23 @@ test.each(["before", "during"] as const)(
 test("Slow commit previews do not block later focus refreshes after snapshots finish", async () => {
   // A completed snapshot is not an in-flight reload merely because its details are still pending.
   const pending = Promise.withResolvers<Result<GitDetails, ExpectedError>>();
-  let reads = 0,
-    details = 0,
-    signal: AbortSignal | undefined;
+  let reads = 0;
+  let details = 0;
+  let signal: AbortSignal | undefined;
   const app = await mount({
     source: {
       load: async () => {
         reads++;
+
         return ok(snapshot());
       },
       details: async (selected, current) => {
         if (++details < 3) {
           signal = current;
+
           return pending.promise;
         }
+
         return ok({
           commit: selected,
           message: "Current commit after focus",
@@ -2950,12 +3221,13 @@ test("Slow commit previews do not block later focus refreshes after snapshots fi
 
 test("Terminal focus refresh preserves Ask input, caret, target and frozen Git context", async () => {
   // An accepted file selection may disappear externally while its unsubmitted question remains editable.
-  let data = snapshot(),
-    reads = 0;
+  let data = snapshot();
+  let reads = 0;
   const app = await mount({
     source: {
       load: async () => {
         reads++;
+
         return ok(structuredClone(data));
       },
       details: async (selected) =>
@@ -2969,8 +3241,12 @@ test("Terminal focus refresh preserves Ask input, caret, target and frozen Git c
     await app.renderOnce();
     await app.mockInput.typeText("explain this file");
     app.mockInput.pressArrow("left");
+
     const input = app.get("git-prompt");
-    if (!(input instanceof PromptInput)) throw new Error("Missing Ask input");
+    if (!(input instanceof PromptInput)) {
+      throw new Error("Missing Ask input");
+    }
+
     const caret = input.cursorOffset;
     data = { ...snapshot(), files: [{ kind: "untracked", status: "?", path: "replacement.txt" }] };
 
@@ -3008,16 +3284,19 @@ test("r refreshes without headers/buttons and spinners show at least 500ms witho
   try {
     clock.advance(500);
     await app.renderOnce();
-    const toolbar = app.get("git-toolbar"),
-      spinner = app.get("git-loading"),
-      list = app.get("git-history");
+
+    const toolbar = app.get("git-toolbar");
+    const spinner = app.get("git-loading");
+    const list = app.get("git-history");
     const glyph = () =>
       app
         .captureCharFrame()
         .split("\n")
         [spinner.y]!.slice(spinner.x, spinner.x + 1);
+
     expect(toolbar.visible).toBe(false);
     expect(spinner.visible).toBe(false);
+
     const position = [spinner.x, spinner.y, list.height, list.y];
 
     // The scoped key still performs a real source reload, not just a visual animation.
@@ -3056,6 +3335,7 @@ test("+ loads commits in batches of 300 without More buttons and stops querying 
     source: {
       load: async (_reference, limit) => {
         limits.push(limit);
+
         const data = snapshot();
         data.commits =
           limits.length === 1
@@ -3065,6 +3345,7 @@ test("+ loads commits in batches of 300 without More buttons and stops querying 
                 subject: `Commit ${index}`,
               }))
             : [commit];
+
         return ok(data);
       },
       details: async (commit) => ok({ commit, message: commit.subject, files: [], branches: [] }),
@@ -3102,8 +3383,10 @@ test("Git lists use full width and compact Changes popups fit inside footers", a
       app.resize(width, height);
       await app.renderOnce();
       await app.renderOnce();
-      const panel = app.get("git-view"),
-        list = app.get("git-history");
+
+      const panel = app.get("git-view");
+      const list = app.get("git-history");
+
       expect(list.y + list.height).toBe(app.get("work-panel").y + app.get("work-panel").height);
       expect(list.y).toBe(panel.y);
       expect(list.width).toBe(panel.width - (width < 80 ? 2 : 4));
@@ -3124,8 +3407,10 @@ test("Git lists use full width and compact Changes popups fit inside footers", a
       app.resize(width, height);
       await app.renderOnce();
       await app.renderOnce();
-      const popup = app.get("git-changes"),
-        diff = app.get("git-diff");
+
+      const popup = app.get("git-changes");
+      const diff = app.get("git-diff");
+
       expect(popup.y + popup.height).toBe(app.get("work-panel").y + app.get("work-panel").height);
       expect(diff.y + diff.height).toBe(popup.y + popup.height - 1);
       expect(app.get("git-files").height).toBeGreaterThan(0);
@@ -3136,6 +3421,7 @@ test("Git lists use full width and compact Changes popups fit inside footers", a
       );
       expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("GIT");
     }
+
     expect(app.requests).toEqual([]);
     expect(app.creations).toEqual([]);
   } finally {
@@ -3157,8 +3443,9 @@ test("Commit clicks expand left details and Enter shows only files with Before/A
     await app.openChanges();
     await app.waitForFrame((frame) => frame.includes("const line00"));
 
-    const files = app.get("git-files"),
-      diff = app.get("git-diff");
+    const files = app.get("git-files");
+    const diff = app.get("git-diff");
+
     expect(app.get("git-details-card").visible).toBe(false);
     expect(app.captureCharFrame()).not.toContain("Author: Ada");
     expect(app.captureCharFrame()).not.toContain("Commit details");
@@ -3187,10 +3474,11 @@ test("Ask popups begin with the selected Git context instead of a popup title", 
     await app.renderOnce();
 
     // The selected context is the first content row, not a replacement decorative header.
-    const popup = app.get("git-ask"),
-      context = popup
-        .getChildren()
-        .find((node) => node instanceof TextRenderable && node.plainText.startsWith("Commit "));
+    const popup = app.get("git-ask");
+    const context = popup
+      .getChildren()
+      .find((node) => node instanceof TextRenderable && node.plainText.startsWith("Commit "));
+
     expect(context).toBeDefined();
     expect(context!.y).toBe(popup.y + 1);
     expect(app.captureCharFrame()).not.toContain("Ask Agent · selected Git context");
@@ -3209,6 +3497,7 @@ test("Changes Tab cycles only files/diffs and Esc returns to commits with left d
   try {
     await app.chooseCommit();
     await app.openChanges();
+
     const selected = app.view.workViewPreferences.gitViews?.["demo:main"]?.selected;
 
     // No detail focus remains in popups; cycle only the two regions.
@@ -3217,6 +3506,7 @@ test("Changes Tab cycles only files/diffs and Esc returns to commits with left d
       await app.renderOnce();
       expect(app.renderer.currentFocusedRenderable?.id).toBe(id);
     }
+
     app.mockInput.pressTab({ shift: true });
     await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("git-diff");
@@ -3252,13 +3542,16 @@ test("Refs uses groups/search instead of kind tabs and retains compact results",
       app.resize(width, height);
       await app.renderOnce();
       await app.renderOnce();
-      const list = app.get("git-browser-list"),
-        group = app.positionIn("git-browser-list", "Remote");
+
+      const list = app.get("git-browser-list");
+      const group = app.positionIn("git-browser-list", "Remote");
+
       expect(list.height).toBeGreaterThan(1);
       expect(app.positionIn("git-browser-list", `${icons.branch} origin/main`).x).toBe(group.x);
       expect(app.get("git-reflog-preview-pane").visible).toBe(false);
       expect(app.renderer.currentFocusedRenderable?.id).toBe("git-browser-search");
     }
+
     expect(app.requests).toEqual([]);
   } finally {
     await app.close();
@@ -3283,13 +3576,15 @@ test("Changes file titles and first files have exactly one blank row at every he
   try {
     await app.chooseCommit();
     await app.openChanges();
-    for (const width of [120, 160, 240])
+    for (const width of [120, 160, 240]) {
       for (let height = 20; height <= 70; height++) {
         app.resize(width, height);
         await app.renderOnce();
         await app.renderOnce();
-        const title = app.positionIn("git-files-panel", "Changed files"),
-          file = app.positionIn("git-files", "M src/only-file.ts");
+
+        const title = app.positionIn("git-files-panel", "Changed files");
+        const file = app.positionIn("git-files", "M src/only-file.ts");
+
         expect({ width, height, gap: file.y - title.y - 1 }).toEqual({ width, height, gap: 1 });
         expect(
           app
@@ -3302,6 +3597,8 @@ test("Changes file titles and first files have exactly one blank row at every he
             .trim(),
         ).toBe("");
       }
+    }
+
     expect(app.requests).toEqual([]);
   } finally {
     await app.close();
@@ -3317,7 +3614,10 @@ test.each(["search", "list"] as const)(
       await app.chooseCommit();
       await app.openRefs();
       await app.mockInput.typeText("origin");
-      if (focus === "list") app.mockInput.pressTab();
+      if (focus === "list") {
+        app.mockInput.pressTab();
+      }
+
       await app.renderOnce();
 
       app.mockInput.pressEscape();
@@ -3365,6 +3665,7 @@ test.each(["all", "escape"] as const)(
         );
         app.mockInput.pressEscape();
       }
+
       await app.waitFor(() => app.loads.at(-1) === "all");
       await app.renderOnce();
 
@@ -3426,6 +3727,7 @@ test("Main starts in tabless Commits and opens Refs/Reflog through footer shortc
   try {
     expect(app.get("git-toolbar").visible).toBe(false);
     expect(app.get("git-history").y).toBe(app.get("git-view").y);
+
     const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
     expect(footer).toContain("b Refs");
     expect(footer).toContain("<C-r> Reflog");
@@ -3452,6 +3754,7 @@ test("Commit refs, graphs, and connectors share colors while messages use theme 
     app.get("git-history").blur();
     await app.renderOnce();
     await app.renderOnce();
+
     const before = app.captureCharFrame();
 
     // Repaint the mounted list in both dark and light terminal palettes.
@@ -3479,14 +3782,19 @@ test("Commit refs, graphs, and connectors share colors while messages use theme 
       expect(app.spanIn("git-history", `HEAD → ${icons.branch} main`).fg.toInts()).toEqual(
         app.spanIn("git-history", "aaaaaaa").fg.toInts(),
       );
+
       const band = app.get(`git-history:${commit.oid}:message-link`);
-      if (!(band instanceof TextRenderable)) throw new Error("Missing graph band");
+      if (!(band instanceof TextRenderable)) {
+        throw new Error("Missing graph band");
+      }
+
       expect(band.plainText.trim()).toBe("");
       expect(band.fg.toInts()).toEqual(app.spanIn("git-history", "aaaaaaa").fg.toInts());
       expect(app.spanIn("git-history", "Working tree").fg.toInts()).toEqual(colors.text.toInts());
       expect(app.captureCharFrame()).toBe(before);
       expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid);
     }
+
     expect(app.requests).toEqual([]);
   } finally {
     await app.close();
@@ -3518,6 +3826,7 @@ test("Changed-file sections have one blank separator that cannot select or open 
     { kind: "staged", status: "A", path: "new.ts" },
     { kind: "staged", status: "M", path: "staged.ts" },
   );
+
   const app = await mount({
     source: {
       load: async () => ok(data),
@@ -3527,12 +3836,14 @@ test("Changed-file sections have one blank separator that cannot select or open 
   });
   try {
     await app.openWorkingTree();
-    const staged = app.positionIn("git-files", "STAGED"),
-      first = app.positionIn("git-files", "A new.ts");
-    const last = app.positionIn("git-files", "M staged.ts"),
-      unstaged = app.positionIn("git-files", "UNSTAGED");
-    const modified = app.positionIn("git-files", "M src/login.ts"),
-      untracked = app.positionIn("git-files", "UNTRACKED");
+
+    const staged = app.positionIn("git-files", "STAGED");
+    const first = app.positionIn("git-files", "A new.ts");
+    const last = app.positionIn("git-files", "M staged.ts");
+    const unstaged = app.positionIn("git-files", "UNSTAGED");
+    const modified = app.positionIn("git-files", "M src/login.ts");
+    const untracked = app.positionIn("git-files", "UNTRACKED");
+
     expect(staged.y).toBe(app.get("git-files").y);
     expect(first.y).toBe(staged.y + 1);
     expect(last.y).toBe(first.y + 1);
@@ -3542,8 +3853,8 @@ test("Changed-file sections have one blank separator that cannot select or open 
     expect(app.positionIn("git-files", "? notes.txt").y).toBe(untracked.y + 1);
 
     // Blank margins remain inert even though clicking them can focus the list.
-    const list = app.get("git-files"),
-      selected = app.view.workViewPreferences.gitViews?.["demo:main"]?.file;
+    const list = app.get("git-files");
+    const selected = app.view.workViewPreferences.gitViews?.["demo:main"]?.file;
     for (const y of [unstaged.y - 1, untracked.y - 1]) {
       expect(
         app
@@ -3561,7 +3872,10 @@ test("Changed-file sections have one blank separator that cannot select or open 
     // Keyboard navigation counts only files, not headings or the new whitespace.
     list.focus();
     app.mockInput.pressKey("HOME");
-    for (let index = 0; index < 3; index++) app.mockInput.pressArrow("down");
+    for (let index = 0; index < 3; index++) {
+      app.mockInput.pressArrow("down");
+    }
+
     app.mockInput.pressKey("y");
     await app.waitFor(() => app.copies.length > 0);
     expect(app.copies).toEqual(["notes.txt"]);
@@ -3578,6 +3892,7 @@ test("Skipping empty changed-file sections adds no leading or inter-file gaps", 
     { kind: "untracked", status: "?", path: "first.txt" },
     { kind: "untracked", status: "?", path: "second.txt" },
   ];
+
   const app = await mount({
     source: {
       load: async () => ok(data),
@@ -3587,8 +3902,10 @@ test("Skipping empty changed-file sections adds no leading or inter-file gaps", 
   });
   try {
     await app.openWorkingTree();
-    const title = app.positionIn("git-files", "UNTRACKED"),
-      first = app.positionIn("git-files", "? first.txt");
+
+    const title = app.positionIn("git-files", "UNTRACKED");
+    const first = app.positionIn("git-files", "? first.txt");
+
     expect(title.y).toBe(app.get("git-files").y);
     expect(first.y).toBe(title.y + 1);
     expect(app.positionIn("git-files", "? second.txt").y).toBe(first.y + 1);
@@ -3606,6 +3923,7 @@ test("Changed files highlight only M letters while retaining full A/D/untracked 
     { kind: "staged", status: "A", path: "added.ts" },
     { kind: "unstaged", status: "D", path: "deleted.ts" },
   );
+
   const app = await mount({
     source: {
       load: async () => ok(data),
@@ -3621,10 +3939,13 @@ test("Changed files highlight only M letters while retaining full A/D/untracked 
     const colors = uiTheme(app.renderer).colors;
     expect(app.spanIn("git-files", "M src/login.ts").fg.toInts()).toEqual(colors.warning.toInts());
     expect(app.spanIn("git-files", "src/login.ts").fg.toInts()).toEqual(colors.text.toInts());
-    for (const text of ["A added.ts", "added.ts", "? notes.txt", "notes.txt"])
+    for (const text of ["A added.ts", "added.ts", "? notes.txt", "notes.txt"]) {
       expect(app.spanIn("git-files", text).fg.toInts()).toEqual(colors.success.toInts());
-    for (const text of ["D deleted.ts", "deleted.ts"])
+    }
+    for (const text of ["D deleted.ts", "deleted.ts"]) {
       expect(app.spanIn("git-files", text).fg.toInts()).toEqual(colors.error.toInts());
+    }
+
     expect(app.requests).toEqual([]);
   } finally {
     await app.close();
@@ -3665,6 +3986,7 @@ test("Commit details provide reading/drag copying without y or a actions", async
     app.mockInput.pressKey("y");
     app.mockInput.pressKey("a");
     await app.renderOnce();
+
     const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
     expect(app.get("git-ask").visible).toBe(false);
     expect(footer).not.toContain("Ask");
@@ -3672,6 +3994,7 @@ test("Commit details provide reading/drag copying without y or a actions", async
     expect(footer).not.toContain("<Tab> Pane");
     expect(footer).not.toContain("<Esc> Back");
     expect(footer).toContain("Help");
+
     const { x, y } = app.positionIn("git-details", "Author: Ada");
     await app.mockMouse.drag(x + 8, y, x + 10, y);
     await app.waitFor(() => app.copies.length > 0);
@@ -3694,6 +4017,7 @@ test("Refs shows branch/tag icons and distinguishes current branches with accent
     ref: "refs/heads/feature/topic",
     oid: commit.oid,
   });
+
   const app = await mount({
     source: {
       load: async () => ok(data),
@@ -3703,6 +4027,7 @@ test("Refs shows branch/tag icons and distinguishes current branches with accent
   });
   try {
     await app.openRefs();
+
     const colors = uiTheme(app.renderer).colors;
     expect(app.positionIn("git-browser-list", `${icons.branch} main`).x).toBe(
       app.positionIn("git-browser-list", `${icons.branch} feature/topic`).x,
@@ -3814,6 +4139,7 @@ test("Git diff h/l synchronizes horizontal positions without forwarding input", 
     app.get("git-diff").focus();
     app.mockInput.pressKey("l");
     await app.renderOnce();
+
     const panes = app.codes();
     expect(panes).toHaveLength(2);
     expect(panes[0]!.scrollX).toBe(4);
@@ -3844,6 +4170,7 @@ test("File selection updates right-side diffs and scrolls both sides as one focu
 
     app.mockInput.pressArrow("down");
     await app.renderOnce();
+
     const codes = app.codes();
     expect(codes).toHaveLength(2);
     expect(codes[0]!.scrollY).toBeGreaterThan(0);
@@ -3872,8 +4199,9 @@ test("Code dragging auto-copies only one side without line numbers or Agent requ
   try {
     await app.openWorkingTree();
     await app.waitForFrame((frame) => frame.includes("const line00"));
-    const codes = app.codes().sort((a, b) => a.x - b.x),
-      left = codes[0]!;
+
+    const codes = app.codes().sort((a, b) => a.x - b.x);
+    const left = codes[0]!;
 
     await app.mockMouse.drag(left.x, left.y, left.x + 4, left.y);
     await app.waitFor(() => app.copies.length > 0);
@@ -3906,6 +4234,7 @@ test("Git selection, diffs, and scroll survive worktree round-trips and UI resto
   } finally {
     await app.close();
   }
+
   const restored = await mount({ initial: retained! });
   try {
     await restored.waitForFrame((frame) => frame.includes("const line69"));
@@ -3932,25 +4261,37 @@ test.each([false, true])(
       await app.chooseCommit();
       app.mockInput.pressKey("a");
       await app.renderOnce();
+
       const input = app.get("git-prompt");
-      if (!(input instanceof PromptInput)) throw new Error("Missing Git prompt");
+      if (!(input instanceof PromptInput)) {
+        throw new Error("Missing Git prompt");
+      }
+
       await app.mockInput.typeText("explain hjklay");
       app.mockInput.pressArrow("left");
-      const value = input.value,
-        caret = input.cursorOffset;
+
+      const value = input.value;
+      const caret = input.cursorOffset;
 
       // Held defaults switch once; overrides preserve drafts and carets too.
-      if (overridden) app.mockInput.pressKey("s", { meta: true });
-      else
+      if (overridden) {
+        app.mockInput.pressKey("s", { meta: true });
+      } else {
         for (const event of ["\x1b[115;5u", "\x1b[115;5:2u", "\x1b[115;5:3u"]) {
           const parsed = parseKeypress(event, { useKittyKeyboard: true });
-          if (!parsed) throw new Error("Invalid Kitty key");
+          if (!parsed) {
+            throw new Error("Invalid Kitty key");
+          }
+
           app.renderer.keyInput.processParsedKey(parsed);
         }
+      }
+
       await app.renderOnce();
       expect(input.value).toBe(value);
       expect(input.cursorOffset).toBe(caret);
       expect(app.renderer.currentFocusedRenderable).toBe(input);
+
       const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
       expect(footer).toContain(`${overridden ? "<M-s>" : "<C-s>"} Change session`);
       expect(app.requests).toEqual([]);
@@ -3970,12 +4311,13 @@ test.each([false, true])(
 
 test("Target commands during Git submission are consumed while preserving retry targets", async () => {
   // Targets cannot change before the first request's acceptance is known.
-  const pending = Promise.withResolvers<Result<void, ExpectedError>>(),
-    targets: string[] = [];
+  const pending = Promise.withResolvers<Result<void, ExpectedError>>();
+  const targets: string[] = [];
   const app = await mount({
     actions: {
       prompt: (id) => {
         targets.push(id);
+
         return pending.promise;
       },
     },
@@ -3993,8 +4335,12 @@ test("Target commands during Git submission are consumed while preserving retry 
     await app.renderOnce();
     pending.resolve(err(new InputError("Retry request")));
     await app.waitForFrame((frame) => frame.includes("Retry request"));
+
     const input = app.get("git-prompt");
-    if (!(input instanceof PromptInput)) throw new Error("Missing Git prompt");
+    if (!(input instanceof PromptInput)) {
+      throw new Error("Missing Git prompt");
+    }
+
     expect(input.value).toBe("Retained request");
     app.mockInput.pressEnter();
     await app.waitFor(() => targets.length === 2);
@@ -4019,6 +4365,7 @@ test("Target commands defer session creation until submission and rejection pres
       app.mockInput.pressKey("s", { ctrl: true });
       await app.renderOnce();
     }
+
     expect(app.creations).toEqual([]);
     expect(app.captureCharFrame()).toContain("New session");
 
@@ -4061,6 +4408,7 @@ test("Dragging popup filenames copies substrings without selecting files or focu
   const app = await mount();
   try {
     await app.openWorkingTree();
+
     const { x, y } = app.positionIn("git-files", "M src/login.ts");
     const file = app.view.workViewPreferences.gitViews?.["demo:main"]?.file;
 
@@ -4082,6 +4430,7 @@ test("Dragging into opposite diffs copies only the originating code region", asy
   try {
     await app.openWorkingTree();
     await app.waitForFrame((frame) => frame.includes("const line00"));
+
     const [left, right] = app.codes().sort((a, b) => a.x - b.x);
 
     await app.mockMouse.drag(left!.x, left!.y, right!.x + 4, right!.y);
@@ -4174,8 +4523,12 @@ test("Git diff themes update light backgrounds/syntax while preserving scroll an
     await app.chooseCommit();
     await app.openChanges();
     await app.waitForFrame((frame) => frame.includes("const line00"));
+
     const oldDiff = app.get("git-file-diff");
-    if (!(oldDiff instanceof DiffRenderable)) throw new Error("Missing whole-file diff");
+    if (!(oldDiff instanceof DiffRenderable)) {
+      throw new Error("Missing whole-file diff");
+    }
+
     expect(oldDiff.contextBg.toInts().slice(0, 3)).toEqual([18, 18, 18]);
     expect(oldDiff.addedBg.toInts().slice(0, 3)).toEqual([23, 53, 23]);
     expect(oldDiff.removedBg.toInts().slice(0, 3)).toEqual([64, 23, 23]);
@@ -4184,10 +4537,12 @@ test("Git diff themes update light backgrounds/syntax while preserving scroll an
     app.get("git-diff").focus();
     app.mockInput.pressKey("END");
     await app.renderOnce();
+
     const scroll = app.codes()[0]!.scrollY;
     app.mockInput.pressKey("a");
     await app.renderOnce();
     await app.mockInput.typeText("keep this request");
+
     const prompt = app.get("git-prompt");
 
     app.renderer.emit("palette", {
@@ -4200,8 +4555,10 @@ test("Git diff themes update light backgrounds/syntax while preserving scroll an
     await app.renderOnce();
 
     const diff = app.get("git-file-diff");
-    if (!(diff instanceof DiffRenderable) || !(prompt instanceof PromptInput))
+    if (!(diff instanceof DiffRenderable) || !(prompt instanceof PromptInput)) {
       throw new Error("Missing themed controls");
+    }
+
     expect(diff.contextBg.toInts().slice(0, 3)).toEqual([250, 250, 250]);
     expect(diff.lineNumberFg.toInts()[0]).toBeLessThan(160);
     expect(diff.addedBg.toInts().slice(0, 3)).toEqual([185, 216, 185]);

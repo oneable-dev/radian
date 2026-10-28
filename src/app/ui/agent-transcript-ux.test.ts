@@ -24,6 +24,7 @@ const section = (text: string): TranscriptSection => ({
   text,
   status: "complete",
 });
+
 async function mount(initial: TranscriptSection[], actions: Partial<WorkbenchActions> = {}) {
   const app = await createTestRenderer({
     width: 120,
@@ -32,8 +33,8 @@ async function mount(initial: TranscriptSection[], actions: Partial<WorkbenchAct
     exitOnCtrlC: false,
   });
   const selection = new WorkspaceSelection(demoWorkspace());
-  const copies: string[] = [],
-    prompts: string[] = [];
+  const copies: string[] = [];
+  const prompts: string[] = [];
   let current = initial;
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {},
@@ -41,10 +42,12 @@ async function mount(initial: TranscriptSection[], actions: Partial<WorkbenchAct
     initialDrafts: { a1: "unsent draft" },
     onPrompt: (_id, text) => {
       prompts.push(text);
+
       return ok(undefined);
     },
     onCopyTranscript: async (text) => {
       copies.push(text);
+
       return ok("Copied to clipboard");
     },
     getSessionDetails: () => ({ status: "complete", output: "", error: null, sections: current }),
@@ -54,9 +57,14 @@ async function mount(initial: TranscriptSection[], actions: Partial<WorkbenchAct
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   const scroll = app.renderer.root.findDescendantById("session-transcript");
-  if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript viewport");
+  if (!(scroll instanceof ScrollBoxRenderable)) {
+    throw new Error("Missing transcript viewport");
+  }
+
   return {
     ...app,
     view,
@@ -72,7 +80,10 @@ async function mount(initial: TranscriptSection[], actions: Partial<WorkbenchAct
     },
     body() {
       const body = app.renderer.currentFocusedRenderable;
-      if (!(body instanceof EditBufferRenderable)) throw new Error("Missing focused text");
+      if (!(body instanceof EditBufferRenderable)) {
+        throw new Error("Missing focused text");
+      }
+
       return body;
     },
     state() {
@@ -130,7 +141,10 @@ test.each(["first\n\nlast", "first\n\nlast\n"])(
     try {
       await app.enter();
       app.mockInput.pressKey("g", { shift: true });
-      if (text.endsWith("\n")) app.mockInput.pressKey("k");
+      if (text.endsWith("\n")) {
+        app.mockInput.pressKey("k");
+      }
+
       app.mockInput.pressKey("v", { shift: true });
       app.mockInput.pressKey("k");
       await app.copy();
@@ -168,6 +182,7 @@ test("v/V transitions preserve anchors and repeated V returns to reading mode", 
     app.mockInput.pressKey("w");
     app.mockInput.pressKey("v");
     app.mockInput.pressKey("l");
+
     const anchor = app.state()?.anchor;
     expect(app.body().getSelectedText()).toBe("be");
 
@@ -205,6 +220,7 @@ test("Streaming line selections restore linewise kinds and ranges in new UIs", a
   } finally {
     await app.close();
   }
+
   const next = await mount([section("first\nsecond plus stream")], {
     initialWorkViews: preferences!,
   });
@@ -246,6 +262,7 @@ test("Ctrl+D/U moves half a viewport in bodies and selections while preserving a
   const app = await mount([section(lines.join("\n"))]);
   try {
     await app.enter();
+
     const half = Math.floor(app.scroll.viewport.height / 2);
     app.mockInput.pressKey("d", { ctrl: true });
     expect(app.body().logicalCursor.row).toBe(half);
@@ -279,8 +296,9 @@ test.each([120, 60])(
       pressLeader(app, "[");
       app.mockInput.pressKey("HOME");
       await app.render();
-      const top = app.scroll.scrollTop,
-        step = Math.max(1, Math.floor(app.scroll.viewport.height / 4));
+
+      const top = app.scroll.scrollTop;
+      const step = Math.max(1, Math.floor(app.scroll.viewport.height / 4));
 
       app.mockInput.pressKey("d", { ctrl: true });
       await app.render();
@@ -314,6 +332,7 @@ test.each([120, 60])(
       expect(app.state()?.selectedId).toBe("section-0");
       expect(app.prompts).toEqual([]);
       expect(app.view.promptDrafts.a1).toBe("unsent draft");
+
       const keymap = defaultKeymap();
       expect(keymap.bound("ctrl+d", "prompt")).toBe(false);
       expect(keymap.bound("ctrl+u", "terminal")).toBe(false);
@@ -426,6 +445,7 @@ test("Half-page section jumps and help follow user key overrides", async () => {
     pressLeader(app, "[");
     app.mockInput.pressKey("HOME");
     await app.render();
+
     const step = Math.max(1, Math.floor(app.scroll.viewport.height / 4));
 
     app.mockInput.pressKey("d", { ctrl: true });
@@ -446,6 +466,7 @@ test("Half-page section jumps and help follow user key overrides", async () => {
     await app.render();
     app.mockInput.pressKey("HOME");
     await app.render();
+
     const top = app.scroll.scrollTop;
     app.mockInput.pressKey("d", { meta: true });
     await app.render();
@@ -513,6 +534,7 @@ test("Thinking stays visible despite saved folding and excludes all fold command
     app.mockInput.pressKey("z");
     app.mockInput.pressKey("m");
     await app.render();
+
     // Retain tool folding without Thinking labels, hints, or folded preferences.
     const frame = app.captureCharFrame();
     expect(frame).toContain("THINK_ALWAYS_VISIBLE");
@@ -580,11 +602,15 @@ test.each([false, true])(
     try {
       uiTheme(app.renderer).configure(palette(light), { muted: "#CC2288" });
       await app.render();
-      const lines = app.captureSpans().lines,
-        spans = lines.flatMap((line) => line.spans);
+
+      const lines = app.captureSpans().lines;
+      const spans = lines.flatMap((line) => line.spans);
       const thinking = spans.find((span) => span.text.includes("THINK_VISIBLE"));
       const answer = spans.find((span) => span.text.includes("ANSWER_VISIBLE"));
-      if (!thinking || !answer) throw new Error(`Missing prose\n${app.captureCharFrame()}`);
+      if (!thinking || !answer) {
+        throw new Error(`Missing prose\n${app.captureCharFrame()}`);
+      }
+
       // Bodies show without expansion and stay gray italic regardless of selection markers.
       const [r, g, b] = thinking.fg.toInts();
       expect(r).toBe(g);
@@ -593,9 +619,12 @@ test.each([false, true])(
       expect(thinking.attributes & TextAttributes.ITALIC).toBe(TextAttributes.ITALIC);
       expect(answer.attributes & TextAttributes.ITALIC).toBe(0);
       expect(thinking.bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
+
       const rows = app.captureCharFrame().split("\n");
-      for (const text of ["THINK_VISIBLE", "ANSWER_VISIBLE"])
+      for (const text of ["THINK_VISIBLE", "ANSWER_VISIBLE"]) {
         expect(rows.find((line) => line.includes(text))!.indexOf(text)).toBe(app.scroll.content.x);
+      }
+
       expect(app.captureCharFrame()).not.toContain("[thinking]");
       expect(app.captureCharFrame()).not.toContain("to expand");
     } finally {
@@ -665,6 +694,7 @@ test("All sections omit arrows and role/status titles while tools and skills dis
     pressLeader(app, "[");
     app.mockInput.pressKey("HOME");
     await app.render();
+
     // Folded tools show execution targets and configured hints without title-only rows.
     const frame = app
       .captureCharFrame()
@@ -699,6 +729,7 @@ test("Bash commands append configured timeout rather than elapsed time", async (
     app.mockInput.pressKey("HOME");
     app.mockInput.pressKey("o", { ctrl: true });
     await app.render();
+
     // Append configured limits on the last command line and preserve output/source copying.
     const frame = app.captureCharFrame();
     expect(frame).toContain("$ printf '한글'");
@@ -725,12 +756,15 @@ test("Timeout-only changes refresh inline summaries and distinguish hints/limits
   try {
     uiTheme(app.renderer).configure(palette(false));
     await app.update([{ ...data, timeoutSeconds: 30 }]);
+
     // Preserve timeout updates even when body and status do not change.
     const frame = app.captureCharFrame();
     expect(frame).toContain("(timeout 30s) (<C-o> to expand)");
     expect(frame).not.toContain("timeout 120s");
+
     const spans = app.captureSpans().lines.flatMap((line) => line.spans);
     const hint = spans.find((item) => item.text.includes("timeout 30s"));
+
     expect(hint?.fg.toInts()).toEqual(uiTheme(app.renderer).colors.muted.toInts());
     expect(frame).not.toContain("RAW_DETAILS");
   } finally {
@@ -752,16 +786,23 @@ test("Agent and Thinking omit titles, backgrounds, and indentation while other b
       .lines.slice(scroll.y, scroll.y + scroll.height)
       .flatMap((line) => line.spans)
       .find((item) => item.text.includes(text));
-    if (!found) throw new Error(`Missing colored text ${text}\n${app.captureCharFrame()}`);
+    if (!found) {
+      throw new Error(`Missing colored text ${text}\n${app.captureCharFrame()}`);
+    }
+
     return found;
   };
   const cell = (x: number, y: number) => {
     let column = 0;
     const found = app.captureSpans().lines[y]!.spans.find((item) => {
       column += item.width;
+
       return column > x;
     });
-    if (!found) throw new Error("Missing rendered cell");
+    if (!found) {
+      throw new Error("Missing rendered cell");
+    }
+
     return found;
   };
   try {
@@ -773,18 +814,22 @@ test("Agent and Thinking omit titles, backgrounds, and indentation while other b
     app.mockInput.pressKey("z");
     app.mockInput.pressKey("r");
     await app.render();
+
     const texts = ["USER_BODY", "THINK_BODY", "TOOL_BODY", "AGENT_BODY"];
     const dark = texts.map((text) => span(text).bg.toInts().join(","));
+
     expect(new Set(dark).size).toBe(3);
     expect(span("THINK_BODY").bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
     expect(span("AGENT_BODY").bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
+
     const scroll = app.renderer.root.findDescendantById("session-transcript")!;
-    const rows = app.captureCharFrame().split("\n"),
-      bodyY = rows.findIndex(
-        (line, index) =>
-          index >= scroll.y && index < scroll.y + scroll.height && line.includes("USER_BODY"),
-      );
+    const rows = app.captureCharFrame().split("\n");
+    const bodyY = rows.findIndex(
+      (line, index) =>
+        index >= scroll.y && index < scroll.y + scroll.height && line.includes("USER_BODY"),
+    );
     const bodyX = rows[bodyY]!.indexOf("USER_BODY");
+
     expect(cell(bodyX - 1, bodyY).bg.equals(span("USER_BODY").bg)).toBe(true);
     // Plain prose/reasoning start at the viewport edge; user blocks retain one padding cell.
     for (const text of ["THINK_BODY", "AGENT_BODY"]) {
@@ -794,12 +839,14 @@ test("Agent and Thinking omit titles, backgrounds, and indentation while other b
       )!;
       expect(line.indexOf(text)).toBe(app.scroll.content.x);
     }
+
     expect(bodyX).toBe(app.scroll.content.x + 1);
     expect(cell(bodyX, bodyY + 2).bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
     expect(cell(bodyX, bodyY + 3).bg.toInts()).toEqual(uiTheme(app.renderer).colors.panel.toInts());
 
     app.renderer.emit("palette", palette(true));
     await app.render();
+
     const light = texts.map((text) => span(text).bg.toInts().join(","));
     expect(new Set(light).size).toBe(3);
     expect(light).not.toEqual(dark);
@@ -843,9 +890,10 @@ test("Skills show only single-line names and exclude folding while retaining nam
     app.mockInput.pressKey("m");
     await app.render();
 
-    const frame = app.captureCharFrame(),
-      scroll = app.renderer.root.findDescendantById("session-transcript")!;
+    const frame = app.captureCharFrame();
+    const scroll = app.renderer.root.findDescendantById("session-transcript")!;
     const transcriptRows = frame.split("\n").slice(scroll.y, scroll.y + scroll.height);
+
     expect(transcriptRows.filter((line) => line.includes(name))).toHaveLength(1);
     expect(frame).not.toContain(`${name} · complete`);
     expect(frame).not.toContain("OTHER_BODY");
@@ -911,12 +959,18 @@ test.each([false, true])(
     const app = await mount([section(text)]);
     try {
       await app.enter();
-      if (reverse) app.mockInput.pressKey("g", { shift: true });
+      if (reverse) {
+        app.mockInput.pressKey("g", { shift: true });
+      }
+
       app.mockInput.pressKey("v");
       if (reverse) {
         app.mockInput.pressKey("g");
         app.mockInput.pressKey("g");
-      } else app.mockInput.pressKey("g", { shift: true });
+      } else {
+        app.mockInput.pressKey("g", { shift: true });
+      }
+
       await app.copy();
 
       expect(app.copies).toEqual([text]);
@@ -939,8 +993,10 @@ test("Enter on folded sections shows summary cursors and only Ctrl+O toggles fol
     await app.render();
     expect(app.state()?.mode).toBe("text");
     expect(app.captureCharFrame()).not.toContain("FOLDED_DETAIL");
-    const heading = app.body(),
-      cursor = app.renderer.getCursorState();
+
+    const heading = app.body();
+    const cursor = app.renderer.getCursorState();
+
     expect(heading.plainText).toBe("[read] (<C-o> to expand)");
     expect(cursor.visible).toBe(true);
     // Terminal cursor coordinates are one-based; renderable bounds are zero-based.
@@ -1022,12 +1078,17 @@ test("Fold overrides update hints while Ctrl+O respects input attachment and PTY
     await app.render();
 
     expect(app.captureCharFrame()).toContain("CUSTOM_FOLD_DETAIL");
+
     const defaults = defaultKeymap();
-    for (const context of ["transcript", "transcript-text", "transcript-visual"] as const)
+    for (const context of ["transcript", "transcript-text", "transcript-visual"] as const) {
       expect(defaults.hint("transcript.fold", context)).toBe("<C-o>");
+    }
+
     expect(defaults.hint("agent.inspect", "prompt")).toBe("<C-o>");
-    for (const context of ["editor", "terminal"] as const)
+    for (const context of ["editor", "terminal"] as const) {
       expect(defaults.bound("ctrl+o", context)).toBe(false);
+    }
+
     expect(app.prompts).toEqual([]);
   } finally {
     await app.close();
@@ -1050,7 +1111,10 @@ test("Folded-summary and expanded-body cursors stay independent and summary curs
     expect(app.state()?.headingCursors?.message).toBe(2);
     app.mockInput.pressKey("o", { ctrl: true });
     app.mockInput.pressEnter();
-    for (let i = 0; i < 4; i++) app.mockInput.pressKey("l");
+    for (let i = 0; i < 4; i++) {
+      app.mockInput.pressKey("l");
+    }
+
     expect(app.state()?.cursors.message).toBe(4);
 
     app.mockInput.pressKey("o", { ctrl: true });
@@ -1069,6 +1133,7 @@ test("Folded-summary and expanded-body cursors stay independent and summary curs
   } finally {
     await app.close();
   }
+
   const next = await mount(data, { initialWorkViews: preferences! });
   try {
     pressLeader(next, "[");
@@ -1170,8 +1235,9 @@ test("Clicking arrow-free inline summaries selects sections and Enter enters cur
     pressLeader(app, "[");
     app.mockInput.pressKey("HOME");
     await app.render();
-    const lines = app.captureCharFrame().split("\n"),
-      y = lines.findIndex((line) => line.includes("[read] (<C-o> to expand)"));
+
+    const lines = app.captureCharFrame().split("\n");
+    const y = lines.findIndex((line) => line.includes("[read] (<C-o> to expand)"));
     const x = lines[y]!.indexOf("[read]");
 
     await app.mockMouse.click(x, y);

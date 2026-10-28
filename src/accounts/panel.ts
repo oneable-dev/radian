@@ -51,6 +51,7 @@ export type AccountsActions = {
   fallback: () => void;
   keyHint: (command: CommandId, context: KeyContext) => string;
 };
+
 type Candidate = {
   id: string;
   label: string;
@@ -59,7 +60,9 @@ type Candidate = {
   choose: () => void;
   rename?: () => void;
 };
+
 type Stage = "accounts" | "providers" | "methods" | "label" | "rename" | "login" | "delete";
+
 const stageTitles: Record<Stage, string> = {
   accounts: "Accounts",
   providers: "Providers",
@@ -111,8 +114,10 @@ export class AccountsPanel {
   ) {
     // Account list, login body and the focus trap own these native layout subscriptions.
     this.listenerBudget = renderer.getMaxListeners() === 0 ? 0 : 4;
-    if (this.listenerBudget)
+    if (this.listenerBudget) {
       renderer.setMaxListeners(renderer.getMaxListeners() + this.listenerBudget);
+    }
+
     const theme = uiTheme(renderer);
     this.clipboard = new Clipboard(renderer);
     this.root = new BoxRenderable(renderer, {
@@ -190,19 +195,26 @@ export class AccountsPanel {
     this.panel.add(this.details);
     this.panel.add(this.input);
     this.panel.add(this.secret);
-    attachPopupActivity(renderer, this.panel, this.spinner.root, () => ({
-      pending: this.busy,
-      hasContent: this.catalog !== undefined || this.stage !== "accounts",
-      message: "Loading accounts…",
-      body: this.list.visible
-        ? this.layout.results.root
-        : this.details.visible
-          ? this.details
-          : this.input.visible
-            ? this.input
-            : this.panel,
-      anchor: this.list.visible ? this.rows[this.cursor] : undefined,
-    }));
+    attachPopupActivity(renderer, this.panel, this.spinner.root, () => {
+      let body: Renderable;
+      if (this.list.visible) {
+        body = this.layout.results.root;
+      } else if (this.details.visible) {
+        body = this.details;
+      } else if (this.input.visible) {
+        body = this.input;
+      } else {
+        body = this.panel;
+      }
+
+      return {
+        pending: this.busy,
+        hasContent: this.catalog !== undefined || this.stage !== "accounts",
+        message: "Loading accounts…",
+        body,
+        anchor: this.list.visible ? this.rows[this.cursor] : undefined,
+      };
+    });
     this.root.add(this.panel);
     theme.scrollbars(this.list);
     theme.scrollbars(this.details);
@@ -220,21 +232,27 @@ export class AccountsPanel {
     renderer.on("focused_renderable", this.keepFocus);
     this.resize();
   }
+
   get visible(): boolean {
     return !this.disposed && !this.root.isDestroyed && this.root.visible;
   }
+
   get context(): KeyContext {
-    return this.secret.focused || this.input.focused
-      ? "accounts-input"
-      : this.search.focused
-        ? "accounts-search"
-        : "accounts";
+    if (this.secret.focused || this.input.focused) {
+      return "accounts-input";
+    } else if (this.search.focused) {
+      return "accounts-search";
+    } else {
+      return "accounts";
+    }
   }
+
   get focusTargets(): Renderable[] {
     return [this.search, this.list, this.details, this.input, this.secret].filter(
       (node) => node.visible && (node !== this.search || this.search.field.visible),
     );
   }
+
   get shortcuts(): readonly FooterShortcut[] {
     return (
       [
@@ -280,8 +298,12 @@ export class AccountsPanel {
         label,
       }));
   }
+
   show(worktreeId: string): void {
-    if (this.visible || this.disposed) return;
+    if (this.visible || this.disposed) {
+      return;
+    }
+
     this.owner = this.renderer.currentFocusedRenderable ?? undefined;
     this.worktreeId = worktreeId;
     this.epoch++;
@@ -293,15 +315,26 @@ export class AccountsPanel {
     this.menu("accounts", "", []);
     this.search.setCounts(null);
     this.resize();
+
     const cached = this.actions.cached?.(worktreeId);
-    if (cached) this.acceptCatalog(cached);
-    else this.launch(() => this.load());
+    if (cached) {
+      this.acceptCatalog(cached);
+    } else {
+      this.launch(() => this.load());
+    }
   }
+
   updateData(): void {
-    if (!this.visible || !this.worktreeId || this.busy || this.stage !== "accounts") return;
+    if (!this.visible || !this.worktreeId || this.busy || this.stage !== "accounts") {
+      return;
+    }
+
     const cached = this.actions.cached?.(this.worktreeId);
-    if (cached && (!cached.ok || cached.value !== this.catalog)) this.acceptCatalog(cached, true);
+    if (cached && (!cached.ok || cached.value !== this.catalog)) {
+      this.acceptCatalog(cached, true);
+    }
   }
+
   private acceptCatalog(
     result: Result<AccountsCatalog, ExpectedError>,
     preserveSearch = false,
@@ -312,24 +345,33 @@ export class AccountsPanel {
     } else {
       this.catalog = result.value;
       this.main(preserveSearch);
-      if (result.value.warning) this.message.content = result.value.warning;
+      if (result.value.warning) {
+        this.message.content = result.value.warning;
+      }
     }
+
     this.actions.changed();
   }
+
   hide(restore = true): void {
-    if (!this.visible) return;
-    const worktreeId = this.worktreeId,
-      flow = this.flow;
+    if (!this.visible) {
+      return;
+    }
+
+    const worktreeId = this.worktreeId;
+    const flow = this.flow;
     if (
       restore &&
       this.busy &&
       this.activeRequest &&
       ["select", "rename", "delete", "login", "answer"].includes(this.activeRequest)
-    )
+    ) {
       this.actions.notice(
         "Account action is still settling. Closing does not undo an accepted save or selection; reopen /accounts to confirm before retrying.",
         { level: "warning" },
       );
+    }
+
     this.activeRequest = undefined;
     this.epoch++;
     this.root.visible = false;
@@ -344,37 +386,58 @@ export class AccountsPanel {
     this.body.content = "";
     this.opened.clear();
     this.renameTarget = undefined;
-    if (worktreeId && flow?.status === "pending")
+    if (worktreeId && flow?.status === "pending") {
       this.launch(async () => {
         await this.actions.request?.({ type: "cancel", worktreeId, flowId: flow.id });
       });
+    }
+
     const owner = this.owner;
     this.owner = undefined;
+
     let available = !!owner && !owner.isDestroyed;
-    for (let node = owner; node; node = node.parent as Renderable | undefined)
+    for (let node = owner; node; node = node.parent as Renderable | undefined) {
       available &&= node.visible;
-    if (restore) {
-      if (available && owner) owner.focus();
-      else this.actions.fallback();
     }
+    if (restore) {
+      if (available && owner) {
+        owner.focus();
+      } else {
+        this.actions.fallback();
+      }
+    }
+
     this.actions.changed();
   }
+
   updateScope(worktreeId: string | null): void {
-    if (this.visible && worktreeId !== this.worktreeId) this.hide();
+    if (this.visible && worktreeId !== this.worktreeId) {
+      this.hide();
+    }
   }
+
   private launch(operation: () => Promise<void>): void {
     void operation().catch((error) => {
       const message = reportUnexpected(error, "accounts popup");
-      if (this.visible) this.message.content = message;
+      if (this.visible) {
+        this.message.content = message;
+      }
     });
   }
+
   private async perform(request: AccountRequest, refresh = false): Promise<void> {
-    if (!this.actions.request || this.busy) return;
+    if (!this.actions.request || this.busy) {
+      return;
+    }
+
     const epoch = this.epoch;
     this.busy = true;
     this.activeRequest = request.type;
     this.spinner.start();
-    if (request.type === "list") this.search.setCounts(null);
+    if (request.type === "list") {
+      this.search.setCounts(null);
+    }
+
     let result: Result<AccountReply, ExpectedError>;
     try {
       result = await this.actions.request(request, undefined, refresh);
@@ -386,23 +449,30 @@ export class AccountsPanel {
         if (this.pendingReload) {
           this.pendingReload = false;
           queueMicrotask(() => {
-            if (this.visible && epoch === this.epoch) this.launch(() => this.load());
+            if (this.visible && epoch === this.epoch) {
+              this.launch(() => this.load());
+            }
           });
         }
       }
     }
     if (!this.visible || epoch !== this.epoch) {
-      if (result.ok && result.value.kind === "login" && result.value.login.status === "pending")
+      if (result.ok && result.value.kind === "login" && result.value.login.status === "pending") {
         await this.actions.request({
           type: "cancel",
           worktreeId: request.worktreeId,
           flowId: result.value.login.id,
         });
+      }
+
       return;
     }
-    if (request.type === "answer" && this.flow?.id !== request.flowId) return;
+    if (request.type === "answer" && this.flow?.id !== request.flowId) {
+      return;
+    }
     if (!result.ok) {
       this.message.content = `[${result.error.code}] ${result.error.message}`;
+
       return;
     }
     if (result.value.kind === "catalog") {
@@ -410,17 +480,27 @@ export class AccountsPanel {
         this.stage === "accounts" && (request.type === "list" || request.type === "select");
       this.catalog = result.value.catalog;
       this.main(preserveSearch);
+
       const warning = [result.value.warning, this.catalog.warning].filter(Boolean).join(" · ");
-      if (warning) this.message.content = warning;
+      if (warning) {
+        this.message.content = warning;
+      }
     } else {
       this.accept(result.value.login);
-      if (request.type === "login") this.launch(() => this.watch());
+      if (request.type === "login") {
+        this.launch(() => this.watch());
+      }
     }
+
     this.actions.changed();
   }
+
   private async load(refresh = false): Promise<void> {
-    if (this.worktreeId) await this.perform({ type: "list", worktreeId: this.worktreeId }, refresh);
+    if (this.worktreeId) {
+      await this.perform({ type: "list", worktreeId: this.worktreeId }, refresh);
+    }
   }
+
   private menu(
     stage: Stage,
     message: string,
@@ -436,6 +516,7 @@ export class AccountsPanel {
       this.cursor = 0;
       this.filtered = [];
     }
+
     this.secret.clear();
     this.secret.visible = this.input.visible = false;
     this.input.value = "";
@@ -443,17 +524,27 @@ export class AccountsPanel {
     this.body.content = "";
     this.search.field.visible = true;
     this.list.visible = true;
-    if (!preserveSearch) this.search.clear();
+    if (!preserveSearch) {
+      this.search.clear();
+    }
+
     this.filter();
     this.resize();
-    if (!preserveSearch) this.search.focus();
+    if (!preserveSearch) {
+      this.search.focus();
+    }
   }
+
   private main(preserveSearch = false): void {
-    const catalog = this.catalog,
-      worktreeId = this.worktreeId;
-    if (!catalog || !worktreeId) return;
+    const catalog = this.catalog;
+    const worktreeId = this.worktreeId;
+    if (!catalog || !worktreeId) {
+      return;
+    }
+
     this.flow = undefined;
     this.promptId = undefined;
+
     const entries: Candidate[] = [
       {
         id: "add",
@@ -466,7 +557,10 @@ export class AccountsPanel {
     const existing = new Map(
       (catalog.existingAccounts ?? []).map((account) => [account.provider, account]),
     );
-    for (const account of existing.values()) names.set(account.provider, account.name);
+    for (const account of existing.values()) {
+      names.set(account.provider, account.name);
+    }
+
     const providers = new Set([
       ...existing.keys(),
       ...catalog.accounts.map((account) => account.provider),
@@ -497,7 +591,7 @@ export class AccountsPanel {
           rename: () => this.rename(provider, null, label),
         });
       }
-      for (const account of catalog.accounts.filter((account) => account.provider === provider))
+      for (const account of catalog.accounts.filter((account) => account.provider === provider)) {
         entries.push({
           id: account.id,
           accountId: account.id,
@@ -506,7 +600,9 @@ export class AccountsPanel {
           choose: () => choose(account.id),
           rename: () => this.rename(provider, account.id, account.label),
         });
+      }
     }
+
     this.menu(
       "accounts",
       providers.size
@@ -516,6 +612,7 @@ export class AccountsPanel {
       preserveSearch,
     );
   }
+
   private providers(): void {
     this.menu(
       "providers",
@@ -528,6 +625,7 @@ export class AccountsPanel {
       })),
     );
   }
+
   private methods(provider: AccountsCatalog["providers"][number]): void {
     this.provider = provider;
     this.menu(
@@ -554,8 +652,12 @@ export class AccountsPanel {
       })),
     );
   }
+
   private accept(login: LoginView): void {
-    if (this.flow?.id === login.id && this.flow.revision > login.revision) return;
+    if (this.flow?.id === login.id && this.flow.revision > login.revision) {
+      return;
+    }
+
     const first = this.stage !== "login" || this.flow?.id !== login.id;
     this.flow = login;
     if (login.status === "complete") {
@@ -564,8 +666,12 @@ export class AccountsPanel {
         { level: "success" },
       );
       this.main();
-      if (this.busy) this.pendingReload = true;
-      else this.launch(() => this.load());
+      if (this.busy) {
+        this.pendingReload = true;
+      } else {
+        this.launch(() => this.load());
+      }
+
       return;
     }
     if (login.status === "cancelled" || login.status === "error") {
@@ -573,8 +679,10 @@ export class AccountsPanel {
       this.main();
       this.message.content =
         login.error ?? "Login cancelled. Existing accounts and selections were retained.";
+
       return;
     }
+
     this.stage = "login";
     this.search.setTitle(stageTitles.login);
     this.resize();
@@ -586,6 +694,7 @@ export class AccountsPanel {
           .join("\n"),
       )
       .join("\n\n");
+
     const prompt = login.prompt;
     this.message.content =
       prompt?.message ??
@@ -608,21 +717,29 @@ export class AccountsPanel {
       this.input.placeholder = prompt?.placeholder ?? "Enter the requested value";
       this.search.clear();
       this.filter();
-      if (this.secret.visible) this.secret.focus();
-      else if (this.input.visible) this.input.focus();
-      else if (this.search.field.visible) this.search.focus();
-      else this.details.focus();
+      if (this.secret.visible) {
+        this.secret.focus();
+      } else if (this.input.visible) {
+        this.input.focus();
+      } else if (this.search.field.visible) {
+        this.search.focus();
+      } else {
+        this.details.focus();
+      }
     }
     if (this.url && !this.opened.has(this.url)) {
       this.opened.add(this.url);
       this.launch(() => this.openBrowser());
     }
+
     this.actions.changed();
   }
+
   private async watch(): Promise<void> {
     this.watching?.abort();
-    const controller = (this.watching = new AbortController()),
-      epoch = this.epoch;
+
+    const controller = (this.watching = new AbortController());
+    const epoch = this.epoch;
     while (
       this.visible &&
       epoch === this.epoch &&
@@ -641,21 +758,29 @@ export class AccountsPanel {
         controller.signal.aborted ||
         this.flow?.id !== flowId ||
         this.flow.status !== "pending"
-      )
+      ) {
         return;
+      }
       if (!result.ok) {
         this.message.content = `[${result.error.code}] Login status is unknown. Close to cancel, or reopen accounts to check saved accounts.`;
+
         return;
       }
       if (result.value.kind !== "login") {
         this.message.content = "Unexpected login status reply.";
+
         return;
       }
+
       this.accept(result.value.login);
     }
   }
+
   private answer(value: string): void {
-    if (!this.flow?.prompt || !this.worktreeId) return;
+    if (!this.flow?.prompt || !this.worktreeId) {
+      return;
+    }
+
     const promptId = this.flow.prompt.id;
     this.secret.clear();
     this.input.value = "";
@@ -669,8 +794,11 @@ export class AccountsPanel {
       }),
     );
   }
+
   private choose(): void {
-    if (this.busy) return;
+    if (this.busy) {
+      return;
+    }
     if (this.stage === "label" && this.provider && this.worktreeId) {
       const label = this.input.value.trim() || this.provider.name;
       this.input.value = "";
@@ -683,14 +811,17 @@ export class AccountsPanel {
           label,
         }),
       );
+
       return;
     }
     if (this.stage === "rename" && this.renameTarget && this.worktreeId && this.catalog) {
       const label = this.input.value.trim();
       if (!label) {
         this.message.content = "Account label must not be blank.";
+
         return;
       }
+
       const request: AccountRequest = {
         type: "rename",
         worktreeId: this.worktreeId,
@@ -699,29 +830,38 @@ export class AccountsPanel {
         revision: this.catalog.revision,
       };
       this.launch(() => this.perform(request));
+
       return;
     }
     if (this.stage === "login" && (this.secret.visible || this.input.visible)) {
       this.answer(this.secret.visible ? this.secret.value : this.input.value);
+
       return;
     }
+
     this.filtered[this.cursor]?.choose();
   }
+
   private back(): void {
     if (this.stage === "accounts" || this.stage === "login" || this.busy) {
       this.hide();
+
       return;
     }
     if (this.stage === "methods") {
       this.providers();
+
       return;
     }
     if (this.stage === "label" && this.provider) {
       this.methods(this.provider);
+
       return;
     }
+
     this.main();
   }
+
   private rename(provider: string, accountId: string | null, label: string): void {
     this.menu(
       "rename",
@@ -737,13 +877,20 @@ export class AccountsPanel {
     this.input.focus();
     this.paint();
   }
+
   private remove(): void {
-    const accountId = this.filtered[this.cursor]?.accountId,
-      catalog = this.catalog,
-      worktreeId = this.worktreeId;
-    if (this.stage !== "accounts" || !accountId || !catalog || !worktreeId || this.busy) return;
+    const accountId = this.filtered[this.cursor]?.accountId;
+    const catalog = this.catalog;
+    const worktreeId = this.worktreeId;
+    if (this.stage !== "accounts" || !accountId || !catalog || !worktreeId || this.busy) {
+      return;
+    }
+
     const account = catalog.accounts.find((account) => account.id === accountId);
-    if (!account) return;
+    if (!account) {
+      return;
+    }
+
     this.menu(
       "delete",
       `Remove ${singleLine(account.label)} and its saved credential from Radian. This does not delete the service account or conversations.`,
@@ -765,38 +912,53 @@ export class AccountsPanel {
       this.body.content = `Used by these worktrees:\n${account.usedBy.map((id) => singleLine(id)).join("\n")}\n\nSwitch them to another connected account before deleting.`;
     }
   }
+
   private get url(): string | undefined {
     return this.flow?.events.findLast((event) => event.url)?.url;
   }
+
   private get code(): string | undefined {
     return this.flow?.events.findLast((event) => event.code)?.code;
   }
+
   private async openBrowser(): Promise<void> {
-    const url = this.url,
-      epoch = this.epoch;
-    if (!url) return;
+    const url = this.url;
+    const epoch = this.epoch;
+    if (!url) {
+      return;
+    }
+
     const result = await (this.actions.openUrl ?? openLoginUrl)(url);
-    if (this.visible && epoch === this.epoch && !result.ok)
+    if (this.visible && epoch === this.epoch && !result.ok) {
       this.message.content = result.error.message;
+    }
   }
+
   private async copy(code: boolean): Promise<void> {
-    const text = code ? this.code : this.url,
-      epoch = this.epoch;
-    if (!text) return;
+    const text = code ? this.code : this.url;
+    const epoch = this.epoch;
+    if (!text) {
+      return;
+    }
+
     const result = await (this.actions.copy?.(text) ?? this.clipboard.copy(text));
-    if (this.visible && epoch === this.epoch)
+    if (this.visible && epoch === this.epoch) {
       this.message.content = result.ok
         ? code
           ? "Device code copied."
           : "Login URL copied."
         : result.error.message;
+    }
   }
+
   private get rowHeight(): number {
     return this.stage === "providers" || this.stage === "methods" ? 1 : 2;
   }
+
   private filter = (): void => {
-    const matches = createTextMatcher(this.search.value),
-      selected = this.filtered[this.cursor]?.id;
+    const matches = createTextMatcher(this.search.value);
+    const selected = this.filtered[this.cursor]?.id;
+
     this.filtered = this.candidates.filter((candidate) =>
       matches(`${candidate.label} ${candidate.detail}`),
     );
@@ -809,7 +971,10 @@ export class AccountsPanel {
       0,
       this.filtered.findIndex((candidate) => candidate.id === selected),
     );
-    for (const row of this.rows) row.destroyRecursively();
+    for (const row of this.rows) {
+      row.destroyRecursively();
+    }
+
     this.rows.length = 0;
     this.filtered.forEach((candidate, index) => {
       const row = new BoxRenderable(this.renderer, {
@@ -843,26 +1008,37 @@ export class AccountsPanel {
               selectable: false,
             })
           : undefined;
+
       uiTheme(this.renderer).bindStyles(row, (styles) => {
         paintText(label, styles["ui.label"]);
-        if (detail) paintText(detail, styles["ui.muted"]);
+        if (detail) {
+          paintText(detail, styles["ui.muted"]);
+        }
       });
       row.add(label);
-      if (detail) row.add(detail);
+      if (detail) {
+        row.add(detail);
+      }
+
       this.rows.push(row);
       this.list.add(row);
     });
     this.list.scrollTo(0);
     this.paint();
   };
+
   private paint(): void {
-    if (!this.rows) return;
+    if (!this.rows) {
+      return;
+    }
+
     const styles = uiTheme(this.renderer).styles;
     this.rows.forEach((row, index) => {
       row.backgroundColor = styles[index === this.cursor ? "ui.selection" : "ui.popup"].bg;
     });
     this.layout.results.root.visible = this.list.visible;
     this.layout.root.flexGrow = this.layout.candidates.flexGrow = this.list.visible ? 1 : 0;
+
     const noAccounts =
       this.stage === "accounts" &&
       !!this.catalog &&
@@ -871,65 +1047,92 @@ export class AccountsPanel {
       !this.search.value;
     // The add-account candidate remains actionable above the centered setup guidance.
     this.layout.results.empty.root.top = noAccounts ? this.filtered.length * this.rowHeight : 0;
+    let emptyTitle: string | undefined;
+    if (this.list.visible && !this.busy && this.catalog) {
+      if (noAccounts) {
+        emptyTitle = "No connected accounts";
+      } else if (!this.filtered.length) {
+        emptyTitle = this.search.value ? "No matching options" : "No available options";
+      }
+    }
     this.layout.results.showEmpty(
-      this.list.visible && !this.busy && !!this.catalog
-        ? noAccounts
-          ? "No connected accounts"
-          : !this.filtered.length
-            ? this.search.value
-              ? "No matching options"
-              : "No available options"
-            : undefined
-        : undefined,
+      emptyTitle,
       noAccounts ? "Choose Add account to sign in." : undefined,
     );
+
     const row = this.rows[this.cursor];
-    if (row) this.list.scrollChildIntoView(row.id);
+    if (row) {
+      this.list.scrollChildIntoView(row.id);
+    }
+
     this.actions.changed();
   }
+
   command(command: CommandId): void {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
     if (command === "accounts.dismiss") {
       this.back();
+
       return;
     }
     if (command === "accounts.choose") {
       this.choose();
+
       return;
     }
     if (command === "accounts.rename") {
-      if (this.stage === "accounts" && !this.busy) this.filtered[this.cursor]?.rename?.();
+      if (this.stage === "accounts" && !this.busy) {
+        this.filtered[this.cursor]?.rename?.();
+      }
+
       return;
     }
     if (command === "accounts.delete") {
       this.remove();
+
       return;
     }
     if (command === "accounts.refresh") {
-      if (this.stage === "accounts") this.launch(() => this.load(true));
+      if (this.stage === "accounts") {
+        this.launch(() => this.load(true));
+      }
+
       return;
     }
     if (command === "accounts.browser") {
       this.launch(() => this.openBrowser());
+
       return;
     }
     if (command === "accounts.copy-url" || command === "accounts.copy-code") {
       this.launch(() => this.copy(command === "accounts.copy-code"));
+
       return;
     }
     if (command === "accounts.search") {
-      if (this.search.field.visible) this.search.focus();
+      if (this.search.field.visible) {
+        this.search.focus();
+      }
+
       return;
     }
+
     const half = command === "accounts.half-page-up" || command === "accounts.half-page-down";
     const direction =
       command === "accounts.previous" || command === "accounts.half-page-up" ? -1 : 1;
-    if (half && this.search.focused) this.list.focus();
+    if (half && this.search.focused) {
+      this.list.focus();
+    }
     if (this.details.focused) {
       this.details.scrollBy(direction * (half ? halfPageStep(this.details.viewport.height) : 1));
+
       return;
     }
-    if (!this.list.visible || this.busy) return;
+    if (!this.list.visible || this.busy) {
+      return;
+    }
     if (command === "accounts.previous" || command === "accounts.next" || half) {
       this.cursor = Math.max(
         0,
@@ -942,34 +1145,53 @@ export class AccountsPanel {
       this.paint();
     }
   }
+
   private keepFocus = (): void => {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
     for (
       let node = this.renderer.currentFocusedRenderable;
       node;
       node = node.parent as Renderable | null
-    )
-      if (node === this.root) return;
-    (this.secret.visible
-      ? this.secret
-      : this.input.visible
-        ? this.input
-        : this.search.field.visible
-          ? this.search
-          : this.details
-    ).focus();
+    ) {
+      if (node === this.root) {
+        return;
+      }
+    }
+
+    let target: Renderable;
+    if (this.secret.visible) {
+      target = this.secret;
+    } else if (this.input.visible) {
+      target = this.input;
+    } else if (this.search.field.visible) {
+      target = this.search;
+    } else {
+      target = this.details;
+    }
+    target.focus();
   };
+
   private resize = (): void => {
-    if (this.disposed || this.root.isDestroyed) return;
+    if (this.disposed || this.root.isDestroyed) {
+      return;
+    }
+
     const size =
       this.stage === "label" || this.stage === "rename" || this.stage === "delete"
         ? POPUP_SIZES.compact
         : POPUP_SIZES.standard;
     const { height } = centerPopup(this.panel, size, this.renderer.width, this.renderer.height);
+
     this.search.fit(height - 5);
   };
+
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.hide(false);
     this.disposed = true;
     this.watching?.abort();
@@ -978,13 +1200,17 @@ export class AccountsPanel {
     this.search.off(InputRenderableEvents.INPUT, this.filter);
     this.renderer.off("resize", this.resize);
     this.renderer.off("focused_renderable", this.keepFocus);
-    if (!this.root.isDestroyed) this.root.destroyRecursively();
+    if (!this.root.isDestroyed) {
+      this.root.destroyRecursively();
+    }
+
     void this.clipboard
       .dispose()
       .catch((error) => reportUnexpected(error, "account clipboard cleanup"));
-    if (this.listenerBudget)
+    if (this.listenerBudget) {
       this.renderer.setMaxListeners(
         Math.max(1, this.renderer.getMaxListeners() - this.listenerBudget),
       );
+    }
   }
 }

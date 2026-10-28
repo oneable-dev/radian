@@ -15,11 +15,13 @@ import { uiTheme } from "./theme.ts";
 async function mount() {
   const app = await createTestRenderer({ width: 80, height: 6 });
   const icon = new ProviderIcon(app.renderer);
+
   icon.left = 4;
   icon.top = 2;
   icon.setProvider("openai");
   icon.visible = true;
   app.renderer.root.add(icon);
+
   return {
     ...app,
     icon,
@@ -28,6 +30,7 @@ async function mount() {
     },
   };
 }
+
 const capabilities: TerminalCapabilities = {
   kitty_keyboard: false,
   kitty_graphics: true,
@@ -60,8 +63,10 @@ test("Ordinary terminals reserve two cells and draw bold Nerd Font logos instead
 
     expect(app.icon.width).toBe(2);
     expect(app.icon.height).toBe(1);
+
     const line = app.captureCharFrame().split("\n")[2]!;
     expect(line.indexOf(icons.openai)).toBe(4);
+
     const span = app
       .captureSpans()
       .lines[2]!.spans.find((value) => value.text.includes(icons.openai))!;
@@ -99,9 +104,11 @@ test("Graphics terminals send themed OpenTUI images with ink width 1.5 times cha
         imageWidth: image.width,
         protocol: protocol!,
       });
+
       return true;
     },
   );
+
   // Only the terminal capability/transport boundary is substituted; image creation and raster data are real.
   Object.defineProperty(app.renderer, "capabilities", {
     configurable: true,
@@ -124,10 +131,11 @@ test("Graphics terminals send themed OpenTUI images with ink width 1.5 times cha
     expect(paint.height).toBe(1);
     expect(paint.pixelWidth).toBe(20);
     expect(paint.pixelHeight).toBe(20);
-    let min = paint.imageWidth,
-      max = -1;
+
+    let min = paint.imageWidth;
+    let max = -1;
     const background = paint.pixels.slice(0, 3);
-    for (let index = 0; index < paint.pixels.length / 4; index++)
+    for (let index = 0; index < paint.pixels.length / 4; index++) {
       if (
         paint.pixels[index * 4] !== background[0] ||
         paint.pixels[index * 4 + 1] !== background[1] ||
@@ -136,9 +144,12 @@ test("Graphics terminals send themed OpenTUI images with ink width 1.5 times cha
         min = Math.min(min, index % paint.imageWidth);
         max = Math.max(max, index % paint.imageWidth);
       }
+    }
+
     const inkPixels = ((max - min + 1) / paint.imageWidth) * paint.pixelWidth;
     expect(inkPixels / 10).toBeCloseTo(1.5, 2);
     expect(Math.max(...paint.pixels.filter((_, index) => index % 4 === 3))).toBe(255);
+
     const foreground = uiTheme(app.renderer).colors.text.toInts().slice(0, 3);
     expect(
       paint.pixels.some(
@@ -161,6 +172,7 @@ test("Graphics terminals send themed OpenTUI images with ink width 1.5 times cha
       highlightBackground: null,
     });
     await app.renderOnce();
+
     const retinted = paints.at(-1)!;
     expect(
       retinted.pixels.some(
@@ -176,6 +188,7 @@ test("Graphics terminals send themed OpenTUI images with ink width 1.5 times cha
     await app.renderOnce();
     app.icon.destroy();
     expect(app.renderer.listenerCount("capabilities")).toBe(before - 1);
+
     const destroyedPaints = paints.length;
     await app.renderOnce();
     expect(paints).toHaveLength(destroyedPaints);
@@ -191,6 +204,7 @@ test("Late pixel-size responses enable enlarged images on the next frame", async
   const app = await mount();
   let resolution: { width: number; height: number } | null = null;
   const draw = spyOn(OptimizedBuffer.prototype, "drawImage").mockReturnValue(true);
+
   Object.defineProperty(app.renderer, "capabilities", {
     configurable: true,
     get: () => capabilities,
@@ -218,16 +232,17 @@ for (const [status, code, fallback] of [
   [7, "invalid-argument", false],
 ] as const) {
   test(`Native image ${code} uses ${fallback ? "safe glyph fallback" : "original exception reporting"}`, async () => {
-    const app = await mount(),
-      failure = new ImageError(status);
-    const errors: Error[] = [],
-      capture = (event: CliRendererErrorEvent) => {
-        errors.push(event.error);
-      };
+    const app = await mount();
+    const failure = new ImageError(status);
+    const errors: Error[] = [];
+    const capture = (event: CliRendererErrorEvent) => {
+      errors.push(event.error);
+    };
     const allocation = spyOn(NativeImage, "fromRgba").mockImplementation(() => {
       throw failure;
     });
     const warn = spyOn(console, "warn").mockImplementation(() => {});
+
     Object.defineProperty(app.renderer, "capabilities", {
       configurable: true,
       get: () => capabilities,
@@ -264,6 +279,7 @@ for (const [status, code, fallback] of [
 test("Unavailable graphics transport safely falls back to same-position glyphs", async () => {
   const app = await mount();
   const draw = spyOn(OptimizedBuffer.prototype, "drawImage").mockReturnValue(false);
+
   Object.defineProperty(app.renderer, "capabilities", {
     configurable: true,
     get: () => capabilities,

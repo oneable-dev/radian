@@ -13,39 +13,49 @@ import { SearchInput } from "../../ui/search-input.ts";
 import { uiTheme } from "../../ui/theme.ts";
 
 async function mount(actions: Partial<WorkbenchActions> = {}) {
-  const clock = new ManualClock(),
-    app = await createTestRenderer({ width: 120, height: 28, kittyKeyboard: true, clock });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    copies: string[] = [],
-    sent: string[] = [];
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width: 120, height: 28, kittyKeyboard: true, clock });
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const copies: string[] = [];
+  const sent: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession() {},
     onCloseSession() {},
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     getSessionDetails: () => ({ status: null, output: "Transcript", error: null }),
     initialDrafts: { a1: "retained draft" },
     onCopyTranscript: async (text) => {
       copies.push(text);
+
       return ok("Copied message");
     },
     ...actions,
   });
   const render = async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
+    for (let i = 0; i < 8; i++) {
+      await Promise.resolve();
+    }
+
     await app.renderOnce();
     await app.renderOnce();
   };
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
+
   await render();
   get("session-prompt").focus();
   await render();
+
   return {
     ...app,
     clock,
@@ -73,14 +83,19 @@ function selected(app: Awaited<ReturnType<typeof mount>>): string {
       node instanceof BoxRenderable &&
       node.id.startsWith("messages-row:") &&
       node.backgroundColor?.equals(uiTheme(app.renderer).styles["ui.selection"].bg!)
-    )
+    ) {
       return (node.getChildren()[0] as TextRenderable).plainText;
+    }
     for (const child of node.getChildren()) {
       const found = visit(child);
-      if (found) return found;
+      if (found) {
+        return found;
+      }
     }
+
     return undefined;
   };
+
   return visit(list) ?? "";
 }
 
@@ -90,8 +105,8 @@ test.each([undefined, "info"] as const)(
     // Routine navigation feedback must not cover work or accumulate in message history.
     const app = await mount();
     try {
-      const prompt = app.get("session-prompt") as PromptInput,
-        caret = prompt.cursorOffset;
+      const prompt = app.get("session-prompt") as PromptInput;
+      const caret = prompt.cursorOffset;
 
       // Both unclassified notices and explicitly informational notices are discarded.
       app.view.notify("No matching text", level ? { level } : undefined);
@@ -171,7 +186,9 @@ test.each(["info", "warning", "error"] as const)(
       if (level === "info") {
         expect(app.captureCharFrame()).toContain("No messages yet");
         expect(app.captureCharFrame()).not.toContain("Extension feedback");
-      } else expect(selected(app)).toContain("Extension feedback");
+      } else {
+        expect(selected(app)).toContain("Extension feedback");
+      }
     } finally {
       await app.close();
     }
@@ -180,12 +197,13 @@ test.each(["info", "warning", "error"] as const)(
 
 test("Expired failure notifications remain searchable with full details and restore draft/caret on close", async () => {
   // Toast lifetime must not determine whether the full failure can still be inspected.
-  const app = await mount(),
-    original =
-      "Connection failed\n" + "Detailed cause. ".repeat(300) + "\nFINAL RECOVERY INSTRUCTION";
+  const app = await mount();
+  const original =
+    "Connection failed\n" + "Detailed cause. ".repeat(300) + "\nFINAL RECOVERY INSTRUCTION";
   try {
     const prompt = app.get("session-prompt") as PromptInput;
     app.mockInput.pressArrow("left");
+
     const caret = prompt.cursorOffset;
     app.view.notify(original, { level: "error", source: "Editor" });
     await app.render();
@@ -228,12 +246,15 @@ test.each([120, 60])(
     // Every candidate matches the query so navigation can be checked without query-dependent ambiguity.
     const app = await mount();
     try {
-      for (let index = 0; index < 30; index++)
+      for (let index = 0; index < 30; index++) {
         app.view.notify(`needle-${String(index).padStart(2, "0")}`, { level: "warning" });
+      }
+
       app.clock.advance(100000);
       app.resize(width, 24);
       app.open();
       await app.render();
+
       const search = app.get("messages-search") as SearchInput;
       await app.mockInput.typeText("needle");
       app.mockInput.pressKey("n", { ctrl: true });
@@ -244,10 +265,12 @@ test.each([120, 60])(
       app.mockInput.pressArrow("down");
       await app.render();
       expect(selected(app)).toContain("needle-28");
+
       const caret = search.cursorOffset;
 
       app.mockInput.pressKey("d", { ctrl: true });
       await app.render();
+
       const after = selected(app);
       expect(after).not.toContain("needle-28");
       expect(app.renderer.currentFocusedRenderable?.id).toBe("messages-list");
@@ -344,6 +367,7 @@ test("Session failures remain readable after session closure without acknowledgi
     }),
     onAcknowledge: async (id) => {
       acknowledged.push(id);
+
       return ok(undefined);
     },
   });
@@ -392,12 +416,16 @@ test("Held Enter/Esc never resubmits or interrupts work after message focus tran
     getSessionDetails: () => ({ status: "working", output: "Working", error: null }),
     onInterrupt: async () => {
       interruptions++;
+
       return ok(undefined);
     },
   });
   const raw = (event: string) => {
     const key = parseKeypress(event, { useKittyKeyboard: true });
-    if (!key) throw new Error("Invalid Kitty key");
+    if (!key) {
+      throw new Error("Invalid Kitty key");
+    }
+
     app.renderer.keyInput.processParsedKey(key);
   };
   try {
@@ -429,8 +457,8 @@ test("Held Enter/Esc never resubmits or interrupts work after message focus tran
 
 test("Long previews stay bounded through resize while copying retains the complete original", async () => {
   // Native list buffers need only a viewport-wide preview, not thousands of source characters.
-  const app = await mount(),
-    original = "한글 👩🏽‍💻 diagnostic ".repeat(1000);
+  const app = await mount();
+  const original = "한글 👩🏽‍💻 diagnostic ".repeat(1000);
   try {
     app.view.notify(original, { level: "error" });
     app.open();
@@ -438,16 +466,20 @@ test("Long previews stay bounded through resize while copying retains the comple
     for (const width of [120, 60, 120]) {
       app.resize(width, 24);
       await app.render();
+
       const preview = selected(app);
       expect(preview).toContain("…");
-      for (const line of preview.split("\n"))
+      for (const line of preview.split("\n")) {
         expect(Bun.stringWidth(line)).toBeLessThanOrEqual(app.get("messages-panel").width - 2);
+      }
     }
+
     app.mockInput.pressKey("y", { ctrl: true });
     await app.render();
 
     expect(app.copies).toEqual([original]);
     expect(app.get("session-notifications").visible).toBe(false);
+
     const listeners = app.renderer.listenerCount("focused_renderable");
     app.get("messages").destroyRecursively();
     expect(app.renderer.listenerCount("focused_renderable")).toBe(listeners - 1);

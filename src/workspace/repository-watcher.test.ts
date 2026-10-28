@@ -10,34 +10,49 @@ import { err, type Result } from "../result.ts";
 import type { ExpectedError } from "../errors.ts";
 
 function changes() {
-  const values: Result<Repository, ExpectedError>[] = [],
-    errors: unknown[] = [];
+  const values: Result<Repository, ExpectedError>[] = [];
+  const errors: unknown[] = [];
   const listeners = new Set<() => void>();
+
   return {
     values,
     errors,
     receive(result: Result<Repository, ExpectedError>) {
       values.push(result);
-      for (const listener of listeners) listener();
+      for (const listener of listeners) {
+        listener();
+      }
     },
     unexpected(error: unknown) {
       errors.push(error);
-      for (const listener of listeners) listener();
+      for (const listener of listeners) {
+        listener();
+      }
     },
     async until(predicate: () => boolean): Promise<void> {
-      if (predicate()) return;
+      if (predicate()) {
+        return;
+      }
+
       await new Promise<void>((resolve, reject) => {
         const done = () => {
-          if (!predicate() && !errors.length) return;
+          if (!predicate() && !errors.length) {
+            return;
+          }
+
           clearTimeout(timer);
           listeners.delete(done);
-          if (errors.length) reject(errors[0]);
-          else resolve();
+          if (errors.length) {
+            reject(errors[0]);
+          } else {
+            resolve();
+          }
         };
         const timer = setTimeout(() => {
           listeners.delete(done);
           reject(new Error("Git metadata event was not observed."));
         }, 5000);
+
         listeners.add(done);
         done();
       });
@@ -52,14 +67,15 @@ function changes() {
 
 test("Real Git registration/linked HEAD changes detect without depending on deleted startup paths", async () => {
   // Start from a linked checkout; its .git is a file, not the directory being watched.
-  const fixture = await createWorktreeFixture(),
-    observed = changes();
+  const fixture = await createWorktreeFixture();
+  const observed = changes();
   const repository = expectOk(await discoverRepository(fixture.feature));
   const watcher = new RepositoryWatcher(repository, observed.receive, observed.unexpected, {
     debounceMs: 10,
   });
   try {
     expectOk(await watcher.start());
+
     const added = join(fixture.directory, "new checkout");
 
     // External Git commands, rather than app actions, invalidate the shared catalog.
@@ -93,11 +109,14 @@ test("Real Git registration/linked HEAD changes detect without depending on dele
 });
 
 test("Watchers detect first worktrees and registration-directory recreation when initially absent", async () => {
-  const fixture = await createWorktreeFixture(),
-    observed = changes();
+  const fixture = await createWorktreeFixture();
+  const observed = changes();
+
   await fixture.git(fixture.main, ["worktree", "remove", "--force", fixture.feature]);
+
   const root = join(fixture.repository.id, "worktrees");
   await rm(root, { recursive: true, force: true });
+
   const initial = expectOk(await discoverRepository(fixture.main));
   const watcher = new RepositoryWatcher(initial, observed.receive, observed.unexpected, {
     debounceMs: 10,
@@ -105,8 +124,10 @@ test("Watchers detect first worktrees and registration-directory recreation when
   try {
     // Only the parent common-directory watch can observe the first registration directory.
     expectOk(await watcher.start());
-    const first = join(fixture.directory, "first"),
-      second = join(fixture.directory, "second");
+
+    const first = join(fixture.directory, "first");
+    const second = join(fixture.directory, "second");
+
     await fixture.git(fixture.main, ["worktree", "add", "-b", "feature/first", first]);
     await observed.until(() => observed.includes(first));
 
@@ -125,8 +146,8 @@ test("Watchers detect first worktrees and registration-directory recreation when
 });
 
 test("Discovery failures never publish empty lists and recover on subsequent Git events", async () => {
-  const fixture = await createWorktreeFixture(),
-    observed = changes();
+  const fixture = await createWorktreeFixture();
+  const observed = changes();
   let fail = true;
   const watcher = new RepositoryWatcher(fixture.repository, observed.receive, observed.unexpected, {
     debounceMs: 10,
@@ -158,13 +179,13 @@ test("Discovery failures never publish empty lists and recover on subsequent Git
 });
 
 test("Events during discovery serialize rescans and disposal suppresses publication", async () => {
-  const fixture = await createWorktreeFixture(),
-    observed = changes();
-  const entered = Promise.withResolvers<void>(),
-    release = Promise.withResolvers<void>();
-  let calls = 0,
-    active = 0,
-    maximum = 0;
+  const fixture = await createWorktreeFixture();
+  const observed = changes();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let calls = 0;
+  let active = 0;
+  let maximum = 0;
   const watcher = new RepositoryWatcher(fixture.repository, observed.receive, observed.unexpected, {
     debounceMs: 10,
     discover: async (cwd) => {
@@ -194,6 +215,7 @@ test("Events during discovery serialize rescans and disposal suppresses publicat
       ),
     );
     await watcher.stop();
+
     const published = observed.values.length;
 
     // A closed watcher has no timers or callbacks left that can publish later mutations.
@@ -210,15 +232,16 @@ test("Events during discovery serialize rescans and disposal suppresses publicat
 
 test("Disposal waits for active Git queries without late updates to closed screens", async () => {
   // The scan has started, but the caller has not yet received its changed metadata.
-  const fixture = await createWorktreeFixture(),
-    observed = changes();
-  const entered = Promise.withResolvers<void>(),
-    release = Promise.withResolvers<void>();
+  const fixture = await createWorktreeFixture();
+  const observed = changes();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
   const watcher = new RepositoryWatcher(fixture.repository, observed.receive, observed.unexpected, {
     debounceMs: 10,
     discover: async (cwd) => {
       entered.resolve();
       await release.promise;
+
       return discoverRepository(cwd);
     },
   });

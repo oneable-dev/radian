@@ -18,7 +18,9 @@ export const promptPartSchema = Type.Union([
     { additionalProperties: false },
   ),
 ]);
+
 export type PromptPart = Static<typeof promptPartSchema>;
+
 export const promptDraftSchema = Type.Object(
   {
     value: Type.String(),
@@ -37,41 +39,59 @@ export const promptDraftSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
 export type PromptDraft = Static<typeof promptDraftSchema>;
+
 export type PromptSubmission = { text: string; images: string[] };
 
 export function promptPartLabel(part: PromptPart): string {
-  if (part.kind !== "paste") return `[${part.kind === "image" ? "Image" : "File"} #${part.index}]`;
+  if (part.kind !== "paste") {
+    return `[${part.kind === "image" ? "Image" : "File"} #${part.index}]`;
+  }
+
   let count = 0;
-  for (const _character of part.text) count++;
+  for (const _character of part.text) {
+    count++;
+  }
+
   return `[Pasted Content ${count} chars]`;
 }
+
 export function validatePromptDraft(value: unknown): Result<PromptDraft, InputError> {
-  if (!Value.Check(promptDraftSchema, value)) return err(new InputError("Malformed input draft."));
+  if (!Value.Check(promptDraftSchema, value)) {
+    return err(new InputError("Malformed input draft."));
+  }
+
   let end = 0;
   for (const token of value.tokens) {
-    if (token.part.kind !== "paste" && token.part.path.includes("\0"))
+    if (token.part.kind !== "paste" && token.part.path.includes("\0")) {
       return err(new InputError("Attachment paths must not contain NUL bytes."));
+    }
     if (
       token.start < end ||
       token.end <= token.start ||
       token.end > value.value.length ||
       value.value.slice(token.start, token.end) !== promptPartLabel(token.part) ||
       token.part.index >= value.next[token.part.kind]
-    )
+    ) {
       return err(new InputError("Input draft attachment ranges are inconsistent."));
+    }
+
     end = token.end;
   }
+
   return value.cursor <= value.value.length
     ? ok(value)
     : err(new InputError("Input draft cursor is outside the text."));
 }
+
 export function expandPromptDraft(draft: PromptDraft, inlineImages = true): PromptSubmission {
-  let text = "",
-    offset = 0;
+  let text = "";
+  let offset = 0;
   const images: string[] = [];
   for (const token of draft.tokens) {
     text += draft.value.slice(offset, token.start);
+
     const part = token.part;
     switch (part.kind) {
       case "paste":
@@ -84,13 +104,18 @@ export function expandPromptDraft(draft: PromptDraft, inlineImages = true): Prom
         if (inlineImages) {
           text += promptPartLabel(part);
           images.push(part.path);
-        } else text += `@${JSON.stringify(part.path)}`;
+        } else {
+          text += `@${JSON.stringify(part.path)}`;
+        }
         break;
     }
+
     offset = token.end;
   }
+
   return { text: text + draft.value.slice(offset), images };
 }
+
 export function collapsedPaste(text: string): boolean {
   // Collapse representation, never data. Control sequences also stay out of the terminal surface.
   return (

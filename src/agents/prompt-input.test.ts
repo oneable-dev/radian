@@ -21,8 +21,10 @@ test("Attachment markers must match source ranges and reject fake or overlapping
   const valid = draft();
   valid.cursor = valid.value.length;
   expect(validatePromptDraft(valid).ok).toBe(true);
+
   const overlap = structuredClone(valid);
   overlap.tokens[1]!.start = 4;
+
   const fake = structuredClone(valid);
   fake.value = fake.value.replace("File", "Fake");
 
@@ -35,6 +37,7 @@ test("Attachment markers must match source ranges and reject fake or overlapping
 test("Image order and file references survive with real paths in legacy drafts", () => {
   const input = draft();
   input.cursor = input.value.length;
+
   const original = structuredClone(input);
 
   expect(expandPromptDraft(input)).toEqual({

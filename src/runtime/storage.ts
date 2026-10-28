@@ -47,6 +47,7 @@ export function runtimePaths(
   const directory = join(resolve(stateRoot), "workspaces", key);
   // Keep the address below macOS's Unix socket path limit, even with long state-directory names.
   const endpoint = join("/tmp", `radian-${process.getuid?.() ?? "user"}`);
+
   return {
     directory,
     socket: join(endpoint, `${key}.sock`),
@@ -67,6 +68,7 @@ export function daemonPaths(
     .slice(0, 32);
   const directory = join(resolve(stateRoot), "daemon", offline ? "offline" : "live");
   const endpoint = join("/tmp", `radian-${process.getuid?.() ?? "user"}`);
+
   return {
     directory,
     socket: join(endpoint, `${key}.sock`),
@@ -78,6 +80,7 @@ export function daemonPaths(
 
 export async function privateDirectory(path: string): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 });
+
   const stat = await lstat(path);
   if (
     !stat.isDirectory() ||
@@ -86,6 +89,7 @@ export async function privateDirectory(path: string): Promise<void> {
   ) {
     throw new StorageError(`Runtime directory is not owned by this user: ${path}`);
   }
+
   await chmod(path, 0o700);
 }
 
@@ -112,7 +116,9 @@ const storedManifestSchema = Type.Object({
   storageVersion: Type.Literal(2),
   records: Type.Array(snapshotIndexSchema),
 });
+
 type SnapshotIndex = Static<typeof snapshotIndexSchema>;
+
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 const snapshotKey = (record: SessionRecord) => digest(sessionRecordKey(record));
 
@@ -125,6 +131,7 @@ export class RuntimeStore implements SessionSnapshotSource {
   private initialized = false;
   private repositoryId: string | undefined;
   private metadata: Omit<RuntimeManifest, "records"> | undefined;
+
   constructor(readonly paths: RuntimePaths) {}
 
   listSessions(worktreeId: string): readonly SessionSnapshotInfo[] {
@@ -133,6 +140,7 @@ export class RuntimeStore implements SessionSnapshotSource {
         entry.worktreeId === worktreeId && !entry.cleanupPending && entry.expiredAt === undefined,
     );
   }
+
   async readSession(
     worktreeId: string,
     conversationId: string,
@@ -141,32 +149,49 @@ export class RuntimeStore implements SessionSnapshotSource {
       (entry) =>
         entry.worktreeId === worktreeId && (entry.conversationId ?? entry.id) === conversationId,
     );
+
     return entry && !entry.cleanupPending && entry.expiredAt === undefined
       ? this.readRecord(entry)
       : ok(null);
   }
+
   isExpired(worktreeId: string, conversationId: string): boolean {
     const entry = this.entries.get(digest(JSON.stringify([worktreeId, conversationId])));
+
     return !!entry && (!!entry.cleanupPending || entry.expiredAt !== undefined);
   }
+
   private async readRecord(entry: SnapshotIndex): Promise<Result<SessionRecord, ExpectedError>> {
     const legacy = this.legacy.get(entry.key);
-    if (legacy) return ok(legacy);
+    if (legacy) {
+      return ok(legacy);
+    }
+
     const read = await capture(() =>
       readFile(join(this.paths.directory, "sessions", `${entry.key}.json`), "utf8"),
     );
-    if (!read.ok) return read;
+    if (!read.ok) {
+      return read;
+    }
+
     const parsed = parseJson(read.value, "session snapshot");
-    if (!parsed.ok)
+    if (!parsed.ok) {
       return err(
         new StorageError("Invalid session snapshot; original file was not replaced.", undefined, {
           cause: parsed.error,
         }),
       );
-    if (!Value.Check(sessionRecordSchema, parsed.value) || snapshotKey(parsed.value) !== entry.key)
+    }
+    if (
+      !Value.Check(sessionRecordSchema, parsed.value) ||
+      snapshotKey(parsed.value) !== entry.key
+    ) {
       return err(new StorageError("Invalid or mismatched session snapshot."));
+    }
+
     const lifecycle =
       entry.lifecycle === "closed" || parsed.value.lifecycle === "closed" ? "closed" : "open";
+
     return ok({
       ...parsed.value,
       lifecycle,
@@ -178,51 +203,71 @@ export class RuntimeStore implements SessionSnapshotSource {
   async load(repositoryId: string): Promise<Result<RuntimeManifest | null, ExpectedError>> {
     const read = await capture(() => readFile(this.paths.manifest, "utf8"));
     if (!read.ok) {
-      if (!(read.error instanceof StorageError) || read.error.systemCode !== "ENOENT") return read;
+      if (!(read.error instanceof StorageError) || read.error.systemCode !== "ENOENT") {
+        return read;
+      }
+
       this.entries.clear();
       this.legacy.clear();
       this.metadata = undefined;
       this.initialized = true;
       this.repositoryId = repositoryId;
+
       return ok(null);
     }
+
     const parsed = parseJson(read.value, "runtime manifest");
-    if (!parsed.ok)
+    if (!parsed.ok) {
       return err(
         new StorageError("Invalid runtime manifest; original file was not replaced.", undefined, {
           cause: parsed.error,
         }),
       );
+    }
+
     const value = parsed.value;
     const indexed = value !== null && typeof value === "object" && "storageVersion" in value;
     if (indexed) {
-      if (!Value.Check(storedManifestSchema, value))
+      if (!Value.Check(storedManifestSchema, value)) {
         return err(new StorageError("Invalid runtime manifest; original file was not replaced."));
-      if (value.repositoryId !== repositoryId)
+      }
+      if (value.repositoryId !== repositoryId) {
         return err(new StorageError("Runtime manifest belongs to another repository."));
+      }
+
       const entries = new Map<string, SnapshotIndex>();
       for (const entry of value.records) {
         if (
           entry.key !==
             digest(JSON.stringify([entry.worktreeId, entry.conversationId ?? entry.id])) ||
           entries.has(entry.key)
-        )
+        ) {
           return err(new StorageError("Invalid session snapshot index."));
+        }
+
         entries.set(entry.key, {
           ...entry,
           closedAt: entry.lifecycle === "open" ? null : (entry.closedAt ?? Date.now()),
         });
       }
+
       this.entries = entries;
       this.legacy.clear();
+
       const records: SessionRecord[] = [];
-      for (const entry of entries.values())
+      for (const entry of entries.values()) {
         if (entry.lifecycle === "open") {
           const record = await this.readRecord(entry);
-          if (!record.ok) return record;
+          if (!record.ok) {
+            return record;
+          }
           // A close written before an interrupted index update must never reopen a conversation.
-          if (record.value.lifecycle !== "closed") records.push(record.value);
+          if (record.value.lifecycle !== "closed") {
+            records.push(record.value);
+          }
         }
+      }
+
       this.initialized = true;
       this.repositoryId = repositoryId;
       this.metadata = {
@@ -231,22 +276,29 @@ export class RuntimeStore implements SessionSnapshotSource {
         repositories: value.repositories,
         preferences: value.preferences,
       };
+
       return ok({ ...this.metadata, records });
     }
-    if (!Value.Check(manifestSchema, value) || value.repositoryId !== repositoryId)
+    if (!Value.Check(manifestSchema, value) || value.repositoryId !== repositoryId) {
       return err(new StorageError("Invalid runtime manifest; original file was not replaced."));
+    }
+
     this.entries.clear();
     this.legacy.clear();
     for (const record of value.records) {
       const normalized = this.normalize(record);
       const entry = this.describe(normalized);
+
       this.entries.set(entry.key, entry);
       this.legacy.set(entry.key, normalized);
     }
+
     this.initialized = true;
     this.repositoryId = repositoryId;
+
     const { records: _records, ...metadata } = value;
     this.metadata = metadata;
+
     return ok({
       ...metadata,
       records: value.records
@@ -257,6 +309,7 @@ export class RuntimeStore implements SessionSnapshotSource {
 
   private normalize(record: SessionRecord, previous?: SnapshotIndex): SessionRecord {
     const lifecycle = record.lifecycle ?? "open";
+
     return {
       ...record,
       lifecycle,
@@ -264,6 +317,7 @@ export class RuntimeStore implements SessionSnapshotSource {
       closedAt: lifecycle === "open" ? null : (record.closedAt ?? previous?.closedAt ?? Date.now()),
     };
   }
+
   private describe(record: SessionRecord, previous?: SnapshotIndex): SnapshotIndex {
     const { updatedAt: _updatedAt, ...data } = record;
     const revision = digest(JSON.stringify({ ...data, lifecycle: data.lifecycle ?? "open" }));
@@ -274,6 +328,7 @@ export class RuntimeStore implements SessionSnapshotSource {
     )
       .replace(/\s+/g, " ")
       .slice(0, 120);
+
     return {
       key: snapshotKey(record),
       revision,
@@ -298,15 +353,21 @@ export class RuntimeStore implements SessionSnapshotSource {
     const task = this.tail.then(() => this.saveNext(manifest));
     // Expected failures are values: later writes may recover. Unknown exceptions stay rejected.
     this.tail = task;
+
     return task;
   }
+
   private async saveNext(manifest: RuntimeManifest): Promise<Result<void, ExpectedError>> {
     if (!this.initialized) {
       const loaded = await this.load(manifest.repositoryId);
-      if (!loaded.ok) return loaded;
+      if (!loaded.ok) {
+        return loaded;
+      }
     }
-    if (this.repositoryId !== manifest.repositoryId)
+    if (this.repositoryId !== manifest.repositoryId) {
       return err(new StorageError("Cannot save a different repository into this runtime store."));
+    }
+
     const incoming = new Map(
       manifest.records
         .filter(
@@ -337,10 +398,13 @@ export class RuntimeStore implements SessionSnapshotSource {
         .map((entry) => entry.key),
     );
     // Missing open records become closed, not deleted; ordinary checkpoints never rewrite old closed bodies.
-    for (const entry of this.entries.values())
+    for (const entry of this.entries.values()) {
       if (!incoming.has(entry.key) && !adopted.has(entry.key) && entry.lifecycle === "open") {
         const record = await this.readRecord(entry);
-        if (!record.ok) return record;
+        if (!record.ok) {
+          return record;
+        }
+
         incoming.set(entry.key, {
           ...record.value,
           lifecycle: "closed",
@@ -348,12 +412,22 @@ export class RuntimeStore implements SessionSnapshotSource {
           updatedAt: Date.now(),
         });
       }
-    for (const [key, record] of this.legacy)
-      if (!incoming.has(key) && !adopted.has(key)) incoming.set(key, record);
+    }
+    for (const [key, record] of this.legacy) {
+      if (!incoming.has(key) && !adopted.has(key)) {
+        incoming.set(key, record);
+      }
+    }
+
     const next = new Map(this.entries);
-    for (const key of adopted) next.delete(key);
+    for (const key of adopted) {
+      next.delete(key);
+    }
+
     const saved = await capture(async () => {
-      if (incoming.size) await privateDirectory(join(this.paths.directory, "sessions"));
+      if (incoming.size) {
+        await privateDirectory(join(this.paths.directory, "sessions"));
+      }
       for (const [key, record] of incoming) {
         const entry = this.describe(record, this.entries.get(key));
         if (this.legacy.has(key) || entry.revision !== this.entries.get(key)?.revision) {
@@ -362,27 +436,40 @@ export class RuntimeStore implements SessionSnapshotSource {
             JSON.stringify({ ...record, lifecycle: entry.lifecycle, updatedAt: entry.updatedAt }),
           );
         }
+
         next.set(key, entry);
       }
+
       await atomicWrite(
         this.paths.manifest,
         JSON.stringify({ ...manifest, storageVersion: 2, records: [...next.values()] }),
       );
     });
-    if (!saved.ok) return saved;
+    if (!saved.ok) {
+      return saved;
+    }
+
     this.entries = next;
     this.legacy.clear();
+
     const { records: _records, ...metadata } = manifest;
     this.metadata = metadata;
+
     // Newly closed empty/deleted conversations must not accumulate preview-only bodies.
     // Publish closed intent first so a cleanup failure can never reopen an old snapshot.
     const failures: ExpectedError[] = [];
     for (const key of incoming.keys()) {
       const entry = this.entries.get(key);
-      if (!entry) continue;
+      if (!entry) {
+        continue;
+      }
+
       const pruned = await this.pruneOrphanedEntry(entry);
-      if (!pruned.ok) failures.push(pruned.error);
+      if (!pruned.ok) {
+        failures.push(pruned.error);
+      }
     }
+
     return failures.length
       ? err(new CleanupError("Closed-session snapshot cleanup partially failed.", failures))
       : ok(undefined);
@@ -395,27 +482,39 @@ export class RuntimeStore implements SessionSnapshotSource {
   ): Promise<Result<number, ExpectedError>> {
     const task = this.tail.then(() => this.pruneNext(days, reserve, now));
     this.tail = task;
+
     return task;
   }
+
   private async publishIndex(
     next: Map<string, SnapshotIndex>,
   ): Promise<Result<void, ExpectedError>> {
-    if (!this.metadata) return ok(undefined);
+    if (!this.metadata) {
+      return ok(undefined);
+    }
+
     const saved = await capture(() =>
       atomicWrite(
         this.paths.manifest,
         JSON.stringify({ ...this.metadata, storageVersion: 2, records: [...next.values()] }),
       ),
     );
-    if (saved.ok) this.entries = next;
+    if (saved.ok) {
+      this.entries = next;
+    }
+
     return saved;
   }
+
   private async pruneNext(
     days: number | null,
     reserve: (snapshot: SessionSnapshotInfo, canonicalFile?: string) => (() => void) | null,
     now: number,
   ): Promise<Result<number, ExpectedError>> {
-    if (!this.initialized || !this.metadata) return ok(0);
+    if (!this.initialized || !this.metadata) {
+      return ok(0);
+    }
+
     let removed = 0;
     const failures: ExpectedError[] = [];
     // Publishing a pruned index replaces the live map during this sweep.
@@ -433,12 +532,18 @@ export class RuntimeStore implements SessionSnapshotSource {
       if (
         !entry.cleanupPending &&
         (entry.expiredAt !== undefined || !sessionExpired(entry, days, now))
-      )
+      ) {
         continue;
+      }
+
       const result = await this.pruneEntry(entry, reserve, now);
-      if (result.ok) removed += result.value;
-      else failures.push(result.error);
+      if (result.ok) {
+        removed += result.value;
+      } else {
+        failures.push(result.error);
+      }
     }
+
     return failures.length
       ? err(
           new CleanupError(
@@ -448,96 +553,138 @@ export class RuntimeStore implements SessionSnapshotSource {
         )
       : ok(removed);
   }
+
   private async pruneOrphanedEntry(
     entry: SnapshotIndex,
     reserve?: (snapshot: SessionSnapshotInfo, canonicalFile?: string) => (() => void) | null,
   ): Promise<Result<number, ExpectedError>> {
-    if (entry.lifecycle !== "closed" || entry.cleanupPending || entry.expiredAt !== undefined)
+    if (entry.lifecycle !== "closed" || entry.cleanupPending || entry.expiredAt !== undefined) {
       return ok(0);
+    }
+
     const sessionFile = entry.sessionFile;
     if (sessionFile) {
       const found = await capture(() => lstat(sessionFile));
-      if (found.ok) return ok(0);
+      if (found.ok) {
+        return ok(0);
+      }
       // Only definite absence authorizes removal; permission and other I/O failures stay visible.
-      if (!(found.error instanceof StorageError) || found.error.systemCode !== "ENOENT")
+      if (!(found.error instanceof StorageError) || found.error.systemCode !== "ENOENT") {
         return found;
+      }
     }
+
     const release = reserve?.(entry, entry.sessionFile);
-    if (reserve && !release) return ok(0);
+    if (reserve && !release) {
+      return ok(0);
+    }
     try {
       // Keep the closed index until unlink succeeds, so an interrupted cleanup remains retryable.
       const removed = await removeRetentionFile(
         join(this.paths.directory, "sessions", `${entry.key}.json`),
       );
-      if (!removed.ok) return removed;
+      if (!removed.ok) {
+        return removed;
+      }
+
       const next = new Map(this.entries);
       next.delete(entry.key);
+
       const saved = await this.publishIndex(next);
-      if (!saved.ok) return saved;
+      if (!saved.ok) {
+        return saved;
+      }
+
       this.legacy.delete(entry.key);
+
       return ok(1);
     } finally {
       release?.();
     }
   }
+
   private async pruneEntry(
     entry: SnapshotIndex,
     reserve: (snapshot: SessionSnapshotInfo, canonicalFile?: string) => (() => void) | null,
     now: number,
   ): Promise<Result<number, ExpectedError>> {
-    if (entry.managed !== true || entry.lifecycle !== "closed" || entry.closedAt == null)
+    if (entry.managed !== true || entry.lifecycle !== "closed" || entry.closedAt == null) {
       return ok(0);
+    }
     if (!entry.cleanupPending) {
       const record = await this.readRecord(entry);
-      if (!record.ok) return record;
+      if (!record.ok) {
+        return record;
+      }
       if (
         record.value.managed !== true ||
         record.value.closedAt !== entry.closedAt ||
         record.value.updatedAt !== entry.updatedAt
-      )
+      ) {
         return ok(0);
+      }
     }
+
     const inspected = await inspectRetainedFile(entry);
-    if (!inspected.ok) return inspected;
-    if (inspected.value.kind === "changed") return ok(0);
+    if (!inspected.ok) {
+      return inspected;
+    }
+    if (inspected.value.kind === "changed") {
+      return ok(0);
+    }
+
     const release = reserve(
       entry,
       inspected.value.kind === "ready" ? inspected.value.path : undefined,
     );
-    if (!release) return ok(0);
+    if (!release) {
+      return ok(0);
+    }
     try {
       // A durable marker hides the record from JSONL fallback and lets an interrupted deletion finish.
       const pending = { ...entry, cleanupPending: true };
       if (!entry.cleanupPending) {
         const marked = new Map(this.entries);
         marked.set(entry.key, pending);
+
         const saved = await this.publishIndex(marked);
-        if (!saved.ok) return saved;
+        if (!saved.ok) {
+          return saved;
+        }
       }
+
       const deleted = await deleteRetainedFile(inspected.value);
       if (!deleted.ok) {
         if (deleted.error.code === "HISTORY_UNAVAILABLE" && !entry.cleanupPending) {
           // The fingerprint check proves deletion did not start. Restore visibility for a changed external file.
           const restored = new Map(this.entries);
           restored.set(entry.key, entry);
+
           const saved = await this.publishIndex(restored);
-          if (!saved.ok)
+          if (!saved.ok) {
             return err(
               new CleanupError("Could not clear an interrupted retention marker.", [
                 deleted.error,
                 saved.error,
               ]),
             );
+          }
         }
+
         return deleted;
       }
+
       const snapshot = await removeRetentionFile(
         join(this.paths.directory, "sessions", `${entry.key}.json`),
       );
-      if (!snapshot.ok) return snapshot;
+      if (!snapshot.ok) {
+        return snapshot;
+      }
+
       // Keep only a small, redacted identity marker so stale checkpoints cannot resurrect expired data.
       const { sessionFile: _file, cwd: _cwd, ...identity } = pending;
       const finished = new Map(this.entries);
+
       finished.set(entry.key, {
         ...identity,
         name: "",
@@ -546,8 +693,12 @@ export class RuntimeStore implements SessionSnapshotSource {
         cleanupPending: false,
         expiredAt: now,
       });
+
       const saved = await this.publishIndex(finished);
-      if (!saved.ok) return saved;
+      if (!saved.ok) {
+        return saved;
+      }
+
       return ok(1);
     } finally {
       release();
@@ -568,9 +719,11 @@ async function atomicWrite(path: string, text: string): Promise<void> {
 
 export async function acquireRuntime(paths: RuntimePaths): Promise<(() => Promise<void>) | null> {
   await privateDirectory(join(paths.socket, ".."));
+
   const token = crypto.randomUUID();
   const temporary = paths.lock + "." + token;
   const owner = { pid: process.pid, token };
+
   await writeFile(temporary, JSON.stringify(owner), { mode: 0o600, flag: "wx" });
   try {
     let claimed = false;
@@ -580,23 +733,36 @@ export async function acquireRuntime(paths: RuntimePaths): Promise<(() => Promis
         claimed = true;
         break;
       } catch (error) {
-        if (!hasCode(error, "EEXIST")) throw error;
+        if (!hasCode(error, "EEXIST")) {
+          throw error;
+        }
+
         let existing: unknown;
         try {
           existing = await readOwner(paths.lock);
         } catch (readError) {
-          if (hasCode(readError, "ENOENT")) continue;
+          if (hasCode(readError, "ENOENT")) {
+            continue;
+          }
+
           throw readError;
         }
-        if (!isOwner(existing))
+        if (!isOwner(existing)) {
           throw new StorageError("Invalid runtime ownership file; refusing to remove it.");
-        if (pidAlive(existing.pid)) return null;
+        }
+        if (pidAlive(existing.pid)) {
+          return null;
+        }
+
         // Serialize stale-owner recovery so two launchers cannot unlink each other's new lock.
         const recovery = paths.lock + ".recovery";
         try {
           await link(temporary, recovery);
         } catch (recoveryError) {
-          if (hasCode(recoveryError, "EEXIST")) return null;
+          if (hasCode(recoveryError, "EEXIST")) {
+            return null;
+          }
+
           throw recoveryError;
         }
         try {
@@ -604,16 +770,25 @@ export async function acquireRuntime(paths: RuntimePaths): Promise<(() => Promis
           try {
             current = await readOwner(paths.lock);
           } catch (readError) {
-            if (!hasCode(readError, "ENOENT")) throw readError;
+            if (!hasCode(readError, "ENOENT")) {
+              throw readError;
+            }
           }
-          if (isOwner(current) && pidAlive(current.pid)) return null;
+          if (isOwner(current) && pidAlive(current.pid)) {
+            return null;
+          }
+
           await rm(paths.lock, { force: true });
           try {
             await link(temporary, paths.lock);
           } catch (claimError) {
-            if (hasCode(claimError, "EEXIST")) return null;
+            if (hasCode(claimError, "EEXIST")) {
+              return null;
+            }
+
             throw claimError;
           }
+
           claimed = true;
           break;
         } finally {
@@ -621,15 +796,21 @@ export async function acquireRuntime(paths: RuntimePaths): Promise<(() => Promis
         }
       }
     }
-    if (!claimed)
+    if (!claimed) {
       throw new StorageError("Runtime ownership changed repeatedly; try connecting again.");
+    }
+
     await rm(paths.socket, { force: true });
+
     return async () => {
       let current: unknown;
       try {
         current = await readOwner(paths.lock);
       } catch (error) {
-        if (hasCode(error, "ENOENT")) return;
+        if (hasCode(error, "ENOENT")) {
+          return;
+        }
+
         throw error;
       }
       if (isOwner(current) && current.token === token) {
@@ -644,10 +825,12 @@ export async function acquireRuntime(paths: RuntimePaths): Promise<(() => Promis
 
 async function readOwner(path: string): Promise<unknown> {
   const parsed = parseJson(await readFile(path, "utf8"), "runtime ownership");
-  if (!parsed.ok)
+  if (!parsed.ok) {
     throw new StorageError("Invalid runtime ownership file; refusing to remove it.", undefined, {
       cause: parsed.error,
     });
+  }
+
   return parsed.value;
 }
 
@@ -657,11 +840,16 @@ export function runtimeOwned(paths: RuntimePaths): Promise<Result<boolean, Expec
     try {
       owner = await readOwner(paths.lock);
     } catch (error) {
-      if (hasCode(error, "ENOENT")) return false;
+      if (hasCode(error, "ENOENT")) {
+        return false;
+      }
+
       throw error;
     }
-    if (!isOwner(owner))
+    if (!isOwner(owner)) {
       throw new StorageError("Invalid runtime ownership file; refusing to replace its owner.");
+    }
+
     return pidAlive(owner.pid);
   });
 }
@@ -669,12 +857,17 @@ export function runtimeOwned(paths: RuntimePaths): Promise<Result<boolean, Expec
 export function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
+
     return true;
   } catch (error) {
-    if (hasCode(error, "ESRCH")) return false;
+    if (hasCode(error, "ESRCH")) {
+      return false;
+    }
+
     throw error;
   }
 }
+
 function isOwner(value: unknown): value is { pid: number; token: string } {
   return (
     !!value &&
@@ -686,6 +879,7 @@ function isOwner(value: unknown): value is { pid: number; token: string } {
     typeof value.token === "string"
   );
 }
+
 function hasCode(error: unknown, code: string): boolean {
   return !!error && typeof error === "object" && "code" in error && error.code === code;
 }

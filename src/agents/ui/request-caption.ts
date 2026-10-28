@@ -6,8 +6,13 @@ import { singleLine, truncateCells } from "../../ui/text.ts";
 export function requestForSection(
   section: TranscriptSection | undefined,
 ): RequestSummary | undefined {
-  if (section?.image) return section.request;
-  if (!section || (section.kind !== "user" && section.skillName === undefined)) return undefined;
+  if (section?.image) {
+    return section.request;
+  }
+  if (!section || (section.kind !== "user" && section.skillName === undefined)) {
+    return undefined;
+  }
+
   return (
     section.request ?? {
       text:
@@ -25,6 +30,7 @@ export function formatWorkRequest(
   available = width,
 ): string {
   const limit = Math.max(0, Math.min(60, Math.floor(width / 2), available));
+
   return formatRequestCaption(request, limit, true);
 }
 
@@ -33,10 +39,14 @@ export function formatRequestCaption(
   width: number,
   quoted = false,
 ): string {
-  if (width <= 0) return "";
+  if (width <= 0) {
+    return "";
+  }
+
   const text = singleLine(request.text);
   const formatText = (available: number): string => {
     const excerpt = truncateCells(text, available - (quoted ? 2 : 0));
+
     return quoted && excerpt ? `“${excerpt}”` : excerpt;
   };
   const image = request.images
@@ -46,12 +56,19 @@ export function formatRequestCaption(
   const namedFile =
     request.files === 1 && request.fileName ? `[File: ${singleLine(request.fileName)}]` : file;
   let badges = [image, namedFile].filter(Boolean).join(" ");
-  if (Bun.stringWidth(badges) > width) badges = [image, file].filter(Boolean).join(" ");
+  if (Bun.stringWidth(badges) > width) {
+    badges = [image, file].filter(Boolean).join(" ");
+  }
   if (Bun.stringWidth(badges) > width) {
     badges = `[${[request.images ? `${request.images}I` : "", request.files ? `${request.files}F` : ""].filter(Boolean).join(" ")}]`;
+
     return truncateCells(badges, width);
   }
-  if (!badges) return formatText(width);
+  if (!badges) {
+    return formatText(width);
+  }
+
   const excerpt = formatText(width - Bun.stringWidth(badges) - 2);
+
   return excerpt ? `${excerpt}  ${badges}` : badges;
 }

@@ -7,8 +7,9 @@ import { expectError, expectOk } from "../testing/results.ts";
 import { tinyPng } from "../testing/image.ts";
 import type { ExecutionState } from "../agents/session-registry.ts";
 
-const imageId = "a".repeat(64),
-  paths = runtimePaths("/fixture/.git", true, "/tmp/radian-image-client-test");
+const imageId = "a".repeat(64);
+const paths = runtimePaths("/fixture/.git", true, "/tmp/radian-image-client-test");
+
 function snapshot(capabilities = ["transcript-images"]): RuntimeSnapshot {
   return {
     version: protocolVersion,
@@ -26,6 +27,7 @@ function snapshot(capabilities = ["transcript-images"]): RuntimeSnapshot {
     notice: "",
   };
 }
+
 function stubFetch(
   implementation: (
     input: Parameters<typeof fetch>[0],
@@ -41,8 +43,8 @@ test("Legacy services and invalid image IDs fail explicitly without queries or r
   const fetchMock = stubFetch(async () => {
     throw new Error("Unsupported image request must not be transmitted");
   });
-  const old = new RuntimeClient(paths, snapshot([])),
-    current = new RuntimeClient(paths, snapshot());
+  const old = new RuntimeClient(paths, snapshot([]));
+  const current = new RuntimeClient(paths, snapshot());
   try {
     expect(expectError(await old.image("session", imageId)).code).toBe("UNSUPPORTED_CAPABILITY");
     expect(expectError(await current.image("session", "../../private.png")).code).toBe(
@@ -57,17 +59,21 @@ test("Legacy services and invalid image IDs fail explicitly without queries or r
 });
 
 test("Binary images remain bounded current-instance bytes without UTF-8 conversion", async () => {
-  const bytes = tinyPng(),
-    requests: { path: string; instance: string | null }[] = [];
+  const bytes = tinyPng();
+  const requests: { path: string; instance: string | null }[] = [];
   const fetchMock = stubFetch(async (input, options) => {
     requests.push({
       path: new URL(input instanceof Request ? input.url : input).pathname,
       instance: new Headers(options?.headers).get("X-Radian-Instance"),
     });
+
     return new Response(
       new ReadableStream({
         start(controller) {
-          for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+          for (const byte of bytes) {
+            controller.enqueue(Uint8Array.of(byte));
+          }
+
           controller.close();
         },
       }),

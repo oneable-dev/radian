@@ -15,15 +15,21 @@ export async function submitAgentPrompt(
   images: readonly string[] = [],
 ): Promise<Result<void, ExpectedError>> {
   const control = parseSessionControl(text);
-  if (!control.ok) return control;
-  if (control.value?.action !== "new-tab" || images.length)
+  if (!control.ok) {
+    return control;
+  }
+  if (control.value?.action !== "new-tab" || images.length) {
     return client.prompt(sessionId, text, images);
+  }
+
   const worktree = selection.snapshot
     .flatMap((repo) => repo.worktrees)
     .find((tree) => tree.sessions.some((session) => session.id === sessionId));
   const conversation = client.snapshot.details[sessionId]?.conversationId;
   const created = await client.newTab(sessionId);
-  if (!created.ok) return created;
+  if (!created.ok) {
+    return created;
+  }
   if (
     worktree &&
     selection.worktree?.id === worktree.id &&
@@ -33,5 +39,6 @@ export async function submitAgentPrompt(
     selection.replaceSnapshot(client.snapshot.repositories);
     selection.selectSession(worktree.id, created.value);
   }
+
   return ok(undefined);
 }

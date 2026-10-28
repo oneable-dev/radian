@@ -40,8 +40,9 @@ test("Corrupt usage ratios, durations, and resets return typed protocol errors",
     { rate_limit: { primary_window: { used_percent: 10, reset_at: Number.MAX_VALUE } } },
   ];
 
-  for (const value of invalid)
+  for (const value of invalid) {
     expect(expectError(parseOpenAiUsage(value)).code).toBe("USAGE_PROTOCOL_ERROR");
+  }
 });
 
 test("Existing OAuth reads only fixed HTTPS endpoints and results expose no credentials/account IDs", async () => {
@@ -51,9 +52,11 @@ test("Existing OAuth reads only fixed HTTPS endpoints and results expose no cred
     expect(url).toBe("https://chatgpt.com/backend-api/wham/usage");
     expect(options.method).toBe("GET");
     expect(options.redirect).toBe("error");
+
     const headers = new Headers(options.headers);
     expect(headers.get("authorization")).toBe(`Bearer ${token()}`);
     expect(headers.get("chatgpt-account-id")).toBe("account-fixture");
+
     return Response.json(payload());
   });
 
@@ -64,23 +67,26 @@ test("Existing OAuth reads only fixed HTTPS endpoints and results expose no cred
   expect(account.key).not.toContain("account-fixture");
   expect(JSON.stringify(result)).not.toContain(token());
   expect(JSON.stringify(result)).not.toContain("account-fixture");
+
   const alias = expectOk(await resolver("openai", signal()))!;
   expect(alias.key).toBe(account.key);
 });
 
 test("API keys and other providers never reach ChatGPT account endpoints", async () => {
-  let resolved = 0,
-    fetched = 0;
+  let resolved = 0;
+  let fetched = 0;
   const resolver = openAiUsageResolver(
     {
       isUsingOAuth: () => false,
       getAuth: async () => {
         resolved++;
+
         return { auth: { apiKey: "sk-fixture" } };
       },
     },
     async () => {
       fetched++;
+
       return Response.json(payload());
     },
   );
@@ -106,6 +112,7 @@ test("Other OAuth tokens never reach OpenAI despite account headers", async () =
     },
     async () => {
       fetched++;
+
       return Response.json(payload());
     },
   );
@@ -133,7 +140,9 @@ for (const [status, code] of [
 
     expect(failure.code).toBe(code);
     expect(failure.message).not.toContain("PRIVATE_PROVIDER_BODY");
-    if (status === 429) expect(failure instanceof UsageError && failure.retryAfterMs).toBe(120000);
+    if (status === 429) {
+      expect(failure instanceof UsageError && failure.retryAfterMs).toBe(120000);
+    }
   });
 }
 

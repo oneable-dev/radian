@@ -32,6 +32,7 @@ test("Hiding loading screens never overwrites saved scroll with empty placeholde
     { [worktree.id]: state },
     () => "",
   );
+
   app.renderer.root.add(panel.root);
   try {
     panel.show(worktree, null);

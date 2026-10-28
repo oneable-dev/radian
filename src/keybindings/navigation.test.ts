@@ -25,8 +25,8 @@ test.each([
   ["transcript-visual", "transcript"],
 ] as const)("%s Ctrl+D/U routes to %s half-page commands", (context, family) => {
   // Lists and bodies share key names while surface owners determine behavior.
-  const down = commandFor(context, "ctrl+d"),
-    up = commandFor(context, "ctrl+u");
+  const down = commandFor(context, "ctrl+d");
+  const up = commandFor(context, "ctrl+u");
 
   // No surface maps jumps to single-item navigation or input editing.
   expect(down).toBe(`${family}.half-page-down`);
@@ -58,8 +58,8 @@ test.each([
   "%s Ctrl+N/P executes the same commands as existing directional navigation",
   (context, previous, next) => {
     // Ctrl+N/P are required defaults, not fallbacks for unavailable Vim keys.
-    const up = commandFor(context, "ctrl+p"),
-      down = commandFor(context, "ctrl+n");
+    const up = commandFor(context, "ctrl+p");
+    const down = commandFor(context, "ctrl+n");
 
     // Choose previous/next actions according to focused tabs, bodies, or results.
     expect(up).toBe(previous);
@@ -87,8 +87,8 @@ test.each([
   ["extension-search", "extension"],
 ] as const)("%s Ctrl+D/U jumps %s results and Ctrl+C clears search", (context, family) => {
   // Forward half-page actions to owned results without editing search text.
-  const down = commandFor(context, "ctrl+d"),
-    up = commandFor(context, "ctrl+u");
+  const down = commandFor(context, "ctrl+d");
+  const up = commandFor(context, "ctrl+u");
 
   expect(down).toBe(`${family}.half-page-down`);
   expect(up).toBe(`${family}.half-page-up`);
@@ -111,6 +111,7 @@ test.each([
     // Returning to search and clearing from results use registered commands, never widget-local key handlers.
     expect(commandFor(context, "/")).toBe(command);
     expect(commandFor(context, "ctrl+c")).toBe("search.clear");
+
     const map = expectOk(
       parseKeymap({ bindings: { [command]: [{ keys: "ctrl+f", scope: context }] } }),
     );
@@ -129,8 +130,10 @@ test("Git search provides default navigation/clearing while keeping ordinary cha
   expect(commandFor("git-search", "ctrl+p")).toBe("git.previous");
   expect(commandFor("git-search", "ctrl+c")).toBe("git.search-clear");
   expect(commandFor("git-search", "ctrl+l")).toBeUndefined();
-  for (const key of ["h", "j", "k", "l", "a", "y", "b"])
+  for (const key of ["h", "j", "k", "l", "a", "y", "b"]) {
     expect(commandFor("git-search", key)).toBeUndefined();
+  }
+
   expect(commandFor("git", "b")).toBe("git.refs");
   expect(commandFor("git", "ctrl+r")).toBe("git.reflog");
   expect(commandFor("git", "r")).toBe("git.refresh");
@@ -170,6 +173,7 @@ test("Transcript Shift+G follows latest output from sections and reaches section
     expect(commandFor(context, "ctrl+end")).toBe("transcript.buffer-end");
     expect(map.hint("transcript.latest", context)).toBe("ge");
   }
+
   expect(map.hint("transcript.latest", "transcript")).toBe("G");
   for (const context of ["prompt", "prompt-completion", "editor", "terminal"] as const) {
     expect(map.bound("shift+g", context)).toBe(false);

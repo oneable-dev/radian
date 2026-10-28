@@ -27,6 +27,7 @@ test("Git state persists as additive preferences alongside Terminal state", () =
     gitViews: { main: state },
     terminalSelection: { other: "shell" },
   });
+
   const restored = restoreWorkViews(preferences);
 
   expect(Value.Check(preferencesSchema, preferences)).toBe(true);

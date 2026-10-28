@@ -10,13 +10,14 @@ import { ok } from "../../result.ts";
 
 async function mount() {
   const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    requests: string[] = [];
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const requests: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => requests.push("new"),
     onCloseSession: () => requests.push("close"),
     onPrompt: () => {
       requests.push("prompt");
+
       return ok(undefined);
     },
     initialDrafts: { a1: "keep agent draft" },
@@ -25,23 +26,34 @@ async function mount() {
     await app.renderOnce();
     await app.renderOnce();
   };
+
   openWorkspaceSearch(app);
   app.mockInput.pressTab();
   await render();
+
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
   const input = get("workspace-search");
-  if (!(input instanceof InputRenderable)) throw new Error("Missing workspace input.");
+  if (!(input instanceof InputRenderable)) {
+    throw new Error("Missing workspace input.");
+  }
+
   const cell = (x: number, y: number) => {
     let column = 0;
+
     return app.captureSpans().lines[y]!.spans.find((span) => {
       column += span.width;
+
       return column > x;
     })!;
   };
+
   return {
     ...app,
     selection,
@@ -57,6 +69,7 @@ async function mount() {
     },
   };
 }
+
 function palette(light: boolean): TerminalColors {
   return {
     palette: [],
@@ -76,8 +89,8 @@ test("Search popups center without reducing work areas or creating previews", as
   // Use independent terminal-contained overlays instead of permanent sidebar widths.
   const app = await mount();
   try {
-    const panel = app.get("workspace-sidebar"),
-      field = app.get("workspace-search-box");
+    const panel = app.get("workspace-sidebar");
+    const field = app.get("workspace-search-box");
 
     expect(panel.x).toBeGreaterThan(0);
     expect(panel.y).toBeGreaterThan(0);
@@ -127,6 +140,7 @@ test.each([false, true])(
       const theme = uiTheme(app.renderer);
       theme.configure(palette(light));
       await app.render();
+
       const field = app.get("workspace-search-box");
       expect(app.cell(field.x + 1, field.y).bg.toInts()).toEqual(
         theme.styles["ui.popup"].bg!.toInts(),
@@ -161,8 +175,9 @@ test("Resize preserves query, caret, and drafts while fitting popups within comp
     await app.mockInput.typeText("workspace-query-".repeat(6));
     app.mockInput.pressArrow("left");
     await app.render();
-    const value = app.input.value,
-      cursor = app.input.cursorOffset;
+
+    const value = app.input.value;
+    const cursor = app.input.cursorOffset;
 
     app.resize(60, 12);
     await app.render();

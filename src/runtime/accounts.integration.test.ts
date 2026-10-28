@@ -8,9 +8,10 @@ import { daemonPaths, pidAlive, privateDirectory } from "./storage.ts";
 
 test("Real shared daemon IPC shares account lists while preserving selections, command reservation, and secrets", async () => {
   // Insert fake accounts only into isolated daemon storage, never user authentication.
-  const fixture = await createWorktreeFixture(),
-    stateRoot = join(fixture.directory, "account-state");
+  const fixture = await createWorktreeFixture();
+  const stateRoot = join(fixture.directory, "account-state");
   const directory = daemonPaths(true, stateRoot).directory;
+
   await privateDirectory(directory);
   await writeFile(
     join(directory, "accounts.json"),
@@ -34,6 +35,7 @@ test("Real shared daemon IPC shares account lists while preserving selections, c
     JSON.stringify({ openai: { type: "api_key", key: "private-existing-ipc-key" } }),
     { mode: 0o600 },
   );
+
   const client = expectOk(
     await connectRuntime(fixture.repository, fixture.main, {
       offline: true,
@@ -41,14 +43,22 @@ test("Real shared daemon IPC shares account lists while preserving selections, c
       entry: join(import.meta.dir, "..", "index.ts"),
     }),
   );
-  if (!client) throw new Error("Fixture runtime missing");
+  if (!client) {
+    throw new Error("Fixture runtime missing");
+  }
   try {
-    const one = fixture.repository.worktrees[0]!,
-      two = fixture.repository.worktrees[1]!;
+    const one = fixture.repository.worktrees[0]!;
+    const two = fixture.repository.worktrees[1]!;
     const listed = await client.accounts({ type: "list", worktreeId: one.id });
-    if (!listed.ok) throw listed.error;
+    if (!listed.ok) {
+      throw listed.error;
+    }
+
     const catalog = listed.value;
-    if (catalog.kind !== "catalog") throw new Error("Expected catalog");
+    if (catalog.kind !== "catalog") {
+      throw new Error("Expected catalog");
+    }
+
     expect(catalog.catalog.existingAccounts).toContainEqual({
       provider: "openai",
       name: "OpenAI",
@@ -68,8 +78,11 @@ test("Real shared daemon IPC shares account lists while preserving selections, c
         revision: catalog.catalog.revision,
       }),
     );
+
     const other = expectOk(await client.accounts({ type: "list", worktreeId: two.id }));
-    if (other.kind !== "catalog") throw new Error("Expected catalog");
+    if (other.kind !== "catalog") {
+      throw new Error("Expected catalog");
+    }
 
     // Lists, snapshots, and prompts expose no credentials and reject external-workspace requests.
     expect(other.catalog.accounts[0]?.id).toBe("account-a");
@@ -81,6 +94,7 @@ test("Real shared daemon IPC shares account lists while preserving selections, c
     expect(
       expectError(await client.accounts({ type: "list", worktreeId: "foreign-worktree" })).code,
     ).toBe("INVALID_INPUT");
+
     const session = expectOk(await client.create(one.id));
     expect(expectError(await client.prompt(session, "/accounts")).code).toBe(
       "UNSUPPORTED_CAPABILITY",
@@ -109,7 +123,10 @@ test("Real shared daemon IPC shares account lists while preserving selections, c
         revision: other.catalog.revision,
       }),
     );
-    if (switched.kind !== "catalog") throw new Error("Expected catalog");
+    if (switched.kind !== "catalog") {
+      throw new Error("Expected catalog");
+    }
+
     expect(switched.catalog.selections).toEqual({});
     expect(switched.catalog.existingAccounts).toContainEqual({
       provider: "openai",
@@ -129,9 +146,15 @@ test("Real shared daemon IPC shares account lists while preserving selections, c
         revision: switched.catalog.revision,
       }),
     );
-    if (renamed.kind !== "catalog") throw new Error("Expected catalog");
+    if (renamed.kind !== "catalog") {
+      throw new Error("Expected catalog");
+    }
+
     const shared = expectOk(await client.accounts({ type: "list", worktreeId: two.id }));
-    if (shared.kind !== "catalog") throw new Error("Expected catalog");
+    if (shared.kind !== "catalog") {
+      throw new Error("Expected catalog");
+    }
+
     expect(shared.catalog.existingAccounts).toContainEqual({
       provider: "openai",
       name: "OpenAI",
@@ -162,8 +185,12 @@ test("Real shared daemon IPC shares account lists while preserving selections, c
     const pid = client.snapshot.pid;
     await client.stopRuntime();
     await client.disconnect();
+
     const deadline = Date.now() + 8000;
-    while (pidAlive(pid) && Date.now() < deadline) await Bun.sleep(20);
+    while (pidAlive(pid) && Date.now() < deadline) {
+      await Bun.sleep(20);
+    }
+
     expect(pidAlive(pid)).toBe(false);
     await fixture.cleanup();
   }

@@ -13,38 +13,49 @@ import { uiTheme } from "../../ui/theme.ts";
 
 async function mount(actions: Partial<WorkbenchActions> = {}) {
   const app = await createTestRenderer({ width: 120, height: 28, kittyKeyboard: true });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    sent: string[] = [],
-    copies: string[] = [];
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const sent: string[] = [];
+  const copies: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {},
     onCloseSession: () => {},
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     getSessionDetails: () => ({ status: null, error: null, output: "Transcript" }),
     initialDrafts: { a1: "untouched draft" },
     onCopyTranscript: async (text) => {
       copies.push(text);
+
       return ok("Copied fixture");
     },
     ...actions,
   });
   const render = async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
+    for (let i = 0; i < 8; i++) {
+      await Promise.resolve();
+    }
+
     await app.renderOnce();
     await app.renderOnce();
   };
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
+
   await render();
   pressLeader(app, "a");
   await render();
+
   const prompt = get("session-prompt") as PromptInput;
+
   return {
     ...app,
     view,
@@ -70,6 +81,7 @@ test("Help shows contextual/shared keys and restores input draft, caret, and foc
   const app = await mount();
   try {
     app.mockInput.pressArrow("left");
+
     const cursor = app.prompt.cursorOffset;
     app.mockInput.pressKey("F1");
     await app.render();
@@ -100,8 +112,8 @@ test.each([false, true])(
   "Light theme %s shares Normal across popup bodies and borders without dimming surrounding content",
   async (light) => {
     // A normal-surface override must be shared by the popup, not just the underlying workbench.
-    const app = await mount(),
-      theme = uiTheme(app.renderer);
+    const app = await mount();
+    const theme = uiTheme(app.renderer);
     const palette = {
       palette: [],
       defaultForeground: light ? "#202020" : "#ECECEC",
@@ -117,27 +129,33 @@ test.each([false, true])(
     const normal = light ? "#F1F2F3" : "#182028";
     const background = (x: number, y: number) => {
       let column = 0;
+
       return app.captureSpans().lines[y]!.spans.find((span) => {
         column += span.width;
+
         return column > x;
       })!.bg;
     };
     try {
       theme.configure(palette, { styles: { "ui.text": { bg: normal } } });
       await app.render();
+
       const outside = background(0, 0).toInts();
 
       // Opening Help preserves the existing frame and leaves uncovered content at its original brightness.
       app.mockInput.pressKey("F1");
       await app.render();
-      const panel = app.get("text-dialog-panel"),
-        frame = app.captureCharFrame();
+
+      const panel = app.get("text-dialog-panel");
+      const frame = app.captureCharFrame();
       const geometry = [panel.x, panel.y, panel.width, panel.height];
+
       expect(background(0, 0).toInts()).toEqual(outside);
       for (const x of [panel.x, panel.x + Math.floor(panel.width / 2), panel.x + panel.width - 1]) {
         expect(background(x, panel.y).toInts()).toEqual(outside);
         expect(background(x, panel.y + panel.height - 1).toInts()).toEqual(outside);
       }
+
       expect(background(panel.x + 1, panel.y + 1).toInts()).toEqual(outside);
       expect(frame.split("\n")[panel.y]!.slice(panel.x, panel.x + panel.width)).toBe(
         "┌" + "─".repeat(panel.width - 2) + "┐",
@@ -167,8 +185,8 @@ test.each([false, true])(
 
 test("Workspace popup preserves colored code outside its bounds and shares surfaces inside", async () => {
   // Match the reported screenshot: the frame crosses code blocks with backgrounds unlike Normal.
-  const app = await mount(),
-    theme = uiTheme(app.renderer);
+  const app = await mount();
+  const theme = uiTheme(app.renderer);
   const underlay = new BoxRenderable(app.renderer, {
     position: "absolute",
     width: "100%",
@@ -191,16 +209,21 @@ test("Workspace popup preserves colored code outside its bounds and shares surfa
     );
     underlay.add(block);
   }
+
   app.view.root.add(underlay);
+
   const background = (x: number, y: number, frame: ReturnType<typeof app.captureSpans>) => {
     let column = 0;
+
     return frame.lines[y]!.spans.find((span) => {
       column += span.width;
+
       return column > x;
     })!.bg;
   };
   try {
     await app.render();
+
     const before = app.captureSpans();
 
     // Open the real Workspace popup rather than a synthetic frame over a uniform background.
@@ -208,10 +231,10 @@ test("Workspace popup preserves colored code outside its bounds and shares surfa
     await app.render();
 
     // The borderless outer surface fills its bounds; uncovered code keeps its original colors.
-    const panel = app.get("workspace-sidebar"),
-      search = app.get("workspace-search-box");
-    const after = app.captureSpans(),
-      lines = app.captureCharFrame().split("\n");
+    const panel = app.get("workspace-sidebar");
+    const search = app.get("workspace-search-box");
+    const after = app.captureSpans();
+    const lines = app.captureCharFrame().split("\n");
     for (let y = panel.y; y < panel.y + panel.height; y++) {
       for (const x of [panel.x - 1, panel.x + panel.width]) {
         expect(background(x, y, after).toInts()).toEqual(background(x, y, before).toInts());
@@ -221,6 +244,7 @@ test("Workspace popup preserves colored code outside its bounds and shares surfa
         expect(background(x, y, after).toInts()).toEqual(theme.styles["ui.popup"].bg!.toInts());
       }
     }
+
     const top = lines[search.y]!.slice(search.x, search.x + search.width);
     expect(top).toStartWith("╭");
     expect(top).toEndWith("╮");
@@ -262,6 +286,7 @@ test("Notifications leave footer height stable and Messages reads/copies untrunc
   try {
     const footer = app.get("app-footer");
     expect(footer.height).toBe(1);
+
     const message =
       "[CONNECTION_FAILED] Temporary connection failure\n" +
       "Detailed cause. ".repeat(200) +
@@ -317,15 +342,19 @@ test("Help reflects overrides and blocks asynchronous focus restoration outside 
     await app.render();
 
     expect(app.renderer.currentFocusedRenderable?.id).toBe("text-dialog-scroll");
+
     const visited = new Set<string>();
     for (let i = 0; i < 6; i++) {
       app.mockInput.pressTab();
       await app.render();
       visited.add(app.renderer.currentFocusedRenderable?.id ?? "none");
     }
+
     expect([...visited]).toEqual(["text-dialog-scroll"]);
-    for (const id of ["text-dialog-copy", "text-dialog-close", "text-dialog-remove"])
+    for (const id of ["text-dialog-copy", "text-dialog-close", "text-dialog-remove"]) {
       expect(app.renderer.root.findDescendantById(id)).toBeUndefined();
+    }
+
     app.mockInput.pressEscape();
     await app.render();
     expect(app.renderer.currentFocusedRenderable).toBe(app.prompt);

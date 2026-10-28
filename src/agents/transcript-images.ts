@@ -20,7 +20,9 @@ export const transcriptImageSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
 export type TranscriptImage = Readonly<Static<typeof transcriptImageSchema>>;
+
 export const transcriptImageQuerySchema = Type.Object(
   { sessionId: Type.String({ minLength: 1, maxLength: 4096 }), imageId },
   { additionalProperties: false },
@@ -31,25 +33,34 @@ const imageNamesSchema = Type.Array(
     { additionalProperties: false },
   ),
 );
+
 type ImageName = Static<typeof imageNamesSchema>[number];
+
 export type TranscriptImageData = {
   readonly bytes: Uint8Array<ArrayBuffer>;
   readonly mimeType: string;
 };
+
 export type TranscriptImageProvider = (
   sessionId: string,
   imageId: string,
   signal: AbortSignal,
 ) => Promise<Result<Uint8Array, ExpectedError>>;
+
 const extensions: Readonly<Record<string, string>> = {
   "image/png": "png",
   "image/jpeg": "jpg",
   "image/webp": "webp",
   "image/gif": "gif",
 };
+
 function validBase64(data: string): boolean {
-  if (!data.length || data.length % 4 !== 0) return false;
+  if (!data.length || data.length % 4 !== 0) {
+    return false;
+  }
+
   const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+
   return !/[^A-Za-z0-9+/]/u.test(data.slice(0, data.length - padding));
 }
 
@@ -69,22 +80,29 @@ export class TranscriptImages {
         .digest("hex");
       this.identities.set(image, id);
     }
+
     return id;
   }
+
   restore(value: unknown): Result<void, HistoryError> {
-    if (!Value.Check(imageNamesSchema, value))
+    if (!Value.Check(imageNamesSchema, value)) {
       return err(
         new HistoryError(
           "HISTORY_CORRUPT",
           "Saved image names are invalid; generated attachment names are shown.",
         ),
       );
+    }
     for (const item of value) {
       const name = truncateCells(singleLine(item.name), 256);
-      if (name && !this.names.has(item.id)) this.names.set(item.id, name);
+      if (name && !this.names.has(item.id)) {
+        this.names.set(item.id, name);
+      }
     }
+
     return ok(undefined);
   }
+
   remember(images: readonly ImageContent[], paths: readonly string[]): readonly ImageName[] {
     const added: ImageName[] = [];
     const cacheRoot = resolve(
@@ -92,7 +110,10 @@ export class TranscriptImages {
     );
     for (const [index, image] of images.entries()) {
       const path = paths[index];
-      if (!path) continue;
+      if (!path) {
+        continue;
+      }
+
       const id = this.identity(image);
       // Our owned clipboard cache has generated storage names, not original filenames.
       const clipboard = dirname(resolve(path)) === cacheRoot;
@@ -101,14 +122,18 @@ export class TranscriptImages {
         (clipboard
           ? `clipboard-${index + 1}.${extensions[image.mimeType] ?? "bin"}`
           : truncateCells(singleLine(basename(path)), 256));
+
       this.names.set(id, name);
       added.push({ id, name });
     }
+
     return added;
   }
+
   describe(image: ImageContent, index: number): TranscriptImage {
     const id = this.identity(image);
     this.images.set(id, image);
+
     return {
       id,
       name: this.names.get(id) ?? `clipboard-${index + 1}.${extensions[image.mimeType] ?? "bin"}`,
@@ -120,21 +145,31 @@ export class TranscriptImages {
       ),
     };
   }
+
   clearReferences(): void {
     this.images.clear();
   }
+
   read(id: string): Result<TranscriptImageData, InputError> {
     const image = this.images.get(id);
-    if (!image)
+    if (!image) {
       return err(new InputError("Image attachment is not available in this conversation."));
-    if (!extensions[image.mimeType])
+    }
+    if (!extensions[image.mimeType]) {
       return err(new InputError("Image preview supports PNG, JPEG, GIF and WebP attachments."));
-    if (image.data.length > Math.ceil(maximumPreviewImageBytes / 3) * 4)
+    }
+    if (image.data.length > Math.ceil(maximumPreviewImageBytes / 3) * 4) {
       return err(new InputError("Image preview exceeds the 16 MiB safety limit."));
-    if (!validBase64(image.data)) return err(new InputError("Stored image data is malformed."));
+    }
+    if (!validBase64(image.data)) {
+      return err(new InputError("Stored image data is malformed."));
+    }
+
     const bytes = Buffer.from(image.data, "base64");
-    if (bytes.byteLength > maximumPreviewImageBytes)
+    if (bytes.byteLength > maximumPreviewImageBytes) {
       return err(new InputError("Image preview exceeds the 16 MiB safety limit."));
+    }
+
     return ok({ bytes, mimeType: image.mimeType });
   }
 }

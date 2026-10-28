@@ -10,7 +10,10 @@ export const historyCommand: CompletionItem = {
 
 // Reserve the popup command at every prompt boundary; never send it to the model.
 export function parseHistoryCommand(text: string): Result<boolean, InputError> {
-  if (!/^\/history(?:\s|$)/u.test(text)) return ok(false);
+  if (!/^\/history(?:\s|$)/u.test(text)) {
+    return ok(false);
+  }
+
   return text.slice(8).trim()
     ? err(new InputError("Usage: /history (open saved session history; no arguments)."))
     : ok(true);

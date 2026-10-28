@@ -34,6 +34,7 @@ const actions = {
   "transcript.search-word-forward": "search-word-forward",
   "transcript.search-word-backward": "search-word-backward",
 } satisfies Partial<Record<CommandId, VimAction>>;
+
 export function transcriptVimAction(command: CommandId): VimAction | undefined {
   return command in actions ? actions[command as keyof typeof actions] : undefined;
 }
@@ -47,6 +48,7 @@ const prefixCommands: Readonly<Record<string, CommandId>> = {
   t: "transcript.till-forward",
   T: "transcript.till-backward",
 };
+
 export function vimPendingHint(status: string, hint: (command: CommandId) => string): string {
   return status.replace(
     /[yiafFtT]/gu,
@@ -84,11 +86,19 @@ const shifted: Readonly<Record<string, string>> = {
 // command (fw, fiw, etc.). Kitty reports base keys plus Shift; legacy input often
 // reports the resulting printable character instead.
 export function vimCharacter(key: KeyEvent): string | null {
-  if (key.ctrl || key.meta || key.option || key.super) return null;
-  if (key.name === "space") return " ";
-  if (key.name === "tab" && !key.shift) return "\t";
+  if (key.ctrl || key.meta || key.option || key.super) {
+    return null;
+  }
+  if (key.name === "space") {
+    return " ";
+  }
+  if (key.name === "tab" && !key.shift) {
+    return "\t";
+  }
+
   const value = key.shift
     ? (shifted[key.name] ?? (/^[a-z]$/u.test(key.name) ? key.name.toUpperCase() : key.name))
     : key.name;
+
   return [...segmenter.segment(value)].length === 1 ? value : null;
 }

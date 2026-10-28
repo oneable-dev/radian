@@ -15,8 +15,8 @@ test.each(["/accounts", "  /accounts  ", "/accounts\n"])(
 
 test("Account command arguments are rejected without reserving similar prose", () => {
   // Never send API-key-like command arguments to the model.
-  const invalid = parseAccountsCommand("/accounts private-key"),
-    other = parseAccountsCommand("/accounts-guide");
+  const invalid = parseAccountsCommand("/accounts private-key");
+  const other = parseAccountsCommand("/accounts-guide");
 
   expect(expectError(invalid).code).toBe("INVALID_INPUT");
   expect(expectOk(other)).toBe(false);

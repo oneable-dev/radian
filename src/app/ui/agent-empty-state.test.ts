@@ -32,6 +32,7 @@ const conversation = (): ExecutionState => ({
     },
   ],
 });
+
 async function mount(initial: ExecutionState | null = empty()) {
   const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true });
   const repositories: Repository[] = [
@@ -49,8 +50,8 @@ async function mount(initial: ExecutionState | null = empty()) {
       ],
     },
   ];
-  const selection = new WorkspaceSelection(repositories),
-    sent: string[] = [];
+  const selection = new WorkspaceSelection(repositories);
+  const sent: string[] = [];
   const states: Record<string, ExecutionState | null> = {
     first: initial,
     existing: conversation(),
@@ -60,6 +61,7 @@ async function mount(initial: ExecutionState | null = empty()) {
     onCloseSession: () => {},
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     getSessionDetails: (id) => states[id] ?? null,
@@ -70,17 +72,32 @@ async function mount(initial: ExecutionState | null = empty()) {
   };
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
   const scroll = get("session-transcript");
-  if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript");
+  if (!(scroll instanceof ScrollBoxRenderable)) {
+    throw new Error("Missing transcript");
+  }
+
   const prompt = get("session-prompt");
-  if (!(prompt instanceof PromptInput)) throw new Error("Missing prompt");
+  if (!(prompt instanceof PromptInput)) {
+    throw new Error("Missing prompt");
+  }
+
   const mark = get("radian-logo-mark");
-  if (!(mark instanceof TextRenderable)) throw new Error("Missing logo");
+  if (!(mark instanceof TextRenderable)) {
+    throw new Error("Missing logo");
+  }
+
   const version = get("radian-logo-version");
-  if (!(version instanceof TextRenderable)) throw new Error("Missing logo version");
+  if (!(version instanceof TextRenderable)) {
+    throw new Error("Missing logo version");
+  }
+
   const region = (x: number, y: number, width: number, height: number) =>
     app
       .captureCharFrame()
@@ -89,6 +106,7 @@ async function mount(initial: ExecutionState | null = empty()) {
       .map((line) => line.slice(x, x + width))
       .join("\n");
   await render();
+
   return {
     ...app,
     view,
@@ -115,6 +133,7 @@ async function mount(initial: ExecutionState | null = empty()) {
     },
   };
 }
+
 // The artwork is intentionally replaceable; behavior tests require its actual rendering, not a fixed shape.
 function expectLogo(app: Awaited<ReturnType<typeof mount>>): void {
   expect(app.get("radian-logo").visible).toBe(true);
@@ -271,8 +290,10 @@ test("Compact logos avoid input and remain centered after expansion and theme ch
     expect(app.mark.y + app.mark.height).toBeLessThanOrEqual(app.get("agent-composer").y);
     app.resize(120, 30);
     await app.render();
+
     const previousColor = app.mark.fg;
     const theme = uiTheme(app.renderer);
+
     theme.configure({
       palette: [],
       defaultForeground: "#202020",

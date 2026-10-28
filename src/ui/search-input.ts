@@ -4,6 +4,7 @@ import { uiTheme } from "./theme.ts";
 import { paintText, type StyleGroup } from "./theme-styles.ts";
 
 type Options = { id: string; fieldId?: string; title?: string; backgroundStyle?: StyleGroup };
+
 type Counts = Readonly<{ matched: number; total: number }>;
 
 // Every app-owned query uses this field; matching and candidate navigation stay with its owner.
@@ -32,6 +33,7 @@ export class SearchInput extends InputRenderable {
       this.field.borderStyle = "rounded";
       this.field.titleAlignment = "center";
       this.setTitle(options.title);
+
       const prompt = new TextRenderable(renderer, {
         id: `${options.id}-prompt`,
         content: ">",
@@ -52,6 +54,7 @@ export class SearchInput extends InputRenderable {
         selectable: false,
         visible: false,
       }));
+
       this.field.insertBefore(prompt, this);
       this.field.add(this.count);
       uiTheme(renderer).bindStyles(this.field, (styles) => {
@@ -66,16 +69,24 @@ export class SearchInput extends InputRenderable {
   setTitle(title: string): void {
     this.field.title = ` ${title} `;
   }
+
   setCounts(counts: Counts | null): void {
-    if (!this.count) return;
+    if (!this.count) {
+      return;
+    }
+
     const text = counts ? `${counts.matched}/${counts.total}` : "";
     this.count.content = text;
     this.count.width = text.length;
     this.count.visible = counts !== null;
   }
+
   clear(): void {
-    if (this.value) this.value = "";
+    if (this.value) {
+      this.value = "";
+    }
   }
+
   fit(availableHeight: number): InputLayout {
     return this.field.fit(1, Math.min(3, availableHeight));
   }

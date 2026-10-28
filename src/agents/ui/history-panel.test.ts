@@ -33,6 +33,7 @@ const saved = (id: string, title = id): HistoryItem => ({
   openSessionId: null,
   unavailableReason: null,
 });
+
 type Options = {
   list?: (id: string, signal?: AbortSignal) => Promise<readonly HistoryItem[]>;
   preview?: (
@@ -44,20 +45,22 @@ type Options = {
   keymap?: Keymap;
   liveSections?: readonly TranscriptSection[];
 };
+
 async function mount(options: Options = {}) {
   const clock = new ManualClock();
   const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true, clock });
-  const listenerLimit = app.renderer.getMaxListeners(),
-    selection = new WorkspaceSelection(demoWorkspace());
-  const resumed: string[] = [],
-    previews: string[] = [],
-    runs: string[] = [];
+  const listenerLimit = app.renderer.getMaxListeners();
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const resumed: string[] = [];
+  const previews: string[] = [];
+  const runs: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     ...(options.keymap ? { keymap: options.keymap } : {}),
     onNewSession: () => runs.push("create"),
     onCloseSession: () => runs.push("close"),
     onPrompt: (_id, text) => {
       runs.push(text);
+
       return ok(undefined);
     },
     initialDrafts: { a1: "untouched draft" },
@@ -78,6 +81,7 @@ async function mount(options: Options = {}) {
       ),
     onPreviewHistory: async (tree, id, signal) => {
       previews.push(id);
+
       return options.preview
         ? options.preview(tree, id, signal)
         : ok({
@@ -105,6 +109,7 @@ async function mount(options: Options = {}) {
     },
     onResumeSession: async (tree, id) => {
       resumed.push(`${tree}/${id}`);
+
       return capture(() => (options.resume ? options.resume(tree, id) : Promise.resolve("a2")));
     },
   });
@@ -112,12 +117,18 @@ async function mount(options: Options = {}) {
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
+
   return {
     ...app,
     clock,
@@ -145,7 +156,10 @@ async function mount(options: Options = {}) {
     async visible(text: string) {
       const deadline = Date.now() + 1500;
       while (!app.captureCharFrame().includes(text)) {
-        if (Date.now() > deadline) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+        if (Date.now() > deadline) {
+          throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+        }
+
         await render();
       }
     },
@@ -195,9 +209,10 @@ test.each([120, 60])(
       await app.open();
       app.clock.advance(500);
       await app.render();
+
       const search = app.get("history-search") as InputRenderable;
-      const field = app.get("history-search-field"),
-        list = app.get("history-list");
+      const field = app.get("history-search-field");
+      const list = app.get("history-list");
       const counter = app.get("history-search-count") as TextRenderable;
 
       // Once loading settles, candidates start directly below search with no duplicate count.
@@ -254,28 +269,42 @@ test("Previews reuse Agent cards, folding, and errors and open read-only at the 
       ok({ id, worktreeId, sections, text: "DO NOT RENDER THE LEGACY STRING", truncated: false }),
   });
   const body = (root: Renderable, text: string): EditBufferRenderable | undefined => {
-    if (root instanceof EditBufferRenderable && root.plainText === text) return root;
+    if (root instanceof EditBufferRenderable && root.plainText === text) {
+      return root;
+    }
     for (const child of root.getChildren()) {
       const found = body(child, text);
-      if (found) return found;
+      if (found) {
+        return found;
+      }
     }
   };
   try {
-    const live = app.get("session-transcript"),
-      state = app.view.workViewPreferences.agentViews;
+    const live = app.get("session-transcript");
+    const state = app.view.workViewPreferences.agentViews;
+
     await app.open();
     app.clock.advance(150);
     await app.render();
+
     const preview = app.get("history-preview") as ScrollBoxRenderable;
     // Preview transcripts share live-session scrollbar policy.
-    if (!(live instanceof ScrollBoxRenderable)) throw new Error("Missing live transcript");
+    if (!(live instanceof ScrollBoxRenderable)) {
+      throw new Error("Missing live transcript");
+    }
+
     expect(live.verticalScrollBar.visible).toBe(false);
     expect(preview.verticalScrollBar.visible).toBe(false);
     for (const section of sections) {
-      const original = body(live, section.text),
-        shown = body(preview, section.text);
-      if (!(original?.parent instanceof BoxRenderable) || !(shown?.parent instanceof BoxRenderable))
+      const original = body(live, section.text);
+      const shown = body(preview, section.text);
+      if (
+        !(original?.parent instanceof BoxRenderable) ||
+        !(shown?.parent instanceof BoxRenderable)
+      ) {
         throw new Error("Expected native section cards");
+      }
+
       expect(shown.parent.backgroundColor.toInts()).toEqual(
         original.parent.backgroundColor.toInts(),
       );
@@ -283,11 +312,13 @@ test("Previews reuse Agent cards, folding, and errors and open read-only at the 
       expect(shown.parent.paddingLeft).toBe(original.parent.paddingLeft);
       expect(shown.visible).toBe(original.visible);
     }
+
     // New previews start at the latest answer like live sessions.
     expect(preview.scrollTop).toBe(Math.max(0, preview.scrollHeight - preview.viewport.height));
     expect(app.captureCharFrame()).toContain("Latest reply");
     expect(app.captureCharFrame()).not.toContain("[thinking]");
     expect(app.captureCharFrame()).not.toContain("DO NOT RENDER THE LEGACY STRING");
+
     const prompt = body(preview, "Newest prompt")!;
     expect(prompt.focusable).toBe(false);
     await app.mockMouse.click(
@@ -336,6 +367,7 @@ test("History answers and Thinking use the same Markdown without changing search
     await app.open();
     app.clock.advance(150);
     await app.render();
+
     const preview = app.get("history-preview");
     for (let pass = 0; pass < 3; pass++) {
       await Promise.all(
@@ -345,6 +377,7 @@ test("History answers and Thinking use the same Markdown without changing search
       );
       await app.render();
     }
+
     // Hiding syntax preserves live-session selection, drafts, and read-only behavior.
     const frame = app.captureCharFrame();
     expect(children(preview).filter((node) => node instanceof MarkdownRenderable)).toHaveLength(2);
@@ -408,10 +441,12 @@ test("History shows real prompt and status components without changing input, su
 
     // Preview composers and telemetry must look exactly like the actual session components.
     await app.open();
+
     const prompt = app.get("history-preview-session-prompt") as EditBufferRenderable;
     const composer = app.get("history-preview-agent-composer") as BoxRenderable;
     const liveComposer = app.get("agent-composer") as BoxRenderable;
     const frame = app.captureCharFrame();
+
     expect(frame).toContain("Ask to do anything");
     expect(frame).not.toContain("Read-only preview");
     expect(frame).toContain("saved-model");
@@ -498,6 +533,7 @@ test("Shared snapshot previews show saved run state, context, usage, and Fast in
 
     // Pass the same saved record to AgentPanel instead of reconstructing fields by inference.
     await app.open();
+
     const frame = app.captureCharFrame();
 
     // Never expire historical values using today's clock or apply them to live settings.
@@ -533,6 +569,7 @@ test("Search matches normalized words while keeping hjkl and r literal", async (
     await app.render();
     expect(app.captureCharFrame()).toContain("Layout review");
     expect(app.captureCharFrame()).not.toContain("키보드 검색");
+
     const search = app.get("history-search") as InputRenderable;
     search.value = "보드 검색";
     await app.render();
@@ -586,12 +623,14 @@ test("List clicks and Ctrl+N/P change only previews; Enter opens the selected se
 test("Esc restores prompt caret, draft, transcript scroll, and original focus", async () => {
   const app = await mount();
   try {
-    const prompt = app.get("session-prompt") as InputRenderable,
-      transcript = app.get("session-transcript") as ScrollBoxRenderable;
+    const prompt = app.get("session-prompt") as InputRenderable;
+    const transcript = app.get("session-transcript") as ScrollBoxRenderable;
+
     prompt.focus();
     prompt.cursorOffset = 5;
     transcript.scrollTo(21);
     await app.render();
+
     const top = transcript.scrollTop;
     // The global shortcut preserves the prompt as the owner without a visible trigger button.
     await app.open();
@@ -617,7 +656,10 @@ test("Repeated kitty Enter/Esc events after popup closure never become backgroun
   const app = await mount();
   const raw = (text: string) => {
     const key = parseKeypress(text, { useKittyKeyboard: true });
-    if (!key) throw new Error("Invalid kitty fixture");
+    if (!key) {
+      throw new Error("Invalid kitty fixture");
+    }
+
     app.renderer.keyInput.processParsedKey(key);
   };
   try {
@@ -632,6 +674,7 @@ test("Repeated kitty Enter/Esc events after popup closure never become backgroun
     await app.open();
     raw("\u001b[13;1u");
     await app.render();
+
     const owner = app.renderer.currentFocusedRenderable;
     raw("\u001b[13;1:2u");
     await app.render();
@@ -669,6 +712,7 @@ test("Popups trap Tab focus, global commands, and background clicks while preser
   try {
     expect(app.get("workspace-picker").visible).toBe(false);
     await app.open();
+
     const dialog = app.get("history-dialog");
     for (let i = 0; i < 9; i++) {
       app.mockInput.pressTab();
@@ -677,6 +721,7 @@ test("Popups trap Tab focus, global commands, and background clicks while preser
         app.renderer.currentFocusedRenderable!.id,
       );
     }
+
     app.leader("e");
     app.leader("b");
     pressLeader(app, "a");
@@ -713,6 +758,7 @@ test.each([120, 60])(
       const body = app.get("history-results");
       const title = app.get("history-loading-message") as TextRenderable;
       const feedback = app.get("history-loading-feedback");
+
       expect(title.plainText).toBe("Loading saved sessions…");
       expect(feedback.x).toBe(body.x + Math.floor((body.width - feedback.width) / 2));
       expect(feedback.y).toBe(body.y + Math.floor((body.height - 1) / 2));
@@ -721,11 +767,13 @@ test.each([120, 60])(
       expect((app.get("history-message") as TextRenderable).visible).toBe(false);
       expect(app.get("history-loading").visible).toBe(true);
       expect(app.renderer.currentFocusedRenderable?.id).toBe("history-search");
+
       const field = app.get("history-search-field");
       expect(field.y).toBe(app.get("history-dialog").y);
 
       // Discovery uses the latest query and does not delay results for the spinner's minimum duration.
       await app.mockInput.typeText("keyboard");
+
       const search = app.get("history-search") as InputRenderable;
       search.cursorOffset = 3;
       pending.resolve([saved("first", "Layout review"), saved("second", "Keyboard review")]);
@@ -749,6 +797,7 @@ test("Fast results appear immediately while shared spinners persist 500 ms and c
     await app.open();
     expect(app.captureCharFrame()).toContain("Saved layout review");
     expect(app.get("history-loading").visible).toBe(true);
+
     // Lookup feedback belongs to the session list, not the popup frame or preview screen.
     const loading = app.get("history-loading");
     expect(loading.parent?.id).toBe("history-loading-feedback");
@@ -804,13 +853,14 @@ test("History refresh keeps existing candidates and preview visible with only in
 
 test("New listings ignore old responses and update only current spinners and results", async () => {
   // The first read remains pending while an explicit refresh takes ownership of the popup.
-  const first = Promise.withResolvers<readonly HistoryItem[]>(),
-    second = Promise.withResolvers<readonly HistoryItem[]>();
+  const first = Promise.withResolvers<readonly HistoryItem[]>();
+  const second = Promise.withResolvers<readonly HistoryItem[]>();
   let calls = 0;
   const signals: (AbortSignal | undefined)[] = [];
   const app = await mount({
     list: (_tree, signal) => {
       signals.push(signal);
+
       return ++calls === 1 ? first.promise : second.promise;
     },
   });
@@ -981,6 +1031,7 @@ test("Refresh and close clear preview caches and reject responses from older gen
     preview: async (tree, id, signal) => {
       signals.push(signal);
       calls++;
+
       return calls === 1
         ? old.promise
         : ok({ worktreeId: tree, id, text: `NEW PREVIEW ${calls}`, truncated: false });
@@ -1033,9 +1084,11 @@ test("Narrow layouts switch between lists and previews while preserving search a
     app.resize(60, 18);
     await app.render();
     expect(app.captureCharFrame()).toContain("Saved answer second");
+
     // Moving up from the latest answer reveals its request even in compact viewports.
-    const preview = app.get("history-preview") as ScrollBoxRenderable,
-      initialScroll = preview.scrollTop;
+    const preview = app.get("history-preview") as ScrollBoxRenderable;
+    const initialScroll = preview.scrollTop;
+
     await app.mockInput.pressKeys(["\x1b[5~"]);
     await app.render();
     expect(preview.scrollTop).toBeLessThan(initialScroll);
@@ -1047,7 +1100,9 @@ test("Narrow layouts switch between lists and previews while preserving search a
       await app.mockInput.pressKeys(["\x1b[5~"]);
       await app.render();
     }
+
     expect(app.captureCharFrame()).toContain("Saved question second");
+
     const dialog = app.get("history-dialog");
     expect(dialog.x + dialog.width).toBeLessThanOrEqual(60);
     expect(dialog.y + dialog.height).toBeLessThanOrEqual(20);
@@ -1072,7 +1127,10 @@ test("Empty lists, no matches, and lookup errors stay distinct with custom Refre
     ),
     list: async () => {
       calls++;
-      if (calls === 1) throw new HistoryError("HISTORY_UNAVAILABLE", "Lookup failed");
+      if (calls === 1) {
+        throw new HistoryError("HISTORY_UNAVAILABLE", "Lookup failed");
+      }
+
       return calls === 2 ? [] : [saved("restored", "Restored history")];
     },
   });
@@ -1109,7 +1167,10 @@ test("Busy and resume errors stay in the popup while existing sessions select wi
       { ...saved("open", "Open history"), openSessionId: "a1" },
     ],
     resume: async (_tree, id) => {
-      if (id === "broken") throw new HistoryError("HISTORY_UNAVAILABLE", "Cannot resume");
+      if (id === "broken") {
+        throw new HistoryError("HISTORY_UNAVAILABLE", "Cannot resume");
+      }
+
       return "a1";
     },
   });
@@ -1164,6 +1225,7 @@ test("Closing popups or changing worktrees prevents stale lists and previews fro
   const app = await mount({
     list: (_tree, current) => {
       signal = current;
+
       return pending.promise;
     },
   });

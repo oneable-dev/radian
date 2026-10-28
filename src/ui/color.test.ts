@@ -13,8 +13,8 @@ test.each([
   "Block text resolves terminal defaults and chooses readable colors: %j",
   ({ background, panel, text, expected }) => {
     // Theme text can be too close to an accent, including both supplied candidates.
-    const first = RGBA.defaultBackground(panel),
-      second = RGBA.defaultForeground(text);
+    const first = RGBA.defaultBackground(panel);
+    const second = RGBA.defaultForeground(text);
 
     const result = contrastingText(RGBA.fromHex(background), first, second);
 

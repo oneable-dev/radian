@@ -31,11 +31,14 @@ test("Agent navigation preferences serialize and restore without changing existi
     agentScroll: { session: 42 },
     agentViews: { session: state },
   });
+
   const stored = JSON.parse(JSON.stringify(preferences));
   const command = expectOk(
     parseCommand(JSON.stringify({ type: "preferences", preferences: stored })),
   );
+
   expect(command.type).toBe("preferences");
+
   const restored = restoreWorkViews(stored);
 
   expect(Value.Check(preferencesSchema, stored)).toBe(true);
@@ -67,6 +70,7 @@ test("Structured transcripts are optional wire fields and reject invalid states 
   };
 
   expectOk(parseSnapshot(legacy));
+
   const section = {
     id: "message",
     kind: "thinking",
@@ -78,7 +82,9 @@ test("Structured transcripts are optional wire fields and reject invalid states 
     ...legacy,
     details: { session: { ...legacy.details.session, sections: [section] } },
   };
+
   expect(expectOk(parseSnapshot(modern)).details.session?.sections?.[0]?.text).toBe("full content");
+
   const skill = {
     ...section,
     kind: "notice",
@@ -90,6 +96,7 @@ test("Structured transcripts are optional wire fields and reject invalid states 
     ...modern,
     details: { session: { ...modern.details.session, sections: [skill] } },
   };
+
   expect(expectOk(parseSnapshot(skillSnapshot)).details.session?.sections?.[0]?.skillName).toBe(
     "example-skill",
   );
@@ -105,6 +112,7 @@ test("Structured transcripts are optional wire fields and reject invalid states 
       }),
     ).code,
   ).toBe("PROTOCOL_ERROR");
+
   const invalid = {
     ...emptyPreferences,
     agentViews: { session: { ...emptyTranscriptView(), cursors: { message: -1 } } },

@@ -22,6 +22,7 @@ const snapshot = (supported = true): RuntimeSnapshot => ({
   capabilities: supported ? ["agent-dashboard"] : [],
 });
 const paths = runtimePaths("/fixture/.git", true, "/tmp/radian-dashboard-client-test");
+
 function mockFetch(
   implementation: (
     input: Parameters<typeof fetch>[0],
@@ -36,9 +37,9 @@ function mockFetch(
 test("Legacy dashboard unavailability is explicit without requests or restarts", async () => {
   // Never forcibly replace users' active legacy services.
   const request = mockFetch(async () => {
-      throw new Error("No requests allowed");
-    }),
-    client = new RuntimeClient(paths, snapshot(false));
+    throw new Error("No requests allowed");
+  });
+  const client = new RuntimeClient(paths, snapshot(false));
   try {
     // Negotiate capabilities before network requests.
     const result = expectError(await client.dashboard(7));
@@ -60,6 +61,7 @@ test("Dashboard instance-fenced GET validates periods, numbers, and bucket count
     expect(url.pathname).toBe("/dashboard");
     expect(url.searchParams.get("days")).toBe("7");
     expect(new Headers(options?.headers).get("X-Radian-Instance")).toBe("fixture");
+
     return Response.json(response);
   });
   const client = new RuntimeClient(paths, snapshot());
@@ -109,13 +111,16 @@ test("Real SDK history remains in dashboards after closure and reads create no f
     const created = (await (
       await request("/command", { type: "create", worktreeId: tree.id })
     ).json()) as { ok: boolean; value: string };
+
     expect(created.ok).toBe(true);
     await request("/command", { type: "prompt", sessionId: created.value, text: "read" });
     await new Promise<void>((resolve, reject) => {
       if (runtime.snapshot.details[created.value]?.result) {
         resolve();
+
         return;
       }
+
       const timer = setTimeout(() => {
         unsubscribe();
         reject(new Error("SDK execution did not settle"));
@@ -129,13 +134,14 @@ test("Real SDK history remains in dashboards after closure and reads create no f
       });
     });
     await request("/command", { type: "close", sessionId: created.value });
+
     const before = runtime.snapshot.repositories.flatMap((repo) =>
       repo.worktrees.flatMap((tree) => tree.sessions),
     );
 
     // Exercise persisted reads and invalid-query guards through actual services.
-    const response = await request("/dashboard?days=7"),
-      data = (await response.json()) as ReturnType<typeof emptyDashboard>;
+    const response = await request("/dashboard?days=7");
+    const data = (await response.json()) as ReturnType<typeof emptyDashboard>;
     const invalid = await request("/dashboard?days=999");
     const unfenced = await runtime.fetch(new Request("http://localhost/dashboard?days=7"));
 

@@ -9,11 +9,19 @@ import packageInfo from "../../package.json";
 async function mount() {
   const app = await createTestRenderer({ width: 80, height: 20 });
   const logo = new RadianLogo(app.renderer);
+
   app.renderer.root.add(logo);
+
   const mark = logo.findDescendantById("radian-logo-mark");
-  if (!(mark instanceof TextRenderable)) throw new Error("Missing logo");
+  if (!(mark instanceof TextRenderable)) {
+    throw new Error("Missing logo");
+  }
+
   const version = logo.findDescendantById("radian-logo-version");
-  if (!(version instanceof TextRenderable)) throw new Error("Missing logo version");
+  if (!(version instanceof TextRenderable)) {
+    throw new Error("Missing logo version");
+  }
+
   const render = async () => {
     await app.renderOnce();
     await app.renderOnce();
@@ -25,6 +33,7 @@ async function mount() {
       .slice(mark.y, mark.y + mark.height)
       .map((line) => line.slice(mark.x, mark.x + mark.width))
       .join("\n");
+
   return { ...app, mark, version, render, frame };
 }
 
@@ -142,6 +151,7 @@ test("Full and compact wordmarks follow palette changes and branding style overr
     // Switching the terminal palette repaints the full wordmark immediately.
     theme.configure(palette("#F0F0F0", "#101010"));
     await app.render();
+
     const darkInk = ink();
     expect(darkInk).toEqual(theme.styles["branding.logo"].fg.toInts());
     theme.configure(light);

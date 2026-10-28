@@ -9,13 +9,20 @@ export function textLinks(text: string): TextLink[] {
   let start = 0;
   for (const chunk of chunks) {
     const end = start + chunk.text.length;
-    if (chunk.link) links.push({ start, end, url: chunk.link.url });
+    if (chunk.link) {
+      links.push({ start, end, url: chunk.link.url });
+    }
+
     start = end;
   }
+
   return links;
 }
 
 export function textLinkAt(text: string, offset: number): string | null {
-  if (offset < 0 || offset >= text.length) return null;
+  if (offset < 0 || offset >= text.length) {
+    return null;
+  }
+
   return textLinks(text).find((link) => offset >= link.start && offset < link.end)?.url ?? null;
 }

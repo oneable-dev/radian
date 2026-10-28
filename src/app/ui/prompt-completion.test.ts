@@ -28,6 +28,7 @@ const fileItems = ["src/main.ts", "src/문서 file.ts"].map((value) => ({
   value,
   description: "Worktree file",
 }));
+
 async function mount(
   provider: CompletionProvider = async (_id, query) =>
     ok(filterCompletions(query.kind === "file" ? fileItems : commandItems, query.query)),
@@ -43,25 +44,32 @@ async function mount(
     onCloseSession: () => {},
     onPrompt: (id, text, images) => {
       sent.push(text);
+
       return submit ? submit(id, text, images) : ok(undefined);
     },
     onComplete: provider,
     getSessionDetails: () => ({ status: "working", output, error: null }),
   });
   const render = async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
+    for (let i = 0; i < 8; i++) {
+      await Promise.resolve();
+    }
+
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
   pressLeader(app, "a");
   await render();
+
   const input = app.renderer.root.findDescendantById("session-prompt") as PromptInput;
   const complete = async () => {
     await render();
     clock.advance(150);
     await render();
   };
+
   return {
     ...app,
     clock,
@@ -117,16 +125,18 @@ test.each(["/", "$", "@"] as const)(
       { kind: "skill", value: "skill:review-code", description: "Review code" },
       { kind: "file", value: "docs/reference.ts", description: "Reference file" },
     ];
-    let requests = 0,
-      reads = 0;
+    let requests = 0;
+    let reads = 0;
     const provider: CompletionProvider = Object.assign(
       async () => {
         requests++;
+
         return ok({ items, truncated: false });
       },
       {
         read: (_id: string, query: Parameters<CompletionProvider>[1]) => {
           reads++;
+
           return ok(
             query.kind === "file"
               ? filterCompletions(
@@ -151,6 +161,7 @@ test.each(["/", "$", "@"] as const)(
       expect(app.renderer.root.findDescendantById("completion-loading")!.visible).toBe(false);
       expect(app.captureCharFrame()).not.toContain("Loading");
       expect(requests).toBe(0);
+
       const before = reads;
       await app.stream("More background output");
       expect(reads).toBe(before);
@@ -206,6 +217,7 @@ test.each([
     const arrowColumn = (row: number) => {
       const line = app.captureCharFrame().split("\n")[row]!;
       expect(line).toContain("→ ");
+
       return Bun.stringWidth(line.slice(0, line.indexOf("→ ")));
     };
     try {
@@ -214,12 +226,14 @@ test.each([
       await app.render();
       await app.mockInput.typeText(trigger);
       await app.render();
+
       const first = app.renderer.root.findDescendantById("completion-option-0")!;
 
       expect(first.x).toBe(app.input.x);
       expect(arrowColumn(first.y)).toBe(app.input.x);
       app.mockInput.pressKey("n", { ctrl: true });
       await app.render();
+
       const second = app.renderer.root.findDescendantById("completion-option-1")!;
       expect(second.x).toBe(app.input.x);
       expect(arrowColumn(second.y)).toBe(app.input.x);
@@ -246,6 +260,7 @@ test("Watcher refreshes update candidates for unchanged queries while retaining 
       ok(filterCatalog(items, query)),
     subscribe: (listener: () => void) => {
       changed = listener;
+
       return () => {
         changed = undefined;
       };
@@ -278,8 +293,8 @@ test("Watcher refreshes update candidates for unchanged queries while retaining 
 test("Enter during cache reload never executes stale catalog commands", async () => {
   // Old candidates are not current between invalidation and replacement arrival.
   const pending = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>();
-  let ready = true,
-    changed: (() => void) | undefined;
+  let ready = true;
+  let changed: (() => void) | undefined;
   let items: readonly CompletionItem[] = [
     { kind: "command", value: "compact", description: "Old command" },
   ];
@@ -288,6 +303,7 @@ test("Enter during cache reload never executes stale catalog commands", async ()
       ready ? ok(filterCatalog(items, query)) : undefined,
     subscribe: (listener: () => void) => {
       changed = listener;
+
       return () => {
         changed = undefined;
       };
@@ -372,9 +388,10 @@ test("Closed slash menus use no space and open heights track lookup state and re
     app.renderer.root.findDescendantById("session-transcript")!.height,
   ];
   try {
-    const closed = geometry(),
-      composer = app.renderer.root.findDescendantById("agent-composer")!;
+    const closed = geometry();
+    const composer = app.renderer.root.findDescendantById("agent-composer")!;
     const metadata = app.renderer.root.findDescendantById("session-status")!;
+
     expect(app.menu().visible).toBe(false);
     expect(metadata.y).toBe(composer.y + composer.height);
 
@@ -391,6 +408,7 @@ test("Closed slash menus use no space and open heights track lookup state and re
         .captureCharFrame()
         .split("\n")
         .slice(menu.y, menu.y + menu.height);
+
     expect(menu.y).toBe(composer.y + composer.height);
     expect(menu.height).toBe(6);
     expect(lines()[0]).toContain("→ compact");
@@ -435,8 +453,10 @@ test.each([false, true])(
     const app = await mount(async () => ok({ items, truncated: false }));
     const cell = (x: number, y: number) => {
       let column = 0;
+
       return app.captureSpans().lines[y]!.spans.find((span) => {
         column += span.width;
+
         return column > x;
       })!;
     };
@@ -459,19 +479,22 @@ test.each([false, true])(
       app.clock.advance(500);
       await app.render();
 
-      const menu = app.menu(),
-        lines = app.captureCharFrame().split("\n"),
-        first = lines[menu.y]!,
-        second = lines[menu.y + 1]!;
+      const menu = app.menu();
+      const lines = app.captureCharFrame().split("\n");
+      const first = lines[menu.y]!;
+      const second = lines[menu.y + 1]!;
       const descriptionX = Bun.stringWidth(first.slice(0, first.indexOf("Document guide")));
+
       expect(menu.height).toBe(2);
       expect(first).toContain("→ guide:문서👩🏽‍💻");
       expect(descriptionX).toBe(Bun.stringWidth(second.slice(0, second.indexOf("Select model"))));
+
       const colors = uiTheme(app.renderer).colors;
       expect(cell(menu.x, menu.y).fg.toInts()).toEqual(colors.accent.toInts());
       expect(cell(descriptionX, menu.y + 1).fg.toInts()).toEqual(colors.muted.toInts());
-      for (const y of [menu.y, menu.y + 1])
+      for (const y of [menu.y, menu.y + 1]) {
         expect(cell(descriptionX, y).bg.toInts()).toEqual(colors.panel.toInts());
+      }
 
       // Clicking only inserts and preserves input focus and submission contracts.
       await app.mockMouse.click(menu.x + 4, menu.y + 1);
@@ -498,8 +521,12 @@ test("Large completion lists resize visible rows, scroll selection, and reclaim 
     await app.type("/");
 
     // Off-page selections move visible candidates and position hints together.
-    for (let i = 0; i < 7; i++) app.mockInput.pressKey("n", { ctrl: true });
+    for (let i = 0; i < 7; i++) {
+      app.mockInput.pressKey("n", { ctrl: true });
+    }
+
     await app.render();
+
     const page = () =>
       app
         .captureCharFrame()
@@ -512,14 +539,17 @@ test("Large completion lists resize visible rows, scroll selection, and reclaim 
     // Compact layouts preserve selection/drafts without covering input, information, or footer.
     app.resize(60, 11);
     await app.render();
+
     const footer = app.renderer.root.findDescendantById("app-footer")!;
     expect(page()).toContain("→ command-7");
     expect(app.menu().y + app.menu().height).toBeLessThanOrEqual(footer.y);
+
     const height = app.menu().height;
     for (let i = 0; i < 6; i++) {
       await app.render();
       expect(app.menu().height).toBe(height);
     }
+
     app.resize(120, 24);
     await app.render();
     expect(app.menu().height).toBe(6);
@@ -546,10 +576,15 @@ test("Completion height changes preserve historical first rows, scroll, and inpu
   const app = await mount(async (_id, query) => ok(filterCompletions(items, query.query)));
   try {
     await app.stream(Array.from({ length: 80 }, (_, i) => `HISTORY_${i}`).join("\n"));
+
     const scroll = app.renderer.root.findDescendantById("session-transcript");
-    if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript viewport");
+    if (!(scroll instanceof ScrollBoxRenderable)) {
+      throw new Error("Missing transcript viewport");
+    }
+
     scroll.scrollTo(12);
     await app.render();
+
     const first = () =>
       app
         .captureCharFrame()
@@ -557,8 +592,9 @@ test("Completion height changes preserve historical first rows, scroll, and inpu
         .slice(scroll.viewport.y, scroll.viewport.y + scroll.viewport.height)
         .join("\n")
         .match(/HISTORY_\d+/u)?.[0];
-    const before = first(),
-      top = scroll.scrollTop;
+    const before = first();
+    const top = scroll.scrollTop;
+
     expect(before).toBeDefined();
     expect(app.view.workViewPreferences.agentViews?.a1?.follow).toBe(false);
 
@@ -589,6 +625,7 @@ test("Rapid input queries once 150ms after the final edit while input/caret upda
   const queries: string[] = [];
   const app = await mount(async (_id, query) => {
     queries.push(query.query);
+
     return ok({ items: fileItems, truncated: false });
   });
   try {
@@ -628,6 +665,7 @@ test("Refresh preserves existing candidate height, selection, and footer without
   const app = await mount(async () => {
     const gate = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>();
     pending.push(gate);
+
     return gate.promise;
   });
   const geometry = () => [
@@ -644,8 +682,9 @@ test("Refresh preserves existing candidate height, selection, and footer without
     expect(app.menu().height).toBeGreaterThan(1);
     app.mockInput.pressKey("n", { ctrl: true });
     await app.render();
-    const filledGeometry = geometry(),
-      filledFooter = footer();
+
+    const filledGeometry = geometry();
+    const filledFooter = footer();
 
     app.mockInput.pressKey("a");
     await app.render();
@@ -682,20 +721,37 @@ test.each(["escape", "blur", "session", "dispose", "renderer"] as const)(
     let calls = 0;
     const app = await mount(async () => {
       calls++;
+
       return ok({ items: commandItems, truncated: false });
     });
     try {
       app.mockInput.pressKey("/");
       await app.render();
       expect(calls).toBe(0);
-      if (action === "escape") app.mockInput.pressEscape();
-      if (action === "blur") openWorkspaceSearch(app);
-      if (action === "session") app.selection.selectSession("demo:feature", "b1");
-      if (action === "dispose") app.view.dispose();
-      if (action === "renderer") app.renderer.destroy();
-      for (let index = 0; index < 8; index++) await Promise.resolve();
+      if (action === "escape") {
+        app.mockInput.pressEscape();
+      }
+      if (action === "blur") {
+        openWorkspaceSearch(app);
+      }
+      if (action === "session") {
+        app.selection.selectSession("demo:feature", "b1");
+      }
+      if (action === "dispose") {
+        app.view.dispose();
+      }
+      if (action === "renderer") {
+        app.renderer.destroy();
+      }
+      for (let index = 0; index < 8; index++) {
+        await Promise.resolve();
+      }
+
       app.clock.advance(1000);
-      for (let index = 0; index < 8; index++) await Promise.resolve();
+      for (let index = 0; index < 8; index++) {
+        await Promise.resolve();
+      }
+
       expect(calls).toBe(0);
       expect(app.sent).toEqual([]);
     } finally {
@@ -709,11 +765,13 @@ test("Loading completion never changes candidate columns or heights", async () =
   const app = await mount();
   try {
     await app.type("@");
+
     const position = () => [
       app.menu().height,
       app.captureCharFrame().split("\n")[app.menu().y]!.indexOf("src/main.ts"),
     ];
     const before = position();
+
     expect(before[1]).toBeGreaterThan(0);
     expect(app.menu().height).toBe(2);
 
@@ -736,6 +794,7 @@ test("Empty results and lookup errors preserve open-menu height and input positi
   try {
     app.mockInput.pressKey("/");
     await app.render();
+
     const geometry = [app.menu().height, app.input.y];
     app.clock.advance(150);
     await app.render();
@@ -782,8 +841,9 @@ test.each(["command", "template", "skill"] as const)(
       ok({ items: [{ kind, value, description: "Selected resource" }], truncated: false }),
     );
     try {
-      const trigger = kind === "skill" ? "$" : "/",
-        name = value.replace(/^skill:/u, "");
+      const trigger = kind === "skill" ? "$" : "/";
+      const name = value.replace(/^skill:/u, "");
+
       await app.type(`${trigger}com`);
       expect(app.captureCharFrame()).toContain(`→ ${name}`);
 
@@ -870,11 +930,22 @@ test.each(["edit", "dismiss", "session", "blur", "dispose", "changed-selection"]
       app.mockInput.pressEnter();
       await app.render();
 
-      if (action === "edit") app.mockInput.pressKey("x");
-      if (action === "dismiss") app.mockInput.pressEscape();
-      if (action === "session") app.selection.selectSession("demo:feature", "b1");
-      if (action === "blur") openWorkspaceSearch(app);
-      if (action === "dispose") app.view.dispose();
+      if (action === "edit") {
+        app.mockInput.pressKey("x");
+      }
+      if (action === "dismiss") {
+        app.mockInput.pressEscape();
+      }
+      if (action === "session") {
+        app.selection.selectSession("demo:feature", "b1");
+      }
+      if (action === "blur") {
+        openWorkspaceSearch(app);
+      }
+      if (action === "dispose") {
+        app.view.dispose();
+      }
+
       pending.resolve(
         ok({
           items: action === "changed-selection" ? [{ ...item, value: "compare" }] : [item],
@@ -940,7 +1011,10 @@ test("Rejected selections consume held Enter repeats without resending and retai
   );
   const raw = (text: string) => {
     const key = parseKeypress(text, { useKittyKeyboard: true });
-    if (!key) throw new Error("Invalid key fixture");
+    if (!key) {
+      throw new Error("Invalid key fixture");
+    }
+
     app.renderer.keyInput.processParsedKey(key);
   };
   try {
@@ -974,6 +1048,7 @@ test.each(["/", "$", "@"] as const)(
     const app = await mount(async () => ok({ items, truncated: false }));
     try {
       await app.type(trigger);
+
       const cursor = app.input.cursorOffset;
 
       // Move down twice and up once to verify both arrow directions.
@@ -1011,6 +1086,7 @@ test("Closing completion restores ordinary arrow editing and literal hjkl", asyn
     expect(app.menu().visible).toBe(true);
     app.mockInput.pressEscape();
     await app.render();
+
     const cursor = app.input.cursorOffset;
 
     // After Esc, move the caret up in the same input and type literal Vim characters.
@@ -1069,7 +1145,10 @@ test("Held kitty Tab repeats never become focus traversal after insertion", asyn
   const app = await mount();
   const raw = (text: string) => {
     const key = parseKeypress(text, { useKittyKeyboard: true });
-    if (!key) throw new Error("Invalid key fixture");
+    if (!key) {
+      throw new Error("Invalid key fixture");
+    }
+
     app.renderer.keyInput.processParsedKey(key);
   };
   try {
@@ -1093,7 +1172,10 @@ test("Repeated kitty Enter never duplicates selected command submissions", async
   const app = await mount();
   const raw = (text: string) => {
     const key = parseKeypress(text, { useKittyKeyboard: true });
-    if (!key) throw new Error("Invalid key fixture");
+    if (!key) {
+      throw new Error("Invalid key fixture");
+    }
+
     app.renderer.keyInput.processParsedKey(key);
   };
   try {
@@ -1184,19 +1266,26 @@ test.each(["pending", "empty", "error"] as const)(
   "Enter submits typed commands once even when lookup is %s",
   async (state) => {
     const pending = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>();
-    const app = await mount(async () =>
-      state === "pending"
-        ? pending.promise
-        : state === "error"
-          ? err(new CapabilityError("Lookup unavailable"))
-          : ok({ items: [], truncated: false }),
-    );
+    const app = await mount(async () => {
+      if (state === "pending") {
+        return pending.promise;
+      } else if (state === "error") {
+        return err(new CapabilityError("Lookup unavailable"));
+      } else {
+        return ok({ items: [], truncated: false });
+      }
+    });
     try {
       // Read-only discovery must not gate execution, even when it fails or has no matches.
       await app.type("/mcp");
       expect(app.menu().visible).toBe(true);
-      if (state === "empty") expect(app.captureCharFrame()).toContain("No matches");
-      if (state === "error") expect(app.captureCharFrame()).toContain("UNSUPPORTED_CAPABILITY");
+      if (state === "empty") {
+        expect(app.captureCharFrame()).toContain("No matches");
+      }
+      if (state === "error") {
+        expect(app.captureCharFrame()).toContain("UNSUPPORTED_CAPABILITY");
+      }
+
       app.mockInput.pressEnter();
       app.mockInput.pressEnter();
       await app.render();
@@ -1296,10 +1385,12 @@ test("Stale candidates after session switching are ignored while each draft surv
   const app = await mount(async (id, _query, signal) => {
     const gate = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>();
     pending.push({ id, signal, gate });
+
     return gate.promise;
   });
   try {
     await app.type("/");
+
     const other = app.selection.snapshot
       .flatMap((repo) => repo.worktrees)
       .flatMap((tree) => tree.sessions.map((session) => ({ tree, session })))
@@ -1333,13 +1424,17 @@ test("Renderer-first shutdown cancels lookups and late responses never access na
   let signal: AbortSignal | undefined;
   const app = await mount(async (_id, _query, abort) => {
     signal = abort;
+
     return gate.promise;
   });
   try {
     await app.type("/");
     app.renderer.destroy();
     gate.resolve(ok({ items: commandItems, truncated: false }));
-    for (let i = 0; i < 12; i++) await Promise.resolve();
+    for (let i = 0; i < 12; i++) {
+      await Promise.resolve();
+    }
+
     expect(signal?.aborted).toBe(true);
     expect(app.sent).toEqual([]);
     app.view.dispose();
@@ -1352,18 +1447,22 @@ test("Streaming and compact layouts retain selection with candidates between inp
   let queries = 0;
   const app = await mount(async (_id, query) => {
     queries++;
+
     return ok(filterCompletions(commandItems, query.query));
   });
   try {
     await app.type("/");
     app.mockInput.pressKey("n", { ctrl: true });
     await app.render();
+
     const before = queries;
     await app.stream("Streaming more output");
     app.resize(60, 12);
     await app.render();
+
     const composer = app.renderer.root.findDescendantById("agent-composer")!;
     const footer = app.renderer.root.findDescendantById("footer-bar")!;
+
     expect(app.menu().y).toBeGreaterThanOrEqual(composer.y + composer.height);
     expect(app.menu().y + app.menu().height).toBeLessThanOrEqual(footer.y);
     expect(queries).toBe(before);

@@ -15,8 +15,11 @@ export const transcriptViewSchema = Type.Object({
   linewise: Type.Optional(Type.Boolean()),
   follow: Type.Boolean(),
 });
+
 export type TranscriptViewState = Static<typeof transcriptViewSchema>;
+
 export const agentViewsSchema = Type.Record(Type.String(), transcriptViewSchema);
+
 export function emptyTranscriptView(): TranscriptViewState {
   return {
     selectedId: null,

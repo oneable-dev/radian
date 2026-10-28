@@ -10,17 +10,17 @@ import { PromptInput } from "../../agents/ui/prompt-input.ts";
 import { ok } from "../../result.ts";
 
 async function mount(width = 150) {
-  const clock = new ManualClock(),
-    app = await createTestRenderer({
-      width,
-      height: 30,
-      kittyKeyboard: true,
-      exitOnCtrlC: false,
-      clock,
-    });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    interrupted: string[] = [],
-    sent: string[] = [];
+  const clock = new ManualClock();
+  const app = await createTestRenderer({
+    width,
+    height: 30,
+    kittyKeyboard: true,
+    exitOnCtrlC: false,
+    clock,
+  });
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const interrupted: string[] = [];
+  const sent: string[] = [];
   let state: ExecutionState = {
     conversationId: "conversation",
     status: "working",
@@ -37,10 +37,12 @@ async function mount(width = 150) {
     onCloseSession: () => {},
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     onInterrupt: async (id) => {
       interrupted.push(id);
+
       return ok(undefined);
     },
     getSessionDetails: () => state,
@@ -56,9 +58,11 @@ async function mount(width = 150) {
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
   prompt.focus();
   await render();
+
   return {
     ...app,
     clock,
@@ -88,12 +92,13 @@ test("Queued hints and shortcuts share one row while indented messages remain se
     await app.render();
 
     // Keep hints on one row, messages immediately below, and one blank row before input.
-    const frame = app.captureCharFrame(),
-      lines = frame.split("\n");
-    const pending = app.get("agent-pending-messages"),
-      status = app.get("agent-run-status"),
-      composer = app.get("agent-composer");
+    const frame = app.captureCharFrame();
+    const lines = frame.split("\n");
+    const pending = app.get("agent-pending-messages");
+    const status = app.get("agent-run-status");
+    const composer = app.get("agent-composer");
     const row = (y: number) => lines[y]!.slice(pending.x, pending.x + pending.width).trimEnd();
+
     expect(row(status.y)).toContain("Working (12s · <Esc> to interrupt)");
     expect(row(status.y + 1)).toBe("“Current request”");
     expect(status.height).toBe(2);
@@ -104,15 +109,20 @@ test("Queued hints and shortcuts share one row while indented messages remain se
     expect(row(pending.y + 2)).toBe("  ↳ Do not edit README");
     expect(row(pending.y + 3)).toBe("");
     expect(frame).not.toContain("Queued");
+
     const statusGroup = app.get("transcript-status-row");
     expect(pending.y).toBe(statusGroup.y + statusGroup.height + 1);
     expect(composer.y).toBe(pending.y + 4);
+
     const hints = app
       .captureSpans()
       .lines.flatMap((line) => line.spans)
       .filter((span) => span.text === "<Esc>");
     expect(hints).toHaveLength(2);
-    for (const span of hints) expect(span.attributes & TextAttributes.BOLD).not.toBe(0);
+    for (const span of hints) {
+      expect(span.attributes & TextAttributes.BOLD).not.toBe(0);
+    }
+
     expect(app.sent).toEqual([]);
 
     // Esc interrupts only selected runs without arbitrarily clearing drafts or runtime queues.
@@ -188,11 +198,14 @@ test("Long queues in compact layouts never overlap input, status, or footer", as
     app.resize(70, 11);
     await app.render();
 
-    const composer = app.get("agent-composer"),
-      pending = app.get("agent-pending-messages"),
-      telemetry = app.get("session-status"),
-      footer = app.get("app-footer");
-    if (pending.visible) expect(pending.y + pending.height).toBeLessThanOrEqual(composer.y);
+    const composer = app.get("agent-composer");
+    const pending = app.get("agent-pending-messages");
+    const telemetry = app.get("session-status");
+    const footer = app.get("app-footer");
+    if (pending.visible) {
+      expect(pending.y + pending.height).toBeLessThanOrEqual(composer.y);
+    }
+
     expect(composer.y + composer.height).toBeLessThanOrEqual(telemetry.y);
     expect(telemetry.y + telemetry.height).toBeLessThanOrEqual(footer.y);
     expect(app.prompt.height).toBeGreaterThan(0);

@@ -8,18 +8,22 @@ export function bindAccountSession(
   worktreeId: string,
   session: AgentSession,
 ): () => void {
-  const original = session.agent.streamFunction,
-    scopes = new Set<string>();
+  const original = session.agent.streamFunction;
+  const scopes = new Set<string>();
+
   session.agent.streamFunction = (model, context, options) =>
     manager.request(worktreeId, async (runtime, identity) => {
       const auth = await runtime.getAuth(model, options?.signal ? { signal: options.signal } : {});
-      if (!auth)
+      if (!auth) {
         throw new ModelsError(
           "auth",
           "The selected provider has no authentication. Open /accounts to configure it.",
         );
+      }
+
       const sessionId = manager.transportScope(options?.sessionId ?? session.sessionId, auth);
       scopes.add(sessionId);
+
       const stamp = identity(model.provider);
       const current = () => manager.selectionIdentity(worktreeId, model.provider) === stamp;
       // Compaction may pass previously resolved auth in options. Do not carry A's key/env or
@@ -37,6 +41,7 @@ export function bindAccountSession(
             ].includes(name.toLowerCase()),
         ),
       );
+
       return original(
         auth.auth.baseUrl ? { ...model, baseUrl: auth.auth.baseUrl } : model,
         context,
@@ -47,16 +52,24 @@ export function bindAccountSession(
           headers: { ...headers, ...auth.auth.headers },
           ...(auth.env ? { env: auth.env } : {}),
           onResponse: async (response, model) => {
-            if (current()) await options?.onResponse?.(response, model);
+            if (current()) {
+              await options?.onResponse?.(response, model);
+            }
           },
           onProviderStreamEvent: async (event, model) => {
-            if (current()) await options?.onProviderStreamEvent?.(event, model);
+            if (current()) {
+              await options?.onProviderStreamEvent?.(event, model);
+            }
           },
         },
       );
     });
+
   return () => {
-    for (const scope of scopes) cleanupSessionResources(scope);
+    for (const scope of scopes) {
+      cleanupSessionResources(scope);
+    }
+
     scopes.clear();
   };
 }

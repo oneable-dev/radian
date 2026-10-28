@@ -99,7 +99,9 @@ export const styleGroups = [
   "git.graph.7",
   "git.graph.8",
 ] as const;
+
 export type StyleGroup = (typeof styleGroups)[number];
+
 export type StyleOverride = {
   fg?: string;
   bg?: string | null;
@@ -107,6 +109,8 @@ export type StyleOverride = {
   italic?: boolean;
   underline?: boolean;
 };
+
 export type StyleOverrides = Partial<Record<StyleGroup, StyleOverride>>;
+
 const names: ReadonlySet<string> = new Set(styleGroups);
 export const isStyleGroup = (name: string): name is StyleGroup => names.has(name);

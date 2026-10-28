@@ -15,7 +15,10 @@ import { ok } from "../../result.ts";
 async function until(check: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 10000;
   while (!(await check())) {
-    if (Date.now() > deadline) throw new Error("Transcript runtime observation timed out");
+    if (Date.now() > deadline) {
+      throw new Error("Transcript runtime observation timed out");
+    }
+
     await Bun.sleep(10);
   }
 }
@@ -28,9 +31,13 @@ test("Real SDK/IPC folding, selection, and cursors restore the same run and sour
     stateRoot: join(fixture.directory, "state"),
     entry: join(import.meta.dir, "..", "..", "index.ts"),
   };
+
   async function mount() {
     const client = expectOk(await connectRuntime(fixture.repository, fixture.main, options));
-    if (!client) throw new Error("Missing runtime");
+    if (!client) {
+      throw new Error("Missing runtime");
+    }
+
     const worktree = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
     let id = client.snapshot.repositories[0]?.worktrees.find((tree) => tree.id === worktree.id)
       ?.sessions[0]?.id;
@@ -47,10 +54,13 @@ test("Real SDK/IPC folding, selection, and cursors restore the same run and sour
       );
       await until(() => client.snapshot.preferences.drafts[id!] === "warm draft");
     }
+
     const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
     const selection = new WorkspaceSelection(client.snapshot.repositories);
     const preferences = structuredClone(client.snapshot.preferences);
+
     selection.restore(preferences.selection);
+
     let pending = Promise.resolve();
     const copies: string[] = [];
     const view = new Workbench(app.renderer, selection, {
@@ -69,6 +79,7 @@ test("Real SDK/IPC folding, selection, and cursors restore the same run and sour
       },
       onCopyTranscript: async (text) => {
         copies.push(text);
+
         return ok("Copied to clipboard");
       },
     });
@@ -79,7 +90,9 @@ test("Real SDK/IPC folding, selection, and cursors restore the same run and sour
       await app.renderOnce();
       await app.renderOnce();
     };
+
     await render();
+
     return {
       ...app,
       client,
@@ -96,14 +109,17 @@ test("Real SDK/IPC folding, selection, and cursors restore the same run and sour
       },
     };
   }
+
   let app: Awaited<ReturnType<typeof mount>> | undefined;
   try {
     app = await mount();
     expect(app.client.snapshot.capabilities).toContain("agent-transcript");
-    const pid = app.client.snapshot.pid,
-      id = app.id;
+
+    const pid = app.client.snapshot.pid;
+    const id = app.id;
     const sections = app.client.snapshot.details[id]!.sections!;
     const toolIndex = sections.findIndex((section) => section.kind === "tool");
+
     expect(toolIndex).toBeGreaterThan(0);
     await until(
       async () =>
@@ -111,14 +127,21 @@ test("Real SDK/IPC folding, selection, and cursors restore the same run and sour
           await new RuntimeStore(app!.client.paths).load(fixture.repository.id),
         )?.records.some((record) => record.id === id && record.sessionFile),
     );
+
     const manifest = expectOk(await new RuntimeStore(app.client.paths).load(fixture.repository.id));
-    if (!manifest) throw new Error("Missing runtime manifest");
+    if (!manifest) {
+      throw new Error("Missing runtime manifest");
+    }
+
     const file = manifest.records.find((record) => record.id === id)!.sessionFile!;
     const originalHistory = await Bun.file(file).text();
 
     pressLeader(app, "[");
     app.mockInput.pressKey("HOME");
-    for (let index = 0; index < toolIndex; index++) app.mockInput.pressKey("j");
+    for (let index = 0; index < toolIndex; index++) {
+      app.mockInput.pressKey("j");
+    }
+
     app.mockInput.pressKey("o", { ctrl: true });
     app.mockInput.pressEnter();
     app.mockInput.pressKey("v");
@@ -180,6 +203,7 @@ test("Real SDK/IPC folding, selection, and cursors restore the same run and sour
     expect(await Bun.file(file).text()).toBe(originalHistory);
   } finally {
     await app?.close();
+
     const admin = expectOk(
       await connectRuntime(fixture.repository, fixture.main, { ...options, start: false }),
     );
@@ -188,6 +212,7 @@ test("Real SDK/IPC folding, selection, and cursors restore the same run and sour
       await admin.disconnect();
       await until(async () => !expectOk(await fetchSnapshot(admin.paths)));
     }
+
     await fixture.cleanup();
   }
 }, 25000);

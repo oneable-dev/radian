@@ -17,6 +17,7 @@ export const sessionResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
 export type SessionResult = Static<typeof sessionResultSchema>;
 
 export function needsAttention(result: SessionResult): boolean {

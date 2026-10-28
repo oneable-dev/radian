@@ -16,30 +16,46 @@ import type { UsageWindow } from "../../usage/model.ts";
 import { icons } from "../../icons.ts";
 
 type Meter = { label: string; percent: number | null; value: string; muted?: boolean };
+
 const cellWidth = (text: string) => Bun.stringWidth(text);
 const percentage = (value: number | null) => (value === null ? "-" : `${Math.round(value)}%`);
 const clampPercent = (value: number) => Math.max(0, Math.min(100, value));
+
 function providerLabel(
   provider: string | null | undefined,
   sessionProvider: string | null | undefined,
 ): string | null {
-  if (provider === "openai" || provider === "openai-codex")
+  if (provider === "openai" || provider === "openai-codex") {
     return provider === "openai-codex" || sessionProvider === "openai-codex" ? "chatgpt" : "openai";
+  }
+
   return provider === "anthropic" ? "claude" : null;
 }
 
 function resetTime(resetsAt: number | null, now: number): string {
-  if (resetsAt === null || resetsAt <= now) return "";
+  if (resetsAt === null || resetsAt <= now) {
+    return "";
+  }
+
   const minutes = Math.ceil((resetsAt - now) / 60000);
-  const days = Math.floor(minutes / 1440),
-    hours = Math.floor((minutes % 1440) / 60);
-  return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  if (days) {
+    return `${days}d ${hours}h`;
+  } else if (hours) {
+    return `${hours}h ${minutes % 60}m`;
+  } else {
+    return `${minutes}m`;
+  }
 }
 
 function usageWindow(telemetry: SessionTelemetry | null, now: number): UsageWindow | null {
   const usage = telemetry?.usage;
   if (usage !== undefined) {
-    if (usage.status !== "ready" && usage.status !== "error") return null;
+    if (usage.status !== "ready" && usage.status !== "error") {
+      return null;
+    }
+
     // The compact view follows the longest returned window, rather than a provider-specific weekly slot.
     return (
       usage.windows
@@ -47,8 +63,10 @@ function usageWindow(telemetry: SessionTelemetry | null, now: number): UsageWind
         .toSorted((a, b) => (b.periodMs ?? 0) - (a.periodMs ?? 0))[0] ?? null
     );
   }
+
   // Additive compatibility with earlier runtimes that only observed a weekly response header.
   const weekly = telemetry?.weekly;
+
   return weekly && weekly.resetsAt > now
     ? {
         id: "legacy-weekly",
@@ -81,14 +99,17 @@ function meterChunks(meter: Meter, width: number, colors: UiColors, styles: UiSt
                 ),
       });
     }
+
     chunks.push(styleChunk(" ", styles["ui.muted"]));
   }
+
   chunks.push(
     styleChunk(
       meter.value,
       styles[meter.muted || meter.percent === null ? "ui.muted" : "ui.label"],
     ),
   );
+
   return chunks;
 }
 
@@ -116,6 +137,7 @@ export class SessionStatus {
       flexShrink: 0,
       onSizeChange: () => this.paint(),
     });
+
     const row = new BoxRenderable(renderer, {
       id: "session-status-line",
       width: "100%",
@@ -151,16 +173,25 @@ export class SessionStatus {
   }
 
   update(telemetry: SessionTelemetry | undefined, visible: boolean, capturedAt?: number): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.telemetry = telemetry ?? null;
     this.capturedAt = capturedAt;
     this.visible = visible;
     this.root.visible = visible;
+
     const recovering =
       telemetry?.usage?.status === "loading" || telemetry?.usage?.status === "error";
-    if (!visible || capturedAt !== undefined) this.spinner.cancel();
-    else if (recovering && !this.recovering) this.spinner.start();
-    else if (!recovering && this.recovering) this.spinner.stop();
+    if (!visible || capturedAt !== undefined) {
+      this.spinner.cancel();
+    } else if (recovering && !this.recovering) {
+      this.spinner.start();
+    } else if (!recovering && this.recovering) {
+      this.spinner.stop();
+    }
+
     this.recovering = visible && capturedAt === undefined && recovering;
     this.cancelExpiry();
     this.paint();
@@ -168,16 +199,25 @@ export class SessionStatus {
   }
 
   updateMcp(status: McpStatus | undefined): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.mcp = status;
     this.paint();
   }
 
   private scheduleTick(): void {
-    if (this.disposed || !this.visible || this.capturedAt !== undefined) return;
-    const now = Date.now(),
-      reset = usageWindow(this.telemetry, now)?.resetsAt;
-    if (reset === undefined || reset === null || reset <= now) return;
+    if (this.disposed || !this.visible || this.capturedAt !== undefined) {
+      return;
+    }
+
+    const now = Date.now();
+    const reset = usageWindow(this.telemetry, now)?.resetsAt;
+    if (reset === undefined || reset === null || reset <= now) {
+      return;
+    }
+
     this.expiry = setTimeout(
       () => {
         this.expiry = undefined;
@@ -189,24 +229,27 @@ export class SessionStatus {
   }
 
   private paint(): void {
-    if (this.disposed || !this.visible || !this.root || this.root.isDestroyed) return;
-    const theme = uiTheme(this.renderer),
-      colors = theme.colors,
-      styles = theme.styles;
+    if (this.disposed || !this.visible || !this.root || this.root.isDestroyed) {
+      return;
+    }
+
+    const theme = uiTheme(this.renderer);
+    const colors = theme.colors;
+    const styles = theme.styles;
     const telemetry = this.telemetry;
     const recovering =
       telemetry?.usage?.status === "loading" || telemetry?.usage?.status === "error";
     const spinning = this.spinner.root.visible;
     // Reserve a separate slot for the shared spinner's minimum-visible tail without delaying new values.
     const spinnerWidth = spinning ? (recovering ? 1 : 2) : 0;
-    const totalWidth = Math.max(0, this.root.width - spinnerWidth),
-      now = this.capturedAt ?? Date.now();
+    const totalWidth = Math.max(0, this.root.width - spinnerWidth);
+    const now = this.capturedAt ?? Date.now();
     const context = telemetry?.context;
     const window = usageWindow(telemetry, now);
     const countdown = resetTime(window?.resetsAt ?? null, now);
     const provider = telemetry?.usage?.provider ?? telemetry?.provider;
-    const hasIcon = this.providerIcon.setProvider(provider),
-      providerName = providerLabel(provider, telemetry?.provider);
+    const hasIcon = this.providerIcon.setProvider(provider);
+    const providerName = providerLabel(provider, telemetry?.provider);
     const signature = JSON.stringify([
       totalWidth,
       spinning,
@@ -215,11 +258,15 @@ export class SessionStatus {
       window?.id,
       countdown,
     ]);
-    if (signature === this.lastPaint) return;
+    if (signature === this.lastPaint) {
+      return;
+    }
+
     this.lastPaint = signature;
     this.root.backgroundColor = styles["ui.text"].bg;
     this.text.bg = styles["ui.text"].bg;
     paintText(this.spinner.root, styles["ui.muted"]);
+
     const remaining =
       context?.usedTokens !== null && context?.usedTokens !== undefined && context.maxTokens > 0
         ? clampPercent((1 - context.usedTokens / context.maxTokens) * 100)
@@ -257,8 +304,8 @@ export class SessionStatus {
             usage.value,
           ]
         : [usage.value];
-    const model = telemetry?.model ?? "model —",
-      effort = telemetry?.effort ?? "—";
+    const model = telemetry?.model ?? "model —";
+    const effort = telemetry?.effort ?? "—";
     const fast = telemetry?.fast === true ? "on" : telemetry?.fast === false ? "off" : "—";
     const chunk = (text: string, group: StyleGroup): TextChunk => styleChunk(text, styles[group]);
     const modelChunk = chunk(
@@ -288,16 +335,22 @@ export class SessionStatus {
       mcpChunks.push(chunk(` · ${icons.mcp} mcp ${servers}`, "ui.muted"));
       if (needsAuth || errors) {
         mcpChunks.push(chunk(" (", "ui.muted"));
-        if (needsAuth)
+        if (needsAuth) {
           mcpChunks.push(
             chunk(`${needsAuth} ${needsAuth === 1 ? "needs" : "need"} auth`, "status.warning"),
           );
-        if (needsAuth && errors) mcpChunks.push(chunk(" · ", "ui.muted"));
-        if (errors)
+        }
+        if (needsAuth && errors) {
+          mcpChunks.push(chunk(" · ", "ui.muted"));
+        }
+        if (errors) {
           mcpChunks.push(chunk(`${errors} ${errors === 1 ? "error" : "errors"}`, "status.error"));
+        }
+
         mcpChunks.push(chunk(")", "ui.muted"));
       }
     }
+
     const identities = [
       ...(mcpChunks.length ? [[...fullIdentity, ...mcpChunks]] : []),
       fullIdentity,
@@ -328,7 +381,10 @@ export class SessionStatus {
                 0,
               );
             const identityWidth = identity.text ? cellWidth(identity.text) + 2 : 0;
-            if (meterWidth + identityWidth > width) continue;
+            if (meterWidth + identityWidth > width) {
+              continue;
+            }
+
             const chunks: TextChunk[] = identity.text
               ? [
                   ...identity.chunks,
@@ -336,22 +392,26 @@ export class SessionStatus {
                 ]
               : [];
             const separation = identity.text ? 2 : 2 + width - meterWidth;
+
             chunks.push(
               ...meterChunks(meters[0]!, barWidth, colors, styles),
               chunk(" ".repeat(separation), "ui.muted"),
               ...meterChunks(meters[1]!, barWidth, colors, styles),
             );
             this.text.content = new StyledText(chunks);
+
             const usageWidth =
               cellWidth(`${meters[1]!.label} ${meters[1]!.value}`) +
               (barWidth && meters[1]!.percent !== null ? barWidth + 1 : 0);
             this.providerIcon.left = width - usageWidth;
             this.providerIcon.visible = hasIcon;
+
             return;
           }
         }
       }
     }
+
     const compact = `${contextMeter.value} ${usage.value}`;
     this.text.content = cellWidth(compact) <= width ? compact : "-";
     this.providerIcon.visible = false;
@@ -359,11 +419,18 @@ export class SessionStatus {
   }
 
   private cancelExpiry(): void {
-    if (this.expiry !== undefined) clearTimeout(this.expiry);
+    if (this.expiry !== undefined) {
+      clearTimeout(this.expiry);
+    }
+
     this.expiry = undefined;
   }
+
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.disposed = true;
     this.visible = false;
     this.cancelExpiry();

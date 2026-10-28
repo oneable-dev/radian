@@ -10,7 +10,10 @@ export function panelSpacing(renderer: Pick<CliRenderer, "width" | "height">) {
 // Keep side insets outside embedded programs rather than padding inside their screen.
 export function bindPanelSpacing(renderer: CliRenderer, panel: BoxRenderable): void {
   const resize = () => {
-    if (panel.isDestroyed) return;
+    if (panel.isDestroyed) {
+      return;
+    }
+
     const { horizontal } = panelSpacing(renderer);
     panel.paddingX = horizontal;
     panel.paddingTop = 0;

@@ -17,27 +17,31 @@ function execution(id: string): SessionExecutor & { closes: number; switches: nu
     prompt: async () => ok(undefined),
     async beforeNewSession() {
       this.switches++;
+
       return ok(undefined);
     },
     async close() {
       this.closes++;
+
       return ok(undefined);
     },
   };
 }
 
 test("newTab adds to the original worktree without replacing active runs or child ownership", async () => {
-  const contexts: SessionContext[] = [],
-    executions: ReturnType<typeof execution>[] = [];
+  const contexts: SessionContext[] = [];
+  const executions: ReturnType<typeof execution>[] = [];
   const registry = new SessionRegistry(demoWorkspace(), async (context) => {
     contexts.push(context);
+
     const next = execution(`conversation-${contexts.length}`);
     executions.push(next);
+
     return next;
   });
   try {
-    const original = expectOk(await registry.create("demo:feature")),
-      other = expectOk(await registry.create("demo:main"));
+    const original = expectOk(await registry.create("demo:feature"));
+    const other = expectOk(await registry.create("demo:main"));
     const before = registry.details(original);
 
     const added = expectOk(await registry.newTab(original));
@@ -74,12 +78,16 @@ test("New-tab failures neither interrupt existing tabs nor clear conversations",
   const original = execution("original");
   let calls = 0;
   const registry = new SessionRegistry(demoWorkspace(), async () => {
-    if (++calls > 1) throw new StorageError("New tab could not be prepared", "EIO");
+    if (++calls > 1) {
+      throw new StorageError("New tab could not be prepared", "EIO");
+    }
+
     return original;
   });
   try {
     const id = expectOk(await registry.create("demo:main"));
     const result = await registry.newTab(id);
+
     expect(expectError(result).code).toBe("STORAGE_FAILED");
     expect(original.closes).toBe(0);
     expect(original.switches).toBe(0);

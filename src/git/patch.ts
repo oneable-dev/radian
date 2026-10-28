@@ -5,12 +5,17 @@ import type { GitComparison } from "./model.ts";
 
 export function fullFilePatch(comparison: GitComparison): Result<string, GitError> {
   const { before, after } = comparison;
-  if (!before && !after) return ok("");
+  if (!before && !after) {
+    return ok("");
+  }
   // jsdiff intentionally emits no hunks for equal files. A context-only hunk keeps
   // pure renames/mode changes navigable without inventing a content modification.
   if (before === after) {
     const lines = before.split("\n");
-    if (lines.at(-1) === "") lines.pop();
+    if (lines.at(-1) === "") {
+      lines.pop();
+    }
+
     return ok(
       [
         "--- Before",
@@ -22,11 +27,13 @@ export function fullFilePatch(comparison: GitComparison): Result<string, GitErro
       ].join("\n"),
     );
   }
+
   const patch = createTwoFilesPatch("Before", "After", before, after, undefined, undefined, {
     context: Infinity,
     timeout: 150,
     maxEditLength: 40000,
   });
+
   return patch === undefined
     ? err(
         new GitError(

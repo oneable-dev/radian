@@ -5,7 +5,10 @@ import packageInfo from "../../package.json";
 
 function options(args: string[] = [], env: NodeJS.ProcessEnv = {}) {
   const action = expectOk(parseCli(args, { cwd: "/fixture", env }));
-  if (action.kind !== "run") throw new Error("Expected runnable CLI options");
+  if (action.kind !== "run") {
+    throw new Error("Expected runnable CLI options");
+  }
+
   return action.options;
 }
 
@@ -23,6 +26,7 @@ test("Commander help and version produce immediate output rather than execution 
       expect(action.text).not.toContain("\x1b");
     }
   }
+
   const version = expectOk(parseCli(["--version"]));
   expect(version).toEqual({ kind: "output", text: packageInfo.version + "\n" });
 });
@@ -120,10 +124,12 @@ test("TTY/TERM checks reject only interactive execution while allowing help, man
     ["runtime", "stop"],
     ["runtime", "restart"],
     ["--runtime-service"],
-  ])
+  ]) {
     expectOk(
       checkInteractiveHost(options(args), { stdinTTY: false, stdoutTTY: false, term: "dumb" }),
     );
+  }
+
   expectOk(
     checkInteractiveHost(options(), { stdinTTY: true, stdoutTTY: true, term: "xterm-256color" }),
   );

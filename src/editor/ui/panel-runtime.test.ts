@@ -13,7 +13,10 @@ import { pidAlive } from "../../runtime/storage.ts";
 async function until(check: () => boolean | Promise<boolean>) {
   const deadline = Date.now() + 8000;
   while (!(await check())) {
-    if (Date.now() > deadline) throw new Error("UI/runtime observation timed out");
+    if (Date.now() > deadline) {
+      throw new Error("UI/runtime observation timed out");
+    }
+
     await Bun.sleep(15);
   }
 }
@@ -26,13 +29,19 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
     stateRoot: join(fixture.directory, "state"),
     entry: join(import.meta.dir, "..", "..", "index.ts"),
   };
+
   async function mount() {
     const client = expectOk(await connectRuntime(fixture.repository, fixture.main, options));
-    if (!client) throw new Error("Missing runtime");
+    if (!client) {
+      throw new Error("Missing runtime");
+    }
+
     const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
     const selection = new WorkspaceSelection(client.snapshot.repositories);
     const preferences = structuredClone(client.snapshot.preferences);
+
     selection.restore(preferences.selection);
+
     let pending = Promise.resolve();
     let diagnosticFrame: import("../../runtime/protocol.ts").EditorFrame | undefined;
     const persist = () => {
@@ -71,7 +80,9 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
       selection.replaceSnapshot(client.snapshot.repositories),
     );
     const unselect = selection.subscribe(persist);
+
     await app.renderOnce();
+
     return {
       ...app,
       client,
@@ -93,10 +104,14 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
           await app.renderOnce();
           await app.renderOnce();
         }
-        const lines = app.captureCharFrame().split("\n"),
-          y = lines.findIndex((line) => line.includes(text)),
-          x = lines[y]?.indexOf(text) ?? -1;
-        if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+
+        const lines = app.captureCharFrame().split("\n");
+        const y = lines.findIndex((line) => line.includes(text));
+        const x = lines[y]?.indexOf(text) ?? -1;
+        if (x < 0) {
+          throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+        }
+
         await app.mockMouse.click(x, y);
         await app.renderOnce();
       },
@@ -104,6 +119,7 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
         try {
           await until(async () => {
             await app.renderOnce();
+
             return app.captureCharFrame().includes(text);
           });
         } catch (error) {
@@ -125,6 +141,7 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
       },
     };
   }
+
   let app: Awaited<ReturnType<typeof mount>> | undefined;
   try {
     app = await mount();
@@ -133,16 +150,20 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
     await app.mockInput.typeText("iunsaved-native-editor");
     app.mockInput.pressEscape();
     await app.visible("unsaved-native-editor");
+
     const pid = app.client.snapshot.editors![0]!.pid;
     const originalSurface = app.renderer.currentFocusedRenderable;
     // Every presented return frame must retain the unsaved buffer, not merely converge later.
     for (const away of ["a", "g"] as const) {
       await app.showView(away);
+
       const frames: string[] = [];
       const capture = () => {
-        if (app!.renderer.root.findDescendantById("editor-view")!.visible)
+        if (app!.renderer.root.findDescendantById("editor-view")!.visible) {
           frames.push(app!.captureCharFrame());
+        }
       };
+
       app.renderer.on("frame", capture);
       try {
         await app.showView("e");
@@ -158,6 +179,7 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
         app.renderer.off("frame", capture);
       }
     }
+
     // Workspace overlays must not resize or restart the running native editor.
     const sidebar = app.renderer.root.findDescendantById("workspace-sidebar")!;
     const rulerColumn = () =>
@@ -167,7 +189,9 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
         .find((line) => line.includes("[No Name]"))
         ?.indexOf("All") ?? -1;
     const expectedRuler = rulerColumn();
+
     expect(expectedRuler).toBeGreaterThan(0);
+
     const transitions: {
       marker: boolean;
       ruler: number;
@@ -181,6 +205,7 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
         width: originalSurface!.width,
         remote: app!.editorFrame?.cols,
       });
+
     app.renderer.on("frame", captureSidebar);
     try {
       for (const visible of [true, false, true, false]) {
@@ -188,9 +213,11 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
         app.mockInput.pressKey("b");
         await until(async () => {
           await app!.renderOnce();
+
           return sidebar.visible === visible;
         });
       }
+
       expect(transitions.length).toBeGreaterThan(0);
       expect(
         transitions.every(
@@ -207,11 +234,14 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
           app.mockInput.pressKey(" ", { ctrl: true });
           app.mockInput.pressKey("b");
         }
+
         await until(async () => {
           await app!.renderOnce();
+
           return sidebar.visible === visible;
         });
       }
+
       // Even a suspended native process must not block opening or closing a popup.
       process.kill(pid, "SIGSTOP");
       try {
@@ -227,6 +257,7 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
       } finally {
         process.kill(pid, "SIGCONT");
       }
+
       expect(transitions.every((frame) => frame.marker && frame.ruler === expectedRuler)).toBe(
         true,
       );
@@ -235,6 +266,7 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
     } finally {
       app.renderer.off("frame", captureSidebar);
     }
+
     // With the navigation strip removed, the editor starts at the work pane's top edge.
     const aligned = () => {
       const panel = app!.renderer.root.findDescendantById("work-panel")!;
@@ -262,11 +294,14 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
     await app.visible("SECOND-WORKTREE-CACHE");
     expect(app.captureCharFrame()).not.toContain("unsaved-native-editor");
     await app.showView("g");
+
     const returns: string[] = [];
     const captureReturn = () => {
-      if (app!.renderer.root.findDescendantById("editor-view")!.visible)
+      if (app!.renderer.root.findDescendantById("editor-view")!.visible) {
         returns.push(app!.captureCharFrame());
+      }
     };
+
     app.renderer.on("frame", captureReturn);
     try {
       await app.click(`${icons.folder} main`);
@@ -311,6 +346,7 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
     await app.click("Open / reconnect editor");
     await until(async () => {
       await app!.renderOnce();
+
       return (
         app!.client.snapshot.editors![0]!.pid !== pid &&
         app!.renderer.currentFocusedRenderable?.id ===
@@ -322,6 +358,7 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
     expect(app.client.snapshot.editors![0]!.pid).not.toBe(pid);
   } finally {
     await app?.close();
+
     const admin = expectOk(
       await connectRuntime(fixture.repository, fixture.main, { ...options, start: false }),
     );
@@ -334,6 +371,7 @@ test("Real native Neovim verifies input, resize, worktree round-trips, and full 
           !expectOk(await fetchSnapshot(admin.paths)) && pids.every((pid) => !pidAlive(pid)),
       );
     }
+
     await fixture.cleanup();
   }
 }, 25000);

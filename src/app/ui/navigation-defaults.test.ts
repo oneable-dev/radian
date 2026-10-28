@@ -8,6 +8,7 @@ import { modelCommand } from "../../agents/model-selection.ts";
 import { ok } from "../../result.ts";
 
 type Surface = "history" | "monitor" | "model";
+
 const navigationCases = (["history", "monitor", "model"] as const).flatMap(
   (surface) =>
     [
@@ -38,16 +39,17 @@ async function mount(surface: Surface) {
           },
     ),
   }));
-  const selection = new WorkspaceSelection(repositories),
-    resumed: string[] = [],
-    models: string[] = [],
-    submitted: string[] = [];
+  const selection = new WorkspaceSelection(repositories);
+  const resumed: string[] = [];
+  const models: string[] = [];
+  const submitted: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession() {},
     onCloseSession() {},
     initialDrafts: { a1: "KEEP_DRAFT" },
     onPrompt: (_id, text) => {
       submitted.push(text);
+
       return ok(undefined);
     },
     getSessionDetails: (id) => ({
@@ -71,6 +73,7 @@ async function mount(surface: Surface) {
       ),
     onResumeSession: async (_tree, id) => {
       resumed.push(id);
+
       return ok("a2");
     },
     onListModels: async (_id, conversationId) =>
@@ -91,6 +94,7 @@ async function mount(surface: Surface) {
       }),
     onSelectModel: async (_id, _conversation, model) => {
       models.push(model.id);
+
       return ok(null);
     },
   });
@@ -100,9 +104,13 @@ async function mount(surface: Surface) {
   };
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
+
   await render();
   if (surface === "model") {
     const prompt = get("session-prompt") as InputRenderable;
@@ -117,7 +125,9 @@ async function mount(surface: Surface) {
     app.mockInput.pressKey(" ", { ctrl: true });
     app.mockInput.pressKey(surface === "history" ? "h" : "s");
   }
+
   await render();
+
   return {
     ...app,
     selection,
@@ -144,16 +154,26 @@ test.each(navigationCases)(
       await app.mockInput.typeText("hjkl");
       await app.render();
       expect(input.value).toBe("hjkl");
-      for (let index = 0; index < 4; index++) app.mockInput.pressBackspace();
+      for (let index = 0; index < 4; index++) {
+        app.mockInput.pressBackspace();
+      }
+
       await app.mockInput.typeText("candidate");
-      if (focus === "list") app.mockInput.pressTab();
+      if (focus === "list") {
+        app.mockInput.pressTab();
+      }
+
       await app.render();
 
       // Move down twice and up once without changing actual models/sessions before confirmation.
       const move = (next: boolean) => {
-        if (navigation === "control") app.mockInput.pressKey(next ? "n" : "p", { ctrl: true });
-        else if (navigation === "arrows") app.mockInput.pressArrow(next ? "down" : "up");
-        else app.mockInput.pressKey(next ? "j" : "k");
+        if (navigation === "control") {
+          app.mockInput.pressKey(next ? "n" : "p", { ctrl: true });
+        } else if (navigation === "arrows") {
+          app.mockInput.pressArrow(next ? "down" : "up");
+        } else {
+          app.mockInput.pressKey(next ? "j" : "k");
+        }
       };
       move(true);
       move(true);
@@ -166,15 +186,21 @@ test.each(navigationCases)(
       expect(app.resumed).toEqual([]);
       expect(app.models).toEqual([]);
       expect(app.view.promptDrafts.a1).toBe(surface === "model" ? undefined : "KEEP_DRAFT");
+
       const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
       expect(footer).not.toMatch(/[↑↓←]/u);
       expect(footer).not.toMatch(/Previous|Next|<C-[np]>|½ page/u);
       app.mockInput.pressEnter();
       await app.render();
 
-      if (surface === "model") expect(app.models).toEqual(["two"]);
-      else if (surface === "history") expect(app.resumed).toEqual(["saved-two"]);
-      else expect(app.selection.sessionId).toBe("a2");
+      if (surface === "model") {
+        expect(app.models).toEqual(["two"]);
+      } else if (surface === "history") {
+        expect(app.resumed).toEqual(["saved-two"]);
+      } else {
+        expect(app.selection.sessionId).toBe("a2");
+      }
+
       expect(app.submitted).toEqual([]);
     } finally {
       await app.close();

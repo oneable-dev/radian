@@ -28,6 +28,7 @@ test("Shared tab widths and close positions stay fixed across short/Unicode name
     close() {},
     button,
   });
+
   row.add(first.root);
   row.add(second.root);
   app.renderer.root.add(row);
@@ -37,6 +38,7 @@ test("Shared tab widths and close positions stay fixed across short/Unicode name
   second.setLabel("zsh");
   try {
     await app.renderOnce();
+
     const positions = [first.closeButton.x, second.root.x, second.closeButton.x];
 
     // Status and growing process names truncate only within label areas.
@@ -70,6 +72,7 @@ test("Widths smaller than tabs shrink labels while keeping close buttons inside"
     close() {},
     button: (label, activate) => new Button(app.renderer, label, activate),
   });
+
   app.renderer.root.add(tab.root);
   tab.setLabel("very-long-process-name");
   try {
@@ -105,6 +108,7 @@ test("Tab padding selects while close buttons affect only their tabs without sel
     button: (label, activate) => new Button(app.renderer, label, activate),
   });
   const outside = new Button(app.renderer, "Input", () => {});
+
   app.renderer.root.add(tab.root);
   app.renderer.root.add(outside);
   tab.setLabel("zsh");
@@ -133,8 +137,8 @@ test.each([false, true])(
   "Light theme %s keeps tab left edges borderless and distinguishes active tabs",
   async (light) => {
     // Active and inactive tabs use their normal backgrounds all the way to the left edge.
-    const app = await createTestRenderer({ width: 80, height: 4 }),
-      theme = uiTheme(app.renderer);
+    const app = await createTestRenderer({ width: 80, height: 4 });
+    const theme = uiTheme(app.renderer);
     const row = new BoxRenderable(app.renderer, { height: 1, flexDirection: "row", gap: 1 });
     const tabs = [1, 2, 10].map((position) => {
       const tab = new SessionTab(app.renderer, {
@@ -148,8 +152,10 @@ test.each([false, true])(
       tab.setPosition(position);
       tab.setLabel("zsh");
       row.add(tab.root);
+
       return tab;
     });
+
     app.renderer.root.add(row);
     theme.configure({
       palette: [],
@@ -163,10 +169,13 @@ test.each([false, true])(
       highlightForeground: null,
       highlightBackground: null,
     });
+
     const cell = (tab: SessionTab, offset = 0) => {
       let column = 0;
+
       return app.captureSpans().lines[tab.root.y]!.spans.find((span) => {
         column += span.width;
+
         return column > tab.root.x + offset;
       })!;
     };
@@ -183,10 +192,12 @@ test.each([false, true])(
           line.slice(tab.root.x, tab.root.x + tab.root.width).startsWith(`  ${position}. zsh`),
         ).toBe(true);
         expect(tab.root.height).toBe(1);
+
         const background = (index === 0 ? theme.colors.surface : theme.colors.panel).toInts();
         expect(cell(tab).bg.toInts()).toEqual(background);
         expect(cell(tab, 1).bg.toInts()).toEqual(background);
       }
+
       expect(line).not.toContain("│");
 
       // Selection moves the background emphasis without adding an edge marker.
@@ -213,6 +224,7 @@ test("Two-digit numbers survive title truncation and expanding restores titles",
     close() {},
     button: (label, activate) => new Button(app.renderer, label, activate),
   });
+
   tab.setPosition(10);
   tab.setLabel("long-process-name");
   app.renderer.root.add(tab.root);
@@ -224,13 +236,16 @@ test("Two-digit numbers survive title truncation and expanding restores titles",
 
       // Widths fitting numbers retain full numbers and compact only titles.
       const line = app.captureCharFrame().split("\n")[tab.root.y]!;
-      if (width >= 5)
+      if (width >= 5) {
         expect(line.slice(tab.root.x, tab.root.x + tab.root.width)).toMatch(/^ {1,2}10\./);
+      }
+
       expect(tab.closeButton.x + tab.closeButton.width).toBeLessThanOrEqual(
         tab.root.x + tab.root.width,
       );
       expect(Bun.stringWidth(tab.title.plainText)).toBeLessThanOrEqual(tab.title.width);
     }
+
     expect(tab.title.plainText).toBe("long-pro…");
   } finally {
     await app.dispose();
@@ -241,8 +256,8 @@ test.each([false, true])(
   "Light theme %s distinguishes active tabs without tab focus or underlined titles",
   async (light) => {
     // Active selection is the only tab state, shared by Agent and Terminal.
-    const app = await createTestRenderer({ width: 50, height: 4 }),
-      theme = uiTheme(app.renderer);
+    const app = await createTestRenderer({ width: 50, height: 4 });
+    const theme = uiTheme(app.renderer);
     const row = new BoxRenderable(app.renderer, { height: 1, flexDirection: "row" });
     const tab = new SessionTab(app.renderer, {
       id: "tab",
@@ -252,6 +267,7 @@ test.each([false, true])(
       close() {},
       button: (label, activate) => new Button(app.renderer, label, activate),
     });
+
     row.add(tab.root);
     app.renderer.root.add(row);
     tab.setLabel("zsh");
@@ -267,6 +283,7 @@ test.each([false, true])(
       highlightForeground: null,
       highlightBackground: null,
     });
+
     const span = () => app.captureSpans().lines[0]!.spans.find((item) => item.text === "zsh")!;
     try {
       // Attempting to focus a tab cannot add a second selection state.

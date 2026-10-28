@@ -22,6 +22,7 @@ import {
 export { blendColors } from "./color.ts";
 
 export type UiColors = Readonly<Record<ThemeRole, RGBA>>;
+
 const themes = new WeakMap<CliRenderer, UiTheme>();
 const fallbackAnsi = [
   "#000000",
@@ -53,8 +54,9 @@ function resolveColors(
   );
   const ansi = (role: ThemeRole, index: number) =>
     override(role, RGBA.fromIndex(index, snapshot(palette?.palette[index], fallbackAnsi[index]!)));
-  const success = ansi("success", 2),
-    error = ansi("error", 1);
+  const success = ansi("success", 2);
+  const error = ansi("error", 1);
+
   return {
     text,
     panel,
@@ -95,43 +97,64 @@ export class UiTheme {
     renderer.prependInputHandler(this.hostThemeSequence);
     renderer.once("destroy", this.dispose);
   }
+
   get colors(): UiColors {
     return this.value;
   }
+
   get styles(): UiStyles {
     return this.styleValue;
   }
+
   bindStyles(owner: Renderable, paint: (styles: UiStyles) => void): void {
     this.bind(owner, () => paint(this.styles));
   }
+
   get monochrome(): boolean {
     return this.colorless;
   }
+
   setMonochrome(value: boolean): void {
-    if (value === this.colorless) return;
+    if (value === this.colorless) {
+      return;
+    }
+
     this.colorless = value;
+
     // Painting may register or dispose bindings; only update the current snapshot.
     const updates = [...this.bindings.keys()];
-    for (const update of updates) update();
+    for (const update of updates) {
+      update();
+    }
+
     this.renderer.requestRender();
   }
+
   configure(palette: TerminalColors, overrides: ThemeOverrides = {}): void {
     this.overrides = structuredClone(overrides);
     this.updatePalette(palette);
   }
+
   bind(owner: Renderable, paint: (colors: UiColors) => void): void {
-    if (owner.isDestroyed) return;
+    if (owner.isDestroyed) {
+      return;
+    }
+
     const update = () => {
-      if (!owner.isDestroyed) paint(this.colors);
+      if (!owner.isDestroyed) {
+        paint(this.colors);
+      }
     };
     const cleanup = () => {
       this.bindings.delete(update);
       owner.off(RenderableEvents.DESTROYED, cleanup);
     };
+
     this.bindings.set(update, cleanup);
     owner.once(RenderableEvents.DESTROYED, cleanup);
     update();
   }
+
   input(
     input: InputRenderable | TextareaRenderable,
     normal: StyleGroup = "ui.input",
@@ -157,9 +180,13 @@ export class UiTheme {
       input.off("blurred", paint);
     });
   }
+
   focusBorder(panel: BoxRenderable): void {
     const paint = () => {
-      if (panel.isDestroyed) return;
+      if (panel.isDestroyed) {
+        return;
+      }
+
       // The renderer announces focus before ancestor hasFocusedDescendant flags settle.
       let focused = false;
       for (
@@ -172,12 +199,14 @@ export class UiTheme {
           break;
         }
       }
+
       panel.borderColor = this.styles[focused ? "ui.focusBorder" : "ui.border"].fg;
     };
     this.bind(panel, paint);
     this.renderer.on("focused_renderable", paint);
     panel.once(RenderableEvents.DESTROYED, () => this.renderer.off("focused_renderable", paint));
   }
+
   scrollbars(scroll: ScrollBoxRenderable): void {
     // Constructor visibility is auto-managed by OpenTUI; this setter establishes
     // explicit ownership without disabling horizontal navigation or changing content.
@@ -190,6 +219,7 @@ export class UiTheme {
       }
     });
   }
+
   private hostThemeSequence = (sequence: string): boolean => {
     if (sequence === "\x1b[?997;1n" || sequence === "\x1b[?997;2n") {
       this.hostChange = true;
@@ -203,43 +233,64 @@ export class UiTheme {
         // OpenTUI refreshes automatically only when light/dark mode changes. Observe its
         // completed OSC handshake before refreshing same-mode palette changes ourselves.
         queueMicrotask(() => {
-          if (this.disposed) return;
-          if (this.renderer.paletteDetectionStatus !== "detecting")
+          if (this.disposed) {
+            return;
+          }
+          if (this.renderer.paletteDetectionStatus !== "detecting") {
             this.renderer.clearPaletteCache();
+          }
+
           void this.renderer.getPalette({ size: 256, timeout: 200 }).catch((error: unknown) => {
-            if (!this.disposed) reportUnexpected(error, "terminal theme refresh");
+            if (!this.disposed) {
+              reportUnexpected(error, "terminal theme refresh");
+            }
           });
         });
       }
     }
+
     return false;
   };
+
   private updatePalette = (palette: TerminalColors): void => {
     this.palette = palette;
     this.refresh();
   };
+
   private refresh = (): void => {
     const next = resolveColors(this.palette, this.overrides, this.renderer.themeMode === "light");
     const styles = resolveStyles(next, this.overrides.styles);
+
     this.renderer.setBackgroundColor(styles["ui.text"].bg ?? next.panel);
     if (
       themeRoles.every((role) => next[role].equals(this.value[role])) &&
       sameStyles(styles, this.styleValue)
-    )
+    ) {
       return;
+    }
+
     this.value = next;
     this.styleValue = styles;
+
     const updates = [...this.bindings.keys()];
-    for (const update of updates) update();
+    for (const update of updates) {
+      update();
+    }
+
     this.renderer.requestRender();
   };
+
   private dispose = (): void => {
     this.disposed = true;
     this.renderer.removeInputHandler(this.hostThemeSequence);
     this.renderer.off("palette", this.updatePalette);
     this.renderer.off("theme_mode", this.refresh);
+
     const cleanups = [...this.bindings.values()];
-    for (const cleanup of cleanups) cleanup();
+    for (const cleanup of cleanups) {
+      cleanup();
+    }
+
     themes.delete(this.renderer);
   };
 }
@@ -250,5 +301,6 @@ export function uiTheme(renderer: CliRenderer): UiTheme {
     theme = new UiTheme(renderer);
     themes.set(renderer, theme);
   }
+
   return theme;
 }

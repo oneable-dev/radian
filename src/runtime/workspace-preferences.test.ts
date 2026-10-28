@@ -20,6 +20,7 @@ const repository: Repository = {
     },
   ],
 };
+
 function preferences(tree: string, session: string): RuntimePreferences {
   return {
     selection: { worktreeId: tree, sessions: { [tree]: session } },
@@ -33,8 +34,8 @@ function preferences(tree: string, session: string): RuntimePreferences {
 
 test("Merged repository drafts/views never contaminate per-repository persistence", () => {
   // Each daemon scopes selection, terminal state, and scroll independently.
-  const a = preferences("tree-a", "session-a"),
-    b = preferences("tree-b", "session-b");
+  const a = preferences("tree-a", "session-a");
+  const b = preferences("tree-b", "session-b");
 
   const merged = mergeWorkspacePreferences([a, b], "tree-b");
   const scoped = repositoryPreferences(merged, repository, a);
@@ -52,6 +53,7 @@ test("New IDs before snapshots and closed-session drafts persist only to owning 
   // New IDs lack rows and old retained drafts may exist only in manifests.
   const previous = preferences("tree-a", "session-a");
   previous.drafts["archived-a"] = "retained";
+
   const incoming = mergeWorkspacePreferences(
     [previous, preferences("tree-b", "session-b")],
     "tree-a",

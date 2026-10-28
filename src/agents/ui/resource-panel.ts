@@ -103,41 +103,61 @@ export class ResourcePanel {
       this.paint();
     });
   }
+
   fit(width: number): void {
     this.width = Math.max(1, width);
     this.paint();
   }
+
   start(): void {
-    if (this.owner || this.root.isDestroyed) return;
+    if (this.owner || this.root.isDestroyed) {
+      return;
+    }
+
     this.history = new ResourceHistory();
     this.snapshot = undefined;
     this.error = "";
+
     const owner = (this.owner = new AbortController());
     this.spinner.start();
     this.paint();
     void this.poll(owner);
   }
+
   stop(): void {
     this.owner?.abort();
     this.owner = undefined;
     this.pending = false;
-    if (this.timer !== undefined) this.renderer.clock.clearTimeout(this.timer);
+    if (this.timer !== undefined) {
+      this.renderer.clock.clearTimeout(this.timer);
+    }
+
     this.timer = undefined;
     this.spinner.cancel();
   }
+
   refresh(): void {
-    if (!this.owner || this.pending) return;
-    if (this.timer !== undefined) this.renderer.clock.clearTimeout(this.timer);
+    if (!this.owner || this.pending) {
+      return;
+    }
+    if (this.timer !== undefined) {
+      this.renderer.clock.clearTimeout(this.timer);
+    }
+
     this.timer = undefined;
     void this.poll(this.owner);
   }
+
   private async poll(owner: AbortController): Promise<void> {
     this.pending = true;
     try {
       const runtime = this.load
         ? await this.load(owner.signal)
         : err(new CapabilityError("Runtime resource metrics are unavailable in this view."));
-      if (this.owner !== owner || owner.signal.aborted) return;
+      if (this.owner !== owner || owner.signal.aborted) {
+        return;
+      }
+
       const ui = readProcessResources();
       this.snapshot = this.history.add(
         ui.ok ? ui.value : null,
@@ -168,13 +188,17 @@ export class ResourcePanel {
       }
     }
   }
+
   private paint(): void {
-    if (!this.table || this.root.isDestroyed) return;
+    if (!this.table || this.root.isDestroyed) {
+      return;
+    }
+
     const styles = uiTheme(this.renderer).styles;
     const sparkWidth = this.width >= 66 ? Math.min(16, Math.floor((this.width - 38) / 2)) : 0;
-    const labelWidth = 10,
-      cpuWidth = 8,
-      memoryWidth = 11;
+    const labelWidth = 10;
+    const cpuWidth = 8;
+    const memoryWidth = 11;
     const column = (value: string, size: number) => value.padStart(size);
     const historyGap = sparkWidth ? " ".repeat(sparkWidth + 1) : "";
     const heading =
@@ -210,11 +234,13 @@ export class ResourcePanel {
         "  " +
         column(resourceMemory(value?.rssBytes), memoryWidth) +
         graph("rssBytes");
+
       return styleChunk(
         truncateCells(row, this.width) + (index < 2 ? "\n" : ""),
         styles[index === 0 ? "ui.popupTitle" : "ui.label"],
       );
     });
+
     this.table.content = new StyledText([
       styleChunk(truncateCells(heading.trimEnd(), this.width) + "\n", styles["ui.muted"]),
       ...rows,
@@ -222,8 +248,11 @@ export class ResourcePanel {
     this.message.content = this.error;
     this.message.visible = Boolean(this.error);
   }
+
   dispose(): void {
     this.stop();
-    if (!this.root.isDestroyed) this.root.destroyRecursively();
+    if (!this.root.isDestroyed) {
+      this.root.destroyRecursively();
+    }
   }
 }

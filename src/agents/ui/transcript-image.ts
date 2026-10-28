@@ -80,7 +80,10 @@ export class TranscriptImagePreview {
   }
 
   update(sessionId: string | null, descriptor: TranscriptImage, allowed = true): void {
-    if (this.disposed || this.root.isDestroyed) return;
+    if (this.disposed || this.root.isDestroyed) {
+      return;
+    }
+
     const protocol = resolveImageRenderProtocol(
       "auto",
       this.renderer.capabilities,
@@ -89,22 +92,28 @@ export class TranscriptImagePreview {
     const identity = JSON.stringify([sessionId, descriptor.id, protocol, allowed]);
     if (identity === this.identity) {
       this.reflow();
+
       return;
     }
+
     this.cancel();
     this.identity = identity;
     if (!allowed) {
       this.show("Preview memory limit reached; collapse another image.");
+
       return;
     }
     if (protocol !== "kitty" && protocol !== "sixel") {
       this.show("Image preview needs a terminal with Kitty or Sixel graphics.");
+
       return;
     }
     if (!sessionId || !this.provider) {
       this.show("Open this session with an updated runtime to preview its image.");
+
       return;
     }
+
     const abort = (this.abort = new AbortController());
     this.show("Loading image…");
     this.spinner.start();
@@ -116,21 +125,26 @@ export class TranscriptImagePreview {
       }
     });
   }
+
   private current(abort: AbortController): boolean {
     return (
       !this.disposed && !this.root.isDestroyed && this.abort === abort && !abort.signal.aborted
     );
   }
+
   private async load(
     sessionId: string,
     descriptor: TranscriptImage,
     abort: AbortController,
   ): Promise<void> {
     const result = await this.provider!(sessionId, descriptor.id, abort.signal);
-    if (!this.current(abort)) return;
+    if (!this.current(abort)) {
+      return;
+    }
     if (!result.ok) {
       this.spinner.stop();
       this.show(`[${result.error.code}] ${result.error.message}`);
+
       return;
     }
     if (
@@ -140,9 +154,12 @@ export class TranscriptImagePreview {
     ) {
       this.spinner.stop();
       this.show("[PROTOCOL_ERROR] Image preview bytes do not match the attachment descriptor.");
+
       return;
     }
+
     this.changing();
+
     const image = new ImageRenderable(this.renderer, {
       id: `${this.root.id}:image`,
       width: "100%",
@@ -151,7 +168,10 @@ export class TranscriptImagePreview {
       fit: "fit",
       protocol: "auto",
       onLoad: () => {
-        if (!this.current(abort)) return;
+        if (!this.current(abort)) {
+          return;
+        }
+
         this.changing();
         this.message.visible = false;
         this.spinner.stop();
@@ -159,7 +179,10 @@ export class TranscriptImagePreview {
         this.renderer.requestRender();
       },
       onError: (error) => {
-        if (!this.current(abort)) return;
+        if (!this.current(abort)) {
+          return;
+        }
+
         const message =
           error instanceof ImageError && expectedImageErrors.has(error.code)
             ? `[${error.code}] Image preview could not be decoded.`
@@ -175,15 +198,20 @@ export class TranscriptImagePreview {
     image.source = result.value;
     await image.loadPromise;
   }
+
   private show(text: string): void {
     this.changing();
     this.message.content = `  ${text}`;
     this.message.visible = true;
     this.renderer.requestRender();
   }
+
   private reflow(): void {
     const image = this.image;
-    if (!image?.image || image.isDestroyed || this.disposed) return;
+    if (!image?.image || image.isDestroyed || this.disposed) {
+      return;
+    }
+
     const aspect = (image.image.width / image.image.height) * image.cellAspectRatio;
     const rows = Math.max(
       1,
@@ -194,10 +222,12 @@ export class TranscriptImagePreview {
       image.height = rows;
     }
   }
+
   private cancel(): void {
     this.abort?.abort();
     this.abort = undefined;
     this.spinner.cancel();
+
     const image = this.image;
     this.image = undefined;
     if (image && !image.isDestroyed) {
@@ -205,8 +235,12 @@ export class TranscriptImagePreview {
       image.destroyRecursively();
     }
   }
+
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.disposed = true;
     this.cancel();
   }

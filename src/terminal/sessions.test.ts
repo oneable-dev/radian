@@ -9,13 +9,17 @@ import { pidAlive } from "../runtime/storage.ts";
 async function until(check: () => boolean | Promise<boolean>) {
   const deadline = Date.now() + 8000;
   while (!(await check())) {
-    if (Date.now() > deadline) throw new Error("Terminal observation timed out.");
+    if (Date.now() > deadline) {
+      throw new Error("Terminal observation timed out.");
+    }
+
     await Bun.sleep(20);
   }
 }
+
 async function watch(sessions: TerminalSessions, id: string) {
-  const lease = crypto.randomUUID(),
-    response = expectOk(sessions.attach(id, lease));
+  const lease = crypto.randomUUID();
+  const response = expectOk(sessions.attach(id, lease));
   const reader = response.body!.getReader();
   let frame: PtyFrame | undefined;
   const task = (async () => {
@@ -23,8 +27,12 @@ async function watch(sessions: TerminalSessions, id: string) {
     let text = "";
     while (true) {
       const part = await reader.read();
-      if (part.done) break;
+      if (part.done) {
+        break;
+      }
+
       text += decoder.decode(part.value, { stream: true });
+
       let index: number;
       while ((index = text.indexOf("\n")) >= 0) {
         frame = JSON.parse(text.slice(0, index));
@@ -32,7 +40,9 @@ async function watch(sessions: TerminalSessions, id: string) {
       }
     }
   })();
+
   await until(() => !!frame);
+
   return {
     lease,
     get frame() {
@@ -65,8 +75,9 @@ test("Same-worktree shells stay independent and closing preserves other terminal
     const b = expectOk(
       await sessions.create(fixture.repository.worktrees[0]!.id, { cols: 80, rows: 20 }),
     );
-    const first = await watch(sessions, a),
-      second = await watch(sessions, b);
+    const first = await watch(sessions, a);
+    const second = await watch(sessions, b);
+
     readers.push(first, second);
     await first.seen("radian$");
     await second.seen("radian$");
@@ -80,9 +91,15 @@ test("Same-worktree shells stay independent and closing preserves other terminal
     second.input("printf 'still-alive\\n'\r");
     await second.seen("still-alive");
   } finally {
-    for (const reader of readers) await reader.disconnect();
+    for (const reader of readers) {
+      await reader.disconnect();
+    }
+
     expectOk(await sessions.stop());
-    if (unrelated.exitCode === null) unrelated.kill("SIGTERM");
+    if (unrelated.exitCode === null) {
+      unrelated.kill("SIGTERM");
+    }
+
     await unrelated.exited;
     await fixture.cleanup();
   }
@@ -98,6 +115,7 @@ test("Shell exit reclaims tabs and owned jobs while preserving other terminals",
     const id = expectOk(await sessions.create(tree.id, { cols: 80, rows: 12 }));
     const neighbor = expectOk(await sessions.create(tree.id, { cols: 80, rows: 12 }));
     const anchor = sessions.infos.find((item) => item.id === id)!.pid;
+
     reader = await watch(sessions, id);
     await reader.seen("radian$");
 
@@ -140,9 +158,11 @@ test("Shell ownership supervisors never automatically execute worktree Bun prelo
       `await Bun.write(${JSON.stringify(marker)}, 'unexpected');`,
     );
     await Bun.write(join(fixture.main, ".env"), `${key}=from-project\n`);
+
     const tree = fixture.repository.worktrees.find((item) => item.path === fixture.main)!;
 
     const id = expectOk(await sessions.create(tree.id, { cols: 80, rows: 12 }));
+
     reader = await watch(sessions, id);
     await reader.seen("radian$");
     reader.input(`printf 'env-%s\\n' "\${${key}-unset}"\r`);

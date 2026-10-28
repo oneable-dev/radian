@@ -23,11 +23,14 @@ export type UsageAccount = {
   readonly provider: string;
   load(signal: AbortSignal): Promise<Result<readonly UsageWindow[], ExpectedError>>;
 };
+
 export type UsageResolver = (
   provider: string,
   signal: AbortSignal,
 ) => Promise<Result<UsageAccount | null, ExpectedError>>;
+
 export type UsageRefreshMode = "automatic" | "manual";
+
 export type UsageSubscription = {
   read(provider: string | null): ProviderUsage;
   refresh(mode?: UsageRefreshMode): void;

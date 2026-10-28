@@ -7,6 +7,7 @@ import { discoverWorkspace } from "./roots.ts";
 
 async function init(path: string): Promise<void> {
   await mkdir(path, { recursive: true });
+
   const child = Bun.spawn(["git", "-C", path, "init", "--initial-branch=main"], {
     stdout: "pipe",
     stderr: "pipe",
@@ -16,16 +17,19 @@ async function init(path: string): Promise<void> {
     new Response(child.stderr).text(),
     child.exited,
   ]);
-  if (code) throw new Error(error);
+  if (code) {
+    throw new Error(error);
+  }
 }
 
 test("Multiple roots collect repositories and display external linked worktrees exactly once", async () => {
   const fixture = await createWorktreeFixture();
   try {
     // Discover nested projects repositories alongside separate hidden dotfiles repositories.
-    const projects = join(fixture.directory, "projects"),
-      nested = join(projects, "team", "service"),
-      dotfiles = join(fixture.directory, ".dotfiles");
+    const projects = join(fixture.directory, "projects");
+    const nested = join(projects, "team", "service");
+    const dotfiles = join(fixture.directory, ".dotfiles");
+
     await init(nested);
     await init(dotfiles);
 
@@ -58,8 +62,9 @@ test("Discovery respects depth, dependency exclusions, and repository boundaries
   const fixture = await createWorktreeFixture();
   try {
     // Repository internals and dependency directories are not separate workspace candidates.
-    const projects = join(fixture.directory, "projects"),
-      nested = join(projects, "team", "service");
+    const projects = join(fixture.directory, "projects");
+    const nested = join(projects, "team", "service");
+
     await init(nested);
     await init(join(projects, "node_modules", "dependency"));
     await init(join(nested, "embedded"));
@@ -84,8 +89,9 @@ test("Explicit symlink roots canonicalize and broken/missing roots preserve vali
   const fixture = await createWorktreeFixture();
   try {
     // Missing roots and invalid Git metadata must not hide healthy roots.
-    const alias = join(fixture.directory, "alias"),
-      broken = join(fixture.directory, "broken");
+    const alias = join(fixture.directory, "alias");
+    const broken = join(fixture.directory, "broken");
+
     await symlink(fixture.main, alias);
     await mkdir(join(broken, ".git"), { recursive: true });
 

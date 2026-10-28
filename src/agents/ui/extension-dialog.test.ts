@@ -12,11 +12,11 @@ import { ok } from "../../result.ts";
 import type { ExtensionDialog, ExtensionUiResponse, SessionExtensionUi } from "../extension-ui.ts";
 
 async function mount(width = 120, height = 30, overrides: Partial<WorkbenchActions> = {}) {
-  const clock = new ManualClock(),
-    app = await createTestRenderer({ width, height, kittyKeyboard: true, clock });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    answers: ExtensionUiResponse[] = [],
-    sent: string[] = [];
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width, height, kittyKeyboard: true, clock });
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const answers: ExtensionUiResponse[] = [];
+  const sent: string[] = [];
   let state: SessionExtensionUi[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession() {},
@@ -30,17 +30,22 @@ async function mount(width = 120, height = 30, overrides: Partial<WorkbenchActio
     }),
     onExtensionUiResponse: async (_id, _conversation, response) => {
       answers.push(response);
+
       return ok(undefined);
     },
     onPrompt: async (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     ...overrides,
   });
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
   const render = async () => {
@@ -48,9 +53,11 @@ async function mount(width = 120, height = 30, overrides: Partial<WorkbenchActio
     await app.renderOnce();
   };
   const prompt = get("session-prompt") as InputRenderable;
+
   await render();
   prompt.focus();
   prompt.value = "Unsent Agent draft";
+
   return {
     ...app,
     selection,
@@ -128,8 +135,12 @@ test.each(["input", "confirm"] as const)(
           ? { id: "request", kind, title: "Callback" }
           : { id: "request", kind, title: "Authorize", message: "Allow access?" },
       );
+
       const input = app.get("extension-dialog-input") as InputRenderable;
-      if (kind === "input") await app.mockInput.typeText("unsubmitted-hjkl");
+      if (kind === "input") {
+        await app.mockInput.typeText("unsubmitted-hjkl");
+      }
+
       const focus = app.renderer.currentFocusedRenderable;
 
       // Resizing never accepts the request or clears an unsubmitted answer.
@@ -147,7 +158,10 @@ test.each(["input", "confirm"] as const)(
         expect(panel.x).toBe(Math.floor((width - columns) / 2));
         expect(panel.y).toBe(Math.floor((height - rows) / 2));
         expect(app.renderer.currentFocusedRenderable).toBe(focus);
-        if (kind === "input") expect(input.value).toBe("unsubmitted-hjkl");
+        if (kind === "input") {
+          expect(input.value).toBe("unsubmitted-hjkl");
+        }
+
         expect(app.answers).toEqual([]);
       }
 
@@ -188,10 +202,11 @@ test.each([
       });
 
       // The search field starts the popup and the first candidate immediately follows it.
-      const panel = app.get("extension-dialog-panel"),
-        field = app.get("extension-dialog-search-field"),
-        search = app.get("extension-dialog-search"),
-        list = app.get("extension-dialog-list") as ScrollBoxRenderable;
+      const panel = app.get("extension-dialog-panel");
+      const field = app.get("extension-dialog-search-field");
+      const search = app.get("extension-dialog-search");
+      const list = app.get("extension-dialog-list") as ScrollBoxRenderable;
+
       expect(app.captureCharFrame().match(/MCP authentication/gu)).toHaveLength(1);
       expect(app.captureCharFrame()).not.toContain("Options");
       expect(field.y).toBe(panel.y);
@@ -243,15 +258,16 @@ test.each([
   "Extension choices preserve search input and navigate candidates across focus at %dx%d",
   async (width, height) => {
     // A long list forces viewport-based navigation in both ordinary and compact layouts.
-    const app = await mount(width, height),
-      options = Array.from(
-        { length: 60 },
-        (_, index) => `Choice ${String(index).padStart(2, "0")}`,
-      );
+    const app = await mount(width, height);
+    const options = Array.from(
+      { length: 60 },
+      (_, index) => `Choice ${String(index).padStart(2, "0")}`,
+    );
     try {
       await app.show({ id: "request", kind: "select", title: "Choose server", options });
       await app.mockInput.typeText("Choice");
       await app.render();
+
       const search = app.get("extension-dialog-search") as InputRenderable;
       const caret = search.cursorOffset;
 
@@ -259,21 +275,27 @@ test.each([
       app.mockInput.pressKey("n", { ctrl: true });
       await app.render();
       expect(app.renderer.currentFocusedRenderable).toBe(search);
+
       const selected = app.get("extension-option:1");
       for (const x of [selected.x, selected.x + selected.width - 1]) {
         let column = 0;
         const span = app.captureSpans().lines[selected.y]!.spans.find((span) => {
           column += span.width;
+
           return column > x;
         });
+
         expect(span?.bg.toInts()).toEqual(
           uiTheme(app.renderer).styles["ui.selection"].bg!.toInts(),
         );
       }
+
       app.mockInput.pressKey("p", { ctrl: true });
       await app.render();
+
       const list = app.get("extension-dialog-list") as ScrollBoxRenderable;
       const step = halfPageStep(list.viewport.height);
+
       app.mockInput.pressKey("d", { ctrl: true });
       await app.render();
       expect(app.renderer.currentFocusedRenderable).toBe(list);
@@ -283,8 +305,10 @@ test.each([
         app.mockInput.pressKey("d", { ctrl: true });
         await app.render();
       }
+
       app.mockInput.pressKey("u", { ctrl: true });
       await app.render();
+
       const candidate = app.get(`extension-option:${step * 3}`);
       expect(candidate.y).toBeGreaterThanOrEqual(list.viewport.y);
       expect(candidate.y).toBeLessThan(list.viewport.y + list.viewport.height);
@@ -307,6 +331,7 @@ test("Extension search clearing preserves literal text ownership and empty clear
     await app.show({ id: "request", kind: "select", title: "Choose", options: ["hjkl", "other"] });
     await app.mockInput.typeText("hjkl");
     await app.render();
+
     const search = app.get("extension-dialog-search") as InputRenderable;
     expect(search.value).toBe("hjkl");
 
@@ -370,7 +395,10 @@ test("Held submission never accepts a following dialog or submits the restored A
   const app = await mount();
   const raw = (event: string) => {
     const key = parseKeypress(event, { useKittyKeyboard: true });
-    if (!key) throw new Error("Invalid Kitty key");
+    if (!key) {
+      throw new Error("Invalid Kitty key");
+    }
+
     app.renderer.keyInput.processParsedKey(key);
   };
   try {

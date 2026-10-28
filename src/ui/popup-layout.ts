@@ -75,9 +75,13 @@ export class SearchPopupLayout {
       options.message.marginX = 1;
       this.candidates.add(options.message);
     }
+
     this.candidates.add(this.results.root);
     this.root.add(this.candidates);
-    if (options.preview) this.root.add(options.preview.body.root);
+    if (options.preview) {
+      this.root.add(options.preview.body.root);
+    }
+
     this.resize(false);
   }
 
@@ -85,11 +89,15 @@ export class SearchPopupLayout {
     const { preview, list } = this.options;
     const split = preview && previewEnabled;
     const showList = !split || wide || !compactPreview;
+
     list.visible = this.results.root.visible = showList;
     this.root.flexDirection = wide ? "row" : "column";
     this.candidates.width = split && wide ? `${100 - preview.width}%` : "100%";
     this.candidates.flexGrow = showList ? 1 : 0;
-    if (!preview) return;
+    if (!preview) {
+      return;
+    }
+
     const pane = preview.body.root;
     pane.visible = Boolean(split && (wide || compactPreview));
     pane.width = wide ? `${preview.width}%` : "100%";
@@ -100,6 +108,7 @@ export class SearchPopupLayout {
 
   get listHeight(): number {
     const { search, message } = this.options;
+
     return this.results.root.visible
       ? this.results.root.height
       : this.root.height -
@@ -138,6 +147,7 @@ export function attachPopupActivity(
     wrapMode: "none",
     selectable: false,
   });
+
   feedback.add(activity);
   feedback.add(label);
   panel.add(feedback);
@@ -148,15 +158,21 @@ export function attachPopupActivity(
   feedback.onLifecyclePass = () => {
     const current = state();
     const body = current.body ?? panel;
+
     feedback.visible = activity.visible && body.width > 0 && body.height > 0;
-    if (!feedback.visible) return;
+    if (!feedback.visible) {
+      return;
+    }
+
     // A spinner's minimum-visible tail never retains a loading message or obscures ready data.
     const centered = current.pending && !current.hasContent;
     label.visible = centered;
     label.content = centered ? truncateCells(current.message, Math.max(0, body.width - 4)) : "";
     label.width = Bun.stringWidth(label.plainText);
+
     const width = Math.min(body.width, activity.width + (label.visible ? label.width + 1 : 0));
     feedback.width = width;
+
     const borderLeft =
       panel.border === true || (Array.isArray(panel.border) && panel.border.includes("left"))
         ? 1
@@ -165,11 +181,13 @@ export function attachPopupActivity(
       panel.border === true || (Array.isArray(panel.border) && panel.border.includes("top"))
         ? 1
         : 0;
+
     feedback.left =
       body.x -
       panel.x -
       borderLeft +
       (centered ? Math.floor((body.width - width) / 2) : Math.max(0, body.width - width - 1));
+
     const y =
       body.y +
       (centered
@@ -179,10 +197,12 @@ export function attachPopupActivity(
       panel.border === true || (Array.isArray(panel.border) && panel.border.includes("bottom"))
         ? 1
         : 0;
+
     // A body can scroll outside its popup; activity must never leak onto the underlying workbench.
     feedback.visible = y >= panel.y + borderTop && y < panel.y + panel.height - borderBottom;
     feedback.top = y - panel.y - borderTop;
   };
+
   return feedback;
 }
 
@@ -220,5 +240,6 @@ export function centerPopup(
   // Native geometry getters still describe the previous frame during resize.
   panel.left = Math.floor((availableWidth - dimensions.width) / 2);
   panel.top = Math.floor((availableHeight - dimensions.height) / 2);
+
   return dimensions;
 }

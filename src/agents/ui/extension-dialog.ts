@@ -33,6 +33,7 @@ import type { Result } from "../../result.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 
 type Scope = { sessionId: string; conversationId: string; dialog: ExtensionDialog };
+
 export type ExtensionDialogActions = {
   answer: (
     sessionId: string,
@@ -44,6 +45,7 @@ export type ExtensionDialogActions = {
   notice: Notice;
   keyHint: (command: CommandId, context: KeyContext) => string;
 };
+
 const plain = (text: string) => {
   // oxlint-disable-next-line eslint/no-control-regex -- Extension text must not inject terminal control bytes.
   return stripVTControlCharacters(text).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/gu, "");
@@ -171,39 +173,55 @@ export class ExtensionDialogPanel {
     renderer.on("focused_renderable", this.keepFocus);
     this.resize();
   }
+
   get visible(): boolean {
     return !this.disposed && this.root.visible;
   }
+
   get context(): KeyContext {
-    return this.input.focused
-      ? "extension-input"
-      : this.search.focused
-        ? "extension-search"
-        : this.details.focused
-          ? "extension-body"
-          : "extension";
+    if (this.input.focused) {
+      return "extension-input";
+    }
+
+    if (this.search.focused) {
+      return "extension-search";
+    }
+
+    if (this.details.focused) {
+      return "extension-body";
+    }
+
+    return "extension";
   }
+
   get focusTargets(): Renderable[] {
     return [this.details, this.search, this.list, this.input].filter((node) =>
       node === this.search ? this.search.field.visible : node.visible,
     );
   }
+
   get shortcuts(): FooterShortcut[] {
     const commands: [CommandId, string][] = [
       ["extension.submit", "Accept"],
       ["extension.dismiss", "Cancel"],
     ];
-    if (this.url)
+    if (this.url) {
       commands.push(["extension.browser", "Open URL"], ["extension.copy-url", "Copy URL"]);
+    }
+
     return commands.map(([command, label]) => ({
       key: footerKeyHint(command, this.context, this.actions.keyHint(command, this.context)),
       label,
     }));
   }
+
   update(scope?: Scope): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
     if (!scope || scope.dialog.id === this.completedId) {
       this.hide();
+
       return;
     }
     if (
@@ -213,20 +231,28 @@ export class ExtensionDialogPanel {
     ) {
       if (!this.visible) {
         this.root.visible = true;
-        if (this.coveredFocus && !this.coveredFocus.isDestroyed) this.coveredFocus.focus();
-        else (this.input.visible ? this.input : this.list).focus();
+        if (this.coveredFocus && !this.coveredFocus.isDestroyed) {
+          this.coveredFocus.focus();
+        } else {
+          (this.input.visible ? this.input : this.list).focus();
+        }
+
         this.coveredFocus = undefined;
         this.actions.changed();
       }
+
       return;
     }
+
     this.hide();
     this.scope = scope;
     this.owner = this.renderer.currentFocusedRenderable ?? undefined;
+
     const dialog = scope.dialog;
     if (dialog.kind === "select") {
       const [title = "", ...details] = plain(dialog.title).split("\n");
       const description = details.join("\n").trim();
+
       this.search.setTitle(singleLine(title) || "Options");
       this.body.content = description;
       this.details.visible = Boolean(description);
@@ -236,20 +262,24 @@ export class ExtensionDialogPanel {
       );
       this.details.visible = true;
     }
+
     this.input.value = "";
     this.input.placeholder = dialog.kind === "input" ? plain(dialog.placeholder ?? "") : "";
     this.input.visible = dialog.kind === "input";
     this.search.field.visible = dialog.kind === "select";
     this.list.visible = dialog.kind !== "input";
-    this.candidates =
-      dialog.kind === "select"
-        ? dialog.options.map((value) => ({ label: singleLine(plain(value)), value }))
-        : dialog.kind === "confirm"
-          ? [
-              { label: "No", value: false },
-              { label: "Yes", value: true },
-            ]
-          : [];
+
+    if (dialog.kind === "select") {
+      this.candidates = dialog.options.map((value) => ({ label: singleLine(plain(value)), value }));
+    } else if (dialog.kind === "confirm") {
+      this.candidates = [
+        { label: "No", value: false },
+        { label: "Yes", value: true },
+      ];
+    } else {
+      this.candidates = [];
+    }
+
     this.cursor = 0;
     this.search.clear();
     this.filter();
@@ -258,19 +288,32 @@ export class ExtensionDialogPanel {
     this.root.visible = true;
     this.resize();
     this.details.scrollTo(0);
-    if (dialog.kind === "input") this.input.focus();
-    else if (dialog.kind === "select") this.search.focus();
-    else this.list.focus();
+    if (dialog.kind === "input") {
+      this.input.focus();
+    } else if (dialog.kind === "select") {
+      this.search.focus();
+    } else {
+      this.list.focus();
+    }
+
     this.actions.changed();
   }
+
   suspend(): void {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
+
     this.coveredFocus = this.renderer.currentFocusedRenderable ?? undefined;
     this.root.visible = false;
     this.spinner.cancel();
   }
+
   private hide(): void {
-    if (!this.visible && !this.scope) return;
+    if (!this.visible && !this.scope) {
+      return;
+    }
+
     const restore = this.visible;
     this.coveredFocus = undefined;
     this.root.visible = false;
@@ -283,17 +326,26 @@ export class ExtensionDialogPanel {
     this.candidates = [];
     this.filtered = [];
     this.paint();
+
     const owner = this.owner;
     this.owner = undefined;
+
     let available = !!owner && !owner.isDestroyed;
-    for (let node = owner; node; node = node.parent as Renderable | undefined)
+    for (let node = owner; node; node = node.parent as Renderable | undefined) {
       available &&= node.visible;
-    if (restore) {
-      if (available && owner) owner.focus();
-      else this.actions.fallback();
     }
+
+    if (restore) {
+      if (available && owner) {
+        owner.focus();
+      } else {
+        this.actions.fallback();
+      }
+    }
+
     this.actions.changed();
   }
+
   private filter = (): void => {
     const match = createTextMatcher(this.search.value);
     this.filtered = this.candidates.filter((candidate) => match(candidate.label));
@@ -301,9 +353,15 @@ export class ExtensionDialogPanel {
     this.cursor = Math.max(0, Math.min(this.cursor, this.filtered.length - 1));
     this.paint();
   };
+
   private paint(): void {
-    if (!this.list || this.list.isDestroyed) return;
-    while (this.rows.length > this.filtered.length) this.rows.pop()!.root.destroyRecursively();
+    if (!this.list || this.list.isDestroyed) {
+      return;
+    }
+    while (this.rows.length > this.filtered.length) {
+      this.rows.pop()!.root.destroyRecursively();
+    }
+
     const styles = uiTheme(this.renderer).styles;
     this.filtered.forEach((candidate, index) => {
       let row = this.rows[index];
@@ -328,51 +386,74 @@ export class ExtensionDialogPanel {
           wrapMode: "none",
           selectable: false,
         });
+
         root.add(text);
         row = { root, text };
         this.rows.push(row);
         this.list.add(root);
       }
+
       row.text.content = candidate.label;
+
       const style = styles[index === this.cursor ? "ui.selection" : "ui.popup"];
       row.root.backgroundColor = style.bg;
       paintText(row.text, style);
     });
+
     const row = this.rows[this.cursor];
-    if (row) this.list.scrollChildIntoView(row.root.id);
+    if (row) {
+      this.list.scrollChildIntoView(row.root.id);
+    }
+
     this.layout.root.visible = this.list.visible;
-    this.layout.results.showEmpty(
-      this.scope?.dialog.kind === "select" && !this.filtered.length
-        ? this.search.value
-          ? "No matching options"
-          : "No available options"
-        : undefined,
-    );
+
+    let emptyTitle: string | undefined;
+    if (this.scope?.dialog.kind === "select" && !this.filtered.length) {
+      emptyTitle = this.search.value ? "No matching options" : "No available options";
+    }
+
+    this.layout.results.showEmpty(emptyTitle);
   }
+
   available(command: CommandId): boolean {
-    if (!this.visible || !command.startsWith("extension.")) return false;
-    if (command === "extension.search") return this.scope?.dialog.kind === "select";
-    if (command === "extension.browser" || command === "extension.copy-url") return !!this.url;
+    if (!this.visible || !command.startsWith("extension.")) {
+      return false;
+    }
+    if (command === "extension.search") {
+      return this.scope?.dialog.kind === "select";
+    }
+    if (command === "extension.browser" || command === "extension.copy-url") {
+      return !!this.url;
+    }
+
     return true;
   }
+
   command(command: CommandId): void {
-    if (!this.available(command)) return;
+    if (!this.available(command)) {
+      return;
+    }
     if (command === "extension.dismiss") {
       this.launch(() => this.answer(true));
+
       return;
     }
     if (command === "extension.submit") {
       this.launch(() => this.answer(false));
+
       return;
     }
     if (command === "extension.search") {
       this.search.focus();
+
       return;
     }
     if (command === "extension.browser" || command === "extension.copy-url") {
       this.launch(() => this.useUrl(command === "extension.browser"));
+
       return;
     }
+
     const step = command === "extension.previous" || command === "extension.half-page-up" ? -1 : 1;
     const half = command === "extension.half-page-up" || command === "extension.half-page-down";
     if (
@@ -382,14 +463,21 @@ export class ExtensionDialogPanel {
         "extension.half-page-up",
         "extension.half-page-down",
       ].includes(command)
-    )
-      return;
-    if (this.details.focused) {
-      this.details.scrollBy(step * (half ? halfPageStep(this.details.viewport.height) : 1));
+    ) {
       return;
     }
-    if (this.input.focused) return;
-    if (half && this.search.focused) this.list.focus();
+    if (this.details.focused) {
+      this.details.scrollBy(step * (half ? halfPageStep(this.details.viewport.height) : 1));
+
+      return;
+    }
+    if (this.input.focused) {
+      return;
+    }
+    if (half && this.search.focused) {
+      this.list.focus();
+    }
+
     this.cursor = Math.max(
       0,
       Math.min(
@@ -400,20 +488,32 @@ export class ExtensionDialogPanel {
     this.paint();
     this.actions.changed();
   }
+
   private async answer(cancelled: boolean): Promise<void> {
     const scope = this.scope;
-    if (!scope || this.busy) return;
+    if (!scope || this.busy) {
+      return;
+    }
+
     const candidate = this.filtered[this.cursor];
-    if (!cancelled && scope.dialog.kind !== "input" && !candidate) return;
-    const response: ExtensionUiResponse = cancelled
-      ? { requestId: scope.dialog.id, cancelled: true }
-      : scope.dialog.kind === "input"
-        ? { requestId: scope.dialog.id, value: this.input.value }
-        : scope.dialog.kind === "confirm"
-          ? { requestId: scope.dialog.id, confirmed: candidate!.value === true }
-          : { requestId: scope.dialog.id, value: String(candidate!.value) };
+    if (!cancelled && scope.dialog.kind !== "input" && !candidate) {
+      return;
+    }
+
+    let response: ExtensionUiResponse;
+    if (cancelled) {
+      response = { requestId: scope.dialog.id, cancelled: true };
+    } else if (scope.dialog.kind === "input") {
+      response = { requestId: scope.dialog.id, value: this.input.value };
+    } else if (scope.dialog.kind === "confirm") {
+      response = { requestId: scope.dialog.id, confirmed: candidate!.value === true };
+    } else {
+      response = { requestId: scope.dialog.id, value: String(candidate!.value) };
+    }
+
     this.busy = true;
     this.spinner.start();
+
     let result: Result<void, ExpectedError>;
     try {
       result = await this.actions.answer(scope.sessionId, scope.conversationId, response);
@@ -423,61 +523,89 @@ export class ExtensionDialogPanel {
         this.spinner.stop();
       }
     }
-    if (this.scope !== scope) return;
+    if (this.scope !== scope) {
+      return;
+    }
     if (!result.ok) {
       this.status.content = `[${result.error.code}] ${result.error.message}`;
       this.status.visible = true;
+
       return;
     }
+
     this.completedId = scope.dialog.id;
     this.hide();
   }
+
   private get url(): string | undefined {
     const dialog = this.scope?.dialog;
+
     return dialog
       ? plain(dialog.title + (dialog.kind === "confirm" ? `\n${dialog.message}` : "")).match(
           /https?:\/\/[^\s<>]+/u,
         )?.[0]
       : undefined;
   }
+
   private async useUrl(browser: boolean): Promise<void> {
     const url = this.url;
-    if (!url) return;
+    if (!url) {
+      return;
+    }
+
     const result = browser ? await openLoginUrl(url) : await this.clipboard.copy(url);
-    if (!result.ok)
+    if (!result.ok) {
       this.actions.notice(`[${result.error.code}] ${result.error.message}`, { level: "error" });
-    else
+    } else {
       this.actions.notice(
         browser ? "Authorization URL opened in the browser." : "Authorization URL copied.",
         { level: "success" },
       );
+    }
   }
+
   private launch(operation: () => Promise<void>): void {
     void operation().catch((error) =>
       this.actions.notice(reportUnexpected(error, "extension dialog"), { level: "error" }),
     );
   }
+
   private keepFocus = (): void => {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
     for (
       let node = this.renderer.currentFocusedRenderable;
       node;
       node = node.parent as Renderable | null
-    )
-      if (node === this.root) return;
+    ) {
+      if (node === this.root) {
+        return;
+      }
+    }
+
     (this.input.visible ? this.input : this.list).focus();
   };
+
   private resize = (): void => {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     const size =
       this.scope && this.scope.dialog.kind !== "select"
         ? POPUP_SIZES.compact
         : POPUP_SIZES.standard;
     const { height } = centerPopup(this.panel, size, this.renderer.width, this.renderer.height);
+
     this.search.fit(Math.max(1, height - 5));
   };
+
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.hide();
     this.disposed = true;
     this.renderer.off("resize", this.resize);

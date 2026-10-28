@@ -9,7 +9,10 @@ export const dashboardCommand: CompletionItem = {
 };
 
 export function parseDashboardCommand(text: string): Result<boolean, InputError> {
-  if (!/^\/dashboard(?:\s|$)/u.test(text)) return ok(false);
+  if (!/^\/dashboard(?:\s|$)/u.test(text)) {
+    return ok(false);
+  }
+
   return text.slice(10).trim()
     ? err(new InputError("Usage: /dashboard (open usage statistics; no arguments)."))
     : ok(true);

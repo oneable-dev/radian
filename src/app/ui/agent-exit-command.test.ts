@@ -15,8 +15,8 @@ async function mount(
 ) {
   const clock = new ManualClock();
   const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
-  const selection = new WorkspaceSelection(demoWorkspace()),
-    submitted: { id: string; text: string }[] = [];
+  const selection = new WorkspaceSelection(demoWorkspace());
+  const submitted: { id: string; text: string }[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession() {},
     onCloseSession() {},
@@ -39,8 +39,12 @@ async function mount(
     onComplete: async (_id, query) => ok(filterCompletions(sessionControlCommands, query.query)),
     onPrompt: async (id, text) => {
       submitted.push({ id, text });
+
       const result = await closing;
-      if (!result.ok) return result;
+      if (!result.ok) {
+        return result;
+      }
+
       selection.replaceSnapshot(
         selection.snapshot.map((repo) => ({
           ...repo,
@@ -50,21 +54,30 @@ async function mount(
           })),
         })),
       );
+
       return result;
     },
   });
   const render = async () => {
-    for (let i = 0; i < 12; i++) await Promise.resolve();
+    for (let i = 0; i < 12; i++) {
+      await Promise.resolve();
+    }
+
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
-  const input = app.renderer.root.findDescendantById("session-prompt"),
-    scroll = app.renderer.root.findDescendantById("session-transcript");
-  if (!(input instanceof PromptInput) || !(scroll instanceof ScrollBoxRenderable))
+
+  const input = app.renderer.root.findDescendantById("session-prompt");
+  const scroll = app.renderer.root.findDescendantById("session-transcript");
+  if (!(input instanceof PromptInput) || !(scroll instanceof ScrollBoxRenderable)) {
     throw new Error("Missing prompt/transcript");
+  }
+
   input.focus();
   await render();
+
   return {
     ...app,
     view,
@@ -160,6 +173,7 @@ test("exit with image attachments preserves tabs, commands, and attachments", as
   try {
     app.input.value = "/exit ";
     app.input.attachFile("/tmp/exit-fixture.png");
+
     const draft = app.input.draft;
 
     // Submit an attached exit command through real input routing.
@@ -184,8 +198,9 @@ test("Rejected exit preserves tabs, commands, and reading positions", async () =
   try {
     app.scroll.scrollTo(10);
     await app.render();
-    const top = app.scroll.scrollTop,
-      navigation = structuredClone(app.view.workViewPreferences.agentViews?.a1);
+
+    const top = app.scroll.scrollTop;
+    const navigation = structuredClone(app.view.workViewPreferences.agentViews?.a1);
 
     // Rejected exit must not alter current conversation navigation.
     await app.submit("/exit");

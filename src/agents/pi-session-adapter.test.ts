@@ -22,9 +22,13 @@ function controlledStreams(options: PiSessionOptions) {
   >();
   const started = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
   const waitFor = (key: string) => {
-    if (gates.has(key)) return Promise.resolve();
+    if (gates.has(key)) {
+      return Promise.resolve();
+    }
+
     const gate = started.get(key) ?? Promise.withResolvers<void>();
     started.set(key, gate);
+
     return gate.promise;
   };
   const base = options.streamFn!;
@@ -41,7 +45,10 @@ function controlledStreams(options: PiSessionOptions) {
               .join("")
         : "";
     const key = input === "slow" ? "child" : input.startsWith("hold ") ? input.slice(5) : null;
-    if (!key) return base(model, context, request);
+    if (!key) {
+      return base(model, context, request);
+    }
+
     const stream = createAssistantMessageEventStream();
     const message: AssistantMessage = fixtureMessage(model.api, model.provider, model.id);
     const aborted = Promise.withResolvers<void>();
@@ -52,8 +59,12 @@ function controlledStreams(options: PiSessionOptions) {
         request?.signal?.removeEventListener("abort", cancel);
         message.content = [{ type: "text", text }];
         message.stopReason = gate.aborted ? "aborted" : "stop";
-        if (gate.aborted) stream.push({ type: "error", reason: "aborted", error: message });
-        else stream.push({ type: "done", reason: "stop", message });
+        if (gate.aborted) {
+          stream.push({ type: "error", reason: "aborted", error: message });
+        } else {
+          stream.push({ type: "done", reason: "stop", message });
+        }
+
         stream.end();
       },
     };
@@ -61,19 +72,27 @@ function controlledStreams(options: PiSessionOptions) {
       gate.aborted = true;
       aborted.resolve();
     };
+
     request?.signal?.addEventListener("abort", cancel, { once: true });
-    if (request?.signal?.aborted) cancel();
+    if (request?.signal?.aborted) {
+      cancel();
+    }
+
     gates.set(key, gate);
     stream.push({ type: "start", partial: message });
     started.get(key)?.resolve();
+
     return stream;
   };
+
   return {
     gates,
     waitFor,
     streamFn,
     releaseAll() {
-      for (const gate of gates.values()) gate.finish("fixture released");
+      for (const gate of gates.values()) {
+        gate.finish("fixture released");
+      }
     },
   };
 }
@@ -91,12 +110,14 @@ async function sdkFixture(
   const registry = new SessionRegistry([fixture.repository], async (context) => {
     const executor = await factory(context);
     executors.push(executor);
+
     return executor;
   });
   const selection = new WorkspaceSelection(registry.snapshot);
   const unsubscribe = registry.subscribe(() => selection.replaceSnapshot(registry.snapshot));
   const main = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
   const feature = fixture.repository.worktrees.find((tree) => tree.path === fixture.feature)!;
+
   return {
     ...fixture,
     registry,
@@ -136,6 +157,7 @@ test("history completion overrides extensions and raw submission never reaches S
     ...options,
     streamFn: (model, context, request) => {
       requests++;
+
       return options.streamFn!(model, context, request);
     },
   }));
@@ -148,15 +170,16 @@ test("history completion overrides extensions and raw submission never reaches S
       pi.registerCommand("history", { description: "Conflicting extension command", handler: async () => { pi.appendEntry("unexpected-history", {}); } });
     }`,
     );
-    const id = expectOk(await app.registry.create(app.main.id)),
-      conversation = app.registry.details(id)!.conversationId!;
+
+    const id = expectOk(await app.registry.create(app.main.id));
+    const conversation = app.registry.details(id)!.conversationId!;
 
     // Check the full catalog and direct server/SDK submission paths.
     const commands = expectOk(app.registry.catalog(id, conversation)).items.filter(
       (item) => item.value === "history",
     );
-    const registryResult = await app.registry.prompt(id, "/history"),
-      sdkResult = await app.executors[0]!.prompt("/history");
+    const registryResult = await app.registry.prompt(id, "/history");
+    const sdkResult = await app.executors[0]!.prompt("/history");
     const invalid = await app.executors[0]!.prompt("/history recent");
 
     // Name collisions and calls without popups must never create model requests.
@@ -180,8 +203,9 @@ test("Reload preserves conversation, model, and output while rereading commands,
     ...options,
     streamFn: (model, context, request) => {
       requests++;
+
       const user = context.messages.findLast((message) => message.role === "user");
-      if (user?.role === "user")
+      if (user?.role === "user") {
         inputs.push(
           typeof user.content === "string"
             ? user.content
@@ -190,13 +214,16 @@ test("Reload preserves conversation, model, and output while rereading commands,
                 .map((part) => part.text)
                 .join(""),
         );
+      }
+
       return options.streamFn!(model, context, request);
     },
   }));
   try {
-    const extensions = join(app.directory, "agent", "extensions"),
-      skills = join(app.directory, "explicit-skills");
+    const extensions = join(app.directory, "agent", "extensions");
+    const skills = join(app.directory, "explicit-skills");
     const template = join(app.directory, "reload-template.md");
+
     await mkdir(extensions, { recursive: true });
     await mkdir(skills);
     await writeFile(
@@ -209,15 +236,18 @@ test("Reload preserves conversation, model, and output while rereading commands,
       pi.on("resources_discover", () => ({ skillPaths: [${JSON.stringify(skills)}], promptPaths: [${JSON.stringify(template)}] }));
     }`,
     );
+
     const id = expectOk(await app.registry.create(app.main.id));
     expect(expectError(await app.registry.prompt(id, "/reload")).code).toBe(
       "UNSUPPORTED_CAPABILITY",
     );
     expect(requests).toBe(0);
     expectOk(await app.registry.prompt(id, "Before reload"));
-    const before = app.registry.details(id)!,
-      file = app.registry.sessionFile(id),
-      conversation = before.conversationId!;
+
+    const before = app.registry.details(id)!;
+    const file = app.registry.sessionFile(id);
+    const conversation = before.conversationId!;
+
     expect(
       expectOk(app.registry.catalog(id, conversation)).items.some(
         (item) => item.value === "fresh-149",
@@ -256,6 +286,7 @@ test("Reload preserves conversation, model, and output while rereading commands,
     expect(after.telemetry?.effort).toBe(before.telemetry?.effort);
     expect(after.resourceRevision).toBe(1);
     expect(requests).toBe(1);
+
     const catalog = expectOk(app.registry.catalog(id, conversation));
     expect(catalog.items.length).toBeGreaterThan(150);
     expect(catalog.items.find((item) => item.value === "reload-template")?.description).toBe(
@@ -300,19 +331,28 @@ test.each([
       ...options,
       streamFn: (model, context, request) => {
         requests++;
+
         return options.streamFn!(model, context, request);
       },
     }));
     let unsubscribe = () => {};
     try {
       const id = expectOk(await app.registry.create(app.main.id));
-      if (seeded) expectOk(await app.registry.prompt(id, "Existing completed conversation"));
-      const before = requests,
-        statuses: SessionExecutor["state"]["status"][] = [];
+      if (seeded) {
+        expectOk(await app.registry.prompt(id, "Existing completed conversation"));
+      }
+
+      const before = requests;
+      const statuses: SessionExecutor["state"]["status"][] = [];
+
       unsubscribe = app.registry.subscribe(() => {
-        for (const repository of app.registry.snapshot)
-          for (const tree of repository.worktrees)
-            for (const session of tree.sessions) statuses.push(session.status);
+        for (const repository of app.registry.snapshot) {
+          for (const tree of repository.worktrees) {
+            for (const session of tree.sessions) {
+              statuses.push(session.status);
+            }
+          }
+        }
       });
 
       // Use the same management operation invoked by the host after UI parsing.
@@ -347,6 +387,7 @@ test("Reload during execution returns busy without interrupting the request", as
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     const run = app.registry.prompt(id, "hold reload");
+
     await app.streams.waitFor("reload");
 
     const result = await app.registry.reload(id);
@@ -366,9 +407,11 @@ test("Failed extension reloads preserve previous catalogs and revisions", async 
   const app = await sdkFixture();
   try {
     await commandExtension(app.directory);
-    const id = expectOk(await app.registry.create(app.main.id)),
-      conversation = app.registry.details(id)!.conversationId!;
+
+    const id = expectOk(await app.registry.create(app.main.id));
+    const conversation = app.registry.details(id)!.conversationId!;
     const before = expectOk(app.registry.catalog(id, conversation));
+
     await writeFile(
       join(app.directory, "agent", "extensions", "invalid.ts"),
       "export default function ( { invalid source",
@@ -390,13 +433,15 @@ test("SDK diagnostics for invalid settings never become reload success", async (
   const app = await sdkFixture(false, (options) => {
     const configured = { ...options };
     delete configured.streamFn;
+
     return configured;
   });
   const warned = spyOn(console, "warn").mockImplementation(() => {});
   try {
-    const id = expectOk(await app.registry.create(app.main.id)),
-      conversation = app.registry.details(id)!.conversationId!;
+    const id = expectOk(await app.registry.create(app.main.id));
+    const conversation = app.registry.details(id)!.conversationId!;
     const before = expectOk(app.registry.catalog(id, conversation));
+
     await writeFile(join(app.directory, "agent", "settings.json"), "{ invalid settings");
 
     const result = await app.registry.reload(id);
@@ -413,14 +458,16 @@ test("SDK diagnostics for invalid settings never become reload success", async (
 
 test("SDK reload initialization error notifications never become success", async () => {
   // Some SDK hook failures arrive through onError rather than exceptions.
-  const app = await sdkFixture(),
-    logged = spyOn(console, "error").mockImplementation(() => {}),
-    warned = spyOn(console, "warn").mockImplementation(() => {});
+  const app = await sdkFixture();
+  const logged = spyOn(console, "error").mockImplementation(() => {});
+  const warned = spyOn(console, "warn").mockImplementation(() => {});
   try {
     await commandExtension(app.directory);
-    const id = expectOk(await app.registry.create(app.main.id)),
-      conversation = app.registry.details(id)!.conversationId!;
+
+    const id = expectOk(await app.registry.create(app.main.id));
+    const conversation = app.registry.details(id)!.conversationId!;
     const before = expectOk(app.registry.catalog(id, conversation));
+
     await writeFile(
       join(app.directory, "agent", "extensions", "bad-start.ts"),
       `export default function(pi) {
@@ -446,9 +493,10 @@ test("Reload programming errors propagate unchanged without replacing catalogs a
   const app = await sdkFixture();
   let restore: (() => void) | undefined;
   try {
-    const id = expectOk(await app.registry.create(app.main.id)),
-      marker = new TypeError("Reload programming defect");
+    const id = expectOk(await app.registry.create(app.main.id));
+    const marker = new TypeError("Reload programming defect");
     const reload = spyOn(DefaultResourceLoader.prototype, "reload").mockRejectedValue(marker);
+
     restore = () => reload.mockRestore();
 
     const operation = app.registry.reload(id);
@@ -468,30 +516,37 @@ test("The real SDK sends and stores image bytes rather than path labels", async 
     model: { ...options.model!, input: ["text", "image"] },
     streamFn: (model, context, request) => {
       const user = context.messages.findLast((message) => message.role === "user");
-      if (user?.role === "user" && typeof user.content !== "string")
+      if (user?.role === "user" && typeof user.content !== "string") {
         observed.push(
           ...user.content.flatMap((part) => (part.type === "image" ? [part.data] : [])),
         );
+      }
+
       return options.streamFn!(model, context, request);
     },
   }));
   try {
     const path = join(app.directory, "image.png");
     await writeFile(path, tinyPng());
+
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "Inspect [Image #1]", undefined, [path]));
 
     expect(observed).toHaveLength(1);
     expect(Buffer.from(observed[0]!, "base64")).toEqual(tinyPng());
+
     const file = app.registry.sessionFile(id)!;
     const saved = await readFile(file, "utf8");
+
     expect(saved).toContain('"type":"image"');
     expect(saved).not.toContain(path);
     expect(app.registry.details(id)?.status).toBe("complete");
+
     const original = app.registry.details(id)?.sections?.find((section) => section.image)?.image;
     expect(original?.name).toBe("image.png");
     expect(expectOk(app.registry.imageData(id, original!.id)).bytes).toEqual(tinyPng());
     expectOk(await app.registry.close(id));
+
     const restored = expectOk(await app.registry.create(app.main.id, file));
     expect(
       app.registry.details(restored)?.sections?.some((section) => section.kind === "user"),
@@ -508,16 +563,17 @@ test("The real SDK sends and stores image bytes rather than path labels", async 
 });
 
 test("Slow image preparation preserves input acceptance and conversation ordering", async () => {
-  const preparing = Promise.withResolvers<void>(),
-    release = Promise.withResolvers<void>();
-  const admissions: string[] = [],
-    contexts: string[][] = [];
+  const preparing = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const admissions: string[] = [];
+  const contexts: string[][] = [];
   const app = await sdkFixture(false, (options) => ({
     ...options,
     model: { ...options.model!, input: ["text", "image"] },
     imageLoader: async () => {
       preparing.resolve();
       await release.promise;
+
       return ok([
         { type: "image" as const, data: tinyPng().toString("base64"), mimeType: "image/png" },
       ]);
@@ -537,6 +593,7 @@ test("Slow image preparation preserves input acceptance and conversation orderin
             : [],
         ),
       );
+
       return options.streamFn!(model, context, request);
     },
   }));
@@ -545,9 +602,14 @@ test("Slow image preparation preserves input acceptance and conversation orderin
     const first = app.registry.prompt(id, "first image input", () => admissions.push("first"), [
       "/fixture/image.png",
     ]);
+
     await preparing.promise;
+
     const second = app.registry.prompt(id, "later text input", () => admissions.push("second"));
-    for (let i = 0; i < 20; i++) await Promise.resolve();
+    for (let i = 0; i < 20; i++) {
+      await Promise.resolve();
+    }
+
     expect(contexts).toEqual([]);
     expect(admissions).toEqual([]);
     release.resolve();
@@ -557,11 +619,13 @@ test("Slow image preparation preserves input acceptance and conversation orderin
     // The SDK may combine steering received before the first model call.
     // Assert acceptance and actual user-message order rather than call count.
     expect(admissions).toEqual(["first", "second"]);
+
     // Image previews now have their own section; text order and the real attachment must both survive.
     const sections = app.registry.details(id)?.sections ?? [];
     expect(
       sections.filter((section) => section.kind === "user").map((section) => section.text),
     ).toEqual(["first image input", "later text input"]);
+
     const images = sections.filter((section) => section.image);
     expect(images).toHaveLength(1);
     expect(images[0]?.image).toMatchObject({
@@ -586,21 +650,27 @@ test("Image steering queues in the same SDK session without interrupting active 
     model: { ...options.model!, input: ["text", "image"] },
     streamFn: (model, context, request) => {
       const user = context.messages.findLast((message) => message.role === "user");
-      if (user?.role === "user" && typeof user.content !== "string")
+      if (user?.role === "user" && typeof user.content !== "string") {
         observed.push(
           ...user.content.flatMap((part) => (part.type === "image" ? [part.data] : [])),
         );
+      }
+
       return options.streamFn!(model, context, request);
     },
   }));
   try {
     const path = join(app.directory, "queued.png");
     await writeFile(path, tinyPng());
+
     const id = expectOk(await app.registry.create(app.main.id));
     const first = app.registry.prompt(id, "hold A");
+
     await app.streams.waitFor("A");
+
     const accepted = Promise.withResolvers<void>();
     const second = app.registry.prompt(id, "hold B", accepted.resolve, [path]);
+
     await accepted.promise;
     expect(app.streams.gates.get("A")!.aborted).toBe(false);
     expect(app.streams.gates.has("B")).toBe(false);
@@ -625,6 +695,7 @@ test("Rejected image preparation preserves restored-session warnings and saved o
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "read"));
+
     const record = app.registry.records.find((item) => item.id === id)!;
     expectOk(await app.registry.close(id));
     expectOk(
@@ -637,8 +708,10 @@ test("Rejected image preparation preserves restored-session warnings and saved o
         },
       }),
     );
+
     const before = app.registry.details(id);
     let accepted = 0;
+
     expect(
       expectError(
         await app.registry.prompt(id, "Inspect image", () => accepted++, [
@@ -660,6 +733,7 @@ test("Unsupported images and attachment-free settings commands fail before accep
   try {
     const id = expectOk(await plain.registry.create(plain.main.id));
     let accepted = 0;
+
     expect(
       expectError(
         await plain.registry.prompt(id, "Inspect image", () => accepted++, [
@@ -672,16 +746,20 @@ test("Unsupported images and attachment-free settings commands fail before accep
   } finally {
     await plain.cleanup();
   }
+
   const app = await sdkFixture(false, (options) => ({
     ...options,
     model: { ...options.model!, input: ["text", "image"] },
   }));
   try {
     await commandExtension(app.directory);
+
     const path = join(app.directory, "image.png");
     await writeFile(path, tinyPng());
+
     const id = expectOk(await app.registry.create(app.main.id));
     let accepted = 0;
+
     expect(
       expectError(await app.registry.prompt(id, "/fixture-command", () => accepted++, [path])).code,
     ).toBe("INVALID_INPUT");
@@ -697,13 +775,16 @@ test("SDK command listing and execution avoid model calls and preserve previous 
   const app = await sdkFixture();
   try {
     await commandExtension(app.directory);
+
     const id = expectOk(await app.registry.create(app.main.id));
     const items = expectOk(
       await app.registry.complete(id, { kind: "command", query: "fixture-command" }),
     ).items;
+
     expect(items.map((item) => [item.value, item.description])).toEqual([
       ["fixture-command", "Fixture slash command"],
     ]);
+
     let accepted = 0;
     expectOk(await app.registry.prompt(id, "/fixture-command argument", () => accepted++));
     expect(app.registry.details(id)?.status).toBeNull();
@@ -711,6 +792,7 @@ test("SDK command listing and execution avoid model calls and preserve previous 
     expect(accepted).toBe(1);
     expect(app.registry.details(id)?.sections?.some((section) => section.completion)).toBe(false);
     expectOk(await app.registry.prompt(id, "read"));
+
     const completed = app.registry.details(id)?.sections?.at(-1)?.completion;
     expectOk(await app.registry.prompt(id, "/fixture-command"));
     expect(app.registry.details(id)?.status).toBe("complete");
@@ -730,6 +812,7 @@ test("Extensions consuming input with notices never show fake intermediate runs"
     ...options,
     streamFn: (model, context, request) => {
       requests++;
+
       return options.streamFn!(model, context, request);
     },
   }));
@@ -747,8 +830,10 @@ test("Extensions consuming input with notices never show fake intermediate runs"
       });
     }`,
     );
+
     const id = expectOk(await app.registry.create(app.main.id));
     const statuses: (SessionExecutor["state"]["status"] | undefined)[] = [];
+
     unsubscribe = app.registry.subscribe(() => statuses.push(app.registry.details(id)?.status));
 
     // Observe session events emitted when notices are published.
@@ -781,9 +866,12 @@ test("Registered slash commands starting real model work report working and comp
       pi.registerCommand("fixture-run", { handler: async () => { pi.sendUserMessage("hold command"); } });
     }`,
     );
+
     const id = expectOk(await app.registry.create(app.main.id));
     unsubscribe = app.registry.subscribe(() => {
-      if (app.registry.details(id)?.status === "complete") settled.resolve();
+      if (app.registry.details(id)?.status === "complete") {
+        settled.resolve();
+      }
     });
 
     // Start real SDK work before withholding the provider response.
@@ -816,7 +904,10 @@ test.each([true, false])(
     const log = spyOn(console, "error").mockImplementation(() => {});
     const append = spyOn(SessionManager.prototype, "appendCustomEntry").mockImplementation(
       function (this: SessionManager, type, data) {
-        if (type === runCompletionEntryType) throw failure;
+        if (type === runCompletionEntryType) {
+          throw failure;
+        }
+
         return original.call(this, type, data);
       },
     );
@@ -826,13 +917,17 @@ test.each([true, false])(
       // Separate completion from persistence warnings and log unexpected errors with original stacks.
       expect(app.registry.details(id)?.status).toBe("complete");
       expect(app.registry.details(id)?.error).toBeNull();
+
       const completion = app.registry.details(id)?.sections?.at(-1)?.completion;
       expect(completion?.outcome).toBe("complete");
       expect(completion?.warning).toContain(
         expected ? "STORAGE_FAILED" : "Unexpected run timing persistence",
       );
-      if (expected) expect(log).not.toHaveBeenCalled();
-      else expect(log.mock.calls.some((call) => call.includes(failure))).toBe(true);
+      if (expected) {
+        expect(log).not.toHaveBeenCalled();
+      } else {
+        expect(log.mock.calls.some((call) => call.includes(failure))).toBe(true);
+      }
     } finally {
       append.mockRestore();
       log.mockRestore();
@@ -846,6 +941,7 @@ test("SDK command failure notifications return failure Results instead of accept
   const log = spyOn(console, "error").mockImplementation(() => {});
   try {
     await commandExtension(app.directory);
+
     const id = expectOk(await app.registry.create(app.main.id));
     let accepted = false;
     const failure = expectError(
@@ -853,6 +949,7 @@ test("SDK command failure notifications return failure Results instead of accept
         accepted = true;
       }),
     );
+
     expect(failure.code).toBe("AGENT_FAILED");
     expect(failure.message).toContain("Fixture command failure");
     expect(accepted).toBe(false);
@@ -868,11 +965,17 @@ test("Commands awaiting models preserve completion state and never deadlock on c
   const app = await sdkFixture(true);
   try {
     await commandExtension(app.directory);
+
     const id = expectOk(await app.registry.create(app.main.id));
     const run = app.registry.prompt(id, "hold A");
+
     await app.streams.waitFor("A");
+
     const command = app.registry.prompt(id, "/fixture-wait");
-    for (let i = 0; i < 20; i++) await Promise.resolve();
+    for (let i = 0; i < 20; i++) {
+      await Promise.resolve();
+    }
+
     app.streams.gates.get("A")!.finish("finished");
     expectOk(await run);
     expectOk(await command);
@@ -880,10 +983,15 @@ test("Commands awaiting models preserve completion state and never deadlock on c
 
     const next = app.registry.prompt(id, "hold B");
     await app.streams.waitFor("B");
+
     const waiting = app.registry.prompt(id, "/fixture-wait");
-    for (let i = 0; i < 20; i++) await Promise.resolve();
+    for (let i = 0; i < 20; i++) {
+      await Promise.resolve();
+    }
+
     const close = app.registry.close(id);
     const gate = app.streams.gates.get("B")!;
+
     await gate.abortReceived;
     gate.finish("aborted");
     await Promise.all([next, waiting]);
@@ -899,16 +1007,20 @@ test("SDK sessions discover extensions in agentDir and execute registered tools"
   const app = await sdkFixture(false, (options) => ({
     ...options,
     streamFn: (model, context, request) => {
-      if (context.messages.at(-1)?.role !== "user")
+      if (context.messages.at(-1)?.role !== "user") {
         return options.streamFn!(model, context, request);
+      }
+
       const stream = createAssistantMessageEventStream();
       const message = fixtureMessage(model.api, model.provider, model.id);
+
       message.content = [
         { type: "toolCall", id: "extension-probe", name: "extension_probe", arguments: {} },
       ];
       message.stopReason = "toolUse";
       stream.push({ type: "done", reason: "toolUse", message });
       stream.end();
+
       return stream;
     },
   }));
@@ -950,7 +1062,9 @@ test("Fast commands avoid model calls and apply or remove priority on native Cod
       const json =
         request.headers.get("content-encoding") === "zstd" ? zstdDecompressSync(bytes) : bytes;
       const body = JSON.parse(json.toString("utf8")) as Record<string, unknown>;
+
       bodies.push(body);
+
       const message = {
         id: "msg-fixture",
         type: "message",
@@ -982,6 +1096,7 @@ test("Fast commands avoid model calls and apply or remove priority on native Cod
         { type: "response.output_item.done", output_index: 0, item: message },
         { type: "response.completed", response },
       ];
+
       return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
         headers: { "Content-Type": "text/event-stream" },
       });
@@ -990,6 +1105,7 @@ test("Fast commands avoid model calls and apply or remove priority on native Cod
   const app = await sdkFixture(false, (options) => {
     const modelRuntime = options.modelRuntime!;
     const apiKey = `e30.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "fixture-account" } })).toString("base64url")}.fixture`;
+
     modelRuntime.registerProvider("native-fast-fixture", {
       api: "openai-codex-responses",
       apiKey,
@@ -1006,6 +1122,7 @@ test("Fast commands avoid model calls and apply or remove priority on native Cod
         },
       ],
     });
+
     const configured: PiSessionOptions = {
       ...options,
       model: modelRuntime.getModel("native-fast-fixture", "native-fixture")!,
@@ -1017,14 +1134,17 @@ test("Fast commands avoid model calls and apply or remove priority on native Cod
       },
     };
     delete configured.streamFn;
+
     return configured;
   });
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     expect(app.registry.details(id)?.telemetry?.fast).toBe(false);
+
     const statuses: (SessionExecutor["state"]["status"] | undefined)[] = [];
     const toggle = async (text: string) => {
       statuses.length = 0;
+
       const before = app.registry.details(id);
       const unsubscribe = app.registry.subscribe(() =>
         statuses.push(app.registry.details(id)?.status),
@@ -1034,12 +1154,14 @@ test("Fast commands avoid model calls and apply or remove priority on native Cod
       } finally {
         unsubscribe();
       }
+
       // Fast telemetry must not start prompt or session-tab loading.
       expect(statuses.length).toBeGreaterThan(0);
       expect(statuses).not.toContain("working");
       expect(app.registry.details(id)?.status).toBe(before?.status);
       expect(app.registry.details(id)?.result).toEqual(before?.result);
     };
+
     await toggle("/fast on");
     await toggle("/fast status");
     await toggle("/fast off");
@@ -1090,6 +1212,7 @@ test("Real SDK read/write uses the selected worktree cwd without modifying other
     expect(await Bun.file(join(app.main.path, "radian-probe.txt")).exists()).toBe(false);
     expect(process.cwd()).toBe(originalCwd);
     expect(app.registry.details(a)?.status).toBe("complete");
+
     const read = app.registry
       .details(a)
       ?.sections?.find((section) => section.kind === "tool" && section.title === "read");
@@ -1112,6 +1235,7 @@ test("Two real SDK runs survive worktree switching and restore background result
     const b = expectOk(await app.registry.create(app.feature.id));
     const runA = app.registry.prompt(a, "hold A");
     const runB = app.registry.prompt(b, "hold B");
+
     await Promise.all([app.streams.waitFor("A"), app.streams.waitFor("B")]);
 
     // A continues on its original SDK handle while B is the visible workspace.
@@ -1141,10 +1265,13 @@ test("Direct Pi subagent tools expose their authored input only after an exact l
   const app = await sdkFixture(false, (options) => ({
     ...options,
     streamFn: (model, context, request) => {
-      if (context.messages.at(-1)?.role === "toolResult")
+      if (context.messages.at(-1)?.role === "toolResult") {
         return options.streamFn!(model, context, request);
-      const stream = createAssistantMessageEventStream(),
-        message = fixtureMessage(model.api, model.provider, model.id);
+      }
+
+      const stream = createAssistantMessageEventStream();
+      const message = fixtureMessage(model.api, model.provider, model.id);
+
       message.content = [
         {
           type: "toolCall",
@@ -1156,6 +1283,7 @@ test("Direct Pi subagent tools expose their authored input only after an exact l
       message.stopReason = "toolUse";
       stream.push({ type: "done", reason: "toolUse", message });
       stream.end();
+
       return stream;
     },
   }));
@@ -1175,6 +1303,7 @@ test("Direct Pi subagent tools expose their authored input only after an exact l
       } });
     }`,
     );
+
     const id = expectOk(await app.registry.create(app.main.id));
 
     expectOk(await app.registry.prompt(id, "Start the child"));
@@ -1202,7 +1331,9 @@ test("Owned SDK children retain their received task and runtime duration after c
   try {
     const parent = expectOk(await app.registry.create(app.main.id));
     const run = app.registry.prompt(parent, "delegate");
+
     await app.streams.waitFor("child");
+
     const children = () => app.registry.snapshot[0]!.worktrees[0]!.sessions[0]!.subagents;
 
     // Working snapshots expose the actual child task and the runtime-owned clock.
@@ -1219,6 +1350,7 @@ test("Owned SDK children retain their received task and runtime duration after c
     expect(completed.request?.text).toBe("slow");
     expect(completed.runTiming?.elapsedMs).toBeGreaterThan(0);
     expect(children()[0]?.runTiming).toEqual(completed.runTiming);
+
     const saved = app.registry.records[0]!.subagents[0]!;
     expect(saved.request).toEqual(completed.request);
     expect(saved.runTiming).toEqual(completed.runTiming);
@@ -1235,8 +1367,10 @@ test("SDK parents and subagents hide immediately and terminate in background wit
     const other = expectOk(await app.registry.create(app.feature.id));
     const delegating = app.registry.prompt(parent, "delegate");
     const unrelated = app.registry.prompt(other, "hold B");
+
     await Promise.all([app.streams.waitFor("child"), app.streams.waitFor("B")]);
     expect(app.registry.snapshot[0]!.worktrees[0]!.sessions[0]!.subagents).toHaveLength(1);
+
     const file = app.registry.sessionFile(parent)!;
     expect(
       expectError(await app.registry.create(app.main.id, app.executors[2]!.sessionFile!)).code,
@@ -1250,6 +1384,7 @@ test("SDK parents and subagents hide immediately and terminate in background wit
     expect(expectError(await app.registry.create(app.main.id, file)).code).toBe("SESSION_CONFLICT");
     expect(app.streams.gates.get("B")!.aborted).toBe(false);
     app.streams.gates.get("child")!.finish("child cancelled");
+
     const [closed, cancelled] = await Promise.all([closing, delegating]);
     expectOk(closed);
     expect(expectError(cancelled).code).toBe("CANCELLED");
@@ -1271,12 +1406,16 @@ test("Reopening closed SDK sessions restores the same saved ID and history witho
   try {
     const original = expectOk(await app.registry.create(app.main.id));
     await app.registry.prompt(original, "read");
+
     const file = app.registry.sessionFile(original)!;
     const completion = app.registry.details(original)?.sections?.at(-1)?.completion;
+
     expect(completion?.outcome).toBe("complete");
     expect(completion?.durationMs).toBeGreaterThanOrEqual(0);
-    const saved = SessionManager.open(file),
-      savedId = saved.getSessionId();
+
+    const saved = SessionManager.open(file);
+    const savedId = saved.getSessionId();
+
     expect(
       saved
         .getBranch()
@@ -1290,6 +1429,7 @@ test("Reopening closed SDK sessions restores the same saved ID and history witho
 
     // Close and reopen use a new display ID but the original persisted session file.
     await app.registry.close(original);
+
     const reopened = expectOk(await app.registry.create(app.main.id, file));
 
     // SDK restoration, not transcript copying, reconstructs the conversation.
@@ -1319,7 +1459,9 @@ test("Input during SDK execution queues after the current response without repla
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     const running = app.registry.prompt(id, "hold A");
+
     await app.streams.waitFor("A");
+
     const accepted = Promise.withResolvers<void>();
 
     // Pi queues B without aborting A or waiting for A's completion to acknowledge it.
@@ -1353,6 +1495,7 @@ test("Interrupt preserves sessions and merges queued input with newlines for one
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     const running = app.registry.prompt(id, "hold A");
+
     await app.streams.waitFor("A");
     expectOk(await app.registry.prompt(id, "second"));
     expectOk(await app.registry.prompt(id, "third"));
@@ -1365,10 +1508,13 @@ test("Interrupt preserves sessions and merges queued input with newlines for one
     // Repeated Esc coalesces while the provider is still acknowledging cancellation.
     const settled = Promise.withResolvers<void>();
     const unsubscribe = app.registry.subscribe(() => {
-      if (app.registry.details(id)?.status === "complete") settled.resolve();
+      if (app.registry.details(id)?.status === "complete") {
+        settled.resolve();
+      }
     });
-    const interrupt = app.registry.interrupt(id),
-      repeated = app.registry.interrupt(id);
+    const interrupt = app.registry.interrupt(id);
+    const repeated = app.registry.interrupt(id);
+
     await app.streams.gates.get("A")!.abortReceived;
     expect(app.registry.details(id)?.pendingMessages?.map((message) => message.text)).toEqual([
       "second",
@@ -1412,9 +1558,11 @@ test("Merging queued input preserves image bytes and duplicate-input order", asy
     model: { ...options.model!, input: ["text", "image"] },
   }));
   try {
-    const id = expectOk(await app.registry.create(app.main.id)),
-      path = join(app.directory, "queued.png");
+    const id = expectOk(await app.registry.create(app.main.id));
+    const path = join(app.directory, "queued.png");
+
     await writeFile(path, tinyPng());
+
     const running = app.registry.prompt(id, "hold A");
     await app.streams.waitFor("A");
     expectOk(await app.registry.prompt(id, "same", undefined, [path]));
@@ -1423,12 +1571,16 @@ test("Merging queued input preserves image bytes and duplicate-input order", asy
       summarizeRequest("same", 1),
       summarizeRequest("same", 1),
     ]);
+
     const settled = Promise.withResolvers<void>();
     const unsubscribe = app.registry.subscribe(() => {
-      if (app.registry.details(id)?.status === "complete") settled.resolve();
+      if (app.registry.details(id)?.status === "complete") {
+        settled.resolve();
+      }
     });
 
     const interrupted = app.registry.interrupt(id);
+
     await app.streams.gates.get("A")!.abortReceived;
     app.streams.gates.get("A")!.finish("cancelled");
     expectOk(await interrupted);
@@ -1442,6 +1594,7 @@ test("Merging queued input preserves image bytes and duplicate-input order", asy
         entry.type === "message" && entry.message.role === "user" ? [entry.message] : [],
       );
     const last = users.at(-1)!;
+
     expect(users).toHaveLength(2);
     expect(
       typeof last.content === "string"
@@ -1469,17 +1622,25 @@ test("Interrupt cancels manual compaction while preserving conversation and sess
     ...options,
     settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
     streamFn: (model, context, request) => {
-      if (!summarizing) return options.streamFn!(model, context, request);
-      const stream = createAssistantMessageEventStream(),
-        message = fixtureMessage(model.api, model.provider, model.id);
+      if (!summarizing) {
+        return options.streamFn!(model, context, request);
+      }
+
+      const stream = createAssistantMessageEventStream();
+      const message = fixtureMessage(model.api, model.provider, model.id);
       const cancel = () => {
         message.stopReason = "aborted";
         stream.push({ type: "error", reason: "aborted", error: message });
         stream.end();
       };
-      if (request?.signal?.aborted) cancel();
-      else request?.signal?.addEventListener("abort", cancel, { once: true });
+      if (request?.signal?.aborted) {
+        cancel();
+      } else {
+        request?.signal?.addEventListener("abort", cancel, { once: true });
+      }
+
       started.resolve();
+
       return stream;
     },
   }));
@@ -1487,8 +1648,10 @@ test("Interrupt cancels manual compaction while preserving conversation and sess
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "first"));
     expectOk(await app.registry.prompt(id, "second"));
+
     const before = app.registry.details(id)!;
     summarizing = true;
+
     const compact = app.registry.compact(id);
     await started.promise;
 
@@ -1513,21 +1676,24 @@ test("Interrupt cancels manual compaction while preserving conversation and sess
 
 test("Unaccepted image input still preparing at interruption never executes later", async () => {
   // Image decoding is an SDK/OS boundary that can finish after the user presses Esc.
-  const loading = Promise.withResolvers<void>(),
-    release = Promise.withResolvers<void>();
+  const loading = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
   const app = await sdkFixture(true, (options) => ({
     ...options,
     model: { ...options.model!, input: ["text", "image"] },
     imageLoader: async () => {
       loading.resolve();
       await release.promise;
+
       return ok([]);
     },
   }));
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     const running = app.registry.prompt(id, "hold A");
+
     await app.streams.waitFor("A");
+
     let accepted = false;
     const preparing = app.registry.prompt(
       id,
@@ -1537,6 +1703,7 @@ test("Unaccepted image input still preparing at interruption never executes late
       },
       ["/fixture/image.png"],
     );
+
     await loading.promise;
 
     const interrupted = app.registry.interrupt(id);
@@ -1561,6 +1728,7 @@ test("Interrupt waits for owned subagent cancellation without closing the parent
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     const running = app.registry.prompt(id, "delegate");
+
     await app.streams.waitFor("child");
 
     const interrupted = app.registry.interrupt(id);
@@ -1581,10 +1749,11 @@ test("Interrupt without queued input cancels only the selected run", async () =>
   // Two independent sessions prove this is not runtime shutdown or session close.
   const app = await sdkFixture(true);
   try {
-    const a = expectOk(await app.registry.create(app.main.id)),
-      b = expectOk(await app.registry.create(app.main.id));
-    const first = app.registry.prompt(a, "hold A"),
-      second = app.registry.prompt(b, "hold B");
+    const a = expectOk(await app.registry.create(app.main.id));
+    const b = expectOk(await app.registry.create(app.main.id));
+    const first = app.registry.prompt(a, "hold A");
+    const second = app.registry.prompt(b, "hold B");
+
     await Promise.all([app.streams.waitFor("A"), app.streams.waitFor("B")]);
 
     const interrupt = app.registry.interrupt(a);
@@ -1620,15 +1789,22 @@ test("Concurrent SDK submissions serialize acceptance and preserve actual queue 
     const runs = ["A", "B", "C"].map((name, i) =>
       app.registry.prompt(id, `hold ${name}`, admissions[i]!.resolve),
     );
+
     await Promise.all(admissions.map((item) => item.promise));
-    for (const result of await Promise.all(runs)) expectOk(result);
+    for (const result of await Promise.all(runs)) {
+      expectOk(result);
+    }
 
     // Early steering may join the initial request; finalized user-message order is authoritative.
     const messages = SessionManager.open(app.registry.sessionFile(id)!)
       .getBranch()
       .flatMap((entry) => {
-        if (entry.type !== "message" || entry.message.role !== "user") return [];
+        if (entry.type !== "message" || entry.message.role !== "user") {
+          return [];
+        }
+
         const content = entry.message.content;
+
         return [
           typeof content === "string"
             ? content
@@ -1652,13 +1828,18 @@ test("Intermediate agent_end events during SDK retries do not report completion 
     ...options,
     settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 1, maxAgentDelayMs: 1 } },
     streamFn: (model, context, request) => {
-      if (++requests !== 1) return options.streamFn!(model, context, request);
+      if (++requests !== 1) {
+        return options.streamFn!(model, context, request);
+      }
+
       const stream = createAssistantMessageEventStream();
       const error = fixtureMessage(model.api, model.provider, model.id);
+
       error.stopReason = "error";
       error.errorMessage = "429 Too Many Requests";
       stream.push({ type: "error", reason: "error", error });
       stream.end();
+
       return stream;
     },
   }));
@@ -1671,6 +1852,7 @@ test("Intermediate agent_end events during SDK retries do not report completion 
 
     // Pi performs the retry; radian does not implement a second retry engine.
     const running = app.registry.prompt(id, "hold Retry");
+
     await app.streams.waitFor("Retry");
     expect(requests).toBe(2);
     expect(observed).not.toContain("complete");
@@ -1699,9 +1881,13 @@ test.each(["close", "interrupt"] as const)(
       ...options,
       streamFn: (model, context, request) => {
         const last = context.messages.at(-1);
-        if (last?.role !== "user") return options.streamFn!(model, context, request);
+        if (last?.role !== "user") {
+          return options.streamFn!(model, context, request);
+        }
+
         const stream = createAssistantMessageEventStream();
         const message = fixtureMessage(model.api, model.provider, model.id);
+
         message.stopReason = "toolUse";
         message.content.push({
           type: "toolCall",
@@ -1713,6 +1899,7 @@ test.each(["close", "interrupt"] as const)(
         });
         stream.push({ type: "done", reason: "toolUse", message });
         stream.end();
+
         return stream;
       },
     }));
@@ -1720,25 +1907,32 @@ test.each(["close", "interrupt"] as const)(
       const id = expectOk(await app.registry.create(app.main.id));
       const started = Promise.withResolvers<void>();
       const unsubscribe = app.registry.subscribe(() => {
-        if (app.registry.details(id)?.output.includes("BASH_STARTED")) started.resolve();
+        if (app.registry.details(id)?.output.includes("BASH_STARTED")) {
+          started.resolve();
+        }
       });
 
       // Await the actual SDK tool update, not a guessed process-start delay.
       const running = app.registry.prompt(id, "bash probe");
+
       await started.promise;
       unsubscribe();
+
       const pid = Number.parseInt(
         await readFile(join(app.main.path, ".bash-probe.pid"), "utf8"),
         10,
       );
       expect(process.kill(pid, 0)).toBe(true);
+
       const [stopped] = await Promise.all([app.registry[operation](id), running]);
       expectOk(stopped);
 
       // Abort propagation and tool completion include process cleanup before control resolves.
       expect(() => process.kill(pid, 0)).toThrow();
       expect(app.registry.closingCount).toBe(0);
-      if (operation === "interrupt") expect(app.registry.details(id)).not.toBeNull();
+      if (operation === "interrupt") {
+        expect(app.registry.details(id)).not.toBeNull();
+      }
     } finally {
       await app.cleanup();
     }
@@ -1750,6 +1944,7 @@ test("SDK history defaults to the specified agentDir when sessionDir is omitted"
   const app = await sdkFixture(false, (options) => {
     const scoped = { ...options };
     delete scoped.sessionDir;
+
     return scoped;
   });
   try {
@@ -1774,10 +1969,12 @@ test("Final SDK provider failures return AgentRunError Results distinct from can
     streamFn: (model) => {
       const stream = createAssistantMessageEventStream();
       const message = fixtureMessage(model.api, model.provider, model.id);
+
       message.stopReason = "error";
       message.errorMessage = "Provider rejected this test request";
       stream.push({ type: "error", reason: "error", error: message });
       stream.end();
+
       return stream;
     },
   }));
@@ -1797,8 +1994,8 @@ test("Final SDK provider failures return AgentRunError Results distinct from can
 
 test("Automatic compaction reports dedicated activity and returns to normal execution before completing once", async () => {
   // Trigger real SDK threshold compaction with a low limit and pause only the summary provider.
-  const started = Promise.withResolvers<void>(),
-    release = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
   const app = await sdkFixture(false, (options) => ({
     ...options,
     settings: { compaction: { enabled: true, keepRecentTokens: 0, reserveTokens: 199900 } },
@@ -1814,6 +2011,7 @@ test("Automatic compaction reports dedicated activity and returns to normal exec
         started.resolve();
         await release.promise;
       }
+
       return options.streamFn!(model, context, request);
     },
   }));
@@ -1822,6 +2020,7 @@ test("Automatic compaction reports dedicated activity and returns to normal exec
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     const pending = app.registry.prompt(id, "Preserve the implementation plan. ".repeat(500));
+
     await Promise.race([
       started.promise,
       pending.then((result) => {
@@ -1856,18 +2055,23 @@ test.each(["complete", "error"] as const)(
   "Manual compaction retains dedicated activity throughout its lifetime and clears after %s",
   async (outcome) => {
     // Pause only the real SDK summary stream to observe compaction deterministically.
-    const started = Promise.withResolvers<void>(),
-      release = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
     let summarizing = false;
     const app = await sdkFixture(false, (options) => ({
       ...options,
       settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
       streamFn: async (model, context, request) => {
-        if (!summarizing) return options.streamFn!(model, context, request);
+        if (!summarizing) {
+          return options.streamFn!(model, context, request);
+        }
+
         started.resolve();
         await release.promise;
-        const stream = createAssistantMessageEventStream(),
-          message = fixtureMessage(model.api, model.provider, model.id);
+
+        const stream = createAssistantMessageEventStream();
+        const message = fixtureMessage(model.api, model.provider, model.id);
+
         message.content = [{ type: "text", text: "Retain the fixture implementation plan" }];
         if (outcome === "complete") {
           message.stopReason = "stop";
@@ -1877,7 +2081,9 @@ test.each(["complete", "error"] as const)(
           message.errorMessage = "Offline compaction fixture";
           stream.push({ type: "error", reason: message.stopReason, error: message });
         }
+
         stream.end();
+
         return stream;
       },
     }));
@@ -1887,11 +2093,13 @@ test.each(["complete", "error"] as const)(
       const id = expectOk(await app.registry.create(app.main.id));
       expectOk(await app.registry.prompt(id, "first request"));
       expectOk(await app.registry.prompt(id, "second request"));
+
       const before = app.registry.details(id)!;
       unsubscribe = app.registry.subscribe(() => {
         const state = app.registry.details(id);
-        if (state?.status === "working")
+        if (state?.status === "working") {
           observed.push("activity" in state ? String(state.activity) : "missing");
+        }
       });
       summarizing = true;
 
@@ -1910,10 +2118,15 @@ test.each(["complete", "error"] as const)(
         conversationId: before.conversationId,
       });
       release.resolve();
+
       const result = await pending;
 
-      if (outcome === "complete") expectOk(result);
-      else expect(expectError(result).code).toBe("AGENT_FAILED");
+      if (outcome === "complete") {
+        expectOk(result);
+      } else {
+        expect(expectError(result).code).toBe("AGENT_FAILED");
+      }
+
       expect(observed.length).toBeGreaterThan(0);
       expect(observed.every((activity) => activity === "compacting")).toBe(true);
       expect(app.registry.details(id)).not.toHaveProperty("activity");
@@ -1937,6 +2150,7 @@ test("Manual compaction saves real SDK summaries while preserving conversation, 
     settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
     streamFn: (model, context, request) => {
       requests.push(JSON.stringify(context.messages));
+
       return options.streamFn!(model, context, request);
     },
   }));
@@ -1944,13 +2158,15 @@ test("Manual compaction saves real SDK summaries while preserving conversation, 
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "Keep the current implementation plan"));
     expectOk(await app.registry.prompt(id, "Continue the fixture work"));
-    const before = app.registry.details(id)!,
-      file = app.registry.sessionFile(id)!,
-      calls = requests.length;
+
+    const before = app.registry.details(id)!;
+    const file = app.registry.sessionFile(id)!;
+    const calls = requests.length;
     let accepted = 0;
     const commands = expectOk(
       await app.registry.complete(id, { kind: "command", query: "" }),
     ).items;
+
     expect(commands.map((item) => item.value)).toEqual(expect.arrayContaining(["new", "compact"]));
 
     // Instructions go to SDK summarization, never into a new user/model turn.
@@ -1959,6 +2175,7 @@ test("Manual compaction saves real SDK summaries while preserving conversation, 
     expect(accepted).toBe(1);
     expect(requests.length).toBeGreaterThan(calls);
     expect(requests.slice(calls).join("\n")).toContain("Preserve the implementation plan");
+
     const after = app.registry.details(id)!;
     expect(after.conversationId).toBe(before.conversationId);
     expect(app.registry.sessionFile(id)).toBe(file);
@@ -1982,17 +2199,20 @@ test("Manual compaction rejects empty or undersized conversations without model 
     ...options,
     streamFn: (model, context, request) => {
       calls++;
+
       return options.streamFn!(model, context, request);
     },
   }));
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     let accepted = 0;
+
     expect(expectError(await app.registry.compact(id, undefined, () => accepted++)).code).toBe(
       "INVALID_INPUT",
     );
     expect(calls).toBe(0);
     expectOk(await app.registry.prompt(id, "tiny fixture"));
+
     const before = calls;
 
     expect(expectError(await app.registry.compact(id, undefined, () => accepted++)).code).toBe(
@@ -2013,6 +2233,7 @@ test("Manual compaction during execution neither interrupts the model nor queues
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     const run = app.registry.prompt(id, "hold compact-busy");
+
     await app.streams.waitFor("compact-busy");
 
     expect(expectError(await app.registry.compact(id)).code).toBe("SESSION_BUSY");
@@ -2034,13 +2255,18 @@ test("Compaction model failures preserve conversation and record accepted comman
     ...options,
     settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
     streamFn: (model, context, request) => {
-      if (!failSummary) return options.streamFn!(model, context, request);
-      const stream = createAssistantMessageEventStream(),
-        message = fixtureMessage(model.api, model.provider, model.id);
+      if (!failSummary) {
+        return options.streamFn!(model, context, request);
+      }
+
+      const stream = createAssistantMessageEventStream();
+      const message = fixtureMessage(model.api, model.provider, model.id);
+
       message.stopReason = "error";
       message.errorMessage = "Offline summary rejected";
       stream.push({ type: "error", reason: "error", error: message });
       stream.end();
+
       return stream;
     },
   }));
@@ -2048,8 +2274,10 @@ test("Compaction model failures preserve conversation and record accepted comman
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "first"));
     expectOk(await app.registry.prompt(id, "second"));
+
     const before = app.registry.details(id)!;
     let accepted = 0;
+
     failSummary = true;
 
     const result = await app.registry.compact(id, undefined, () => accepted++);
@@ -2082,7 +2310,10 @@ test("Compaction programming errors propagate unchanged instead of becoming inpu
     ...options,
     settings: { compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 } },
     streamFn: (model, context, request) => {
-      if (broken) throw defect;
+      if (broken) {
+        throw defect;
+      }
+
       return options.streamFn!(model, context, request);
     },
   }));
@@ -2106,9 +2337,11 @@ test("newTab opens a session without touching active SDK conversations, child wo
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     const run = app.registry.prompt(id, "delegate");
+
     await app.streams.waitFor("child");
-    const conversation = app.registry.details(id)!.conversationId,
-      file = app.registry.sessionFile(id)!;
+
+    const conversation = app.registry.details(id)!.conversationId;
+    const file = app.registry.sessionFile(id)!;
 
     const added = expectOk(await app.registry.newTab(id));
 
@@ -2132,18 +2365,24 @@ test("newTab opens a session without touching active SDK conversations, child wo
 test("clear interrupts and saves the current tab before replacing its conversation in place", async () => {
   const app = await sdkFixture(true);
   try {
-    const id = expectOk(await app.registry.create(app.main.id)),
-      other = expectOk(await app.registry.create(app.main.id));
+    const id = expectOk(await app.registry.create(app.main.id));
+    const other = expectOk(await app.registry.create(app.main.id));
     const first = app.registry.prompt(id, "hold previous-conversation");
+
     await app.streams.waitFor("previous-conversation");
+
     const second = app.registry.prompt(other, "hold other-tab");
     await app.streams.waitFor("other-tab");
-    const conversation = app.registry.details(id)!.conversationId,
-      oldFile = app.registry.sessionFile(id)!;
+
+    const conversation = app.registry.details(id)!.conversationId;
+    const oldFile = app.registry.sessionFile(id)!;
+
     app.selection.selectSession(app.main.id, id);
+
     const accepted = Promise.withResolvers<void>();
 
     const replacement = app.registry.clearSession(id, () => accepted.resolve());
+
     await accepted.promise;
     await app.streams.gates.get("previous-conversation")!.abortReceived;
     expect(expectError(await app.registry.prompt(id, "during replacement")).code).toBe(
@@ -2191,10 +2430,13 @@ test("clear cleans up owned child work and saves cancellation in the original co
   try {
     const id = expectOk(await app.registry.create(app.main.id));
     const run = app.registry.prompt(id, "delegate");
+
     await app.streams.waitFor("child");
+
     const accepted = Promise.withResolvers<void>();
 
     const replacement = app.registry.clearSession(id, () => accepted.resolve());
+
     await accepted.promise;
     await app.streams.gates.get("child")!.abortReceived;
     app.streams.gates.get("child")!.finish("cancelled owned child");
@@ -2220,9 +2462,12 @@ test("clear respects extension vetoes without interrupting the active model", as
       pi.on("session_before_switch", (event) => event.reason === "new" ? { cancel: true } : undefined);
     };`,
     );
+
     const id = expectOk(await app.registry.create(app.main.id));
     const run = app.registry.prompt(id, "hold cancelled-new");
+
     await app.streams.waitFor("cancelled-new");
+
     const conversation = app.registry.details(id)!.conversationId;
     let accepted = false;
 
@@ -2254,8 +2499,10 @@ test("clear SDK lifecycle hooks receive replacement reasons instead of startup o
       pi.on("session_shutdown", (event) => { pi.appendEntry("shutdown-reason", event); });
     };`,
     );
+
     const id = expectOk(await app.registry.create(app.main.id));
     expectOk(await app.registry.prompt(id, "original work"));
+
     const oldFile = app.registry.sessionFile(id)!;
 
     expectOk(await app.registry.clearSession(id));
@@ -2263,6 +2510,7 @@ test("clear SDK lifecycle hooks receive replacement reasons instead of startup o
     const oldEntries = SessionManager.open(oldFile).getBranch();
     // Pi buffers an empty conversation's metadata until its first actual turn.
     expectOk(await app.registry.prompt(id, "first fresh conversation turn"));
+
     const newEntries = SessionManager.open(app.registry.sessionFile(id)!).getBranch();
     expect(
       oldEntries

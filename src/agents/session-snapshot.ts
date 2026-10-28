@@ -3,6 +3,7 @@ import type { Result } from "../result.ts";
 import type { SessionRecord } from "./session-registry.ts";
 
 export type SessionLifecycle = "open" | "closed";
+
 export type SessionSnapshotInfo = {
   readonly id: string;
   readonly name: string;

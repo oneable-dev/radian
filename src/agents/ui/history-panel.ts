@@ -99,8 +99,10 @@ export class SessionHistoryPanel {
   ) {
     // The list and shared session surface own native scroll/layout subscriptions.
     this.listenerBudget = renderer.getMaxListeners() === 0 ? 0 : 8;
-    if (this.listenerBudget)
+    if (this.listenerBudget) {
       renderer.setMaxListeners(renderer.getMaxListeners() + this.listenerBudget);
+    }
+
     const theme = uiTheme(renderer);
     this.root = new BoxRenderable(renderer, {
       id: "session-history",
@@ -179,8 +181,9 @@ export class SessionHistoryPanel {
         item &&
         this.worktree &&
         this.previewCache.read(this.worktree.id, item.id) !== this.previewState
-      )
+      ) {
         this.renderPreview();
+      }
     });
     this.preview = this.session.transcript;
     this.previewPane = this.session.body.root;
@@ -217,12 +220,15 @@ export class SessionHistoryPanel {
   get visible(): boolean {
     return this.root.visible && !this.disposed && !this.root.isDestroyed;
   }
+
   get context(): KeyContext {
     return this.search.focused ? "history-search" : "history";
   }
+
   private get previewTarget(): Renderable {
     return this.session.focusTarget;
   }
+
   get focusTargets(): Renderable[] {
     return [
       this.search,
@@ -230,11 +236,13 @@ export class SessionHistoryPanel {
       ...(this.previewPane.visible ? [this.previewTarget] : []),
     ];
   }
+
   get shortcuts(): readonly FooterShortcut[] {
     const hint = (command: Extract<CommandId, `history.${string}`>, label: string) => ({
       key: footerKeyHint(command, this.context, this.actions.keyHint(command, this.context)),
       label,
     });
+
     return [
       ...(this.selected &&
       !this.selected.unavailableReason &&
@@ -251,16 +259,21 @@ export class SessionHistoryPanel {
       hint("history.half-page-down", "½ page"),
     ].filter((item) => item.key);
   }
+
   private get selected(): HistoryItem | undefined {
     return this.filtered[this.cursor];
   }
 
   show(worktree: Worktree | null): void {
-    if (this.disposed || this.root.isDestroyed) return;
-    if (this.visible) {
-      this.search.focus();
+    if (this.disposed || this.root.isDestroyed) {
       return;
     }
+    if (this.visible) {
+      this.search.focus();
+
+      return;
+    }
+
     this.owner = this.renderer.currentFocusedRenderable ?? undefined;
     this.worktree = worktree;
     this.compactPreview = false;
@@ -272,15 +285,26 @@ export class SessionHistoryPanel {
     this.filter();
     this.resize();
     this.search.focus();
+
     const cached = worktree ? this.actions.cached?.(worktree.id) : undefined;
-    if (cached) this.accept(cached);
-    else this.launch(() => this.refresh());
+    if (cached) {
+      this.accept(cached);
+    } else {
+      this.launch(() => this.refresh());
+    }
   }
+
   updateData(): void {
-    if (!this.visible || !this.worktree || this.loading || this.resuming) return;
+    if (!this.visible || !this.worktree || this.loading || this.resuming) {
+      return;
+    }
+
     const cached = this.actions.cached?.(this.worktree.id);
-    if (cached && (!cached.ok || cached.value !== this.items)) this.accept(cached);
+    if (cached && (!cached.ok || cached.value !== this.items)) {
+      this.accept(cached);
+    }
   }
+
   private accept(result: Result<readonly HistoryItem[], ExpectedError>): void {
     this.loadError = result.ok
       ? undefined
@@ -288,8 +312,12 @@ export class SessionHistoryPanel {
     this.items = result.ok ? result.value : [];
     this.filter();
   }
+
   hide(restoreFocus = true): void {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
+
     this.generation++;
     this.loading = false;
     this.cancelPreview();
@@ -297,54 +325,79 @@ export class SessionHistoryPanel {
     this.spinner.cancel();
     this.updatePreview(null, [], "", false);
     this.root.visible = false;
-    if (this.resuming && restoreFocus)
+    if (this.resuming && restoreFocus) {
       this.actions.onError(
         "Open is still settling. Closing history does not cancel an accepted request; check the session tabs before retrying.",
         { level: "warning" },
       );
+    }
+
     const owner = this.owner;
     this.owner = undefined;
+
     let restored = false;
     if (restoreFocus && owner && !owner.isDestroyed) {
       let visible = true;
-      for (let node: Renderable | null = owner; node; node = node.parent as Renderable | null)
+      for (let node: Renderable | null = owner; node; node = node.parent as Renderable | null) {
         visible &&= node.visible;
+      }
+
       if (visible) {
         owner.focus();
         restored = this.renderer.currentFocusedRenderable === owner;
       }
     }
-    if (restoreFocus && !restored) this.actions.onCloseFallback?.();
+    if (restoreFocus && !restored) {
+      this.actions.onCloseFallback?.();
+    }
+
     this.actions.onChange?.();
   }
+
   updateScope(worktree: Worktree | null): void {
-    if (this.visible && this.worktree?.id !== worktree?.id) this.hide();
+    if (this.visible && this.worktree?.id !== worktree?.id) {
+      this.hide();
+    }
   }
+
   refreshVisible(): void {
-    if (this.visible) this.launch(() => this.refresh(true));
+    if (this.visible) {
+      this.launch(() => this.refresh(true));
+    }
   }
+
   private launch(operation: () => Promise<void>): void {
-    const pending = operation(),
-      generation = this.generation;
+    const pending = operation();
+    const generation = this.generation;
+
     void pending.catch((error: unknown) => {
       const message = reportUnexpected(error, "history");
-      if (!this.current(generation)) return;
+      if (!this.current(generation)) {
+        return;
+      }
+
       this.failure(message, true);
     });
   }
+
   private current(generation: number): boolean {
     return this.visible && this.generation === generation;
   }
+
   private failure(message: string, notify = false): void {
     this.message.content = message;
     this.message.visible = this.listStatus.visible = true;
-    if (notify) this.actions.onError(message);
+    if (notify) {
+      this.actions.onError(message);
+    }
+
     this.actions.onChange?.();
   }
 
   private async refresh(force = false): Promise<void> {
-    const generation = ++this.generation,
-      worktree = this.worktree;
+    const generation = ++this.generation;
+    const worktree = this.worktree;
+
     this.loadRequest?.abort();
     this.cancelPreview(this.items.length > 0);
     this.spinner.cancel();
@@ -356,12 +409,15 @@ export class SessionHistoryPanel {
         : "No worktree selected";
       this.items = [];
       this.filter();
+
       return;
     }
+
     const request = (this.loadRequest = new AbortController());
     this.loading = true;
     this.spinner.start();
     this.filter();
+
     let result: Result<readonly HistoryItem[], ExpectedError>;
     try {
       result = await this.actions.list(worktree.id, request.signal, force);
@@ -372,15 +428,22 @@ export class SessionHistoryPanel {
         this.actions.onChange?.();
       }
     }
-    if (!this.current(generation)) return;
+    if (!this.current(generation)) {
+      return;
+    }
+
     this.accept(result);
   }
 
   private filter = (): void => {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
+
     const selected = this.selected?.id;
     const matches = createTextMatcher(this.search.value);
     const matchesQuery = this.items.filter((item) => matches(item.title));
+
     this.search.setCounts(
       this.loading || this.loadError
         ? null
@@ -391,7 +454,10 @@ export class SessionHistoryPanel {
       0,
       this.filtered.findIndex((item) => item.id === selected),
     );
-    for (const row of this.rows) row.destroyRecursively();
+    for (const row of this.rows) {
+      row.destroyRecursively();
+    }
+
     this.rows.length = 0;
     for (const [index, item] of this.filtered.entries()) {
       const row = new BoxRenderable(this.renderer, {
@@ -401,7 +467,10 @@ export class SessionHistoryPanel {
         minWidth: 0,
         flexDirection: "column",
         onMouseDown: (event) => {
-          if (event.button !== 0) return;
+          if (event.button !== 0) {
+            return;
+          }
+
           event.preventDefault();
           event.stopPropagation();
           this.list.focus();
@@ -410,8 +479,15 @@ export class SessionHistoryPanel {
           this.schedulePreview();
         },
       });
+      let prefix = "";
+      if (item.unavailableReason) {
+        prefix = "[Unavailable] ";
+      } else if (item.openSessionId) {
+        prefix = "[Open] ";
+      }
+
       const title = new TextRenderable(this.renderer, {
-        content: `${item.unavailableReason ? "[Unavailable] " : item.openSessionId ? "[Open] " : ""}${item.title}`,
+        content: `${prefix}${item.title}`,
         height: 1,
         wrapMode: "none",
         selectable: false,
@@ -422,6 +498,7 @@ export class SessionHistoryPanel {
         wrapMode: "none",
         selectable: false,
       });
+
       uiTheme(this.renderer).bindStyles(row, (styles) => {
         paintText(title, styles["ui.label"]);
         paintText(metadata, styles["ui.muted"]);
@@ -432,18 +509,24 @@ export class SessionHistoryPanel {
       this.list.add(row);
       this.rows.push(row);
     }
+
     this.list.scrollTo(0);
-    this.message.content =
-      this.loadError ??
-      (this.loading
-        ? "Loading saved sessions…"
-        : !this.items.length
-          ? "No saved sessions"
-          : !matchesQuery.length
-            ? "No matching sessions"
-            : matchesQuery.length > 200
-              ? "Showing first 200; refine search"
-              : "");
+
+    let message = this.loadError;
+    if (message === undefined) {
+      if (this.loading) {
+        message = "Loading saved sessions…";
+      } else if (!this.items.length) {
+        message = "No saved sessions";
+      } else if (!matchesQuery.length) {
+        message = "No matching sessions";
+      } else {
+        message = matchesQuery.length > 200 ? "Showing first 200; refine search" : "";
+      }
+    }
+
+    this.message.content = message;
+
     const empty = !this.loading && !this.loadError && !this.filtered.length;
     this.layout.results.showEmpty(empty ? this.message.plainText : undefined);
     this.message.visible = !this.loading && !empty && Boolean(this.message.plainText);
@@ -451,34 +534,57 @@ export class SessionHistoryPanel {
     this.paint();
     this.schedulePreview();
   };
+
   private paint(): void {
-    if (!this.rows) return;
+    if (!this.rows) {
+      return;
+    }
+
     const styles = uiTheme(this.renderer).styles;
     this.rows.forEach((row, index) => {
       row.backgroundColor = styles[index === this.cursor ? "ui.selection" : "ui.popup"].bg;
     });
+
     const row = this.rows[this.cursor];
-    if (row) this.list.scrollChildIntoView(row.id);
+    if (row) {
+      this.list.scrollChildIntoView(row.id);
+    }
+
     this.actions.onChange?.();
   }
+
   private cancelPreview(preserveBody = false): void {
     this.previewIdentity = undefined;
     this.previewState = undefined;
-    if (this.actions.previews) this.previewCache.unselect();
-    else this.previewCache.clear();
+    if (this.actions.previews) {
+      this.previewCache.unselect();
+    } else {
+      this.previewCache.clear();
+    }
+
     this.setPreviewLoading(false);
-    if (!preserveBody) this.updatePreview(null, [], "", this.visible);
+    if (!preserveBody) {
+      this.updatePreview(null, [], "", this.visible);
+    }
   }
+
   private setPreviewLoading(loading: boolean): void {
-    if (loading === this.previewLoading) return;
+    if (loading === this.previewLoading) {
+      return;
+    }
+
     this.previewLoading = loading;
     if (loading) {
       this.spinner.start();
-    } else if (!this.loading) this.spinner.stop();
+    } else if (!this.loading) {
+      this.spinner.stop();
+    }
   }
+
   private previewMessage(message: string): void {
     this.updatePreview(null, undefined, message, this.visible);
   }
+
   private updatePreview(
     id: string | null,
     sections: readonly TranscriptSection[] | undefined,
@@ -489,8 +595,10 @@ export class SessionHistoryPanel {
   ): void {
     if (id === null) {
       this.session.empty(output, visible);
+
       return;
     }
+
     const sessionId = this.selected?.openSessionId ?? snapshot?.id ?? this.selected?.id ?? id;
     const turn =
       sections?.slice(
@@ -507,7 +615,13 @@ export class SessionHistoryPanel {
     );
     const failure = answer?.status === "error" ? answer : undefined;
     const capturedAt = snapshot?.lifecycle === "closed" ? snapshot.updatedAt : undefined;
-    const status = snapshot ? snapshot.state.status : failure ? "failure" : "complete";
+    let status: ExecutionState["status"];
+    if (snapshot) {
+      status = snapshot.state.status;
+    } else {
+      status = failure ? "failure" : "complete";
+    }
+
     const state: ExecutionState = {
       status,
       error: failure?.error ?? null,
@@ -532,6 +646,7 @@ export class SessionHistoryPanel {
     const sessions = tree.sessions.some((session) => session.id === sessionId)
       ? tree.sessions.map((session) => (session.id === sessionId ? descriptor : session))
       : [...tree.sessions, descriptor];
+
     this.session.show(
       { ...tree, sessions },
       sessionId,
@@ -541,10 +656,12 @@ export class SessionHistoryPanel {
       this.actions.draft?.(sessionId),
     );
   }
+
   private showPreview(value: HistoryPreview): void {
     if (value.snapshot) {
       const snapshot = value.snapshot;
       const sections = snapshot.state.sections;
+
       this.updatePreview(
         `history:${value.worktreeId}:${value.id}`,
         value.truncated && sections
@@ -564,8 +681,10 @@ export class SessionHistoryPanel {
         snapshot.state.telemetry,
         snapshot,
       );
+
       return;
     }
+
     const sections: readonly TranscriptSection[] =
       value.sections ??
       (value.text
@@ -598,34 +717,46 @@ export class SessionHistoryPanel {
       value.telemetry,
     );
   }
+
   private schedulePreview(): void {
-    const item = this.selected,
-      worktree = this.worktree;
+    const item = this.selected;
+    const worktree = this.worktree;
     const identity =
       item && worktree && !this.loading ? JSON.stringify([worktree.id, item.id]) : undefined;
-    if (identity && identity === this.previewIdentity) return;
+    if (identity && identity === this.previewIdentity) {
+      return;
+    }
+
     this.previewIdentity = identity;
     // The session renderer owns scroll restoration; resetting here overwrites the previous session's saved position.
     if (this.loading || this.loadError || !item || !worktree) {
       this.previewCache.unselect();
       this.setPreviewLoading(false);
-      if (!this.loading || !this.items.length)
+      if (!this.loading || !this.items.length) {
         this.previewMessage(this.loadError ?? (this.loading ? "" : "Select a saved session"));
+      }
+
       return;
     }
     if (!this.actions.preview && !this.actions.previews) {
       this.previewMessage(
         "Read-only preview is unavailable. Press <CR> to open the session explicitly.",
       );
+
       return;
     }
+
     this.previewCache.select(worktree.id, item.id);
     this.renderPreview();
   }
+
   private renderPreview(): void {
-    const item = this.selected,
-      worktree = this.worktree;
-    if (!this.visible || this.loading || !item || !worktree) return;
+    const item = this.selected;
+    const worktree = this.worktree;
+    if (!this.visible || this.loading || !item || !worktree) {
+      return;
+    }
+
     // Responses populate their own slots; the screen only ever reads the selected slot.
     const state =
       this.previewCache.read(worktree.id, item.id) ??
@@ -645,54 +776,73 @@ export class SessionHistoryPanel {
       default:
         this.updatePreview(null, [], "", true);
     }
+
     this.actions.onChange?.();
   }
 
   private async openSelected(): Promise<void> {
-    const item = this.selected,
-      worktree = this.worktree;
-    if (!item || !worktree || !this.actions.resume || this.resuming || this.loading) return;
-    if (item.unavailableReason) {
-      this.failure(item.unavailableReason);
+    const item = this.selected;
+    const worktree = this.worktree;
+    if (!item || !worktree || !this.actions.resume || this.resuming || this.loading) {
       return;
     }
+
+    if (item.unavailableReason) {
+      this.failure(item.unavailableReason);
+
+      return;
+    }
+
     const generation = this.generation;
     this.resuming = true;
     this.message.content = "Opening saved session…";
     this.message.visible = this.listStatus.visible = true;
     this.actions.onChange?.();
+
     let result: Result<string, ExpectedError>;
     try {
       result = await this.actions.resume(worktree.id, item.id);
     } finally {
       this.resuming = false;
-      if (this.visible) this.actions.onChange?.();
+      if (this.visible) {
+        this.actions.onChange?.();
+      }
     }
-    if (!this.current(generation)) return;
-    if (!result.ok) {
-      this.failure(`[${result.error.code}] Resume error: ${result.error.message}`);
+    if (!this.current(generation)) {
       return;
     }
+    if (!result.ok) {
+      this.failure(`[${result.error.code}] Resume error: ${result.error.message}`);
+
+      return;
+    }
+
     this.hide(false);
     this.actions.onOpened(worktree.id, result.value);
   }
 
   command(command: CommandId): void {
-    if (!this.visible) return;
+    if (!this.visible) {
+      return;
+    }
     if (command === "history.dismiss") {
       this.hide();
+
       return;
     }
     if (command === "history.search") {
       this.search.focus();
+
       return;
     }
     if (command === "history.refresh") {
       this.refreshVisible();
+
       return;
     }
     if (command === "history.open") {
       this.launch(() => this.openSelected());
+
       return;
     }
     if (command === "history.preview") {
@@ -700,41 +850,57 @@ export class SessionHistoryPanel {
         this.compactPreview = !this.compactPreview;
         this.resize();
         (this.compactPreview ? this.previewTarget : this.search).focus();
-      } else if (this.session.focused) this.search.focus();
-      else this.previewTarget.focus();
+      } else if (this.session.focused) {
+        this.search.focus();
+      } else {
+        this.previewTarget.focus();
+      }
+
       this.actions.onChange?.();
+
       return;
     }
     if (command === "history.page-up" || command === "history.page-down") {
       this.preview.scrollBy(
         (command === "history.page-up" ? -1 : 1) * Math.max(1, this.preview.viewport.height - 1),
       );
+
       return;
     }
-    if (command === "history.first") this.cursor = 0;
-    else if (command === "history.last") this.cursor = this.filtered.length - 1;
-    else if (command === "history.previous" || command === "history.next")
+    if (command === "history.first") {
+      this.cursor = 0;
+    } else if (command === "history.last") {
+      this.cursor = this.filtered.length - 1;
+    } else if (command === "history.previous" || command === "history.next") {
       this.cursor += command === "history.previous" ? -1 : 1;
-    else if (command === "history.half-page-up" || command === "history.half-page-down") {
+    } else if (command === "history.half-page-up" || command === "history.half-page-down") {
       const direction = command === "history.half-page-up" ? -1 : 1;
       if (this.session.focused) {
         this.preview.scrollBy(direction * halfPageStep(this.preview.viewport.height));
+
         return;
       }
+
       const height = this.layout.listHeight;
       if (this.search.focused) {
         if (this.compactPreview) {
           this.compactPreview = false;
           this.resize();
         }
+
         this.list.focus();
       }
+
       this.cursor += direction * halfPageStep(height, 2);
-    } else return;
+    } else {
+      return;
+    }
+
     this.cursor = Math.max(0, Math.min(this.filtered.length - 1, this.cursor));
     this.paint();
     this.schedulePreview();
   }
+
   moveFocus(direction: 1 | -1): void {
     if (this.renderer.width < 100) {
       const targets = [this.search, this.list, this.previewTarget];
@@ -742,20 +908,27 @@ export class SessionHistoryPanel {
         ? 2
         : targets.indexOf(this.renderer.currentFocusedRenderable!);
       const next = (index + direction + targets.length) % targets.length;
+
       this.compactPreview = next === 2;
       this.resize();
       (next === 2 ? this.previewTarget : targets[next])?.focus();
     } else {
-      const targets = this.focusTargets,
-        index = this.session.focused
-          ? targets.length - 1
-          : targets.indexOf(this.renderer.currentFocusedRenderable!);
+      const targets = this.focusTargets;
+      const index = this.session.focused
+        ? targets.length - 1
+        : targets.indexOf(this.renderer.currentFocusedRenderable!);
+
       targets[(index + direction + targets.length) % targets.length]?.focus();
     }
+
     this.actions.onChange?.();
   }
+
   private resize = (): void => {
-    if (this.disposed || this.root.isDestroyed) return;
+    if (this.disposed || this.root.isDestroyed) {
+      return;
+    }
+
     const { height } = centerPopup(
       this.panel,
       POPUP_SIZES.expanded,
@@ -769,13 +942,22 @@ export class SessionHistoryPanel {
       this.visible &&
       ((this.session.focused && !this.previewPane.visible) ||
         (this.list.focused && !this.list.visible))
-    )
+    ) {
       this.search.focus();
-    if (this.visible) this.renderPreview();
+    }
+
+    if (this.visible) {
+      this.renderPreview();
+    }
+
     this.actions.onChange?.();
   };
+
   dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
+
     this.hide(false);
     this.disposed = true;
     this.generation++;
@@ -786,10 +968,13 @@ export class SessionHistoryPanel {
     this.renderer.off("resize", this.resize);
     this.unsubscribePreviews?.();
     this.session.dispose();
-    if (!this.root.isDestroyed) this.root.destroyRecursively();
-    if (this.listenerBudget)
+    if (!this.root.isDestroyed) {
+      this.root.destroyRecursively();
+    }
+    if (this.listenerBudget) {
       this.renderer.setMaxListeners(
         Math.max(1, this.renderer.getMaxListeners() - this.listenerBudget),
       );
+    }
   }
 }

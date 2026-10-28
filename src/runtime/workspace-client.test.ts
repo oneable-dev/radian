@@ -19,6 +19,7 @@ function repo(id: string): Repository {
     worktrees: [{ id, path: `/fixture/${id}`, name: id, branch: "main", sessions: [] }],
   };
 }
+
 function peer(repository: Repository) {
   const id = repository.worktrees[0]!.id;
   let connected = true;
@@ -34,13 +35,14 @@ function peer(repository: Repository) {
     closingCount: 0,
     notice: "",
   };
-  const listeners = new Set<() => void>(),
-    calls: string[] = [],
-    saved: RuntimePreferences[] = [];
+  const listeners = new Set<() => void>();
+  const calls: string[] = [];
+  const saved: RuntimePreferences[] = [];
   let failSave = false;
   let saveGate: Promise<void> = Promise.resolve();
   const call = async <T>(name: string, value: T) => {
     calls.push(name);
+
     return ok(value);
   };
   const client: RepositoryClient = {
@@ -52,6 +54,7 @@ function peer(repository: Repository) {
     },
     subscribe(listener) {
       listeners.add(listener);
+
       return () => listeners.delete(listener);
     },
     create: (tree) => call(`create:${tree}`, `${id}-new`),
@@ -73,16 +76,19 @@ function peer(repository: Repository) {
     createTerminal: (tree) => call(`terminal:${tree}`, `${id}-terminal`),
     attachEditor: async (pty) => {
       calls.push(`attach-editor:${pty}`);
+
       return err(new InputError("Fixture has no native editor."));
     },
     attachTerminal: async (pty) => {
       calls.push(`attach-terminal:${pty}`);
+
       return err(new InputError("Fixture has no native terminal."));
     },
     closeTerminal: (pty) => call(`close-terminal:${pty}`, undefined),
     savePreferences: async (preferences) => {
       saved.push(structuredClone(preferences));
       await saveGate;
+
       return failSave ? err(new StorageError("Fixture disk is full.", "ENOSPC")) : ok(undefined);
     },
     beginDetach() {
@@ -92,6 +98,7 @@ function peer(repository: Repository) {
       calls.push("disconnect");
     },
   };
+
   return {
     client,
     calls,
@@ -104,11 +111,15 @@ function peer(repository: Repository) {
     },
     update(snapshot: RuntimeSnapshot) {
       state = snapshot;
-      for (const listener of listeners) listener();
+      for (const listener of listeners) {
+        listener();
+      }
     },
     connection(value: boolean) {
       connected = value;
-      for (const listener of listeners) listener();
+      for (const listener of listeners) {
+        listener();
+      }
     },
   };
 }
@@ -125,18 +136,21 @@ async function isolated(run: (directory: string) => Promise<void>): Promise<void
 test("Extension UI aggregates connected repositories and routes answers only to the owning session", () =>
   isolated(async (stateRoot) => {
     // UI requests are repository-scoped even when the workspace combines multiple services.
-    const a = repo("a"),
-      b = repo("b"),
-      pa = peer(a),
-      pb = peer(b),
-      answered: string[] = [];
+    const a = repo("a");
+    const b = repo("b");
+    const pa = peer(a);
+    const pb = peer(b);
+    const answered: string[] = [];
+
     pa.client.answerExtensionUi = async (id) => {
       answered.push(id);
+
       return ok(undefined);
     };
     pb.client.answerExtensionUi = async () => {
       throw new Error("Wrong repository received an extension answer");
     };
+
     const workspace = expectOk(
       await WorkspaceClient.open([a, b], a.worktrees[0]!.path, { stateRoot }, async (repository) =>
         ok(repository.id === a.id ? pa.client : pb.client),
@@ -185,10 +199,10 @@ test("Extension UI aggregates connected repositories and routes answers only to 
 test("Resources read the shared daemon once across repositories without activation or duplicate sums", () =>
   isolated(async (stateRoot) => {
     // Multiple repository endpoints represent one Runtime process, not separate resource consumers.
-    const a = repo("a"),
-      b = repo("b"),
-      pa = peer(a),
-      pb = peer(b);
+    const a = repo("a");
+    const b = repo("b");
+    const pa = peer(a);
+    const pb = peer(b);
     const queried: string[] = [];
     const sample = { pid: process.pid + 1, elapsedMs: 1000, cpuMicros: 1234, rssBytes: 5678 };
     for (const [name, current] of [
@@ -201,9 +215,11 @@ test("Resources read the shared daemon once across repositories without activati
       });
       current.client.resources = async () => {
         queried.push(name);
+
         return ok(sample);
       };
     }
+
     const workspace = expectOk(
       await WorkspaceClient.open(
         [a, b],
@@ -215,9 +231,11 @@ test("Resources read the shared daemon once across repositories without activati
     try {
       const first = expectOk(await workspace.resources());
       pa.connection(false);
+
       const fallback = expectOk(await workspace.resources());
       expect(expectError(await workspace.resources(AbortSignal.abort())).code).toBe("CANCELLED");
       pb.connection(false);
+
       const unavailable = expectError(await workspace.resources());
 
       // Switching channels preserves the same PID; no cold runtime or session is started for metrics.
@@ -234,23 +252,27 @@ test("Resources read the shared daemon once across repositories without activati
 test("Dashboards aggregate all/selected projects and distinguish partial unsupported services from cancellation", () =>
   isolated(async (stateRoot) => {
     // Repository usage can combine, but lookup failures must not become zero.
-    const a = repo("a"),
-      b = repo("b"),
-      pa = peer(a),
-      pb = peer(b),
-      queried: string[] = [];
+    const a = repo("a");
+    const b = repo("b");
+    const pa = peer(a);
+    const pb = peer(b);
+    const queried: string[] = [];
     for (const [name, client, tokens] of [
       ["a", pa.client, 100],
       ["b", pb.client, 200],
-    ] as const)
+    ] as const) {
       client.dashboard = async (days) => {
         queried.push(name);
+
         const data = emptyDashboard(days);
         data.totals.tokens = tokens;
         data.daily.at(-1)!.tokens = tokens;
         data.models = [{ name: "test/large", value: tokens }];
+
         return ok(data);
       };
+    }
+
     const workspace = expectOk(
       await WorkspaceClient.open(
         [a, b],
@@ -261,18 +283,21 @@ test("Dashboards aggregate all/selected projects and distinguish partial unsuppo
     );
     try {
       // Global and selected scopes aggregate identical resources by name.
-      const all = expectOk(await workspace.dashboard(7)),
-        selected = expectOk(await workspace.dashboard(7, a.id));
+      const all = expectOk(await workspace.dashboard(7));
+      const selected = expectOk(await workspace.dashboard(7, a.id));
+
       expect(all.totals.tokens).toBe(300);
       expect(all.models).toEqual([{ name: "test/large", value: 300 }]);
       expect(selected.totals.tokens).toBe(100);
       expect(queried).toEqual(["a", "b", "a"]);
       delete pb.client.dashboard;
+
       const partial = expectOk(await workspace.dashboard(7));
 
       // Show partial failures and skip cancelled/invalid project lookups.
       expect(partial.totals.tokens).toBe(100);
       expect(partial.warnings).toEqual(["b: excluded [UNSUPPORTED_CAPABILITY]."]);
+
       const before = queried.length;
       expect(expectError(await workspace.dashboard(7, undefined, AbortSignal.abort())).code).toBe(
         "CANCELLED",
@@ -291,10 +316,10 @@ test("Dashboards aggregate all/selected projects and distinguish partial unsuppo
 
 test("newTab creates only in originating repositories and retains ownership of new IDs", () =>
   isolated(async (stateRoot) => {
-    const a = repo("a"),
-      b = repo("b"),
-      pa = peer(a),
-      pb = peer(b);
+    const a = repo("a");
+    const b = repo("b");
+    const pa = peer(a);
+    const pb = peer(b);
     const workspace = expectOk(
       await WorkspaceClient.open(
         [a, b],
@@ -306,6 +331,7 @@ test("newTab creates only in originating repositories and retains ownership of n
     try {
       const original = expectOk(await workspace.create("a"));
       const added = expectOk(await workspace.newTab(original));
+
       expect(added).toBe("a-sibling");
       expect(pa.calls).toContain(`new-tab:${original}`);
       expect(pb.calls).toEqual([]);
@@ -320,10 +346,10 @@ test("newTab creates only in originating repositories and retains ownership of n
 test("History previews route only to worktree-owning runtimes and never execute when cancelled", () =>
   isolated(async (stateRoot) => {
     // A workspace combines two already-connected peers without merging their saved-session identities.
-    const a = repo("a"),
-      b = repo("b"),
-      pa = peer(a),
-      pb = peer(b);
+    const a = repo("a");
+    const b = repo("b");
+    const pa = peer(a);
+    const pb = peer(b);
     const workspace = expectOk(
       await WorkspaceClient.open(
         [a, b],
@@ -336,6 +362,7 @@ test("History previews route only to worktree-owning runtimes and never execute 
       expect(expectOk(await workspace.previewHistory("b", "saved-b")).worktreeId).toBe("b");
       expect(pb.calls).toContain("preview:b:saved-b");
       expect(pa.calls).not.toContain("preview:b:saved-b");
+
       const abort = new AbortController();
       abort.abort();
       expect(expectError(await workspace.previewHistory("a", "saved-a", abort.signal)).code).toBe(
@@ -358,10 +385,10 @@ test("History previews route only to worktree-owning runtimes and never execute 
 test("All repositories display while initial selection/concurrent requests lazily start only owning runtimes", () =>
   isolated(async (stateRoot) => {
     // Discovered repositories are visible before any daemon starts.
-    const a = repo("a"),
-      b = repo("b"),
-      pa = peer(a),
-      pb = peer(b);
+    const a = repo("a");
+    const b = repo("b");
+    const pa = peer(a);
+    const pb = peer(b);
     const started: string[] = [];
     const ready = Promise.withResolvers<void>();
     const workspace = expectOk(
@@ -370,9 +397,13 @@ test("All repositories display while initial selection/concurrent requests lazil
         b.worktrees[0]!.path,
         { stateRoot, offline: true },
         async (repository, _cwd, options) => {
-          if (!options.start) return ok(null);
+          if (!options.start) {
+            return ok(null);
+          }
+
           started.push(repository.name);
           await ready.promise;
+
           return ok(repository.id === a.id ? pa.client : pb.client);
         },
       ),
@@ -383,16 +414,20 @@ test("All repositories display while initial selection/concurrent requests lazil
       expect(started).toEqual([]);
 
       // Same-repository selection/creation shares one startup result.
-      const selected = workspace.activate("b"),
-        created = workspace.create("b");
+      const selected = workspace.activate("b");
+      const created = workspace.create("b");
+
       ready.resolve();
       expectOk(await selected);
+
       const session = expectOk(await created);
       expectOk(await workspace.prompt(session, "read"));
       expectOk(await workspace.complete(session, { kind: "file", query: "" }));
       expectOk(await workspace.listHistory("b"));
+
       const editor = expectOk(await workspace.openEditor("b"));
       const terminal = expectOk(await workspace.createTerminal("b", { cols: 80, rows: 20 }));
+
       expectError(
         await workspace.attachEditor(
           editor,
@@ -427,10 +462,10 @@ test("All repositories display while initial selection/concurrent requests lazil
 test("Existing snapshots and reconnections preserve other repository rows and connections", () =>
   isolated(async (stateRoot) => {
     // Two running daemons attach to existing sessions without startup.
-    const a = repo("a"),
-      b = repo("b"),
-      pa = peer(a),
-      pb = peer(b);
+    const a = repo("a");
+    const b = repo("b");
+    const pa = peer(a);
+    const pb = peer(b);
     const starts: boolean[] = [];
     const workspace = expectOk(
       await WorkspaceClient.open(
@@ -439,6 +474,7 @@ test("Existing snapshots and reconnections preserve other repository rows and co
         { stateRoot },
         async (repository, _cwd, options) => {
           starts.push(options.start ?? true);
+
           return ok(repository.id === a.id ? pa.client : pb.client);
         },
       ),
@@ -481,9 +517,9 @@ test("Existing snapshots and reconnections preserve other repository rows and co
 test("Repository connection failures stay isolated and unknown targets never receive commands", () =>
   isolated(async (stateRoot) => {
     // A remains usable while B is offline.
-    const a = repo("a"),
-      b = repo("b"),
-      pa = peer(a);
+    const a = repo("a");
+    const b = repo("b");
+    const pa = peer(a);
     const workspace = expectOk(
       await WorkspaceClient.open([a, b], a.worktrees[0]!.path, { stateRoot }, async (repository) =>
         repository.id === a.id
@@ -494,6 +530,7 @@ test("Repository connection failures stay isolated and unknown targets never rec
     try {
       const session = expectOk(await workspace.create("a"));
       expectOk(await workspace.prompt(session, "read"));
+
       const failure = expectError(await workspace.activate("b"));
 
       // Failure codes report without retrying against arbitrary default repositories.
@@ -509,28 +546,34 @@ test("Repository connection failures stay isolated and unknown targets never rec
 
 test("Detach closes late connections without creation commands or new snapshots", () =>
   isolated(async (stateRoot) => {
-    const a = repo("a"),
-      pa = peer(a),
-      ready = Promise.withResolvers<void>();
+    const a = repo("a");
+    const pa = peer(a);
+    const ready = Promise.withResolvers<void>();
     const workspace = expectOk(
       await WorkspaceClient.open(
         [a],
         "/outside",
         { stateRoot },
         async (_repository, _cwd, options) => {
-          if (!options.start) return ok(null);
+          if (!options.start) {
+            return ok(null);
+          }
+
           await ready.promise;
+
           return ok(pa.client);
         },
       ),
     );
     let changes = 0;
+
     workspace.subscribe(() => changes++);
 
     // Detach the TUI while awaiting runtime connection.
     const creating = workspace.create("a");
     workspace.beginDetach();
     ready.resolve();
+
     const error = expectError(await creating);
     await workspace.disconnect();
 
@@ -544,8 +587,8 @@ test("Detach closes late connections without creation commands or new snapshots"
 test("Legacy migration hints survive successful preference saves without replacing services", () =>
   isolated(async (stateRoot) => {
     // Retain existing connections lacking shared-daemon capabilities.
-    const a = repo("a"),
-      pa = peer(a);
+    const a = repo("a");
+    const pa = peer(a);
     const workspace = expectOk(
       await WorkspaceClient.open([a], "/outside", { stateRoot }, async () => ok(pa.client)),
     );
@@ -564,25 +607,27 @@ test("Legacy migration hints survive successful preference saves without replaci
 
 test("Final detach persistence splits by repository and one failure never blocks others", () =>
   isolated(async (stateRoot) => {
-    const a = repo("a"),
-      b = repo("b"),
-      pa = peer(a),
-      pb = peer(b);
+    const a = repo("a");
+    const b = repo("b");
+    const pa = peer(a);
+    const pb = peer(b);
     const workspace = expectOk(
       await WorkspaceClient.open([a, b], "/outside", { stateRoot }, async (repository) =>
         ok(repository.id === a.id ? pa.client : pb.client),
       ),
     );
     try {
-      const aId = expectOk(await workspace.create("a")),
-        bId = expectOk(await workspace.create("b"));
+      const aId = expectOk(await workspace.create("a"));
+      const bId = expectOk(await workspace.create("b"));
       const preferences = workspace.snapshot.preferences;
+
       preferences.selection = { worktreeId: "b", sessions: { a: aId, b: bId } };
       preferences.drafts = { [aId]: "draft A", [bId]: "draft B" };
 
       // Healthy final preference writes remain allowed after beginDetach.
       workspace.beginDetach();
       pb.failSave();
+
       const error = expectError(await workspace.savePreferences(preferences));
 
       expect(error.code).toBe("CLEANUP_FAILED");
@@ -597,16 +642,17 @@ test("Final detach persistence splits by repository and one failure never blocks
 
 test("Per-repository writes serialize and never send new state before earlier completion", () =>
   isolated(async (stateRoot) => {
-    const a = repo("a"),
-      pa = peer(a),
-      gate = Promise.withResolvers<void>();
+    const a = repo("a");
+    const pa = peer(a);
+    const gate = Promise.withResolvers<void>();
     const workspace = expectOk(
       await WorkspaceClient.open([a], "/outside", { stateRoot }, async () => ok(pa.client)),
     );
     try {
       const id = expectOk(await workspace.create("a"));
-      const first = workspace.snapshot.preferences,
-        second = workspace.snapshot.preferences;
+      const first = workspace.snapshot.preferences;
+      const second = workspace.snapshot.preferences;
+
       first.drafts = { [id]: "old" };
       second.drafts = { [id]: "new" };
       pa.gateSaving(gate.promise);
@@ -614,8 +660,10 @@ test("Per-repository writes serialize and never send new state before earlier co
       // Queue latest drafts and detach behind delayed older writes.
       const oldSave = workspace.savePreferences(first);
       await Promise.resolve();
+
       const newSave = workspace.savePreferences(second);
       const closing = workspace.disconnect();
+
       await Promise.resolve();
       expect(pa.saved).toHaveLength(1);
       gate.resolve();
@@ -634,11 +682,13 @@ test("Per-repository writes serialize and never send new state before earlier co
 
 test("Preconnection drafts survive and interim view changes persist after delayed attachment", () =>
   isolated(async (stateRoot) => {
-    const b = repo("b"),
-      pb = peer(b);
+    const b = repo("b");
+    const pb = peer(b);
     const previous = defaultPreferences();
+
     previous.selection = { worktreeId: "b", sessions: { b: "saved-b" } };
     previous.drafts = { "saved-b": "retained" };
+
     const live = {
       ...b,
       worktrees: b.worktrees.map((tree) => ({
@@ -647,6 +697,7 @@ test("Preconnection drafts survive and interim view changes persist after delaye
       })),
     };
     pb.update({ ...pb.client.snapshot, repositories: [live], preferences: previous });
+
     const paths = runtimePaths(b.id, true, stateRoot);
     await privateDirectory(paths.directory);
     expectOk(
@@ -658,6 +709,7 @@ test("Preconnection drafts survive and interim view changes persist after delaye
         preferences: previous,
       }),
     );
+
     const workspace = expectOk(
       await WorkspaceClient.open(
         [b],
@@ -687,24 +739,29 @@ test("Preconnection drafts survive and interim view changes persist after delaye
 
 test("Initialization bugs still clean every concurrently arriving repository connection", () =>
   isolated(async (stateRoot) => {
-    const a = repo("a"),
-      b = repo("b"),
-      pb = peer(b),
-      bug = new TypeError("Fixture programming defect");
-    const entered = Promise.withResolvers<void>(),
-      gate = Promise.withResolvers<void>();
+    const a = repo("a");
+    const b = repo("b");
+    const pb = peer(b);
+    const bug = new TypeError("Fixture programming defect");
+    const entered = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
 
     // Interleave A's unexpected exception with B's delayed connection.
     const opening = WorkspaceClient.open([a, b], "/outside", { stateRoot }, async (repository) => {
-      if (repository.id === a.id) throw bug;
+      if (repository.id === a.id) {
+        throw bug;
+      }
+
       entered.resolve();
       await gate.promise;
+
       return ok(pb.client);
     });
     const failed = opening.then(
       () => undefined,
       (error: unknown) => error,
     );
+
     await entered.promise;
     gate.resolve();
 
@@ -715,9 +772,11 @@ test("Initialization bugs still clean every concurrently arriving repository con
 
 test("Postconnection preference failures show warnings instead of connection rejection", () =>
   isolated(async (stateRoot) => {
-    const b = repo("b"),
-      pb = peer(b);
+    const b = repo("b");
+    const pb = peer(b);
+
     pb.failSave();
+
     const workspace = expectOk(
       await WorkspaceClient.open(
         [b],
@@ -729,6 +788,7 @@ test("Postconnection preference failures show warnings instead of connection rej
     try {
       // Connection succeeds before only its preference write fails.
       expectOk(await workspace.activate("b"));
+
       const created = expectOk(await workspace.create("b"));
 
       // Accepted attachment/creation must not report cancellation or restart.

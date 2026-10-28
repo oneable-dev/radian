@@ -37,6 +37,7 @@ test("Full-screen snapshots preserve wide characters, colors, styles, input mode
     await write(restored, terminalScreen(original));
 
     expect(restored.buffer.active.getLine(0)?.translateToString(true)).toBe("편집🙂");
+
     const cell = restored.buffer.active.getLine(0)!.getCell(0)!;
     expect(cell.getFgColor()).toBe(0x123456);
     expect(cell.getBgColor()).toBe(7);

@@ -5,6 +5,7 @@ import { requestSummarySchema, summarizeRequest } from "./request-summary.ts";
 test("Request summaries count actual images and explicit file references without changing source text", () => {
   const text = 'Review these [Image #1] [Image #3]\n@"/tmp/some note.md" @"/tmp/panel.ts"';
   const summary = summarizeRequest(text, 2);
+
   expect(summary).toEqual({ text: "Review these", images: 2, files: 2 });
   expect(text).toContain('@"/tmp/some note.md"');
   expect(Value.Check(requestSummarySchema, summary)).toBe(true);
@@ -63,6 +64,7 @@ test.each(["```", "````", "~~~"])(
   (fence) => {
     const text = `Explain:\n${fence}text\n@"/tmp/example.ts"\n${fence}\n@"/tmp/actual.ts"`;
     const summary = summarizeRequest(text, 0);
+
     expect(summary.files).toBe(1);
     expect(summary.fileName).toBe("actual.ts");
     expect(summary.text).toContain('@"/tmp/example.ts"');
@@ -73,6 +75,7 @@ test.each(["```", "````", "~~~"])(
 test("Large-request display metadata is bounded while preserving graphemes and source text", () => {
   const text = "x".repeat(4094) + "👩‍💻" + "long tail".repeat(1000);
   const summary = summarizeRequest(text, 0);
+
   expect(summary.text).toBe("x".repeat(4094) + "…");
   expect(Value.Check(requestSummarySchema, summary)).toBe(true);
   expect(summary.text).not.toContain("\uFFFD");

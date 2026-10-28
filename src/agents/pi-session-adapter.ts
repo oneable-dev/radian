@@ -91,12 +91,16 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
   // the terminal, so initialize the built-in palette without a terminal or watcher.
   initTheme("system");
   let runtime: Promise<ModelRuntime> | undefined;
+
   return async (context) => {
-    if (!(await stat(context.cwd)).isDirectory())
+    if (!(await stat(context.cwd)).isDirectory()) {
       throw new InputError("Session working directory is not a directory.");
+    }
+
     const agentDir = options.agentDir ?? getAgentDir();
     const worktreeId = context.worktreeId ?? context.cwd;
     const workspace = options.accounts ? await options.accounts.workspace(worktreeId) : undefined;
+
     runtime ??= workspace
       ? Promise.resolve(workspace.runtime)
       : options.modelRuntime
@@ -105,6 +109,7 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
             authPath: join(agentDir, "auth.json"),
             modelsPath: join(agentDir, "models.json"),
           });
+
     const modelRuntime = workspace?.runtime ?? (await runtime);
     const settingsManager = options.streamFn
       ? SettingsManager.inMemory({
@@ -126,9 +131,11 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         ? { noSkills: true, noContextFiles: true, noPromptTemplates: true }
         : {}),
     });
+
     await resourceLoader.reload();
     // Resource discovery reloads settings; apply host overrides only after that reload.
     settingsManager.applyOverrides({ ...options.settings, cacheWarming: "off" });
+
     const sessionManager = context.sessionFile
       ? SessionManager.open(context.sessionFile, options.sessionDir, context.cwd)
       : options.sessionDir
@@ -162,15 +169,21 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         : () => {};
     let executor: PiSessionExecutor | undefined;
     const accountChanged = (provider: string) => executor?.credentialsChanged(provider);
+
     workspace?.listeners.add(accountChanged);
+
     const releaseAccounts = () => {
       workspace?.listeners.delete(accountChanged);
       releaseTransport();
     };
+
     return withCleanup(
       async () => {
         await mkdir(session.sessionManager.getSessionDir(), { recursive: true });
-        if (options.streamFn) session.agent.streamFunction = options.streamFn;
+        if (options.streamFn) {
+          session.agent.streamFunction = options.streamFn;
+        }
+
         const diagnostics = new CommandDiagnostics();
         const unsupportedSessionAction = async (): Promise<never> => {
           throw new CapabilityError(
@@ -181,6 +194,7 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
           context.role === "main"
             ? new ExtensionUiBridge(session.extensionRunner.getUIContext(), mcpAuth.eventBus)
             : undefined;
+
         await session.bindExtensions({
           ...(ui ? { uiContext: ui.context, mode: "rpc" as const } : {}),
           onError: diagnostics.report,
@@ -207,7 +221,10 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
           releaseAccounts,
           options.accounts
             ? (signal, refresh) => {
-                if (refresh) options.accounts!.invalidateModels(worktreeId);
+                if (refresh) {
+                  options.accounts!.invalidateModels(worktreeId);
+                }
+
                 return options.accounts!.refreshModels(worktreeId, signal);
               }
             : undefined,
@@ -216,6 +233,7 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         );
         executor.setUiActive(context.isUiActive?.() ?? false);
         adopted = true;
+
         return executor;
       },
       async () => {
@@ -243,7 +261,10 @@ function subagentTool(context: SessionContext) {
     execute: async (_id, { name, task }, signal) => {
       const result = await context.spawnSubagent(name, task, signal);
       // SDK tools require rejection for failures; never pass a Result error as successful tool content.
-      if (!result.ok) throw result.error;
+      if (!result.ok) {
+        throw result.error;
+      }
+
       return { content: [{ type: "text" as const, text: result.value }], details: {} };
     },
   });
@@ -308,6 +329,7 @@ export class PiSessionExecutor implements SessionExecutor {
     this.request = deliveredRequest(
       session.messages.findLast((message) => message.role === "user"),
     );
+
     const sections = this.transcript.sections;
     const requestIndex = sections.findLastIndex(
       (section) =>
@@ -316,16 +338,20 @@ export class PiSessionExecutor implements SessionExecutor {
     const completion = sections
       .slice(Math.max(0, requestIndex))
       .findLast((section) => section.completion)?.completion;
-    if (completion)
+    if (completion) {
       this.result = {
         id: crypto.randomUUID(),
         outcome: completion.outcome,
         completedAt: completion.completedAt,
         ...(this.request ? { request: this.request } : {}),
       };
+    }
+
     this.telemetry = new PiSessionTelemetry(session, () => this.emit(), usage, fast);
+
     const stopUi = ui?.subscribe(() => this.emit());
     const stopSession = session.subscribe((event) => this.handleEvent(event));
+
     this.unsubscribe = () => {
       stopUi?.();
       stopSession();
@@ -333,25 +359,33 @@ export class PiSessionExecutor implements SessionExecutor {
   }
 
   credentialsChanged(provider: string): void {
-    if (this.session.model?.provider !== provider) return;
+    if (this.session.model?.provider !== provider) {
+      return;
+    }
+
     this.telemetry.invalidateAccount();
     this.emit();
   }
+
   commands() {
     return this.commandCatalog;
   }
+
   get extensionUi() {
     return this.ui?.state;
   }
+
   setUiActive(active: boolean): void {
     this.uiActive = active;
     this.ui?.setActive(active && !this.interrupting && !this.closing);
   }
+
   answerExtensionUi(response: ExtensionUiResponse): Result<void, ExpectedError> {
     return this.ui
       ? this.ui.answer(response)
       : err(new CapabilityError("This session does not host extension dialogs."));
   }
+
   imageData(id: string) {
     return this.transcript.imageData(id);
   }
@@ -360,18 +394,31 @@ export class PiSessionExecutor implements SessionExecutor {
     signal?: AbortSignal,
     refresh = false,
   ): Promise<Result<ModelCatalog, ExpectedError>> {
-    if (signal?.aborted) return err(new CancelledError());
-    if (this.closing || this.disposed)
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+    if (this.closing || this.disposed) {
       return err(new SessionError("SESSION_NOT_OPEN", "Session is closing."));
+    }
+
     const refreshed = await this.refreshAccountModels?.(signal, refresh);
-    if (refreshed && !refreshed.ok) return refreshed;
+    if (refreshed && !refreshed.ok) {
+      return refreshed;
+    }
+
     const loaded = await modelOperation(() =>
       this.session.modelRuntime.getAvailable(undefined, signal ? { signal } : {}),
     );
-    if (!loaded.ok) return loaded;
-    if (signal?.aborted) return err(new CancelledError());
-    if (this.closing || this.disposed)
+    if (!loaded.ok) {
+      return loaded;
+    }
+    if (signal?.aborted) {
+      return err(new CancelledError());
+    }
+    if (this.closing || this.disposed) {
       return err(new SessionError("SESSION_NOT_OPEN", "Session closed while loading models."));
+    }
+
     const model = this.session.model;
     const current = this.modelSelectionSnapshot
       ? this.modelSelectionSnapshot.current
@@ -379,6 +426,7 @@ export class PiSessionExecutor implements SessionExecutor {
         ? { provider: model.provider, id: model.id }
         : null;
     const effort = this.modelSelectionSnapshot?.effort ?? this.session.thinkingLevel;
+
     return ok({
       conversationId: this.savedSessionId,
       current,
@@ -400,9 +448,10 @@ export class PiSessionExecutor implements SessionExecutor {
     identity: ModelIdentity,
     effort?: ModelEffort,
   ): Promise<Result<string | null, ExpectedError>> {
-    if (this.closing || this.disposed)
+    if (this.closing || this.disposed) {
       return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
-    if (this.busy)
+    }
+    if (this.busy) {
       return Promise.resolve(
         err(
           new SessionError(
@@ -411,6 +460,8 @@ export class PiSessionExecutor implements SessionExecutor {
           ),
         ),
       );
+    }
+
     const current = this.session.model;
     this.modelSelectionSnapshot = {
       current: current ? { provider: current.provider, id: current.id } : null,
@@ -418,31 +469,39 @@ export class PiSessionExecutor implements SessionExecutor {
       telemetry: this.telemetry.read(),
     };
     this.controlling = true;
+
     const task = (async (): Promise<Result<string | null, ExpectedError>> => {
       const available = await this.models();
-      if (!available.ok) return available;
+      if (!available.ok) {
+        return available;
+      }
+
       const allowed = available.value.models.some(
         (model) => model.provider === identity.provider && model.id === identity.id,
       );
       const model = allowed
         ? this.session.modelRuntime.getModel(identity.provider, identity.id)
         : undefined;
-      if (!model)
+      if (!model) {
         return err(
           new ModelSelectionError(
             "This model is no longer available with the current provider credentials. Refresh the list and choose another model.",
           ),
         );
-      if (effort !== undefined && !getSupportedThinkingLevels(model).includes(effort))
+      }
+      if (effort !== undefined && !getSupportedThinkingLevels(model).includes(effort)) {
         return err(
           new InputError(
             "This model does not support the selected effort. Refresh the list before applying. No settings were changed.",
           ),
         );
-      if (this.closing || this.disposed)
+      }
+      if (this.closing || this.disposed) {
         return err(
           new SessionError("SESSION_NOT_OPEN", "Session closed before the model could be changed."),
         );
+      }
+
       let warning: string | null = null;
       const persistenceWarning = (code: string) =>
         `[${code}] ${effort === undefined ? "Model" : "Model and effort"} applied, but saving the selection could not be confirmed. Reconnect before retrying.`;
@@ -451,37 +510,47 @@ export class PiSessionExecutor implements SessionExecutor {
         const capabilitiesChanged =
           current &&
           getSupportedThinkingLevels(current).join() !== getSupportedThinkingLevels(model).join();
-        if (!modelsAreEqual(current, model) || capabilitiesChanged)
+        if (!modelsAreEqual(current, model) || capabilitiesChanged) {
           await this.session.setModel(model, { persist: false });
+        }
       });
       if (!changed.ok) {
         // The SDK applies live values before saving. Preserve accepted values and still finish the pair.
-        if (this.session.model !== model || changed.error.code !== "STORAGE_FAILED") return changed;
+        if (this.session.model !== model || changed.error.code !== "STORAGE_FAILED") {
+          return changed;
+        }
+
         warning = persistenceWarning(changed.error.code);
       }
-      if (!modelsAreEqual(this.session.model, model))
+      if (!modelsAreEqual(this.session.model, model)) {
         return err(
           new AgentRunError(
             "An extension changed the selected model while applying settings. Reopen /model to inspect the current model and effort.",
           ),
         );
+      }
       if (effort !== undefined) {
         const thinking = await modelOperation(async () => {
           this.session.setThinkingLevel(effort, { persist: false });
         });
         if (!thinking.ok) {
-          if (this.session.thinkingLevel !== effort || thinking.error.code !== "STORAGE_FAILED")
+          if (this.session.thinkingLevel !== effort || thinking.error.code !== "STORAGE_FAILED") {
             return thinking;
+          }
+
           warning = persistenceWarning(thinking.error.code);
         }
-        if (this.session.thinkingLevel !== effort)
+        if (this.session.thinkingLevel !== effort) {
           return err(
             new AgentRunError(
               "The selected effort changed while applying settings. Reopen /model to inspect the current model and effort.",
             ),
           );
+        }
       }
+
       this.telemetry.refreshUsage();
+
       return ok(warning);
     })().finally(() => {
       this.controlling = false;
@@ -490,9 +559,11 @@ export class PiSessionExecutor implements SessionExecutor {
       this.emit();
     });
     const tracked = task.then((result) => (result.ok ? ok(undefined) : result));
+
     this.runs.add(tracked);
     // Cleanup waits for this operation too, without converting unexpected exceptions into input errors.
     void tracked.catch(() => {});
+
     return task;
   }
 
@@ -507,15 +578,19 @@ export class PiSessionExecutor implements SessionExecutor {
       this.session.pendingMessageCount > 0
     );
   }
+
   get acceptsImages(): boolean {
     return this.session.model?.input.includes("image") ?? false;
   }
+
   get savedSessionId(): string {
     return this.session.sessionId;
   }
+
   get sessionFile(): string | undefined {
     return this.session.sessionFile;
   }
+
   get state(): ExecutionState {
     const messages = this.session.messages.slice(-12).flatMap((message) => {
       if (message.role === "user") {
@@ -526,26 +601,34 @@ export class PiSessionExecutor implements SessionExecutor {
                 .filter((part) => part.type === "text")
                 .map((part) => part.text)
                 .join("");
+
         return [`You: ${text}`];
       }
-      if (message.role === "assistant")
+      if (message.role === "assistant") {
         return [
           `Agent: ${message.content
             .filter((part) => part.type === "text")
             .map((part) => part.text)
             .join("")}`,
         ];
-      if (message.role === "toolResult")
+      }
+      if (message.role === "toolResult") {
         return [
           `${message.toolName}: ${message.content
             .filter((part) => part.type === "text")
             .map((part) => part.text)
             .join("")}`,
         ];
+      }
+
       return [];
     });
-    if (this.partial) messages.push(`Agent (streaming): ${this.partial}`);
+    if (this.partial) {
+      messages.push(`Agent (streaming): ${this.partial}`);
+    }
+
     messages.push(...this.activeTools.values());
+
     return {
       conversationId: this.savedSessionId,
       resourceRevision: this.resourceRevision,
@@ -567,6 +650,7 @@ export class PiSessionExecutor implements SessionExecutor {
                 .map((part) => part.text)
                 .join("\n");
         const skill = parseSkillBlock(text);
+
         return summarizeRequest(
           skill ? skill.userMessage || `/skill:${skill.name}` : text,
           typeof message.content === "string"
@@ -587,13 +671,15 @@ export class PiSessionExecutor implements SessionExecutor {
 
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
+
     return () => this.listeners.delete(listener);
   }
 
   compact(instructions?: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>> {
-    if (this.closing || this.disposed)
+    if (this.closing || this.disposed) {
       return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
-    if (this.busy)
+    }
+    if (this.busy) {
       return Promise.resolve(
         err(
           new SessionError(
@@ -602,7 +688,10 @@ export class PiSessionExecutor implements SessionExecutor {
           ),
         ),
       );
+    }
+
     this.controlling = true;
+
     const before = { status: this.status, error: this.error };
     let accepted = false;
     const task = this.compaction
@@ -614,22 +703,29 @@ export class PiSessionExecutor implements SessionExecutor {
         onAccepted?.();
       })
       .then((result): Result<void, ExpectedError> => {
-        if (result.ok) this.transcript.notice("Context compacted", result.value.summary);
-        else if (accepted)
+        if (result.ok) {
+          this.transcript.notice("Context compacted", result.value.summary);
+        } else if (accepted) {
           this.transcript.notice(
             result.error instanceof CancelledError ? "Compaction cancelled" : "Compaction failed",
             `[${result.error.code}] ${result.error.message}`,
             result.error instanceof CancelledError ? "cancelled" : "error",
           );
+        }
+
         this.status = before.status;
         this.error = before.error;
         this.telemetry.refreshUsage();
+
         return result.ok ? ok(undefined) : result;
       })
       .catch((error: unknown) => {
         this.status = "failure";
         this.error = "Unexpected compaction failure. Inspect runtime.log.";
-        if (accepted) this.transcript.notice("Compaction failed", this.error, "error");
+        if (accepted) {
+          this.transcript.notice("Compaction failed", this.error, "error");
+        }
+
         throw error;
       })
       .finally(() => {
@@ -639,14 +735,17 @@ export class PiSessionExecutor implements SessionExecutor {
         this.runs.delete(task);
         this.emit();
       });
+
     this.runs.add(task);
+
     return task;
   }
 
   reload(): Promise<Result<void, ExpectedError>> {
-    if (this.closing || this.disposed)
+    if (this.closing || this.disposed) {
       return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
-    if (this.busy)
+    }
+    if (this.busy) {
       return Promise.resolve(
         err(
           new SessionError(
@@ -655,12 +754,17 @@ export class PiSessionExecutor implements SessionExecutor {
           ),
         ),
       );
+    }
+
     const previousSettingsErrors = this.session.settingsManager.drainErrors();
-    if (previousSettingsErrors.length)
+    if (previousSettingsErrors.length) {
       console.warn("[radian:settings] Earlier settings errors", previousSettingsErrors);
+    }
+
     this.controlling = true;
     this.ui?.reset();
     this.mcpAuth?.reset();
+
     const reported: ExtensionError[] = [];
     const stopReporting = this.diagnostics.observe((error) => reported.push(error));
     const task = (async (): Promise<Result<void, ExpectedError>> => {
@@ -671,6 +775,7 @@ export class PiSessionExecutor implements SessionExecutor {
       );
       if (!reloaded.ok) {
         console.warn("[radian:reload] Resource reload failed", reloaded.error);
+
         return err(
           new AgentRunError(
             "Resource reload did not finish. Resources may have changed; the previous completion catalog was retained. Inspect runtime.log before retrying.",
@@ -678,6 +783,7 @@ export class PiSessionExecutor implements SessionExecutor {
           ),
         );
       }
+
       const loader = this.session.resourceLoader;
       const diagnostics = [...loader.getSkills().diagnostics, ...loader.getPrompts().diagnostics];
       const errors = [
@@ -687,9 +793,12 @@ export class PiSessionExecutor implements SessionExecutor {
         ...diagnostics.filter((item) => item.type === "error"),
       ];
       const warnings = diagnostics.filter((item) => item.type !== "error");
-      if (warnings.length) console.warn("[radian:reload] Resource diagnostics", warnings);
+      if (warnings.length) {
+        console.warn("[radian:reload] Resource diagnostics", warnings);
+      }
       if (errors.length) {
         console.warn("[radian:reload] Resource loading failed", errors);
+
         return err(
           new AgentRunError(
             "Some resources could not reload. Resources may have changed; the previous completion catalog was retained. Inspect runtime.log before retrying.",
@@ -697,17 +806,21 @@ export class PiSessionExecutor implements SessionExecutor {
           ),
         );
       }
+
       const catalog = sessionCommands(this.session);
       this.telemetry.refreshUsage("manual");
       this.commandCatalog = catalog;
       this.resourceRevision++;
+
       return ok(undefined);
     })().finally(() => {
       this.controlling = false;
       this.runs.delete(task);
       this.emit();
     });
+
     this.runs.add(task);
+
     return task;
   }
 
@@ -723,7 +836,7 @@ export class PiSessionExecutor implements SessionExecutor {
     );
     if (expanded !== text) {
       const name = expanded.slice(7).split(/\s/u, 1)[0];
-      if (!skills.some((skill) => skill.name === name))
+      if (!skills.some((skill) => skill.name === name)) {
         return Promise.resolve(
           err(
             new InputError(
@@ -731,11 +844,16 @@ export class PiSessionExecutor implements SessionExecutor {
             ),
           ),
         );
+      }
+
       text = expanded;
     }
+
     const dashboard = parseDashboardCommand(text);
-    if (!dashboard.ok) return Promise.resolve(dashboard);
-    if (dashboard.value)
+    if (!dashboard.ok) {
+      return Promise.resolve(dashboard);
+    }
+    if (dashboard.value) {
       return Promise.resolve(
         err(
           new CapabilityError(
@@ -743,9 +861,13 @@ export class PiSessionExecutor implements SessionExecutor {
           ),
         ),
       );
+    }
+
     const control = parseSessionControl(text);
-    if (!control.ok) return Promise.resolve(control);
-    if (control.value)
+    if (!control.ok) {
+      return Promise.resolve(control);
+    }
+    if (control.value) {
       return Promise.resolve(
         err(
           new CapabilityError(
@@ -753,9 +875,13 @@ export class PiSessionExecutor implements SessionExecutor {
           ),
         ),
       );
+    }
+
     const accounts = parseAccountsCommand(text);
-    if (!accounts.ok) return Promise.resolve(accounts);
-    if (accounts.value)
+    if (!accounts.ok) {
+      return Promise.resolve(accounts);
+    }
+    if (accounts.value) {
       return Promise.resolve(
         err(
           new CapabilityError(
@@ -763,9 +889,13 @@ export class PiSessionExecutor implements SessionExecutor {
           ),
         ),
       );
+    }
+
     const model = parseModelCommand(text);
-    if (!model.ok) return Promise.resolve(model);
-    if (model.value)
+    if (!model.ok) {
+      return Promise.resolve(model);
+    }
+    if (model.value) {
       return Promise.resolve(
         err(
           new CapabilityError(
@@ -773,9 +903,13 @@ export class PiSessionExecutor implements SessionExecutor {
           ),
         ),
       );
+    }
+
     const history = parseHistoryCommand(text);
-    if (!history.ok) return Promise.resolve(history);
-    if (history.value)
+    if (!history.ok) {
+      return Promise.resolve(history);
+    }
+    if (history.value) {
       return Promise.resolve(
         err(
           new CapabilityError(
@@ -783,6 +917,8 @@ export class PiSessionExecutor implements SessionExecutor {
           ),
         ),
       );
+    }
+
     return this.promptInput(text, onAccepted, imagePaths);
   }
 
@@ -792,32 +928,42 @@ export class PiSessionExecutor implements SessionExecutor {
     imagePaths: readonly string[] = [],
     replayImages?: ImageContent[],
   ): Promise<Result<void, ExpectedError>> {
-    if (this.interrupting)
+    if (this.interrupting) {
       return Promise.resolve(
         err(new SessionError("SESSION_BUSY", "Interruption is in progress. Input was retained.")),
       );
-    if (this.controlling)
+    }
+    if (this.controlling) {
       return Promise.resolve(
         err(
           new SessionError("SESSION_BUSY", "Session control is in progress. Input was retained."),
         ),
       );
-    if (this.closing || this.disposed)
+    }
+    if (this.closing || this.disposed) {
       return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
+    }
+
     const revisionAtSubmission = this.inputRevision;
     const admitted = Promise.withResolvers<void>();
     const previous = this.admission;
+
     this.admission = admitted.promise;
+
     const task = previous
       .then(async (): Promise<Result<void, ExpectedError>> => {
-        if (this.closing || this.disposed)
+        if (this.closing || this.disposed) {
           return err(new SessionError("SESSION_NOT_OPEN", "Session is closing."));
-        if (revisionAtSubmission !== this.inputRevision)
+        }
+        if (revisionAtSubmission !== this.inputRevision) {
           return err(new CancelledError("Pending input was cancelled by interruption."));
-        if (this.session.isCompacting && !this.session.isStreaming)
+        }
+        if (this.session.isCompacting && !this.session.isStreaming) {
           return err(
             new SessionError("SESSION_BUSY", "Session is compacting; retry after it finishes."),
           );
+        }
+
         // Preparation is part of admission: a later text request must not overtake
         // an earlier image request while its bytes are being read or normalized.
         const loaded = replayImages
@@ -825,23 +971,30 @@ export class PiSessionExecutor implements SessionExecutor {
           : imagePaths.length
             ? await this.imageLoader(imagePaths)
             : ok([]);
-        if (!loaded.ok) return loaded;
-        if (revisionAtSubmission !== this.inputRevision)
+        if (!loaded.ok) {
+          return loaded;
+        }
+        if (revisionAtSubmission !== this.inputRevision) {
           return err(new CancelledError("Pending input was cancelled by interruption."));
-        if (this.closing || this.disposed)
+        }
+        if (this.closing || this.disposed) {
           return err(
             new SessionError("SESSION_NOT_OPEN", "Session closed while preparing image input."),
           );
-        if (this.session.isCompacting && !this.session.isStreaming)
+        }
+        if (this.session.isCompacting && !this.session.isStreaming) {
           return err(
             new SessionError("SESSION_BUSY", "Session is compacting; retry after it finishes."),
           );
-        if ((imagePaths.length || replayImages?.length) && !this.acceptsImages)
+        }
+        if ((imagePaths.length || replayImages?.length) && !this.acceptsImages) {
           return err(
             new CapabilityError(
               "The selected model no longer accepts image input. Input was retained.",
             ),
           );
+        }
+
         const images = loaded.value;
         const bareMcpAuth = text.trimEnd() === "/mcp-auth";
         const name = bareMcpAuth
@@ -850,21 +1003,27 @@ export class PiSessionExecutor implements SessionExecutor {
             ? text.slice(1).split(" ", 1)[0]!
             : "";
         const registered = name ? this.session.extensionRunner.getCommand(name) : undefined;
-        if (images.length && registered)
+        if (images.length && registered) {
           return err(
             new InputError(
               `/${name} does not accept image attachments. Send the images in an ordinary prompt instead.`,
             ),
           );
+        }
+
         const names = this.transcript.rememberImages(images, imagePaths);
         if (names.length) {
           const saved = await capture(async () =>
             this.session.sessionManager.appendCustomEntry(imageNamesEntryType, names),
           );
-          if (!saved.ok) return saved;
-          if (revisionAtSubmission !== this.inputRevision || this.closing || this.disposed)
+          if (!saved.ok) {
+            return saved;
+          }
+          if (revisionAtSubmission !== this.inputRevision || this.closing || this.disposed) {
             return err(new CancelledError("Input was cancelled while saving attachment metadata."));
+          }
         }
+
         let command = registered ? this.diagnostics.begin(name) : undefined;
         let handled = false;
         let accepted = false;
@@ -882,12 +1041,14 @@ export class PiSessionExecutor implements SessionExecutor {
         const result = await withCleanup(
           async (): Promise<Result<void, ExpectedError>> => {
             if (bareMcpAuth) {
-              if (!registered || !this.ui || !this.mcpAuth)
+              if (!registered || !this.ui || !this.mcpAuth) {
                 return err(
                   new CapabilityError(
                     "MCP authentication requires a configured MCP adapter and an interactive main session.",
                   ),
                 );
+              }
+
               // Refresh through the adapter's own command: a deferred runtime can publish an
               // empty shutdown snapshot before its real catalog is initialized.
               const status = this.session.extensionRunner
@@ -898,19 +1059,29 @@ export class PiSessionExecutor implements SessionExecutor {
                     candidate.sourceInfo.path === registered.sourceInfo.path,
                 );
               if (status) {
-                if (command) this.diagnostics.end(command);
+                if (command) {
+                  this.diagnostics.end(command);
+                }
+
                 command = this.diagnostics.begin(status.invocationName);
+
                 const initialized = await capture(() =>
                   this.session.prompt(`/${status.invocationName} status`, {
                     streamingBehavior: "steer",
                   }),
                 );
-                if (!initialized.ok || command.failure) return initialized;
+                if (!initialized.ok || command.failure) {
+                  return initialized;
+                }
+
                 this.diagnostics.end(command);
                 command = this.diagnostics.begin(name);
               }
+
               const selected = await this.mcpAuth.select(this.ui.context);
-              if (!selected.ok) return selected;
+              if (!selected.ok) {
+                return selected;
+              }
               if (
                 selected.value === undefined ||
                 revisionAtSubmission !== this.inputRevision ||
@@ -920,10 +1091,13 @@ export class PiSessionExecutor implements SessionExecutor {
                 handled = true;
                 admitted.resolve();
                 accept();
+
                 return ok(undefined);
               }
+
               text = `/mcp-auth ${selected.value}`;
             }
+
             return capture(() =>
               this.session.prompt(text, {
                 streamingBehavior: "steer",
@@ -939,17 +1113,23 @@ export class PiSessionExecutor implements SessionExecutor {
           },
           async () => {
             stopDialog?.();
-            if (command) this.diagnostics.end(command);
+            if (command) {
+              this.diagnostics.end(command);
+            }
           },
         );
         if (command?.failure) {
           this.ui?.cancelDialogs();
+
           const error = new AgentRunError(
             `Command /${name} failed${accepted ? "." : `: ${command.failure.error}.`} It may have changed state; inspect before retrying.`,
             { cause: command.failure },
           );
           // Do not copy arbitrary extension error text (possibly containing credentials) into UI state.
-          if (accepted) this.ui?.context.notify(error.message, "error");
+          if (accepted) {
+            this.ui?.context.notify(error.message, "error");
+          }
+
           return err(error);
         }
         if (!result.ok) {
@@ -957,12 +1137,19 @@ export class PiSessionExecutor implements SessionExecutor {
             this.status = "failure";
             this.error = result.error.message;
           }
+
           return result;
         }
-        if (handled) return ok(undefined);
-        if (this.aborted) return err(new CancelledError());
-        if (this.state.status === "failure")
+        if (handled) {
+          return ok(undefined);
+        }
+        if (this.aborted) {
+          return err(new CancelledError());
+        }
+        if (this.state.status === "failure") {
           return err(new AgentRunError(this.error ?? "Agent failed."));
+        }
+
         return ok(undefined);
       })
       .catch((error: unknown) => {
@@ -977,19 +1164,21 @@ export class PiSessionExecutor implements SessionExecutor {
       });
     this.runs.add(task);
     this.emit();
+
     return task;
   }
 
   private queuedMessages(): QueuedUserMessage[] {
-    const agent = this.session.agent,
-      steering = agent.steeringMode,
-      followUp = agent.followUpMode;
+    const agent = this.session.agent;
+    const steering = agent.steeringMode;
+    const followUp = agent.followUpMode;
     // SDK peek follows delivery mode and otherwise exposes only the first item.
     // This synchronous snapshot must include all messages and their image blocks,
     // without changing the user's actual delivery policy or persisted settings.
     try {
       agent.steeringMode = "all";
       agent.followUpMode = "all";
+
       return [
         ...this.interruptedMessages,
         ...agent
@@ -1003,23 +1192,30 @@ export class PiSessionExecutor implements SessionExecutor {
   }
 
   interrupt(onAccepted?: () => void): Promise<Result<void, ExpectedError>> {
-    if (this.closing || this.disposed)
+    if (this.closing || this.disposed) {
       return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
+    }
     if (this.interruptTask) {
       onAccepted?.();
+
       return this.interruptTask;
     }
+
     this.interrupting = true;
     this.inputRevision++;
     this.ui?.setActive(false);
-    const admission = this.admission,
-      runs = [...this.runs];
+
+    const admission = this.admission;
+    const runs = [...this.runs];
+
     this.interruptedMessages = this.queuedMessages();
     this.session.clearQueue();
     this.session.abortBash();
+
     const abort = this.session.abort();
     const task = (async (): Promise<Result<void, ExpectedError>> => {
       onAccepted?.();
+
       const stopped = await capture(async () => {
         // Abort first: an extension command may itself be waiting for SDK idle.
         await admission;
@@ -1029,8 +1225,13 @@ export class PiSessionExecutor implements SessionExecutor {
         await Promise.all([abort, this.session.abort()]);
         await Promise.all(runs);
       });
-      if (!stopped.ok) return stopped;
-      if (this.closing || this.disposed || !this.interruptedMessages.length) return ok(undefined);
+      if (!stopped.ok) {
+        return stopped;
+      }
+      if (this.closing || this.disposed || !this.interruptedMessages.length) {
+        return ok(undefined);
+      }
+
       const messages = this.interruptedMessages;
       const text = messages
         .map((message) =>
@@ -1049,7 +1250,9 @@ export class PiSessionExecutor implements SessionExecutor {
       );
       const accepted = Promise.withResolvers<Result<void, ExpectedError>>();
       let admitted = false;
+
       this.interrupting = false;
+
       const run = this.promptInput(
         text,
         () => {
@@ -1063,13 +1266,19 @@ export class PiSessionExecutor implements SessionExecutor {
       );
       void run.then(
         (result) => {
-          if (!admitted) accepted.resolve(result);
+          if (!admitted) {
+            accepted.resolve(result);
+          }
         },
         (error: unknown) => {
-          if (!admitted) accepted.reject(error);
-          else reportUnexpected(error, "resumed agent execution");
+          if (!admitted) {
+            accepted.reject(error);
+          } else {
+            reportUnexpected(error, "resumed agent execution");
+          }
         },
       );
+
       return accepted.promise;
     })().finally(() => {
       this.interrupting = false;
@@ -1077,27 +1286,39 @@ export class PiSessionExecutor implements SessionExecutor {
       this.ui?.setActive(this.uiActive && !this.closing);
       this.emit();
     });
+
     this.interruptTask = task;
     this.emit();
+
     return task;
   }
 
   async beforeNewSession(): Promise<Result<void, ExpectedError>> {
-    if (this.disposed) return ok(undefined);
+    if (this.disposed) {
+      return ok(undefined);
+    }
+
     const result = await this.session.extensionRunner.emit({
       type: "session_before_switch",
       reason: "new",
     });
+
     return result?.cancel
       ? err(new CancelledError("Session replacement was cancelled by an extension."))
       : ok(undefined);
   }
 
   close(reason: "quit" | "new" = "quit"): Promise<Result<void, ExpectedError>> {
-    if (this.disposed) return Promise.resolve(ok(undefined));
-    if (this.closeTask) return this.closeTask;
+    if (this.disposed) {
+      return Promise.resolve(ok(undefined));
+    }
+    if (this.closeTask) {
+      return this.closeTask;
+    }
+
     this.closing = true;
     this.ui?.dispose();
+
     const task = capture(async () => {
       this.session.clearQueue();
       this.session.abortBash();
@@ -1108,7 +1329,10 @@ export class PiSessionExecutor implements SessionExecutor {
         async () => {
           // Run failure/cancellation is not cleanup failure, but unexpected rejections still propagate.
           await Promise.all(this.runs);
-          if (this.interruptTask) await this.interruptTask;
+          if (this.interruptTask) {
+            await this.interruptTask;
+          }
+
           await this.session.extensionRunner.emit({ type: "session_shutdown", reason });
         },
         async () => {
@@ -1122,18 +1346,23 @@ export class PiSessionExecutor implements SessionExecutor {
         },
       );
     }).then((result) => {
-      if (!result.ok) this.closeTask = undefined;
+      if (!result.ok) {
+        this.closeTask = undefined;
+      }
+
       return result;
     });
     this.closeTask = task;
     void task.catch(() => {
       this.closeTask = undefined;
     });
+
     return task;
   }
 
   private handleEvent(event: AgentSessionEvent): void {
     this.ui?.observeEvent(event);
+
     const completion = this.transcript.handle(event);
     switch (event.type) {
       case "agent_start":
@@ -1145,7 +1374,10 @@ export class PiSessionExecutor implements SessionExecutor {
         break;
       case "message_start": {
         const request = deliveredRequest(event.message);
-        if (request) this.request = request;
+        if (request) {
+          this.request = request;
+        }
+
         break;
       }
       case "auto_retry_start":
@@ -1159,14 +1391,17 @@ export class PiSessionExecutor implements SessionExecutor {
       case "compaction_end":
         // Manual control restores its settled status in compact() before clearing
         // this activity; otherwise an end-event snapshot flashes the old request.
-        if (!this.controlling) this.compacting = false;
+        if (!this.controlling) {
+          this.compacting = false;
+        }
         break;
       case "message_update":
-        if (event.message.role === "assistant")
+        if (event.message.role === "assistant") {
           this.partial = event.message.content
             .filter((part) => part.type === "text")
             .map((part) => part.text)
             .join("");
+        }
         break;
       case "message_end":
         this.partial = "";
@@ -1195,15 +1430,19 @@ export class PiSessionExecutor implements SessionExecutor {
       // Resolve the delivered request once at settlement, not by scanning transcripts for each monitor update.
       // Stop at the previous run boundary so autonomous work cannot borrow an older request title.
       this.request = undefined;
+
       const sections = this.transcript.sections;
       for (let index = sections.length - 1; index >= 0; index--) {
         const section = sections[index]!;
-        if (section.completion && section.completion !== completion) break;
+        if (section.completion && section.completion !== completion) {
+          break;
+        }
         if (section.request) {
           this.request = section.request;
           break;
         }
       }
+
       this.result = {
         id: crypto.randomUUID(),
         outcome: completion.outcome,
@@ -1216,11 +1455,12 @@ export class PiSessionExecutor implements SessionExecutor {
       // Optional display persistence cannot turn an accepted, settled action into a rejected run.
       try {
         const saved = saveRunCompletion(this.session.sessionManager, completion);
-        if (!saved.ok)
+        if (!saved.ok) {
           this.transcript.warnCompletion(
             completion,
             `[${saved.error.code}] Run finished, but saving its timing could not be confirmed.`,
           );
+        }
       } catch (error) {
         this.transcript.warnCompletion(
           completion,
@@ -1228,29 +1468,41 @@ export class PiSessionExecutor implements SessionExecutor {
         );
       }
     }
+
     this.emit();
   }
 
   private finalStatus(aborted: boolean): ExecutionState["status"] {
     const last = this.session.messages.findLast((message) => message.role === "assistant");
-    if (!last || last.role !== "assistant" || aborted || last.stopReason === "aborted") return null;
+    if (!last || last.role !== "assistant" || aborted || last.stopReason === "aborted") {
+      return null;
+    }
     if (last.stopReason === "error") {
       this.error = last.errorMessage ?? "Agent failed.";
+
       return "failure";
     }
+
     return last.stopReason === "stop" || last.stopReason === "length" ? "complete" : null;
   }
 
   private emit(): void {
     // SDK model switching can emit an intermediate automatic effort before the explicit choice.
-    if (!this.modelSelectionSnapshot) for (const listener of this.listeners) listener();
+    if (!this.modelSelectionSnapshot) {
+      for (const listener of this.listeners) {
+        listener();
+      }
+    }
   }
 }
 
 function deliveredRequest(
   message: AgentSession["messages"][number] | undefined,
 ): RequestSummary | undefined {
-  if (message?.role !== "user") return undefined;
+  if (message?.role !== "user") {
+    return undefined;
+  }
+
   const text =
     typeof message.content === "string"
       ? message.content
@@ -1259,6 +1511,7 @@ function deliveredRequest(
           .map((part) => part.text)
           .join("");
   const skill = parseSkillBlock(text);
+
   return summarizeRequest(
     skill ? skill.userMessage || `/skill:${skill.name}` : text,
     typeof message.content === "string"
@@ -1271,13 +1524,15 @@ async function modelOperation<T>(operation: () => Promise<T>): Promise<Result<T,
   try {
     return await capture(operation);
   } catch (error) {
-    if (error instanceof ModelsError)
+    if (error instanceof ModelsError) {
       return err(
         new ModelSelectionError(
           "Could not load or apply model configuration. Check the provider authentication and settings before retrying.",
           { cause: error },
         ),
       );
+    }
+
     throw error;
   }
 }
@@ -1288,10 +1543,14 @@ function saveRunCompletion(
 ): Result<void, ExpectedError> {
   try {
     manager.appendCustomEntry(runCompletionEntryType, completion);
+
     return ok(undefined);
   } catch (error) {
     const expected = knownError(error);
-    if (expected) return err(expected);
+    if (expected) {
+      return err(expected);
+    }
+
     throw error;
   }
 }
@@ -1302,8 +1561,10 @@ function toolText(result: unknown): string {
     typeof result !== "object" ||
     !("content" in result) ||
     !Array.isArray(result.content)
-  )
+  ) {
     return "";
+  }
+
   return result.content
     .flatMap((part: unknown) =>
       part &&

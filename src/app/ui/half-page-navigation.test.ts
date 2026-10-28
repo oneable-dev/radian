@@ -12,20 +12,21 @@ import { SearchInput } from "../../ui/search-input.ts";
 import { horizontalInset } from "../../ui/spacing.ts";
 
 type Surface = "workspace" | "history" | "monitor" | "model";
+
 const surfaces = ["workspace", "history", "monitor", "model"] as const;
 const count = 40;
 
 async function mount(surface: Surface) {
-  const clock = new ManualClock(),
-    app = await createTestRenderer({
-      width: 140,
-      height: 30,
-      kittyKeyboard: true,
-      exitOnCtrlC: false,
-      clock,
-    });
-  const repository = demoWorkspace()[0]!,
-    original = repository.worktrees[0]!;
+  const clock = new ManualClock();
+  const app = await createTestRenderer({
+    width: 140,
+    height: 30,
+    kittyKeyboard: true,
+    exitOnCtrlC: false,
+    clock,
+  });
+  const repository = demoWorkspace()[0]!;
+  const original = repository.worktrees[0]!;
   const names = Array.from({ length: count }, (_, index) => `candidate-${index}`);
   const sessions = names.map((name, index) => ({
     id: `session-${index}`,
@@ -43,12 +44,12 @@ async function mount(surface: Surface) {
           sessions: index ? [] : sessions,
         }))
       : [{ ...original, sessions }];
-  const selection = new WorkspaceSelection([{ ...repository, worktrees }]),
-    opened: string[] = [],
-    submitted: string[] = [];
-  const interrupted: string[] = [],
-    closed: string[] = [],
-    detached: string[] = [];
+  const selection = new WorkspaceSelection([{ ...repository, worktrees }]);
+  const opened: string[] = [];
+  const submitted: string[] = [];
+  const interrupted: string[] = [];
+  const closed: string[] = [];
+  const detached: string[] = [];
   const body = Array.from({ length: 100 }, (_, index) => `Preview line ${index}`).join("\n");
   const view = new Workbench(app.renderer, selection, {
     onNewSession() {},
@@ -60,11 +61,13 @@ async function mount(surface: Surface) {
     },
     onInterrupt: async (id) => {
       interrupted.push(id);
+
       return ok(undefined);
     },
     initialDrafts: { "session-0": "KEEP_AGENT_DRAFT" },
     onPrompt: (_id, text) => {
       submitted.push(text);
+
       return ok(undefined);
     },
     getSessionDetails: (id) => ({
@@ -90,6 +93,7 @@ async function mount(surface: Surface) {
       ok({ worktreeId, id, text: body, truncated: false }),
     onResumeSession: async (_tree, id) => {
       opened.push(id);
+
       return ok("session-0");
     },
     onListModels: async (_id, conversationId) =>
@@ -110,6 +114,7 @@ async function mount(surface: Surface) {
       }),
     onSelectModel: async (_id, _conversation, model) => {
       opened.push(model.id);
+
       return ok(null);
     },
   });
@@ -119,9 +124,13 @@ async function mount(surface: Surface) {
   };
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
+
   await render();
   if (surface === "model") {
     const prompt = get("session-prompt") as InputRenderable;
@@ -132,18 +141,22 @@ async function mount(surface: Surface) {
     await render();
     app.mockInput.pressEnter();
     await render();
-  } else if (surface === "workspace") openWorkspaceSearch(app);
-  else {
+  } else if (surface === "workspace") {
+    openWorkspaceSearch(app);
+  } else {
     app.mockInput.pressKey(" ", { ctrl: true });
     app.mockInput.pressKey(surface === "history" ? "h" : "s");
   }
+
   await render();
+
   const input = get(
     surface === "workspace" ? "workspace-search" : `${surface}-search`,
   ) as InputRenderable;
   const list = get(
     surface === "workspace" ? "workspace-tree" : `${surface}-list`,
   ) as ScrollBoxRenderable;
+
   return {
     ...app,
     clock,
@@ -186,11 +199,13 @@ test.each(surfaces)(
         await app.render();
         app.mockInput.pressEnter();
         await app.render();
-      } else if (surface === "workspace") openWorkspaceSearch(app);
-      else {
+      } else if (surface === "workspace") {
+        openWorkspaceSearch(app);
+      } else {
         app.mockInput.pressKey(" ", { ctrl: true });
         app.mockInput.pressKey(surface === "history" ? "h" : "s");
       }
+
       await app.render();
 
       // Do not reset only filters or append fresh input after stale text.
@@ -215,19 +230,26 @@ test.each(surfaces)(
     // Different search targets share input geometry and click behavior.
     const app = await mount(surface);
     try {
-      if (!(app.input instanceof SearchInput)) throw new Error("Missing shared search field");
-      const input = app.input,
-        field = input.field;
+      if (!(app.input instanceof SearchInput)) {
+        throw new Error("Missing shared search field");
+      }
+
+      const input = app.input;
+      const field = input.field;
+
       await app.mockInput.typeText("candidate");
       app.mockInput.pressArrow("left");
-      const value = input.value,
-        cursor = input.cursorOffset;
+
+      const value = input.value;
+      const cursor = input.cursorOffset;
       const background = (x: number, y: number) => {
         let end = 0;
+
         return app
           .captureSpans()
           .lines[y]!.spans.find((span) => {
             end += span.width;
+
             return end > x;
           })!
           .bg.toInts();
@@ -239,6 +261,7 @@ test.each(surfaces)(
         await app.render();
         app.list.focus();
         await app.render();
+
         const paddingY = input.y;
         expect(background(field.x + 1, paddingY)).toEqual(
           uiTheme(app.renderer).styles["ui.popup"].bg!.toInts(),
@@ -250,6 +273,7 @@ test.each(surfaces)(
         expect(field.height).toBe(3);
         expect(input.height).toBe(1);
         expect(input.y - field.y).toBe(1);
+
         const status =
           surface === "history"
             ? app.get("history-list-status")
@@ -260,8 +284,10 @@ test.each(surfaces)(
         expect(app.list.y).toBe(field.y + field.height + (status?.visible ? status.height : 0));
         expect(app.list.x).toBe(field.x + 1);
         expect(app.list.width).toBe(field.width - 2);
-        const inset = horizontalInset(width),
-          counter = app.get(`${surface}-search-count`);
+
+        const inset = horizontalInset(width);
+        const counter = app.get(`${surface}-search-count`);
+
         expect(input.x - field.x).toBe(inset + 3);
         // Split-column percentages can round adjacent native text widths to different cells.
         expect(
@@ -282,6 +308,7 @@ test.each(surfaces)(
         expect(input.value).toBe(value);
         expect(input.cursorOffset).toBe(cursor);
       }
+
       expect(input.maxLength).toBe(256);
       expect(app.opened).toEqual([]);
       expect(app.submitted).toEqual([]);
@@ -293,23 +320,25 @@ test.each(surfaces)(
 
 test("History preview panes fill their height without headings in split and compact layouts", async () => {
   // Preview-only panes must preserve list-local search and independent conversation state.
-  const surface = "history",
-    app = await mount(surface);
+  const surface = "history";
+  const app = await mount(surface);
   try {
     await app.mockInput.typeText("candidate");
     app.mockInput.pressArrow("left");
     await app.render();
-    const input = app.input as SearchInput,
-      value = input.value,
-      cursor = input.cursorOffset;
+
+    const input = app.input as SearchInput;
+    const value = input.value;
+    const cursor = input.cursorOffset;
 
     // Verify actual terminal-cell layouts across split and single-panel transitions.
     for (const width of [140, 100, 99, 60, 140]) {
       app.resize(width, 30);
       await app.render();
-      const field = input.field,
-        preview = app.get(`${surface}-preview-pane`),
-        message = app.get(`${surface}-message`);
+
+      const field = input.field;
+      const preview = app.get(`${surface}-preview-pane`);
+      const message = app.get(`${surface}-message`);
 
       // Search and result hints belong only to lists; previews use their full height.
       expect(field.x + 1).toBe(app.list.x);
@@ -320,6 +349,7 @@ test("History preview panes fill their height without headings in split and comp
         expect(field.x + field.width).toBe(preview.x);
         expect(preview.y).toBe(field.y);
         expect(preview.y + preview.height).toBe(app.list.y + app.list.height);
+
         const lines = app.captureCharFrame().split("\n");
         expect(lines[field.y]![preview.x]).toBe("│");
         expect(lines[message.y]![preview.x]).toBe("│");
@@ -329,6 +359,7 @@ test("History preview panes fill their height without headings in split and comp
         app.mockInput.pressKey("o", { ctrl: true });
         await app.render();
       }
+
       const content = app.get(`${surface}-preview-agent-view`);
       const frame = app.captureCharFrame();
 
@@ -340,10 +371,12 @@ test("History preview panes fill their height without headings in split and comp
       expect(content.x + content.width).toBe(
         app.get(`${surface}-dialog`).x + app.get(`${surface}-dialog`).width,
       );
+
       // Remove only host padding: preserve the session's native inset and full-bleed composer background.
-      const transcript = app.get(`${surface}-preview`),
-        composer = app.get(`${surface}-preview-agent-composer`),
-        prompt = app.get(`${surface}-preview-session-prompt`);
+      const transcript = app.get(`${surface}-preview`);
+      const composer = app.get(`${surface}-preview-agent-composer`);
+      const prompt = app.get(`${surface}-preview-session-prompt`);
+
       expect(transcript.x).toBe(content.x + horizontalInset(width));
       expect(prompt.x).toBe(transcript.x);
       expect(composer.x).toBe(content.x);
@@ -359,10 +392,12 @@ test("History preview panes fill their height without headings in split and comp
         app.mockInput.pressKey("o", { ctrl: true });
         await app.render();
       }
+
       expect(input.value).toBe(value);
       expect(input.cursorOffset).toBe(cursor);
       expect(app.renderer.currentFocusedRenderable).toBe(input);
     }
+
     expect(app.view.promptDrafts["session-0"]).toBe("KEEP_AGENT_DRAFT");
     expect(app.opened).toEqual([]);
     expect(app.submitted).toEqual([]);
@@ -380,6 +415,7 @@ test.each(surfaces)(
       await app.mockInput.typeText("candidate");
       app.mockInput.pressTab();
       await app.render();
+
       const step = Math.max(1, Math.floor(app.list.viewport.height / 4));
       expect(step).toBeGreaterThan(1);
 
@@ -395,28 +431,40 @@ test.each(surfaces)(
       expect(app.selection.sessionId).toBe("session-0");
       expect(app.submitted).toEqual([]);
       expect(app.renderer.currentFocusedRenderable).toBe(app.list);
-      const id =
-        surface === "workspace"
-          ? `worktree:tree-${step}`
-          : surface === "history"
-            ? `history:saved-${step}`
-            : surface === "monitor"
-              ? `monitor:session-${step}`
-              : `model:${JSON.stringify(["fixture", `candidate-${step}`])}`;
+
+      let id: string;
+      switch (surface) {
+        case "workspace":
+          id = `worktree:tree-${step}`;
+          break;
+        case "history":
+          id = `history:saved-${step}`;
+          break;
+        case "monitor":
+          id = `monitor:session-${step}`;
+          break;
+        default:
+          id = `model:${JSON.stringify(["fixture", `candidate-${step}`])}`;
+      }
       const row = app.get(id);
       let column = 0;
       const span = app.captureSpans().lines[row.y]!.spans.find((span) => {
         column += span.width;
+
         return column > row.x + 1;
       });
+
       expect(span?.bg.toInts()).toEqual(uiTheme(app.renderer).styles["ui.selection"].bg!.toInts());
       app.mockInput.pressEnter();
       await app.render();
 
-      if (surface === "workspace") expect(app.selection.worktree?.id).toBe(`tree-${step}`);
-      else if (surface === "monitor") expect(app.selection.sessionId).toBe(`session-${step}`);
-      else
+      if (surface === "workspace") {
+        expect(app.selection.worktree?.id).toBe(`tree-${step}`);
+      } else if (surface === "monitor") {
+        expect(app.selection.sessionId).toBe(`session-${step}`);
+      } else {
         expect(app.opened).toEqual([surface === "history" ? `saved-${step}` : `candidate-${step}`]);
+      }
     } finally {
       await app.close();
     }
@@ -431,6 +479,7 @@ test.each(surfaces)(
     try {
       app.mockInput.pressTab();
       await app.render();
+
       const step = Math.max(1, Math.floor(app.list.viewport.height / 4));
 
       app.mockInput.pressKey("END");
@@ -440,12 +489,16 @@ test.each(surfaces)(
       await app.render();
 
       const index = count - 1 - step;
-      if (surface === "workspace") expect(app.selection.worktree?.id).toBe(`tree-${index}`);
-      else if (surface === "monitor") expect(app.selection.sessionId).toBe(`session-${index}`);
-      else
+      if (surface === "workspace") {
+        expect(app.selection.worktree?.id).toBe(`tree-${index}`);
+      } else if (surface === "monitor") {
+        expect(app.selection.sessionId).toBe(`session-${index}`);
+      } else {
         expect(app.opened).toEqual([
           surface === "history" ? `saved-${index}` : `candidate-${index}`,
         ]);
+      }
+
       expect(app.submitted).toEqual([]);
     } finally {
       await app.close();
@@ -465,9 +518,11 @@ test.each(surfaces.flatMap((surface) => (["d", "u"] as const).map((key) => ({ su
         app.mockInput.pressKey("n", { ctrl: true });
         await app.render();
       }
+
       app.mockInput.pressArrow("left");
       app.mockInput.pressArrow("left");
       await app.render();
+
       const cursor = app.input.cursorOffset;
       const step = Math.max(1, Math.floor(app.list.viewport.height / 4));
       const selected = 20 + (key === "d" ? step : -step);
@@ -482,12 +537,15 @@ test.each(surfaces.flatMap((surface) => (["d", "u"] as const).map((key) => ({ su
       expect(app.submitted).toEqual([]);
       app.mockInput.pressEnter();
       await app.render();
-      if (surface === "workspace") expect(app.selection.worktree?.id).toBe(`tree-${selected}`);
-      else if (surface === "monitor") expect(app.selection.sessionId).toBe(`session-${selected}`);
-      else
+      if (surface === "workspace") {
+        expect(app.selection.worktree?.id).toBe(`tree-${selected}`);
+      } else if (surface === "monitor") {
+        expect(app.selection.sessionId).toBe(`session-${selected}`);
+      } else {
         expect(app.opened).toEqual([
           surface === "history" ? `saved-${selected}` : `candidate-${selected}`,
         ]);
+      }
     } finally {
       await app.close();
     }
@@ -498,7 +556,10 @@ test("Empty workspace search Ctrl+D/U continues list jumps from the current cand
   // Empty queries still transfer focus without resetting current candidates.
   const app = await mount("workspace");
   try {
-    for (let index = 0; index < 6; index++) app.mockInput.pressKey("n", { ctrl: true });
+    for (let index = 0; index < 6; index++) {
+      app.mockInput.pressKey("n", { ctrl: true });
+    }
+
     await app.render();
 
     app.mockInput.pressKey("d", { ctrl: true });
@@ -539,16 +600,15 @@ test.each(surfaces)(
     const app = await mount(surface);
     try {
       await app.mockInput.typeText("candidate");
+
       const drafts = app.view.promptDrafts;
-      const modal = app.get(
-        surface === "workspace"
-          ? "workspace-picker"
-          : surface === "history"
-            ? "session-history"
-            : surface === "monitor"
-              ? "session-monitor"
-              : "model-picker",
-      );
+      const modalIds = {
+        workspace: "workspace-picker",
+        history: "session-history",
+        monitor: "session-monitor",
+        model: "model-picker",
+      };
+      const modal = app.get(modalIds[surface]);
 
       app.mockInput.pressCtrlC();
       await app.render();
@@ -577,6 +637,7 @@ test.each(surfaces)("%s search Ctrl+L never aliases query clearing", async (surf
   const app = await mount(surface);
   try {
     await app.mockInput.typeText("candidate");
+
     const cursor = app.input.cursorOffset;
 
     app.mockInput.pressKey("l", { ctrl: true });
@@ -596,8 +657,12 @@ test("Empty search Ctrl+C preserves selection without resetting candidates or sc
   // Empty queries need no global search-reset events.
   const app = await mount("workspace");
   try {
-    for (let index = 0; index < 6; index++) app.mockInput.pressKey("n", { ctrl: true });
+    for (let index = 0; index < 6; index++) {
+      app.mockInput.pressKey("n", { ctrl: true });
+    }
+
     await app.render();
+
     const top = app.list.scrollTop;
 
     app.mockInput.pressCtrlC();
@@ -623,14 +688,21 @@ test.each(["d", "u"] as const)(
     const app = await mount("workspace");
     const raw = (event: string) => {
       const parsed = parseKeypress(event, { useKittyKeyboard: true });
-      if (!parsed) throw new Error("Invalid Kitty key");
+      if (!parsed) {
+        throw new Error("Invalid Kitty key");
+      }
+
       app.renderer.keyInput.processParsedKey(parsed);
     };
     const code = key === "d" ? 100 : 117;
     try {
       await app.mockInput.typeText("candidate");
-      for (let index = 0; index < 15; index++) app.mockInput.pressKey("n", { ctrl: true });
+      for (let index = 0; index < 15; index++) {
+        app.mockInput.pressKey("n", { ctrl: true });
+      }
+
       await app.render();
+
       const step = Math.max(1, Math.floor(app.list.viewport.height / 4));
 
       raw(`\x1b[${code};5u`);
@@ -667,6 +739,7 @@ test("Compact History search jumps return from previews to result lists", async 
       app.mockInput.pressKey("n", { ctrl: true });
       await app.render();
     }
+
     const step = Math.max(1, Math.floor(app.list.viewport.height / 4));
     app.mockInput.pressKey("o", { ctrl: true });
     await app.render();
@@ -682,8 +755,10 @@ test("Compact History search jumps return from previews to result lists", async 
     expect(app.renderer.currentFocusedRenderable?.id).toBe(app.list.id);
     expect(app.get("history-preview-pane").visible).toBe(false);
     expect(app.input.value).toBe("candidate");
-    const selected = 10 + step,
-      row = app.get(`history:saved-${selected}`);
+
+    const selected = 10 + step;
+    const row = app.get(`history:saved-${selected}`);
+
     expect(row.y).toBeGreaterThanOrEqual(app.list.viewport.y);
     expect(row.y + row.height).toBeLessThanOrEqual(app.list.viewport.y + app.list.viewport.height);
     app.mockInput.pressEnter();
@@ -702,8 +777,9 @@ test.each(surfaces)(
     try {
       await app.mockInput.typeText("no-matching-candidate");
       await app.render();
-      const value = app.input.value,
-        cursor = app.input.cursorOffset;
+
+      const value = app.input.value;
+      const cursor = app.input.cursorOffset;
 
       app.mockInput.pressKey("d", { ctrl: true });
       app.mockInput.pressEnter();
@@ -728,9 +804,11 @@ test("History preview Ctrl+D/U scrolls only bodies without changing candidates",
     app.mockInput.pressKey("o", { ctrl: true });
     app.clock.advance(150);
     await app.render();
+
     const preview = app.get("history-preview") as ScrollBoxRenderable;
     preview.scrollTo(0);
     await app.render();
+
     const half = Math.max(1, Math.floor(preview.viewport.height / 2));
 
     app.mockInput.pressKey("d", { ctrl: true });
@@ -764,8 +842,9 @@ test("Detail-dialog Ctrl+D/U scrolls bodies by half a page", async () => {
     app.mockInput.pressKey("!");
     app.mockInput.pressEnter();
     await app.render();
-    const scroll = app.get("text-dialog-scroll") as ScrollBoxRenderable,
-      half = Math.floor(scroll.viewport.height / 2);
+
+    const scroll = app.get("text-dialog-scroll") as ScrollBoxRenderable;
+    const half = Math.floor(scroll.viewport.height / 2);
 
     app.mockInput.pressKey("d", { ctrl: true });
     await app.render();

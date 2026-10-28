@@ -7,14 +7,24 @@ export function filterWorkspaces(
   repositories: readonly Repository[],
   query: string,
 ): readonly Repository[] {
-  if (query === "") return repositories;
+  if (query === "") {
+    return repositories;
+  }
+
   const matches = createTextMatcher(query);
+
   return repositories.flatMap((repository) => {
-    if (matches(repository.name)) return [repository];
+    if (matches(repository.name)) {
+      return [repository];
+    }
+
     const worktrees = repository.worktrees.filter(
       (tree) => matches(tree.name) || (tree.branch !== null && matches(tree.branch)),
     );
-    if (worktrees.length === 0) return [];
+    if (worktrees.length === 0) {
+      return [];
+    }
+
     return [{ ...repository, worktrees }];
   });
 }

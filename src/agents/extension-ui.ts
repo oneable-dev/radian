@@ -20,6 +20,7 @@ import {
 
 const id = Type.String({ minLength: 1, maxLength: 4096 });
 const text = Type.String({ maxLength: 65536 });
+
 export const extensionDialogSchema = Type.Union([
   Type.Object({
     id,
@@ -30,13 +31,17 @@ export const extensionDialogSchema = Type.Union([
   Type.Object({ id, kind: Type.Literal("confirm"), title: text, message: text }),
   Type.Object({ id, kind: Type.Literal("input"), title: text, placeholder: Type.Optional(text) }),
 ]);
+
 export type ExtensionDialog = Static<typeof extensionDialogSchema>;
+
 export const extensionUiResponseSchema = Type.Union([
   Type.Object({ requestId: id, cancelled: Type.Literal(true) }, { additionalProperties: false }),
   Type.Object({ requestId: id, value: text }, { additionalProperties: false }),
   Type.Object({ requestId: id, confirmed: Type.Boolean() }, { additionalProperties: false }),
 ]);
+
 export type ExtensionUiResponse = Static<typeof extensionUiResponseSchema>;
+
 export const extensionUiStateSchema = Type.Object({
   dialog: Type.Optional(extensionDialogSchema),
   notifications: Type.Array(
@@ -50,15 +55,21 @@ export const extensionUiStateSchema = Type.Object({
   statuses: Type.Record(Type.String(), text),
   mcp: Type.Optional(mcpStatusSchema),
 });
+
 export type ExtensionUiState = Static<typeof extensionUiStateSchema>;
+
 export const sessionExtensionUiSchema = Type.Object({
   sessionId: id,
   conversationId: id,
   ...extensionUiStateSchema.properties,
 });
+
 export type SessionExtensionUi = Static<typeof sessionExtensionUiSchema>;
+
 type WithoutId<T> = T extends { id: string } ? Omit<T, "id"> : never;
+
 type DialogRequest = WithoutId<ExtensionDialog>;
+
 type Pending = { dialog: ExtensionDialog; finish(value?: string | boolean): void };
 
 // This state is live UI transport, never part of ExecutionState or a saved conversation.
@@ -81,19 +92,23 @@ export class ExtensionUiBridge {
   constructor(base: ExtensionUIContext, events?: EventBus) {
     this.unsubscribeMcp = events?.on(mcpStatusChannel, (value) => {
       const result = readMcpServers(value);
-      if (result.ok) this.mcp = summarizeMcpServers(result.value);
-      else {
+      if (result.ok) {
+        this.mcp = summarizeMcpServers(result.value);
+      } else {
         console.warn(`[radian:mcp] ${result.error.code}: ${result.error.message}`);
         this.mcp = undefined;
       }
+
       this.changed();
     });
     this.childDisplay = new PiSubagentDisplay(events, () => {
       const result = piSubagentsFromWidget(this.childWidget, this.childDisplay.lookup);
       if (!result.ok) {
         console.warn(`[radian:subagents] ${result.error.code}: ${result.error.message}`);
+
         return;
       }
+
       this.children = result.value;
       this.changed();
     });
@@ -111,7 +126,10 @@ export class ExtensionUiBridge {
       confirm: async (title, message, opts) =>
         (await this.request({ kind: "confirm", title, message }, opts)) === true,
       notify: (message, level = "info") => {
-        if (!this.active || this.disposed) return;
+        if (!this.active || this.disposed) {
+          return;
+        }
+
         this.notifications = [
           ...this.notifications.slice(-7),
           { id: crypto.randomUUID(), message: message.slice(0, 65536), level },
@@ -119,21 +137,34 @@ export class ExtensionUiBridge {
         this.changed();
       },
       setStatus: (key, value) => {
-        if (this.disposed) return;
+        if (this.disposed) {
+          return;
+        }
+
         const statusKey = key.slice(0, 4096);
-        if (value === undefined) this.statuses.delete(statusKey);
-        else if (this.statuses.has(statusKey) || this.statuses.size < 32)
+        if (value === undefined) {
+          this.statuses.delete(statusKey);
+        } else if (this.statuses.has(statusKey) || this.statuses.size < 32) {
           this.statuses.set(statusKey, value.slice(0, 65536));
+        }
+
         this.changed();
       },
       setWidget: (key, content) => {
-        if (this.disposed || key !== "subagent-async") return;
-        if (content !== undefined && !Array.isArray(content)) return;
+        if (this.disposed || key !== "subagent-async") {
+          return;
+        }
+        if (content !== undefined && !Array.isArray(content)) {
+          return;
+        }
+
         const result = piSubagentsFromWidget(content, this.childDisplay.lookup);
         if (!result.ok) {
           console.warn(`[radian:subagents] ${result.error.code}: ${result.error.message}`);
+
           return;
         }
+
         this.childWidget = content ? [...content] : undefined;
         this.children = result.value;
         this.childrenObservedAt = performance.now();
@@ -152,8 +183,10 @@ export class ExtensionUiBridge {
       },
     };
   }
+
   get subagents(): readonly Subagent[] {
     const elapsed = Math.max(0, performance.now() - this.childrenObservedAt);
+
     return this.children.map((child) =>
       child.status === "working" && child.runTiming
         ? {
@@ -163,8 +196,10 @@ export class ExtensionUiBridge {
         : child,
     );
   }
+
   get state(): ExtensionUiState {
     const dialog = this.pending.values().next().value?.dialog;
+
     return {
       ...(dialog ? { dialog } : {}),
       notifications: [...this.notifications],
@@ -172,29 +207,43 @@ export class ExtensionUiBridge {
       ...(this.mcp ? { mcp: { ...this.mcp } } : {}),
     };
   }
+
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
+
     return () => {
       this.listeners.delete(listener);
     };
   }
+
   onDialog(listener: () => void): () => void {
     this.dialogListeners.add(listener);
+
     return () => {
       this.dialogListeners.delete(listener);
     };
   }
+
   setActive(active: boolean): void {
     this.active = active && !this.disposed;
-    if (!this.active) this.clear();
+    if (!this.active) {
+      this.clear();
+    }
   }
+
   cancelDialogs(): void {
     const pending = [...this.pending.values()];
-    for (const dialog of pending) dialog.finish();
+    for (const dialog of pending) {
+      dialog.finish();
+    }
   }
+
   observeEvent(event: AgentSessionEvent): void {
-    if (!this.disposed) this.childDisplay.handleEvent(event);
+    if (!this.disposed) {
+      this.childDisplay.handleEvent(event);
+    }
   }
+
   reset(): void {
     this.mcp = undefined;
     this.children = [];
@@ -202,50 +251,66 @@ export class ExtensionUiBridge {
     this.childDisplay.reset();
     this.clear();
   }
+
   clear(): void {
     this.cancelDialogs();
     this.notifications = [];
     this.statuses.clear();
     this.changed();
   }
+
   answer(response: ExtensionUiResponse): Result<void, ExpectedError> {
     const pending = this.pending.get(response.requestId);
-    if (!pending)
+    if (!pending) {
       return err(
         new SessionError(
           "SESSION_CONFLICT",
           "This extension dialog is no longer pending. No answer was delivered.",
         ),
       );
+    }
     if ("cancelled" in response) {
       pending.finish();
+
       return ok(undefined);
     }
+
     const dialog = pending.dialog;
     if (dialog.kind === "confirm") {
-      if (!("confirmed" in response))
+      if (!("confirmed" in response)) {
         return err(new InputError("This extension dialog requires a confirmation."));
+      }
+
       pending.finish(response.confirmed);
+
       return ok(undefined);
     }
-    if (!("value" in response) || response.value.length > 65536)
+    if (!("value" in response) || response.value.length > 65536) {
       return err(
         new InputError("This extension dialog requires a text answer of at most 65536 characters."),
       );
-    if (dialog.kind === "select" && !dialog.options.includes(response.value))
+    }
+    if (dialog.kind === "select" && !dialog.options.includes(response.value)) {
       return err(new InputError("Choose one of the extension dialog's options."));
+    }
+
     pending.finish(response.value);
+
     return ok(undefined);
   }
+
   private request(
     request: DialogRequest,
     opts?: ExtensionUIDialogOptions,
   ): Promise<string | boolean | undefined> {
-    if (!this.active || this.disposed || opts?.signal?.aborted) return Promise.resolve(undefined);
-    if (this.pending.size >= 16)
+    if (!this.active || this.disposed || opts?.signal?.aborted) {
+      return Promise.resolve(undefined);
+    }
+    if (this.pending.size >= 16) {
       throw new CapabilityError(
         "Too many pending extension dialogs. Finish or cancel an existing dialog first.",
       );
+    }
     if (
       request.title.length > 65536 ||
       (request.kind === "select" &&
@@ -253,30 +318,46 @@ export class ExtensionUiBridge {
           request.options.some((option) => option.length > 65536))) ||
       (request.kind === "input" && (request.placeholder?.length ?? 0) > 65536) ||
       (request.kind === "confirm" && request.message.length > 65536)
-    )
+    ) {
       throw new CapabilityError("The extension dialog exceeds Radian's UI transport limits.");
+    }
+
     const dialog: ExtensionDialog = { ...request, id: crypto.randomUUID() };
     const result = Promise.withResolvers<string | boolean | undefined>();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (value?: string | boolean) => {
-      if (!this.pending.delete(dialog.id)) return;
-      if (timer) clearTimeout(timer);
+      if (!this.pending.delete(dialog.id)) {
+        return;
+      }
+      if (timer) {
+        clearTimeout(timer);
+      }
+
       opts?.signal?.removeEventListener("abort", cancel);
       result.resolve(value);
       this.changed();
     };
     const cancel = () => finish();
+
     this.pending.set(dialog.id, { dialog, finish });
     opts?.signal?.addEventListener("abort", cancel, { once: true });
     // Even callers omitting a timeout cannot leave an unattended prompt forever.
     timer = setTimeout(cancel, Math.max(0, Math.min(opts?.timeout ?? 600000, 600000)));
-    for (const listener of this.dialogListeners) listener();
+    for (const listener of this.dialogListeners) {
+      listener();
+    }
+
     this.changed();
+
     return result.promise;
   }
+
   private changed(): void {
-    for (const listener of this.listeners) listener();
+    for (const listener of this.listeners) {
+      listener();
+    }
   }
+
   dispose(): void {
     this.disposed = true;
     this.unsubscribeMcp?.();

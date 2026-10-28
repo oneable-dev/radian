@@ -8,31 +8,35 @@ import type { UsageResolver, UsageWindow } from "./model.ts";
 const windows = (usedPercent = 10, resetsAt = 604800000): UsageWindow[] => [
   { id: "period", usedPercent, periodMs: 604800000, resetsAt },
 ];
+
 async function settle() {
-  for (let i = 0; i < 70; i++) await Promise.resolve();
+  for (let i = 0; i < 70; i++) {
+    await Promise.resolve();
+  }
 }
 
 test("New sessions query without prompts and same-account agents share requests", async () => {
   const clock = new ManualClock();
   const gate = Promise.withResolvers<Result<readonly UsageWindow[], UsageError>>();
-  let calls = 0,
-    changes = 0;
+  let calls = 0;
+  let changes = 0;
   const resolver: UsageResolver = async () =>
     ok({
       provider: "acme",
       key: "shared-private-account",
       load: async () => {
         calls++;
+
         return gate.promise;
       },
     });
   const monitor = new UsageMonitor(resolver, clock);
   const a = monitor.watch(() => {
-      changes++;
-    }),
-    b = monitor.watch(() => {
-      changes++;
-    });
+    changes++;
+  });
+  const b = monitor.watch(() => {
+    changes++;
+  });
   try {
     expect(a.read("agent-one").status).toBe("loading");
     b.read("agent-two");
@@ -93,6 +97,7 @@ test("Polling runs only while attached and reconnection/completion respect cache
     subscription.dispose();
     await monitor.stop();
   }
+
   expect(clock.pendingTimerCount).toBe(0);
 });
 
@@ -170,13 +175,14 @@ test("Frequent agent updates never starve other providers' scheduled polling", a
         key: provider,
         load: async () => {
           calls[provider] = (calls[provider] ?? 0) + 1;
+
           return ok(windows());
         },
       }),
     clock,
   );
-  const busy = monitor.watch(() => {}),
-    quiet = monitor.watch(() => {});
+  const busy = monitor.watch(() => {});
+  const quiet = monitor.watch(() => {});
   try {
     busy.read("busy");
     quiet.read("quiet");
@@ -208,6 +214,7 @@ test("Lookup failures report typed state and honor rate-limit retry delays", asy
         key: "account",
         load: async () => {
           calls++;
+
           return calls === 1
             ? err(new UsageError("USAGE_RATE_LIMITED", "Limited", 120000))
             : ok(windows(42));
@@ -242,7 +249,10 @@ test("Unsupported providers never invent values and unexpected bugs log at host 
   const defect = new TypeError("fixture defect");
   const log = spyOn(console, "error").mockImplementation(() => {});
   const monitor = new UsageMonitor(async (provider) => {
-    if (provider === "broken") throw defect;
+    if (provider === "broken") {
+      throw defect;
+    }
+
     return ok(null);
   }, clock);
   const subscription = monitor.watch(() => {});
@@ -369,8 +379,8 @@ test("Late closed-session authentication never overwrites new same-provider sess
         : ok({ key: "new-account", provider: "acme", load: async () => ok(windows(80)) }),
     clock,
   );
-  const first = monitor.watch(() => {}),
-    next = monitor.watch(() => {});
+  const first = monitor.watch(() => {});
+  const next = monitor.watch(() => {});
   try {
     first.read("agent");
     await settle();
@@ -395,8 +405,10 @@ test("Closing before lookup starts prevents late authentication/network work", a
   let calls = 0;
   const monitor = new UsageMonitor(async () => {
     calls++;
+
     return ok(null);
   }, clock);
+
   monitor.watch(() => {}).read("agent");
 
   await monitor.stop();
@@ -408,8 +420,8 @@ test("Closing before lookup starts prevents late authentication/network work", a
 
 test("Closing aborts active queries and prevents late responses/timers from reviving state", async () => {
   const clock = new ManualClock();
-  let aborted = false,
-    changes = 0;
+  let aborted = false;
+  let changes = 0;
   const monitor = new UsageMonitor(
     async () =>
       ok({
@@ -432,9 +444,11 @@ test("Closing aborts active queries and prevents late responses/timers from revi
   const subscription = monitor.watch(() => {
     changes++;
   });
+
   subscription.read("agent");
   monitor.setActive(true);
   await settle();
+
   const before = changes;
 
   await monitor.stop();

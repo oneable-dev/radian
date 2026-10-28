@@ -175,13 +175,16 @@ const execution = Type.Object({
   pendingMessages: Type.Optional(Type.Array(requestSummarySchema)),
   runTiming: Type.Optional(runTiming),
 });
+
 export const workViewSchema = Type.Union([
   Type.Literal("agent"),
   Type.Literal("editor"),
   Type.Literal("git"),
   Type.Literal("terminal"),
 ]);
+
 export type WorkView = Static<typeof workViewSchema>;
+
 // Preserve the original three-view wire enum for existing clients/manifests.
 export const workViewsSchema = Type.Object({
   active: Type.Record(
@@ -190,6 +193,7 @@ export const workViewsSchema = Type.Object({
   ),
   agentScroll: Type.Record(Type.String(), Type.Integer({ minimum: 0 })),
 });
+
 export type WorkViewPreferences = {
   active: Record<string, WorkView>;
   agentScroll: Record<string, number>;
@@ -197,6 +201,7 @@ export type WorkViewPreferences = {
   gitViews?: Record<string, GitViewState>;
   agentViews?: Record<string, TranscriptViewState>;
 };
+
 export const ptyInfoSchema = Type.Object({
   id,
   worktreeId: id,
@@ -204,15 +209,21 @@ export const ptyInfoSchema = Type.Object({
   exited: Type.Boolean(),
   exitCode: Type.Union([Type.Integer(), Type.Null()]),
 });
+
 export type PtyInfo = Static<typeof ptyInfoSchema>;
+
 export const terminalInfoSchema = Type.Object({
   ...ptyInfoSchema.properties,
   title: Type.String(),
   shellPid: Type.Integer({ minimum: 2 }),
 });
+
 export type TerminalInfo = Static<typeof terminalInfoSchema>;
+
 export const editorInfoSchema = ptyInfoSchema;
+
 export type EditorInfo = PtyInfo;
+
 export const terminalLinkSchema = Type.Object({
   url: Type.String(),
   cells: Type.Array(
@@ -223,7 +234,9 @@ export const terminalLinkSchema = Type.Object({
     }),
   ),
 });
+
 export type TerminalLink = Static<typeof terminalLinkSchema>;
+
 export const ptyFrameSchema = Type.Object({
   ...ptyInfoSchema.properties,
   cols: Type.Integer({ minimum: 2, maximum: 500 }),
@@ -239,14 +252,20 @@ export const ptyFrameSchema = Type.Object({
     }),
   ),
 });
+
 export type PtyFrame = Static<typeof ptyFrameSchema>;
+
 export const terminalTextSchema = Type.Object({
   text: Type.String({ maxLength: maxFrameBytes / 2 }),
   cursor: Type.Object({ row: Type.Integer({ minimum: 0 }), column: Type.Integer({ minimum: 0 }) }),
 });
+
 export type TerminalText = Static<typeof terminalTextSchema>;
+
 export const editorFrameSchema = ptyFrameSchema;
+
 export type EditorFrame = PtyFrame;
+
 export const preferencesSchema = Type.Object({
   selection: Type.Object({
     worktreeId: Type.Union([id, Type.Null()]),
@@ -261,7 +280,9 @@ export const preferencesSchema = Type.Object({
     Type.Object({ active: Type.Array(id), selected: Type.Record(Type.String(), id) }),
   ),
 });
+
 export type RuntimePreferences = Static<typeof preferencesSchema>;
+
 export const emptyPreferences: RuntimePreferences = {
   selection: { worktreeId: null, sessions: {} },
   drafts: {},
@@ -292,10 +313,12 @@ export const snapshotSchema = Type.Object({
     }),
   ),
 });
+
 export type RuntimeSnapshot = Omit<Static<typeof snapshotSchema>, "repositories" | "details"> & {
   readonly repositories: readonly Repository[];
   readonly details: Readonly<Record<string, ExecutionState>>;
 };
+
 export const sessionRecordSchema = Type.Object({
   id,
   name: Type.String(),
@@ -318,10 +341,12 @@ export const manifestSchema = Type.Object({
   records: Type.Array(sessionRecordSchema),
   preferences: preferencesSchema,
 });
+
 export type RuntimeManifest = Omit<Static<typeof manifestSchema>, "repositories" | "records"> & {
   readonly repositories: readonly Repository[];
   readonly records: readonly SessionRecord[];
 };
+
 export const historySchema = Type.Array(
   Type.Object({
     id,
@@ -377,6 +402,7 @@ const inputBytes = Type.String({
   maxLength: 131072,
   pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
 });
+
 export const commandSchema = Type.Union([
   Type.Object({ type: Type.Literal("terminal-create"), worktreeId: id, ...size }),
   Type.Object({ type: Type.Literal("terminal-close"), terminalId: id }),
@@ -462,14 +488,18 @@ export const commandSchema = Type.Union([
     rows: Type.Integer({ minimum: 1, maximum: 200 }),
   }),
 ]);
+
 export type RuntimeCommand = Static<typeof commandSchema>;
+
 export const wireErrorSchema = Type.Object({
   // JSON enum and TypeScript union share one source; Type.Union(map()) loses tuple inference.
   code: Type.Unsafe<ErrorCode>({ type: "string", enum: [...errorCodes] }),
   message: Type.String(),
   outcome: Type.Union([Type.Literal("rejected"), Type.Literal("unknown")]),
 });
+
 export type WireError = { code: ErrorCode; message: string; outcome: "rejected" | "unknown" };
+
 export const replySchema = Type.Union([
   Type.Object({
     ok: Type.Literal(true),
@@ -478,12 +508,14 @@ export const replySchema = Type.Union([
   }),
   Type.Object({ ok: Type.Literal(false), error: Type.Union([Type.String(), wireErrorSchema]) }),
 ]);
+
 export function wireError(
   error: ExpectedError,
   outcome: WireError["outcome"] = error instanceof AgentRunError ? "unknown" : "rejected",
 ): WireError {
   return { code: error.code, message: error.message, outcome };
 }
+
 export function errorStatus(error: ExpectedError): number {
   switch (error.code) {
     case "INVALID_INPUT":
@@ -519,27 +551,40 @@ export function errorStatus(error: ExpectedError): number {
       return 500;
   }
 }
+
 export function parseCommand(text: string): Result<RuntimeCommand, InputError> {
   const parsed = parseJson(text, "command");
-  if (!parsed.ok) return parsed;
-  if (!Value.Check(commandSchema, parsed.value))
+  if (!parsed.ok) {
+    return parsed;
+  }
+  if (!Value.Check(commandSchema, parsed.value)) {
     return err(new InputError("Malformed runtime command."));
-  if (parsed.value.type === "prompt" && parsed.value.images?.some((path) => path.includes("\0")))
+  }
+  if (parsed.value.type === "prompt" && parsed.value.images?.some((path) => path.includes("\0"))) {
     return err(new InputError("Image paths must not contain NUL bytes."));
+  }
   if (parsed.value.type === "preferences" && parsed.value.preferences.inputDrafts) {
     for (const draft of Object.values(parsed.value.preferences.inputDrafts)) {
       const valid = validatePromptDraft(draft);
-      if (!valid.ok) return valid;
+      if (!valid.ok) {
+        return valid;
+      }
     }
   }
+
   return ok(parsed.value);
 }
+
 export function parseSnapshot(value: unknown): Result<RuntimeSnapshot, ProtocolError> {
-  if (!Value.Check(snapshotSchema, value))
+  if (!Value.Check(snapshotSchema, value)) {
     return err(new ProtocolError("Incompatible or malformed runtime snapshot."));
+  }
   for (const draft of Object.values(value.preferences.inputDrafts ?? {})) {
     const valid = validatePromptDraft(draft);
-    if (!valid.ok) return err(new ProtocolError(valid.error.message, { cause: valid.error }));
+    if (!valid.ok) {
+      return err(new ProtocolError(valid.error.message, { cause: valid.error }));
+    }
   }
+
   return ok(value);
 }

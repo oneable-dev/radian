@@ -11,8 +11,11 @@ export function snapshotEvents<T>(
     start(controller) {
       const send = () => {
         const data = encoder.encode(JSON.stringify(current()) + "\n");
-        if ((controller.desiredSize ?? 0) > 0) controller.enqueue(data);
-        else pending = data;
+        if ((controller.desiredSize ?? 0) > 0) {
+          controller.enqueue(data);
+        } else {
+          pending = data;
+        }
       };
       unsubscribe = subscribe(send);
       send();
@@ -27,11 +30,15 @@ export function snapshotEvents<T>(
       }
     },
     cancel() {
-      if (heartbeat) clearInterval(heartbeat);
+      if (heartbeat) {
+        clearInterval(heartbeat);
+      }
+
       unsubscribe?.();
       pending = undefined;
     },
   });
+
   return new Response(stream, {
     headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" },
   });

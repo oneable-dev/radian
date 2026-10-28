@@ -35,9 +35,9 @@ test.each(matchers)(
 
 test("Prefix matching rejects middle substrings and noncontiguous characters", () => {
   // Command discovery must use a contiguous prefix, not another search mode.
-  const prefix = createPrefixMatcher("rev"),
-    middle = createPrefixMatcher("view"),
-    fuzzy = createPrefixMatcher("rvc");
+  const prefix = createPrefixMatcher("rev");
+  const middle = createPrefixMatcher("view");
+  const fuzzy = createPrefixMatcher("rvc");
 
   const results = [
     prefix("Review-code"),
@@ -52,8 +52,8 @@ test("Prefix matching rejects middle substrings and noncontiguous characters", (
 
 test("Literal matching preserves path spaces instead of splitting AND conditions", () => {
   // Quoted paths can contain significant leading, trailing and internal spaces.
-  const prefix = createPrefixMatcher(" file "),
-    substring = createSubstringMatcher(" file ");
+  const prefix = createPrefixMatcher(" file ");
+  const substring = createSubstringMatcher(" file ");
 
   const results = [
     prefix(" file .ts"),

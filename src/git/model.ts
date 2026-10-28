@@ -8,8 +8,11 @@ export type GitCommit = {
   author: string;
   date: string;
 };
+
 export type GitRef = { kind: "local" | "remote" | "tag"; name: string; ref: string; oid: string };
+
 export type GitReflog = { oid: string; selector: string; subject: string; date: string };
+
 export type GitFile = {
   kind: "commit" | "staged" | "unstaged" | "untracked";
   status: string;
@@ -18,6 +21,7 @@ export type GitFile = {
   conflicted?: boolean;
   commit?: GitCommit;
 };
+
 export type GitSnapshot = {
   commits: GitCommit[];
   refs: GitRef[];
@@ -26,6 +30,7 @@ export type GitSnapshot = {
   head: string;
   headOid: string | null;
 };
+
 // Branch refs point directly at this commit. Tags remain snapshot tip refs.
 export type GitDetails = {
   commit: GitCommit;
@@ -33,12 +38,14 @@ export type GitDetails = {
   files: GitFile[];
   branches: GitRef[];
 };
+
 export type GitComparison = {
   before: string;
   after: string;
   beforeLabel: string;
   afterLabel: string;
 };
+
 export type GitSource = {
   load(
     reference: string | null,
@@ -70,6 +77,7 @@ export type GitViewState = {
   detailsScroll: number;
   diffScroll: number;
 };
+
 export const initialGitState = (): GitViewState => ({
   tab: "commits",
   right: "commit",

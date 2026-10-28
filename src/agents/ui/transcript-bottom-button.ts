@@ -16,7 +16,10 @@ export class TranscriptBottomButton extends BoxRenderable {
       zIndex: 1,
       visible: false,
       onMouseDown: (event) => {
-        if (event.button !== 0) return;
+        if (event.button !== 0) {
+          return;
+        }
+
         event.preventDefault();
         event.stopPropagation();
         activate();
@@ -37,15 +40,29 @@ export class TranscriptBottomButton extends BoxRenderable {
     space: { left: number; top: number; width: number } | null,
   ): void {
     const show = visible && space !== null && space.width >= 3;
-    if (this.visible !== show) this.visible = show;
-    if (!show || !space) return;
+    if (this.visible !== show) {
+      this.visible = show;
+    }
+    if (!show || !space) {
+      return;
+    }
+
     const caption = `↓ Back to bottom${hint ? ` · ${hint}` : ""}`;
-    const content = truncateCells(caption, space.width - 2),
-      width = Bun.stringWidth(content) + 2;
-    if (this.label.plainText !== content) this.label.content = content;
+    const content = truncateCells(caption, space.width - 2);
+    const width = Bun.stringWidth(content) + 2;
+    if (this.label.plainText !== content) {
+      this.label.content = content;
+    }
+
     const left = space.left + Math.floor((space.width - width) / 2);
-    if (this.width !== width) this.width = width;
-    if (this.left !== left) this.left = left;
-    if (this.top !== space.top) this.top = space.top;
+    if (this.width !== width) {
+      this.width = width;
+    }
+    if (this.left !== left) {
+      this.left = left;
+    }
+    if (this.top !== space.top) {
+      this.top = space.top;
+    }
   }
 }

@@ -7,10 +7,12 @@ import type { WorkspaceConfig } from "./config.ts";
 import type { Repository } from "./model.ts";
 
 export type DiscoveryWarning = { path: string; error: ExpectedError };
+
 export type WorkspaceDiscovery = {
   repositories: readonly Repository[];
   warnings: readonly DiscoveryWarning[];
 };
+
 const excludedDirectories = new Set([
   "node_modules",
   "vendor",
@@ -26,10 +28,12 @@ const maximumDirectories = 10000;
 export async function discoverWorkspace(
   config: WorkspaceConfig,
 ): Promise<Result<WorkspaceDiscovery, InputError>> {
-  if (!Number.isInteger(config.maxDepth) || config.maxDepth < 0 || config.maxDepth > 10)
+  if (!Number.isInteger(config.maxDepth) || config.maxDepth < 0 || config.maxDepth > 10) {
     return err(new InputError("Workspace maxDepth must be an integer from 0 to 10."));
-  const repositories = new Map<string, Repository>(),
-    warnings: DiscoveryWarning[] = [];
+  }
+
+  const repositories = new Map<string, Repository>();
+  const warnings: DiscoveryWarning[] = [];
   const visited = new Map<string, number>();
   const queue: { path: string; depth: number }[] = [];
   for (const root of config.roots) {
@@ -38,13 +42,16 @@ export async function discoverWorkspace(
       warnings.push({ path: root, error: canonical.error });
       continue;
     }
+
     queue.push({ path: canonical.value, depth: 0 });
   }
   // A breadth-first scan gives overlapping roots the largest remaining depth budget.
   for (let index = 0; index < queue.length; index++) {
     const current = queue[index]!;
     const remaining = config.maxDepth - current.depth;
-    if ((visited.get(current.path) ?? -1) >= remaining) continue;
+    if ((visited.get(current.path) ?? -1) >= remaining) {
+      continue;
+    }
     if (visited.size >= maximumDirectories) {
       warnings.push({
         path: current.path,
@@ -54,19 +61,28 @@ export async function discoverWorkspace(
       });
       break;
     }
+
     visited.set(current.path, remaining);
+
     const marker = await capture(() => lstat(join(current.path, ".git")));
     if (marker.ok) {
       const repository = await discoverRepository(current.path);
-      if (repository.ok) repositories.set(repository.value.id, repository.value);
-      else warnings.push({ path: current.path, error: repository.error });
+      if (repository.ok) {
+        repositories.set(repository.value.id, repository.value);
+      } else {
+        warnings.push({ path: current.path, error: repository.error });
+      }
+
       continue;
     }
     if (!(marker.error instanceof StorageError) || marker.error.systemCode !== "ENOENT") {
       warnings.push({ path: current.path, error: marker.error });
       continue;
     }
-    if (remaining === 0) continue;
+    if (remaining === 0) {
+      continue;
+    }
+
     const children = await capture(() => readdir(current.path, { withFileTypes: true }));
     if (!children.ok) {
       warnings.push({ path: current.path, error: children.error });
@@ -78,9 +94,11 @@ export async function discoverWorkspace(
         child.isDirectory() &&
         !child.name.startsWith(".") &&
         !excludedDirectories.has(child.name)
-      )
+      ) {
         queue.push({ path: join(current.path, child.name), depth: current.depth + 1 });
+      }
     }
   }
+
   return ok({ repositories: [...repositories.values()], warnings });
 }

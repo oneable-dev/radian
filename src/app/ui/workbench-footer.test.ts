@@ -36,17 +36,21 @@ async function mount(
     },
     onPrompt: (_id, text) => {
       calls.push(`prompt:${text}`);
+
       return ok(undefined);
     },
     getSessionDetails: () => ({ status, output: "Transcript", error: null }),
     onListHistory: async () => ok(await list()),
     onResumeSession: async (_tree, id) => {
       calls.push(`resume:${id}`);
+
       return ok("a1");
     },
     ...actions,
   });
+
   await app.renderOnce();
+
   return {
     ...app,
     selection,
@@ -66,7 +70,10 @@ async function mount(
     async visible(text: string) {
       const deadline = Date.now() + 3000;
       while (!app.captureCharFrame().includes(text)) {
-        if (Date.now() > deadline) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+        if (Date.now() > deadline) {
+          throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+        }
+
         await app.renderOnce();
       }
     },
@@ -107,6 +114,7 @@ test.each([120, 60])(
     const app = await mount(undefined, {
       onInterrupt: async () => {
         interruptions++;
+
         return ok(undefined);
       },
     });
@@ -126,6 +134,7 @@ test.each([120, 60])(
         expect(app.footerLine()).toContain("<F1>");
         expect(app.view.promptDrafts.a1).toBe("first\nsecond");
       }
+
       app.mockInput.pressEscape();
       await app.renderOnce();
       expect(interruptions).toBe(1);
@@ -270,10 +279,11 @@ test("Prompts and status align to the work-area left without sidebar space", asy
     ] as const) {
       app.resize(width, height);
       await app.renderOnce();
-      const composer = app.renderer.root.findDescendantById("agent-composer")!,
-        prompt = app.renderer.root.findDescendantById("session-prompt")!;
-      const panel = app.renderer.root.findDescendantById("work-panel")!,
-        status = app.renderer.root.findDescendantById("session-status")!;
+
+      const composer = app.renderer.root.findDescendantById("agent-composer")!;
+      const prompt = app.renderer.root.findDescendantById("session-prompt")!;
+      const panel = app.renderer.root.findDescendantById("work-panel")!;
+      const status = app.renderer.root.findDescendantById("session-status")!;
 
       expect(panel.x).toBe(0);
       expect(panel.width).toBe(width);
@@ -339,15 +349,18 @@ test("Short terminals keep Agent status/input clear of single-row footers", asyn
     // Resizing while typing must preserve the active draft and fit every control above the footer.
     app.resize(60, 12);
     await app.renderOnce();
+
     const composer = app.renderer.root.findDescendantById("agent-composer")!;
     const prompt = app.renderer.root.findDescendantById("session-prompt")!;
     const footer = app.renderer.root.findDescendantById("footer-bar")!;
 
     expect(composer.height).toBe(3);
+
     const status = app.renderer.root.findDescendantById("session-status")!;
     expect(composer.y + composer.height).toBe(status.y);
     expect(status.height).toBe(3);
     expect(status.y + status.height).toBeLessThanOrEqual(footer.y);
+
     const row = status.getChildren()[0]!;
     expect(app.captureCharFrame().split("\n")[row.y]).toContain("context");
     expect(app.captureCharFrame().split("\n")[row.y]).toContain("usage");

@@ -28,11 +28,15 @@ test("Real temporary linked worktrees discover their common repository", async (
   const directory = await mkdtemp(join(tmpdir(), "radian-git-test-"));
   const main = join(directory, "main repository");
   const linked = join(directory, "linked tree");
+
   async function git(args: string[]): Promise<void> {
     const process = Bun.spawn(["git", ...args], { stdout: "pipe", stderr: "pipe" });
     const error = await new Response(process.stderr).text();
-    if ((await process.exited) !== 0) throw new Error(error);
+    if ((await process.exited) !== 0) {
+      throw new Error(error);
+    }
   }
+
   try {
     await git(["init", "--initial-branch=main", main]);
     await git([

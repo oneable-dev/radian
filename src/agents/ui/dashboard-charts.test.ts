@@ -7,8 +7,8 @@ test("Inactive graphs retain zero values and dates without drawing fabricated ac
   const snapshot = emptyDashboard(7, new Date(2026, 2, 22, 12).getTime());
 
   // Render daily graphs and empty rankings as screen text.
-  const trend = dashboardTrend(snapshot.daily, "tokens", 80).join("\n"),
-    bars = dashboardBars([], 80);
+  const trend = dashboardTrend(snapshot.daily, "tokens", 80).join("\n");
+  const bars = dashboardBars([], 80);
 
   // Never produce invalid ratios or fake activity.
   expect(trend).toContain("0");
@@ -27,6 +27,7 @@ test.each([20, 40, 80, 112])(
       { name: "review-code", value: 200 },
     ];
     const snapshot = emptyDashboard(30);
+
     snapshot.daily[0]!.tokens = 123456;
 
     // Compact long rankings and 30-day trends in narrow layouts.
@@ -36,19 +37,22 @@ test.each([20, 40, 80, 112])(
     ];
 
     // Boundaries must neither split graphemes nor overflow.
-    for (const line of lines) expect(Bun.stringWidth(line)).toBeLessThanOrEqual(width);
+    for (const line of lines) {
+      expect(Bun.stringWidth(line)).toBeLessThanOrEqual(width);
+    }
+
     expect(lines.join("\n")).not.toContain("NaN");
   },
 );
 
 test("Run durations and tokens display distinct units", () => {
   // Displaying milliseconds like tokens would change the metric's meaning.
-  const durationMs = 3661000,
-    tokens = 123456;
+  const durationMs = 3661000;
+  const tokens = 123456;
 
   // Convert metrics independently at the shared summary-format boundary.
-  const time = dashboardValue(durationMs, "durationMs"),
-    consumption = dashboardValue(tokens);
+  const time = dashboardValue(durationMs, "durationMs");
+  const consumption = dashboardValue(tokens);
 
   // Durations use hours/minutes; tokens retain exact counts.
   expect(time).toBe("1h 1m");

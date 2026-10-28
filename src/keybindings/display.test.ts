@@ -70,8 +70,8 @@ test.each([
     const map = expectOk(parseKeymap({ leader, bindings: { "button.activate": [] } }));
 
     // Verify public lookup paths used by footers and help.
-    const hint = map.hint("tab.new", "terminal"),
-      hints = map.hints("app.detach", "terminal");
+    const hint = map.hint("tab.new", "terminal");
+    const hints = map.hints("app.detach", "terminal");
     const help = keymapHelp(map, "terminal", () => true);
 
     // Leader overrides change physical-key explanations, not logical command hints.
@@ -98,8 +98,8 @@ test("Explicit physical leader-like bindings never display as logical leaders", 
   );
 
   // Hints preserve original binding semantics rather than expanded keys.
-  const literal = map.hint("app.detach", "terminal"),
-    symbolic = map.hint("view.editor", "terminal");
+  const literal = map.hint("app.detach", "terminal");
+  const symbolic = map.hint("view.editor", "terminal");
 
   // Later leader changes must not reinterpret fixed bindings as leader commands.
   expect(literal).toBe("<C-Space>q");

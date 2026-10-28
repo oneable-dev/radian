@@ -65,6 +65,7 @@ test("Monochrome postprocessing preserves characters, default-color intent, and 
   const buffer = OptimizedBuffer.create(3, 1, "unicode", { owner: app.renderer.nativeScene! });
   try {
     buffer.drawText("ABC", 0, 0, RGBA.fromHex("#FF0000"), colors.selected, TextAttributes.BOLD);
+
     const before = Buffer.from(buffer.getRealCharBytes()).toString();
     monochromeFrame(buffer, colors);
 
@@ -74,6 +75,7 @@ test("Monochrome postprocessing preserves characters, default-color intent, and 
         expect(RGBA.fromArray(fg.subarray(offset, offset + 4)).intent).toBe("default");
         expect(RGBA.fromArray(bg.subarray(offset, offset + 4)).intent).toBe("default");
       }
+
       expect(attributes[0]! & TextAttributes.BOLD).not.toBe(0);
       expect(attributes[0]! & TextAttributes.INVERSE).not.toBe(0);
     });

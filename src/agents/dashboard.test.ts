@@ -49,7 +49,10 @@ test("Period token totals include cache but never double-count reasoning or cont
   ];
 
   // Aggregate the three recorded categories of model usage.
-  for (const value of entries) expectOk(accumulator.add(value));
+  for (const value of entries) {
+    expectOk(accumulator.add(value));
+  }
+
   const result = accumulator.finish();
 
   // Count each component once for a total of 210 tokens.
@@ -64,7 +67,7 @@ test("Period token totals include cache but never double-count reasoning or cont
 test("Runs aggregate by completion time and retain actual counts and duration for errors and interruptions", () => {
   // Prepare completion metadata so prompts and tool calls cannot inflate run counts.
   const accumulator = new DashboardAccumulator(1, "/repo", now);
-  for (const [index, outcome] of ["complete", "error", "cancelled"].entries())
+  for (const [index, outcome] of ["complete", "error", "cancelled"].entries()) {
     expectOk(
       accumulator.add(
         entry(`run-${index}`, {
@@ -74,6 +77,7 @@ test("Runs aggregate by completion time and retain actual counts and duration fo
         }),
       ),
     );
+  }
 
   // Aggregate different outcomes on the same date.
   const result = accumulator.finish();
@@ -135,7 +139,10 @@ test("Explicit skill calls and successful reads aggregate while failed and ordin
   ];
 
   // Group both invocation paths under the same skill name.
-  for (const value of entries) expectOk(accumulator.add(value));
+  for (const value of entries) {
+    expectOk(accumulator.add(value));
+  }
+
   const result = accumulator.finish();
 
   // Expose totals without distinguishing invocation sources.
@@ -177,7 +184,10 @@ test("MCP gateway calls do not double-count nested calls and subagent management
   ];
 
   // Record two nested tool calls and one direct call.
-  for (const value of entries) expectOk(accumulator.add(value));
+  for (const value of entries) {
+    expectOk(accumulator.add(value));
+  }
+
   const result = accumulator.finish();
 
   // Server calls are distinct from tokens; management queries are not runs.
@@ -195,11 +205,13 @@ test("Forked common history counts once while new entries add usage", () => {
   // SDK forks copy historical entry IDs and timestamps unchanged.
   const original = new DashboardAccumulator(7, "/repo", now);
   expectOk(original.add(assistant("shared")));
+
   const fork = new DashboardAccumulator(7, "/repo", now, original.identities);
 
   // Forks retain context but only new responses increase token usage.
   expectOk(fork.add(assistant("shared")));
   expectOk(fork.add(assistant("new")));
+
   const result = mergeDashboards([original.finish(), fork.finish()], 7, now);
 
   // Context copying is not new model consumption.
@@ -211,6 +223,7 @@ test("Exclude out-of-range and future records while retaining inactive dates in 
   // Prepare records before today's midnight and after the current time.
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
+
   const accumulator = new DashboardAccumulator(1, "/repo", now);
   const fields = { role: "assistant", provider: "test", model: "large", usage, content: [] };
 
@@ -258,7 +271,10 @@ test("Saved workflow children aggregate by actual agent and warn about missing m
   ];
 
   // Count only observed child runs and deduplicate run IDs.
-  for (const value of entries) expectOk(accumulator.add(value));
+  for (const value of entries) {
+    expectOk(accumulator.add(value));
+  }
+
   const result = accumulator.finish();
 
   // Distinguish missing data from observed zero usage.
@@ -282,6 +298,7 @@ test("Nested model usage stays unattributed instead of inheriting the parent mod
       message("nested-usage", { role: "toolResult", toolCallId: "nested", usage, content: [] }),
     ),
   );
+
   const result = accumulator.finish();
 
   // Preserve totals without guessing model attribution.

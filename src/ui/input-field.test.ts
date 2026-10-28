@@ -20,8 +20,10 @@ test.each(["search", "prompt"] as const)(
             () => {},
           );
     const other = new BoxRenderable(app.renderer, { height: 1, focusable: true });
+
     app.renderer.root.add(input.field);
     app.renderer.root.add(other);
+
     const render = async () => {
       await app.renderOnce();
       await app.renderOnce();
@@ -48,7 +50,10 @@ test.each(["search", "prompt"] as const)(
       expect(input.value).toBe("ab!cdef");
       expect(app.renderer.currentFocusedRenderable).toBe(input);
     } finally {
-      if (input instanceof PromptInput) input.dispose();
+      if (input instanceof PromptInput) {
+        input.dispose();
+      }
+
       await app.dispose();
     }
   },
@@ -62,7 +67,9 @@ test("Shared prompts size from content/space while retaining source/caret throug
     () => {},
     () => {},
   );
+
   app.renderer.root.add(input.field);
+
   const render = async () => {
     await app.renderOnce();
     await app.renderOnce();
@@ -71,6 +78,7 @@ test("Shared prompts size from content/space while retaining source/caret throug
     const value = "한글🙂 word ".repeat(100);
     input.value = value;
     input.cursorOffset = input.editBuffer.measureText("한글🙂");
+
     const cursor = input.cursorOffset;
 
     await render();
@@ -109,6 +117,7 @@ test("Empty prompts show only placeholders without borders or drafts across focu
     () => {},
     () => {},
   );
+
   input.field.marginX = -2;
   owner.add(input.field);
   app.renderer.root.add(owner);
@@ -121,15 +130,21 @@ test("Empty prompts show only placeholders without borders or drafts across focu
     ] as const) {
       app.resize(width, 8);
       for (const focused of [false, true]) {
-        if (focused) input.focus();
-        else input.blur();
+        if (focused) {
+          input.focus();
+        } else {
+          input.blur();
+        }
+
         await app.renderOnce();
         await app.renderOnce();
 
         const frame = app.captureCharFrame().split("\n");
         expect(frame[input.y]).toContain("Ask to do anything");
-        for (const y of [input.field.y, input.field.y + input.field.height - 1])
+        for (const y of [input.field.y, input.field.y + input.field.height - 1]) {
           expect(frame[y]!.trim()).toBe("");
+        }
+
         expect(input.field.x).toBe(0);
         expect(input.field.width).toBe(width);
         expect(input.x).toBe(inset);
@@ -137,6 +152,7 @@ test("Empty prompts show only placeholders without borders or drafts across focu
         expect(input.submission.text).toBe("");
       }
     }
+
     // The placeholder disappears as soon as real input exists, without changing its caret or rows.
     await app.mockInput.typeText("real draft");
     await app.renderOnce();
@@ -152,13 +168,14 @@ test("Empty prompts show only placeholders without borders or drafts across focu
 
 test("Borderless inputs keep paste spinners visible in right padding", async () => {
   // Clipboard feedback retains its dedicated gutter independently of work-status effects.
-  const clock = new ManualClock(),
-    app = await createTestRenderer({ width: 40, height: 5, clock });
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width: 40, height: 5, clock });
   const input = new PromptInput(
     app.renderer,
     () => {},
     () => {},
   );
+
   app.renderer.root.add(input.field);
   try {
     input.focus();
@@ -185,6 +202,7 @@ test.each([1, 2])("Only %i rows still preserve input text and caret", async (hei
     () => {},
     () => {},
   );
+
   app.renderer.root.add(input.field);
   try {
     input.value = "visible draft";
@@ -207,8 +225,8 @@ test.each([1, 2])("Only %i rows still preserve input text and caret", async (hei
 
 test("Hiding shared Prompt parents cleans clipboard reads/loading timers and discards late results", async () => {
   // A hidden input must not accept a late clipboard result from its previous screen.
-  const clock = new ManualClock(),
-    app = await createTestRenderer({ width: 80, height: 12, clock });
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width: 80, height: 12, clock });
   const pending = Promise.withResolvers<Result<ClipboardRepresentation, ExpectedError>>();
   let signal: AbortSignal | undefined;
   const input = new PromptInput(
@@ -219,6 +237,7 @@ test("Hiding shared Prompt parents cleans clipboard reads/loading timers and dis
       clipboard: {
         read: (current) => {
           signal = current;
+
           return pending.promise;
         },
         dispose: async () => {},
@@ -226,6 +245,7 @@ test("Hiding shared Prompt parents cleans clipboard reads/loading timers and dis
     },
   );
   const owner = new BoxRenderable(app.renderer, { width: "100%", height: 8 });
+
   owner.add(input.field);
   app.renderer.root.add(owner);
   try {

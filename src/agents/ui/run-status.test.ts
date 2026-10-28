@@ -29,17 +29,21 @@ const settled = (
   status: "complete",
   completion: { startedAt: 1800000000000, completedAt: 1800000001000, durationMs: 1000, outcome },
 });
+
 async function mount(width = 70, interruptKey?: () => string) {
-  const clock = new ManualClock(),
-    app = await createTestRenderer({ width, height: 4, kittyKeyboard: true, clock });
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width, height: 4, kittyKeyboard: true, clock });
   const status = new RunStatus(app.renderer, interruptKey);
+
   app.renderer.root.add(status.root);
+
   const render = async () => {
     await app.renderOnce();
     await app.renderOnce();
   };
   const node = () => app.renderer.root.findDescendantById("agent-run-status-text")!;
   const captionNode = () => app.renderer.root.findDescendantById("agent-run-request")!;
+
   return {
     ...app,
     clock,
@@ -76,6 +80,7 @@ test("Working shows the actual latest request below it, never tool output or ans
         status: "running",
       },
     ]);
+
     app.status.update("a", state, true);
     await app.render();
     expect(app.text()).toBe("Working (0s · <Esc> to interrupt)");
@@ -115,12 +120,13 @@ test.each(["<C-x>", "<S-Tab>"])(
 
 test("Compaction shows dedicated wording and animated spinners, restoring requests when work resumes", async () => {
   // Automatic compaction neither finishes the active run nor creates a new request.
-  const app = await mount(),
-    state = working([user("Previous delivered request")]);
+  const app = await mount();
+  const state = working([user("Previous delivered request")]);
   try {
     const compacting = { ...state, activity: "compacting" as const };
     app.status.update("a", compacting, true);
     await app.render();
+
     const first = app.captureCharFrame();
     expect(first).toContain("○ Compacting context");
     expect(app.spinner().width).toBe(1);
@@ -166,8 +172,10 @@ test("Compaction overrides Fast arrows and shimmer, then restores them when exec
   try {
     app.status.update("a", state, true);
     await app.render();
-    const timers = app.clock.pendingTimerCount,
-      textX = app.node().x;
+
+    const timers = app.clock.pendingTimerCount;
+    const textX = app.node().x;
+
     expect(app.captureCharFrame()).toContain("▶▷▷ Working");
 
     // Automatic compaction changes presentation without starting another operation or shimmer timer.
@@ -198,8 +206,8 @@ test("Compaction overrides Fast arrows and shimmer, then restores them when exec
 
 test("Fast compaction completion finishes only the spinner minimum without redisplaying old requests", async () => {
   // Show compaction results immediately without a disappearing spinner flash.
-  const app = await mount(),
-    state = { ...working([user("Previous request")]), activity: "compacting" as const };
+  const app = await mount();
+  const state = { ...working([user("Previous request")]), activity: "compacting" as const };
   try {
     app.status.update("a", state, true);
     await app.render();
@@ -240,10 +248,11 @@ test("Working requests truncate to one line after reserving attachment badges", 
 
 test("Working shows input and actual image/file counts without internal image guidance", async () => {
   // Verify the status display using sections from real SDK messages.
-  const app = await mount(120),
-    transcript = new SessionTranscript([]);
+  const app = await mount(120);
+  const transcript = new SessionTranscript([]);
   const text =
     'Review both images [Image #1] [Image #2] @"/tmp/a.ts" @"/tmp/b.ts"\n\n[Image: original 3000x4000, displayed at 1500x2000. Multiply coordinates by 2.00 to map to original image.]';
+
   transcript.handle({
     type: "message_end",
     message: {
@@ -303,6 +312,7 @@ test("Repeated snapshots never restart minimum spinner time or invent normal com
     const state = working([user("Short job")]);
     app.status.update("a", state, true);
     await app.render();
+
     const first = app.captureCharFrame();
     app.clock.advance(80);
     await app.render();
@@ -344,7 +354,9 @@ test.each(["cancelled", "unfinished", "error"] as const)(
       expect(app.spinner().visible).toBe(false);
       expect(app.node().x).toBe(app.status.root.x);
       expect(app.node().width).toBe(app.status.root.width);
-      if (outcome === "cancelled") expect(app.text()).toBe("Cancelled (1s) “Task”");
+      if (outcome === "cancelled") {
+        expect(app.text()).toBe("Cancelled (1s) “Task”");
+      }
     } finally {
       await app.close();
     }
@@ -355,8 +367,8 @@ test.each([false, true])(
   "Theme brightness %s keeps cancellation gray and unfinished/failure states in error colors",
   async (light) => {
     // Semantic palette roles must keep intentional cancellation neutral without changing time or request colors.
-    const app = await mount(),
-      theme = uiTheme(app.renderer);
+    const app = await mount();
+    const theme = uiTheme(app.renderer);
     try {
       theme.configure({
         palette: [],
@@ -389,10 +401,12 @@ test.each([false, true])(
         expect(spans.find((span) => span.text.includes(label))!.fg.toInts()).toEqual(
           theme.colors[color].toInts(),
         );
-        if (outcome === "cancelled")
+        if (outcome === "cancelled") {
           expect(spans.find((span) => span.text.includes("(1s)"))!.fg.toInts()).toEqual(
             theme.colors.muted.toInts(),
           );
+        }
+
         expect(spans.find((span) => span.text.includes("Task"))!.fg.toInts()).toEqual(
           theme.colors.text.toInts(),
         );
@@ -452,6 +466,7 @@ test("Cancellation, interruption, and failure differ from completion and never r
       expect(app.text()).toBe(label ? `${label} “Task”` : "");
       expect(app.spinner().visible).toBe(false);
     }
+
     app.status.update(
       "a",
       {
@@ -633,8 +648,8 @@ test.each([70, 28])(
   "Elapsed time stays gray at width %i while Working and request colors remain intact",
   async (width) => {
     // Both full interrupt hints and compact labels keep elapsed time visually secondary.
-    const app = await mount(width),
-      theme = uiTheme(app.renderer);
+    const app = await mount(width);
+    const theme = uiTheme(app.renderer);
     try {
       app.status.update("a", working([user("Task")]), true);
       for (const [advance, elapsed] of [
@@ -667,6 +682,7 @@ test.each([70, 28])(
           expect(spans.find((span) => span.text.includes("Working"))!.fg.toInts()).toEqual(
             theme.colors.accent.toInts(),
           );
+
           const caption = app.captureSpans().lines[app.captionNode().y]!.spans;
           expect(caption.find((span) => span.text.includes("Task"))!.fg.toInts()).toEqual(
             theme.colors.muted.toInts(),
@@ -695,10 +711,12 @@ test("Only Fast shows yellow arrows and Working shimmer; time and requests stay 
   };
   const colorAt = (offset: number) => {
     let column = 0;
+
     return app
       .captureSpans()
       .lines[app.node().y]!.spans.find((span) => {
         column += span.width;
+
         return column > app.node().x + offset;
       })!
       .fg.toInts();
@@ -706,9 +724,11 @@ test("Only Fast shows yellow arrows and Working shimmer; time and requests stay 
   try {
     app.status.update("a", state, true);
     await app.render();
-    const base = uiTheme(app.renderer).colors.number.toInts(),
-      geometry = [app.node().x, app.node().y, app.captionNode().x, app.status.root.height];
+
+    const base = uiTheme(app.renderer).colors.number.toInts();
+    const geometry = [app.node().x, app.node().y, app.captionNode().x, app.status.root.height];
     const caption = app.caption();
+
     expect(app.node().x).toBe(app.status.root.x + 4);
     expect(app.captionNode().x).toBe(app.spinner().x);
     expect(app.captureCharFrame()).toContain("▶▷▷ Working");
@@ -717,6 +737,7 @@ test("Only Fast shows yellow arrows and Working shimmer; time and requests stay 
     // Only the word Working is swept; elapsed time, interrupt hint and request remain fixed.
     app.clock.advance(100);
     await app.render();
+
     const first = colorAt(0);
 
     expect(first).not.toEqual(base);
@@ -733,6 +754,7 @@ test("Only Fast shows yellow arrows and Working shimmer; time and requests stay 
     app.clock.advance(1150);
     await app.render();
     expect(colorAt(0)).toEqual(first);
+
     const timers = app.clock.pendingTimerCount;
     app.status.update("a", { ...state, telemetry: { ...state.telemetry, fast: false } }, true);
     await app.render();
@@ -793,6 +815,7 @@ test("Hiding Fast screens, switching sessions, and disposal clean shimmer and sp
   try {
     app.status.update("a", state, true);
     await app.render();
+
     const timers = app.clock.pendingTimerCount;
     app.clock.advance(120);
     app.status.update("a", state, true);
@@ -834,9 +857,11 @@ test("Theme switching updates working and failure colors without fixed product c
         highlightBackground: null,
       };
       const theme = uiTheme(app.renderer);
+
       theme.configure(palette);
       app.status.update("a", working([user("Theme request")]), true);
       await app.render();
+
       const spans = () => app.captureSpans().lines[0]!.spans;
       expect(
         spans()

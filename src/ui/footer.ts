@@ -16,6 +16,7 @@ export type FooterShortcut = {
   readonly label: string;
   readonly disabled?: boolean;
 };
+
 type Scope = { name: string; branch: string | null };
 
 // One stable row: view badge and plain workspace context on the left, contextual hints on the right.
@@ -53,6 +54,7 @@ export class Footer {
       alignItems: "center",
       onSizeChange: () => this.render(),
     });
+
     const text = (id: string) =>
       new TextRenderable(renderer, {
         id,
@@ -74,50 +76,63 @@ export class Footer {
       actions.help.id = "footer-help";
       this.bar.add(actions.help);
     }
+
     this.root.add(this.bar);
     renderer.on("resize", this.render);
     this.root.once(RenderableEvents.DESTROYED, () => renderer.off("resize", this.render));
     this.theme.bindStyles(this.root, () => this.render());
   }
+
   get focusTargets(): Button[] {
     return this.actions ? [this.actions.help] : [];
   }
+
   setHelpHint(hint: string): void {
     if (hint !== this.helpHint) {
       this.helpHint = hint;
       this.render();
     }
   }
+
   setView(text: string): void {
     if (text !== this.viewText) {
       this.viewText = text;
       this.render();
     }
   }
+
   setContext(text: string): void {
     if (text !== this.contextText) {
       this.contextText = text;
       this.render();
     }
   }
+
   setWorkspace(scope: Scope | null): void {
     this.scope = scope;
     this.render();
   }
+
   setShortcuts(shortcuts: readonly FooterShortcut[]): void {
     this.shortcuts = shortcuts;
     this.render();
   }
+
   private render = (): void => {
-    if (this.root.isDestroyed) return;
-    const width = Math.max(0, this.bar.width),
-      styles = this.theme.styles;
+    if (this.root.isDestroyed) {
+      return;
+    }
+
+    const width = Math.max(0, this.bar.width);
+    const styles = this.theme.styles;
     const view = ` ${singleLine(this.viewText).toUpperCase()} `;
     const identityWidth = Math.min(width, Bun.stringWidth(view));
+
     this.identity.width = identityWidth;
     this.identity.content = truncateCells(view, identityWidth);
     paintText(this.identity, styles["footer.mode"]);
     this.bar.backgroundColor = styles["footer.identity"].bg;
+
     const helpLabel =
       width < 80
         ? /^<F\d+>$/u.test(this.helpHint)
@@ -134,24 +149,28 @@ export class Footer {
       this.actions.help.visible = helpWidth > 0;
       this.actions.help.width = helpWidth;
     }
+
     let remaining = Math.max(0, width - identityWidth - helpWidth);
     const scopeWidth = this.scope ? Math.min(remaining, Math.floor(width * 0.5)) : 0;
-    const worktreePrefix = ` ${icons.folder} `,
-      separator = " · ",
-      branchPrefix = `${icons.branch} `,
-      suffix = " ";
-    const overhead = Bun.stringWidth(worktreePrefix + separator + branchPrefix + suffix),
-      budget = scopeWidth - overhead;
+    const worktreePrefix = ` ${icons.folder} `;
+    const separator = " · ";
+    const branchPrefix = `${icons.branch} `;
+    const suffix = " ";
+    const overhead = Bun.stringWidth(worktreePrefix + separator + branchPrefix + suffix);
+    const budget = scopeWidth - overhead;
+
     this.workspace.visible = !!this.scope && budget >= 2;
+
     let workspaceWidth = 0;
     if (this.scope && this.workspace.visible) {
-      const name = singleLine(this.scope.name),
-        branch = singleLine(this.scope.branch ?? "detached HEAD");
+      const name = singleLine(this.scope.name);
+      const branch = singleLine(this.scope.branch ?? "detached HEAD");
       const branchBudget = Math.min(Bun.stringWidth(branch), Math.ceil(budget / 2));
-      const worktree = truncateCells(name, budget - branchBudget),
-        ref = truncateCells(branch, budget - Bun.stringWidth(worktree));
-      const left = worktreePrefix + worktree,
-        right = branchPrefix + ref + suffix;
+      const worktree = truncateCells(name, budget - branchBudget);
+      const ref = truncateCells(branch, budget - Bun.stringWidth(worktree));
+      const left = worktreePrefix + worktree;
+      const right = branchPrefix + ref + suffix;
+
       workspaceWidth = Bun.stringWidth(left + separator + right);
       this.workspace.content = new StyledText([
         styleChunk(left, styles["footer.worktree"]),
@@ -159,35 +178,45 @@ export class Footer {
         styleChunk(right, styles["footer.branch"]),
       ]);
     }
+
     this.workspace.width = workspaceWidth;
     remaining -= workspaceWidth;
-    const context = singleLine(this.contextText),
-      contextWidth = Math.min(
-        Math.max(0, remaining - 2),
-        context ? Bun.stringWidth(context) + 2 : 0,
-      );
+
+    const context = singleLine(this.contextText);
+    const contextWidth = Math.min(
+      Math.max(0, remaining - 2),
+      context ? Bun.stringWidth(context) + 2 : 0,
+    );
+
     this.context.width = contextWidth;
     this.context.visible = contextWidth > 0;
     this.context.content = truncateCells(` ${context} `, contextWidth);
     paintText(this.context, styles["footer.accent"]);
+
     const available = Math.max(0, remaining - contextWidth);
     this.hints.width = available;
     this.hints.visible = available > 0;
+
     const chunks = [];
     let used = 0;
     for (const { key, label, disabled } of this.shortcuts) {
-      const text = `${key} ${label}`,
-        size = Bun.stringWidth(text) + 2;
+      const text = `${key} ${label}`;
+      const size = Bun.stringWidth(text) + 2;
       if (used + size > available) {
-        if (available > used) chunks.push(styleChunk("…", styles["footer.description"]));
+        if (available > used) {
+          chunks.push(styleChunk("…", styles["footer.description"]));
+        }
+
         break;
       }
+
       chunks.push(
         styleChunk(`${used ? "  " : ""}${key}`, styles[disabled ? "ui.muted" : "footer.key"]),
         styleChunk(` ${label}`, styles["footer.description"]),
       );
       used += size;
     }
+
     this.hints.content = new StyledText(chunks);
   };
 }

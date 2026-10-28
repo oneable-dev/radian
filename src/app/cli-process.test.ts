@@ -6,6 +6,7 @@ import packageInfo from "../../package.json";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 
 const entry = join(import.meta.dir, "..", "index.ts");
+
 async function run(args: string[], cwd: string, config: string, state: string) {
   const child = Bun.spawn([process.execPath, entry, ...args], {
     cwd,
@@ -14,11 +15,12 @@ async function run(args: string[], cwd: string, config: string, state: string) {
     stdout: "pipe",
     stderr: "pipe",
   });
-  const stdout = new Response(child.stdout).text(),
-    stderr = new Response(child.stderr).text();
+  const stdout = new Response(child.stdout).text();
+  const stderr = new Response(child.stderr).text();
   const timer = setTimeout(() => child.kill("SIGTERM"), 10000);
   try {
     const code = await child.exited;
+
     return { code, stdout: await stdout, stderr: await stderr };
   } finally {
     clearTimeout(timer);
@@ -26,28 +28,35 @@ async function run(args: string[], cwd: string, config: string, state: string) {
 }
 
 test("Real help, version, invalid arguments, and non-TTY startup never read corrupt settings or create runtime state", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "radian-cli-entry-")),
-    config = join(directory, "config"),
-    state = join(directory, "state");
+  const directory = await mkdtemp(join(tmpdir(), "radian-cli-entry-"));
+  const config = join(directory, "config");
+  const state = join(directory, "state");
   try {
     await mkdir(join(config, "radian"), { recursive: true });
-    for (const name of ["workspace.json", "keybindings.json", "theme.json"])
+    for (const name of ["workspace.json", "keybindings.json", "theme.json"]) {
       await writeFile(join(config, "radian", name), "{broken");
+    }
+
     const help = await run(["--help"], directory, config, state);
     expect(help.code).toBe(0);
     expect(help.stdout).toContain("Usage: radian");
     expect(help.stderr).toBe("");
+
     const version = await run(["--version"], directory, config, state);
     expect(version.code).toBe(0);
     expect(version.stdout.trim()).toBe(packageInfo.version);
+
     const invalid = await run(["--unknown"], directory, config, state);
     expect(invalid.code).toBe(1);
     expect(invalid.stderr).toContain("INVALID_INPUT");
+
     const pipe = await run(["--demo"], directory, config, state);
     expect(pipe.code).toBe(1);
     expect(pipe.stderr).toContain("requires a TTY");
-    for (const result of [help, version, invalid, pipe])
+    for (const result of [help, version, invalid, pipe]) {
       expect(result.stdout + result.stderr).not.toContain("\x1b");
+    }
+
     // Informational output and rejected entry must not create state directories.
     expect(await readdir(directory)).toEqual(["config"]);
   } finally {
@@ -56,9 +65,9 @@ test("Real help, version, invalid arguments, and non-TTY startup never read corr
 }, 20000);
 
 test("Shared runtime status and stop work outside Git and TTY without starting absent services", async () => {
-  const fixture = await createWorktreeFixture(),
-    state = join(fixture.directory, "state"),
-    config = join(fixture.directory, "config");
+  const fixture = await createWorktreeFixture();
+  const state = join(fixture.directory, "state");
+  const config = join(fixture.directory, "config");
   try {
     await mkdir(join(config, "radian"), { recursive: true });
     await writeFile(join(config, "radian", "workspace.json"), "{broken");
@@ -73,6 +82,7 @@ test("Shared runtime status and stop work outside Git and TTY without starting a
       expect(result.stdout).toContain("No running workspace service.");
       expect(result.stderr).toBe("");
     }
+
     expect(await readdir(fixture.directory)).not.toContain("state");
   } finally {
     await fixture.cleanup();

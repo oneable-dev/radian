@@ -18,13 +18,17 @@ const snapshotSchema = Type.Object({
   version: Type.Literal(1),
   servers: Type.Array(serverSchema, { maxItems: 1000 }),
 });
+
 export type McpServer = Static<typeof serverSchema>;
+
 export const mcpStatusSchema = Type.Object({
   servers: Type.Integer({ minimum: 0, maximum: 1000 }),
   needsAuth: Type.Integer({ minimum: 0, maximum: 1000 }),
   errors: Type.Integer({ minimum: 0, maximum: 1000 }),
 });
+
 export type McpStatus = Static<typeof mcpStatusSchema>;
+
 export const enabledMcpServer = (server: McpServer): boolean =>
   !server.disabled &&
   server.status !== "disabled" &&
@@ -44,6 +48,7 @@ export function readMcpServers(value: unknown): Result<McpServer[], ProtocolErro
 
 export function summarizeMcpServers(servers: readonly McpServer[]): McpStatus {
   const enabled = servers.filter(enabledMcpServer);
+
   return {
     servers: enabled.length,
     needsAuth: enabled.filter((server) => server.status === "needs-auth").length,

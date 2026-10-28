@@ -97,12 +97,18 @@ const routine = new Set<CommandId>([
 // Keep routine defaults in full help, not the footer. Changed bindings remain discoverable;
 // send, newline and interrupt hints are deliberately omitted even when rebound.
 export function footerKeyHint(command: CommandId, context: KeyContext, key: string): string {
-  if (omitted.has(command)) return "";
+  if (omitted.has(command)) {
+    return "";
+  }
+
   const conventional =
     routine.has(command) ||
     (command === "transcript.copy" && context === "transcript-visual") ||
     (command === "terminal.copy-yank" && context === "terminal-visual");
-  if (!conventional) return key;
+  if (!conventional) {
+    return key;
+  }
+
   return key === defaults.hint(command, context) || key === defaults.hints(command, context)
     ? ""
     : key;

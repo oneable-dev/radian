@@ -8,13 +8,13 @@ import { pidAlive } from "../runtime/storage.ts";
 
 test("Closing a session through the real service never emits shutdown progress notices", async () => {
   // Observe actual bootstrap delivery through a PTY, using scripted responses instead of a model provider.
-  const fixture = await createWorktreeFixture(),
-    entry = join(import.meta.dir, "..", "index.ts");
+  const fixture = await createWorktreeFixture();
+  const entry = join(import.meta.dir, "..", "index.ts");
   const stateRoot = join(fixture.directory, "state");
-  let client: RuntimeClient | undefined,
-    child: Bun.Subprocess | undefined,
-    raw = "",
-    messagesFrame = "";
+  let client: RuntimeClient | undefined;
+  let child: Bun.Subprocess | undefined;
+  let raw = "";
+  let messagesFrame = "";
   const screen = new Terminal({ cols: 120, rows: 24, scrollback: 0, allowProposedApi: true });
   const frame = () =>
     Array.from(
@@ -29,13 +29,16 @@ test("Closing a session through the real service never emits shutdown progress n
       expectOk(
         await connectRuntime(fixture.repository, fixture.main, { offline: true, stateRoot, entry }),
       ) ?? undefined;
-    if (!client) throw new Error("Missing offline runtime.");
+    if (!client) {
+      throw new Error("Missing offline runtime.");
+    }
+
     const tree = fixture.repository.worktrees.find((tree) => tree.path === fixture.main)!;
     const id = expectOk(await client.create(tree.id));
-    const ready = Promise.withResolvers<void>(),
-      closed = Promise.withResolvers<void>(),
-      messagesShown = Promise.withResolvers<void>(),
-      decoder = new TextDecoder();
+    const ready = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    const messagesShown = Promise.withResolvers<void>();
+    const decoder = new TextDecoder();
     const observed = Promise.all([ready.promise, closed.promise, messagesShown.promise]);
     const deadline = setTimeout(() => {
       const error = new Error(
@@ -63,8 +66,12 @@ test("Closing a session through the real service never emits shutdown progress n
             // Cursor-addressed repaint patches are not contiguous prose; inspect the actual terminal cells.
             screen.write(bytes, () => {
               const text = frame();
-              if (text.includes("Ask to do anything") && text.includes("context")) ready.resolve();
-              if (text.includes("No AI sessions")) closed.resolve();
+              if (text.includes("Ask to do anything") && text.includes("context")) {
+                ready.resolve();
+              }
+              if (text.includes("No AI sessions")) {
+                closed.resolve();
+              }
               if (
                 text.includes(" Messages ") &&
                 text.includes("0/0") &&
@@ -105,7 +112,10 @@ test("Closing a session through the real service never emits shutdown progress n
     }
   } finally {
     if (child) {
-      if (child.exitCode === null) child.kill("SIGTERM");
+      if (child.exitCode === null) {
+        child.kill("SIGTERM");
+      }
+
       await child.exited;
       child.terminal?.close();
     }
@@ -113,13 +123,18 @@ test("Closing a session through the real service never emits shutdown progress n
       const pid = client.snapshot.pid;
       expectOk(await client.stopRuntime());
       await client.disconnect();
+
       const deadline = Date.now() + 10000;
       while (expectOk(await fetchSnapshot(client.paths)) || pidAlive(pid)) {
-        // oxlint-disable-next-line eslint/no-unsafe-finally -- A leaked daemon must fail cleanup even after a test failure.
-        if (Date.now() > deadline) throw new Error("Offline runtime did not stop.");
+        if (Date.now() > deadline) {
+          // oxlint-disable-next-line eslint/no-unsafe-finally -- A leaked daemon must fail cleanup even after a test failure.
+          throw new Error("Offline runtime did not stop.");
+        }
+
         await new Promise<void>((resolve) => setTimeout(resolve, 20));
       }
     }
+
     screen.dispose();
     await fixture.cleanup();
   }

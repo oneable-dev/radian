@@ -13,34 +13,48 @@ import { TerminalNotifications } from "./terminal-notifications.ts";
 class Source {
   readonly listeners = new Set<() => void>();
   recoveryVersion = 0;
+
   constructor(public snapshot: WorkspaceSnapshot) {}
+
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
+
     return () => this.listeners.delete(listener);
   }
+
   publish(state: ExecutionState): void {
     this.snapshot = { ...this.snapshot, details: { ...this.snapshot.details, session: state } };
     this.changed();
   }
+
   changed(): void {
-    for (const listener of this.listeners) listener();
+    for (const listener of this.listeners) {
+      listener();
+    }
   }
 }
+
 class Terminal extends EventEmitter {
   isDestroyed = false;
   accepted = true;
   failure: Error | undefined;
   readonly sent: { body: string; title: string | undefined }[] = [];
+
   triggerNotification(body: string, title?: string): boolean {
     this.sent.push({ body, title });
-    if (this.failure) throw this.failure;
+    if (this.failure) {
+      throw this.failure;
+    }
+
     return this.accepted;
   }
+
   destroy(): void {
     this.isDestroyed = true;
     this.emit("destroy");
   }
 }
+
 function state(
   completions: readonly RunCompletion[] = [],
   status: ExecutionState["status"] = "complete",
@@ -64,6 +78,7 @@ function state(
     ]),
   };
 }
+
 function snapshot(execution: ExecutionState = state()): WorkspaceSnapshot {
   return {
     repositories: [
@@ -89,26 +104,32 @@ function snapshot(execution: ExecutionState = state()): WorkspaceSnapshot {
     notice: "",
   };
 }
+
 function completion(
   outcome: RunCompletion["outcome"] = "complete",
   startedAt = 1000,
 ): RunCompletion {
   return { startedAt, completedAt: startedAt + 42000, durationMs: 42000, outcome };
 }
+
 function fixture(initial = state()) {
-  const source = new Source(snapshot(initial)),
-    terminal = new Terminal(),
-    errors: unknown[] = [];
+  const source = new Source(snapshot(initial));
+  const terminal = new Terminal();
+  const errors: unknown[] = [];
   const notifications = new TerminalNotifications(terminal, source, (error) => errors.push(error));
+
   return { source, terminal, errors, notifications };
 }
 
-for (const focus of ["unknown", "blur", "focus"] as const)
+for (const focus of ["unknown", "blur", "focus"] as const) {
   for (const outcome of ["complete", "error"] as const) {
     test(`Final ${outcome} results with ${focus} focus notify once according to policy`, () => {
       // Initial focus is unknown; replace only terminal delivery, not OS behavior.
       const app = fixture();
-      if (focus !== "unknown") app.terminal.emit(focus);
+      if (focus !== "unknown") {
+        app.terminal.emit(focus);
+      }
+
       const finished = completion(outcome);
       try {
         // Heartbeats and persistence warnings for the same result are not new runs.
@@ -135,16 +156,18 @@ for (const focus of ["unknown", "blur", "focus"] as const)
       }
     });
   }
+}
 
 test("Preconnection history, newly opened conversations, and reconnections notify only subsequent runs", () => {
   // Existing completion history establishes the initial notification baseline only.
-  const old = completion(),
-    app = fixture(state([old]));
+  const old = completion();
+  const app = fixture(state([old]));
   try {
     // Opening saved conversations or recovering services still represents historical data.
     app.source.changed();
     app.source.publish({ ...state([old, completion("error", 50000)]), conversationId: "resumed" });
     app.source.recoveryVersion++;
+
     const restored = [old, completion("error", 50000), completion("complete", 100000)];
     app.source.publish({ ...state(restored), conversationId: "resumed" });
     expect(app.terminal.sent).toHaveLength(0);
@@ -164,8 +187,9 @@ test("Initial reads of other saved sessions never notify", () => {
   // Add another saved session while observing an existing session.
   const app = fixture();
   try {
-    const repository = app.source.snapshot.repositories[0]!,
-      tree = repository.worktrees[0]!;
+    const repository = app.source.snapshot.repositories[0]!;
+    const tree = repository.worktrees[0]!;
+
     app.source.snapshot = {
       ...app.source.snapshot,
       repositories: [
@@ -197,10 +221,12 @@ test("Initial reads of other saved sessions never notify", () => {
 
 test("Responses and retries never notify before final settlement", () => {
   // Use actual transcript contracts to distinguish request completion from individual responses.
-  const app = fixture(),
-    transcript = new SessionTranscript([]);
+  const app = fixture();
+  const transcript = new SessionTranscript([]);
   const assistant = fixtureMessage("openai-responses", "fixture", "fixture");
+
   assistant.content = [{ type: "text", text: "Private answer" }];
+
   const publish = () =>
     app.source.publish({ ...state([], "working"), sections: transcript.sections });
   const message = (value: typeof assistant) => {
@@ -248,9 +274,9 @@ test.each(["cancelled", "unfinished"] as const)(
 
 test("Coalesced final runs each notify once and child state never notifies separately", () => {
   // Child state changes are not separate main-session completions.
-  const app = fixture(),
-    repository = app.source.snapshot.repositories[0]!,
-    tree = repository.worktrees[0]!;
+  const app = fixture();
+  const repository = app.source.snapshot.repositories[0]!;
+  const tree = repository.worktrees[0]!;
   try {
     app.source.snapshot = {
       ...app.source.snapshot,
@@ -289,8 +315,8 @@ test("Coalesced final runs each notify once and child state never notifies separ
 
 test("Completion summaries use only the same run's last request, never earlier or future requests", () => {
   // Combine multiple runs and a subsequent pending request in one snapshot.
-  const app = fixture(),
-    first = state([completion()], "complete", "First task").sections!;
+  const app = fixture();
+  const first = state([completion()], "complete", "First task").sections!;
   const second = state([completion("error", 50000)], "failure", "Second task").sections!.map(
     (section) => ({ ...section, id: `second-${section.id}` }),
   );
@@ -333,8 +359,8 @@ test.each(["missing", "empty"] as const)(
   "Request summary %s shows only duration instead of identifiers or responses",
   (request) => {
     // Historical or attachment-only requests may have no displayable task text.
-    const app = fixture(),
-      finished = state([completion()], "complete", "");
+    const app = fixture();
+    const finished = state([completion()], "complete", "");
     try {
       app.source.publish({
         ...finished,
@@ -353,8 +379,8 @@ test.each(["missing", "empty"] as const)(
 
 test("Skill notifications summarize invocation names rather than internal instructions", () => {
   // Skill notice bodies may contain private instructions rather than user task names.
-  const app = fixture(),
-    finished = state([completion()]);
+  const app = fixture();
+  const finished = state([completion()]);
   try {
     app.source.publish({
       ...finished,
@@ -380,8 +406,8 @@ test("Skill notifications summarize invocation names rather than internal instru
 
 test("Structured task summaries override source text containing attachment paths", () => {
   // Distinguish runtime summaries from original conversation text.
-  const app = fixture(),
-    finished = state([completion()]);
+  const app = fixture();
+  const finished = state([completion()]);
   const request = {
     id: "request",
     kind: "user" as const,
@@ -451,8 +477,12 @@ test.each(["dispose", "destroy"] as const)(
     // Detach and renderer shutdown both end notification ownership.
     const app = fixture();
 
-    if (action === "dispose") app.notifications.dispose();
-    else app.terminal.destroy();
+    if (action === "dispose") {
+      app.notifications.dispose();
+    } else {
+      app.terminal.destroy();
+    }
+
     app.notifications.dispose();
     app.source.publish(state([completion()]));
 
@@ -482,8 +512,9 @@ test("Unsupported terminals neither retry notifications nor alter outcomes", () 
 
 test("Unexpected SDK errors reach the UI unchanged without redelivering results", () => {
   // Never disguise programming errors as ordinary unsupported outcomes.
-  const app = fixture(),
-    error = new Error("Unexpected notification failure");
+  const app = fixture();
+  const error = new Error("Unexpected notification failure");
+
   app.terminal.failure = error;
   try {
     app.source.publish(state([completion()]));
@@ -552,9 +583,9 @@ test("Ghostty native output delivers actual OSC 777 notifications through ordere
       done();
     },
   });
-  const driver = new NativeSession(sink),
-    source = new Source(snapshot()),
-    errors: unknown[] = [];
+  const driver = new NativeSession(sink);
+  const source = new Source(snapshot());
+  const errors: unknown[] = [];
   const terminal = Object.assign(new EventEmitter(), {
     isDestroyed: false,
     triggerNotification: (body: string, title?: string) => driver.triggerNotification(body, title),
@@ -592,8 +623,8 @@ test("Ghostty native output delivers actual OSC 777 notifications through ordere
 test("Real OpenTUI focus parser signals update notification delivery", async () => {
   // Replace only terminal output while using real input parsing and renderer events.
   const app = await createTestRenderer({ width: 40, height: 8 });
-  const source = new Source(snapshot()),
-    errors: unknown[] = [];
+  const source = new Source(snapshot());
+  const errors: unknown[] = [];
   const send = spyOn(app.renderer, "triggerNotification").mockReturnValue(true);
   const notifications = new TerminalNotifications(app.renderer, source, (error) =>
     errors.push(error),

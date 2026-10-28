@@ -25,6 +25,7 @@ const answer = (text: string): TranscriptSection => ({
   text,
   status: "streaming",
 });
+
 async function mount(actions: Partial<WorkbenchActions> = {}) {
   const clock = new ManualClock();
   const app = await createTestRenderer({ width: 120, height: 28, kittyKeyboard: true, clock });
@@ -67,6 +68,7 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     onCloseSession: () => {},
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return ok(undefined);
     },
     getSessionDetails: (id) => states[id] ?? null,
@@ -79,11 +81,15 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
   };
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
   const status = () => {
     const node = get("agent-run-status-text");
+
     return node.visible
       ? app
           .captureCharFrame()
@@ -94,6 +100,7 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
   };
   const caption = () => {
     const node = get("agent-run-request");
+
     return node.visible
       ? app
           .captureCharFrame()
@@ -106,7 +113,9 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     selection.replaceSnapshot(selection.snapshot);
     await render();
   };
+
   await render();
+
   return {
     ...app,
     clock,
@@ -129,37 +138,46 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
 test("Actual requests and spinners appear above prompts without top Request, mode, or section counts", async () => {
   const app = await mount();
   try {
-    const row = app.get("agent-run-status"),
-      scroll = app.get("session-transcript"),
-      prompt = app.get("session-prompt");
-    if (!(scroll instanceof ScrollBoxRenderable) || !(prompt instanceof PromptInput))
+    const row = app.get("agent-run-status");
+    const scroll = app.get("session-transcript");
+    const prompt = app.get("session-prompt");
+    if (!(scroll instanceof ScrollBoxRenderable) || !(prompt instanceof PromptInput)) {
       throw new Error("Missing native controls.");
-    const y = row.y,
-      draft = prompt.value,
-      cursor = prompt.cursorOffset;
+    }
+
+    const y = row.y;
+    const draft = prompt.value;
+    const cursor = prompt.cursorOffset;
+
     expect(app.status()).toBe("Working (0s · <Esc> to interrupt)");
     expect(app.caption()).toBe("“Implement workspace search”");
     expect(app.get("agent-run-loading").visible).toBe(true);
     expect(app.renderer.root.findDescendantById("agent-request")).toBeUndefined();
     expect(scroll.y).toBe(app.get("agent-transcript-area").y);
+
     const group = app.get("transcript-status-row");
     expect(group.height).toBe(2);
     expect(row.height).toBe(2);
     expect(row.y).toBe(group.y);
     expect(group.y).toBe(scroll.viewport.y + scroll.viewport.height + 1);
     expect(app.get("agent-composer").y).toBe(row.y + row.height + 1);
+
     const initialFrame = app.captureCharFrame().split("\n");
-    for (const gutter of [group.y - 1, group.y + group.height])
+    for (const gutter of [group.y - 1, group.y + group.height]) {
       expect(initialFrame[gutter]!.slice(group.x, group.x + group.width).trim()).toBe("");
+    }
+
     expect(app.captureCharFrame()).not.toMatch(/(?:INPUT|TRANSCRIPT) · \d+\/\d+|Request Implement/);
 
     // Reading old output must not move the running-request anchor or overwrite the draft.
     pressLeader(app, "[");
     scroll.scrollTo(20);
     await app.render();
-    const focus = app.renderer.currentFocusedRenderable,
-      top = scroll.scrollTop;
+
+    const focus = app.renderer.currentFocusedRenderable;
+    const top = scroll.scrollTop;
     const sections = app.states.a1!.sections!;
+
     app.states.a1 = {
       ...app.states.a1!,
       sections: [sections[0]!, answer(`${sections[1]!.text}\nNEW STREAM OUTPUT`)],
@@ -175,6 +193,7 @@ test("Actual requests and spinners appear above prompts without top Request, mod
     expect(prompt.value).toBe(draft);
     expect(prompt.cursorOffset).toBe(cursor);
     expect(app.sent).toEqual([]);
+
     const frame = app.captureCharFrame().split("\n");
     expect(frame[row.y]).not.toContain("Paused");
     expect(frame[app.get("footer-bar").y]).toContain("Paused");
@@ -190,8 +209,8 @@ test("Actual requests and spinners appear above prompts without top Request, mod
 
 test("Failures remain above the prompt without duplicate transcript error summaries", async () => {
   // A failed response retains its partial output and runtime-owned failure detail.
-  const app = await mount(),
-    error = "ECONNRESET: The socket connection was closed unexpectedly.";
+  const app = await mount();
+  const error = "ECONNRESET: The socket connection was closed unexpectedly.";
   try {
     app.states.a1 = {
       status: "failure",
@@ -213,6 +232,7 @@ test("Failures remain above the prompt without duplicate transcript error summar
       .split("\n")
       .slice(scroll.y, scroll.y + scroll.height)
       .join("\n");
+
     expect(app.status()).toBe(`Failed: ${error}`);
     expect(transcript).toContain("PARTIAL_RESPONSE");
     expect(transcript).not.toContain("ECONNRESET");
@@ -269,15 +289,22 @@ test("Normal completion clears status after spinner minimums while preserving re
         })),
       })),
     );
+
     const scroll = app.get("session-transcript");
-    if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript");
+    if (!(scroll instanceof ScrollBoxRenderable)) {
+      throw new Error("Missing transcript");
+    }
+
     pressLeader(app, "[");
     scroll.scrollTo(20);
     await app.render();
-    const top = scroll.scrollTop,
-      prompt = app.get("session-prompt");
+
+    const top = scroll.scrollTop;
+    const prompt = app.get("session-prompt");
+
     pressLeader(app, "a");
     await app.render();
+
     const promptY = prompt.y;
     app.clock.advance(100);
     app.states.a1 = { ...app.states.a1!, status: "complete" };
@@ -306,12 +333,16 @@ test("Drafts, rejections, and settings commands update requests only when actual
   const app = await mount({
     onPrompt: (_id, text) => {
       sent.push(text);
+
       return response;
     },
   });
   try {
     const prompt = app.get("session-prompt");
-    if (!(prompt instanceof PromptInput)) throw new Error("Missing prompt.");
+    if (!(prompt instanceof PromptInput)) {
+      throw new Error("Missing prompt.");
+    }
+
     pressLeader(app, "a");
     prompt.value = "";
     await app.mockInput.typeText("/fast status");
@@ -390,17 +421,22 @@ test("clear preserves tabs and other drafts while removing old requests, spinner
         sections: [],
       };
       app.selection.replaceSnapshot(app.selection.snapshot);
+
       return ok(undefined);
     },
   });
   try {
     app.states.a1 = { ...app.states.a1!, conversationId: "previous" };
     await app.update();
-    const tab = app.get("session:demo:main:a1"),
-      tabStrip = app.get("agent-session-list"),
-      count = tabStrip.getChildren().length;
+
+    const tab = app.get("session:demo:main:a1");
+    const tabStrip = app.get("agent-session-list");
+    const count = tabStrip.getChildren().length;
     const prompt = app.get("session-prompt");
-    if (!(prompt instanceof PromptInput)) throw new Error("Missing input");
+    if (!(prompt instanceof PromptInput)) {
+      throw new Error("Missing input");
+    }
+
     pressLeader(app, "[");
     app.mockInput.pressKey("HOME");
     await app.render();
@@ -437,8 +473,12 @@ test("Replacement snapshots and late acceptance never clear new drafts or miside
   try {
     app.states.a1 = { ...app.states.a1!, conversationId: "previous" };
     await app.update();
+
     const prompt = app.get("session-prompt");
-    if (!(prompt instanceof PromptInput)) throw new Error("Missing input");
+    if (!(prompt instanceof PromptInput)) {
+      throw new Error("Missing input");
+    }
+
     pressLeader(app, "a");
     prompt.value = "/clear";
     app.mockInput.pressEnter();

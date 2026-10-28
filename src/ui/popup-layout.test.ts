@@ -17,6 +17,7 @@ test("Empty popup bodies center guidance through resize without replacing the fo
   const app = await createTestRenderer({ width: 81, height: 21 });
   const list = new ScrollBoxRenderable(app.renderer, { flexGrow: 1, minHeight: 0 });
   const body = new PopupBody(app.renderer, "results", list);
+
   app.renderer.root.add(body.root);
   try {
     body.showEmpty("No matching results");
@@ -32,6 +33,7 @@ test("Empty popup bodies center guidance through resize without replacing the fo
       app.resize(width, height);
       await app.renderOnce();
       await app.renderOnce();
+
       const title = app.renderer.root.findDescendantById("results-empty:title")!;
 
       // Guidance neither changes focus nor creates scrollable placeholder rows.
@@ -40,6 +42,7 @@ test("Empty popup bodies center guidance through resize without replacing the fo
       expect(app.renderer.currentFocusedRenderable).toBe(list);
       expect(list.getChildren().some((node) => node instanceof TextRenderable)).toBe(false);
     }
+
     body.showEmpty();
     await app.renderOnce();
     expect(body.empty.root.visible).toBe(false);
@@ -60,9 +63,11 @@ test.each([
     const app = await createTestRenderer({ width: 120, height: 20 });
     const search = new SearchInput(app.renderer, { id: "search", title: "Search" });
     const list = new ScrollBoxRenderable(app.renderer, { flexGrow: 1, minHeight: 0 });
+
     list.add(
       new TextRenderable(app.renderer, { content: "First candidate", height: 1, flexShrink: 0 }),
     );
+
     const message = rows
       ? new TextRenderable(app.renderer, {
           content: "Result status",
@@ -77,6 +82,7 @@ test.each([
       list,
       ...(message ? { message } : {}),
     });
+
     app.renderer.root.add(layout.root);
     try {
       // Narrow terminals and hidden search fields must not duplicate or leave behind spacing.
@@ -89,8 +95,9 @@ test.each([
         await app.renderOnce();
         await app.renderOnce();
 
-        const next = message?.visible ? message : layout.results.root,
-          nextY = search.field.y + search.field.height;
+        const next = message?.visible ? message : layout.results.root;
+        const nextY = search.field.y + search.field.height;
+
         expect(next.y).toBe(nextY);
         expect(list.y).toBe(nextY + (visible ? rows : 0));
         expect(list.x).toBe(search.field.x + 1);
@@ -99,6 +106,7 @@ test.each([
           expect(message.x).toBe(list.x);
           expect(message.width).toBe(list.width);
         }
+
         expect(list.height).toBe(height - search.field.height - (visible ? rows : 0));
 
         search.field.visible = false;
@@ -138,6 +146,7 @@ test.each([false, true])(
       list,
       ...(previewEnabled ? { preview: { body: preview, width: 58 } } : {}),
     });
+
     app.renderer.root.add(layout.root);
     search.value = "hjkl query";
     search.cursorOffset = 4;
@@ -171,11 +180,15 @@ test.each([false, true])(
             expect(search.field.x + search.field.width).toBe(preview.root.x);
           }
         }
+
         // Compact preview jumps use the same candidate height as visible lists, without a reserved search gap.
         expect(layout.listHeight).toBe(layout.root.height - search.field.height - message.height);
       }
     } finally {
-      if (!previewEnabled) preview.root.destroyRecursively();
+      if (!previewEnabled) {
+        preview.root.destroyRecursively();
+      }
+
       await app.dispose();
     }
   },
@@ -183,8 +196,8 @@ test.each([false, true])(
 
 test("Popup refresh activity stays inside the body without reserving a header or hiding content", async () => {
   // Available content remains usable while a refresh or spinner tail is settling.
-  const clock = new ManualClock(),
-    app = await createTestRenderer({ width: 80, height: 20, clock });
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width: 80, height: 20, clock });
   const panel = new PopupFrame(app.renderer, {
     position: "absolute",
     border: true,
@@ -194,6 +207,7 @@ test("Popup refresh activity stays inside the body without reserving a header or
   });
   const content = new TextRenderable(app.renderer, { content: "First content line", flexGrow: 1 });
   const spinner = new LoadingSpinner(app.renderer, { id: "popup-loading" });
+
   panel.add(content);
   attachPopupActivity(app.renderer, panel, spinner.root, () => ({
     pending: false,
@@ -237,17 +251,20 @@ test("Popup activity centers empty loads, follows selected rows and immediately 
   });
   const first = new TextRenderable(app.renderer, { content: "First candidate", height: 1 });
   const selected = new TextRenderable(app.renderer, { content: "Selected candidate", height: 1 });
+
   body.add(first);
   body.add(selected);
+
   const spinner = new LoadingSpinner(app.renderer, { id: "activity" });
-  let pending = true,
-    hasContent = false;
+  let pending = true;
+  let hasContent = false;
   const feedback = attachPopupActivity(app.renderer, body, spinner.root, () => ({
     pending,
     hasContent,
     message: "Loading candidates…",
     anchor: selected,
   }));
+
   app.renderer.root.add(body);
   try {
     first.visible = selected.visible = false;
@@ -303,7 +320,9 @@ test("Activity for an offscreen popup body never leaks onto the workbench", asyn
     width: 30,
     height: 10,
   });
+
   panel.add(body);
+
   const spinner = new LoadingSpinner(app.renderer, { id: "offscreen-loading" });
   const feedback = attachPopupActivity(app.renderer, panel, spinner.root, () => ({
     pending: true,
@@ -311,6 +330,7 @@ test("Activity for an offscreen popup body never leaks onto the workbench", asyn
     message: "Refreshing…",
     body,
   }));
+
   app.renderer.root.add(panel);
   try {
     spinner.start();
@@ -336,6 +356,7 @@ test.each(Object.entries(POPUP_SIZES))(
     // Minimal terminal dimensions must never produce zero-sized or offscreen popup frames.
     const app = await createTestRenderer({ width: 80, height: 20 });
     const panel = new PopupFrame(app.renderer, { position: "absolute", border: false });
+
     app.renderer.root.add(panel);
     try {
       for (const [width, height] of [
@@ -365,6 +386,7 @@ test("Popup placement uses requested dimensions rather than stale native resize 
   // Native getters still report the last frame when the terminal begins shrinking.
   const app = await createTestRenderer({ width: 140, height: 30 });
   const panel = new PopupFrame(app.renderer, { position: "absolute", border: true });
+
   app.renderer.root.add(panel);
   try {
     centerPopup(panel, POPUP_SIZES.expanded, 140, 30);

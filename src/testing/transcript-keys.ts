@@ -2,9 +2,10 @@ import type { MockInput } from "@opentui/core/testing";
 import { defaultKeymap, type Keymap } from "../keybindings/config.ts";
 
 type Input = { mockInput: MockInput };
+
 function pressChord(app: Input, chord: string): void {
-  const parts = chord.split("+"),
-    name = parts.pop()!;
+  const parts = chord.split("+");
+  const name = parts.pop()!;
   const names: Record<string, string> = {
     space: " ",
     plus: "+",
@@ -19,6 +20,7 @@ function pressChord(app: Input, chord: string): void {
     left: "ARROW_LEFT",
     right: "ARROW_RIGHT",
   };
+
   app.mockInput.pressKey(names[name] ?? (/^f\d+$/u.test(name) ? name.toUpperCase() : name), {
     ctrl: parts.includes("ctrl"),
     shift: parts.includes("shift"),
@@ -26,8 +28,12 @@ function pressChord(app: Input, chord: string): void {
     super: parts.includes("super"),
   });
 }
+
 export function pressLeader(app: Input, key: string, keymap = defaultKeymap()): void {
-  for (const chord of keymap.leader) pressChord(app, chord);
+  for (const chord of keymap.leader) {
+    pressChord(app, chord);
+  }
+
   pressChord(app, key);
 }
 
@@ -38,6 +44,10 @@ export function pressTranscriptRead(app: Input, keymap: Keymap = defaultKeymap()
   const binding =
     keymap.bindings.find((binding) => String(binding.command) === "output.read") ??
     keymap.bindings.find((binding) => binding.command === "focus.transcript");
-  if (!binding) throw new Error("No configured transcript entry command");
-  for (const chord of binding.keys) pressChord(app, chord);
+  if (!binding) {
+    throw new Error("No configured transcript entry command");
+  }
+  for (const chord of binding.keys) {
+    pressChord(app, chord);
+  }
 }

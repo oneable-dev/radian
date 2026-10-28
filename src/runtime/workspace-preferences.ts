@@ -14,8 +14,10 @@ export function mergeWorkspacePreferences(
   for (const preferences of all) {
     Object.assign(result.selection.sessions, preferences.selection.sessions);
     Object.assign(result.drafts, preferences.drafts);
-    if (preferences.inputDrafts)
+    if (preferences.inputDrafts) {
       Object.assign((result.inputDrafts ??= {}), preferences.inputDrafts);
+    }
+
     Object.assign(result.workViews.active, preferences.workViews?.active);
     Object.assign(result.workViews.agentScroll, preferences.workViews?.agentScroll);
     Object.assign(result.gitViews, preferences.gitViews);
@@ -23,7 +25,9 @@ export function mergeWorkspacePreferences(
     result.terminalViews.active.push(...(preferences.terminalViews?.active ?? []));
     Object.assign(result.terminalViews.selected, preferences.terminalViews?.selected);
   }
+
   result.selection.worktreeId = selectedWorktree;
+
   return structuredClone(result);
 }
 
@@ -48,6 +52,7 @@ export function repositoryPreferences(
     record: Readonly<Record<string, T>>,
     ids: ReadonlySet<string>,
   ): Record<string, T> => Object.fromEntries(Object.entries(record).filter(([id]) => ids.has(id)));
+
   return structuredClone({
     selection: {
       worktreeId:

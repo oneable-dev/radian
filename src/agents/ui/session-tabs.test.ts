@@ -28,8 +28,8 @@ async function mount(
 ) {
   const clock = new ManualClock();
   const app = await createTestRenderer({ width: 100, height: 6, kittyKeyboard: true, clock });
-  const selected: string[] = [],
-    closed: string[] = [];
+  const selected: string[] = [];
+  const closed: string[] = [];
   const tabs = new SessionTabs(app.renderer, {
     select: (id) => selected.push(id),
     close: (id) => closed.push(id),
@@ -38,30 +38,40 @@ async function mount(
     keyHint: () => "",
     button: (label, activate) => new Button(app.renderer, label, activate),
   });
+
   app.renderer.root.add(tabs.root);
   tabs.update("tree", initial, initial[0]?.id ?? null, true);
+
   const render = async () => {
     await app.renderOnce();
     await app.renderOnce();
   };
   await render();
+
   const get = (id: string, worktreeId = "tree") => {
     const tab = app.renderer.root.findDescendantById(`session:${worktreeId}:${id}`);
-    if (!tab) throw new Error(`Missing tab ${id}`);
+    if (!tab) {
+      throw new Error(`Missing tab ${id}`);
+    }
+
     const title = app.renderer.root.findDescendantById(`${tab.id}:title`);
     const number = app.renderer.root.findDescendantById(`${tab.id}:number`);
-    if (!(title instanceof TextRenderable) || !(number instanceof TextRenderable))
+    if (!(title instanceof TextRenderable) || !(number instanceof TextRenderable)) {
       throw new Error(`Missing tab label ${id}`);
+    }
+
     return { tab, title, number };
   };
   const status = (id = firstId) => {
     const { tab, title, number } = get(id);
+
     return app
       .captureCharFrame()
       .split("\n")
       [tab.y]!.slice(number.x + number.width, title.x)
       .trim();
   };
+
   return {
     ...app,
     tabs,
@@ -80,8 +90,8 @@ async function mount(
 
 test.each([100, 28])("Session tabs stay adjacent without gaps at %s columns", async (width) => {
   // Two fixed-width tabs must share an edge even when the strip needs horizontal scrolling.
-  const entries = [session(), session(secondId)],
-    app = await mount(entries);
+  const entries = [session(), session(secondId)];
+  const app = await mount(entries);
   try {
     // Selecting the second tab reveals it in compact layouts without adding inter-tab space.
     app.resize(width, 6);
@@ -89,9 +99,10 @@ test.each([100, 28])("Session tabs stay adjacent without gaps at %s columns", as
     await app.render();
 
     // The next tab starts immediately after the previous frame and stays fully visible.
-    const first = app.get(firstId).tab,
-      second = app.get(secondId).tab,
-      viewport = app.tabs.list.viewport;
+    const first = app.get(firstId).tab;
+    const second = app.get(secondId).tab;
+    const viewport = app.tabs.list.viewport;
+
     expect(second.x).toBe(first.x + first.width);
     expect(second.x).toBeGreaterThanOrEqual(viewport.x);
     expect(second.x + second.width).toBeLessThanOrEqual(viewport.x + viewport.width);
@@ -215,14 +226,18 @@ test.each(priorities)("Show only $name in one cell", async ({ entry, glyph, colo
     const prefix = app.status();
 
     // Glyph, semantic color and reserved width must agree, including the genuinely empty state.
-    if (glyph === "working") expect(spinnerFrames.some((frame) => frame === prefix)).toBe(true);
-    else expect(prefix).toBe(glyph);
+    if (glyph === "working") {
+      expect(spinnerFrames.some((frame) => frame === prefix)).toBe(true);
+    } else {
+      expect(prefix).toBe(glyph);
+    }
     if (glyph) {
       const span = app
         .captureSpans()
         .lines[tab.y]!.spans.find((span) => span.text.includes(prefix))!;
       expect(span.fg.toInts()).toEqual(uiTheme(app.renderer).colors[color].toInts());
     }
+
     expect(Bun.stringWidth(prefix)).toBe(glyph ? 1 : 0);
     expect(title.x - tab.x).toBe(glyph ? 7 : 5);
     expect(app.selected).toEqual([]);
@@ -242,14 +257,16 @@ test("Only Fast tabs use yellow three-cell arrows and retain tab/close positions
   const app = await mount(entries, (id) => (id === firstId && fast ? "fast" : "default"));
   const prefix = app.status;
   try {
-    const { tab, title } = app.get(firstId),
-      other = app.get(secondId).tab;
+    const { tab, title } = app.get(firstId);
+    const other = app.get(secondId).tab;
     const close = app.renderer.root.findDescendantById(`close-session:${firstId}`)!;
     const geometry = [tab.x, tab.width, title.x, close.x, other.x];
+
     expect(prefix(firstId)).toBe("▶▷▷");
     expect(title.x).toBe(tab.x + 9);
     expect(prefix(secondId)).toBe("⠋");
     expect(tab.width).toBe(SESSION_TAB_WIDTH);
+
     const spans = app.captureSpans().lines[tab.y]!.spans;
     expect(spans.find((span) => span.text.includes("▶"))!.fg.toInts()).toEqual(
       uiTheme(app.renderer).colors.number.toInts(),
@@ -295,8 +312,8 @@ test.each(["default", "fast"] as const)(
     let style: SpinnerStyle = original;
     const app = await mount(entries, (id) => (id === firstId ? style : "default"));
     try {
-      const { tab, title } = app.get(firstId),
-        other = app.get(secondId).tab;
+      const { tab, title } = app.get(firstId);
+      const other = app.get(secondId).tab;
       const close = app.renderer.root.findDescendantById(`close-session:${firstId}`)!;
       const geometry = [tab.x, tab.width, close.x, other.x];
       const initialTitle = title.x;
@@ -408,8 +425,10 @@ test.each([false, true])(
       await app.render();
 
       expect(prefix()).toBe("●");
+
       const { tab, title } = app.get(firstId);
       expect(title.x).toBe(tab.x + 7);
+
       const dot = app.captureSpans().lines[tab.y]!.spans.find((span) => span.text.includes("●"))!;
       expect(dot.fg.toInts()).toEqual(uiTheme(app.renderer).colors.muted.toInts());
       expect(app.clock.pendingTimerCount).toBe(0);
@@ -466,14 +485,16 @@ test("Unread bells hidden during execution survive return and direct cancellatio
 });
 
 test("Tabs without status icons reclaim status slots and spacing for IDs", async () => {
-  const unknown = { ...session(), status: null },
-    app = await mount([unknown]);
+  const unknown = { ...session(), status: null };
+  const app = await mount([unknown]);
   try {
     // Missing status frees two more cells for UUIDs even in narrow tabs.
     app.resize(12, 6);
     await app.render();
-    const { tab, title } = app.get(firstId),
-      close = app.renderer.root.findDescendantById(`close-session:${firstId}`)!;
+
+    const { tab, title } = app.get(firstId);
+    const close = app.renderer.root.findDescendantById(`close-session:${firstId}`)!;
+
     expect(title.x).toBe(tab.x + 5);
     expect(title.plainText).toBe("01a…");
     expect(tab.width).toBe(12);
@@ -509,17 +530,20 @@ test("Tabs without status icons reclaim status slots and spacing for IDs", async
 });
 
 test("Unknown tabs remove status slots after spinner minimums and restore UUID space", async () => {
-  const working = { ...session(), status: "working" as const },
-    app = await mount([working]);
+  const working = { ...session(), status: "working" as const };
+  const app = await mount([working]);
   try {
     app.resize(12, 6);
     await app.render();
+
     const { tab, title } = app.get(firstId);
     app.clock.advance(120);
     app.tabs.update("tree", [{ ...working, status: null }], firstId, true);
     await app.render();
-    const width = tab.width,
-      titleX = title.x;
+
+    const width = tab.width;
+    const titleX = title.x;
+
     app.clock.advance(379);
     await app.render();
     expect(title.x).toBe(titleX);
@@ -538,9 +562,9 @@ test("Unknown tabs remove status slots after spinner minimums and restore UUID s
 });
 
 test("Returning to unknown tabs never reserves space for cancelled spinners", async () => {
-  const working = { ...session(), status: "working" as const },
-    unknown = { ...working, status: null },
-    app = await mount([working]);
+  const working = { ...session(), status: "working" as const };
+  const unknown = { ...working, status: null };
+  const app = await mount([working]);
   try {
     app.clock.advance(120);
     app.tabs.update("tree", [unknown], firstId, true);
@@ -549,6 +573,7 @@ test("Returning to unknown tabs never reserves space for cancelled spinners", as
     app.clock.advance(500);
     app.tabs.update("tree", [unknown], firstId, true);
     await app.render();
+
     const { tab, title } = app.get(firstId);
     expect(title.x).toBe(tab.x + 5);
     expect(title.plainText).toBe(firstLabel);
@@ -559,16 +584,18 @@ test("Returning to unknown tabs never reserves space for cancelled spinners", as
 });
 
 test("Earlier tabs gaining status slots keep selected IDs and close buttons visible", async () => {
-  const entries = [{ ...session("short"), status: null }, session(secondId)],
-    app = await mount(entries);
+  const entries = [{ ...session("short"), status: null }, session(secondId)];
+  const app = await mount(entries);
   try {
     app.resize(20, 6);
     app.tabs.update("tree", entries, secondId, true);
     await app.render();
     app.tabs.update("tree", [{ ...entries[0]!, status: "working" }, entries[1]!], secondId, true);
     await app.render();
-    const { tab } = app.get(secondId),
-      close = app.renderer.root.findDescendantById(`close-session:${secondId}`)!;
+
+    const { tab } = app.get(secondId);
+    const close = app.renderer.root.findDescendantById(`close-session:${secondId}`)!;
+
     expect(tab.x).toBeGreaterThanOrEqual(app.tabs.list.viewport.x);
     expect(close.x + close.width).toBeLessThanOrEqual(
       app.tabs.list.viewport.x + app.tabs.list.viewport.width,
@@ -582,13 +609,15 @@ test("Earlier tabs gaining status slots keep selected IDs and close buttons visi
 
 test("Agent tabs distinguish active selection without accepting strip focus or underlining titles", async () => {
   // Two sessions share a passive strip with no keyboard focus state.
-  const entries = [session(), session(secondId)],
-    app = await mount(entries);
+  const entries = [session(), session(secondId)];
+  const app = await mount(entries);
   const cell = (id: string) => {
     const title = app.get(id).title;
     let x = 0;
+
     return app.captureSpans().lines[title.y]!.spans.find((span) => {
       x += span.width;
+
       return x > title.x;
     })!;
   };
@@ -629,8 +658,8 @@ test("Agent tabs distinguish active selection without accepting strip focus or u
 
 test("AI tabs use full UUID labels with only fixed-width tail truncation", async () => {
   // Full UUIDs are label sources, not names or arbitrary eight-character prefixes.
-  const entry = session(),
-    app = await mount([entry]);
+  const entry = session();
+  const app = await mount([entry]);
   try {
     // Preserve the shared 18-cell frame even on large screens.
     await app.render();
@@ -659,8 +688,9 @@ test("UUID labels truncate at available width and restore visible prefixes when 
     ] as const) {
       app.resize(width, 6);
       await app.render();
-      const { tab, title } = app.get(firstId),
-        text = title.plainText;
+
+      const { tab, title } = app.get(firstId);
+      const text = title.plainText;
 
       // Show continuous UUID prefixes without synthesizing middle or trailing identifiers.
       expect(text).toBe(expected);
@@ -704,12 +734,13 @@ test.each([
 
 test("Adding and removing similar UUID tabs preserves labels, widths, and selected-tab visibility", async () => {
   // UUID display length follows shared frame width, not neighboring tabs.
-  const entries = [session(), session(secondId)],
-    app = await mount(entries);
+  const entries = [session(), session(secondId)];
+  const app = await mount(entries);
   try {
     app.resize(28, 6);
     app.tabs.update("tree", entries, secondId, true);
     await app.render();
+
     const firstTab = app.get(firstId).tab;
 
     // Add an overlapping-prefix tab while preserving another session's selection.
@@ -721,8 +752,10 @@ test("Adding and removing similar UUID tabs preserves labels, widths, and select
     expect(app.get(firstId).title.plainText).toBe(firstLabel);
     expect(app.get(collisionId).title.plainText).toBe(firstLabel);
     expect(app.get(secondId).title.plainText).toBe(secondLabel);
-    const selectedTab = app.get(secondId).tab,
-      viewport = app.tabs.list.viewport;
+
+    const selectedTab = app.get(secondId).tab;
+    const viewport = app.tabs.list.viewport;
+
     expect(selectedTab.x).toBeGreaterThanOrEqual(viewport.x);
     expect(selectedTab.x + selectedTab.width).toBeLessThanOrEqual(viewport.x + viewport.width);
 
@@ -814,8 +847,8 @@ test("Tabs after the ninth show numbers and renumber by current order after clos
 test("Identically truncated UUID tabs select and close using their full unique IDs", async () => {
   // Prepare UUIDs with identical visible prefixes and different final characters.
   const otherId = "01a156a2-ba64-707c-bd92-fc877962e973";
-  const entries = [session(), session(otherId, "Other conversation")],
-    app = await mount(entries);
+  const entries = [session(), session(otherId, "Other conversation")];
+  const app = await mount(entries);
   try {
     // Renaming and keyboard selection preserve identical tail-truncation rules.
     const renamed = entries.map((entry) => ({ ...entry, name: "Renamed conversation" }));
@@ -826,6 +859,7 @@ test("Identically truncated UUID tabs select and close using their full unique I
     await app.render();
     expect(app.get(firstId).title.plainText).toBe(firstLabel);
     expect(app.get(otherId).title.plainText).toBe(firstLabel);
+
     const close = app.renderer.root.findDescendantById(`close-session:${otherId}`)!;
     expect(close.x).toBeGreaterThanOrEqual(app.tabs.list.viewport.x);
     expect(close.x + close.width).toBeLessThanOrEqual(
@@ -843,6 +877,7 @@ test("Identically truncated UUID tabs select and close using their full unique I
     // Clicking the first title never confuses the other UUID.
     app.tabs.update("tree", renamed, firstId, true);
     await app.render();
+
     const { tab, title } = app.get(firstId);
     expect(tab.x).toBe(app.tabs.list.viewport.x);
     await app.mockMouse.click(title.x, title.y);

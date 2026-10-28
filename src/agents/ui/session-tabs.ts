@@ -18,6 +18,7 @@ type Tab = {
   frame: SessionTab;
   status: StatusIndicator;
 };
+
 type Actions = {
   idPrefix?: string;
   select(id: string): void;
@@ -87,7 +88,10 @@ export class SessionTabs {
     selected: string | null,
     visible: boolean,
   ): void {
-    if (this.disposed || this.root.isDestroyed) return;
+    if (this.disposed || this.root.isDestroyed) {
+      return;
+    }
+
     const switched = worktreeId !== this.worktreeId;
     this.reveal ||= switched || selected !== this.selected;
     this.worktreeId = worktreeId;
@@ -95,19 +99,24 @@ export class SessionTabs {
     this.selected = selected;
     this.visible = visible && !!worktreeId;
     this.root.visible = this.visible;
+
     const ids = new Set(sessions.map((session) => session.id));
-    for (const [id, tab] of this.tabs)
+    for (const [id, tab] of this.tabs) {
       if (switched || !ids.has(id)) {
         tab.status.dispose();
         tab.root.destroyRecursively();
         this.tabs.delete(id);
       }
+    }
     for (const [index, session] of sessions.entries()) {
       let tab = this.tabs.get(session.id);
       if (!tab) {
         const status = new StatusIndicator(this.renderer, () => {
           const current = this.tabs.get(session.id);
-          if (!current) return;
+          if (!current) {
+            return;
+          }
+
           this.setTitle(current, session.id);
           this.reveal = true;
           this.renderer.requestRender();
@@ -121,11 +130,14 @@ export class SessionTabs {
           close: () => this.actions.close(session.id),
           button: (label, activate, action) => this.actions.button(label, activate, action),
         });
+
         this.list.add(frame.root);
         tab = { root: frame.root, title: frame.title, frame, status };
         this.tabs.set(session.id, tab);
       }
+
       tab.frame.setPosition(index + 1);
+
       const working =
         session.status === "working" ||
         session.subagents.some((child) => child.status === "working");
@@ -141,14 +153,22 @@ export class SessionTabs {
         this.reveal = true;
       }
     }
+
     this.list.visible = this.visible;
     this.paint();
-    if (this.reveal) this.renderer.requestRender();
+    if (this.reveal) {
+      this.renderer.requestRender();
+    }
   }
 
   available(command: CommandId): boolean {
-    if (!this.visible) return false;
-    if (command === "session.new") return true;
+    if (!this.visible) {
+      return false;
+    }
+    if (command === "session.new") {
+      return true;
+    }
+
     return (
       [
         "session.close",
@@ -159,16 +179,22 @@ export class SessionTabs {
       ].includes(command) && this.sessions.length > 0
     );
   }
+
   command(command: CommandId): void {
-    if (!this.available(command)) return;
+    if (!this.available(command)) {
+      return;
+    }
     if (command === "session.new") {
       this.actions.create();
+
       return;
     }
     if (command === "session.close") {
       this.close();
+
       return;
     }
+
     const index = this.sessions.findIndex((session) => session.id === this.selected);
     const target =
       command === "session.first"
@@ -180,42 +206,67 @@ export class SessionTabs {
               Math.min(this.sessions.length - 1, index + (command === "session.previous" ? -1 : 1)),
             );
     const session = this.sessions[target];
-    if (session) this.actions.select(session.id);
+    if (session) {
+      this.actions.select(session.id);
+    }
   }
+
   private close(): void {
-    if (this.selected) this.actions.close(this.selected);
+    if (this.selected) {
+      this.actions.close(this.selected);
+    }
   }
+
   private setTitle(tab: Tab, id: string): void {
     const previous = tab.title.plainText;
     tab.frame.resize(this.list.width);
     tab.frame.setLabel(id);
     this.reveal ||= tab.title.plainText !== previous;
   }
+
   private resizeTitles(): void {
     for (const session of this.sessions) {
       const tab = this.tabs.get(session.id);
-      if (tab) this.setTitle(tab, session.id);
+      if (tab) {
+        this.setTitle(tab, session.id);
+      }
     }
   }
+
   private paint(): void {
-    for (const [id, tab] of this.tabs) tab.frame.update(id === this.selected);
+    for (const [id, tab] of this.tabs) {
+      tab.frame.update(id === this.selected);
+    }
   }
+
   private revealSelected = (): void => {
-    if (!this.reveal || !this.visible || this.disposed || this.root.isDestroyed) return;
+    if (!this.reveal || !this.visible || this.disposed || this.root.isDestroyed) {
+      return;
+    }
+
     this.reveal = false;
+
     const tab = this.selected ? this.tabs.get(this.selected)?.root : undefined;
-    if (!tab) return;
+    if (!tab) {
+      return;
+    }
+
     const viewport = this.list.viewport;
     // Native nearest-edge scrolling skips children exactly as wide as the viewport.
     const delta =
       tab.x < viewport.x
         ? tab.x - viewport.x
         : Math.max(0, tab.x + tab.width - viewport.x - viewport.width);
-    if (delta) this.list.scrollBy({ x: delta, y: 0 });
+    if (delta) {
+      this.list.scrollBy({ x: delta, y: 0 });
+    }
   };
+
   dispose(): void {
     this.disposed = true;
     this.renderer.off("frame", this.revealSelected);
-    for (const tab of this.tabs.values()) tab.status.dispose();
+    for (const tab of this.tabs.values()) {
+      tab.status.dispose();
+    }
   }
 }

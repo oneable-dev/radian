@@ -12,11 +12,14 @@ import { ok } from "../../result.ts";
 import { pressLeader } from "../../testing/keys.ts";
 
 const flush = async () => {
-  for (let i = 0; i < 30; i++) await Promise.resolve();
+  for (let i = 0; i < 30; i++) {
+    await Promise.resolve();
+  }
 };
+
 async function mount(previewUnits = 0) {
-  const clock = new ManualClock(),
-    app = await createTestRenderer({ width: 120, height: 28, kittyKeyboard: true, clock });
+  const clock = new ManualClock();
+  const app = await createTestRenderer({ width: 120, height: 28, kittyKeyboard: true, clock });
   const selection = new WorkspaceSelection(demoWorkspace());
   const models: ModelCatalog = {
     conversationId: "conversation",
@@ -61,6 +64,7 @@ async function mount(previewUnits = 0) {
   const previews = new HistoryPreviewCache(
     async (tree, id) => {
       requests.previews++;
+
       return ok({
         worktreeId: tree,
         id,
@@ -82,11 +86,13 @@ async function mount(previewUnits = 0) {
       throw error;
     },
   );
+
   previews.preload(
     "demo:main",
     history.map((item) => ({ id: item.id, revision: "1" })),
   );
   await flush();
+
   const view = new Workbench(app.renderer, selection, {
     onNewSession() {},
     onCloseSession() {},
@@ -105,28 +111,36 @@ async function mount(previewUnits = 0) {
     },
     onListModels: async () => {
       requests.models++;
+
       return ok(models);
     },
     onSelectModel: async () => ok(null),
     onAccountsRequest: async () => {
       requests.accounts++;
+
       return ok({ kind: "catalog", catalog: accounts });
     },
     onListHistory: async () => {
       requests.history++;
+
       return ok(history);
     },
   });
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
   const render = async () => {
     await app.renderOnce();
     await app.renderOnce();
   };
+
   await render();
+
   return {
     ...app,
     clock,
@@ -180,6 +194,7 @@ test("Prepared model and account popups reopen immediately without requests or l
       app.mockInput.pressEscape();
       await app.render();
     }
+
     expect(app.requests.models).toBe(0);
     expect(app.requests.accounts).toBe(0);
   } finally {
@@ -200,6 +215,7 @@ test("Prepared History and complete previews survive closure without rediscovery
       app.mockInput.pressEscape();
       await app.render();
     }
+
     expect(app.requests.history).toBe(0);
     expect(app.requests.previews).toBe(2);
   } finally {
@@ -234,6 +250,7 @@ test("Incoming account and history snapshots preserve search caret, focus, and s
     await app.command("/accounts");
     await app.mockInput.typeText("account");
     await app.render();
+
     const accountSearch = app.get("accounts-search") as InputRenderable;
     accountSearch.cursorOffset = 3;
     app.updateAccounts();
@@ -250,6 +267,7 @@ test("Incoming account and history snapshots preserve search caret, focus, and s
     await app.mockInput.typeText("Saved");
     app.mockInput.pressKey("n", { ctrl: true });
     await app.render();
+
     const historySearch = app.get("history-search") as InputRenderable;
     historySearch.cursorOffset = 2;
     app.updateHistory();

@@ -51,20 +51,25 @@ const manifest = (records: readonly SessionRecord[]): RuntimeManifest => ({
   preferences: structuredClone(emptyPreferences),
   records,
 });
+
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "radian-session-snapshots-")),
-    paths = runtimePaths("repo", true, root);
+  const root = await mkdtemp(join(tmpdir(), "radian-session-snapshots-"));
+  const paths = runtimePaths("repo", true, root);
+
   await privateDirectory(paths.directory);
+
   return {
     paths,
     store: new RuntimeStore(paths),
     record(id: string, conversationId = id, lifecycle: "open" | "closed" = "open"): SessionRecord {
       const sessionFile = join(root, `${conversationId}.jsonl`);
-      if (!existsSync(sessionFile))
+      if (!existsSync(sessionFile)) {
         writeFileSync(
           sessionFile,
           JSON.stringify({ type: "session", version: 3, id: conversationId, cwd: root }) + "\n",
         );
+      }
+
       return { ...record(id, conversationId, lifecycle), cwd: root, sessionFile };
     },
     async close() {
@@ -72,6 +77,7 @@ async function fixture() {
     },
   };
 }
+
 async function fileFor(
   paths: ReturnType<typeof runtimePaths>,
   conversationId: string,
@@ -80,7 +86,10 @@ async function fileFor(
   const entry = index.records.find(
     (entry: { conversationId: string }) => entry.conversationId === conversationId,
   );
-  if (!entry) throw new Error("Missing snapshot index entry");
+  if (!entry) {
+    throw new Error("Missing snapshot index entry");
+  }
+
   return join(paths.directory, "sessions", `${entry.key}.json`);
 }
 
@@ -91,8 +100,8 @@ test("Recovery and History share files while closed conversations stay unrecover
     expectOk(await app.store.save(manifest([app.record("a"), app.record("b", "b", "closed")])));
 
     // Reopen storage like a fresh process and read recovery and History separately.
-    const restored = new RuntimeStore(app.paths),
-      loaded = expectOk(await restored.load("repo"));
+    const restored = new RuntimeStore(app.paths);
+    const loaded = expectOk(await restored.load("repo"));
     const closed = expectOk(await restored.readSession("tree", "b"));
 
     // Recover only open runs while closed bodies and telemetry remain in the same files.
@@ -101,6 +110,7 @@ test("Recovery and History share files while closed conversations stay unrecover
     expect(closed?.lifecycle).toBe("closed");
     expect(closed?.state).toEqual(app.record("b").state);
     expect(expectOk(await restored.readSession("other-tree", "b"))).toBeNull();
+
     const index = await readFile(app.paths.manifest, "utf8");
     expect(index).not.toContain("SAVED BODY");
     expect(index).not.toContain("usedTokens");
@@ -143,12 +153,14 @@ test("Updating open conversations never rewrites historical closed bodies", asyn
         manifest([app.record("active"), app.record("closed", "closed", "closed")]),
       ),
     );
-    const path = await fileFor(app.paths, "closed"),
-      before = await stat(path),
-      bytes = await readFile(path, "utf8");
+
+    const path = await fileFor(app.paths, "closed");
+    const before = await stat(path);
+    const bytes = await readFile(path, "utf8");
 
     // Change output only on active sessions.
     const changed = app.record("active");
+
     expectOk(
       await app.store.save(
         manifest([{ ...changed, state: { ...changed.state, output: "New active output" } }]),
@@ -170,13 +182,17 @@ test("Legacy manifests migrate to per-session files while preserving open/closed
   try {
     const { lifecycle: _lifecycle, ...legacy } = app.record("legacy");
     const original = JSON.stringify(manifest([legacy, app.record("closed", "closed", "closed")]));
+
     await writeFile(app.paths.manifest, original);
 
     // Reads preserve source; migrate only on subsequent checkpoints.
     const restored = expectOk(await app.store.load("repo"));
     expect(restored?.records.map((record) => record.id)).toEqual(["legacy"]);
     expect(await readFile(app.paths.manifest, "utf8")).toBe(original);
-    if (!restored) throw new Error("Missing legacy manifest");
+    if (!restored) {
+      throw new Error("Missing legacy manifest");
+    }
+
     expectOk(await app.store.save(restored));
 
     // New stores retain identical recovery lists and closed status metadata.
@@ -196,8 +212,9 @@ test("Legacy snapshots without conversation IDs merge with SDK-recovered file id
   // Retaining old tab IDs as separate History conversations would duplicate source records.
   const app = await fixture();
   try {
-    const current = app.record("tab", "sdk-conversation"),
-      { conversationId: _conversationId, ...state } = current.state;
+    const current = app.record("tab", "sdk-conversation");
+    const { conversationId: _conversationId, ...state } = current.state;
+
     await writeFile(app.paths.manifest, JSON.stringify(manifest([{ ...current, state }])));
     expectOk(await app.store.load("repo"));
 
@@ -223,8 +240,8 @@ test("Corrupt closed snapshots never block open recovery but fail explicitly in 
     await writeFile(await fileFor(app.paths, "b"), "broken JSON");
 
     // Load only open sessions; read corrupt closed conversations when selected.
-    const store = new RuntimeStore(app.paths),
-      loaded = expectOk(await store.load("repo"));
+    const store = new RuntimeStore(app.paths);
+    const loaded = expectOk(await store.load("repo"));
     const failure = expectError(await store.readSession("tree", "b"));
 
     // Never hide corruption through empty previews or JSONL fallback.
@@ -248,13 +265,17 @@ test("Index failures after closed-body persistence never reopen conversations on
     const failure = expectError(await app.store.save(manifest([app.record("a", "a", "closed")])));
     await rm(app.paths.manifest, { recursive: true });
     await rename(app.paths.manifest + ".backup", app.paths.manifest);
-    const store = new RuntimeStore(app.paths),
-      loaded = expectOk(await store.load("repo"));
+
+    const store = new RuntimeStore(app.paths);
+    const loaded = expectOk(await store.load("repo"));
 
     // Prefer actual closed bodies over stale open indexes and repair on the next checkpoint.
     expect(failure.code).toBe("STORAGE_FAILED");
     expect(loaded?.records).toEqual([]);
-    if (!loaded) throw new Error("Missing manifest");
+    if (!loaded) {
+      throw new Error("Missing manifest");
+    }
+
     expectOk(await store.save(loaded));
     expect(store.listSessions("tree")[0]?.lifecycle).toBe("closed");
   } finally {

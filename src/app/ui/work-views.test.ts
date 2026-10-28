@@ -19,6 +19,7 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     onCloseSession: () => requests.push("close"),
     onPrompt: () => {
       requests.push("prompt");
+
       return ok(undefined);
     },
     getSessionDetails: () => ({
@@ -28,8 +29,10 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     }),
     ...actions,
   });
+
   await app.renderOnce();
   await app.renderOnce();
+
   return {
     ...app,
     selection,
@@ -55,10 +58,14 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
         await app.renderOnce();
         await app.renderOnce();
       }
-      const lines = app.captureCharFrame().split("\n"),
-        y = lines.findIndex((line) => line.includes(text));
+
+      const lines = app.captureCharFrame().split("\n");
+      const y = lines.findIndex((line) => line.includes(text));
       const x = lines[y]?.indexOf(text) ?? -1;
-      if (x < 0) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+      if (x < 0) {
+        throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+      }
+
       await app.mockMouse.click(x, y);
       await app.renderOnce();
       await app.renderOnce();
@@ -66,7 +73,10 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     async visible(text: string) {
       const deadline = Date.now() + 3000;
       while (!app.captureCharFrame().includes(text)) {
-        if (Date.now() > deadline) throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+        if (Date.now() > deadline) {
+          throw new Error(`Missing ${text}\n${app.captureCharFrame()}`);
+        }
+
         await app.renderOnce();
         await Bun.sleep(1);
       }
@@ -77,14 +87,16 @@ async function mount(actions: Partial<WorkbenchActions> = {}) {
     },
   };
 }
+
 function editorFixture() {
-  const inputs: string[] = [],
-    opens: string[] = [],
-    detaches: string[] = [];
+  const inputs: string[] = [];
+  const opens: string[] = [];
+  const detaches: string[] = [];
   const actions: EditorActions = {
     info: (id) => ({ id, worktreeId: id, pid: 123, exited: false, exitCode: null }),
     open: async (id) => {
       opens.push(id);
+
       return ok(id);
     },
     attach: async (id, receive) => {
@@ -100,7 +112,9 @@ function editorFixture() {
         revision: revision++,
         ansi: `\x1bc\x1b[1;1HEditor buffer ${id}`,
       });
+
       receive(frame(80, 24));
+
       return ok({
         input: (bytes) => inputs.push(new TextDecoder().decode(bytes)),
         resize: (cols, rows) => receive(frame(cols, rows)),
@@ -110,6 +124,7 @@ function editorFixture() {
       });
     },
   };
+
   return { actions, inputs, opens, detaches };
 }
 
@@ -118,6 +133,7 @@ test("Letter shortcuts switch views without upper tabs and retain current names 
   const app = await mount();
   try {
     expect(app.renderer.root.findDescendantById("work-view-tabs")).toBeUndefined();
+
     const panel = app.renderer.root.findDescendantById("work-panel")!;
     for (const [key, label, id] of [
       ["a", "Agents", "agent"],
@@ -136,6 +152,7 @@ test("Letter shortcuts switch views without upper tabs and retain current names 
       expect(app.view.workViewPreferences.active["demo:main"]).toBe(id);
       expect(app.selection.sessionId).toBe("a1");
     }
+
     expect(app.requests).toEqual([]);
   } finally {
     await app.close();
@@ -143,11 +160,12 @@ test("Letter shortcuts switch views without upper tabs and retain current names 
 });
 
 test("Editor fills all four work-panel corners at every size, leaving only the footer", async () => {
-  const editor = editorFixture(),
-    app = await mount({ editor: editor.actions });
+  const editor = editorFixture();
+  const app = await mount({ editor: editor.actions });
   try {
     await app.showView("e");
     await app.visible("Editor buffer");
+
     const surface = app.renderer.root.findDescendantById("editor-terminal:demo:main")!;
     for (const [width, height] of [
       [120, 24],
@@ -160,6 +178,7 @@ test("Editor fills all four work-panel corners at every size, leaving only the f
       app.resize(width, height);
       await app.renderOnce();
       await app.renderOnce();
+
       const pane = app.renderer.root.findDescendantById("work-panel")!;
       const footer = app.renderer.root.findDescendantById("app-footer")!;
 
@@ -170,6 +189,7 @@ test("Editor fills all four work-panel corners at every size, leaving only the f
       expect(app.renderer.root.findDescendantById(surface.id)).toBe(surface);
       expect(app.renderer.currentFocusedRenderable).toBe(surface);
     }
+
     expect(editor.detaches).toEqual([]);
     expect(editor.opens).toEqual([]);
     expect(app.requests).toEqual([]);
@@ -213,8 +233,8 @@ test("Numbers select current Agent session order while preserving drafts and wor
 
 test("Editor/Git number and creation keys neither switch screens/sessions nor reach PTYs", async () => {
   // A configured but unavailable app command is consumed rather than replayed as native edits.
-  const editor = editorFixture(),
-    app = await mount({ editor: editor.actions });
+  const editor = editorFixture();
+  const app = await mount({ editor: editor.actions });
   try {
     await app.showView("e");
     await app.visible("Editor buffer");
@@ -237,12 +257,12 @@ test("Editor/Git number and creation keys neither switch screens/sessions nor re
 });
 
 test("Common creation explicitly creates current-worktree sessions even in empty Agents", async () => {
-  const created: string[] = [],
-    app = await mount({
-      onNewSession: (id) => {
-        created.push(id);
-      },
-    });
+  const created: string[] = [];
+  const app = await mount({
+    onNewSession: (id) => {
+      created.push(id);
+    },
+  });
   try {
     // Merely changing views never creates a session; only the explicit new-tab command does.
     app.selection.selectWorktree("demo:empty");
@@ -337,7 +357,10 @@ test("Explicit Agent scroll and drafts restore after tab round-trips and UI recr
   });
   let firstLine = "";
   try {
-    for (let i = 0; i < 3; i++) await app.mockMouse.scroll(60, 10, "up");
+    for (let i = 0; i < 3; i++) {
+      await app.mockMouse.scroll(60, 10, "up");
+    }
+
     await app.renderOnce();
     firstLine = app.captureCharFrame().match(/line \d+/)?.[0] ?? "";
     expect(firstLine).not.toBe("");
@@ -348,6 +371,7 @@ test("Explicit Agent scroll and drafts restore after tab round-trips and UI recr
   } finally {
     await app.close();
   }
+
   // A fresh view receives only serialized preferences, not the previous renderables.
   const next = await mount({
     ...(retained ? { initialWorkViews: retained } : {}),
@@ -363,8 +387,8 @@ test("Explicit Agent scroll and drafts restore after tab round-trips and UI recr
 
 test("Focused Editor forwards Neovim keys and leader+b opens workspace navigation", async () => {
   // Only the process boundary is replaced; native OpenTUI VT/key handling remains real.
-  const editor = editorFixture(),
-    app = await mount({ editor: editor.actions });
+  const editor = editorFixture();
+  const app = await mount({ editor: editor.actions });
   try {
     await app.showView("e");
     await app.visible("Editor buffer");
@@ -394,13 +418,16 @@ test("Focused Editor forwards Neovim keys and leader+b opens workspace navigatio
 test("Slow Editor open responses never overwrite newly selected Git screens or focus", async () => {
   const ready = Promise.withResolvers<ReturnType<typeof ok<string>>>();
   const editor = editorFixture();
+
   editor.actions.info = () => undefined;
   editor.actions.open = () => ready.promise;
+
   const app = await mount({ editor: editor.actions });
   try {
     await app.showView("e");
     await app.click(`${icons.folder} radian-ui`);
     await app.showView("g");
+
     const focus = app.renderer.currentFocusedRenderable;
 
     ready.resolve(ok("demo:main"));
@@ -422,8 +449,10 @@ test("Missing restored Editor processes report explicit failure without automati
   editor.actions.info = () => undefined;
   editor.actions.open = async (id) => {
     editor.opens.push(id);
+
     return err(new EditorError("EDITOR_UNAVAILABLE", "Neovim is missing."));
   };
+
   const app = await mount({
     editor: editor.actions,
     initialWorkViews: { active: { "demo:main": "editor" }, agentScroll: {} },
@@ -445,11 +474,12 @@ test("Missing restored Editor processes report explicit failure without automati
 });
 
 test("History above Editor returns to the same input/connection on Esc without forwarding PTY keys", async () => {
-  const editor = editorFixture(),
-    app = await mount({ editor: editor.actions });
+  const editor = editorFixture();
+  const app = await mount({ editor: editor.actions });
   try {
     await app.showView("e");
     await app.visible("Editor buffer");
+
     const input = app.renderer.currentFocusedRenderable;
     app.mockInput.pressKey(" ", { ctrl: true });
     app.mockInput.pressKey("h");
@@ -473,10 +503,13 @@ test("Renderer-first Editor shutdown safely handles late frames and detach", asy
   const editor = editorFixture();
   let late: ((frame: EditorFrame) => void) | undefined;
   const attach = editor.actions.attach;
+
   editor.actions.attach = async (id, frame, failed) => {
     late = frame;
+
     return attach(id, frame, failed);
   };
+
   const app = await mount({ editor: editor.actions });
   try {
     await app.showView("e");

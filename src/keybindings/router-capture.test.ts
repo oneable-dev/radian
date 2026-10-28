@@ -17,10 +17,12 @@ test("Selection shortcuts precede literal capture without stealing trailing lead
     exitOnCtrlC: false,
   });
   const input = new InputRenderable(app.renderer, { width: 60 });
+
   app.renderer.root.add(input);
   input.focus();
-  const commands: string[] = [],
-    captured: string[] = [];
+
+  const commands: string[] = [];
+  const captured: string[] = [];
   const router = new KeyRouter(
     app.renderer,
     keymap,
@@ -28,8 +30,12 @@ test("Selection shortcuts precede literal capture without stealing trailing lead
     () => true,
     (command) => commands.push(command),
     (key) => {
-      if (key.name !== "c") return false;
+      if (key.name !== "c") {
+        return false;
+      }
+
       captured.push(key.name);
+
       return true;
     },
     () => "selection",
@@ -59,10 +65,12 @@ test("Literal argument capture respects trailing leader keys and consumes held r
   );
   const app = await createTestRenderer({ width: 60, height: 8, kittyKeyboard: true });
   const input = new InputRenderable(app.renderer, { width: 60 });
+
   app.renderer.root.add(input);
   input.focus();
-  const commands: string[] = [],
-    captured: string[] = [];
+
+  const commands: string[] = [];
+  const captured: string[] = [];
   const router = new KeyRouter(
     app.renderer,
     keymap,
@@ -70,14 +78,21 @@ test("Literal argument capture respects trailing leader keys and consumes held r
     (command) => command === "app.detach",
     (command) => commands.push(command),
     (key) => {
-      if (key.name !== "r") return false;
+      if (key.name !== "r") {
+        return false;
+      }
+
       captured.push(key.name);
+
       return true;
     },
   );
   const raw = (sequence: string) => {
     const key = parseKeypress(sequence, { useKittyKeyboard: true });
-    if (!key) throw new Error("Invalid key");
+    if (!key) {
+      throw new Error("Invalid key");
+    }
+
     app.renderer.keyInput.processParsedKey(key);
   };
   try {

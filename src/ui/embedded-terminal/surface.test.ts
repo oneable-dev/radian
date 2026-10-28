@@ -23,6 +23,7 @@ test("Incoming VT snapshots apply before the next visible frame without repeated
   // Blank or previous-snapshot first frames expose flicker to users.
   const app = await createTestRenderer({ width: 20, height: 2 });
   const surface = new TerminalSurface(app.renderer, "first-paint");
+
   app.renderer.root.add(surface.root);
   try {
     surface.display({
@@ -66,6 +67,7 @@ test("Embedded terminal defaults/ANSI follow outer themes while explicit RGB bac
   const app = await createTestRenderer({ width: 20, height: 2 });
   const theme = new TerminalTheme(app.renderer, colors("#123456"));
   const surface = new TerminalSurface(app.renderer, "theme-terminal", theme);
+
   app.renderer.root.add(surface.root);
   try {
     // After full reset, apply defaults, ANSI red, and program RGB backgrounds independently.
@@ -115,6 +117,7 @@ test("Embedded terminal defaults/ANSI follow outer themes while explicit RGB bac
     await app.renderOnce();
     expect(app.captureSpans().lines[0]!.spans[0]!.bg.toInts().slice(0, 3)).toEqual([101, 67, 33]);
     surface.dispose();
+
     const next = new TerminalSurface(app.renderer, "next-terminal", theme);
     app.renderer.root.add(next.root);
     next.display({
@@ -150,6 +153,7 @@ test("Unknown colors retain renderer defaults and theme cleanup unsubscribes", a
     cursorColor: null,
   });
   const surface = new TerminalSurface(app.renderer, "fallback-terminal", theme);
+
   app.renderer.root.add(surface.root);
   try {
     surface.display({

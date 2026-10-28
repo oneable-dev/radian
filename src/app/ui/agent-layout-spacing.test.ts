@@ -11,9 +11,9 @@ import { ok } from "../../result.ts";
 async function mount(withRequest = false) {
   const clock = new ManualClock();
   const app = await createTestRenderer({ width: 120, height: 30, kittyKeyboard: true, clock });
-  let status: ExecutionState["status"] = "working",
-    children = false,
-    request = withRequest;
+  let status: ExecutionState["status"] = "working";
+  let children = false;
+  let request = withRequest;
   const workspace = () =>
     demoWorkspace().map((repo) => ({
       ...repo,
@@ -79,12 +79,20 @@ async function mount(withRequest = false) {
   };
   const get = (id: string) => {
     const node = app.renderer.root.findDescendantById(id);
-    if (!node) throw new Error(`Missing ${id}`);
+    if (!node) {
+      throw new Error(`Missing ${id}`);
+    }
+
     return node;
   };
+
   await render();
+
   const scroll = get("session-transcript");
-  if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Missing transcript");
+  if (!(scroll instanceof ScrollBoxRenderable)) {
+    throw new Error("Missing transcript");
+  }
+
   return {
     ...app,
     clock,
@@ -122,10 +130,11 @@ test.each([120, 60])(
     // The final tinted tool card exposes duplicate gutters that plain text can conceal.
     const app = await mount();
     const expectStatusGap = () => {
-      const card = app.lastCard(),
-        row = app.get("transcript-status-row"),
-        composer = app.get("agent-composer");
+      const card = app.lastCard();
+      const row = app.get("transcript-status-row");
+      const composer = app.get("agent-composer");
       const content = row.getChildren().find((node) => node.visible)!;
+
       expect(row.visible).toBe(true);
       expect({
         above: content.y - card.y - card.height,
@@ -134,8 +143,9 @@ test.each([120, 60])(
       }).toEqual({ above: 1, below: 1, statusHeight: 1 });
     };
     const expectComposerGap = () => {
-      const card = app.lastCard(),
-        composer = app.get("agent-composer");
+      const card = app.lastCard();
+      const composer = app.get("agent-composer");
+
       expect(app.get("transcript-status-row").visible).toBe(false);
       expect(composer.y - card.y - card.height).toBe(1);
     };
@@ -158,6 +168,7 @@ test.each([120, 60])(
         await app.state("working");
         expectStatusGap();
       }
+
       expect(app.view.promptDrafts.a1).toBe("Retained draft");
     } finally {
       await app.close();
@@ -171,8 +182,9 @@ test("Removing status rows preserves the first visible historical line, scroll, 
     pressLeader(app, "a");
     app.scroll.scrollTo(12);
     await app.render();
-    const top = app.scroll.scrollTop,
-      focus = app.renderer.currentFocusedRenderable;
+
+    const top = app.scroll.scrollTop;
+    const focus = app.renderer.currentFocusedRenderable;
     const first = () =>
       app
         .captureCharFrame()
@@ -181,6 +193,7 @@ test("Removing status rows preserves the first visible historical line, scroll, 
         .join("\n")
         .match(/OLDER_LINE_\d+/u)?.[0];
     const before = first();
+
     expect(before).toBeDefined();
     expect(app.view.workViewPreferences.agentViews?.a1?.follow).toBe(false);
 
@@ -214,11 +227,12 @@ test.each([120, 60])(
         .join("\n")
         .match(/OLDER_LINE_\d+/u)?.[0];
     const verify = () => {
-      const row = app.get("transcript-status-row"),
-        run = app.get("agent-run-status"),
-        caption = app.get("agent-run-request") as TextRenderable;
-      const button = app.get("transcript-bottom-button"),
-        composer = app.get("agent-composer");
+      const row = app.get("transcript-status-row");
+      const run = app.get("agent-run-status");
+      const caption = app.get("agent-run-request") as TextRenderable;
+      const button = app.get("transcript-bottom-button");
+      const composer = app.get("agent-composer");
+
       expect(row.height).toBe(2);
       expect(run.height).toBe(2);
       expect(caption.y).toBe(run.y + 1);
@@ -238,8 +252,10 @@ test.each([120, 60])(
       pressLeader(app, "a");
       app.scroll.scrollTo(12);
       await app.render();
-      const before = first(),
-        top = app.scroll.scrollTop;
+
+      const before = first();
+      const top = app.scroll.scrollTop;
+
       expect(before).toBeDefined();
       verify();
 
@@ -296,9 +312,10 @@ test.each([120, 60])(
       await app.render();
       app.clock.advance(150);
       await app.render();
-      const composer = app.get("agent-composer"),
-        menu = app.get("prompt-completions"),
-        metadata = app.get("session-status");
+
+      const composer = app.get("agent-composer");
+      const menu = app.get("prompt-completions");
+      const metadata = app.get("session-status");
 
       // Only the conversation/status/input groups have separation; completion stays attached to input.
       expect(menu.visible).toBe(true);

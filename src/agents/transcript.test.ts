@@ -4,6 +4,7 @@ import { fixtureMessage } from "../testing/offline-runtime.ts";
 import { SessionTranscript } from "./transcript.ts";
 
 type Message = AgentSession["messages"][number];
+
 function complete(transcript: SessionTranscript, message: Message): void {
   transcript.handle({ type: "message_start", message });
   transcript.handle({ type: "message_end", message });
@@ -13,6 +14,7 @@ test("Parallel tool calls pair reversed results by call ID and preserve unknown 
   // Identical tool names must not cause the second result to overwrite the first call.
   const transcript = new SessionTranscript([]);
   const assistant = fixtureMessage("openai-responses", "openai", "fixture");
+
   assistant.stopReason = "toolUse";
   assistant.content = [
     { type: "thinking", thinking: "Plan the request" },
@@ -45,6 +47,7 @@ test("Parallel tool calls pair reversed results by call ID and preserve unknown 
     "tool",
     "tool",
   ]);
+
   const tools = transcript.sections.filter((section) => section.kind === "tool");
   expect(tools[0]?.toolCallId).toBe("a");
   expect(tools[0]?.status).toBe("complete");
@@ -59,11 +62,13 @@ test("Parallel tool calls pair reversed results by call ID and preserve unknown 
 test("Streaming blocks retain section IDs through completion and include intermediate tool results", () => {
   const transcript = new SessionTranscript([]);
   const partial = fixtureMessage("openai-responses", "openai", "fixture");
+
   partial.content = [
     { type: "text", text: "first" },
     { type: "toolCall", id: "call", name: "bash", arguments: { command: "probe" } },
   ];
   transcript.handle({ type: "message_start", message: partial });
+
   const ids = transcript.sections.map((section) => section.id);
 
   // Public message_end arrives before SDK persistence; it must update, not duplicate, the live row.
@@ -71,6 +76,7 @@ test("Streaming blocks retain section IDs through completion and include interme
     ...partial,
     content: [{ type: "text" as const, text: "first and final" }, partial.content[1]!],
   };
+
   transcript.handle({ type: "message_end", message: final });
   transcript.handle({
     type: "tool_execution_start",
@@ -98,8 +104,9 @@ test("Saved conversations restore full source and entry IDs without 12-section o
   // SessionManager is in-memory; this test never writes to the user's JSONL history.
   const manager = SessionManager.inMemory("/fixture");
   const first = manager.appendMessage({ role: "user", content: "x".repeat(14000), timestamp: 1 });
-  for (let index = 0; index < 20; index++)
+  for (let index = 0; index < 20; index++) {
     manager.appendMessage({ role: "user", content: `message ${index}`, timestamp: index + 2 });
+  }
 
   const transcript = new SessionTranscript(manager.getBranch());
 
@@ -109,8 +116,8 @@ test("Saved conversations restore full source and entry IDs without 12-section o
 });
 
 test("Live and restored image/file summaries match while keeping source text separate from image data", () => {
-  const manager = SessionManager.inMemory("/fixture"),
-    live = new SessionTranscript([]);
+  const manager = SessionManager.inMemory("/fixture");
+  const live = new SessionTranscript([]);
   const message: Message = {
     role: "user",
     timestamp: 1,
@@ -120,8 +127,10 @@ test("Live and restored image/file summaries match while keeping source text sep
       { type: "image", mimeType: "image/jpeg", data: "OPAQUE_IMAGE_BYTES_TWO" },
     ],
   };
+
   manager.appendMessage(message);
   complete(live, message);
+
   const restored = new SessionTranscript(manager.getBranch());
   for (const transcript of [live, restored]) {
     expect(transcript.sections[0]?.request).toEqual({
@@ -142,6 +151,7 @@ test("Live and restored image/file summaries match while keeping source text sep
 test("Redacted Thinking hides signatures and provides readable image and error fallbacks", () => {
   const transcript = new SessionTranscript([]);
   const assistant = fixtureMessage("openai-responses", "openai", "fixture");
+
   assistant.content = [
     {
       type: "thinking",
@@ -156,6 +166,7 @@ test("Redacted Thinking hides signatures and provides readable image and error f
     content: [{ type: "image", mimeType: "image/png", data: "opaque-image" }],
     timestamp: 2,
   });
+
   const error = {
     ...assistant,
     content: [],
@@ -181,6 +192,7 @@ test.each([false, true])(
     let now = 1000;
     const transcript = new SessionTranscript([], { wallTime: () => now, monotonicTime: () => now });
     const assistant = fixtureMessage("openai-responses", "fixture", "fixture");
+
     assistant.stopReason = "aborted";
     assistant.errorMessage = "Request was aborted";
     assistant.content = partial ? [{ type: "text", text: "Keep the partial response" }] : [];
@@ -189,6 +201,7 @@ test.each([false, true])(
 
     complete(transcript, assistant);
     now += 1200;
+
     const completion = transcript.handle({ type: "agent_settled", aborted: true });
 
     expect(completion).toMatchObject({ outcome: "cancelled", durationMs: 1200 });
@@ -199,16 +212,18 @@ test.each([false, true])(
       ),
     ).toBe(false);
     expect(JSON.stringify(transcript.sections)).not.toContain("Request was aborted");
-    if (partial)
+    if (partial) {
       expect(transcript.sections.find((section) => section.kind === "assistant")?.text).toBe(
         "Keep the partial response",
       );
+    }
 
     // Saved JSONL retains the original SDK result; rebuilding display metadata must behave identically.
     const manager = SessionManager.inMemory("/fixture");
     manager.appendMessage({ role: "user", content: "/ne", timestamp: 1000 });
     manager.appendMessage(assistant);
     manager.appendCustomEntry("radian.run-completion.v1", completion);
+
     const restored = new SessionTranscript(manager.getBranch());
     expect(restored.sections.at(-1)?.completion).toEqual(completion);
     expect(JSON.stringify(restored.sections)).not.toContain("Request was aborted");
@@ -262,8 +277,9 @@ test.each([120, 0.5, undefined, 0, -1, Infinity, "120"])(
   "Bash timeout projection preserves only explicitly valid seconds: %j",
   (timeout) => {
     // Never invent limits for commands with missing or invalid timeout values.
-    const manager = SessionManager.inMemory("/fixture"),
-      assistant = fixtureMessage("openai-responses", "openai", "fixture");
+    const manager = SessionManager.inMemory("/fixture");
+    const assistant = fixtureMessage("openai-responses", "openai", "fixture");
+
     assistant.content = [
       {
         type: "toolCall",
@@ -276,9 +292,11 @@ test.each([120, 0.5, undefined, 0, -1, Infinity, "120"])(
       },
     ];
     manager.appendMessage(assistant);
+
     // Saved history and live events project identical command summaries and limits.
     const live = new SessionTranscript([]);
     complete(live, assistant);
+
     const restored = new SessionTranscript(manager.getBranch());
     for (const section of [live.sections[0]!, restored.sections[0]!]) {
       expect(section.command).toBe("printf '한글'\nprintf done");
@@ -294,9 +312,10 @@ test.each([120, 0.5, undefined, 0, -1, Infinity, "120"])(
 
 test("Long command previews preserve Unicode, timeouts, and original text while truncating display", () => {
   // Emoji at UTF-16 boundaries must not produce isolated surrogates.
-  const assistant = fixtureMessage("openai-responses", "openai", "fixture"),
-    transcript = new SessionTranscript([]);
+  const assistant = fixtureMessage("openai-responses", "openai", "fixture");
+  const transcript = new SessionTranscript([]);
   const command = "a".repeat(4094) + "😀 tail";
+
   assistant.content = [
     { type: "toolCall", id: "long-shell", name: "bash", arguments: { command, timeout: 120 } },
   ];
@@ -309,8 +328,9 @@ test("Long command previews preserve Unicode, timeouts, and original text while 
 
 test("Generic tools never infer timeout units and preserve concise read targets and start lines", () => {
   // Extension timeout units are unknown and must not inherit Bash semantics.
-  const assistant = fixtureMessage("openai-responses", "openai", "fixture"),
-    transcript = new SessionTranscript([]);
+  const assistant = fixtureMessage("openai-responses", "openai", "fixture");
+  const transcript = new SessionTranscript([]);
+
   assistant.content = [
     {
       type: "toolCall",
@@ -331,6 +351,7 @@ test("Generic tools never infer timeout units and preserve concise read targets 
 test("Ordinary SKILL.md reads remain tool executions rather than inferred skill calls", () => {
   const transcript = new SessionTranscript([]);
   const assistant = fixtureMessage("openai-responses", "openai", "fixture");
+
   assistant.content = [
     { type: "toolCall", id: "read-skill", name: "read", arguments: { path: "/fixture/SKILL.md" } },
   ];
