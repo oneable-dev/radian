@@ -266,7 +266,7 @@ test.each([false, true])(
       const picker = app.current()!.dialog!;
       expect(picker).toMatchObject({
         kind: "select",
-        title: "Authenticate MCP server",
+        title: "MCP authentication",
         options: ["vercel", "supabase"],
       });
       expect(app.current()?.statuses["auth-command"]).toBeUndefined();

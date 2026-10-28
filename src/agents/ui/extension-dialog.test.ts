@@ -173,6 +173,72 @@ test.each(["input", "confirm"] as const)(
 test.each([
   [120, 30],
   [60, 16],
+  [30, 10],
+])(
+  "Extension choices use their search title without a separate heading or gap at %dx%d",
+  async (width, height) => {
+    // Authentication needs a distinct picker title rather than a generic options label.
+    const app = await mount(width, height);
+    try {
+      await app.show({
+        id: "authentication",
+        kind: "select",
+        title: "MCP authentication",
+        options: ["supabase", "vercel"],
+      });
+
+      // The search field starts the popup and the first candidate immediately follows it.
+      const panel = app.get("extension-dialog-panel"),
+        field = app.get("extension-dialog-search-field"),
+        search = app.get("extension-dialog-search"),
+        list = app.get("extension-dialog-list") as ScrollBoxRenderable;
+      expect(app.captureCharFrame().match(/MCP authentication/gu)).toHaveLength(1);
+      expect(app.captureCharFrame()).not.toContain("Options");
+      expect(field.y).toBe(panel.y);
+      expect(app.get("extension-option:0").y).toBe(field.y + field.height);
+      expect(app.renderer.currentFocusedRenderable).toBe(search);
+
+      // Tab traversal skips the absent description and returns to search without accepting.
+      app.mockInput.pressTab();
+      await app.render();
+      expect(app.renderer.currentFocusedRenderable).toBe(list);
+      app.mockInput.pressTab();
+      await app.render();
+      expect(app.renderer.currentFocusedRenderable).toBe(search);
+      expect(app.answers).toEqual([]);
+      expect(app.prompt.value).toBe("Unsent Agent draft");
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+test("Extension selection titles preserve multiline instructions as body content", async () => {
+  // Extension titles can include meaningful instructions in addition to the picker name.
+  const app = await mount();
+  try {
+    await app.show({
+      id: "selection",
+      kind: "select",
+      title: "MCP authentication\n\nSelect the server for your workspace.",
+      options: ["vercel"],
+    });
+
+    // Only the first line becomes the search title; the remaining content stays readable.
+    const frame = app.captureCharFrame();
+    expect(frame.match(/MCP authentication/gu)).toHaveLength(1);
+    expect(frame).toContain("Select the server for your workspace.");
+    expect(frame).not.toContain("Options");
+    expect(app.get("extension-dialog-details").visible).toBe(true);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("extension-dialog-search");
+  } finally {
+    await app.close();
+  }
+});
+
+test.each([
+  [120, 30],
+  [60, 16],
 ])(
   "Extension choices preserve search input and navigate candidates across focus at %dx%d",
   async (width, height) => {

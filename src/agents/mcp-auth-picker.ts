@@ -42,7 +42,7 @@ export class McpAuthPicker {
       return ok(undefined);
     }
     const choice = await ui.select(
-      "Authenticate MCP server",
+      "MCP authentication",
       servers.map((server) => server.name),
     );
     if (choice === undefined) return ok(undefined);

@@ -218,9 +218,18 @@ export class ExtensionDialogPanel {
     this.scope = scope;
     this.owner = this.renderer.currentFocusedRenderable ?? undefined;
     const dialog = scope.dialog;
-    this.body.content = plain(
-      dialog.title + (dialog.kind === "confirm" ? `\n\n${dialog.message}` : ""),
-    );
+    if (dialog.kind === "select") {
+      const [title = "", ...details] = plain(dialog.title).split("\n");
+      const description = details.join("\n").trim();
+      this.search.setTitle(singleLine(title) || "Options");
+      this.body.content = description;
+      this.details.visible = Boolean(description);
+    } else {
+      this.body.content = plain(
+        dialog.title + (dialog.kind === "confirm" ? `\n\n${dialog.message}` : ""),
+      );
+      this.details.visible = true;
+    }
     this.input.value = "";
     this.input.placeholder = dialog.kind === "input" ? plain(dialog.placeholder ?? "") : "";
     this.input.visible = dialog.kind === "input";
