@@ -208,6 +208,50 @@ test("Cached Editor screens restore immediately but input waits for new lease ac
   }
 });
 
+test("Disconnected Editor guidance stays centered across resize and preserves cached buffers", async () => {
+  // A live editor must stop accepting input when its attachment is lost.
+  const app = await mount();
+  try {
+    app.failures[0]!(new EditorError("EDITOR_UNAVAILABLE", "Attachment lost."));
+
+    // Recovery guidance follows the panel center instead of occupying header rows.
+    for (const [width, height] of [
+      [80, 24],
+      [81, 17],
+      [50, 10],
+    ] as const) {
+      app.resize(width, height);
+      await app.render();
+      const lines = app.captureCharFrame().split("\n");
+      const messageY = lines.findIndex((line) => line.includes("Editor unavailable"));
+      const actionY = lines.findIndex((line) => line.includes("Open / reconnect editor"));
+      for (const y of [messageY, actionY]) {
+        expect(y).toBeGreaterThan(0);
+        const line = lines[y]!,
+          text = line.trim();
+        expect(Math.abs(line.indexOf(text) + text.length / 2 - width / 2)).toBeLessThanOrEqual(1);
+      }
+      expect(Math.abs((messageY + actionY + 1) / 2 - height / 2)).toBeLessThanOrEqual(1);
+      expect(app.captureCharFrame()).not.toContain("BUFFER-editor");
+      expect(app.panel.openButton.focused).toBe(true);
+      expect(app.panel.input).toBeUndefined();
+    }
+
+    // Explicit reconnection restores the same buffer without leaving recovery rows behind.
+    app.panel.show(tree, true);
+    await app.render();
+    await app.render();
+    expect(app.attaches).toBe(2);
+    expect(app.opens).toBe(0);
+    expect(app.panel.input?.width).toBe(50);
+    expect(app.panel.input?.height).toBe(10);
+    expect(app.captureCharFrame()).toContain("BUFFER-editor");
+    expect(app.captureCharFrame()).not.toContain("Editor unavailable");
+  } finally {
+    await app.close();
+  }
+});
+
 test("Explicit reconnection reuses caches and stale failures never close new connections", async () => {
   // A failed connection must not satisfy the already-connected fast path.
   const app = await mount();

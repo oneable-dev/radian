@@ -24,6 +24,7 @@ async function mount(initial?: WorkViewPreferences, clock?: ManualClock, keymap?
   const selection = new WorkspaceSelection(demoWorkspace());
   let items: TerminalInfo[] = [];
   let sequence = 0;
+  const failures: ((error: unknown) => void)[] = [];
   const created: string[] = [],
     closed: string[] = [],
     inputs: string[] = [],
@@ -52,7 +53,8 @@ async function mount(initial?: WorkViewPreferences, clock?: ManualClock, keymap?
       selection.replaceSnapshot(selection.snapshot);
       return ok(undefined);
     },
-    attach: async (id, receive) => {
+    attach: async (id, receive, failed) => {
+      failures.push(failed);
       let revision = 0,
         offset = 0,
         cols = 80,
@@ -100,6 +102,7 @@ async function mount(initial?: WorkViewPreferences, clock?: ManualClock, keymap?
     selection,
     view,
     actions,
+    failures,
     created,
     closed,
     inputs,
@@ -172,6 +175,61 @@ test("Restored Terminal screens create one default shell when none are open", as
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBe("shell-1");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
     expect(app.inputs).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Disconnected Terminal guidance stays centered and Enter reconnects the selected shell", async () => {
+  // Keep the running shell while its attachment fails, rather than starting a replacement.
+  const clock = new ManualClock();
+  const app = await mount(undefined, clock);
+  try {
+    await app.showView("t");
+    await app.visible("Shell shell-1");
+    app.failures[0]!(new PtyError("PTY_UNAVAILABLE", "Attachment lost."));
+    // Let the transient diagnostic toast expire so it cannot cover the compact recovery body.
+    clock.advance(8000);
+
+    // Both the recovery message and its focused action stay centered as the body resizes.
+    for (const [width, height] of [
+      [120, 24],
+      [81, 18],
+      [64, 12],
+    ] as const) {
+      app.resize(width, height);
+      await app.renderOnce();
+      await app.renderOnce();
+      const viewport = app.renderer.root.findDescendantById("terminal-viewport")!;
+      const lines = app.captureCharFrame().split("\n");
+      const messageY = lines.findIndex((line) => line.includes("Terminal unavailable"));
+      const actionY = lines.findIndex((line) => line.includes("Reconnect"));
+      expect(app.captureCharFrame()).toContain("Terminal unavailable");
+      expect(app.captureCharFrame()).toContain("Reconnect");
+      for (const y of [messageY, actionY]) {
+        expect(y).toBeGreaterThan(viewport.y);
+        const text = y === messageY ? "Terminal unavailable · reconnect explicitly" : "Reconnect";
+        const x = lines[y]!.indexOf(text);
+        expect(
+          Math.abs(x + text.length / 2 - (viewport.x + viewport.width / 2)),
+        ).toBeLessThanOrEqual(1);
+      }
+      expect(
+        Math.abs((messageY + actionY + 1) / 2 - (viewport.y + viewport.height / 2)),
+      ).toBeLessThanOrEqual(1);
+      expect(app.captureCharFrame()).not.toContain("Shell shell-1");
+      expect(viewport.hasFocusedDescendant).toBe(true);
+    }
+
+    // The existing activation command reconnects without creating a shell or replaying input.
+    app.mockInput.pressEnter();
+    await app.visible("Shell shell-1");
+    expect(app.created).toEqual(["demo:main"]);
+    expect(app.failures).toHaveLength(2);
+    expect(app.inputs).toEqual([]);
+    expect(app.captureCharFrame()).not.toContain("Terminal unavailable");
+    expect(app.captureCharFrame()).not.toContain("Reconnect");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
   } finally {
     await app.close();
   }

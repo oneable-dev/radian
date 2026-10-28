@@ -52,6 +52,7 @@ export class TerminalPanel {
   private readonly viewport: BoxRenderable;
   private readonly spinner: LoadingSpinner;
   private readonly emptyState: EmptyState;
+  private readonly recovery: BoxRenderable;
   private readonly reconnectButton: BoxRenderable;
   private readonly tabButtons = new Map<string, SessionTab>();
   private readonly creating = new Set<string>();
@@ -129,8 +130,8 @@ export class TerminalPanel {
       "Reconnect terminal",
     );
     this.reconnectButton.visible = false;
+    this.reconnectButton.maxWidth = "100%";
     toolbar.add(this.tabs);
-    toolbar.add(this.reconnectButton);
     const status = (this.messageRow = new BoxRenderable(renderer, {
       height: 1,
       flexShrink: 0,
@@ -166,6 +167,35 @@ export class TerminalPanel {
     this.emptyState = new EmptyState(renderer, "terminal-empty-state");
     this.emptyState.root.visible = false;
     this.viewport.add(this.emptyState.root);
+    this.recovery = new BoxRenderable(renderer, {
+      id: "terminal-recovery",
+      flexGrow: 1,
+      minHeight: 0,
+      flexDirection: "column",
+      justifyContent: "center",
+      alignItems: "center",
+      gap: 1,
+      overflow: "hidden",
+      visible: false,
+      onSizeChange: () => {
+        this.recovery.gap = this.recovery.height >= 3 ? 1 : 0;
+      },
+    });
+    const recoveryMessage = new TextRenderable(renderer, {
+      content: "Terminal unavailable · reconnect explicitly",
+      height: 1,
+      minHeight: 0,
+      maxWidth: "100%",
+      flexShrink: 1,
+      wrapMode: "none",
+      selectable: false,
+    });
+    uiTheme(renderer).bindStyles(recoveryMessage, (styles) =>
+      paintText(recoveryMessage, styles["ui.muted"]),
+    );
+    this.recovery.add(recoveryMessage);
+    this.recovery.add(this.reconnectButton);
+    this.viewport.add(this.recovery);
     this.root.add(toolbar);
     this.root.add(status);
     this.root.add(this.viewport);
@@ -451,6 +481,7 @@ export class TerminalPanel {
     this.cancelLayout?.();
     this.removeSurface();
     this.reconnectButton.visible = false;
+    this.recovery.visible = false;
     if (focus) this.root.focus();
     const owner = this.renderer.currentFocusedRenderable;
     if (!id || !this.actions) {
@@ -562,8 +593,9 @@ export class TerminalPanel {
         ? `[${error.code}] ${error.message}`
         : reportUnexpected(error, "terminal view");
     if (this.root.isDestroyed) return;
-    this.setMessage("Terminal unavailable · reconnect explicitly");
+    this.setMessage(this.selected ? "" : "Terminal unavailable · reconnect explicitly");
     this.reconnectButton.visible = Boolean(this.selected);
+    this.recovery.visible = Boolean(this.selected);
     if (this.surface?.root.focused) this.reconnectButton.focus();
     this.removeSurface();
     this.notice(message, { level: "error", source: "Terminal" });

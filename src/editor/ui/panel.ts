@@ -32,6 +32,7 @@ type CachedEditor = { id: string; surface: TerminalSurface; frame?: EditorFrame 
 export class EditorPanel {
   readonly root: BoxRenderable;
   readonly openButton: BoxRenderable;
+  private readonly status: BoxRenderable;
   private readonly message: TextRenderable;
   private readonly cached = new Map<string, CachedEditor>();
   private selected: CachedEditor | undefined;
@@ -59,10 +60,25 @@ export class EditorPanel {
       flexDirection: "column",
       visible: false,
     });
+    this.status = new BoxRenderable(renderer, {
+      id: "editor-status",
+      flexGrow: 1,
+      minHeight: 0,
+      flexDirection: "column",
+      justifyContent: "center",
+      alignItems: "center",
+      gap: 1,
+      overflow: "hidden",
+      onSizeChange: () => {
+        this.status.gap = this.status.height >= 3 ? 1 : 0;
+      },
+    });
     this.message = new TextRenderable(renderer, {
       content: "",
       height: 1,
-      flexShrink: 0,
+      minHeight: 0,
+      maxWidth: "100%",
+      flexShrink: 1,
       wrapMode: "none",
       selectable: false,
     });
@@ -72,8 +88,11 @@ export class EditorPanel {
     this.openButton = button("Open / reconnect editor", () => {
       if (this.worktree) this.show(this.worktree, true);
     });
-    this.root.add(this.message);
-    this.root.add(this.openButton);
+    this.openButton.maxWidth = "100%";
+    this.openButton.flexShrink = 0;
+    this.status.add(this.message);
+    this.status.add(this.openButton);
+    this.root.add(this.status);
   }
   get input(): EmbeddedTerminalRenderable | undefined {
     return this.root.visible &&
@@ -115,6 +134,7 @@ export class EditorPanel {
           : "";
     this.message.visible = !worktree || !this.actions || Boolean(exited);
     this.openButton.visible = Boolean(worktree && this.actions && (!info || exited));
+    this.status.visible = this.message.visible || this.openButton.visible;
     if (previous && previous.id === info?.id && !exited) {
       this.selected = previous;
       // The last painted screen is visible immediately. Input remains disabled
@@ -130,6 +150,7 @@ export class EditorPanel {
           this.message.content = `Opening Neovim · ${worktree.name}`;
           this.message.visible = true;
           this.openButton.visible = false;
+          this.status.visible = true;
           await this.laidOut();
           if (!this.current(generation)) return;
           const opened = await this.actions.open(worktree.id, {
@@ -146,6 +167,7 @@ export class EditorPanel {
         if (!id) {
           this.message.content = "Editor is not running · open explicitly to start Neovim.";
           this.message.visible = true;
+          this.status.visible = true;
           return;
         }
         let cached = this.cached.get(worktree.id);
@@ -176,6 +198,7 @@ export class EditorPanel {
               : "";
             this.message.visible = frame.exited;
             this.openButton.visible = frame.exited;
+            this.status.visible = frame.exited;
             if (frame.exited && editor.surface.root.focused) this.openButton.focus();
             editor.surface.acceptsInput = Boolean(this.connection && !frame.exited);
             editor.surface.root.visible = !frame.exited;
@@ -221,8 +244,10 @@ export class EditorPanel {
     this.message.content = "Editor unavailable · open / reconnect explicitly";
     this.message.visible = true;
     this.openButton.visible = true;
+    this.status.visible = true;
     if (this.selected?.surface.root.focused) this.openButton.focus();
     this.selected?.surface.suspend();
+    if (this.selected) this.selected.surface.root.visible = false;
     this.notice(text, { level: "error", source: "Editor" });
     this.changed();
   }
