@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -69,6 +70,19 @@ async function fixture() {
     other,
     sessions,
     now,
+    repositories: [
+      {
+        id: "repo",
+        name: "Project",
+        worktrees: [cwd, other].map((path, index) => ({
+          id: `tree-${index}`,
+          path,
+          name: `tree-${index}`,
+          branch: "main",
+          sessions: [],
+        })),
+      },
+    ],
     save,
     entries,
     async cleanup() {
@@ -143,37 +157,185 @@ test("Shared SDK directories scope by project and warn about partially corrupt c
   }
 });
 
-test("Forked histories count shared ancestors only once across conversation files", async () => {
-  // Create real JSONL files with shared historical entries in original and fork.
+test.each(["same", "different"])(
+  "Forked histories count shared ancestors once in the %s worktree",
+  async (worktree) => {
+    // Original and fork may belong to different worktrees in the same shared directory.
+    const app = await fixture();
+    const registry = new SessionRegistry(app.repositories, async () => {
+      throw new Error("No executor allowed");
+    });
+    try {
+      await app.save("original");
+
+      const fork = app.entries("original", worktree === "different" ? app.other : app.cwd);
+      fork[0] = { ...fork[0]!, id: "fork" };
+      await writeFile(
+        join(app.sessions, "fork.jsonl"),
+        fork.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+      );
+
+      // Count unique runs and model responses across all worktree indexes, not files.
+      const result = expectOk(
+        await new SessionHistory(app.repositories, registry, app.sessions).dashboard(7),
+      );
+
+      // Moving a fork to another worktree must not duplicate inherited usage.
+      expect(result.totals).toEqual({ tokens: 120, runs: 1, durationMs: 2000 });
+    } finally {
+      await registry.shutdown();
+      await app.cleanup();
+    }
+  },
+);
+
+test("Dashboard scans a shared SDK directory once per refresh and retains worktree scope", async () => {
+  // Two member worktrees share storage with a foreign session outside the repository.
   const app = await fixture();
-  const repositories = [
-    {
-      id: "repo",
-      name: "Project",
-      worktrees: [{ id: "tree", path: app.cwd, name: "main", branch: "main", sessions: [] }],
-    },
-  ];
-  const registry = new SessionRegistry(repositories, async () => {
+  const registry = new SessionRegistry(app.repositories, async () => {
     throw new Error("No executor allowed");
   });
+  const directoryListing = spyOn(SessionManager, "listAll");
+  const worktreeListing = spyOn(SessionManager, "list");
   try {
-    await app.save("original");
+    await app.save("main");
+    await app.save("other", app.other);
+    await app.save("foreign", app.directory);
+    const history = new SessionHistory(app.repositories, registry, app.sessions);
 
-    const fork = app.entries("original");
-    fork[0] = { ...fork[0]!, id: "fork" };
-    await writeFile(
-      join(app.sessions, "fork.jsonl"),
-      fork.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
-    );
+    // Reuse the directory scan across worktrees, but rediscover new files on the next refresh.
+    const first = expectOk(await history.dashboard(7));
+    expect(directoryListing).toHaveBeenCalledTimes(1);
+    const foreign = expectError(await history.preview("tree-0", "foreign"));
+    await app.save("new", app.other);
+    const refreshed = expectOk(await history.dashboard(7));
 
-    // Count unique runs and model responses, not files.
-    const result = expectOk(
-      await new SessionHistory(repositories, registry, app.sessions).dashboard(7),
-    );
-
-    // Forks did not consume historical tokens or run time again.
-    expect(result.totals).toEqual({ tokens: 120, runs: 1, durationMs: 2000 });
+    // Each member file contributes once; foreign metadata never becomes preview membership.
+    expect(first.totals).toEqual({ tokens: 240, runs: 2, durationMs: 4000 });
+    expect(refreshed.totals).toEqual({ tokens: 360, runs: 3, durationMs: 6000 });
+    expect(foreign.code).toBe("HISTORY_UNAVAILABLE");
+    expect(directoryListing).toHaveBeenCalledTimes(2);
+    expect(directoryListing).toHaveBeenCalledWith(app.sessions, undefined, undefined);
+    expect(worktreeListing).not.toHaveBeenCalled();
+    expect(registry.records).toEqual([]);
   } finally {
+    worktreeListing.mockRestore();
+    directoryListing.mockRestore();
+    await registry.shutdown();
+    await app.cleanup();
+  }
+});
+
+test("Empty shared directories are scanned once even when several worktrees have no usage", async () => {
+  // An empty result is still a completed discovery, not a reason to retry for each worktree.
+  const app = await fixture();
+  const registry = new SessionRegistry(app.repositories, async () => {
+    throw new Error("No executor allowed");
+  });
+  const directoryListing = spyOn(SessionManager, "listAll");
+  const worktreeListing = spyOn(SessionManager, "list");
+  try {
+    // Aggregate an empty directory through the same public dashboard path.
+    const result = expectOk(
+      await new SessionHistory(app.repositories, registry, app.sessions).dashboard(7),
+    );
+
+    // Zero usage does not require duplicate metadata scans.
+    expect(result.totals).toEqual({ tokens: 0, runs: 0, durationMs: 0 });
+    expect(directoryListing).toHaveBeenCalledTimes(1);
+    expect(worktreeListing).not.toHaveBeenCalled();
+  } finally {
+    worktreeListing.mockRestore();
+    directoryListing.mockRestore();
+    await registry.shutdown();
+    await app.cleanup();
+  }
+});
+
+test("Batched dashboard discovery preserves default per-worktree legacy directories", async () => {
+  // Dedicated storage contains one session while a legacy directory supplies the other worktree.
+  const app = await fixture();
+  const registry = new SessionRegistry(app.repositories, async () => {
+    throw new Error("No executor allowed");
+  });
+  const legacyPath = join(app.directory, "legacy.jsonl");
+  const timestamp = new Date(app.now);
+  const directoryListing = spyOn(SessionManager, "listAll");
+  const worktreeListing = spyOn(SessionManager, "list").mockImplementation(async (cwd) =>
+    cwd === app.other
+      ? [
+          {
+            id: "legacy",
+            path: legacyPath,
+            cwd: app.other,
+            created: timestamp,
+            modified: timestamp,
+            messageCount: 2,
+            firstMessage: "Question",
+            allMessagesText: "Question Answer",
+          },
+        ]
+      : [],
+  );
+  try {
+    await app.save("owned");
+    await writeFile(
+      legacyPath,
+      app
+        .entries("legacy", app.other)
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+    );
+
+    // Batch only the shared directory; default directories remain scoped to their worktrees.
+    const result = expectOk(
+      await new SessionHistory(app.repositories, registry, app.sessions, undefined, true).dashboard(
+        7,
+      ),
+    );
+
+    // Both sources contribute without invoking a shared-directory scan per worktree.
+    expect(result.totals).toEqual({ tokens: 240, runs: 2, durationMs: 4000 });
+    expect(directoryListing).toHaveBeenCalledTimes(1);
+    expect(worktreeListing.mock.calls.map(([cwd, directory]) => [cwd, directory])).toEqual([
+      [app.cwd, undefined],
+      [app.other, undefined],
+    ]);
+  } finally {
+    worktreeListing.mockRestore();
+    directoryListing.mockRestore();
+    await registry.shutdown();
+    await app.cleanup();
+  }
+});
+
+test("Cancelled shared discovery forwards its signal without poisoning later dashboards", async () => {
+  // A cancelled refresh must not leave its shared directory result in a longer-lived cache.
+  const app = await fixture();
+  const registry = new SessionRegistry(app.repositories, async () => {
+    throw new Error("No executor allowed");
+  });
+  const abort = new AbortController();
+  const directoryListing = spyOn(SessionManager, "listAll").mockImplementation(async () => {
+    abort.abort();
+    abort.signal.throwIfAborted();
+    return [];
+  });
+  try {
+    await app.save("saved");
+    const history = new SessionHistory(app.repositories, registry, app.sessions);
+
+    // Cancel during SDK discovery rather than only before dashboard entry.
+    const cancelled = expectError(await history.dashboard(7, abort.signal));
+    expect(directoryListing).toHaveBeenCalledWith(app.sessions, undefined, abort.signal);
+    directoryListing.mockRestore();
+    const recovered = expectOk(await history.dashboard(7));
+
+    // A new request observes live files instead of reusing the cancelled attempt.
+    expect(cancelled.code).toBe("CANCELLED");
+    expect(recovered.totals).toEqual({ tokens: 120, runs: 1, durationMs: 2000 });
+  } finally {
+    directoryListing.mockRestore();
     await registry.shutdown();
     await app.cleanup();
   }

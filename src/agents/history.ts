@@ -1,5 +1,6 @@
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import { realpath, stat } from "node:fs/promises";
+import { resolve } from "node:path";
 import { repositorySnapshot, type RepositorySource } from "../workspace/catalog.ts";
 import { validateHistory, type SessionRecord, type SessionRegistry } from "./session-registry.ts";
 import {
@@ -276,6 +277,7 @@ export class SessionHistory {
     const files = new Set<string>();
     const summaries: DashboardSnapshot[] = [];
     const warnings: string[] = [];
+    let sharedSessions: readonly SessionInfo[] | undefined;
     for (const tree of repositorySnapshot(this.repositories).flatMap(
       (repository) => repository.worktrees,
     )) {
@@ -283,7 +285,19 @@ export class SessionHistory {
         return err(new CancelledError());
       }
 
-      const index = await this.index(tree.id, signal, true);
+      // Directory-wide SDK discovery is shared only within this refresh, never across requests.
+      if (this.sessionDir && !sharedSessions) {
+        const sessions = await capture(() =>
+          SessionManager.listAll(this.sessionDir, undefined, signal),
+        );
+        if (!sessions.ok) {
+          return sessions;
+        }
+
+        sharedSessions = sessions.value;
+      }
+
+      const index = await this.index(tree.id, signal, true, sharedSessions);
       if (!index.ok) {
         return index;
       }
@@ -331,6 +345,7 @@ export class SessionHistory {
     worktreeId: string,
     signal?: AbortSignal,
     refresh = false,
+    sharedSessions?: readonly SessionInfo[],
   ): Promise<Result<HistoryIndex, ExpectedError>> {
     if (signal?.aborted) {
       return Promise.resolve(err(new CancelledError()));
@@ -357,7 +372,7 @@ export class SessionHistory {
       return previous.ready;
     }
 
-    const ready = this.discover(worktreeId, signal).then((result) => {
+    const ready = this.discover(worktreeId, signal, sharedSessions).then((result) => {
       entry.valid = result.ok;
 
       return result;
@@ -373,6 +388,7 @@ export class SessionHistory {
   private async discover(
     worktreeId: string,
     signal?: AbortSignal,
+    sharedSessions?: readonly SessionInfo[],
   ): Promise<Result<HistoryIndex, ExpectedError>> {
     if (signal?.aborted) {
       return err(new CancelledError());
@@ -393,10 +409,14 @@ export class SessionHistory {
       return err(new CancelledError());
     }
 
+    const resolvedCwd = resolve(tree.path);
     const sessions = await capture(async () => {
-      const owned = (await SessionManager.list(tree.path, this.sessionDir, undefined, signal)).map(
-        (session) => ({ ...session, requireCwd: !!this.sessionDir }),
-      );
+      // listAll is directory-wide; retain list's cwd scope before canonical-path validation.
+      const owned = (
+        sharedSessions
+          ? sharedSessions.filter((session) => session.cwd && resolve(session.cwd) === resolvedCwd)
+          : await SessionManager.list(tree.path, this.sessionDir, undefined, signal)
+      ).map((session) => ({ ...session, requireCwd: !!this.sessionDir }));
       const legacy = this.includeDefaultSessions
         ? (await SessionManager.list(tree.path, undefined, undefined, signal)).map((session) => ({
             ...session,
