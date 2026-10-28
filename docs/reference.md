@@ -13,7 +13,7 @@ Build a terminal-based editor that uses Pi Agent to help developers build softwa
 
 ## Development
 
-Requires Bun 1.4.3 or later.
+Requires Bun 1.4.4 or later.
 
 ```sh
 bun install --frozen-lockfile
@@ -1671,8 +1671,8 @@ daemon. Existing history and repository data paths are retained; no destructive 
 
 Event subscriptions send the current snapshot every 5 s while idle, keeping `GET /events` alive
 without disabling ordinary request timeouts. These heartbeat snapshots use the existing protocol and
-do not run agents or write checkpoints. A heartbeat is used because the installed Bun 1.4.3 can still
-time out streaming Unix requests after `server.timeout(request, 0)`.
+do not run agents or write checkpoints. A heartbeat works around streaming Unix requests timing out
+after `server.timeout(request, 0)`, as observed on Bun 1.4.3.
 
 A workspace snapshot includes every open session, not one prompt or one terminal viewport. Closed
 session snapshots stay on disk and are fetched individually by History, not broadcast to every TUI.

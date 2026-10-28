@@ -9,24 +9,29 @@ bun install --frozen-lockfile
 ## Checks
 
 ```sh
-bun run format:check
-bun run lint
+bun fmt --check
+bun lint
 bun run typecheck
 bun test
 ```
 
-Use `bun run format` to apply Oxfmt formatting. `.oxfmtrc.json` uses a 100-column
-print width, preserves import and `package.json` key order, and excludes generated
-output and dependencies.
+Use `bun fmt` to apply Bun's built-in formatting. `.oxfmtrc.json` is retained for
+Oxfmt compatibility: it uses a 100-column print width, preserves import and
+`package.json` key order, and excludes generated output and dependencies. The
+`format` and `format:check` scripts delegate to `bun fmt` and `bun fmt --check`.
 
-`bun run lint` runs Oxlint's correctness rules and type-aware checks, including
+Bun 1.4.4 includes `bun fmt`, but not a built-in `bun lint`. `bun lint` therefore
+still runs the project's Oxlint script. Keep `oxlint` and `oxlint-tsgolint` until
+a stable Bun release includes the native linter and its checks have been verified.
+
+`bun lint` runs Oxlint's correctness rules and type-aware checks, including
 `typescript/no-floating-promises`. Errors, warnings, and unused suppression
 comments fail the check. Generated output and dependencies are excluded in
 `.oxlintrc.json`.
 
-Use `bun run lint:fix` for automatic fixes, then review the diff and rerun the
-checks. Do not apply dangerous fixes or reformat unrelated code as part of lint
-cleanup.
+Use `bun lint --fix` for automatic fixes, then review the diff and rerun the
+checks. The `lint:fix` script remains available too. Do not apply dangerous fixes
+or reformat unrelated code as part of lint cleanup.
 
 Handle promises with `await`, `return`, or a rejection handler. The default
 `no-floating-promises` options allow an explicit `void` for intentionally detached

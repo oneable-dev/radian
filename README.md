@@ -17,8 +17,8 @@
 </p>
 
 <p align="center">
-  <a href="package.json#gh-dark-mode-only"><img src="https://img.shields.io/badge/Bun-%E2%89%A51.4.3-6E7681?style=flat-square&amp;labelColor=30363D" alt="Bun ≥ 1.4.3"></a>
-  <a href="package.json#gh-light-mode-only"><img src="https://img.shields.io/badge/Bun-%E2%89%A51.4.3-D0D7DE?style=flat-square&amp;labelColor=EAEEF2" alt="Bun ≥ 1.4.3"></a>
+  <a href="package.json#gh-dark-mode-only"><img src="https://img.shields.io/badge/Bun-%E2%89%A51.4.4-6E7681?style=flat-square&amp;labelColor=30363D" alt="Bun ≥ 1.4.4"></a>
+  <a href="package.json#gh-light-mode-only"><img src="https://img.shields.io/badge/Bun-%E2%89%A51.4.4-D0D7DE?style=flat-square&amp;labelColor=EAEEF2" alt="Bun ≥ 1.4.4"></a>
   <a href="LICENSE#gh-dark-mode-only"><img src="https://img.shields.io/badge/license-MIT-6E7681?style=flat-square&amp;labelColor=30363D" alt="MIT license"></a>
   <a href="LICENSE#gh-light-mode-only"><img src="https://img.shields.io/badge/license-MIT-D0D7DE?style=flat-square&amp;labelColor=EAEEF2" alt="MIT license"></a>
 </p>
@@ -63,7 +63,7 @@ popup, so switching projects does not take space away from your editor or termin
 ## Requirements
 
 - **macOS or Linux** for the local runtime and embedded terminals.
-- **Bun ≥ 1.4.3** and **Git** on your `PATH`.
+- **Bun ≥ 1.4.4** and **Git** on your `PATH`.
 - A cursor-addressable **UTF-8 terminal** with interactive stdin/stdout.
 - **Neovim** available as `nvim` on the runtime's `PATH` to use Editor.
 - A **Nerd Font** is recommended for the full icon set.

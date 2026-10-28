@@ -9,17 +9,17 @@
     "type": "git",
     "url": "https://github.com/oneable-dev/radian.git"
   },
-  "packageManager": "bun@1.4.3",
+  "packageManager": "bun@1.4.4",
   "engines": {
-    "bun": ">=1.4.3"
+    "bun": ">=1.4.4"
   },
   "scripts": {
     "start": "bun src/index.ts",
     "dev": "bun src/index.ts",
     "restart": "bun src/index.ts runtime restart",
     "typecheck": "tsc --noEmit",
-    "format": "oxfmt",
-    "format:check": "oxfmt --check",
+    "format": "bun fmt",
+    "format:check": "bun fmt --check",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "test": "bun test",
@@ -36,8 +36,7 @@
     "web-tree-sitter": "0.25.10"
   },
   "devDependencies": {
-    "@types/bun": "1.4.3",
-    "oxfmt": "0.75.0",
+    "@types/bun": "1.4.4",
     "oxlint": "1.90.0",
     "oxlint-tsgolint": "7.0.2005",
     "typescript": "7.0.2"
