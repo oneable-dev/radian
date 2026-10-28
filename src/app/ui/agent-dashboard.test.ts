@@ -1,4 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
+import * as os from "node:os";
 import { ScrollBoxRenderable, TextRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import {
@@ -426,7 +427,14 @@ test("Compact dashboards distinguish empty data from lookup failures without inv
 });
 
 test("Live resources sum UI and Runtime and keep their history independent of usage filters and focus", async () => {
-  // Stable OS counters make the displayed one-core percentages and RSS sum deterministic.
+  // Eight logical CPUs make the whole-machine percentages independent of the test host.
+  const logicalCpus = spyOn(os, "cpus").mockReturnValue(
+    Array.from({ length: 8 }, () => ({
+      model: "Test CPU",
+      speed: 1000,
+      times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 },
+    })),
+  );
   let elapsedMs = 1000;
   let uiCpu = 0;
   let runtimeCpu = 0;
@@ -450,12 +458,14 @@ test("Live resources sum UI and Runtime and keep their history independent of us
     await app.open();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("dashboard-body");
     expect(app.captureCharFrame()).toContain("Radian resources · live");
+    expect(app.captureCharFrame()).toContain("CPU: whole machine = 100%");
 
     const table = app.get("dashboard-resources-table");
     if (!(table instanceof TextRenderable)) {
       throw new Error("Missing resource table");
     }
 
+    expect(table.plainText).toMatch(/Total\s+—/);
     expect(table.plainText).toContain("405 MB");
 
     // Provider history filters must neither reset live samples nor move focus when polling completes.
@@ -471,22 +481,22 @@ test("Live resources sum UI and Runtime and keep their history independent of us
 
     const scrollTop = body.scrollTop;
     elapsedMs = 2000;
-    uiCpu = 8000;
-    runtimeCpu = 32000;
+    uiCpu = 1000000;
+    runtimeCpu = 3000000;
     app.clock.advance(1000);
     await app.render();
 
-    expect(table.plainText).toMatch(/Total\s+4\.0%/);
-    expect(table.plainText).toMatch(/UI\s+0\.8%/);
-    expect(table.plainText).toMatch(/Runtime\s+3\.2%/);
+    expect(table.plainText).toMatch(/Total\s+50\.0%/);
+    expect(table.plainText).toMatch(/UI\s+12\.5%/);
+    expect(table.plainText).toMatch(/Runtime\s+37\.5%/);
     expect(table.plainText).toContain("405 MB");
-    expect(table.plainText).toContain("▁");
+    expect(table.plainText).toContain("▄");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("dashboard-period");
     expect(body.scrollTop).toBe(scrollTop);
     app.get("dashboard-project").focus();
     app.mockInput.pressKey("n", { ctrl: true });
     await app.render();
-    expect(table.plainText).toMatch(/Total\s+4\.0%/);
+    expect(table.plainText).toMatch(/Total\s+50\.0%/);
     expect(calls).toBe(2);
     expect(app.sent).toEqual([]);
   } finally {
@@ -494,6 +504,7 @@ test("Live resources sum UI and Runtime and keep their history independent of us
     elapsed.mockRestore();
     rss.mockRestore();
     cpu.mockRestore();
+    logicalCpus.mockRestore();
   }
 });
 

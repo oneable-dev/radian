@@ -75,7 +75,7 @@ export class ResourcePanel {
       wrapMode: "word",
       selectable: false,
       content:
-        "Shared Runtime · 1 core = 100% · RSS sum (shared pages may overlap) · children excluded",
+        "Shared Runtime · CPU: whole machine = 100% · RSS sum (shared pages may overlap) · children excluded",
     });
     this.message = new TextRenderable(renderer, {
       id: "dashboard-resources-error",

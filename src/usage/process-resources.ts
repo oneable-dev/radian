@@ -1,3 +1,4 @@
+import { cpus } from "node:os";
 import { Type, type Static } from "typebox";
 import { ResourceError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
@@ -46,6 +47,7 @@ export function readProcessResources(): Result<ProcessResourceSample, ResourceEr
 function values(
   current: ProcessResourceSample | null,
   previous: ProcessResourceSample | null,
+  cpuCount: number,
 ): ResourceValues | null {
   if (!current) {
     return null;
@@ -55,9 +57,11 @@ function values(
   const cpu = previous ? current.cpuMicros - previous.cpuMicros : -1;
 
   return {
-    // One fully occupied core is 100%; multiple cores may legitimately exceed 100%.
+    // All logical CPUs together are 100%; a single busy CPU contributes only its machine share.
     cpuPercent:
-      previous?.pid === current.pid && elapsed > 0 && cpu >= 0 ? cpu / (elapsed * 10) : null,
+      previous?.pid === current.pid && elapsed > 0 && cpu >= 0 && cpuCount > 0
+        ? cpu / (elapsed * 10 * cpuCount)
+        : null,
     rssBytes: current.rssBytes,
   };
 }
@@ -66,6 +70,9 @@ export class ResourceHistory {
   private ui: ProcessResourceSample | null = null;
   private runtime: ProcessResourceSample | null = null;
   private points: ResourcePoint[] = [];
+
+  // The UI and shared Runtime run on the same machine and use one capacity denominator.
+  constructor(private readonly cpuCount = cpus().length) {}
 
   get recent(): readonly ResourcePoint[] {
     return this.points;
@@ -76,8 +83,8 @@ export class ResourceHistory {
     runtime: ProcessResourceSample | null,
     at = Date.now(),
   ): ResourceSnapshot {
-    const uiValues = values(ui, this.ui);
-    const runtimeValues = values(runtime, this.runtime);
+    const uiValues = values(ui, this.ui, this.cpuCount);
+    const runtimeValues = values(runtime, this.runtime, this.cpuCount);
     const total =
       uiValues && runtimeValues && ui?.pid !== runtime?.pid
         ? {

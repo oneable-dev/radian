@@ -41,18 +41,62 @@ test("OS counter failures preserve their cause as typed resource failures", () =
   }
 });
 
-test("CPU intervals sum UI and Runtime using one-core percentages without a 100 percent cap", () => {
-  // Different cumulative counters share a one-second sampling interval.
-  const history = new ResourceHistory();
+test("CPU intervals normalize UI and Runtime against whole-machine capacity before summing", () => {
+  // Eight logical CPUs provide eight CPU seconds per wall-clock second.
+  const history = new ResourceHistory(8);
   const initial = history.add(sample(1, 1000, 100000, 85), sample(2, 9000, 200000, 320), 0);
 
+  // Process-specific clocks and cumulative counters still define independent interval deltas.
   const current = history.add(sample(1, 2000, 350000, 90), sample(2, 10000, 1700000, 330), 1000);
 
-  // The first CPU reading is unknown; subsequent 25% and 150% sum to 175%, not a machine-normalized ratio.
+  // Normalize each process once; preserve unknown initial CPU readings and the unchanged RSS sum.
   expect(initial.total).toEqual({ cpuPercent: null, rssBytes: 405 });
-  expect(current.ui).toEqual({ cpuPercent: 25, rssBytes: 90 });
-  expect(current.runtime).toEqual({ cpuPercent: 150, rssBytes: 330 });
-  expect(current.total).toEqual({ cpuPercent: 175, rssBytes: 420 });
+  expect(current.ui).toEqual({ cpuPercent: 3.125, rssBytes: 90 });
+  expect(current.runtime).toEqual({ cpuPercent: 18.75, rssBytes: 330 });
+  expect(current.total).toEqual({ cpuPercent: 21.875, rssBytes: 420 });
+  expect(history.recent.at(-1)?.total).toEqual(current.total);
+});
+
+test.each([
+  { cpuCount: 8, elapsedMs: 1000, cpuMicros: 0, expected: 0 },
+  { cpuCount: 8, elapsedMs: 1000, cpuMicros: 1000000, expected: 12.5 },
+  { cpuCount: 8, elapsedMs: 250, cpuMicros: 250000, expected: 12.5 },
+  { cpuCount: 8, elapsedMs: 1000, cpuMicros: 3000000, expected: 37.5 },
+  { cpuCount: 8, elapsedMs: 1000, cpuMicros: 8000000, expected: 100 },
+  { cpuCount: 1, elapsedMs: 1000, cpuMicros: 1000000, expected: 100 },
+])(
+  "$cpuMicros CPU microseconds over $elapsedMs ms on $cpuCount logical CPUs reports $expected percent",
+  ({ cpuCount, elapsedMs, cpuMicros, expected }) => {
+    // Idle, single-core and multicore work share the same whole-machine denominator.
+    const history = new ResourceHistory(cpuCount);
+    history.add(sample(1, 1000, 100), sample(2, 1000, 200), 0);
+
+    // Keep UI idle so the Runtime contribution also defines the expected Total.
+    const current = history.add(
+      sample(1, 1000 + elapsedMs, 100),
+      sample(2, 1000 + elapsedMs, 200 + cpuMicros),
+      elapsedMs,
+    );
+
+    // Interval length must not change the share, and full-machine work must equal 100%.
+    expect(current.ui?.cpuPercent).toBe(0);
+    expect(current.runtime?.cpuPercent).toBe(expected);
+    expect(current.total?.cpuPercent).toBe(expected);
+  },
+);
+
+test("Unavailable logical CPU counts leave CPU unknown without hiding resident memory", () => {
+  // An OS without CPU topology cannot provide a trustworthy whole-machine percentage.
+  const history = new ResourceHistory(0);
+  history.add(sample(1, 1000, 0), sample(2, 1000, 0), 0);
+
+  // Valid interval counters do not make an unavailable denominator safe to guess.
+  const current = history.add(sample(1, 2000, 1000000, 85), sample(2, 2000, 3000000, 320), 1000);
+
+  // Unknown CPU must remain distinct from zero while memory stays available.
+  expect(current.ui).toEqual({ cpuPercent: null, rssBytes: 85 });
+  expect(current.runtime).toEqual({ cpuPercent: null, rssBytes: 320 });
+  expect(current.total).toEqual({ cpuPercent: null, rssBytes: 405 });
 });
 
 test("Missing Runtime readings clear totals and require a fresh CPU baseline after recovery", () => {

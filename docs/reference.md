@@ -988,8 +988,10 @@ and preserves drafts. The shortcut is configurable as `dashboard.show`.
 The popup opens at the top of a scrollable read-only body. **Radian resources** shows current CPU
 and resident memory for this **UI**, the **shared Runtime**, and their **Total**. The Runtime is
 counted once, regardless of how many repository channels share its PID. System-wide usage and
-external CLI, terminal, and MCP child processes are excluded. CPU uses interval deltas with one
-fully occupied core equal to 100%, so totals may exceed 100%; the first CPU reading is unknown.
+external CLI, terminal, and MCP child processes are excluded. CPU uses interval deltas divided by
+the machine's logical CPU count: 100% means Radian occupies all logical CPUs, while one fully busy
+CPU on an eight-logical-CPU machine contributes 12.5%. The first CPU reading is unknown; CPU also
+remains unknown if the logical CPU count is unavailable.
 Memory is summed RSS, not unique physical memory: shared pages may be counted more than once.
 
 Total CPU and memory include small chronological sparklines for the latest 60 seconds. Samples
