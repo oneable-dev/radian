@@ -19,14 +19,15 @@ import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
 import { uiTheme } from "../../ui/theme.ts";
-import { PopupFrame } from "../../ui/popup-frame.ts";
-import { POPUP_SIZES, PopupBody, attachPopupActivity, centerPopup } from "../../ui/popup-layout.ts";
+import { PopupBody, attachPopupActivity } from "../../ui/popup-layout.ts";
 import { paintText, styleChunk } from "../../ui/theme-styles.ts";
 import { singleLine, truncateCells } from "../../ui/text.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import { dashboardBars, dashboardTrend, dashboardValue } from "./dashboard-charts.ts";
 import { ResourcePanel } from "./resource-panel.ts";
 import type { ResourceLoader } from "../../usage/process-resources.ts";
+import type { WorkspaceResourceLoader } from "../../usage/workspace-resources.ts";
+import type { DialogContent } from "../../ui/text-dialog.ts";
 
 type Project = { id: string; name: string };
 
@@ -41,6 +42,8 @@ type Strip = {
 
 export type DashboardActions = {
   resources?: ResourceLoader;
+  workspaces?: WorkspaceResourceLoader;
+  details?: (content: DialogContent) => void;
   load?: (
     days: DashboardPeriod,
     repositoryId?: string,
@@ -48,6 +51,7 @@ export type DashboardActions = {
   ) => Promise<Result<DashboardSnapshot, ExpectedError>>;
   projects: () => readonly Project[];
   changed: () => void;
+  visibilityChanged?: () => void;
   fallback: () => void;
   keyHint: (command: CommandId, context: KeyContext) => string;
 };
@@ -69,7 +73,6 @@ export class DashboardPanel {
   private readonly ranking: TextRenderable;
   private readonly rankingBody: PopupBody;
   private readonly message: TextRenderable;
-  private readonly notes: TextRenderable;
   private readonly spinner: LoadingSpinner;
   private readonly period: Strip;
   private readonly project: Strip;
@@ -94,18 +97,19 @@ export class DashboardPanel {
     const theme = uiTheme(renderer);
     this.root = new BoxRenderable(renderer, {
       id: "agent-dashboard",
-      position: "absolute",
       width: "100%",
-      height: "100%",
-      zIndex: 5300,
+      flexGrow: 1,
+      minWidth: 0,
+      minHeight: 0,
+      flexDirection: "column",
       visible: false,
       onMouseDown: (event) => event.stopPropagation(),
       onMouseScroll: (event) => event.stopPropagation(),
     });
-    this.panel = new PopupFrame(renderer, {
-      id: "dashboard-dialog",
-      position: "absolute",
-      border: true,
+    this.panel = new BoxRenderable(renderer, {
+      id: "dashboard-panel",
+      width: "100%",
+      height: "100%",
       paddingX: 1,
       flexDirection: "column",
       minWidth: 0,
@@ -127,7 +131,7 @@ export class DashboardPanel {
       contentOptions: { flexDirection: "column", paddingRight: 1 },
       onMouseDown: () => this.scroll.focus(),
     });
-    this.resources = new ResourcePanel(renderer, actions.resources);
+    this.resources = new ResourcePanel(renderer, actions.resources, actions.workspaces);
     this.scroll.add(this.resources.root);
     this.historyHeading = this.text("dashboard-history-heading");
     this.historyHeading.content = "Usage history";
@@ -165,17 +169,6 @@ export class DashboardPanel {
     this.rankingBody.root.flexGrow = 0;
     this.rankingBody.root.flexShrink = 0;
     this.historyBody.add(this.rankingBody.root);
-    this.notes = new TextRenderable(renderer, {
-      id: "dashboard-notes",
-      width: "100%",
-      height: "auto",
-      minHeight: 1,
-      flexShrink: 0,
-      selectable: false,
-      wrapMode: "word",
-      marginTop: 1,
-    });
-    this.historyBody.add(this.notes);
     this.panel.add(this.scroll);
     attachPopupActivity(renderer, this.panel, this.spinner.root, () => ({
       pending: this.loading,
@@ -186,19 +179,16 @@ export class DashboardPanel {
     this.root.add(this.panel);
     theme.scrollbars(this.scroll);
     theme.bindStyles(this.root, (styles) => {
-      this.root.backgroundColor = styles["ui.backdrop"].bg;
-      this.panel.backgroundColor = styles["ui.popup"].bg;
-      this.panel.borderColor = styles["ui.popupBorder"].fg;
+      this.root.backgroundColor = styles["ui.text"].bg;
+      this.panel.backgroundColor = styles["ui.text"].bg;
       paintText(this.spinner.root, styles["status.working"]);
       paintText(this.historyHeading, styles["ui.label"]);
       paintText(this.message, styles["ui.muted"]);
       paintText(this.graph, styles["metadata.meter"]);
       paintText(this.ranking, styles["ui.label"]);
-      paintText(this.notes, styles["ui.muted"]);
       this.paint();
     });
     renderer.on("resize", this.resize);
-    renderer.on("focused_renderable", this.keepFocus);
     renderer.addPostProcessFn(this.revealRanking);
     this.resize();
   }
@@ -281,7 +271,8 @@ export class DashboardPanel {
         ["focus.next", "Section"],
         ["dashboard.half-page-down", "½ page"],
         ["dashboard.refresh", "Refresh"],
-        ["dashboard.dismiss", "Close"],
+        ["dashboard.details", "Details"],
+        ["dashboard.dismiss", "Back"],
       ] as const
     ).map(([command, label]) => ({
       key: footerKeyHint(command, this.context, this.actions.keyHint(command, this.context)),
@@ -304,6 +295,7 @@ export class DashboardPanel {
       ? Math.max(0, this.projects.findIndex((project) => project.id === selectedId) + 1)
       : 0;
     this.root.visible = true;
+    this.actions.visibilityChanged?.();
     this.resize();
     this.scroll.focus();
     this.scroll.scrollTo(0);
@@ -323,6 +315,7 @@ export class DashboardPanel {
     this.resources.stop();
     this.loading = false;
     this.revealRankingPending = false;
+    this.actions.visibilityChanged?.();
 
     const owner = this.owner;
     this.owner = undefined;
@@ -349,6 +342,24 @@ export class DashboardPanel {
   }
 
   command(command: CommandId): void {
+    if (command === "dashboard.details") {
+      this.actions.details?.({
+        title: "Usage details",
+        text: [
+          "Resources",
+          "CPU is measured over sampling intervals; all logical CPUs together are 100%. RAM is resident memory (RSS); shared pages can be counted in more than one process. Trends cover the last 60 seconds.",
+          "Shared includes this UI and the Runtime. Workspace processes include Radian's editors, terminals and their descendants. In-process Agent work and other shared services remain in Runtime; they cannot be accurately divided by workspace. Unavailable readings are shown as —, not zero.",
+          "",
+          "Usage history",
+          "Saved sessions are grouped by local calendar days. Tokens include input, output and cache. Runs/time include recorded settled runs; overlapping durations are summed. Skills combine explicit calls and successful loads. Only observed MCP/subagent calls are counted.",
+          ...(this.snapshot?.warnings.length
+            ? ["", "Coverage warnings", ...this.snapshot.warnings]
+            : []),
+        ].join("\n\n"),
+      });
+
+      return;
+    }
     if (command === "dashboard.dismiss") {
       this.hide();
 
@@ -466,22 +477,14 @@ export class DashboardPanel {
     }
 
     const snapshot = this.snapshot;
-    this.message.content = this.loading
-      ? ""
-      : this.error ||
-        (snapshot?.warnings.length
-          ? `Partial data · ${snapshot.warnings.join(" ")}`
-          : "Saved history · local calendar days");
-    paintText(
-      this.message,
-      styles[this.error || snapshot?.warnings.length ? "status.warning" : "ui.muted"],
-    );
+    this.message.content = this.loading ? "" : this.error;
+    paintText(this.message, styles["status.warning"]);
     this.message.visible = Boolean(this.message.plainText);
 
     const contentVisible = !!snapshot || !this.loading;
     // Keep an empty data region below the editable strips for centered initial feedback.
     this.historyBody.minHeight = contentVisible ? 0 : 7;
-    for (const node of [this.summary, this.graph, this.rankingBody.root, this.notes]) {
+    for (const node of [this.summary, this.graph, this.rankingBody.root]) {
       node.visible = contentVisible;
     }
 
@@ -534,9 +537,6 @@ export class DashboardPanel {
           styleChunk(ranking.join("\n"), styles["ui.label"]),
         ]);
 
-    this.notes.content =
-      "Tokens include input, output and cache. Runs/time include recorded settled runs; overlapping durations are summed. Skills combine explicit calls and successful loads. Only observed MCP/subagent calls are counted." +
-      (snapshot?.warnings.length ? `\n\nCoverage warnings\n${snapshot.warnings.join("\n")}` : "");
     this.actions.changed();
   }
 
@@ -560,36 +560,13 @@ export class DashboardPanel {
     this.scroll.scrollChildIntoView(this.rankingBody.root.id);
   };
 
-  private keepFocus = (): void => {
-    if (!this.visible) {
-      return;
-    }
-    for (
-      let node = this.renderer.currentFocusedRenderable;
-      node;
-      node = node.parent as Renderable | null
-    ) {
-      if (node === this.root) {
-        return;
-      }
-    }
-
-    this.scroll.focus();
-  };
-
   private resize = (): void => {
     if (this.disposed) {
       return;
     }
 
-    const { width } = centerPopup(
-      this.panel,
-      POPUP_SIZES.expanded,
-      this.renderer.width,
-      this.renderer.height,
-    );
-    // Renderable geometry still reflects the preceding frame during a resize event.
-    this.contentWidth = Math.max(1, width - 5);
+    // Use the incoming work-area width before layout settles; retain only content/scrollbar padding.
+    this.contentWidth = Math.max(1, this.renderer.width - 3);
     this.resources.fit(this.contentWidth);
     this.paint();
   };
@@ -605,7 +582,6 @@ export class DashboardPanel {
     this.request?.abort();
     this.resources.dispose();
     this.renderer.off("resize", this.resize);
-    this.renderer.off("focused_renderable", this.keepFocus);
     this.renderer.removePostProcessFn(this.revealRanking);
     if (!this.root.isDestroyed) {
       this.root.destroyRecursively();

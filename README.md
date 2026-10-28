@@ -142,13 +142,16 @@ unless you configure another sequence.
 | `<leader>b`                   | Toggle workspace search; `/` focuses search from the results.      |
 | `<leader>c`                   | Create an agent session or terminal in the current view.           |
 | `<leader>n` / `<leader>p`     | Next / previous tab in Agents or Terminal, wrapping at either end. |
-| `<leader>u`                   | Open the Agent usage dashboard.                                    |
+| `<leader>u`                   | Show full-screen usage; `<Esc>` returns to the previous work view. |
 | `<leader>1` … `<leader>9`     | Select an agent session or terminal tab by position.               |
 | `<leader>h`                   | Open saved agent history for the current worktree.                 |
 | `<leader>s`                   | Monitor agent sessions.                                            |
 | `<leader>[`                   | Read and select output in Agents or Terminal.                      |
 | `<leader>d`                   | Detach the interface; keep the runtime running.                    |
 | `<leader>?`                   | Open keyboard help.                                                |
+
+In Usage, `i` opens measurement details and history coverage warnings. Workspace CPU/RAM
+covers Radian's editor and terminal process trees; shared Agent execution stays in Runtime.
 
 App-owned lists support `<C-n>` / `<C-p>` for next/previous and `<C-d>` / `<C-u>` for
 half-page navigation. In Transcript Sections, `<C-d/u>` and `<C-f/b>` select sections

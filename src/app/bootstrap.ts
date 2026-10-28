@@ -23,6 +23,7 @@ import { err, ok, type Result } from "../result.ts";
 import type { Keymap } from "../keybindings/config.ts";
 import type { ThemeOverrides } from "../ui/theme-config.ts";
 import { readTerminalProcessTitles } from "../terminal/process-titles.ts";
+import { readWorkspaceResources } from "../usage/workspace-resources.ts";
 import type { CliOptions as Options } from "./cli.ts";
 
 export async function main(
@@ -515,6 +516,7 @@ async function runUI(
             onDashboard: (days, repositoryId, signal) =>
               client.dashboard(days, repositoryId, signal),
             onResources: (signal) => client.resources(signal),
+            onWorkspaceResources: (signal) => readWorkspaceResources(client.resourceScopes, signal),
             onListHistory: preloaded!.listHistory,
             onPreviewHistory: (worktreeId, savedId, signal) =>
               client.previewHistory(worktreeId, savedId, signal),

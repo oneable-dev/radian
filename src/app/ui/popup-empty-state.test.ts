@@ -116,8 +116,7 @@ const surfaces = [
   },
   {
     name: "dashboard",
-    preset: "expanded",
-    panel: "dashboard-dialog",
+    panel: "dashboard-panel",
     content: "dashboard-body",
     header: "Agent Dashboard",
     body: "dashboard-ranking-body",
@@ -429,7 +428,7 @@ for (const [width, height] of [
         const content = app.get(surface.content);
         const spec = searches[surface.name];
 
-        expect(content.y).toBe(panel.y + (spec ? 0 : 1));
+        expect(content.y).toBe(panel.y + (spec || surface.name === "dashboard" ? 0 : 1));
 
         const popupText = app
           .captureCharFrame()

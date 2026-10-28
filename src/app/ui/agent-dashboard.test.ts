@@ -10,6 +10,7 @@ import {
 import { PromptInput } from "../../ui/prompt-input.ts";
 import { CapabilityError, SessionError } from "../../errors.ts";
 import type { ProcessResourceSample } from "../../usage/process-resources.ts";
+import type { WorkspaceResourceSample } from "../../usage/workspace-resources.ts";
 import { err, ok, type Result } from "../../result.ts";
 import { parseKeymap } from "../../keybindings/config.ts";
 import { expectOk } from "../../testing/results.ts";
@@ -147,6 +148,262 @@ test("Dashboard commands open without prompting and preserve invalid arguments a
     expect(app.get("agent-dashboard").visible).toBe(false);
     expect(app.lookups).toHaveLength(1);
   } finally {
+    await app.close();
+  }
+});
+
+test("Usage fills the work area at every size while the shared footer stays visible", async () => {
+  // Usage has the same work-area boundary as Agent, not a centered popup size.
+  const app = await mount();
+  try {
+    await app.open();
+
+    for (const [width, height] of [
+      [120, 32],
+      [50, 18],
+      [200, 60],
+      [120, 32],
+    ] as const) {
+      // Resizing must not restore popup gutters or cover the persistent status line.
+      app.resize(width, height);
+      await app.render();
+
+      const usage = app.get("agent-dashboard");
+      const body = app.get("dashboard-body");
+      const work = app.get("work-panel");
+      const footer = app.get("app-footer");
+
+      // The content starts at the top and reaches the footer without a surrounding frame.
+      expect(usage.x).toBe(work.x);
+      expect(usage.y).toBe(work.y);
+      expect(usage.width).toBe(work.width);
+      expect(usage.y + usage.height).toBe(footer.y);
+      expect(body.y).toBe(work.y);
+      expect(body.y + body.height).toBe(footer.y);
+      expect(app.captureCharFrame().split("\n")[footer.y]?.trimStart()).toStartWith("USAGE");
+      expect(app.get("agent-view").visible).toBe(false);
+      expect(app.renderer.currentFocusedRenderable).toBe(body);
+    }
+
+    expect(app.lookups).toHaveLength(1);
+    expect(app.sent).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
+
+test.each([
+  ["a", "AGENT", "agent"],
+  ["e", "EDITOR", "editor"],
+  ["g", "GIT", "git"],
+  ["t", "TERMINAL", "terminal"],
+] as const)(
+  "Usage switches directly to %s without changing Agent drafts",
+  async (key, label, view) => {
+    // A full-screen usage view must not trap the global work-view commands.
+    const app = await mount();
+    try {
+      app.input.value = "Retained draft";
+      await app.open();
+
+      // Select a work view without dismissing Usage first.
+      app.mockInput.pressKey(" ", { ctrl: true });
+      app.mockInput.pressKey(key);
+      await app.render();
+
+      // Screen changes stop sampling and leave the conversation untouched.
+      expect(app.get("agent-dashboard").visible).toBe(false);
+      expect(app.captureCharFrame().split("\n")[app.get("app-footer").y]?.trimStart()).toStartWith(
+        label,
+      );
+      expect(app.view.workViewPreferences.active["demo:main"]).toBe(view);
+      expect(app.input.value).toBe("Retained draft");
+      expect(app.sent).toEqual([]);
+      app.clock.advance(5000);
+      await app.render();
+      expect(app.get("dashboard-resources-loading").visible).toBe(false);
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+test("Help opens over full-screen Usage and restores its focused filter on dismissal", async () => {
+  // Usage owns the work area while ordinary popups remain available above it.
+  const app = await mount();
+  try {
+    await app.open();
+    const period = app.get("dashboard-period");
+    period.focus();
+
+    // Help uses the actual keymap rather than changing the selected Usage filter.
+    app.mockInput.pressKey("F1");
+    await app.render();
+
+    expect(app.get("text-dialog").visible).toBe(true);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("text-dialog-scroll");
+    expect((app.get("text-dialog-body") as TextRenderable).plainText).toContain(
+      "Return from usage",
+    );
+
+    // Esc closes Help first and returns keyboard ownership to the same Usage section.
+    app.mockInput.pressEscape();
+    await app.render();
+    expect(app.get("text-dialog").visible).toBe(false);
+    expect(app.get("agent-dashboard").visible).toBe(true);
+    expect(app.renderer.currentFocusedRenderable).toBe(period);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Usage keeps coverage warnings and measurement prose in command-opened details instead of the main screen", async () => {
+  // Partial historical coverage remains inspectable without dominating everyday statistics.
+  const app = await mount({
+    onDashboard: async () =>
+      ok({ ...sample(), warnings: ["Fixture sessions lack settled run metadata."] }),
+  });
+  try {
+    await app.open();
+    app.get("dashboard-body").focus();
+    app.mockInput.pressKey("END");
+    await app.render();
+
+    // The complete main surface stays free of persistent disclaimers, including its last row.
+    expect(app.captureCharFrame()).not.toContain("Partial data");
+    expect(app.captureCharFrame()).not.toContain("Tokens include");
+    expect(app.captureCharFrame()).not.toContain("Coverage warnings");
+    expect(app.get("dashboard-message").visible).toBe(false);
+    expect(app.renderer.root.findDescendantById("dashboard-notes")).toBeUndefined();
+
+    // Details is a configured command that preserves the selected filter and the Agent draft.
+    const period = app.get("dashboard-period");
+    period.focus();
+    app.mockInput.pressKey("i");
+    await app.render();
+    const details = app.get("text-dialog-body") as TextRenderable;
+    expect(details.plainText).toContain("Fixture sessions lack settled run metadata.");
+    expect(details.plainText).toContain("Workspace processes include");
+    expect(details.plainText).toContain("all logical CPUs together are 100%");
+    app.mockInput.pressEscape();
+    await app.render();
+    expect(app.renderer.currentFocusedRenderable).toBe(period);
+    expect(app.get("agent-dashboard").visible).toBe(true);
+    expect(app.sent).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Workspace CPU and RAM stay readable across resize without changing filters or double-counting shared memory", async () => {
+  // Independent process counters make the per-workspace shares deterministic.
+  const cpus = spyOn(os, "cpus").mockReturnValue(
+    Array.from({ length: 8 }, () => ({
+      model: "Test",
+      speed: 1000,
+      times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 },
+    })),
+  );
+  let elapsedMs = 1000;
+  let scans = 0;
+  const app = await mount({
+    onWorkspaceResources: async () => {
+      scans++;
+      return ok([
+        {
+          id: "main",
+          name: "Project / main",
+          elapsedMs,
+          processes: [
+            {
+              pid: 101,
+              started: "original",
+              cpuMicros: (elapsedMs - 1000) * 2000,
+              rssBytes: 64 * 1024 ** 2,
+            },
+          ],
+        },
+        {
+          id: "feature",
+          name: "Unicode 작업 / feature",
+          elapsedMs,
+          processes: [
+            {
+              pid: 201,
+              started: "original",
+              cpuMicros: (elapsedMs - 1000) * 1000,
+              rssBytes: 128 * 1024 ** 2,
+            },
+          ],
+        },
+      ]);
+    },
+  });
+  try {
+    await app.open();
+    const table = app.get("dashboard-workspace-resources") as TextRenderable;
+    expect(table.plainText).toContain("Project / main");
+    expect(table.plainText).toContain("Unicode 작업 / feature");
+    expect(table.plainText).toContain("64 MB");
+    expect(table.plainText).toContain("128 MB");
+    app.get("dashboard-period").focus();
+    const body = app.get("dashboard-body") as ScrollBoxRenderable;
+    const scrollTop = body.scrollTop;
+
+    // Live samples do not change the history period, the body position or keyboard ownership.
+    elapsedMs = 2000;
+    app.clock.advance(1000);
+    await app.render();
+    expect(table.plainText).toMatch(/Project \/ main\s+25\.0%\s+64 MB/);
+    expect(table.plainText).toMatch(/Unicode 작업 \/ feature\s+12\.5%\s+128 MB/);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("dashboard-period");
+    expect(body.scrollTop).toBe(scrollTop);
+
+    // Narrow screens truncate names, never the CPU and RAM columns or process rows.
+    app.resize(50, 18);
+    await app.render();
+    expect(table.plainText).toContain("25.0%");
+    expect(table.plainText).toContain("128 MB");
+    expect(table.plainText.split("\n").every((line) => Bun.stringWidth(line) <= table.width)).toBe(
+      true,
+    );
+    app.mockInput.pressEscape();
+    await app.render();
+    app.clock.advance(5000);
+    await app.render();
+    expect(scans).toBe(2);
+    expect(app.sent).toEqual([]);
+  } finally {
+    await app.close();
+    cpus.mockRestore();
+  }
+});
+
+test("Closing Usage cancels workspace inspection and ignores responses after the screen is hidden", async () => {
+  // OS inspection can finish after cancellation and must never reclaim the closed view.
+  const pending =
+    Promise.withResolvers<Result<readonly WorkspaceResourceSample[], CapabilityError>>();
+  let signal: AbortSignal | undefined;
+  const app = await mount({
+    onWorkspaceResources: (abort) => {
+      signal = abort;
+      return pending.promise;
+    },
+  });
+  try {
+    await app.open();
+    app.mockInput.pressEscape();
+    await app.render();
+    pending.resolve(ok([{ id: "late", name: "Late workspace", elapsedMs: 1000, processes: [] }]));
+    await app.render();
+
+    // Stale workspace data cannot revive the view or overwrite focus in the restored Agent.
+    expect(signal?.aborted).toBe(true);
+    expect(app.get("agent-dashboard").visible).toBe(false);
+    expect(app.captureCharFrame()).not.toContain("Late workspace");
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+  } finally {
+    pending.resolve(ok([]));
     await app.close();
   }
 });
@@ -458,14 +715,14 @@ test("Live resources sum UI and Runtime and keep their history independent of us
     await app.open();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("dashboard-body");
     expect(app.captureCharFrame()).toContain("Radian resources · live");
-    expect(app.captureCharFrame()).toContain("CPU: whole machine = 100%");
+    expect(app.captureCharFrame()).not.toContain("CPU: whole machine = 100%");
 
     const table = app.get("dashboard-resources-table");
     if (!(table instanceof TextRenderable)) {
       throw new Error("Missing resource table");
     }
 
-    expect(table.plainText).toMatch(/Total\s+—/);
+    expect(table.plainText).toMatch(/Shared\s+—/);
     expect(table.plainText).toContain("405 MB");
 
     // Provider history filters must neither reset live samples nor move focus when polling completes.
@@ -486,7 +743,7 @@ test("Live resources sum UI and Runtime and keep their history independent of us
     app.clock.advance(1000);
     await app.render();
 
-    expect(table.plainText).toMatch(/Total\s+50\.0%/);
+    expect(table.plainText).toMatch(/Shared\s+50\.0%/);
     expect(table.plainText).toMatch(/UI\s+12\.5%/);
     expect(table.plainText).toMatch(/Runtime\s+37\.5%/);
     expect(table.plainText).toContain("405 MB");
@@ -496,7 +753,7 @@ test("Live resources sum UI and Runtime and keep their history independent of us
     app.get("dashboard-project").focus();
     app.mockInput.pressKey("n", { ctrl: true });
     await app.render();
-    expect(table.plainText).toMatch(/Total\s+50\.0%/);
+    expect(table.plainText).toMatch(/Shared\s+50\.0%/);
     expect(calls).toBe(2);
     expect(app.sent).toEqual([]);
   } finally {
@@ -579,7 +836,7 @@ test("Resizing live resources keeps memory and every process visible without cle
 
     // Native geometry updates one frame later; column sizing must already use the requested width.
     const frame = app.captureCharFrame();
-    expect(frame).toContain("Memory");
+    expect(frame).toContain("RAM");
     expect(frame).toContain("Runtime");
     expect(frame).toContain("320 MB");
     expect(table.plainText).not.toContain("··");
@@ -610,7 +867,7 @@ test("Resource failures leave usage history usable and compact layouts retain ev
     }
 
     // Narrow layouts omit sparklines, never the process breakdown or unknown-value markers.
-    expect(table.plainText).toContain("Total");
+    expect(table.plainText).toContain("Shared");
     expect(table.plainText).toContain("UI");
     expect(table.plainText).toContain("Runtime");
     expect(table.plainText).not.toContain("··");

@@ -84,9 +84,10 @@ const labels: Partial<Record<CommandId, string>> = {
   "extension.search": "Search extension choices",
   "extension.browser": "Open the URL in the extension dialog",
   "extension.copy-url": "Copy the URL in the extension dialog",
-  "dashboard.show": "Open Agent usage dashboard",
-  "dashboard.dismiss": "Close Agent dashboard",
+  "dashboard.show": "Show full-screen usage",
+  "dashboard.dismiss": "Return from usage",
   "dashboard.refresh": "Refresh saved statistics",
+  "dashboard.details": "Inspect measurement scope and history coverage",
 };
 
 export function keymapHelp(

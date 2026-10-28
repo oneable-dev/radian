@@ -24,6 +24,7 @@ import type { RuntimePreferences, RuntimeSnapshot } from "./protocol.ts";
 import { runtimePaths, RuntimeStore } from "./storage.ts";
 import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
 import type { ProcessResourceSample } from "../usage/process-resources.ts";
+import type { WorkspaceResourceScope } from "../usage/workspace-resources.ts";
 
 // Repository-scoped channels share a daemon process; identity fencing and PTY leases stay local.
 export type RepositoryClient = Pick<
@@ -508,6 +509,33 @@ export class WorkspaceClient {
     }
 
     return result;
+  }
+
+  get resourceScopes(): readonly WorkspaceResourceScope[] {
+    return this.entries.flatMap((entry) => {
+      const snapshot = entry.client?.snapshot;
+      const repository =
+        snapshot?.repositories.find((repo) => repo.id === entry.repository.id) ?? entry.repository;
+      const owner =
+        !this.detaching && entry.client?.connected && snapshot?.editors && snapshot.terminals
+          ? {
+              pid: snapshot.pid,
+              processes: [...snapshot.editors, ...snapshot.terminals].filter(
+                (item) => !item.exited,
+              ),
+            }
+          : null;
+
+      return repository.worktrees.map((tree) => ({
+        id: tree.id,
+        name: `${repository.name} / ${tree.name}`,
+        roots: owner
+          ? owner.processes
+              .filter((item) => item.worktreeId === tree.id)
+              .map((item) => ({ pid: item.pid, parentPid: owner.pid }))
+          : null,
+      }));
+    });
   }
 
   async resources(signal?: AbortSignal): Promise<Result<ProcessResourceSample, ExpectedError>> {

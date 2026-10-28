@@ -76,6 +76,7 @@ export type WorkbenchActions = AgentActions & {
   getRetainedSessionIds?: () => ReadonlySet<string>;
   onDashboard?: DashboardActions["load"];
   onResources?: DashboardActions["resources"];
+  onWorkspaceResources?: DashboardActions["workspaces"];
   onListModels?: ModelPickerActions["list"];
   onSelectModel?: ModelPickerActions["select"];
   onAccountsRequest?: AccountsActions["request"];
@@ -303,6 +304,9 @@ export class Workbench {
     this.dashboard = new DashboardPanel(renderer, {
       ...(actions.onDashboard ? { load: actions.onDashboard } : {}),
       ...(actions.onResources ? { resources: actions.onResources } : {}),
+      ...(actions.onWorkspaceResources ? { workspaces: actions.onWorkspaceResources } : {}),
+      details: (content) => this.dialog.show(content),
+      visibilityChanged: () => this.render(),
       projects: () =>
         this.selection.snapshot.map((repository) => ({ id: repository.id, name: repository.name })),
       changed: () => this.updateFooter(),
@@ -401,6 +405,7 @@ export class Workbench {
     this.workPanel.add(this.editor.root);
     this.workPanel.add(this.git.root);
     this.workPanel.add(this.terminals.root);
+    this.workPanel.add(this.dashboard.root);
     panels.add(this.workPanel);
     this.root.add(panels);
 
@@ -420,7 +425,6 @@ export class Workbench {
     this.root.add(this.history.root);
     this.root.add(this.models.root);
     this.root.add(this.accounts.root);
-    this.root.add(this.dashboard.root);
     this.root.add(this.extension.root);
     this.root.add(this.dialog.root);
     this.root.add(this.messagesPanel.root);
@@ -625,6 +629,7 @@ export class Workbench {
       return;
     }
 
+    this.dashboard.hide(false);
     this.agent.rememberScroll();
     this.workViews.active[worktree.id] = view;
     this.saveWorkViews();
@@ -951,7 +956,7 @@ export class Workbench {
             hint("sidebar.toggle", "Workspace"),
             hint("tab.new", "New session"),
             hint("tab.close", "Close tab"),
-            hint("dashboard.show", "Dashboard"),
+            hint("dashboard.show", "Usage"),
           ];
     } else if (
       context === "git" ||
@@ -977,9 +982,7 @@ export class Workbench {
       }
     }
 
-    this.footer.setView(
-      this.displayedWorkView === "agent" ? "AGENT" : this.displayedWorkView.toUpperCase(),
-    );
+    this.footer.setView(this.dashboard.visible ? "USAGE" : this.displayedWorkView.toUpperCase());
     this.footer.setWorkspace(this.selection.worktree);
 
     const overlay =
@@ -1424,8 +1427,10 @@ export class Workbench {
     if (this.dashboard.visible) {
       return (
         (command.startsWith("dashboard.") && command !== "dashboard.show") ||
+        (command.startsWith("view.") && Boolean(this.selection.worktree)) ||
         command === "focus.next" ||
         command === "focus.previous" ||
+        command === "app.help" ||
         command === "app.detach"
       );
     }
@@ -2198,18 +2203,24 @@ export class Workbench {
     this.notifications.retain(sessionIds);
 
     const openIds = new Set([...sessionIds, ...(this.actions.getRetainedSessionIds?.() ?? [])]);
-    this.agent.update(worktree, this.selection.sessionId, openIds, workView === "agent");
-    if (workView === "git") {
+    const workViewVisible = !this.dashboard.visible;
+    this.agent.update(
+      worktree,
+      this.selection.sessionId,
+      openIds,
+      workViewVisible && workView === "agent",
+    );
+    if (workViewVisible && workView === "git") {
       this.git.show(worktree, this.selection.sessionId);
     } else {
       this.git.hide();
     }
-    if (workView === "editor") {
+    if (workViewVisible && workView === "editor") {
       this.editor.show(worktree);
     } else {
       this.editor.hide();
     }
-    if (workView === "terminal") {
+    if (workViewVisible && workView === "terminal") {
       this.terminals.show(
         worktree,
         worktree ? this.workViews.terminalSelection?.[worktree.id] : undefined,
@@ -2236,7 +2247,7 @@ export class Workbench {
       this.selection.sessionId
         ? this.actions.getSessionDetails?.(this.selection.sessionId)?.conversationId
         : undefined,
-      workView === "agent",
+      workViewVisible && workView === "agent",
     );
     if (this.navigationKey && this.navigationKey !== this.lastScrolledKey) {
       this.revealRow(this.navigationKey);

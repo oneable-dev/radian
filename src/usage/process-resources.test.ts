@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { expectError, expectOk } from "../testing/results.ts";
+import type { WorkspaceResourceSample } from "./workspace-resources.ts";
 import {
   readProcessResources,
   ResourceHistory,
@@ -149,4 +150,71 @@ test("Recent resource samples stay bounded by time and count without double-coun
   expect(history.recent).toHaveLength(60);
   expect(history.recent[0]?.at).toBe(62000);
   expect(history.recent.at(-1)?.total).toBeNull();
+});
+
+const workspace = (
+  elapsedMs: number,
+  cpuMicros: number,
+  started = "original",
+): WorkspaceResourceSample => ({
+  id: "main",
+  name: "Project / main",
+  elapsedMs,
+  processes: [
+    { pid: 100, started, cpuMicros, rssBytes: 1024 },
+    { pid: 101, started: "child", cpuMicros, rssBytes: 2048 },
+  ],
+});
+
+test("Workspace CPU and RAM aggregate process intervals separately from shared UI and Runtime totals", () => {
+  // Both workspace processes consume one core each on an eight-core machine.
+  const history = new ResourceHistory(8);
+  const initial = history.add(sample(1, 1000, 0, 85), sample(2, 1000, 0, 320), 0, [
+    workspace(1000, 100),
+  ]);
+
+  const current = history.add(sample(1, 2000, 0, 85), sample(2, 2000, 0, 320), 1000, [
+    workspace(2000, 1000100),
+  ]);
+
+  // Initial CPU is unknown, and workspace memory must not inflate the Shared subtotal.
+  expect(initial.workspaces[0]?.value).toEqual({ cpuPercent: null, rssBytes: 3072 });
+  expect(current.workspaces[0]).toEqual({
+    id: "main",
+    name: "Project / main",
+    value: { cpuPercent: 25, rssBytes: 3072 },
+  });
+  expect(current.total).toEqual({ cpuPercent: 0, rssBytes: 405 });
+});
+
+test("Recycled workspace PIDs and failed reads invalidate CPU baselines without showing false zeros", () => {
+  // A new process can reuse a PID while having unrelated lifetime CPU counters.
+  const history = new ResourceHistory(8);
+  history.add(null, null, 0, [workspace(1000, 100)]);
+  const recycled = history.add(null, null, 1000, [workspace(2000, 2000000, "replacement")]);
+  const failed = history.add(null, null, 2000, null);
+  const recovered = history.add(null, null, 3000, [workspace(4000, 3000000, "replacement")]);
+
+  // Keep workspace names on errors, but require a fresh baseline after recovery.
+  expect(recycled.workspaces[0]?.value).toEqual({ cpuPercent: null, rssBytes: 3072 });
+  expect(failed.workspaces[0]).toEqual({ id: "main", name: "Project / main", value: null });
+  expect(recovered.workspaces[0]?.value?.cpuPercent).toBeNull();
+});
+
+test("Known idle workspaces report zero while disconnected and removed workspaces remain distinct", () => {
+  // An empty owned process list is measured inactivity, not a failed lookup.
+  const history = new ResourceHistory(8);
+  const current = history.add(null, null, 0, [
+    { ...workspace(1000, 0), processes: [] },
+    { ...workspace(1000, 0), id: "offline", processes: null },
+  ]);
+
+  const removed = history.add(null, null, 1000, []);
+
+  // Disconnects preserve unknown readings, while discovery removals clear obsolete rows.
+  expect(current.workspaces.map((item) => item.value)).toEqual([
+    { cpuPercent: 0, rssBytes: 0 },
+    null,
+  ]);
+  expect(removed.workspaces).toEqual([]);
 });

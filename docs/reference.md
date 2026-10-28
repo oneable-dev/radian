@@ -982,22 +982,32 @@ Finish existing jobs before explicitly restarting an old runtime to load the new
 ### Agent Dashboard
 
 Open **/dashboard** from the Agent input, or press **Ctrl+Space u** (the configured leader followed
-by `u`). Opening it never sends a model prompt or interrupts work. Esc restores the previous focus
-and preserves drafts. The shortcut is configurable as `dashboard.show`.
+by `u`). Usage fills the work area, leaving the shared **USAGE** footer visible. Opening it never
+sends a model prompt or interrupts work. Esc restores the previous view and focus while preserving
+drafts; the usual view commands also switch directly to Agent, Editor, Git or Terminal. The opening
+shortcut is configurable as `dashboard.show`.
 
-The popup opens at the top of a scrollable read-only body. **Radian resources** shows current CPU
-and resident memory for this **UI**, the **shared Runtime**, and their **Total**. The Runtime is
-counted once, regardless of how many repository channels share its PID. System-wide usage and
-external CLI, terminal, and MCP child processes are excluded. CPU uses interval deltas divided by
-the machine's logical CPU count: 100% means Radian occupies all logical CPUs, while one fully busy
-CPU on an eight-logical-CPU machine contributes 12.5%. The first CPU reading is unknown; CPU also
-remains unknown if the logical CPU count is unavailable.
-Memory is summed RSS, not unique physical memory: shared pages may be counted more than once.
+**Radian resources** shows current CPU and resident memory for this **UI**, the **Runtime**, and
+their **Shared** subtotal. Runtime is counted once, regardless of how many repository channels share
+its PID. **Workspace processes** lists each discovered worktree's Radian-owned editor and terminal
+process trees, including their descendants. These values are separate from Shared; in-process Agent
+execution and other shared services remain in Runtime rather than being divided arbitrarily.
+Processes from unrelated applications are not attributed by directory or name. Disconnected owners
+and missing/replaced process roots are shown as unknown, while verified idle workspaces show zero.
+The breakdown uses existing runtime process IDs and local POSIX inspection without activating cold
+repositories, collecting command arguments, or restarting services.
 
-Total CPU and memory include small chronological sparklines for the latest 60 seconds. Samples
-are collected about once per second only while the popup is open, never persisted, and reset when
-it reopens. Narrow layouts omit sparklines but retain the Total/UI/Runtime values. Missing metrics
-remain unknown rather than zero, and resource failures do not prevent browsing usage history.
+CPU uses interval deltas divided by the machine's logical CPU count: 100% means all logical CPUs,
+while one fully busy CPU on an eight-logical-CPU machine contributes 12.5%. The first CPU reading
+is unknown; CPU also remains unknown if the logical CPU count is unavailable. Memory is summed
+RSS, not unique physical memory: shared pages may be counted more than once.
+
+Shared CPU and RAM include small chronological sparklines for the latest 60 seconds. Samples
+are collected about once per second only while Usage is open, never persisted, and reset when
+it reopens. Narrow layouts omit sparklines but retain CPU/RAM values and workspace rows. Missing
+metrics remain unknown rather than zero, and resource failures do not prevent browsing usage history.
+Measurement explanations and historical coverage warnings are available on demand through **i**
+(`dashboard.details`), not repeated in the main view. Actual lookup failures remain visible.
 
 **Usage history** retains **total tokens**, **recorded runs**, and **total run time** above a daily
 bar chart. Select Tokens, Runs or Run time to change the chart. Today, 7-day and 30-day filters use
@@ -1027,8 +1037,8 @@ counted once within a repository. Run counts and duration use Radian's recorded 
 older conversations without it still contribute tokens but cannot supply reliable run timing. Times
 are summed elapsed run durations (including overlapping work), not time spent at the keyboard.
 Expired/deleted histories are not reconstructed. Missing/corrupt records and unsupported repository
-services produce explicit errors or partial-coverage warnings; authentication and transcript bodies
-never leave the runtime as dashboard data. An old runtime must be restarted explicitly after its work
+services produce explicit errors or partial-coverage warnings available in Details; authentication
+and transcript bodies never leave the runtime as dashboard data. An old runtime must be restarted explicitly after its work
 is finished to enable this feature; opening the dashboard never restarts it automatically.
 
 ### Native Git

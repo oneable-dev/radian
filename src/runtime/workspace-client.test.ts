@@ -196,6 +196,62 @@ test("Extension UI aggregates connected repositories and routes answers only to 
     }
   }));
 
+test("Workspace resource scopes include only live owned editor and terminal roots and keep disconnected workspaces unknown", () =>
+  isolated(async (stateRoot) => {
+    // Workspaces share a daemon, but each PTY snapshot identifies its own worktree.
+    const a = repo("a");
+    const b = repo("b");
+    const pa = peer(a);
+    const pb = peer(b);
+    pa.update({
+      ...pa.client.snapshot,
+      editors: [
+        { id: "editor", worktreeId: "a", pid: 101, exited: false, exitCode: null },
+        { id: "ended", worktreeId: "a", pid: 102, exited: true, exitCode: 0 },
+      ],
+      terminals: [
+        {
+          id: "terminal",
+          worktreeId: "a",
+          pid: 201,
+          shellPid: 202,
+          title: "Shell",
+          exited: false,
+          exitCode: null,
+        },
+      ],
+    });
+    const workspace = expectOk(
+      await WorkspaceClient.open(
+        [a, b],
+        a.worktrees[0]!.path,
+        { stateRoot, offline: true },
+        async (repository) => ok(repository.id === a.id ? pa.client : pb.client),
+      ),
+    );
+    try {
+      pb.connection(false);
+
+      // Observing ownership must not activate repositories, create sessions or start processes.
+      expect(workspace.resourceScopes).toEqual([
+        {
+          id: "a",
+          name: "a / a",
+          roots: [
+            { pid: 101, parentPid: process.pid },
+            { pid: 201, parentPid: process.pid },
+          ],
+        },
+        { id: "b", name: "b / b", roots: null },
+      ]);
+      pa.update({ ...pa.client.snapshot, editors: [], terminals: [] });
+      expect(workspace.resourceScopes[0]?.roots).toEqual([]);
+      expect([...pa.calls, ...pb.calls]).toEqual([]);
+    } finally {
+      await workspace.disconnect();
+    }
+  }));
+
 test("Resources read the shared daemon once across repositories without activation or duplicate sums", () =>
   isolated(async (stateRoot) => {
     // Multiple repository endpoints represent one Runtime process, not separate resource consumers.
