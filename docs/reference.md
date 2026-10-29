@@ -35,14 +35,19 @@ also opens it. **Esc** closes without changing selection and restores the origin
 Opening or closing the popup never changes the work pane or PTY dimensions.
 **Ctrl+Space, then s** opens a searchable list of working sessions and unread results, without a preview pane.
 Browsing preserves the current work view and unread state; **Enter** opens the selected session's latest output.
-The session monitor uses 80% of the terminal width without a fixed column cap. Its height stays capped
-at 18 rows, shrinking to 80% of shorter terminals.
+The session monitor uses the shared `standard` popup preset, capped at 100 columns by 24 rows.
 Searchable pickers share a borderless outer surface and a rounded search field carrying a centered title,
 a `>` prompt on the left and matched/total counts on the right. Search has no placeholder and uses the
 popup background in either focus state. Lists have one cell of padding on each side and follow search
 without a blank gap; loading, errors and meaningful status messages keep their own content rows.
 This applies to Workspaces, Sessions, History, Models, Accounts and its selection stages, Messages,
-Git Refs/Reflog and extension options. Each retains its own dimensions, previews and editable state.
+Git Refs/Reflog, Git Changes and extension options. Centered popups share cell-based size presets:
+`compact` (64 × 10) for short input/confirmation, `standard` (100 × 24) for single-list pickers,
+`expanded` (160 × 36) for details/Reflog, and `large` (240 × 64) for History and Git Changes.
+Sizes are capped at 90% of the available width and 80% of the available height; `large` uses 95% width
+and 90% height to leave more room for previews even on ordinary terminals. Size is independent of query
+and result count. Git overlays use the work pane above the footer; other centered popups use the screen.
+Each surface retains its own previews and editable state.
 Counts reflect all matching selectable candidates, not group headings or only the rendered first page;
 unknown counts stay hidden during discovery.
 Opening or reopening a picker clears its query and input caret and focuses search. Tab/Shift+Tab always
@@ -896,7 +901,7 @@ success (green) color, effort uses keyword, and `fast` uses number (yellow/gold)
 unknown values and separators stay muted. These are terminal palette roles, not fixed product colors.
 The prompt surface reaches both edges of the Agent pane; its internal padding aligns the editable
 text with the work-status and telemetry rows. No permanent sidebar or divider reserves any width.
-The prompt has no borders in either mode. When empty it shows the muted `Ask to do anything`
+The inline Agent prompt has no borders in either mode. When empty it shows the muted `Ask to do anything`
 placeholder; the placeholder is never submitted or persisted as a draft. Focus retains the same background.
 Normal work keeps its existing spinner and colors. Fast work uses a fixed three-cell yellow arrow
 indicator (`▶▷▷`, `▷▶▷`, `▷▷▶`) in its session tab and Working row. Tab frames and close buttons do
@@ -1043,8 +1048,9 @@ is finished to enable this feature; opening the dashboard never restarts it auto
 
 ### Native Git
 
-Git opens directly into the full-width **Commits** main view, without Commits/Reflog/Refs tabs or a
-permanent right panel. **b** opens the searchable Refs modal; **Ctrl+R** opens searchable Reflog with a
+Git opens directly into **Commits**, with history on the left and a permanent right sidebar containing
+**Commit details** above **Changed files**. Below 100 columns the sidebar stacks below history.
+There are no Commits/Reflog/Refs tabs. **b** opens the searchable Refs modal; **Ctrl+R** opens searchable Reflog with a
 read-only target-commit preview. **r** remains Refresh. All bindings can be overridden and appear in the
 footer. Workspace navigation stays in its shared popup; Git does not duplicate worktree navigation or
 provide submodules.
@@ -1065,7 +1071,7 @@ through reflog and absent from the filtered/bounded main graph. Closing that pop
 previous main selection and reading position. Unsupported, missing or pruned targets show an explicit
 error rather than an empty successful comparison.
 
-Both modals use the shared SearchInput. Ctrl+N/P navigates candidates from either search or results;
+Refs, Reflog and Changes use the shared SearchInput and search/results layout. Ctrl+N/P navigates candidates from either search or results;
 j/k also navigates results. Ctrl+D/U from search preserves query/caret, reveals and focuses results,
 and jumps the candidate cursor by half a viewport; held repeats continue from that cursor. Ctrl+C
 clears only the query, including from results, and is a no-op when empty; Ctrl+L is not an alias.
@@ -1080,22 +1086,19 @@ line, followed by two neutral cells before the message. Selection strengthens on
 of filling the row, with softer emphasis while history is unfocused. Working tree uses the same solid
 background band as commits; its hollow node and dotted parent lane distinguish uncommitted changes.
 Parent lanes, ref-to-node lines, and message alignment remain intact.
-The left column always reserves the responsive details-card width, including on Working tree and
-while history is unfocused, so the graph and messages do not move horizontally as focus changes.
-Focusing a selected commit reveals a fully unfolded details card anchored to that row; commit row
-heights do not change. The card has no internal scrollbar, height cap or redundant title and includes
-the complete hash, author, date, message, HEAD status, local/remote branches and tags. Branches and
-remotes are queried with `for-each-ref --points-at`: only refs whose tips match the selected commit
-are displayed, not every branch containing it in history. Remote refs use locally available
-remote-tracking data, not a network lookup. Tags and graph labels also identify refs pointing directly
-at a commit.
+The sidebar follows the selected history entry without changing graph-row heights or hiding when
+focus leaves history. There are no floating detail cards or row anchors. Commit details include the
+complete hash, author, date, message, HEAD status, local/remote branches and tags. Branches and remotes
+are queried with `for-each-ref --points-at`: only refs whose tips match the selected commit are shown,
+not every branch containing it in history. Remote refs use locally available remote-tracking data,
+not a network lookup. Tags and graph labels also identify refs pointing directly at a commit.
 Branches, remotes and tags appear above author/date; `—` denotes a completed empty result and `…`
-marks branch refs that have not loaded yet. Commits without tip refs still have details.
-Cards taller than the terminal extend the shared Commits viewport instead of clipping text or
-introducing nested scrolling. Tab focuses the card; Ctrl+D/U and the mouse wheel move that shared
-viewport, Home/End reach the card's ends, and Esc returns to the history cursor. Moving focus outside
-history/details hides the card but keeps the column width reserved for ref labels.
-Dragging details text still copies it, but the card has no separate `a` or `y` action.
+marks branch refs that have not loaded yet. Working tree shows its current branch and grouped
+staged, unstaged and untracked files instead of stale commit details.
+Tab traverses history, details and changed files. Details have their own scroll viewport: Ctrl+D/U,
+Home/End and wheel scrolling never move history or change commit selection. Esc returns to history.
+Dragging details text copies it, but details have no separate `a` or `y` action. Selecting a sidebar
+file does not open a popup; Enter opens Changes for that file.
 
 The initial selection is Working tree, with staged, unstaged and untracked changes. A commit compares
 against its first parent (or empty content for a root commit). Staged compares HEAD/index, unstaged
@@ -1103,13 +1106,17 @@ compares index/worktree, and untracked compares empty/worktree. A staged rename 
 unstaged edit uses the new index path. Git queries disable optional locks and external diff/textconv;
 they never stage, commit, push or change branches.
 
-Enter on a commit or Working tree opens a large changes popup containing only changed files on the
-left and a whole-file Before / After comparison on the right. A short title identifies the commit;
-metadata remains in the main history's left column rather than consuming diff space. The first file
-is loaded automatically, and selecting another file updates the comparison without closing the popup.
-Both diff columns share one keyboard-focus target and synchronized wheel/keyboard scrolling.
-Tab / Shift+Tab cycle only between files and diff. Esc closes the popup and restores the prior history
-selection and shared reading position. Empty commits show an explicit no-changed-files state.
+Enter on a commit or Working tree opens a centered, borderless Changes popup using the shared
+`large` preset. It starts with an empty, focused search field above changed files on the left and a
+whole-file Before / After preview on the right. Search matches paths, including rename source paths,
+and counts files rather than group headings. Metadata remains in the main sidebar instead of taking
+diff space. The selected file loads automatically; browsing files updates the comparison without
+closing the popup. Both diff columns share one focus target and synchronized wheel/keyboard scrolling.
+Tab / Shift+Tab cycle through search, files and preview; Shift+Tab from Before/After returns directly
+to files, revealing them on narrow screens. `/` returns to search. Ctrl+O focuses the
+preview and returns to search when toggled back, revealing the appropriate region on narrow screens.
+Esc closes the popup and restores its originating focus, commit selection and independent sidebar
+reading position. Empty commits and unmatched queries show distinct empty states.
 Unchanged content is included, not silently omitted by a default short-context patch.
 
 Git-specific actions are scoped to Git browsing controls and can be rebound in the normal keymap:
@@ -1123,8 +1130,14 @@ Git-specific actions are scoped to Git browsing controls and can be rebound in t
 | Tag result                   | Name only                                             | Name                              |
 | Reflog event result          | Event details and target hash                         | Full target hash                  |
 
-`a` freezes the chosen context and opens a small prompt showing its target session. The default is the
-last selected session in that worktree. **Ctrl+S** (`git.change-session`, configurable) cycles through
+`a` freezes the chosen context and opens a centered, borderless popup containing only the shared
+multiline prompt. It keeps the `compact` preset's width and maximum height, but its actual height fits
+the input rows and grows or shrinks with the draft. The popup has no padding outside the input field,
+so its background ends at the field's bounds instead of filling a fixed-height block. The input field shares search fields' rounded border and centered `Ask`
+title, without a query prompt or result count; there is no outer border or separate title row.
+The field and native editor both use `ui.popup` backgrounds in focused and unfocused states, including
+live theme overrides; the inline Agent composer keeps its separate `prompt.input` surface.
+Its empty placeholder identifies the frozen context, while the footer shows the target session. The default is the last selected session in that worktree. **Ctrl+S** (`git.change-session`, configurable) cycles through
 that worktree's sessions and **New session** without modifying the prompt or creating a session.
 Enter submits through the same runtime path as Agent input, including SDK steering when busy;
 New session creates one only on submission. Esc cancels. There are no session-change, Send or Cancel
@@ -1454,8 +1467,11 @@ Accounts uses **o** to open the login browser, **y** to copy its URL and **Y** t
 when the read-only login details have focus. In text fields those letters remain literal input;
 use Tab to focus details first. Passive result notifications also omit close icons and expire normally.
 Session-tab close controls and non-popup application controls are unchanged.
-Searchable pickers share the titled search-field design without an outer frame; non-picker dialogs
-and notifications retain their existing frame glyphs, colors, geometry and inner padding.
+Searchable pickers share the titled search-field design without an outer frame. Existing dialog and
+notification frames use the same rounded corners as search and Ask inputs, preserving their colors,
+geometry and inner padding. App-owned enclosing borders, including transcript focus outlines, share
+`UI_BORDER_STYLE` from `src/ui/border-style.ts`; borderless surfaces do not gain a frame. Internal pane
+separators, tree guides and data-table grids keep their straight-line rendering.
 Bodies use an opaque background matching `ui.text` by default; an explicit `ui.popup.bg` override
 takes precedence. The shared `src/ui/popup-frame.ts` keeps border-cell backgrounds on the underlying
 surface, so colored code blocks behind a frame do not acquire a popup-colored fringe outside the line.
@@ -1846,6 +1862,8 @@ technical layers; neither feature depends on the other's implementation.
 
 History is a searchable popup, not a sidebar tab or a session-toolbar button. Use **`/history`** in
 the Agent prompt, or **Ctrl+Space → h** (`history.show`, configurable) from any work view.
+It uses the shared `large` preset (up to 240 columns by 64 rows), clamped to 95% of terminal width
+and 90% of terminal height.
 Its scope is the active worktree, not the workspace popup's candidate cursor. The list uses SDK conversation
 names (falling back to the first prompt or `Untitled session`), last activity and message count,
 newest first, including in shared offline directories. Only closed conversations with discoverable SDK

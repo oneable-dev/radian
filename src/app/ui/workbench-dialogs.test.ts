@@ -158,8 +158,12 @@ test.each([false, true])(
 
       expect(background(panel.x + 1, panel.y + 1).toInts()).toEqual(outside);
       expect(frame.split("\n")[panel.y]!.slice(panel.x, panel.x + panel.width)).toBe(
-        "┌" + "─".repeat(panel.width - 2) + "┐",
+        "╭" + "─".repeat(panel.width - 2) + "╮",
       );
+
+      expect(
+        frame.split("\n")[panel.y + panel.height - 1]!.slice(panel.x, panel.x + panel.width),
+      ).toBe("╰" + "─".repeat(panel.width - 2) + "╯");
 
       // Explicit popup colors affect the enclosed body, never the surface outside the border line.
       theme.configure(palette, {

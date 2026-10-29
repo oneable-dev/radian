@@ -194,7 +194,7 @@ async function mount(
     (frame) =>
       frame.includes("Working tree") ||
       get("git-diff").visible ||
-      get("git-details-card").visible ||
+      get("git-sidebar").visible ||
       frame.includes("HEAD@{"),
   );
 
@@ -1253,8 +1253,8 @@ test("Long Korean/emoji ref labels truncate by cells and retain additional-ref c
   }
 });
 
-test("Opening and closing commit details retains reserved left width and graph-row positions", async () => {
-  // Detail cards sit outside graph layout and must not shift other commit rows.
+test("Commit details and changed files share a persistent right sidebar without moving graph rows", async () => {
+  // Browsing changes sidebar content, never the position of the commit graph.
   const app = await mount();
   try {
     const prefix = `git-history:${commit.oid}`;
@@ -1266,20 +1266,22 @@ test("Opening and closing commit details retains reserved left width and graph-r
     await app.chooseCommit();
     await app.waitForFrame((frame) => frame.includes("Full explanation of the change."));
 
-    const card = app.get("git-details-card");
-    const anchor = app.get("git-details-anchor");
+    const sidebar = app.get("git-sidebar");
+    const details = app.get("git-details");
+    const files = app.get("git-summary-files");
 
-    expect(card.visible).toBe(true);
+    expect(sidebar.x).toBeGreaterThan(graph.x);
+    expect(files.y).toBeGreaterThan(details.y + details.height);
+    expect(app.renderer.root.findDescendantById("git-details-card")).toBeUndefined();
+    expect(app.renderer.root.findDescendantById("git-details-anchor")).toBeUndefined();
     expect(graph.x).toBe(reserved);
     expect([row.y, row.height]).toEqual(position);
-    expect(card.x + card.width).toBeLessThanOrEqual(graph.x);
-    expect([anchor.x, anchor.y]).toEqual([card.x + card.width - 1, row.y]);
     expect(app.get("git-changes").visible).toBe(false);
 
-    // Disappearing details retain reserved space without graph movement.
+    // Leaving history focus keeps the selected commit readable in the sidebar.
     app.get("git-history").blur();
     await app.renderOnce();
-    expect(card.visible).toBe(false);
+    expect(sidebar.visible).toBe(true);
     expect(graph.x).toBe(reserved);
     expect([row.y, row.height]).toEqual(position);
     expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid);
@@ -1290,9 +1292,9 @@ test("Opening and closing commit details retains reserved left width and graph-r
 });
 
 test.each(["arrows", "vim", "control"] as const)(
-  "%s round-trips between Working tree and commits reserve details to stabilize graphs/messages",
+  "%s round-trips update sidebar details without moving graphs/messages",
   async (navigation) => {
-    // Cardless Working tree uses the same column width as card-bearing commits.
+    // Working tree and commit metadata occupy the same persistent sidebar.
     const app = await mount();
     const move = (next: boolean) => {
       if (navigation === "arrows") {
@@ -1314,12 +1316,14 @@ test.each(["arrows", "vim", "control"] as const)(
         const graphX = app.get(`git-history:${commit.oid}:graph`).x;
         const messageX = app.get(`git-history:${commit.oid}:label`).x;
 
-        // Only card visibility changes; graph/message x coordinates stay fixed.
+        // Only the selected content changes; graph/message x coordinates stay fixed.
         for (const next of [true, false, true]) {
           move(next);
           await app.renderOnce();
           await app.renderOnce();
-          expect(app.get("git-details-card").visible).toBe(next);
+          expect((app.get("git-detail-text") as TextRenderable).plainText).toContain(
+            next ? commit.oid : "Working tree",
+          );
           expect(app.get(`git-history:${commit.oid}:graph`).x).toBe(graphX);
           expect(app.get(`git-history:${commit.oid}:label`).x).toBe(messageX);
           expect(app.get("git-history:__working_tree__:graph").x).toBe(graphX);
@@ -1328,7 +1332,7 @@ test.each(["arrows", "vim", "control"] as const)(
 
         app.get("git-history").blur();
         await app.renderOnce();
-        expect(app.get("git-details-card").visible).toBe(false);
+        expect(app.get("git-sidebar").visible).toBe(true);
         expect(app.get(`git-history:${commit.oid}:graph`).x).toBe(graphX);
       }
 
@@ -1399,8 +1403,8 @@ test("Detail branches, remotes, and tags show only refs directly targeting selec
   }
 });
 
-test("Stable left-detail geometry never requests additional renders during screen refresh", async () => {
-  // Resetting text or borders on every position correction would schedule endless frames.
+test("Stable sidebar geometry never requests additional renders during screen refresh", async () => {
+  // Stable sidebar geometry must not keep scheduling render passes.
   const clock = new ManualClock();
   const app = await mount({ clock });
   let cardRender: ReturnType<typeof spyOn<Renderable, "requestRender">> | undefined;
@@ -1411,11 +1415,11 @@ test("Stable left-detail geometry never requests additional renders during scree
     await app.renderOnce();
     await app.renderOnce();
 
-    const card = app.get("git-details-card");
+    const card = app.get("git-sidebar");
     cardRender = spyOn(card, "requestRender");
-    anchorRender = spyOn(app.get("git-details-anchor"), "requestRender");
+    anchorRender = spyOn(app.get("git-summary-files-panel"), "requestRender");
 
-    // Frames from other UI must not make unchanged cards/connectors request rendering.
+    // Frames from other UI must not repaint unchanged sidebar geometry.
     await app.renderOnce();
     await app.renderOnce();
 
@@ -1429,7 +1433,7 @@ test("Stable left-detail geometry never requests additional renders during scree
       throw new Error("Missing details body");
     }
 
-    expect(card.height).toBe(text.virtualLineCount + 2);
+    expect(card.height).toBe(app.get("git-history").height);
   } finally {
     cardRender?.mockRestore();
     anchorRender?.mockRestore();
@@ -1437,8 +1441,8 @@ test("Stable left-detail geometry never requests additional renders during scree
   }
 });
 
-test("Details fully expand messages beyond old height caps without internal scrolling", async () => {
-  // Prepare messages fitting the screen but exceeding the former 65% cap.
+test("Sidebar details scroll independently while retaining the full commit message", async () => {
+  // Messages longer than the upper sidebar viewport remain readable through its own scroll.
   const app = await mount({
     source: {
       load: async () => ok(snapshot()),
@@ -1454,20 +1458,24 @@ test("Details fully expand messages beyond old height caps without internal scro
   });
   try {
     await app.chooseCommit();
-    await app.waitForFrame((frame) => frame.includes("Expanded message 14"));
+    await app.waitFor(() =>
+      (app.get("git-detail-text") as TextRenderable).plainText.includes("Expanded message 14"),
+    );
 
-    const card = app.get("git-details-card");
+    const card = app.get("git-sidebar");
     const body = app.get("git-details");
     const text = app.get("git-detail-text");
     if (!(text instanceof TextRenderable)) {
       throw new Error("Missing details body");
     }
 
-    expect(body instanceof ScrollBoxRenderable).toBe(false);
-    expect(card.height).toBe(text.virtualLineCount + 2);
-    expect(text.height).toBe(text.virtualLineCount);
-    expect(card.height).toBeGreaterThan(app.get("git-history").height * 0.65);
+    expect(body instanceof ScrollBoxRenderable).toBe(true);
+    expect(card.height).toBe(app.get("git-history").height);
+    expect(text.height).toBeGreaterThan(body.height);
     expect(app.captureCharFrame()).toContain("Author: Ada");
+    body.focus();
+    app.mockInput.pressKey("END");
+    await app.renderOnce();
     expect(app.captureCharFrame()).toContain("Expanded message 14");
     expect(app.get(`git-history:${commit.oid}`).height).toBe(2);
     expect(app.requests).toEqual([]);
@@ -1476,8 +1484,8 @@ test("Details fully expand messages beyond old height caps without internal scro
   }
 });
 
-test("Oversized details fully expand and use shared Commits scrolling to read/copy tails", async () => {
-  // Cards taller than terminals must not gain private scrollbars or inaccessible clipped content.
+test("Long sidebar messages support scrolling and copying without moving commit history", async () => {
+  // Long messages remain fully readable without extending or moving commit history.
   const message =
     Array.from({ length: 80 }, (_, index) => `Long message ${index}`).join("\n") +
     "\nLast detail line";
@@ -1493,21 +1501,21 @@ test("Oversized details fully expand and use shared Commits scrolling to read/co
     app.mockInput.pressTab();
     await app.renderOnce();
 
-    const history = app.get("git-history") as ScrollBoxRenderable;
-    const card = app.get("git-details-card");
+    const history = app.get("git-details") as ScrollBoxRenderable;
+    const card = app.get("git-sidebar");
     const body = app.get("git-details");
 
-    expect(body instanceof ScrollBoxRenderable).toBe(false);
-    expect(card.height).toBeGreaterThan(history.height);
+    expect(body instanceof ScrollBoxRenderable).toBe(true);
+    expect((app.get("git-detail-text") as TextRenderable).height).toBeGreaterThan(history.height);
 
-    // Wheel input over cards moves shared viewports, not internal content.
+    // Wheel input over details scrolls that body, not history.
     const author = app.positionIn("git-details", "Author: Ada");
     await app.mockMouse.scroll(author.x, author.y, "down");
     await app.renderOnce();
     expect(history.scrollTop).toBeGreaterThan(0);
     expect(app.renderer.currentFocusedRenderable).toBe(body);
 
-    // End moves shared viewports while preserving commit selection.
+    // End reaches the message tail while preserving commit selection.
     app.mockInput.pressKey("END");
     await app.renderOnce();
     await app.renderOnce();
@@ -1523,7 +1531,7 @@ test("Oversized details fully expand and use shared Commits scrolling to read/co
     expect(app.copies).toEqual(["Last"]);
     expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid);
     expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("GIT");
-    // Settle the shared scroll position and the independently mounted copy notification.
+    // Return the details viewport to its metadata after copying.
     app.mockInput.pressKey("HOME");
     await app.renderOnce();
     await app.renderOnce();
@@ -1534,8 +1542,8 @@ test("Oversized details fully expand and use shared Commits scrolling to read/co
   }
 });
 
-test("Detail cards omit duplicate titles and show actual branches/tags above authors", async () => {
-  // Cards expose branch/tag names hidden behind ref-summary +N indicators.
+test("The sidebar shows actual branches and tags above authors", async () => {
+  // The sidebar exposes branch/tag names hidden behind ref-summary +N indicators.
   const data = snapshot();
   data.refs = [
     { kind: "local", name: "main", ref: "refs/heads/main", oid: commit.oid },
@@ -1561,10 +1569,10 @@ test("Detail cards omit duplicate titles and show actual branches/tags above aut
     await app.chooseCommit();
     await app.waitForFrame((frame) => frame.includes("Full commit message"));
 
-    const card = app.get("git-details-card");
+    const card = app.get("git-details-panel");
     const text = app.get("git-detail-text");
 
-    expect(app.captureCharFrame()).not.toContain("Commit details");
+    expect(app.captureCharFrame()).toContain("Commit details");
     expect(text.y).toBe(card.y + 1);
     expect(app.captureCharFrame()).toContain("Branches: main, feature/topic");
     expect(app.captureCharFrame()).toContain("Remotes: origin/main");
@@ -1578,7 +1586,7 @@ test("Detail cards omit duplicate titles and show actual branches/tags above aut
   }
 });
 
-test("Left details show all matching refs while excluding other commits' refs", async () => {
+test("Sidebar details show all matching refs while excluding other commits' refs", async () => {
   // Details expose full source hidden behind summary +N counts.
   const data = snapshot();
   data.refs.push(
@@ -1620,7 +1628,7 @@ test("Left details show all matching refs while excluding other commits' refs", 
 });
 
 test.each(["arrows", "vim", "control"] as const)(
-  "%s navigation to refless commits updates left details and connector targets",
+  "%s navigation to refless commits updates sidebar metadata",
   async (navigation) => {
     // Ordinary commits away from branch tips also expose details when focused.
     const data = snapshot();
@@ -1662,7 +1670,7 @@ test.each(["arrows", "vim", "control"] as const)(
       expect(text.plainText).toContain("Branches: —");
       expect(text.plainText).toContain("Remotes: —");
       expect(text.plainText).toContain("Tags: —");
-      expect(app.get("git-details-anchor").y).toBe(app.get(`git-history:${rootCommit.oid}`).y);
+      expect(app.get("git-summary-files").y).toBeGreaterThan(app.get("git-details").y);
       expect(app.renderer.currentFocusedRenderable?.id).toBe("git-history");
       expect(app.requests).toEqual([]);
     } finally {
@@ -1698,8 +1706,8 @@ test("Tab reads details and Esc returns without losing selection or hash actions
   }
 });
 
-test("Rapid commit navigation prevents late details from overwriting current ref cards", async () => {
-  // Late previous messages must preserve current selection and connectors.
+test("Rapid commit navigation prevents late details from overwriting current sidebar content", async () => {
+  // Late previous messages must preserve current selection and sidebar metadata.
   const pending = Promise.withResolvers<Result<import("../model.ts").GitDetails, ExpectedError>>();
   let previousSignal: AbortSignal | undefined;
   const app = await mount({
@@ -1734,7 +1742,7 @@ test("Rapid commit navigation prevents late details from overwriting current ref
     expect(previousSignal?.aborted).toBe(true);
     expect(text.plainText).toContain(rootCommit.oid);
     expect(text.plainText).not.toContain("Obsolete commit message");
-    expect(app.get("git-details-anchor").y).toBe(app.get(`git-history:${rootCommit.oid}`).y);
+    expect(app.get("git-sidebar").visible).toBe(true);
     expect(app.requests).toEqual([]);
   } finally {
     pending.resolve(ok({ commit, message: "cleanup", files: [], branches: [] }));
@@ -1742,7 +1750,7 @@ test("Rapid commit navigation prevents late details from overwriting current ref
   }
 });
 
-test("Changes round-trips retain left-detail message reading positions", async () => {
+test("Changes round-trips retain independent sidebar reading positions", async () => {
   // Inspecting changed files must not discard long-message reading positions.
   const app = await mount({
     source: {
@@ -1762,7 +1770,7 @@ test("Changes round-trips retain left-detail message reading positions", async (
     app.mockInput.pressTab();
     await app.renderOnce();
 
-    const history = app.get("git-history") as ScrollBoxRenderable;
+    const history = app.get("git-details") as ScrollBoxRenderable;
     app.mockInput.pressKey("d", { ctrl: true });
     app.mockInput.pressKey("d", { ctrl: true });
     await app.renderOnce();
@@ -1781,15 +1789,15 @@ test("Changes round-trips retain left-detail message reading positions", async (
 
     expect(history.scrollTop).toBe(position);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("git-details");
-    expect(app.get("git-details-card").visible).toBe(true);
+    expect(app.get("git-sidebar").visible).toBe(true);
     expect(app.requests).toEqual([]);
   } finally {
     await app.close();
   }
 });
 
-test("New UIs restore shared viewport positions for expanded details", async () => {
-  // Shared screen positions restore even without separate detail-scroll state.
+test("New UIs restore independent sidebar message positions", async () => {
+  // Independent detail positions restore without moving history.
   const source: GitSource = {
     load: async () => ok(snapshot()),
     compare: async () => ok(comparison()),
@@ -1816,23 +1824,23 @@ test("New UIs restore shared viewport positions for expanded details", async () 
     await app.close();
   }
 
-  // Short commit lists must not clamp saved positions before full message heights are ready.
+  // Saved detail positions are restored only after the full message has loaded.
   const restored = await mount({ source, initial: retained! });
   try {
     await restored.waitForFrame((frame) => frame.includes("Restored detail 79"));
 
-    expect(restored.view.workViewPreferences.gitViews?.["demo:main"]?.historyScroll).toBe(
-      retained!.gitViews?.["demo:main"]?.historyScroll,
+    expect(restored.view.workViewPreferences.gitViews?.["demo:main"]?.detailsScroll).toBe(
+      retained!.gitViews?.["demo:main"]?.detailsScroll,
     );
-    expect(restored.get("git-details") instanceof ScrollBoxRenderable).toBe(false);
+    expect(restored.get("git-details") instanceof ScrollBoxRenderable).toBe(true);
     expect(restored.requests).toEqual([]);
   } finally {
     await restored.close();
   }
 });
 
-test("Closing Changes after reconnection restores shared long-detail reading positions", async () => {
-  // Hidden background lists may be shorter than saved positions before cards expand.
+test("Closing Changes after reconnection restores sidebar reading positions", async () => {
+  // Restoring a popup must preserve the independent sidebar viewport behind it.
   const source: GitSource = {
     load: async () => ok(snapshot()),
     compare: async () => ok(comparison()),
@@ -1857,22 +1865,22 @@ test("Closing Changes after reconnection restores shared long-detail reading pos
     await app.openChanges();
     await app.waitForFrame((frame) => frame.includes("const line00"));
     retained = app.view.workViewPreferences;
-    expect(retained.gitViews?.["demo:main"]?.historyScroll).toBeGreaterThan(0);
+    expect(retained.gitViews?.["demo:main"]?.detailsScroll).toBeGreaterThan(0);
   } finally {
     await app.close();
   }
 
-  // Popup Esc must not overwrite saved positions with unexpanded background zero.
+  // Popup Esc must not replace the saved details offset with a placeholder position.
   const restored = await mount({ source, initial: retained! });
   try {
     await restored.waitForFrame((frame) => frame.includes("const line00"));
     restored.mockInput.pressEscape();
     await restored.waitForFrame((frame) => frame.includes("Popup return 79"));
 
-    expect(restored.get("git-details-card").visible).toBe(true);
+    expect(restored.get("git-sidebar").visible).toBe(true);
     expect(restored.get("git-changes").visible).toBe(false);
-    expect(restored.view.workViewPreferences.gitViews?.["demo:main"]?.historyScroll).toBe(
-      retained!.gitViews?.["demo:main"]?.historyScroll,
+    expect(restored.view.workViewPreferences.gitViews?.["demo:main"]?.detailsScroll).toBe(
+      retained!.gitViews?.["demo:main"]?.detailsScroll,
     );
     expect(restored.requests).toEqual([]);
   } finally {
@@ -1880,8 +1888,8 @@ test("Closing Changes after reconnection restores shared long-detail reading pos
   }
 });
 
-test("Scrolling selected commits offscreen hides details and removes hidden-body focus", async () => {
-  // Mouse wheel scrolling must not attach detail bodies to unrelated commit rows.
+test("Scrolling selected commits offscreen preserves sidebar information and focus", async () => {
+  // The sidebar stays attached to selection, not to the currently visible history rows.
   const data = snapshot();
   data.commits.push(
     ...Array.from({ length: 40 }, (_, index) => ({
@@ -1910,9 +1918,9 @@ test("Scrolling selected commits offscreen hides details and removes hidden-body
     await app.renderOnce();
     await app.renderOnce();
 
-    expect(app.get("git-details-card").visible).toBe(false);
-    expect(app.get("git-details-anchor").visible).toBe(false);
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-history");
+    expect(app.get("git-sidebar").visible).toBe(true);
+    expect((app.get("git-detail-text") as TextRenderable).plainText).toContain(commit.oid);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-details");
     expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.selected).toBe(commit.oid);
     expect(app.requests).toEqual([]);
   } finally {
@@ -1920,8 +1928,8 @@ test("Scrolling selected commits offscreen hides details and removes hidden-body
   }
 });
 
-test("Narrow left details retain full heights without changing graph-row heights", async () => {
-  // Use final candidates and long messages whose cards extend below the viewport.
+test("Narrow layouts stack the sidebar without changing graph-row heights", async () => {
+  // Compact layouts keep independent regions within the work pane.
   const app = await mount();
   try {
     await app.chooseCommit();
@@ -1939,7 +1947,7 @@ test("Narrow left details retain full heights without changing graph-row heights
       await app.renderOnce();
       await app.renderOnce();
 
-      const card = app.get("git-details-card");
+      const card = app.get("git-sidebar");
       const history = app.get("git-history");
       const row = app.get(`git-history:${rootCommit.oid}`);
 
@@ -1951,13 +1959,15 @@ test("Narrow left details retain full heights without changing graph-row heights
         throw new Error("Missing details body");
       }
 
-      expect(card.height).toBe(text.virtualLineCount + 2);
+      expect(app.get("git-details").height).toBeLessThanOrEqual(card.height);
       expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("GIT");
-      expect(card.x + card.width).toBeLessThanOrEqual(
-        app.get(`git-history:${rootCommit.oid}:graph`).x,
-      );
+      if (width < 100) {
+        expect(card.y).toBeGreaterThanOrEqual(history.y + history.height);
+      } else {
+        expect(card.x).toBeGreaterThanOrEqual(history.x + history.width);
+      }
       expect(row.height).toBe(2);
-      expect(app.get(`git-history:${rootCommit.oid}:label`).width).toBeGreaterThan(12);
+      expect(app.get(`git-history:${rootCommit.oid}:label`).width).toBeGreaterThan(8);
     }
 
     expect(app.requests).toEqual([]);
@@ -2056,9 +2066,9 @@ test("Empty-commit details remain readable in lists and Changes shows only empty
     await app.openChanges();
 
     expect(app.captureCharFrame()).not.toContain("Empty commit explanation");
-    expect(app.get("git-details-card").visible).toBe(false);
+    expect(app.get("git-sidebar").visible).toBe(true);
     expect(app.get("git-changes").visible).toBe(true);
-    expect(app.captureCharFrame()).toContain("Changed files (0)");
+    expect(app.captureCharFrame()).toContain("0/0");
     expect(app.captureCharFrame()).toContain("No changed files");
     expect(comparisons).toBe(0);
     app.mockInput.pressEscape();
@@ -2138,7 +2148,7 @@ test("Closing during detail lookup prevents late popup or diff reopening", async
     await app.chooseCommit();
     expect(app.captureCharFrame()).toContain("Loading commit details");
     await app.openChanges();
-    expect(app.get("git-details-card").visible).toBe(false);
+    expect(app.get("git-sidebar").visible).toBe(true);
 
     app.mockInput.pressEscape();
     await app.renderOnce();
@@ -2240,6 +2250,7 @@ test("Comparison failures stay inside popups and support refresh retries", async
     await app.waitForFrame((frame) => frame.includes("Comparison unavailable"));
     expect(app.get("git-changes").visible).toBe(true);
 
+    app.mockInput.pressTab();
     app.mockInput.pressKey("r");
     await app.waitForFrame((frame) => frame.includes("const line00"));
 
@@ -2309,9 +2320,9 @@ test.each([
   { width: 160, light: true },
   { width: 60, light: true },
 ])(
-  "Shared Agent/Git prompts use identical appearance, padding, auto-height, and clearing: %j",
+  "Shared Agent/Git prompts preserve editing and padding with a titled Ask field: %j",
   async ({ width, light }) => {
-    // Render identical source in each view to detect parent style overrides.
+    // Ask adds a field frame, not a different editor or input behavior.
     const app = await mount();
     const render = async () => {
       await app.renderOnce();
@@ -2370,7 +2381,15 @@ test.each([
 
       input.value = "first\nsecond";
       await render();
-      expect(appearance(input)).toEqual(expected);
+      expect(appearance(input)).toEqual({
+        ...expected,
+        left: expected.left + 1,
+        right: expected.right + 1,
+        border: true,
+        borderColor: uiTheme(app.renderer).styles["ui.popupBorder"].fg.toInts(),
+        background: uiTheme(app.renderer).styles["ui.popup"].bg!.toInts(),
+        editorBackground: uiTheme(app.renderer).styles["ui.popup"].bg!.toInts(),
+      });
       expect(input.height).toBe(2);
       expect(input.field.height).toBe(4);
       expect(input.activity.root.parent).toBe(input.field);
@@ -2541,7 +2560,7 @@ test("Git details and both diffs scroll focused bodies by half-pages", async () 
     await app.chooseCommit();
 
     const details = app.get("git-details");
-    const history = app.get("git-history") as ScrollBoxRenderable;
+    const history = app.get("git-details") as ScrollBoxRenderable;
 
     details.focus();
     history.scrollTo(0);
@@ -2876,7 +2895,7 @@ test.each(["view", "worktree"] as const)(
       // View identities and synchronized scroll survive while external edits become visible.
       expect(reads).toBe(2);
       expect(comparisons).toBe(2);
-      expect(app.captureCharFrame()).toContain("Changed files (3)");
+      expect((app.get("git-changes-search-count") as TextRenderable).plainText).toBe("3/3");
       expect(app.captureCharFrame()).toContain("fresh.txt");
       expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.file).toBe(
         "unstaged:src/login.ts",
@@ -3002,6 +3021,7 @@ test.each(["arrows", "vim", "control"] as const)(
       await app.waitForFrame((frame) => frame.includes("const line00"));
 
       // Staying on the first file or scrolling diff bodies does not reread any Git data.
+      app.get("git-files").focus();
       move(false);
       await app.renderOnce();
       app.get("git-diff").focus();
@@ -3237,6 +3257,7 @@ test("Terminal focus refresh preserves Ask input, caret, target and frozen Git c
   });
   try {
     await app.openWorkingTree();
+    app.get("git-files").focus();
     app.mockInput.pressKey("a");
     await app.renderOnce();
     await app.mockInput.typeText("explain this file");
@@ -3259,7 +3280,7 @@ test("Terminal focus refresh preserves Ask input, caret, target and frozen Git c
     expect(input.value).toBe("explain this file");
     expect(input.cursorOffset).toBe(caret);
     expect(app.renderer.currentFocusedRenderable).toBe(input);
-    expect(app.captureCharFrame()).toContain("File src/login.ts");
+    expect(input.placeholder).toBe("Ask about File src/login.ts");
     expect(app.requests).toEqual([]);
     expect(app.creations).toEqual([]);
     expect(app.view.promptDrafts.a1).toBe("existing Agent draft");
@@ -3369,8 +3390,168 @@ test("+ loads commits in batches of 300 without More buttons and stops querying 
   }
 });
 
-test("Git lists use full width and compact Changes popups fit inside footers", async () => {
-  // Actual list layouts leave no permanent right-hand pane.
+test.each([160, 60])(
+  "Changes at %d columns preserves search editing and hands repeated half-page navigation to candidates",
+  async (width) => {
+    // Enough files to span several pages make candidate jumps distinct from native editing.
+    const data = snapshot();
+    data.files = Array.from({ length: 40 }, (_, index) => ({
+      kind: "unstaged",
+      status: "M",
+      path: `src/file${String(index).padStart(2, "0")}.ts`,
+    }));
+    const app = await mount({
+      source: {
+        load: async () => ok(data),
+        details: async (selected) =>
+          ok({ commit: selected, message: selected.subject, files: [], branches: [] }),
+        compare: async () => ok(comparison()),
+      },
+    });
+    const raw = (value: string) => {
+      const key = parseKeypress(value, { useKittyKeyboard: true });
+      if (!key) throw new Error("Invalid Kitty key");
+      app.renderer.keyInput.processParsedKey(key);
+    };
+    try {
+      app.resize(width, 32);
+      await app.renderOnce();
+      await app.openWorkingTree();
+      const input = app.get("git-changes-search") as SearchInput;
+      const list = app.get("git-files") as ScrollBoxRenderable;
+      expect(app.renderer.currentFocusedRenderable).toBe(input);
+      expect((app.get("git-changes-search-count") as TextRenderable).plainText).toBe("40/40");
+
+      // Single-step input navigation keeps the caret, while held half-page keys transfer ownership once.
+      await app.mockInput.typeText("file");
+      input.cursorOffset = 2;
+      app.mockInput.pressKey("n", { ctrl: true });
+      await app.renderOnce();
+      expect(app.renderer.currentFocusedRenderable).toBe(input);
+      expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.file).toBe(
+        "unstaged:src/file01.ts",
+      );
+      const step = Math.floor(list.viewport.height / 2);
+      raw("\x1b[100;5u");
+      await app.renderOnce();
+      raw("\x1b[100;5:2u");
+      await app.renderOnce();
+      raw("\x1b[100;5:3u");
+      expect(app.renderer.currentFocusedRenderable).toBe(list);
+      expect(input.value).toBe("file");
+      expect(input.cursorOffset).toBe(2);
+      const key = `unstaged:src/file${String(1 + step * 2).padStart(2, "0")}.ts`;
+      expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.file).toBe(key);
+      const row = app.get(`git-files:${key}`);
+      expect(row.y).toBeGreaterThanOrEqual(list.viewport.y);
+      expect(row.y + row.height).toBeLessThanOrEqual(list.viewport.y + list.viewport.height);
+
+      // Preview focus and the search-clear command never close the popup or edit the Agent draft.
+      app.mockInput.pressKey("o", { ctrl: true });
+      await app.renderOnce();
+      expect(app.renderer.currentFocusedRenderable?.id).toBe("git-diff");
+      app.mockInput.pressKey("o", { ctrl: true });
+      await app.renderOnce();
+      expect(app.renderer.currentFocusedRenderable).toBe(input);
+      app.mockInput.pressCtrlC();
+      app.mockInput.pressCtrlC();
+      await app.mockInput.typeText("hjklay");
+      await app.renderOnce();
+      expect(input.value).toBe("hjklay");
+      expect(app.get("git-changes").visible).toBe(true);
+      expect(app.get("git-ask").visible).toBe(false);
+      expect(app.view.promptDrafts.a1).toBe("existing Agent draft");
+      expect(app.requests).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+test("Late commit files use the latest Unicode query without losing search focus or caret", async () => {
+  // Discovery completes after a query is entered, rather than filtering a request-time query snapshot.
+  const pending = Promise.withResolvers<Result<GitDetails, ExpectedError>>();
+  const compared: string[] = [];
+  const app = await mount({
+    source: {
+      load: async () => ok(snapshot()),
+      details: () => pending.promise,
+      compare: async (file) => {
+        compared.push(file.path);
+        return ok(comparison());
+      },
+    },
+  });
+  try {
+    await app.chooseCommit();
+    await app.openChanges();
+    const input = app.get("git-changes-search") as SearchInput;
+    await app.mockInput.pasteBracketedText("파일🙂");
+    input.cursorOffset = 1;
+    expect((app.get("git-changes-search-count") as TextRenderable).visible).toBe(false);
+
+    pending.resolve(
+      ok({
+        commit,
+        message: "Ready",
+        branches: [],
+        files: [
+          { kind: "commit", status: "M", path: "first.ts", commit },
+          { kind: "commit", status: "M", path: "파일🙂.ts", commit },
+        ],
+      }),
+    );
+    await app.waitForFrame((frame) => frame.includes("1/2"));
+
+    // Only the matching file is compared, and resizing preserves its identity and unsubmitted search.
+    expect(compared).toEqual(["파일🙂.ts"]);
+    for (const width of [60, 320, 160]) {
+      app.resize(width, 32);
+      await app.renderOnce();
+      expect(input.value).toBe("파일🙂");
+      expect(input.cursorOffset).toBe(1);
+      expect(app.renderer.currentFocusedRenderable).toBe(input);
+      expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.file).toBe("commit:파일🙂.ts");
+    }
+    app.mockInput.pressEscape();
+    await app.renderOnce();
+    await app.openChanges();
+    expect(input.value).toBe("");
+    expect(input.cursorOffset).toBe(0);
+    expect(app.requests).toEqual([]);
+  } finally {
+    pending.resolve(ok({ commit, message: "cleanup", branches: [], files: [] }));
+    await app.close();
+  }
+});
+
+test("Sidebar file activation opens its comparison and restores the originating focus", async () => {
+  // The permanent file list follows commit selection without opening Changes during browsing.
+  const app = await mount();
+  try {
+    await app.chooseCommit();
+    const files = app.get("git-summary-files");
+    files.focus();
+    app.mockInput.pressKey("n", { ctrl: true });
+    await app.renderOnce();
+    expect(app.get("git-changes").visible).toBe(false);
+    expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.file).toBe("commit:src/other.ts");
+
+    app.mockInput.pressEnter();
+    await app.waitForFrame((frame) => frame.includes("const line00"));
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-changes-search");
+    app.mockInput.pressEscape();
+    await app.renderOnce();
+    expect(app.renderer.currentFocusedRenderable).toBe(files);
+    expect(app.get("git-sidebar").visible).toBe(true);
+    expect(app.requests).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Git sidebars and centered Changes previews fit above footers through resize", async () => {
+  // The persistent sidebar moves below history only on narrow terminals.
   const app = await mount();
   try {
     for (const [width, height] of [
@@ -3387,11 +3568,18 @@ test("Git lists use full width and compact Changes popups fit inside footers", a
       const panel = app.get("git-view");
       const list = app.get("git-history");
 
-      expect(list.y + list.height).toBe(app.get("work-panel").y + app.get("work-panel").height);
+      const sidebar = app.get("git-sidebar");
+      expect(sidebar.y + sidebar.height).toBe(
+        app.get("work-panel").y + app.get("work-panel").height,
+      );
       expect(list.y).toBe(panel.y);
-      expect(list.width).toBe(panel.width - (width < 80 ? 2 : 4));
+      if (width >= 100) {
+        expect(list.x + list.width).toBeLessThanOrEqual(sidebar.x);
+      } else {
+        expect(list.y + list.height).toBeLessThanOrEqual(sidebar.y);
+      }
       expect(app.get("git-changes").visible).toBe(false);
-      expect(app.captureCharFrame()).not.toContain("Changed files");
+      expect(app.captureCharFrame()).toContain("Changed files");
     }
 
     // Enter-opened popups retain real file-list and both diff viewports.
@@ -3408,17 +3596,27 @@ test("Git lists use full width and compact Changes popups fit inside footers", a
       await app.renderOnce();
       await app.renderOnce();
 
+      app.get("git-changes-search").focus();
+      app.mockInput.pressKey("o", { ctrl: true });
+      await app.renderOnce();
+      await app.renderOnce();
       const popup = app.get("git-changes");
       const diff = app.get("git-diff");
 
-      expect(popup.y + popup.height).toBe(app.get("work-panel").y + app.get("work-panel").height);
-      expect(diff.y + diff.height).toBe(popup.y + popup.height - 1);
-      expect(app.get("git-files").height).toBeGreaterThan(0);
+      expect(popup.y + popup.height).toBeLessThan(
+        app.get("work-panel").y + app.get("work-panel").height,
+      );
+      expect(diff.y + diff.height).toBe(popup.y + popup.height);
+      expect(app.get("git-changes-search").visible).toBe(true);
       expect(app.codes()).toHaveLength(2);
       expect(app.codes().every((pane) => pane.width > 0 && pane.height > 0)).toBe(true);
-      expect(app.codes().every((pane) => pane.y + pane.height <= popup.y + popup.height - 1)).toBe(
-        true,
-      );
+      for (const pane of app.codes()) {
+        expect({ width, height, bottom: pane.y + pane.height }).toEqual({
+          width,
+          height,
+          bottom: popup.y + popup.height,
+        });
+      }
       expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("GIT");
     }
 
@@ -3429,14 +3627,14 @@ test("Git lists use full width and compact Changes popups fit inside footers", a
   }
 });
 
-test("Commit clicks expand left details and Enter shows only files with Before/After", async () => {
+test("Commit selection updates the sidebar and Enter opens searchable Before/After previews", async () => {
   // Mouse commit selection preserves immediate hash-copy and Ask actions.
   const app = await mount();
   try {
     await app.chooseCommit();
     expect(app.get("git-changes").visible).toBe(false);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("git-history");
-    expect(app.get("git-details-card").visible).toBe(true);
+    expect(app.get("git-sidebar").visible).toBe(true);
     expect(app.captureCharFrame()).toContain("Author: Ada");
 
     // Load first-file comparisons automatically without reopening files.
@@ -3446,25 +3644,200 @@ test("Commit clicks expand left details and Enter shows only files with Before/A
     const files = app.get("git-files");
     const diff = app.get("git-diff");
 
-    expect(app.get("git-details-card").visible).toBe(false);
+    expect(app.get("git-sidebar").visible).toBe(true);
     expect(app.captureCharFrame()).not.toContain("Author: Ada");
-    expect(app.captureCharFrame()).not.toContain("Commit details");
     expect(app.captureCharFrame()).not.toContain("aaaaaaa · Update login");
-    expect(app.get("git-changes-body").y).toBe(app.get("git-changes").y + 1);
+    expect(app.get("git-changes-body").y).toBe(app.get("git-changes").y);
     expect(app.captureCharFrame()).not.toContain("Changes ·");
-    expect(app.captureCharFrame()).toContain("Changed files (2)");
+    expect((app.get("git-changes-search-count") as TextRenderable).plainText).toBe("2/2");
     expect(app.captureCharFrame()).toContain("Before ·");
     expect(app.captureCharFrame()).toContain("After ·");
     expect(files.x).toBeLessThan(diff.x);
     expect(app.codes()).toHaveLength(2);
-    expect(app.renderer.currentFocusedRenderable).toBe(files);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-changes-search");
     expect(app.requests).toEqual([]);
   } finally {
     await app.close();
   }
 });
 
-test("Ask popups begin with the selected Git context instead of a popup title", async () => {
+test.each([false, true])(
+  "Ask uses the shared popup background through focus and theme changes at light=%s",
+  async (light) => {
+    // Different popup and Agent input overrides expose accidental reuse of the inline composer surface.
+    const app = await mount();
+    const theme = uiTheme(app.renderer);
+    const palette: TerminalColors = {
+      palette: [],
+      defaultForeground: light ? "#202020" : "#ECECEC",
+      defaultBackground: light ? "#FAFAF6" : "#141414",
+      cursorColor: null,
+      mouseForeground: null,
+      mouseBackground: null,
+      tekForeground: null,
+      tekBackground: null,
+      highlightForeground: null,
+      highlightBackground: null,
+    };
+    const background = (x: number, y: number) => {
+      let column = 0;
+      return app
+        .captureSpans()
+        .lines[y]!.spans.find((span) => {
+          column += span.width;
+          return column > x;
+        })!
+        .bg.toInts();
+    };
+    try {
+      await app.chooseCommit();
+      app.mockInput.pressKey("a");
+      await app.renderOnce();
+      const input = app.get("git-prompt") as PromptInput;
+      input.value = "Ask draft\nSecond line";
+      input.cursorOffset = 4;
+
+      // Both native focus states follow the popup token, including while an existing draft is visible.
+      for (const color of light ? ["#DDEEFF", "#E8E0D0"] : ["#112233", "#263240"]) {
+        theme.configure(palette, {
+          styles: {
+            "ui.popup": { bg: color },
+            "prompt.input": { bg: light ? "#FFF4DA" : "#341D28" },
+          },
+        });
+        const popup = theme.styles["ui.popup"].bg!.toInts();
+        for (const focused of [false, true]) {
+          if (focused) input.focus();
+          else input.blur();
+          await app.renderOnce();
+          await app.renderOnce();
+
+          expect(input.field.backgroundColor.toInts()).toEqual(popup);
+          expect(input.backgroundColor.toInts()).toEqual(popup);
+          expect(background(input.x, input.y)).toEqual(popup);
+          expect(background(input.field.x + 1, input.y)).toEqual(popup);
+          expect(input.field.border).toBe(true);
+          expect(input.field.title).toBe(" Ask ");
+          expect(input.value).toBe("Ask draft\nSecond line");
+          expect(input.cursorOffset).toBe(4);
+        }
+        const agent = app.get("session-prompt") as PromptInput;
+        expect(agent.field.backgroundColor.toInts()).toEqual(
+          theme.styles["prompt.input"].bg!.toInts(),
+        );
+        expect(agent.field.backgroundColor.toInts()).not.toEqual(popup);
+      }
+      expect(app.requests).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+test.each([160, 60])(
+  "Ask at %d columns fits its field without painting extra background through editing and resize",
+  async (width) => {
+    // A distinct popup color makes unused background outside the rounded input visible to the test.
+    const app = await mount();
+    const background = (frame: ReturnType<typeof app.captureSpans>, x: number, y: number) => {
+      let column = 0;
+      return frame.lines[y]!.spans.find((span) => {
+        column += span.width;
+        return column > x;
+      })!.bg.toInts();
+    };
+    try {
+      uiTheme(app.renderer).configure(
+        {
+          palette: [],
+          defaultForeground: "#ECECEC",
+          defaultBackground: "#141414",
+          cursorColor: null,
+          mouseForeground: null,
+          mouseBackground: null,
+          tekForeground: null,
+          tekBackground: null,
+          highlightForeground: null,
+          highlightBackground: null,
+        },
+        { styles: { "ui.popup": { bg: "#112233" } } },
+      );
+      app.resize(width, 32);
+      await app.renderOnce();
+      await app.chooseCommit();
+      await app.renderOnce();
+      const before = app.captureSpans();
+      app.mockInput.pressKey("a");
+      await app.renderOnce();
+      await app.renderOnce();
+      const popup = app.get("git-ask");
+      const overlay = app.get("git-ask-overlay");
+      const input = app.get("git-prompt") as PromptInput;
+      const field = input.field;
+      const after = app.captureSpans();
+      for (const [x, y] of [
+        [field.x - 1, field.y],
+        [field.x + field.width, field.y],
+        [field.x, field.y - 1],
+        [field.x, field.y + field.height],
+      ] as const) {
+        expect(background(after, x, y)).toEqual(background(before, x, y));
+      }
+
+      // The surface follows editor rows, including shrinking again after long drafts are cleared.
+      for (const [value, height] of [
+        ["", 3],
+        ["first\nsecond\nthird", 5],
+        ["long line\n".repeat(10), 8],
+        ["short", 3],
+      ] as const) {
+        input.value = value;
+        input.cursorOffset = Math.min(3, value.length);
+        await app.renderOnce();
+        await app.renderOnce();
+        expect([popup.x, popup.y, popup.width, popup.height]).toEqual([
+          field.x,
+          field.y,
+          field.width,
+          field.height,
+        ]);
+        expect(popup.height).toBe(height);
+        expect(popup.x).toBe(overlay.x + Math.floor((overlay.width - popup.width) / 2));
+        expect(popup.y).toBe(overlay.y + Math.floor((overlay.height - height) / 2));
+        expect(input.value).toBe(value);
+        expect(input.cursorOffset).toBe(Math.min(3, value.length));
+      }
+
+      // Terminal shrink/grow keeps the same draft and bounds without restoring the old fixed-height block.
+      input.value = "word ".repeat(100);
+      input.cursorOffset = 4;
+      for (const [columns, rows] of [
+        [40, 12],
+        [60, 4],
+        [160, 32],
+      ] as const) {
+        app.resize(columns, rows);
+        await app.renderOnce();
+        await app.renderOnce();
+        expect([popup.x, popup.y, popup.width, popup.height]).toEqual([
+          field.x,
+          field.y,
+          field.width,
+          field.height,
+        ]);
+        expect(popup.y).toBeGreaterThanOrEqual(overlay.y);
+        expect(popup.y + popup.height).toBeLessThanOrEqual(overlay.y + overlay.height);
+        expect(input.value).toBe("word ".repeat(100));
+        expect(input.cursorOffset).toBe(4);
+      }
+      expect(app.requests).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+test("Ask uses a centered borderless compact-width surface containing only the prompt", async () => {
   // Removing chrome must preserve the actual Git target, session choice and prompt ownership.
   const app = await mount();
   try {
@@ -3473,14 +3846,25 @@ test("Ask popups begin with the selected Git context instead of a popup title", 
     await app.renderOnce();
     await app.renderOnce();
 
-    // The selected context is the first content row, not a replacement decorative header.
+    // Context stays frozen without reserving header, session or action rows in the input popup.
     const popup = app.get("git-ask");
-    const context = popup
-      .getChildren()
-      .find((node) => node instanceof TextRenderable && node.plainText.startsWith("Commit "));
-
-    expect(context).toBeDefined();
-    expect(context!.y).toBe(popup.y + 1);
+    expect(popup.getChildren().map((node) => node.id)).toEqual(["git-prompt-field"]);
+    expect([popup.width, popup.height]).toEqual([64, 3]);
+    expect(popup.x).toBe(48);
+    expect(popup.y).toBe(14);
+    expect((popup as import("@opentui/core").BoxRenderable).border).toBe(false);
+    const field = (app.get("git-prompt") as PromptInput).field;
+    const top = app
+      .captureCharFrame()
+      .split("\n")
+      [field.y]!.slice(field.x, field.x + field.width);
+    expect(field.border).toBe(true);
+    expect(field.borderStyle).toBe("rounded");
+    expect(field.title).toBe(" Ask ");
+    expect(top).toStartWith("╭");
+    expect(top).toEndWith("╮");
+    expect(Math.abs(top.indexOf("Ask") + 1.5 - field.width / 2)).toBeLessThanOrEqual(1);
+    expect(app.renderer.root.findDescendantById("git-prompt-prompt")).toBeUndefined();
     expect(app.captureCharFrame()).not.toContain("Ask Agent · selected Git context");
     expect(app.captureCharFrame()).toContain("Session:");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("git-prompt");
@@ -3491,7 +3875,47 @@ test("Ask popups begin with the selected Git context instead of a popup title", 
   }
 });
 
-test("Changes Tab cycles only files/diffs and Esc returns to commits with left details", async () => {
+test.each([160, 60])(
+  "Changes at %d columns returns from the Enter-opened preview to files with Shift+Tab",
+  async (width) => {
+    // Search and selection must survive the direct preview-to-list round trip, including compact layouts.
+    const app = await mount();
+    try {
+      app.resize(width, 32);
+      await app.renderOnce();
+      await app.chooseCommit();
+      await app.openChanges();
+      const input = app.get("git-changes-search") as SearchInput;
+      const files = app.get("git-files") as ScrollBoxRenderable;
+      await app.mockInput.typeText("src");
+      input.cursorOffset = 1;
+      app.mockInput.pressKey("n", { ctrl: true });
+      await app.renderOnce();
+      const selected = app.view.workViewPreferences.gitViews?.["demo:main"]?.file;
+
+      // Enter reveals and focuses Before/After; one reverse Tab reveals and focuses its originating list.
+      app.mockInput.pressEnter();
+      await app.renderOnce();
+      expect(app.renderer.currentFocusedRenderable?.id).toBe("git-diff");
+      app.mockInput.pressTab({ shift: true });
+      await app.renderOnce();
+      await app.renderOnce();
+      expect(app.renderer.currentFocusedRenderable).toBe(files);
+      expect(files.visible).toBe(true);
+      expect(input.value).toBe("src");
+      expect(input.cursorOffset).toBe(1);
+      expect(app.view.workViewPreferences.gitViews?.["demo:main"]?.file).toBe(selected);
+      const row = app.get(`git-files:${selected}`);
+      expect(row.y).toBeGreaterThanOrEqual(files.viewport.y);
+      expect(row.y + row.height).toBeLessThanOrEqual(files.viewport.y + files.viewport.height);
+      expect(app.requests).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+test("Changes Tab cycles search, files and previews before Esc restores commit focus", async () => {
   // Popup focus must not leak into background tabs or Agent input.
   const app = await mount();
   try {
@@ -3500,8 +3924,8 @@ test("Changes Tab cycles only files/diffs and Esc returns to commits with left d
 
     const selected = app.view.workViewPreferences.gitViews?.["demo:main"]?.selected;
 
-    // No detail focus remains in popups; cycle only the two regions.
-    for (const id of ["git-diff", "git-files", "git-diff", "git-files"]) {
+    // Search remains a focus region instead of disappearing after Enter opens the popup.
+    for (const id of ["git-files", "git-diff", "git-changes-search", "git-files"]) {
       app.mockInput.pressTab();
       await app.renderOnce();
       expect(app.renderer.currentFocusedRenderable?.id).toBe(id);
@@ -3509,7 +3933,7 @@ test("Changes Tab cycles only files/diffs and Esc returns to commits with left d
 
     app.mockInput.pressTab({ shift: true });
     await app.renderOnce();
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-diff");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("git-changes-search");
     app.mockInput.pressEscape();
     await app.renderOnce();
 
@@ -3558,7 +3982,7 @@ test("Refs uses groups/search instead of kind tabs and retains compact results",
   }
 });
 
-test("Changes file titles and first files have exactly one blank row at every height", async () => {
+test("Changes search directly precedes results without blank header rows through resize", async () => {
   // Moving details into lists preserves existing space beneath file titles.
   const app = await mount({
     source: {
@@ -3582,20 +4006,12 @@ test("Changes file titles and first files have exactly one blank row at every he
         await app.renderOnce();
         await app.renderOnce();
 
-        const title = app.positionIn("git-files-panel", "Changed files");
+        const search = (app.get("git-changes-search") as SearchInput).field;
         const file = app.positionIn("git-files", "M src/only-file.ts");
 
-        expect({ width, height, gap: file.y - title.y - 1 }).toEqual({ width, height, gap: 1 });
-        expect(
-          app
-            .captureCharFrame()
-            .split("\n")
-            [title.y + 1]!.slice(
-              title.x,
-              app.get("git-files-panel").x + app.get("git-files-panel").width,
-            )
-            .trim(),
-        ).toBe("");
+        expect(file.y).toBe(search.y + search.height);
+        expect(app.get("git-files").x).toBe(search.x + 1);
+        expect(app.get("git-files").width).toBe(search.width - 2);
       }
     }
 
@@ -4002,7 +4418,7 @@ test("Commit details provide reading/drag copying without y or a actions", async
     expect(app.copies).toEqual(["Ada"]);
     expect(app.requests).toEqual([]);
     expect(app.get("git-changes").visible).toBe(false);
-    expect(app.get("git-details-card").visible).toBe(true);
+    expect(app.get("git-sidebar").visible).toBe(true);
   } finally {
     await app.close();
   }
@@ -4293,7 +4709,7 @@ test.each([false, true])(
       expect(app.renderer.currentFocusedRenderable).toBe(input);
 
       const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
-      expect(footer).toContain(`${overridden ? "<M-s>" : "<C-s>"} Change session`);
+      expect(footer).toContain(`${overridden ? "<M-s>" : "<C-s>"} Session:`);
       expect(app.requests).toEqual([]);
       expect(app.creations).toEqual([]);
       app.mockInput.pressEnter();

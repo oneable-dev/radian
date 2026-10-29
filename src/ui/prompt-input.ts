@@ -17,7 +17,7 @@ import type { Result } from "../result.ts";
 import { Clipboard } from "./clipboard.ts";
 import { LoadingSpinner } from "./loading-spinner.ts";
 import { uiTheme } from "./theme.ts";
-import { paintText, syntaxDefinition } from "./theme-styles.ts";
+import { paintText, syntaxDefinition, type StyleGroup } from "./theme-styles.ts";
 import { maxFrameBytes } from "../runtime/protocol.ts";
 import { cacheClipboardImage, fileInput, pastedFiles } from "../agents/prompt-attachments.ts";
 import {
@@ -41,6 +41,7 @@ type Options = {
   id?: string;
   fieldId?: string;
   activityId?: string;
+  backgroundStyle?: StyleGroup;
 };
 
 export class PromptInput extends TextareaRenderable {
@@ -83,7 +84,13 @@ export class PromptInput extends TextareaRenderable {
         { name: "kpenter", meta: true, action: "newline" },
       ],
     });
-    this.field = new InputField(renderer, this, "prompt", options.fieldId ?? `${this.id}-field`);
+    this.field = new InputField(
+      renderer,
+      this,
+      "prompt",
+      options.fieldId ?? `${this.id}-field`,
+      options.backgroundStyle,
+    );
     if (options.readOnly) {
       this.focusable = false;
       this.selectable = false;

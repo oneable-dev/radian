@@ -931,7 +931,7 @@ export class SessionHistoryPanel {
 
     const { height } = centerPopup(
       this.panel,
-      POPUP_SIZES.expanded,
+      POPUP_SIZES.large,
       this.renderer.width,
       this.renderer.height,
     );

@@ -20,6 +20,7 @@ import { Clipboard } from "../../ui/clipboard.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
+import { UI_BORDER_STYLE } from "../../ui/border-style.ts";
 import { transcriptBackground, transcriptSpacing } from "./transcript-style.ts";
 import { TranscriptMarkdown, updateTranscriptMarkdownStyles } from "./transcript-markdown.ts";
 import { paintText, syntaxDefinition } from "../../ui/theme-styles.ts";
@@ -1508,7 +1509,7 @@ export class TranscriptPanel {
         width: viewport.width + 2,
         height: row.box.height + 2,
         border: true,
-        borderStyle: "single",
+        borderStyle: UI_BORDER_STYLE,
         borderColor: this.theme.styles["ui.focusBorder"].fg,
         backgroundColor: this.theme.styles["ui.text"].bg ?? this.theme.colors.panel,
         shouldFill: false,

@@ -1062,7 +1062,32 @@ test("Refresh and close clear preview caches and reject responses from older gen
 });
 
 test("Narrow layouts switch between lists and previews while preserving search and caret on resize", async () => {
-  const app = await mount();
+  // The transcript must exceed the enlarged viewport so preview navigation remains observable.
+  const app = await mount({
+    preview: async (tree, id) =>
+      ok({
+        id,
+        worktreeId: tree,
+        text: "",
+        truncated: false,
+        sections: [
+          {
+            id: `${id}:prompt`,
+            kind: "user",
+            title: "You",
+            status: "complete",
+            text: `Saved question ${id}\n${Array.from({ length: 12 }, (_, line) => `Question context ${line}`).join("\n")}`,
+          },
+          {
+            id: `${id}:answer`,
+            kind: "assistant",
+            title: "Agent",
+            status: "complete",
+            text: `Saved answer ${id}`,
+          },
+        ],
+      }),
+  });
   try {
     await app.open();
     await app.mockInput.typeText("keyboard");
@@ -1088,6 +1113,7 @@ test("Narrow layouts switch between lists and previews while preserving search a
     // Moving up from the latest answer reveals its request even in compact viewports.
     const preview = app.get("history-preview") as ScrollBoxRenderable;
     const initialScroll = preview.scrollTop;
+    expect(initialScroll).toBeGreaterThan(0);
 
     await app.mockInput.pressKeys(["\x1b[5~"]);
     await app.render();

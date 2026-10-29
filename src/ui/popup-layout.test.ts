@@ -350,6 +350,65 @@ test("Activity for an offscreen popup body never leaks onto the workbench", asyn
   }
 });
 
+test("Large popups use more of ordinary terminals and keep a larger maximum size", async () => {
+  // Enlarging only the maximum would leave ordinary terminals stuck at the previous viewport cap.
+  const app = await createTestRenderer({ width: 160, height: 32 });
+  const panel = new PopupFrame(app.renderer, { position: "absolute", border: false });
+  app.renderer.root.add(panel);
+  try {
+    centerPopup(panel, POPUP_SIZES.expanded, 160, 32);
+    await app.renderOnce();
+    expect([panel.width, panel.height]).toEqual([144, 25]);
+
+    // Only the large preset gets narrower margins; other preset geometry stays unchanged.
+    centerPopup(panel, POPUP_SIZES.large, 160, 32);
+    await app.renderOnce();
+    expect([panel.x, panel.y, panel.width, panel.height]).toEqual([4, 2, 152, 28]);
+
+    app.resize(320, 90);
+    centerPopup(panel, POPUP_SIZES.large, 320, 90);
+    await app.renderOnce();
+    expect([panel.x, panel.y, panel.width, panel.height]).toEqual([40, 13, 240, 64]);
+  } finally {
+    await app.dispose();
+  }
+});
+
+test.each([undefined, false, true])(
+  "Popup frames share rounded corners without enabling omitted or false borders: %s",
+  async (border) => {
+    // A shared border style must not add outer frames back to borderless pickers.
+    const app = await createTestRenderer({ width: 60, height: 20 });
+    const panel = new PopupFrame(app.renderer, {
+      position: "absolute",
+      left: 2,
+      top: 2,
+      width: 20,
+      height: 6,
+      ...(border === undefined ? {} : { border }),
+    });
+    app.renderer.root.add(panel);
+    try {
+      await app.renderOnce();
+      expect(panel.border).toBe(border ?? false);
+      expect(panel.borderStyle).toBe("rounded");
+      if (border) {
+        const lines = app.captureCharFrame().split("\n");
+        expect(lines[panel.y]!.slice(panel.x, panel.x + panel.width)).toBe(
+          "╭" + "─".repeat(18) + "╮",
+        );
+        expect(lines[panel.y + panel.height - 1]!.slice(panel.x, panel.x + panel.width)).toBe(
+          "╰" + "─".repeat(18) + "╯",
+        );
+      } else {
+        expect(app.captureCharFrame()).not.toMatch(/[╭╮╰╯]/u);
+      }
+    } finally {
+      await app.dispose();
+    }
+  },
+);
+
 test.each(Object.entries(POPUP_SIZES))(
   "The %s popup preset fits even a one-cell terminal",
   async (_name, size) => {
@@ -376,6 +435,30 @@ test.each(Object.entries(POPUP_SIZES))(
         expect(panel.x + panel.width).toBeLessThanOrEqual(width);
         expect(panel.y + panel.height).toBeLessThanOrEqual(height);
       }
+    } finally {
+      await app.dispose();
+    }
+  },
+);
+
+test.each([false, true])(
+  "Popup color updates preserve explicitly configured borders: %s",
+  async (border) => {
+    // Theme changes must not recreate outer borders on a borderless popup.
+    const app = await createTestRenderer({ width: 60, height: 20 });
+    const panel = new PopupFrame(app.renderer, { width: 40, height: 12, border });
+    app.renderer.root.add(panel);
+    try {
+      await app.renderOnce();
+      const before = app.captureCharFrame();
+      panel.borderColor = "#FF0000";
+      panel.focusedBorderColor = "#00FF00";
+      await app.renderOnce();
+
+      // Ink changes leave both the requested sides and the cell geometry intact.
+      expect(panel.border).toBe(border);
+      expect([panel.width, panel.height]).toEqual([40, 12]);
+      expect(app.captureCharFrame()).toBe(before);
     } finally {
       await app.dispose();
     }

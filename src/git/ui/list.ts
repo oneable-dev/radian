@@ -52,10 +52,6 @@ export class GitList {
   private signature = "";
   private selected: string | null = null;
   private refWidth = 0;
-  private expandedRef: string | null = null;
-  private rowExtent = 0;
-  private readonly tail: BoxRenderable;
-  private readonly offsets = new Map<string, number>();
   private readonly rows = new Map<string, BoxRenderable>();
   private readonly annotations = new Map<string, Annotation>();
 
@@ -76,8 +72,6 @@ export class GitList {
       contentOptions: { flexDirection: "column" },
       onMouseDown: () => this.root.focus(),
     });
-    this.tail = new BoxRenderable(renderer, { id: `${id}:tail`, height: 0, flexShrink: 0 });
-    this.root.add(this.tail);
     uiTheme(renderer).scrollbars(this.root);
     this.root.on("focused", () => this.highlight());
     this.root.on("blurred", () => this.highlight());
@@ -87,48 +81,14 @@ export class GitList {
     return this.selected;
   }
 
-  get selectedOffset(): number | undefined {
-    return this.offsets.get(this.selected ?? "");
-  }
-
-  get rowsHeight(): number {
-    return this.rowExtent;
-  }
-
-  setTailHeight(height: number): void {
-    this.tail.height = Math.max(0, Math.round(height));
-  }
-
-  get selectedRow(): Readonly<{ y: number; height: number }> | undefined {
-    return this.rows.get(this.selected ?? "");
-  }
-
-  get selectedColor(): StyleGroup | undefined {
-    return this.annotations.get(this.selected ?? "")?.item.history?.color;
-  }
-
-  // Focus expansion changes only column geometry, never row identity or graph height.
-  setRefWidth(width: number, expanded: string | null): void {
-    if (width === this.refWidth && expanded === this.expandedRef) {
+  setRefWidth(width: number): void {
+    if (width === this.refWidth) {
       return;
     }
 
-    const resized = width !== this.refWidth;
-    const previous = this.expandedRef;
-
     this.refWidth = width;
-    this.expandedRef = expanded;
-    if (resized) {
-      for (const annotation of this.annotations.values()) {
-        this.paintAnnotation(annotation);
-      }
-    } else {
-      for (const key of [previous, expanded]) {
-        const annotation = this.annotations.get(key ?? "");
-        if (annotation) {
-          this.paintAnnotation(annotation);
-        }
-      }
+    for (const annotation of this.annotations.values()) {
+      this.paintAnnotation(annotation);
     }
   }
 
@@ -146,13 +106,7 @@ export class GitList {
 
       this.rows.clear();
       this.annotations.clear();
-      this.offsets.clear();
-      this.rowExtent = 0;
       for (const item of items) {
-        this.rowExtent += item.gapBefore ? 1 : 0;
-        this.offsets.set(item.key, this.rowExtent);
-        this.rowExtent += item.connector ? 2 : 1;
-
         let down: { x: number; y: number } | undefined;
         const row = new BoxRenderable(this.renderer, {
           id: `${this.root.id}:${item.key}`,
@@ -300,10 +254,6 @@ export class GitList {
         this.root.add(row);
         this.rows.set(item.key, row);
       }
-
-      // Only the shared history viewport scrolls when an expanded details card is taller than its rows.
-      this.root.remove(this.tail);
-      this.root.add(this.tail);
     }
 
     this.highlight(previous);
@@ -314,9 +264,8 @@ export class GitList {
     const decoration = item.history!;
     const styles = uiTheme(this.renderer).styles;
     const color = styles[decoration.color];
-    const expanded = item.key === this.expandedRef;
-    const connected = decoration.refs.length > 0 || expanded;
-    const first = decoration.refs[0] ?? (expanded ? `Commit ${item.key.slice(0, 7)}` : "");
+    const connected = decoration.refs.length > 0;
+    const first = decoration.refs[0] ?? "";
     const suffix = decoration.refs.length > 1 ? ` +${decoration.refs.length - 1}` : "";
     const caption =
       truncateCells(first, Math.max(0, this.refWidth - 3 - Bun.stringWidth(suffix))) + suffix;
@@ -404,8 +353,32 @@ export class GitList {
     const previous = this.selected;
     this.selected = key;
     this.highlight(previous);
-    this.root.scrollChildIntoView(`${this.root.id}:${key}`);
+    this.revealSelection();
     this.choose(key);
+  }
+
+  revealSelection(): void {
+    let offset = 0;
+    for (const item of this.items) {
+      offset += item.gapBefore ? 1 : 0;
+      const height = item.connector ? 2 : 1;
+      if (item.key === this.selected) {
+        const top = this.root.scrollTop;
+        const viewport = this.root.viewport.height;
+        if (viewport > 0) {
+          // Row positions may still describe the previous native layout after a cursor jump.
+          this.root.scrollTo(
+            offset < top
+              ? offset
+              : offset + height > top + viewport
+                ? offset + height - viewport
+                : top,
+          );
+        }
+        return;
+      }
+      offset += height;
+    }
   }
 
   moveHalfPage(direction: -1 | 1): void {

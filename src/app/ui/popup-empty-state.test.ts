@@ -42,7 +42,7 @@ const surfaces = [
   },
   {
     name: "history",
-    preset: "expanded",
+    preset: "large",
     panel: "history-dialog",
     content: "history-body",
     header: "History · radian",
@@ -89,10 +89,11 @@ const surfaces = [
   },
   {
     name: "changes",
+    preset: "large",
     panel: "git-changes",
     content: "git-changes-body",
     header: "Working tree",
-    body: "git-files-body",
+    body: "git-changes-results",
     title: "No changed",
     preview: "git-comparison-body",
   },
@@ -143,6 +144,7 @@ const searches: Partial<
   history: { id: "history-search", title: "History", counts: "0/0", status: "history-list-status" },
   model: { id: "model-search", title: "Models", counts: "0/0", status: "model-message" },
   messages: { id: "messages-search", title: "Messages", counts: "0/0" },
+  changes: { id: "git-changes-search", title: "Changed files", counts: "0/0" },
   refs: { id: "git-browser-search", title: "Refs", counts: "0/1", status: "git-browser-status" },
   reflog: {
     id: "git-browser-search",
@@ -264,6 +266,7 @@ async function mount(name: Surface, width: number, height: number) {
     await render();
     app.renderer.root.findDescendantById("git-history")!.focus();
     app.mockInput.pressEnter();
+    revealPreview = () => app.mockInput.pressKey("o", { ctrl: true });
   } else if (name === "accounts") {
     const accounts = new AccountsPanel(app.renderer, {
       ...common,
@@ -352,6 +355,8 @@ test.each(surfaces.filter((surface) => "preset" in surface))(
     try {
       const panel = app.get(surface.panel);
       const expanded = surface.preset === "expanded";
+      const large = surface.preset === "large";
+      const pane = surface.name === "changes";
       const geometry = [panel.x, panel.y, panel.width, panel.height];
 
       // Filtering must not shrink the frame or move the input caret.
@@ -364,11 +369,16 @@ test.each(surfaces.filter((surface) => "preset" in surface))(
 
       expect([panel.x, panel.y, panel.width, panel.height]).toEqual(geometry);
       for (const [width, height, columns, rows] of [
-        [320, 90, expanded ? 160 : 100, expanded ? 36 : 24],
-        [140, 32, expanded ? 126 : 100, expanded ? 25 : 24],
-        [60, 16, 54, 12],
-        [30, 10, 27, 8],
-        [320, 90, expanded ? 160 : 100, expanded ? 36 : 24],
+        [320, 90, large ? 240 : expanded ? 160 : 100, large ? 64 : expanded ? 36 : 24],
+        [
+          140,
+          32,
+          large ? 133 : expanded ? 126 : 100,
+          large ? (pane ? 27 : 28) : expanded ? 25 : 24,
+        ],
+        [60, 16, large ? 57 : 54, large ? (pane ? 13 : 14) : 12],
+        [30, 10, large ? 28 : 27, large ? (pane ? 8 : 9) : 8],
+        [320, 90, large ? 240 : expanded ? 160 : 100, large ? 64 : expanded ? 36 : 24],
       ] as const) {
         // Repeated shrink/grow cycles use current bounds rather than stale native geometry.
         app.resize(width, height);
@@ -376,7 +386,7 @@ test.each(surfaces.filter((surface) => "preset" in surface))(
 
         expect([panel.width, panel.height]).toEqual([columns, rows]);
         expect(panel.x).toBe(Math.floor((width - columns) / 2));
-        expect(panel.y).toBe(Math.floor((height - rows) / 2));
+        expect(panel.y).toBe(Math.floor((height - (pane ? 1 : 0) - rows) / 2));
         expect(app.renderer.currentFocusedRenderable).toBe(focus);
         if (search) {
           expect(search.value).toBe("no-match-hjkl");
@@ -473,7 +483,7 @@ for (const [width, height] of [
         // Empty data and unmatched queries must not turn into disabled candidate rows.
         centered(surface.body, surface.title);
         if ("preview" in surface) {
-          if (width < 100 && surface.name !== "changes") {
+          if (width < 100) {
             app.revealPreview();
             await app.render();
           }

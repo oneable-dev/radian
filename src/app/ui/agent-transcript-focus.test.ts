@@ -119,8 +119,8 @@ async function mount(initial: readonly TranscriptSection[] = sections, width = 1
     if (visible) {
       const bottomButton = app.renderer.root.findDescendantById("transcript-bottom-button");
       for (const [y, start, end] of [
-        [card.y - 1, "┌", "┐"],
-        [card.y + card.height, "└", "┘"],
+        [card.y - 1, "╭", "╮"],
+        [card.y + card.height, "╰", "╯"],
       ] as const) {
         if (
           y < viewport.y ||

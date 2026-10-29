@@ -29,9 +29,6 @@ export class SearchInput extends InputRenderable {
       options.backgroundStyle ?? (options.title ? "ui.popup" : undefined),
     );
     if (options.title) {
-      this.field.border = true;
-      this.field.borderStyle = "rounded";
-      this.field.titleAlignment = "center";
       this.setTitle(options.title);
 
       const prompt = new TextRenderable(renderer, {
@@ -58,8 +55,6 @@ export class SearchInput extends InputRenderable {
       this.field.insertBefore(prompt, this);
       this.field.add(this.count);
       uiTheme(renderer).bindStyles(this.field, (styles) => {
-        this.field.borderColor = styles["ui.popupBorder"].fg;
-        this.field.titleColor = styles["ui.popupTitle"].fg;
         paintText(prompt, styles["ui.popupTitle"]);
         paintText(count, styles["ui.muted"]);
       });
@@ -67,7 +62,7 @@ export class SearchInput extends InputRenderable {
   }
 
   setTitle(title: string): void {
-    this.field.title = ` ${title} `;
+    this.field.setTitle(title);
   }
 
   setCounts(counts: Counts | null): void {

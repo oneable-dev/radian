@@ -5,6 +5,7 @@ import {
   type TextareaRenderable,
 } from "@opentui/core";
 import { horizontalInset } from "./spacing.ts";
+import { UI_BORDER_STYLE } from "./border-style.ts";
 import { uiTheme } from "./theme.ts";
 import type { StyleGroup } from "./theme-styles.ts";
 
@@ -58,6 +59,14 @@ export class InputField extends BoxRenderable {
     this.resize();
   }
 
+  setTitle(title: string): void {
+    this.border = true;
+    this.borderStyle = UI_BORDER_STYLE;
+    this.titleAlignment = "center";
+    this.title = ` ${title} `;
+    this.paint();
+  }
+
   measure(rows: number, availableHeight: number): InputLayout {
     const capacity = Math.max(1, Math.floor(availableHeight));
     // Give editing the last row before spending any space on vertical decoration.
@@ -71,6 +80,9 @@ export class InputField extends BoxRenderable {
     const layout = this.measure(rows, availableHeight);
     this.editor.height = layout.rows;
     this.height = layout.height;
+    if (this.title) {
+      this.border = layout.height >= 3;
+    }
 
     return layout;
   }
@@ -90,6 +102,13 @@ export class InputField extends BoxRenderable {
           : "ui.input");
 
     this.backgroundColor = styles[surface].bg;
+    if (this.title) {
+      const border = this.border;
+      this.borderColor = styles["ui.popupBorder"].fg;
+      this.titleColor = styles["ui.popupTitle"].fg;
+      // OpenTUI color setters enable borders; a compact layout may have hidden this one.
+      this.border = border;
+    }
   };
 
   private resize = (): void => {

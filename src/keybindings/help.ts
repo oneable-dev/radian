@@ -53,7 +53,7 @@ const labels: Partial<Record<CommandId, string>> = {
   "git.reflog": "Search reflog events and preview target commits",
   "git.search": "Focus Git search",
   "git.search-clear": "Clear the Git search query",
-  "git.preview": "Focus or toggle reflog preview",
+  "git.preview": "Focus or toggle the Changes or Reflog preview",
   "git.change-session":
     "Cycle the Git request target through this worktree's sessions and New session",
   "git.submit": "Send input with the frozen Git context",

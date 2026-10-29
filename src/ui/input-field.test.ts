@@ -166,6 +166,64 @@ test("Empty prompts show only placeholders without borders or drafts across focu
   }
 });
 
+test("Titled prompts share search-field borders and preserve editing when decoration must shrink", async () => {
+  // Ask frames reuse search-field chrome without turning their multiline editor into a query input.
+  const app = await createTestRenderer({ width: 80, height: 15 });
+  const search = new SearchInput(app.renderer, { id: "query", title: "Search" });
+  const input = new PromptInput(
+    app.renderer,
+    () => {},
+    () => {},
+    { backgroundStyle: "ui.popup" },
+  );
+  app.renderer.root.add(search.field);
+  app.renderer.root.add(input.field);
+  try {
+    input.field.setTitle("Ask");
+    input.value = "first\nsecond";
+    input.cursorOffset = 3;
+    input.focus();
+    await app.renderOnce();
+    await app.renderOnce();
+
+    // The frame has the same shape and colors as search, with no extra title row.
+    expect(input.field.border).toBe(true);
+    expect(input.field.borderStyle).toBe(search.field.borderStyle);
+    expect(input.field.titleAlignment).toBe("center");
+    expect(input.field.title).toBe(" Ask ");
+    expect(input.field.backgroundColor.toInts()).toEqual(search.field.backgroundColor.toInts());
+    expect(input.backgroundColor.toInts()).toEqual(search.backgroundColor.toInts());
+    expect(input.field.borderColor.toInts()).toEqual(search.field.borderColor.toInts());
+    expect(input.field.titleColor?.toInts()).toEqual(search.field.titleColor?.toInts());
+    expect(input.height).toBe(2);
+    expect(input.field.height).toBe(4);
+    const top = app.captureCharFrame().split("\n")[input.field.y]!;
+    expect(top).toStartWith("╭");
+    expect(top).toEndWith("╮");
+    expect(Math.abs(top.indexOf("Ask") + 1.5 - input.field.width / 2)).toBeLessThanOrEqual(1);
+
+    // Tiny viewports spend the last row on text, even after focus repaints the field.
+    input.fit(1);
+    input.blur();
+    input.focus();
+    await app.renderOnce();
+    expect(input.field.border).toBe(false);
+    expect(input.height).toBe(1);
+    expect(input.field.height).toBe(1);
+    expect(input.value).toBe("first\nsecond");
+    expect(input.cursorOffset).toBe(3);
+
+    input.fit(8);
+    await app.renderOnce();
+    expect(input.field.border).toBe(true);
+    expect(input.height).toBe(2);
+    expect(input.field.height).toBe(4);
+  } finally {
+    input.dispose();
+    await app.dispose();
+  }
+});
+
 test("Borderless inputs keep paste spinners visible in right padding", async () => {
   // Clipboard feedback retains its dedicated gutter independently of work-status effects.
   const clock = new ManualClock();

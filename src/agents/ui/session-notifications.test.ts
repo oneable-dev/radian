@@ -178,7 +178,10 @@ test.each([false, true])(
         const lines = app.captureCharFrame().split("\n");
 
         expect(lines[card.y]!.slice(card.x, card.x + card.width)).toBe(
-          "┌" + "─".repeat(card.width - 2) + "┐",
+          "╭" + "─".repeat(card.width - 2) + "╮",
+        );
+        expect(lines[card.y + card.height - 1]!.slice(card.x, card.x + card.width)).toBe(
+          "╰" + "─".repeat(card.width - 2) + "╯",
         );
         for (let y = card.y; y < card.y + card.height; y++) {
           expect(lines[y]!.slice(card.x, card.x + card.width)).not.toContain("UNDERLAY");

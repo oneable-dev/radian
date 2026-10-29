@@ -207,30 +207,33 @@ export function attachPopupActivity(
 }
 
 type PopupSize = { width: number; height: number };
+type PopupPreset = PopupSize & { viewport?: { width: number; height: number } };
 
 // Centered overlays share cell-based presets; anchored cards and pane-sized views keep their own geometry.
 export const POPUP_SIZES = {
   compact: { width: 64, height: 10 },
   standard: { width: 100, height: 24 },
   expanded: { width: 160, height: 36 },
-} as const satisfies Record<string, PopupSize>;
+  large: { width: 240, height: 64, viewport: { width: 0.95, height: 0.9 } },
+} as const satisfies Record<string, PopupPreset>;
 
 const POPUP_VIEWPORT = { width: 0.9, height: 0.8 } as const;
 
 export function getPopupSize(
-  size: PopupSize,
+  size: PopupPreset,
   availableWidth: number,
   availableHeight: number,
 ): PopupSize {
+  const viewport = size.viewport ?? POPUP_VIEWPORT;
   return {
-    width: Math.max(1, Math.floor(Math.min(size.width, availableWidth * POPUP_VIEWPORT.width))),
-    height: Math.max(1, Math.floor(Math.min(size.height, availableHeight * POPUP_VIEWPORT.height))),
+    width: Math.max(1, Math.floor(Math.min(size.width, availableWidth * viewport.width))),
+    height: Math.max(1, Math.floor(Math.min(size.height, availableHeight * viewport.height))),
   };
 }
 
 export function centerPopup(
   panel: BoxRenderable,
-  size: PopupSize,
+  size: PopupPreset,
   availableWidth: number,
   availableHeight: number,
 ): PopupSize {
