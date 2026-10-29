@@ -36,6 +36,7 @@ test.each(["refs", "reflog"] as const)(
     const app = await createTestRenderer({ width: 120, height: 28, clock: new ManualClock() });
     const applied: (string | null)[] = [];
     const browser = new GitBrowser(app.renderer, {
+      notice() {},
       changed() {},
       close() {},
       selected() {},
@@ -80,6 +81,7 @@ test.each(["refs", "reflog"] as const)(
     const app = await createTestRenderer({ width: 120, height: 28, clock });
     let lookups = 0;
     const browser = new GitBrowser(app.renderer, {
+      notice() {},
       changed() {},
       close() {},
       selected() {},
@@ -108,7 +110,8 @@ test.each(["refs", "reflog"] as const)(
       const spinner = walk(browser.root).find((node) => node.id === "git-browser-loading");
 
       expect(spinner?.visible).toBe(true);
-      expect(app.captureCharFrame()).toContain("Loading Git data");
+      expect(spinner?.y).toBe(browser.search.field.y);
+      expect(app.captureCharFrame()).not.toContain("Loading Git data");
       browser.update({ commits: [], refs: [], files: [], reflog: [], head: "", headOid: null });
       await app.renderOnce();
 

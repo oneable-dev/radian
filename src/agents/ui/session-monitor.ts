@@ -51,7 +51,6 @@ export class SessionMonitor {
   readonly list: ScrollBoxRenderable;
   private readonly panel: BoxRenderable;
   private readonly layout: SearchPopupLayout;
-  private readonly message: TextRenderable;
   private readonly rows: Candidate[] = [];
   private repositories: readonly Repository[] = [];
   private items: readonly MonitoredSession[] = [];
@@ -92,13 +91,6 @@ export class SessionMonitor {
       flexDirection: "column",
     });
     this.search = new SearchInput(renderer, { id: "monitor-search", title: "Sessions" });
-    this.message = new TextRenderable(renderer, {
-      id: "monitor-message",
-      height: 1,
-      flexShrink: 0,
-      wrapMode: "none",
-      selectable: false,
-    });
     this.list = new ScrollBoxRenderable(renderer, {
       id: "monitor-list",
       width: "100%",
@@ -112,7 +104,6 @@ export class SessionMonitor {
     this.layout = new SearchPopupLayout(renderer, {
       id: "monitor",
       search: this.search,
-      message: this.message,
       list: this.list,
     });
     this.panel.add(this.layout.root);
@@ -123,7 +114,6 @@ export class SessionMonitor {
     theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
       this.panel.backgroundColor = styles["ui.popup"].bg;
-      paintText(this.message, styles["ui.muted"]);
       this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);
@@ -234,7 +224,11 @@ export class SessionMonitor {
       ? monitoredSessions(this.repositories, this.search.value)
       : sessions;
 
-    this.search.setCounts({ matched: matches.length, total: sessions.length });
+    this.search.setCounts({
+      matched: matches.length,
+      total: sessions.length,
+      limit: maximumCandidates,
+    });
     this.items = matches.slice(0, maximumCandidates);
 
     const index = this.items.findIndex((item) => item.session.id === selected);
@@ -329,11 +323,6 @@ export class SessionMonitor {
       }
     }
 
-    this.message.content =
-      matches.length > maximumCandidates
-        ? `Showing first ${maximumCandidates} of ${matches.length} sessions; refine search`
-        : "";
-    this.message.visible = matches.length > maximumCandidates;
     this.layout.results.showEmpty(
       !this.items.length
         ? this.search.value

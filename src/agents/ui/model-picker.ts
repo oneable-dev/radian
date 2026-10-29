@@ -70,7 +70,6 @@ export class ModelPicker {
   private effortSignature = "";
   private readonly panel: BoxRenderable;
   private readonly layout: SearchPopupLayout;
-  private readonly message: TextRenderable;
   private readonly spinner: LoadingSpinner;
   private readonly rows: BoxRenderable[] = [];
   private catalog: ModelCatalog | undefined;
@@ -113,13 +112,6 @@ export class ModelPicker {
     });
     this.spinner = new LoadingSpinner(renderer, { id: "model-loading" });
     this.search = new SearchInput(renderer, { id: "model-search", title: "Models" });
-    this.message = new TextRenderable(renderer, {
-      id: "model-message",
-      height: 1,
-      flexShrink: 0,
-      wrapMode: "none",
-      selectable: false,
-    });
     this.list = new ScrollBoxRenderable(renderer, {
       id: "model-list",
       flexGrow: 1,
@@ -156,23 +148,21 @@ export class ModelPicker {
     this.layout = new SearchPopupLayout(renderer, {
       id: "model",
       search: this.search,
-      message: this.message,
       list: this.list,
     });
     this.panel.add(this.layout.root);
     this.panel.add(this.effort);
-    attachPopupActivity(renderer, this.layout.results.root, this.spinner.root, () => ({
+    attachPopupActivity(renderer, this.panel, this.spinner.root, () => ({
       pending: this.loading || this.applying,
       hasContent: this.catalog !== undefined,
-      message: "Loading available models…",
-      anchor: this.applying ? this.rows[this.cursor] : undefined,
+      message: "",
+      title: this.search.field,
     }));
     this.root.add(this.panel);
     theme.scrollbars(this.list);
     theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
       this.panel.backgroundColor = styles["ui.popup"].bg;
-      paintText(this.message, styles["ui.muted"]);
       paintText(this.spinner.root, styles["status.working"]);
       this.paint();
     });
@@ -343,8 +333,7 @@ export class ModelPicker {
     void pending.catch((error: unknown) => {
       const message = reportUnexpected(error, "model picker");
       if (this.current(revision)) {
-        this.message.content = message;
-        this.message.visible = true;
+        this.actions.notice(message, { level: "error", source: "Models" });
         this.actions.changed();
       }
     });
@@ -364,7 +353,6 @@ export class ModelPicker {
     this.loadError = undefined;
     this.filter();
     this.spinner.start();
-    this.message.content = "";
     this.actions.changed();
 
     let result: Result<ModelCatalog, ExpectedError>;
@@ -392,9 +380,13 @@ export class ModelPicker {
 
   private accept(result: Result<ModelCatalog, ExpectedError>, scope: Scope): void {
     if (!result.ok || result.value.conversationId !== scope.conversationId) {
-      this.loadError = !result.ok
+      const message = !result.ok
         ? `[${result.error.code}] ${result.error.message}`
         : "Conversation changed. Close and reopen /model.";
+      if (message !== this.loadError) {
+        this.actions.notice(message, { level: "error", source: "Models" });
+      }
+      this.loadError = message;
       this.catalog = undefined;
       this.filtered = [];
       this.filter();
@@ -402,6 +394,7 @@ export class ModelPicker {
       return;
     }
 
+    this.loadError = undefined;
     this.catalog = result.value;
     this.filter();
   }
@@ -420,7 +413,7 @@ export class ModelPicker {
 
     this.search.setCounts(
       this.catalog && !this.loading && !this.loadError
-        ? { matched: matches.length, total: this.catalog.models.length }
+        ? { matched: matches.length, total: this.catalog.models.length, limit: 200 }
         : null,
     );
 
@@ -480,22 +473,6 @@ export class ModelPicker {
       this.list.add(row);
     });
 
-    let message = this.loadError;
-    if (message === undefined) {
-      if (this.loading || !this.catalog) {
-        message = "";
-      } else if (!this.catalog.models.length) {
-        message = "No available models. Configure provider authentication in Pi first.";
-      } else if (!matches.length) {
-        message = "No matching models";
-      } else {
-        const limitNotice = matches.length > 200 ? " · showing first 200; refine search" : "";
-        message = `${matches.length} models${limitNotice} · changes apply only to this session`;
-      }
-    }
-
-    this.message.content = message;
-
     const empty = !!this.catalog && !this.filtered.length && !this.loadError && !this.loading;
     const hasModels = !!this.catalog?.models.length;
 
@@ -503,7 +480,6 @@ export class ModelPicker {
       empty ? (hasModels ? "No matching models" : "No available models") : undefined,
       empty && !hasModels ? "Configure provider authentication in Pi first." : undefined,
     );
-    this.message.visible = !empty && Boolean(this.message.plainText);
     this.list.scrollTo(0);
     this.paint();
   };
@@ -646,7 +622,6 @@ export class ModelPicker {
     const revision = this.revision;
     this.applying = true;
     this.spinner.start();
-    this.message.content = "Applying model and effort…";
     this.paint();
 
     let result: Result<string | null, ExpectedError>;
@@ -668,7 +643,10 @@ export class ModelPicker {
       return;
     }
     if (!result.ok) {
-      this.message.content = `[${result.error.code}] ${result.error.message}`;
+      this.actions.notice(`[${result.error.code}] ${result.error.message}`, {
+        level: "error",
+        source: "Models",
+      });
 
       return;
     }

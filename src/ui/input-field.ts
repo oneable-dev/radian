@@ -8,6 +8,7 @@ import { horizontalInset } from "./spacing.ts";
 import { UI_BORDER_STYLE } from "./border-style.ts";
 import { uiTheme } from "./theme.ts";
 import type { StyleGroup } from "./theme-styles.ts";
+import { truncateCells } from "./text.ts";
 
 export type InputLayout = Readonly<{ rows: number; height: number }>;
 
@@ -16,6 +17,8 @@ type InputKind = "search" | "prompt";
 // The field owns spacing and hit testing; native editors retain caret/selection ownership.
 export class InputField extends BoxRenderable {
   private inset = -1;
+  private label = "";
+  private titleActivityWidth = 0;
 
   constructor(
     private readonly renderer: CliRenderer,
@@ -63,8 +66,16 @@ export class InputField extends BoxRenderable {
     this.border = true;
     this.borderStyle = UI_BORDER_STYLE;
     this.titleAlignment = "center";
-    this.title = ` ${title} `;
+    this.label = title;
+    this.setTitleActivity(this.titleActivityWidth);
     this.paint();
+  }
+
+  setTitleActivity(width: number): void {
+    this.titleActivityWidth = width;
+    const label =
+      width > 0 ? truncateCells(this.label, Math.max(0, this.width - width - 5)) : this.label;
+    this.title = ` ${label}${" ".repeat(width > 0 ? width + 2 : 1)}`;
   }
 
   measure(rows: number, availableHeight: number): InputLayout {

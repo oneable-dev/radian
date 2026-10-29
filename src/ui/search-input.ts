@@ -5,7 +5,7 @@ import { paintText, type StyleGroup } from "./theme-styles.ts";
 
 type Options = { id: string; fieldId?: string; title?: string; backgroundStyle?: StyleGroup };
 
-type Counts = Readonly<{ matched: number; total: number }>;
+type Counts = Readonly<{ matched: number; total: number; limit?: number }>;
 
 // Every app-owned query uses this field; matching and candidate navigation stay with its owner.
 export class SearchInput extends InputRenderable {
@@ -70,7 +70,10 @@ export class SearchInput extends InputRenderable {
       return;
     }
 
-    const text = counts ? `${counts.matched}/${counts.total}` : "";
+    const limited = counts?.limit !== undefined && counts.matched > counts.limit;
+    const text = counts
+      ? `${counts.matched}/${counts.total}${limited ? ` · ${counts.limit} shown` : ""}`
+      : "";
     this.count.content = text;
     this.count.width = text.length;
     this.count.visible = counts !== null;

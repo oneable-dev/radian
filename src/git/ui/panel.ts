@@ -378,9 +378,8 @@ export class GitPanel {
       hasContent:
         this.selectedFiles.length > 0 ||
         !!(this.cache?.details || this.cache?.external || this.cache?.error),
-      message: "Loading changed files…",
-      body: this.filesBody.root,
-      anchor: this.files.root.findDescendantById(`${this.files.root.id}:${this.cache?.state.file}`),
+      message: "",
+      title: this.changesSearch.field,
     }));
 
     this.changesSearch = new SearchInput(renderer, {
@@ -451,6 +450,7 @@ export class GitPanel {
     this.root.add(this.changesOverlay);
     this.changesSearch.on(InputRenderableEvents.INPUT, this.filterChanges);
     this.browser = new GitBrowser(renderer, {
+      notice: this.notice,
       changed: () => {
         this.updateHistoryRail();
         this.changed();

@@ -466,7 +466,7 @@ test("Popup Esc closes and restores input without changing models or interruptin
   }
 });
 
-test("Unexpected model discovery failures remain visible after the centered loading message is removed", async () => {
+test("Unexpected model discovery failures reach shared notifications without a status row", async () => {
   // Programming failures keep their original cause at the UI boundary, not a permanent loading state.
   const failure = new TypeError("Broken model catalog");
   const logged = spyOn(console, "error").mockImplementation(() => {});
@@ -479,7 +479,8 @@ test("Unexpected model discovery failures remain visible after the centered load
     await app.open();
 
     expect(app.captureCharFrame()).toContain("Unexpected model picker failure");
-    expect(app.get("model-message").visible).toBe(true);
+    expect(app.renderer.root.findDescendantById("model-message")).toBeUndefined();
+    expect(app.get("session-notifications").visible).toBe(true);
     expect(app.get("model-loading-message").visible).toBe(false);
     expect(logged).toHaveBeenCalledWith("[radian:model picker] Unexpected failure", failure);
   } finally {

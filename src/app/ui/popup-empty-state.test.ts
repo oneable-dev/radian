@@ -140,17 +140,16 @@ const searches: Partial<
   Record<Surface, { id: string; title: string; counts: string; status?: string }>
 > = {
   workspace: { id: "workspace-search", title: "Workspaces", counts: "0/0" },
-  monitor: { id: "monitor-search", title: "Sessions", counts: "0/0", status: "monitor-message" },
-  history: { id: "history-search", title: "History", counts: "0/0", status: "history-list-status" },
-  model: { id: "model-search", title: "Models", counts: "0/0", status: "model-message" },
+  monitor: { id: "monitor-search", title: "Sessions", counts: "0/0" },
+  history: { id: "history-search", title: "History", counts: "0/0" },
+  model: { id: "model-search", title: "Models", counts: "0/0" },
   messages: { id: "messages-search", title: "Messages", counts: "0/0" },
   changes: { id: "git-changes-search", title: "Changed files", counts: "0/0" },
-  refs: { id: "git-browser-search", title: "Refs", counts: "0/1", status: "git-browser-status" },
+  refs: { id: "git-browser-search", title: "Refs", counts: "0/1" },
   reflog: {
     id: "git-browser-search",
     title: "Reflog",
     counts: "0/0",
-    status: "git-browser-status",
   },
   accounts: { id: "accounts-search", title: "Accounts", counts: "1/1", status: "accounts-message" },
   extension: { id: "extension-dialog-search", title: "Choose an option", counts: "0/1" },
@@ -228,6 +227,7 @@ async function mount(name: Surface, width: number, height: number) {
     messages.show();
   } else if (name === "refs" || name === "reflog") {
     const browser = new GitBrowser(app.renderer, {
+      notice: noop,
       changed: noop,
       close: noop,
       selected: noop,
@@ -457,7 +457,7 @@ for (const [width, height] of [
           const list = body.getChildren()[0]!;
           const status = spec.status ? app.get(spec.status) : undefined;
 
-          expect(input.field.title).toBe(` ${spec.title} `);
+          expect(input.field.title?.trim()).toBe(spec.title);
           expect(input.placeholder).toBe("");
           expect(app.captureCharFrame().split("\n")[input.field.y]).toContain(spec.title);
           expect((app.get(`${spec.id}-prompt`) as TextRenderable).plainText).toBe(">");

@@ -364,7 +364,7 @@ test("Monitor candidates show status and scope above muted quoted requests", asy
     expect(caption.x).toBe(row.x);
     expect(marker.visible).toBe(true);
     expect(app.get("monitor-status:a1").visible).toBe(true);
-    expect(app.get("monitor-message").visible).toBe(false);
+    expect(app.renderer.root.findDescendantById("monitor-message")).toBeUndefined();
 
     const listText = app
       .captureCharFrame()
@@ -564,7 +564,7 @@ test("Monitor browsing never acknowledges; only sessions opened with Enter do", 
     expect(app.get("session-monitor").visible).toBe(true);
     expect(app.captureCharFrame()).not.toContain("PREVIEW_RESULT");
     expect(app.captureCharFrame()).not.toContain("Needs attention");
-    expect(app.get("monitor-message").visible).toBe(false);
+    expect(app.renderer.root.findDescendantById("monitor-message")).toBeUndefined();
     expect(app.acknowledged).toEqual([]);
     expect(app.selection.sessionId).toBe("a1");
     app.mockInput.pressKey("n", { ctrl: true });
@@ -1120,16 +1120,15 @@ test("Large monitors report rendering limits and search still reaches later sess
 
     app.leader("s");
     await app.render();
-    // Candidate limits remain visible even without a preview column.
-    expect(app.captureCharFrame()).toContain("Showing first 200 of 252 sessions");
-
-    const message = app.get("monitor-message");
-    if (!(message instanceof TextRenderable)) {
-      throw new Error("Missing monitor summary");
-    }
-
-    expect(message.plainText).toBe("Showing first 200 of 252 sessions; refine search");
-    expect((app.get("monitor-search-count") as TextRenderable).plainText).toBe("252/252");
+    // Candidate limits live with counts, without pushing results below an extra status row.
+    expect(app.captureCharFrame()).toContain("252/252 · 200 shown");
+    expect(app.captureCharFrame()).not.toContain("Showing first");
+    expect(app.renderer.root.findDescendantById("monitor-message")).toBeUndefined();
+    expect((app.get("monitor-search-count") as TextRenderable).plainText).toBe(
+      "252/252 · 200 shown",
+    );
+    const field = app.get("monitor-search-field");
+    expect(app.get("monitor-list").y).toBe(field.y + field.height);
     expect(app.renderer.root.findDescendantById("monitor:bulk-249")).toBeUndefined();
     await app.mockInput.typeText("special last");
     await app.render();
@@ -1138,7 +1137,6 @@ test("Large monitors report rendering limits and search still reaches later sess
     expect(app.captureCharFrame()).toContain("Last special task");
     expect(app.acknowledged).toEqual([]);
     expect((app.get("monitor-search-count") as TextRenderable).plainText).toBe("1/252");
-    expect(message.visible).toBe(false);
   } finally {
     await app.close();
   }

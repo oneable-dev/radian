@@ -11,6 +11,7 @@ import type { Result } from "../../result.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import { footerKeyHint } from "../../keybindings/footer.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
+import type { Notice } from "../../ui/messages.ts";
 import { SearchInput } from "../../ui/search-input.ts";
 import { createTextMatcher } from "../../search.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
@@ -41,6 +42,7 @@ const display = (value: string) =>
   );
 
 type Actions = {
+  notice: Notice;
   changed(): void;
   close(): void;
   selected(kind: GitBrowserKind, key: string | null): void;
@@ -60,13 +62,11 @@ export class GitBrowser {
   private readonly body: BoxRenderable;
   private readonly layout: SearchPopupLayout;
   private readonly previewBody: PopupBody;
-  private readonly message: TextRenderable;
   private readonly previewPane: BoxRenderable;
   private readonly previewText: TextRenderable;
   private readonly spinner: LoadingSpinner;
   private snapshot: GitSnapshot | undefined;
   private loadError: string | undefined;
-  private summary = "";
   private kind: GitBrowserKind = "refs";
   private key: string | null = null;
   private compactPreview = false;
@@ -105,14 +105,6 @@ export class GitBrowser {
     });
     this.spinner = new LoadingSpinner(renderer, { id: "git-browser-loading" });
     this.search = new SearchInput(renderer, { id: "git-browser-search", title: "Refs" });
-    this.message = new TextRenderable(renderer, {
-      id: "git-browser-status",
-      height: 1,
-      flexShrink: 0,
-      selectable: false,
-      wrapMode: "none",
-      truncate: true,
-    });
     this.list = new GitList(
       renderer,
       "git-browser-list",
@@ -142,20 +134,16 @@ export class GitBrowser {
     this.layout = new SearchPopupLayout(renderer, {
       id: "git-browser",
       search: this.search,
-      message: this.message,
       list: this.list.root,
       preview: { body: this.previewBody, width: 48 },
     });
     this.body = this.layout.root;
     this.panel.add(this.body);
-    attachPopupActivity(renderer, this.layout.results.root, this.spinner.root, () => ({
+    attachPopupActivity(renderer, this.panel, this.spinner.root, () => ({
       pending: (!this.snapshot && !this.loadError) || this.request !== undefined,
       hasContent: this.snapshot !== undefined || this.loadError !== undefined,
-      message: "Loading Git data…",
-      anchor:
-        this.request && this.key
-          ? this.list.root.findDescendantById(`${this.list.root.id}:${this.key}`)
-          : undefined,
+      message: "",
+      title: this.search.field,
     }));
     this.root.add(this.panel);
 
@@ -165,7 +153,6 @@ export class GitBrowser {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
       this.panel.backgroundColor = styles["ui.popup"].bg;
       this.previewPane.borderColor = styles["ui.border"].fg;
-      paintText(this.message, styles["ui.muted"]);
       paintText(this.spinner.root, styles["status.working"]);
       paintText(this.previewText, styles["ui.label"]);
       this.previewText.selectionBg = styles["ui.selection"].bg;
@@ -382,24 +369,10 @@ export class GitBrowser {
       this.key = candidates[0]?.key ?? null;
     }
 
-    this.list.update(
-      rows.length || (this.snapshot && !this.loadError)
-        ? rows
-        : this.loadError
-          ? [{ key: "empty", label: this.loadError, disabled: true }]
-          : [],
-      this.key,
-    );
+    this.list.update(rows, this.key);
 
     const empty = !!this.snapshot && !this.loadError && !candidates.length;
     this.layout.results.showEmpty(empty ? "No matches" : undefined);
-    this.message.visible = !empty && (this.snapshot !== undefined || this.loadError !== undefined);
-
-    const noun = this.kind === "refs" ? "result" : "event";
-    this.summary = !this.snapshot
-      ? "Loading Git data…"
-      : `${candidates.length} ${noun}${candidates.length === 1 ? "" : "s"}`;
-    this.message.content = this.loadError ?? this.summary;
     if (this.key) {
       this.list.root.scrollChildIntoView(`git-browser-list:${this.key}`);
     }
@@ -470,6 +443,12 @@ export class GitBrowser {
         }
 
         this.results.set(event.oid, result);
+        if (!result.ok) {
+          this.actions.notice(`[${result.error.code}] ${result.error.message}`, {
+            level: "error",
+            source: "Git",
+          });
+        }
         if (this.results.size > 16) {
           this.results.delete(this.results.keys().next().value!);
         }
@@ -489,6 +468,7 @@ export class GitBrowser {
         const message = reportUnexpected(error, "Git reflog preview");
         if (this.current(revision, request)) {
           this.unexpected.set(event.oid, message);
+          this.actions.notice(message, { level: "error", source: "Git" });
           if (this.unexpected.size > 16) {
             this.unexpected.delete(this.unexpected.keys().next().value!);
           }
@@ -518,14 +498,6 @@ export class GitBrowser {
   private renderPreview(): void {
     const event = this.event;
     const result = event ? this.results.get(event.oid) : undefined;
-    const failure =
-      result && !result.ok
-        ? `[${result.error.code}] ${result.error.message}`
-        : event
-          ? this.unexpected.get(event.oid)
-          : undefined;
-
-    this.message.content = this.loadError ?? failure ?? this.summary;
     this.previewBody.showEmpty(!event ? "Select a reflog event" : undefined);
     this.previewText.content = !event
       ? ""

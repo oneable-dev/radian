@@ -700,7 +700,8 @@ test("Esc steps back through account name, authentication method, and provider s
     // Cancelling name entry returns to the current provider's authentication methods.
     app.mockInput.pressEscape();
     await app.render();
-    expect(app.captureCharFrame()).toContain("Choose how to sign in to Fixture.");
+    expect(app.captureCharFrame()).toContain("Sign-in methods");
+    expect(app.captureCharFrame()).not.toContain("Choose how to sign in");
     expect(app.captureCharFrame()).toContain("API key");
     expect(app.get("accounts-input").visible).toBe(false);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-search");
@@ -708,7 +709,8 @@ test("Esc steps back through account name, authentication method, and provider s
     // Going back from methods returns to providers, not the initial account list.
     app.mockInput.pressEscape();
     await app.render();
-    expect(app.captureCharFrame()).toContain("Choose a service to sign in.");
+    expect(app.captureCharFrame()).toContain("Providers");
+    expect(app.captureCharFrame()).not.toContain("Choose a service to sign in.");
     expect(app.captureCharFrame()).toContain("Fixture");
     expect(app.captureCharFrame()).not.toContain("Personal");
     expect(app.get("accounts-picker").visible).toBe(true);
@@ -740,9 +742,15 @@ test.each([
       name: `Service ${index}`,
       methods: catalog.providers[0]!.methods,
     }));
+    const calls: AccountRequest[] = [];
     const app = await mount({
-      onAccountsRequest: async (request) =>
-        ok({ kind: "catalog", catalog: { ...catalog, providers, worktreeId: request.worktreeId } }),
+      onAccountsRequest: async (request) => {
+        calls.push(request);
+        return ok({
+          kind: "catalog",
+          catalog: { ...catalog, providers, worktreeId: request.worktreeId },
+        });
+      },
     });
     try {
       app.resize(width, height);
@@ -777,9 +785,18 @@ test.each([
       app.mockInput.pressEnter();
       await app.render();
 
-      // Jump by half the visible single-line candidates, not empty secondary rows.
-      expect(app.captureCharFrame()).toContain(`Choose how to sign in to Service ${jump}.`);
-      expect(app.requests.some((request) => request.type === "login")).toBe(false);
+      // Opening methods only previews the provider; explicit activation still owns sign-in.
+      expect(app.captureCharFrame()).toContain("Sign-in methods");
+      expect(app.captureCharFrame()).not.toContain("Choose how to sign in");
+      expect(calls.some((request) => request.type === "login")).toBe(false);
+      app.mockInput.pressEnter();
+      await app.render();
+      app.mockInput.pressEnter();
+      await app.render();
+      expect(calls.find((request) => request.type === "login")).toMatchObject({
+        provider: `provider-${jump}`,
+        label: `Service ${jump}`,
+      });
       expect(app.sent).toEqual([]);
     } finally {
       await app.close();

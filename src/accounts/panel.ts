@@ -93,6 +93,7 @@ export class AccountsPanel {
   private filtered: Candidate[] = [];
   private cursor = 0;
   private catalog: AccountsCatalog | undefined;
+  private catalogError: ExpectedError | undefined;
   private flow: LoginView | undefined;
   private worktreeId: string | undefined;
   private owner: Renderable | undefined;
@@ -210,7 +211,8 @@ export class AccountsPanel {
       return {
         pending: this.busy,
         hasContent: this.catalog !== undefined || this.stage !== "accounts",
-        message: "Loading accounts…",
+        message: "",
+        title: this.search.field.visible ? this.search.field : undefined,
         body,
         anchor: this.list.visible ? this.rows[this.cursor] : undefined,
       };
@@ -310,6 +312,7 @@ export class AccountsPanel {
     this.root.visible = true;
     this.stage = "accounts";
     this.catalog = undefined;
+    this.catalogError = undefined;
     this.flow = undefined;
     this.promptId = undefined;
     this.menu("accounts", "", []);
@@ -340,13 +343,20 @@ export class AccountsPanel {
     preserveSearch = false,
   ): void {
     if (!result.ok) {
-      this.message.content = `[${result.error.code}] ${result.error.message}`;
+      if (result.error !== this.catalogError) {
+        this.actions.notice(`[${result.error.code}] ${result.error.message}`, {
+          level: "error",
+          source: "Accounts",
+        });
+      }
+      this.catalogError = result.error;
       this.search.setCounts(null);
     } else {
+      this.catalogError = undefined;
       this.catalog = result.value;
       this.main(preserveSearch);
       if (result.value.warning) {
-        this.message.content = result.value.warning;
+        this.actions.notice(result.value.warning, { level: "warning", source: "Accounts" });
       }
     }
 
@@ -420,7 +430,7 @@ export class AccountsPanel {
     void operation().catch((error) => {
       const message = reportUnexpected(error, "accounts popup");
       if (this.visible) {
-        this.message.content = message;
+        this.actions.notice(message, { level: "error", source: "Accounts" });
       }
     });
   }
@@ -471,7 +481,10 @@ export class AccountsPanel {
       return;
     }
     if (!result.ok) {
-      this.message.content = `[${result.error.code}] ${result.error.message}`;
+      this.actions.notice(`[${result.error.code}] ${result.error.message}`, {
+        level: "error",
+        source: "Accounts",
+      });
 
       return;
     }
@@ -483,7 +496,7 @@ export class AccountsPanel {
 
       const warning = [result.value.warning, this.catalog.warning].filter(Boolean).join(" · ");
       if (warning) {
-        this.message.content = warning;
+        this.actions.notice(warning, { level: "warning", source: "Accounts" });
       }
     } else {
       this.accept(result.value.login);
@@ -603,20 +616,13 @@ export class AccountsPanel {
       }
     }
 
-    this.menu(
-      "accounts",
-      providers.size
-        ? "Enter switches accounts for this worktree. Use Add account to sign in to another account."
-        : "",
-      entries,
-      preserveSearch,
-    );
+    this.menu("accounts", "", entries, preserveSearch);
   }
 
   private providers(): void {
     this.menu(
       "providers",
-      "Choose a service to sign in.",
+      "",
       (this.catalog?.providers ?? []).map((provider) => ({
         id: provider.id,
         label: provider.name,
@@ -630,7 +636,7 @@ export class AccountsPanel {
     this.provider = provider;
     this.menu(
       "methods",
-      `Choose how to sign in to ${singleLine(provider.name)}. OAuth does not require a separate API key.`,
+      "",
       provider.methods.map((method) => ({
         id: method.id,
         label: method.name,
@@ -677,8 +683,10 @@ export class AccountsPanel {
     if (login.status === "cancelled" || login.status === "error") {
       this.spinner.stop();
       this.main();
-      this.message.content =
-        login.error ?? "Login cancelled. Existing accounts and selections were retained.";
+      this.actions.notice(
+        login.error ?? "Login cancelled. Existing accounts and selections were retained.",
+        { level: login.status === "error" ? "error" : "warning", source: "Accounts" },
+      );
 
       return;
     }
@@ -930,7 +938,7 @@ export class AccountsPanel {
 
     const result = await (this.actions.openUrl ?? openLoginUrl)(url);
     if (this.visible && epoch === this.epoch && !result.ok) {
-      this.message.content = result.error.message;
+      this.actions.notice(result.error.message, { level: "error", source: "Accounts" });
     }
   }
 
@@ -943,11 +951,10 @@ export class AccountsPanel {
 
     const result = await (this.actions.copy?.(text) ?? this.clipboard.copy(text));
     if (this.visible && epoch === this.epoch) {
-      this.message.content = result.ok
-        ? code
-          ? "Device code copied."
-          : "Login URL copied."
-        : result.error.message;
+      this.actions.notice(
+        result.ok ? (code ? "Device code copied." : "Login URL copied.") : result.error.message,
+        { level: result.ok ? "success" : "error", source: "Accounts" },
+      );
     }
   }
 

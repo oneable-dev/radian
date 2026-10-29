@@ -4,6 +4,7 @@ import { paintText } from "./theme-styles.ts";
 import { truncateCells } from "./text.ts";
 import { EmptyState } from "./empty-state.ts";
 import type { SearchInput } from "./search-input.ts";
+import type { InputField } from "./input-field.ts";
 
 // Empty guidance decorates a viewport without replacing its keyboard/scroll owner.
 export class PopupBody {
@@ -123,6 +124,7 @@ export type PopupActivityState = {
   message: string;
   body?: Renderable | undefined;
   anchor?: Renderable | undefined;
+  title?: InputField | undefined;
 };
 
 // Features own operation lifetimes; placement follows the data currently available to the user.
@@ -155,8 +157,42 @@ export function attachPopupActivity(
     feedback.backgroundColor = styles["ui.popup"].bg;
     paintText(label, styles["ui.muted"]);
   });
+  let previousTitle: InputField | undefined;
   feedback.onLifecyclePass = () => {
     const current = state();
+    const field = current.title;
+    if (previousTitle && previousTitle !== field && !previousTitle.isDestroyed) {
+      previousTitle.setTitleActivity(0);
+    }
+    previousTitle = field;
+    field?.setTitleActivity(activity.visible ? activity.width : 0);
+
+    if (field) {
+      // Searchable popups use only their fixed input title, never body loading prose or rows.
+      label.visible = false;
+      label.content = "";
+      feedback.visible =
+        activity.visible && field.visible && field.width >= activity.width && field.height > 0;
+      feedback.width = activity.width;
+      const titleWidth = Bun.stringWidth(field.title ?? "");
+      const titleStart = Math.floor((field.width - titleWidth) / 2);
+      const x = field.border
+        ? titleStart + titleWidth - activity.width - 1
+        : Math.max(0, field.width - activity.width);
+      const borderLeft =
+        panel.border === true || (Array.isArray(panel.border) && panel.border.includes("left"))
+          ? 1
+          : 0;
+      const borderTop =
+        panel.border === true || (Array.isArray(panel.border) && panel.border.includes("top"))
+          ? 1
+          : 0;
+      feedback.left =
+        field.x - panel.x - borderLeft + Math.max(0, Math.min(field.width - activity.width, x));
+      feedback.top = field.y - panel.y - borderTop;
+      return;
+    }
+
     const body = current.body ?? panel;
 
     feedback.visible = activity.visible && body.width > 0 && body.height > 0;

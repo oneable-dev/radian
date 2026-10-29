@@ -274,14 +274,7 @@ test.each(surfaces)(
         expect(input.height).toBe(1);
         expect(input.y - field.y).toBe(1);
 
-        const status =
-          surface === "history"
-            ? app.get("history-list-status")
-            : surface === "model"
-              ? app.get("model-message")
-              : null;
-        expect((status?.visible ? status : app.list).y).toBe(field.y + field.height);
-        expect(app.list.y).toBe(field.y + field.height + (status?.visible ? status.height : 0));
+        expect(app.list.y).toBe(field.y + field.height);
         expect(app.list.x).toBe(field.x + 1);
         expect(app.list.width).toBe(field.width - 2);
 
@@ -338,13 +331,11 @@ test("History preview panes fill their height without headings in split and comp
 
       const field = input.field;
       const preview = app.get(`${surface}-preview-pane`);
-      const message = app.get(`${surface}-message`);
-
-      // Completed feedback is hidden and reserves no row between search and candidates.
+      // Activity never reserves a row between search and candidates, even during a spinner tail.
       expect(field.x + 1).toBe(app.list.x);
       expect(field.width - 2).toBe(app.list.width);
-      expect(message.visible).toBe(false);
-      expect(app.get("history-list-status").visible).toBe(false);
+      expect(app.renderer.root.findDescendantById("history-message")).toBeUndefined();
+      expect(app.renderer.root.findDescendantById("history-list-status")).toBeUndefined();
       expect(app.list.y).toBe(field.y + field.height);
       expect(preview.visible).toBe(width >= 100);
       if (preview.visible) {

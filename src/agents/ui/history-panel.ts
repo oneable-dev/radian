@@ -68,11 +68,9 @@ export class SessionHistoryPanel {
   private readonly panel: BoxRenderable;
   private readonly body: BoxRenderable;
   private readonly layout: SearchPopupLayout;
-  private readonly listStatus: BoxRenderable;
   private readonly spinner: LoadingSpinner;
   private readonly previewCache: HistoryPreviewCache;
   private readonly unsubscribePreviews: (() => void) | undefined;
-  private readonly message: TextRenderable;
   private readonly previewPane: BoxRenderable;
   private readonly session: SessionPreview;
   private readonly rows: BoxRenderable[] = [];
@@ -129,27 +127,6 @@ export class SessionHistoryPanel {
     });
     this.spinner = new LoadingSpinner(renderer, { id: "history-loading" });
     this.search = new SearchInput(renderer, { id: "history-search", title: "History" });
-    this.message = new TextRenderable(renderer, {
-      id: "history-message",
-      content: "",
-      height: 1,
-      flexGrow: 1,
-      minWidth: 0,
-      wrapMode: "none",
-      selectable: false,
-    });
-    this.listStatus = new BoxRenderable(renderer, {
-      id: "history-list-status",
-      height: 1,
-      flexShrink: 0,
-      flexDirection: "row",
-      gap: 1,
-    });
-    // Collapse completed loading feedback before layout so it leaves no blank row.
-    this.listStatus.onLifecyclePass = () => {
-      this.listStatus.visible = this.message.visible;
-    };
-    this.listStatus.add(this.message);
     this.list = new ScrollBoxRenderable(renderer, {
       id: "history-list",
       width: "100%",
@@ -190,15 +167,14 @@ export class SessionHistoryPanel {
     this.layout = new SearchPopupLayout(renderer, {
       id: "history",
       search: this.search,
-      message: this.listStatus,
       list: this.list,
       preview: { body: this.session.body, width: 58 },
     });
-    attachPopupActivity(renderer, this.layout.results.root, this.spinner.root, () => ({
-      pending: this.loading || this.previewLoading,
+    attachPopupActivity(renderer, this.panel, this.spinner.root, () => ({
+      pending: this.loading || this.previewLoading || this.resuming,
       hasContent: this.items.length > 0,
-      message: "Loading saved sessions…",
-      anchor: this.rows[this.cursor],
+      message: "",
+      title: this.search.field,
     }));
     this.body = this.layout.root;
     this.panel.add(this.body);
@@ -207,7 +183,6 @@ export class SessionHistoryPanel {
     theme.bindStyles(this.root, (styles) => {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
       this.panel.backgroundColor = styles["ui.popup"].bg;
-      paintText(this.message, styles["ui.muted"]);
       this.previewPane.borderColor = styles["ui.border"].fg;
       paintText(this.spinner.root, styles["status.working"]);
       this.paint();
@@ -306,9 +281,13 @@ export class SessionHistoryPanel {
   }
 
   private accept(result: Result<readonly HistoryItem[], ExpectedError>): void {
-    this.loadError = result.ok
+    const error = result.ok
       ? undefined
       : `[${result.error.code}] History error: ${result.error.message}`;
+    if (error && error !== this.loadError) {
+      this.failure(error);
+    }
+    this.loadError = error;
     this.items = result.ok ? result.value : [];
     this.filter();
   }
@@ -376,7 +355,7 @@ export class SessionHistoryPanel {
         return;
       }
 
-      this.failure(message, true);
+      this.failure(message);
     });
   }
 
@@ -384,13 +363,8 @@ export class SessionHistoryPanel {
     return this.visible && this.generation === generation;
   }
 
-  private failure(message: string, notify = false): void {
-    this.message.content = message;
-    this.message.visible = this.listStatus.visible = true;
-    if (notify) {
-      this.actions.onError(message);
-    }
-
+  private failure(message: string): void {
+    this.actions.onError(message, { level: "error", source: "History" });
     this.actions.onChange?.();
   }
 
@@ -408,6 +382,7 @@ export class SessionHistoryPanel {
         ? "Session history is unavailable in this preview."
         : "No worktree selected";
       this.items = [];
+      this.failure(this.loadError);
       this.filter();
 
       return;
@@ -447,7 +422,7 @@ export class SessionHistoryPanel {
     this.search.setCounts(
       this.loading || this.loadError
         ? null
-        : { matched: matchesQuery.length, total: this.items.length },
+        : { matched: matchesQuery.length, total: this.items.length, limit: 200 },
     );
     this.filtered = matchesQuery.slice(0, 200);
     this.cursor = Math.max(
@@ -512,25 +487,10 @@ export class SessionHistoryPanel {
 
     this.list.scrollTo(0);
 
-    let message = this.loadError;
-    if (message === undefined) {
-      if (this.loading) {
-        message = "Loading saved sessions…";
-      } else if (!this.items.length) {
-        message = "No saved sessions";
-      } else if (!matchesQuery.length) {
-        message = "No matching sessions";
-      } else {
-        message = matchesQuery.length > 200 ? "Showing first 200; refine search" : "";
-      }
-    }
-
-    this.message.content = message;
-
     const empty = !this.loading && !this.loadError && !this.filtered.length;
-    this.layout.results.showEmpty(empty ? this.message.plainText : undefined);
-    this.message.visible = !this.loading && !empty && Boolean(this.message.plainText);
-    this.listStatus.visible = this.message.visible;
+    this.layout.results.showEmpty(
+      empty ? (this.items.length ? "No matching sessions" : "No saved sessions") : undefined,
+    );
     this.paint();
     this.schedulePreview();
   };
@@ -576,7 +536,7 @@ export class SessionHistoryPanel {
     this.previewLoading = loading;
     if (loading) {
       this.spinner.start();
-    } else if (!this.loading) {
+    } else if (!this.loading && !this.resuming) {
       this.spinner.stop();
     }
   }
@@ -795,8 +755,7 @@ export class SessionHistoryPanel {
 
     const generation = this.generation;
     this.resuming = true;
-    this.message.content = "Opening saved session…";
-    this.message.visible = this.listStatus.visible = true;
+    this.spinner.start();
     this.actions.onChange?.();
 
     let result: Result<string, ExpectedError>;
@@ -804,7 +763,10 @@ export class SessionHistoryPanel {
       result = await this.actions.resume(worktree.id, item.id);
     } finally {
       this.resuming = false;
-      if (this.visible) {
+      if (this.current(generation)) {
+        if (!this.loading && !this.previewLoading) {
+          this.spinner.stop();
+        }
         this.actions.onChange?.();
       }
     }

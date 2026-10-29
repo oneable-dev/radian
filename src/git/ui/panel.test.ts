@@ -326,14 +326,11 @@ test.each(["refs", "reflog"] as const)(
         const field = input.field;
         const list = app.get("git-browser-list");
         const preview = app.get("git-reflog-preview-pane");
-        const message = app.get("git-browser-status");
-
-        // Search and result hints must not extend over right-side previews.
+        // Search and activity stay within the candidate column, without a separate status row.
         expect(field.x + 1).toBe(list.x);
         expect(field.width - 2).toBe(list.width);
-        expect(message.x).toBe(list.x);
-        expect(message.y).toBe(field.y + field.height);
-        expect(list.y).toBe(message.y + message.height);
+        expect(app.renderer.root.findDescendantById("git-browser-status")).toBeUndefined();
+        expect(list.y).toBe(field.y + field.height);
         expect(preview.visible).toBe(mode === "reflog" && width >= 100);
         if (preview.visible) {
           expect(field.x + field.width).toBe(preview.x);
@@ -342,7 +339,7 @@ test.each(["refs", "reflog"] as const)(
 
           const lines = app.captureCharFrame().split("\n");
           expect(lines[field.y]![preview.x]).toBe("│");
-          expect(lines[message.y]![preview.x]).toBe("│");
+          expect(lines[list.y]![preview.x]).toBe("│");
         }
 
         expect(input.value).toBe(value);
@@ -2103,7 +2100,7 @@ test("Changes results appear immediately while spinners honor minimums and clean
     expect(app.captureCharFrame()).toContain("M loading.txt");
     expect(app.captureCharFrame()).not.toContain("Loading file comparison");
     expect(app.captureCharFrame()).not.toContain("Loading changed files");
-    expect(spinner.y).toBe(app.get("git-files:unstaged:loading.txt").y);
+    expect(spinner.y).toBe(app.get("git-changes-search-field").y);
 
     // Results stay readable before the spinner minimum ends.
     pending.resolve(ok(comparison()));

@@ -60,7 +60,6 @@ export class ExtensionDialogPanel {
   private readonly layout: SearchPopupLayout;
   private readonly details: ScrollBoxRenderable;
   private readonly body: TextRenderable;
-  private readonly status: TextRenderable;
   private readonly spinner: LoadingSpinner;
   private readonly clipboard: Clipboard;
   private scope: Scope | undefined;
@@ -133,14 +132,6 @@ export class ExtensionDialogPanel {
       maxLength: 65536,
       visible: false,
     });
-    this.status = new TextRenderable(renderer, {
-      id: "extension-dialog-status",
-      height: 1,
-      flexShrink: 0,
-      wrapMode: "none",
-      visible: false,
-      selectable: false,
-    });
     this.layout = new SearchPopupLayout(renderer, {
       id: "extension",
       search: this.search,
@@ -149,11 +140,11 @@ export class ExtensionDialogPanel {
     this.panel.add(this.details);
     this.panel.add(this.layout.root);
     this.panel.add(this.input);
-    this.panel.add(this.status);
     attachPopupActivity(renderer, this.panel, this.spinner.root, () => ({
       pending: this.busy,
       hasContent: true,
-      message: "Sending response…",
+      message: "",
+      title: this.search.field.visible ? this.search.field : undefined,
       body: this.list.visible ? this.layout.results.root : this.details,
       anchor: this.list.visible ? this.rows[this.cursor]?.root : undefined,
     }));
@@ -165,7 +156,6 @@ export class ExtensionDialogPanel {
       this.root.backgroundColor = styles["ui.backdrop"].bg;
       this.panel.backgroundColor = styles["ui.popup"].bg;
       paintText(this.body, styles["ui.label"]);
-      paintText(this.status, styles["ui.muted"]);
       this.paint();
     });
     this.search.on(InputRenderableEvents.INPUT, this.filter);
@@ -283,7 +273,6 @@ export class ExtensionDialogPanel {
     this.cursor = 0;
     this.search.clear();
     this.filter();
-    this.status.visible = false;
     this.busy = false;
     this.root.visible = true;
     this.resize();
@@ -527,8 +516,10 @@ export class ExtensionDialogPanel {
       return;
     }
     if (!result.ok) {
-      this.status.content = `[${result.error.code}] ${result.error.message}`;
-      this.status.visible = true;
+      this.actions.notice(`[${result.error.code}] ${result.error.message}`, {
+        level: "error",
+        source: "Extension",
+      });
 
       return;
     }
