@@ -75,7 +75,7 @@ export class InputField extends BoxRenderable {
     this.titleActivityWidth = width;
     const label =
       width > 0 ? truncateCells(this.label, Math.max(0, this.width - width - 5)) : this.label;
-    this.title = ` ${label}${" ".repeat(width > 0 ? width + 2 : 1)}`;
+    this.title = ` ${" ".repeat(width > 0 ? width + 1 : 0)}${label} `;
   }
 
   measure(rows: number, availableHeight: number): InputLayout {

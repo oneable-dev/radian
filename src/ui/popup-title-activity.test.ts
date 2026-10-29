@@ -38,14 +38,14 @@ async function mount() {
   return { ...app, clock, panel, search, list, spinner, feedback, render };
 }
 
-test("Search title activity animates without body text, spacing changes or input resets", async () => {
+test("Search title activity precedes the label without body text, spacing changes or input resets", async () => {
   // Initial I/O has no candidates, but neither the title nor the body needs loading prose.
   const app = await mount();
   const timers = app.clock.pendingTimerCount;
   try {
     app.spinner.start();
     await app.render();
-    expect(app.captureCharFrame()).toContain(" Models ⠋ ");
+    expect(app.captureCharFrame()).toContain(" ⠋ Models ");
     expect(app.captureCharFrame()).not.toContain("Loading candidates");
     expect(app.spinner.root.y).toBe(app.search.field.y);
     expect(app.list.y).toBe(app.search.field.y + app.search.field.height);
@@ -57,7 +57,7 @@ test("Search title activity animates without body text, spacing changes or input
     app.search.setCounts({ matched: 1, total: 1 });
     app.spinner.stop();
     await app.render();
-    expect(app.captureCharFrame()).toContain(" History ⠙ ");
+    expect(app.captureCharFrame()).toContain(" ⠙ History ");
     expect(app.captureCharFrame()).toContain("Ready candidate");
     expect(app.search.value).toBe("literal query");
     expect(app.search.cursorOffset).toBe(4);

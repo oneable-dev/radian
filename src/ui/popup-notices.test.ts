@@ -120,7 +120,7 @@ test("Model application keeps candidates visible with title-only activity and no
     await render();
     expect(calls).toBe(1);
     expect(picker.changing).toBe(true);
-    expect(app.captureCharFrame()).toContain(" Models ⠋ ");
+    expect(app.captureCharFrame()).toContain(" ⠋ Models ");
     expect(app.captureCharFrame()).toContain("Ready model");
     expect(app.captureCharFrame()).not.toContain("Applying model");
     expect(picker.list.y).toBe(picker.search.field.y + picker.search.field.height);

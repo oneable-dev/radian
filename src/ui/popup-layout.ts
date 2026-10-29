@@ -176,9 +176,7 @@ export function attachPopupActivity(
       feedback.width = activity.width;
       const titleWidth = Bun.stringWidth(field.title ?? "");
       const titleStart = Math.floor((field.width - titleWidth) / 2);
-      const x = field.border
-        ? titleStart + titleWidth - activity.width - 1
-        : Math.max(0, field.width - activity.width);
+      const x = field.border ? titleStart + 1 : Math.max(0, field.width - activity.width);
       const borderLeft =
         panel.border === true || (Array.isArray(panel.border) && panel.border.includes("left"))
           ? 1

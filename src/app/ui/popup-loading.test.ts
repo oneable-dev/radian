@@ -57,7 +57,7 @@ test.each(surfaces)(
       app.mockInput.pressEnter();
       await render();
 
-      // Searchable popups keep activity beside their title, without loading prose or a status row.
+      // Searchable popups put activity before their title, without loading prose or a status row.
       for (const width of [120, 60]) {
         app.resize(width, 30);
         await render();
@@ -72,7 +72,7 @@ test.each(surfaces)(
           const frame = app.captureCharFrame();
           const glyph = (node(spinner) as TextRenderable).plainText;
           expect(feedback.y).toBe(field.y);
-          expect(frame.split("\n")[field.y]).toContain(` ${title} ${glyph} `);
+          expect(frame.split("\n")[field.y]).toContain(` ${glyph} ${title} `);
           expect(frame).not.toMatch(/Loading (available models|accounts|saved sessions)/u);
           expect((node(`${spinner}-message`) as TextRenderable).visible).toBe(false);
           expect(viewport.y).toBe(field.y + field.height);

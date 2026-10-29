@@ -762,7 +762,7 @@ test.each([120, 60])(
       expect(feedback.y).toBe(field.y);
       expect(body.y).toBe(field.y + field.height);
       expect(app.captureCharFrame().split("\n")[field.y]).toContain(
-        ` History ${spinner.plainText} `,
+        ` ${spinner.plainText} History `,
       );
       expect(app.captureCharFrame()).not.toContain("Loading saved sessions");
       expect((app.get("history-loading-message") as TextRenderable).visible).toBe(false);
