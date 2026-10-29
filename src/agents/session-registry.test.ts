@@ -428,7 +428,7 @@ test("Duplicate file and symlink opens remain blocked until cleanup completes", 
   }
 });
 
-test("Runtime recovery uses fresh SDK telemetry instead of saved Fast and weekly values", async () => {
+test("Runtime recovery recomputes telemetry instead of replaying cached Fast observations and weekly quotas", async () => {
   // A previous process's account allowance and request tier are not current measurements.
   const executor = new ControlledExecutor();
   const fresh: NonNullable<ExecutionState["telemetry"]> = {

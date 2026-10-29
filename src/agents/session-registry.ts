@@ -588,7 +588,7 @@ export class SessionRegistry {
         : record.state.sections
           ? { sections: record.state.sections }
           : {}),
-      // Restore SDK-derived telemetry, never a saved account quota or Fast setting.
+      // Recompute telemetry from the SDK and explicit conversation preferences, never cached quotas.
       ...(restored.telemetry ? { telemetry: restored.telemetry } : {}),
       status: record.state.status === "working" ? null : restored.status,
       error:

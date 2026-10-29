@@ -1,13 +1,22 @@
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { CapabilityError, InputError } from "../errors.ts";
+import { CapabilityError, capture, InputError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 
-const scope = (model: Model<Api>) => JSON.stringify([model.provider, model.api, model.id]);
-const supported = (model: Model<Api>) =>
-  model.api === "openai-responses" || model.api === "openai-codex-responses";
+const entryType = "radian.fast-mode.v1";
+type FastChoice = Pick<Model<Api>, "provider" | "api" | "id"> & { enabled: boolean };
+const scope = (model: Pick<Model<Api>, "provider" | "api" | "id">) =>
+  JSON.stringify([model.provider, model.api, model.id]);
+const supported = (api: string) => api === "openai-responses" || api === "openai-codex-responses";
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
+const choice = (value: unknown): value is FastChoice =>
+  record(value) &&
+  typeof value.provider === "string" &&
+  typeof value.api === "string" &&
+  supported(value.api) &&
+  typeof value.id === "string" &&
+  typeof value.enabled === "boolean";
 
 // Session-local, explicitly opt-in priority requests. No global config writes or paid startup probes.
 export class FastMode {
@@ -21,8 +30,17 @@ export class FastMode {
     replaceable: true,
     factory: (pi) => {
       // A replaceable factory can run during discovery and then be omitted. Activate only when bound.
-      pi.on("session_start", () => {
+      pi.on("session_start", (_event, ctx) => {
+        this.requested.clear();
+        this.observed.clear();
+        for (const entry of ctx.sessionManager.getBranch()) {
+          if (entry.type === "custom" && entry.customType === entryType && choice(entry.data)) {
+            this.requested.set(scope(entry.data), entry.data.enabled);
+          }
+        }
+
         this.active = true;
+        this.changed();
       });
       pi.on("model_select", () => this.changed());
       pi.on("session_shutdown", (event) => {
@@ -47,8 +65,28 @@ export class FastMode {
             throw result.error;
           }
 
+          if (args.trim() !== "status" && ctx.model) {
+            const model = ctx.model;
+            const saved = await capture(async () =>
+              pi.appendEntry<FastChoice>(entryType, {
+                provider: model.provider,
+                api: model.api,
+                id: model.id,
+                enabled: result.value,
+              }),
+            );
+            if (!saved.ok) {
+              ctx.ui.notify(
+                `fast ${result.value ? "on" : "off"} for this session, but the choice could not be saved [${saved.error.code}]. It may be lost after reload or restart.`,
+                "warning",
+              );
+
+              return;
+            }
+          }
+
           ctx.ui.notify(
-            `fast ${result.value ? "on" : "off"} (session only)${result.value ? " · priority may increase usage" : ""}`,
+            `fast ${result.value ? "on" : "off"} (this conversation)${result.value ? " · priority may increase usage" : ""}`,
             "info",
           );
         },
@@ -69,7 +107,7 @@ export class FastMode {
   }
 
   read(model: Model<Api> | undefined): boolean | null {
-    if (!this.active || !model || !supported(model)) {
+    if (!this.active || !model || !supported(model.api)) {
       return null;
     }
 
@@ -86,7 +124,7 @@ export class FastMode {
     if (!["", "on", "off", "status"].includes(action)) {
       return err(new InputError("Usage: /fast [on|off|status]"));
     }
-    if (!this.active || !model || !supported(model)) {
+    if (!this.active || !model || !supported(model.api)) {
       return err(
         new CapabilityError("Priority requests are not supported by this model provider."),
       );
@@ -104,7 +142,7 @@ export class FastMode {
   }
 
   apply(payload: unknown, model: Model<Api>): unknown {
-    if (!this.active || !supported(model) || !record(payload) || payload.model !== model.id) {
+    if (!this.active || !supported(model.api) || !record(payload) || payload.model !== model.id) {
       return payload;
     }
 
@@ -126,7 +164,7 @@ export class FastMode {
   }
 
   observe(model: Model<Api>, enabled: boolean): void {
-    if (this.active && supported(model)) {
+    if (this.active && supported(model.api)) {
       this.observed.set(scope(model), enabled);
     }
   }

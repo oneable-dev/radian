@@ -941,11 +941,15 @@ tokens or repaints. Missing model limits remain unknown. Existing repository ser
 restart to load this fallback; reopening only the TUI does not update it.
 
 Radian supplies `/fast [on|off|status]` for OpenAI Responses/Codex models, including
-prompt completion. Its per-model, per-session state starts **off**, so a restored session does not
-remain unknown merely because it has not sent a request. `/fast on` opts into `service_tier: priority`;
-`/fast off` removes an explicit priority/fast tier. These commands themselves never invoke a model, publish a transient Working state or
-add conversation messages. They do not change effort, write global configuration, or persist priority
-across a runtime restart. Priority can increase usage and is not a guarantee of server speed.
+prompt completion. New conversations start **off**. Explicit choices are stored per provider, API and
+model in the saved conversation and restored after a runtime restart or when reopening that conversation
+from History. Models without a saved choice remain **off**, without needing a model request to establish
+that state. `/fast on` opts into `service_tier: priority`; `/fast off` removes an explicit priority/fast
+tier. These commands themselves never invoke a model, publish a transient Working state or add
+conversation messages. `/fast status` only reads the current state. Choices do not change effort or
+write global configuration, and observed provider tiers are not persisted as opt-ins. Saving failures
+retain the accepted choice in memory and report a warning. Priority can increase usage and is not a
+guarantee of server speed.
 
 An existing extension registering `/fast` replaces the default control; its request observers remain
 intact. Such an extension may leave the initial state unknown until its first outgoing request.
