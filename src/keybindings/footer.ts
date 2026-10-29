@@ -19,8 +19,6 @@ const routine = new Set<CommandId>([
   "git.clear",
   "git.search-clear",
   "search.clear",
-  "transcript.search-clear",
-  "transcript.search-cancel",
   "dialog.dismiss",
   "dialog.half-page-down",
   "messages.open",

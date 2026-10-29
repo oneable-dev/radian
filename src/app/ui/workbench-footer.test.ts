@@ -1,6 +1,7 @@
 import { openWorkspaceSearch, pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
+import type { TextRenderable } from "@opentui/core";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -58,6 +59,8 @@ async function mount(
     view,
     initialFocusListeners,
     footerLine: () => app.captureCharFrame().split("\n")[app.renderer.height - 1]!,
+    badge: () =>
+      (app.renderer.root.findDescendantById("footer-identity") as TextRenderable).plainText.trim(),
     setStatus(next: ExecutionState["status"]) {
       status = next;
       selection.replaceSnapshot(selection.snapshot);
@@ -100,6 +103,93 @@ test("Default screens use content through the footer without fixed legends or hi
     expect(app.captureCharFrame()).not.toContain("Status not supplied");
     expect(app.captureCharFrame()).not.toContain("UI preview only");
     expect(app.footerLine()).toContain("AGENT");
+    expect(app.calls).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
+
+test.each([120, 60])(
+  "Width %i replaces the view badge with focused reader modes and restores AGENT for prompts",
+  async (width) => {
+    // Legacy output and a retained draft exercise mode changes without exposing implementation labels.
+    const app = await mount(undefined, {
+      initialDrafts: { a1: "unsent draft" },
+      getSessionDetails: () => ({
+        status: "complete",
+        error: null,
+        output: Array.from({ length: 60 }, (_, index) => `line ${index}`).join("\n"),
+      }),
+    });
+    try {
+      app.resize(width, 24);
+      pressLeader(app, "a");
+      await app.renderOnce();
+      expect(app.badge()).toBe("AGENT");
+
+      // Section navigation and body navigation share NORMAL, even while following is suspended.
+      pressLeader(app, "[");
+      app.mockInput.pressKey("HOME");
+      await app.renderOnce();
+      expect(app.badge()).toBe("NORMAL");
+      expect(app.view.workViewPreferences.agentViews?.a1?.follow).toBe(false);
+      expect(app.footerLine()).not.toMatch(/Paused|legacy preview|TEXT|AGENT/u);
+      app.mockInput.pressEnter();
+      await app.renderOnce();
+      expect(app.badge()).toBe("NORMAL");
+
+      // Selection replaces the badge instead of adding another mode label.
+      app.mockInput.pressKey("v");
+      await app.renderOnce();
+      expect(app.badge()).toBe("VISUAL");
+      app.mockInput.pressKey("v", { shift: true });
+      await app.renderOnce();
+      expect(app.badge()).toBe("VISUAL LINE");
+
+      // Backing out preserves the native draft and restores the view name only on prompt focus.
+      app.mockInput.pressEscape();
+      await app.renderOnce();
+      expect(app.badge()).toBe("NORMAL");
+      app.mockInput.pressEscape();
+      await app.renderOnce();
+      expect(app.badge()).toBe("NORMAL");
+      app.mockInput.pressEscape();
+      await app.renderOnce();
+      expect(app.badge()).toBe("AGENT");
+      expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
+      expect(app.view.promptDrafts.a1).toBe("unsent draft");
+      expect(app.calls).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+test("Popups keep view badges and restore the focused reader mode on dismissal", async () => {
+  // Popup search remains available, and the reader's selection must survive overlays.
+  const app = await mount();
+  try {
+    pressLeader(app, "[");
+    app.mockInput.pressEnter();
+    app.mockInput.pressKey("v");
+    await app.renderOnce();
+    expect(app.badge()).toBe("VISUAL");
+
+    openWorkspaceSearch(app);
+    await app.mockInput.typeText("radian");
+    await app.renderOnce();
+    expect(app.badge()).toBe("AGENT");
+    app.mockInput.pressEscape();
+    await app.renderOnce();
+    expect(app.badge()).toBe("VISUAL");
+
+    // Usage owns its view badge rather than inheriting the background selection mode.
+    pressLeader(app, "u");
+    await app.renderOnce();
+    expect(app.badge()).toBe("USAGE");
+    app.mockInput.pressEscape();
+    await app.renderOnce();
+    expect(app.badge()).toBe("VISUAL");
     expect(app.calls).toEqual([]);
   } finally {
     await app.close();

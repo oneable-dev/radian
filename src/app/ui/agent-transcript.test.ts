@@ -130,14 +130,14 @@ test("Keyboard section/body/selection/copy navigation never submits drafts or mo
     await app.transcript();
     app.mockInput.pressEnter();
     await app.render();
-    expect(app.captureCharFrame()).toContain("TEXT");
+    expect(app.captureCharFrame()).toContain("NORMAL");
     app.mockInput.pressKey("v");
     app.mockInput.pressKey("l");
     await app.copy();
 
     // Inclusive selection contains two whole Korean graphemes, never partial UTF-8/cells.
     expect(app.copied).toEqual(["한글"]);
-    expect(app.captureCharFrame()).toContain("TEXT");
+    expect(app.captureCharFrame()).toContain("NORMAL");
     await app.mockInput.pasteBracketedText("must not edit");
     app.mockInput.pressKey("x");
     app.mockInput.pressBackspace();
@@ -201,7 +201,7 @@ test.each([0, 1, 2, 3])(
       await app.copyLine();
 
       expect(app.copied).toEqual([sections()[index]!.text.split("\n")[0]! + "\n"]);
-      expect(app.captureCharFrame()).toContain("TEXT");
+      expect(app.captureCharFrame()).toContain("NORMAL");
       expect(app.sent).toEqual([]);
     } finally {
       await app.close();
@@ -228,7 +228,7 @@ test("Emoji/combining-character selections copy identical source after resize", 
     app.mockInput.pressKey("y", { shift: true });
     await Promise.resolve();
     expect(app.copied.at(-1)).toBe(text);
-    expect(app.captureCharFrame()).toContain("TEXT");
+    expect(app.captureCharFrame()).toContain("NORMAL");
   } finally {
     await app.close();
   }
@@ -524,7 +524,7 @@ test("Compact help scrolls and returns to existing body navigation on close", as
     app.mockInput.pressKey("F1");
     await app.render();
     expect(app.captureCharFrame()).toContain("Sections:");
-    expect(app.captureCharFrame().split("\n")[11]).toContain("AGENT");
+    expect(app.captureCharFrame().split("\n")[11]?.trimStart()).toStartWith("HELP ");
     app.mockInput.pressKey("END");
     await app.render();
 
@@ -551,7 +551,7 @@ test("Compact help scrolls and returns to existing body navigation on close", as
     app.mockInput.pressEscape();
     await app.render();
 
-    expect(app.captureCharFrame()).toContain("TEXT");
+    expect(app.captureCharFrame()).toContain("NORMAL");
     expect((app.renderer.currentFocusedRenderable as EditBufferRenderable).cursorOffset).toBe(2);
     expect(app.sent).toEqual([]);
   } finally {
@@ -683,7 +683,7 @@ test("Following selects new sections while actual upward scrolling fixes selecti
   }
 });
 
-test("Legacy runtime previews remain identifiable after folding and support source copying", async () => {
+test("Legacy runtime output uses NORMAL navigation and supports source copying after folding", async () => {
   const text = "legacy first\nlegacy second";
   const app = await mount(undefined, {
     getSessionDetails: () => ({ status: null, error: null, output: text }),
@@ -695,7 +695,8 @@ test("Legacy runtime previews remain identifiable after folding and support sour
     await app.copy();
 
     expect(app.captureCharFrame()).toContain("[Transcript] (<C-o> to expand)");
-    expect(app.captureCharFrame()).toContain("legacy preview");
+    expect(app.captureCharFrame()).toContain("NORMAL");
+    expect(app.captureCharFrame()).not.toContain("legacy preview");
     expect(app.captureCharFrame()).not.toContain("legacy first");
     expect(app.copied).toEqual([text]);
   } finally {

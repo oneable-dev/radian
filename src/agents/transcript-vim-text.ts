@@ -36,7 +36,6 @@ const blank = /^[ \t]*$/u;
 export class VimText {
   readonly boundaries: number[];
   readonly lines = [0];
-  private searchCache: { query: string; wholeWord: boolean; matches: number[] } | undefined;
 
   constructor(readonly text: string) {
     this.boundaries = [];
@@ -558,78 +557,5 @@ export class VimText {
     }
 
     return this.lineRange(first, last);
-  }
-
-  wordAt(position: number): string | null {
-    const end = this.lineEnd(this.line(position));
-    let cursor = position;
-    while (cursor < end && !keyword.test(this.text.slice(cursor, this.endOfCharacter(cursor)))) {
-      cursor = this.endOfCharacter(cursor);
-    }
-    if (cursor >= end) {
-      return null;
-    }
-
-    const range = this.wordObject(cursor, false, false, 1);
-
-    return range ? this.text.slice(range.start, range.end) : null;
-  }
-
-  search(
-    position: number,
-    query: string,
-    direction: 1 | -1,
-    count = 1,
-    wholeWord = false,
-  ): number | null {
-    if (!query) {
-      return null;
-    }
-
-    let matches =
-      this.searchCache?.query === query && this.searchCache.wholeWord === wholeWord
-        ? this.searchCache.matches
-        : undefined;
-    if (!matches) {
-      matches = [];
-      for (
-        let index = this.text.indexOf(query);
-        index >= 0;
-        index = this.text.indexOf(query, index + 1)
-      ) {
-        if (
-          this.boundaries[this.index(index)] !== index ||
-          this.boundaries[this.index(index + query.length)] !== index + query.length
-        ) {
-          continue;
-        }
-        if (
-          wholeWord &&
-          (keyword.test(this.text.slice(this.previousCharacter(index), index)) ||
-            keyword.test(
-              this.text.slice(index + query.length, this.endOfCharacter(index + query.length)),
-            ))
-        ) {
-          continue;
-        }
-
-        matches.push(index);
-      }
-
-      this.searchCache = { query, wholeWord, matches };
-    }
-    if (!matches.length) {
-      return null;
-    }
-
-    const next =
-      direction > 0
-        ? matches.findIndex((match) => match > position)
-        : matches.findLastIndex((match) => match < position);
-    const first = next < 0 ? (direction > 0 ? 0 : matches.length - 1) : next;
-
-    return matches[
-      (((first + direction * (count - 1)) % matches.length) + matches.length) % matches.length
-    ]!;
   }
 }

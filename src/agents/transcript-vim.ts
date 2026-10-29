@@ -15,7 +15,6 @@ export type VimEffect =
   | { type: "native"; motion: "up" | "down"; count: number }
   | { type: "select" | "yank"; range: VimRange }
   | { type: "copy-selection" }
-  | { type: "search"; direction: 1 | -1 }
   | { type: "notice"; message: string };
 
 export type VimAction =
@@ -28,13 +27,7 @@ export type VimAction =
   | "till-forward"
   | "till-backward"
   | "find-repeat"
-  | "find-reverse"
-  | "search-forward"
-  | "search-backward"
-  | "search-next"
-  | "search-previous"
-  | "search-word-forward"
-  | "search-word-backward";
+  | "find-reverse";
 
 const none: VimEffect = { type: "none" };
 const bounded = (value: number) => Math.min(maximumVimCount, Math.max(1, value));
@@ -55,7 +48,6 @@ export class TranscriptVim {
   private find: { kind: VimFind["kind"]; count: number } | undefined;
   private lastFind: VimFind | undefined;
   private lastFindStep: { kind: VimFind["kind"]; position: number } | undefined;
-  private lastSearch: { query: string; direction: 1 | -1; wholeWord: boolean } | undefined;
 
   get pending(): boolean {
     return this.counting || !!this.operator || !!this.object || !!this.find;
@@ -182,26 +174,6 @@ export class TranscriptVim {
 
       return this.moved(context, move);
     }
-    if (action === "search-forward" || action === "search-backward") {
-      return { type: "search", direction: action === "search-forward" ? 1 : -1 };
-    }
-    if (action === "search-word-forward" || action === "search-word-backward") {
-      const query = context.model.wordAt(context.cursor);
-      if (!query) {
-        return this.finish({ type: "notice", message: "No word under the cursor" });
-      }
-
-      this.lastSearch = {
-        query,
-        direction: action === "search-word-forward" ? 1 : -1,
-        wholeWord: true,
-      };
-
-      return this.repeatSearch(context, false);
-    }
-    if (action === "search-next" || action === "search-previous") {
-      return this.repeatSearch(context, action === "search-previous");
-    }
 
     const { count, explicit } = this.count();
     if ((action === "up" || action === "down") && !this.operator) {
@@ -233,35 +205,5 @@ export class TranscriptVim {
     }
 
     return this.finish(none);
-  }
-
-  submitSearch(query: string, direction: 1 | -1, context: VimContext): VimEffect {
-    if (query) {
-      this.lastSearch = { query, direction, wholeWord: false };
-    } else if (this.lastSearch) {
-      this.lastSearch = { ...this.lastSearch, direction };
-    }
-
-    return this.repeatSearch(context, false);
-  }
-
-  private repeatSearch(context: VimContext, reverse: boolean): VimEffect {
-    const { count } = this.count();
-    const search = this.lastSearch;
-    if (!search) {
-      return this.finish({ type: "notice", message: "No previous search" });
-    }
-
-    const position = context.model.search(
-      context.cursor,
-      search.query,
-      reverse ? (search.direction === 1 ? -1 : 1) : search.direction,
-      count,
-      search.wholeWord,
-    );
-
-    return position === null
-      ? this.finish({ type: "notice", message: `Pattern not found: ${search.query}` })
-      : this.moved(context, { position });
   }
 }

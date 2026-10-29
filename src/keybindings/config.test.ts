@@ -21,6 +21,38 @@ test("Default leader is Ctrl+Space and Ctrl+C never quits the app", () => {
   expect(map.bound("ctrl+b", "prompt")).toBe(false);
 });
 
+test("Reader defaults omit transcript search without removing popup search commands", () => {
+  // Transcript readers no longer own search keys, while searchable popups keep their command map.
+  const map = defaultKeymap();
+  const formerSearchKeys = [
+    "/",
+    "?",
+    "shift+?",
+    "shift+/",
+    "n",
+    "shift+n",
+    "*",
+    "shift+*",
+    "shift+8",
+    "#",
+    "shift+#",
+    "shift+3",
+  ];
+
+  for (const context of ["transcript", "transcript-text", "transcript-visual"] as const) {
+    for (const key of formerSearchKeys) {
+      expect(map.bound(key, context)).toBe(false);
+    }
+  }
+
+  expect(map.bindings.some((binding) => binding.command.startsWith("transcript.search"))).toBe(
+    false,
+  );
+  expect(map.hint("workspace.search", "workspace")).toBe("/");
+  expect(map.hint("history.search", "history")).toBe("/");
+  expect(map.hint("search.clear", "search")).toBe("<C-c>");
+});
+
 test.each([
   ["darwin", "<D-c>", "super+c", "ctrl+c"],
   ["win32", "<C-c>", "ctrl+c", "super+c"],

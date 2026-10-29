@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { EditBufferRenderable, parseKeypress } from "@opentui/core";
+import { EditBufferRenderable, parseKeypress, type TextRenderable } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench } from "../../app/ui/workbench.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
@@ -9,7 +9,7 @@ import { err, ok, type Result } from "../../result.ts";
 import type { PtyFrame, TerminalText } from "../../runtime/protocol.ts";
 import { parseKeymap } from "../../keybindings/config.ts";
 import { expectOk } from "../../testing/results.ts";
-import { pressLeader } from "../../testing/keys.ts";
+import { openWorkspaceSearch, pressLeader } from "../../testing/keys.ts";
 
 async function mount(text = "alpha beta\n한글 👨‍👩‍👧‍👦 é\nlast line", custom = false) {
   const app = await createTestRenderer({
@@ -137,6 +137,9 @@ async function mount(text = "alpha beta\n한글 👨‍👩‍👧‍👦 é\nl
     send,
     reader,
     render,
+    badge: () =>
+      (app.renderer.root.findDescendantById("footer-identity") as TextRenderable).plainText.trim(),
+    footerLine: () => app.captureCharFrame().split("\n")[app.renderer.height - 1]!,
     async open() {
       if (custom) {
         app.mockInput.pressKey("b", { ctrl: true });
@@ -153,6 +156,50 @@ async function mount(text = "alpha beta\n한글 👨‍👩‍👧‍👦 é\nl
     },
   };
 }
+
+test.each([100, 60])(
+  "Width %i replaces TERMINAL with reader modes without forwarding navigation to the shell",
+  async (width) => {
+    // The real terminal panel owns input until the user explicitly enters snapshot navigation.
+    const app = await mount();
+    try {
+      app.resize(width, 24);
+      await app.render();
+      expect(app.badge()).toBe("TERMINAL");
+
+      await app.open();
+      expect(app.badge()).toBe("NORMAL");
+      expect(app.footerLine()).not.toMatch(/TERMINAL|frozen output|Reading output/u);
+      app.mockInput.pressKey("v");
+      await app.render();
+      expect(app.badge()).toBe("VISUAL");
+      app.mockInput.pressKey("v", { shift: true });
+      await app.render();
+      expect(app.badge()).toBe("VISUAL LINE");
+
+      // Overlay search keeps the base view label without losing the snapshot selection.
+      const selected = app.reader().getSelectedText();
+      openWorkspaceSearch(app);
+      await app.render();
+      expect(app.badge()).toBe("TERMINAL");
+      app.mockInput.pressEscape();
+      await app.render();
+      expect(app.badge()).toBe("VISUAL LINE");
+      expect(app.reader().getSelectedText()).toBe(selected);
+
+      // Esc clears selection before returning to the live shell and its TERMINAL badge.
+      app.mockInput.pressEscape();
+      await app.render();
+      expect(app.badge()).toBe("NORMAL");
+      app.mockInput.pressEscape();
+      await app.render();
+      expect(app.badge()).toBe("TERMINAL");
+      expect(app.inputs).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  },
+);
 
 test("Shared terminal reading/copying preserves shell input and PTY sizes", async () => {
   // Replace clipboard/connection boundaries only; use actual routers and Unicode editing buffers.
@@ -171,7 +218,8 @@ test("Shared terminal reading/copying preserves shell input and PTY sizes", asyn
     expect(app.inputs).toEqual([]);
     expect(app.captureCharFrame()).toContain("Completed");
     expect(app.captureCharFrame()).toContain("Copied to clipboard");
-    expect(app.captureCharFrame()).toContain("NORMAL · frozen output");
+    expect(app.badge()).toBe("NORMAL");
+    expect(app.footerLine()).not.toContain("frozen output");
     app.mockInput.pressEscape();
     await app.render();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("shell-terminal");
@@ -296,8 +344,11 @@ test("Esc during pending reads prevents late navigation reopening", async () => 
   app.boundary.read = () => pending.promise;
   try {
     await app.open();
+    expect(app.badge()).toBe("NORMAL");
+    expect(app.footerLine()).not.toContain("Reading output");
     app.mockInput.pressEscape();
     await app.render();
+    expect(app.badge()).toBe("TERMINAL");
     pending.resolve(ok({ text: "LATE SNAPSHOT", cursor: { row: 0, column: 0 } }));
     await app.render();
 

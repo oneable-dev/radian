@@ -169,7 +169,7 @@ test("Soft wrapping and resize never change Visual Line logical ranges", async (
     await app.copy();
 
     expect(app.copies).toEqual([line + "\nnext\n"]);
-    expect(app.captureCharFrame().split("\n")[11]).toContain("AGENT");
+    expect(app.captureCharFrame().split("\n")[11]?.trimStart()).toStartWith("NORMAL ");
   } finally {
     await app.close();
   }
@@ -867,7 +867,7 @@ test("Agent and Thinking omit titles, backgrounds, and indentation while other b
     await app.copy();
 
     expect(app.copies).toEqual(["USER_BODY"]);
-    expect(app.captureCharFrame().split("\n")[11]).toContain("AGENT");
+    expect(app.captureCharFrame().split("\n")[11]?.trimStart()).toStartWith("NORMAL ");
     expect(app.view.promptDrafts.a1).toBe("unsent draft");
   } finally {
     await app.close();

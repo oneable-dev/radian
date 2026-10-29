@@ -218,8 +218,13 @@ attached without being stopped or overwritten and show a migration notice (see S
 Workspace navigation is an overlay; the work pane always uses the full available width.
 The work pane switches between **Agents**, **Editor**, **Git** and **Terminal**, with one visible
 view per worktree and Agents as the initial view. There is no top-level view tab strip:
-**Ctrl+Space, then a/e/g/t** selects the view and focuses its work area. The footer identifies the
-current view next to the Radian product name, independently of keyboard focus.
+**Ctrl+Space, then a/e/g/t** selects the view and focuses its work area. The footer's left badge
+normally shows **AGENT**, **EDITOR**, **GIT** or **TERMINAL**; the Usage popup shows **USAGE**.
+Focused Agent transcripts and terminal reading snapshots replace that badge with **NORMAL**,
+**VISUAL** or **VISUAL LINE**. Transcript-local help shows **HELP**. Returning to the Agent prompt
+or live shell restores **AGENT** or **TERMINAL**.
+Other popups keep the view badge rather than displaying a background reader's mode. Embedded Neovim
+and live terminal programs retain ownership of their own editing modes and input.
 **Ctrl+Space, then 1–9** selects the corresponding Agent session or terminal in the current worktree's
 tab order. Missing slots and numeric selection in Editor/Git do nothing; no sessions are created.
 **Ctrl+Space, then c** creates an Agent session or terminal in the current view, including when
@@ -560,8 +565,6 @@ default Ctrl+T/Ctrl+E or leader-o aliases. All commands remain configurable:
 | Text/Visual           | f/F/t/T, then a character; ; / ,                       | Find/till on the logical line; repeat/reverse the last find                                       |
 | Visual / yank pending | i / a, then w/W/p or a quote/bracket                   | Select/yank an inner or surrounding text object                                                   |
 | Text/Visual           | 1–9, then more digits and a motion                     | Repeat a motion; counts on either side of y multiply                                              |
-| Text/Visual           | / / ?; n / N; * / #                                    | Literal section search, repeat/reverse, or whole-word search                                      |
-| Search input          | Enter / Esc / Ctrl+C                                   | Accept, cancel without moving, or clear only the query                                            |
 | Text/Visual           | v / V                                                  | Character selection / whole-logical-line selection; repeat the same key to stop                   |
 | Text/Visual           | gx                                                     | Open the HTTP(S) link under the cursor in the system default browser                              |
 | Visual Line           | j/k                                                    | Move by logical source lines, including wrapped paragraphs                                        |
@@ -593,8 +596,8 @@ are retained across resize, streaming, session switches and reconnect.
 #### Read-only Vim composition
 
 In Text mode, vertical cursor movement crosses the visible header/body boundary and then adjacent
-sections; it never navigates hidden folded details. Other motions, yank operators, text objects and
-searches operate on the **current reading surface** (heading or displayed body). Visual selections
+sections; it never navigates hidden folded details. Other motions, yank operators and text objects
+operate on the **current reading surface** (heading or displayed body). Visual selections
 remain within that surface rather than inventing offsets across separate buffers. Lowercase
 words group Unicode letters/numbers/underscore separately from punctuation; uppercase WORDs group
 all non-whitespace characters. `viw` selects the entire word even from its middle, while `vaw` includes
@@ -615,14 +618,11 @@ The operator and prefix commands are configurable in the shared keymap; object n
 arguments are data. Yanks use the existing system clipboard boundary, preserve the reading cursor,
 and retain source LF/CRLF when the reading surface is literal. No EOF newline is invented.
 
-`/` and `?` open a one-line, literal (not Vim-regexp) search input. Typing does not move the reading
-cursor or submit the Agent draft. Enter accepts and wraps to a match in the chosen direction; Esc
-cancels without moving, and Ctrl+C clears only this query, including when already empty. Empty Enter
-reuses the previous query. `n` follows the original search direction and `N` reverses it without
-changing that direction; `*`/`#` search the nearest whole keyword forward/backward rather than matching
-word prefixes. Searches and finds support counts and yank composition. Insert/append, deletion,
-change, replacement, paste, undo, registers, macros, Ex commands and Vim-regexp syntax are deliberately
-not implemented. This is a read-only command vocabulary, not an embedded editable Vim instance.
+Transcript search is not provided: `/`, `?`, `n`/`N` and `*`/`#` are unbound in the reader by default.
+They remain ordinary text in Agent prompts, and searchable popup filtering is unaffected. Character
+finds still support counts and yank composition. Insert/append, deletion, change, replacement, paste,
+undo, registers, macros, Ex commands and Vim-regexp syntax are deliberately not implemented. This is
+a read-only command vocabulary, not an embedded editable Vim instance.
 
 `gx` (`transcript.open-link`) opens the URL under the read-only cursor, including an inline Markdown
 link's displayed label, including table cells. Click a rendered link or a URL in literal text to open the same target;
@@ -647,9 +647,11 @@ In Text, the same keys move the reading cursor, crossing visible headings and ad
 Visual movement stays within the selected surface so its anchor remains valid. Esc returns to Text,
 then Sections when explicit section navigation is wanted.
 
-The former `INPUT · section/count · following` row is removed. Text/Visual/search/help mode and a
-`Paused` indicator appear only when relevant in the one-row footer; `Paused` refers to viewport
-following, never agent execution. Following is based on the viewport: at the bottom it follows new output; moving above the bottom pauses it;
+The former `INPUT · section/count · following` row is removed. Sections and Text navigation both use
+**NORMAL** in the footer's left badge; Visual and help replace it with their corresponding
+mode labels. Pending Vim commands remain separate from the badge, as do extension-provided statuses.
+Viewport following and legacy output formats do not add footer labels. Following is based on the
+viewport: at the bottom it follows new output; moving above the bottom pauses it;
 returning to the bottom by wheel or paging resumes it automatically. Live Agent transcripts hide
 their vertical scrollbar and reclaim its column without disabling wheel or keyboard navigation.
 History previews use the same hidden-scrollbar policy. Merely focusing the transcript does not pause it. Content growth and asynchronous Markdown layout preserve the pre-growth
@@ -726,7 +728,8 @@ sessions/views and reconnecting to the same live runtime. Stable live section ID
 restoration of temporary selections after a service restart. Full transcript text is not limited to
 the legacy 12-message/12,000-character preview. Aggregate workspace snapshots have a **64 MiB receive
 limit**, separate from the 8 MiB command/PTY limits; transcript paging is not implemented. Older
-services remain usable with a clearly marked legacy preview. Finish their jobs and explicitly stop/restart them to load the new capability; no service
+services remain usable with their legacy output in a generic Transcript section. Finish their jobs
+and explicitly stop/restart them to load the new capability; no service
 is automatically restarted.
 
 ### Agent session commands
@@ -1225,7 +1228,8 @@ when safe; Radian never restarts shells automatically for this feature.
 
 **Leader, then [** enters read-only output navigation, using an on-demand plain-text snapshot of the active
 screen and retained scrollback. Shells and jobs keep running; new output does not replace the text
-being selected. The footer shows **NORMAL**, **VISUAL** or **VISUAL LINE** and `frozen output`.
+being selected. The footer's left badge replaces **TERMINAL** with **NORMAL**, **VISUAL** or
+**VISUAL LINE** while the snapshot has focus, without an additional `frozen output` label.
 Use h/j/k/l, arrows or Ctrl+N/P to move, w/b for words, 0/$ for line bounds, gg/G for buffer bounds,
 and Ctrl+U/D or Ctrl+B/F (also PgUp/PgDn) for half/full pages. **v/V** selects characters/logical lines; **y** copies
 the selection or current line, returning to Normal after accepted clipboard delivery. Copy failures
@@ -1442,7 +1446,7 @@ Spaces separate sequential keys (`"space r"` is a two-key leader); `+` combines 
 Use explicit `shift+c` for uppercase C. A string binding is global; an object can specify `scope`:
 `global`, `app` (outside PTYs), `pty`, `workspace`, `search`, `history`, `history-search`, `monitor`, `monitor-search`, `git-tabs`,
 `prompt`, `prompt-completion`, `button`, `transcript` (section navigation), `transcript-text`,
-`transcript-visual`, `transcript-search`, `editor`, `terminal`, `terminal-copy`, `terminal-visual`, `git`, `git-prompt`, `dialog`, `selection`, or `none`. The transient `selection` scope is checked before the focused context only while visible text is selected; other keys retain their original context. An override replaces that command's defaults;
+`transcript-visual`, `editor`, `terminal`, `terminal-copy`, `terminal-visual`, `git`, `git-prompt`, `dialog`, `selection`, or `none`. The transient `selection` scope is checked before the focused context only while visible text is selected; other keys retain their original context. An override replaces that command's defaults;
 `[]` disables it. Command IDs/defaults are defined in `src/keybindings/commands.ts`.
 Unknown commands, invalid keys and overlapping/prefix bindings are errors rather than silent fallbacks.
 For example, a printable Space leader conflicts with the default button Space activation unless that
@@ -2065,8 +2069,9 @@ show their authored input after an exact single-child receipt binds it to a run.
 bindings are bounded and cleared on reload. Workflow inputs remain unavailable because the current
 Pi extension redacts them; task labels and redacted prompt markers are never used as input captions.
 No terminal output or lifecycle files are scraped. Fast settings
-remain session-local and are not propagated to children. Transcript `Paused` appears in the footer,
-not this execution block. Model/context/account usage remains on the separate lower telemetry row.
+remain session-local and are not propagated to children. Viewport following is independent of
+execution state and does not add a footer label. Model/context/account usage remains on the separate
+lower telemetry row.
 
 The SDK adapter normalizes events into display snapshots. `agent_end` alone is not completion:
 automatic retries keep the run working, and `agent_settled` plus the final outcome determine

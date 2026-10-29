@@ -838,7 +838,7 @@ test("Legacy raw-source selection offsets never apply incorrectly to rendered te
     expect(app.body().plainText).toBe("한글 after");
     expect(app.body().cursorOffset).toBe(0);
     expect(app.body().hasSelection()).toBe(false);
-    expect(app.captureCharFrame()).toContain("TEXT");
+    expect(app.captureCharFrame()).toContain("NORMAL");
     expect(app.markdown().visible).toBe(true);
   } finally {
     await app.close();

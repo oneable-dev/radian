@@ -19,7 +19,7 @@ import { TranscriptPanel, type TranscriptOptions } from "./transcript-panel.ts";
 import { TranscriptBottomButton } from "./transcript-bottom-button.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import type { Keymap } from "../../keybindings/config.ts";
-import type { FooterShortcut } from "../../ui/footer.ts";
+import type { FooterMode, FooterShortcut } from "../../ui/footer.ts";
 import { bindPanelSpacing, panelSpacing } from "../../ui/spacing.ts";
 import { SessionStatus } from "./session-status.ts";
 import { RunStatus } from "./run-status.ts";
@@ -415,6 +415,10 @@ export class AgentPanel {
 
   get transcriptShortcuts(): readonly FooterShortcut[] {
     return this.transcript.shortcuts;
+  }
+
+  get transcriptMode(): FooterMode | null {
+    return this.transcript.footerMode;
   }
 
   get transcriptStatus(): string {

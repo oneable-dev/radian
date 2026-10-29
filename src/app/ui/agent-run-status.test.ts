@@ -196,7 +196,8 @@ test("Actual requests and spinners appear above prompts without top Request, mod
 
     const frame = app.captureCharFrame().split("\n");
     expect(frame[row.y]).not.toContain("Paused");
-    expect(frame[app.get("footer-bar").y]).toContain("Paused");
+    expect(frame[app.get("footer-bar").y]?.trimStart()).toStartWith("NORMAL ");
+    expect(frame[app.get("footer-bar").y]).not.toContain("Paused");
     app.mockInput.pressKey("END", { ctrl: true });
     await app.render();
     expect(app.captureCharFrame().split("\n")[app.get("footer-bar").y]).not.toContain("Paused");

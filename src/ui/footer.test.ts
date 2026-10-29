@@ -46,12 +46,12 @@ test("View blocks replace branding without reserving a second footer row", async
   const app = await mount(120, 24);
   try {
     app.footer.setView("TERMINAL");
-    app.footer.setContext("Paused");
+    app.footer.setContext("Extension status");
     await app.renderOnce();
 
     expect(app.line().trimStart()).toStartWith("TERMINAL");
     expect(app.line()).not.toContain("Radian");
-    expect(app.line()).toContain("Paused");
+    expect(app.line()).toContain("Extension status");
     expect(app.line()).toContain("<CR> Run");
     expect(app.footer.root.height).toBe(1);
     expect(app.body.height).toBe(23);
@@ -122,7 +122,17 @@ test("View labels keep exactly one space on both sides at every width", async ()
   try {
     for (const width of [120, 80, 60, 120]) {
       app.resize(width, 8);
-      for (const view of ["AGENT", "EDITOR", "GIT", "TERMINAL"]) {
+      for (const view of [
+        "AGENT",
+        "EDITOR",
+        "GIT",
+        "TERMINAL",
+        "USAGE",
+        "NORMAL",
+        "VISUAL",
+        "VISUAL LINE",
+        "HELP",
+      ]) {
         app.footer.setView(view);
         await app.renderOnce();
 

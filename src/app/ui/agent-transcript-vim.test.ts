@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
 import {
   EditBufferRenderable,
-  InputRenderable,
   MarkdownRenderable,
   parseKeypress,
   type Renderable,
+  type ScrollBoxRenderable,
+  type TextRenderable,
 } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
@@ -98,8 +99,10 @@ async function mount(
 
       await render();
     },
-    search() {
-      return app.renderer.root.findDescendantById("transcript-search") as InputRenderable;
+    pendingKeys() {
+      return (
+        app.renderer.root.findDescendantById("footer-context") as TextRenderable
+      ).plainText.trim();
     },
     state() {
       return view.workViewPreferences.agentViews?.[selection.sessionId ?? ""];
@@ -156,7 +159,8 @@ test("yiw, yw, and y$ copy distinct ranges without moving reading cursors", asyn
     await app.read(8);
     await app.keys("y");
     expect(app.copied).toEqual([]);
-    expect(app.captureCharFrame()).toContain("TEXT · y");
+    expect(app.captureCharFrame()).toContain("NORMAL");
+    expect(app.pendingKeys()).toBe("y");
 
     await app.keys("iw");
     await app.waitFor(() => app.copied.length === 1);
@@ -275,104 +279,48 @@ test("Esc, invalid keys, and session switching cancel pending operators without 
   }
 });
 
-test("Search input keeps h/j/k/l and digits literal and Esc cancels without moving", async () => {
-  // Search is command-line input, not body navigation or Agent prompting.
-  const app = await mount("alpha beta gamma");
+test("Former search keys leave the reading cursor, viewport, and drafts unchanged", async () => {
+  // Long sections must not reveal a search input or scroll away from the reading position.
+  const source = Array.from({ length: 60 }, (_, index) => `alpha beta gamma ${index}`).join("\n");
+  const app = await mount(source);
   try {
-    await app.read(6);
+    await app.read(8);
+    const reader = app.body();
+    const scroll = app.renderer.root.findDescendantById(
+      "session-transcript",
+    ) as ScrollBoxRenderable;
+    const top = scroll.scrollTop;
 
-    await app.keys("/");
-    await app.mockInput.typeText("hjkl123");
-    await app.render();
-    expect(app.search().value).toBe("hjkl123");
-    app.mockInput.pressEscape();
-    await app.render();
+    // These unbound keys no longer initiate, repeat, or compose transcript searches.
+    for (const key of ["/", "?", "n", "N", "*", "#"]) {
+      await app.keys(key);
+      expect(app.renderer.currentFocusedRenderable).toBe(reader);
+      expect(app.cursor()).toBe(8);
+      expect(scroll.scrollTop).toBe(top);
+    }
 
-    expect(app.cursor()).toBe(6);
+    expect(app.renderer.root.findDescendantById("transcript-search")).toBeUndefined();
+    expect(reader.plainText).toBe(source);
     expect(app.state()?.mode).toBe("text");
     expect(app.view.promptDrafts.a1).toBe("Unsent draft");
+    expect(app.copied).toEqual([]);
     expect(app.sent).toEqual([]);
   } finally {
     await app.close();
   }
 });
 
-test("Search Enter, n/N, and ? wrap bidirectionally within current sections", async () => {
-  // Only Enter accepts navigation to matching positions.
-  const app = await mount("one two one two one");
+test("Former transcript search keys remain literal in Agent prompts", async () => {
+  // Removing reader commands must not intercept ordinary prompt text or submit the draft.
+  const app = await mount("alpha beta");
   try {
-    await app.read();
-
-    await app.keys("/one\n");
-    expect(app.cursor()).toBe(8);
-    await app.keys("n");
-    expect(app.cursor()).toBe(16);
-    await app.keys("N");
-    expect(app.cursor()).toBe(8);
-    await app.keys("?one\n");
-    expect(app.cursor()).toBe(0);
-    await app.keys("n");
-
-    expect(app.cursor()).toBe(16);
-    expect(app.view.promptDrafts.a1).toBe("Unsent draft");
-  } finally {
-    await app.close();
-  }
-});
-
-test("* and # exclude partial words while y/search copies ranges without movement", async () => {
-  // Star searches must not match alphaX as alpha.
-  const app = await mount("alpha alphaX alpha beta");
-  try {
-    await app.read();
-
-    await app.keys("*");
-    expect(app.cursor()).toBe(13);
-    await app.keys("#");
-    expect(app.cursor()).toBe(0);
-    await app.keys("y/beta\n");
-    await app.waitFor(() => app.copied.length === 1);
-
-    expect(app.copied).toEqual(["alpha alphaX alpha "]);
-    expect(app.cursor()).toBe(0);
-  } finally {
-    await app.close();
-  }
-});
-
-test("Search Ctrl+C clears only queries and empty repeats never interrupt drafts or execution", async () => {
-  // Use the shared router boundary that consumes repeats even after focus changes.
-  let interrupted = 0;
-  const app = await mount("alpha beta", {
-    onInterrupt: async () => {
-      interrupted++;
-
-      return ok(undefined);
-    },
-  });
-  const raw = (sequence: string) => {
-    const key = parseKeypress(sequence, { useKittyKeyboard: true });
-    if (!key) {
-      throw new Error("Invalid key");
-    }
-
-    app.renderer.keyInput.processParsedKey(key);
-  };
-  try {
-    await app.read();
-    await app.keys("/");
-    await app.mockInput.typeText("beta");
-
-    raw("\x1b[99;5u");
-    expect(app.search().value).toBe("");
-    app.mockInput.pressEscape();
-    raw("\x1b[99;5:2u");
-    raw("\x1b[99;5:3u");
+    pressLeader(app, "a");
+    await app.mockInput.typeText("/?nN*#");
     await app.render();
 
-    expect(app.state()?.mode).toBe("text");
-    expect(app.view.promptDrafts.a1).toBe("Unsent draft");
-    expect(interrupted).toBe(0);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
+    expect(app.view.promptDrafts.a1).toBe("Unsent draft/?nN*#");
+    expect(app.sent).toEqual([]);
   } finally {
     await app.close();
   }
@@ -402,8 +350,8 @@ test("vip/yap select and copy paragraph/blank-line ranges while retaining Markdo
   }
 });
 
-test("Search cancellation preserves original Visual selection and rendered highlighting", async () => {
-  // Protect existing body selections while focus moves to search.
+test("Former search keys preserve Visual selections and rendered highlighting", async () => {
+  // Removed search bindings must not change formatted selections or their native input owner.
   const app = await mount("**alpha beta gamma**", {}, "assistant");
   try {
     await app.read(8);
@@ -411,13 +359,9 @@ test("Search cancellation preserves original Visual selection and rendered highl
 
     const before = app.cursor();
 
-    await app.keys("/");
-    await app.mockInput.typeText("gamma");
-    await app.render();
-    expect(app.renderer.getSelection()?.getSelectedText()).toBe("beta");
-    app.mockInput.pressEscape();
-    await app.render();
+    await app.keys("/?nN*#");
 
+    expect(app.renderer.getSelection()?.getSelectedText()).toBe("beta");
     expect(app.cursor()).toBe(before);
     expect(app.body().getSelectedText()).toBe("beta");
     expect(app.state()?.mode).toBe("visual");
@@ -542,7 +486,8 @@ test("User overrides apply to inner/yank/word commands while object arguments st
     await app.read(8);
 
     await app.keys("c");
-    expect(app.captureCharFrame()).toContain("TEXT · c");
+    expect(app.captureCharFrame()).toContain("NORMAL");
+    expect(app.pendingKeys()).toBe("c");
     await app.keys("uw");
     await app.waitFor(() => app.copied.length === 1);
     await app.keys("cq");

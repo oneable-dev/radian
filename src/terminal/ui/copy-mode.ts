@@ -12,6 +12,7 @@ import { Clipboard } from "../../ui/clipboard.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import type { Notice } from "../../ui/messages.ts";
+import type { FooterMode } from "../../ui/footer.ts";
 import { textLinkAt } from "../../text-links.ts";
 import { bindCtrlClickLink } from "../../ui/ctrl-click-link.ts";
 
@@ -90,14 +91,12 @@ export class TerminalCopyMode {
     }
   }
 
-  get status(): string {
-    if (!this.active) {
-      return "";
-    } else if (this.pending) {
-      return "Reading output";
-    } else {
-      return `${this.anchor === null ? "NORMAL" : this.linewise ? "VISUAL LINE" : "VISUAL"} · frozen output`;
+  get mode(): FooterMode | null {
+    if (!this.active || !this.root.focused) {
+      return null;
     }
+
+    return this.anchor === null ? "NORMAL" : this.linewise ? "VISUAL LINE" : "VISUAL";
   }
 
   open(read: () => Promise<Result<TerminalText, ExpectedError>>): void {

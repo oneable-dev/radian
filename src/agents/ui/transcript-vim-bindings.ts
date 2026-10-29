@@ -27,12 +27,6 @@ const actions = {
   "transcript.till-backward": "till-backward",
   "transcript.find-repeat": "find-repeat",
   "transcript.find-reverse": "find-reverse",
-  "transcript.search-forward": "search-forward",
-  "transcript.search-backward": "search-backward",
-  "transcript.search-next": "search-next",
-  "transcript.search-previous": "search-previous",
-  "transcript.search-word-forward": "search-word-forward",
-  "transcript.search-word-backward": "search-word-backward",
 } satisfies Partial<Record<CommandId, VimAction>>;
 
 export function transcriptVimAction(command: CommandId): VimAction | undefined {

@@ -982,9 +982,6 @@ export class Workbench {
       }
     }
 
-    this.footer.setView(this.dashboard.visible ? "USAGE" : this.displayedWorkView.toUpperCase());
-    this.footer.setWorkspace(this.selection.worktree);
-
     const overlay =
       this.messagesPanel.visible ||
       this.extension.visible ||
@@ -995,13 +992,19 @@ export class Workbench {
       this.dashboard.visible ||
       this.monitor?.visible ||
       this.sidebar.visible;
+    let badge = this.dashboard.visible ? "USAGE" : this.displayedWorkView.toUpperCase();
     let outputStatus = "";
-    if (this.agent.active) {
-      outputStatus = this.agent.transcriptStatus;
-    } else if (this.terminals.root.visible) {
-      outputStatus = this.terminals.copyStatus;
+    if (!overlay) {
+      if (this.agent.active) {
+        badge = this.agent.transcriptMode ?? badge;
+        outputStatus = this.agent.transcriptStatus;
+      } else if (this.terminals.root.visible) {
+        badge = this.terminals.copyModeBadge ?? badge;
+      }
     }
 
+    this.footer.setView(badge);
+    this.footer.setWorkspace(this.selection.worktree);
     this.footer.setContext(overlay ? "" : this.extensionStatus || outputStatus);
     this.footer.setShortcuts(shortcuts.filter((shortcut) => shortcut.key));
   };

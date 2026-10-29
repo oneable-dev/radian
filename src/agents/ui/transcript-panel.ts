@@ -1,7 +1,5 @@
 import {
   BoxRenderable,
-  InputRenderable,
-  InputRenderableEvents,
   ScrollBoxRenderable,
   SyntaxStyle,
   TextAttributes,
@@ -15,7 +13,7 @@ import {
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
 import { keyToken, type Keymap } from "../../keybindings/config.ts";
 import { footerKeyHint } from "../../keybindings/footer.ts";
-import type { FooterShortcut } from "../../ui/footer.ts";
+import type { FooterMode, FooterShortcut } from "../../ui/footer.ts";
 import { Clipboard } from "../../ui/clipboard.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import type { Notice } from "../../ui/messages.ts";
@@ -150,10 +148,6 @@ export class TranscriptPanel {
   private readonly empty: RadianLogo;
   private readonly vim = new TranscriptVim();
   private vimModel: VimText | undefined;
-  private readonly searchLine: BoxRenderable;
-  private readonly searchInput: InputRenderable;
-  private readonly searchPrefix: TextRenderable;
-  private searchDirection: 1 | -1 = 1;
   private helpPosition = 0;
   private helpFollow = false;
   private rows = new Map<string, Row>();
@@ -241,46 +235,6 @@ export class TranscriptPanel {
     this.scroll.add(this.help);
     // Viewport decorations must not become scrollable or selectable transcript content.
     this.scroll.viewport.add(this.empty);
-    this.searchLine = new BoxRenderable(renderer, {
-      id: "transcript-search-line",
-      position: "absolute",
-      left: 0,
-      bottom: 0,
-      width: "100%",
-      height: 1,
-      flexDirection: "row",
-      visible: false,
-      zIndex: 20,
-      onMouseDown: (event) => {
-        event.stopPropagation();
-        if (event.button === 0) {
-          event.preventDefault();
-          this.searchInput.focus();
-        }
-      },
-    });
-    this.searchPrefix = new TextRenderable(renderer, {
-      width: 1,
-      height: 1,
-      selectable: false,
-      content: "/",
-    });
-    this.searchInput = new InputRenderable(renderer, {
-      id: "transcript-search",
-      flexGrow: 1,
-      minWidth: 0,
-      maxLength: 4096,
-      placeholder: "Search current section",
-    });
-    this.searchLine.add(this.searchPrefix);
-    this.searchLine.add(this.searchInput);
-    this.scroll.viewport.add(this.searchLine);
-    this.theme.input(this.searchInput, "ui.input", "ui.inputFocused");
-    this.theme.bindStyles(this.searchLine, (styles) => {
-      this.searchLine.backgroundColor = styles["ui.inputFocused"].bg;
-      paintText(this.searchPrefix, styles["ui.inputFocused"]);
-    });
-    this.searchInput.on(InputRenderableEvents.INPUT, () => this.options.changed());
     this.scroll.verticalScrollBar.on("change", this.rememberScroll);
     this.scroll.content.on("resize", this.applyTarget);
     this.scroll.viewport.on("resize", this.resize);
@@ -342,17 +296,11 @@ export class TranscriptPanel {
   get focused(): boolean {
     const focused = this.renderer.currentFocusedRenderable;
 
-    return (
-      focused === this.scroll ||
-      (this.searchLine.visible && focused === this.searchInput) ||
-      (!!focused && this.readers.has(focused))
-    );
+    return focused === this.scroll || (!!focused && this.readers.has(focused));
   }
 
   get focusTarget(): Renderable {
-    if (this.searchLine.visible) {
-      return this.searchInput;
-    } else if (!this.help.visible && this.state?.mode !== "sections" && this.selected) {
+    if (!this.help.visible && this.state?.mode !== "sections" && this.selected) {
       return this.reader(this.selected);
     } else {
       return this.scroll;
@@ -362,9 +310,6 @@ export class TranscriptPanel {
   keyContext(): KeyContext | null {
     if (this.options.passive || !this.visible || !this.focused) {
       return null;
-    }
-    if (this.searchLine.visible) {
-      return "transcript-search";
     }
     if (this.help.visible) {
       return "transcript";
@@ -392,13 +337,6 @@ export class TranscriptPanel {
       key: footerKeyHint(command, context, this.hint(command, context)),
       label,
     });
-    if (context === "transcript-search") {
-      return [
-        hint("transcript.search-submit", "Find"),
-        hint("transcript.search-clear", "Clear"),
-        hint("transcript.search-cancel", "Cancel"),
-      ];
-    }
     if (this.help.visible) {
       return [
         hint("transcript.next", "Scroll help"),
@@ -1401,11 +1339,7 @@ export class TranscriptPanel {
   private syncFormattedSelection(row: Row): void {
     const selection = row.body.getSelection();
     const root = row.markdown!.root;
-    if (
-      !selection ||
-      this.state?.mode !== "visual" ||
-      (!row.body.focused && !this.searchLine.visible)
-    ) {
+    if (!selection || this.state?.mode !== "visual" || !row.body.focused) {
       this.clearFormattedSelection();
 
       return;
@@ -1565,41 +1499,28 @@ export class TranscriptPanel {
     );
   }
 
+  get footerMode(): FooterMode | null {
+    if (!this.visible || !this.focused) {
+      return null;
+    }
+    if (this.help.visible) {
+      return "HELP";
+    }
+    if (this.state?.mode === "visual") {
+      return this.state.linewise ? "VISUAL LINE" : "VISUAL";
+    }
+
+    return "NORMAL";
+  }
+
   get footerStatus(): string {
-    if (!this.visible) {
+    if (!this.visible || !this.focused || this.help.visible) {
       return "";
     }
 
-    const labels: string[] = [];
-    if (this.focused) {
-      if (this.help.visible) {
-        labels.push("HELP");
-      } else if (this.searchLine.visible) {
-        labels.push("SEARCH · section");
-      } else if (this.state?.mode === "visual") {
-        labels.push(this.state.linewise ? "VISUAL LINE" : "VISUAL");
-      } else if (this.state?.mode === "text") {
-        labels.push("TEXT");
-      }
-    }
-    if (this.vim.status && this.focused && !this.help.visible) {
-      labels.push(
-        vimPendingHint(this.vim.status, (command) =>
-          this.hint(
-            command,
-            this.state?.mode === "visual" ? "transcript-visual" : "transcript-text",
-          ),
-        ),
-      );
-    }
-    if (this.state && !this.state.follow && !this.help.visible) {
-      labels.push("Paused");
-    }
-    if (this.focused && this.legacy) {
-      labels.push("legacy preview");
-    }
-
-    return labels.join(" · ");
+    return vimPendingHint(this.vim.status, (command) =>
+      this.hint(command, this.state?.mode === "visual" ? "transcript-visual" : "transcript-text"),
+    );
   }
 
   private refreshStatus(): void {
@@ -1607,7 +1528,7 @@ export class TranscriptPanel {
       return;
     }
 
-    const status = this.footerStatus;
+    const status = [this.footerMode, this.footerStatus].filter(Boolean).join(" · ");
     if (status === this.lastStatus) {
       return;
     }
@@ -1909,20 +1830,6 @@ export class TranscriptPanel {
     if (this.options.passive || !this.visible || !this.sessionId) {
       return false;
     }
-    if (this.searchLine.visible) {
-      return [
-        "transcript.search-submit",
-        "transcript.search-cancel",
-        "transcript.search-clear",
-      ].includes(command);
-    }
-    if (
-      ["transcript.search-submit", "transcript.search-cancel", "transcript.search-clear"].includes(
-        command,
-      )
-    ) {
-      return false;
-    }
     if (command === "transcript.fold" && !this.foldable(this.selected)) {
       return false;
     }
@@ -1944,29 +1851,6 @@ export class TranscriptPanel {
   command(command: CommandId, key?: KeyEvent): void {
     const state = this.state;
     if (!state || !this.available(command)) {
-      return;
-    }
-    if (this.searchLine.visible) {
-      if (command === "transcript.search-clear") {
-        this.searchInput.value = "";
-        this.options.changed();
-
-        return;
-      }
-
-      const query = this.searchInput.value;
-      const context = this.vimContext();
-
-      this.searchLine.visible = false;
-      this.restoreFocus();
-      if (command === "transcript.search-submit" && context) {
-        this.applyVim(this.vim.submitSearch(query, this.searchDirection, context));
-      } else {
-        this.vim.cancel();
-        this.save();
-        this.options.changed();
-      }
-
       return;
     }
     if (!this.help.visible && state.mode !== "sections" && this.selected) {
@@ -2488,12 +2372,7 @@ export class TranscriptPanel {
 
   captureKey(key: KeyEvent, keymap: Keymap): boolean {
     const context = this.keyContext();
-    if (
-      !context ||
-      context === "transcript-search" ||
-      context === "transcript" ||
-      this.help.visible
-    ) {
+    if (!context || context === "transcript" || this.help.visible) {
       return false;
     }
     if (this.vim.awaitingCharacter) {
@@ -2544,7 +2423,6 @@ export class TranscriptPanel {
 
   cancelPending(): void {
     this.vim.cancel();
-    this.searchLine.visible = false;
     if (!this.disposed) {
       this.refreshStatus();
     }
@@ -2573,14 +2451,6 @@ export class TranscriptPanel {
         break;
       case "notice":
         this.options.notice(effect.message);
-        break;
-      case "search":
-        this.rememberCursor(row);
-        this.searchDirection = effect.direction;
-        this.searchPrefix.content = effect.direction === 1 ? "/" : "?";
-        this.searchInput.value = "";
-        this.searchLine.visible = true;
-        this.searchInput.focus();
         break;
       case "copy-selection":
         this.copy(false);
@@ -2829,7 +2699,6 @@ export class TranscriptPanel {
         : "Numeric count input is unbound. ") +
       `${this.hint("transcript.back", "transcript-text")} cancels unfinished commands first.\n` +
       `${textHint("transcript.find-forward")}/${textHint("transcript.find-backward")}/${textHint("transcript.till-forward")}/${textHint("transcript.till-backward")} + character finds within the logical line; ${textHint("transcript.find-repeat")}/${textHint("transcript.find-reverse")} repeat/reverse.\n` +
-      `${textHint("transcript.search-forward")}/${textHint("transcript.search-backward")} literal search in the current reading section; ${this.hint("transcript.search-submit", "transcript-search")} accepts, ${this.hint("transcript.search-cancel", "transcript-search")} cancels, ${this.hint("transcript.search-clear", "transcript-search")} clears only the query. ${textHint("transcript.search-next")}/${textHint("transcript.search-previous")} repeat; ${textHint("transcript.search-word-forward")}/${textHint("transcript.search-word-backward")} search whole word.\n` +
       `${this.hint("transcript.half-page-down", "transcript")}/${this.hint("transcript.half-page-up", "transcript")} half-page section jump; ${this.hint("transcript.page-down", "transcript")}/${this.hint("transcript.page-up", "transcript")} full-page section jump. Text/Visual moves the cursor.\n` +
       `Text up/down crosses visible headings and adjacent sections; Visual selections stay within the active text surface. Folding keeps Text mode and restores each surface's cursor.\n` +
       `Following resumes at the viewport bottom and pauses above it; selections protect the view.\n` +

@@ -317,36 +317,3 @@ test("f/t and semicolon/comma repeats never get stuck on adjacent targets", () =
   expect(back).toEqual({ type: "move", position: 2 });
   expect(model.find(0, { kind: "f", character: "z" })).toBeNull();
 });
-
-test("Search wraps bidirectionally after the current position and respects word boundaries", () => {
-  // Test literal dots independently from whole-word substring restrictions.
-  const model = new VimText("alpha beta alpha betamax alpha");
-  const literal = new VimText("a.b aXb");
-
-  const forward = model.search(0, "alpha", 1, 2);
-  const backward = model.search(0, "alpha", -1);
-  const word = model.search(0, "beta", 1, 1, true);
-  const dot = literal.search(0, "a.b", 1);
-
-  expect(forward).toBe(25);
-  expect(backward).toBe(25);
-  expect(word).toBe(6);
-  expect(dot).toBe(0);
-  expect(model.search(0, "absent", 1)).toBeNull();
-});
-
-test("n/N preserve original search direction and empty searches repeat the previous query", () => {
-  // Reverse repetition must not change the original search direction.
-  const vim = new TranscriptVim();
-  const state = context("one two one two one", 8);
-
-  const first = vim.submitSearch("one", -1, state);
-  const reverse = vim.command("search-previous", state);
-  const next = vim.command("search-next", state);
-  const empty = vim.submitSearch("", 1, state);
-
-  expect(first).toEqual({ type: "move", position: 0 });
-  expect(reverse).toEqual({ type: "move", position: 16 });
-  expect(next).toEqual({ type: "move", position: 0 });
-  expect(empty).toEqual({ type: "move", position: 16 });
-});

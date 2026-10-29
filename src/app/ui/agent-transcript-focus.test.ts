@@ -304,13 +304,7 @@ test("Help and non-text views release the formatted reading cursor while inputs 
     await app.render();
     expect(app.renderer.getCursorState().visible).toBe(true);
 
-    // Search and prompt inputs must own their cursors rather than inherit a hidden reading cursor.
-    app.mockInput.pressKey("/");
-    await app.render();
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("transcript-search");
-    expect(app.renderer.getCursorState().visible).toBe(true);
-    app.mockInput.pressEscape();
-    await app.render();
+    // Prompt inputs must own their cursors rather than inherit a hidden reading cursor.
     pressLeader(app, "a");
     await app.render();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");

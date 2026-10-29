@@ -11,6 +11,8 @@ import type { Button } from "./button.ts";
 import { singleLine, truncateCells } from "./text.ts";
 import { icons } from "../icons.ts";
 
+export type FooterMode = "NORMAL" | "VISUAL" | "VISUAL LINE" | "HELP";
+
 export type FooterShortcut = {
   readonly key: string;
   readonly label: string;
@@ -19,7 +21,7 @@ export type FooterShortcut = {
 
 type Scope = { name: string; branch: string | null };
 
-// One stable row: view badge and plain workspace context on the left, contextual hints on the right.
+// One stable row: view/mode badge and plain workspace context on the left, contextual hints on the right.
 export class Footer {
   readonly root: BoxRenderable;
   readonly bar: BoxRenderable;

@@ -346,7 +346,9 @@ test("Terminal gx preserves Visual selections and stays literal in ordinary shel
     expect(app.inputs).toEqual([]);
     expect(reader.getSelectedText()).toBe(selection);
     expect(reader.cursorOffset).toBe(cursor);
-    expect(app.captureCharFrame()).toContain("VISUAL · frozen output");
+    const footer = app.renderer.root.findDescendantById("footer-bar")!;
+    expect(app.captureCharFrame().split("\n")[footer.y]?.trimStart()).toStartWith("VISUAL ");
+    expect(app.captureCharFrame()).not.toContain("frozen output");
   } finally {
     await app.close();
   }

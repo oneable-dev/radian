@@ -19,6 +19,7 @@ import { EmptyState } from "../../ui/empty-state.ts";
 import { icons } from "../../icons.ts";
 import type { TerminalTheme } from "../../ui/embedded-terminal/theme.ts";
 import type { Notice } from "../../ui/messages.ts";
+import type { FooterMode } from "../../ui/footer.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { paintText } from "../../ui/theme-styles.ts";
 import type { ButtonFactory } from "../../ui/button.ts";
@@ -218,8 +219,8 @@ export class TerminalPanel {
     return this.copyMode?.context ?? null;
   }
 
-  get copyStatus(): string {
-    return this.copyMode?.status ?? "";
+  get copyModeBadge(): FooterMode | null {
+    return this.copyMode?.mode ?? null;
   }
 
   get canRead(): boolean {
