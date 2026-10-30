@@ -864,9 +864,15 @@ Neither automatic strategic-compaction suggestions nor a model-callable compacti
 ### Graph planning
 
 `/plan [requirements]` starts a planning-only Agent turn using the bundled
-`resources/skills/graph-plan/SKILL.md` instructions. With no arguments it uses the requirements
-already discussed, asking for clarification when needed. It investigates the workspace and proposes
-tasks, prerequisite IDs, inputs, outputs, acceptance criteria, expected write scopes and role profiles.
+`resources/skills/graph-plan/SKILL.md` instructions. The host identifies this run from its
+structured SDK custom-message type, not a prefix in user text or transformed prompt content.
+The hosted command also records the actual `/plan` invocation as a user request before model work,
+so the request remains visible in the transcript and History and survives an interrupted first run.
+That user entry is display and persistence data, never planning authority. Ordinary user text quoting
+former planning markers cannot activate planning or authorize submission. With no arguments it uses
+the requirements already discussed, asking for clarification when needed.
+It investigates the workspace and proposes tasks, prerequisite IDs, inputs, outputs,
+acceptance criteria, expected write scopes and role profiles.
 It does not launch the proposed subagents, run acceptance commands, retry tasks or resume execution.
 
 The main Agent submits its complete graph and semantic review through `radian-plan`. Host code rejects
@@ -876,19 +882,17 @@ role fit and potential shared-file conflicts remain agent assessments, not struc
 The displayed dependency graph is derived from the submitted task data. Structural validation, semantic
 review, user approval and task completion are distinct; saving a plan does not approve or execute it.
 
-Parent sessions expose these commands; the SDK command also supplies argument candidates:
-
-| Command                | Behavior                                                                           |
-| ---------------------- | ---------------------------------------------------------------------------------- |
-| `/plan [requirements]` | Create or revise a plan; model calls may consume quota.                            |
-| `/plan show`           | Read and display the authoritative current plan and its review.                    |
-| `/plan check`          | Revalidate the saved artifact and display its structural and agent-review results. |
-| `/plan clear`          | Remove only the current plan, not conversation history or exported copies.         |
-| `/plan export <path>`  | Write an independent JSON copy; existing files are never overwritten.              |
-
-`show`, `check`, `clear` and `export` do not call a model. Commands reject busy sessions instead of
+Parent sessions expose only `/plan [requirements]`: create or revise a plan, automatically validate
+its structure and present the saved plan and review in the same turn. All arguments are requirements,
+not management subcommands. Planning may use model tokens and rejects busy sessions rather than
 racing an active run. The command is an SDK extension; an explicitly configured conflicting extension
 can replace this bundled command. Owned child agents do not receive the planner extension.
+
+When the user later authorizes implementation, parent workflow instructions require reading the
+applicable saved plan and comparing its acceptance criteria with actual changes and verification
+results before reporting completion. Unmet or unverified criteria remain explicit; no manual plan
+check is required. This is agent verification guidance, not a runtime scheduler or an automatic
+acceptance-command runner. A saved plan must not be applied to unrelated requests.
 
 Each file-backed SDK conversation owns one adjacent `<session-file>.plan.json` artifact. It contains
 the plan, its SHA-256 content hash, conversation/workspace identity and agent semantic-review report.
@@ -897,19 +901,15 @@ previous valid file. Plans are limited to 128 tasks and a 2 MiB serialized artif
 artifact is conversation-wide, not branch-local: returning to an older transcript does not roll it back.
 Subsequent model requests receive a current-plan reference, including after resume or compaction, and
 can read its details through `radian-plan`. Restart never executes saved tasks. A new conversation in
-the same tab owns a separate plan. Exported copies are not tracked or deleted by session maintenance.
+the same tab owns a separate plan. Internal plan reads validate the stored structure and content hash.
 
 The planning turn blocks native edit/write calls and delegated-work actions while allowing profile
-listing. Its shell/integration access is not an OS sandbox; planning instructions require read-only
-investigation, and trusted extensions and enabled shell tools still have their normal OS permissions.
-
-For a standalone structural check of raw plan JSON or an exported artifact, run:
-
-```sh
-bun src/agents/check-plan.ts /path/to/plan.json
-```
-
-The checker validates stored content hashes when present and never executes acceptance-criterion text.
+listing. These guards remain active through model/tool turns and retry until the run settles; ordinary
+requests after completion, failure or cancellation regain their normal tool access. Runtime actions
+should use structured command and SDK state rather than infer authority from prompt text; the other
+host controls already use their own typed paths. This is not an OS sandbox: planning instructions
+require read-only investigation, and trusted extensions and enabled shell tools still have their
+normal OS permissions.
 
 ### Default extension packages
 
@@ -1993,7 +1993,7 @@ Current task-plan sidecars follow this same conversation lifecycle, not an indep
 or detaching retains the plan; expiry removes its verified sidecar with the conversation. Age-based cleanup preserves active and external/unknown-origin conversations. Mismatched, changed,
 corrupt or symbolic artifacts are preserved rather than guessing ownership. If the original SDK file
 is positively absent, orphan cleanup can remove its verified plan sidecar with the snapshot.
-Explicitly exported plans remain independent files.
+Files outside the owned session artifacts are not removed.
 
 Expired owned JSONL and snapshot bodies are removed together. A durable cleanup marker hides a
 partially removed conversation from History's JSONL fallback and permits retry after interruption;

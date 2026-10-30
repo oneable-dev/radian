@@ -1,12 +1,9 @@
 import type { ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
-import { writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import { Type } from "typebox";
 import instructions from "../../resources/skills/graph-plan/SKILL.md" with { type: "text" };
 import {
   CancelledError,
   CapabilityError,
-  capture,
   InputError,
   SessionError,
   type ExpectedError,
@@ -14,7 +11,6 @@ import {
 import { err, ok, type Result } from "../result.ts";
 import { renderTaskPlan, taskPlanSchema } from "./task-plan.ts";
 import {
-  clearTaskPlan,
   planFilePath,
   planReviewSchema,
   readTaskPlan,
@@ -23,9 +19,9 @@ import {
   type StoredTaskPlan,
 } from "./task-plan-store.ts";
 
-const requestMarker = "<radian-graph-plan>";
-const messageType = "radian.task-plan";
-const subcommands = ["show", "check", "clear", "export"] as const;
+const requestMessageType = "radian.task-plan-request";
+const resultMessageType = "radian.task-plan";
+const contextMessageType = "radian.task-plan-context";
 
 function location(
   ctx: ExtensionContext,
@@ -50,7 +46,9 @@ function report(document: StoredTaskPlan, file: string): string {
 }
 
 /** A conversation-scoped planner, not a task scheduler or an OS sandbox. */
-export function taskPlanningExtension(): InlineExtension {
+export function taskPlanningExtension(
+  recordRequest?: (invocation: string) => void,
+): InlineExtension {
   return {
     name: "radian-plan",
     replaceable: true,
@@ -59,7 +57,8 @@ export function taskPlanningExtension(): InlineExtension {
       let submitted = false;
 
       pi.on("before_agent_start", (event) => {
-        planning = event.messageType === "user" && event.prompt.startsWith(requestMarker);
+        planning =
+          event.messageType === "custom" && event.message.customType === requestMessageType;
         submitted = false;
       });
       // Rehydrate only the request context; do not append another plan pointer to saved history.
@@ -80,8 +79,8 @@ export function taskPlanningExtension(): InlineExtension {
             ...event.messages,
             {
               role: "custom" as const,
-              customType: "radian.task-plan-context",
-              content: `The conversation-wide current plan is ${planFilePath(target.value.file)} (SHA-256 ${current.value.hash}). Goal: ${current.value.plan.goal}. Read it with radian-plan before relying on or revising details. Older plan submissions in the transcript do not replace this current file. Its structural validity is not user approval or proof of task completion.`,
+              customType: contextMessageType,
+              content: `The conversation-wide current plan is ${planFilePath(target.value.file)} (SHA-256 ${current.value.hash}). Goal: ${current.value.plan.goal}. Read it with radian-plan before relying on or revising details. Older plan submissions in the transcript do not replace this current file. Its structural validity is not user approval or proof of task completion. Before reporting completion of user-authorized implementation of this plan, compare its applicable acceptance criteria with the actual changes and verification evidence; report unmet or unverified criteria. Do not apply this plan to unrelated requests or execute acceptance commands during /plan.`,
               display: false,
               timestamp: Date.now(),
             },
@@ -112,7 +111,7 @@ export function taskPlanningExtension(): InlineExtension {
             entries: [
               {
                 type: "custom_message",
-                customType: messageType,
+                customType: resultMessageType,
                 content:
                   "No new structurally validated plan was saved. Any earlier current plan remains unchanged. Clarify outstanding questions or run /plan again to finish planning.",
                 display: true,
@@ -176,69 +175,23 @@ export function taskPlanningExtension(): InlineExtension {
       });
 
       pi.registerCommand("plan", {
-        description:
-          "Create a task/delegation graph without executing it: /plan [requirements] | show | check | clear | export <path>",
-        getArgumentCompletions: (prefix) =>
-          subcommands
-            .filter((value) => value.startsWith(prefix))
-            .map((value) => ({ value, label: value })),
+        description: "Create, validate and present a task/delegation graph: /plan [requirements]",
         handler: async (args, ctx) => {
-          const input = args.trim();
-          const [action] = input.split(/\s+/u);
-          const control = subcommands.some((name) => name === action);
           if (!ctx.isIdle())
             throw new SessionError(
               "SESSION_BUSY",
-              "Wait for the current run before changing or inspecting its task plan.",
+              "Wait for the current run before creating or revising its task plan.",
             );
-          if (!control) {
-            pi.sendUserMessage(
-              `${requestMarker}\n${instructions}\n\nUser requirements:\n${input || "Use the requirements already discussed in this conversation. Ask if the goal is not clear."}\n</radian-graph-plan>`,
-            );
-            return;
-          }
-          const target = location(ctx);
-          if (!target.ok) throw target.error;
-          const { file, owner } = target.value;
-          if (action !== "export" && input !== action)
-            throw new InputError(`Usage: /plan ${action}`);
-          if (action === "clear") {
-            const removed = await clearTaskPlan(file, owner);
-            if (!removed.ok) throw removed.error;
-            pi.sendMessage({
-              customType: messageType,
-              content:
-                "Current task plan cleared. Conversation history and exported files were not changed.",
+          const input = args.trim();
+          recordRequest?.(`/plan${args ? ` ${args}` : ""}`);
+          pi.sendMessage(
+            {
+              customType: requestMessageType,
+              content: `${instructions}\n\nUser requirements:\n${input || "Use the requirements already discussed in this conversation. Ask if the goal is not clear."}`,
               display: true,
-            });
-            return;
-          }
-          const current = await readTaskPlan(file, owner);
-          if (!current.ok) throw current.error;
-          if (!current.value) throw new InputError("This conversation has no saved task plan.");
-          if (action === "export") {
-            const path = input.slice("export".length).trim();
-            if (!path || path.includes("\0")) throw new InputError("Usage: /plan export <path>");
-            const destination = resolve(ctx.cwd, path);
-            const exported = await capture(() =>
-              writeFile(destination, JSON.stringify(current.value, null, 2) + "\n", {
-                flag: "wx",
-                mode: 0o600,
-              }),
-            );
-            if (!exported.ok) throw exported.error;
-            pi.sendMessage({
-              customType: messageType,
-              content: `Task plan exported to ${destination}. This independent copy is not removed by session retention.`,
-              display: true,
-            });
-            return;
-          }
-          pi.sendMessage({
-            customType: messageType,
-            content: report(current.value, file),
-            display: true,
-          });
+            },
+            { triggerTurn: true },
+          );
         },
       });
     },

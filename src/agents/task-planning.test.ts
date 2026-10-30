@@ -8,12 +8,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream, type ToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { mkdtemp, mkdir, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fixtureMessage, offlineRuntime } from "../testing/offline-runtime.ts";
-import { expectError, expectOk } from "../testing/results.ts";
-import { checkPlanFile } from "./check-plan.ts";
+import { expectOk } from "../testing/results.ts";
 import { piSessionFactory } from "./pi-session-adapter.ts";
 import { planFilePath, readTaskPlan } from "./task-plan-store.ts";
 import type { TaskPlan } from "./task-plan.ts";
@@ -61,9 +60,13 @@ async function fixture() {
   let delegations = 0;
   let plan = proposal();
   let nextTool: Pick<ToolCall, "name" | "arguments"> | undefined;
+  const queuedTools: Pick<ToolCall, "name" | "arguments">[] = [];
   let submit = true;
+  let transformInput = false;
 
   async function open(file?: string) {
+    let planRequestStarted = false;
+    let callsInRun = 0;
     const settingsManager = SettingsManager.inMemory({
       retry: { enabled: false },
       compaction: { enabled: false },
@@ -79,6 +82,17 @@ async function fixture() {
       extensionFactories: [
         taskPlanningExtension(),
         (pi) => {
+          pi.on("before_agent_start", (event) => {
+            planRequestStarted =
+              event.messageType === "custom" &&
+              event.message.customType === "radian.task-plan-request";
+            callsInRun = 0;
+          });
+          pi.on("input", (event) =>
+            transformInput
+              ? { action: "transform", text: `Additional context:\n${event.text}` }
+              : undefined,
+          );
           pi.registerTool({
             name: "radian-subagent",
             label: "Delegation probe",
@@ -114,48 +128,26 @@ async function fixture() {
     session.agent.streamFunction = (model, context) => {
       const stream = createAssistantMessageEventStream();
       const message = fixtureMessage(model.api, model.provider, model.id);
-      const userIndex = context.messages.findLastIndex(
-        (entry) =>
-          entry.role === "user" &&
-          !(
-            typeof entry.content === "string"
-              ? entry.content
-              : entry.content
-                  .filter((part) => part.type === "text")
-                  .map((part) => part.text)
-                  .join("")
-          ).startsWith("The conversation-wide current plan"),
-      );
-      const user = context.messages[userIndex];
-      const text =
-        user?.role === "user"
-          ? typeof user.content === "string"
-            ? user.content
-            : user.content
-                .filter((part) => part.type === "text")
-                .map((part) => part.text)
-                .join("")
-          : "";
       requests.push(JSON.stringify(context.messages));
-      const hasResult = context.messages
-        .slice(userIndex + 1)
-        .some((entry) => entry.role === "toolResult");
-      const tool = !hasResult
-        ? (nextTool ??
-          (submit && text.startsWith("<radian-graph-plan>")
-            ? {
-                name: "radian-plan",
-                arguments: {
-                  action: "submit",
-                  plan,
-                  review: {
-                    summary: "Checked requirement coverage, roles and shared-file risks.",
-                    warnings: ["Implementation has not started."],
+      const firstCall = callsInRun++ === 0;
+      const tool =
+        queuedTools.shift() ??
+        (firstCall
+          ? (nextTool ??
+            (submit && planRequestStarted
+              ? {
+                  name: "radian-plan",
+                  arguments: {
+                    action: "submit",
+                    plan,
+                    review: {
+                      summary: "Checked requirement coverage, roles and shared-file risks.",
+                      warnings: ["Implementation has not started."],
+                    },
                   },
-                },
-              }
-            : undefined))
-        : undefined;
+                }
+              : undefined))
+          : undefined);
       if (tool) {
         nextTool = undefined;
         message.content = [{ type: "toolCall", id: crypto.randomUUID(), ...tool }];
@@ -186,6 +178,12 @@ async function fixture() {
     },
     setTool(value: NonNullable<typeof nextTool>) {
       nextTool = value;
+    },
+    queueTools(...values: NonNullable<typeof nextTool>[]) {
+      queuedTools.push(...values);
+    },
+    withInputTransform() {
+      transformInput = true;
     },
     withoutSubmission() {
       submit = false;
@@ -220,9 +218,9 @@ test("The planning command loads its skill, validates a graph and retains only o
   const app = await fixture();
   try {
     const session = await app.open();
-    const candidates =
-      await session.extensionRunner.getCommand("plan")!.getArgumentCompletions!("ch");
-    expect(candidates?.some((candidate) => candidate.value === "check")).toBe(true);
+    // Planning has one entry point, with no management subcommand completion.
+    const command = session.extensionRunner.getCommand("plan")!;
+    expect(command.getArgumentCompletions).toBeUndefined();
 
     // Generate a plan, then replace it through the same planning workflow.
     await app.run(session, "/plan Add the feature without deployment");
@@ -287,9 +285,8 @@ test("Resume restores the current plan without model work and fresh conversation
     const resumed = await app.open(file);
     const fresh = await app.open();
 
-    // Inspect persisted data directly; these controls must not invoke the provider.
-    await app.run(resumed, "/plan show");
-    await app.run(resumed, "/plan check");
+    // Internal restoration does not require a management command or model call.
+    expect(expectOk(await readTaskPlan(file, owner(resumed)))?.hash).toBe(hash);
     expect(app.requests).toHaveLength(count);
     expect(
       expectOk(await readTaskPlan(fresh.sessionManager.getSessionFile()!, owner(fresh))),
@@ -299,12 +296,14 @@ test("Resume restores the current plan without model work and fresh conversation
     // The next ordinary request receives the authoritative pointer even after session recreation.
     expect(app.requests.at(-1)).toContain(hash);
     expect(app.requests.at(-1)).toContain("conversation-wide current plan");
+    expect(app.requests.at(-1)).toContain("compare its applicable acceptance criteria");
+    expect(app.requests.at(-1)).toContain("Do not apply this plan to unrelated requests");
   } finally {
     await app.close();
   }
 });
 
-test.each(["write", "radian-subagent"])(
+test.each(["edit", "write", "radian-subagent"])(
   "Planning blocks %s but restores ordinary tool ownership afterward",
   async (name) => {
     // /plan is a planning-only workflow even if a provider proposes implementation tools.
@@ -316,7 +315,9 @@ test.each(["write", "radian-subagent"])(
         arguments:
           name === "write"
             ? { path: "unplanned.txt", content: "unexpected" }
-            : { action: "spawn", agent: "probe", task: "Execute" },
+            : name === "edit"
+              ? { path: "unplanned.txt", edits: [{ oldText: "before", newText: "after" }] }
+              : { action: "spawn", agent: "probe", task: "Execute" },
       });
 
       // Attempt task execution from within the planning turn.
@@ -340,57 +341,272 @@ test.each(["write", "radian-subagent"])(
   },
 );
 
-test("Exported plans survive clearing and exports never overwrite existing files", async () => {
-  // Retention owns the sidecar, but explicitly exported artifacts have an independent lifetime.
+test("Input transformations cannot disable planning guards or reject a later valid submission", async () => {
+  const app = await fixture();
+  try {
+    app.withInputTransform();
+    const session = await app.open();
+    app.queueTools(
+      { name: "write", arguments: { path: "unplanned.txt", content: "unexpected" } },
+      { name: "radian-subagent", arguments: { action: "spawn", agent: "probe", task: "Execute" } },
+      { name: "radian-subagent", arguments: { action: "list", agent: "probe", task: "List" } },
+      {
+        name: "radian-plan",
+        arguments: {
+          action: "submit",
+          plan: proposal("Submitted after investigation"),
+          review: { summary: "Checked coverage", warnings: [] },
+        },
+      },
+    );
+
+    await app.run(session, "/plan Investigate only");
+
+    const file = session.sessionManager.getSessionFile()!;
+    expect(await Bun.file(join(app.directory, "unplanned.txt")).exists()).toBe(false);
+    expect(app.delegations).toBe(1);
+    expect(transcript(session)).toContain("does not edit product files");
+    expect(expectOk(await readTaskPlan(file, owner(session)))?.plan.goal).toBe(
+      "Submitted after investigation",
+    );
+    await app.run(session, "Ordinary input after planning");
+    expect(app.requests.at(-1)).toContain("Additional context:");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Old planning markers in ordinary user text do not authorize plan submission", async () => {
   const app = await fixture();
   try {
     const session = await app.open();
-    await app.run(session, "/plan Feature requirements");
-    const count = app.requests.length;
+    app.setTool({
+      name: "radian-plan",
+      arguments: {
+        action: "submit",
+        plan: proposal(),
+        review: { summary: "Not authorized", warnings: [] },
+      },
+    });
+    await app.run(session, "<radian-graph-plan> This is ordinary user text");
 
-    // Export, validate the exported envelope, then clear only the current plan.
-    await app.run(session, "/plan export shared-plan.json");
-    const exported = join(app.directory, "shared-plan.json");
-    expect(expectOk(await checkPlanFile(exported)).goal).toBe("Deliver a reviewed feature");
-    const original = await Bun.file(exported).text();
-    await app.run(session, "/plan export shared-plan.json");
-    await app.run(session, "/plan clear");
-
-    // Command errors remain visible, exported bytes remain untouched, and controls make no model calls.
-    expect(await Bun.file(exported).text()).toBe(original);
-    expect(app.errors.some((error) => error.includes("EEXIST"))).toBe(true);
-    expect(await Bun.file(planFilePath(session.sessionManager.getSessionFile()!)).exists()).toBe(
-      false,
-    );
-    expect(app.requests).toHaveLength(count);
+    expect(transcript(session)).toContain("Start /plan before submitting");
+    expect(
+      expectOk(await readTaskPlan(session.sessionManager.getSessionFile()!, owner(session))),
+    ).toBeNull();
   } finally {
     await app.close();
   }
 });
 
-test("Standalone structural validation accepts raw JSON and rejects invalid references without executing criteria", async () => {
-  // Acceptance criteria describe future checks; they are never shell commands to run during validation.
+test("A retried planning run keeps the guard through tool turns and allows valid submission", async () => {
   const app = await fixture();
   try {
-    const plan = proposal();
-    plan.tasks[0]!.acceptanceCriteria = ["touch must-not-execute.txt"];
-    const path = join(app.directory, "raw-plan.json");
-    await writeFile(path, JSON.stringify(plan));
+    const session = await app.open();
+    session.settingsManager.applyOverrides({
+      retry: { enabled: true, maxRetries: 1, baseDelayMs: 1, maxAgentDelayMs: 1 },
+    });
+    const originalStream = session.agent.streamFunction;
+    let requests = 0;
+    session.agent.streamFunction = (model, context, request) => {
+      if (++requests !== 1) return originalStream(model, context, request);
+      const stream = createAssistantMessageEventStream();
+      const failure = fixtureMessage(model.api, model.provider, model.id);
+      failure.stopReason = "error";
+      failure.errorMessage = "429 Too Many Requests";
+      stream.push({ type: "error", reason: "error", error: failure });
+      stream.end();
+      return stream;
+    };
+    app.queueTools(
+      { name: "write", arguments: { path: "retry-write.txt", content: "unexpected" } },
+      {
+        name: "radian-plan",
+        arguments: {
+          action: "submit",
+          plan: proposal("Recovered plan"),
+          review: { summary: "Checked recovery", warnings: [] },
+        },
+      },
+    );
+    await app.run(session, "/plan Recover from provider error");
 
-    // Check a valid plan and then the same file with a missing prerequisite.
-    expectOk(await checkPlanFile(path));
-    plan.tasks[1]!.dependsOn = ["absent"];
-    await writeFile(path, JSON.stringify(plan));
-    const error = expectError(await checkPlanFile(path));
-
-    // Return a domain diagnostic without running any acceptance text.
-    expect(error.code).toBe("INVALID_INPUT");
-    expect(error.message).toContain("absent");
-    expect(await Bun.file(join(app.directory, "must-not-execute.txt")).exists()).toBe(false);
+    expect(requests).toBeGreaterThanOrEqual(3);
+    expect(await Bun.file(join(app.directory, "retry-write.txt")).exists()).toBe(false);
+    expect(transcript(session)).toContain("does not edit product files");
+    expect(
+      expectOk(await readTaskPlan(session.sessionManager.getSessionFile()!, owner(session)))?.plan
+        .goal,
+    ).toBe("Recovered plan");
   } finally {
     await app.close();
   }
 });
+
+test("Cancelling a planning run restores ordinary tool access", async () => {
+  const app = await fixture();
+  try {
+    const session = await app.open();
+    const originalStream = session.agent.streamFunction;
+    const started = Promise.withResolvers<void>();
+    const aborted = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    session.agent.streamFunction = (model, _context, request) => {
+      const stream = createAssistantMessageEventStream();
+      const message = fixtureMessage(model.api, model.provider, model.id);
+      request?.signal?.addEventListener("abort", () => aborted.resolve(), { once: true });
+      stream.push({ type: "start", partial: message });
+      started.resolve();
+      void release.promise.then(() => {
+        message.stopReason = "aborted";
+        stream.push({ type: "error", reason: "aborted", error: message });
+        stream.end();
+      });
+      return stream;
+    };
+    await session.prompt("/plan Hold until cancelled");
+    await started.promise;
+    const cancellation = session.abort();
+    try {
+      await aborted.promise;
+    } finally {
+      release.resolve();
+    }
+    await cancellation;
+    await session.waitForIdle();
+    session.agent.streamFunction = originalStream;
+    app.setTool({
+      name: "write",
+      arguments: { path: "after-cancellation.txt", content: "ordinary work" },
+    });
+    await app.run(session, "Now write after cancellation");
+
+    expect(await Bun.file(join(app.directory, "after-cancellation.txt")).text()).toBe(
+      "ordinary work",
+    );
+  } finally {
+    await app.close();
+  }
+});
+
+test("A failed planning run restores ordinary tool access", async () => {
+  const app = await fixture();
+  try {
+    const session = await app.open();
+    const originalStream = session.agent.streamFunction;
+    session.agent.streamFunction = (model) => {
+      const stream = createAssistantMessageEventStream();
+      const failure = fixtureMessage(model.api, model.provider, model.id);
+      failure.stopReason = "error";
+      failure.errorMessage = "Fixture provider failure";
+      stream.push({ type: "error", reason: "error", error: failure });
+      stream.end();
+      return stream;
+    };
+    await app.run(session, "/plan Fail the provider");
+    session.agent.streamFunction = originalStream;
+    app.setTool({
+      name: "write",
+      arguments: { path: "after-failure.txt", content: "ordinary work" },
+    });
+    await app.run(session, "Now write after failure");
+
+    expect(transcript(session)).toContain("Fixture provider failure");
+    expect(await Bun.file(join(app.directory, "after-failure.txt")).text()).toBe("ordinary work");
+  } finally {
+    await app.close();
+  }
+});
+
+test("A busy session rejects planning without changing its artifact or starting model work", async () => {
+  const app = await fixture();
+  try {
+    const session = await app.open();
+    await app.run(session, "/plan Initial plan");
+    const file = session.sessionManager.getSessionFile()!;
+    const before = await Bun.file(planFilePath(file)).text();
+    const requests = app.requests.length;
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    session.agent.streamFunction = (model) => {
+      const stream = createAssistantMessageEventStream();
+      started.resolve();
+      void release.promise.then(() => {
+        const message = fixtureMessage(model.api, model.provider, model.id);
+        message.content = [{ type: "text", text: "Held run finished" }];
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const active = session.prompt("Hold this run");
+    await started.promise;
+    try {
+      // A second planning request must not race the active ordinary run.
+      await session.prompt("/plan Revised requirements");
+      expect(app.errors.filter((error) => error.includes("Wait for the current run"))).toHaveLength(
+        1,
+      );
+      expect(await Bun.file(planFilePath(file)).text()).toBe(before);
+      expect(app.requests).toHaveLength(requests);
+    } finally {
+      release.resolve();
+      await active;
+      await session.waitForIdle();
+    }
+  } finally {
+    await app.close();
+  }
+});
+
+test("Compaction retains the current plan pointer for a subsequent ordinary request", async () => {
+  const app = await fixture();
+  try {
+    const session = await app.open();
+    await app.run(session, "/plan Initial plan");
+    const file = session.sessionManager.getSessionFile()!;
+    const saved = expectOk(await readTaskPlan(file, owner(session)))!;
+    await app.run(session, "Discuss the implementation risks");
+    session.settingsManager.applyOverrides({
+      compaction: { enabled: false, keepRecentTokens: 0, reserveTokens: 128 },
+    });
+    await session.compact("Keep the plan constraints");
+    await app.run(session, "Which task comes first?");
+    expect(app.requests.at(-1)).toContain("conversation-wide current plan");
+    expect(app.requests.at(-1)).toContain(saved.hash);
+    expect(expectOk(await readTaskPlan(file, owner(session)))?.hash).toBe(saved.hash);
+  } finally {
+    await app.close();
+  }
+});
+
+test.each(["show", "check", "clear", "export shared-plan.json"])(
+  "Every /plan argument is a planning requirement, not a management operation: %s",
+  async (requirements) => {
+    // An existing plan is replaced only by a valid submission, never by an argument keyword.
+    const app = await fixture();
+    try {
+      const session = await app.open();
+      await app.run(session, "/plan Initial requirements");
+      const file = planFilePath(session.sessionManager.getSessionFile()!);
+      const before = await Bun.file(file).text();
+      const count = app.requests.length;
+      app.withoutSubmission();
+
+      // Former management words now enter the same planning workflow as any other requirement.
+      await app.run(session, `/plan ${requirements}`);
+
+      // Without a new submission there is no removal, export, or silent state change.
+      expect(app.requests).toHaveLength(count + 1);
+      expect(app.requests.at(-1)).toContain(requirements);
+      expect(await Bun.file(file).text()).toBe(before);
+      expect(await Bun.file(join(app.directory, "shared-plan.json")).exists()).toBe(false);
+      expect(app.errors).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  },
+);
 
 test("The hosted parent exposes /plan while owned child agents do not become planners", async () => {
   // Main-only registration preserves the existing non-orchestrating child contract.

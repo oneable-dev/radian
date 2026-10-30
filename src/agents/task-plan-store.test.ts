@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectError, expectOk } from "../testing/results.ts";
 import {
-  clearTaskPlan,
   parseStoredTaskPlan,
   planFilePath,
   readTaskPlan,
@@ -44,7 +43,7 @@ async function fixture() {
   return { root, sessionFile, owner, close: () => rm(root, { recursive: true, force: true }) };
 }
 
-test("A validated plan saves privately, replaces its predecessor, and clears idempotently", async () => {
+test("A validated plan privately replaces its predecessor in one current sidecar", async () => {
   // A verified SDK session owns one adjacent plan, never a revision directory.
   const app = await fixture();
   try {
@@ -59,9 +58,7 @@ test("A validated plan saves privately, replaces its predecessor, and clears ide
     expect(first.hash).toMatch(/^[a-f0-9]{64}$/);
     expect(expectOk(await readTaskPlan(app.sessionFile, app.owner))).toEqual(latest);
     expect((await stat(planFilePath(app.sessionFile))).mode & 0o777).toBe(0o600);
-    expectOk(await clearTaskPlan(app.sessionFile, app.owner));
-    expectOk(await clearTaskPlan(app.sessionFile, app.owner));
-    expect(expectOk(await readTaskPlan(app.sessionFile, app.owner))).toBeNull();
+    expect(await readFile(planFilePath(app.sessionFile), "utf8")).toBe(JSON.stringify(latest));
   } finally {
     await app.close();
   }
@@ -147,7 +144,7 @@ test("An oversized but valid plan is rejected before replacing the previous side
   }
 });
 
-test("Corrupt, tampered, and mismatched records cannot be read, overwritten, or removed", async () => {
+test("Corrupt, tampered, and mismatched records cannot be read or overwritten", async () => {
   // Sidecar contents are an untrusted filesystem input even under a private directory.
   const app = await fixture();
   try {
@@ -156,19 +153,13 @@ test("Corrupt, tampered, and mismatched records cannot be read, overwritten, or 
     expect(expectError(await readTaskPlan(app.sessionFile, mismatched)).code).toBe(
       "STORAGE_FAILED",
     );
-    expect(expectError(await clearTaskPlan(app.sessionFile, mismatched)).code).toBe(
-      "STORAGE_FAILED",
-    );
 
-    // Alter the plan without updating its hash, then try every destructive API.
+    // Alter the plan without updating its hash, then reject reading and replacement.
     const tampered = { ...saved, plan: { ...saved.plan, goal: "Altered" } };
     await writeFile(planFilePath(app.sessionFile), JSON.stringify(tampered));
     expect(expectError(parseStoredTaskPlan(tampered, app.owner)).code).toBe("STORAGE_FAILED");
     expect(expectError(await readTaskPlan(app.sessionFile, app.owner)).code).toBe("STORAGE_FAILED");
     expect(expectError(await saveTaskPlan(app.sessionFile, app.owner, plan, review)).code).toBe(
-      "STORAGE_FAILED",
-    );
-    expect(expectError(await clearTaskPlan(app.sessionFile, app.owner)).code).toBe(
       "STORAGE_FAILED",
     );
     expect(await readFile(planFilePath(app.sessionFile), "utf8")).toBe(JSON.stringify(tampered));
@@ -177,7 +168,7 @@ test("Corrupt, tampered, and mismatched records cannot be read, overwritten, or 
   }
 });
 
-test("A replaced SDK owner or public sidecar cannot authorize reading or removal", async () => {
+test("A replaced SDK owner or public sidecar cannot authorize reading", async () => {
   // A valid saved envelope may become stale if the SDK original is replaced externally.
   const app = await fixture();
   try {
@@ -187,9 +178,6 @@ test("A replaced SDK owner or public sidecar cannot authorize reading or removal
     // Reject a sidecar whose permissions changed rather than exposing private plan data.
     await chmod(sidecar, 0o644);
     expect(expectError(await readTaskPlan(app.sessionFile, app.owner)).code).toBe("STORAGE_FAILED");
-    expect(expectError(await clearTaskPlan(app.sessionFile, app.owner)).code).toBe(
-      "STORAGE_FAILED",
-    );
     await chmod(sidecar, 0o600);
 
     // Valid sidecar metadata does not override a changed SDK session identity.
@@ -198,9 +186,6 @@ test("A replaced SDK owner or public sidecar cannot authorize reading or removal
       JSON.stringify({ type: "session", id: "other", cwd: app.root }) + "\n",
     );
     expect(expectError(await readTaskPlan(app.sessionFile, app.owner)).code).toBe("STORAGE_FAILED");
-    expect(expectError(await clearTaskPlan(app.sessionFile, app.owner)).code).toBe(
-      "STORAGE_FAILED",
-    );
     expect(await Bun.file(sidecar).exists()).toBe(true);
   } finally {
     await app.close();

@@ -446,28 +446,3 @@ export function saveTaskPlan(
     return saved.ok ? ok(stored) : saved;
   });
 }
-
-export function clearTaskPlan(
-  sessionFile: string,
-  owner: PlanOwner,
-): Promise<Result<void, ExpectedError>> {
-  return serialized(planFilePath(sessionFile), async () => {
-    const inspected = await inspectSidecar(sessionFile, owner);
-    if (!inspected.ok) return inspected;
-    if (inspected.value) {
-      const sdk = await inspectSdkOwner(sessionFile, owner);
-      if (!sdk.ok) return sdk;
-    }
-    return removeIfUnchanged(
-      sessionFile,
-      owner,
-      inspected.value
-        ? {
-            kind: "ready",
-            fingerprint: inspected.value.fingerprint,
-            updatedAt: inspected.value.plan.updatedAt,
-          }
-        : { kind: "absent" },
-    );
-  });
-}

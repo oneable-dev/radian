@@ -17,6 +17,7 @@ import { ok } from "../result.ts";
 import { readHistoryPreview } from "./history-preview.ts";
 import { commandDisplayEntryType } from "./command-display.ts";
 import { SessionHistory } from "./history.ts";
+import { readTaskPlan } from "./task-plan-store.ts";
 
 function controlledStreams(options: PiSessionOptions) {
   const gates = new Map<
@@ -1084,6 +1085,324 @@ test("Extensions consuming input with notices never show fake intermediate runs"
     await app.cleanup();
   }
 });
+
+test("Hosted /plan starts a displayed SDK run and preserves the plan on a failed revision", async () => {
+  let requests = 0;
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    defaultPackagePaths: [],
+    streamFn: (model) => {
+      requests++;
+      const stream = createAssistantMessageEventStream();
+      const message = fixtureMessage(model.api, model.provider, model.id);
+      if (requests % 2 === 1) {
+        message.content = [
+          {
+            type: "toolCall",
+            id: crypto.randomUUID(),
+            name: "radian-plan",
+            arguments: {
+              action: "submit",
+              plan: {
+                schemaVersion: 1,
+                goal: "Hosted plan",
+                outOfScope: [],
+                assumptions: [],
+                openQuestions: [],
+                tasks: [
+                  {
+                    id: "work",
+                    title: "Implement work",
+                    agent: "main",
+                    dependsOn: requests > 2 ? ["missing"] : [],
+                    inputs: [],
+                    outputs: ["Feature"],
+                    acceptanceCriteria: ["Feature works"],
+                    files: [],
+                  },
+                ],
+              },
+              review: { summary: "Checked coverage", warnings: [] },
+            },
+          },
+        ];
+        message.stopReason = "toolUse";
+      } else {
+        message.content = [{ type: "text", text: "Planning response finished." }];
+      }
+      stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
+      stream.end();
+      return stream;
+    },
+  }));
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    const conversation = app.registry.details(id)!.conversationId!;
+    const runPlan = async (text: string) => {
+      const settled = Promise.withResolvers<void>();
+      let working = false;
+      const unsubscribe = app.registry.subscribe(() => {
+        const status = app.registry.details(id)?.status;
+        if (status === "working") working = true;
+        if (working && status === "complete") settled.resolve();
+      });
+      try {
+        expectOk(await app.registry.prompt(id, text));
+        await settled.promise;
+      } finally {
+        unsubscribe();
+      }
+    };
+    await runPlan("/plan Hosted valid");
+    const file = app.registry.sessionFile(id)!;
+    const owner = { conversationId: conversation, cwd: app.main.path };
+    const before = expectOk(await readTaskPlan(file, owner))!;
+    const displayed = app.registry.details(id)?.sections ?? [];
+    expect(
+      displayed.some(
+        (section) =>
+          section.kind === "notice" &&
+          section.title === "radian.task-plan-request" &&
+          section.text.includes("Hosted valid"),
+      ),
+    ).toBe(true);
+    expect(
+      displayed.some((section) => section.kind === "tool" && section.title === "radian-plan"),
+    ).toBe(true);
+
+    await runPlan("/plan Hosted invalid");
+    const after = expectOk(await readTaskPlan(file, owner))!;
+    expect(after.hash).toBe(before.hash);
+    expect(
+      app.registry
+        .details(id)
+        ?.sections?.some(
+          (section) =>
+            section.kind === "tool" &&
+            section.title === "radian-plan" &&
+            section.status === "error" &&
+            section.text.includes("missing"),
+        ),
+    ).toBe(true);
+    // Each planning invocation is recorded once, even when its proposed revision fails.
+    expect(
+      app.registry.details(id)?.sections?.filter((section) => section.kind === "user"),
+    ).toHaveLength(2);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Hosted planning retains the delivered command request through a held and settled run", async () => {
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let hold = false;
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    defaultPackagePaths: [],
+    streamFn: (model) => {
+      const stream = createAssistantMessageEventStream();
+      const message = fixtureMessage(model.api, model.provider, model.id);
+      message.content = [{ type: "text", text: "Response finished" }];
+      if (hold) {
+        stream.push({ type: "start", partial: message });
+        started.resolve();
+        void release.promise.then(() => {
+          stream.push({ type: "done", reason: "stop", message });
+          stream.end();
+        });
+      } else {
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end();
+      }
+
+      return stream;
+    },
+  }));
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    expectOk(await app.registry.prompt(id, "Previous ordinary request"));
+    hold = true;
+    const settled = Promise.withResolvers<void>();
+    let working = false;
+    const unsubscribe = app.registry.subscribe(() => {
+      const status = app.registry.details(id)?.status;
+      if (status === "working") working = true;
+      if (working && status === "complete") settled.resolve();
+    });
+    try {
+      expectOk(await app.registry.prompt(id, "/plan Verify metadata"));
+      await started.promise;
+      const live = app.registry.details(id);
+      expect(live?.request?.text).toBe("/plan Verify metadata");
+      expect(
+        live?.sections?.filter(
+          (section) => section.kind === "user" && section.text === "/plan Verify metadata",
+        ),
+      ).toHaveLength(1);
+      release.resolve();
+      await settled.promise;
+    } finally {
+      release.resolve();
+      unsubscribe();
+    }
+    const complete = app.registry.details(id);
+    expect(complete?.request?.text).toBe("/plan Verify metadata");
+    expect(complete?.result?.request?.text).toBe("/plan Verify metadata");
+    expect(
+      complete?.sections?.filter(
+        (section) => section.kind === "user" && section.text === "/plan Verify metadata",
+      ),
+    ).toHaveLength(1);
+  } finally {
+    release.resolve();
+    await app.cleanup();
+  }
+});
+
+test("An overriding /plan extension does not record the built-in planning request", async () => {
+  const app = await sdkFixture(false, (options) => ({ ...options, defaultPackagePaths: [] }));
+  try {
+    const directory = join(app.directory, "agent", "extensions");
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      join(directory, "plan-override.ts"),
+      `export default function (pi) {
+        pi.registerCommand("plan", { handler: () => {
+          pi.sendMessage({ customType: "fixture-plan-override", content: "Overridden", display: true });
+        } });
+      }`,
+    );
+    const id = expectOk(await app.registry.create(app.main.id));
+    expectOk(await app.registry.prompt(id, "/plan Overridden request"));
+    expect(
+      app.registry
+        .details(id)
+        ?.sections?.some((section) => section.title === "fixture-plan-override"),
+    ).toBe(true);
+    expect(app.registry.details(id)?.sections?.some((section) => section.kind === "user")).toBe(
+      false,
+    );
+    expect(await Bun.file(app.registry.sessionFile(id)!).exists()).toBe(false);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("A plan-only conversation has a History title and a reopened request", async () => {
+  const app = await sdkFixture(false, (options) => ({ ...options, defaultPackagePaths: [] }));
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    const settled = Promise.withResolvers<void>();
+    let working = false;
+    const unsubscribe = app.registry.subscribe(() => {
+      const status = app.registry.details(id)?.status;
+      if (status === "working") working = true;
+      if (working && status === "complete") settled.resolve();
+    });
+    try {
+      expectOk(await app.registry.prompt(id, "/plan First planning request"));
+      await settled.promise;
+    } finally {
+      unsubscribe();
+    }
+    const file = app.registry.sessionFile(id)!;
+    expectOk(await app.registry.close(id));
+    const history = new SessionHistory(
+      [app.repository],
+      app.registry,
+      join(app.directory, "agent", "sessions"),
+    );
+    const items = expectOk(await history.list(app.main.id));
+    expect(items.some((item) => item.title === "/plan First planning request")).toBe(true);
+    const reopened = expectOk(await app.registry.create(app.main.id, file));
+    expect(app.registry.details(reopened)?.request?.text).toBe("/plan First planning request");
+    expect(app.registry.details(reopened)?.result?.request?.text).toBe(
+      "/plan First planning request",
+    );
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test.each(["ordinary initial request", "/plan Initial planning request"])(
+  "An initial request is persisted before provider completion: %s",
+  async (input) => {
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let providerUserRequests: string[] = [];
+    const app = await sdkFixture(false, (options) => ({
+      ...options,
+      defaultPackagePaths: [],
+      streamFn: (model, context) => {
+        providerUserRequests = context.messages.flatMap((message) =>
+          message.role === "user"
+            ? [
+                typeof message.content === "string"
+                  ? message.content
+                  : message.content
+                      .filter((part) => part.type === "text")
+                      .map((part) => part.text)
+                      .join(""),
+              ]
+            : [],
+        );
+        const stream = createAssistantMessageEventStream();
+        const message = fixtureMessage(model.api, model.provider, model.id);
+        stream.push({ type: "start", partial: message });
+        started.resolve();
+        void release.promise.then(() => {
+          message.content = [{ type: "text", text: "Finished" }];
+          stream.push({ type: "done", reason: "stop", message });
+          stream.end();
+        });
+
+        return stream;
+      },
+    }));
+    try {
+      const id = expectOk(await app.registry.create(app.main.id));
+      let working = false;
+      const settled = Promise.withResolvers<void>();
+      const unsubscribe = app.registry.subscribe(() => {
+        const status = app.registry.details(id)?.status;
+        if (status === "working") working = true;
+        if (working && status === "complete") settled.resolve();
+      });
+      try {
+        const pending = app.registry.prompt(id, input);
+        await started.promise;
+        const file = app.registry.sessionFile(id)!;
+        expect(await Bun.file(file).exists()).toBe(true);
+        if (input.startsWith("/plan")) {
+          const entries = SessionManager.open(
+            file,
+            join(app.directory, "agent", "sessions"),
+            app.main.path,
+          ).getBranch();
+          expect(
+            entries.filter((entry) => entry.type === "message" && entry.message.role === "user"),
+          ).toHaveLength(1);
+          expect(providerUserRequests.filter((request) => request === input)).toHaveLength(1);
+          expect(
+            providerUserRequests.some((request) =>
+              request.includes("User requirements:\nInitial planning request"),
+            ),
+          ).toBe(true);
+        }
+        release.resolve();
+        expectOk(await pending);
+        await settled.promise;
+      } finally {
+        release.resolve();
+        unsubscribe();
+      }
+    } finally {
+      release.resolve();
+      await app.cleanup();
+    }
+  },
+);
 
 test("Registered slash commands starting real model work report working and completion", async () => {
   // Hiding all slash-prefixed loading would also hide extensions starting real work.

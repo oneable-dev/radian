@@ -138,6 +138,7 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
     const profile = discovered?.ok
       ? discovered.value.find((entry) => entry.name === context.agent)
       : undefined;
+    let executor: PiSessionExecutor | undefined;
     if (context.agent && !profile)
       throw new InputError(
         `Unknown agent: ${context.agent}. Use radian-subagent list to discover profiles.`,
@@ -174,7 +175,18 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       extensionFactories: [
         fast.extension,
         compaction.extension,
-        ...(context.role === "main" ? [taskPlanningExtension()] : []),
+        ...(context.role === "main"
+          ? [
+              taskPlanningExtension((invocation) => {
+                if (!executor)
+                  throw new SessionError(
+                    "SESSION_BUSY",
+                    "Session initialization is still in progress.",
+                  );
+                executor.recordPlanRequest(invocation);
+              }),
+            ]
+          : []),
         ...(context.role === "subagent" ? [leafPolicy(profile?.tools)] : []),
         ...(profile
           ? [
@@ -280,7 +292,6 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       options.accounts && !options.streamFn
         ? bindAccountSession(options.accounts, worktreeId, session)
         : () => {};
-    let executor: PiSessionExecutor | undefined;
     const accountChanged = (provider: string) => executor?.credentialsChanged(provider);
 
     workspace?.listeners.add(accountChanged);
@@ -506,6 +517,24 @@ export class PiSessionExecutor implements SessionExecutor {
       stopUi?.();
       stopSession();
     };
+  }
+
+  recordPlanRequest(invocation: string): void {
+    // Persist the actual command before the custom turn. SDK custom-only turns do not
+    // create a session file until an assistant message; this user entry also supplies
+    // the SDK's firstMessage title without changing any user-specified session name.
+    const message = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: invocation }],
+      timestamp: Date.now(),
+    };
+    const manager = this.session.sessionManager;
+    const entryId = manager.appendMessage(message);
+    this.session.agent.state.messages = manager.buildSessionProjection().messages;
+    this.transcript.recordPersistedUser(entryId, message);
+    this.request = deliveredRequest(message);
+    this.result = undefined;
+    this.emit();
   }
 
   credentialsChanged(provider: string): void {

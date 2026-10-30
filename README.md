@@ -217,9 +217,10 @@ implementation notes, including:
 
 ## Current scope
 
-- [`/plan`](docs/reference.md#graph-planning) creates and structurally validates a task/delegation
-  graph without executing its tasks. Each conversation retains one current plan; normal session
-  retention cleans it up, while explicit exports remain independent files.
+- [`/plan`](docs/reference.md#graph-planning) creates, structurally validates and presents a
+  task/delegation graph without executing its tasks. After authorized implementation, the parent
+  compares actual results with the plan's acceptance criteria before reporting completion.
+  Each conversation retains one current plan, cleaned up through normal session retention.
 - Git browsing is **read-only**: staging, commits, branch switching, and conflict
   resolution are not built into the Git view.
 - Live editor and terminal state survives interface detach, not runtime shutdown.
