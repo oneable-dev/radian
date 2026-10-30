@@ -17,7 +17,7 @@
     "start": "bun src/index.ts",
     "dev": "bun src/index.ts",
     "restart": "bun src/index.ts runtime restart",
-    "build": "bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/index.ts --outfile dist/radian",
+    "build": "bun src/build.ts",
     "typecheck": "tsc --noEmit",
     "format": "bun fmt",
     "format:check": "bun fmt --check",
@@ -27,12 +27,17 @@
     "test:workspace": "bun src/testing/worktree-fixture.ts"
   },
   "dependencies": {
+    "@earendil-works/pi-agent-core": "1.2.0",
     "@earendil-works/pi-ai": "1.2.0",
     "@earendil-works/pi-coding-agent": "1.2.0",
+    "@earendil-works/pi-tui": "1.2.0",
     "@opentui/core": "0.6.2",
     "@xterm/headless": "6.0.0",
     "commander": "15.0.0",
     "diff": "9.0.0",
+    "jiti": "2.7.0",
+    "pi-mcp-adapter": "3.0.0",
+    "pi-web-access": "0.32.0",
     "typebox": "1.3.27",
     "web-tree-sitter": "0.25.10"
   },

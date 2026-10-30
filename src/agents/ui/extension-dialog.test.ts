@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { InputRenderable, parseKeypress, type ScrollBoxRenderable } from "@opentui/core";
+import {
+  InputRenderable,
+  parseKeypress,
+  type ScrollBoxRenderable,
+  type TextareaRenderable,
+} from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Workbench, type WorkbenchActions } from "../../app/ui/workbench.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
@@ -16,6 +21,7 @@ async function mount(width = 120, height = 30, overrides: Partial<WorkbenchActio
   const app = await createTestRenderer({ width, height, kittyKeyboard: true, clock });
   const selection = new WorkspaceSelection(demoWorkspace());
   const answers: ExtensionUiResponse[] = [];
+  const answerListeners = new Set<() => void>();
   const sent: string[] = [];
   let state: SessionExtensionUi[] = [];
   const view = new Workbench(app.renderer, selection, {
@@ -30,6 +36,7 @@ async function mount(width = 120, height = 30, overrides: Partial<WorkbenchActio
     }),
     onExtensionUiResponse: async (_id, _conversation, response) => {
       answers.push(response);
+      for (const listener of answerListeners) listener();
 
       return ok(undefined);
     },
@@ -63,6 +70,27 @@ async function mount(width = 120, height = 30, overrides: Partial<WorkbenchActio
     selection,
     view,
     answers,
+    kitty(sequence: string): void {
+      const key = parseKeypress(sequence, { useKittyKeyboard: true });
+      if (!key) throw new Error("Invalid Kitty key");
+      app.renderer.keyInput.processParsedKey(key);
+    },
+    waitForAnswer(predicate: (answers: readonly ExtensionUiResponse[]) => boolean): Promise<void> {
+      if (predicate(answers)) return Promise.resolve();
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          answerListeners.delete(check);
+          reject(new Error("Extension answer timed out"));
+        }, 2000);
+        const check = () => {
+          if (!predicate(answers)) return;
+          clearTimeout(timer);
+          answerListeners.delete(check);
+          resolve();
+        };
+        answerListeners.add(check);
+      });
+    },
     sent,
     prompt,
     clock,
@@ -451,6 +479,157 @@ test("Help temporarily covers extension input and returns to the unsubmitted ans
     expect(app.renderer.currentFocusedRenderable).toBe(app.get("extension-dialog-input"));
     expect(app.answers).toEqual([]);
     expect(app.prompt.value).toBe("Unsent Agent draft");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Multiline extension editors keep Enter literal and save through the configured command", async () => {
+  const app = await mount();
+  try {
+    await app.show({ id: "editor", kind: "editor", title: "Edit system prompt", prefill: "" });
+    const editor = app.get("extension-dialog-editor") as TextareaRenderable;
+    expect(app.renderer.currentFocusedRenderable?.id).toBe(editor.id);
+
+    await app.mockInput.typeText("first");
+    app.mockInput.pressEnter();
+    await app.mockInput.typeText("hjkl");
+    await app.render();
+
+    expect(editor.plainText).toBe("first\nhjkl");
+    expect(app.answers).toEqual([]);
+    app.mockInput.pressKey("s", { ctrl: true });
+    await app.render();
+
+    expect(app.answers).toEqual([{ requestId: "editor", value: "first\nhjkl" }]);
+    expect(app.sent).toEqual([]);
+    expect(app.prompt.value).toBe("Unsent Agent draft");
+    expect(editor.plainText).toBe("");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Cancelling a prefilled multiline editor returns no edited text", async () => {
+  const app = await mount();
+  try {
+    await app.show({
+      id: "editor",
+      kind: "editor",
+      title: "Edit configuration",
+      prefill: "first\nsecond",
+    });
+    const editor = app.get("extension-dialog-editor") as TextareaRenderable;
+    expect(editor.plainText).toBe("first\nsecond");
+
+    await app.mockInput.typeText("unsaved");
+    app.mockInput.pressEscape();
+    await app.render();
+
+    expect(app.answers).toEqual([{ requestId: "editor", cancelled: true }]);
+    expect(editor.plainText).toBe("");
+    expect(app.prompt.value).toBe("Unsent Agent draft");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Custom component input, repeats and cancellation keys stay in their isolated terminal", async () => {
+  const app = await mount();
+  try {
+    await app.show({
+      id: "component",
+      kind: "custom",
+      title: "",
+      frame: { cols: 80, rows: 24, revision: 1, ansi: "\u001bcComponent fixture" },
+    });
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("extension-dialog-component");
+
+    await app.mockInput.typeText("hjkl");
+    app.mockInput.pressKey("n", { ctrl: true });
+    app.mockInput.pressKey("n", { ctrl: true });
+    app.mockInput.pressEnter();
+    app.mockInput.pressKey("c", { ctrl: true });
+    app.mockInput.pressEscape();
+    await app.waitForAnswer((answers) =>
+      answers.some((answer) => "input" in answer && answer.input === "\u001b"),
+    );
+    await app.render();
+
+    const input = app.answers
+      .flatMap((answer) => ("input" in answer ? [answer.input] : []))
+      .join("");
+    expect(input).toContain("hjkl");
+    expect(input.split("\u000e").length - 1).toBe(2);
+    expect(input).toContain("\r");
+    expect(input).toContain("\u0003");
+    expect(input).toContain("\u001b");
+    expect(app.answers.some((answer) => "cancelled" in answer)).toBe(false);
+    expect(app.answers.some((answer) => "viewport" in answer)).toBe(true);
+    expect(app.get("extension-dialog").visible).toBe(true);
+    expect(app.prompt.value).toBe("Unsent Agent draft");
+    expect(app.sent).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Held component Enter never submits a following native dialog", async () => {
+  const app = await mount();
+  try {
+    await app.show({
+      id: "component",
+      kind: "custom",
+      title: "",
+      frame: { cols: 80, rows: 24, revision: 1, ansi: "" },
+    });
+    app.kitty("\u001b[13;1u");
+    await app.render();
+    await app.waitForAnswer((answers) =>
+      answers.some((answer) => "input" in answer && answer.input === "\r"),
+    );
+    await app.show({ id: "following", kind: "input", title: "Callback" });
+
+    app.kitty("\u001b[13;1:2u");
+    await app.render();
+
+    expect(app.answers.filter((answer) => answer.requestId === "following")).toEqual([]);
+    app.kitty("\u001b[13;1:3u");
+    app.kitty("\u001b[13;1u");
+    await app.render();
+    expect(app.answers.filter((answer) => answer.requestId === "following")).toEqual([
+      { requestId: "following", value: "" },
+    ]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Held component cancellation never clears the restored Agent draft", async () => {
+  const app = await mount();
+  try {
+    await app.show({
+      id: "component",
+      kind: "custom",
+      title: "",
+      frame: { cols: 80, rows: 24, revision: 1, ansi: "" },
+    });
+    app.kitty("\u001b[99;5u");
+    await app.render();
+    await app.waitForAnswer((answers) =>
+      answers.some((answer) => "input" in answer && answer.input === "\u0003"),
+    );
+    await app.clear();
+
+    app.kitty("\u001b[99;5:2u");
+    await app.render();
+
+    expect(app.prompt.value).toBe("Unsent Agent draft");
+    app.kitty("\u001b[99;5:3u");
+    expect(app.prompt.isDestroyed).toBe(false);
+    app.mockInput.pressKey("c", { ctrl: true });
+    await app.render();
+    expect(app.prompt.value).toBe("");
   } finally {
     await app.close();
   }

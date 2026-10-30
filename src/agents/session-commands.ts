@@ -8,6 +8,7 @@ export function sessionCommands(session: AgentSession): readonly CompletionItem[
       kind: "command",
       value: command.invocationName,
       description: command.description?.slice(0, 1024) ?? "Extension command",
+      ...(command.getArgumentCompletions ? { hasArguments: true } : {}),
     }));
   const names = new Set(commands.map((command) => command.value));
   for (const template of session.promptTemplates) {

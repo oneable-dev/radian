@@ -1,6 +1,5 @@
 import {
   createAgentSession,
-  defineTool,
   getAgentDir,
   initTheme,
   ModelRuntime,
@@ -10,29 +9,26 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   type ExtensionError,
+  type ExtensionAPI,
+  type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 import {
   clampThinkingLevel,
   getSupportedThinkingLevels,
   modelsAreEqual,
   ModelsError,
-  Type,
   type ImageContent,
 } from "@earendil-works/pi-ai";
 import { mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type {
-  ExecutionState,
-  SessionContext,
-  SessionExecutor,
-  SessionFactory,
-} from "./session-registry.ts";
+import type { ExecutionState, SessionExecutor, SessionFactory } from "./session-registry.ts";
 import {
   AgentRunError,
   CancelledError,
   CapabilityError,
   capture,
   InputError,
+  ProtocolError,
   knownError,
   ModelSelectionError,
   reportUnexpected,
@@ -59,7 +55,7 @@ import {
   type ModelEffort,
   type ModelIdentity,
 } from "./model-selection.ts";
-import { expandSkillInvocation } from "./completion.ts";
+import { completionLimit, expandSkillInvocation, type CompletionResult } from "./completion.ts";
 import { parseSessionControl } from "./session-controls.ts";
 import { parseHistoryCommand } from "./history-command.ts";
 import { parseDashboardCommand } from "./dashboard-command.ts";
@@ -69,6 +65,19 @@ import { bindAccountSession } from "../accounts/session.ts";
 import { sessionResourceLoader } from "./resource-loader.ts";
 import { ExtensionUiBridge, type ExtensionUiResponse } from "./extension-ui.ts";
 import { McpAuthPicker } from "./mcp-auth-picker.ts";
+import { withComponentCommands } from "./extension-capabilities.ts";
+import { leafExcludedTools, leafPolicy } from "./leaf-extension.ts";
+import { commandDisplay, commandDisplayEntryType, type CommandDisplay } from "./command-display.ts";
+import { childSkills, discoverAgentProfiles, roleInstructions } from "./agent-profiles.ts";
+import { subagentTool, supervisorTool } from "./subagent-tools.ts";
+import { subagentInstructions } from "./subagent-instructions.ts";
+import {
+  SubagentNotifications,
+  subagentEventType,
+  subagentNotificationKind,
+  subagentNotificationText,
+  type SubagentNotice,
+} from "./subagent-notifications.ts";
 
 type QueuedUserMessage = Extract<
   ReturnType<AgentSession["agent"]["peekQueuedMessages"]>[number],
@@ -78,6 +87,7 @@ type QueuedUserMessage = Extract<
 export type PiSessionOptions = {
   agentDir?: string;
   sessionDir?: string;
+  defaultPackagePaths?: readonly string[];
   modelRuntime?: ModelRuntime;
   model?: NonNullable<AgentSession["model"]>;
   streamFn?: AgentSession["agent"]["streamFunction"];
@@ -121,18 +131,69 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
     const fast = new FastMode();
     const compaction = new ManualCompaction();
     const mcpAuth = new McpAuthPicker();
-    const resourceLoader = sessionResourceLoader({
+    const profiles = () =>
+      discoverAgentProfiles(agentDir, context.cwd, settingsManager.isProjectTrusted());
+    const discovered = context.role === "subagent" && context.agent ? profiles() : undefined;
+    if (discovered && !discovered.ok) throw discovered.error;
+    const profile = discovered?.ok
+      ? discovered.value.find((entry) => entry.name === context.agent)
+      : undefined;
+    if (context.agent && !profile)
+      throw new InputError(
+        `Unknown agent: ${context.agent}. Use radian-subagent list to discover profiles.`,
+      );
+    const resourceLoader: ResourceLoader = sessionResourceLoader({
       cwd: context.cwd,
       agentDir,
       settingsManager,
       noThemes: true,
       eventBus: mcpAuth.eventBus,
+      ...(context.role === "subagent"
+        ? {
+            skillsOverride: (result) => {
+              const filtered = childSkills(result.skills);
+              if (!filtered.ok) throw filtered.error;
+              return { ...result, skills: filtered.value };
+            },
+          }
+        : {}),
+      appendSystemPromptOverride: (base) => {
+        const instructions = [...base, subagentInstructions[context.role]];
+        if (context.role === "subagent") return instructions;
+        const catalog = profiles();
+        if (!catalog.ok)
+          return [
+            ...instructions,
+            `Agent profile discovery failed: ${catalog.error.message}. Use radian-subagent list to inspect the error before delegating.`,
+          ];
+        return [
+          ...instructions,
+          `Available agent profiles for radian-subagent (fresh context, shared worktree):\n${catalog.value.map(({ name, description }) => `- ${name}: ${description}`).join("\n") || "(none configured)"}`,
+        ];
+      },
       extensionFactories: [
         fast.extension,
         compaction.extension,
         ...(context.role === "main" ? [taskPlanningExtension()] : []),
+        ...(context.role === "subagent" ? [leafPolicy(profile?.tools)] : []),
+        ...(profile
+          ? [
+              (pi: ExtensionAPI) => {
+                pi.on("before_agent_start", (event) => {
+                  const instructions = roleInstructions(profile, resourceLoader.getSkills().skills);
+                  if (!instructions.ok) throw instructions.error;
+                  event.systemPromptOptions.appendSystemPrompt += `\n\n${instructions.value}`;
+                });
+              },
+            ]
+          : []),
       ],
-      ...(options.streamFn
+      ...(options.defaultPackagePaths
+        ? { defaultPackagePaths: options.defaultPackagePaths }
+        : options.streamFn
+          ? { defaultPackagePaths: [] }
+          : {}),
+      ...(options.streamFn && !options.defaultPackagePaths
         ? { noSkills: true, noContextFiles: true, noPromptTemplates: true }
         : {}),
     });
@@ -146,6 +207,16 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       : options.sessionDir
         ? SessionManager.create(context.cwd, options.sessionDir)
         : undefined;
+    const roleModel = profile?.model
+      ? modelRuntime.getModel(
+          profile.model.slice(0, profile.model.indexOf("/")),
+          profile.model.slice(profile.model.indexOf("/") + 1),
+        )
+      : undefined;
+    if (profile?.model && !roleModel)
+      throw new ModelSelectionError(
+        `Agent ${profile.name} requires unavailable model ${profile.model}.`,
+      );
     const { session } = await createAgentSession({
       cwd: context.cwd,
       agentDir,
@@ -164,8 +235,45 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
           }
         : {}),
       ...(sessionManager ? { sessionManager } : {}),
-      ...(options.model ? { model: options.model } : {}),
-      ...(context.role === "main" ? { customTools: [subagentTool(context)] } : {}),
+      ...((roleModel ?? options.model) ? { model: roleModel ?? options.model } : {}),
+      ...(profile?.thinking ? { thinkingLevel: profile.thinking } : {}),
+      // SDK 1.2 retains unmatched MCP tools for codemode unless an mcp__ selector exists.
+      // The bare namespace prefix is not an MCP tool; it opts into strict matching.
+      // leafPolicy remains authoritative for every direct and nested tool call.
+      ...(profile?.tools ? { tools: [...profile.tools, "radian-supervisor", "mcp__"] } : {}),
+      ...(context.role === "main"
+        ? {
+            customTools: [
+              subagentTool(async (command, signal) => {
+                if (command.action === "list" || command.action === "spawn") {
+                  const available = profiles();
+                  if (!available.ok) return available;
+                  if (command.action === "list")
+                    return ok(available.value.map(({ prompt: _prompt, ...entry }) => entry));
+                  if (!available.value.some((entry) => entry.name === command.agent))
+                    return err(
+                      new InputError(
+                        `Unknown agent ${command.agent}. Available: ${available.value.map((entry) => entry.name).join(", ") || "none"}.`,
+                      ),
+                    );
+                }
+                return (
+                  context.coordinateSubagents?.(command, signal) ??
+                  err(new CapabilityError("This session cannot coordinate subagents."))
+                );
+              }),
+            ],
+          }
+        : {
+            customTools: [
+              supervisorTool(
+                context.contactSupervisor
+                  ? (command, signal) => context.contactSupervisor!(command, signal)
+                  : undefined,
+              ),
+            ],
+            excludeTools: leafExcludedTools,
+          }),
     });
     let adopted = false;
     const releaseTransport =
@@ -185,6 +293,10 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
     return withCleanup(
       async () => {
         await mkdir(session.sessionManager.getSessionDir(), { recursive: true });
+        if (profile?.thinking && session.thinkingLevel !== profile.thinking)
+          throw new InputError(
+            `Agent ${profile.name}'s model does not support thinking level ${profile.thinking}.`,
+          );
         if (options.streamFn) {
           session.agent.streamFunction = options.streamFn;
         }
@@ -192,12 +304,16 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         const diagnostics = new CommandDiagnostics();
         const unsupportedSessionAction = async (): Promise<never> => {
           throw new CapabilityError(
-            "Pi session replacement/reload is not hosted here. Use Radian's session controls instead.",
+            "Pi session replacement is not hosted here. Use Radian's session controls instead.",
           );
         };
         const ui =
           context.role === "main"
-            ? new ExtensionUiBridge(session.extensionRunner.getUIContext(), mcpAuth.eventBus)
+            ? new ExtensionUiBridge(
+                session.extensionRunner.getUIContext(),
+                mcpAuth.eventBus,
+                agentDir,
+              )
             : undefined;
 
         await session.bindExtensions({
@@ -209,9 +325,37 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
             fork: unsupportedSessionAction,
             switchSession: unsupportedSessionAction,
             navigateTree: unsupportedSessionAction,
-            reload: unsupportedSessionAction,
+            reload: async () => {
+              if (!executor)
+                throw new SessionError(
+                  "SESSION_BUSY",
+                  "Session initialization is still in progress.",
+                );
+              const result = await executor.reload(true);
+              if (!result.ok) {
+                ui?.context.notify(
+                  "Extension reload did not finish. Earlier accepted changes were not rolled back.",
+                  "warning",
+                );
+                throw result.error;
+              }
+            },
           },
         });
+        if (profile) {
+          const instructions = roleInstructions(profile, resourceLoader.getSkills().skills);
+          if (!instructions.ok) throw instructions.error;
+          if (profile.tools) {
+            const registered = new Set(session.getAllTools().map((tool) => tool.name));
+            const missing = profile.tools.filter(
+              (name) => !name.includes("*") && !registered.has(name),
+            );
+            if (missing.length)
+              throw new InputError(
+                `Agent ${profile.name} requires unavailable tools: ${missing.join(", ")}.`,
+              );
+          }
+        }
         executor = new PiSessionExecutor(
           session,
           workspace?.usage ?? options.usageMonitor,
@@ -243,36 +387,21 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       },
       async () => {
         if (!adopted) {
-          session.dispose();
-          mcpAuth.dispose();
-          releaseAccounts();
+          await withCleanup(
+            async () => {
+              await session.abort();
+              await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+            },
+            async () => {
+              session.dispose();
+              mcpAuth.dispose();
+              releaseAccounts();
+            },
+          );
         }
       },
     );
   };
-}
-
-function subagentTool(context: SessionContext) {
-  return defineTool({
-    name: "radian_subagent",
-    label: "Subagent",
-    description:
-      "Delegate a bounded task to an owned subagent in the same worktree. Wait for its result. The child cannot delegate further.",
-    promptSnippet: "Delegate a task to a subagent in this worktree.",
-    parameters: Type.Object({
-      name: Type.String({ minLength: 1 }),
-      task: Type.String({ minLength: 1 }),
-    }),
-    execute: async (_id, { name, task }, signal) => {
-      const result = await context.spawnSubagent(name, task, signal);
-      // SDK tools require rejection for failures; never pass a Result error as successful tool content.
-      if (!result.ok) {
-        throw result.error;
-      }
-
-      return { content: [{ type: "text" as const, text: result.value }], details: {} };
-    },
-  });
 }
 
 export class PiSessionExecutor implements SessionExecutor {
@@ -285,6 +414,8 @@ export class PiSessionExecutor implements SessionExecutor {
   private readonly transcript: SessionTranscript;
   private readonly telemetry: PiSessionTelemetry;
   private readonly runs = new Set<Promise<Result<void, ExpectedError>>>();
+  private readonly subagentNotifications = new SubagentNotifications();
+  private subagentFlushScheduled = false;
   // Serialize only SDK admission, not model execution; messages live in Pi's queue.
   private admission: Promise<void> = Promise.resolve();
   private closeTask: Promise<Result<void, ExpectedError>> | undefined;
@@ -308,6 +439,10 @@ export class PiSessionExecutor implements SessionExecutor {
   private interruptTask: Promise<Result<void, ExpectedError>> | undefined;
   // Own undelivered messages only while interrupting; the SDK owns the live queue.
   private interruptedMessages: QueuedUserMessage[] = [];
+  private readonly queuedCommandDisplays = new WeakMap<QueuedUserMessage, CommandDisplay>();
+  private startingCommandDisplay: CommandDisplay | undefined;
+  private commandToSave: QueuedUserMessage | undefined;
+  private commandProjection: { leafId: string | null; ids: readonly string[] } | undefined;
   private started: { wall: number; monotonic: number } | undefined;
   private request: RequestSummary | undefined;
   private result: SessionResult | undefined;
@@ -329,11 +464,21 @@ export class PiSessionExecutor implements SessionExecutor {
     private readonly mcpAuth?: McpAuthPicker,
   ) {
     this.status = this.finalStatus(false);
+    // Packages may register aliases during session_start, after resource discovery.
+    withComponentCommands(session.resourceLoader.getExtensions());
     this.commandCatalog = sessionCommands(session);
     this.transcript = new SessionTranscript(session.sessionManager.getBranch());
-    this.request = deliveredRequest(
-      session.messages.findLast((message) => message.role === "user"),
-    );
+    const loadingErrors = session.resourceLoader.getExtensions().errors;
+    if (loadingErrors.length) {
+      console.warn("[radian:extensions] Extension loading failed", loadingErrors);
+      this.transcript.notice(
+        "Extension loading",
+        `${loadingErrors.length} extension(s) could not load. Configured sources were retained without a bundled substitute. Inspect runtime.log for paths and errors.`,
+        "error",
+      );
+    }
+    const lastUser = session.messages.findLast((message) => message.role === "user");
+    this.request = deliveredRequest(lastUser, lastUser && this.displayForMessage(lastUser));
 
     const sections = this.transcript.sections;
     const requestIndex = sections.findLastIndex(
@@ -374,6 +519,33 @@ export class PiSessionExecutor implements SessionExecutor {
 
   commands() {
     return this.commandCatalog;
+  }
+
+  async argumentCompletions(
+    command: string,
+    prefix: string,
+    signal?: AbortSignal,
+  ): Promise<Result<CompletionResult, ExpectedError>> {
+    if (signal?.aborted || this.closing || this.disposed) return err(new CancelledError());
+    const revision = this.resourceRevision;
+    const callback = this.session.extensionRunner
+      .getRegisteredCommands()
+      .find((entry) => entry.invocationName === command)?.getArgumentCompletions;
+    const options = (await callback?.(prefix)) ?? [];
+    if (signal?.aborted || this.closing || this.disposed || revision !== this.resourceRevision) {
+      return err(new CancelledError("Argument completions became stale."));
+    }
+    if (options.some((item) => !item.value || item.value.length > 4096)) {
+      return err(new ProtocolError("Extension returned an invalid argument completion value."));
+    }
+    return ok({
+      items: options.slice(0, completionLimit).map((item) => ({
+        kind: "argument" as const,
+        value: item.value,
+        description: (item.description ?? item.label).slice(0, 1024),
+      })),
+      truncated: options.length > completionLimit,
+    });
   }
 
   get extensionUi() {
@@ -607,7 +779,9 @@ export class PiSessionExecutor implements SessionExecutor {
                 .map((part) => part.text)
                 .join("");
 
-        return [`You: ${text}`];
+        const display = this.displayForMessage(message);
+
+        return [`You: ${display ? display.map((part) => part.text).join("\n") : text}`];
       }
       if (message.role === "assistant") {
         return [
@@ -634,11 +808,14 @@ export class PiSessionExecutor implements SessionExecutor {
 
     messages.push(...this.activeTools.values());
 
+    const finalOutput = this.finalResponse();
     return {
       conversationId: this.savedSessionId,
       resourceRevision: this.resourceRevision,
       status: this.status,
+      ...(finalOutput !== undefined ? { finalOutput } : {}),
       output: messages.join("\n\n").slice(-12000),
+      activeTools: [...this.activeTools.values()].slice(0, 32).map((tool) => tool.slice(0, 512)),
       error: this.error,
       ...(this.request ? { request: this.request } : {}),
       ...(this.result ? { result: this.result } : {}),
@@ -655,9 +832,14 @@ export class PiSessionExecutor implements SessionExecutor {
                 .map((part) => part.text)
                 .join("\n");
         const skill = parseSkillBlock(text);
+        const display = this.queuedCommandDisplays.get(message);
 
         return summarizeRequest(
-          skill ? skill.userMessage || `/skill:${skill.name}` : text,
+          display
+            ? display.map((part) => part.text).join("\n")
+            : skill
+              ? skill.userMessage || `/skill:${skill.name}`
+              : text,
           typeof message.content === "string"
             ? 0
             : message.content.filter((part) => part.type === "image").length,
@@ -746,11 +928,19 @@ export class PiSessionExecutor implements SessionExecutor {
     return task;
   }
 
-  reload(): Promise<Result<void, ExpectedError>> {
+  reload(fromExtension = false): Promise<Result<void, ExpectedError>> {
     if (this.closing || this.disposed) {
       return Promise.resolve(err(new SessionError("SESSION_NOT_OPEN", "Session is closing.")));
     }
-    if (this.busy) {
+    if (
+      this.busy &&
+      (!fromExtension ||
+        this.runs.size > 1 ||
+        !this.session.isIdle ||
+        this.controlling ||
+        this.interrupting ||
+        this.session.pendingMessageCount > 0)
+    ) {
       return Promise.resolve(
         err(
           new SessionError(
@@ -932,6 +1122,7 @@ export class PiSessionExecutor implements SessionExecutor {
     onAccepted?: () => void,
     imagePaths: readonly string[] = [],
     replayImages?: ImageContent[],
+    replayDisplay?: CommandDisplay,
   ): Promise<Result<void, ExpectedError>> {
     if (this.interrupting) {
       return Promise.resolve(
@@ -1007,6 +1198,7 @@ export class PiSessionExecutor implements SessionExecutor {
           : text.startsWith("/")
             ? text.slice(1).split(" ", 1)[0]!
             : "";
+        if (name) withComponentCommands(this.session.resourceLoader.getExtensions());
         const registered = name ? this.session.extensionRunner.getCommand(name) : undefined;
         if (images.length && registered) {
           return err(
@@ -1029,7 +1221,16 @@ export class PiSessionExecutor implements SessionExecutor {
           }
         }
 
+        const display =
+          replayDisplay ??
+          (!registered && !replayImages
+            ? commandDisplay(
+                text,
+                this.session.promptTemplates.map((template) => template.name),
+              )
+            : undefined);
         let command = registered ? this.diagnostics.begin(name) : undefined;
+        if (registered?.name === "subagents-inspect-rpc") this.ui?.takeInspection();
         let handled = false;
         let accepted = false;
         const accept = () => {
@@ -1110,6 +1311,12 @@ export class PiSessionExecutor implements SessionExecutor {
                 ...(images.length ? { images: [...images] } : {}),
                 preflightResult: (disposition) => {
                   handled = disposition === "handled";
+                  if (display && disposition === "started") {
+                    this.startingCommandDisplay = display;
+                  } else if (display && disposition === "queued") {
+                    const queued = this.queuedMessages().at(-1);
+                    if (queued) this.queuedCommandDisplays.set(queued, display);
+                  }
                   admitted.resolve();
                   accept();
                 },
@@ -1144,6 +1351,18 @@ export class PiSessionExecutor implements SessionExecutor {
           }
 
           return result;
+        }
+        if (registered?.name === "subagents-inspect-rpc") {
+          const inspection = this.ui?.takeInspection();
+          if (inspection && !inspection.ok) return inspection;
+          if (inspection?.ok) {
+            this.transcript.notice(
+              "Subagent inspection",
+              inspection.value.text,
+              inspection.value.failed ? "error" : "complete",
+            );
+            this.emit();
+          }
         }
         if (handled) {
           return ok(undefined);
@@ -1207,8 +1426,8 @@ export class PiSessionExecutor implements SessionExecutor {
     }
 
     this.interrupting = true;
+    this.subagentNotifications.clear();
     this.inputRevision++;
-    this.ui?.setActive(false);
 
     const admission = this.admission;
     const runs = [...this.runs];
@@ -1222,6 +1441,9 @@ export class PiSessionExecutor implements SessionExecutor {
       onAccepted?.();
 
       const stopped = await capture(async () => {
+        this.ui?.setActive(false);
+        // Raw-input cancellation is used by package-owned foreground slash runs.
+        this.ui?.interrupt();
         // Abort first: an extension command may itself be waiting for SDK idle.
         await admission;
         // Preflight already in flight can have queued input after the first clear.
@@ -1248,6 +1470,23 @@ export class PiSessionExecutor implements SessionExecutor {
                 .join("\n"),
         )
         .join("\n");
+      const displays = messages.map((message) => this.queuedCommandDisplays.get(message));
+      const replayDisplay = displays.some(Boolean)
+        ? messages.flatMap(
+            (message, index) =>
+              displays[index] ?? [
+                {
+                  text:
+                    typeof message.content === "string"
+                      ? message.content
+                      : message.content
+                          .filter((part) => part.type === "text")
+                          .map((part) => part.text)
+                          .join("\n"),
+                },
+              ],
+          )
+        : undefined;
       const images = messages.flatMap((message) =>
         typeof message.content === "string"
           ? []
@@ -1268,6 +1507,7 @@ export class PiSessionExecutor implements SessionExecutor {
         },
         [],
         images,
+        replayDisplay,
       );
       void run.then(
         (result) => {
@@ -1298,6 +1538,67 @@ export class PiSessionExecutor implements SessionExecutor {
     return task;
   }
 
+  notifySubagent(event: SubagentNotice, current: () => boolean = () => true): void {
+    if (this.closing || this.disposed || this.interrupting) return;
+    this.subagentNotifications.add(event, current);
+    this.scheduleSubagentNotifications();
+  }
+
+  private scheduleSubagentNotifications(): void {
+    if (
+      !this.subagentNotifications.size ||
+      this.subagentFlushScheduled ||
+      this.closing ||
+      this.disposed ||
+      this.status === "working" ||
+      this.busy
+    )
+      return;
+    this.subagentFlushScheduled = true;
+    queueMicrotask(() => {
+      this.subagentFlushScheduled = false;
+      if (this.closing || this.disposed || this.status === "working" || this.busy) return;
+      const events = this.subagentNotifications.take();
+      if (!events.length) return;
+      // Never enqueue a follow-up while streaming: the registry may observe/reply
+      // before this run settles. Revalidate current state at this idle boundary.
+      const task = capture(() =>
+        this.session.sendCustomMessage(
+          {
+            customType: subagentEventType,
+            content: subagentNotificationText(events),
+            display: false,
+            details: { kind: subagentNotificationKind, version: 1, events },
+          },
+          { triggerTurn: true },
+        ),
+      );
+      this.runs.add(task);
+      void task
+        .then((result) => {
+          if (!result.ok && !(result.error instanceof CancelledError)) {
+            console.warn(`[radian:subagents] ${result.error.code}: ${result.error.message}`);
+            this.ui?.context.notify(
+              `[${result.error.code}] Child state was retained, but notifying its parent failed. Inspect subagent status before retrying.`,
+              "warning",
+            );
+          }
+        })
+        .catch((error: unknown) => reportUnexpected(error, "subagent notification"))
+        .finally(() => {
+          this.runs.delete(task);
+          this.emit();
+        });
+    });
+  }
+
+  async steer(message: string): Promise<Result<unknown, ExpectedError>> {
+    if (this.closing || this.disposed)
+      return err(new SessionError("SESSION_NOT_OPEN", "The child is closing."));
+    const queued = await capture(() => this.session.steer(message));
+    return queued.ok ? ok({ disposition: queued.value, compliance: "not-confirmed" }) : queued;
+  }
+
   async beforeNewSession(): Promise<Result<void, ExpectedError>> {
     if (this.disposed) {
       return ok(undefined);
@@ -1322,6 +1623,7 @@ export class PiSessionExecutor implements SessionExecutor {
     }
 
     this.closing = true;
+    this.subagentNotifications.clear();
     this.ui?.dispose();
 
     const task = capture(async () => {
@@ -1368,7 +1670,15 @@ export class PiSessionExecutor implements SessionExecutor {
   private handleEvent(event: AgentSessionEvent): void {
     this.ui?.observeEvent(event);
 
-    const completion = this.transcript.handle(event);
+    // Public message_end precedes SDK persistence. The following event can safely
+    // append display metadata after its user message, including in bounded History reads.
+    this.saveCommandDisplay();
+    let display: CommandDisplay | undefined;
+    if (event.type === "message_start" && event.message.role === "user") {
+      display = this.queuedCommandDisplays.get(event.message) ?? this.startingCommandDisplay;
+      this.startingCommandDisplay = undefined;
+    }
+    const completion = this.transcript.handle(event, display);
     switch (event.type) {
       case "agent_start":
         this.started ??= { wall: Date.now(), monotonic: performance.now() };
@@ -1378,7 +1688,7 @@ export class PiSessionExecutor implements SessionExecutor {
         this.aborted = false;
         break;
       case "message_start": {
-        const request = deliveredRequest(event.message);
+        const request = deliveredRequest(event.message, display);
         if (request) {
           this.request = request;
         }
@@ -1409,6 +1719,9 @@ export class PiSessionExecutor implements SessionExecutor {
         }
         break;
       case "message_end":
+        if (event.message.role === "user" && this.transcript.commandDisplay(event.message)) {
+          this.commandToSave = event.message;
+        }
         this.partial = "";
         break;
       case "tool_execution_start":
@@ -1477,6 +1790,85 @@ export class PiSessionExecutor implements SessionExecutor {
     this.emit();
   }
 
+  private displayForMessage(message: AgentSession["messages"][number]): CommandDisplay | undefined {
+    const display = this.transcript.commandDisplay(message);
+    if (display || message.role !== "user" || !this.transcript.hasCommandDisplays) return display;
+    const leafId = this.session.sessionManager.getLeafId();
+    if (this.commandProjection?.leafId !== leafId) {
+      this.commandProjection = {
+        leafId,
+        ids: this.session.sessionManager
+          .buildSessionProjection()
+          .entries.flatMap((entry) => entry.messages.map(() => entry.sourceEntry.id)),
+      };
+    }
+    const id = this.commandProjection.ids[this.session.messages.indexOf(message)];
+
+    return this.transcript.commandDisplay(message, id);
+  }
+
+  private saveCommandDisplay(): void {
+    const message = this.commandToSave;
+    if (!message) return;
+    this.commandToSave = undefined;
+    const parts = this.transcript.commandDisplay(message);
+    const entry = this.session.sessionManager
+      .getBranch()
+      .findLast((entry) => entry.type === "message" && entry.message === message);
+    if (!parts || !entry) {
+      this.ui?.context.notify(
+        "Command was accepted, but saving its display metadata could not be confirmed.",
+        "warning",
+      );
+      return;
+    }
+    this.transcript.rememberCommandId(message, entry.id);
+    try {
+      this.session.sessionManager.appendCustomEntry(commandDisplayEntryType, {
+        messageId: entry.id,
+        parts,
+      });
+      const manager = this.session.sessionManager;
+      // SDK History uses firstMessage when unnamed; an initial command needs an
+      // invocation-based default instead of exposing the expanded instructions.
+      if (
+        !manager.getSessionName() &&
+        manager.getBranch().find((item) => item.type === "message" && item.message.role === "user")
+          ?.id === entry.id
+      ) {
+        this.session.setSessionName(
+          parts
+            .map((part) => part.text)
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .slice(0, 120),
+        );
+      }
+    } catch (error) {
+      const expected = knownError(error);
+      const warning = expected
+        ? `[${expected.code}] Command was accepted, but saving its display metadata could not be confirmed.`
+        : reportUnexpected(error, "command display persistence");
+      this.transcript.notice("Command display persistence", warning, "error");
+      this.ui?.context.notify(warning, "warning");
+    }
+  }
+
+  private finalResponse(): string | undefined {
+    if (this.status !== "complete") return undefined;
+    const last = this.session.messages.findLast((message) => message.role === "assistant");
+    if (
+      last?.role !== "assistant" ||
+      (last.stopReason !== "stop" && last.stopReason !== "length") ||
+      last.content.some((part) => part.type === "toolCall")
+    )
+      return undefined;
+    return last.content
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("");
+  }
+
   private finalStatus(aborted: boolean): ExecutionState["status"] {
     const last = this.session.messages.findLast((message) => message.role === "assistant");
     if (!last || last.role !== "assistant" || aborted || last.stopReason === "aborted") {
@@ -1492,6 +1884,7 @@ export class PiSessionExecutor implements SessionExecutor {
   }
 
   private emit(): void {
+    this.scheduleSubagentNotifications();
     // SDK model switching can emit an intermediate automatic effort before the explicit choice.
     if (!this.modelSelectionSnapshot) {
       for (const listener of this.listeners) {
@@ -1503,6 +1896,7 @@ export class PiSessionExecutor implements SessionExecutor {
 
 function deliveredRequest(
   message: AgentSession["messages"][number] | undefined,
+  display?: CommandDisplay,
 ): RequestSummary | undefined {
   if (message?.role !== "user") {
     return undefined;
@@ -1518,7 +1912,11 @@ function deliveredRequest(
   const skill = parseSkillBlock(text);
 
   return summarizeRequest(
-    skill ? skill.userMessage || `/skill:${skill.name}` : text,
+    display
+      ? display.map((part) => part.text).join("\n")
+      : skill
+        ? skill.userMessage || `/skill:${skill.name}`
+        : text,
     typeof message.content === "string"
       ? 0
       : message.content.filter((part) => part.type === "image").length,

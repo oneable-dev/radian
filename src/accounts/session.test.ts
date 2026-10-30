@@ -181,6 +181,8 @@ test("Switching accounts mid-response preserves requests, tools, and conversatio
     executor = await piSessionFactory({
       accounts: manager,
       agentDir: join(directory, "agent"),
+      // Credential transport tests must not initialize ambient MCP or web providers.
+      defaultPackagePaths: [],
       model,
       settings: { retry: { enabled: false }, compaction: { enabled: false } },
     })({

@@ -423,6 +423,9 @@ export class DashboardAccumulator {
     if (name === "radian_subagent" && typeof args.name === "string") {
       this.increment("subagents", args.name);
     }
+    if (name === "radian-subagent" && args.action === "spawn" && typeof args.agent === "string") {
+      this.increment("subagents", args.agent);
+    }
     // Only execution payloads count: list/status/management calls are not agent runs.
     if (name === "subagent" && !args.action) {
       if (typeof args.agent === "string") {

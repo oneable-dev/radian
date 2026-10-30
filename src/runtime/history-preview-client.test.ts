@@ -259,6 +259,42 @@ test("Structured commands/timeouts survive preview IPC while invalid types/limit
   }
 });
 
+test("Prompt command tags survive preview IPC and reject invalid command names", async () => {
+  // A command marker is independent of Bash execution metadata and contains no template body.
+  const section = {
+    id: "command",
+    kind: "user",
+    title: "You",
+    text: "/review",
+    commandName: "review",
+    status: "complete",
+  };
+  let returned: unknown = section;
+  const fetchMock = stub(async () =>
+    Response.json({
+      id: "saved",
+      worktreeId: "tree",
+      text: "/review",
+      truncated: false,
+      sections: [returned],
+    }),
+  );
+  const client = new RuntimeClient(paths, snapshot());
+  try {
+    const preview = expectOk(await client.previewHistory("tree", "saved"));
+
+    // Reconnected clients retain the decorative marker rather than losing its presentation.
+    expect(preview.sections?.[0]).toMatchObject({ text: "/review", commandName: "review" });
+    for (const commandName of ["", 42, "x".repeat(257)]) {
+      returned = { ...section, commandName };
+      expect(expectError(await client.previewHistory("tree", "saved")).code).toBe("PROTOCOL_ERROR");
+    }
+  } finally {
+    await client.disconnect();
+    fetchMock.mockRestore();
+  }
+});
+
 test("Completion metadata survives preview IPC while incomplete/invalid times fail", async () => {
   const completion = {
     startedAt: 1000000,

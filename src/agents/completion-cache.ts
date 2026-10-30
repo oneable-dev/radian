@@ -18,6 +18,7 @@ export type CompletionProvider = ((
     sessionId: string,
     query: CompletionQuery,
   ) => Result<CompletionResult, ExpectedError> | undefined;
+  supportsArguments?: (sessionId: string, command: string) => boolean;
   subscribe?: (listener: () => void) => () => void;
   retain?: (ids: ReadonlySet<string>) => void;
 };
@@ -50,10 +51,23 @@ export class CompletionCache {
     private readonly load: CatalogLoader,
     private readonly identity: (id: string) => string,
     private readonly unexpected: (error: unknown) => void,
+    private readonly dynamic?: CompletionProvider,
   ) {
     this.provider = Object.assign(this.complete, {
       prepare: this.prepare,
       read: this.read,
+      supportsArguments: (id: string, command: string) => {
+        const entry = this.sessions.get(id);
+        const result = entry?.result;
+        return (
+          entry?.identity === this.identity(id) &&
+          result?.ok === true &&
+          result.value.items.some(
+            (item) =>
+              item.kind === "command" && item.value === command && item.hasArguments === true,
+          )
+        );
+      },
       subscribe: (listener: () => void) => {
         this.listeners.add(listener);
 
@@ -141,6 +155,7 @@ export class CompletionCache {
     if (query.kind === "file") {
       return this.files.get(entry.cwd)?.index.read(query.query);
     }
+    if (query.kind === "argument") return undefined;
 
     const result = entry.result;
     if (result) {
@@ -176,6 +191,23 @@ export class CompletionCache {
           "Completion resources are not prepared for this session.",
         ),
       );
+    }
+
+    if (query.kind === "argument") {
+      const ownedSignal = AbortSignal.any([signal, entry.abort.signal]);
+      const result = await waitFor(
+        this.dynamic?.(id, query, ownedSignal) ??
+          Promise.resolve(ok({ items: [], truncated: false })),
+        ownedSignal,
+      );
+      if (
+        this.disposed ||
+        this.sessions.get(id) !== entry ||
+        this.identity(id) !== entry.identity
+      ) {
+        return err(new CancelledError("Argument completion became stale."));
+      }
+      return result;
     }
 
     const pending = query.kind === "file" ? this.files.get(entry.cwd)!.ready : entry.ready;

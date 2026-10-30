@@ -214,7 +214,9 @@ test("Completion IPC reads only selected-session SDK commands/worktree files wit
     await writeFile(
       join(extensions, "commands.ts"),
       `export default function (pi) {
-      pi.registerCommand("lookup-probe", { description: "Read-only command catalog probe", handler: async () => {} });
+      pi.registerCommand("lookup-probe", { description: "Read-only command catalog probe",
+        getArgumentCompletions: async (prefix) => [{ value: prefix + " status", label: "Status" }],
+        handler: async () => {} });
       pi.registerCommand("lookup-broken", { handler: async () => { throw new Error("Fixture command rejected"); } });
     }`,
     );
@@ -231,6 +233,18 @@ test("Completion IPC reads only selected-session SDK commands/worktree files wit
       await client.complete(id, { kind: "command", query: "lookup-probe" }),
     );
     expect(commands.items.map((item) => item.value)).toEqual(["lookup-probe"]);
+    expect(commands.items[0]?.hasArguments).toBe(true);
+    expect(client.snapshot.capabilities).toContain("extension-arguments");
+    const argumentsResult = expectOk(
+      await client.complete(id, {
+        kind: "argument",
+        command: "lookup-probe",
+        query: "server",
+      }),
+    );
+    expect(argumentsResult.items).toEqual([
+      { kind: "argument", value: "server status", description: "Status" },
+    ]);
     // IPC and prepared UI catalogs must enforce the same normalized prefix rule.
     expect(
       expectOk(
@@ -254,6 +268,7 @@ test("Completion IPC reads only selected-session SDK commands/worktree files wit
     // The read-only endpoint still validates the instance fence and its wire input.
     for (const [params, instance, code] of [
       [`sessionId=${id}&kind=wrong&query=`, client.snapshot.instance, "INVALID_INPUT"],
+      [`sessionId=${id}&kind=argument&query=`, client.snapshot.instance, "INVALID_INPUT"],
       [`sessionId=${id}&kind=file&query=`, "old-instance", "PROTOCOL_ERROR"],
     ] as const) {
       const response = await fetch(`http://localhost/completions?${params}`, {

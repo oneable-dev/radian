@@ -445,8 +445,9 @@ export class Workbench {
       (command) => this.commandAvailable(command),
       (command, key) => this.command(command, key),
       (key) =>
-        this.keyContext().startsWith("transcript") &&
-        this.agent.transcriptCaptureKey(key, this.keymap),
+        this.extension.captureKey(key, this.keymap) ||
+        (this.keyContext().startsWith("transcript") &&
+          this.agent.transcriptCaptureKey(key, this.keymap)),
       () => (this.selectedText() !== null ? "selection" : null),
     );
     renderer.on("resize", this.resize);

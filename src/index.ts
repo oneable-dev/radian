@@ -2,6 +2,18 @@ import { checkInteractiveHost, parseCli } from "./app/cli.ts";
 import { reportUnexpected, type ExpectedError } from "./errors.ts";
 import { ok, type Result } from "./result.ts";
 import { selfLaunch } from "./runtime/launch.ts";
+import { dirname, join } from "node:path";
+
+function bundledSdkDirectory(): void {
+  if (Bun.isStandaloneExecutable) {
+    process.env.PI_PACKAGE_DIR ??= join(
+      dirname(process.execPath),
+      "packages",
+      "node_modules",
+      "@earendil-works/pi-coding-agent",
+    );
+  }
+}
 
 async function run(): Promise<Result<void, ExpectedError>> {
   const parsed = parseCli(process.argv.slice(2));
@@ -36,6 +48,7 @@ async function run(): Promise<Result<void, ExpectedError>> {
 
   // Never initialize SDK/resources, scan roots, or attach/start a service for help,
   // version, invalid arguments, or an unsupported interactive host.
+  bundledSdkDirectory();
   const { main } = await import("./app/bootstrap.ts");
 
   return main(options, selfLaunch(new URL(import.meta.url)));

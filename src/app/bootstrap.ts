@@ -313,6 +313,7 @@ async function runUI(
         (id, signal) => client.catalog(id, signal),
         (id) => client.completionIdentity(id),
         unexpected,
+        (id, query, signal) => client.complete(id, query, signal),
       )
     : undefined;
   const preloaded = client ? new PreloadedData(client, unexpected) : undefined;

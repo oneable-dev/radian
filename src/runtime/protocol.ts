@@ -25,6 +25,8 @@ import { modelEffortSchema, modelIdentitySchema } from "../agents/model-selectio
 import { sessionResultSchema } from "../agents/session-attention.ts";
 import { extensionUiResponseSchema, sessionExtensionUiSchema } from "../agents/extension-ui.ts";
 
+import { ownedSubagentRecordSchema } from "../agents/subagent-record.ts";
+
 export const protocolVersion = 1;
 // Commands and PTY frames describe one operation/viewport. A workspace snapshot
 // aggregates every retained session and must not inherit that per-operation limit.
@@ -47,6 +49,8 @@ const agent = Type.Object({
   status,
   request: Type.Optional(requestSummarySchema),
   runTiming: Type.Optional(runTiming),
+  finishedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+  progress: Type.Optional(Type.String()),
   source: Type.Optional(Type.Literal("pi")),
   phase: Type.Optional(
     Type.Union([
@@ -55,6 +59,7 @@ const agent = Type.Object({
       Type.Literal("stopped"),
       Type.Literal("rejected"),
       Type.Literal("partial"),
+      Type.Literal("waiting"),
     ]),
   ),
 });
@@ -102,6 +107,7 @@ const transcriptSection = Type.Object({
   request: Type.Optional(requestSummarySchema),
   image: Type.Optional(transcriptImageSchema),
   skillName: Type.Optional(Type.String({ minLength: 1 })),
+  commandName: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
   command: Type.Optional(Type.String({ maxLength: 4096 })),
   timeoutSeconds: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
 });
@@ -165,6 +171,8 @@ const execution = Type.Object({
   status,
   activity: Type.Optional(Type.Literal("compacting")),
   output: Type.String(),
+  finalOutput: Type.Optional(Type.String()),
+  activeTools: Type.Optional(Type.Array(Type.String())),
   error: Type.Union([Type.String(), Type.Null()]),
   sections: Type.Optional(Type.Array(transcriptSection)),
   telemetry: Type.Optional(telemetry),
@@ -326,6 +334,7 @@ export const sessionRecordSchema = Type.Object({
   sessionFile: Type.Optional(id),
   state: execution,
   subagents: Type.Array(agent),
+  ownedSubagents: Type.Optional(Type.Array(ownedSubagentRecordSchema, { maxItems: 128 })),
   lifecycle: Type.Optional(Type.Union([Type.Literal("open"), Type.Literal("closed")])),
   closedAt: Type.Optional(
     Type.Union([Type.Integer({ minimum: 0, maximum: 8640000000000000 }), Type.Null()]),

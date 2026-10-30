@@ -110,6 +110,67 @@ async function mount(initial: TranscriptSection[], actions: Partial<WorkbenchAct
   };
 }
 
+test.each([
+  ["tool", "radian-subagent"],
+  ["tool", "radian-supervisor"],
+  ["tool", "radian_subagent"],
+  ["notice", "subagent-slash-result"],
+] as const)(
+  "Subagent %s headers display one public tag without exposing internal title %s",
+  async (kind, title) => {
+    // Normalize both live event names and titles retained in historical snapshots.
+    const app = await mount([{ ...section("Subagent test content"), kind, title }]);
+    try {
+      await app.render();
+      const frame = app.captureCharFrame();
+
+      expect(frame).toContain("[subagent]");
+      expect(frame).not.toContain(`[${title}]`);
+      expect(app.view.promptDrafts.a1).toBe("unsent draft");
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+test("Raw internal subagent notices from older snapshots are not displayed or selectable", async () => {
+  // Historical snapshots may still contain the old display=true control event.
+  const app = await mount([
+    {
+      ...section('{"type":"question","id":"INTERNAL_NOTICE_ID"}'),
+      kind: "notice",
+      title: "radian.subagent-event",
+    },
+    { ...section("A meaningful parent answer"), id: "answer" },
+  ]);
+  try {
+    await app.render();
+    const frame = app.captureCharFrame();
+
+    expect(frame).not.toContain("INTERNAL_NOTICE_ID");
+    expect(frame).not.toContain("radian.subagent-event");
+    expect(frame).toContain("A meaningful parent answer");
+    expect(app.view.promptDrafts.a1).toBe("unsent draft");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Unrelated notice titles retain their configured labels", async () => {
+  // Only known subagent protocol titles share the public tag.
+  const app = await mount([
+    { ...section("A persistence warning"), kind: "notice", title: "Storage warning" },
+  ]);
+  try {
+    await app.render();
+
+    expect(app.captureCharFrame()).toContain("[Storage warning]");
+    expect(app.captureCharFrame()).not.toContain("[subagent]");
+  } finally {
+    await app.close();
+  }
+});
+
 test("V selects full logical lines and copies extended source with actual newlines only", async () => {
   // Starting inside a word must still select from the first column, unlike character selection.
   const app = await mount([section("alpha beta\n한글 👨‍👩‍👧‍👦\nlast")]);
@@ -708,6 +769,46 @@ test("All sections omit arrows and role/status titles while tools and skills dis
     expect(frame).not.toMatch(/[▾▸›]|You ·|Agent ·|Thinking ·| · complete/);
     expect(frame).not.toContain("TOOL_CONTENT");
     expect(frame).toContain("THINK_CONTENT");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Prompt commands render a non-folding inline tag with separate literal arguments and copy only the invocation", async () => {
+  // The display projection contains only the command name and operator-supplied arguments.
+  const app = await mount([
+    {
+      id: "command",
+      kind: "user",
+      title: "You",
+      text: "/review",
+      commandName: "review",
+      status: "complete",
+    },
+    {
+      id: "arguments",
+      kind: "user",
+      title: "You",
+      text: 'src/agents\nkeep "quoted args"',
+      status: "complete",
+    },
+  ]);
+  try {
+    pressLeader(app, "[");
+    app.mockInput.pressKey("HOME");
+    app.mockInput.pressKey("o", { ctrl: true });
+    await app.render();
+    await app.copy();
+
+    // Folding cannot hide the invocation, and the decorative tag never enters copied text.
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("[command] /review");
+    expect(frame).toContain("src/agents");
+    expect(frame).toContain('keep "quoted args"');
+    expect(frame).not.toContain("[message]");
+    expect(app.copies).toEqual(["/review"]);
+    expect(app.prompts).toEqual([]);
+    expect(app.view.promptDrafts.a1).toBe("unsent draft");
   } finally {
     await app.close();
   }

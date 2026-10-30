@@ -1,8 +1,9 @@
 import { createPrefixMatcher, createSubstringMatcher } from "../search.ts";
 
 export type CompletionQuery = {
-  readonly kind: "command" | "skill" | "file";
+  readonly kind: "command" | "skill" | "file" | "argument";
   readonly query: string;
+  readonly command?: string;
 };
 
 export type CompletionCatalog = {
@@ -12,9 +13,10 @@ export type CompletionCatalog = {
 };
 
 export type CompletionItem = {
-  readonly kind: "command" | "skill" | "template" | "file";
+  readonly kind: "command" | "skill" | "template" | "file" | "argument";
   readonly value: string;
   readonly description: string;
+  readonly hasArguments?: boolean;
 };
 
 export type CompletionResult = {
@@ -67,7 +69,7 @@ export function completionTarget(text: string, cursor: number): CompletionTarget
         };
       }
       if (text[start] !== "@") {
-        return null;
+        break;
       }
 
       const raw = text.slice(start + (quoted ? 2 : 1), Math.min(cursor, closed ? end - 1 : end));
@@ -78,6 +80,18 @@ export function completionTarget(text: string, cursor: number): CompletionTarget
     start = end;
   }
 
+  const invocation = /^\/([^\s]+)\s+/u.exec(text);
+  if (invocation && cursor >= invocation[0].length) {
+    let end = cursor;
+    while (end < text.length && !/\s/u.test(text[end]!)) end++;
+    return {
+      kind: "argument",
+      command: invocation[1]!,
+      query: text.slice(invocation[0].length, cursor),
+      start: invocation[0].length,
+      end,
+    };
+  }
   return null;
 }
 
@@ -111,12 +125,14 @@ export function insertCompletion(
   item: CompletionItem,
 ): { text: string; cursor: number } {
   const value =
-    item.kind === "file"
-      ? `@${/[\s"\\]/u.test(item.value) ? JSON.stringify(item.value) : item.value}`
-      : target.kind === "skill"
-        ? `$${item.value.replace(/^skill:/u, "")}`
-        : `/${item.value}`;
-  const insertion = value + (target.end === text.length ? " " : "");
+    target.kind === "argument"
+      ? item.value
+      : item.kind === "file"
+        ? `@${/[\s"\\]/u.test(item.value) ? JSON.stringify(item.value) : item.value}`
+        : target.kind === "skill"
+          ? `$${item.value.replace(/^skill:/u, "")}`
+          : `/${item.value}`;
+  const insertion = value + (target.end === text.length && !/\s$/u.test(value) ? " " : "");
 
   return {
     text: text.slice(0, target.start) + insertion + text.slice(target.end),
@@ -138,6 +154,7 @@ export function filterCatalog(
   items: readonly CompletionItem[],
   query: CompletionQuery,
 ): CompletionResult {
+  if (query.kind === "argument") return { items: [], truncated: false };
   const candidates =
     query.kind === "skill"
       ? items

@@ -548,6 +548,15 @@ control or expandable instructions. The tag is decorative; copying still copies 
 They are excluded from individual and all-section folding, but the name remains navigable/selectable/copyable. Arguments following the invocation remain a separate
 user message. A generic `read` of `SKILL.md` stays a tool call; filenames alone do not identify a skill.
 
+File-based prompt commands show **`[command] /name`**, followed by the operator's literal arguments
+as a separate user message. The command tag is decorative and cannot fold; copying the invocation
+excludes the tag. Expanded template instructions remain in model context, not in the transcript,
+pending request summaries or History previews. Display-only metadata preserves this presentation
+when reopening a session, even if its template changes. An initial command supplies an invocation-based
+default session name unless a name already exists. Older messages without invocation metadata retain
+their original display; command names are never guessed from expanded bodies. Host controls such as
+`/model` and `/history` do not become transcript entries.
+
 **Leader, then [** enters output navigation in both Agents and Terminal (`output.read`). In Agents,
 **Esc** returns through Visual, Text and Sections to the input. The final Sections-to-Input step
 explicitly exits reading: it reveals the latest output and resumes following, keeping the unsent draft
@@ -769,9 +778,10 @@ The Agent prompt completes and executes these host commands instead of sending t
   installation ID. If token rotation succeeds but saving fails, Radian keeps the refreshed token in
   memory and displays a storage warning: repair storage before restarting the daemon. A known remote
   OAuth account cannot be added again under a second label, avoiding competing refresh owners.
-  The legacy `pi-accounts`
-  extension is excluded before import on startup and `/reload`, without modifying Pi CLI settings
-  or importing its tokens. The `accounts` service capability is required; older services must be
+  Radian does not bundle `pi-accounts` and applies no package-specific exclusion to user
+  extensions. Remove that extension from your Pi configuration if you want only Radian's account
+  integration; explicitly configured extensions retain their own effects. The `accounts`
+  service capability is required; older services must be
   explicitly restarted after existing jobs finish. Renaming additionally requires `account-labels`;
   older account-switching services remain usable but reject label edits until an explicit restart.
   The command accepts no arguments or images.
@@ -898,12 +908,41 @@ bun src/agents/check-plan.ts /path/to/plan.json
 
 The checker validates stored content hashes when present and never executes acceptance-criterion text.
 
+### Default extension packages
+
+Radian ships pinned `pi-mcp-adapter` and `pi-web-access` dependencies and
+loads their declared resources through the standard SDK package/resource loader. It does not
+register packages in user `settings.json`, install defaults on first use, migrate credentials,
+or require a separate Pi CLI. A package's extensions, skills and prompts come from the selected
+source: project package selections precede user packages, which precede bundled fallbacks.
+Manifest names identify duplicates across different installation paths and symlinks before import.
+Explicit resource filters remain effective; an entirely disabled package does not trigger an install.
+Broken explicit selections report errors rather than silently loading the bundled version.
+Extension import failures appear as startup transcript notices; paths and errors are recorded in
+`runtime.log` without adding diagnostics to model history. Standalone extension-file registrations retain normal SDK discovery and suppress a matching
+bundled package, without mixing in that package's skills or prompts. Other user resources remain
+under SDK discovery, and reload applies the latest settings and project-trust decision.
+
+Compiled distributions include a sibling `packages/` dependency/resource tree. Copy it with the
+executable, preserving symlinks. Owned subagents run in the same Radian service using its embedded
+SDK; they need neither a package bootstrap nor another Pi CLI or Node. Radian does not ship the
+`pi-subagents` package, its workflow scripts, management commands or package-provided skills.
+
 ### Extension dialogs
 
-Configured Pi extensions can use `ctx.ui.input`, `select`, `confirm`, `notify` and `setStatus`
-through Radian's native UI. Main sessions advertise `ctx.mode === "rpc"`, not `"tui"`; owned
-subagents do not receive an interactive UI. This requires the additive `extension-ui` runtime
-capability. Finish existing jobs and explicitly restart an older service to enable it.
+Configured Pi extensions can use `ctx.ui.input`, `select`, `confirm`, `editor`, `custom`, `notify`
+and `setStatus`. Basic dialogs and multiline editors use native Radian controls; custom components
+run in an isolated Pi viewport rendered by the shared embedded-terminal surface, never on process
+stdin/stdout. Factories, callbacks, overlays and disposal stay in the service; bounded parsed-screen
+frames and correlated input/resize responses cross IPC. Arbitrary terminal controls and OSC clipboard
+writes are not forwarded to the host terminal. Package handlers and persistence logic are unchanged.
+This supports the default packages' observed component APIs, not every possible extension integration.
+
+The main SDK session remains RPC. Supported package UI commands receive a component-capable TUI
+context only while an interactive viewport is available; RPC-only inspection keeps RPC mode.
+Owned Radian leaf sessions receive no interactive UI or additional delegation capability.
+The `extension-ui`, `extension-components` and `extension-arguments` service capabilities identify
+these additions. Finish existing jobs and explicitly restart an older service to enable them.
 
 Dialogs belong to the originating session and conversation. Select that session to answer; another
 open popup temporarily takes precedence. **Enter** explicitly submits input or a choice, and
@@ -923,13 +962,25 @@ previous server choices, and availability is checked again after selection.
 
 The authentication dialog displays the authorization URL and accepts the callback URL.
 `extension.browser` and `extension.copy-url` open/copy the displayed URL; use Help or the contextual
-hints for their configured keys. No MCP authentication is implemented separately. Pi custom components
-and extension multiline editors are not hosted and fail explicitly; terminal decorations/editor
-replacement keep their non-interactive SDK behavior.
+hints for their configured keys. No MCP authentication is implemented separately. Multiline editors
+preserve literal Enter/newlines; `extension.submit` defaults to **Ctrl+S** there and **Esc** cancels
+without saving. Package component controls keep their native keyboard ownership and Pi keybindings;
+explicit Radian keymap overrides remain available. Held activation/cancellation keys cannot submit a
+following dialog or clear the restored Agent draft. Terminal decorations and replacement of the main
+Agent editor retain their non-interactive SDK behavior.
+
+Command argument candidates come from the registered SDK `getArgumentCompletions` callback,
+including asynchronous callbacks, rather than a reimplemented command grammar. Insertion preserves
+the command and trailing text. Resource revision, connection and query fences reject stale results.
+Subagents slash results replace their running placeholder even when Pi marks the final envelope
+hidden; unrelated internal messages remain hidden. RPC inspection replies survive synchronous widget
+emission/retraction as correlated, view-only transcript notices, without entering model history.
+Extension-requested reload reuses the host reload path, retaining the conversation and catalog
+revision rules; errors do not imply that previously accepted configuration changes were rolled back.
 
 Command admission can complete before a dialog is answered; it does not imply authentication has
-finished. Responses use a separate instance-, session- and conversation-fenced operation. Dialogs
-expire after the requested timeout, capped at ten minutes (also the default), and cancel on interrupt,
+finished. Responses use a separate instance-, session- and conversation-fenced operation. Basic dialogs and multiline editors
+expire after the requested timeout, capped at ten minutes (also the default), and all UI waits cancel on interrupt,
 close or last-client disconnect. Cancelling a wait does not prove that a remote action was rolled back.
 Dialog state, callback answers, extension notifications and statuses are transient: Radian does not
 add them to Agent drafts, model messages, session snapshots on disk or logs. Trusted extensions still
@@ -1673,11 +1724,76 @@ and receive snapshots; it never owns or disposes SDK executions. macOS/Linux are
 local-service platforms for this implementation.
 Changing selection/search never calls SDK `switchSession()`, aborts an execution, or changes
 `process.cwd()`. Nonselected sessions continue streaming and publishing snapshots.
-The `radian_subagent` tool creates an owned SDK child in the same worktree and waits for its result.
-Children cannot delegate further. Finished children retain display metadata but release execution
-resources. Configured Pi extensions, context files, skills and prompt templates use SDK discovery.
-Pi's interactive terminal UI is not embedded; extension-specific UI compatibility and subprocess
-cleanup depend on the extension's SDK integration. Cache warming is disabled.
+The `radian-subagent` tool creates an owned SDK child in the same worktree with a fresh conversation.
+Children cannot delegate further. Finished children release execution resources while preserving
+saved histories and status-query results. All child status rows disappear together ten seconds after
+the last child settles. A later launch starts a new visible batch without resurrecting hidden rows.
+Default and configured Pi extensions, context files, skills and prompt templates use SDK discovery.
+Package component viewports are isolated from the workbench terminal; extension-specific lifecycle
+behavior still belongs to the package. Cache warming is disabled.
+
+#### Agent profiles and collaboration
+
+Define Markdown profiles in `~/.pi/agent/agents/*.md`. Trusted project `.pi/agents/*.md` files override
+same-named user profiles, with nearer project directories taking precedence. Profiles use YAML
+frontmatter (`name`, `description`, optional exact `provider/model` in `model`, `thinking`, `skills`
+and `tools`) and role instructions in the body. Unknown fields and invalid definitions fail explicitly.
+Legacy `advertise`, `systemPromptMode`, `inherit*` and `extensions` profile fields are not supported:
+profiles are advertised by default; Pi's base prompt, common/project context and activated extensions
+remain available without per-profile filesystem paths. Role instructions append to the normal prompt.
+
+Radian appends its parent/child API protocol from `src/agents/subagent-instructions.ts`, independently
+of profile instructions and installed skills. Parent guidance covers the coordination tool and internal
+event semantics; child guidance covers supervisor reporting and the no-delegation boundary. The normal
+Pi base prompt, append files and context remain intact. An optional, host-independent `subagent` skill
+can provide collaboration principles; no skill name or installation is required for the runtime API.
+
+`skills` is a list of required skill names whose bodies are provided with their source paths; other
+available skills stay discoverable for on-demand reading. A skill with `metadata: { parentOnly: "true" }`
+is omitted from child discovery, including required-role skill resolution. This is catalog scoping,
+not a filesystem sandbox. A `tools` list is an SDK-enforced allowlist of exact tool names or `*`
+patterns, also applying to dynamically activated extension tools. Default-selection modifiers such as
+`+write` are rejected. Omitting the field uses the SDK defaults; `[]` allows only the child reporting
+protocol. Neither tool restrictions nor role instructions are an OS sandbox, particularly if `bash`
+is allowed. The `radian-supervisor` protocol tool is always available to owned children.
+
+Parent tool actions:
+
+- `list`: discover role profiles without launching work.
+- `spawn { agent, task, async? }`: asynchronous by default, returning a run ID. At most five runs may
+  be active per parent and 128 may be retained per conversation. `async: false` waits for output, is
+  disallowed alongside other active children, and cannot answer child questions.
+- `status { id? }`: read owned tasks, observed active tools, progress, pending questions, timing and
+  saved-session paths. `output` contains only the settled final assistant response; `recentOutput`
+  contains the separately bounded inspection tail. Failed, cancelled and legacy runs without an
+  explicit final response never borrow earlier prose or promote tool logs to a result. Full transcripts
+  remain in saved History.
+- `wait { id? }`: wait for the selected runs to finish, returning early when any owned child needs
+  an answer. Include other pending questions in the returned snapshot so they cannot deadlock the parent.
+- `steer { id, message }`: queue guidance for a live child. Delivery is not proof of compliance and
+  does not undo accepted edits; a pending question needs `reply`, not steering.
+- `reply { id, questionId, message }`: answer one correlated, still-pending question exactly once.
+- `stop { id }`: cancel the owned run without claiming rollback.
+
+Child tool actions on `radian-supervisor` are `progress { message }` and `ask { message }`. Progress
+is nonblocking and retained as a bounded list; an ask waits for an explicit parent reply. Important
+updates, questions and final results enter an owner-scoped inbox outside the SDK follow-up queue.
+Reports are coalesced and revalidated at the parent's idle boundary. State already returned by
+`status`/`wait`, answered questions, superseded progress and intentionally stopped work do not wake
+the parent again. Genuinely unseen questions and outcomes still wake it using a hidden, explicitly
+internal SDK custom message; a batch is delivered once without becoming user transcript JSON.
+No sibling or unrelated-session channel is provided. Parent closure, replacement,
+interruption and service shutdown release outstanding questions and clean up owned executions.
+After a service restart, unfinished child records are historical, not automatically resumed jobs.
+The legacy `radian_subagent` spelling remains readable in stored analytics, but is not an active tool.
+
+The main transcript projects one foldable `[subagent]` delegation record from each exact launch receipt.
+It retains the task, meaningful questions/replies, guidance, final response and failures, updating the
+same anchor rather than appending one notice per event. Successful `list`/`status`/`wait` plumbing is
+hidden; failed control operations remain visible. Routine progress updates only the existing compact
+status caption. Internal event envelopes, UUIDs and child tool/source logs are not dumped into the
+main transcript. Native child details and full saved conversations retain their ordinary renderer.
+Older visible internal-event entries are hidden when reloaded or rendered from a saved snapshot.
 
 Closing immediately removes the UI item and applies the existing next/previous/empty fallback.
 The registry retains its closing handle, rejects new work, and cancels the main agent and every
@@ -1708,7 +1824,7 @@ in each worktree and submit these scripted commands:
 - `slow`: a ten-second SDK response stream; switch worktrees and return to inspect progress.
 - `read`: invoke the real SDK read tool on the selected worktree's `workspace.txt`.
 - `write`: invoke the real SDK write tool on `radian-probe.txt` in the selected worktree.
-- `delegate`: invoke `radian_subagent` with an owned slow SDK child; close its parent while working.
+- `delegate`: invoke `radian-subagent` with the offline `probe` profile and an owned slow SDK child; close its parent while working.
 
 **`--test-runtime` uses scripted model responses, not real AI.** It uses isolated credentials/settings
 and no provider requests, while exercising the real SDK session, tools, persistence and cancellation.
@@ -2115,12 +2231,15 @@ The work-status block expands vertically below the selected session's main run s
 the composer. Each subagent has its own name, `Working (24s)` or terminal outcome, and a short
 quoted received-task caption when request metadata exists. The caption starts in the same column
 as the agent name, with no additional indent; long inputs end in an ellipsis. Runtime timing survives
-reconnects; terminal child durations stop advancing. Children remain visible when their parent settles. The block
+reconnects; terminal child durations stop advancing. Children remain visible when their parent settles,
+but the entire child group hides ten seconds after all owned children settle. Results remain in History
+and status queries. A pending question is labeled `Waiting`. The block
 preserves input drafts, focus and paused transcript anchors. Compact layouts bound child feedback
 to at most eight rows and one third of the pane height, prioritize active children and summarize
 omitted rows rather than pushing the composer off-screen.
 
-Owned SDK children provide task previews and timing directly. Pi extension async children are
+Owned SDK children provide task previews and timing directly. Compatibility decoding for externally
+supplied legacy Pi extension async children is retained; these are
 read-only observations of the versioned `subagent-async` RPC widget snapshot; workflow wrappers and
 host gates are not counted as agents. These observations do not grant Radian lifecycle ownership.
 Pi snapshots supply labels and timing, not delegated prompt text. Session-local lifecycle identity

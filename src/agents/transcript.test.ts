@@ -10,6 +10,208 @@ function complete(transcript: SessionTranscript, message: Message): void {
   transcript.handle({ type: "message_end", message });
 }
 
+test("Native delegation projects one durable task record while internal queries, control JSON and read logs stay hidden", () => {
+  // Exact run receipts bind later questions, replies and outcomes to one launch record.
+  const transcript = new SessionTranscript([]);
+  const messages: Message[] = [];
+  const call = (
+    id: string,
+    args: Extract<
+      ReturnType<typeof fixtureMessage>["content"][number],
+      { type: "toolCall" }
+    >["arguments"],
+  ) => {
+    const message = fixtureMessage("openai-responses", "openai", "fixture");
+    message.stopReason = "toolUse";
+    message.content = [{ type: "toolCall", id, name: "radian-subagent", arguments: args }];
+    messages.push(message);
+    complete(transcript, message);
+  };
+  const result = (
+    id: string,
+    details: NonNullable<Extract<Message, { role: "toolResult" }>["details"]>,
+  ) => {
+    const message: Message = {
+      role: "toolResult",
+      toolCallId: id,
+      toolName: "radian-subagent",
+      content: [{ type: "text", text: JSON.stringify(details) }],
+      details,
+      isError: false,
+      timestamp: 1,
+    };
+    messages.push(message);
+    complete(transcript, message);
+  };
+  const snapshot = {
+    id: "INTERNAL_RUN_ID",
+    agent: "reviewer",
+    status: "working",
+    task: "Review the assigned API",
+    output: "",
+    recentOutput: "SOURCE_LOG_MUST_NOT_APPEAR",
+    questions: [],
+    progress: [],
+  };
+  call("launch", { action: "spawn", agent: "reviewer", task: "Review the assigned API" });
+  result("launch", snapshot);
+  const anchor = transcript.sections[0]!.id;
+  call("status", { action: "status", id: snapshot.id });
+  result("status", [
+    {
+      ...snapshot,
+      status: "waiting",
+      questions: [{ id: "INTERNAL_QUESTION_ID", message: "May I change the API?", createdAt: 1 }],
+    },
+  ]);
+  call("reply", {
+    action: "reply",
+    id: snapshot.id,
+    questionId: "INTERNAL_QUESTION_ID",
+    message: "Keep the public API unchanged.",
+  });
+  result("reply", { delivered: true, questionId: "INTERNAL_QUESTION_ID" });
+  call("steer", { action: "steer", id: snapshot.id, message: "Focus on backwards compatibility." });
+  result("steer", { disposition: "queued" });
+
+  // Completion is read through the normal query tool rather than a separate visible alert.
+  call("wait", { action: "wait", id: snapshot.id });
+  result("wait", [{ ...snapshot, status: "complete", output: "FINAL_REVIEW_ANSWER" }]);
+  const old: Message = {
+    role: "custom",
+    customType: "radian.subagent-event",
+    display: true,
+    content: JSON.stringify({ type: "finished", output: "LEGACY_RAW_SOURCE" }),
+    timestamp: 2,
+  };
+  messages.push(old);
+  complete(transcript, old);
+  const record = transcript.sections[0]!;
+  const manager = SessionManager.inMemory();
+  for (const message of messages) {
+    if (message.role === "custom")
+      manager.appendCustomMessageEntry(
+        message.customType,
+        message.content,
+        message.display,
+        message.details,
+      );
+    else if (message.role === "assistant" || message.role === "toolResult")
+      manager.appendMessage(message);
+  }
+  const restored = new SessionTranscript(manager.getBranch());
+
+  // Live and restored views show the same useful audit trail without transport payloads.
+  expect(transcript.sections).toHaveLength(1);
+  expect(record).toMatchObject({
+    id: anchor,
+    toolCallId: "launch",
+    summary: "reviewer · Review the assigned API · Complete",
+  });
+  expect(record.text).toContain("May I change the API?");
+  expect(record.text).toContain("Keep the public API unchanged.");
+  expect(record.text).toContain("Focus on backwards compatibility.");
+  expect(record.text).toContain("FINAL_REVIEW_ANSWER");
+  for (const hidden of [
+    "SOURCE_LOG_MUST_NOT_APPEAR",
+    "LEGACY_RAW_SOURCE",
+    "INTERNAL_RUN_ID",
+    "INTERNAL_QUESTION_ID",
+    "Arguments:",
+    "createdAt",
+  ])
+    expect(record.text).not.toContain(hidden);
+  expect(restored.sections.map(({ text, summary }) => ({ text, summary }))).toEqual([
+    { text: record.text, summary: record.summary },
+  ]);
+});
+
+test("Failed native coordination queries remain visible as errors without dumping control arguments", () => {
+  // Suppressing successful polling must not swallow a genuine domain failure.
+  const transcript = new SessionTranscript([]);
+  const call = fixtureMessage("openai-responses", "openai", "fixture");
+  call.stopReason = "toolUse";
+  call.content = [
+    {
+      type: "toolCall",
+      id: "bad-status",
+      name: "radian-subagent",
+      arguments: { action: "status", id: "PRIVATE_RUN_ID" },
+    },
+  ];
+  complete(transcript, call);
+
+  complete(transcript, {
+    role: "toolResult",
+    toolCallId: "bad-status",
+    toolName: "radian-subagent",
+    content: [{ type: "text", text: "This run does not belong to the current conversation." }],
+    isError: true,
+    timestamp: 1,
+  });
+
+  expect(transcript.sections).toHaveLength(1);
+  expect(transcript.sections[0]?.status).toBe("error");
+  expect(transcript.sections[0]?.text).toContain("does not belong");
+  expect(transcript.sections[0]?.text).not.toContain("PRIVATE_RUN_ID");
+});
+
+test("Subagent slash results replace their live placeholder even when the final envelope is hidden", () => {
+  const transcript = new SessionTranscript([]);
+  complete(transcript, {
+    role: "custom",
+    customType: "subagent-slash-result",
+    content: "Running child",
+    display: true,
+    details: { requestId: "request", result: { details: { progress: [{ status: "running" }] } } },
+    timestamp: 1,
+  });
+  const anchor = transcript.sections[0]!.id;
+  expect(transcript.sections[0]!.status).toBe("running");
+
+  complete(transcript, {
+    role: "custom",
+    customType: "subagent-slash-result",
+    content: "Child completed",
+    display: false,
+    details: {
+      requestId: "request",
+      result: { content: [{ type: "text", text: "Child completed" }] },
+    },
+    timestamp: 2,
+  });
+
+  expect(transcript.sections).toHaveLength(1);
+  expect(transcript.sections[0]).toMatchObject({
+    id: anchor,
+    text: "Child completed",
+    status: "complete",
+  });
+});
+
+test("Hidden internal extension messages stay hidden while failed slash results remain visible", () => {
+  const transcript = new SessionTranscript([]);
+  complete(transcript, {
+    role: "custom",
+    customType: "subagent-compaction-resume",
+    content: "Internal instructions",
+    display: false,
+    timestamp: 1,
+  });
+  complete(transcript, {
+    role: "custom",
+    customType: "subagent-slash-result",
+    content: "Child failed",
+    display: false,
+    details: { requestId: "request", result: { isError: true } },
+    timestamp: 2,
+  });
+
+  expect(transcript.sections).toHaveLength(1);
+  expect(transcript.sections[0]).toMatchObject({ text: "Child failed", status: "error" });
+  expect(JSON.stringify(transcript.sections)).not.toContain("Internal instructions");
+});
+
 test("Parallel tool calls pair reversed results by call ID and preserve unknown arguments", () => {
   // Identical tool names must not cause the second result to overwrite the first call.
   const transcript = new SessionTranscript([]);

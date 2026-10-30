@@ -13,19 +13,22 @@ export type PtyAttachment = {
   read?(): Promise<Result<TerminalText, ExpectedError>>;
 };
 
+export type TerminalDisplayFrame = Pick<PtyFrame, "cols" | "rows" | "revision" | "ansi"> &
+  Partial<PtyFrame>;
+
 // A presentation/input adapter only. Owners decide what to launch, which tab is
 // selected, whether to display exited output, and when to close a process.
 export class TerminalSurface {
   readonly root: EmbeddedTerminalRenderable;
   private connection: PtyAttachment | undefined;
-  private frame: PtyFrame | undefined;
+  private frame: TerminalDisplayFrame | undefined;
   private dimensions = "";
   private paintQueued = false;
   private prepared:
     | { cols: number; rows: number; revision: number; commit: () => void }
     | undefined;
   private readonly unsubscribeTheme: (() => void) | undefined;
-  private paintedFrame: PtyFrame | undefined;
+  private paintedFrame: TerminalDisplayFrame | undefined;
   acceptsInput = true;
 
   constructor(
@@ -165,7 +168,7 @@ export class TerminalSurface {
     this.resize();
   }
 
-  display(frame: PtyFrame): void {
+  display(frame: TerminalDisplayFrame): void {
     this.frame = frame;
 
     const prepared = this.prepared;

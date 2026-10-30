@@ -10,6 +10,7 @@ import {
   historyPreviewSectionLimit,
 } from "./history-preview.ts";
 import { runCompletionEntryType } from "./run-completion.ts";
+import { commandDisplay, commandDisplayEntryType } from "./command-display.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 
 const header = {
@@ -40,6 +41,43 @@ async function fixture(records: unknown[]) {
     },
   };
 }
+
+test("Bounded History previews retain command annotations at the oldest included prompt boundary", async () => {
+  // More than fifteen display sections force the reverse reader to stop at a prompt boundary.
+  const records: unknown[] = [header];
+  let parent: string | null = null;
+  for (let index = 0; index < 12; index++) {
+    const user = `user-${index}`;
+    const metadata = `command-${index}`;
+    const answer = `answer-${index}`;
+    records.push(message(user, parent, "user", "PRIVATE_COMMAND_INSTRUCTIONS"));
+    records.push({
+      type: "custom",
+      id: metadata,
+      parentId: user,
+      timestamp: header.timestamp,
+      customType: commandDisplayEntryType,
+      data: { messageId: user, parts: commandDisplay(`/review task-${index}`, ["review"]) },
+    });
+    records.push(
+      message(answer, metadata, "assistant", [{ type: "text", text: `Answer ${index}` }]),
+    );
+    parent = answer;
+  }
+  const app = await fixture(records);
+  try {
+    const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
+
+    // Even the oldest retained command must resolve from its message ID without reading the full file.
+    expect(preview.sections).toHaveLength(15);
+    expect(preview.sections?.[0]).toMatchObject({ text: "/review", commandName: "review" });
+    expect(preview.sections?.at(-2)?.text).toBe("task-11");
+    expect(preview.text).not.toContain("PRIVATE_COMMAND_INSTRUCTIONS");
+    expect(JSON.stringify(preview.sections)).not.toContain("PRIVATE_COMMAND_INSTRUCTIONS");
+  } finally {
+    await app.close();
+  }
+});
 
 test("Previews read only the current branch's latest SDK sections without changing writers or files", async () => {
   // The previous branch and tool/thinking payload must not be mistaken for the chosen conversation.

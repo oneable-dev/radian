@@ -1,11 +1,15 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
+import { readdir } from "node:fs/promises";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectOk } from "../testing/results.ts";
 import type { RuntimeClient } from "./client.ts";
 import { connectRuntime } from "./lifecycle.ts";
 import { daemonPaths, pidAlive } from "./storage.ts";
 import packageInfo from "../../package.json";
+import { buildDistribution } from "../build.ts";
+import { probeExtensionResources } from "../testing/extension-resources.ts";
+import { probeExtensionParent } from "../testing/extension-parent.ts";
 
 async function until(check: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 15000;
@@ -18,7 +22,6 @@ async function until(check: () => boolean | Promise<boolean>): Promise<void> {
 test("Standalone executables manage offline sessions and terminal supervisors outside the source checkout", async () => {
   // Build into a private directory without node_modules and never address a user runtime.
   const fixture = await createWorktreeFixture();
-  const entry = join(import.meta.dir, "..", "index.ts");
   const binary = join(fixture.directory, "radian");
   const stateRoot = join(fixture.directory, "state");
   const env = { ...process.env, XDG_CONFIG_HOME: join(fixture.directory, "config") };
@@ -40,25 +43,13 @@ test("Standalone executables manage offline sessions and terminal supervisors ou
   const administrative = (command: string) =>
     run(["runtime", command, "--test-runtime", "--state-dir", stateRoot]);
   try {
-    const build = Bun.spawn(
-      [
-        process.execPath,
-        "build",
-        "--compile",
-        "--no-compile-autoload-dotenv",
-        "--no-compile-autoload-bunfig",
-        entry,
-        "--outfile",
-        binary,
-      ],
-      { stdout: "pipe", stderr: "pipe" },
+    await buildDistribution(binary);
+    expect(await Bun.file(binary).exists()).toBe(true);
+    const runtimePackages = await readdir(
+      join(fixture.directory, "packages", "node_modules", ".store"),
     );
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(build.stdout).text(),
-      new Response(build.stderr).text(),
-      build.exited,
-    ]);
-    expect({ stdout, stderr, code }).toMatchObject({ code: 0 });
+    expect(runtimePackages.some((name) => name.startsWith("radian@"))).toBe(false);
+    expect(runtimePackages.some((name) => name.startsWith("pi-subagents@"))).toBe(false);
     const preloadMarker = join(fixture.directory, "unexpected-preload");
     await Bun.write(join(fixture.directory, "bunfig.toml"), 'preload = ["./preload.ts"]\n');
     await Bun.write(
@@ -108,6 +99,13 @@ test("Standalone executables manage offline sessions and terminal supervisors ou
       clearTimeout(timeout);
       demo.terminal?.close();
     }
+
+    await probeExtensionResources(binary, join(fixture.directory, "resource-fixture"));
+    await probeExtensionParent(
+      binary,
+      join(fixture.directory, "parent-fixture"),
+      fixture.repository,
+    );
 
     // The compiled application must relaunch itself without a virtual source-path argument.
     expect(await administrative("restart")).toMatchObject({ code: 0 });

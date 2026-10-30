@@ -12,6 +12,7 @@ import {
   filterCompletions,
   type CompletionItem,
   type CompletionResult,
+  type CompletionQuery,
 } from "../../agents/completion.ts";
 import type { CompletionProvider } from "../../agents/ui/completion-menu.ts";
 import { CapabilityError, InputError } from "../../errors.ts";
@@ -95,6 +96,89 @@ async function mount(
     },
   };
 }
+
+test("Argument menus preserve the command, trailing text and input focus through navigation and insertion", async () => {
+  // The provider advertises the callback without teaching the UI any command grammar.
+  const queries: CompletionQuery[] = [];
+  const provider: CompletionProvider = Object.assign(
+    async (_id: string, query: CompletionQuery) => {
+      queries.push({
+        kind: query.kind,
+        query: query.query,
+        ...(query.command ? { command: query.command } : {}),
+      });
+      return ok({
+        items: [
+          { kind: "argument" as const, value: "token status", description: "Show token status" },
+          { kind: "argument" as const, value: "token set", description: "Set token" },
+        ],
+        truncated: false,
+      });
+    },
+    { supportsArguments: (_id: string, command: string) => command === "mcp" },
+  );
+  const app = await mount(provider);
+  try {
+    app.input.value = "/mcp token st --keep";
+    app.input.cursorOffset = app.input.value.indexOf(" --keep");
+    await app.complete();
+
+    // Candidate navigation must not become text editing or execute the command.
+    app.mockInput.pressKey("n", { ctrl: true });
+    app.mockInput.pressKey("p", { ctrl: true });
+    await app.render();
+    expect(app.input.value).toBe("/mcp token st --keep");
+    expect(app.captureCharFrame()).toContain("Show token status");
+    app.mockInput.pressTab();
+    await app.render();
+
+    expect(queries).toEqual([{ kind: "argument", command: "mcp", query: "token st" }]);
+    expect(app.input.value).toBe("/mcp token status --keep");
+    expect(app.input.cursorOffset).toBe("/mcp token status".length);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+    expect(app.sent).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Late argument results never cross command scopes", async () => {
+  // Both commands share an empty argument prefix; command identity must fence results.
+  const old = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>();
+  const provider: CompletionProvider = Object.assign(
+    async (_id: string, query: CompletionQuery) => {
+      return query.command === "mcp"
+        ? old.promise
+        : ok({
+            items: [{ kind: "argument" as const, value: "run helper", description: "Run helper" }],
+            truncated: false,
+          });
+    },
+    { supportsArguments: () => true },
+  );
+  const app = await mount(provider);
+  try {
+    await app.type("/mcp ");
+    app.input.value = "/subagents ";
+    await app.complete();
+    old.resolve(
+      ok({
+        items: [{ kind: "argument", value: "token stale", description: "Obsolete MCP candidate" }],
+        truncated: false,
+      }),
+    );
+    await app.render();
+    app.mockInput.pressTab();
+    await app.render();
+
+    expect(app.input.value).toBe("/subagents run helper ");
+    expect(app.captureCharFrame()).not.toContain("Obsolete MCP candidate");
+    expect(app.sent).toEqual([]);
+  } finally {
+    old.resolve(ok({ items: [], truncated: false }));
+    await app.close();
+  }
+});
 
 test("Command completion shows prefix matches only, excluding middle substrings", async () => {
   // The menu contains mcp, whose suffix must not become an executable candidate.

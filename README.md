@@ -224,9 +224,11 @@ implementation notes, including:
   resolution are not built into the Git view.
 - Live editor and terminal state survives interface detach, not runtime shutdown.
   Recovery does not replay shell commands or interrupted agent requests.
-- Pi skills, prompt templates, and SDK-compatible extensions can be discovered.
-  Basic [extension dialogs](docs/reference.md#extension-dialogs) use Radian's native UI;
-  Pi's custom terminal components and extension multiline editors are not embedded.
+- Subagents, MCP Adapter and Web Access are bundled defaults, loaded through the Pi SDK.
+  Project and user package selections take precedence without changing Pi settings.
+  [Extension dialogs](docs/reference.md#extension-dialogs) include native multiline editing
+  and isolated component viewports for the supported packages. This is not a guarantee
+  of compatibility with every third-party terminal extension.
 - Native Windows is not currently supported by the local runtime.
 
 ## Development
@@ -237,10 +239,14 @@ bun test
 bun run build
 ```
 
-`bun run build` creates `dist/radian` for the current operating system and CPU,
-including the Bun runtime. Git and Neovim remain external requirements. The build
-disables automatic project `.env` and `bunfig.toml` loading for deterministic
-startup; Radian settings and explicit provider authentication still apply.
+`bun run build` creates `dist/radian` and its `dist/packages/` runtime resources for the
+current operating system and CPU. Distribute them together and preserve the package
+symlinks. The executable includes Bun; owned SDK subagents run inside the Radian service
+without a separate Pi CLI or Node. Define their roles, models, required skills and tool
+allowlists in `~/.pi/agent/agents/*.md`, then coordinate them through `radian-subagent`.
+MCP and Web Access are bundled; `pi-subagents` is not. Git and Neovim remain external requirements. Builds disable automatic
+project `.env` and `bunfig.toml` loading; Radian settings and explicit provider
+authentication still apply.
 
 Tests that exercise embedded Neovim also require `nvim`. See the
 [reference guide](docs/reference.md#test-real-sdk-switching-without-a-paid-model)

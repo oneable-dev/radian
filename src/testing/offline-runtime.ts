@@ -1,12 +1,16 @@
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PiSessionOptions } from "../agents/pi-session-adapter.ts";
 
 // These are scripted SDK responses, not a language model or a substitute for live-provider validation.
 export async function offlineRuntime(directory: string): Promise<PiSessionOptions> {
-  await mkdir(directory, { recursive: true });
+  await mkdir(join(directory, "agents"), { recursive: true });
+  await writeFile(
+    join(directory, "agents", "probe.md"),
+    "---\nname: probe\ndescription: Offline worktree probe\ntools: [read, bash, edit, write]\n---\nComplete the assigned offline probe without delegating.\n",
+  );
 
   const modelRuntime = await ModelRuntime.create({
     authPath: join(directory, "auth.json"),
@@ -109,7 +113,10 @@ export async function offlineRuntime(directory: string): Promise<PiSessionOption
                 name: "write",
                 arguments: { path: "radian-probe.txt", content: "Offline SDK write probe\n" },
               }
-            : { name: "radian_subagent", arguments: { name: "Worktree probe", task: "slow" } };
+            : {
+                name: "radian-subagent",
+                arguments: { action: "spawn", agent: "probe", task: "slow", async: false },
+              };
       message.content.push({ type: "toolCall", id: crypto.randomUUID(), ...tool });
       message.stopReason = "toolUse";
       finish();

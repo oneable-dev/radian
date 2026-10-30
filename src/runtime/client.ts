@@ -653,7 +653,17 @@ export class RuntimeClient {
     if (signal?.aborted) {
       return err(new CancelledError());
     }
-    if (!Value.Check(completionQuerySchema, { sessionId, kind: query.kind, query: query.query })) {
+    if (query.kind === "argument" && !this.state.capabilities?.includes("extension-arguments")) {
+      return err(
+        new CapabilityError(
+          "Running service does not support extension argument completion. Restart it to enable this feature.",
+        ),
+      );
+    }
+    if (
+      (query.kind === "argument" && !query.command) ||
+      !Value.Check(completionQuerySchema, { sessionId, ...query })
+    ) {
       return err(
         new InputError(
           "Invalid completion query; names and queries are limited to 4,096 characters.",
@@ -669,6 +679,7 @@ export class RuntimeClient {
       ...(signal ? [signal] : []),
     ]);
     const params = new URLSearchParams({ sessionId, kind: query.kind, query: query.query });
+    if (query.command) params.set("command", query.command);
     const attempted = await capture(() =>
       transport(this.paths, `/completions?${params.toString()}`, {
         headers: { "X-Radian-Instance": instance },

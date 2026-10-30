@@ -3,8 +3,14 @@ import { completionLimit } from "../agents/completion.ts";
 
 export const completionQuerySchema = Type.Object({
   sessionId: Type.String({ minLength: 1, maxLength: 4096 }),
-  kind: Type.Union([Type.Literal("command"), Type.Literal("skill"), Type.Literal("file")]),
+  kind: Type.Union([
+    Type.Literal("command"),
+    Type.Literal("skill"),
+    Type.Literal("file"),
+    Type.Literal("argument"),
+  ]),
   query: Type.String({ maxLength: 4096 }),
+  command: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
 });
 export const completionItemSchema = Type.Object({
   kind: Type.Union([
@@ -12,9 +18,11 @@ export const completionItemSchema = Type.Object({
     Type.Literal("skill"),
     Type.Literal("template"),
     Type.Literal("file"),
+    Type.Literal("argument"),
   ]),
   value: Type.String({ minLength: 1, maxLength: 4096 }),
   description: Type.String({ maxLength: 1024 }),
+  hasArguments: Type.Optional(Type.Boolean()),
 });
 export const completionResultSchema = Type.Object({
   items: Type.Array(completionItemSchema, { maxItems: completionLimit }),

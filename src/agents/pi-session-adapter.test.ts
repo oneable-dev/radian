@@ -14,6 +14,9 @@ import { summarizeRequest } from "./request-summary.ts";
 import { expectOk, expectError } from "../testing/results.ts";
 import { tinyPng } from "../testing/image.ts";
 import { ok } from "../result.ts";
+import { readHistoryPreview } from "./history-preview.ts";
+import { commandDisplayEntryType } from "./command-display.ts";
+import { SessionHistory } from "./history.ts";
 
 function controlledStreams(options: PiSessionOptions) {
   const gates = new Map<
@@ -190,6 +193,236 @@ test("history completion overrides extensions and raw submission never reaches S
     expect(expectError(invalid).code).toBe("INVALID_INPUT");
     expect(requests).toBe(0);
     expect(app.registry.details(id)?.sections).toEqual([]);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+async function reviewTemplate(directory: string, body = "PRIVATE_COMMAND_INSTRUCTIONS\nTask: $@") {
+  const prompts = join(directory, "agent", "prompts");
+  await mkdir(prompts, { recursive: true });
+  await writeFile(join(prompts, "review.md"), `---\ndescription: Review fixture\n---\n${body}\n`);
+}
+
+test("File prompt commands show invocation and arguments while preserving expanded model context and saved History", async () => {
+  // Use real template discovery and SDK persistence with only the model transport offline.
+  const inputs: string[] = [];
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    defaultPackagePaths: [],
+    streamFn: (model, context, request) => {
+      const user = context.messages.findLast((message) => message.role === "user");
+      if (user?.role === "user")
+        inputs.push(
+          typeof user.content === "string"
+            ? user.content
+            : user.content
+                .filter((part) => part.type === "text")
+                .map((part) => part.text)
+                .join(""),
+        );
+      return options.streamFn!(model, context, request);
+    },
+  }));
+  try {
+    await reviewTemplate(app.directory);
+    const extensions = join(app.directory, "agent", "extensions");
+    await mkdir(extensions, { recursive: true });
+    await writeFile(
+      join(extensions, "context-edit.ts"),
+      `export default function(pi) {
+      pi.on("agent_before_settle", (_event, ctx) => {
+        const entries = ctx.sessionManager.getBranch();
+        const user = entries.findLast(entry => entry.type === "message" && entry.message.role === "user");
+        if (!user || entries.some(entry => entry.type === "context_edit" && entry.targetId === user.id)) return;
+        return { entries: [{ type: "context_edit", targetId: user.id, replacement: { content: user.message.content } }] };
+      });
+    }`,
+    );
+    const id = expectOk(await app.registry.create(app.main.id));
+
+    // Execute both forms before closing, without retaining the template file for restoration.
+    expectOk(await app.registry.prompt(id, '/review src/agents "keep quotes"'));
+    expectOk(await app.registry.prompt(id, "/review"));
+    const file = app.registry.sessionFile(id)!;
+    const live = app.registry.details(id)!;
+    const saved = SessionManager.open(file);
+    const preview = expectOk(await readHistoryPreview(file, app.main.id, saved.getSessionId()));
+    expectOk(await app.registry.close(id));
+    const history = new SessionHistory(
+      [app.repository],
+      app.registry,
+      join(app.directory, "agent", "sessions"),
+    );
+    const historyItems = expectOk(await history.list(app.main.id));
+    await writeFile(join(app.directory, "agent", "prompts", "review.md"), "Changed template body");
+    const reopened = expectOk(await app.registry.create(app.main.id, file));
+
+    // Live, bounded History and reopening must agree without leaking expanded instructions.
+    expect(inputs).toEqual([
+      "PRIVATE_COMMAND_INSTRUCTIONS\nTask: src/agents keep quotes",
+      "PRIVATE_COMMAND_INSTRUCTIONS\nTask: ",
+    ]);
+    for (const sections of [
+      live.sections,
+      preview.sections,
+      app.registry.details(reopened)?.sections,
+    ]) {
+      expect(
+        sections?.filter((section) => section.kind === "user").map((section) => section.text),
+      ).toEqual(["/review", 'src/agents "keep quotes"', "/review"]);
+      expect(sections?.filter((section) => section.commandName === "review")).toHaveLength(2);
+      expect(JSON.stringify(sections)).not.toContain("PRIVATE_COMMAND_INSTRUCTIONS");
+    }
+    expect(live.output).not.toContain("PRIVATE_COMMAND_INSTRUCTIONS");
+    expect(live.request?.text).toBe("/review");
+    expect(app.registry.details(reopened)?.request?.text).toBe("/review");
+    expect(preview.text).not.toContain("PRIVATE_COMMAND_INSTRUCTIONS");
+    expect(historyItems[0]?.title).toBe('/review src/agents "keep quotes"');
+    expect(saved.getBranch().some((entry) => entry.type === "context_edit")).toBe(true);
+    expect(
+      saved
+        .getBranch()
+        .filter((entry) => entry.type === "custom" && entry.customType === commandDisplayEntryType),
+    ).toHaveLength(2);
+    expect(JSON.stringify(saved.buildSessionContext().messages)).toContain(
+      "PRIVATE_COMMAND_INSTRUCTIONS",
+    );
+    expect(JSON.stringify(saved.buildSessionContext().messages)).not.toContain(
+      commandDisplayEntryType,
+    );
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Command display persistence failures warn without rejecting accepted model work", async () => {
+  // Optional display persistence can fail after the SDK has already accepted the prompt.
+  const app = await sdkFixture(false, (options) => ({ ...options, defaultPackagePaths: [] }));
+  const original = SessionManager.prototype.appendCustomEntry;
+  const append = spyOn(SessionManager.prototype, "appendCustomEntry").mockImplementation(function (
+    this: SessionManager,
+    type,
+    data,
+  ) {
+    if (type === commandDisplayEntryType)
+      throw Object.assign(new Error("Fixture write denied"), { code: "EACCES" });
+    return original.call(this, type, data);
+  });
+  try {
+    await reviewTemplate(app.directory);
+    const id = expectOk(await app.registry.create(app.main.id));
+
+    expectOk(await app.registry.prompt(id, "/review inspect"));
+
+    // The invocation remains compact in memory; persistence uncertainty is reported separately.
+    const details = app.registry.details(id)!;
+    expect(details.status).toBe("complete");
+    expect(details.error).toBeNull();
+    expect(details.sections?.some((section) => section.commandName === "review")).toBe(true);
+    expect(
+      details.sections?.find((section) => section.title === "Command display persistence")?.text,
+    ).toContain("STORAGE_FAILED");
+    expect(JSON.stringify(details)).not.toContain("PRIVATE_COMMAND_INSTRUCTIONS");
+  } finally {
+    append.mockRestore();
+    await app.cleanup();
+  }
+});
+
+test("Host controls and extension commands never receive file-command transcript tags", async () => {
+  // Conflicting prompt files must not replace app controls or registered extension handlers.
+  const app = await sdkFixture(false, (options) => ({ ...options, defaultPackagePaths: [] }));
+  try {
+    await commandExtension(app.directory);
+    const prompts = join(app.directory, "agent", "prompts");
+    await mkdir(prompts, { recursive: true });
+    for (const name of ["model", "history", "fixture-command"]) {
+      await writeFile(join(prompts, `${name}.md`), "PRIVATE_COMMAND_INSTRUCTIONS");
+    }
+    const id = expectOk(await app.registry.create(app.main.id));
+
+    for (const text of ["/model", "/history"]) {
+      expect(expectError(await app.registry.prompt(id, text)).code).toBe("UNSUPPORTED_CAPABILITY");
+    }
+    expectOk(await app.registry.prompt(id, "/fixture-command argument"));
+
+    // UI-only actions and extension execution must not fabricate user messages or model runs.
+    expect(app.registry.details(id)?.sections).toEqual([]);
+    expect(app.registry.details(id)?.status).toBeNull();
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Queued prompt commands keep their own display identity and compact pending summaries", async () => {
+  // A long-running request leaves two identical expanded bodies queued with distinct arguments.
+  const app = await sdkFixture(true, (options) => ({ ...options, defaultPackagePaths: [] }));
+  try {
+    await reviewTemplate(app.directory, "PRIVATE_COMMAND_INSTRUCTIONS");
+    const id = expectOk(await app.registry.create(app.main.id));
+    const running = app.registry.prompt(id, "hold A");
+    await app.streams.waitFor("A");
+
+    expectOk(await app.registry.prompt(id, "/review first"));
+    expectOk(await app.registry.prompt(id, "/review second"));
+    expect(app.registry.details(id)?.pendingMessages?.map((message) => message.text)).toEqual([
+      "/review first",
+      "/review second",
+    ]);
+    app.streams.gates.get("A")!.finish("First response");
+    expectOk(await running);
+
+    // Queue objects, not body equality, associate each delivered invocation.
+    const details = app.registry.details(id)!;
+    expect(
+      details.sections?.filter((section) => section.kind === "user").map((section) => section.text),
+    ).toEqual(["hold A", "/review", "first", "/review", "second"]);
+    expect(JSON.stringify(details)).not.toContain("PRIVATE_COMMAND_INSTRUCTIONS");
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Interrupt replay preserves command displays alongside ordinary queued input", async () => {
+  // Interruption combines pending SDK input into one replayed message without expanding it again.
+  const app = await sdkFixture(true, (options) => ({ ...options, defaultPackagePaths: [] }));
+  try {
+    await reviewTemplate(app.directory);
+    const id = expectOk(await app.registry.create(app.main.id));
+    const running = app.registry.prompt(id, "hold A");
+    await app.streams.waitFor("A");
+    expectOk(await app.registry.prompt(id, "/review first"));
+    expectOk(await app.registry.prompt(id, "ordinary queued request"));
+    expectOk(await app.registry.prompt(id, "/review second"));
+
+    const settled = Promise.withResolvers<void>();
+    const unsubscribe = app.registry.subscribe(() => {
+      if (app.registry.details(id)?.status === "complete") settled.resolve();
+    });
+    const interrupted = app.registry.interrupt(id);
+    await app.streams.gates.get("A")!.abortReceived;
+    app.streams.gates.get("A")!.finish("Cancelled response");
+    expectOk(await interrupted);
+    expect(expectError(await running).code).toBe("CANCELLED");
+    // Queue acceptance is not settlement; wait for the replayed run itself to finish.
+    await settled.promise;
+    unsubscribe();
+    expectOk(await app.registry.prompt(id, "after replay"));
+
+    const details = app.registry.details(id)!;
+    expect(
+      details.sections?.filter((section) => section.kind === "user").map((section) => section.text),
+    ).toEqual([
+      "hold A",
+      "/review",
+      "first",
+      "ordinary queued request",
+      "/review",
+      "second",
+      "after replay",
+    ]);
+    expect(JSON.stringify(details)).not.toContain("PRIVATE_COMMAND_INSTRUCTIONS");
   } finally {
     await app.cleanup();
   }

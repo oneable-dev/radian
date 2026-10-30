@@ -35,6 +35,9 @@ export class SubagentSummary {
   private maximumRows = 8;
   private timer: ReturnType<CliRenderer["clock"]["setInterval"]> | undefined;
   private disposed = false;
+  private settledKey: string | undefined;
+  private expiresAt: number | undefined;
+  private expiryTimer: ReturnType<CliRenderer["clock"]["setTimeout"]> | undefined;
 
   constructor(private readonly renderer: CliRenderer) {
     this.root = new BoxRenderable(renderer, {
@@ -75,6 +78,43 @@ export class SubagentSummary {
 
     this.children = children;
     this.active = active;
+    const settled =
+      children.length > 0 &&
+      children.every(
+        (child) =>
+          child.status !== "working" && child.phase !== "queued" && child.phase !== "waiting",
+      );
+    const key = settled
+      ? children
+          .map((child) => `${child.id}:${child.finishedAt ?? ""}`)
+          .sort()
+          .join("|")
+      : undefined;
+    if (key !== this.settledKey) {
+      this.settledKey = key;
+      if (this.expiryTimer !== undefined) this.renderer.clock.clearTimeout(this.expiryTimer);
+      this.expiryTimer = undefined;
+      const known = children.every((child) => child.finishedAt !== undefined);
+      const delay = known
+        ? Math.max(0, Math.max(...children.map((child) => child.finishedAt!)) + 10_000 - Date.now())
+        : 10_000;
+      this.expiresAt = settled ? this.renderer.clock.now() + delay : undefined;
+    }
+    if (!active && this.expiryTimer !== undefined) {
+      this.renderer.clock.clearTimeout(this.expiryTimer);
+      this.expiryTimer = undefined;
+    } else if (
+      active &&
+      this.expiresAt !== undefined &&
+      this.expiresAt > this.renderer.clock.now() &&
+      this.expiryTimer === undefined
+    ) {
+      this.expiryTimer = this.renderer.clock.setTimeout(() => {
+        this.expiryTimer = undefined;
+        this.paint();
+        this.renderer.requestRender();
+      }, this.expiresAt - this.renderer.clock.now());
+    }
 
     const ids = new Set(children.map((child) => child.id));
     for (const [id, row] of this.items) {
@@ -182,7 +222,11 @@ export class SubagentSummary {
       return;
     }
 
-    const visible = this.active && this.children.length > 0 && this.maximumRows > 0;
+    const visible =
+      this.active &&
+      this.children.length > 0 &&
+      this.maximumRows > 0 &&
+      (this.expiresAt === undefined || this.renderer.clock.now() < this.expiresAt);
     this.root.visible = visible;
 
     const styles = uiTheme(this.renderer).styles;
@@ -279,8 +323,15 @@ export class SubagentSummary {
       ]);
 
       const caption =
-        child.request && captions > 0
-          ? formatWorkRequest(child.request, this.root.width, width)
+        captions > 0
+          ? child.progress
+            ? truncateCells(
+                singleLine(child.progress),
+                Math.min(width, 60, Math.floor(this.root.width / 2)),
+              )
+            : child.request
+              ? formatWorkRequest(child.request, this.root.width, width)
+              : ""
           : "";
       row.caption.visible = !!caption;
       row.caption.content = caption;
@@ -324,6 +375,8 @@ export class SubagentSummary {
     }
 
     this.timer = undefined;
+    if (this.expiryTimer !== undefined) this.renderer.clock.clearTimeout(this.expiryTimer);
+    this.expiryTimer = undefined;
     for (const row of this.items.values()) {
       row.spinner.cancel();
     }

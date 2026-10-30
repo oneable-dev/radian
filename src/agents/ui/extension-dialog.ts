@@ -4,12 +4,15 @@ import {
   InputRenderableEvents,
   ScrollBoxRenderable,
   TextRenderable,
+  TextareaRenderable,
+  type KeyEvent,
   type CliRenderer,
   type Renderable,
 } from "@opentui/core";
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionDialog, ExtensionUiResponse } from "../extension-ui.ts";
-import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
+import { inScope, type CommandId, type KeyContext } from "../../keybindings/commands.ts";
+import { keyToken, type Keymap } from "../../keybindings/config.ts";
 import { footerKeyHint } from "../../keybindings/footer.ts";
 import { SearchInput } from "../../ui/search-input.ts";
 import { LoadingSpinner } from "../../ui/loading-spinner.ts";
@@ -20,6 +23,8 @@ import { singleLine } from "../../ui/text.ts";
 import type { Notice } from "../../ui/messages.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { PopupFrame } from "../../ui/popup-frame.ts";
+import { InputField } from "../../ui/input-field.ts";
+import { TerminalSurface } from "../../ui/embedded-terminal/surface.ts";
 import {
   POPUP_SIZES,
   SearchPopupLayout,
@@ -56,6 +61,10 @@ export class ExtensionDialogPanel {
   readonly search: SearchInput;
   readonly list: ScrollBoxRenderable;
   readonly input: InputRenderable;
+  readonly editor: TextareaRenderable;
+  private readonly editorField: InputField;
+  private readonly component: TerminalSurface;
+  private componentQueue: Promise<void> = Promise.resolve();
   private readonly panel: BoxRenderable;
   private readonly layout: SearchPopupLayout;
   private readonly details: ScrollBoxRenderable;
@@ -132,6 +141,25 @@ export class ExtensionDialogPanel {
       maxLength: 65536,
       visible: false,
     });
+    this.editor = new TextareaRenderable(renderer, {
+      id: "extension-dialog-editor",
+      width: "auto",
+      height: 8,
+      flexGrow: 1,
+      keyBindings: [{ name: "return", action: "newline" }],
+    });
+    this.editorField = new InputField(
+      renderer,
+      this.editor,
+      "search",
+      "extension-dialog-editor-field",
+      "ui.popup",
+    );
+    this.editorField.visible = false;
+    this.component = new TerminalSurface(renderer, "extension-dialog-component");
+    this.component.root.visible = false;
+    this.component.root.maxWidth = 200;
+    this.component.root.maxHeight = 80;
     this.layout = new SearchPopupLayout(renderer, {
       id: "extension",
       search: this.search,
@@ -140,12 +168,18 @@ export class ExtensionDialogPanel {
     this.panel.add(this.details);
     this.panel.add(this.layout.root);
     this.panel.add(this.input);
+    this.panel.add(this.editorField);
+    this.panel.add(this.component.root);
     attachPopupActivity(renderer, this.panel, this.spinner.root, () => ({
       pending: this.busy,
       hasContent: true,
       message: "",
       title: this.search.field.visible ? this.search.field : undefined,
-      body: this.list.visible ? this.layout.results.root : this.details,
+      body: this.editorField.visible
+        ? this.editorField
+        : this.list.visible
+          ? this.layout.results.root
+          : this.details,
       anchor: this.list.visible ? this.rows[this.cursor]?.root : undefined,
     }));
     this.root.add(this.panel);
@@ -169,6 +203,8 @@ export class ExtensionDialogPanel {
   }
 
   get context(): KeyContext {
+    if (this.scope?.dialog.kind === "custom") return "extension-custom";
+    if (this.scope?.dialog.kind === "editor") return "extension-editor";
     if (this.input.focused) {
       return "extension-input";
     }
@@ -185,14 +221,26 @@ export class ExtensionDialogPanel {
   }
 
   get focusTargets(): Renderable[] {
-    return [this.details, this.search, this.list, this.input].filter((node) =>
-      node === this.search ? this.search.field.visible : node.visible,
+    return [
+      this.details,
+      this.search,
+      this.list,
+      this.input,
+      this.editor,
+      this.component.root,
+    ].filter((node) =>
+      node === this.search
+        ? this.search.field.visible
+        : node === this.editor
+          ? this.editorField.visible
+          : node.visible,
     );
   }
 
   get shortcuts(): FooterShortcut[] {
+    if (this.scope?.dialog.kind === "custom") return [];
     const commands: [CommandId, string][] = [
-      ["extension.submit", "Accept"],
+      ["extension.submit", this.scope?.dialog.kind === "editor" ? "Save" : "Accept"],
       ["extension.dismiss", "Cancel"],
     ];
     if (this.url) {
@@ -219,12 +267,13 @@ export class ExtensionDialogPanel {
       this.scope.conversationId === scope.conversationId &&
       this.scope.sessionId === scope.sessionId
     ) {
+      if (scope.dialog.kind === "custom") this.component.display(scope.dialog.frame);
       if (!this.visible) {
         this.root.visible = true;
         if (this.coveredFocus && !this.coveredFocus.isDestroyed) {
           this.coveredFocus.focus();
         } else {
-          (this.input.visible ? this.input : this.list).focus();
+          this.defaultFocus();
         }
 
         this.coveredFocus = undefined;
@@ -256,8 +305,33 @@ export class ExtensionDialogPanel {
     this.input.value = "";
     this.input.placeholder = dialog.kind === "input" ? plain(dialog.placeholder ?? "") : "";
     this.input.visible = dialog.kind === "input";
+    this.editorField.visible = dialog.kind === "editor";
+    this.component.root.visible = dialog.kind === "custom";
     this.search.field.visible = dialog.kind === "select";
-    this.list.visible = dialog.kind !== "input";
+    this.list.visible = dialog.kind === "select" || dialog.kind === "confirm";
+    if (dialog.kind === "editor") {
+      this.details.visible = false;
+      this.editorField.setTitle(singleLine(plain(dialog.title)));
+      this.editor.setText(dialog.prefill);
+    }
+    if (dialog.kind === "custom") {
+      this.details.visible = false;
+      this.component.acceptsInput = true;
+      this.component.connect({
+        input: (bytes) =>
+          this.sendComponent(scope, {
+            requestId: dialog.id,
+            input: new TextDecoder().decode(bytes),
+          }),
+        resize: (cols, rows) =>
+          this.sendComponent(scope, {
+            requestId: dialog.id,
+            viewport: { cols: Math.min(200, cols), rows: Math.min(80, rows) },
+          }),
+        disconnect: async () => {},
+      });
+      this.component.display(dialog.frame);
+    }
 
     if (dialog.kind === "select") {
       this.candidates = dialog.options.map((value) => ({ label: singleLine(plain(value)), value }));
@@ -277,13 +351,8 @@ export class ExtensionDialogPanel {
     this.root.visible = true;
     this.resize();
     this.details.scrollTo(0);
-    if (dialog.kind === "input") {
-      this.input.focus();
-    } else if (dialog.kind === "select") {
-      this.search.focus();
-    } else {
-      this.list.focus();
-    }
+    if (dialog.kind === "select") this.search.focus();
+    else this.defaultFocus();
 
     this.actions.changed();
   }
@@ -310,6 +379,10 @@ export class ExtensionDialogPanel {
     this.busy = false;
     this.spinner.cancel();
     this.input.value = "";
+    this.editor.setText("");
+    this.editorField.visible = false;
+    this.component.suspend();
+    this.component.root.visible = false;
     this.body.content = "";
     this.search.clear();
     this.candidates = [];
@@ -408,6 +481,12 @@ export class ExtensionDialogPanel {
     if (!this.visible || !command.startsWith("extension.")) {
       return false;
     }
+    if (this.scope?.dialog.kind === "custom") return command === "extension.dismiss";
+    if (
+      this.scope?.dialog.kind === "editor" &&
+      !["extension.submit", "extension.dismiss"].includes(command)
+    )
+      return false;
     if (command === "extension.search") {
       return this.scope?.dialog.kind === "select";
     }
@@ -485,13 +564,20 @@ export class ExtensionDialogPanel {
     }
 
     const candidate = this.filtered[this.cursor];
-    if (!cancelled && scope.dialog.kind !== "input" && !candidate) {
+    if (
+      !cancelled &&
+      scope.dialog.kind !== "input" &&
+      scope.dialog.kind !== "editor" &&
+      !candidate
+    ) {
       return;
     }
 
     let response: ExtensionUiResponse;
     if (cancelled) {
       response = { requestId: scope.dialog.id, cancelled: true };
+    } else if (scope.dialog.kind === "editor") {
+      response = { requestId: scope.dialog.id, value: this.editor.plainText };
     } else if (scope.dialog.kind === "input") {
       response = { requestId: scope.dialog.id, value: this.input.value };
     } else if (scope.dialog.kind === "confirm") {
@@ -561,6 +647,52 @@ export class ExtensionDialogPanel {
     );
   }
 
+  captureKey(key: KeyEvent, keymap: Keymap): boolean {
+    const scope = this.scope;
+    if (!this.visible || scope?.dialog.kind !== "custom") return false;
+    const token = keyToken(key);
+    if (
+      keymap.bindings.some(
+        (binding) => binding.keys[0] === token && inScope(binding.scope, "extension-custom"),
+      )
+    )
+      return false;
+    const plain = !key.ctrl && !key.meta && !key.shift && !key.super;
+    const input =
+      key.ctrl && key.name === "c" && !key.meta && !key.shift && !key.super
+        ? "\u0003"
+        : plain && ["return", "kpenter"].includes(key.name)
+          ? "\r"
+          : plain && key.name === "escape"
+            ? "\u001b"
+            : undefined;
+    if (input === undefined) return false;
+    // The shared router owns activation/cancellation until release. Other keys
+    // remain native, including held list navigation, text editing and paste.
+    this.sendComponent(scope, { requestId: scope.dialog.id, input });
+    return true;
+  }
+
+  private sendComponent(scope: Scope, response: ExtensionUiResponse): void {
+    this.componentQueue = this.componentQueue
+      .then(async () => {
+        if (this.scope !== scope) return;
+        const result = await this.actions.answer(scope.sessionId, scope.conversationId, response);
+        if (!result.ok && this.scope === scope) {
+          this.actions.notice(result.error.message, { level: "error", source: "Extension" });
+        }
+      })
+      .catch((error) => {
+        this.actions.notice(reportUnexpected(error, "extension component"), { level: "error" });
+      });
+  }
+
+  private defaultFocus(): void {
+    if (this.scope?.dialog.kind === "custom") this.component.root.focus();
+    else if (this.editorField.visible) this.editor.focus();
+    else (this.input.visible ? this.input : this.list).focus();
+  }
+
   private keepFocus = (): void => {
     if (!this.visible) {
       return;
@@ -575,7 +707,7 @@ export class ExtensionDialogPanel {
       }
     }
 
-    (this.input.visible ? this.input : this.list).focus();
+    this.defaultFocus();
   };
 
   private resize = (): void => {
@@ -584,12 +716,15 @@ export class ExtensionDialogPanel {
     }
 
     const size =
-      this.scope && this.scope.dialog.kind !== "select"
-        ? POPUP_SIZES.compact
-        : POPUP_SIZES.standard;
+      this.scope?.dialog.kind === "custom" || this.scope?.dialog.kind === "editor"
+        ? POPUP_SIZES.expanded
+        : this.scope && this.scope.dialog.kind !== "select"
+          ? POPUP_SIZES.compact
+          : POPUP_SIZES.standard;
     const { height } = centerPopup(this.panel, size, this.renderer.width, this.renderer.height);
 
     this.search.fit(Math.max(1, height - 5));
+    if (this.editorField.visible) this.editorField.fit(Math.max(6, height - 2), height);
   };
 
   dispose(): void {
@@ -599,6 +734,7 @@ export class ExtensionDialogPanel {
 
     this.hide();
     this.disposed = true;
+    this.component.dispose();
     this.renderer.off("resize", this.resize);
     this.renderer.off("focused_renderable", this.keepFocus);
     this.search.off(InputRenderableEvents.INPUT, this.filter);

@@ -160,6 +160,12 @@ test("MCP gateway calls do not double-count nested calls and subagent management
       call("native", "mcp__figma_remote__get_design", {}),
       call("gateway", "mcp", { tool: "mcp__atlassian__issue" }),
       call("worker", "radian_subagent", { name: "reviewer", task: "review" }),
+      call("native-worker", "radian-subagent", {
+        action: "spawn",
+        agent: "reviewer",
+        task: "review",
+      }),
+      call("native-status", "radian-subagent", { action: "status", agent: "reviewer" }),
       call("inspect", "subagent", { action: "status", agent: "reviewer" }),
       call("single", "subagent", { agent: "implementer", task: "build" }),
     ]),
@@ -196,8 +202,8 @@ test("MCP gateway calls do not double-count nested calls and subagent management
     { name: "figma-remote", value: 1 },
   ]);
   expect(result.subagents).toEqual([
+    { name: "reviewer", value: 2 },
     { name: "implementer", value: 1 },
-    { name: "reviewer", value: 1 },
   ]);
 });
 

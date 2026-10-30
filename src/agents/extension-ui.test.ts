@@ -7,12 +7,17 @@ import { offlineRuntime } from "../testing/offline-runtime.ts";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 
-async function fixture(handler: string, onStart = "", extension = "") {
+async function fixture(handler: string, onStart = "", extension = "", packageName?: string) {
   const files = await createWorktreeFixture();
   const agent = join(files.directory, "agent");
   const extensions = join(agent, "extensions");
 
   await mkdir(extensions, { recursive: true });
+  if (packageName)
+    await writeFile(
+      join(agent, "package.json"),
+      JSON.stringify({ name: packageName, version: "1.0.0" }),
+    );
   await writeFile(
     join(extensions, "ui.ts"),
     `export default function(pi) {
@@ -77,6 +82,39 @@ async function fixture(handler: string, onStart = "", extension = "") {
     },
   };
 }
+
+test("Initial extension import failures remain visible without preventing the session or importing a replacement", async () => {
+  // The configured package fails during registration, before a command can report its own error.
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  let app: Awaited<ReturnType<typeof fixture>> | undefined;
+  try {
+    app = await fixture(
+      "",
+      "",
+      'throw new Error("Selected package version is incompatible");',
+      "pi-mcp-adapter",
+    );
+
+    const notice = app.registry
+      .details(app.id)
+      ?.sections?.find((section) => section.title === "Extension loading");
+
+    expect(notice?.status).toBe("error");
+    expect(notice?.text).toContain("without a bundled substitute");
+    expect(
+      expectOk(app.registry.catalog(app.id, app.conversation)).items.some(
+        (item) => item.value === "ui-fixture",
+      ),
+    ).toBe(false);
+    expect(
+      warning.mock.calls.some((call) => call[0] === "[radian:extensions] Extension loading failed"),
+    ).toBe(true);
+    expect(app.models()).toBe(0);
+  } finally {
+    await app?.cleanup();
+    warning.mockRestore();
+  }
+});
 
 test("SDK commands admit interactive dialogs early and return select, confirm and input answers without model work", async () => {
   // Only the extension handles synthetic credentials; it never stores or echoes them.
@@ -646,16 +684,287 @@ test("Late Pi child identity events replace task labels only in their originatin
   }
 });
 
-test("Pi custom terminal components fail explicitly without pretending that Radian is a Pi TUI", async () => {
-  // Unsupported UI must not look like a successful but invisible command.
+test("MCP command contexts advertise component UI only while a live viewport is available", async () => {
   const app = await fixture(
-    `await ctx.ui.custom(() => { throw new Error("Should not render"); });`,
+    `
+    if (_args === "headless") { if (ctx.mode !== "rpc") throw new Error("Expected RPC fallback"); return; }
+    if (ctx.mode !== "tui") throw new Error("Expected component-capable context");
+    await ctx.ui.custom((_tui, _theme, _keys, done) => ({
+      render: () => ["MCP fixture"], invalidate() {},
+      handleInput(data) { if (data === "\\x03") done(undefined); },
+    }));
+  `,
+    "",
+    "",
+    "pi-mcp-adapter",
+  );
+  try {
+    const run = app.registry.prompt(app.id, "/ui-fixture");
+    await app.waitFor(() => app.current()?.dialog?.kind === "custom");
+    expectOk(app.answer({ requestId: app.current()!.dialog!.id, cancelled: true }));
+    expectOk(await run);
+
+    app.registry.setUiActive(false);
+    expectOk(await app.registry.prompt(app.id, "/ui-fixture headless"));
+    expect(app.current()?.dialog).toBeUndefined();
+    expect(app.models()).toBe(0);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Non-MCP extension commands retain RPC mode without package-specific administration adapters", async () => {
+  const app = await fixture(
+    `if (ctx.mode !== "rpc") throw new Error("Expected RPC command context");`,
+    "",
+    `
+    pi.registerCommand("subagents", { handler: async (_args, ctx) => {
+      if (ctx.mode !== "rpc") throw new Error("Unexpected package-specific administration adapter");
+    }});
+    pi.registerCommand("subagents-inspect-rpc", { handler: async (_args, ctx) => {
+      if (ctx.mode !== "rpc") throw new Error("RPC inspection was changed to TUI");
+    }});
+  `,
+    "pi-subagents",
+  );
+  try {
+    expectOk(await app.registry.prompt(app.id, "/subagents"));
+    expectOk(await app.registry.prompt(app.id, "/subagents-inspect-rpc"));
+    expectOk(await app.registry.prompt(app.id, "/ui-fixture"));
+    expect(app.models()).toBe(0);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Extension-requested reload updates resources without replacing the conversation or making a model call", async () => {
+  const app = await fixture("await ctx.reload();");
+  try {
+    const previous = app.registry.details(app.id)!;
+
+    expectOk(await app.registry.prompt(app.id, "/ui-fixture"));
+
+    expect(app.registry.details(app.id)?.conversationId).toBe(previous.conversationId);
+    expect(app.registry.details(app.id)?.resourceRevision).toBe(
+      (previous.resourceRevision ?? 0) + 1,
+    );
+    expect(app.models()).toBe(0);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Interrupt reaches a package raw-input cancellation callback", async () => {
+  const app = await fixture(`
+    await new Promise(resolve => {
+      const stop = ctx.ui.onTerminalInput(data => {
+        if (data === "\\x03") { stop(); resolve(undefined); return { consume: true }; }
+      });
+      ctx.ui.setStatus("raw-input", "Waiting");
+    });
+  `);
+  try {
+    const run = app.registry.prompt(app.id, "/ui-fixture");
+    await app.waitFor(() => app.current()?.statuses["raw-input"] === "Waiting");
+
+    expectOk(await app.registry.interrupt(app.id));
+    await run;
+
+    expect(app.current()?.dialog).toBeUndefined();
+    expect(app.models()).toBe(0);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Synchronous inspection widget replies remain correlated without entering model history", async () => {
+  const payload = JSON.stringify({
+    kind: "pi-subagents.inspect-reply",
+    version: 1,
+    requestId: "fixture-request",
+    status: "complete",
+    finalOutput: "correlated-inspection-output",
+  });
+  const app = await fixture(
+    "",
+    "",
+    `
+    pi.registerCommand("subagents-inspect-rpc", { handler: async (_args, ctx) => {
+      ctx.ui.setWidget("subagent-inspect", [${JSON.stringify("PI_SUBAGENT_INSPECT_JSON:" + payload)}]);
+      ctx.ui.setWidget("subagent-inspect", undefined);
+    }});
+  `,
+  );
+  try {
+    expectOk(await app.registry.prompt(app.id, "read"));
+    const modelCalls = app.models();
+
+    expectOk(await app.registry.prompt(app.id, "/subagents-inspect-rpc fixture-request run"));
+
+    const reply = app.registry
+      .details(app.id)
+      ?.sections?.find((section) => section.title === "Subagent inspection");
+    expect(JSON.parse(reply!.text)).toMatchObject({
+      requestId: "fixture-request",
+      finalOutput: "correlated-inspection-output",
+    });
+    expect(app.models()).toBe(modelCalls);
+    expect(await readFile(app.registry.sessionFile(app.id)!, "utf8")).not.toContain(
+      "correlated-inspection-output",
+    );
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("SDK asynchronous argument completion callbacks return insertion values without executing commands", async () => {
+  const app = await fixture(
+    "",
+    "",
+    `
+    pi.registerCommand("argument-fixture", {
+      description: "Fixture arguments",
+      getArgumentCompletions: async (prefix) => [{ value: prefix + "tatus ", label: "Status", description: "Show status" }],
+      handler: async () => { throw new Error("Completion must never execute a command"); },
+    });
+  `,
+  );
+  try {
+    const catalog = expectOk(app.registry.catalog(app.id, app.conversation));
+    expect(catalog.items.find((item) => item.value === "argument-fixture")?.hasArguments).toBe(
+      true,
+    );
+
+    const result = expectOk(
+      await app.registry.complete(app.id, {
+        kind: "argument",
+        command: "argument-fixture",
+        query: "token s",
+      }),
+    );
+
+    expect(result).toEqual({
+      items: [{ kind: "argument", value: "token status ", description: "Show status" }],
+      truncated: false,
+    });
+    expect(
+      expectError(
+        await app.registry.complete(
+          app.id,
+          { kind: "argument", command: "argument-fixture", query: "" },
+          AbortSignal.abort(),
+        ),
+      ).code,
+    ).toBe("CANCELLED");
+    expect(app.models()).toBe(0);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Custom components retain their factory, render an isolated viewport and return local structured results", async () => {
+  // The actual Pi component runs in the service; only its safe VT frame crosses the UI boundary.
+  const app = await fixture(`
+    const result = await ctx.ui.custom((tui, theme, kb, done) => {
+      let selected = 0;
+      return {
+        render: (width) => ["Viewport " + width, theme.fg("success", "Choice " + selected)],
+        invalidate() {},
+        handleInput(data) {
+          if (kb.matches(data, "tui.select.down")) selected++;
+          else if (kb.matches(data, "tui.select.confirm")) done(new Map([["selected", selected]]));
+          tui.requestRender();
+        },
+      };
+    });
+    ctx.ui.notify(result.get("selected") === 1 ? "Structured result received" : "Wrong result");
+  `);
+  try {
+    const run = app.registry.prompt(app.id, "/ui-fixture");
+    await app.waitFor(() => app.current()?.dialog?.kind === "custom");
+    const id = app.current()!.dialog!.id;
+
+    expectOk(app.answer({ requestId: id, viewport: { cols: 60, rows: 12 } }));
+    await app.waitFor(() => {
+      const dialog = app.current()?.dialog;
+      return dialog?.kind === "custom" && dialog.frame.ansi.includes("Viewport 60");
+    });
+    expectOk(app.answer({ requestId: id, input: "\u001b[B" }));
+    await app.waitFor(() => {
+      const dialog = app.current()?.dialog;
+      return dialog?.kind === "custom" && dialog.frame.ansi.includes("Choice 1");
+    });
+    expectOk(app.answer({ requestId: id, input: "\r" }));
+
+    expectOk(await run);
+    expect(app.current()?.dialog).toBeUndefined();
+    expect(app.current()?.notifications.at(-1)?.message).toBe("Structured result received");
+    expect(app.models()).toBe(0);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Multiline editor submissions preserve newlines and cancellation does not save", async () => {
+  const app = await fixture(`
+    const text = await ctx.ui.editor("Edit fixture", "first\\nsecond");
+    ctx.ui.notify(text === undefined ? "Cancelled" : text === "changed\\nsecond" ? "Saved expected text" : "Wrong text");
+  `);
+  try {
+    let run = app.registry.prompt(app.id, "/ui-fixture");
+    await app.waitFor(() => app.current()?.dialog?.kind === "editor");
+    const dialog = app.current()!.dialog!;
+    expect(dialog.kind).toBe("editor");
+    if (dialog.kind !== "editor") throw new Error("Expected editor");
+    expect(dialog.prefill).toBe("first\nsecond");
+
+    expectOk(app.answer({ requestId: dialog.id, value: "changed\nsecond" }));
+    expectOk(await run);
+    expect(app.current()?.notifications.at(-1)?.message).toBe("Saved expected text");
+
+    run = app.registry.prompt(app.id, "/ui-fixture");
+    await app.waitFor(() => app.current()?.dialog?.kind === "editor");
+    expectOk(app.answer({ requestId: app.current()!.dialog!.id, cancelled: true }));
+    expectOk(await run);
+    expect(app.current()?.notifications.at(-1)?.message).toBe("Cancelled");
+    expect(app.models()).toBe(0);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Interrupt delivers component cancellation to callbacks that own an outer command promise", async () => {
+  // MCP panels use this outer-promise pattern instead of awaiting custom() directly.
+  const app = await fixture(`
+    await new Promise(resolve => {
+      void ctx.ui.custom((_tui, _theme, _kb, done) => ({
+        render: () => ["Cancelable component"], invalidate() {},
+        handleInput(data) { if (data === "\\x03") { done(undefined); resolve(undefined); } },
+      }));
+    });
+  `);
+  try {
+    const run = app.registry.prompt(app.id, "/ui-fixture");
+    await app.waitFor(() => app.current()?.dialog?.kind === "custom");
+
+    expectOk(await app.registry.interrupt(app.id));
+    await run;
+
+    expect(app.current()?.dialog).toBeUndefined();
+    expect(app.models()).toBe(0);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("Component factory exceptions retract the pending viewport and remain command failures", async () => {
+  const app = await fixture(
+    `await ctx.ui.custom(() => { throw new Error("Fixture construction failed"); });`,
   );
   try {
     const failure = expectError(await app.registry.prompt(app.id, "/ui-fixture"));
 
     expect(failure.code).toBe("AGENT_FAILED");
-    expect(failure.message).toContain("custom terminal UI");
     expect(app.models()).toBe(0);
     expect(app.current()?.dialog).toBeUndefined();
   } finally {

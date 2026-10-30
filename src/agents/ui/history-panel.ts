@@ -601,7 +601,10 @@ export class SessionHistoryPanel {
       id: sessionId,
       name: snapshot?.name ?? this.selected?.title ?? "Preview",
       status,
-      subagents: snapshot?.subagents ?? [],
+      subagents:
+        snapshot?.subagents.filter(
+          (child) => !snapshot.ownedSubagents?.some((run) => run.id === child.id && run.hidden),
+        ) ?? [],
     };
     const sessions = tree.sessions.some((session) => session.id === sessionId)
       ? tree.sessions.map((session) => (session.id === sessionId ? descriptor : session))

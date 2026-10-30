@@ -13,6 +13,13 @@ import {
 } from "./run-completion.ts";
 import { requestDisplayText, summarizeRequest, type RequestSummary } from "./request-summary.ts";
 import type { ImageContent } from "@earendil-works/pi-ai";
+import { SubagentTranscript } from "./subagent-transcript.ts";
+import { subagentEventType } from "./subagent-notifications.ts";
+import {
+  commandDisplayEntryType,
+  parseCommandDisplay,
+  type CommandDisplay,
+} from "./command-display.ts";
 import {
   imageNamesEntryType,
   TranscriptImages,
@@ -42,6 +49,7 @@ export type TranscriptSection = {
   readonly error?: string;
   readonly toolCallId?: string;
   readonly skillName?: string;
+  readonly commandName?: string;
   readonly command?: string;
   readonly timeoutSeconds?: number;
   readonly completion?: RunCompletion;
@@ -62,6 +70,7 @@ type Tool = {
   text: string;
   status: TranscriptStatus;
   error?: string;
+  details?: unknown;
 };
 
 function contentText(
@@ -107,6 +116,43 @@ export function toolResultText(result: unknown): string {
       return [];
     })
     .join("");
+}
+
+function slashResultInfo(
+  message: AgentMessage,
+): { requestId?: string; status: TranscriptStatus } | undefined {
+  if (message.role !== "custom" || message.customType !== "subagent-slash-result") return undefined;
+  const details = message.details;
+  const requestId =
+    details &&
+    typeof details === "object" &&
+    "requestId" in details &&
+    typeof details.requestId === "string"
+      ? details.requestId
+      : undefined;
+  const result =
+    details && typeof details === "object" && "result" in details ? details.result : undefined;
+  const failed =
+    result && typeof result === "object" && "isError" in result && result.isError === true;
+  const metadata =
+    result && typeof result === "object" && "details" in result ? result.details : undefined;
+  const progress =
+    metadata && typeof metadata === "object" && "progress" in metadata
+      ? metadata.progress
+      : undefined;
+  const running =
+    Array.isArray(progress) &&
+    progress.some(
+      (item: unknown) =>
+        item &&
+        typeof item === "object" &&
+        "status" in item &&
+        ["running", "pending"].includes(String(item.status)),
+    );
+  return {
+    ...(requestId ? { requestId } : {}),
+    status: failed ? "error" : running ? "running" : "complete",
+  };
 }
 
 function summary(text: string): string {
@@ -180,6 +226,8 @@ export class SessionTranscript {
   private cached: readonly TranscriptSection[] | undefined;
   private readonly completions = new Map<string, RunCompletion>();
   private readonly images = new TranscriptImages();
+  private readonly commandDisplays = new WeakMap<AgentMessage, CommandDisplay>();
+  private readonly savedCommandDisplays = new Map<string, CommandDisplay>();
   private run:
     | { startedAt: number; monotonic: number; messageIndex: number; sectionCount: number }
     | undefined;
@@ -188,8 +236,26 @@ export class SessionTranscript {
     entries: readonly SessionEntry[],
     private readonly clock: RunClock = systemRunClock,
   ) {
+    // Display-only metadata references persisted message IDs, never inferred prompt bodies.
+    const commands = this.savedCommandDisplays;
+    for (const entry of entries) {
+      if (entry.type !== "custom" || entry.customType !== commandDisplayEntryType) continue;
+      const parsed = parseCommandDisplay(entry.data);
+      if (parsed.ok) {
+        commands.set(parsed.value.messageId, parsed.value.parts);
+      } else {
+        this.notice(
+          "Command display unavailable",
+          `[${parsed.error.code}] ${parsed.error.message}`,
+          "error",
+        );
+      }
+    }
     for (const entry of entries) {
       if (entry.type === "message") {
+        const display = commands.get(entry.id);
+        if (display && entry.message.role === "user")
+          this.commandDisplays.set(entry.message, display);
         this.messages.push({ id: entry.id, message: entry.message, streaming: false });
       } else if (entry.type === "custom" && entry.customType === runCompletionEntryType) {
         const parsed = parseRunCompletion(entry.data);
@@ -228,6 +294,7 @@ export class SessionTranscript {
             customType: entry.customType,
             content: entry.content,
             display: entry.display,
+            details: entry.details,
             timestamp: Date.parse(entry.timestamp),
           },
         });
@@ -247,7 +314,28 @@ export class SessionTranscript {
     }
   }
 
-  handle(event: AgentSessionEvent): RunCompletion | undefined {
+  get hasCommandDisplays(): boolean {
+    return this.savedCommandDisplays.size > 0;
+  }
+
+  commandDisplay(message: AgentMessage, messageId?: string): CommandDisplay | undefined {
+    const display =
+      this.commandDisplays.get(message) ??
+      (messageId ? this.savedCommandDisplays.get(messageId) : undefined);
+    if (display) this.commandDisplays.set(message, display);
+
+    return display;
+  }
+
+  rememberCommandId(message: AgentMessage, messageId: string): void {
+    const display = this.commandDisplays.get(message);
+    if (display) this.savedCommandDisplays.set(messageId, display);
+  }
+
+  handle(event: AgentSessionEvent, command?: CommandDisplay): RunCompletion | undefined {
+    if (command && event.type === "message_start" && event.message.role === "user") {
+      this.commandDisplays.set(event.message, command);
+    }
     let completion: RunCompletion | undefined;
     switch (event.type) {
       case "agent_start":
@@ -327,6 +415,10 @@ export class SessionTranscript {
           arguments: previous?.arguments ?? {},
           text,
           status: event.isError ? "error" : "complete",
+          details:
+            event.result && typeof event.result === "object" && "details" in event.result
+              ? event.result.details
+              : undefined,
           ...(event.isError ? { error: text || "Tool failed" } : {}),
         });
         break;
@@ -427,7 +519,14 @@ export class SessionTranscript {
     this.images.clearReferences();
 
     const tools = new Map(this.tools);
-    for (const { message } of this.messages) {
+    const slashResults = new Map<string, { latest: string; anchor: string }>();
+    for (const { id, message } of this.messages) {
+      const slash = slashResultInfo(message);
+      if (slash?.requestId)
+        slashResults.set(slash.requestId, {
+          latest: id,
+          anchor: slashResults.get(slash.requestId)?.anchor ?? id,
+        });
       if (message.role === "toolResult") {
         const previous = tools.get(message.toolCallId);
         const text = contentText(message.content);
@@ -437,14 +536,27 @@ export class SessionTranscript {
           arguments: previous?.arguments,
           text,
           status: message.isError ? "error" : "complete",
+          details: message.details,
           ...(message.isError ? { error: text || "Tool failed" } : {}),
         });
       }
     }
 
     const sections: TranscriptSection[] = [];
+    const subagents = new SubagentTranscript(
+      this.messages.map((item) => item.message),
+      tools,
+    );
+    const addTool = (id: string, callId: string, tool: Tool) => {
+      const projection = subagents.present(callId, tool);
+      if (projection !== "hidden")
+        sections.push({ ...toolSection(id, callId, tool), ...projection });
+    };
     const seenTools = new Set<string>();
     for (const { id, message, streaming, noticeStatus } of this.messages) {
+      const slash = slashResultInfo(message);
+      const slashIdentity = slash?.requestId ? slashResults.get(slash.requestId) : undefined;
+      if (slashIdentity && slashIdentity.latest !== id) continue;
       switch (message.role) {
         case "user": {
           const images =
@@ -460,7 +572,24 @@ export class SessionTranscript {
           const text = requestDisplayText(prose, images.length);
           const skill = parseSkillBlock(text);
           const start = sections.length;
-          if (!skill) {
+          const command = this.commandDisplays.get(message);
+          if (command) {
+            const request = summarizeRequest(
+              command.map((part) => part.text).join("\n"),
+              images.length,
+            );
+            for (const [index, part] of command.entries()) {
+              sections.push({
+                id: `${id}:command:${index}`,
+                kind: "user",
+                title: "You",
+                text: requestDisplayText(part.text, images.length),
+                status: "complete",
+                ...(part.commandName ? { commandName: part.commandName } : {}),
+                ...(index === command.length - 1 ? { request } : {}),
+              });
+            }
+          } else if (!skill) {
             if (text || !images.length) {
               sections.push({
                 id,
@@ -567,21 +696,20 @@ export class SessionTranscript {
               }
             } else if (part.type === "toolCall") {
               const tool = tools.get(part.id);
-              sections.push(
-                toolSection(blockId, part.id, {
-                  name: part.name,
-                  arguments: part.arguments,
-                  text: tool?.text ?? "",
-                  status:
-                    tool?.status ??
-                    (streaming
-                      ? "pending"
-                      : status === "cancelled" || status === "error"
-                        ? status
-                        : "unfinished"),
-                  ...(tool?.error ? { error: tool.error } : {}),
-                }),
-              );
+              addTool(blockId, part.id, {
+                name: part.name,
+                arguments: part.arguments,
+                text: tool?.text ?? "",
+                status:
+                  tool?.status ??
+                  (streaming
+                    ? "pending"
+                    : status === "cancelled" || status === "error"
+                      ? status
+                      : "unfinished"),
+                details: tool?.details,
+                ...(tool?.error ? { error: tool.error } : {}),
+              });
               seenTools.add(part.id);
             }
           }
@@ -610,7 +738,7 @@ export class SessionTranscript {
         }
         case "toolResult":
           if (!seenTools.has(message.toolCallId)) {
-            sections.push(toolSection(id, message.toolCallId, tools.get(message.toolCallId)!));
+            addTool(id, message.toolCallId, tools.get(message.toolCallId)!);
             seenTools.add(message.toolCallId);
           }
           break;
@@ -626,13 +754,14 @@ export class SessionTranscript {
           });
           break;
         case "custom":
-          if (message.display) {
+          if (message.customType === subagentEventType) break;
+          if (message.display || slash) {
             sections.push({
-              id,
+              id: slashIdentity?.anchor ?? id,
               kind: "notice",
               title: message.customType,
               text: contentText(message.content),
-              status: noticeStatus ?? "complete",
+              status: noticeStatus ?? slash?.status ?? "complete",
             });
           }
           break;

@@ -14,7 +14,7 @@ test.each([
   ["/", 1, "command", ""],
   ["/mc", 3, "command", "mc"],
   ["/mcp arg", 3, "command", "mc"],
-  ["/mcp arg", 8, null, null],
+  ["/mcp arg", 8, "argument", "arg"],
   [" /mc", 4, null, null],
   ["text /mc", 8, null, null],
   ["@", 1, "file", ""],
@@ -30,6 +30,33 @@ test.each([
   const target = completionTarget(text, cursor);
   expect(target?.kind ?? null).toBe(kind);
   expect(target?.query ?? null).toBe(query);
+});
+
+test("Argument completions replace the full argument prefix without duplicating the command", () => {
+  const input = "/mcp token sta";
+  const target = completionTarget(input, input.length)!;
+  expect(target).toMatchObject({ kind: "argument", command: "mcp", query: "token sta", start: 5 });
+
+  const result = insertCompletion(input, target, {
+    kind: "argument",
+    value: "token status ",
+    description: "",
+  });
+
+  expect(result).toEqual({ text: "/mcp token status ", cursor: 18 });
+});
+
+test("Argument insertion preserves later arguments and file mentions keep their own completion", () => {
+  const text = "/mcp enable ser --keep";
+  const target = completionTarget(text, text.indexOf("ser") + 2)!;
+  const result = insertCompletion(text, target, {
+    kind: "argument",
+    value: "enable server",
+    description: "",
+  });
+
+  expect(result.text).toBe("/mcp enable server --keep");
+  expect(completionTarget("/run agent @src/", 16)).toMatchObject({ kind: "file", query: "src/" });
 });
 
 test("Completion replaces only the current token and preserves Korean, emoji, and trailing text", () => {

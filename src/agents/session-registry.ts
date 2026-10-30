@@ -14,6 +14,7 @@ import {
   parseJson,
   SessionError,
   CapabilityError,
+  reportUnexpected,
   type ExpectedError,
 } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
@@ -47,6 +48,10 @@ import {
   type SessionSnapshotInfo,
 } from "./session-snapshot.ts";
 import type { ExtensionUiState, ExtensionUiResponse, SessionExtensionUi } from "./extension-ui.ts";
+import { SubagentChannel } from "./subagent-channel.ts";
+import type { OwnedSubagentRecord } from "./subagent-record.ts";
+import type { SubagentCommand, SupervisorCommand } from "./subagent-tools.ts";
+import type { SubagentNotice, SubagentNoticePayload } from "./subagent-notifications.ts";
 
 export type ExecutionState = {
   readonly conversationId?: string;
@@ -54,6 +59,8 @@ export type ExecutionState = {
   readonly status: AgentStatus | null;
   readonly activity?: "compacting";
   readonly output: string;
+  readonly finalOutput?: string;
+  readonly activeTools?: readonly string[];
   readonly error: string | null;
   readonly sections?: readonly TranscriptSection[];
   readonly telemetry?: SessionTelemetry;
@@ -73,6 +80,11 @@ export type SessionExecutor = {
   answerExtensionUi?(response: ExtensionUiResponse): Result<void, ExpectedError>;
   setUiActive?(active: boolean): void;
   commands?(): readonly CompletionItem[];
+  argumentCompletions?(
+    command: string,
+    prefix: string,
+    signal?: AbortSignal,
+  ): Promise<Result<CompletionResult, ExpectedError>>;
   reload?(): Promise<Result<void, ExpectedError>>;
   models?(signal?: AbortSignal, refresh?: boolean): Promise<Result<ModelCatalog, ExpectedError>>;
   selectModel?(
@@ -91,6 +103,8 @@ export type SessionExecutor = {
     onAccepted?: () => void,
     imagePaths?: readonly string[],
   ): Promise<Result<void, ExpectedError>>;
+  notifySubagent?(event: SubagentNotice, current?: () => boolean): void;
+  steer?(message: string): Promise<Result<unknown, ExpectedError>>;
   beforeNewSession?(): Promise<Result<void, ExpectedError>>;
   close(reason?: "quit" | "new"): Promise<Result<void, ExpectedError>>;
 };
@@ -102,6 +116,15 @@ export type SessionContext = {
   readonly previousSessionFile?: string;
   readonly startReason?: "new";
   readonly role: "main" | "subagent";
+  readonly agent?: string;
+  coordinateSubagents?(
+    command: SubagentCommand,
+    signal?: AbortSignal,
+  ): Promise<Result<unknown, ExpectedError>>;
+  contactSupervisor?(
+    command: SupervisorCommand,
+    signal?: AbortSignal,
+  ): Promise<Result<unknown, ExpectedError>>;
   isUiActive?: () => boolean;
   spawnSubagent(
     name: string,
@@ -117,6 +140,7 @@ export type SessionRecord = {
   readonly sessionFile?: string;
   readonly state: ExecutionState;
   readonly subagents: readonly Subagent[];
+  readonly ownedSubagents?: readonly OwnedSubagentRecord[];
   readonly lifecycle?: SessionLifecycle;
   readonly updatedAt?: number;
   readonly cwd?: string;
@@ -140,6 +164,19 @@ type Execution = {
   failure?: string;
   request?: RequestSummary;
   runTiming?: Subagent["runTiming"];
+  task?: string;
+  output?: string;
+  finalOutput?: string;
+  noticeVersion?: number;
+  observedNoticeVersion?: number;
+  terminalObserved?: boolean;
+  progress?: OwnedSubagentRecord["progress"];
+  suppressNotifications?: boolean;
+  backgroundAccepted?: boolean;
+  channel?: SubagentChannel;
+  completion?: Promise<Result<string, ExpectedError>>;
+  settled?: boolean;
+  controller?: AbortController;
   readonly worktree?: Worktree;
   readonly managed?: boolean;
   closedAt?: number;
@@ -155,6 +192,9 @@ type OpenExecution = Execution & {
   replacing?: boolean;
   observedResultId?: string | undefined;
   attention?: SessionResult | undefined;
+  hiddenChildren?: Set<string>;
+  childrenSettledAt?: number;
+  childrenTimer?: ReturnType<typeof setTimeout>;
 };
 
 export class SessionRegistry {
@@ -236,7 +276,11 @@ export class SessionRegistry {
               id: entry.id,
               name: entry.name,
               status: state?.status ?? null,
-              subagents: this.children(entry),
+              subagents:
+                entry.childrenSettledAt !== undefined &&
+                Date.now() >= entry.childrenSettledAt + 10_000
+                  ? []
+                  : this.children(entry).filter((child) => !entry.hiddenChildren?.has(child.id)),
               ...(state?.request ? { request: state.request } : {}),
               ...(state?.result ? { result: state.result } : {}),
               ...(entry.attention ? { attention: entry.attention } : {}),
@@ -420,6 +464,7 @@ export class SessionRegistry {
           conversationId: entry.executor!.savedSessionId,
         },
         subagents: this.children(entry),
+        ownedSubagents: this.ownedRecords(entry),
         lifecycle: "open",
         closedAt: null,
         managed: entry.managed ?? false,
@@ -454,9 +499,38 @@ export class SessionRegistry {
   }
 
   private retire(entry: OpenExecution, before?: SessionRecord): SessionRecord | undefined {
-    return entry.executor
-      ? this.retireExecution(entry, entry.worktree, this.children(entry), entry.executor, before)
-      : undefined;
+    if (!entry.executor) return undefined;
+    const record = {
+      ...this.retireExecution(entry, entry.worktree, this.children(entry), entry.executor, before),
+      ownedSubagents: this.ownedRecords(entry),
+    };
+    this.retired.set(sessionRecordKey(record), record);
+    return record;
+  }
+
+  private ownedRecords(entry: OpenExecution): OwnedSubagentRecord[] {
+    const expired =
+      entry.childrenSettledAt !== undefined && Date.now() >= entry.childrenSettledAt + 10_000;
+    return [...entry.children.values()].map((child) => {
+      const state = child.executor?.state;
+      const runTiming = state?.runTiming ?? child.runTiming;
+      const finalOutput = state?.finalOutput ?? child.finalOutput;
+      return {
+        id: child.id,
+        name: child.name,
+        status: child.failure ? "failure" : (state?.status ?? child.finishedStatus ?? null),
+        ...(child.task !== undefined ? { task: child.task } : {}),
+        output: state?.output ?? child.output ?? "",
+        ...(finalOutput !== undefined ? { finalOutput } : {}),
+        ...(child.failure ? { error: child.failure } : {}),
+        ...(child.fileKey ? { sessionFile: child.fileKey } : {}),
+        ...(child.closedAt !== undefined ? { finishedAt: child.closedAt } : {}),
+        hidden: expired || entry.hiddenChildren?.has(child.id) === true,
+        ...(child.request ? { request: child.request } : {}),
+        ...(runTiming ? { runTiming } : {}),
+        progress: [...(child.channel?.progress ?? child.progress ?? [])],
+      };
+    });
   }
 
   private retireExecution(
@@ -505,11 +579,17 @@ export class SessionRegistry {
       const state = child.executor?.state;
       const request = state?.request ?? child.request;
       const runTiming = state?.runTiming ?? child.runTiming;
+      const progress = (child.channel?.progress ?? child.progress)?.at(-1)?.message;
 
       return {
         id: child.id,
         name: child.name,
-        status: child.failure ? "failure" : (state?.status ?? child.finishedStatus ?? null),
+        ...(progress ? { progress: progress.slice(0, 512) } : {}),
+        status: child.failure
+          ? "failure"
+          : (state?.status ?? child.finishedStatus ?? (child.ready ? "working" : null)),
+        ...(child.channel?.questions.length ? { phase: "waiting" as const } : {}),
+        ...(child.closedAt !== undefined ? { finishedAt: child.closedAt } : {}),
         ...(request ? { request } : {}),
         ...(runTiming ? { runTiming } : {}),
       };
@@ -562,7 +642,9 @@ export class SessionRegistry {
     const entry = selected.value;
     const restored = entry.executor!.state;
     const interrupted: SessionResult | undefined =
-      record.state.status === "working"
+      record.state.status === "working" ||
+      record.ownedSubagents?.some((child) => child.status === "working") ||
+      record.subagents.some((child) => child.source !== "pi" && child.status === "working")
         ? {
             id: crypto.randomUUID(),
             outcome: "unfinished",
@@ -590,20 +672,36 @@ export class SessionRegistry {
           : {}),
       // Recompute telemetry from the SDK and explicit conversation preferences, never cached quotas.
       ...(restored.telemetry ? { telemetry: restored.telemetry } : {}),
-      status: record.state.status === "working" ? null : restored.status,
-      error:
-        record.state.status === "working"
-          ? "Previous runtime ended during this run; submit a new prompt to continue."
-          : restored.error,
+      status: interrupted ? null : restored.status,
+      error: interrupted
+        ? "Previous runtime ended during owned work; inspect saved results and submit a new prompt to continue."
+        : restored.error,
     };
-    for (const child of record.subagents.filter((child) => child.source !== "pi")) {
+    for (const child of record.ownedSubagents ??
+      record.subagents.filter((child) => child.source !== "pi")) {
+      const saved = "output" in child ? child : undefined;
+      if (saved?.hidden) {
+        entry.hiddenChildren ??= new Set();
+        entry.hiddenChildren.add(child.id);
+      }
       entry.children.set(child.id, {
+        ...(saved
+          ? {
+              output: saved.output,
+              ...(saved.finalOutput !== undefined ? { finalOutput: saved.finalOutput } : {}),
+              progress: saved.progress,
+              ...(saved.task !== undefined ? { task: saved.task } : {}),
+              ...(saved.sessionFile ? { fileKey: saved.sessionFile } : {}),
+              ...(saved.error ? { failure: saved.error } : {}),
+            }
+          : {}),
         id: child.id,
         name: child.name,
         role: "subagent",
         ready: undefined,
         ...(child.request ? { request: child.request } : {}),
         ...(child.runTiming ? { runTiming: child.runTiming } : {}),
+        closedAt: child.finishedAt ?? record.updatedAt ?? Date.now(),
         finishedStatus: child.status === "working" ? null : child.status,
       });
     }
@@ -665,6 +763,8 @@ export class SessionRegistry {
         ...(requestedFile ? { sessionFile: requestedFile } : {}),
         spawnSubagent: (name, task, signal) =>
           this.spawnSubagent(id, name, task, signal, generation),
+        coordinateSubagents: (command, signal) =>
+          this.coordinateSubagents(id, generation, command, signal),
       }),
     );
     const entry: OpenExecution = {
@@ -776,6 +876,16 @@ export class SessionRegistry {
     }
 
     const entry = selected.value;
+    if (query.kind === "argument") {
+      if (!query.command)
+        return err(new InputError("Argument completion requires a command name."));
+      const result =
+        (await entry.executor?.argumentCompletions?.(query.command, query.query, signal)) ??
+        ok({ items: [], truncated: false });
+      return entry.phase === "open"
+        ? result
+        : err(new SessionError("SESSION_NOT_OPEN", "Session closed during argument completion."));
+    }
     if (query.kind === "file") {
       const result = await completeFiles(entry.worktree.path, query.query, signal);
 
@@ -1100,7 +1210,14 @@ export class SessionRegistry {
       );
     }
 
-    return entry.executor.interrupt(onAccepted);
+    for (const child of entry.children.values()) child.suppressNotifications = true;
+    return collectCleanup(
+      [
+        entry.executor.interrupt(onAccepted),
+        ...[...entry.children.values()].map((child) => this.closeExecution(child)),
+      ],
+      "Could not interrupt all owned work.",
+    );
   }
 
   newTab(id: string): Promise<Result<string, ExpectedError>> {
@@ -1174,6 +1291,8 @@ export class SessionRegistry {
         ...(previousSessionFile ? { previousSessionFile } : {}),
         spawnSubagent: (name, task, signal) =>
           this.spawnSubagent(previous.id, name, task, signal, generation),
+        coordinateSubagents: (command, signal) =>
+          this.coordinateSubagents(previous.id, generation, command, signal),
       }),
     );
     const created = await ready;
@@ -1205,6 +1324,7 @@ export class SessionRegistry {
         onAccepted?.();
         stopping = true;
         previous.closedAt = Date.now();
+        if (previous.childrenTimer) clearTimeout(previous.childrenTimer);
 
         const archived = this.retire(previous);
         // Explicit /clear stops only the execution owned by this tab. Keep its file
@@ -1308,6 +1428,7 @@ export class SessionRegistry {
 
     const archived = this.retire(entry);
     entry.phase = "closing";
+    if (entry.childrenTimer) clearTimeout(entry.childrenTimer);
 
     const task = Promise.resolve().then(async () => {
       const result = await collectCleanup(
@@ -1355,12 +1476,189 @@ export class SessionRegistry {
     );
   }
 
+  private notifyChild(owner: OpenExecution, child: Execution, event: SubagentNoticePayload): void {
+    if (
+      this.entries.get(owner.id) !== owner ||
+      owner.phase !== "open" ||
+      owner.replacing ||
+      child.suppressNotifications ||
+      !child.backgroundAccepted ||
+      this.shuttingDown
+    )
+      return;
+    const version = (child.noticeVersion ?? 0) + 1;
+    child.noticeVersion = version;
+    owner.executor?.notifySubagent?.({ ...event, id: child.id, agent: child.name }, () => {
+      if (
+        this.entries.get(owner.id) !== owner ||
+        owner.phase !== "open" ||
+        owner.replacing ||
+        child.suppressNotifications ||
+        this.shuttingDown ||
+        version <= (child.observedNoticeVersion ?? 0)
+      )
+        return false;
+      if (event.type === "finished") return !child.terminalObserved;
+      if (child.settled || !child.ready || child.controller?.signal.aborted) return false;
+      if (event.type === "question")
+        return (
+          child.channel?.questions.some((question) => question.id === event.question.id) === true
+        );
+      return !child.channel?.questions.length;
+    });
+  }
+
+  private async coordinateSubagents(
+    ownerId: string,
+    generation: string,
+    command: SubagentCommand,
+    signal?: AbortSignal,
+  ): Promise<Result<unknown, ExpectedError>> {
+    const selected = this.requireOpen(ownerId);
+    if (!selected.ok) return selected;
+    const owner = selected.value;
+    if (owner.generation !== generation)
+      return err(
+        new SessionError("SESSION_CONFLICT", "This conversation no longer owns those runs."),
+      );
+    if (owner.replacing)
+      return err(new SessionError("SESSION_BUSY", "This conversation is being replaced."));
+    if (signal?.aborted) return err(new CancelledError());
+    if (command.action === "list")
+      return err(new CapabilityError("Profile discovery belongs to the session resource loader."));
+    if (command.action === "spawn") {
+      if (command.async === false && [...owner.children.values()].some((child) => child.ready))
+        return err(
+          new CapabilityError(
+            "Use asynchronous spawn while other owned runs are active so questions can be answered.",
+          ),
+        );
+      if ([...owner.children.values()].filter((child) => child.ready).length >= 5)
+        return err(new InputError("This parent already has five active subagents."));
+      if (owner.children.size >= 128)
+        return err(
+          new InputError(
+            "This conversation has reached its retained-run limit. Start a new conversation.",
+          ),
+        );
+      const background = command.async !== false;
+      let childId: string | undefined;
+      const result = await this.spawnSubagent(
+        ownerId,
+        command.agent,
+        command.task,
+        signal,
+        generation,
+        background,
+        (id) => {
+          childId = id;
+        },
+      );
+      return result.ok ? ok(this.childStatus(owner.children.get(childId!)!)) : result;
+    }
+    const children = command.id ? [owner.children.get(command.id)] : [...owner.children.values()];
+    if (children.some((child) => !child))
+      return err(new InputError("This run does not belong to the current conversation."));
+    const runs = children as Execution[];
+    if (command.action === "status")
+      return ok(runs.map((child) => this.childStatus(child, command.id !== undefined)));
+    if (command.action === "wait") {
+      const settled = () =>
+        runs.every((child) => !child.ready || child.settled) ||
+        [...owner.children.values()].some((child) => child.channel?.questions.length);
+      if (!settled()) {
+        const response = Promise.withResolvers<void>();
+        const cancel = () => response.resolve();
+        const unsubscribe = this.subscribe(() => {
+          if (settled() || owner.phase !== "open" || owner.replacing) response.resolve();
+        });
+        signal?.addEventListener("abort", cancel, { once: true });
+        try {
+          await response.promise;
+        } finally {
+          unsubscribe();
+          signal?.removeEventListener("abort", cancel);
+        }
+        if (signal?.aborted || owner.phase !== "open" || owner.replacing)
+          return err(new CancelledError());
+      }
+      if (runs.every((child) => !child.ready || child.settled))
+        await Promise.all(runs.flatMap((child) => (child.completion ? [child.completion] : [])));
+      if (
+        signal?.aborted ||
+        this.entries.get(ownerId) !== owner ||
+        owner.phase !== "open" ||
+        owner.replacing
+      )
+        return err(new CancelledError());
+      const attention = [...owner.children.values()].filter(
+        (child) => child.channel?.questions.length && !runs.includes(child),
+      );
+      return ok(
+        [...runs, ...attention].map((child) => this.childStatus(child, command.id !== undefined)),
+      );
+    }
+    const child = runs[0]!;
+    if (command.action === "reply")
+      return (
+        child.channel?.reply(command.questionId, command.message) ??
+        err(new InputError("This run has no pending questions."))
+      );
+    if (command.action === "stop") {
+      child.suppressNotifications = true;
+      const stopped = await this.closeExecution(child);
+      return stopped.ok ? ok(this.childStatus(child)) : stopped;
+    }
+    if (!child.ready || !child.executor?.steer)
+      return err(new InputError("This run is no longer accepting guidance."));
+    if (child.channel?.questions.length)
+      return err(
+        new InputError("Answer the pending question with reply; steer does not answer questions."),
+      );
+    return child.executor.steer(command.message);
+  }
+
+  private childStatus(child: Execution, detail = true): unknown {
+    const state = child.executor?.state;
+    child.observedNoticeVersion = child.noticeVersion ?? 0;
+    if (!child.ready || child.settled) child.terminalObserved = true;
+    return {
+      id: child.id,
+      agent: child.name,
+      task: (child.task ?? child.request?.text)?.slice(0, detail ? 16_384 : 400),
+      status: child.failure
+        ? "failure"
+        : child.channel?.questions.length
+          ? "waiting"
+          : child.ready
+            ? "working"
+            : (child.finishedStatus ?? "stopped"),
+      currentTools: state?.activeTools ?? [],
+      progress: (child.channel?.progress ?? child.progress ?? [])
+        .slice(detail ? -16 : -1)
+        .map((update) => ({ ...update, message: update.message.slice(0, detail ? 2048 : 512) })),
+      questions: (child.channel?.questions ?? []).map((question) => ({
+        ...question,
+        message: question.message.slice(0, detail ? 16_384 : 512),
+      })),
+      output: (state?.finalOutput ?? child.finalOutput ?? "").slice(0, 16_384),
+      recentOutput: (state?.output ?? child.output ?? "").slice(detail ? -16_384 : -512),
+      ...(child.failure ? { error: child.failure } : {}),
+      ...((state?.runTiming ?? child.runTiming)
+        ? { runTiming: state?.runTiming ?? child.runTiming }
+        : {}),
+      ...(child.fileKey ? { sessionFile: child.fileKey } : {}),
+    };
+  }
+
   private async spawnSubagent(
     ownerId: string,
     name: string,
     task: string,
     signal?: AbortSignal,
     generation?: string,
+    background = false,
+    onCreated?: (id: string) => void,
   ): Promise<Result<string, ExpectedError>> {
     const selected = this.requireOpen(ownerId);
     if (!selected.ok) {
@@ -1383,25 +1681,50 @@ export class SessionRegistry {
       return err(new SessionError("SESSION_BUSY", "This conversation is being replaced."));
     }
 
+    const child: Execution = {
+      id: crypto.randomUUID(),
+      name,
+      task,
+      role: "subagent",
+      ready: undefined,
+      controller: new AbortController(),
+      worktree: owner.worktree,
+      managed: true,
+      request: summarizeRequest(task, 0),
+    };
+    child.channel = new SubagentChannel((event) => {
+      if (event.type !== "question-settled") this.notifyChild(owner, child, event);
+      this.emit();
+    });
     const ready = capture(() =>
       this.factory({
         cwd: owner.worktree.path,
         worktreeId: owner.worktree.id,
         role: "subagent",
+        agent: name,
+        contactSupervisor: (command, childSignal) => {
+          if (owner.phase !== "open" || owner.replacing || child.controller!.signal.aborted)
+            return Promise.resolve(err(new CancelledError()));
+          if (!background && command.action === "ask")
+            return Promise.resolve(
+              err(
+                new CapabilityError(
+                  "A synchronous parent cannot answer questions. Use asynchronous spawn.",
+                ),
+              ),
+            );
+          return child.channel!.contact(command, childSignal);
+        },
         spawnSubagent: async () => err(new InputError("Nested delegation is not enabled.")),
       }),
     );
-    const child: Execution = {
-      id: crypto.randomUUID(),
-      name,
-      role: "subagent",
-      ready,
-      worktree: owner.worktree,
-      managed: true,
-      request: summarizeRequest(task, 0),
-    };
-
+    child.ready = ready;
+    if (owner.childrenSettledAt !== undefined && Date.now() >= owner.childrenSettledAt + 10_000) {
+      owner.hiddenChildren ??= new Set();
+      for (const id of owner.children.keys()) owner.hiddenChildren.add(id);
+    }
     owner.children.set(child.id, child);
+    onCreated?.(child.id);
     this.emit();
 
     let cancelTask: Promise<Result<void, ExpectedError>> | undefined;
@@ -1412,7 +1735,79 @@ export class SessionRegistry {
     };
 
     signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
 
+    const complete = this.completeChild(
+      owner,
+      child,
+      ready,
+      task,
+      child.controller!.signal,
+      () => cancelTask,
+    ).finally(() => {
+      child.settled = true;
+      this.emit();
+    });
+    child.completion = complete;
+    if (background) {
+      void complete
+        .then((result) => {
+          this.notifyChild(owner, child, {
+            type: "finished",
+            status:
+              child.failure || child.finishedStatus === "failure"
+                ? "failure"
+                : child.finishedStatus === "complete"
+                  ? "complete"
+                  : "stopped",
+            ...(child.finalOutput !== undefined
+              ? { output: child.finalOutput.slice(0, 4000) }
+              : {}),
+            ...(!result.ok ? { error: result.error.message } : {}),
+          });
+        })
+        .catch((error: unknown) => {
+          child.failure = reportUnexpected(error, "background subagent execution");
+          this.emit();
+          this.notifyChild(owner, child, {
+            type: "finished",
+            status: "failure",
+            error: child.failure,
+          });
+        });
+      const created = await ready;
+      signal?.removeEventListener("abort", cancel);
+      if (!created.ok) {
+        await complete;
+        return created;
+      }
+      if (
+        signal?.aborted ||
+        this.entries.get(ownerId) !== owner ||
+        owner.phase !== "open" ||
+        owner.replacing
+      ) {
+        await this.closeExecution(child);
+        return err(new CancelledError());
+      }
+      child.backgroundAccepted = true;
+      return ok(child.id);
+    }
+    try {
+      return await complete;
+    } finally {
+      signal?.removeEventListener("abort", cancel);
+    }
+  }
+
+  private async completeChild(
+    owner: OpenExecution,
+    child: Execution,
+    ready: NonNullable<Execution["ready"]>,
+    task: string,
+    signal: AbortSignal,
+    cancellation: () => Promise<Result<void, ExpectedError>> | undefined,
+  ): Promise<Result<string, ExpectedError>> {
     let result: Result<string, ExpectedError>;
     try {
       result = await this.runChild(owner, child, ready, task, signal);
@@ -1427,15 +1822,14 @@ export class SessionRegistry {
       }
 
       throw error;
-    } finally {
-      signal?.removeEventListener("abort", cancel);
     }
+    if (result.ok) child.finalOutput = result.value;
     if (!result.ok && !(result.error instanceof CancelledError) && owner.phase === "open") {
       child.failure = result.error.message;
       this.emit();
     }
 
-    const cleanup = await (cancelTask ?? this.closeExecution(child));
+    const cleanup = await (cancellation() ?? this.closeExecution(child));
     if (!cleanup.ok) {
       child.failure = cleanup.error.message;
       if (owner.phase === "open") {
@@ -1521,7 +1915,7 @@ export class SessionRegistry {
       return err(new AgentRunError(executor.state.error ?? "Subagent failed."));
     }
 
-    return ok(executor.state.output);
+    return ok(executor.state.finalOutput ?? "");
   }
 
   private closeExecution(
@@ -1532,6 +1926,8 @@ export class SessionRegistry {
       return execution.cleanupTask;
     }
 
+    execution.channel?.close();
+    execution.controller?.abort();
     const ready = execution.ready;
     if (!ready) {
       return Promise.resolve(ok(undefined));
@@ -1540,6 +1936,9 @@ export class SessionRegistry {
     const task = (async (): Promise<Result<void, ExpectedError>> => {
       const created = await ready;
       if (!created.ok) {
+        execution.ready = undefined;
+        execution.closedAt ??= Date.now();
+        this.emit();
         return ok(undefined);
       } // Factory failure is returned to create/runChild; no handle exists.
 
@@ -1566,7 +1965,11 @@ export class SessionRegistry {
           this.fileOwners.delete(execution.fileKey);
         }
 
-        execution.finishedStatus = created.value.state.status;
+        execution.output ??= created.value.state.output;
+        const finalOutput = created.value.state.finalOutput;
+        if (finalOutput !== undefined) execution.finalOutput ??= finalOutput;
+        execution.finishedStatus =
+          created.value.state.status === "working" ? null : created.value.state.status;
         execution.ready = undefined;
         delete execution.executor;
         this.emit();
@@ -1605,6 +2008,27 @@ export class SessionRegistry {
   }
 
   private emit(): void {
+    for (const entry of this.entries.values()) {
+      const children = [...entry.children.values()];
+      const running = children.some((child) => child.ready !== undefined);
+      if (running || !children.length) {
+        delete entry.childrenSettledAt;
+        if (entry.childrenTimer) clearTimeout(entry.childrenTimer);
+        delete entry.childrenTimer;
+      } else if (entry.phase === "open" && !entry.replacing) {
+        entry.childrenSettledAt ??= Math.max(
+          ...children.map((child) => child.closedAt ?? Date.now()),
+        );
+        const remaining = entry.childrenSettledAt + 10_000 - Date.now();
+        if (remaining > 0 && !entry.childrenTimer) {
+          entry.childrenTimer = setTimeout(() => {
+            delete entry.childrenTimer;
+            this.emit();
+          }, remaining);
+          entry.childrenTimer.unref();
+        }
+      }
+    }
     for (const listener of this.listeners) {
       listener();
     }

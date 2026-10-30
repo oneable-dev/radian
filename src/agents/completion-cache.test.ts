@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CompletionCache } from "./completion-cache.ts";
-import type { CompletionCatalog } from "./completion.ts";
+import type { CompletionCatalog, CompletionQuery, CompletionResult } from "./completion.ts";
 import { CapabilityError } from "../errors.ts";
 import { err, ok } from "../result.ts";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
@@ -249,3 +249,102 @@ test("Lookup cancellation preserves shared initialization and failures remain er
     await fixture.cleanup();
   }
 });
+
+test("Argument callbacks stay dynamic while command capability metadata remains cached", async () => {
+  // Only declared callbacks can open argument menus; their results may change between requests.
+  const fixture = await createWorktreeFixture();
+  const queries: CompletionQuery[] = [];
+  let loads = 0;
+  const cache = new CompletionCache(
+    async () => {
+      loads++;
+      return ok({
+        ...catalog(),
+        items: [
+          { kind: "command", value: "mcp", description: "MCP", hasArguments: true },
+          { kind: "command", value: "memory", description: "Memory" },
+        ],
+      });
+    },
+    () => "instance/conversation/0",
+    (error) => {
+      throw error;
+    },
+    async (_id, query) => {
+      queries.push(query);
+      return ok({
+        items: [{ kind: "argument", value: `${query.query} status`, description: "Status" }],
+        truncated: false,
+      });
+    },
+  );
+  try {
+    cache.provider.prepare!("session", fixture.main);
+    await cache.provider(
+      "session",
+      { kind: "command", query: "mcp" },
+      new AbortController().signal,
+    );
+
+    // Repeated lookups reuse the command catalog, not the callback's previous candidates.
+    const query = { kind: "argument", command: "mcp", query: "token" } as const;
+    for (let index = 0; index < 2; index++) {
+      expect(
+        expectOk(await cache.provider("session", query, new AbortController().signal)).items[0]
+          ?.value,
+      ).toBe("token status");
+    }
+
+    expect(queries).toEqual([query, query]);
+    expect(loads).toBe(1);
+    expect(cache.provider.supportsArguments!("session", "mcp")).toBe(true);
+    expect(cache.provider.supportsArguments!("session", "memory")).toBe(false);
+  } finally {
+    cache.dispose();
+    await fixture.cleanup();
+  }
+});
+
+test.each(["cancel", "replace", "release"] as const)(
+  "Late argument candidates are discarded after %s",
+  async (change) => {
+    // The callback deliberately ignores cancellation to exercise the cache's ownership fence.
+    const fixture = await createWorktreeFixture();
+    const pending = Promise.withResolvers<ReturnType<typeof ok<CompletionResult>>>();
+    let identity = "first";
+    const cache = new CompletionCache(
+      async () => ok(catalog()),
+      () => identity,
+      (error) => {
+        throw error;
+      },
+      async () => pending.promise,
+    );
+    const abort = new AbortController();
+    try {
+      cache.provider.prepare!("session", fixture.main);
+      const request = cache.provider(
+        "session",
+        { kind: "argument", command: "mcp", query: "" },
+        abort.signal,
+      );
+
+      // Invalidation happens before the obsolete response arrives.
+      if (change === "cancel") abort.abort();
+      if (change === "replace") {
+        identity = "second";
+        cache.provider.prepare!("session", fixture.main);
+      }
+      if (change === "release") cache.provider.retain!(new Set());
+      pending.resolve(
+        ok({ items: [{ kind: "argument", value: "stale", description: "Old" }], truncated: false }),
+      );
+
+      expect(expectError(await request).code).toBe("CANCELLED");
+    } finally {
+      pending.resolve(ok({ items: [], truncated: false }));
+      cache.dispose();
+      await fixture.cleanup();
+    }
+  },
+);

@@ -327,6 +327,63 @@ test("Children remain visible after the parent settles and terminal durations st
   }
 });
 
+test("All settled child feedback disappears together after ten seconds without changing focus or drafts", async () => {
+  // One settled row must stay visible while another child is still working.
+  const app = await mount();
+  try {
+    pressLeader(app, "a");
+    const focus = app.renderer.currentFocusedRenderable;
+    await app.update(
+      [{ ...child("writer", 1000), status: "complete" }, child("reviewer", 2000)],
+      "complete",
+    );
+    app.clock.advance(12_000);
+    await app.render();
+    expect(app.list.visible).toBe(true);
+
+    await app.update([
+      { ...child("writer", 1000), status: "complete" },
+      { ...child("reviewer", 3000), status: "failure" },
+    ]);
+    app.clock.advance(9999);
+    await app.render();
+    expect(app.list.visible).toBe(true);
+    app.clock.advance(1);
+    await app.render();
+
+    expect(app.list.visible).toBe(false);
+    expect(app.get("transcript-status-row").visible).toBe(false);
+    expect(app.captureCharFrame()).not.toContain("reviewer · Failed");
+    expect(app.renderer.currentFocusedRenderable).toBe(focus);
+    expect(app.view.promptDrafts.a1).toBe("Retained unsent draft");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Meaningful progress updates the existing status caption without creating transcript messages", async () => {
+  // Progress belongs to the compact live status area, not a new JSON notice in the transcript.
+  const app = await mount();
+  try {
+    pressLeader(app, "a");
+    const focus = app.renderer.currentFocusedRenderable;
+
+    await app.update([
+      { ...child("reviewer", 1000), progress: "Found a compatibility issue 한글👩‍💻" },
+    ]);
+    const captions = app.captions();
+
+    expect(captions).toHaveLength(1);
+    expect(captions[0]!.plainText).toContain("Found a compatibility issue");
+    expect(captions[0]!.plainText).not.toContain("Received reviewer task");
+    expect(app.captureCharFrame()).not.toContain("radian.subagent-event");
+    expect(app.renderer.currentFocusedRenderable).toBe(focus);
+    expect(app.view.promptDrafts.a1).toBe("Retained unsent draft");
+  } finally {
+    await app.close();
+  }
+});
+
 test("Compact layouts bound child rows and prioritize active children without stealing text input", async () => {
   // A large set of settled children must not hide the one agent that is still working.
   const app = await mount(60);

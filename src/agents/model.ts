@@ -11,8 +11,10 @@ export type Subagent = {
   readonly status: AgentStatus | null;
   readonly request?: RequestSummary;
   readonly runTiming?: { readonly startedAt: number; readonly elapsedMs: number };
+  readonly finishedAt?: number;
+  readonly progress?: string;
   readonly source?: "pi";
-  readonly phase?: "queued" | "paused" | "stopped" | "rejected" | "partial";
+  readonly phase?: "queued" | "paused" | "stopped" | "rejected" | "partial" | "waiting";
 };
 
 // Display snapshots have no ownership of Pi agents or saved session records.

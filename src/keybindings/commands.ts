@@ -21,6 +21,8 @@ export const contexts = [
   "extension-search",
   "extension-input",
   "extension-body",
+  "extension-editor",
+  "extension-custom",
   "session-tabs",
   "terminal-tabs",
   "git-tabs",
@@ -87,6 +89,8 @@ const tabContexts = contexts.filter(
     context !== "selection" &&
     context !== "editor" &&
     context !== "terminal" &&
+    context !== "extension-custom" &&
+    context !== "extension-editor" &&
     context !== "prompt-completion",
 );
 
@@ -105,6 +109,7 @@ export const defaultBindings = (platform: NodeJS.Platform = process.platform) =>
               "selection",
               "editor",
               "terminal",
+              "extension-custom",
               "transcript",
               "transcript-text",
               "transcript-visual",
@@ -305,8 +310,14 @@ export const defaultBindings = (platform: NodeJS.Platform = process.platform) =>
     ],
     "history.first": [key("home", "history")],
     "history.last": [key("end", "history")],
-    "extension.dismiss": extensionContexts.map((scope) => key("escape", scope)),
-    "extension.submit": extensionContexts.map((scope) => key("enter", scope)),
+    "extension.dismiss": [
+      ...extensionContexts.map((scope) => key("escape", scope)),
+      key("escape", "extension-editor"),
+    ],
+    "extension.submit": [
+      ...extensionContexts.map((scope) => key("enter", scope)),
+      key("ctrl+s", "extension-editor"),
+    ],
     "extension.search": [key("/", "extension")],
     "extension.previous": [
       ...extensionListContexts.flatMap((scope) => [key("up", scope), key("ctrl+p", scope)]),
@@ -568,7 +579,12 @@ export function inScope(scope: KeyScope, context: KeyContext): boolean {
     return context === "editor" || context === "terminal";
   }
   if (scope === "app") {
-    return context !== "editor" && context !== "terminal";
+    return (
+      context !== "editor" &&
+      context !== "terminal" &&
+      context !== "extension-custom" &&
+      context !== "extension-editor"
+    );
   }
 
   return scope === context;

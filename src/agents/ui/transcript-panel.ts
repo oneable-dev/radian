@@ -47,7 +47,7 @@ type Row = {
   heading: BoxRenderable;
   header: TranscriptBody;
   bodyRow: BoxRenderable;
-  skillTag: TextRenderable;
+  invocationTag: TextRenderable;
   body: TranscriptBody;
   markdown: TranscriptMarkdown | undefined;
   markdownKind: "assistant" | "thinking" | undefined;
@@ -91,6 +91,7 @@ function sameSection(a: TranscriptSection, b: TranscriptSection): boolean {
       a.error === b.error &&
       a.summary === b.summary &&
       a.skillName === b.skillName &&
+      a.commandName === b.commandName &&
       a.command === b.command &&
       a.timeoutSeconds === b.timeoutSeconds &&
       sameRunCompletion(a.completion, b.completion) &&
@@ -120,8 +121,12 @@ function cancellationNotice(section: TranscriptSection): boolean {
   );
 }
 
-function hiddenCancellation(section: TranscriptSection): boolean {
-  return cancellationNotice(section) && !section.completion?.warning;
+function hiddenSection(section: TranscriptSection): boolean {
+  // Older snapshots may retain visible raw control events even after the live projector changes.
+  return (
+    (section.kind === "notice" && section.title === "radian.subagent-event") ||
+    (cancellationNotice(section) && !section.completion?.warning)
+  );
 }
 
 export type TranscriptOptions = {
@@ -478,7 +483,7 @@ export class TranscriptPanel {
       };
     }
     if (changed) {
-      const incoming = source.filter((section) => !hiddenCancellation(section));
+      const incoming = source.filter((section) => !hiddenSection(section));
       const ids = new Set(incoming.map((section) => section.id));
       for (const [key, row] of this.rows) {
         if (!ids.has(key)) {
@@ -495,7 +500,7 @@ export class TranscriptPanel {
 
       let request: RequestSummary | undefined;
       for (const section of source) {
-        if (hiddenCancellation(section)) {
+        if (hiddenSection(section)) {
           if (section.completion) {
             request = undefined;
           }
@@ -803,7 +808,7 @@ export class TranscriptPanel {
       flexShrink: 0,
       flexDirection: "row",
     });
-    const skillTag = new TextRenderable(this.renderer, {
+    const invocationTag = new TextRenderable(this.renderer, {
       width: 8,
       height: 1,
       flexShrink: 0,
@@ -825,7 +830,7 @@ export class TranscriptPanel {
     });
 
     body.setText(section.text);
-    bodyRow.add(skillTag);
+    bodyRow.add(invocationTag);
     bodyRow.add(body);
 
     const completion = new TextRenderable(this.renderer, {
@@ -842,7 +847,7 @@ export class TranscriptPanel {
       heading,
       header,
       bodyRow,
-      skillTag,
+      invocationTag,
       body,
       markdown: undefined,
       markdownKind: undefined,
@@ -939,7 +944,12 @@ export class TranscriptPanel {
   }
 
   private foldable(row: Row | undefined): boolean {
-    return !!row && row.section.skillName === undefined && row.section.kind !== "thinking";
+    return (
+      !!row &&
+      row.section.skillName === undefined &&
+      row.section.commandName === undefined &&
+      row.section.kind !== "thinking"
+    );
   }
 
   private folded(row: Row): boolean {
@@ -955,6 +965,15 @@ export class TranscriptPanel {
   }
 
   private headingText(section: TranscriptSection, folded: boolean): string {
+    const title = [
+      "radian.subagent-event",
+      "radian-subagent",
+      "radian-supervisor",
+      "radian_subagent",
+      "subagent-slash-result",
+    ].includes(section.title)
+      ? "subagent"
+      : section.title;
     let label: string;
     if (section.image) {
       const key = this.hint("transcript.fold", "transcript");
@@ -969,12 +988,12 @@ export class TranscriptPanel {
         label =
           section.command !== undefined
             ? `$ ${section.command}`
-            : `[${section.title}]${section.summary ? ` ${section.summary}` : ""}`;
+            : `[${title}]${section.summary ? ` ${section.summary}` : ""}`;
         break;
       case "thinking":
         return "";
       case "notice":
-        label = `[${section.title}]`;
+        label = `[${title}]`;
         break;
       case "user":
       case "assistant":
@@ -1024,6 +1043,7 @@ export class TranscriptPanel {
     const section = row.section;
     const selected = this.state?.selectedId === section.id;
     const skill = section.skillName !== undefined;
+    const command = section.commandName !== undefined;
     const cancelled = cancellationNotice(section);
     const folded = this.folded(row);
     const spacing = transcriptSpacing();
@@ -1041,6 +1061,7 @@ export class TranscriptPanel {
     row.heading.visible =
       !cancelled &&
       !skill &&
+      !command &&
       (folded || (!this.legacy && (section.kind === "tool" || section.kind === "notice")));
 
     const markdownKind =
@@ -1173,7 +1194,9 @@ export class TranscriptPanel {
 
     row.body.height = row.markdown ? Math.max(1, row.markdown.root.height) : skill ? 1 : "auto";
     row.body.wrapMode = row.markdown || skill ? "none" : "word";
-    row.skillTag.visible = skill;
+    row.invocationTag.visible = skill || command;
+    row.invocationTag.content = command ? "[command] " : "[skill] ";
+    row.invocationTag.width = command ? 10 : 8;
 
     const headingText = this.headingText(section, folded);
     if (row.header.plainText !== headingText) {
@@ -1203,9 +1226,9 @@ export class TranscriptPanel {
     row.body.textColor = bodyStyle.fg;
     row.body.attributes = bodyStyle.attributes;
     row.bodyRow.backgroundColor = row.body.backgroundColor = background;
-    row.skillTag.bg = row.body.backgroundColor;
-    row.skillTag.fg = styles["transcript.skill"].fg;
-    row.skillTag.attributes = styles["transcript.skill"].attributes;
+    row.invocationTag.bg = row.body.backgroundColor;
+    row.invocationTag.fg = styles["transcript.skill"].fg;
+    row.invocationTag.attributes = styles["transcript.skill"].attributes;
     row.body.cursorColor = styles["ui.focusBorder"].fg;
 
     const selectionStyle = styles[this.legacy ? "ui.selection" : "transcript.selection"];
@@ -2706,7 +2729,7 @@ export class TranscriptPanel {
       `Context compacted summaries start folded; click their heading or use ${this.hint("transcript.fold", "transcript")} to expand/collapse.\n` +
       `Image attachments show [read] filename, start folded, and preview on header click or ${this.hint("transcript.fold", "transcript")}.\n` +
       `Thinking is always visible as gray italic text and never folds.\n` +
-      `Skills show [skill] name only and never fold; copying excludes the decorative tag.\n` +
+      `Skills show [skill] name and prompt commands show [command] /name; neither tag folds or copies.\n` +
       `${this.hint("transcript.fold-all", "transcript")}/${this.hint("transcript.unfold-all", "transcript")} fold/unfold all · ${this.hint("transcript.latest", "transcript")} follow latest · ${this.hint("transcript.back", "transcript")} back · ${this.hint("focus.prompt", "transcript")} input · ${this.hint("transcript.help", "transcript")} close help`;
     this.paint();
     this.scroll.focus();

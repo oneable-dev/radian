@@ -715,6 +715,28 @@ test("Completion uses instance-fenced read requests and rejects invalid candidat
   }
 });
 
+test("Argument completion against older services fails before making a request", async () => {
+  // Prompt completion alone does not imply the additive callback capability.
+  const state = { ...snapshot(), capabilities: ["prompt-completion"] };
+  const fetchMock = stubFetch(async () => {
+    throw new Error("Legacy services must not receive argument requests");
+  });
+  const client = new RuntimeClient(paths, state);
+  try {
+    const result = await client.complete("session", {
+      kind: "argument",
+      command: "mcp",
+      query: "token",
+    });
+
+    expect(expectError(result).code).toBe("UNSUPPORTED_CAPABILITY");
+    expect(fetchMock).not.toHaveBeenCalled();
+  } finally {
+    await client.disconnect();
+    fetchMock.mockRestore();
+  }
+});
+
 test("User-cancelled completion fetches return CANCELLED instead of exceptions or empty success", async () => {
   const state = snapshot();
   state.capabilities = ["prompt-completion"];

@@ -21,6 +21,7 @@ import { SessionTranscript, type TranscriptSection } from "./transcript.ts";
 import type { SessionTelemetry } from "./telemetry.ts";
 import type { SessionRecord } from "./session-registry.ts";
 import { parseRunCompletion, runCompletionEntryType } from "./run-completion.ts";
+import { commandDisplayEntryType, parseCommandDisplay } from "./command-display.ts";
 import {
   historyReadChunk,
   historyReadFailure,
@@ -76,6 +77,11 @@ function validateEntry(entry: SessionEntry): Result<void, HistoryError> {
     return typeof entry.thinkingLevel === "string"
       ? ok(undefined)
       : corrupt("Invalid saved thinking level.");
+  }
+  if (entry.type === "custom" && entry.customType === commandDisplayEntryType) {
+    const display = parseCommandDisplay(entry.data);
+
+    return display.ok ? ok(undefined) : display;
   }
   if (entry.type === "custom" && entry.customType === runCompletionEntryType) {
     const completion = parseRunCompletion(entry.data);
@@ -488,7 +494,8 @@ export async function readHistoryPreview(
               "model_change",
               "thinking_level_change",
             ].includes(entry.type) ||
-            (entry.type === "custom" && entry.customType === runCompletionEntryType)
+            (entry.type === "custom" &&
+              [runCompletionEntryType, commandDisplayEntryType].includes(entry.customType))
           ) {
             const valid = validateEntry(entry);
             if (!valid.ok) {

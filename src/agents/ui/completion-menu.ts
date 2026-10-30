@@ -178,12 +178,19 @@ export class CompletionMenu {
       this.input.editBuffer.getTextRange(0, this.input.cursorOffset).length,
     );
 
+    if (
+      target?.kind === "argument" &&
+      (!sessionId ||
+        !target.command ||
+        !this.provider.supportsArguments?.(sessionId, target.command))
+    )
+      return null;
     return sessionId && target
       ? {
           sessionId,
           target,
-          lookup: JSON.stringify([sessionId, target.kind, target.query]),
-          scope: JSON.stringify([sessionId, target.kind]),
+          lookup: JSON.stringify([sessionId, target.kind, target.command, target.query]),
+          scope: JSON.stringify([sessionId, target.kind, target.command]),
         }
       : null;
   }
