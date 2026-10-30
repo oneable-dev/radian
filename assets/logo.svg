@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title description">
+  <title id="title">Radian R monogram</title>
+  <desc id="description">A white block R with thin offset double-line contours on a black background, using the R from Radian's block-and-box wordmark. No external font is required.</desc>
+  <rect width="256" height="256" fill="#000000"/>
+  <g transform="translate(64 33) scale(1.6)">
+    <path fill="#FFFFFF" fill-rule="evenodd" d="M0 0H63V18H73.5V54H63V72H73.5V108H52.5V72H21V108H0Z M21 18V54H52.5V18Z"/>
+    <path fill="none" stroke="#FFFFFF" stroke-width="0.8" stroke-linecap="square" stroke-linejoin="miter" d="
+      M63 7.25H70V18
+      M63 10.75H66.5V18
+      M52.5 25.25H24.5V54
+      M52.5 28.75H28V54
+      M73.5 25.25H80.5V64.75H70V72
+      M73.5 28.75H77V61.25H66.5V72
+      M52.5 79.25H24.5V115.25H7V108
+      M52.5 82.75H28V118.75H3.5V108
+      M73.5 79.25H80.5V118.75H56V108
+      M73.5 82.75H77V115.25H59.5V108
+    "/>
+  </g>
+</svg>
