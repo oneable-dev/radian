@@ -53,6 +53,9 @@ type Row = {
   markdownKind: "assistant" | "thinking" | undefined;
   completion: TextRenderable;
   completionWidth: number;
+  plainHeight?: number;
+  plainWidth?: number;
+  plainSource?: string;
   preview?: TranscriptImagePreview;
 };
 
@@ -246,7 +249,7 @@ export class TranscriptPanel {
     renderer.on("focused_renderable", this.focusChanged);
     renderer.keyInput.on("paste", this.readPaste);
     renderer.on("resize", this.resize);
-    renderer.addPostProcessFn(this.reflowCompletions);
+    renderer.addPostProcessFn(this.reflowContent);
     this.theme.scrollbars(this.scroll);
     this.theme.bind(this.scroll, () => {
       const styles = this.theme.styles;
@@ -1080,6 +1083,9 @@ export class TranscriptPanel {
       row.markdown?.root.destroyRecursively();
       row.markdown = undefined;
       row.markdownKind = markdownKind;
+      delete row.plainHeight;
+      delete row.plainWidth;
+      delete row.plainSource;
       if (markdownKind) {
         row.markdown = new TranscriptMarkdown(
           this.renderer,
@@ -1163,7 +1169,7 @@ export class TranscriptPanel {
       row.bodyRow.position = "relative";
       row.bodyRow.zIndex = 0;
       row.bodyRow.top = 0;
-      row.bodyRow.height = "auto";
+      row.bodyRow.height = skill ? 1 : (row.plainHeight ?? "auto");
     }
 
     row.bodyRow.visible = row.body.visible =
@@ -1192,7 +1198,11 @@ export class TranscriptPanel {
       delete row.preview;
     }
 
-    row.body.height = row.markdown ? Math.max(1, row.markdown.root.height) : skill ? 1 : "auto";
+    row.body.height = row.markdown
+      ? Math.max(1, row.markdown.root.height)
+      : skill
+        ? 1
+        : (row.plainHeight ?? "auto");
     row.body.wrapMode = row.markdown || skill ? "none" : "word";
     row.invocationTag.visible = skill || command;
     row.invocationTag.content = command ? "[command] " : "[skill] ";
@@ -1273,13 +1283,41 @@ export class TranscriptPanel {
     row.completion.bg = style.bg ?? this.theme.styles["ui.text"].bg;
   }
 
-  // Native widths settle after size callbacks; repaint only completion rows whose measured width changed.
-  private reflowCompletions = (): void => {
+  // Native column widths settle after size callbacks. Reconcile owned text measurements once settled.
+  private reflowContent = (): void => {
     if (this.disposed || this.scroll.isDestroyed || !this.visible) {
       return;
     }
     for (const row of this.rows.values()) {
       this.updatePreview(row);
+      if (
+        !row.markdown &&
+        row.box.visible &&
+        row.bodyRow.visible &&
+        !this.folded(row) &&
+        row.section.skillName === undefined
+      ) {
+        // Culled editors can report zero width. Measure against their owned column,
+        // not their last painted geometry, so older wrapped text contributes its
+        // full height and cannot strand later answers below the scrollable bottom.
+        const width =
+          (row.box.width || this.scroll.viewport.width) -
+          (this.legacy ? 0 : 2) -
+          (row.section.commandName !== undefined ? 10 : 0);
+        if (width > 0 && (width !== row.plainWidth || row.section.text !== row.plainSource)) {
+          const measured = row.body.editorView.measureForDimensions(width, 1);
+          if (measured) {
+            const height = Math.max(1, measured.lineCount);
+            row.plainWidth = width;
+            row.plainSource = row.section.text;
+            if (height !== row.plainHeight) {
+              this.prepareLayoutChange();
+              row.plainHeight = height;
+              row.bodyRow.height = row.body.height = height;
+            }
+          }
+        }
+      }
       if (row.section.completion && row.completion.width !== row.completionWidth) {
         this.prepareLayoutChange();
         this.paintCompletion(row);
@@ -2879,7 +2917,7 @@ export class TranscriptPanel {
     this.renderer.keyInput.off("paste", this.readPaste);
     this.renderer.off("resize", this.resize);
     this.clearFormattedSelection();
-    this.renderer.removePostProcessFn(this.reflowCompletions);
+    this.renderer.removePostProcessFn(this.reflowContent);
     this.scroll.verticalScrollBar.off("change", this.rememberScroll);
     this.scroll.content.off("resize", this.applyTarget);
     this.scroll.viewport.off("resize", this.resize);

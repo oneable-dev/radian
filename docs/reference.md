@@ -664,7 +664,10 @@ viewport: at the bottom it follows new output; moving above the bottom pauses it
 returning to the bottom by wheel or paging resumes it automatically. Live Agent transcripts hide
 their vertical scrollbar and reclaim its column without disabling wheel or keyboard navigation.
 History previews use the same hidden-scrollbar policy. Merely focusing the transcript does not pause it. Content growth and asynchronous Markdown layout preserve the pre-growth
-bottom intent rather than treating the increased scroll range as user navigation. Following also
+bottom intent rather than treating the increased scroll range as user navigation. Wrapped plain
+bodies (including expanded failures and user requests) publish native line measurements at the owned
+column width, including offscreen rows. Their complete height contributes to the scroll extent so
+later answers remain reachable after failure/retry/completion and resize. Following also
 keeps the bottom on resize and when returning from another work view. Explicitly exiting the reader
 with the final Esc resumes following; merely focusing the prompt, cancelling a popup, or wheel-reading
 while input already owns focus does not silently reset a deliberately paused viewport.

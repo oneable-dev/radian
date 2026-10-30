@@ -171,6 +171,59 @@ test("Unrelated notice titles retain their configured labels", async () => {
   }
 });
 
+test.each(["user", "notice", "tool"] as const)(
+  "A wrapped %s body cannot leave the final answer beyond the scrollable bottom",
+  async (kind) => {
+    // A long plain-text body triggers a native auto-height mismatch, especially in error cards.
+    const data: TranscriptSection[] = [
+      {
+        id: "wrapped",
+        kind,
+        title: kind === "notice" ? "Agent error" : "read",
+        text: ("Plain content wrapped over the viewport ".repeat(20) + "\n").repeat(2),
+        status: "error",
+      },
+      {
+        id: "final",
+        kind: "assistant",
+        title: "Agent",
+        text: "FINAL_ANSWER_VISIBLE",
+        status: "complete",
+      },
+    ];
+    const app = await mount(data, {
+      initialWorkViews: {
+        active: {},
+        agentScroll: {},
+        agentViews: {
+          a1: {
+            selectedId: null,
+            mode: "sections",
+            anchor: null,
+            follow: true,
+            folded: { wrapped: false },
+            cursors: {},
+          },
+        },
+      },
+    });
+    try {
+      await app.render();
+      const last = app.scroll.content.getChildren().at(-1)!;
+
+      // Numeric scrollTop==max is insufficient if the content extent excludes visible text rows.
+      expect(app.captureCharFrame()).toContain("FINAL_ANSWER_VISIBLE");
+      expect(last.y + last.height).toBeLessThanOrEqual(
+        app.scroll.viewport.y + app.scroll.viewport.height,
+      );
+      expect(app.state()?.follow).toBe(true);
+      expect(app.view.promptDrafts.a1).toBe("unsent draft");
+    } finally {
+      await app.close();
+    }
+  },
+);
+
 test("V selects full logical lines and copies extended source with actual newlines only", async () => {
   // Starting inside a word must still select from the first column, unlike character selection.
   const app = await mount([section("alpha beta\n한글 👨‍👩‍👧‍👦\nlast")]);
