@@ -21,6 +21,7 @@ type Row = {
   icon: TextRenderable;
   heading: TextRenderable;
   caption: TextRenderable;
+  captionGuide: TextRenderable;
   child: Subagent;
   sampledAt: number;
   running: boolean;
@@ -197,11 +198,23 @@ export class SubagentSummary {
       visible: false,
     });
 
+    const captionGuide = new TextRenderable(this.renderer, {
+      position: "absolute",
+      left: 0,
+      top: 1,
+      width: 2,
+      height: 1,
+      content: "│",
+      selectable: false,
+      visible: false,
+    });
+
     headingRow.add(branch);
     headingRow.add(slot);
     headingRow.add(heading);
     root.add(headingRow);
     root.add(caption);
+    root.add(captionGuide);
     this.root.insertBefore(root, this.more);
 
     return {
@@ -211,6 +224,7 @@ export class SubagentSummary {
       icon,
       heading,
       caption,
+      captionGuide,
       child,
       sampledAt: this.renderer.clock.now(),
       running: false,
@@ -261,8 +275,10 @@ export class SubagentSummary {
       }
 
       row.running = working;
-      row.branch.content = index === shown.length - 1 && !hidden ? "└─" : "├─";
+      const continues = index < shown.length - 1 || overflowRow;
+      row.branch.content = continues ? "├─" : "└─";
       paintText(row.branch, styles["ui.muted"]);
+      paintText(row.captionGuide, styles["ui.muted"]);
       paintText(row.spinner.root, styles["status.working"]);
 
       let color: keyof typeof styles;
@@ -334,6 +350,7 @@ export class SubagentSummary {
               : ""
           : "";
       row.caption.visible = !!caption;
+      row.captionGuide.visible = !!caption && continues;
       row.caption.content = caption;
       paintText(row.caption, styles["status.elapsed"]);
       row.root.height = 1 + Number(!!caption);
@@ -352,7 +369,7 @@ export class SubagentSummary {
     }
 
     this.more.visible = visible && overflowRow;
-    this.more.content = truncateCells(`  … ${hidden} more subagents`, this.root.width);
+    this.more.content = truncateCells(`└─ … ${hidden} more subagents`, this.root.width);
     paintText(this.more, styles["ui.muted"]);
     this.root.height = rows + Number(this.more.visible);
     if (ticking && this.timer === undefined) {

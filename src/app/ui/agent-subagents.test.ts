@@ -3,6 +3,7 @@ import { BoxRenderable, ScrollBoxRenderable, TextRenderable } from "@opentui/cor
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { PiSubagentDisplay } from "../../agents/pi-subagent-display.ts";
+import { SubagentSummary } from "../../agents/ui/subagent-summary.ts";
 import { piSubagentsFromWidget } from "../../agents/pi-subagent-status.ts";
 import { expectOk } from "../../testing/results.ts";
 import { Workbench } from "./workbench.ts";
@@ -172,6 +173,59 @@ test.each([120, 60, 200])(
     }
   },
 );
+
+test.each([60, 120])(
+  "At width %i, subagent tree guides continue through captions and stop at the last heading",
+  async (width) => {
+    // Request and progress captions must not split the tree between active and settled children.
+    const app = await mount(width);
+    const writer = child("writer", 1000);
+    const reviewer = { ...child("reviewer", 2000), progress: "Reviewing the implementation" };
+    const done = { ...child("done", 3000), status: "complete" as const };
+    const guides = () =>
+      app
+        .captureCharFrame()
+        .split("\n")
+        .slice(app.list.y, app.list.y + app.list.height)
+        .map((line) => line.slice(app.list.x, app.list.x + 2));
+    try {
+      // Expanding each child adds a caption row while keeping the branch column continuous.
+      await app.update([done, writer, reviewer]);
+
+      expect(app.captions()).toHaveLength(3);
+      expect(guides()).toEqual(["├─", "│ ", "├─", "│ ", "└─", "  "]);
+
+      // Removing later children must also remove the old continuation below the remaining heading.
+      await app.update([writer]);
+
+      expect(guides()).toEqual(["└─", "  "]);
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+test("A single-row subagent summary closes its tree even when other children are hidden", async () => {
+  // A one-row status budget cannot display captions or an overflow row.
+  const app = await createTestRenderer({ width: 60, height: 4, clock: new ManualClock() });
+  const summary = new SubagentSummary(app.renderer);
+  app.renderer.root.add(summary.root);
+  summary.fitRows(1);
+  try {
+    // Only the first child remains visible when multiple agents share this budget.
+    summary.update([child("writer", 1000), child("reviewer", 2000)], true);
+    await app.renderOnce();
+    await app.renderOnce();
+
+    // The visible tree ends here rather than pointing to a missing overflow row.
+    expect(summary.root.height).toBe(1);
+    expect(app.captureCharFrame().split("\n")[0]).toStartWith("└─");
+    expect(app.captureCharFrame()).not.toContain("more subagents");
+  } finally {
+    summary.dispose();
+    await app.dispose();
+  }
+});
 
 test("Pi agent names and quoted inputs share a starting column without an extra input indent", async () => {
   // Four direct launches have real authored inputs independent from their task labels.
@@ -404,6 +458,9 @@ test("Compact layouts bound child rows and prioritize active children without st
     expect(app.headings()[0]).toBe("active · Working (9s)");
     expect(app.list.height).toBeLessThanOrEqual(4);
     expect(app.captureCharFrame()).toContain("more subagents");
+    // The overflow row terminates the same tree instead of leaving its final branch open.
+    const overflow = app.captureCharFrame().split("\n")[app.list.y + app.list.height - 1]!;
+    expect(overflow.slice(app.list.x)).toStartWith("└─ … ");
     expect(app.scroll.height).toBeGreaterThan(0);
     expect(app.get("session-status").y + app.get("session-status").height).toBeLessThanOrEqual(
       app.get("app-footer").y,
