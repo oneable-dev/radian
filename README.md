@@ -23,8 +23,8 @@
   <a href="LICENSE#gh-light-mode-only"><img src="https://img.shields.io/badge/license-MIT-D0D7DE?style=flat-square&amp;labelColor=EAEEF2" alt="MIT license"></a>
 </p>
 
-<!-- Release media: add a real Agent-view screenshot here, followed by a short
-workflow demo: Agents → Neovim → Git → another worktree → the running Agent.
+<!-- Release media: add a real Code-view screenshot here, followed by a short
+workflow demo: Chat → Code → Neovim → Git → another worktree → the running agent.
 Keep font size, terminal dimensions, and theme consistent. -->
 
 Radian is a standalone terminal application, not a Neovim plugin or distribution.
@@ -39,8 +39,8 @@ and run shells without leaving your workbench.
 
 - **Your Neovim, unchanged.** Bring your own configuration and plugins. Radian
   embeds Neovim rather than replacing your editing environment.
-- **Worktree-native.** Keep agent sessions, drafts, editor state, and terminals
-  scoped to the worktree they belong to.
+- **Chat anywhere, code by worktree.** Start general conversations without a
+  project, or keep coding sessions, editor state, and terminals scoped to a worktree.
 - **Keep work running.** Detach the interface and reconnect while the local runtime
   stays alive. Switching views or worktrees does not stop your agents or shells.
 - **Review, then ask.** Browse Git history and whole-file diffs, then attach Git
@@ -48,14 +48,15 @@ and run shells without leaving your workbench.
 - **Commands over chrome.** Use configurable leader sequences, searchable lists,
   and familiar motions instead of permanent sidebars and toolbars.
 
-## One workbench, four views
+## One workbench, five views
 
 Each view gets the work pane to itself. Workspace navigation opens as a searchable
 popup, so switching projects does not take space away from your editor or terminal.
 
 | View         | What you can do                                                                                          |
 | ------------ | -------------------------------------------------------------------------------------------------------- |
-| **Agents**   | Run independent Pi sessions, read tool output, switch models, and resume saved conversations.            |
+| **Chat**     | Ask questions and run tools without opening a workspace. Search other conversations with `<leader>h`.    |
+| **Code**     | Run worktree-scoped Pi sessions, read tool output, switch models, and resume saved conversations.        |
 | **Editor**   | Use your own Neovim, with its buffers, cursor, and editing state retained while the runtime stays alive. |
 | **Git**      | Browse commits, refs, reflog, and working-tree changes in a read-only interface.                         |
 | **Terminal** | Run worktree-local shells and development servers that keep running when you detach.                     |
@@ -101,19 +102,31 @@ including their linked worktrees. If your projects live elsewhere, set your
 The default `<leader>` is `<C-Space>`: press and release Ctrl+Space, then press the
 next key.
 
-1. Press `<leader>b` to find a repository or worktree, then `<CR>` to open it.
-2. In Agents, press `<leader>c` to create a session.
+1. Start in Chat, or press `<leader>q` to return to it. For project work, use
+   `<leader>b` to find a worktree and `<leader>a` to select Code.
+2. Press `<leader>c` to create a conversation in Chat or a session in Code.
 3. Run `/accounts` to add and select a provider account, or reuse existing Pi
    authentication. Adding an account does not activate it; select it explicitly.
 4. Run `/model` to choose the session's model and supported reasoning effort.
 5. Write a request and press `<CR>`. Use `<S-CR>` or `<M-CR>` for a newline.
 
 > [!WARNING]
-> Real agent requests can use provider quota and run coding tools in the selected
-> worktree. Radian is not a filesystem or process sandbox.
+> Real requests can use provider quota and run tools with your user permissions.
+> Chat starts in your home directory; Code starts in the selected worktree.
+> Neither is a filesystem or process sandbox.
 
 Use `<leader>e`, `<leader>g`, and `<leader>t` to move between editing, reviewing, and
-shell work. Press `<leader>a` to return to Agents.
+shell work. Press `<leader>a` for Code or `<leader>q` for Chat. Chat has no session
+strip: `<leader>h` searches other Chat conversations, excluding the one displayed.
+Code keeps its worktree-local session tabs and saved History. Chat treats `@` as
+ordinary text and does not prepare a file index; Code retains `@` file completion.
+Both views support commands, skills, explicit attachments, and tools.
+
+Multiple windows share conversations and execution, but keep their selected view,
+conversation, drafts, and reading positions independently. The same terminal/pane
+can restore its state when reopened. A new terminal starts from the last navigation
+state without copying another terminal's unsent draft. First launch opens Chat.
+Chat account/model defaults are separate from Code selections; credentials are reused.
 
 ### Leave without stopping work
 
@@ -136,19 +149,19 @@ jobs first. A stopped runtime does not preserve live Neovim buffers or shell pro
 These are defaults; commands can be remapped or disabled. `<leader>` is `<C-Space>`
 unless you configure another sequence.
 
-| Keys                          | Action                                                             |
-| ----------------------------- | ------------------------------------------------------------------ |
-| `<leader>a` / `e` / `g` / `t` | Select Agents / Editor / Git / Terminal.                           |
-| `<leader>b`                   | Toggle workspace search; `/` focuses search from the results.      |
-| `<leader>c`                   | Create an agent session or terminal in the current view.           |
-| `<leader>n` / `<leader>p`     | Next / previous tab in Agents or Terminal, wrapping at either end. |
-| `<leader>u`                   | Show full-screen usage; `<Esc>` returns to the previous work view. |
-| `<leader>1` … `<leader>9`     | Select an agent session or terminal tab by position.               |
-| `<leader>h`                   | Open saved agent history for the current worktree.                 |
-| `<leader>s`                   | Monitor agent sessions.                                            |
-| `<leader>[`                   | Read and select output in Agents or Terminal.                      |
-| `<leader>d`                   | Detach the interface; keep the runtime running.                    |
-| `<leader>?`                   | Open keyboard help.                                                |
+| Keys                                | Action                                                                 |
+| ----------------------------------- | ---------------------------------------------------------------------- |
+| `<leader>q` / `a` / `e` / `g` / `t` | Select Chat / Code / Editor / Git / Terminal.                          |
+| `<leader>b`                         | Toggle workspace search; `/` focuses search from the results.          |
+| `<leader>c`                         | Create an agent session or terminal in the current view.               |
+| `<leader>n` / `<leader>p`           | Next / previous tab in Code or Terminal, wrapping at either end.       |
+| `<leader>u`                         | Show full-screen usage; `<Esc>` returns to the previous work view.     |
+| `<leader>1` … `<leader>9`           | Select an agent session or terminal tab by position.                   |
+| `<leader>h`                         | Find other Chat conversations, or saved History for the Code worktree. |
+| `<leader>s`                         | Monitor agent sessions.                                                |
+| `<leader>[`                         | Read and select output in Chat, Code, or Terminal.                     |
+| `<leader>d`                         | Detach the interface; keep the runtime running.                        |
+| `<leader>?`                         | Open keyboard help.                                                    |
 
 In Usage, `i` opens measurement details and history coverage warnings. Workspace CPU/RAM
 covers Radian's editor and terminal process trees; shared Agent execution stays in Runtime.

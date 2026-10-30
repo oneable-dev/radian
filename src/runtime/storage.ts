@@ -357,7 +357,7 @@ export class RuntimeStore implements SessionSnapshotSource {
       revision,
       id: record.id,
       name: record.name,
-      worktreeId: record.worktreeId,
+      worktreeId: record.worktreeId!,
       ...(record.state.conversationId ? { conversationId: record.state.conversationId } : {}),
       ...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
       ...(record.cwd ? { cwd: record.cwd } : {}),
@@ -396,7 +396,7 @@ export class RuntimeStore implements SessionSnapshotSource {
         .filter(
           (record) =>
             record.lifecycle !== "closed" ||
-            !this.isExpired(record.worktreeId, record.state.conversationId ?? record.id),
+            !this.isExpired(record.worktreeId!, record.state.conversationId ?? record.id),
         )
         .map((record) => [
           snapshotKey(record),

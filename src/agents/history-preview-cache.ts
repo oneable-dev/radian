@@ -64,7 +64,11 @@ export class HistoryPreviewCache {
     return this.entries.get(keyFor(worktreeId, savedId))?.state;
   }
 
-  preload(worktreeId: string, items: readonly { id: string; revision: string }[]): void {
+  preload(
+    worktreeId: string,
+    items: readonly { id: string; revision: string }[],
+    options: { background?: boolean } = {},
+  ): void {
     this.versions.set(worktreeId, new Map(items.map((item) => [item.id, item.revision])));
 
     const versions = new Map(items.map((item) => [keyFor(worktreeId, item.id), item.revision]));
@@ -84,7 +88,8 @@ export class HistoryPreviewCache {
 
     this.pruneBackground();
     this.backgroundFull = false;
-    for (const item of items.slice(0, maximumEntries)) {
+    // CHAT still synchronizes revisions, but loads a body only when selected.
+    for (const item of options.background === false ? [] : items.slice(0, maximumEntries)) {
       const key = keyFor(worktreeId, item.id);
       if (this.entries.has(key)) {
         continue;

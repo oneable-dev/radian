@@ -4,6 +4,7 @@ import type { SessionNotification } from "../agents/session-notification.ts";
 import type { ExecutionState } from "../agents/session-registry.ts";
 import type { WorkspaceSnapshot } from "../runtime/workspace-client.ts";
 import { SessionNotifications } from "./session-notifications.ts";
+import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
 
 class Source {
   recoveryVersion = 0;
@@ -125,6 +126,61 @@ function fixture(source = new Source()) {
 
   return { source, sent, notifications };
 }
+
+test("CHAT results notify once without a synthetic repository or worktree", () => {
+  // A workspace-free conversation exists before the terminal attaches.
+  const source = new Source();
+  source.snapshot = {
+    ...source.snapshot,
+    repositories: [],
+    chat: {
+      id: CHAT_SCOPE_ID,
+      path: "/home/test",
+      name: "CHAT",
+      sessions: [{ id: "chat", name: "Question", status: "working", subagents: [] }],
+      details: { chat: working() },
+      historyRevision: 0,
+      accountsRevision: 0,
+      closingCount: 0,
+    },
+    details: { chat: working() },
+  };
+  const app = fixture(source);
+  try {
+    const finished = settled(result("chat-result"));
+    source.snapshot = {
+      ...source.snapshot,
+      details: { chat: finished },
+      chat: {
+        ...source.snapshot.chat!,
+        details: { chat: finished },
+        sessions: [
+          {
+            id: "chat",
+            name: "Question",
+            status: "complete",
+            subagents: [],
+            result: finished.result!,
+            attention: finished.attention!,
+          },
+        ],
+      },
+    };
+    source.changed();
+    source.changed();
+
+    expect(app.sent).toHaveLength(1);
+    expect(app.sent[0]).toMatchObject({
+      sessionId: "chat",
+      worktreeId: CHAT_SCOPE_ID,
+      durationMs: 42000,
+    });
+    expect(source.snapshot.repositories).toEqual([]);
+    expect(JSON.stringify(app.sent)).not.toContain("Private answer");
+  } finally {
+    app.notifications.dispose();
+  }
+});
 
 test.each(["complete", "error", "unfinished", "cancelled"] as const)(
   "New %s results from other repositories deliver once regardless of acknowledgement",

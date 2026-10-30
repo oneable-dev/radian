@@ -1,5 +1,5 @@
 import { type CliRenderer, type Renderable, type ScrollBoxRenderable } from "@opentui/core";
-import type { Worktree } from "../../workspace/model.ts";
+import type { SessionCollection } from "./session-collection.ts";
 import type { ExecutionState } from "../session-registry.ts";
 import type { PromptDraft } from "../prompt-input.ts";
 import type { CommandId, KeyContext } from "../../keybindings/commands.ts";
@@ -81,7 +81,7 @@ export class SessionPreview {
   }
 
   show(
-    worktree: Worktree,
+    worktree: SessionCollection,
     sessionId: string,
     state: ExecutionState,
     visible: boolean,

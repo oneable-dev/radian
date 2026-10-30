@@ -336,7 +336,9 @@ export class WorkspaceRuntime {
       ...this.registry.retainedWorktreeIds,
       ...this.editors.retainedWorktreeIds,
       ...this.terminals.retainedWorktreeIds,
-      ...[...this.failedRecovery.values()].map((record) => record.worktreeId),
+      ...[...this.failedRecovery.values()].flatMap((record) =>
+        record.worktreeId ? [record.worktreeId] : [],
+      ),
     ]);
     this.catalog.replace([this.repository], retained);
   }
@@ -798,6 +800,9 @@ export class WorkspaceRuntime {
       case "create": {
         return this.registry.create(command.worktreeId);
       }
+      case "chat-create":
+      case "chat-resume":
+        return err(new InputError("CHAT commands belong to the shared daemon."));
       case "resume": {
         return this.history.resume(command.worktreeId, command.savedId);
       }

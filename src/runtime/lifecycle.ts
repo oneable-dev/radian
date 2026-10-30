@@ -118,6 +118,40 @@ export async function connectRuntime(
   return ok(client);
 }
 
+export async function connectChatRuntime(
+  options: ConnectOptions = {},
+): Promise<Result<RuntimeClient, ExpectedError>> {
+  const daemon = await ensureSharedDaemon(options);
+  if (!daemon.ok) return daemon;
+  if (!daemon.value.capabilities?.includes("chat-sessions")) {
+    return err(
+      new ProtocolError(
+        "Running shared daemon predates CHAT. Stop it explicitly before using CHAT.",
+      ),
+    );
+  }
+  const paths = daemonPaths(options.offline ?? false, options.stateRoot);
+  const registered = await transport(paths, "/chat-config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Radian-Instance": daemon.value.instance },
+    body: JSON.stringify({ config: options.config ? resolve(options.config) : null }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!registered.ok) return registered;
+  const reply = await readJson(registered.value);
+  if (!reply.ok) return reply;
+  if (!Value.Check(replySchema, reply.value))
+    return err(new ProtocolError("Malformed CHAT configuration reply."));
+  if (!reply.value.ok) return err(remoteError(reply.value.error));
+  const client = new RuntimeClient(paths, daemon.value);
+  const attached = await client.attach();
+  if (!attached.ok) {
+    await client.disconnect();
+    return attached;
+  }
+  return ok(client);
+}
+
 export async function ensureSharedDaemon(
   options: ConnectOptions = {},
 ): Promise<Result<RuntimeSnapshot, ExpectedError>> {

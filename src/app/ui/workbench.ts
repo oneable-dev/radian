@@ -18,6 +18,9 @@ import { rowPresentation } from "./workspace-status.ts";
 import { icons } from "../../icons.ts";
 import { sessionStatus } from "../../agents/status.ts";
 import { AgentPanel, type AgentActions } from "../../agents/ui/agent-panel.ts";
+import { CHAT_SCOPE_ID } from "../../agents/session-scope.ts";
+import type { ChatCollection } from "../../runtime/protocol.ts";
+import type { AppView } from "../view-state.ts";
 import type { HistoryItem } from "../../agents/history.ts";
 import type { HistoryPreview } from "../../agents/history-preview.ts";
 import { SessionHistoryPanel } from "../../agents/ui/history-panel.ts";
@@ -100,6 +103,11 @@ export type WorkbenchActions = AgentActions & {
   git?: GitActions;
   terminalUnavailable?: string;
   terminalTheme?: TerminalTheme;
+  getChat?: () => ChatCollection | null;
+  initialView?: AppView;
+  initialChatSessionId?: string | null;
+  onViewChange?: (view: AppView) => void;
+  onChatSessionChange?: (id: string | null) => void;
   initialWorkViews?: WorkViewPreferences;
   onWorkViewsChange?: (preferences: WorkViewPreferences) => void;
   keymap?: Keymap;
@@ -149,6 +157,8 @@ export class Workbench {
   private readonly git: GitPanel;
   private readonly workViews: WorkViewPreferences;
   private displayedWorkView: WorkView = "agent";
+  private appView: AppView;
+  private selectedChatSessionId: string | null;
   private sessionCreationIntent = 0;
   private readonly footer: Footer;
   private readonly dialog: TextDialog;
@@ -175,6 +185,8 @@ export class Workbench {
     this.theme = uiTheme(renderer);
     this.keymap = actions.keymap ?? defaultKeymap();
     this.workViews = structuredClone(actions.initialWorkViews ?? { active: {}, agentScroll: {} });
+    this.appView = actions.getChat ? (actions.initialView ?? "agent") : "agent";
+    this.selectedChatSessionId = actions.initialChatSessionId ?? null;
     this.root = new BoxRenderable(renderer, {
       id: "workspace-screen",
       width: "100%",
@@ -233,6 +245,12 @@ export class Workbench {
       ...(actions.onPreviewHistory ? { preview: actions.onPreviewHistory } : {}),
       details: (id) => actions.getSessionDetails?.(id) ?? null,
       draft: (id) => this.agent?.promptDraftFor(id),
+      currentConversationId: () => {
+        const id = this.selectedChatSessionId;
+        return this.appView === "chat" && id
+          ? (this.actions.getSessionDetails?.(id)?.conversationId ?? null)
+          : null;
+      },
       ...(actions.onImage ? { image: actions.onImage } : {}),
       onChange: () => this.updateFooter(),
       keyHint: (command, context) => this.keymap.hint(command, context),
@@ -327,7 +345,10 @@ export class Workbench {
         onNewSession: (id) => this.createAgentSession(id),
         onModel: (id) => this.showModels(id),
         onAccounts: () => this.showAccounts(),
-        onHistory: () => this.history.show(this.selection.worktree),
+        onHistory: () =>
+          this.history.show(
+            this.appView === "chat" ? (actions.getChat?.() ?? null) : this.selection.worktree,
+          ),
         onShowDashboard: () => this.dashboard.show(),
         onInspectInput: (content) => this.dialog.show(content),
         onSelectSession: (tree, id) => this.activateSession(tree, id),
@@ -485,6 +506,21 @@ export class Workbench {
     return structuredClone(this.workViews);
   }
 
+  get currentView(): AppView {
+    return this.appView;
+  }
+
+  get chatSessionId(): string | null {
+    return this.selectedChatSessionId;
+  }
+
+  selectChatSession(id: string): void {
+    if (!this.actions.getChat?.()?.sessions.some((session) => session.id === id)) {
+      return;
+    }
+    this.activateSession(CHAT_SCOPE_ID, id);
+  }
+
   private toggleSidebar(): void {
     this.setSidebarVisible(!this.sidebar.visible);
   }
@@ -568,10 +604,9 @@ export class Workbench {
       return;
     }
 
-    const id = this.selection.sessionId;
-    const attention = this.selection.worktree?.sessions.find(
-      (session) => session.id === id,
-    )?.attention;
+    const id = this.appView === "chat" ? this.selectedChatSessionId : this.selection.sessionId;
+    const collection = this.appView === "chat" ? this.actions.getChat?.() : this.selection.worktree;
+    const attention = collection?.sessions.find((session) => session.id === id)?.attention;
     // Most frames have nothing to acknowledge: do not rebuild the aggregate runtime snapshot for them.
     if (!id || !attention || this.acknowledgements.get(id) === attention.id) {
       return;
@@ -604,6 +639,11 @@ export class Workbench {
   };
 
   private focusWorkView(): void {
+    if (this.appView === "chat") {
+      (this.agent.active ? this.agent.prompt : this.agent.focusTargets[0])?.focus();
+      return;
+    }
+
     switch (this.displayedWorkView) {
       case "agent":
         (this.agent.active ? this.agent.prompt : this.agent.focusTargets[0])?.focus();
@@ -634,12 +674,44 @@ export class Workbench {
     this.agent.rememberScroll();
     this.workViews.active[worktree.id] = view;
     this.saveWorkViews();
+    if (this.appView !== view) {
+      this.sessionCreationIntent++;
+      this.appView = view;
+      this.actions.onViewChange?.(view);
+    }
     this.render();
     if (view === "editor" && explicit) {
       this.editor.show(worktree, true);
     }
 
     this.focusWorkView();
+  }
+
+  private selectChatView(): void {
+    if (!this.actions.getChat) {
+      return;
+    }
+
+    this.dashboard.hide(false);
+    this.agent.rememberScroll();
+    if (this.appView !== "chat") {
+      this.sessionCreationIntent++;
+      this.appView = "chat";
+      this.actions.onViewChange?.("chat");
+    }
+    this.render();
+    this.focusWorkView();
+  }
+
+  private setChatSession(id: string | null): void {
+    if (this.selectedChatSessionId === id) {
+      return;
+    }
+    this.sessionCreationIntent++;
+    this.agent.rememberScroll();
+    this.selectedChatSessionId = id;
+    this.actions.onChatSessionChange?.(id);
+    this.render();
   }
 
   private moveWorkTab(direction: 1 | -1): void {
@@ -673,7 +745,8 @@ export class Workbench {
   }
 
   private createAgentSession(worktreeId: string): void {
-    const sessionId = this.selection.sessionId;
+    const sessionId =
+      worktreeId === CHAT_SCOPE_ID ? this.selectedChatSessionId : this.selection.sessionId;
     const owner = this.renderer.currentFocusedRenderable;
     const intent = ++this.sessionCreationIntent;
 
@@ -683,14 +756,16 @@ export class Workbench {
         this.disposed ||
         this.root.isDestroyed ||
         intent !== this.sessionCreationIntent ||
-        this.displayedWorkView !== "agent" ||
-        this.selection.worktree?.id !== worktreeId ||
+        (worktreeId === CHAT_SCOPE_ID
+          ? this.appView !== "chat"
+          : this.appView !== "agent" || this.selection.worktree?.id !== worktreeId) ||
         this.renderer.currentFocusedRenderable !== owner
       ) {
         return;
       }
 
-      const selected = this.selection.sessionId;
+      const selected =
+        worktreeId === CHAT_SCOPE_ID ? this.selectedChatSessionId : this.selection.sessionId;
       // The first snapshot in an empty worktree may already have selected this new session.
       if (selected !== sessionId && (sessionId !== null || selected !== createdId)) {
         return;
@@ -704,9 +779,22 @@ export class Workbench {
   private activateSession(worktreeId: string, sessionId: string): void {
     this.foreground = true;
     this.acknowledgements.delete(sessionId);
+    if (worktreeId === CHAT_SCOPE_ID) {
+      this.setChatSession(sessionId);
+      if (this.appView !== "chat") {
+        this.selectChatView();
+      }
+      return;
+    }
+
     this.agent.rememberScroll();
     this.workViews.active[worktreeId] = "agent";
     this.saveWorkViews();
+    if (this.appView !== "agent") {
+      this.sessionCreationIntent++;
+      this.appView = "agent";
+      this.actions.onViewChange?.("agent");
+    }
     this.selection.selectSession(worktreeId, sessionId);
   }
 
@@ -747,7 +835,10 @@ export class Workbench {
         id: notification.id,
         title,
         level,
-        source: `${notification.repository} / ${notification.worktree}`,
+        source:
+          notification.worktreeId === CHAT_SCOPE_ID
+            ? "CHAT"
+            : `${notification.repository} / ${notification.worktree}`,
       },
     );
     if (!message) {
@@ -759,9 +850,12 @@ export class Workbench {
   }
 
   private openNotification(notification: SessionNotification): void {
-    const tree = this.selection.snapshot
-      .flatMap((repo) => repo.worktrees)
-      .find((tree) => tree.id === notification.worktreeId);
+    const tree =
+      notification.worktreeId === CHAT_SCOPE_ID
+        ? this.actions.getChat?.()
+        : this.selection.snapshot
+            .flatMap((repo) => repo.worktrees)
+            .find((tree) => tree.id === notification.worktreeId);
     const state = this.actions.getSessionDetails?.(notification.sessionId);
     if (
       !tree?.sessions.some((session) => session.id === notification.sessionId) ||
@@ -801,7 +895,12 @@ export class Workbench {
 
     const tree = this.selection.worktree;
     const item = this.messages.add(text, Date.now(), {
-      source: tree ? `${this.displayedWorkView.toUpperCase()} / ${tree.name}` : "Radian",
+      source:
+        this.appView === "chat"
+          ? "CHAT"
+          : tree
+            ? `${this.displayedWorkView === "agent" ? "CODE" : this.displayedWorkView.toUpperCase()} / ${tree.name}`
+            : "Radian",
       ...options,
     });
     if (!item) {
@@ -918,7 +1017,7 @@ export class Workbench {
     } else if (this.terminals.root.visible && this.commandAvailable("tab.new")) {
       shortcuts = [hint("tab.new", "New terminal")];
     } else if (this.agent.root.visible && !this.agent.active) {
-      shortcuts = [hint("tab.new", "New session")];
+      shortcuts = [hint("tab.new", this.appView === "chat" ? "New conversation" : "New session")];
     } else if (this.agent.transcriptContext()) {
       shortcuts = this.agent.transcriptShortcuts;
     } else if (focused === this.agent.prompt && this.agent.active) {
@@ -953,10 +1052,10 @@ export class Workbench {
             ...(this.agent.prompt.value ? [hint("agent.clear", "Clear")] : []),
             pair("agent.history-previous", "agent.history-next", "Input history"),
             hint("output.read", "Transcript"),
-            pair("tab.previous", "tab.next", "Tab"),
+            ...(this.appView === "chat" ? [] : [pair("tab.previous", "tab.next", "Tab")]),
             hint("sidebar.toggle", "Workspace"),
-            hint("tab.new", "New session"),
-            hint("tab.close", "Close tab"),
+            hint("tab.new", this.appView === "chat" ? "New conversation" : "New session"),
+            ...(this.appView === "chat" ? [] : [hint("tab.close", "Close tab")]),
             hint("dashboard.show", "Usage"),
           ];
     } else if (
@@ -993,7 +1092,13 @@ export class Workbench {
       this.dashboard.visible ||
       this.monitor?.visible ||
       this.sidebar.visible;
-    let badge = this.dashboard.visible ? "USAGE" : this.displayedWorkView.toUpperCase();
+    let badge = this.dashboard.visible
+      ? "USAGE"
+      : this.appView === "chat"
+        ? "CHAT"
+        : this.displayedWorkView === "agent"
+          ? "CODE"
+          : this.displayedWorkView.toUpperCase();
     let outputStatus = "";
     if (!overlay) {
       if (this.agent.active) {
@@ -1005,7 +1110,7 @@ export class Workbench {
     }
 
     this.footer.setView(badge);
-    this.footer.setWorkspace(this.selection.worktree);
+    this.footer.setWorkspace(this.appView === "chat" ? null : this.selection.worktree);
     this.footer.setContext(overlay ? "" : this.extensionStatus || outputStatus);
     this.footer.setShortcuts(shortcuts.filter((shortcut) => shortcut.key));
   };
@@ -1017,7 +1122,7 @@ export class Workbench {
   }
 
   private showAccounts(): Result<void, ExpectedError> {
-    const worktreeId = this.selection.worktree?.id;
+    const worktreeId = this.appView === "chat" ? CHAT_SCOPE_ID : this.selection.worktree?.id;
     if (!worktreeId || !this.actions.onAccountsRequest) {
       return err(
         new CapabilityError("Account management is unavailable in this view. No prompt was sent."),
@@ -1105,7 +1210,11 @@ export class Workbench {
     if (row.kind === "worktree") {
       this.setSidebarVisible(false, false);
       this.selection.selectWorktree(row.worktree.id);
-      this.focusWorkView();
+      if (this.appView === "chat") {
+        this.selectWorkView(this.workViews.active[row.worktree.id] ?? "agent");
+      } else {
+        this.focusWorkView();
+      }
     }
   }
 
@@ -1431,7 +1540,10 @@ export class Workbench {
     if (this.dashboard.visible) {
       return (
         (command.startsWith("dashboard.") && command !== "dashboard.show") ||
-        (command.startsWith("view.") && Boolean(this.selection.worktree)) ||
+        (command.startsWith("view.") &&
+          (command === "view.chat"
+            ? Boolean(this.actions.getChat)
+            : Boolean(this.selection.worktree))) ||
         command === "focus.next" ||
         command === "focus.previous" ||
         command === "app.help" ||
@@ -1502,7 +1614,9 @@ export class Workbench {
       return true;
     }
     if (command === "history.show") {
-      return Boolean(this.selection.worktree);
+      return this.appView === "chat"
+        ? Boolean(this.actions.getChat?.())
+        : Boolean(this.selection.worktree);
     }
     if (command.startsWith("history.")) {
       return false;
@@ -1510,22 +1624,28 @@ export class Workbench {
 
     const index = tabIndex(command);
     if (index >= 0) {
+      if (this.appView === "chat") return false;
       return this.displayedWorkView === "agent"
         ? Boolean(this.selection.worktree?.sessions[index])
         : this.displayedWorkView === "terminal" && this.terminals.canSelect(index);
     }
     if (command === "tab.next" || command === "tab.previous") {
+      if (this.appView === "chat") return false;
       return this.displayedWorkView === "agent"
         ? Boolean(this.selection.worktree?.sessions.length)
         : this.displayedWorkView === "terminal" && this.terminals.canSelect(0);
     }
     if (command === "tab.new") {
+      if (this.appView === "chat") {
+        return Boolean(this.actions.getChat?.());
+      }
       return this.displayedWorkView === "agent"
         ? Boolean(this.selection.worktree)
         : this.displayedWorkView === "terminal" &&
             Boolean(this.selection.worktree && this.actions.terminal);
     }
     if (command === "tab.close") {
+      if (this.appView === "chat") return false;
       return this.displayedWorkView === "agent"
         ? this.agent.sessionAvailable("session.close")
         : this.displayedWorkView === "terminal" && this.terminals.canClose;
@@ -1548,6 +1668,8 @@ export class Workbench {
     switch (command) {
       case "app.detach":
         return Boolean(this.actions.onDetach);
+      case "view.chat":
+        return Boolean(this.actions.getChat);
       case "view.agent":
       case "view.editor":
       case "view.git":
@@ -1570,7 +1692,7 @@ export class Workbench {
       case "terminal.scroll-down":
         return this.terminals.root.visible && this.terminals.canScroll;
       case "output.read":
-        return this.displayedWorkView === "agent"
+        return this.appView === "chat" || this.displayedWorkView === "agent"
           ? this.agent.active
           : this.displayedWorkView === "terminal" && this.terminals.canRead;
       case "focus.prompt":
@@ -1669,7 +1791,9 @@ export class Workbench {
       return;
     }
     if (command === "history.show") {
-      this.history.show(this.selection.worktree);
+      this.history.show(
+        this.appView === "chat" ? (this.actions.getChat?.() ?? null) : this.selection.worktree,
+      );
 
       return;
     }
@@ -1700,7 +1824,9 @@ export class Workbench {
       return;
     }
     if (command === "tab.new") {
-      if (this.displayedWorkView === "terminal") {
+      if (this.appView === "chat") {
+        this.createAgentSession(CHAT_SCOPE_ID);
+      } else if (this.displayedWorkView === "terminal") {
         this.terminals.create();
       } else if (this.selection.worktree) {
         this.createAgentSession(this.selection.worktree.id);
@@ -1789,6 +1915,9 @@ export class Workbench {
         break;
       case "search.clear":
         this.activeSearch()?.clear();
+        break;
+      case "view.chat":
+        this.selectChatView();
         break;
       case "view.agent":
         this.selectWorkView("agent");
@@ -2195,36 +2324,52 @@ export class Workbench {
     this.paintRows(rows);
 
     const worktree = this.selection.worktree;
+    const chat = this.actions.getChat?.() ?? null;
+    if (
+      chat &&
+      this.selectedChatSessionId &&
+      !chat.sessions.some((session) => session.id === this.selectedChatSessionId)
+    ) {
+      this.selectedChatSessionId = null;
+      this.actions.onChatSessionChange?.(null);
+    }
     const workView = worktree ? (this.workViews.active[worktree.id] ?? "agent") : "agent";
-
     this.displayedWorkView = workView;
+    const showingChat = this.appView === "chat";
+    if (!showingChat && worktree && this.appView !== workView) {
+      this.sessionCreationIntent++;
+      this.appView = workView;
+      this.actions.onViewChange?.(workView);
+    }
+    const selectedId = showingChat ? this.selectedChatSessionId : this.selection.sessionId;
 
-    const sessionIds = new Set(
-      this.selection.snapshot.flatMap((repo) =>
+    const sessionIds = new Set([
+      ...this.selection.snapshot.flatMap((repo) =>
         repo.worktrees.flatMap((tree) => tree.sessions.map((item) => item.id)),
       ),
-    );
+      ...(chat?.sessions.map((session) => session.id) ?? []),
+    ]);
     this.notifications.retain(sessionIds);
 
     const openIds = new Set([...sessionIds, ...(this.actions.getRetainedSessionIds?.() ?? [])]);
     const workViewVisible = !this.dashboard.visible;
     this.agent.update(
-      worktree,
-      this.selection.sessionId,
+      showingChat ? chat : worktree,
+      selectedId,
       openIds,
-      workViewVisible && workView === "agent",
+      workViewVisible && (showingChat || workView === "agent"),
     );
-    if (workViewVisible && workView === "git") {
+    if (workViewVisible && !showingChat && workView === "git") {
       this.git.show(worktree, this.selection.sessionId);
     } else {
       this.git.hide();
     }
-    if (workViewVisible && workView === "editor") {
+    if (workViewVisible && !showingChat && workView === "editor") {
       this.editor.show(worktree);
     } else {
       this.editor.hide();
     }
-    if (workViewVisible && workView === "terminal") {
+    if (workViewVisible && !showingChat && workView === "terminal") {
       this.terminals.show(
         worktree,
         worktree ? this.workViews.terminalSelection?.[worktree.id] : undefined,
@@ -2236,8 +2381,11 @@ export class Workbench {
     this.workspaceLayout.results.showEmpty(
       !rows.length ? (this.search.value ? "No matching workspaces" : "No repositories") : undefined,
     );
-    this.history.updateScope(worktree);
-    this.monitor.update(this.selection.snapshot);
+    this.history.updateScope(showingChat ? chat : worktree);
+    if (showingChat) {
+      this.history.updateData();
+    }
+    this.monitor.update(this.selection.snapshot, chat);
     for (const id of this.acknowledgements.keys()) {
       if (!openIds.has(id)) {
         this.acknowledgements.delete(id);
@@ -2245,13 +2393,11 @@ export class Workbench {
     }
 
     this.refreshExtensionUi();
-    this.accounts.updateScope(this.selection.worktree?.id ?? null);
+    this.accounts.updateScope(showingChat ? (chat?.id ?? null) : (worktree?.id ?? null));
     this.models.updateScope(
-      this.selection.sessionId,
-      this.selection.sessionId
-        ? this.actions.getSessionDetails?.(this.selection.sessionId)?.conversationId
-        : undefined,
-      workViewVisible && workView === "agent",
+      selectedId,
+      selectedId ? this.actions.getSessionDetails?.(selectedId)?.conversationId : undefined,
+      workViewVisible && (showingChat || workView === "agent"),
     );
     if (this.navigationKey && this.navigationKey !== this.lastScrolledKey) {
       this.revealRow(this.navigationKey);
@@ -2267,7 +2413,8 @@ export class Workbench {
       .getExtensionUi?.()
       .find(
         (state) =>
-          state.sessionId === this.selection.sessionId &&
+          state.sessionId ===
+            (this.appView === "chat" ? this.selectedChatSessionId : this.selection.sessionId) &&
           state.conversationId ===
             this.actions.getSessionDetails?.(state.sessionId)?.conversationId,
       );

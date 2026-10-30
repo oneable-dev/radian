@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { CompletionCache } from "./completion-cache.ts";
 import type { CompletionCatalog, CompletionQuery, CompletionResult } from "./completion.ts";
@@ -82,6 +83,40 @@ test("Commands, skills, files, and rerenders reuse catalogs after initial prepar
   } finally {
     cache.dispose();
     await fixture.cleanup();
+  }
+});
+
+test("CHAT prepares catalogs without file indexes or refresh scanning, including homedir cwd", async () => {
+  // CHAT keeps command and skill completion but cannot create a filesystem index in a shared home directory.
+  const cache = new CompletionCache(
+    async () => ok(catalog()),
+    () => "chat/conversation/0",
+    (error) => {
+      throw error;
+    },
+  );
+  const provider = cache.provider;
+  const signal = new AbortController().signal;
+  try {
+    provider.prepare?.("chat-session", homedir(), { files: false });
+    expect(
+      expectOk(await provider("chat-session", { kind: "command", query: "command-1" }, signal))
+        .items.length,
+    ).toBeGreaterThan(0);
+    expect(
+      expectOk(await provider("chat-session", { kind: "skill", query: "review" }, signal)).items[0]
+        ?.value,
+    ).toBe("review-code");
+    expect(
+      expectOk(await provider("chat-session", { kind: "file", query: "anything" }, signal)).items,
+    ).toEqual([]);
+    expectOk(await cache.refresh("chat-session"));
+    expect(expectOk(provider.read!("chat-session", { kind: "file", query: "" })!).items).toEqual(
+      [],
+    );
+    expect(cache["files"].size).toBe(0);
+  } finally {
+    cache.dispose();
   }
 });
 

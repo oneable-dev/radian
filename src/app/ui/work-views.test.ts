@@ -136,7 +136,7 @@ test("Letter shortcuts switch views without upper tabs and retain current names 
 
     const panel = app.renderer.root.findDescendantById("work-panel")!;
     for (const [key, label, id] of [
-      ["a", "Agents", "agent"],
+      ["a", "CODE", "agent"],
       ["e", "Editor", "editor"],
       ["g", "Git", "git"],
       ["t", "Terminal", "terminal"],
@@ -147,7 +147,7 @@ test("Letter shortcuts switch views without upper tabs and retain current names 
       await app.renderOnce();
 
       const footer = app.captureCharFrame().split("\n")[23]!;
-      expect(footer.trimStart()).toStartWith(key === "a" ? "AGENT" : label.toUpperCase());
+      expect(footer.trimStart()).toStartWith(label.toUpperCase());
       expect(app.renderer.root.findDescendantById(`${id}-view`)!.y).toBe(panel.y);
       expect(app.view.workViewPreferences.active["demo:main"]).toBe(id);
       expect(app.selection.sessionId).toBe("a1");

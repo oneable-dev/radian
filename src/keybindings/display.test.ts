@@ -92,6 +92,7 @@ test("Explicit physical leader-like bindings never display as logical leaders", 
     parseKeymap({
       bindings: {
         "app.detach": ["ctrl+space q"],
+        "view.chat": [],
         "view.editor": ["<leader> v"],
       },
     }),

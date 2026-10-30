@@ -14,6 +14,7 @@ export type RepositoryRegistration = Static<typeof repositoryRegistrationSchema>
 export const daemonRegistrySchema = Type.Object(
   {
     version: Type.Literal(1),
+    chatConfig: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     repositories: Type.Array(
       Type.Object(
         {

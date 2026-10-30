@@ -1,10 +1,12 @@
-import { discoverRepository } from "../workspace/discovery.ts";
+import { discoverOptionalRepository, discoverRepository } from "../workspace/discovery.ts";
 import { discoverWorkspace } from "../workspace/roots.ts";
 import { loadSettings } from "./settings.ts";
 import { WorkspaceClient } from "../runtime/workspace-client.ts";
 import { demoWorkspace } from "../workspace/demo.ts";
 import { WorkspaceSelection } from "./workspace-selection.ts";
 import { submitAgentPrompt } from "./agent-prompt.ts";
+import { currentUiIdentity, retainedUiDrafts, UiStateStore, type UiState } from "./ui-state.ts";
+import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
 import type { Repository } from "../workspace/model.ts";
 import { defaultPreferences, fetchSnapshot, RuntimeClient } from "../runtime/client.ts";
 import { connectRuntime, ensureSharedDaemon } from "../runtime/lifecycle.ts";
@@ -24,6 +26,7 @@ import type { Keymap } from "../keybindings/config.ts";
 import type { ThemeOverrides } from "../ui/theme-config.ts";
 import { readTerminalProcessTitles } from "../terminal/process-titles.ts";
 import { readWorkspaceResources } from "../usage/workspace-resources.ts";
+import { sessionSources } from "./session-sources.ts";
 import type { CliOptions as Options } from "./cli.ts";
 
 export async function main(
@@ -56,55 +59,45 @@ export async function main(
   } else {
     const config = settings.value.workspace;
     if (!config.roots.length) {
-      const discovered = await discoverRepository(options.cwd);
+      const discovered = await discoverOptionalRepository(options.cwd);
       if (discovered.ok) {
-        repositories = [discovered.value];
+        repositories = discovered.value ? [discovered.value] : [];
       } else {
         discoveryError = discovered.error.message;
       }
     } else {
       const discovered = await discoverWorkspace(config);
       if (!discovered.ok) {
-        return discovered;
+        discoveryError = `Workspace discovery [${discovered.error.code}]: ${discovered.error.message}`;
+      } else {
+        repositories = discovered.value.repositories;
+        discoveryError =
+          discovered.value.warnings
+            .map(({ path, error }) => `${path}: [${error.code}] ${error.message}`)
+            .join(" · ") || null;
       }
-
-      repositories = discovered.value.repositories;
-      discoveryError =
-        discovered.value.warnings
-          .map(({ path, error }) => `${path}: [${error.code}] ${error.message}`)
-          .join(" · ") ||
-        (repositories.length ? null : "No Git repositories found in workspace roots.");
     }
   }
 
-  const connected =
-    !options.demo && repositories.length
-      ? await WorkspaceClient.open(
-          repositories,
-          options.cwd,
-          {
-            offline: options.offline,
-            launch,
-            ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
-            ...(options.config ? { config: options.config } : {}),
-          },
-          connectRuntime,
-        )
-      : ok(null);
+  const connected = !options.demo
+    ? await WorkspaceClient.open(
+        repositories,
+        options.cwd,
+        {
+          offline: options.offline,
+          launch,
+          ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
+          ...(options.config ? { config: options.config } : {}),
+        },
+        connectRuntime,
+      )
+    : ok(null);
   if (!connected.ok) {
     return connected;
   }
 
   const client = connected.value;
   try {
-    const selected = client?.snapshot.preferences.selection.worktreeId;
-    if (client && selected) {
-      const activated = await client.activate(selected);
-      if (!activated.ok) {
-        discoveryError = [discoveryError, activated.error.message].filter(Boolean).join(" · ");
-      }
-    }
-
     await runUI(
       repositories,
       client,
@@ -261,13 +254,28 @@ async function runUI(
   const { uiTheme } = await import("../ui/theme.ts");
   const { monochromeFrame } = await import("../ui/monochrome.ts");
   let attachedTheme: ReturnType<typeof uiTheme> | undefined;
-  const selection = new WorkspaceSelection(client?.snapshot.repositories ?? repositories);
-  const preferences: RuntimePreferences = client
-    ? structuredClone(client.snapshot.preferences)
-    : defaultPreferences();
+  const initialWarnings: ExpectedError[] = [];
+  let state: UiState = {
+    version: 1,
+    view: client ? "chat" : "agent",
+    chatSessionId: null,
+    preferences: client ? structuredClone(client.snapshot.preferences) : defaultPreferences(),
+  };
+  let uiStore: UiStateStore | undefined;
   if (client) {
-    selection.restore(preferences.selection);
+    const identity = await currentUiIdentity();
+    if (!identity.ok) initialWarnings.push(identity.error);
+    uiStore = new UiStateStore(
+      daemonPaths(options.offline, options.stateRoot).directory,
+      identity.ok ? identity.value : `client:${crypto.randomUUID()}`,
+    );
+    const loaded = await uiStore.load(state.preferences);
+    if (loaded.ok) state = loaded.value;
+    else initialWarnings.push(loaded.error);
   }
+  const preferences: RuntimePreferences = state.preferences;
+  const selection = new WorkspaceSelection(client?.snapshot.repositories ?? repositories);
+  selection.restore(preferences.selection);
 
   const renderer = await createCliRenderer({
     exitOnCtrlC: false,
@@ -339,6 +347,11 @@ async function runUI(
       }
     }
 
+    for (const session of snapshot.chat?.sessions ?? []) {
+      if (!snapshot.details[session.id]?.conversationId) continue;
+      ids.add(session.id);
+      completions.provider.prepare?.(session.id, snapshot.chat!.path, { files: false });
+    }
     completions.provider.retain?.(ids);
   };
   const preload = (): void => {
@@ -357,9 +370,13 @@ async function runUI(
       .catch(unexpected);
   };
   let pendingPreferences: Promise<Result<void, ExpectedError>> = Promise.resolve(ok(undefined));
-  let lastPreferences = JSON.stringify(preferences);
-  let activatedWorktree = selection.worktree?.id ?? null;
+  let lastPreferences = "";
+  let activatedWorktree: string | null = null;
   const persist = (): void => {
+    const ownership = (state.sessionScopes ??= {});
+    for (const source of sessionSources(client?.snapshot ?? { repositories })) {
+      for (const session of source.sessions) ownership[session.id] = source.scopeId;
+    }
     const current = selection.state;
     const sessions = { ...preferences.selection.sessions, ...current.sessions };
     for (const tree of selection.snapshot.flatMap((repo) => repo.worktrees)) {
@@ -369,22 +386,21 @@ async function runUI(
     }
 
     preferences.selection = { worktreeId: current.worktreeId, sessions };
-    if (client && current.worktreeId !== activatedWorktree) {
+    if (client && state.view !== "chat" && current.worktreeId !== activatedWorktree) {
       activatedWorktree = current.worktreeId;
       if (activatedWorktree) {
         observe(client.activate(activatedWorktree));
       }
     }
 
-    const key = JSON.stringify(preferences);
-    if (!client || key === lastPreferences) {
+    const key = JSON.stringify(state);
+    if (!uiStore || key === lastPreferences) {
       return;
     }
 
     lastPreferences = key;
-
-    const state = structuredClone(preferences);
-    pendingPreferences = pendingPreferences.then(() => client.savePreferences(state));
+    const snapshot = structuredClone(state);
+    pendingPreferences = pendingPreferences.then(() => uiStore!.save(snapshot));
     observe(pendingPreferences);
   };
   const unsubscribeSelection = selection.subscribe(persist);
@@ -430,6 +446,17 @@ async function runUI(
     const terminalTheme = new TerminalTheme(renderer, palette);
     view = new Workbench(renderer, selection, {
       keymap,
+      ...(client ? { getChat: () => client.snapshot.chat ?? null } : {}),
+      initialView: state.view,
+      initialChatSessionId: state.chatSessionId,
+      onViewChange: (next) => {
+        state.view = next;
+        persist();
+      },
+      onChatSessionChange: (id) => {
+        state.chatSessionId = id;
+        persist();
+      },
       onDetach: detach,
       terminalTheme,
       onNewSession: (worktreeId, onCreated) => {
@@ -476,7 +503,11 @@ async function runUI(
       ...(client
         ? {
             onPrompt: async (id: string, text: string, images?: readonly string[]) => {
-              const result = await submitAgentPrompt(client, selection, id, text, images);
+              const result = await submitAgentPrompt(client, selection, id, text, images, {
+                isCurrent: (sessionId) =>
+                  view?.currentView === "chat" && view.chatSessionId === sessionId,
+                select: (sessionId) => view?.selectChatSession(sessionId),
+              });
               if (!result.ok || text.trim() !== "/reload") {
                 return result;
               }
@@ -525,7 +556,15 @@ async function runUI(
               client.resume(worktreeId, savedId),
             initialDrafts: preferences.drafts,
             ...(preferences.inputDrafts ? { initialInputDrafts: preferences.inputDrafts } : {}),
-            getRetainedSessionIds: () => client.retainedSessionIds,
+            getRetainedSessionIds: () =>
+              new Set([
+                ...client.retainedSessionIds,
+                ...retainedUiDrafts(state, (scope) =>
+                  scope === CHAT_SCOPE_ID
+                    ? client.snapshot.chat !== undefined
+                    : client.hasSnapshot(scope),
+                ),
+              ]),
             onDraftChange: (drafts, inputs) => {
               preferences.drafts = drafts;
               preferences.inputDrafts = inputs;
@@ -558,6 +597,13 @@ async function runUI(
       );
     }
 
+    for (const warning of initialWarnings) {
+      view.notify(`[${warning.code}] UI state: ${warning.message}`, {
+        level: "warning",
+        source: "State",
+      });
+    }
+    persist();
     updateNotice();
     await renderer.closed;
   } finally {

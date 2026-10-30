@@ -550,7 +550,7 @@ export async function readHistoryPreview(
 
 export function previewSessionSnapshot(record: SessionRecord, id: string): HistoryPreview {
   const bounded = previewResult(
-    record.worktreeId,
+    record.worktreeId!,
     id,
     record.state.sections?.slice(-historyPreviewSectionCount) ?? [],
     [],

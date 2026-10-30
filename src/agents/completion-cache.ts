@@ -13,7 +13,7 @@ export type CompletionProvider = ((
   query: CompletionQuery,
   signal: AbortSignal,
 ) => Promise<Result<CompletionResult, ExpectedError>>) & {
-  prepare?: (sessionId: string, cwd: string) => void;
+  prepare?: (sessionId: string, cwd: string, options?: { files?: boolean }) => void;
   read?: (
     sessionId: string,
     query: CompletionQuery,
@@ -26,6 +26,7 @@ export type CompletionProvider = ((
 type CatalogEntry = {
   identity: string;
   cwd: string;
+  files: boolean;
   abort: AbortController;
   ready: Promise<Result<CompletionCatalog, ExpectedError>>;
   result?: Result<CompletionCatalog, ExpectedError>;
@@ -85,11 +86,12 @@ export class CompletionCache {
     }
   };
 
-  private prepare = (id: string, cwd: string): void => {
+  private prepare = (id: string, cwd: string, options: { files?: boolean } = {}): void => {
     if (this.disposed) {
       return;
     }
-    if (!this.files.has(cwd)) {
+    const files = options.files !== false;
+    if (files && !this.files.has(cwd)) {
       const index = new CompletionFileIndex(cwd, this.emit, this.unexpected);
       const ready = index.refresh();
 
@@ -99,7 +101,7 @@ export class CompletionCache {
 
     const identity = this.identity(id);
     const previous = this.sessions.get(id);
-    if (previous?.identity === identity && previous.cwd === cwd) {
+    if (previous?.identity === identity && previous.cwd === cwd && previous.files === files) {
       return;
     }
 
@@ -123,7 +125,7 @@ export class CompletionCache {
 
         return result;
       });
-    const entry: CatalogEntry = { identity, cwd, abort, ready };
+    const entry: CatalogEntry = { identity, cwd, files, abort, ready };
 
     this.sessions.set(id, entry);
     void ready.catch(this.unexpected);
@@ -148,12 +150,14 @@ export class CompletionCache {
       );
     }
     if (entry.identity !== this.identity(id)) {
-      this.prepare(id, entry.cwd);
+      this.prepare(id, entry.cwd, { files: entry.files });
 
       return undefined;
     }
     if (query.kind === "file") {
-      return this.files.get(entry.cwd)?.index.read(query.query);
+      return entry.files
+        ? this.files.get(entry.cwd)?.index.read(query.query)
+        : ok({ items: [], truncated: false });
     }
     if (query.kind === "argument") return undefined;
 
@@ -210,7 +214,10 @@ export class CompletionCache {
       return result;
     }
 
-    const pending = query.kind === "file" ? this.files.get(entry.cwd)!.ready : entry.ready;
+    const pending = query.kind === "file" ? this.files.get(entry.cwd)?.ready : entry.ready;
+    if (!pending) {
+      return ok({ items: [], truncated: false });
+    }
     const result = await waitFor<unknown>(pending, signal);
     if (!result.ok) {
       return result;
@@ -236,7 +243,7 @@ export class CompletionCache {
       );
     }
 
-    this.prepare(id, previous.cwd);
+    this.prepare(id, previous.cwd, { files: previous.files });
 
     const entry = this.sessions.get(id)!;
     const catalog = await entry.ready;
@@ -247,7 +254,10 @@ export class CompletionCache {
       return err(new CancelledError());
     }
 
-    const files = this.files.get(entry.cwd)!;
+    const files = entry.files ? this.files.get(entry.cwd) : undefined;
+    if (!files) {
+      return ok(undefined);
+    }
     files.ready = files.index.refresh();
 
     return files.ready;

@@ -10,7 +10,7 @@ import type { HistoryItem } from "../history.ts";
 import type { HistoryPreview } from "../history-preview.ts";
 import { HistoryPreviewCache, type PreviewState } from "../history-preview-cache.ts";
 import { SearchInput } from "../../ui/search-input.ts";
-import type { Worktree } from "../../workspace/model.ts";
+import { isChatCollection, type SessionCollection } from "./session-collection.ts";
 import { reportUnexpected, type ExpectedError } from "../../errors.ts";
 import type { Result } from "../../result.ts";
 import type { FooterShortcut } from "../../ui/footer.ts";
@@ -57,6 +57,7 @@ export type HistoryActions = {
   details?: (id: string) => ExecutionState | null;
   draft?: (id: string) => PromptDraft | string | undefined;
   image?: TranscriptImageProvider;
+  currentConversationId?: () => string | null;
 };
 
 // The popup owns only a query and a candidate cursor. Canonical session selection changes on Open.
@@ -76,7 +77,7 @@ export class SessionHistoryPanel {
   private readonly rows: BoxRenderable[] = [];
   private items: readonly HistoryItem[] = [];
   private filtered: readonly HistoryItem[] = [];
-  private worktree: Worktree | null = null;
+  private worktree: SessionCollection | null = null;
   private owner: Renderable | undefined;
   private cursor = 0;
   private generation = 0;
@@ -239,7 +240,7 @@ export class SessionHistoryPanel {
     return this.filtered[this.cursor];
   }
 
-  show(worktree: Worktree | null): void {
+  show(worktree: SessionCollection | null): void {
     if (this.disposed || this.root.isDestroyed) {
       return;
     }
@@ -251,6 +252,7 @@ export class SessionHistoryPanel {
 
     this.owner = this.renderer.currentFocusedRenderable ?? undefined;
     this.worktree = worktree;
+    this.search.setTitle(isChatCollection(worktree) ? "Conversations" : "History");
     this.compactPreview = false;
     this.root.visible = true;
     this.items = [];
@@ -277,6 +279,8 @@ export class SessionHistoryPanel {
     const cached = this.actions.cached?.(this.worktree.id);
     if (cached && (!cached.ok || cached.value !== this.items)) {
       this.accept(cached);
+    } else if (isChatCollection(this.worktree)) {
+      this.filter();
     }
   }
 
@@ -333,7 +337,7 @@ export class SessionHistoryPanel {
     this.actions.onChange?.();
   }
 
-  updateScope(worktree: Worktree | null): void {
+  updateScope(worktree: SessionCollection | null): void {
     if (this.visible && this.worktree?.id !== worktree?.id) {
       this.hide();
     }
@@ -417,12 +421,14 @@ export class SessionHistoryPanel {
 
     const selected = this.selected?.id;
     const matches = createTextMatcher(this.search.value);
-    const matchesQuery = this.items.filter((item) => matches(item.title));
+    const current = isChatCollection(this.worktree) ? this.actions.currentConversationId?.() : null;
+    const available = current ? this.items.filter((item) => item.id !== current) : this.items;
+    const matchesQuery = available.filter((item) => matches(item.title));
 
     this.search.setCounts(
       this.loading || this.loadError
         ? null
-        : { matched: matchesQuery.length, total: this.items.length, limit: 200 },
+        : { matched: matchesQuery.length, total: available.length, limit: 200 },
     );
     this.filtered = matchesQuery.slice(0, 200);
     this.cursor = Math.max(
@@ -489,7 +495,13 @@ export class SessionHistoryPanel {
 
     const empty = !this.loading && !this.loadError && !this.filtered.length;
     this.layout.results.showEmpty(
-      empty ? (this.items.length ? "No matching sessions" : "No saved sessions") : undefined,
+      empty
+        ? available.length
+          ? "No matching sessions"
+          : isChatCollection(this.worktree)
+            ? "No other conversations"
+            : "No saved sessions"
+        : undefined,
     );
     this.paint();
     this.schedulePreview();
@@ -594,7 +606,6 @@ export class SessionHistoryPanel {
       id: "history",
       path: "",
       name: "History",
-      branch: null,
       sessions: [],
     };
     const descriptor = {

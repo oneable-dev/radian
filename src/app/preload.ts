@@ -2,6 +2,7 @@ import type { WorkspaceClient } from "../runtime/workspace-client.ts";
 import type { ModelCatalog } from "../agents/model-selection.ts";
 import type { AccountsCatalog, AccountReply, AccountRequest } from "../accounts/model.ts";
 import type { HistoryItem } from "../agents/history.ts";
+import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
 import { HistoryPreviewCache } from "../agents/history-preview-cache.ts";
 import { CancelledError, SessionError, type ExpectedError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
@@ -151,10 +152,16 @@ export class PreloadedData {
     }
   };
 
+  private scopes() {
+    const snapshot = this.client.snapshot;
+    return [
+      ...snapshot.repositories.flatMap((repository) => repository.worktrees),
+      ...(snapshot.chat ? [snapshot.chat] : []),
+    ];
+  }
+
   private treeFor(id: string): string | undefined {
-    return this.client.snapshot.repositories
-      .flatMap((repo) => repo.worktrees)
-      .find((tree) => tree.sessions.some((session) => session.id === id))?.id;
+    return this.scopes().find((scope) => scope.sessions.some((session) => session.id === id))?.id;
   }
 
   private modelIdentity(
@@ -182,26 +189,22 @@ export class PreloadedData {
 
     const ids = new Set<string>();
     const snapshot = this.client.snapshot;
-    for (const repo of snapshot.repositories) {
-      for (const tree of repo.worktrees) {
-        const scope = this.client.dataIdentity(tree.id, "models");
-        if (scope === undefined) {
+    for (const tree of this.scopes()) {
+      const scope = this.client.dataIdentity(tree.id, "models");
+      if (scope === undefined) {
+        continue;
+      }
+      for (const session of tree.sessions) {
+        const state = snapshot.details[session.id];
+        const conversation = state?.conversationId;
+        if (!conversation) {
           continue;
         }
-        for (const session of tree.sessions) {
-          const state = snapshot.details[session.id];
-          const conversation = state?.conversationId;
-          if (!conversation) {
-            continue;
-          }
 
-          ids.add(session.id);
-          void this.models.load(
-            session.id,
-            this.modelIdentity(session.id, scope, state),
-            (signal) => this.client.models(session.id, conversation, signal),
-          );
-        }
+        ids.add(session.id);
+        void this.models.load(session.id, this.modelIdentity(session.id, scope, state), (signal) =>
+          this.client.models(session.id, conversation, signal),
+        );
       }
     }
 
@@ -214,15 +217,13 @@ export class PreloadedData {
     }
 
     const ids = new Set<string>();
-    for (const repo of this.client.snapshot.repositories) {
-      for (const tree of repo.worktrees) {
-        if (this.client.dataIdentity(tree.id, "accounts") === undefined) {
-          continue;
-        }
-
-        ids.add(tree.id);
-        void this.accountCatalog(tree.id);
+    for (const scope of this.scopes()) {
+      if (this.client.dataIdentity(scope.id, "accounts") === undefined) {
+        continue;
       }
+
+      ids.add(scope.id);
+      void this.accountCatalog(scope.id);
     }
 
     this.accounts.retain(ids);
@@ -234,15 +235,13 @@ export class PreloadedData {
     }
 
     const ids = new Set<string>();
-    for (const repo of this.client.snapshot.repositories) {
-      for (const tree of repo.worktrees) {
-        if (this.client.dataIdentity(tree.id, "history") === undefined) {
-          continue;
-        }
-
-        ids.add(tree.id);
-        void this.listHistory(tree.id);
+    for (const scope of this.scopes()) {
+      if (this.client.dataIdentity(scope.id, "history") === undefined) {
+        continue;
       }
+
+      ids.add(scope.id);
+      void this.listHistory(scope.id);
     }
 
     this.history.retain(ids);
@@ -365,6 +364,7 @@ export class PreloadedData {
               revision:
                 item.revision ?? JSON.stringify([item.modified, item.messageCount, item.title]),
             })),
+            { background: tree !== CHAT_SCOPE_ID },
           );
         }
 

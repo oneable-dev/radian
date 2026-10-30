@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import type { Repository } from "../workspace/model.ts";
+import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
 import type { ExecutionState, SessionRecord } from "../agents/session-registry.ts";
 import type { GitViewState } from "../git/model.ts";
 import { gitViewsSchema } from "../git/preferences.ts";
@@ -295,7 +296,24 @@ export const emptyPreferences: RuntimePreferences = {
   selection: { worktreeId: null, sessions: {} },
   drafts: {},
 };
+export const chatCollectionSchema = Type.Object({
+  id: Type.Literal(CHAT_SCOPE_ID),
+  path: id,
+  name: Type.Literal("CHAT"),
+  sessions: Type.Array(session),
+  details: Type.Record(Type.String(), execution),
+  historyRevision: Type.Integer({ minimum: 0 }),
+  accountsRevision: Type.Integer({ minimum: 0 }),
+  closingCount: Type.Integer({ minimum: 0 }),
+});
+
+export type ChatCollection = Omit<Static<typeof chatCollectionSchema>, "sessions" | "details"> & {
+  readonly sessions: readonly Repository["worktrees"][number]["sessions"][number][];
+  readonly details: Readonly<Record<string, ExecutionState>>;
+};
+
 export const snapshotSchema = Type.Object({
+  chat: Type.Optional(chatCollectionSchema),
   version: Type.Literal(protocolVersion),
   pid: Type.Integer({ minimum: 1 }),
   instance: id,
@@ -322,10 +340,32 @@ export const snapshotSchema = Type.Object({
   ),
 });
 
-export type RuntimeSnapshot = Omit<Static<typeof snapshotSchema>, "repositories" | "details"> & {
+export type RuntimeSnapshot = Omit<
+  Static<typeof snapshotSchema>,
+  "repositories" | "details" | "chat"
+> & {
   readonly repositories: readonly Repository[];
   readonly details: Readonly<Record<string, ExecutionState>>;
+  readonly chat?: ChatCollection;
 };
+
+export const chatSessionRecordSchema = Type.Object({
+  id,
+  name: Type.String(),
+  role: Type.Optional(Type.Literal("subagent")),
+  scope: Type.Object({ kind: Type.Literal("chat") }),
+  sessionFile: Type.Optional(id),
+  state: execution,
+  subagents: Type.Array(agent),
+  ownedSubagents: Type.Optional(Type.Array(ownedSubagentRecordSchema, { maxItems: 128 })),
+  lifecycle: Type.Optional(Type.Union([Type.Literal("open"), Type.Literal("closed")])),
+  closedAt: Type.Optional(
+    Type.Union([Type.Integer({ minimum: 0, maximum: 8640000000000000 }), Type.Null()]),
+  ),
+  managed: Type.Optional(Type.Boolean()),
+  updatedAt: Type.Optional(Type.Integer({ minimum: 0, maximum: 8640000000000000 })),
+  cwd: Type.Optional(id),
+});
 
 export const sessionRecordSchema = Type.Object({
   id,
@@ -355,6 +395,19 @@ export type RuntimeManifest = Omit<Static<typeof manifestSchema>, "repositories"
   readonly repositories: readonly Repository[];
   readonly records: readonly SessionRecord[];
 };
+
+export const chatHistorySchema = Type.Array(
+  Type.Object({
+    id,
+    title: Type.String(),
+    modified: Type.String(),
+    messageCount: Type.Integer({ minimum: 0 }),
+    revision: Type.Optional(Type.String()),
+    openSessionId: Type.Union([id, Type.Null()]),
+    unavailableReason: Type.Union([Type.String(), Type.Null()]),
+  }),
+);
+export type ChatHistoryItem = Static<typeof chatHistorySchema>[number];
 
 export const historySchema = Type.Array(
   Type.Object({
@@ -399,6 +452,28 @@ export const historyPreviewSchema = Type.Object({
     }),
   ),
 });
+export const chatHistoryPreviewSchema = Type.Object({
+  id,
+  text: Type.String({ maxLength: 65536 }),
+  truncated: Type.Boolean(),
+  sections: historyPreviewSchema.properties.sections,
+  telemetry: Type.Optional(telemetry),
+  snapshot: Type.Optional(
+    Type.Object({
+      id,
+      name: Type.String(),
+      scope: Type.Object({ kind: Type.Literal("chat") }),
+      sessionFile: Type.Optional(id),
+      state: execution,
+      subagents: Type.Array(agent),
+    }),
+  ),
+});
+export type ChatHistoryPreview = Omit<
+  import("../agents/history-preview.ts").HistoryPreview,
+  "worktreeId"
+>;
+
 export const historyPreviewQuerySchema = Type.Object(
   { worktreeId: id, savedId: id },
   { additionalProperties: false },
@@ -431,6 +506,8 @@ export const commandSchema = Type.Union([
   }),
   Type.Object({ type: Type.Literal("terminal-read"), terminalId: id, lease: id }),
   Type.Object({ type: Type.Literal("create"), worktreeId: id }),
+  Type.Object({ type: Type.Literal("chat-create") }),
+  Type.Object({ type: Type.Literal("chat-resume"), savedId: id }),
   Type.Object({ type: Type.Literal("resume"), worktreeId: id, savedId: id }),
   Type.Object({ type: Type.Literal("close"), sessionId: id }),
   Type.Object(

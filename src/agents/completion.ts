@@ -29,7 +29,11 @@ export type CompletionTarget = CompletionQuery & { readonly start: number; reado
 export const completionLimit = 100;
 
 // Offsets are JavaScript string indices. The UI converts native display-cell offsets at its boundary.
-export function completionTarget(text: string, cursor: number): CompletionTarget | null {
+export function completionTarget(
+  text: string,
+  cursor: number,
+  options: { files?: boolean } = {},
+): CompletionTarget | null {
   if (cursor < 1 || cursor > text.length) {
     return null;
   }
@@ -68,7 +72,7 @@ export function completionTarget(text: string, cursor: number): CompletionTarget
           query: text.slice(1, cursor),
         };
       }
-      if (text[start] !== "@") {
+      if (text[start] !== "@" || options.files === false) {
         break;
       }
 

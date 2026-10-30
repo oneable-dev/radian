@@ -286,6 +286,7 @@ test("View letters and internal tab numbers/creation keys can be independently r
   expect(map.hint("tab.new", "terminal")).toBe("");
   expect(map.hint("view.editor", "terminal")).toBe("<leader>v");
   expect(map.hint("view.terminal", "editor")).toBe("<leader>t");
+  expect(map.hint("view.chat", "prompt")).toBe("<leader>q");
   expect(map.hint("terminal.new", "terminal")).toBe("");
 });
 
@@ -305,6 +306,7 @@ test("Key settings override or disable scoped defaults and update actual hints",
         "session.new": [{ keys: "s", scope: "workspace" }],
         "session.close": [],
         "app.detach": ["<leader> q"],
+        "view.chat": [],
       },
     }),
   );

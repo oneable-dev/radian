@@ -1,4 +1,5 @@
 import { resolve, sep } from "node:path";
+import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
 import type { Repository } from "../workspace/model.ts";
 import {
   mergeDashboards,
@@ -19,7 +20,7 @@ import {
 } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { defaultPreferences, type RuntimeClient } from "./client.ts";
-import type { ConnectOptions } from "./lifecycle.ts";
+import { connectChatRuntime, connectRuntime, type ConnectOptions } from "./lifecycle.ts";
 import type { RuntimePreferences, RuntimeSnapshot } from "./protocol.ts";
 import { runtimePaths, RuntimeStore } from "./storage.ts";
 import { mergeWorkspacePreferences, repositoryPreferences } from "./workspace-preferences.ts";
@@ -93,6 +94,7 @@ type Entry = {
 export type WorkspaceSnapshot = Pick<
   RuntimeSnapshot,
   | "repositories"
+  | "chat"
   | "details"
   | "preferences"
   | "closingCount"
@@ -110,6 +112,9 @@ export class WorkspaceClient {
   private detaching = false;
   private recovery = 0;
   private disconnection: Promise<void> | undefined;
+  private chatClient: RuntimeClient | undefined;
+  private chatUnsubscribe: (() => void) | undefined;
+  private chatConnectionVersion = 0;
 
   private constructor(
     repositories: readonly Repository[],
@@ -132,15 +137,25 @@ export class WorkspaceClient {
     options: ConnectOptions,
     connect: Connector,
   ): Promise<Result<WorkspaceClient, ExpectedError>> {
-    if (!repositories.length) {
-      return err(new InputError("No repositories discovered in workspace roots."));
-    }
-
     const workspace = new WorkspaceClient(repositories, options, connect);
     let ready = false;
 
     return withCleanup(
       async () => {
+        if (connect === connectRuntime || !repositories.length) {
+          const chat = await connectChatRuntime(options);
+          if (!chat.ok) return chat;
+          workspace.chatClient = chat.value;
+          let wasConnected = chat.value.connected;
+          workspace.chatUnsubscribe = chat.value.subscribe(() => {
+            if (!wasConnected && chat.value.connected) {
+              workspace.recovery++;
+              workspace.chatConnectionVersion++;
+            }
+            wasConnected = chat.value.connected;
+            workspace.emit();
+          });
+        }
         let cursor = 0;
         const loaded = await Promise.allSettled(
           Array.from({ length: Math.min(4, repositories.length) }, async () => {
@@ -167,12 +182,12 @@ export class WorkspaceClient {
         const preferred =
           workspace.entries.find((entry) =>
             entry.repository.worktrees.some((tree) => tree.id === current?.id),
-          ) ?? workspace.entries[0]!;
-        const remembered = preferred.preferences.selection.worktreeId;
+          ) ?? workspace.entries[0];
+        const remembered = preferred?.preferences.selection.worktreeId;
         const selected =
-          preferred.repository.worktrees.find((tree) => tree.id === remembered)?.id ??
+          preferred?.repository.worktrees.find((tree) => tree.id === remembered)?.id ??
           current?.id ??
-          preferred.repository.worktrees[0]?.id ??
+          preferred?.repository.worktrees[0]?.id ??
           null;
 
         workspace.preferences = mergeWorkspacePreferences(
@@ -290,11 +305,15 @@ export class WorkspaceClient {
           entry.client?.snapshot.repositories.find((repo) => repo.id === entry.repository.id) ??
           entry.repository,
       ),
-      details: Object.fromEntries(
-        snapshots.flatMap((snapshot) => Object.entries(snapshot.details)),
-      ),
+      ...(this.chatClient?.snapshot.chat ? { chat: this.chatClient.snapshot.chat } : {}),
+      details: Object.fromEntries([
+        ...snapshots.flatMap((snapshot) => Object.entries(snapshot.details)),
+        ...Object.entries(this.chatClient?.snapshot.chat?.details ?? {}),
+      ]),
       preferences: structuredClone(this.preferences),
-      closingCount: snapshots.reduce((count, snapshot) => count + snapshot.closingCount, 0),
+      closingCount:
+        snapshots.reduce((count, snapshot) => count + snapshot.closingCount, 0) +
+        (this.chatClient?.snapshot.chat?.closingCount ?? 0),
       terminalClosingCount: snapshots.reduce(
         (count, snapshot) => count + (snapshot.terminalClosingCount ?? 0),
         0,
@@ -303,11 +322,15 @@ export class WorkspaceClient {
       terminals: snapshots.flatMap((snapshot) => snapshot.terminals ?? []),
       extensionUi: this.detaching
         ? []
-        : this.entries.flatMap((entry) =>
-            entry.client?.connected ? (entry.client.snapshot.extensionUi ?? []) : [],
-          ),
-      notice: this.entries
-        .flatMap((entry) => {
+        : [
+            ...(this.chatClient?.snapshot.extensionUi ?? []),
+            ...this.entries.flatMap((entry) =>
+              entry.client?.connected ? (entry.client.snapshot.extensionUi ?? []) : [],
+            ),
+          ],
+      notice: [
+        this.chatClient?.snapshot.notice,
+        ...this.entries.flatMap((entry) => {
           const notice =
             entry.error?.message ||
             entry.warning ||
@@ -320,7 +343,9 @@ export class WorkspaceClient {
           return notice || legacy
             ? [`${entry.repository.name}: ${[notice, legacy].filter(Boolean).join(" · ")}`]
             : [];
-        })
+        }),
+      ]
+        .filter(Boolean)
         .join(" · "),
     };
   }
@@ -445,6 +470,10 @@ export class WorkspaceClient {
     return entry ? ok(entry) : err(new InputError("Worktree does not belong to this workspace."));
   }
 
+  private chatOwner(id: string): boolean {
+    return this.chatClient?.snapshot.chat?.sessions.some((session) => session.id === id) ?? false;
+  }
+
   private sessionOwner(id: string): Result<Entry, SessionError> {
     const entry = this.entries.find(
       (entry) =>
@@ -459,7 +488,14 @@ export class WorkspaceClient {
       : err(new SessionError("SESSION_NOT_OPEN", "Session is not open in this workspace."));
   }
 
+  async createChat(): ReturnType<RuntimeClient["createChat"]> {
+    return (
+      this.chatClient?.createChat() ?? err(new CapabilityError("CHAT runtime is unavailable."))
+    );
+  }
+
   async create(worktreeId: string): ReturnType<RuntimeClient["create"]> {
+    if (worktreeId === CHAT_SCOPE_ID) return this.createChat();
     const entry = this.worktreeOwner(worktreeId);
     if (!entry.ok) {
       return entry;
@@ -479,6 +515,7 @@ export class WorkspaceClient {
   }
 
   async newTab(sessionId: string): ReturnType<RuntimeClient["newTab"]> {
+    if (this.chatOwner(sessionId)) return this.chatClient!.newTab(sessionId);
     const entry = this.sessionOwner(sessionId);
     if (!entry.ok) {
       return entry;
@@ -492,7 +529,15 @@ export class WorkspaceClient {
     return result;
   }
 
+  async resumeChat(savedId: string): ReturnType<RuntimeClient["resumeChat"]> {
+    return (
+      this.chatClient?.resumeChat(savedId) ??
+      err(new CapabilityError("CHAT runtime is unavailable."))
+    );
+  }
+
   async resume(worktreeId: string, savedId: string): ReturnType<RuntimeClient["resume"]> {
+    if (worktreeId === CHAT_SCOPE_ID) return this.resumeChat(savedId);
     const entry = this.worktreeOwner(worktreeId);
     if (!entry.ok) {
       return entry;
@@ -614,13 +659,32 @@ export class WorkspaceClient {
     return ok(merged);
   }
 
+  async listChatHistory(signal?: AbortSignal): ReturnType<RuntimeClient["listChatHistory"]> {
+    return (
+      this.chatClient?.listChatHistory(signal) ??
+      err(new CapabilityError("CHAT runtime is unavailable."))
+    );
+  }
+
+  listHistory(
+    worktreeId: typeof CHAT_SCOPE_ID,
+    signal?: AbortSignal,
+  ): ReturnType<RuntimeClient["listChatHistory"]>;
+  listHistory(worktreeId: string, signal?: AbortSignal): ReturnType<RuntimeClient["listHistory"]>;
   async listHistory(
     worktreeId: string,
     signal?: AbortSignal,
-  ): ReturnType<RuntimeClient["listHistory"]> {
+  ): Promise<
+    Result<
+      | readonly import("./protocol.ts").ChatHistoryItem[]
+      | readonly import("../agents/history.ts").HistoryItem[],
+      ExpectedError
+    >
+  > {
     if (signal?.aborted) {
       return err(new CancelledError());
     }
+    if (worktreeId === CHAT_SCOPE_ID) return this.listChatHistory(signal);
 
     const entry = this.worktreeOwner(worktreeId);
     if (!entry.ok) {
@@ -635,14 +699,41 @@ export class WorkspaceClient {
     return client.ok ? client.value.listHistory(worktreeId, signal) : client;
   }
 
+  async previewChatHistory(
+    savedId: string,
+    signal?: AbortSignal,
+  ): ReturnType<RuntimeClient["previewChatHistory"]> {
+    return (
+      this.chatClient?.previewChatHistory(savedId, signal) ??
+      err(new CapabilityError("CHAT runtime is unavailable."))
+    );
+  }
+
+  previewHistory(
+    worktreeId: typeof CHAT_SCOPE_ID,
+    savedId: string,
+    signal?: AbortSignal,
+  ): ReturnType<RuntimeClient["previewChatHistory"]>;
+  previewHistory(
+    worktreeId: string,
+    savedId: string,
+    signal?: AbortSignal,
+  ): ReturnType<RuntimeClient["previewHistory"]>;
   async previewHistory(
     worktreeId: string,
     savedId: string,
     signal?: AbortSignal,
-  ): ReturnType<RuntimeClient["previewHistory"]> {
+  ): Promise<
+    Result<
+      | import("./protocol.ts").ChatHistoryPreview
+      | import("../agents/history-preview.ts").HistoryPreview,
+      ExpectedError
+    >
+  > {
     if (signal?.aborted) {
       return err(new CancelledError());
     }
+    if (worktreeId === CHAT_SCOPE_ID) return this.previewChatHistory(savedId, signal);
 
     const entry = this.worktreeOwner(worktreeId);
     if (!entry.ok) {
@@ -663,6 +754,7 @@ export class WorkspaceClient {
   async acknowledge(
     ...args: Parameters<RuntimeClient["acknowledge"]>
   ): ReturnType<RuntimeClient["acknowledge"]> {
+    if (this.chatOwner(args[0])) return this.chatClient!.acknowledge(...args);
     const entry = this.sessionOwner(args[0]);
     if (!entry.ok) {
       return entry;
@@ -676,18 +768,21 @@ export class WorkspaceClient {
   async interrupt(
     ...args: Parameters<RuntimeClient["interrupt"]>
   ): ReturnType<RuntimeClient["interrupt"]> {
+    if (this.chatOwner(args[0])) return this.chatClient!.interrupt(...args);
     const entry = this.sessionOwner(args[0]);
 
     return entry.ok ? entry.value.client!.interrupt(...args) : entry;
   }
 
   async prompt(...args: Parameters<RuntimeClient["prompt"]>): ReturnType<RuntimeClient["prompt"]> {
+    if (this.chatOwner(args[0])) return this.chatClient!.prompt(...args);
     const entry = this.sessionOwner(args[0]);
 
     return entry.ok ? entry.value.client!.prompt(...args) : entry;
   }
 
   async image(...args: Parameters<RuntimeClient["image"]>): ReturnType<RuntimeClient["image"]> {
+    if (this.chatOwner(args[0])) return this.chatClient!.image(...args);
     const entry = this.sessionOwner(args[0]);
     if (!entry.ok) {
       return entry;
@@ -704,6 +799,11 @@ export class WorkspaceClient {
     request: Parameters<RuntimeClient["accounts"]>[0],
     signal?: AbortSignal,
   ): ReturnType<RuntimeClient["accounts"]> {
+    if (request.worktreeId === CHAT_SCOPE_ID)
+      return (
+        this.chatClient?.accounts(request, signal) ??
+        err(new CapabilityError("CHAT runtime is unavailable."))
+      );
     const entry = this.worktreeOwner(request.worktreeId);
     if (!entry.ok) {
       return entry;
@@ -722,6 +822,7 @@ export class WorkspaceClient {
   async answerExtensionUi(
     ...args: Parameters<RuntimeClient["answerExtensionUi"]>
   ): ReturnType<RuntimeClient["answerExtensionUi"]> {
+    if (this.chatOwner(args[0])) return this.chatClient!.answerExtensionUi(...args);
     const entry = this.sessionOwner(args[0]);
     if (!entry.ok) {
       return entry;
@@ -733,6 +834,7 @@ export class WorkspaceClient {
   }
 
   async models(...args: Parameters<RuntimeClient["models"]>): ReturnType<RuntimeClient["models"]> {
+    if (this.chatOwner(args[0])) return this.chatClient!.models(...args);
     const entry = this.sessionOwner(args[0]);
     if (!entry.ok) {
       return entry;
@@ -748,6 +850,7 @@ export class WorkspaceClient {
   async selectModel(
     ...args: Parameters<RuntimeClient["selectModel"]>
   ): ReturnType<RuntimeClient["selectModel"]> {
+    if (this.chatOwner(args[0])) return this.chatClient!.selectModel(...args);
     const entry = this.sessionOwner(args[0]);
     if (!entry.ok) {
       return entry;
@@ -761,6 +864,21 @@ export class WorkspaceClient {
   }
 
   dataIdentity(worktreeId: string, kind: "models" | "accounts" | "history"): string | undefined {
+    if (worktreeId === CHAT_SCOPE_ID) {
+      const snapshot = this.chatClient?.snapshot;
+      return snapshot?.chat
+        ? JSON.stringify([
+            snapshot.instance,
+            this.chatConnectionVersion,
+            kind === "history" ? snapshot.chat.historyRevision : snapshot.chat.accountsRevision,
+            Object.values(snapshot.chat.details).map((state) => [
+              state.conversationId,
+              state.resourceRevision ?? 0,
+              ...(kind === "models" ? [state.telemetry?.model, state.telemetry?.effort] : []),
+            ]),
+          ])
+        : undefined;
+    }
     const entry = this.worktreeOwner(worktreeId);
     if (!entry.ok) {
       return undefined;
@@ -786,6 +904,16 @@ export class WorkspaceClient {
   }
 
   completionIdentity(sessionId: string): string {
+    if (this.chatOwner(sessionId)) {
+      const snapshot = this.chatClient!.snapshot;
+      const state = snapshot.chat!.details[sessionId];
+      return JSON.stringify([
+        snapshot.instance,
+        state?.conversationId,
+        state?.resourceRevision ?? 0,
+        this.chatConnectionVersion,
+      ]);
+    }
     const entry = this.sessionOwner(sessionId);
     if (!entry.ok) {
       return JSON.stringify([sessionId, null]);
@@ -805,6 +933,7 @@ export class WorkspaceClient {
   async catalog(
     ...args: Parameters<RuntimeClient["catalog"]>
   ): ReturnType<RuntimeClient["catalog"]> {
+    if (this.chatOwner(args[0])) return this.chatClient!.catalog(...args);
     const entry = this.sessionOwner(args[0]);
     if (!entry.ok) {
       return entry;
@@ -820,12 +949,14 @@ export class WorkspaceClient {
   async complete(
     ...args: Parameters<RuntimeClient["complete"]>
   ): ReturnType<RuntimeClient["complete"]> {
+    if (this.chatOwner(args[0])) return this.chatClient!.complete(...args);
     const entry = this.sessionOwner(args[0]);
 
     return entry.ok ? entry.value.client!.complete(...args) : entry;
   }
 
   async closeSession(id: string): ReturnType<RuntimeClient["closeSession"]> {
+    if (this.chatOwner(id)) return this.chatClient!.closeSession(id);
     const entry = this.sessionOwner(id);
     if (!entry.ok) {
       return entry;
@@ -969,6 +1100,8 @@ export class WorkspaceClient {
     }
 
     this.detaching = true;
+    this.chatUnsubscribe?.();
+    this.chatClient?.beginDetach();
     for (const entry of this.entries) {
       entry.watcher?.close();
       entry.unsubscribe?.();
@@ -992,9 +1125,10 @@ export class WorkspaceClient {
     const writes = await Promise.allSettled(
       this.entries.flatMap((entry) => (entry.saving ? [entry.saving] : [])),
     );
-    const detached = await Promise.allSettled(
-      this.entries.flatMap((entry) => (entry.client ? [entry.client.disconnect()] : [])),
-    );
+    const detached = await Promise.allSettled([
+      ...this.entries.flatMap((entry) => (entry.client ? [entry.client.disconnect()] : [])),
+      ...(this.chatClient ? [this.chatClient.disconnect()] : []),
+    ]);
     const watchers = await Promise.allSettled(
       this.entries.flatMap((entry) => (entry.watcher ? [entry.watcher.stop()] : [])),
     );

@@ -16,6 +16,7 @@ test("Closing a session through the real service never emits shutdown progress n
   let child: Bun.Subprocess | undefined;
   let raw = "";
   let messagesFrame = "";
+  let selectedCode = false;
   const screen = new Terminal({ cols: 120, rows: 24, scrollback: 0, allowProposedApi: true });
   const frame = () =>
     Array.from(
@@ -67,7 +68,16 @@ test("Closing a session through the real service never emits shutdown progress n
             // Cursor-addressed repaint patches are not contiguous prose; inspect the actual terminal cells.
             screen.write(bytes, () => {
               const text = frame();
-              if (text.includes("Ask to do anything") && text.includes("context")) {
+              // First launch now opens CHAT; this regression explicitly exercises CODE.
+              if (!selectedCode && text.includes("CHAT")) {
+                selectedCode = true;
+                _terminal.write("\x00a");
+              }
+              if (
+                text.includes("CODE") &&
+                text.includes("Ask to do anything") &&
+                text.includes("context")
+              ) {
                 ready.resolve();
               }
               if (text.includes("No AI sessions")) {

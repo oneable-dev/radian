@@ -4,6 +4,7 @@ import type { WorkspaceClient } from "../runtime/workspace-client.ts";
 import type { RunCompletion } from "../agents/run-completion.ts";
 import type { TranscriptSection } from "../agents/transcript.ts";
 import { singleLine, truncateCells } from "../ui/text.ts";
+import { sessionSources } from "./session-sources.ts";
 
 type Source = Pick<WorkspaceClient, "snapshot" | "recoveryVersion" | "subscribe">;
 
@@ -58,70 +59,68 @@ export class TerminalNotifications {
     const snapshot = this.source.snapshot;
     const next = new Map<string, ObservedSession>();
     const notifications: Notification[] = [];
-    for (const repository of snapshot.repositories) {
-      for (const worktree of repository.worktrees) {
-        for (const session of worktree.sessions) {
-          const state = snapshot.details[session.id];
-          const previous = this.observed.get(session.id);
-          if (!state?.sections) {
-            if (previous) {
-              next.set(session.id, previous);
-            }
+    for (const source of sessionSources(snapshot)) {
+      for (const session of source.sessions) {
+        const state = snapshot.details[session.id];
+        const previous = this.observed.get(session.id);
+        if (!state?.sections) {
+          if (previous) {
+            next.set(session.id, previous);
+          }
 
+          continue;
+        }
+
+        const initial = baseline || !previous || previous.conversationId !== state.conversationId;
+        const completions = new Set<string>();
+        let request: string | undefined;
+        for (const section of state.sections) {
+          const delivered = requestExcerpt(section);
+          if (delivered !== undefined) {
+            request = delivered;
+          }
+
+          const completion = section.completion;
+          if (!completion) {
             continue;
           }
 
-          const initial = baseline || !previous || previous.conversationId !== state.conversationId;
-          const completions = new Set<string>();
-          let request: string | undefined;
-          for (const section of state.sections) {
-            const delivered = requestExcerpt(section);
-            if (delivered !== undefined) {
-              request = delivered;
-            }
+          const excerpt = request;
+          request = undefined; // Never borrow another run's request.
 
-            const completion = section.completion;
-            if (!completion) {
-              continue;
-            }
-
-            const excerpt = request;
-            request = undefined; // Never borrow another run's request.
-
-            // Persistence warnings are not another run or a reason to alert again.
-            const key = JSON.stringify([
-              section.id,
-              completion.startedAt,
-              completion.completedAt,
-              completion.durationMs,
-              completion.outcome,
-            ]);
-            completions.add(key);
-            if (
-              initial ||
-              previous.completions.has(key) ||
-              (completion.outcome !== "complete" && completion.outcome !== "error")
-            ) {
-              continue;
-            }
-
-            // Only a short delivered-request excerpt and run time belong in the body;
-            // project/worktree/session identifiers, responses and raw errors do not.
-            const summary = notificationSummary(excerpt ?? "");
-            const elapsed = duration(completion);
-            const body = summary ? `${summary} · ${elapsed}` : elapsed;
-
-            notifications.push({
-              title:
-                completion.outcome === "complete"
-                  ? "Radian · Task completed"
-                  : "Radian · Task failed",
-              body,
-            });
+          // Persistence warnings are not another run or a reason to alert again.
+          const key = JSON.stringify([
+            section.id,
+            completion.startedAt,
+            completion.completedAt,
+            completion.durationMs,
+            completion.outcome,
+          ]);
+          completions.add(key);
+          if (
+            initial ||
+            previous.completions.has(key) ||
+            (completion.outcome !== "complete" && completion.outcome !== "error")
+          ) {
+            continue;
           }
 
-          next.set(session.id, { conversationId: state.conversationId, completions });
+          // Only a short delivered-request excerpt and run time belong in the body;
+          // project/worktree/session identifiers, responses and raw errors do not.
+          const summary = notificationSummary(excerpt ?? "");
+          const elapsed = duration(completion);
+          const body = summary ? `${summary} · ${elapsed}` : elapsed;
+
+          notifications.push({
+            title:
+              completion.outcome === "complete"
+                ? "Radian · Task completed"
+                : "Radian · Task failed",
+            body,
+          });
         }
+
+        next.set(session.id, { conversationId: state.conversationId, completions });
       }
     }
 

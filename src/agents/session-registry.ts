@@ -1,6 +1,8 @@
 import { realpath } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import type { Repository, Worktree } from "../workspace/model.ts";
+import type { SessionScope } from "./session-scope.ts";
 import { repositorySnapshot, type RepositorySource } from "../workspace/catalog.ts";
 import type { AgentStatus, Subagent } from "./model.ts";
 import {
@@ -111,6 +113,7 @@ export type SessionExecutor = {
 
 export type SessionContext = {
   readonly cwd: string;
+  readonly scope?: SessionScope;
   readonly worktreeId?: string;
   readonly sessionFile?: string;
   readonly previousSessionFile?: string;
@@ -136,7 +139,9 @@ export type SessionContext = {
 export type SessionRecord = {
   readonly id: string;
   readonly name: string;
-  readonly worktreeId: string;
+  readonly scope?: SessionScope;
+  readonly role?: "subagent";
+  readonly worktreeId?: string;
   readonly sessionFile?: string;
   readonly state: ExecutionState;
   readonly subagents: readonly Subagent[];
@@ -177,14 +182,15 @@ type Execution = {
   completion?: Promise<Result<string, ExpectedError>>;
   settled?: boolean;
   controller?: AbortController;
-  readonly worktree?: Worktree;
+  readonly worktree?: Worktree | undefined;
   readonly managed?: boolean;
   closedAt?: number;
 };
 
 type OpenExecution = Execution & {
   closeTask?: Promise<Result<void, ExpectedError>>;
-  readonly worktree: Worktree;
+  readonly scope: SessionScope;
+  readonly worktree?: Worktree | undefined;
   readonly children: Map<string, Execution>;
   readonly generation: string;
   phase: "creating" | "open" | "closing";
@@ -209,6 +215,7 @@ export class SessionRegistry {
   constructor(
     private readonly repositories: RepositorySource,
     private readonly factory: SessionFactory,
+    private readonly registryScope: "code" | "chat" = "code",
   ) {}
 
   setUiActive(active: boolean): void {
@@ -259,7 +266,11 @@ export class SessionRegistry {
   }
 
   get retainedWorktreeIds(): ReadonlySet<string> {
-    return new Set([...this.entries.values()].map((entry) => entry.worktree.id));
+    return new Set(
+      [...this.entries.values()].flatMap((entry) =>
+        entry.scope.kind === "code" ? [entry.scope.worktreeId] : [],
+      ),
+    );
   }
 
   get snapshot(): readonly Repository[] {
@@ -268,7 +279,12 @@ export class SessionRegistry {
       worktrees: repo.worktrees.map((worktree) => ({
         ...worktree,
         sessions: [...this.entries.values()]
-          .filter((entry) => entry.phase === "open" && entry.worktree.id === worktree.id)
+          .filter(
+            (entry) =>
+              entry.phase === "open" &&
+              entry.scope.kind === "code" &&
+              entry.scope.worktreeId === worktree.id,
+          )
           .map((entry) => {
             const state = this.details(entry.id);
 
@@ -288,6 +304,23 @@ export class SessionRegistry {
           }),
       })),
     }));
+  }
+
+  get chatSessions(): readonly Repository["worktrees"][number]["sessions"][number][] {
+    return [...this.entries.values()]
+      .filter((entry) => entry.phase === "open" && entry.scope.kind === "chat")
+      .map((entry) => {
+        const state = this.details(entry.id);
+        return {
+          id: entry.id,
+          name: entry.name,
+          status: state?.status ?? null,
+          subagents: this.children(entry),
+          ...(state?.request ? { request: state.request } : {}),
+          ...(state?.result ? { result: state.result } : {}),
+          ...(entry.attention ? { attention: entry.attention } : {}),
+        };
+      });
   }
 
   get closingCount(): number {
@@ -425,7 +458,7 @@ export class SessionRegistry {
     }
 
     const current = this.sessionSnapshot(
-      snapshot.worktreeId,
+      snapshot.scope?.kind === "chat" ? undefined : snapshot.worktreeId,
       snapshot.conversationId ?? snapshot.id,
     );
     if (current && (current.lifecycle !== "closed" || current.closedAt !== snapshot.closedAt)) {
@@ -453,7 +486,9 @@ export class SessionRegistry {
       .map((entry) => ({
         id: entry.id,
         name: entry.name,
-        worktreeId: entry.worktree.id,
+        ...(entry.scope.kind === "code"
+          ? { worktreeId: entry.scope.worktreeId }
+          : { scope: entry.scope }),
         ...(entry.fileKey
           ? { sessionFile: entry.fileKey }
           : entry.executor?.sessionFile
@@ -468,11 +503,14 @@ export class SessionRegistry {
         lifecycle: "open",
         closedAt: null,
         managed: entry.managed ?? false,
-        cwd: entry.worktree.path,
+        cwd: entry.worktree?.path ?? homedir(),
       }));
   }
 
-  sessionSnapshot(worktreeId: string, conversationId: string): SessionRecord | undefined {
+  sessionSnapshot(
+    worktreeId: string | undefined,
+    conversationId: string,
+  ): SessionRecord | undefined {
     return (
       this.records.find(
         (record) =>
@@ -501,7 +539,14 @@ export class SessionRegistry {
   private retire(entry: OpenExecution, before?: SessionRecord): SessionRecord | undefined {
     if (!entry.executor) return undefined;
     const record = {
-      ...this.retireExecution(entry, entry.worktree, this.children(entry), entry.executor, before),
+      ...this.retireExecution(
+        entry,
+        entry.scope,
+        entry.worktree,
+        this.children(entry),
+        entry.executor,
+        before,
+      ),
       ownedSubagents: this.ownedRecords(entry),
     };
     this.retired.set(sessionRecordKey(record), record);
@@ -535,7 +580,8 @@ export class SessionRegistry {
 
   private retireExecution(
     entry: Execution,
-    worktree: Worktree,
+    scope: SessionScope,
+    worktree: Worktree | undefined,
     subagents: readonly Subagent[],
     executor: SessionExecutor,
     before?: SessionRecord,
@@ -547,8 +593,9 @@ export class SessionRegistry {
     const record: SessionRecord = {
       id: entry.id,
       name: entry.name,
-      worktreeId: worktree.id,
-      cwd: worktree.path,
+      ...(scope.kind === "code" ? { worktreeId: scope.worktreeId } : { scope }),
+      ...(scope.kind === "chat" && entry.role === "subagent" ? { role: "subagent" as const } : {}),
+      cwd: worktree?.path ?? homedir(),
       ...(sessionFile ? { sessionFile } : {}),
       lifecycle: "closed",
       closedAt: entry.closedAt ?? before?.closedAt ?? Date.now(),
@@ -600,7 +647,7 @@ export class SessionRegistry {
   }
 
   async restore(record: SessionRecord): Promise<Result<void, ExpectedError>> {
-    if (record.lifecycle === "closed") {
+    if (record.lifecycle === "closed" || record.role === "subagent") {
       return ok(undefined);
     }
 
@@ -625,8 +672,10 @@ export class SessionRegistry {
       }
     }
 
-    const created = await this.create(
-      record.worktreeId,
+    const created = await this.createScoped(
+      record.scope?.kind === "chat"
+        ? { kind: "chat" }
+        : { kind: "code", worktreeId: record.worktreeId! },
       existence.value ? record.sessionFile : undefined,
       record,
     );
@@ -711,20 +760,41 @@ export class SessionRegistry {
     return ok(undefined);
   }
 
-  async create(
+  create(
     worktreeId: string,
     sessionFile?: string,
     identity?: { readonly id: string; readonly name: string; readonly managed?: boolean },
   ): Promise<Result<string, ExpectedError>> {
+    return this.createScoped({ kind: "code", worktreeId }, sessionFile, identity);
+  }
+
+  createChat(
+    sessionFile?: string,
+    identity?: { readonly id: string; readonly name: string; readonly managed?: boolean },
+  ): Promise<Result<string, ExpectedError>> {
+    return this.createScoped({ kind: "chat" }, sessionFile, identity);
+  }
+
+  private async createScoped(
+    scope: SessionScope,
+    sessionFile?: string,
+    identity?: { readonly id: string; readonly name: string; readonly managed?: boolean },
+  ): Promise<Result<string, ExpectedError>> {
+    if (scope.kind !== this.registryScope) {
+      return err(new InputError("Session scope does not belong to this registry."));
+    }
     if (this.shuttingDown) {
       return err(this.stopping());
     }
 
-    const worktree = repositorySnapshot(this.repositories)
-      .flatMap((repo) => repo.worktrees)
-      .find((tree) => tree.id === worktreeId);
-    if (!worktree) {
-      return err(new InputError(`Unknown worktree: ${worktreeId}`));
+    const worktree =
+      scope.kind === "code"
+        ? repositorySnapshot(this.repositories)
+            .flatMap((repo) => repo.worktrees)
+            .find((tree) => tree.id === scope.worktreeId)
+        : undefined;
+    if (scope.kind === "code" && !worktree) {
+      return err(new InputError(`Unknown worktree: ${scope.worktreeId}`));
     }
 
     const canonical = sessionFile ? await capture(() => realpath(sessionFile)) : ok(undefined);
@@ -756,8 +826,9 @@ export class SessionRegistry {
     const generation = crypto.randomUUID();
     const ready = capture(() =>
       this.factory({
-        cwd: worktree.path,
-        worktreeId: worktree.id,
+        cwd: worktree?.path ?? homedir(),
+        scope,
+        ...(scope.kind === "code" ? { worktreeId: scope.worktreeId } : {}),
         role: "main",
         isUiActive: () => this.uiActive,
         ...(requestedFile ? { sessionFile: requestedFile } : {}),
@@ -771,7 +842,8 @@ export class SessionRegistry {
       id,
       name: identity?.name ?? `Session ${id.slice(0, 8)}`,
       role: "main",
-      worktree,
+      scope,
+      ...(worktree ? { worktree } : {}),
       ready,
       generation,
       phase: "creating",
@@ -887,7 +959,10 @@ export class SessionRegistry {
         : err(new SessionError("SESSION_NOT_OPEN", "Session closed during argument completion."));
     }
     if (query.kind === "file") {
-      const result = await completeFiles(entry.worktree.path, query.query, signal);
+      if (entry.scope.kind === "chat") {
+        return err(new CapabilityError("CHAT does not index or complete project files."));
+      }
+      const result = await completeFiles(entry.worktree!.path, query.query, signal);
 
       return entry.phase === "open"
         ? result
@@ -1132,7 +1207,7 @@ export class SessionRegistry {
     const result = await entry.executor!.prompt(
       text,
       accept,
-      imagePaths.map((path) => resolve(entry.worktree.path, path)),
+      imagePaths.map((path) => resolve(entry.worktree?.path ?? homedir(), path)),
     );
     // Executors without an admission callback can prove acceptance only on success.
     if (result.ok && !accepted) {
@@ -1236,7 +1311,8 @@ export class SessionRegistry {
       );
     }
 
-    return this.create(selected.value.worktree.id);
+    const scope = selected.value.scope;
+    return scope.kind === "chat" ? this.createChat() : this.create(scope.worktreeId);
   }
 
   clearSession(id: string, onAccepted?: () => void): Promise<Result<void, ExpectedError>> {
@@ -1283,8 +1359,9 @@ export class SessionRegistry {
     const previousSessionFile = previous.executor?.sessionFile;
     const ready = capture(() =>
       this.factory({
-        cwd: previous.worktree.path,
-        worktreeId: previous.worktree.id,
+        cwd: previous.worktree?.path ?? homedir(),
+        scope: previous.scope,
+        ...(previous.scope.kind === "code" ? { worktreeId: previous.scope.worktreeId } : {}),
         role: "main",
         isUiActive: () => this.uiActive,
         startReason: "new",
@@ -1351,7 +1428,8 @@ export class SessionRegistry {
             id: previous.id,
             name: previous.name,
             role: "main",
-            worktree: previous.worktree,
+            scope: previous.scope,
+            ...(previous.worktree ? { worktree: previous.worktree } : {}),
             phase: "open",
             children: new Map(),
             ready,
@@ -1688,7 +1766,7 @@ export class SessionRegistry {
       role: "subagent",
       ready: undefined,
       controller: new AbortController(),
-      worktree: owner.worktree,
+      ...(owner.worktree ? { worktree: owner.worktree } : {}),
       managed: true,
       request: summarizeRequest(task, 0),
     };
@@ -1698,8 +1776,9 @@ export class SessionRegistry {
     });
     const ready = capture(() =>
       this.factory({
-        cwd: owner.worktree.path,
-        worktreeId: owner.worktree.id,
+        cwd: owner.worktree?.path ?? homedir(),
+        scope: owner.scope,
+        ...(owner.scope.kind === "code" ? { worktreeId: owner.scope.worktreeId } : {}),
         role: "subagent",
         agent: name,
         contactSupervisor: (command, childSignal) => {
@@ -1942,12 +2021,18 @@ export class SessionRegistry {
         return ok(undefined);
       } // Factory failure is returned to create/runChild; no handle exists.
 
-      const tree = execution.role === "subagent" ? execution.worktree : undefined;
-      if (tree) {
+      const scope =
+        execution.role === "subagent"
+          ? this.entries.values().find((entry) => entry.children.has(execution.id))?.scope
+          : undefined;
+      const tree = execution.worktree;
+      if (scope) {
         execution.closedAt ??= Date.now();
       }
 
-      const archived = tree ? this.retireExecution(execution, tree, [], created.value) : undefined;
+      const archived = scope
+        ? this.retireExecution(execution, scope, tree, [], created.value)
+        : undefined;
       const closed = await created.value.close(reason);
       if (!closed.ok) {
         delete execution.cleanupTask;
@@ -1958,8 +2043,8 @@ export class SessionRegistry {
       execution.unsubscribe?.();
       delete execution.unsubscribe;
       if (execution.role === "subagent") {
-        if (tree) {
-          this.retireExecution(execution, tree, [], created.value, archived);
+        if (scope) {
+          this.retireExecution(execution, scope, tree, [], created.value, archived);
         }
         if (execution.fileKey && this.fileOwners.get(execution.fileKey) === execution.id) {
           this.fileOwners.delete(execution.fileKey);

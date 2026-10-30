@@ -13,6 +13,7 @@ import {
   type ProviderAuthInteraction,
 } from "@earendil-works/pi-ai";
 import { AccountManager } from "./manager.ts";
+import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
 import type { AccountReply, LoginView } from "./model.ts";
 import { expectError, expectOk } from "../testing/results.ts";
 
@@ -154,6 +155,22 @@ async function select(manager: AccountManager, worktreeId: string, accountId: st
     revision: (await manager.catalog(worktreeId)).revision,
   });
 }
+
+test("CHAT account defaults remain independent of CODE worktree defaults", async () => {
+  // Both scopes share credentials, but selecting CHAT must not change an existing CODE selection.
+  const { manager } = await fixture();
+  const code = await add(manager, "code", "worktree-one");
+  const chat = await add(manager, "chat", CHAT_SCOPE_ID);
+  expectOk(await select(manager, "worktree-one", code.id));
+  expectOk(await select(manager, CHAT_SCOPE_ID, chat.id));
+
+  const codeCatalog = await manager.catalog("worktree-one");
+  const chatCatalog = await manager.catalog(CHAT_SCOPE_ID);
+  expect(codeCatalog.selections.fixture).toBe(code.id);
+  expect(chatCatalog.selections.fixture).toBe(chat.id);
+  expect(chatCatalog.accounts.map((entry) => entry.id)).toContain(code.id);
+  expect(codeCatalog.accounts.map((entry) => entry.id)).toContain(chat.id);
+});
 
 test("Concurrent model preload requests share metadata until an explicit invalidation", async () => {
   // Sessions in the same worktree must not supersede one another's startup discovery.

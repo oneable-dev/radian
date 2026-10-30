@@ -19,8 +19,9 @@ import {
   ModelsError,
   type ImageContent,
 } from "@earendil-works/pi-ai";
+import { readFileSync } from "node:fs";
 import { mkdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import type { ExecutionState, SessionExecutor, SessionFactory } from "./session-registry.ts";
 import {
   AgentRunError,
@@ -33,6 +34,7 @@ import {
   ModelSelectionError,
   reportUnexpected,
   SessionError,
+  systemCode,
   withCleanup,
   type ExpectedError,
 } from "../errors.ts";
@@ -63,6 +65,7 @@ import type { AccountManager } from "../accounts/manager.ts";
 import { parseAccountsCommand } from "../accounts/model.ts";
 import { bindAccountSession } from "../accounts/session.ts";
 import { sessionResourceLoader } from "./resource-loader.ts";
+import { CHAT_SCOPE_ID } from "./session-scope.ts";
 import { ExtensionUiBridge, type ExtensionUiResponse } from "./extension-ui.ts";
 import { McpAuthPicker } from "./mcp-auth-picker.ts";
 import { withComponentCommands } from "./extension-capabilities.ts";
@@ -94,6 +97,7 @@ export type PiSessionOptions = {
   settings?: Partial<ReturnType<SettingsManager["getSettings"]>>;
   usageMonitor?: UsageMonitor;
   accounts?: AccountManager;
+  chatDefaults?: () => { provider: string; model: string; effort?: string } | undefined;
   imageLoader?: (paths: readonly string[]) => Promise<Result<ImageContent[], ExpectedError>>;
 };
 
@@ -109,7 +113,8 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
     }
 
     const agentDir = options.agentDir ?? getAgentDir();
-    const worktreeId = context.worktreeId ?? context.cwd;
+    const chat = context.scope?.kind === "chat";
+    const worktreeId = chat ? CHAT_SCOPE_ID : (context.worktreeId ?? context.cwd);
     const workspace = options.accounts ? await options.accounts.workspace(worktreeId) : undefined;
 
     runtime ??= workspace
@@ -122,12 +127,15 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
           });
 
     const modelRuntime = workspace?.runtime ?? (await runtime);
+    const chatDefaults = chat ? options.chatDefaults?.() : undefined;
     const settingsManager = options.streamFn
       ? SettingsManager.inMemory({
           retry: { enabled: false },
           compaction: { enabled: false },
         })
-      : SettingsManager.create(context.cwd, agentDir);
+      : chat
+        ? chatSettingsManager(agentDir)
+        : SettingsManager.create(context.cwd, agentDir);
     const fast = new FastMode();
     const compaction = new ManualCompaction();
     const mcpAuth = new McpAuthPicker();
@@ -147,6 +155,17 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       cwd: context.cwd,
       agentDir,
       settingsManager,
+      ...(chat
+        ? {
+            agentsFilesOverride: (result) => ({
+              agentsFiles: result.agentsFiles.filter((file) => {
+                const global = resolve(agentDir);
+                const path = resolve(file.path);
+                return path === global || path.startsWith(global + sep);
+              }),
+            }),
+          }
+        : {}),
       noThemes: true,
       eventBus: mcpAuth.eventBus,
       ...(context.role === "subagent"
@@ -211,13 +230,28 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
     });
 
     await resourceLoader.reload();
-    // Resource discovery reloads settings; apply host overrides only after that reload.
-    settingsManager.applyOverrides({ ...options.settings, cacheWarming: "off" });
+    // Resource discovery reloads settings; apply CHAT selection and host overrides afterwards.
+    const applyHostSettings = () =>
+      settingsManager.applyOverrides({
+        ...(chatDefaults?.provider ? { defaultProvider: chatDefaults.provider } : {}),
+        ...(chatDefaults?.model ? { defaultModel: chatDefaults.model } : {}),
+        ...(chatDefaults?.effort
+          ? { defaultThinkingLevel: chatDefaults.effort as ModelEffort }
+          : {}),
+        ...options.settings,
+        cacheWarming: "off",
+      });
+    applyHostSettings();
 
+    // Keep CHAT child execution files out of the user-conversation History index.
+    const sessionDir =
+      chat && context.role === "subagent" && options.sessionDir
+        ? join(options.sessionDir, "subagents")
+        : options.sessionDir;
     const sessionManager = context.sessionFile
-      ? SessionManager.open(context.sessionFile, options.sessionDir, context.cwd)
-      : options.sessionDir
-        ? SessionManager.create(context.cwd, options.sessionDir)
+      ? SessionManager.open(context.sessionFile, sessionDir, context.cwd)
+      : sessionDir
+        ? SessionManager.create(context.cwd, sessionDir)
         : undefined;
     const roleModel = profile?.model
       ? modelRuntime.getModel(
@@ -376,7 +410,7 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
           compaction,
           () => {
             options.accounts?.invalidateModels(worktreeId);
-            settingsManager.applyOverrides({ ...options.settings, cacheWarming: "off" });
+            applyHostSettings();
           },
           releaseAccounts,
           options.accounts
@@ -413,6 +447,30 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       },
     );
   };
+}
+
+// SDK reload must reread user resources, but CHAT must never persist its model
+// selection to Pi's global defaults or read project settings (including ~/.pi).
+function chatSettingsManager(agentDir: string): SettingsManager {
+  return SettingsManager.fromStorage(
+    {
+      withLock(scope, fn) {
+        if (scope !== "global") {
+          fn(undefined);
+          return;
+        }
+        let current: string | undefined;
+        try {
+          current = readFileSync(join(agentDir, "settings.json"), "utf8");
+        } catch (error) {
+          if (systemCode(error) !== "ENOENT") throw error;
+        }
+        // Ignore the callback's write result: session-local setters remain in memory.
+        fn(current);
+      },
+    },
+    { projectTrusted: false },
+  );
 }
 
 export class PiSessionExecutor implements SessionExecutor {

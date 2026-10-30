@@ -9,6 +9,7 @@ import { SessionTranscript } from "../agents/transcript.ts";
 import { fixtureMessage } from "../testing/offline-runtime.ts";
 import type { WorkspaceSnapshot } from "../runtime/workspace-client.ts";
 import { TerminalNotifications } from "./terminal-notifications.ts";
+import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
 
 class Source {
   readonly listeners = new Set<() => void>();
@@ -120,6 +121,39 @@ function fixture(initial = state()) {
 
   return { source, terminal, errors, notifications };
 }
+
+test("CHAT completion reaches the attached terminal without repository membership", () => {
+  // Completion metadata is eligible even when no workspace has been discovered.
+  const initial = state([], "working");
+  const source = new Source({
+    ...snapshot(initial),
+    repositories: [],
+    chat: {
+      id: CHAT_SCOPE_ID,
+      path: "/home/test",
+      name: "CHAT",
+      sessions: [{ id: "session", name: "Question", status: "working", subagents: [] }],
+      details: { session: initial },
+      historyRevision: 0,
+      accountsRevision: 0,
+      closingCount: 0,
+    },
+  });
+  const terminal = new Terminal();
+  const errors: unknown[] = [];
+  const notifications = new TerminalNotifications(terminal, source, (error) => errors.push(error));
+  try {
+    source.publish(state([completion()], "complete", "Research this topic"));
+    source.changed();
+
+    expect(terminal.sent).toEqual([
+      { title: "Radian · Task completed", body: "Research this topic · 42s" },
+    ]);
+    expect(errors).toEqual([]);
+  } finally {
+    notifications.dispose();
+  }
+});
 
 for (const focus of ["unknown", "blur", "focus"] as const) {
   for (const outcome of ["complete", "error"] as const) {

@@ -1,7 +1,7 @@
-import { basename, resolve } from "node:path";
-import { realpath } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
+import { lstat, realpath, stat } from "node:fs/promises";
 import type { Repository, Worktree } from "./model.ts";
-import { capture, ExpectedError } from "../errors.ts";
+import { capture, ExpectedError, StorageError } from "../errors.ts";
 import { err, ok, type Result } from "../result.ts";
 
 export function parseWorktrees(porcelain: string): Worktree[] {
@@ -56,6 +56,45 @@ async function git(cwd: string, args: string[]): Promise<string> {
   }
 
   return output;
+}
+
+// A workspace-free launch is valid. Probe ancestor markers without scanning their
+// contents; a present but damaged repository still returns its actual Git error.
+export async function discoverOptionalRepository(
+  cwd: string,
+): Promise<Result<Repository | null, ExpectedError>> {
+  if (process.env.GIT_DIR) return discoverRepository(cwd);
+  const canonical = await capture(() => realpath(cwd));
+  if (!canonical.ok) return canonical;
+  let directory = canonical.value;
+  while (true) {
+    const marker = await capture(() => lstat(join(directory, ".git")));
+    if (marker.ok) return discoverRepository(canonical.value);
+    if (!(marker.error instanceof StorageError) || marker.error.systemCode !== "ENOENT") {
+      return marker;
+    }
+    // Bare repositories and Git administrative directories have HEAD/objects
+    // rather than a .git child, but can still own ordinary linked worktrees.
+    const head = await capture(() => lstat(join(directory, "HEAD")));
+    if (head.ok && (head.value.isFile() || head.value.isSymbolicLink())) {
+      const objects = await capture(() => stat(join(directory, "objects")));
+      if (objects.ok && objects.value.isDirectory()) return discoverRepository(canonical.value);
+      if (
+        !objects.ok &&
+        (!(objects.error instanceof StorageError) || objects.error.systemCode !== "ENOENT")
+      ) {
+        return objects;
+      }
+    } else if (
+      !head.ok &&
+      (!(head.error instanceof StorageError) || head.error.systemCode !== "ENOENT")
+    ) {
+      return head;
+    }
+    const parent = dirname(directory);
+    if (parent === directory) return ok(null);
+    directory = parent;
+  }
 }
 
 export async function discoverRepository(cwd: string): Promise<Result<Repository, ExpectedError>> {

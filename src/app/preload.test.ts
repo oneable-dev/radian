@@ -7,6 +7,7 @@ import type { HistoryItem } from "../agents/history.ts";
 import type { ModelCatalog } from "../agents/model-selection.ts";
 import type { AccountsCatalog } from "../accounts/model.ts";
 import { expectOk } from "../testing/results.ts";
+import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
 
 type Client = ConstructorParameters<typeof PreloadedData>[0];
 
@@ -138,6 +139,59 @@ test("Startup preloads active catalogs and previews without activating cold work
     expect(app.calls.history).toHaveLength(1);
     expect(app.calls.models).toHaveLength(1);
     expect(app.calls.previews).toHaveLength(2);
+    expect(app.failures).toEqual([]);
+  } finally {
+    app.data.dispose();
+  }
+});
+
+test("CHAT prepares its own catalogs without preloading conversation bodies or changing history candidates", async () => {
+  // Both attached windows may filter a different current conversation from one source catalog.
+  const app = fixture();
+  Object.assign(app.client.snapshot, {
+    repositories: [],
+    chat: {
+      id: CHAT_SCOPE_ID,
+      name: "CHAT",
+      path: "/home/test",
+      sessions: [{ id: "a1", name: "Current chat", status: "complete", subagents: [] }],
+      details: app.client.snapshot.details,
+      historyRevision: 0,
+      accountsRevision: 0,
+      closingCount: 0,
+    },
+  });
+  app.client.dataIdentity = (scope, kind) =>
+    scope === CHAT_SCOPE_ID ? `chat:${kind}:${app.revisions[kind]}` : undefined;
+  const rows = [item("conversation", CHAT_SCOPE_ID), item("other", CHAT_SCOPE_ID)];
+  app.setRows(rows);
+  try {
+    app.preload();
+    await flush();
+    expectOk(await app.data.listHistory(CHAT_SCOPE_ID));
+
+    expect(app.calls.models).toEqual(["a1"]);
+    expect(app.calls.accounts).toEqual([CHAT_SCOPE_ID]);
+    expect(app.calls.history).toEqual([CHAT_SCOPE_ID]);
+    expect(app.calls.previews).toEqual([]);
+    expect(app.data.cachedHistory(CHAT_SCOPE_ID)).toEqual(ok(rows));
+    expect(app.data.cachedAccounts(CHAT_SCOPE_ID)).toEqual(ok(account(CHAT_SCOPE_ID)));
+
+    // Selecting a body may cache it, but another client's new turn must invalidate that revision.
+    app.data.previews.select(CHAT_SCOPE_ID, "other");
+    await flush();
+    expect(app.calls.previews).toEqual(["other"]);
+    expect(app.data.previews.read(CHAT_SCOPE_ID, "other")?.kind).toBe("ready");
+    app.data.previews.unselect();
+    app.revisions.history++;
+    app.setRows([rows[0]!, { ...rows[1]!, modified: "2026-10-15T12:34:00.000Z" }]);
+    expectOk(await app.data.listHistory(CHAT_SCOPE_ID));
+    await flush();
+    expect(app.data.previews.read(CHAT_SCOPE_ID, "other")).toBeUndefined();
+    expect(app.calls.previews).toEqual(["other"]);
+    app.data.previews.select(CHAT_SCOPE_ID, "other");
+    await flush();
+    expect(app.calls.previews).toEqual(["other", "other"]);
     expect(app.failures).toEqual([]);
   } finally {
     app.data.dispose();

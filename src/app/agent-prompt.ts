@@ -5,6 +5,10 @@ import type { WorkspaceClient } from "../runtime/workspace-client.ts";
 import type { WorkspaceSelection } from "./workspace-selection.ts";
 
 type PromptClient = Pick<WorkspaceClient, "snapshot" | "prompt" | "newTab">;
+type ChatSelection = {
+  isCurrent: (sessionId: string) => boolean;
+  select: (sessionId: string) => void;
+};
 
 // Selection is UI-owned. A late creation must not pull the user back from another tab/worktree.
 export async function submitAgentPrompt(
@@ -13,6 +17,7 @@ export async function submitAgentPrompt(
   sessionId: string,
   text: string,
   images: readonly string[] = [],
+  chat?: ChatSelection,
 ): Promise<Result<void, ExpectedError>> {
   const control = parseSessionControl(text);
   if (!control.ok) {
@@ -26,9 +31,22 @@ export async function submitAgentPrompt(
     .flatMap((repo) => repo.worktrees)
     .find((tree) => tree.sessions.some((session) => session.id === sessionId));
   const conversation = client.snapshot.details[sessionId]?.conversationId;
+  const isChat =
+    client.snapshot.chat?.sessions.some((session) => session.id === sessionId) ?? false;
+  const currentChat = isChat && chat?.isCurrent(sessionId);
   const created = await client.newTab(sessionId);
   if (!created.ok) {
     return created;
+  }
+  if (isChat) {
+    if (
+      currentChat &&
+      chat?.isCurrent(sessionId) &&
+      client.snapshot.details[sessionId]?.conversationId === conversation
+    ) {
+      chat.select(created.value);
+    }
+    return ok(undefined);
   }
   if (
     worktree &&

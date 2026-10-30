@@ -32,6 +32,19 @@ test.each([
   expect(target?.query ?? null).toBe(query);
 });
 
+test("CHAT treats @ and quoted @ paths literally while retaining slash, skill and argument targets", () => {
+  // Disabling only file targets must not consume the command token or explicit command arguments.
+  const chat = { files: false };
+  expect(completionTarget("@file", 5, chat)).toBeNull();
+  expect(completionTarget('text @"a b"', 11, chat)).toBeNull();
+  expect(completionTarget("/help", 5, chat)?.kind).toBe("command");
+  expect(completionTarget("$review", 7, chat)?.kind).toBe("skill");
+  expect(completionTarget("/mcp enable @literal", 20, chat)).toMatchObject({
+    kind: "argument",
+    command: "mcp",
+  });
+});
+
 test("Argument completions replace the full argument prefix without duplicating the command", () => {
   const input = "/mcp token sta";
   const target = completionTarget(input, input.length)!;

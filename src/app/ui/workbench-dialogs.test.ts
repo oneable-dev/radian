@@ -301,7 +301,7 @@ test("Notifications leave footer height stable and Messages reads/copies untrunc
     expect(app.renderer.root.findDescendantById("footer-notice")).toBeUndefined();
     expect(app.captureCharFrame()).toContain("Temporary connection");
     expect(app.captureCharFrame()).not.toContain("Detailed cause.");
-    expect(app.captureCharFrame()).toContain("AGENT / radian");
+    expect(app.captureCharFrame()).toContain("CODE / radian");
     pressLeader(app, "!");
     app.mockInput.pressEnter();
     app.mockInput.pressKey("y");
@@ -328,7 +328,11 @@ test("Help reflects overrides and blocks asynchronous focus restoration outside 
   const keymap = expectOk(
     parseKeymap({
       leader: "ctrl+b",
-      bindings: { "app.help": [{ keys: "f2", scope: "app" }], "app.detach": ["<leader> q"] },
+      bindings: {
+        "app.help": [{ keys: "f2", scope: "app" }],
+        "app.detach": ["<leader> q"],
+        "view.chat": [],
+      },
     }),
   );
   const app = await mount({ keymap, onDetach: () => {} });

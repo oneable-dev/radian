@@ -1,13 +1,15 @@
 import type { ExpectedError } from "../errors.ts";
 import type { Result } from "../result.ts";
 import type { SessionRecord } from "./session-registry.ts";
+import type { SessionScope } from "./session-scope.ts";
 
 export type SessionLifecycle = "open" | "closed";
 
 export type SessionSnapshotInfo = {
   readonly id: string;
   readonly name: string;
-  readonly worktreeId: string;
+  readonly scope?: SessionScope;
+  readonly worktreeId?: string;
   readonly conversationId?: string;
   readonly sessionFile?: string;
   readonly cwd?: string;
@@ -30,5 +32,7 @@ export type SessionSnapshotSource = {
 };
 
 export function sessionRecordKey(record: SessionRecord): string {
-  return JSON.stringify([record.worktreeId, record.state.conversationId ?? record.id]);
+  return record.scope?.kind === "chat"
+    ? JSON.stringify(["chat", record.state.conversationId ?? record.id])
+    : JSON.stringify([record.worktreeId, record.state.conversationId ?? record.id]);
 }

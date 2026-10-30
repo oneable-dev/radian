@@ -23,6 +23,9 @@ import { SearchInput } from "../../ui/search-input.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import { StatusIndicator, sessionSpinnerStyle } from "./status-indicator.ts";
 import { formatRequestCaption } from "./request-caption.ts";
+import { createTextMatcher } from "../../search.ts";
+import type { SessionCollection } from "./session-collection.ts";
+import { CHAT_SCOPE_ID } from "../session-scope.ts";
 
 type Actions = {
   details(id: string): ExecutionState | null;
@@ -53,6 +56,7 @@ export class SessionMonitor {
   private readonly layout: SearchPopupLayout;
   private readonly rows: Candidate[] = [];
   private repositories: readonly Repository[] = [];
+  private chat: SessionCollection | null = null;
   private items: readonly MonitoredSession[] = [];
   private cursor = 0;
   private owner: Renderable | undefined;
@@ -148,8 +152,9 @@ export class SessionMonitor {
     ];
   }
 
-  update(repositories: readonly Repository[]): void {
+  update(repositories: readonly Repository[], chat: SessionCollection | null = null): void {
     this.repositories = repositories;
+    this.chat = chat;
     if (this.visible) {
       this.refresh();
     }
@@ -217,12 +222,50 @@ export class SessionMonitor {
     this.refresh();
   };
 
+  private monitored(query = ""): MonitoredSession[] {
+    const code = monitoredSessions(this.repositories, query);
+    const chat = this.chat;
+    if (!chat) {
+      return code;
+    }
+
+    const matches = createTextMatcher(query);
+    const conversations: MonitoredSession[] = [];
+    for (const session of chat.sessions) {
+      const working =
+        session.status === "working" ||
+        session.subagents.some((child) => child.status === "working");
+      if (!working && !session.attention) {
+        continue;
+      }
+
+      const title = session.request?.text || session.attention?.request?.text || session.name;
+      if (!matches(`${title} CHAT`)) {
+        continue;
+      }
+
+      conversations.push({
+        session,
+        worktreeId: chat.id,
+        repository: "CHAT",
+        worktree: chat.name,
+        branch: null,
+        title,
+        working,
+      });
+    }
+
+    const items = [...code, ...conversations];
+    return [
+      ...items.filter((item) => item.session.attention),
+      ...items.filter((item) => !item.session.attention),
+    ];
+  }
+
   private refresh(): void {
     const selected = this.items[this.cursor]?.session.id;
-    const sessions = monitoredSessions(this.repositories);
-    const matches = this.search.value
-      ? monitoredSessions(this.repositories, this.search.value)
-      : sessions;
+    const sessions = this.monitored();
+    const matches = this.search.value ? this.monitored(this.search.value) : sessions;
 
     this.search.setCounts({
       matched: matches.length,
@@ -372,25 +415,31 @@ export class SessionMonitor {
       0,
       row.root.width - (row.status.root.visible ? row.status.root.width + 1 : 0),
     );
-    const tree = singleLine(row.item.worktree);
-    const branch = singleLine(row.item.branch ?? "detached HEAD");
-    // Scope and request each own a line, so long requests cannot squeeze out either scope field.
-    const treePrefix = `${icons.folder} `;
-    const branchPrefix = `${icons.branch} `;
-    const separator = " · ";
-    const scopeBudget = Math.max(0, width - Bun.stringWidth(treePrefix + separator + branchPrefix));
-    const branchBudget = Math.min(
-      Bun.stringWidth(branch),
-      scopeBudget - Math.min(Bun.stringWidth(tree), Math.ceil(scopeBudget / 2)),
-    );
-    const treeText = truncateCells(tree, scopeBudget - branchBudget);
-    const branchText = truncateCells(branch, scopeBudget - Bun.stringWidth(treeText));
+    if (row.item.worktreeId === CHAT_SCOPE_ID) {
+      row.scope.content = truncateCells("CHAT", width);
+    } else {
+      const tree = singleLine(row.item.worktree);
+      const branch = singleLine(row.item.branch ?? "detached HEAD");
+      // Scope and request each own a line, so long requests cannot squeeze out either scope field.
+      const treePrefix = `${icons.folder} `;
+      const branchPrefix = `${icons.branch} `;
+      const separator = " · ";
+      const scopeBudget = Math.max(
+        0,
+        width - Bun.stringWidth(treePrefix + separator + branchPrefix),
+      );
+      const branchBudget = Math.min(
+        Bun.stringWidth(branch),
+        scopeBudget - Math.min(Bun.stringWidth(tree), Math.ceil(scopeBudget / 2)),
+      );
+      const treeText = truncateCells(tree, scopeBudget - branchBudget);
+      const branchText = truncateCells(branch, scopeBudget - Bun.stringWidth(treeText));
+      row.scope.content = truncateCells(
+        `${treePrefix}${treeText}${separator}${branchPrefix}${branchText}`,
+        width,
+      );
+    }
     const styles = uiTheme(this.renderer).styles;
-
-    row.scope.content = truncateCells(
-      `${treePrefix}${treeText}${separator}${branchPrefix}${branchText}`,
-      width,
-    );
     paintText(row.scope, styles["ui.label"]);
     row.text.content = formatRequestCaption(
       { text: row.item.title, images: 0, files: 0 },

@@ -1,5 +1,6 @@
 import { Value } from "typebox/value";
 import type { HistoryItem } from "../agents/history.ts";
+import { CHAT_SCOPE_ID } from "../agents/session-scope.ts";
 import type { HistoryPreview } from "../agents/history-preview.ts";
 import {
   dashboardPeriods,
@@ -23,6 +24,8 @@ import { err, ok, type Result } from "../result.ts";
 import {
   emptyPreferences,
   historySchema,
+  chatHistorySchema,
+  chatHistoryPreviewSchema,
   historyPreviewSchema,
   historyPreviewQuerySchema,
   maxFrameBytes,
@@ -32,6 +35,8 @@ import {
   type RuntimeCommand,
   type RuntimePreferences,
   type RuntimeSnapshot,
+  type ChatHistoryItem,
+  type ChatHistoryPreview,
   type EditorFrame,
 } from "./protocol.ts";
 import type { RuntimePaths } from "./storage.ts";
@@ -127,6 +132,33 @@ export class RuntimeClient {
       ...this.state,
       notice: this.failure || this.warning || this.state.notice,
       details,
+      ...(this.state.chat
+        ? {
+            chat: {
+              ...this.state.chat,
+              sessions: this.state.chat.sessions
+                .filter((session) => !this.hidden.has(session.id))
+                .map((session) => ({
+                  ...session,
+                  status: this.failure && session.status === "working" ? null : session.status,
+                  subagents: session.subagents.map((child) => ({
+                    ...child,
+                    status: this.failure && child.status === "working" ? null : child.status,
+                  })),
+                })),
+              details: Object.fromEntries(
+                Object.entries(this.state.chat.details)
+                  .filter(([id]) => !this.hidden.has(id))
+                  .map(([id, state]) => [
+                    id,
+                    this.failure && state.status === "working"
+                      ? { ...state, status: null, error: this.failure }
+                      : state,
+                  ]),
+              ),
+            },
+          }
+        : {}),
       extensionUi:
         this.failure || this.detaching
           ? []
@@ -346,7 +378,19 @@ export class RuntimeClient {
     });
   }
 
+  async createChat(): Promise<Result<string, ExpectedError>> {
+    const result = await this.command({ type: "chat-create" });
+    if (!result.ok) return result;
+    if (!result.value) return err(new ProtocolError("CHAT creation returned no session ID."));
+    const opened = await this.waitForState(
+      () => this.snapshot.chat?.sessions.some((session) => session.id === result.value) === true,
+      "CHAT creation",
+    );
+    return opened.ok ? ok(result.value) : opened;
+  }
+
   async create(worktreeId: string): Promise<Result<string, ExpectedError>> {
+    if (worktreeId === CHAT_SCOPE_ID) return this.createChat();
     const result = await this.command({ type: "create", worktreeId });
     if (!result.ok) {
       return result;
@@ -941,6 +985,40 @@ export class RuntimeClient {
     return ok(decoded.value);
   }
 
+  async listChatHistory(
+    signal?: AbortSignal,
+  ): Promise<Result<readonly ChatHistoryItem[], ExpectedError>> {
+    if (this.detaching || this.failure) return err(this.connectionClosed());
+    if (signal?.aborted) return err(new CancelledError());
+    const instance = this.state.instance;
+    const epoch = this.connectionEpoch;
+    const attempted = await capture(() =>
+      transport(this.paths, `/history?worktreeId=${encodeURIComponent(CHAT_SCOPE_ID)}`, {
+        headers: { "X-Radian-Instance": instance },
+        signal: AbortSignal.any([
+          this.streamAbort.signal,
+          AbortSignal.timeout(15000),
+          ...(signal ? [signal] : []),
+        ]),
+      }),
+    );
+    if (!attempted.ok) return attempted;
+    if (!attempted.value.ok) return attempted.value;
+    const response = attempted.value.value;
+    const body = await capture(() => readJson(response));
+    if (!body.ok) return body;
+    if (!body.value.ok) return body.value;
+    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance)
+      return err(new CancelledError("CHAT history belongs to an outdated connection."));
+    if (!response.ok)
+      return Value.Check(replySchema, body.value.value) && !body.value.value.ok
+        ? err(remoteError(body.value.value.error))
+        : err(new ProtocolError("Malformed CHAT history failure."));
+    return Value.Check(chatHistorySchema, body.value.value)
+      ? ok(body.value.value)
+      : err(new ProtocolError("Malformed CHAT history."));
+  }
+
   async listHistory(
     worktreeId: string,
     signal?: AbortSignal,
@@ -997,6 +1075,46 @@ export class RuntimeClient {
       body.value.every((item) => item.worktreeId === worktreeId)
       ? ok(body.value)
       : err(new ProtocolError("Malformed or mismatched history response."));
+  }
+
+  async previewChatHistory(
+    savedId: string,
+    signal?: AbortSignal,
+  ): Promise<Result<ChatHistoryPreview, ExpectedError>> {
+    if (this.detaching || this.failure) return err(this.connectionClosed());
+    if (signal?.aborted) return err(new CancelledError());
+    const instance = this.state.instance;
+    const epoch = this.connectionEpoch;
+    const attempted = await capture(() =>
+      transport(
+        this.paths,
+        `/history/preview?${new URLSearchParams({ worktreeId: CHAT_SCOPE_ID, savedId }).toString()}`,
+        {
+          headers: { "X-Radian-Instance": instance },
+          signal: AbortSignal.any([
+            this.streamAbort.signal,
+            AbortSignal.timeout(8000),
+            ...(signal ? [signal] : []),
+          ]),
+        },
+      ),
+    );
+    if (!attempted.ok) return attempted;
+    if (!attempted.value.ok) return attempted.value;
+    const response = attempted.value.value;
+    const body = await capture(() => readJson(response));
+    if (!body.ok) return body;
+    if (!body.value.ok) return body.value;
+    if (signal?.aborted || epoch !== this.connectionEpoch || instance !== this.state.instance)
+      return err(new CancelledError("CHAT preview belongs to an outdated connection."));
+    if (!response.ok)
+      return Value.Check(replySchema, body.value.value) && !body.value.value.ok
+        ? err(remoteError(body.value.value.error))
+        : err(new ProtocolError("Malformed CHAT preview failure."));
+    return Value.Check(chatHistoryPreviewSchema, body.value.value) &&
+      body.value.value.id === savedId
+      ? ok(body.value.value)
+      : err(new ProtocolError("Malformed CHAT preview."));
   }
 
   async previewHistory(
@@ -1074,7 +1192,19 @@ export class RuntimeClient {
     return ok(body);
   }
 
+  async resumeChat(savedId: string): Promise<Result<string, ExpectedError>> {
+    const result = await this.command({ type: "chat-resume", savedId });
+    if (!result.ok) return result;
+    if (!result.value) return err(new ProtocolError("CHAT resume returned no session ID."));
+    const opened = await this.waitForState(
+      () => this.snapshot.chat?.sessions.some((session) => session.id === result.value) === true,
+      "CHAT resume",
+    );
+    return opened.ok ? ok(result.value) : opened;
+  }
+
   async resume(worktreeId: string, savedId: string): Promise<Result<string, ExpectedError>> {
+    if (worktreeId === CHAT_SCOPE_ID) return this.resumeChat(savedId);
     const capability = this.requireHistory();
     if (!capability.ok) {
       return capability;
@@ -1262,9 +1392,10 @@ export class RuntimeClient {
       () =>
         this.state.instance === binding.instance &&
         this.connectionEpoch === binding.epoch &&
-        this.snapshot.repositories.some((repo) =>
-          repo.worktrees.some((tree) => tree.sessions.some((session) => session.id === id)),
-        ),
+        (this.snapshot.chat?.sessions.some((session) => session.id === id) ||
+          this.snapshot.repositories.some((repo) =>
+            repo.worktrees.some((tree) => tree.sessions.some((session) => session.id === id)),
+          )),
       "New-tab creation",
     );
 

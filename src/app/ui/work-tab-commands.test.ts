@@ -379,7 +379,7 @@ test.each(["agent", "terminal"] as const)(
       // Help describes the shared command and never advertises the displaced default.
       expect(app.requests).toEqual([mode === "agent" ? "close:a1" : "close:shell-1"]);
       expect(app.captureCharFrame()).toContain("<M-w>");
-      expect(app.captureCharFrame()).toContain("Close the active Agent/Terminal tab");
+      expect(app.captureCharFrame()).toContain("Close the active CODE/Terminal tab");
       expect(app.inputs).toEqual([]);
     } finally {
       await app.close();

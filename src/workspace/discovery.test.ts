@@ -1,9 +1,20 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverRepository, GitDiscoveryError, parseWorktrees } from "./discovery.ts";
+import {
+  discoverOptionalRepository,
+  discoverRepository,
+  GitDiscoveryError,
+  parseWorktrees,
+} from "./discovery.ts";
 import { expectOk, expectError } from "../testing/results.ts";
+
+async function git(args: string[]): Promise<void> {
+  const process = Bun.spawn(["git", ...args], { stdout: "pipe", stderr: "pipe" });
+  const error = await new Response(process.stderr).text();
+  if ((await process.exited) !== 0) throw new Error(error);
+}
 
 test("NUL records distinguish spaces, newline paths, and detached HEAD", () => {
   // NUL delimiters preserve paths that line-based parsing would corrupt.
@@ -29,14 +40,6 @@ test("Real temporary linked worktrees discover their common repository", async (
   const main = join(directory, "main repository");
   const linked = join(directory, "linked tree");
 
-  async function git(args: string[]): Promise<void> {
-    const process = Bun.spawn(["git", ...args], { stdout: "pipe", stderr: "pipe" });
-    const error = await new Response(process.stderr).text();
-    if ((await process.exited) !== 0) {
-      throw new Error(error);
-    }
-  }
-
   try {
     await git(["init", "--initial-branch=main", main]);
     await git([
@@ -60,7 +63,57 @@ test("Real temporary linked worktrees discover their common repository", async (
     expect(repository.name).toBe("main repository");
     expect(repository.id).toBe(await realpath(join(main, ".git")));
     expect(expectOk(await discoverRepository(main)).id).toBe(repository.id);
+    const nested = join(linked, "nested");
+    await mkdir(nested);
+    expect(expectOk(await discoverOptionalRepository(nested))?.id).toBe(repository.id);
     expect(repository.worktrees.map((tree) => tree.branch)).toEqual(["main", "feature/ui"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Optional discovery preserves linked worktrees when launched from a bare repository", async () => {
+  // Bare repositories have no .git child and still provide valid CODE workspaces.
+  const directory = await mkdtemp(join(tmpdir(), "radian-bare-discovery-"));
+  const main = join(directory, "main");
+  const bare = join(directory, "bare.git");
+  const linked = join(directory, "linked");
+  try {
+    await git(["init", "--initial-branch=main", main]);
+    await git([
+      "-C",
+      main,
+      "-c",
+      "user.name=Radian Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "fixture",
+    ]);
+    await git(["clone", "--bare", main, bare]);
+    await git(["-C", bare, "worktree", "add", "--detach", linked, "main"]);
+
+    const repository = expectOk(await discoverOptionalRepository(bare));
+
+    expect(repository?.id).toBe(await realpath(bare));
+    expect(repository?.worktrees.map((tree) => tree.path)).toEqual([await realpath(linked)]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Optional launch discovery accepts non-Git paths but preserves broken repository errors", async () => {
+  // CHAT needs no workspace; an existing invalid marker is still a genuine discovery failure.
+  const directory = await mkdtemp(join(tmpdir(), "radian-optional-git-"));
+  try {
+    expect(expectOk(await discoverOptionalRepository(directory))).toBeNull();
+
+    await writeFile(join(directory, ".git"), "gitdir: missing-target\n");
+    const broken = await discoverOptionalRepository(directory);
+
+    expect(expectError(broken).code).toBe("GIT_DISCOVERY_FAILED");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

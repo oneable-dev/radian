@@ -48,6 +48,7 @@ export class CompletionMenu {
   private requestReady: ReturnType<typeof Promise.withResolvers<void>> | undefined;
   private queued = false;
   private disposed = false;
+  private files = true;
   private sourceVersion = 0;
   private readVersion = -1;
   private readonly unsubscribeSource: (() => void) | undefined;
@@ -140,10 +141,20 @@ export class CompletionMenu {
     this.root.once(RenderableEvents.DESTROYED, () => this.dispose());
   }
 
-  prepare(sessionId: string | null, cwd: string | undefined, retained: ReadonlySet<string>): void {
+  prepare(
+    sessionId: string | null,
+    cwd: string | undefined,
+    retained: ReadonlySet<string>,
+    options: { files?: boolean } = {},
+  ): void {
+    const files = options.files !== false;
+    if (this.files !== files) {
+      this.files = files;
+      this.hide();
+    }
     this.provider?.retain?.(retained);
     if (sessionId && cwd) {
-      this.provider?.prepare?.(sessionId, cwd);
+      this.provider?.prepare?.(sessionId, cwd, { files });
     }
   }
 
@@ -176,6 +187,7 @@ export class CompletionMenu {
     const target = completionTarget(
       this.input.value,
       this.input.editBuffer.getTextRange(0, this.input.cursorOffset).length,
+      { files: this.files },
     );
 
     if (

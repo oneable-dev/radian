@@ -8,7 +8,7 @@ import {
 } from "@opentui/core";
 import type { ExecutionState } from "../session-registry.ts";
 import type { McpStatus } from "../mcp-status.ts";
-import type { Worktree } from "../../workspace/model.ts";
+import { isChatCollection, type SessionCollection } from "./session-collection.ts";
 import { CapabilityError, InputError, type ExpectedError } from "../../errors.ts";
 import { err, ok, type Result } from "../../result.ts";
 import type { Notice } from "../../ui/messages.ts";
@@ -107,7 +107,7 @@ export class AgentPanel {
   private readonly inputDrafts = new Map<string, PromptDraft>();
   private readonly promptHistories = new Map<string, PromptHistory>();
   private readonly submitting = new Set<string>();
-  private worktree: Worktree | null = null;
+  private worktree: SessionCollection | null = null;
   private promptSessionId: string | null = null;
   private readonly conversations = new Map<string, string>();
   private syncingDraft = false;
@@ -493,7 +493,7 @@ export class AgentPanel {
   }
 
   update(
-    worktree: Worktree | null,
+    worktree: SessionCollection | null,
     selectedId: string | null,
     openIds: ReadonlySet<string>,
     visible: boolean,
@@ -507,7 +507,12 @@ export class AgentPanel {
     const emptyFocused = this.root.focused;
     this.root.visible = visible;
     this.worktree = worktree;
-    this.sessions.update(worktree?.id ?? null, worktree?.sessions ?? [], selectedId, visible);
+    this.sessions.update(
+      worktree?.id ?? null,
+      isChatCollection(worktree) ? [] : (worktree?.sessions ?? []),
+      selectedId,
+      visible && !isChatCollection(worktree),
+    );
 
     const session = worktree?.sessions.find((item) => item.id === selectedId);
     const details = session ? this.actions.getSessionDetails?.(session.id) : null;
@@ -518,13 +523,28 @@ export class AgentPanel {
 
     this.emptyState.update({
       icon: worktree ? icons.robot : icons.folder,
-      title: session?.name ?? (worktree ? "No AI sessions" : "No workspace available"),
+      title:
+        session?.name ??
+        (isChatCollection(worktree)
+          ? worktree?.sessions.length
+            ? "No conversation selected"
+            : "No conversations"
+          : worktree
+            ? "No AI sessions"
+            : "No workspace available"),
       description: worktree
         ? session
-          ? `Workspace: ${worktree.name} · ${details ? (details.error ?? details.status ?? "Ready") : "display preview only"}`
+          ? `${isChatCollection(worktree) ? "CHAT" : `Workspace: ${worktree.name}`} · ${details ? (details.error ?? details.status ?? "Ready") : "display preview only"}`
           : ""
         : "Open radian inside a Git repository.",
-      ...(creationKey ? { action: { key: creationKey, label: "New session" } } : {}),
+      ...(creationKey
+        ? {
+            action: {
+              key: creationKey,
+              label: isChatCollection(worktree) ? "New conversation" : "New session",
+            },
+          }
+        : {}),
     });
 
     const sessionId = session?.id ?? null;
@@ -591,7 +611,9 @@ export class AgentPanel {
     );
     // Only empty content needs a fallback target; active pane ancestors must not intercept input clicks.
     this.root.focusable = visible && !!worktree && !this.active;
-    this.completion.prepare(sessionId, worktree?.path, openIds);
+    this.completion.prepare(sessionId, worktree?.path, openIds, {
+      files: !isChatCollection(worktree),
+    });
 
     const capturedAt = this.transcriptOptions.snapshotTime?.();
     this.runStatus.update(sessionId, details, this.active, capturedAt === undefined);

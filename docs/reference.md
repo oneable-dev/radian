@@ -56,7 +56,7 @@ the current query, input caret, focus and candidate identity when still availabl
 using the latest query. A removed candidate falls back to the first match or an empty result. Ordinary
 and secret authentication prompts retain their own input ownership.
 Neither popup adds a top-level entry button or a global notification counter.
-Open sessions remain tabs within Agents; focus that strip to use `h/l` (or left/right),
+Open Code sessions remain tabs within Code; focus that strip to use `h/l` (or left/right),
 Home/End and `x` for close. Use `<leader>c` to create a tab.
 The session prompt owns input by default; `Enter` submits, `Shift+Enter` or `Alt+Enter` inserts a newline,
 and `Ctrl+C` clears the draft without interrupting work. `Esc` interrupts the selected Agent;
@@ -213,26 +213,53 @@ Drafts, selected sessions and view state survive lazy activation; detaching rele
 connections, not the underlying agents or native processes. Existing legacy repository processes are
 attached without being stopped or overwritten and show a migration notice (see Service lifetime).
 
+### Chat conversations
+
+**Chat** is independent of repositories and worktrees. It uses the home directory as its working
+directory and the base for explicit relative attachments. It supports the same local tools, MCP,
+commands, Skills, and attachments as Code; it is not a filesystem or process sandbox. It does not
+inherit the launching project's instructions or settings. CHAT account/model defaults are separate
+from Code selections, while provider credentials are reused.
+
+Chat displays one conversation without a session strip. **Ctrl+Space, then h** searches other Chat
+conversations, excluding the conversation displayed in that attached UI and excluding it from the
+candidate count. Browsing or previewing does not switch conversations. Enter activates an existing
+conversation or resumes its saved history; Esc returns without switching. Conversation execution
+is shared across windows and must not be duplicated when another UI selects the same conversation.
+New conversations use **Ctrl+Space, then c**; moving away does not stop earlier work.
+
+Chat treats `@` as ordinary text: no file completion trigger, file index, recursive watcher, or
+file-completion key capture is prepared. This does not disable explicit file/image attachments or
+local file tools. Code retains its Git-based `@` completion. Command and Skill catalogs remain
+available in both views.
+
+Attached terminals/panes persist their own view, selection, drafts, caret, and reading positions
+under the daemon state directory's `ui` folder. A new terminal restores only the shared last
+navigation seed, never another terminal's unsent drafts. Existing terminals do not follow each
+other's view changes. First launch opens Chat. Detaching one UI does not stop shared conversations.
+
 ### Work views
 
 Workspace navigation is an overlay; the work pane always uses the full available width.
-The work pane switches between **Agents**, **Editor**, **Git** and **Terminal**, with one visible
-view per worktree and Agents as the initial view. There is no top-level view tab strip:
-**Ctrl+Space, then a/e/g/t** selects the view and focuses its work area. The footer's left badge
-normally shows **AGENT**, **EDITOR**, **GIT** or **TERMINAL**; the Usage popup shows **USAGE**.
+**Chat** is app-scoped; **Code**, **Editor**, **Git**, and **Terminal** retain worktree-local state.
+There is no top-level view tab strip. **Ctrl+Space, then q/a/e/g/t** selects the view and focuses
+its work area. The `view.agent` command and its `a` binding remain compatible; its display name is Code.
+The footer's left badge normally shows **CHAT**, **CODE**, **EDITOR**, **GIT** or **TERMINAL**;
+the Usage popup shows **USAGE**.
 Focused Agent transcripts and terminal reading snapshots replace that badge with **NORMAL**,
 **VISUAL** or **VISUAL LINE**. Transcript-local help shows **HELP**. Returning to the Agent prompt
-or live shell restores **AGENT** or **TERMINAL**.
+or live shell restores **CHAT**, **CODE** or **TERMINAL**.
 Other popups keep the view badge rather than displaying a background reader's mode. Embedded Neovim
 and live terminal programs retain ownership of their own editing modes and input.
 **Ctrl+Space, then 1–9** selects the corresponding Agent session or terminal in the current worktree's
 tab order. Missing slots and numeric selection in Editor/Git do nothing; no sessions are created.
 **Ctrl+Space, then c** creates an Agent session or terminal in the current view, including when
-no tabs remain. It does nothing in Editor/Git. In Agents, the new session is selected and its prompt
+no tabs remain. In Chat it creates another conversation without a tab strip; it does nothing in Editor/Git.
+In Code, the new session is selected and its prompt
 receives focus once it appears. If you navigate elsewhere while creation is pending, the new tab opens in the background
 without taking focus. Agent and Terminal session strips remain visible and clickable.
 Tree cursor movement is only navigation; Enter or a direct worktree click commits the selection.
-Each worktree separately remembers its work view and selected Agent session. Within Agents, session
+Each worktree separately remembers its work view and selected Code session. Within Code, session
 tabs use the full session UUID as their label, alongside aggregate status and a close control.
 Agent and Terminal tabs share an 18-cell frame, including padding and the right-aligned `×` control.
 Each tab has a separate, one-based position number (`1.`, `2.`, …) before its status and title.
@@ -247,7 +274,7 @@ IDs that fit are shown in full. There is no eight-character prefix limit or spec
 formatting. Selection, closing and persistence still use the full UUID, even when truncated labels
 look identical. Session names remain unchanged for History and other metadata. Use the same configured `tab.new` sequence from input, the tab strip or the empty body;
 the strip remains focusable when empty. `Ctrl+N/P` navigates tabs, not session creation.
-The upper-right worktree label and the New session/History toolbar buttons are removed. Session-tab selection and History resume open the chosen session in Agents. Restoring a
+The upper-right worktree label and the New session/History toolbar buttons are removed. Session-tab selection and History resume open the chosen session in Code. Restoring a
 selection, filtering and background snapshots never implicitly activate another work view.
 Session creation/closing retain their existing rules and never implicitly launch an editor.
 With no open Agent sessions or terminals, a shared centered empty state shows a muted icon, a short
@@ -367,9 +394,9 @@ budget; the latest complete entry is always retained even if it alone exceeds th
 
 ### Prompt completion
 
-The Agent prompt shows a read-only completion menu directly below the input. `/` opens command
+The Chat and Code prompts show a read-only completion menu directly below the input. `/` opens command
 suggestions only in the first token at the beginning of the prompt. `$` opens a separate Skill menu
-in that same leading position; Skills do not appear in `/` suggestions. `@` opens file suggestions at
+in that same leading position; Skills do not appear in `/` suggestions. In Code only, `@` opens file suggestions at
 the beginning of any whitespace-delimited token, including in the middle of a sentence; email
 addresses do not trigger it. Matching uses the text before the cursor, not just the end of the draft.
 Commands, templates and Skills require a contiguous name prefix; file paths accept a contiguous
@@ -464,7 +491,7 @@ are bounded to 16 MiB; each transcript retains at most eight previews / 32 MiB o
 Additional expanded sections wait for another image to collapse. Collapse, hiding or switching sessions
 cancels pending requests and releases native image resources. Kitty/Sixel-capable terminals render the
 image; other terminals show an explicit compatibility message. History preview shows attachment headers;
-open the saved session in Agents for image previews. Updated service code is required for descriptors
+open the saved session in Code for image previews. Updated service code is required for descriptors
 and image reads; existing services are never automatically restarted.
 Empty conversations show a subdued, centered logo and app version without introductory text or an idle `Ready` row.
 The logo in `src/ui/radian-logo.ts` reuses the banner's `assets/radian.txt` wordmark and follows the
@@ -557,7 +584,7 @@ default session name unless a name already exists. Older messages without invoca
 their original display; command names are never guessed from expanded bodies. Host controls such as
 `/model` and `/history` do not become transcript entries.
 
-**Leader, then [** enters output navigation in both Agents and Terminal (`output.read`). In Agents,
+**Leader, then [** enters output navigation in Chat, Code, and Terminal (`output.read`). In Chat and Code,
 **Esc** returns through Visual, Text and Sections to the input. The final Sections-to-Input step
 explicitly exits reading: it reveals the latest output and resumes following, keeping the unsent draft
 and prompt caret unchanged. Intermediate back steps preserve the reading position. The unbound `focus.prompt` command can be configured to focus
@@ -811,7 +838,7 @@ The Agent prompt completes and executes these host commands instead of sending t
   The command takes no arguments or images.
 - **`/new`** creates a fresh session in a **new tab in the same worktree**, using the same creation
   path as `<leader> c` / `tab.new`. Existing tabs, conversations, running Agents,
-  owned subagents, queued input and saved history remain intact. The Agents UI selects the new tab
+  owned subagents, queued input and saved history remain intact. The Code UI selects the new tab
   once it is observable, unless the user has meanwhile selected another tab/worktree or the source
   conversation has changed. A creation failure retains the command and original tab.
 - **`/clear`** replaces the conversation in the **current tab**, retaining its position and tab count.
@@ -1492,10 +1519,10 @@ area when it already owns focus. Creation uses the separate
 **Ctrl+Space, then c** sequence, not **Ctrl+N** or bare `n`.
 
 The default leader is **Ctrl+Space**. Press and release it, then press `d` to detach radian or `u` to open the usage dashboard,
-`a`/`e`/`g`/`t` to select Agents/Editor/Git/Terminal, `b` to toggle workspace navigation,
+`q`/`a`/`e`/`g`/`t` to select Chat/Code/Editor/Git/Terminal, `b` to toggle workspace navigation,
 or `s` to monitor working sessions and unread results. Opening workspace navigation focuses search;
 from its results list, `/` returns to search without changing the query.
-`<leader> 1` through `<leader> 9` select a session in Agents or a shell in Terminal, based on the
+`<leader> 1` through `<leader> 9` select a session in Code or a shell in Terminal, based on the
 visible view rather than the focused control. `<leader> c` creates a session/shell in that view,
 including empty states. `<leader> n` / `<leader> p` select the next/previous tab in the same worktree
 and view, wrapping at either end. They never create a tab, switch work views, or navigate behind a popup;
@@ -1602,7 +1629,7 @@ so underlying text stays hidden throughout the animation.
 ### Common footer
 
 The work pane and navigation popups share one full-width, single-row footer. The **displayed work view**
-(`AGENT`, `EDITOR`, `GIT` or `TERMINAL`) occupies a solid accent-colored rectangle on the left; branding,
+(`CHAT`, `CODE`, `EDITOR`, `GIT` or `TERMINAL`) occupies a solid accent-colored rectangle on the left; branding,
 version text and the former gradient are omitted. The view label has exactly one space on each side.
 The selected worktree and branch follow as plain text with no individual backgrounds, separated by `·`
 and using the existing folder and branch icons. They are no longer duplicated
@@ -1679,7 +1706,7 @@ and embedded programs' own UI/configuration are unchanged.
 ### In-app session notifications
 
 An attached TUI shows newly observed main-agent results in a top-right overlay across all
-already-connected repositories and worktrees, regardless of the current Agents, Editor, Git or
+already-connected repositories and worktrees, regardless of the current Chat, Code, Editor, Git or
 Terminal view or terminal focus. Completed results use success styling, failures use error styling,
 and stopped or unknown-origin cancelled results use warning styling. Explicit user interruption
 and lifecycle shutdown do not create new popups, matching the unread-bell policy. Individual
@@ -2065,7 +2092,7 @@ Type a title query, including Unicode text. Every whitespace-separated term must
 contiguous substring; scattered letters do not match. Arrows or Ctrl+N/P move the candidate cursor without
 changing the live session; normal letters, including hjkl and r, remain search text. `Tab`/`Shift+Tab`
 cycle within the popup. The list additionally supports j/k and Home/End. `Enter` opens the selected
-context in Agents without copying/forking the SDK file or sending a prompt. If another client has
+context in Code without copying/forking the SDK file or sending a prompt. If another client has
 already opened it since discovery, Open selects that existing tab instead of creating a duplicate.
 Clicking a row only selects its preview. `Esc` closes the popup and restores its original focus without
 changing drafts, transcript scroll, work views, workspace popup visibility or PTY attachments.
@@ -2202,7 +2229,7 @@ never marks a result as read. The monitor never polls processes, rescans session
 or starts cold repository services. It projects in-memory session summaries in linear time.
 Full-snapshot transport/parsing remains an existing cost, separate from this summary projection.
 
-**Enter** opens the actual session in Agents, reveals its latest output and focuses the input so you
+**Enter** opens the actual session in Chat or Code, reveals its latest output and focuses the input so you
 can continue the conversation immediately. A foreground Agent conversation acknowledges a pending
 result only while its latest output is actually visible, not while scrolled into older output,
 covered by a popup or in another work view. Merely restoring a selection, browsing candidates or
