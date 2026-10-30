@@ -46,6 +46,7 @@ import { runCompletionEntryType, type RunCompletion } from "./run-completion.ts"
 import { PiSessionTelemetry } from "./pi-session-telemetry.ts";
 import { CommandDiagnostics, sessionCommands } from "./session-commands.ts";
 import { FastMode } from "./fast-mode.ts";
+import { taskPlanningExtension } from "./task-planning.ts";
 import type { UsageMonitor } from "../usage/monitor.ts";
 import { loadPromptImages } from "./prompt-attachments.ts";
 import { ManualCompaction } from "./manual-compaction.ts";
@@ -126,7 +127,11 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       settingsManager,
       noThemes: true,
       eventBus: mcpAuth.eventBus,
-      extensionFactories: [fast.extension, compaction.extension],
+      extensionFactories: [
+        fast.extension,
+        compaction.extension,
+        ...(context.role === "main" ? [taskPlanningExtension()] : []),
+      ],
       ...(options.streamFn
         ? { noSkills: true, noContextFiles: true, noPromptTemplates: true }
         : {}),

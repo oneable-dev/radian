@@ -217,6 +217,9 @@ implementation notes, including:
 
 ## Current scope
 
+- [`/plan`](docs/reference.md#graph-planning) creates and structurally validates a task/delegation
+  graph without executing its tasks. Each conversation retains one current plan; normal session
+  retention cleans it up, while explicit exports remain independent files.
 - Git browsing is **read-only**: staging, commits, branch switching, and conflict
   resolution are not built into the Git view.
 - Live editor and terminal state survives interface detach, not runtime shutdown.

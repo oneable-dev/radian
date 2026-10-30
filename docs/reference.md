@@ -848,6 +848,56 @@ attached clients; new clients send explicit `new-tab` and `clear` actions. Finis
 restart the service explicitly when ready to upgrade.
 Neither automatic strategic-compaction suggestions nor a model-callable compaction tool is added.
 
+### Graph planning
+
+`/plan [requirements]` starts a planning-only Agent turn using the bundled
+`resources/skills/graph-plan/SKILL.md` instructions. With no arguments it uses the requirements
+already discussed, asking for clarification when needed. It investigates the workspace and proposes
+tasks, prerequisite IDs, inputs, outputs, acceptance criteria, expected write scopes and role profiles.
+It does not launch the proposed subagents, run acceptance commands, retry tasks or resume execution.
+
+The main Agent submits its complete graph and semantic review through `radian-plan`. Host code rejects
+missing/blank fields, duplicate task IDs or dependencies, unknown/self references and dependency cycles.
+Only a valid submission atomically replaces the current plan. Requirement coverage, useful task size,
+role fit and potential shared-file conflicts remain agent assessments, not structural guarantees.
+The displayed dependency graph is derived from the submitted task data. Structural validation, semantic
+review, user approval and task completion are distinct; saving a plan does not approve or execute it.
+
+Parent sessions expose these commands; the SDK command also supplies argument candidates:
+
+| Command                | Behavior                                                                           |
+| ---------------------- | ---------------------------------------------------------------------------------- |
+| `/plan [requirements]` | Create or revise a plan; model calls may consume quota.                            |
+| `/plan show`           | Read and display the authoritative current plan and its review.                    |
+| `/plan check`          | Revalidate the saved artifact and display its structural and agent-review results. |
+| `/plan clear`          | Remove only the current plan, not conversation history or exported copies.         |
+| `/plan export <path>`  | Write an independent JSON copy; existing files are never overwritten.              |
+
+`show`, `check`, `clear` and `export` do not call a model. Commands reject busy sessions instead of
+racing an active run. The command is an SDK extension; an explicitly configured conflicting extension
+can replace this bundled command. Owned child agents do not receive the planner extension.
+
+Each file-backed SDK conversation owns one adjacent `<session-file>.plan.json` artifact. It contains
+the plan, its SHA-256 content hash, conversation/workspace identity and agent semantic-review report.
+Updates replace that file rather than creating revision archives; invalid submissions preserve the
+previous valid file. Plans are limited to 128 tasks and a 2 MiB serialized artifact. Ordinary tool submissions remain part of normal conversation history. The current
+artifact is conversation-wide, not branch-local: returning to an older transcript does not roll it back.
+Subsequent model requests receive a current-plan reference, including after resume or compaction, and
+can read its details through `radian-plan`. Restart never executes saved tasks. A new conversation in
+the same tab owns a separate plan. Exported copies are not tracked or deleted by session maintenance.
+
+The planning turn blocks native edit/write calls and delegated-work actions while allowing profile
+listing. Its shell/integration access is not an OS sandbox; planning instructions require read-only
+investigation, and trusted extensions and enabled shell tools still have their normal OS permissions.
+
+For a standalone structural check of raw plan JSON or an exported artifact, run:
+
+```sh
+bun src/agents/check-plan.ts /path/to/plan.json
+```
+
+The checker validates stored content hashes when present and never executes acceptance-criterion text.
+
 ### Extension dialogs
 
 Configured Pi extensions can use `ctx.ui.input`, `select`, `confirm`, `notify` and `setStatus`
@@ -1819,6 +1869,12 @@ successful sweep under `sessionRetention`. The daemon rereads the policy each ti
 file, its SDK conversation ID and original worktree, then reserves it against Radian resume/create
 operations. Files changed externally after the snapshot and symbolic/replaced paths are preserved.
 The final file fingerprint is checked again immediately before removal.
+
+Current task-plan sidecars follow this same conversation lifecycle, not an independent TTL. Closing
+or detaching retains the plan; expiry removes its verified sidecar with the conversation. Age-based cleanup preserves active and external/unknown-origin conversations. Mismatched, changed,
+corrupt or symbolic artifacts are preserved rather than guessing ownership. If the original SDK file
+is positively absent, orphan cleanup can remove its verified plan sidecar with the snapshot.
+Explicitly exported plans remain independent files.
 
 Expired owned JSONL and snapshot bodies are removed together. A durable cleanup marker hides a
 partially removed conversation from History's JSONL fallback and permits retry after interruption;

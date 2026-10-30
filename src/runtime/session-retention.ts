@@ -28,7 +28,7 @@ export function sessionExpired(
   );
 }
 
-type Fingerprint = { dev: number; ino: number; size: number; mtimeMs: number };
+type Fingerprint = { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number };
 
 export type RetainedFile =
   | { kind: "absent" }
@@ -36,7 +36,11 @@ export type RetainedFile =
   | { kind: "ready"; path: string; fingerprint: Fingerprint };
 
 const sameFile = (a: Fingerprint, b: Fingerprint) =>
-  a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
+  a.dev === b.dev &&
+  a.ino === b.ino &&
+  a.size === b.size &&
+  a.mtimeMs === b.mtimeMs &&
+  a.ctimeMs === b.ctimeMs;
 
 // Never treat a saved path as deletion authority by itself: verify the regular file,
 // SDK identity, original worktree and whether another application has since changed it.
@@ -131,7 +135,13 @@ export async function inspectRetainedFile(
         return ok({
           kind: "ready",
           path: canonical.value,
-          fingerprint: { dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs },
+          fingerprint: {
+            dev: stat.dev,
+            ino: stat.ino,
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+            ctimeMs: stat.ctimeMs,
+          },
         } as const);
       },
       () => file.close(),
@@ -161,6 +171,17 @@ export async function deleteRetainedFile(file: RetainedFile): Promise<Result<voi
       new HistoryError(
         "HISTORY_UNAVAILABLE",
         "Session changed before retention deletion; no SDK file was removed.",
+      ),
+    );
+  }
+
+  const canonical = await capture(() => realpath(file.path));
+  if (!canonical.ok) return canonical;
+  if (canonical.value !== resolve(file.path)) {
+    return err(
+      new HistoryError(
+        "HISTORY_UNAVAILABLE",
+        "Session location changed before retention deletion.",
       ),
     );
   }

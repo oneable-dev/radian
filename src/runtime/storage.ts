@@ -7,6 +7,13 @@ import { Value } from "typebox/value";
 import { manifestSchema, sessionRecordSchema, type RuntimeManifest } from "./protocol.ts";
 import type { SessionRecord } from "../agents/session-registry.ts";
 import {
+  deleteTaskPlanForRetention,
+  inspectTaskPlanForRetention,
+  recheckTaskPlanForRetention,
+  type InspectedTaskPlan,
+  type PlanOwner,
+} from "../agents/task-plan-store.ts";
+import {
   sessionRecordKey,
   type SessionSnapshotInfo,
   type SessionSnapshotSource,
@@ -105,6 +112,22 @@ const snapshotIndexSchema = Type.Object({
   closedAt: sessionRecordSchema.properties.closedAt,
   managed: sessionRecordSchema.properties.managed,
   cleanupPending: Type.Optional(Type.Boolean()),
+  cleanupPlan: Type.Optional(
+    Type.Union([
+      Type.Object({ kind: Type.Literal("absent") }),
+      Type.Object({
+        kind: Type.Literal("ready"),
+        fingerprint: Type.Object({
+          dev: Type.Number(),
+          ino: Type.Number(),
+          size: Type.Number(),
+          mtimeMs: Type.Number(),
+          ctimeMs: Type.Number(),
+        }),
+        updatedAt: Type.Number(),
+      }),
+    ]),
+  ),
   expiredAt: sessionRecordSchema.properties.updatedAt,
   lifecycle: Type.Union([Type.Literal("open"), Type.Literal("closed")]),
   updatedAt: Type.Integer({ minimum: 0, maximum: 8640000000000000 }),
@@ -579,6 +602,26 @@ export class RuntimeStore implements SessionSnapshotSource {
       return ok(0);
     }
     try {
+      // Missing originals are proof only when the adjacent plan belongs to this conversation.
+      const planOwner = this.planOwner(entry);
+      let plan: InspectedTaskPlan = { kind: "absent" };
+      if (sessionFile) {
+        const inspected = await this.inspectPlan(entry);
+        if (!inspected.ok) return inspected;
+        plan = inspected.value;
+
+        const again = await capture(() => lstat(sessionFile));
+        if (again.ok) return ok(0);
+        if (!(again.error instanceof StorageError) || again.error.systemCode !== "ENOENT") {
+          return again;
+        }
+        if (planOwner) {
+          const checked = await recheckTaskPlanForRetention(sessionFile, planOwner, plan);
+          if (!checked.ok) return checked;
+          const deleted = await deleteTaskPlanForRetention(sessionFile, planOwner, plan);
+          if (!deleted.ok) return deleted;
+        }
+      }
       // Keep the closed index until unlink succeeds, so an interrupted cleanup remains retryable.
       const removed = await removeRetentionFile(
         join(this.paths.directory, "sessions", `${entry.key}.json`),
@@ -601,6 +644,25 @@ export class RuntimeStore implements SessionSnapshotSource {
     } finally {
       release?.();
     }
+  }
+
+  private planOwner(entry: SnapshotIndex): PlanOwner | null {
+    return entry.cwd ? { conversationId: entry.conversationId ?? entry.id, cwd: entry.cwd } : null;
+  }
+
+  private async inspectPlan(
+    entry: SnapshotIndex,
+  ): Promise<Result<InspectedTaskPlan, ExpectedError>> {
+    if (!entry.sessionFile) return ok({ kind: "absent" });
+    const owner = this.planOwner(entry);
+    if (!owner) {
+      const found = await capture(() => lstat(entry.sessionFile! + ".plan.json"));
+      if (found.ok) return err(new StorageError("Cannot verify ownership of task plan sidecar."));
+      return found.error instanceof StorageError && found.error.systemCode === "ENOENT"
+        ? ok({ kind: "absent" })
+        : found;
+    }
+    return inspectTaskPlanForRetention(entry.sessionFile, owner);
   }
 
   private async pruneEntry(
@@ -632,6 +694,33 @@ export class RuntimeStore implements SessionSnapshotSource {
     if (inspected.value.kind === "changed") {
       return ok(0);
     }
+    const plan = await this.inspectPlan(entry);
+    if (!plan.ok) return plan;
+    if (
+      !entry.cleanupPending &&
+      plan.value.kind === "ready" &&
+      (plan.value.updatedAt > entry.updatedAt ||
+        Math.floor(plan.value.fingerprint.mtimeMs) > entry.updatedAt)
+    ) {
+      return ok(0);
+    }
+    // A prior interrupted sweep must not delete a sidecar created or changed since its marker.
+    const expectedPlan = entry.cleanupPlan ?? { kind: "absent" as const };
+    const planRemovedDuringCleanup =
+      entry.cleanupPending &&
+      inspected.value.kind === "absent" &&
+      plan.value.kind === "absent" &&
+      expectedPlan.kind === "ready";
+    if (
+      entry.cleanupPending &&
+      !planRemovedDuringCleanup &&
+      (plan.value.kind !== expectedPlan.kind ||
+        (plan.value.kind === "ready" &&
+          expectedPlan.kind === "ready" &&
+          JSON.stringify(plan.value.fingerprint) !== JSON.stringify(expectedPlan.fingerprint)))
+    ) {
+      return err(new StorageError("Task plan changed during interrupted retention cleanup."));
+    }
 
     const release = reserve(
       entry,
@@ -642,7 +731,11 @@ export class RuntimeStore implements SessionSnapshotSource {
     }
     try {
       // A durable marker hides the record from JSONL fallback and lets an interrupted deletion finish.
-      const pending = { ...entry, cleanupPending: true };
+      const pending = {
+        ...entry,
+        cleanupPending: true,
+        cleanupPlan: entry.cleanupPlan ?? plan.value,
+      };
       if (!entry.cleanupPending) {
         const marked = new Map(this.entries);
         marked.set(entry.key, pending);
@@ -650,6 +743,31 @@ export class RuntimeStore implements SessionSnapshotSource {
         const saved = await this.publishIndex(marked);
         if (!saved.ok) {
           return saved;
+        }
+      }
+
+      if (entry.sessionFile) {
+        const owner = this.planOwner(entry);
+        if (!owner && plan.value.kind === "ready") {
+          return err(new StorageError("Cannot verify ownership of task plan sidecar."));
+        }
+        if (owner) {
+          const checked = await recheckTaskPlanForRetention(entry.sessionFile, owner, plan.value);
+          if (!checked.ok) {
+            if (!entry.cleanupPending) {
+              const restored = new Map(this.entries);
+              restored.set(entry.key, entry);
+              const saved = await this.publishIndex(restored);
+              if (!saved.ok)
+                return err(
+                  new CleanupError("Could not clear an interrupted retention marker.", [
+                    checked.error,
+                    saved.error,
+                  ]),
+                );
+            }
+            return checked;
+          }
         }
       }
 
@@ -674,6 +792,14 @@ export class RuntimeStore implements SessionSnapshotSource {
         return deleted;
       }
 
+      if (entry.sessionFile) {
+        const owner = this.planOwner(entry);
+        if (owner) {
+          const sidecar = await deleteTaskPlanForRetention(entry.sessionFile, owner, plan.value);
+          if (!sidecar.ok) return sidecar;
+        }
+      }
+
       const snapshot = await removeRetentionFile(
         join(this.paths.directory, "sessions", `${entry.key}.json`),
       );
@@ -682,7 +808,7 @@ export class RuntimeStore implements SessionSnapshotSource {
       }
 
       // Keep only a small, redacted identity marker so stale checkpoints cannot resurrect expired data.
-      const { sessionFile: _file, cwd: _cwd, ...identity } = pending;
+      const { sessionFile: _file, cwd: _cwd, cleanupPlan: _plan, ...identity } = pending;
       const finished = new Map(this.entries);
 
       finished.set(entry.key, {
