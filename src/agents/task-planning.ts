@@ -188,7 +188,7 @@ export function taskPlanningExtension(
             {
               customType: requestMessageType,
               content: `${instructions}\n\nUser requirements:\n${input || "Use the requirements already discussed in this conversation. Ask if the goal is not clear."}`,
-              display: true,
+              display: false,
             },
             { triggerTurn: true },
           );

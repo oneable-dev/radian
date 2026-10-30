@@ -530,10 +530,25 @@ export class PiSessionExecutor implements SessionExecutor {
     };
     const manager = this.session.sessionManager;
     const entryId = manager.appendMessage(message);
+    const display = commandDisplay(invocation, ["plan"])!;
     this.session.agent.state.messages = manager.buildSessionProjection().messages;
-    this.transcript.recordPersistedUser(entryId, message);
-    this.request = deliveredRequest(message);
+    this.transcript.recordPersistedUser(entryId, message, display);
+    this.request = deliveredRequest(message, display);
     this.result = undefined;
+    // The annotation follows its user entry so reverse History retains both at a prompt boundary.
+    // Failure here cannot reject the already recorded request or its model turn.
+    try {
+      manager.appendCustomEntry(commandDisplayEntryType, { messageId: entryId, parts: display });
+    } catch (error) {
+      // The SDK advances its leaf before writing; later records must not depend on a failed annotation.
+      manager.branch(entryId);
+      const expected = knownError(error);
+      const warning = expected
+        ? `[${expected.code}] Planning was accepted, but saving its display metadata could not be confirmed.`
+        : reportUnexpected(error, "planning command display persistence");
+      this.transcript.notice("Command display persistence", warning, "error");
+      this.ui?.context.notify(warning, "warning");
+    }
     this.emit();
   }
 

@@ -28,7 +28,8 @@ export function commandDisplay(
   text: string,
   templateNames: readonly string[],
 ): CommandDisplay | undefined {
-  const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(text);
+  // Consume one separator only; any further whitespace belongs to the literal arguments.
+  const match = /^\/([^\s]+)(?:\s([\s\S]*))?$/.exec(text);
   if (!match || !templateNames.includes(match[1]!)) return undefined;
 
   const name = match[1]!;

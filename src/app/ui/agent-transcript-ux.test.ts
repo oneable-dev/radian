@@ -827,45 +827,48 @@ test("All sections omit arrows and role/status titles while tools and skills dis
   }
 });
 
-test("Prompt commands render a non-folding inline tag with separate literal arguments and copy only the invocation", async () => {
-  // The display projection contains only the command name and operator-supplied arguments.
-  const app = await mount([
-    {
-      id: "command",
-      kind: "user",
-      title: "You",
-      text: "/review",
-      commandName: "review",
-      status: "complete",
-    },
-    {
-      id: "arguments",
-      kind: "user",
-      title: "You",
-      text: 'src/agents\nkeep "quoted args"',
-      status: "complete",
-    },
-  ]);
-  try {
-    pressLeader(app, "[");
-    app.mockInput.pressKey("HOME");
-    app.mockInput.pressKey("o", { ctrl: true });
-    await app.render();
-    await app.copy();
+test.each(["review", "plan"])(
+  "/%s renders a non-folding command tag and copies only the invocation",
+  async (name) => {
+    // The display projection contains only the command name and operator-supplied arguments.
+    const app = await mount([
+      {
+        id: "command",
+        kind: "user",
+        title: "You",
+        text: `/${name}`,
+        commandName: name,
+        status: "complete",
+      },
+      {
+        id: "arguments",
+        kind: "user",
+        title: "You",
+        text: 'src/agents\nkeep "quoted args"',
+        status: "complete",
+      },
+    ]);
+    try {
+      pressLeader(app, "[");
+      app.mockInput.pressKey("HOME");
+      app.mockInput.pressKey("o", { ctrl: true });
+      await app.render();
+      await app.copy();
 
-    // Folding cannot hide the invocation, and the decorative tag never enters copied text.
-    const frame = app.captureCharFrame();
-    expect(frame).toContain("[command] /review");
-    expect(frame).toContain("src/agents");
-    expect(frame).toContain('keep "quoted args"');
-    expect(frame).not.toContain("[message]");
-    expect(app.copies).toEqual(["/review"]);
-    expect(app.prompts).toEqual([]);
-    expect(app.view.promptDrafts.a1).toBe("unsent draft");
-  } finally {
-    await app.close();
-  }
-});
+      // Folding cannot hide the invocation, and the decorative tag never enters copied text.
+      const frame = app.captureCharFrame();
+      expect(frame).toContain(`[command] /${name}`);
+      expect(frame).toContain("src/agents");
+      expect(frame).toContain('keep "quoted args"');
+      expect(frame).not.toContain("[message]");
+      expect(app.copies).toEqual([`/${name}`]);
+      expect(app.prompts).toEqual([]);
+      expect(app.view.promptDrafts.a1).toBe("unsent draft");
+    } finally {
+      await app.close();
+    }
+  },
+);
 
 test("Bash commands append configured timeout rather than elapsed time", async () => {
   // Multiline commands with timeouts must not create separate role/status titles.

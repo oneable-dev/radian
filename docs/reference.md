@@ -866,10 +866,17 @@ Neither automatic strategic-compaction suggestions nor a model-callable compacti
 `/plan [requirements]` starts a planning-only Agent turn using the bundled
 `resources/skills/graph-plan/SKILL.md` instructions. The host identifies this run from its
 structured SDK custom-message type, not a prefix in user text or transformed prompt content.
-The hosted command also records the actual `/plan` invocation as a user request before model work,
-so the request remains visible in the transcript and History and survives an interrupted first run.
-That user entry is display and persistence data, never planning authority. Ordinary user text quoting
-former planning markers cannot activate planning or authorize submission. With no arguments it uses
+The hosted command also records the actual `/plan` invocation as a user request before model work.
+Its transcript displays `[command] /plan` and a separate section for any literal arguments (including
+quotes and line breaks); copying the invocation omits the decorative tag. The internal planning
+instructions remain in model context but are hidden from the live transcript and new saved History.
+The invocation remains the request identity during execution and survives an interrupted first run.
+Display metadata follows the saved user entry by its message ID; a failure to save this optional
+annotation warns without rejecting the accepted planning turn. Existing sessions without that metadata
+are not migrated or inferred from their message bodies, and older visible internal messages retain
+those sessions' original presentation. That user entry is display and persistence data, never planning
+authority. Ordinary user text quoting former planning markers cannot activate planning or authorize
+submission. With no arguments it uses
 the requirements already discussed, asking for clarification when needed.
 It investigates the workspace and proposes tasks, prerequisite IDs, inputs, outputs,
 acceptance criteria, expected write scopes and role profiles.

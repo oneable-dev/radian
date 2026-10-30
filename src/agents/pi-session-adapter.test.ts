@@ -3,6 +3,7 @@ import { createAssistantMessageEventStream, type AssistantMessage } from "@earen
 import { join } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import * as fs from "node:fs";
 import { DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
 import { offlineRuntime, fixtureMessage } from "../testing/offline-runtime.ts";
 import { createWorktreeFixture } from "../testing/worktree-fixture.ts";
@@ -297,6 +298,106 @@ test("File prompt commands show invocation and arguments while preserving expand
   }
 });
 
+test.each([
+  [
+    "/plan",
+    [{ text: "/plan", commandName: "plan" }],
+    "/plan",
+    "Use the requirements already discussed",
+  ],
+  [
+    '/plan "quoted args"\nkeep literal lines',
+    [{ text: "/plan", commandName: "plan" }, { text: '"quoted args"\nkeep literal lines' }],
+    '/plan "quoted args" keep literal lines',
+    '"quoted args"\nkeep literal lines',
+  ],
+  [
+    "/plan \n  keep indentation\nnext",
+    [{ text: "/plan", commandName: "plan" }, { text: "\n  keep indentation\nnext" }],
+    "/plan keep indentation next",
+    "keep indentation\nnext",
+  ],
+  [
+    "/plan   indented first\n  second",
+    [{ text: "/plan", commandName: "plan" }, { text: "  indented first\n  second" }],
+    "/plan indented first second",
+    "indented first\n  second",
+  ],
+] as const)(
+  "Built-in %s keeps literal display distinct from model instructions in History",
+  async (input, parts, summary, requirements) => {
+    // Only the transport is offline; admission, custom-message persistence and History use the real SDK.
+    const modelContexts: string[] = [];
+    const app = await sdkFixture(false, (options) => ({
+      ...options,
+      defaultPackagePaths: [],
+      streamFn: (model, context, request) => {
+        modelContexts.push(JSON.stringify(context.messages));
+        return options.streamFn!(model, context, request);
+      },
+    }));
+    try {
+      const id = expectOk(await app.registry.create(app.main.id));
+      const settled = Promise.withResolvers<void>();
+      let working = false;
+      const unsubscribe = app.registry.subscribe(() => {
+        const status = app.registry.details(id)?.status;
+        if (status === "working") working = true;
+        if (working && status === "complete") settled.resolve();
+      });
+      try {
+        expectOk(await app.registry.prompt(id, input));
+        await settled.promise;
+      } finally {
+        unsubscribe();
+      }
+
+      const file = app.registry.sessionFile(id)!;
+      const conversation = app.registry.details(id)!.conversationId!;
+      const live = app.registry.details(id)!;
+      const saved = SessionManager.open(file);
+      const preview = expectOk(await readHistoryPreview(file, app.main.id, conversation));
+      const custom = saved
+        .getBranch()
+        .find(
+          (entry) =>
+            entry.type === "custom_message" && entry.customType === "radian.task-plan-request",
+        );
+      expect(custom?.type === "custom_message" && custom.display).toBe(false);
+      expect(JSON.stringify(custom)).toContain("Read repository instructions");
+      expect(modelContexts[0]).toContain("Read repository instructions");
+      expect(modelContexts[0]).toContain(JSON.stringify(requirements).slice(1, -1));
+      expect(JSON.stringify(saved.buildSessionContext().messages)).toContain(
+        "Read repository instructions",
+      );
+      expect(JSON.stringify(saved.buildSessionContext().messages)).not.toContain(
+        commandDisplayEntryType,
+      );
+      expectOk(await app.registry.close(id));
+      const reopened = expectOk(await app.registry.create(app.main.id, file));
+      for (const sections of [
+        live.sections,
+        preview.sections,
+        app.registry.details(reopened)?.sections,
+      ]) {
+        expect(sections?.filter((section) => section.kind === "user")).toMatchObject(parts);
+        expect(sections?.filter((section) => section.commandName === "plan")).toHaveLength(1);
+        expect(sections?.some((section) => section.title === "radian.task-plan-request")).toBe(
+          false,
+        );
+        expect(JSON.stringify(sections)).not.toContain("Read repository instructions");
+      }
+      expect(live.output).not.toContain("Read repository instructions");
+      expect(preview.text).not.toContain("Read repository instructions");
+      expect(live.request?.text).toBe(summary);
+      expect(live.result?.request?.text).toBe(summary);
+      expect(app.registry.details(reopened)?.request?.text).toBe(summary);
+    } finally {
+      await app.cleanup();
+    }
+  },
+);
+
 test("Command display persistence failures warn without rejecting accepted model work", async () => {
   // Optional display persistence can fail after the SDK has already accepted the prompt.
   const app = await sdkFixture(false, (options) => ({ ...options, defaultPackagePaths: [] }));
@@ -325,6 +426,81 @@ test("Command display persistence failures warn without rejecting accepted model
       details.sections?.find((section) => section.title === "Command display persistence")?.text,
     ).toContain("STORAGE_FAILED");
     expect(JSON.stringify(details)).not.toContain("PRIVATE_COMMAND_INSTRUCTIONS");
+  } finally {
+    append.mockRestore();
+    await app.cleanup();
+  }
+});
+
+test("A failed /plan annotation write preserves its recorded turn and saved History", async () => {
+  // Fail at the OS boundary after the SDK has already advanced its in-memory entry tree.
+  const app = await sdkFixture(false, (options) => ({ ...options, defaultPackagePaths: [] }));
+  const original = fs.appendFileSync;
+  let failed = false;
+  const append = spyOn(fs, "appendFileSync").mockImplementation((path, data, options) => {
+    if (
+      !failed &&
+      typeof data === "string" &&
+      data.includes(`"customType":"${commandDisplayEntryType}"`)
+    ) {
+      failed = true;
+      throw Object.assign(new Error("Fixture annotation write failed"), { code: "EIO" });
+    }
+    return original(path, data, options);
+  });
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    const settled = Promise.withResolvers<void>();
+    let working = false;
+    const unsubscribe = app.registry.subscribe(() => {
+      const status = app.registry.details(id)?.status;
+      if (status === "working") working = true;
+      if (working && status === "complete") settled.resolve();
+    });
+    try {
+      expectOk(await app.registry.prompt(id, "/plan Inspect safely"));
+      await settled.promise;
+    } finally {
+      unsubscribe();
+    }
+
+    const details = app.registry.details(id)!;
+    const file = app.registry.sessionFile(id)!;
+    const saved = SessionManager.open(file);
+    expect(failed).toBe(true);
+    expect(details.status).toBe("complete");
+    expect(details.error).toBeNull();
+    expect(details.request?.text).toBe("/plan Inspect safely");
+    expect(details.sections?.filter((section) => section.kind === "user")).toMatchObject([
+      { text: "/plan", commandName: "plan" },
+      { text: "Inspect safely" },
+    ]);
+    expect(
+      details.sections?.find((section) => section.title === "Command display persistence")?.text,
+    ).toContain("STORAGE_FAILED");
+    expect(
+      saved
+        .getBranch()
+        .filter((entry) => entry.type === "message" && entry.message.role === "user"),
+    ).toHaveLength(1);
+    expect(
+      saved
+        .getBranch()
+        .filter((entry) => entry.type === "custom" && entry.customType === commandDisplayEntryType),
+    ).toHaveLength(0);
+
+    // Missing optional styling must not sever the saved invocation or later model messages.
+    const preview = expectOk(await readHistoryPreview(file, app.main.id, details.conversationId!));
+    expect(preview.sections?.filter((section) => section.kind === "user")).toMatchObject([
+      { text: "/plan Inspect safely" },
+    ]);
+    expect(JSON.stringify(preview)).not.toContain("Read repository instructions");
+    expectOk(await app.registry.close(id));
+    const reopened = expectOk(await app.registry.create(app.main.id, file));
+    expect(app.registry.details(reopened)?.request?.text).toBe("/plan Inspect safely");
+    expect(
+      app.registry.details(reopened)?.sections?.filter((section) => section.kind === "user"),
+    ).toMatchObject([{ text: "/plan Inspect safely" }]);
   } finally {
     append.mockRestore();
     await app.cleanup();
@@ -1086,13 +1262,15 @@ test("Extensions consuming input with notices never show fake intermediate runs"
   }
 });
 
-test("Hosted /plan starts a displayed SDK run and preserves the plan on a failed revision", async () => {
+test("Hosted /plan hides its internal request while retaining the displayed command and saved report", async () => {
   let requests = 0;
+  const modelContexts: string[] = [];
   const app = await sdkFixture(false, (options) => ({
     ...options,
     defaultPackagePaths: [],
-    streamFn: (model) => {
+    streamFn: (model, context) => {
       requests++;
+      modelContexts.push(JSON.stringify(context.messages));
       const stream = createAssistantMessageEventStream();
       const message = fixtureMessage(model.api, model.provider, model.id);
       if (requests % 2 === 1) {
@@ -1157,14 +1335,21 @@ test("Hosted /plan starts a displayed SDK run and preserves the plan on a failed
     const file = app.registry.sessionFile(id)!;
     const owner = { conversationId: conversation, cwd: app.main.path };
     const before = expectOk(await readTaskPlan(file, owner))!;
-    const displayed = app.registry.details(id)?.sections ?? [];
+    const live = app.registry.details(id)!;
+    const displayed = live.sections ?? [];
+    expect(displayed.filter((section) => section.kind === "user")).toMatchObject([
+      { text: "/plan", commandName: "plan" },
+      { text: "Hosted valid" },
+    ]);
+    expect(displayed.some((section) => section.title === "radian.task-plan-request")).toBe(false);
+    expect(JSON.stringify(displayed)).not.toContain("Read repository instructions");
+    expect(live.output).not.toContain("Read repository instructions");
+    expect(live.request?.text).toBe("/plan Hosted valid");
+    expect(live.result?.request?.text).toBe("/plan Hosted valid");
+    expect(modelContexts[0]).toContain("Read repository instructions");
+    expect(modelContexts[0]).toContain("User requirements:\\nHosted valid");
     expect(
-      displayed.some(
-        (section) =>
-          section.kind === "notice" &&
-          section.title === "radian.task-plan-request" &&
-          section.text.includes("Hosted valid"),
-      ),
+      displayed.some((section) => section.text.includes("Semantic review (agent assessment)")),
     ).toBe(true);
     expect(
       displayed.some((section) => section.kind === "tool" && section.title === "radian-plan"),
@@ -1187,7 +1372,33 @@ test("Hosted /plan starts a displayed SDK run and preserves the plan on a failed
     // Each planning invocation is recorded once, even when its proposed revision fails.
     expect(
       app.registry.details(id)?.sections?.filter((section) => section.kind === "user"),
-    ).toHaveLength(2);
+    ).toMatchObject([
+      { text: "/plan", commandName: "plan" },
+      { text: "Hosted valid" },
+      { text: "/plan", commandName: "plan" },
+      { text: "Hosted invalid" },
+    ]);
+    expect(app.registry.details(id)?.result?.request?.text).toBe("/plan Hosted invalid");
+    expect(
+      modelContexts.some((context) => context.includes("User requirements:\\nHosted invalid")),
+    ).toBe(true);
+    const preview = expectOk(await readHistoryPreview(file, app.main.id, conversation));
+    expect(
+      preview.sections?.some((section) =>
+        section.text.includes("Semantic review (agent assessment)"),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(preview.sections)).not.toContain("Read repository instructions");
+    expectOk(await app.registry.close(id));
+    const reopened = expectOk(await app.registry.create(app.main.id, file));
+    expect(
+      app.registry
+        .details(reopened)
+        ?.sections?.some((section) => section.text.includes("Semantic review (agent assessment)")),
+    ).toBe(true);
+    expect(JSON.stringify(app.registry.details(reopened)?.sections)).not.toContain(
+      "Read repository instructions",
+    );
   } finally {
     await app.cleanup();
   }
@@ -1235,11 +1446,14 @@ test("Hosted planning retains the delivered command request through a held and s
       await started.promise;
       const live = app.registry.details(id);
       expect(live?.request?.text).toBe("/plan Verify metadata");
-      expect(
-        live?.sections?.filter(
-          (section) => section.kind === "user" && section.text === "/plan Verify metadata",
-        ),
-      ).toHaveLength(1);
+      expect(live?.sections?.filter((section) => section.kind === "user")).toMatchObject([
+        { text: "Previous ordinary request" },
+        { text: "/plan", commandName: "plan" },
+        { text: "Verify metadata" },
+      ]);
+      expect(live?.sections?.some((section) => section.title === "radian.task-plan-request")).toBe(
+        false,
+      );
       release.resolve();
       await settled.promise;
     } finally {
@@ -1249,13 +1463,108 @@ test("Hosted planning retains the delivered command request through a held and s
     const complete = app.registry.details(id);
     expect(complete?.request?.text).toBe("/plan Verify metadata");
     expect(complete?.result?.request?.text).toBe("/plan Verify metadata");
-    expect(
-      complete?.sections?.filter(
-        (section) => section.kind === "user" && section.text === "/plan Verify metadata",
-      ),
-    ).toHaveLength(1);
+    expect(complete?.sections?.filter((section) => section.commandName === "plan")).toHaveLength(1);
+    expect(JSON.stringify(complete?.sections)).not.toContain("Read repository instructions");
   } finally {
     release.resolve();
+    await app.cleanup();
+  }
+});
+
+test("A failed hosted planning turn keeps its command request without exposing internal instructions", async () => {
+  // Provider failure is terminal, but the pre-recorded invocation remains the request identity.
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    defaultPackagePaths: [],
+    streamFn: (model) => {
+      const stream = createAssistantMessageEventStream();
+      const failure = fixtureMessage(model.api, model.provider, model.id);
+      failure.stopReason = "error";
+      failure.errorMessage = "Fixture planning provider failure";
+      stream.push({ type: "error", reason: "error", error: failure });
+      stream.end();
+      return stream;
+    },
+  }));
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+
+    const settled = Promise.withResolvers<void>();
+    const unsubscribe = app.registry.subscribe(() => {
+      if (app.registry.details(id)?.status === "failure") settled.resolve();
+    });
+    try {
+      expectOk(await app.registry.prompt(id, "/plan Check provider failure"));
+      await settled.promise;
+    } finally {
+      unsubscribe();
+    }
+
+    const details = app.registry.details(id)!;
+    expect(details.status).toBe("failure");
+    expect(details.request?.text).toBe("/plan Check provider failure");
+    expect(details.result?.outcome).toBe("error");
+    expect(details.result?.request?.text).toBe("/plan Check provider failure");
+    expect(details.sections?.filter((section) => section.kind === "user")).toMatchObject([
+      { text: "/plan", commandName: "plan" },
+      { text: "Check provider failure" },
+    ]);
+    expect(JSON.stringify(details.sections)).not.toContain("Read repository instructions");
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test("An interrupted hosted planning turn retains its persisted command and hidden instructions", async () => {
+  // Cancellation before the provider finishes must not erase the initial real user entry.
+  const started = Promise.withResolvers<void>();
+  const app = await sdkFixture(false, (options) => ({
+    ...options,
+    defaultPackagePaths: [],
+    streamFn: (model, _context, request) => {
+      const stream = createAssistantMessageEventStream();
+      const message = fixtureMessage(model.api, model.provider, model.id);
+      stream.push({ type: "start", partial: message });
+      started.resolve();
+      request?.signal?.addEventListener(
+        "abort",
+        () => {
+          message.stopReason = "aborted";
+          stream.push({ type: "error", reason: "aborted", error: message });
+          stream.end();
+        },
+        { once: true },
+      );
+      return stream;
+    },
+  }));
+  try {
+    const id = expectOk(await app.registry.create(app.main.id));
+    const running = app.registry.prompt(id, "/plan Stop this turn");
+    await started.promise;
+
+    expectOk(await app.registry.interrupt(id));
+    expectOk(await running);
+
+    const details = app.registry.details(id)!;
+    const file = app.registry.sessionFile(id)!;
+    const preview = expectOk(await readHistoryPreview(file, app.main.id, details.conversationId!));
+    expect(details.request?.text).toBe("/plan Stop this turn");
+    expect(details.result?.request?.text).toBe("/plan Stop this turn");
+    expect(details.result?.outcome).toBe("cancelled");
+    expect(details.sections?.filter((section) => section.commandName === "plan")).toHaveLength(1);
+    expect(preview.sections?.filter((section) => section.kind === "user")).toMatchObject([
+      { text: "/plan", commandName: "plan" },
+      { text: "Stop this turn" },
+    ]);
+    expect(JSON.stringify(details.sections)).not.toContain("Read repository instructions");
+    expect(JSON.stringify(preview)).not.toContain("Read repository instructions");
+    expect(
+      SessionManager.open(file)
+        .getBranch()
+        .filter((entry) => entry.type === "message" && entry.message.role === "user"),
+    ).toHaveLength(1);
+  } finally {
     await app.cleanup();
   }
 });
@@ -1380,9 +1689,26 @@ test.each(["ordinary initial request", "/plan Initial planning request"])(
             join(app.directory, "agent", "sessions"),
             app.main.path,
           ).getBranch();
-          expect(
-            entries.filter((entry) => entry.type === "message" && entry.message.role === "user"),
-          ).toHaveLength(1);
+          const users = entries.filter(
+            (entry) => entry.type === "message" && entry.message.role === "user",
+          );
+          const display = entries.find(
+            (entry) => entry.type === "custom" && entry.customType === commandDisplayEntryType,
+          );
+          expect(users).toHaveLength(1);
+          expect(display?.type === "custom" && display.data).toMatchObject({
+            messageId: users[0]?.id,
+            parts: [{ text: "/plan", commandName: "plan" }, { text: "Initial planning request" }],
+          });
+          expect(entries.indexOf(display!)).toBe(entries.indexOf(users[0]!) + 1);
+          const preview = expectOk(
+            await readHistoryPreview(file, app.main.id, app.registry.details(id)!.conversationId!),
+          );
+          expect(preview.sections?.filter((section) => section.kind === "user")).toMatchObject([
+            { text: "/plan", commandName: "plan" },
+            { text: "Initial planning request" },
+          ]);
+          expect(JSON.stringify(preview)).not.toContain("Read repository instructions");
           expect(providerUserRequests.filter((request) => request === input)).toHaveLength(1);
           expect(
             providerUserRequests.some((request) =>

@@ -10,6 +10,14 @@ test.each([
     '/review src/agents\nkeep "quoted args"',
     [{ commandName: "review", text: "/review" }, { text: 'src/agents\nkeep "quoted args"' }],
   ],
+  [
+    "/review \n  keep indentation\nnext",
+    [{ commandName: "review", text: "/review" }, { text: "\n  keep indentation\nnext" }],
+  ],
+  [
+    "/review   indented first\n  second",
+    [{ commandName: "review", text: "/review" }, { text: "  indented first\n  second" }],
+  ],
   ["/unknown args", undefined],
   ["ordinary /review", undefined],
 ] as const)(
@@ -20,7 +28,7 @@ test.each([
 
     const display = commandDisplay(input, templates);
 
-    // Quotes and multiline user arguments remain literal, unlike template substitutions.
+    // Quotes, leading whitespace and multiline arguments remain literal, unlike template substitutions.
     expect(display).toEqual(expected);
   },
 );
@@ -70,6 +78,23 @@ test("Identical ordinary prompts are not mistaken for commands with the same exp
   // Message IDs, not timestamps or body matching, determine invocation identity.
   expect(transcript.sections.map((section) => section.text)).toEqual(["/review", "Same body"]);
   expect(transcript.sections[1]?.commandName).toBeUndefined();
+});
+
+test("Former planning marker text without display metadata remains ordinary user text", () => {
+  // A quoted legacy marker must not be mistaken for a host-recorded command.
+  const manager = SessionManager.inMemory("/fixture");
+  manager.appendMessage({
+    role: "user",
+    content: "<radian-graph-plan> /plan ordinary prose",
+    timestamp: 1,
+  });
+
+  const sections = new SessionTranscript(manager.getBranch()).sections;
+
+  expect(sections).toMatchObject([
+    { kind: "user", text: "<radian-graph-plan> /plan ordinary prose" },
+  ]);
+  expect(sections[0]?.commandName).toBeUndefined();
 });
 
 test("Invalid saved command metadata returns a stable history error", () => {

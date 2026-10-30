@@ -79,6 +79,55 @@ test("Bounded History previews retain command annotations at the oldest included
   }
 });
 
+test("Bounded History restores older /plan annotations without displaying hidden planning instructions", async () => {
+  // Reverse traversal must include the annotation following the oldest retained user entry.
+  const records: unknown[] = [header];
+  let parent: string | null = null;
+  for (let index = 0; index < 12; index++) {
+    const user = `user-${index}`;
+    const metadata = `command-${index}`;
+    const internal = `planning-${index}`;
+    const answer = `answer-${index}`;
+    records.push(message(user, parent, "user", `/plan task-${index}`));
+    records.push({
+      type: "custom",
+      id: metadata,
+      parentId: user,
+      timestamp: header.timestamp,
+      customType: commandDisplayEntryType,
+      data: { messageId: user, parts: commandDisplay(`/plan task-${index}`, ["plan"]) },
+    });
+    records.push({
+      type: "custom_message",
+      id: internal,
+      parentId: metadata,
+      timestamp: header.timestamp,
+      customType: "radian.task-plan-request",
+      content: "PRIVATE_PLAN_INSTRUCTIONS",
+      display: false,
+    });
+    records.push(
+      message(answer, internal, "assistant", [{ type: "text", text: `Answer ${index}` }]),
+    );
+    parent = answer;
+  }
+  const app = await fixture(records);
+  try {
+    const preview = expectOk(await readHistoryPreview(app.path, "tree", "saved"));
+
+    expect(preview.sections).toHaveLength(15);
+    expect(preview.sections?.[0]).toMatchObject({ text: "/plan", commandName: "plan" });
+    expect(preview.sections?.at(-2)?.text).toBe("task-11");
+    expect(preview.text).not.toContain("PRIVATE_PLAN_INSTRUCTIONS");
+    expect(JSON.stringify(preview.sections)).not.toContain("PRIVATE_PLAN_INSTRUCTIONS");
+    expect(preview.sections?.some((section) => section.title === "radian.task-plan-request")).toBe(
+      false,
+    );
+  } finally {
+    await app.close();
+  }
+});
+
 test("Previews read only the current branch's latest SDK sections without changing writers or files", async () => {
   // The previous branch and tool/thinking payload must not be mistaken for the chosen conversation.
   const app = await fixture([

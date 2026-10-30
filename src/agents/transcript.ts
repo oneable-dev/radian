@@ -314,9 +314,15 @@ export class SessionTranscript {
     }
   }
 
-  recordPersistedUser(id: string, message: Extract<AgentMessage, { role: "user" }>): void {
+  recordPersistedUser(
+    id: string,
+    message: Extract<AgentMessage, { role: "user" }>,
+    display: CommandDisplay,
+  ): void {
     // Host-recorded commands use their SDK entry ID so the live transcript and
     // reopened History project the same request without a second SDK message.
+    this.commandDisplays.set(message, display);
+    this.savedCommandDisplays.set(id, display);
     this.messages.push({ id, message, streaming: false });
     this.cached = undefined;
   }
