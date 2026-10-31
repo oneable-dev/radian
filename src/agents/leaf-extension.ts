@@ -10,7 +10,7 @@ export const leafExcludedTools = [
 
 // Child reporting is independent of delegation. Common providers must never
 // grant a leaf a new delegation capability, including legacy extension tools.
-export function leafPolicy(allowed?: readonly string[]): ExtensionFactory {
+export function leafPolicy(allowed?: readonly string[], purpose?: "planning"): ExtensionFactory {
   const patterns = allowed?.map(
     (pattern) =>
       new RegExp(
@@ -21,10 +21,11 @@ export function leafPolicy(allowed?: readonly string[]): ExtensionFactory {
         "u",
       ),
   );
+  const planningTools = new Set(["read", "grep", "find", "ls"]);
   const permits = (name: string) =>
     name === "radian-supervisor" ||
-    patterns === undefined ||
-    patterns.some((pattern) => pattern.test(name));
+    ((purpose !== "planning" || planningTools.has(name)) &&
+      (patterns === undefined || patterns.some((pattern) => pattern.test(name))));
   return (pi) => {
     const excluded = new Set(leafExcludedTools);
     pi.on("before_agent_start", () => {

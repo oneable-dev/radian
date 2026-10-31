@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs/promises";
 import { chmod, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +33,35 @@ const plan = {
 };
 const review = { summary: "Reviewed the task graph", warnings: [] };
 
+test("A proposal cannot overwrite a plan created or changed after its baseline was captured", async () => {
+  // The expected hash is checked inside the same serialization boundary as replacement.
+  const app = await fixture();
+  try {
+    const first = expectOk(
+      await saveTaskPlan(app.sessionFile, app.owner, plan, review, { expectedHash: null }),
+    );
+    expect(
+      expectError(
+        await saveTaskPlan(app.sessionFile, app.owner, plan, review, { expectedHash: null }),
+      ).code,
+    ).toBe("SESSION_CONFLICT");
+    const latest = expectOk(
+      await saveTaskPlan(app.sessionFile, app.owner, { ...plan, goal: "A newer request" }, review),
+    );
+    expect(
+      expectError(
+        await saveTaskPlan(app.sessionFile, app.owner, plan, review, { expectedHash: first.hash }),
+      ).message,
+    ).toContain("changed after planning started");
+    expect(expectOk(await readTaskPlan(app.sessionFile, app.owner))?.hash).toBe(latest.hash);
+    expectOk(
+      await saveTaskPlan(app.sessionFile, app.owner, plan, review, { expectedHash: latest.hash }),
+    );
+  } finally {
+    await app.close();
+  }
+});
+
 async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), "radian-plan-")));
   const sessionFile = join(root, "conversation.jsonl");
@@ -42,6 +72,54 @@ async function fixture() {
   );
   return { root, sessionFile, owner, close: () => rm(root, { recursive: true, force: true }) };
 }
+
+test.each(["abort", "supersede"])(
+  "A planning request ending during temporary-file I/O cannot commit: %s",
+  async (kind) => {
+    // Hold the real OS boundary before replacement, rather than relying on timer timing.
+    const app = await fixture();
+    const first = expectOk(await saveTaskPlan(app.sessionFile, app.owner, plan, review));
+    const held = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    let current = true;
+    const originalOpen = fs.open;
+    const opened = spyOn(fs, "open").mockImplementation(
+      async (...args: Parameters<typeof fs.open>) => {
+        const handle = await originalOpen(...args);
+        if (String(args[0]).startsWith(planFilePath(app.sessionFile) + ".")) {
+          const sync = handle.sync.bind(handle);
+          handle.sync = async () => {
+            held.resolve();
+            await resume.promise;
+            return sync();
+          };
+        }
+        return handle;
+      },
+    );
+    const saving = saveTaskPlan(
+      app.sessionFile,
+      app.owner,
+      { ...plan, goal: "Must not commit" },
+      review,
+      { expectedHash: first.hash, signal: controller.signal, isCurrent: () => current },
+    );
+    try {
+      await held.promise;
+      if (kind === "abort") controller.abort();
+      else current = false;
+      resume.resolve();
+      expect(expectError(await saving).code).toBe("CANCELLED");
+      expect(expectOk(await readTaskPlan(app.sessionFile, app.owner))?.hash).toBe(first.hash);
+    } finally {
+      resume.resolve();
+      opened.mockRestore();
+      await saving;
+      await app.close();
+    }
+  },
+);
 
 test("A validated plan privately replaces its predecessor in one current sidecar", async () => {
   // A verified SDK session owns one adjacent plan, never a revision directory.

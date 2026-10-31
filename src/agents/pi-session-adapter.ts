@@ -45,6 +45,7 @@ import { PiSessionTelemetry } from "./pi-session-telemetry.ts";
 import { CommandDiagnostics, sessionCommands } from "./session-commands.ts";
 import { FastMode } from "./fast-mode.ts";
 import { taskPlanningExtension } from "./task-planning.ts";
+import { resolveCommandAgent } from "./command-agent.ts";
 import type { UsageMonitor } from "../usage/monitor.ts";
 import { loadPromptImages } from "./prompt-attachments.ts";
 import { ManualCompaction } from "./manual-compaction.ts";
@@ -196,17 +197,44 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
         compaction.extension,
         ...(context.role === "main"
           ? [
-              taskPlanningExtension((invocation) => {
-                if (!executor)
-                  throw new SessionError(
-                    "SESSION_BUSY",
-                    "Session initialization is still in progress.",
-                  );
-                executor.recordPlanRequest(invocation);
-              }),
+              taskPlanningExtension(
+                (invocation) => {
+                  if (!executor)
+                    throw new SessionError(
+                      "SESSION_BUSY",
+                      "Session initialization is still in progress.",
+                    );
+                  executor.recordPlanRequest(invocation);
+                },
+                {
+                  resolveAgent: async () => {
+                    await settingsManager.reload();
+                    const failures = settingsManager.drainErrors();
+                    if (failures.length)
+                      return err(
+                        new InputError(
+                          "Could not reload command agent settings; the existing plan was retained.",
+                        ),
+                      );
+                    applyHostSettings();
+                    return resolveCommandAgent("plan", settingsManager.getSettings(), profiles);
+                  },
+                  availableAgents: () => {
+                    const available = profiles();
+                    return available.ok
+                      ? ok(available.value.map(({ name, description }) => ({ name, description })))
+                      : available;
+                  },
+                  coordinate: (command, signal) =>
+                    context.coordinateSubagents?.(command, signal, "planning") ??
+                    Promise.resolve(
+                      err(new CapabilityError("This session cannot coordinate a planning agent.")),
+                    ),
+                },
+              ),
             ]
           : []),
-        ...(context.role === "subagent" ? [leafPolicy(profile?.tools)] : []),
+        ...(context.role === "subagent" ? [leafPolicy(profile?.tools, context.purpose)] : []),
         ...(profile
           ? [
               (pi: ExtensionAPI) => {
@@ -253,16 +281,14 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
       : sessionDir
         ? SessionManager.create(context.cwd, sessionDir)
         : undefined;
-    const roleModel = profile?.model
+    let roleModel = profile?.model
       ? modelRuntime.getModel(
           profile.model.slice(0, profile.model.indexOf("/")),
           profile.model.slice(profile.model.indexOf("/") + 1),
         )
       : undefined;
-    if (profile?.model && !roleModel)
-      throw new ModelSelectionError(
-        `Agent ${profile.name} requires unavailable model ${profile.model}.`,
-      );
+    // Extension providers are registered during session binding. Resolve them again
+    // before any request rather than rejecting a freshly installed provider early.
     const { session } = await createAgentSession({
       cwd: context.cwd,
       agentDir,
@@ -316,6 +342,7 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
                 context.contactSupervisor
                   ? (command, signal) => context.contactSupervisor!(command, signal)
                   : undefined,
+                context.purpose === "planning",
               ),
             ],
             excludeTools: leafExcludedTools,
@@ -338,10 +365,6 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
     return withCleanup(
       async () => {
         await mkdir(session.sessionManager.getSessionDir(), { recursive: true });
-        if (profile?.thinking && session.thinkingLevel !== profile.thinking)
-          throw new InputError(
-            `Agent ${profile.name}'s model does not support thinking level ${profile.thinking}.`,
-          );
         if (options.streamFn) {
           session.agent.streamFunction = options.streamFn;
         }
@@ -388,6 +411,25 @@ export function piSessionFactory(options: PiSessionOptions = {}): SessionFactory
           },
         });
         if (profile) {
+          if (profile.model) {
+            roleModel = modelRuntime.getModel(
+              profile.model.slice(0, profile.model.indexOf("/")),
+              profile.model.slice(profile.model.indexOf("/") + 1),
+            );
+            if (!roleModel)
+              throw new ModelSelectionError(
+                `Agent ${profile.name} requires unavailable model ${profile.model}.`,
+              );
+            if (session.model?.provider !== roleModel.provider || session.model.id !== roleModel.id)
+              await session.setModel(roleModel, { persist: false });
+          }
+          if (profile.thinking) {
+            session.setThinkingLevel(profile.thinking, { persist: false });
+            if (session.thinkingLevel !== profile.thinking)
+              throw new InputError(
+                `Agent ${profile.name}'s model does not support thinking level ${profile.thinking}.`,
+              );
+          }
           const instructions = roleInstructions(profile, resourceLoader.getSkills().skills);
           if (!instructions.ok) throw instructions.error;
           if (profile.tools) {

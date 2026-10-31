@@ -919,8 +919,42 @@ It investigates the workspace and proposes tasks, prerequisite IDs, inputs, outp
 acceptance criteria, expected write scopes and role profiles.
 It does not launch the proposed subagents, run acceptance commands, retry tasks or resume execution.
 
-The main Agent submits its complete graph and semantic review through `radian-plan`. Host code rejects
-missing/blank fields, duplicate task IDs or dependencies, unknown/self references and dependency cycles.
+By default the main Agent submits its complete graph and semantic review through `radian-plan`.
+To delegate drafting, add a profile binding to **Pi settings** (`~/.pi/agent/settings.json`, or trusted
+project `.pi/settings.json` for code sessions), not the unified Radian settings file:
+
+```json
+{
+  "commandAgents": { "plan": "planner" }
+}
+```
+
+Create `~/.pi/agent/agents/planner.md` with the normal profile fields. Its `model`, `thinking`, skills
+and body own model selection and planning instructions; the command binding contains only its name.
+Radian reloads the effective binding and discovers the profile on each `/plan`, so changing the model
+in the profile does not require changing product code or switching the parent's selected model.
+CHAT uses personal settings, not launch-project bindings. Missing bindings retain parent planning;
+an invalid or unavailable configured profile/model fails explicitly, never falling back silently.
+Extension-provided profile models are resolved after provider registration, including cold children.
+
+With a binding, the parent uses `radian-plan delegate` to start one host-designated, read-only child,
+then `wait` and `reply { questionId, message }` to handle its result or material questions. The child
+receives the requirements, textual conversation context, available roles and the current plan/hash;
+tool payloads and image bytes are not copied into this handoff. It asks for essential missing context.
+The child submits a bounded, complete `{ plan, review }` through `radian-supervisor` action `proposal`.
+This structured channel is separate from the truncated status/notification text. After reviewing it,
+the parent uses `radian-plan accept` to validate and save under its own conversation identity. The
+child cannot write a sidecar or delegate further. `cancel`, interruption, session replacement and a
+ten-minute deadline end that owned workflow without approving tasks. Questions may continue in a
+later user turn; cancel a pending workflow before moving to unrelated implementation work.
+
+Only `read`, `grep`, `find`, `ls` and the supervisor protocol are available to a planning child,
+intersected with its profile allowlist even for nested or dynamically loaded tool calls. Shell,
+terminal, write and MCP tools cannot acquire planning permissions by name or prompt text. This is
+a host tool boundary, not an OS sandbox or protection against trusted extension code itself.
+
+Host code rejects missing/blank fields, duplicate task IDs or dependencies, unknown/self references
+and dependency cycles. Delegated proposals additionally validate assigned profile availability.
 Only a valid submission atomically replaces the current plan. Requirement coverage, useful task size,
 role fit and potential shared-file conflicts remain agent assessments, not structural guarantees.
 The displayed dependency graph is derived from the submitted task data. Structural validation, semantic
@@ -941,7 +975,11 @@ acceptance-command runner. A saved plan must not be applied to unrelated request
 Each file-backed SDK conversation owns one adjacent `<session-file>.plan.json` artifact. It contains
 the plan, its SHA-256 content hash, conversation/workspace identity and agent semantic-review report.
 Updates replace that file rather than creating revision archives; invalid submissions preserve the
-previous valid file. Plans are limited to 128 tasks and a 2 MiB serialized artifact. Ordinary tool submissions remain part of normal conversation history. The current
+previous valid file. A delegated result also checks its original plan hash inside the serialized save
+boundary, so a late proposal cannot replace a newer accepted plan. Cancelled, failed and unfinished
+proposals do not replace the artifact. Cancellation is checked before replacement; it cannot roll back
+an already accepted write. Delegated proposals and context are each limited to 1 MiB;
+plans are limited to 128 tasks and a 2 MiB serialized artifact. Ordinary tool submissions remain part of normal conversation history. The current
 artifact is conversation-wide, not branch-local: returning to an older transcript does not roll it back.
 Subsequent model requests receive a current-plan reference, including after resume or compaction, and
 can read its details through `radian-plan`. Restart never executes saved tasks. A new conversation in
@@ -1839,8 +1877,11 @@ Parent tool actions:
 - `reply { id, questionId, message }`: answer one correlated, still-pending question exactly once.
 - `stop { id }`: cancel the owned run without claiming rollback.
 
-Child tool actions on `radian-supervisor` are `progress { message }` and `ask { message }`. Progress
-is nonblocking and retained as a bounded list; an ask waits for an explicit parent reply. Important
+Child tool actions on `radian-supervisor` are `progress { message }` and `ask { message }`. Only a
+host-designated planning child additionally receives `proposal { proposal: { plan, review } }`, which
+returns data to its parent without writing a plan or executing tasks. Ordinary children cannot claim
+that capability through their profile or public spawn input. Progress is nonblocking and retained as
+a bounded list; an ask waits for an explicit parent reply. Important
 updates, questions and final results enter an owner-scoped inbox outside the SDK follow-up queue.
 Reports are coalesced and revalidated at the parent's idle boundary. State already returned by
 `status`/`wait`, answered questions, superseded progress and intentionally stopped work do not wake

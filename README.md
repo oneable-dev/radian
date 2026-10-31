@@ -247,6 +247,8 @@ implementation notes, including:
   task/delegation graph without executing its tasks. After authorized implementation, the parent
   compares actual results with the plan's acceptance criteria before reporting completion.
   Each conversation retains one current plan, cleaned up through normal session retention.
+  Optional Pi `commandAgents.plan` settings delegate drafting to a user profile's model; the parent
+  stays on its selected model and alone validates/saves the read-only child's structured proposal.
 - Git browsing is **read-only**: staging, commits, branch switching, and conflict
   resolution are not built into the Git view.
 - Live editor and terminal state survives interface detach, not runtime shutdown.

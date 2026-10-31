@@ -16,7 +16,9 @@ import { expectOk } from "../testing/results.ts";
 import { piSessionFactory } from "./pi-session-adapter.ts";
 import { planFilePath, readTaskPlan } from "./task-plan-store.ts";
 import type { TaskPlan } from "./task-plan.ts";
-import { taskPlanningExtension } from "./task-planning.ts";
+import { taskPlanningExtension, type PlanningHost } from "./task-planning.ts";
+import { ok, err } from "../result.ts";
+import { CancelledError } from "../errors.ts";
 
 function proposal(goal = "Deliver a reviewed feature"): TaskPlan {
   return {
@@ -50,7 +52,7 @@ function proposal(goal = "Deliver a reviewed feature"): TaskPlan {
   };
 }
 
-async function fixture() {
+async function fixture(host?: PlanningHost) {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "radian-task-planning-")));
   const options = await offlineRuntime(join(directory, "agent"));
   await mkdir(options.sessionDir!, { recursive: true });
@@ -80,7 +82,7 @@ async function fixture() {
       noPromptTemplates: true,
       noThemes: true,
       extensionFactories: [
-        taskPlanningExtension(),
+        taskPlanningExtension(undefined, host),
         (pi) => {
           pi.on("before_agent_start", (event) => {
             planRequestStarted =
@@ -212,6 +214,130 @@ function owner(session: AgentSession) {
     cwd: session.sessionManager.getCwd(),
   };
 }
+
+test("A delegated planning timeout stops only its bound run and preserves the prior artifact", async () => {
+  // Deadline cleanup must not rely on another model turn or poll unrelated children.
+  const stopped = Promise.withResolvers<string | undefined>();
+  const host: PlanningHost = {
+    timeoutMs: 10,
+    resolveAgent: async () =>
+      ok({
+        name: "planner",
+        description: "Fixture",
+        skills: [],
+        prompt: "Plan only",
+        path: "/fixture/planner.md",
+      }),
+    coordinate: async (command) => {
+      if (command.action === "stop") {
+        stopped.resolve(command.id);
+        return ok(null);
+      }
+      const run = { id: "owned-planner", status: "working", questions: [] };
+      return ok(command.action === "spawn" ? run : [run]);
+    },
+  };
+  const app = await fixture(host);
+  try {
+    app.withoutSubmission();
+    app.queueTools({ name: "radian-plan", arguments: { action: "delegate" } });
+    const session = await app.open();
+    await app.run(session, "/plan Read only");
+    expect(await stopped.promise).toBe("owned-planner");
+    expect(
+      expectOk(await readTaskPlan(session.sessionManager.getSessionFile()!, owner(session))),
+    ).toBeNull();
+  } finally {
+    await app.close();
+  }
+});
+
+test("Aborting a delegated wait explicitly cancels the owned planning run", async () => {
+  // Cancelling a wait alone is not proof that its background child was stopped.
+  const waiting = Promise.withResolvers<void>();
+  const stopped: string[] = [];
+  const app = await fixture({
+    resolveAgent: async () =>
+      ok({
+        name: "planner",
+        description: "Fixture",
+        skills: [],
+        prompt: "Plan only",
+        path: "/fixture/planner.md",
+      }),
+    coordinate: async (command, signal) => {
+      if (command.action === "stop") {
+        stopped.push(command.id);
+        return ok(null);
+      }
+      if (command.action === "wait") {
+        waiting.resolve();
+        return new Promise((resolve) => {
+          const abort = () => resolve(err(new CancelledError()));
+          if (signal?.aborted) abort();
+          else signal?.addEventListener("abort", abort, { once: true });
+        });
+      }
+      const run = { id: "owned-planner", status: "working", questions: [] };
+      return ok(command.action === "spawn" ? run : [run]);
+    },
+  });
+  try {
+    app.withoutSubmission();
+    app.queueTools(
+      { name: "radian-plan", arguments: { action: "delegate" } },
+      { name: "radian-plan", arguments: { action: "wait" } },
+    );
+    const session = await app.open();
+    const run = app.run(session, "/plan Read only");
+    await waiting.promise;
+    await session.abort();
+    await run;
+    expect(stopped).toEqual(["owned-planner"]);
+    expect(
+      expectOk(await readTaskPlan(session.sessionManager.getSessionFile()!, owner(session))),
+    ).toBeNull();
+  } finally {
+    await app.close();
+  }
+});
+
+test("Cancelling through the planning tool does not unlock writes or submission in the same turn", async () => {
+  // A model cannot escape read-only planning by cancelling and immediately executing work.
+  const app = await fixture();
+  try {
+    const session = await app.open();
+    await app.run(session, "/plan Original plan");
+    const original = expectOk(
+      await readTaskPlan(session.sessionManager.getSessionFile()!, owner(session)),
+    )!;
+    app.queueTools(
+      { name: "radian-plan", arguments: { action: "cancel" } },
+      {
+        name: "radian-plan",
+        arguments: {
+          action: "submit",
+          plan: proposal("Unexpected replacement"),
+          review: { summary: "Unexpected", warnings: [] },
+        },
+      },
+      { name: "write", arguments: { path: "cancel-escape.txt", content: "unexpected" } },
+    );
+    await app.run(session, "/plan Cancel without implementation");
+    expect(await Bun.file(join(app.directory, "cancel-escape.txt")).exists()).toBe(false);
+    expect(
+      expectOk(await readTaskPlan(session.sessionManager.getSessionFile()!, owner(session)))?.hash,
+    ).toBe(original.hash);
+    app.setTool({
+      name: "write",
+      arguments: { path: "later-authorized.txt", content: "approved" },
+    });
+    await app.run(session, "Now perform this authorized write");
+    expect(await Bun.file(join(app.directory, "later-authorized.txt")).text()).toBe("approved");
+  } finally {
+    await app.close();
+  }
+});
 
 test("The planning command loads its skill, validates a graph and retains only one current sidecar", async () => {
   // Use a real SDK session with scripted provider responses, not a live model.

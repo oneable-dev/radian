@@ -6,9 +6,11 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import {
   capture,
+  CancelledError,
   InputError,
   parseJson,
   StorageError,
+  SessionError,
   withCleanup,
   type ExpectedError,
 } from "../errors.ts";
@@ -375,8 +377,11 @@ export function saveTaskPlan(
   owner: PlanOwner,
   plan: unknown,
   review: unknown,
+  options?: { expectedHash?: string | null; signal?: AbortSignal; isCurrent?: () => boolean },
 ): Promise<Result<StoredTaskPlan, ExpectedError>> {
+  const currentRequest = () => !options?.signal?.aborted && (options?.isCurrent?.() ?? true);
   return serialized(planFilePath(sessionFile), async () => {
+    if (!currentRequest()) return err(new CancelledError("Planning request ended before saving."));
     if (!validOwner(owner)) return err(new InputError("Invalid task plan owner."));
     const validated = validateTaskPlan(plan);
     if (!validated.ok) return validated;
@@ -384,6 +389,16 @@ export function saveTaskPlan(
       return err(new InputError("Invalid task plan review."));
     const current = await inspectSidecar(sessionFile, owner);
     if (!current.ok) return current;
+    if (
+      options?.expectedHash !== undefined &&
+      (current.value?.plan.hash ?? null) !== options.expectedHash
+    )
+      return err(
+        new SessionError(
+          "SESSION_CONFLICT",
+          "Current task plan changed after planning started; the existing plan was retained.",
+        ),
+      );
     const parent = await verifyParent(sessionFile);
     if (!parent.ok) return parent;
     const sdk = await inspectSdkOwner(sessionFile, owner);
@@ -430,6 +445,10 @@ export function saveTaskPlan(
           ) {
             throw new StorageError("Task plan changed before replacement.");
           }
+          if (!currentRequest())
+            throw new CancelledError(
+              "Planning request ended before replacement; the existing plan was retained.",
+            );
           await rename(temporary, path);
         },
         async () => {

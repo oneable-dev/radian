@@ -54,6 +54,7 @@ import { SubagentChannel } from "./subagent-channel.ts";
 import type { OwnedSubagentRecord } from "./subagent-record.ts";
 import type { SubagentCommand, SupervisorCommand } from "./subagent-tools.ts";
 import type { SubagentNotice, SubagentNoticePayload } from "./subagent-notifications.ts";
+import { validatePlanningProposal, type PlanningProposal } from "./planning-proposal.ts";
 
 export type ExecutionState = {
   readonly conversationId?: string;
@@ -120,9 +121,11 @@ export type SessionContext = {
   readonly startReason?: "new";
   readonly role: "main" | "subagent";
   readonly agent?: string;
+  readonly purpose?: "planning";
   coordinateSubagents?(
     command: SubagentCommand,
     signal?: AbortSignal,
+    purpose?: "planning",
   ): Promise<Result<unknown, ExpectedError>>;
   contactSupervisor?(
     command: SupervisorCommand,
@@ -160,6 +163,8 @@ type Execution = {
   readonly id: string;
   readonly name: string;
   readonly role: "main" | "subagent";
+  readonly purpose?: "planning";
+  planningProposal?: PlanningProposal;
   ready: Promise<Result<SessionExecutor, ExpectedError>> | undefined;
   finishedStatus?: AgentStatus | null;
   fileKey?: string;
@@ -834,8 +839,8 @@ export class SessionRegistry {
         ...(requestedFile ? { sessionFile: requestedFile } : {}),
         spawnSubagent: (name, task, signal) =>
           this.spawnSubagent(id, name, task, signal, generation),
-        coordinateSubagents: (command, signal) =>
-          this.coordinateSubagents(id, generation, command, signal),
+        coordinateSubagents: (command, signal, purpose) =>
+          this.coordinateSubagents(id, generation, command, signal, purpose),
       }),
     );
     const entry: OpenExecution = {
@@ -1368,8 +1373,8 @@ export class SessionRegistry {
         ...(previousSessionFile ? { previousSessionFile } : {}),
         spawnSubagent: (name, task, signal) =>
           this.spawnSubagent(previous.id, name, task, signal, generation),
-        coordinateSubagents: (command, signal) =>
-          this.coordinateSubagents(previous.id, generation, command, signal),
+        coordinateSubagents: (command, signal, purpose) =>
+          this.coordinateSubagents(previous.id, generation, command, signal, purpose),
       }),
     );
     const created = await ready;
@@ -1591,6 +1596,7 @@ export class SessionRegistry {
     generation: string,
     command: SubagentCommand,
     signal?: AbortSignal,
+    purpose?: "planning",
   ): Promise<Result<unknown, ExpectedError>> {
     const selected = this.requireOpen(ownerId);
     if (!selected.ok) return selected;
@@ -1631,19 +1637,26 @@ export class SessionRegistry {
         (id) => {
           childId = id;
         },
+        purpose,
       );
-      return result.ok ? ok(this.childStatus(owner.children.get(childId!)!)) : result;
+      return result.ok
+        ? ok(this.childStatus(owner.children.get(childId!)!, true, purpose))
+        : result;
     }
     const children = command.id ? [owner.children.get(command.id)] : [...owner.children.values()];
     if (children.some((child) => !child))
       return err(new InputError("This run does not belong to the current conversation."));
     const runs = children as Execution[];
+    if (purpose && runs.some((child) => child.purpose !== purpose))
+      return err(new InputError("This run does not belong to the planning request."));
     if (command.action === "status")
-      return ok(runs.map((child) => this.childStatus(child, command.id !== undefined)));
+      return ok(runs.map((child) => this.childStatus(child, command.id !== undefined, purpose)));
     if (command.action === "wait") {
       const settled = () =>
         runs.every((child) => !child.ready || child.settled) ||
-        [...owner.children.values()].some((child) => child.channel?.questions.length);
+        (purpose ? runs : [...owner.children.values()]).some(
+          (child) => child.channel?.questions.length,
+        );
       if (!settled()) {
         const response = Promise.withResolvers<void>();
         const cancel = () => response.resolve();
@@ -1669,11 +1682,15 @@ export class SessionRegistry {
         owner.replacing
       )
         return err(new CancelledError());
-      const attention = [...owner.children.values()].filter(
-        (child) => child.channel?.questions.length && !runs.includes(child),
-      );
+      const attention = purpose
+        ? []
+        : [...owner.children.values()].filter(
+            (child) => child.channel?.questions.length && !runs.includes(child),
+          );
       return ok(
-        [...runs, ...attention].map((child) => this.childStatus(child, command.id !== undefined)),
+        [...runs, ...attention].map((child) =>
+          this.childStatus(child, command.id !== undefined, purpose),
+        ),
       );
     }
     const child = runs[0]!;
@@ -1685,7 +1702,7 @@ export class SessionRegistry {
     if (command.action === "stop") {
       child.suppressNotifications = true;
       const stopped = await this.closeExecution(child);
-      return stopped.ok ? ok(this.childStatus(child)) : stopped;
+      return stopped.ok ? ok(this.childStatus(child, true, purpose)) : stopped;
     }
     if (!child.ready || !child.executor?.steer)
       return err(new InputError("This run is no longer accepting guidance."));
@@ -1696,7 +1713,7 @@ export class SessionRegistry {
     return child.executor.steer(command.message);
   }
 
-  private childStatus(child: Execution, detail = true): unknown {
+  private childStatus(child: Execution, detail = true, purpose?: "planning"): unknown {
     const state = child.executor?.state;
     child.observedNoticeVersion = child.noticeVersion ?? 0;
     if (!child.ready || child.settled) child.terminalObserved = true;
@@ -1726,6 +1743,13 @@ export class SessionRegistry {
         ? { runTiming: state?.runTiming ?? child.runTiming }
         : {}),
       ...(child.fileKey ? { sessionFile: child.fileKey } : {}),
+      ...(purpose === "planning" &&
+      child.purpose === "planning" &&
+      child.settled &&
+      !child.failure &&
+      child.planningProposal
+        ? { proposal: structuredClone(child.planningProposal) }
+        : {}),
     };
   }
 
@@ -1737,6 +1761,7 @@ export class SessionRegistry {
     generation?: string,
     background = false,
     onCreated?: (id: string) => void,
+    purpose?: "planning",
   ): Promise<Result<string, ExpectedError>> {
     const selected = this.requireOpen(ownerId);
     if (!selected.ok) {
@@ -1764,6 +1789,7 @@ export class SessionRegistry {
       name,
       task,
       role: "subagent",
+      ...(purpose ? { purpose } : {}),
       ready: undefined,
       controller: new AbortController(),
       ...(owner.worktree ? { worktree: owner.worktree } : {}),
@@ -1781,9 +1807,25 @@ export class SessionRegistry {
         ...(owner.scope.kind === "code" ? { worktreeId: owner.scope.worktreeId } : {}),
         role: "subagent",
         agent: name,
+        ...(purpose ? { purpose } : {}),
         contactSupervisor: (command, childSignal) => {
-          if (owner.phase !== "open" || owner.replacing || child.controller!.signal.aborted)
+          if (
+            owner.phase !== "open" ||
+            owner.replacing ||
+            child.controller!.signal.aborted ||
+            childSignal?.aborted
+          )
             return Promise.resolve(err(new CancelledError()));
+          if (command.action === "proposal") {
+            if (purpose !== "planning")
+              return Promise.resolve(
+                err(new CapabilityError("Only a planning run may return a plan proposal.")),
+              );
+            const proposal = validatePlanningProposal(command.proposal);
+            if (!proposal.ok) return Promise.resolve(proposal);
+            child.planningProposal = structuredClone(proposal.value);
+            return Promise.resolve(ok({ recorded: true }));
+          }
           if (!background && command.action === "ask")
             return Promise.resolve(
               err(

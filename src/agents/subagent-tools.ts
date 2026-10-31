@@ -3,6 +3,7 @@ import { Type, type Static } from "typebox";
 import { CapabilityError, InputError, type ExpectedError } from "../errors.ts";
 import { Value } from "typebox/value";
 import type { Result } from "../result.ts";
+import { planningProposalSchema } from "./planning-proposal.ts";
 
 const id = Type.String({ minLength: 1, maxLength: 256 });
 const message = Type.String({ minLength: 1, maxLength: 16384 });
@@ -22,8 +23,12 @@ export const subagentCommandSchema = Type.Union([
 ]);
 export type SubagentCommand = Static<typeof subagentCommandSchema>;
 export const supervisorCommandSchema = Type.Union([
-  Type.Object({ action: Type.Literal("progress"), message }),
-  Type.Object({ action: Type.Literal("ask"), message }),
+  Type.Object({ action: Type.Literal("progress"), message }, { additionalProperties: false }),
+  Type.Object({ action: Type.Literal("ask"), message }, { additionalProperties: false }),
+  Type.Object(
+    { action: Type.Literal("proposal"), proposal: planningProposalSchema },
+    { additionalProperties: false },
+  ),
 ]);
 export type SupervisorCommand = Static<typeof supervisorCommandSchema>;
 export type SubagentHandler<T> = (
@@ -68,19 +73,31 @@ export function subagentTool(handler?: SubagentHandler<SubagentCommand>) {
   });
 }
 
-export function supervisorTool(handler?: SubagentHandler<SupervisorCommand>) {
+export function supervisorTool(handler?: SubagentHandler<SupervisorCommand>, planning = false) {
   return defineTool({
     name: "radian-supervisor",
     label: "Supervisor",
     description:
-      "Contact your owning parent. progress records a meaningful update without waiting for a reply. ask waits for an explicit decision. Neither action delegates work or contacts unrelated sessions.",
+      "Contact your owning parent. progress records an update; ask waits for a decision. A planning-only run may submit its complete plan and review with proposal; this never writes a plan file or executes tasks.",
     promptSnippet:
       "Report meaningful progress or ask your parent for a decision with radian-supervisor.",
     parameters: Type.Object(
-      { action: Type.Union([Type.Literal("progress"), Type.Literal("ask")]), message },
+      {
+        action: Type.Union(
+          (planning ? ["progress", "ask", "proposal"] : ["progress", "ask"]).map((action) =>
+            Type.Literal(action),
+          ),
+        ),
+        message: Type.Optional(message),
+        ...(planning ? { proposal: Type.Optional(planningProposalSchema) } : {}),
+      },
       { additionalProperties: false },
     ),
     execute: async (_id, command, signal) => {
+      if (!Value.Check(supervisorCommandSchema, command))
+        throw new InputError("Missing or invalid fields for this supervisor action.");
+      if (command.action === "proposal" && !planning)
+        throw new CapabilityError("Only a host-designated planning run may submit a proposal.");
       if (!handler) throw new CapabilityError("This session has no owning supervisor.");
       const result = await handler(command, signal);
       if (!result.ok) throw result.error;

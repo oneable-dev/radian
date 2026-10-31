@@ -30,6 +30,10 @@ export class SubagentChannel {
     signal?: AbortSignal,
   ): Promise<Result<unknown, ExpectedError>> {
     if (this.closed || signal?.aborted) return Promise.resolve(err(new CancelledError()));
+    if (command.action === "proposal")
+      return Promise.resolve(
+        err(new InputError("Planning proposals belong to the owning runtime.")),
+      );
     if (!command.message.trim())
       return Promise.resolve(err(new InputError("A supervisor message cannot be empty.")));
     if (command.action === "progress") {
