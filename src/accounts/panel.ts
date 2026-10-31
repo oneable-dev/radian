@@ -958,10 +958,6 @@ export class AccountsPanel {
     }
   }
 
-  private get rowHeight(): number {
-    return this.stage === "providers" || this.stage === "methods" ? 1 : 2;
-  }
-
   private filter = (): void => {
     const matches = createTextMatcher(this.search.value);
     const selected = this.filtered[this.cursor]?.id;
@@ -986,7 +982,7 @@ export class AccountsPanel {
     this.filtered.forEach((candidate, index) => {
       const row = new BoxRenderable(this.renderer, {
         id: `accounts-row:${candidate.id}`,
-        height: this.rowHeight,
+        height: 1,
         flexShrink: 0,
         flexDirection: "column",
         minWidth: 0,
@@ -1006,26 +1002,10 @@ export class AccountsPanel {
         wrapMode: "none",
         selectable: false,
       });
-      const detail =
-        this.rowHeight === 2
-          ? new TextRenderable(this.renderer, {
-              content: singleLine(candidate.detail),
-              height: 1,
-              wrapMode: "none",
-              selectable: false,
-            })
-          : undefined;
-
       uiTheme(this.renderer).bindStyles(row, (styles) => {
         paintText(label, styles["ui.label"]);
-        if (detail) {
-          paintText(detail, styles["ui.muted"]);
-        }
       });
       row.add(label);
-      if (detail) {
-        row.add(detail);
-      }
 
       this.rows.push(row);
       this.list.add(row);
@@ -1053,7 +1033,7 @@ export class AccountsPanel {
       !this.catalog.existingAccounts?.length &&
       !this.search.value;
     // The add-account candidate remains actionable above the centered setup guidance.
-    this.layout.results.empty.root.top = noAccounts ? this.filtered.length * this.rowHeight : 0;
+    this.layout.results.empty.root.top = noAccounts ? this.filtered.length : 0;
     let emptyTitle: string | undefined;
     if (this.list.visible && !this.busy && this.catalog) {
       if (noAccounts) {
@@ -1067,9 +1047,14 @@ export class AccountsPanel {
       noAccounts ? "Choose Add account to sign in." : undefined,
     );
 
-    const row = this.rows[this.cursor];
-    if (row) {
-      this.list.scrollChildIntoView(row.id);
+    const height = this.list.viewport.height;
+    if (this.rows[this.cursor] && height > 0) {
+      // Candidate indices are row offsets, including in a one-row confirmation viewport.
+      if (this.cursor < this.list.scrollTop) {
+        this.list.scrollTo(this.cursor);
+      } else if (this.cursor >= this.list.scrollTop + height) {
+        this.list.scrollTo(this.cursor - height + 1);
+      }
     }
 
     this.actions.changed();
@@ -1145,8 +1130,7 @@ export class AccountsPanel {
         0,
         Math.min(
           this.filtered.length - 1,
-          this.cursor +
-            direction * (half ? halfPageStep(this.list.viewport.height, this.rowHeight) : 1),
+          this.cursor + direction * (half ? halfPageStep(this.list.viewport.height) : 1),
         ),
       );
       this.paint();

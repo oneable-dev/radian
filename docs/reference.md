@@ -785,6 +785,8 @@ The Agent prompt completes and executes these host commands instead of sending t
 - **`/accounts`** opens account switching with a fresh, focused search field. The first screen lists saved accounts and existing
   connections with configured authentication; unauthenticated providers are not shown as accounts.
   Choose **Add account** to see supported providers, choose OAuth or API key, and name the new account.
+  Account, provider, sign-in method, authentication-choice and deletion lists use single-line rows
+  without secondary descriptions. Authentication and deletion guidance remains in the popup body.
   Accounts and credentials are shared by the daemon; each **worktree** uses its own account per
   provider. Adding an account never changes the active account: select it explicitly after signing in.
   OAuth opens the browser and always displays the URL with copy/reopen controls;
@@ -792,8 +794,9 @@ The Agent prompt completes and executes these host commands instead of sending t
   authorization-code input are masked and never enter Agent drafts or conversation history.
   **/** searches, **Ctrl+N/P** moves candidates in either focus, **j/k** navigates results, and
   **Ctrl+D/U** jumps half a list viewport. **Ctrl+C** clears only the search query. **Enter** switches
-  the account for this worktree, **r** edits the selected account's label, **x** opens local-account
-  deletion confirmation, and **Ctrl+R** refreshes the account list without resetting search, caret,
+  the account for this worktree. **Tab** moves focus from search to results, where **r** edits the
+  selected account's label and **x** opens local-account deletion confirmation. **Ctrl+R** refreshes
+  the account list without resetting search, caret,
   focus or the selected candidate when it still exists. Label entry uses **Enter** to save
   and **Esc** to discard unsubmitted edits. Labels are shared across worktrees; renaming never changes
   authentication or selections. **Esc** goes back or cancels login and restores input focus.

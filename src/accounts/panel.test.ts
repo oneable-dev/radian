@@ -183,6 +183,87 @@ test("The initial account list shows saved accounts and lists unauthenticated pr
   }
 });
 
+test("Account switching keeps add, existing, and saved accounts on adjacent single lines", async () => {
+  // Existing connections and saved credentials share the same compact account list.
+  const app = await mount({
+    onAccountsRequest: async (request) =>
+      ok({
+        kind: "catalog",
+        catalog: {
+          ...catalog,
+          worktreeId: request.worktreeId,
+          selections: { fixture: "named" },
+          existingAccounts: [{ provider: "fixture", name: "Fixture", type: "oauth" }],
+        },
+      }),
+  });
+  try {
+    await app.open();
+
+    // Keep account identities and the active marker without secondary descriptions or blank rows.
+    const rows = ["add", "existing:fixture", "named"].map((id) => app.get(`accounts-row:${id}`));
+    expect(rows.map((row) => row.height)).toEqual([1, 1, 1]);
+    expect(rows.map((row) => row.y - rows[0]!.y)).toEqual([0, 1, 2]);
+
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("Fixture · Existing login");
+    expect(frame).toContain("Fixture · Personal [Active]");
+    expect(frame).not.toContain("Sign in to another account");
+    expect(frame).not.toContain("already connected");
+    expect(frame).not.toContain("worktree(s)");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Delete confirmation uses single-line options and retains affected worktree guidance", async () => {
+  // Deletion must still explain affected worktrees after secondary option descriptions are removed.
+  const calls: AccountRequest[] = [];
+  const app = await mount({
+    onAccountsRequest: async (request) => {
+      calls.push(request);
+
+      return ok({
+        kind: "catalog",
+        catalog: {
+          ...catalog,
+          worktreeId: request.worktreeId,
+          accounts: [{ ...catalog.accounts[0]!, usedBy: ["other:main"] }],
+        },
+      });
+    },
+  });
+  try {
+    await app.open();
+    app.mockInput.pressKey("j");
+    app.mockInput.pressKey("x");
+    await app.render();
+
+    // Both options occupy one row while the meaningful deletion warning remains in the body.
+    const keep = app.get("accounts-row:cancel");
+    const remove = app.get("accounts-row:delete");
+    expect([keep.height, remove.height]).toEqual([1, 1]);
+    expect(remove.y).toBe(keep.y + 1);
+
+    const frame = app.captureCharFrame();
+    expect(frame).toContain("Keep account");
+    expect(frame).toContain("Used by these worktrees:");
+    expect(frame).toContain("other:main");
+    expect(frame).not.toContain("Switch any worktrees using this account");
+
+    // The compact viewport reveals the destructive choice through navigation without accepting it.
+    app.mockInput.pressKey("n", { ctrl: true });
+    await app.render();
+    expect(app.captureCharFrame()).toContain("Delete local account");
+    app.mockInput.pressKey("p", { ctrl: true });
+    await app.render();
+    expect(app.captureCharFrame()).toContain("Keep account");
+    expect(calls.map((request) => request.type)).toEqual(["list"]);
+  } finally {
+    await app.close();
+  }
+});
+
 test("No connected accounts shows an add-account hint instead of a fake selection", async () => {
   // Start with supported providers but no saved credentials.
   const app = await mount({
@@ -804,59 +885,70 @@ test.each([
   },
 );
 
-test("Account search supports Ctrl+N/P and half-page navigation while preserving query and caret", async () => {
-  // Use more accounts than fit in one viewport to test input/results navigation.
-  const many = {
-    ...catalog,
-    accounts: Array.from({ length: 60 }, (_, i) => ({
-      ...catalog.accounts[0]!,
-      id: `account-${i}`,
-      label: `Account ${i}`,
-    })),
-  };
-  const calls: AccountRequest[] = [];
-  const app = await mount({
-    onAccountsRequest: async (request) => {
-      calls.push(request);
+test.each([
+  [120, 30],
+  [60, 16],
+])(
+  "The %dx%d account list jumps half a viewport of single-line candidates",
+  async (width, height) => {
+    // Use more accounts than fit in one viewport to test input/results navigation.
+    const many = {
+      ...catalog,
+      accounts: Array.from({ length: 60 }, (_, i) => ({
+        ...catalog.accounts[0]!,
+        id: `account-${i}`,
+        label: `Account ${i}`,
+      })),
+    };
+    const calls: AccountRequest[] = [];
+    const app = await mount({
+      onAccountsRequest: async (request) => {
+        calls.push(request);
 
-      return ok({ kind: "catalog", catalog: { ...many, worktreeId: request.worktreeId } });
-    },
-  });
-  try {
-    await app.open();
-    app.mockInput.pressKey("/");
-    await app.render();
-    await app.mockInput.typeText("Account");
-    await app.render();
+        return ok({ kind: "catalog", catalog: { ...many, worktreeId: request.worktreeId } });
+      },
+    });
+    try {
+      app.resize(width, height);
+      await app.render();
+      await app.open();
+      app.mockInput.pressKey("/");
+      await app.render();
+      await app.mockInput.typeText("Fixture");
+      await app.render();
 
-    const search = app.get("accounts-search") as InputRenderable;
-    const caret = search.cursorOffset;
+      const search = app.get("accounts-search") as InputRenderable;
+      const caret = search.cursorOffset;
+      const jump = Math.max(
+        1,
+        Math.floor((app.get("accounts-list") as ScrollBoxRenderable).viewport.height / 2),
+      );
 
-    // Move candidates from input focus, then hand off focus with a half-page jump.
-    app.mockInput.pressKey("n", { ctrl: true });
-    app.mockInput.pressKey("p", { ctrl: true });
-    app.mockInput.pressKey("d", { ctrl: true });
-    await app.render();
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-list");
-    expect(search.value).toBe("Account");
-    expect(search.cursorOffset).toBe(caret);
-    app.mockInput.pressKey("n", { ctrl: true });
-    app.mockInput.pressKey("k");
-    app.mockInput.pressEnter();
-    await app.render();
+      // Move candidates from input focus, then hand off focus with a half-page jump.
+      app.mockInput.pressKey("n", { ctrl: true });
+      app.mockInput.pressKey("p", { ctrl: true });
+      app.mockInput.pressKey("d", { ctrl: true });
+      await app.render();
+      expect(app.renderer.currentFocusedRenderable?.id).toBe("accounts-list");
+      expect(search.value).toBe("Fixture");
+      expect(search.cursorOffset).toBe(caret);
+      app.mockInput.pressKey("n", { ctrl: true });
+      app.mockInput.pressKey("k");
+      app.mockInput.pressEnter();
+      await app.render();
 
-    // Navigate by candidates; the next request selects an account after the first.
-    const selected = calls.find((request) => request.type === "select");
-    expect(selected?.type).toBe("select");
-    if (selected?.type === "select") {
-      expect(selected.accountId).not.toBe("account-0");
+      // A half-page jump selects the exact candidate implied by single-line row spacing.
+      expect(calls.find((request) => request.type === "select")).toMatchObject({
+        provider: "fixture",
+        accountId: `account-${jump}`,
+      });
+
+      expect(app.sent).toEqual([]);
+    } finally {
+      await app.close();
     }
-
-    expect(app.sent).toEqual([]);
-  } finally {
-    await app.close();
-  }
-});
+  },
+);
 
 test("Ctrl+C on empty account search keeps the popup open and h/j/k/l literal", async () => {
   // Clearing search and typing must not trigger account actions or app exit.
@@ -951,6 +1043,76 @@ test("API key input stays masked and reaches only the SDK login request", async 
     await app.render();
     expect(app.get("accounts-secret").visible).toBe(false);
     expect(app.captureCharFrame()).not.toContain("Enter API key");
+  } finally {
+    waiting.resolve(err(new CancelledError()));
+    await app.close();
+  }
+});
+
+test("Authentication choices use single lines while descriptions remain searchable", async () => {
+  // Provider-defined descriptions remain search metadata, not extra option rows.
+  const calls: AccountRequest[] = [];
+  const waiting = Promise.withResolvers<Result<AccountReply, ExpectedError>>();
+  const flow: LoginView = {
+    id: "workspace-choice",
+    revision: 1,
+    status: "pending",
+    events: [],
+    prompt: {
+      id: "workspace",
+      type: "select",
+      message: "Choose a workspace",
+      options: [
+        { id: "personal", label: "Personal workspace", description: "Individual access" },
+        { id: "team", label: "Team workspace", description: "Organization access" },
+      ],
+    },
+  };
+  const app = await mount({
+    onAccountsRequest: async (request, signal) => {
+      calls.push(request);
+      if (request.type === "login" || request.type === "answer") {
+        return ok({ kind: "login", login: flow });
+      }
+      if (request.type === "poll") {
+        signal?.addEventListener("abort", () => waiting.resolve(err(new CancelledError())), {
+          once: true,
+        });
+
+        return waiting.promise;
+      }
+
+      return ok({ kind: "catalog", catalog: { ...catalog, worktreeId: request.worktreeId } });
+    },
+  });
+  try {
+    await app.open();
+    for (let step = 0; step < 4; step++) {
+      app.mockInput.pressEnter();
+      await app.render();
+    }
+
+    // Authentication choices have no secondary rows, just like account and provider choices.
+    const personal = app.get("accounts-row:personal");
+    const team = app.get("accounts-row:team");
+    expect([personal.height, team.height]).toEqual([1, 1]);
+    expect(team.y).toBe(personal.y + 1);
+    expect(app.captureCharFrame()).not.toContain("Individual access");
+    expect(app.captureCharFrame()).not.toContain("Organization access");
+
+    // Searching hidden metadata still activates the provider's original option identifier.
+    await app.mockInput.typeText("Organization");
+    await app.render();
+    expect(app.captureCharFrame()).toContain("Team workspace");
+    expect(app.captureCharFrame()).not.toContain("Personal workspace");
+    app.mockInput.pressEnter();
+    await app.render();
+    expect(calls.find((request) => request.type === "answer")).toMatchObject({
+      flowId: "workspace-choice",
+      promptId: "workspace",
+      value: "team",
+    });
+    expect(app.sent).toEqual([]);
   } finally {
     waiting.resolve(err(new CancelledError()));
     await app.close();
