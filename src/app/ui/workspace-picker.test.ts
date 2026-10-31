@@ -309,7 +309,7 @@ test("Search focus changes preserve open-popup input and only reopening after se
   }
 });
 
-test("Workspace hints omit default navigation in both search and results focus", async () => {
+test("Workspace footer omits command hints in both search and results focus", async () => {
   // Ctrl+N/P and j/k keep working without repetitive footer hints.
   const app = await fixture();
   const footer = () => app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
@@ -324,7 +324,7 @@ test("Workspace hints omit default navigation in both search and results focus",
 
     expect(footer()).not.toContain("k/j Navigate");
     expect(footer()).not.toMatch(/[↑↓]/u);
-    expect(footer()).toContain("Help");
+    expect(footer()).not.toContain("Help");
   } finally {
     await app.close();
   }
@@ -1142,7 +1142,7 @@ test("Large monitors report rendering limits and search still reaches later sess
   }
 });
 
-test("Cancelling repository-free popups restores Help instead of hidden search focus", async () => {
+test("Cancelling repository-free popups restores the visible view instead of hidden search focus", async () => {
   // With no session or PTY to restore, keys must not remain in hidden inputs.
   const app = await createTestRenderer({ width: 60, height: 12, kittyKeyboard: true });
   const view = new Workbench(app.renderer, new WorkspaceSelection([]), {
@@ -1157,7 +1157,15 @@ test("Cancelling repository-free popups restores Help instead of hidden search f
     await app.renderOnce();
 
     expect(app.renderer.root.findDescendantById("workspace-picker")!.visible).toBe(false);
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("footer-help");
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("agent-view");
+
+    // Passive footer removal leaves the visible empty view as the only traversal target.
+    for (const shift of [false, true]) {
+      app.mockInput.pressTab({ shift });
+      await app.renderOnce();
+      expect(app.renderer.currentFocusedRenderable?.id).toBe("agent-view");
+      expect(app.renderer.currentFocusedRenderable?.visible).toBe(true);
+    }
   } finally {
     view.dispose();
     await app.dispose();

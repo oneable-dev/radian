@@ -232,24 +232,26 @@ test.each(["agent", "terminal"] as const)(
 );
 
 test.each(["agent", "terminal"] as const)(
-  "%s tab clicks preserve focus outside the work content",
+  "%s tab clicks behind Workspace preserve selection and external search focus",
   async (mode) => {
-    // A footer command can own focus independently of the visible tab.
+    // Workspace search can own focus independently of the visible tab.
     const app = await mount(mode);
     try {
-      const footer = app.renderer.root.findDescendantById("footer-help")!;
-      footer.focus();
+      app.leader("b");
+      await app.render();
+      const search = app.renderer.root.findDescendantById("workspace-search")!;
+      expect(app.renderer.currentFocusedRenderable).toBe(search);
 
       const tab = app.renderer.root.findDescendantById(
         mode === "agent" ? "session:demo:main:a2" : "terminal-session:shell-2",
       )!;
 
-      // Changing the displayed tab must not activate its input when another region owns focus.
+      // The modal owns input and blocks background tab activation rather than stealing search focus.
       await app.mockMouse.click(tab.x, tab.y);
       await app.render();
 
-      expect(app.active()).toBe(mode === "agent" ? "a2" : "shell-2");
-      expect(app.renderer.currentFocusedRenderable).toBe(footer);
+      expect(app.active()).toBe(mode === "agent" ? "a1" : "shell-1");
+      expect(app.renderer.currentFocusedRenderable?.id).toBe(search.id);
       expect(app.requests).toEqual([]);
       expect(app.inputs).toEqual([]);
     } finally {
@@ -336,7 +338,7 @@ test.each(["agent", "terminal"] as const)(
     // An explicit global focus command can exercise traversal even inside a native PTY.
     const app = await mount(mode, true);
     try {
-      // Cycle through all available work-view and footer targets.
+      // Cycle through all available work-view targets.
       for (let index = 0; index < 8; index++) {
         app.leader("f");
         await app.render();
@@ -358,15 +360,17 @@ test.each(["agent", "terminal"] as const)(
 );
 
 test.each(["agent", "terminal"] as const)(
-  "%s remapped tab close updates execution, footer, and help",
+  "%s remapped tab close updates execution and Help without footer hints",
   async (mode) => {
     // A user override replaces the shared default in both app-owned and native inputs.
     const app = await mount(mode, true);
     try {
-      // Leave enough footer space so this tests rebinding rather than shortcut truncation.
+      // Even wide footers omit configured command hints.
       app.resize(200, 30);
       await app.render();
-      expect(app.captureCharFrame()).toContain("<M-w> Close tab");
+      expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain(
+        "<M-w> Close tab",
+      );
 
       // The configured chord closes only the current tab before opening help.
       app.mockInput.pressKey("w", { meta: true });
@@ -544,7 +548,7 @@ test("Navigation never creates empty tabs and single tabs remain selected", asyn
   }
 });
 
-test("Overrides update common tab behavior, help, and footers", async () => {
+test("Overrides update common tab behavior and Help without footer hints", async () => {
   // Cycle using configured global commands, not hardcoded characters.
   const app = await mount("agent", true);
   try {
@@ -554,7 +558,9 @@ test("Overrides update common tab behavior, help, and footers", async () => {
     app.mockInput.pressKey("j", { meta: true });
     await app.render();
     expect(app.active()).toBe("a1");
-    expect(app.captureCharFrame()).toContain("<M-k>/<M-j> Tab");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain(
+      "<M-k>/<M-j> Tab",
+    );
     app.leader("?");
     await app.render();
     app.mockInput.pressKey("d", { ctrl: true });

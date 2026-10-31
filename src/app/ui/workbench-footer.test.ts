@@ -8,6 +8,7 @@ import { demoWorkspace } from "../../workspace/demo.ts";
 import type { HistoryItem } from "../../agents/history.ts";
 import type { ExecutionState } from "../../agents/session-registry.ts";
 import { ok } from "../../result.ts";
+import { icons } from "../../icons.ts";
 
 const saved = (id: string, unavailableReason: string | null = null): HistoryItem => ({
   id,
@@ -102,6 +103,70 @@ test("Default screens use content through the footer without fixed legends or hi
     expect(app.captureCharFrame()).not.toContain("Status not supplied");
     expect(app.captureCharFrame()).not.toContain("UI preview only");
     expect(app.footerLine()).toContain("AGENT");
+    expect(app.calls).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Account usage lives only in the footer while the session keeps model settings and context", async () => {
+  // Both providers share account-level telemetry; the composer still belongs to this session.
+  const resetsAt = Date.now() + 3600000;
+  const app = await mount(undefined, {
+    getSessionDetails: () => ({
+      status: "complete",
+      error: null,
+      output: "Transcript",
+      telemetry: {
+        provider: "openai-codex",
+        model: "gpt-test",
+        effort: "high",
+        fast: false,
+        context: { usedTokens: 28000, maxTokens: 100000 },
+        weekly: null,
+        providerUsage: {
+          "openai-codex": {
+            provider: "openai-codex",
+            status: "ready",
+            windows: [{ id: "weekly", usedPercent: 18, periodMs: 604800000, resetsAt }],
+            updatedAt: Date.now(),
+            errorCode: null,
+          },
+          anthropic: {
+            provider: "anthropic",
+            status: "ready",
+            windows: [{ id: "weekly", usedPercent: 43, periodMs: 604800000, resetsAt }],
+            updatedAt: Date.now(),
+            errorCode: null,
+          },
+        },
+      },
+    }),
+  });
+  try {
+    const status = app.renderer.root.findDescendantById("session-status-line")!;
+    const line = () => app.captureCharFrame().split("\n")[status.y]!;
+
+    // Provider usage is global chrome; context remains right-aligned beneath the composer.
+    expect(app.footerLine()).toContain("18% used");
+    expect(app.footerLine()).toContain("43% used");
+    expect(app.footerLine()).toContain("1h 0m");
+    expect(line()).toContain("gpt-test");
+    expect(line()).toContain("high");
+    expect(line().trimEnd()).toEndWith("72% left");
+    expect(line()).not.toContain("used");
+    expect(app.footerLine()).not.toMatch(/<leader>|<F1>|Help|left/u);
+
+    // Opening a popup does not replace usage with contextual shortcuts or remove Help's command.
+    app.mockInput.pressKey("F1");
+    await app.renderOnce();
+    expect(app.captureCharFrame()).toContain("Application shortcuts");
+    expect(app.footerLine()).toContain("18% used");
+    expect(app.footerLine()).toContain("43% used");
+    expect(app.footerLine()).not.toMatch(/<F1>|Help|Copy|Close/u);
+    app.mockInput.pressEscape();
+    await app.renderOnce();
+    expect(app.selection.sessionId).toBe("a1");
     expect(app.calls).toEqual([]);
   } finally {
     await app.close();
@@ -220,7 +285,7 @@ test.each([120, 60])(
         app.setStatus(state);
         await app.renderOnce();
         expect(app.footerLine()).not.toMatch(/Run|Queue|New line|Interrupt|<C-[cnp]>/u);
-        expect(app.footerLine()).toContain("<F1>");
+        expect(app.footerLine()).not.toMatch(/<F1>|Help|<leader>/u);
         expect(app.view.promptDrafts.a1).toBe("first\nsecond");
       }
 
@@ -246,8 +311,7 @@ test("Trees and search retain focus navigation and literal typing without defaul
     openWorkspaceSearch(app);
     app.mockInput.pressTab();
     await app.renderOnce();
-    expect(app.footerLine()).not.toMatch(/<CR>|Navigate|½ page|Close|First\/last/u);
-    expect(app.footerLine()).toContain("<F1> Help");
+    expect(app.footerLine()).not.toMatch(/<CR>|Navigate|½ page|Close|First\/last|<F1>|Help/u);
 
     openWorkspaceSearch(app);
     await app.renderOnce();
@@ -261,26 +325,26 @@ test("Trees and search retain focus navigation and literal typing without defaul
     app.mockInput.pressTab();
     await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree");
-    expect(app.footerLine()).toContain("<F1> Help");
+    expect(app.footerLine()).not.toMatch(/<F1>|Help/u);
   } finally {
     await app.close();
   }
 });
 
-test("History hints only Preview/Refresh while preserving lookup and selection", async () => {
+test("History omits all footer hints while preserving lookup and selection", async () => {
   // Late metadata must not restore default open/navigation hints.
   const pending = Promise.withResolvers<readonly HistoryItem[]>();
   const app = await mount(() => pending.promise);
   try {
     await app.openHistory();
-    expect(app.footerLine()).toContain("<C-r> Refresh");
+    expect(app.footerLine()).not.toMatch(/Refresh|Preview|<C-r>|<C-o>/u);
     expect(app.renderer.currentFocusedRenderable?.id).toBe("history-search");
     expect(app.footerLine()).not.toContain("<CR> Open");
 
     pending.resolve([saved("Available saved"), saved("Busy saved", "Still closing")]);
     await app.visible("Available saved");
 
-    expect(app.footerLine()).toContain("<C-o> Preview");
+    expect(app.footerLine()).not.toContain("Preview");
     app.mockInput.pressTab();
     await app.renderOnce();
     expect(app.footerLine()).not.toMatch(/<CR>|Previous|Next|½ page|<Esc>/u);
@@ -297,13 +361,13 @@ test("History hints only Preview/Refresh while preserving lookup and selection",
   }
 });
 
-test("Prompt availability and separate errors preserve hints, drafts, and selection", async () => {
-  // Omit default draft clearing while retaining app-specific movement hints in every send state.
+test("Prompt availability preserves drafts and selection without any footer shortcuts", async () => {
+  // Removing instructions must not change draft clearing, submission or workspace commands.
   const app = await mount();
   try {
     pressLeader(app, "a");
     await app.renderOnce();
-    expect(app.footerLine()).toContain("<leader>b Workspace");
+    expect(app.footerLine()).not.toContain("<leader>b Workspace");
     expect(app.footerLine()).not.toContain("<CR> Run");
     await app.mockInput.typeText("hello");
     await app.renderOnce();
@@ -318,7 +382,7 @@ test("Prompt availability and separate errors preserve hints, drafts, and select
     await app.renderOnce();
 
     expect(app.calls).toEqual(["prompt:hello"]);
-    expect(app.footerLine()).toContain("<leader>b Workspace");
+    expect(app.footerLine()).not.toContain("<leader>b Workspace");
     expect(app.view.promptDrafts.a1).toBeUndefined();
     expect(app.selection.sessionId).toBe("a1");
     expect(app.footerLine()).not.toContain("<CR> Run");
@@ -349,7 +413,7 @@ test("Compact hidden-panel layouts keep footer/notifications at bottom and click
     expect(app.calls).toEqual([]);
     app.resize(120, 24);
     await app.renderOnce();
-    expect(app.footerLine()).toContain("<leader>[ Transcript");
+    expect(app.footerLine()).not.toContain("<leader>[ Transcript");
   } finally {
     await app.close();
   }
@@ -451,8 +515,8 @@ test("Short terminals keep Agent status/input clear of single-row footers", asyn
     expect(status.y + status.height).toBeLessThanOrEqual(footer.y);
 
     const row = status.getChildren()[0]!;
-    expect(app.captureCharFrame().split("\n")[row.y]).toContain("context");
-    expect(app.captureCharFrame().split("\n")[row.y]).toContain("usage");
+    expect(app.captureCharFrame().split("\n")[row.y]).toContain(`${icons.context} -`);
+    expect(app.captureCharFrame().split("\n")[row.y]).not.toContain(`${icons.robot} -`);
     expect(prompt.y + prompt.height).toBeLessThanOrEqual(footer.y);
     expect(app.captureCharFrame().split("\n")[prompt.y]).toContain("compact draft");
     expect(app.captureCharFrame()).not.toContain("Status not supplied");
@@ -478,7 +542,7 @@ test("Blur and disposal leave neither stale shortcuts nor focus subscriptions", 
     app.renderer.currentFocusedRenderable?.blur();
     await app.renderOnce();
     expect(app.footerLine()).toContain("AGENT");
-    expect(app.footerLine()).toContain("Help");
+    expect(app.footerLine()).not.toContain("Help");
     expect(app.footerLine()).not.toContain("Open worktree");
     app.view.dispose();
 

@@ -126,7 +126,7 @@ test("CHAT shows one conversation without a session strip and AGENT restores its
     expect(app.view.chatSessionId).toBe("chat-1");
     expect(app.renderer.root.findDescendantById("agent-session-tabs")!.visible).toBe(false);
     expect(app.captureCharFrame()).toContain("CHAT");
-    expect(app.captureCharFrame().split("\n")[26]).toContain("<leader>b Workspace");
+    expect(app.captureCharFrame().split("\n")[26]).not.toContain("<leader>b Workspace");
     expect(app.renderer.root.findDescendantById("footer-workspace")!.visible).toBe(false);
 
     // An AGENT view remains selectable without changing CHAT's remembered conversation.

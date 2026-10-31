@@ -76,7 +76,7 @@ test("Workspace j/k browses and Enter switches while identical input characters 
   }
 });
 
-test("User keymaps apply consistently to tree commands, disabling, footers, and leader view switching", async () => {
+test("User keymaps control tree commands, disabling, and view switching without footer hints", async () => {
   const app = await createTestRenderer({
     width: 120,
     height: 24,
@@ -113,7 +113,7 @@ test("User keymaps apply consistently to tree commands, disabling, footers, and 
     expect(footer()).not.toContain("New session");
     app.mockInput.pressEscape();
     await app.renderOnce();
-    expect(footer()).toContain("<C-s> New session");
+    expect(footer()).not.toContain("<C-s> New session");
     expect(footer()).not.toContain("Close tab");
     app.mockInput.pressKey("b", { ctrl: true });
     app.mockInput.pressKey("x");

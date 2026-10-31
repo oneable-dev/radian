@@ -23,6 +23,7 @@ import { capture, HistoryError, type ExpectedError } from "../../errors.ts";
 import { ok, type Result } from "../../result.ts";
 import { parseKeymap, type Keymap } from "../../keybindings/config.ts";
 import { expectOk } from "../../testing/results.ts";
+import { icons } from "../../icons.ts";
 
 const saved = (id: string, title = id): HistoryItem => ({
   id,
@@ -55,7 +56,9 @@ async function mount(options: Options = {}) {
   const previews: string[] = [];
   const runs: string[] = [];
   const view = new Workbench(app.renderer, selection, {
-    ...(options.keymap ? { keymap: options.keymap } : {}),
+    // Preview tests need a configured command that opens History without replacing the live draft.
+    keymap:
+      options.keymap ?? expectOk(parseKeymap({ bindings: { "history.show": ["<leader> h"] } })),
     onNewSession: () => runs.push("create"),
     onCloseSession: () => runs.push("close"),
     onPrompt: (_id, text) => {
@@ -451,8 +454,10 @@ test("History shows real prompt and status components without changing input, su
     expect(frame).not.toContain("Read-only preview");
     expect(frame).toContain("saved-model");
     expect(frame).toContain("Cancelled");
-    expect(frame).toContain("context -");
-    expect(frame).toContain("usage -");
+    expect(frame).toContain(`${icons.context} -`);
+    const status = app.get("history-preview-session-status");
+    expect(status.findDescendantById("usage-provider-icon")).toBeUndefined();
+    expect(frame).not.toContain("% used");
     expect(composer.border).toEqual(liveComposer.border);
     expect(composer.height).toBe(liveComposer.height);
     expect(app.get("history-preview-session-status").visible).toBe(true);
@@ -481,8 +486,8 @@ test("History shows real prompt and status components without changing input, su
   }
 });
 
-test("Shared snapshot previews show saved run state, context, usage, and Fast in the same session UI", async () => {
-  // Usage windows expired now still had actual observations in the saved screen.
+test("Shared snapshot previews retain saved run state, context, and Fast without account usage", async () => {
+  // Saved account quotas must not be presented as session-specific history metadata.
   const capturedAt = 1700000000000;
   const snapshot: SessionRecord = {
     id: "closed-tab",
@@ -536,14 +541,21 @@ test("Shared snapshot previews show saved run state, context, usage, and Fast in
 
     const frame = app.captureCharFrame();
 
-    // Never expire historical values using today's clock or apply them to live settings.
+    // Preserve captured session context without surfacing saved account quotas in the preview.
     expect(frame).toContain("Saved snapshot answer");
     expect(frame).toContain("Failed");
     expect(frame).toContain("Saved failure");
     expect(frame).toContain("archived-model");
     expect(frame).toContain("fast on");
     expect(frame).toContain("64%");
-    expect(frame).toContain("43% used");
+    expect(frame).not.toContain("43% used");
+    const row = app
+      .get("history-preview-session-status")
+      .findDescendantById("session-status-line")!;
+    const statusLine = frame.split("\n")[row.y]!;
+    expect(statusLine).toContain("64%");
+    expect(statusLine).not.toContain("used");
+    expect(statusLine).not.toContain("resets");
     expect(frame).not.toContain("Preview ·");
     expect(frame).not.toContain("saved 2023-11-14");
     expect(app.selection.sessionId).toBe("a1");
@@ -1099,7 +1111,7 @@ test("Narrow layouts switch between lists and previews while preserving search a
     expect(app.get("history-list").visible).toBe(true);
     expect(app.get("history-preview-pane").visible).toBe(false);
     expect(app.captureCharFrame().split("\n")[11]).not.toContain("<Esc> Close");
-    expect(app.captureCharFrame().split("\n")[11]).toContain("<C-o> Preview");
+    expect(app.captureCharFrame().split("\n")[11]).not.toContain("<C-o> Preview");
     expect(app.view.workViewPreferences.active["demo:main"] ?? "agent").toBe("agent");
     app.mockInput.pressKey("o", { ctrl: true });
     await app.render();
@@ -1149,7 +1161,10 @@ test("Empty lists, no matches, and lookup errors stay distinct with custom Refre
   const app = await mount({
     keymap: expectOk(
       parseKeymap({
-        bindings: { "history.refresh": [{ keys: "ctrl+g", scope: "history-search" }] },
+        bindings: {
+          "history.show": ["<leader> h"],
+          "history.refresh": [{ keys: "ctrl+g", scope: "history-search" }],
+        },
       }),
     ),
     list: async () => {
@@ -1166,7 +1181,9 @@ test("Empty lists, no matches, and lookup errors stay distinct with custom Refre
     await app.render();
     await app.open();
     await app.visible("History error:");
-    expect(app.captureCharFrame()).toContain("<C-g> Refresh");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain(
+      "<C-g> Refresh",
+    );
     app.mockInput.pressKey("r", { ctrl: true });
     await app.render();
     expect(calls).toBe(1);

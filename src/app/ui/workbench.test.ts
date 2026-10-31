@@ -160,7 +160,8 @@ test("Close keys choose previous sessions at the end and empty screens for final
     expect(app.selection.worktree?.sessions).toHaveLength(0);
     expect(app.captureCharFrame()).toContain("No AI sessions");
     expect(app.renderer.root.findDescendantById("agent-session-list")!.visible).toBe(true);
-    expect(app.captureCharFrame().split("\n")[23]).toContain("<leader>c New session");
+    expect(app.captureCharFrame().split("\n")[23]).not.toContain("<leader>c New session");
+    expect(app.captureCharFrame()).toContain("<leader>c");
   } finally {
     await app.close();
   }
@@ -355,20 +356,21 @@ test("Failures behind History update after closing regardless of selection", asy
 });
 
 test("Tab and Shift+Tab move focus among visible input owners", async () => {
-  // The tree is the initial focus target in the workspace sidebar.
+  // Workspace search and results are visible focus owners; the footer is passive.
   const app = await mount();
   try {
-    const first = app.renderer.currentFocusedRenderable;
+    await app.openWorkspaces();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-search");
 
     // Focus cycling is explicit because Core has no automatic Tab traversal.
     app.mockInput.pressTab();
-
-    const next = app.renderer.currentFocusedRenderable;
+    await app.renderOnce();
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-tree");
     app.mockInput.pressTab({ shift: true });
+    await app.renderOnce();
 
     // Keyboard-only navigation returns to the initial target without losing selection.
-    expect(next).not.toBe(first);
-    expect(app.renderer.currentFocusedRenderable).toBe(first);
+    expect(app.renderer.currentFocusedRenderable?.id).toBe("workspace-search");
     expect(app.selection.sessionId).toBe("a1");
   } finally {
     await app.close();

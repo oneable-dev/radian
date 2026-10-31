@@ -10,7 +10,7 @@ import {
 import { icons } from "../icons.ts";
 import { err, ok, type Result } from "../result.ts";
 import { uiTheme } from "./theme.ts";
-import { styleBackground, type UiStyle } from "./theme-styles.ts";
+import { styleBackground, type StyleGroup, type UiStyle } from "./theme-styles.ts";
 import { providerIconMask, providerIconSize, type ProviderIconName } from "./provider-icon-data.ts";
 
 const decoder = new TextDecoder();
@@ -44,7 +44,10 @@ export class ProviderIcon extends Renderable {
   private imageSignature = "";
   private failed = false;
 
-  constructor(private readonly renderer: CliRenderer) {
+  constructor(
+    private readonly renderer: CliRenderer,
+    backgroundStyle: StyleGroup = "branding.provider",
+  ) {
     super(renderer, {
       id: "usage-provider-icon",
       position: "absolute",
@@ -55,9 +58,10 @@ export class ProviderIcon extends Renderable {
       visible: false,
     });
     this.selectable = false;
-    this.style = uiTheme(renderer).styles["branding.provider"];
-    uiTheme(renderer).bindStyles(this, (styles) => {
-      this.style = styles["branding.provider"];
+    const theme = uiTheme(renderer);
+    this.style = { ...theme.styles["branding.provider"], bg: theme.styles[backgroundStyle].bg };
+    theme.bindStyles(this, (styles) => {
+      this.style = { ...styles["branding.provider"], bg: styles[backgroundStyle].bg };
       this.requestRender();
     });
     renderer.on("capabilities", this.retryGraphics);

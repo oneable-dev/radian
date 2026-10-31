@@ -380,7 +380,9 @@ test.each(["oauth", "api_key", "named"] as const)(
       }
 
       await app.render();
-      expect(app.captureCharFrame()).toContain("r Rename account");
+      expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain(
+        "r Rename account",
+      );
 
       // Enter a label through native editing; only Enter accepts the change.
       app.mockInput.pressKey("r");
@@ -539,7 +541,9 @@ test("Rename shortcuts and Help follow user overrides without changing literal s
     await app.open();
     app.mockInput.pressKey("j");
     await app.render();
-    expect(app.captureCharFrame()).toContain("e Rename account");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain(
+      "e Rename account",
+    );
     expect(app.captureCharFrame()).not.toContain("r Rename account");
 
     // Search owns literal characters; the remapped command applies only to the results list.
@@ -678,11 +682,12 @@ test("The GPT icon retains its scale and colors behind the undimmed accounts pop
     const pixels = original[0].raw().data.slice();
     const geometry = original.slice(3, 7);
 
-    // Uncovered telemetry keeps its colors because the default modal backdrop adds no tint.
+    // Footer usage keeps its colors because the default modal backdrop adds no tint.
     await app.open();
     await app.render();
 
-    const icon = app.get("usage-provider-icon");
+    const icon = app.get("footer-provider-icon-openai-codex");
+    expect(icon.y).toBe(app.get("footer-bar").y);
     expect(app.captureCharFrame().split("\n")[icon.y]).not.toContain(icons.openai);
     expect(app.captureCharFrame().split("\n")[icon.y]).toContain("73% used");
 

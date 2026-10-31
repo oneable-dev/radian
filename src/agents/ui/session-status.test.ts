@@ -1,6 +1,6 @@
 import { pressLeader } from "../../testing/keys.ts";
-import { expect, spyOn, test } from "bun:test";
-import type { TerminalColors, TextRenderable } from "@opentui/core";
+import { expect, test } from "bun:test";
+import type { TerminalColors } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { Workbench } from "../../app/ui/workbench.ts";
 import { WorkspaceSelection } from "../../app/workspace-selection.ts";
@@ -10,16 +10,9 @@ import type { SessionTelemetry } from "../telemetry.ts";
 import type { SessionExtensionUi } from "../extension-ui.ts";
 import type { ProviderUsage } from "../../usage/model.ts";
 import { uiTheme } from "../../ui/theme.ts";
-import { icons, spinnerFrames } from "../../icons.ts";
+import { icons } from "../../icons.ts";
 import { SessionStatus } from "./session-status.ts";
 
-const unavailable = (): ProviderUsage => ({
-  provider: "openai",
-  status: "unavailable",
-  windows: [],
-  updatedAt: null,
-  errorCode: null,
-});
 const sample = (): SessionTelemetry => ({
   provider: "openai-codex",
   model: "gpt-5.5",
@@ -38,25 +31,9 @@ const sample = (): SessionTelemetry => ({
   },
 });
 
-async function mount(telemetry: SessionTelemetry = sample(), clock?: ManualClock, settled = false) {
-  const app = await createTestRenderer({
-    width: 140,
-    height: 24,
-    kittyKeyboard: true,
-    ...(clock ? { clock } : {}),
-  });
-  const snapshot = demoWorkspace();
-  const selection = new WorkspaceSelection(
-    settled
-      ? snapshot.map((repo) => ({
-          ...repo,
-          worktrees: repo.worktrees.map((tree) => ({
-            ...tree,
-            sessions: tree.sessions.map((session) => ({ ...session, subagents: [] })),
-          })),
-        }))
-      : snapshot,
-  );
+async function mount(telemetry: SessionTelemetry = sample()) {
+  const app = await createTestRenderer({ width: 140, height: 24, kittyKeyboard: true });
+  const selection = new WorkspaceSelection(demoWorkspace());
   const states: Record<string, SessionTelemetry | undefined> = { a1: telemetry };
   let extensions: SessionExtensionUi[] = [];
   const view = new Workbench(app.renderer, selection, {
@@ -102,6 +79,28 @@ async function mount(telemetry: SessionTelemetry = sample(), clock?: ManualClock
   };
 }
 
+async function mountStatus(
+  telemetry: SessionTelemetry = sample(),
+  width = 100,
+  clock?: ManualClock,
+) {
+  const app = await createTestRenderer({ width, height: 5, ...(clock ? { clock } : {}) });
+  const status = new SessionStatus(app.renderer);
+  app.renderer.root.add(status.root);
+  status.update(telemetry, true);
+  await app.renderOnce();
+
+  return {
+    ...app,
+    status,
+    line: () => app.captureCharFrame().split("\n")[status.root.y + 1]!,
+    async close() {
+      status.dispose();
+      await app.dispose();
+    },
+  };
+}
+
 const palette = (light: boolean): TerminalColors => ({
   palette: [
     "#000000",
@@ -124,10 +123,11 @@ const palette = (light: boolean): TerminalColors => ({
   highlightBackground: null,
 });
 
-test("Status below prompts has one-row outer spacing and separates context from usage", async () => {
-  // The session has 64% context remaining, while its account has used 18% of the selected allowance.
+test("Status below prompts keeps model settings left and only context right with one-row outer spacing", async () => {
+  // The session has 64% context left; its account allowance must not consume the metadata row.
   const app = await mount();
   try {
+    // Editing a draft leaves the passive metadata visible without taking its focus.
     pressLeader(app, "a");
     await app.mockInput.typeText("keep this draft");
     await app.renderOnce();
@@ -135,7 +135,7 @@ test("Status below prompts has one-row outer spacing and separates context from 
     const prompt = app.renderer.root.findDescendantById("session-prompt")!;
     const composer = app.renderer.root.findDescendantById("agent-composer")!;
 
-    // The telemetry has its own one-row gutters, separate from the prompt's internal padding.
+    // Telemetry has its own one-row gutters, separate from the prompt's internal padding.
     expect(app.root.y).toBe(composer.y + composer.height);
     expect(app.root.height).toBe(3);
     expect(app.row.y - app.root.y).toBe(1);
@@ -151,43 +151,28 @@ test("Status below prompts has one-row outer spacing and separates context from 
     expect(composer.width).toBe(panel.width);
     expect(prompt.x).toBe(app.root.x);
     expect(prompt.x + prompt.width).toBe(app.root.x + app.root.width);
-    expect(app.line()).toContain(
+    expect(app.line().trimStart()).toStartWith(
       `${icons.model} gpt-5.5 · ${icons.brain} high · ${icons.bolt} fast on`,
     );
-    expect(app.line()).toContain(icons.context);
-    expect(app.line()).toContain("64% left");
-    expect(app.line()).toContain("chatgpt");
-    expect(app.line()).not.toContain("ChatGPT");
-    expect(app.line()).toMatch(/context ▉{8} 64%/);
-    expect(app.line()).toContain(icons.openai);
-    expect(app.line()).toContain("18% used 1h 0m");
+    expect(app.line().trimEnd()).toEndWith(`${icons.context} ▉▉▉▉▉▉▉▉ 64% left`);
+    expect(Bun.stringWidth(app.line().trimEnd())).toBe(app.root.x + app.root.width);
+    expect(app.line()).not.toMatch(/context|chatgpt|ChatGPT|used|1h/u);
+    expect(app.line()).not.toContain(icons.openai);
+    expect(app.root.findDescendantById("usage-provider-icon")).toBeUndefined();
 
-    const usageText = app.line().slice(app.line().indexOf(icons.openai));
-    expect(usageText).not.toContain("·");
-    expect(usageText).not.toContain("━");
-    expect(usageText).toMatch(/▉{8} 18% used 1h 0m/);
-    expect(app.renderer.root.findDescendantById("usage-provider-icon")?.width).toBe(2);
-    expect(app.line()).not.toContain("82%");
-    expect(app.line()).not.toContain("weekly");
-    expect(app.line()).not.toContain("⟳");
-
-    // Passive status text never steals focus or submits a draft.
-    await app.mockMouse.click(app.row.x + 2, app.row.y);
-    await app.renderOnce();
-    expect(app.renderer.currentFocusedRenderable).toBe(prompt);
-    expect(app.view.promptDrafts.a1).toBe("keep this draft");
-
-    const icon = app.renderer.root.findDescendantById("usage-provider-icon")!;
-    await app.mockMouse.click(icon.x, icon.y);
-    await app.renderOnce();
-    expect(app.renderer.currentFocusedRenderable).toBe(prompt);
-    expect(app.view.promptDrafts.a1).toBe("keep this draft");
+    // Clicking either end of the metadata must not steal input focus or submit the draft.
+    for (const x of [app.row.x + 2, app.row.x + app.row.width - 2]) {
+      await app.mockMouse.click(x, app.row.y);
+      await app.renderOnce();
+      expect(app.renderer.currentFocusedRenderable).toBe(prompt);
+      expect(app.view.promptDrafts.a1).toBe("keep this draft");
+    }
   } finally {
     await app.close();
   }
 });
 
-test("MCP follows Fast with a Nerd Font plug and colored issues without duplicating footer status", async () => {
+test("MCP follows fast on the left with colored issues without duplicating footer status", async () => {
   // A legacy adapter status remains readable until a structured snapshot becomes available.
   const app = await mount();
   app.resize(220, 24);
@@ -211,9 +196,12 @@ test("MCP follows Fast with a Nerd Font plug and colored issues without duplicat
     // The runtime summary replaces only the MCP footer entry, never unrelated extension status.
     await app.setExtensions([{ ...extension, mcp: { servers: 8, needsAuth: 1, errors: 1 } }]);
 
+    // Runtime metadata stays with settings, before the right-aligned context meter.
     expect(app.line()).toContain(
       `${icons.bolt} fast on · ${icons.mcp} mcp 8 (1 needs auth · 1 error)`,
     );
+    expect(app.line().indexOf(icons.mcp)).toBeLessThan(app.line().indexOf(icons.context));
+    expect(Bun.stringWidth(app.line().trimEnd())).toBe(app.root.x + app.root.width);
     expect(icons.mcp).toBe("\uF1E6");
     expect(app.line()).not.toContain("🔌");
     expect(footer()).not.toContain("Legacy MCP footer");
@@ -247,19 +235,13 @@ test.each([
   { mcp: { servers: 0, needsAuth: 0, errors: 0 }, expected: "" },
 ])("MCP shows only nonzero issue counts: $expected", async ({ mcp, expected }) => {
   // Zero issues do not need parentheses, and a session with no enabled servers needs no indicator.
-  const app = await mount();
-  app.resize(220, 24);
+  const app = await mountStatus(sample(), 140);
   try {
-    await app.setExtensions([
-      {
-        sessionId: "a1",
-        conversationId: "conversation-a1",
-        notifications: [],
-        statuses: {},
-        mcp,
-      },
-    ]);
+    // Each structured summary replaces the session's previous MCP state.
+    app.status.updateMcp(mcp);
+    await app.renderOnce();
 
+    // Known issues retain their grammatical counts without displaying zero-valued noise.
     if (expected) {
       expect(app.line()).toContain(`${icons.mcp} ${expected}`);
       if (!mcp.needsAuth && !mcp.errors) {
@@ -301,6 +283,7 @@ test("MCP follows the selected conversation without leaking another session or s
     await app.setExtensions(extensions);
     expect(app.line()).toContain("mcp 8 (1 needs auth)");
 
+    // Selecting another session and later receiving a stale snapshot must replace, not merge, metadata.
     app.selection.selectSession("demo:main", "a2");
     await app.renderOnce();
 
@@ -315,45 +298,34 @@ test("MCP follows the selected conversation without leaking another session or s
   }
 });
 
-test("Narrow layouts drop MCP before model settings and resource ratios and restore it on expansion", async () => {
-  // Optional runtime metadata must not displace the selected model, Fast or known percentages.
-  const app = await mount();
-  app.resize(220, 24);
+test("Narrow rows drop MCP before model settings and restore it on expansion", async () => {
+  // Optional MCP details must not displace model settings or known remaining context.
+  const app = await mountStatus(sample(), 140);
+  app.status.updateMcp({ servers: 8, needsAuth: 1, errors: 1 });
   try {
-    await app.setExtensions([
-      {
-        sessionId: "a1",
-        conversationId: "conversation-a1",
-        notifications: [],
-        statuses: {},
-        mcp: { servers: 8, needsAuth: 1, errors: 1 },
-      },
-    ]);
-    pressLeader(app, "a");
-    await app.mockInput.typeText("resize MCP draft");
-
-    app.resize(90, 24);
+    // Shrinking the row hides optional metadata, without changing the telemetry or its alignment.
+    app.resize(70, 5);
     await app.renderOnce();
 
     expect(app.line()).not.toContain(icons.mcp);
     expect(app.line()).toContain("gpt-5.5");
     expect(app.line()).toContain("fast on");
-    expect(app.line()).toContain("64% left");
-    expect(app.line()).toContain("18% used");
-    app.resize(220, 24);
+    expect(app.line().trimEnd()).toEndWith("64% left");
+    expect(Bun.stringWidth(app.line().trimEnd())).toBe(70);
+    app.resize(140, 5);
     await app.renderOnce();
     expect(app.line()).toContain(`${icons.mcp} mcp 8 (1 needs auth · 1 error)`);
-    expect(app.view.promptDrafts.a1).toBe("resize MCP draft");
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
+    expect(app.line().trimEnd()).toEndWith(`${icons.context} ▉▉▉▉▉▉▉▉ 64% left`);
   } finally {
     await app.close();
   }
 });
 
-test("Worktree and branch move to the footer without duplicating session telemetry", async () => {
+test("Worktree and branch stay in the footer without duplicating session metadata", async () => {
   // Workspace identity belongs to the workbench, not the Agent-only model row.
   const app = await mount();
   try {
+    // Terminal palette changes must not move scope information back into the session row.
     for (const light of [false, true]) {
       app.renderer.emit("palette", palette(light));
       await app.renderOnce();
@@ -371,27 +343,38 @@ test("Worktree and branch move to the footer without duplicating session telemet
   }
 });
 
-test("Narrow status rows preserve usage ratios without reserving workspace metadata", async () => {
-  // Removing the duplicated scope returns its width to known resource percentages.
-  const app = await createTestRenderer({ width: 60, height: 5 });
-  const status = new SessionStatus(app.renderer);
-
-  app.renderer.root.add(status.root);
-  status.update(sample(), true);
+test("Narrow rows preserve right-aligned context even after all model settings no longer fit", async () => {
+  // Context remains useful when the entire settings block must be hidden.
+  const app = await mountStatus(sample(), 60);
   try {
-    for (const width of [60, 50, 40, 30, 60]) {
+    // Each resize must recompute the layout rather than preserve stale whitespace or hidden settings.
+    for (const width of [60, 50, 40, 30, 20, 10, 6, 4, 1, 60]) {
       app.resize(width, 5);
       await app.renderOnce();
 
-      expect(status.root.findDescendantById("session-worktree-context")).toBeUndefined();
-
-      const line = app.captureCharFrame().split("\n")[status.root.y + 1]!;
-      expect(line).toContain("64%");
-      expect(line).toContain("18% used");
+      // A minimal percentage survives until even its digits cannot fit, always at the right edge.
+      expect(Bun.stringWidth(app.line().trimEnd())).toBe(width);
+      expect(app.line()).not.toContain(icons.openai);
+      expect(app.line()).not.toContain("used");
+      if (width >= 4) {
+        expect(app.line()).toContain("64%");
+      } else {
+        expect(app.line()).toBe("-");
+      }
+      if (width >= 10) {
+        expect(app.line()).toContain(icons.context);
+        expect(app.line().trimEnd()).toEndWith("64% left");
+      }
+      if (width === 20) {
+        expect(app.line()).not.toContain("gpt-5.5");
+      }
     }
+
+    expect(app.line()).toContain("gpt-5.5");
+    expect(app.line()).toContain("fast on");
+    expect(app.line()).toContain("▉▉▉▉▉▉▉▉");
   } finally {
-    status.dispose();
-    await app.dispose();
+    await app.close();
   }
 });
 
@@ -403,7 +386,6 @@ test("Input backgrounds fill panels while input aligns with run-status and model
     effort: "xhigh",
     fast: null,
     context: { usedTokens: 6000, maxTokens: 200000 },
-    usage: unavailable(),
   });
   try {
     // Width changes adapt text insets; height changes keep the same vertical treatment.
@@ -496,17 +478,13 @@ test("Empty inputs show only placeholders and preserve inner backgrounds across 
   }
 });
 
-test("Filled bars use theme accent gradients while retaining context and usage directions", async () => {
-  const data = sample();
-  const app = await mount({
-    ...data,
-    context: { usedTokens: 0, maxTokens: 200000 },
-    usage: { ...data.usage!, windows: [{ ...data.usage!.windows[0]!, usedPercent: 100 }] },
-  });
+test("Filled context bars retain theme accent gradients across palette changes", async () => {
+  // An unused context window fills every segment, making the accent gradient observable.
+  const app = await mountStatus({ ...sample(), context: { usedTokens: 0, maxTokens: 200000 } });
   const spanAt = (column: number) => {
     let x = 0;
 
-    return app.captureSpans().lines[app.row.y]!.spans.find((span) => {
+    return app.captureSpans().lines[app.status.root.y + 1]!.spans.find((span) => {
       x += span.width;
 
       return x > column;
@@ -514,20 +492,19 @@ test("Filled bars use theme accent gradients while retaining context and usage d
   };
   const verify = () => {
     const line = app.line();
-    const start = Bun.stringWidth(line.slice(0, line.indexOf("context"))) + "context ".length;
+    const start = Bun.stringWidth(line.slice(0, line.indexOf(icons.context)) + `${icons.context} `);
     const first = spanAt(start);
     const last = spanAt(start + 7);
 
     expect(first.fg.toInts()).toEqual(uiTheme(app.renderer).colors.accent.toInts());
     expect(last.fg.equals(first.fg)).toBe(false);
     expect(first.bg.equals(uiTheme(app.renderer).colors.panel)).toBe(true);
-    expect(app.line()).toContain("context ▉▉▉▉▉▉▉▉ 100%");
-    expect(app.line()).toContain("▉▉▉▉▉▉▉▉ 100% used");
+    expect(line.trimEnd()).toEndWith(`${icons.context} ▉▉▉▉▉▉▉▉ 100% left`);
 
     return first.fg.toInts();
   };
   try {
-    app.resize(140, 24);
+    // Theme changes must repaint the passive meter even when the telemetry has not changed.
     app.renderer.emit("palette", palette(false));
     await app.renderOnce();
 
@@ -536,54 +513,44 @@ test("Filled bars use theme accent gradients while retaining context and usage d
     app.renderer.emit("palette", palette(true));
     await app.renderOnce();
 
+    // The new theme changes colors without changing the remaining-context direction.
     expect(verify()).not.toEqual(dark);
   } finally {
     await app.close();
   }
 });
 
-test("77% and 53% bars retain bold segment shapes with cell-level fill colors", async () => {
-  // Eight segments approximate the fill; the labels must retain the exact percentages.
-  const data = sample();
-  const app = await mount({
-    ...data,
-    context: { usedTokens: 46000, maxTokens: 200000 },
-    usage: { ...data.usage!, windows: [{ ...data.usage!.windows[0]!, usedPercent: 53 }] },
-  });
+test("Partial context bars retain bold segment shapes with cell-level fill colors", async () => {
+  // Eight segments approximate the fill; the label must retain the exact 77% value.
+  const app = await mountStatus({ ...sample(), context: { usedTokens: 46000, maxTokens: 200000 } });
   const spanAt = (column: number) => {
     let x = 0;
 
-    return app.captureSpans().lines[app.row.y]!.spans.find((span) => {
+    return app.captureSpans().lines[app.status.root.y + 1]!.spans.find((span) => {
       x += span.width;
 
       return x > column;
     })!;
   };
   try {
+    // Switching palettes must preserve thick segments without adding a continuous background track.
     for (const light of [false, true]) {
-      // Switching palettes must preserve thick segments without adding a continuous background track.
       app.renderer.emit("palette", palette(light));
       await app.renderOnce();
 
-      // Six context segments and four usage segments are active; empty cells keep the same glyph.
+      // Six context segments are active; empty cells keep the same glyph and panel background.
       const line = app.line();
       const panel = uiTheme(app.renderer).colors.panel;
+      const label = `${icons.context} `;
+      const start = Bun.stringWidth(line.slice(0, line.indexOf(label) + label.length));
+      const empty = spanAt(start + 7).fg;
 
-      expect(line).toContain("context ▉▉▉▉▉▉▉▉ 77% left");
-      expect(line).toContain("chatgpt ▉▉▉▉▉▉▉▉ 53% used");
-      for (const [label, filled] of [
-        ["context ", 6],
-        ["chatgpt ", 4],
-      ] as const) {
-        const start = Bun.stringWidth(line.slice(0, line.indexOf(label) + label.length));
-        const empty = spanAt(start + 7).fg;
-
-        expect(empty.equals(panel)).toBe(false);
-        for (let cell = 0; cell < 8; cell++) {
-          const span = spanAt(start + cell);
-          expect(span.bg.toInts()).toEqual(panel.toInts());
-          expect(span.fg.equals(empty)).toBe(cell >= filled);
-        }
+      expect(line).toContain(`${icons.context} ▉▉▉▉▉▉▉▉ 77% left`);
+      expect(empty.equals(panel)).toBe(false);
+      for (let cell = 0; cell < 8; cell++) {
+        const span = spanAt(start + cell);
+        expect(span.bg.toInts()).toEqual(panel.toInts());
+        expect(span.fg.equals(empty)).toBe(cell >= 6);
       }
     }
   } finally {
@@ -591,77 +558,67 @@ test("77% and 53% bars retain bold segment shapes with cell-level fill colors", 
   }
 });
 
-test("Context matches used-text colors while model, effort, and Fast follow theme roles and state", async () => {
-  const app = await mount();
+test("Context, model, effort and fast retain theme roles and configuration state", async () => {
+  // A known palette distinguishes each role from hardcoded or uniformly muted text.
+  const app = await mountStatus();
   const span = (text: string) =>
-    app.captureSpans().lines[app.row.y]!.spans.find((value) => value.text.includes(text))!;
-  const verify = (enabled: boolean) => {
-    const colors = uiTheme(app.renderer).colors;
-    expect(span("context").fg.toInts()).toEqual(span("18% used").fg.toInts());
-    expect(span("context").fg.toInts()).toEqual(colors.text.toInts());
-    expect(span("gpt-5.5").fg.toInts()).toEqual(colors.success.toInts());
-    expect(span("high").fg.toInts()).toEqual(colors.keyword.toInts());
-    expect(span(`fast ${enabled ? "on" : "off"}`).fg.toInts()).toEqual(
-      (enabled ? colors.number : colors.muted).toInts(),
-    );
-  };
+    app
+      .captureSpans()
+      .lines[app.status.root.y + 1]!.spans.find((value) => value.text.includes(text))!;
   try {
-    // A known palette makes each role distinguishable from a hardcoded color or blanket muted style.
-    app.renderer.emit("palette", palette(false));
-    await app.renderOnce();
-    verify(true);
+    // Both fast states must follow the active palette without changing label casing or alignment.
+    for (const light of [false, true]) {
+      app.renderer.emit("palette", palette(light));
+      for (const enabled of [true, false]) {
+        app.status.update({ ...sample(), fast: enabled }, true);
+        await app.renderOnce();
 
-    await app.set({ ...sample(), fast: false });
-    verify(false);
-    app.renderer.emit("palette", {
-      ...palette(true),
-      palette: [
-        "#000000",
-        "#CC2222",
-        "#447711",
-        "#BB7700",
-        "#6655AA",
-        "#773399",
-        "#996633",
-        "#DDDDDD",
-      ],
-    });
-    await app.renderOnce();
-
-    verify(false);
-    expect(app.line()).toContain(
-      `${icons.model} gpt-5.5 · ${icons.brain} high · ${icons.bolt} fast off`,
-    );
+        const colors = uiTheme(app.renderer).colors;
+        expect(span(icons.context).fg.toInts()).toEqual(colors.text.toInts());
+        expect(span("gpt-5.5").fg.toInts()).toEqual(colors.success.toInts());
+        expect(span("high").fg.toInts()).toEqual(colors.keyword.toInts());
+        expect(span(`fast ${enabled ? "on" : "off"}`).fg.toInts()).toEqual(
+          (enabled ? colors.number : colors.muted).toInts(),
+        );
+        expect(app.line()).toContain(
+          `${icons.model} gpt-5.5 · ${icons.brain} high · ${icons.bolt} fast ${enabled ? "on" : "off"}`,
+        );
+      }
+    }
   } finally {
     await app.close();
   }
 });
 
-test("Narrow layouts compact bars, settings, and time while preserving ratios and drafts for restoration", async () => {
+test("Narrow layouts preserve context, drafts and focus while restoring settings on expansion", async () => {
+  // A session remains editable while its metadata switches between compact and wide layouts.
   const app = await mount();
   try {
     pressLeader(app, "a");
     await app.mockInput.typeText("resize draft");
-    for (const [width, height, gap] of [
-      [100, 20, 1],
-      [60, 12, 1],
-      [140, 24, 1],
+
+    // Resizing must affect presentation only, never the active draft or keyboard focus.
+    for (const [width, height] of [
+      [100, 20],
+      [60, 12],
+      [140, 24],
     ] as const) {
       app.resize(width, height);
       await app.renderOnce();
 
-      expect(app.line()).toContain("context");
+      // Context is the only resource shown in the row and stays flush with the prompt's right inset.
+      expect(app.line()).toContain(icons.context);
       expect(app.line()).toContain("64%");
-      expect(app.line()).toContain("18% used");
-      expect(app.line()).toContain(icons.openai);
-      expect(Bun.stringWidth(app.line())).toBeLessThanOrEqual(width);
+      expect(app.line()).not.toContain("used");
+      expect(app.line()).not.toContain(icons.openai);
+      expect(Bun.stringWidth(app.line().trimEnd())).toBe(app.root.x + app.root.width);
 
       const prompt = app.renderer.root.findDescendantById("session-prompt")!;
       const composer = app.renderer.root.findDescendantById("agent-composer")!;
       const footer = app.renderer.root.findDescendantById("footer-bar")!;
       const run = app.renderer.root.findDescendantById("agent-run-status")!;
 
-      expect(composer.y - run.y - run.height).toBe(gap);
+      expect(composer.y - run.y - run.height).toBe(1);
       expect(app.row.y - composer.y - composer.height).toBe(1);
       expect(app.root.y + app.root.height).toBeLessThanOrEqual(footer.y);
       expect(app.root.x).toBe(prompt.x);
@@ -673,303 +630,110 @@ test("Narrow layouts compact bars, settings, and time while preserving ratios an
 
     expect(app.line()).toContain("fast on");
     expect(app.line()).toContain("▉▉▉▉▉▉▉▉");
-    expect(app.line()).toContain("1h 0m");
   } finally {
     await app.close();
   }
 });
 
 test("Full and abbreviated fast labels remain lowercase in every state", async () => {
-  const app = await mount();
+  // Compact settings retain their model, brain and bolt icons while dropping verbose labels.
+  const app = await mountStatus();
   try {
     expect(app.line()).toContain("fast on");
-    expect(app.line()).not.toContain("Fast");
 
-    // A compact identity keeps the robot, brain and bolt while dropping verbose labels.
-    app.resize(56, 24);
-    await app.renderOnce();
+    // The narrower row must retain all three settings rather than silently hide fast configuration.
+    app.resize(40, 5);
+    for (const [fast, label] of [
+      [true, "on"],
+      [false, "off"],
+      [null, "—"],
+    ] as const) {
+      app.status.update({ ...sample(), fast }, true);
+      await app.renderOnce();
 
-    const compact = `${icons.model} gpt-5.5 ${icons.brain} high ${icons.bolt}`;
-    expect(app.line()).toContain(`${compact} on`);
-    await app.set({ ...sample(), fast: false });
-    expect(app.line()).toContain(`${compact} off`);
-    await app.set({ ...sample(), fast: null });
-    expect(app.line()).toContain(`${compact} —`);
-    expect(app.line()).not.toContain("Fast");
-  } finally {
-    await app.close();
-  }
-});
-
-test("Idle Fast indicators stay static and inputs add neither animation nor borders", async () => {
-  // Fast is session configuration; it must not animate the idle composer or passive metadata.
-  const clock = new ManualClock();
-  const app = await mount(sample(), clock, true);
-  try {
-    const before = app.captureSpans().lines[app.row.y];
-    const baseline = clock.pendingTimerCount;
-
-    clock.advance(450);
-    await app.renderOnce();
-
-    expect(app.captureSpans().lines[app.row.y]).toEqual(before);
-    expect(clock.pendingTimerCount).toBe(baseline);
-
-    const composer = app.renderer.root.findDescendantById("agent-composer")!;
-    const frame = app.captureCharFrame().split("\n");
-    for (const y of [composer.y, composer.y + composer.height - 1]) {
-      expect(frame[y]!.trim()).toBe("");
+      expect(app.line()).toContain(
+        `${icons.model} gpt-5.5 ${icons.brain} high ${icons.bolt} ${label}`,
+      );
+      expect(app.line()).not.toContain("Fast");
+      expect(app.line()).toContain("64% left");
     }
-
-    expect(app.line()).toContain("fast on");
-    await app.set({ ...sample(), fast: false });
-    expect(app.line()).toContain("fast off");
-    await app.set({ ...sample(), fast: null });
-    expect(app.line()).toContain("fast —");
-    expect(clock.pendingTimerCount).toBe(baseline);
   } finally {
     await app.close();
   }
 });
 
-test("Unknown context and unsupported usage show dashes without bars or cross-session leakage", async () => {
-  const app = await mount();
+test.each([
+  { name: "missing context", context: null },
+  { name: "unknown used tokens", context: { usedTokens: null, maxTokens: 200000 } },
+  { name: "unknown model limit", context: { usedTokens: 72000, maxTokens: 0 } },
+])("Unknown context shows a right-aligned dash without bars: $name", async ({ context }) => {
+  // Unknown usage or capacity must never look like a full or empty known context window.
+  const app = await mountStatus();
   try {
-    await app.set({
-      ...sample(),
-      fast: null,
-      context: { usedTokens: null, maxTokens: 200000 },
-      usage: unavailable(),
-    });
+    // Replacing known context must clear its previous percentage and every filled segment.
+    app.status.update({ ...sample(), fast: null, context }, true);
+    await app.renderOnce();
 
     expect(app.line()).toContain("fast —");
-    expect(app.line()).toContain("context -");
-    expect(app.line().slice(app.line().indexOf(icons.openai)).trim().replace(/\s+/g, " ")).toBe(
-      `${icons.openai} chatgpt -`,
-    );
+    expect(app.line().trimEnd()).toEndWith(`${icons.context} -`);
+    expect(Bun.stringWidth(app.line().trimEnd())).toBe(100);
     expect(app.line()).not.toContain("▉");
-    expect(app.line()).not.toContain("0%");
+    expect(app.line()).not.toContain("%");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Selecting a session without telemetry clears the previous model and context", async () => {
+  // The selected session initially has a known model and 64% remaining context.
+  const app = await mount();
+  try {
+    // Another session has no telemetry and must not inherit the previous session's metadata.
     app.selection.selectSession("demo:main", "a2");
     await app.renderOnce();
+
     expect(app.line()).not.toContain("gpt-5.5");
-    expect(app.line()).not.toContain("18% used");
+    expect(app.line()).not.toContain("64%");
+    expect(app.line()).toContain("model —");
+    expect(app.line().trimEnd()).toEndWith(`${icons.context} -`);
   } finally {
     await app.close();
   }
 });
 
-test("Estimated post-compaction context shows remaining percentage against the current model limit without extra markers", async () => {
-  // Accept estimates when usage is unknown, but calculate remaining capacity from the actual model limit.
-  const app = await mount();
+test("Estimated post-compaction context uses the current model limit without extra markers", async () => {
+  // Estimated token usage is still useful when measured against the actual model capacity.
+  const app = await mountStatus();
   try {
     // Estimated 40,000 tokens against an 872,000-token model rounds to 95% remaining.
-    await app.set({ ...sample(), context: { usedTokens: 40000, maxTokens: 872000 } });
+    app.status.update({ ...sample(), context: { usedTokens: 40000, maxTokens: 872000 } }, true);
+    await app.renderOnce();
 
-    // Preserve existing bar/percentage format without tildes or unknown-value dashes.
-    expect(app.line()).toMatch(/context ▉{8} 95%/);
+    // Preserve the existing bar and percentage format without tildes or unknown-value dashes.
+    expect(app.line().trimEnd()).toEndWith(`${icons.context} ▉▉▉▉▉▉▉▉ 95% left`);
     expect(app.line()).not.toContain("~");
-    expect(app.line()).not.toContain("context -");
+    expect(app.line()).not.toContain(`${icons.context} -`);
   } finally {
     await app.close();
   }
 });
 
-test("Unsupported usage retains context bars without fabricating usage bars or times", async () => {
-  // Providers without usage support must not spin recovery indicators indefinitely.
-  const app = await mount();
+test("Zero remaining context shows empty segments instead of an unknown dash", async () => {
+  // A completely full context window is known, unlike missing telemetry.
+  const app = await mountStatus();
   try {
-    await app.set({ ...sample(), usage: unavailable() });
-
-    // Unlike retry errors, unsupported states retain static unknown indicators.
-    expect(app.line()).toMatch(/context ▉+ 64% left/);
-    expect(app.line().slice(app.line().indexOf(icons.openai)).trim().replace(/\s+/g, " ")).toBe(
-      `${icons.openai} chatgpt -`,
-    );
-  } finally {
-    await app.close();
-  }
-});
-
-test("Usage recovery shows only gray last-fill bars and spinners until fresh success", async () => {
-  // Start with usage failure after the session's last successful value of 18%.
-  const clock = new ManualClock();
-  const data = sample();
-  const app = await mount(data, clock, true);
-  const spinner = () => app.renderer.root.findDescendantById("usage-loading") as TextRenderable;
-  const spanAt = (column: number) => {
-    let x = 0;
-
-    return app.captureSpans().lines[app.row.y]!.spans.find((span) => {
-      x += span.width;
-
-      return x > column;
-    })!;
-  };
-  try {
-    pressLeader(app, "a");
-    await app.mockInput.typeText("keep recovery draft");
-    for (const light of [false, true]) {
-      // Backoff snapshots and theme changes never reset spinners or last-fill bars.
-      await app.set({
-        ...data,
-        usage: { ...data.usage!, status: "error", errorCode: "USAGE_TIMEOUT" },
-      });
-      app.renderer.emit("palette", palette(light));
-      await app.renderOnce();
-
-      const usage = app.line().slice(app.line().indexOf(icons.openai));
-      const start = Bun.stringWidth(
-        app.line().slice(0, app.line().indexOf("chatgpt ") + "chatgpt ".length),
-      );
-      const styles = uiTheme(app.renderer).styles;
-
-      // Retain fill but hide numbers, units, and countdowns; context keeps its normal color.
-      expect(usage).toContain("▉▉▉▉▉▉▉▉");
-      expect(usage).not.toMatch(/18%|used|1h|-/);
-      expect(spanAt(start).fg.toInts()).toEqual(styles["ui.muted"].fg.toInts());
-      expect(spanAt(start + 7).fg.equals(spanAt(start).fg)).toBe(false);
-      expect(spinner().visible).toBe(true);
-      expect(spinnerFrames.some((frame) => frame === spinner().plainText)).toBe(true);
-      expect(spanAt(spinner().x).fg.toInts()).toEqual(styles["ui.muted"].fg.toInts());
-      expect(app.line()).toContain("64% left");
-
-      const before = spinner().plainText;
-      clock.advance(80);
-      await app.renderOnce();
-      expect(spinner().plainText).not.toBe(before);
-    }
-
-    clock.advance(60000);
-    await app.renderOnce();
-    expect(spinner().visible).toBe(true);
-    await app.set({
-      ...data,
-      usage: { ...data.usage!, windows: [{ ...data.usage!.windows[0]!, usedPercent: 42 }] },
-    });
-
-    // Recovery displays fresh values immediately without touching drafts or focus.
-    expect(app.line()).toContain("42% used");
-    expect(spinner().visible).toBe(false);
-    expect(app.view.promptDrafts.a1).toBe("keep recovery draft");
-    expect(app.renderer.currentFocusedRenderable?.id).toBe("session-prompt");
-  } finally {
-    await app.close();
-  }
-});
-
-test("Initial usage requests and failed waits show spinners without previous values or delayed success", async () => {
-  // New apps have no historical usage; never invent percentages or fills.
-  const clock = new ManualClock();
-  const app = await createTestRenderer({ width: 100, height: 5, clock });
-  const status = new SessionStatus(app.renderer);
-
-  app.renderer.root.add(status.root);
-
-  const data = sample();
-  const spinner = () => status.root.findDescendantById("usage-loading") as TextRenderable;
-  try {
-    for (const state of ["loading", "error"] as const) {
-      status.update({ ...data, usage: { ...unavailable(), status: state } }, true);
-      await app.renderOnce();
-
-      // Initial failures also retry and retain spinners, unlike unsupported states.
-      const line = app.captureCharFrame().split("\n")[spinner().y]!;
-      expect(spinner().visible).toBe(true);
-      expect(line.slice(line.indexOf(icons.openai))).not.toMatch(/▉|%|used|-/);
-    }
-
-    status.update(data, true);
+    // Moving from partial usage to the model limit must empty every segment without losing its shape.
+    app.status.update({ ...sample(), context: { usedTokens: 200000, maxTokens: 200000 } }, true);
     await app.renderOnce();
 
-    // Fresh success appears immediately during the shared spinner minimum without overlap.
-    expect(app.captureCharFrame()).toContain("18% used 1h 0m");
-    expect(spinner().visible).toBe(true);
-    clock.advance(500);
-    await app.renderOnce();
-    expect(spinner().visible).toBe(false);
-    // Drain frames scheduled by spinner hiding before checking animation leaks.
-    clock.advance(20);
-    await app.renderOnce();
-    expect(clock.pendingTimerCount).toBe(0);
-  } finally {
-    status.dispose();
-    await app.dispose();
-  }
-});
-
-test("Recovery hides reset usage windows and cleans spinner timers on hiding, static history, and disposal", async () => {
-  // Expired success values in error states must not become current-limit fills.
-  const clock = new ManualClock();
-  const app = await createTestRenderer({ width: 100, height: 5, clock });
-  const status = new SessionStatus(app.renderer);
-
-  app.renderer.root.add(status.root);
-
-  const data = sample();
-  const now = Date.now();
-  const failed: SessionTelemetry = {
-    ...data,
-    usage: {
-      ...data.usage!,
-      status: "error",
-      errorCode: "USAGE_QUERY_FAILED",
-      windows: [{ ...data.usage!.windows[0]!, resetsAt: now - 1 }],
-    },
-  };
-  try {
-    status.update(failed, true);
-    await app.renderOnce();
-    clock.advance(20);
-    await app.renderOnce();
-
-    const line = app.captureCharFrame().split("\n")[status.root.y + 1]!;
-    expect(line.slice(line.indexOf(icons.openai))).not.toContain("▉");
-    expect(clock.pendingTimerCount).toBe(1);
-
-    // Drain screen-transition frames so only recovery animation timers could remain.
-    status.update(failed, false);
-    clock.advance(20);
-    await app.renderOnce();
-    expect(clock.pendingTimerCount).toBe(0);
-    status.update(failed, true, now);
-    await app.renderOnce();
-    clock.advance(20);
-    await app.renderOnce();
-    expect(clock.pendingTimerCount).toBe(0);
-    status.update(failed, true);
-    await app.renderOnce();
-    clock.advance(20);
-    await app.renderOnce();
-    expect(clock.pendingTimerCount).toBe(1);
-    status.dispose();
-    clock.advance(20);
-    await app.renderOnce();
-
-    expect(clock.pendingTimerCount).toBe(0);
-  } finally {
-    status.dispose();
-    await app.dispose();
-  }
-});
-
-test("Actual zero usage and zero remaining context show empty bars distinct from unknown values", async () => {
-  const data = sample();
-  const app = await mount({
-    ...data,
-    context: { usedTokens: 200000, maxTokens: 200000 },
-    usage: { ...data.usage!, windows: [{ ...data.usage!.windows[0]!, usedPercent: 0 }] },
-  });
-  try {
-    await app.renderOnce();
-
-    expect(app.line()).toContain("context ▉▉▉▉▉▉▉▉ 0%");
-    expect(app.line()).toContain("▉▉▉▉▉▉▉▉ 0% used");
+    expect(app.line().trimEnd()).toEndWith(`${icons.context} ▉▉▉▉▉▉▉▉ 0% left`);
     expect(app.line()).not.toContain("100%");
+    expect(app.line()).not.toContain(`${icons.context} -`);
 
     const colors = uiTheme(app.renderer).colors;
     for (const span of app
       .captureSpans()
-      .lines[app.row.y]!.spans.filter((span) => span.text.includes("▉"))) {
+      .lines[app.status.root.y + 1]!.spans.filter((value) => value.text.includes("▉"))) {
       expect(span.fg.equals(colors.accent)).toBe(false);
       expect(span.bg.toInts()).toEqual(colors.panel.toInts());
     }
@@ -978,145 +742,124 @@ test("Actual zero usage and zero remaining context show empty bars distinct from
   }
 });
 
-test("Legacy weekly responses convert to used ratios and new providers receive matching icons", async () => {
+test("Provider usage, legacy quota and recovery activity never appear on the session row", async () => {
+  // Telemetry may contain multiple account allowances and legacy quota while settings remain unchanged.
+  const clock = new ManualClock();
   const data = sample();
-  const { usage: _usage, ...legacy } = data;
-  const app = await mount({
-    ...legacy,
-    weekly: { remainingPercent: 82, observedAt: Date.now(), resetsAt: Date.now() + 3600000 },
-  });
+  const app = await mountStatus(data, 140, clock);
   try {
-    await app.renderOnce();
-    expect(app.line()).toContain("18% used");
+    const before = app.line();
 
-    await app.set({
-      ...sample(),
-      provider: "anthropic",
-      usage: { ...unavailable(), provider: "anthropic" },
-    });
-
-    expect(app.line()).toContain(icons.claude);
-    expect(app.line()).toContain("claude");
-    expect(app.line()).not.toContain("Claude");
-    expect(app.line()).not.toContain(icons.openai);
-    await app.set({ ...sample(), provider: "openai" });
-    expect(app.line()).toContain(icons.openai);
-    expect(app.line()).toContain("openai");
-    expect(app.line()).not.toContain("OpenAI");
-    expect(app.line()).not.toContain("chatgpt");
-  } finally {
-    await app.close();
-  }
-});
-
-test("Countdowns update from local clocks without inventing refreshed limits after reset", async () => {
-  const now = 1800000000000;
-  const reset = now + (5 * 24 + 23) * 3600000;
-  const clock = spyOn(Date, "now").mockReturnValue(now);
-  const scheduled = spyOn(globalThis, "setTimeout");
-  const app = await mount({
-    ...sample(),
-    usage: {
-      ...sample().usage!,
-      windows: [{ id: "period", usedPercent: 10, periodMs: 604800000, resetsAt: reset }],
-    },
-  });
-  const tick = () => {
-    const index = scheduled.mock.calls.findLastIndex(([, delay]) => delay === 60000);
-    const result = scheduled.mock.results[index];
-    const callback = scheduled.mock.calls[index]?.[0];
-    if (!result || result.type !== "return" || typeof callback !== "function") {
-      throw new Error("Countdown did not acquire a local timer.");
-    }
-
-    clearTimeout(result.value);
-    callback();
-  };
-  try {
-    expect(app.line()).toContain("10% used 5d 23h");
-
-    clock.mockReturnValue(now + 3600000);
-    tick();
-    await app.renderOnce();
-
-    expect(app.line()).toContain("10% used 5d 22h");
-    clock.mockReturnValue(reset + 1);
-    tick();
-    await app.renderOnce();
-    expect(app.line().slice(app.line().indexOf(icons.openai)).trim().replace(/\s+/g, " ")).toBe(
-      `${icons.openai} chatgpt -`,
-    );
-    expect(app.line()).not.toContain("100%");
-  } finally {
-    await app.close();
-    scheduled.mockRestore();
-    clock.mockRestore();
-  }
-});
-
-test("Usage selects the longest window regardless of provider names or primary/secondary order", async () => {
-  const now = Date.now();
-  const app = await mount({
-    ...sample(),
-    provider: "another-provider",
-    usage: {
-      provider: "another-provider",
-      status: "ready",
-      updatedAt: now,
-      errorCode: null,
-      windows: [
-        { id: "first", usedPercent: 90, periodMs: 18000000, resetsAt: now + 3600000 },
+    // Every account state belongs to the global footer, not a duplicate per-session resource meter.
+    for (const status of ["ready", "loading", "error", "unavailable"] as const) {
+      const usage: ProviderUsage = { ...data.usage!, status };
+      app.status.update(
         {
-          id: "second",
-          usedPercent: 10,
-          periodMs: 604800000,
-          resetsAt: now + (5 * 24 + 23) * 3600000,
+          ...data,
+          usage,
+          providerUsage: {
+            "openai-codex": usage,
+            anthropic: { ...usage, provider: "anthropic" },
+            custom: { ...usage, provider: "custom" },
+          },
+          weekly: { remainingPercent: 82, observedAt: Date.now(), resetsAt: Date.now() + 3600000 },
         },
-      ],
-    },
-  });
-  try {
-    app.resize(160, 24);
-    await app.renderOnce();
+        true,
+      );
+      await app.renderOnce();
+      clock.advance(1000);
+      await app.renderOnce();
 
-    expect(app.line()).toContain("usage");
-    expect(app.line()).toContain("10% used 5d 23h");
-    expect(app.line()).not.toContain("90% used");
-    expect(app.line()).not.toContain(icons.openai);
+      // Provider updates neither change the session line nor leave spinner or countdown timers behind.
+      expect(app.line()).toBe(before);
+      expect(app.line()).not.toContain(icons.openai);
+      expect(app.line()).not.toContain(icons.claude);
+      expect(app.line()).not.toMatch(/18%|used|1h/u);
+      expect(app.status.root.findDescendantById("usage-provider-icon")).toBeUndefined();
+      expect(app.status.root.findDescendantById("usage-loading")).toBeUndefined();
+      expect(clock.pendingTimerCount).toBe(0);
+    }
   } finally {
     await app.close();
   }
 });
 
-test("Hiding and disposal clean countdown timers", async () => {
-  const scheduled = spyOn(globalThis, "setTimeout");
-  const cleared = spyOn(globalThis, "clearTimeout");
-  const app = await mount();
-  const timer = () => {
-    const index = scheduled.mock.calls.findLastIndex(([, delay]) => delay === 60000);
-    const result = scheduled.mock.results[index];
-    if (!result || result.type !== "return") {
-      throw new Error("Countdown timer was not scheduled.");
-    }
-
-    return result.value;
+test("Captured history retains its model settings, MCP and context without live timers", async () => {
+  // An old history snapshot may carry expired usage and recovery state alongside captured session metadata.
+  const capturedAt = 1700000000000;
+  const clock = new ManualClock();
+  const data = sample();
+  const snapshot: SessionTelemetry = {
+    ...data,
+    usage: {
+      ...data.usage!,
+      status: "error",
+      windows: [{ ...data.usage!.windows[0]!, resetsAt: capturedAt + 3600000 }],
+    },
   };
+  const app = await mountStatus(snapshot, 140, clock);
   try {
-    const hidden = timer();
-    app.selection.selectWorktree("demo:empty");
+    // History callers keep the capture-time argument, even though the remaining metadata is clock-free.
+    app.status.update(snapshot, true, capturedAt);
+    app.status.updateMcp({ servers: 3, needsAuth: 0, errors: 1 });
     await app.renderOnce();
-    expect(cleared).toHaveBeenCalledWith(hidden);
-
-    app.selection.selectSession("demo:main", "a1");
+    clock.advance(20);
     await app.renderOnce();
 
-    const disposed = timer();
-    app.view.dispose();
+    const before = app.line();
+    expect(before).toContain(
+      `${icons.model} gpt-5.5 · ${icons.brain} high · ${icons.bolt} fast on`,
+    );
+    expect(before).toContain(`${icons.mcp} mcp 3 (1 error)`);
+    expect(before.trimEnd()).toEndWith(`${icons.context} ▉▉▉▉▉▉▉▉ 64% left`);
+    expect(before).not.toContain(icons.openai);
+    expect(clock.pendingTimerCount).toBe(0);
 
-    expect(cleared).toHaveBeenCalledWith(disposed);
+    // Advancing local time must not age or animate a captured session.
+    clock.advance(60000);
+    await app.renderOnce();
+
+    expect(app.line()).toBe(before);
+    expect(clock.pendingTimerCount).toBe(0);
+    app.resize(160, 5);
+    await app.renderOnce();
+    expect(app.line()).toContain(`${icons.mcp} mcp 3 (1 error)`);
+    expect(Bun.stringWidth(app.line().trimEnd())).toBe(160);
   } finally {
     await app.close();
-    scheduled.mockRestore();
-    cleared.mockRestore();
+  }
+});
+
+test("Hidden session metadata restores without scheduling activity and disposal ignores late updates", async () => {
+  // Passive settings and context require neither countdown nor animation timers.
+  const clock = new ManualClock();
+  const data = sample();
+  const app = await mountStatus(data, 100, clock);
+  try {
+    const before = app.line();
+
+    // Switching surfaces hides the metadata and later restores exactly the same captured values.
+    app.status.update(data, false);
+    await app.renderOnce();
+    expect(app.line().trim()).toBe("");
+    app.status.update(data, true);
+    await app.renderOnce();
+    clock.advance(20);
+    await app.renderOnce();
+
+    expect(app.line()).toBe(before);
+    expect(clock.pendingTimerCount).toBe(0);
+    app.status.dispose();
+    app.status.update({ ...data, model: "late model" }, true);
+    app.status.updateMcp({ servers: 9, needsAuth: 0, errors: 0 });
+    await app.renderOnce();
+    clock.advance(20);
+    await app.renderOnce();
+
+    // Late snapshots cannot repaint a disposed session or reintroduce asynchronous work.
+    expect(app.line()).toBe(before);
+    expect(clock.pendingTimerCount).toBe(0);
+  } finally {
+    await app.close();
   }
 });

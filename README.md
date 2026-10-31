@@ -110,6 +110,13 @@ next key.
 4. Run `/model` to choose the session's model and supported reasoning effort.
 5. Write a request and press `<CR>`. Use `<S-CR>` or `<M-CR>` for a newline.
 
+The session status line keeps model settings on the left and context remaining on the
+right. The bottom footer shows connected providers' usage and reset countdowns instead
+of keyboard hints; use Help to inspect configured shortcuts. Each provider appears once,
+including saved accounts that are not selected, with a logo or generic AI icon. Connected
+ChatGPT and Claude subscriptions show their own quotas independently of the current model.
+API-key connections without subscription quota data show a dash.
+
 > [!WARNING]
 > Real requests can use provider quota and run tools with your user permissions.
 > Chat starts in your home directory; Agent starts in the selected worktree.
@@ -124,8 +131,7 @@ ordinary text and does not prepare a file index; Agent retains `@` file completi
 Both views support commands, skills, explicit attachments, and tools.
 
 Chat conversations are shared across workspaces, not created separately for each
-project. `<leader>b` remains available, including its footer hint, to select a
-worktree. Returning with `<leader>m` restores the same Chat conversation and draft.
+project. `<leader>b` remains available to select a worktree. Returning with `<leader>m` restores the same Chat conversation and draft.
 
 Multiple windows share conversations and execution, but keep their selected view,
 conversation, drafts, and reading positions independently. The same terminal/pane

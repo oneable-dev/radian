@@ -594,7 +594,7 @@ test("Period and project changes reaggregate by scope while half-page navigation
   }
 });
 
-test("Custom dashboard navigation updates both behavior and footer hints", async () => {
+test("Custom dashboard navigation updates behavior without global footer hints", async () => {
   // Preserve explicit overrides replacing default Ctrl+N.
   const keymap = expectOk(
     parseKeymap({ bindings: { "dashboard.next": [{ keys: "q", scope: "dashboard-tabs" }] } }),
@@ -611,9 +611,9 @@ test("Custom dashboard navigation updates both behavior and footer hints", async
     app.mockInput.pressKey("q");
     await app.render();
 
-    // Visible hints match actual key behavior.
+    // The configured key changes the selected tab without adding a footer hint.
     expect(app.captureCharFrame()).toContain("test/large");
-    expect(app.captureCharFrame()).toContain("q Next");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("q Next");
   } finally {
     await app.close();
   }

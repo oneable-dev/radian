@@ -35,7 +35,8 @@ import {
   type ExtensionDialogActions,
 } from "../../agents/ui/extension-dialog.ts";
 import type { SessionExtensionUi } from "../../agents/extension-ui.ts";
-import { Footer, type FooterShortcut } from "../../ui/footer.ts";
+import { Footer } from "../../ui/footer.ts";
+import type { ProviderUsage } from "../../usage/model.ts";
 import { Messages, messageText, type Message, type NoticeOptions } from "../../ui/messages.ts";
 import { MessagesPanel } from "../../ui/messages-panel.ts";
 import { formatRunDuration } from "../../agents/ui/run-completion.ts";
@@ -44,7 +45,6 @@ import { PopupFrame } from "../../ui/popup-frame.ts";
 import { POPUP_SIZES, SearchPopupLayout, centerPopup } from "../../ui/popup-layout.ts";
 import { SearchInput } from "../../ui/search-input.ts";
 import { keymapHelp } from "../../keybindings/help.ts";
-import { footerKeyHint } from "../../keybindings/footer.ts";
 import { Button, type ButtonVariant } from "../../ui/button.ts";
 import { halfPageStep } from "../../ui/navigation.ts";
 import { singleLine } from "../../ui/text.ts";
@@ -64,9 +64,9 @@ import {
 } from "../../terminal/ui/panel.ts";
 import { GitPanel, type GitActions } from "../../git/ui/panel.ts";
 import type { WorkView, WorkViewPreferences } from "../../runtime/protocol.ts";
-import { defaultKeymap, formatKeys, type Keymap } from "../../keybindings/config.ts";
+import { defaultKeymap, type Keymap } from "../../keybindings/config.ts";
 import { KeyRouter } from "../../keybindings/router.ts";
-import { inScope, tabIndex, type CommandId, type KeyContext } from "../../keybindings/commands.ts";
+import { tabIndex, type CommandId, type KeyContext } from "../../keybindings/commands.ts";
 import type { TerminalTheme } from "../../ui/embedded-terminal/theme.ts";
 import { uiTheme, type UiTheme } from "../../ui/theme.ts";
 import { paintText, styleChunk } from "../../ui/theme-styles.ts";
@@ -162,7 +162,6 @@ export class Workbench {
   private sessionCreationIntent = 0;
   private readonly footer: Footer;
   private readonly dialog: TextDialog;
-  private readonly buttonHints = new WeakMap<Renderable, string>();
   private readonly buttonActions = new WeakMap<Renderable, () => void>();
   private readonly keymap: Keymap;
   private readonly router: KeyRouter;
@@ -430,16 +429,7 @@ export class Workbench {
     panels.add(this.workPanel);
     this.root.add(panels);
 
-    const help = this.button("Help", () => this.showHelp(), "Open help");
-    // Opening a pointer-triggered popup restores the original editor/PTY focus on close.
-    help.onMouseDown = (event) => {
-      if (event.button === 0) {
-        event.preventDefault();
-        event.stopPropagation();
-        this.showHelp();
-      }
-    };
-    this.footer = new Footer(renderer, { help });
+    this.footer = new Footer(renderer);
     this.root.add(this.footer.root);
     this.root.add(this.workspacePopup);
     this.root.add(this.monitor.root);
@@ -573,7 +563,7 @@ export class Workbench {
       visible &&= focused.visible;
     }
     if (!visible) {
-      this.footer?.focusTargets.at(-1)?.focus();
+      this.agent.root.focus();
     }
   }
 
@@ -929,159 +919,6 @@ export class Workbench {
 
     this.notifications?.setHidden(this.messagesPanel.visible || this.dialog.visible);
 
-    const focused = this.renderer.currentFocusedRenderable;
-    let shortcuts: readonly FooterShortcut[] = [];
-    const context = this.keyContext();
-    const key = (command: CommandId) =>
-      footerKeyHint(command, context, this.keymap.hint(command, context));
-    const hint = (command: CommandId, label: string): FooterShortcut => ({
-      key: key(command),
-      label,
-    });
-    const pair = (a: CommandId, b: CommandId, label: string): FooterShortcut => ({
-      key: [key(a), key(b)].filter(Boolean).join("/"),
-      label,
-    });
-    const help = this.keymap.bindings.find(
-      (binding) =>
-        binding.command === "app.help" &&
-        binding.keys.length === 1 &&
-        inScope(binding.scope, context),
-    );
-
-    this.footer.setHelpHint(
-      help ? formatKeys(help.displayKeys) : this.keymap.hint("app.help", context),
-    );
-    if (this.extension.visible) {
-      shortcuts = this.extension.shortcuts;
-    } else if (this.dialog.visible) {
-      shortcuts = [
-        hint("dialog.copy", "Copy"),
-        hint("dialog.half-page-down", "½ page"),
-        hint("dialog.dismiss", "Close"),
-      ];
-    } else if (this.messagesPanel.visible) {
-      shortcuts = this.messagesPanel.shortcuts;
-    } else if (this.dashboard.visible) {
-      shortcuts = this.dashboard.shortcuts;
-    } else if (this.accounts.visible) {
-      shortcuts = this.accounts.shortcuts;
-    } else if (this.models.visible) {
-      shortcuts = this.models.shortcuts;
-    } else if (this.history.visible) {
-      shortcuts = this.history.shortcuts;
-    } else if (this.monitor?.visible) {
-      shortcuts = this.monitor.shortcuts;
-    } else if (focused === this.search) {
-      shortcuts = [
-        hint("focus.results", "Open"),
-        pair("workspace.previous", "workspace.next", "Navigate"),
-        hint("workspace.half-page-down", "½ page"),
-        hint("workspace.dismiss", "Close"),
-      ];
-    } else if (focused === this.tree) {
-      shortcuts = [
-        ...(this.visibleRows().some(
-          (row) => row.kind === "worktree" && row.key === this.navigationKey,
-        )
-          ? [hint("workspace.open", "Open worktree")]
-          : []),
-        pair("workspace.previous", "workspace.next", "Navigate"),
-        hint("workspace.dismiss", "Close"),
-        hint("workspace.half-page-down", "½ page"),
-        pair("workspace.first", "workspace.last", "First/last"),
-      ];
-    } else if (focused && focused === this.editor?.input) {
-      shortcuts = [hint("sidebar.toggle", "Workspaces")];
-    } else if (this.terminals.copyContext) {
-      shortcuts = [
-        hint("terminal.copy-right", "Cursor"),
-        hint("terminal.copy-visual", "Select"),
-        hint("terminal.copy-visual-line", "Lines"),
-        hint("terminal.copy-yank", context === "terminal-visual" ? "Copy selection" : "Copy line"),
-        hint("terminal.copy-open-link", "Open link"),
-        hint("terminal.copy-half-page-down", "½ page"),
-        hint("terminal.copy-back", "Back"),
-      ];
-    } else if (focused && focused === this.terminals?.input) {
-      shortcuts = [
-        hint("output.read", "Read output"),
-        pair("tab.previous", "tab.next", "Tab"),
-        hint("tab.new", "New terminal"),
-        hint("tab.close", "Close tab"),
-        ...(this.terminals.canScroll
-          ? [pair("terminal.scroll-up", "terminal.scroll-down", "Scroll")]
-          : []),
-        hint("sidebar.toggle", "Workspaces"),
-      ];
-    } else if (this.terminals.root.visible && this.commandAvailable("tab.new")) {
-      shortcuts = [hint("tab.new", "New terminal")];
-    } else if (this.agent.root.visible && !this.agent.active) {
-      shortcuts = [hint("tab.new", this.appView === "chat" ? "New conversation" : "New session")];
-    } else if (this.agent.transcriptContext()) {
-      shortcuts = this.agent.transcriptShortcuts;
-    } else if (focused === this.agent.prompt && this.agent.active) {
-      shortcuts = this.agent.completionOpen
-        ? [
-            {
-              ...hint("agent.send", this.agent.working ? "Queue" : "Run"),
-              disabled: !this.agent.canSubmit,
-            },
-            {
-              key: this.keymap.hints("completion.accept", context),
-              label: "Insert",
-              disabled: !this.agent.completionAvailable("completion.accept"),
-            },
-            {
-              ...hint("completion.next", "Next"),
-              disabled: !this.agent.completionAvailable("completion.next"),
-            },
-            {
-              ...hint("completion.previous", "Previous"),
-              disabled: !this.agent.completionAvailable("completion.previous"),
-            },
-            hint("completion.dismiss", "Dismiss"),
-          ]
-        : [
-            ...(this.agent.canSubmit
-              ? [hint("agent.send", this.agent.working ? "Queue" : "Run")]
-              : []),
-            hint("agent.newline", "New line"),
-            ...(this.agent.prompt.canInspect ? [hint("agent.inspect", "Inspect")] : []),
-            ...(this.agent.canInterrupt ? [hint("agent.interrupt", "Interrupt")] : []),
-            ...(this.agent.prompt.value ? [hint("agent.clear", "Clear")] : []),
-            pair("agent.history-previous", "agent.history-next", "Input history"),
-            hint("output.read", "Transcript"),
-            ...(this.appView === "chat" ? [] : [pair("tab.previous", "tab.next", "Tab")]),
-            hint("sidebar.toggle", "Workspace"),
-            hint("tab.new", this.appView === "chat" ? "New conversation" : "New session"),
-            ...(this.appView === "chat" ? [] : [hint("tab.close", "Close tab")]),
-            hint("dashboard.show", "Usage"),
-          ];
-    } else if (
-      context === "git" ||
-      context === "git-tabs" ||
-      context === "git-search" ||
-      context === "git-prompt" ||
-      this.git.available("git.back")
-    ) {
-      shortcuts = this.git.shortcuts;
-    } else if (focused) {
-      const label = this.buttonHints.get(focused);
-      if (focused.visible && label) {
-        shortcuts = [
-          {
-            key: footerKeyHint(
-              "button.activate",
-              "button",
-              this.keymap.hints("button.activate", "button"),
-            ),
-            label,
-          },
-        ];
-      }
-    }
-
     const overlay =
       this.messagesPanel.visible ||
       this.extension.visible ||
@@ -1110,13 +947,54 @@ export class Workbench {
     this.footer.setView(badge);
     this.footer.setWorkspace(this.appView === "chat" ? null : this.selection.worktree);
     this.footer.setContext(overlay ? "" : this.extensionStatus || outputStatus);
-    this.footer.setShortcuts(shortcuts.filter((shortcut) => shortcut.key));
   };
 
   refreshPreloadedData(): void {
     this.models.updateData();
     this.accounts.updateData();
     this.history.updateData();
+    this.refreshFooterUsage();
+  }
+
+  private refreshFooterUsage(): void {
+    const collection = this.appView === "chat" ? this.actions.getChat?.() : this.selection.worktree;
+    const selectedId =
+      this.appView === "chat" ? this.selectedChatSessionId : this.selection.sessionId;
+    const sessions = collection?.sessions ?? [];
+    const telemetry =
+      (selectedId ? this.actions.getSessionDetails?.(selectedId)?.telemetry : undefined) ??
+      sessions.map(({ id }) => this.actions.getSessionDetails?.(id)?.telemetry).find(Boolean);
+    const result = collection ? this.actions.preloaded?.cachedAccounts(collection.id) : undefined;
+    const catalog = result?.ok ? result.value : undefined;
+    const snapshots: Record<string, ProviderUsage> = { ...telemetry?.providerUsage };
+    const provider = telemetry?.provider ?? telemetry?.usage?.provider;
+    if (provider && !snapshots[provider]) {
+      if (telemetry?.usage) {
+        snapshots[provider] = telemetry.usage;
+      } else if (telemetry?.weekly) {
+        const weekly = telemetry.weekly;
+        snapshots[provider] = {
+          provider,
+          status: "ready",
+          windows: [
+            {
+              id: "legacy-weekly",
+              usedPercent: 100 - weekly.remainingPercent,
+              periodMs: 7 * 24 * 60 * 60000,
+              resetsAt: weekly.resetsAt,
+            },
+          ],
+          updatedAt: weekly.observedAt,
+          errorCode: null,
+        };
+      }
+    }
+
+    this.footer.setUsage(snapshots, [
+      ...(provider ? [provider] : []),
+      ...(catalog?.existingAccounts?.map(({ provider }) => provider) ?? []),
+      ...(catalog?.accounts.map(({ provider }) => provider) ?? []),
+    ]);
   }
 
   private showAccounts(): Result<void, ExpectedError> {
@@ -1193,11 +1071,10 @@ export class Workbench {
   private button(
     label: string,
     activate: () => void,
-    actionLabel = label,
+    _actionLabel = label,
     variant: ButtonVariant = "default",
   ): Button {
     const button = new Button(this.renderer, label, activate, variant);
-    this.buttonHints.set(button, actionLabel);
     this.buttonActions.set(button, activate);
 
     return button;
@@ -1524,6 +1401,9 @@ export class Workbench {
     if (command.startsWith("dialog.")) {
       return false;
     }
+    if (command === "app.help") {
+      return true;
+    }
     if (this.accounts.visible) {
       return (
         command.startsWith("accounts.") ||
@@ -1544,7 +1424,6 @@ export class Workbench {
             : Boolean(this.selection.worktree))) ||
         command === "focus.next" ||
         command === "focus.previous" ||
-        command === "app.help" ||
         command === "app.detach"
       );
     }
@@ -1607,9 +1486,6 @@ export class Workbench {
     }
     if (command.startsWith("monitor.")) {
       return false;
-    }
-    if (command === "app.help") {
-      return true;
     }
     if (command === "history.show") {
       return this.appView === "chat"
@@ -2115,8 +1991,6 @@ export class Workbench {
       targets.push(...this.git.focusTargets);
     }
 
-    targets.push(...this.footer.focusTargets);
-
     const index = targets.findIndex((target) => target === this.renderer.currentFocusedRenderable);
     const next = (index + direction + targets.length) % targets.length;
 
@@ -2357,6 +2231,7 @@ export class Workbench {
       openIds,
       workViewVisible && (showingChat || workView === "agent"),
     );
+    this.refreshFooterUsage();
     if (workViewVisible && !showingChat && workView === "git") {
       this.git.show(worktree, this.selection.sessionId);
     } else {

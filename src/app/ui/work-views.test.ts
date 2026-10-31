@@ -146,9 +146,6 @@ test("Letter shortcuts switch views without upper tabs and retain current names 
     ] as const) {
       // View shortcuts select the work pane without creating sessions or sending prompts.
       await app.showView(key);
-      app.renderer.root.findDescendantById("footer-help")!.focus();
-      await app.renderOnce();
-
       const footer = app.captureCharFrame().split("\n")[23]!;
       expect(footer.trimStart()).toStartWith(label.toUpperCase());
       expect(app.renderer.root.findDescendantById(`${id}-view`)!.y).toBe(panel.y);
@@ -213,7 +210,7 @@ test("Numbers select current Agent session order while preserving drafts and wor
     expect(app.view.promptDrafts.a1).toBe("first draft");
 
     // Moving focus and choosing a missing slot must not create or submit anything.
-    app.renderer.root.findDescendantById("footer-help")!.focus();
+    app.renderer.root.findDescendantById("session-transcript")!.focus();
     app.leader("1");
     await app.renderOnce();
     expect(app.selection.sessionId).toBe("a1");
@@ -405,7 +402,7 @@ test("Focused Editor forwards Neovim keys and leader+b opens workspace navigatio
     expect(editor.inputs.join("")).toContain("\x06");
     expect(editor.inputs.join("")).toContain("\x05");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("editor-terminal:demo:main");
-    expect(app.captureCharFrame().split("\n")[23]).toContain("<leader>b Workspaces");
+    expect(app.captureCharFrame().split("\n")[23]).not.toContain("<leader>b Workspaces");
 
     app.leader("b");
     await app.renderOnce();

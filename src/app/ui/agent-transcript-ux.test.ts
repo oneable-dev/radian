@@ -1145,7 +1145,7 @@ test("Enter on folded sections shows summary cursors and only Ctrl+O toggles fol
     pressLeader(app, "[");
     app.mockInput.pressKey("HOME");
     await app.render();
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<CR> Text");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("<CR> Text");
     app.mockInput.pressEnter();
     await app.render();
     expect(app.state()?.mode).toBe("text");
@@ -1229,7 +1229,7 @@ test("Fold overrides update hints while Ctrl+O respects input attachment and PTY
     expect(app.body().plainText).toBe("[read] (<M-x> to expand)");
     app.mockInput.pressEscape();
     await app.render();
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<M-x>");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("<M-x>");
 
     app.mockInput.pressKey("x", { meta: true });
     await app.render();

@@ -1,7 +1,7 @@
 import { openWorkspaceSearch, pressLeader } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
-import { BoxRenderable, TextRenderable } from "@opentui/core";
+import { BoxRenderable, InputRenderable, TextRenderable } from "@opentui/core";
 import { Workbench, type WorkbenchActions } from "./workbench.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -107,6 +107,66 @@ test("Help shows contextual/shared keys and restores input draft, caret, and foc
     await app.close();
   }
 });
+
+test.each([
+  ["F1", "search"],
+  ["F1", "results"],
+  ["F2", "search"],
+  ["F2", "results"],
+] as const)(
+  "%s Help restores Workspace %s focus, query, caret, candidate, and Agent draft",
+  async (key, focus) => {
+    // Search owns an unfinished query while a different worktree is only being previewed.
+    const keymap = expectOk(
+      parseKeymap(key === "F1" ? {} : { bindings: { "app.help": [{ keys: "f2", scope: "app" }] } }),
+    );
+    const app = await mount({ keymap });
+    try {
+      app.prompt.cursorOffset = 5;
+      openWorkspaceSearch(app);
+      await app.render();
+      await app.mockInput.typeText("radian");
+      const input = app.get("workspace-search") as InputRenderable;
+      input.cursorOffset = 2;
+      app.mockInput.pressKey("n", { ctrl: true });
+      if (focus === "results") {
+        app.mockInput.pressTab();
+      }
+      await app.render();
+      const focusedId = focus === "search" ? "workspace-search" : "workspace-tree";
+      expect(app.renderer.currentFocusedRenderable?.id).toBe(focusedId);
+
+      // Contextual Help must remain reachable without a footer button, including user overrides.
+      app.mockInput.pressKey(key);
+      await app.render();
+      expect(app.get("text-dialog").visible).toBe(true);
+      expect(app.captureCharFrame()).toContain(
+        `Current context: ${focus === "search" ? "search" : "workspace"}`,
+      );
+      app.mockInput.pressEscape();
+      await app.render();
+
+      // Returning from Help preserves the unsubmitted choice and its original input owner.
+      expect(app.get("workspace-picker").visible).toBe(true);
+      expect(app.renderer.currentFocusedRenderable?.id).toBe(focusedId);
+      expect(input.value).toBe("radian");
+      expect(input.cursorOffset).toBe(2);
+      expect(app.selection.worktree?.id).toBe("demo:main");
+      expect(app.selection.sessionId).toBe("a1");
+      expect(app.prompt.value).toBe("untouched draft");
+      expect(app.prompt.cursorOffset).toBe(5);
+      expect(app.sent).toEqual([]);
+
+      // Explicit activation still opens the candidate chosen before Help, not a reset selection.
+      app.mockInput.pressEnter();
+      await app.render();
+      expect(app.selection.worktree?.id).toBe("demo:feature");
+      expect(app.view.promptDrafts.a1).toBe("untouched draft");
+    } finally {
+      await app.close();
+    }
+  },
+);
 
 test.each([false, true])(
   "Light theme %s shares Normal across popup bodies and borders without dimming surrounding content",
@@ -265,15 +325,16 @@ test("Workspace popup preserves colored code outside its bounds and shares surfa
   }
 });
 
-test("Footer Help clicks remember original focus and retain compact entry points", async () => {
+test("Help commands remember original focus without footer entry points in compact layouts", async () => {
   const app = await mount();
   try {
-    // Abbreviated Help shortcuts retain Neovim notation in compact layouts.
+    // Compact footers stay hint-free while the configured Help command remains available.
     app.resize(60, 16);
     await app.render();
-    expect(app.get("footer-help").visible).toBe(true);
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<F1>");
-    await app.click("footer-help");
+    expect(app.renderer.root.findDescendantById("footer-help")).toBeUndefined();
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("<F1>");
+    app.mockInput.pressKey("F1");
+    await app.render();
     expect(app.get("text-dialog").visible).toBe(true);
     app.mockInput.pressEscape();
     await app.render();
@@ -337,8 +398,8 @@ test("Help reflects overrides and blocks asynchronous focus restoration outside 
   );
   const app = await mount({ keymap, onDetach: () => {} });
   try {
-    // Show actual remapped keys separately while command lists retain logical leaders.
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<F2> Help");
+    // Help keeps logical leaders and overrides without adding hints to the global footer.
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("<F2> Help");
     app.mockInput.pressKey("F2");
     await app.render();
     app.mockInput.pressKey("y");

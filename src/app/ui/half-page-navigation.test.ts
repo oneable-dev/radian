@@ -583,8 +583,8 @@ test("Empty workspace search Ctrl+D/U continues list jumps from the current cand
   }
 });
 
-test("Search footers omit default candidate navigation and half-page hints", async () => {
-  // Earlier interaction scenarios retain actual jumps; hide only default hints.
+test("Search footers omit all command hints while navigation remains available", async () => {
+  // Earlier interaction scenarios retain actual jumps without global footer shortcuts.
   const app = await mount("workspace");
   try {
     await app.mockInput.typeText("candidate");
@@ -593,7 +593,7 @@ test("Search footers omit default candidate navigation and half-page hints", asy
     const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
 
     expect(footer).not.toMatch(/<C-[npd]>|Navigate|½ page/u);
-    expect(footer).toContain("Help");
+    expect(footer).not.toContain("Help");
   } finally {
     await app.close();
   }

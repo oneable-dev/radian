@@ -2028,10 +2028,21 @@ export class GitPanel {
     this.prompt.setWorkingDirectory(this.worktree.path);
     this.prompt.value = "";
     this.prompt.placeholder = `Ask about ${context.label}`;
+    this.updateAskTarget();
     this.dialog.visible = this.dialogOverlay.visible = true;
     this.resizeAsk();
     this.prompt.focus();
     this.changed();
+  }
+
+  private updateAskTarget(): void {
+    if (!this.ask) {
+      return;
+    }
+
+    const session = this.worktree?.sessions.find((session) => session.id === this.ask?.session);
+    const target = display(session?.name ?? this.ask.session ?? "New session");
+    this.prompt.field.setTitle(`Ask · ${target}`);
   }
 
   private cycleSession(): void {
@@ -2041,6 +2052,7 @@ export class GitPanel {
 
     const choices = [...(this.worktree?.sessions ?? []).map((session) => session.id), null];
     this.ask.session = choices[(choices.indexOf(this.ask.session) + 1) % choices.length]!;
+    this.updateAskTarget();
     this.changed();
   }
 
@@ -2113,6 +2125,7 @@ export class GitPanel {
     } finally {
       ask.sending = false;
       if (this.ask === ask && !this.disposed) {
+        this.updateAskTarget();
         this.changed();
       }
     }

@@ -260,7 +260,9 @@ test("Terminal leader+c selects new tabs without sending shell control character
   try {
     await app.showView("t");
     await app.visible("Shell shell-1");
-    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).toContain("<leader>c New terminal");
+    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).not.toContain(
+      "<leader>c New terminal",
+    );
 
     // Creation shortcuts during input prepare a second shell.
     app.leader("c");
@@ -425,7 +427,7 @@ test("Default-shell failures never auto-retry and leader+c explicitly requests r
 });
 
 test.each(["disabled", "rebound"] as const)(
-  "With %s creation shortcuts, default Ctrl+N reaches shells and hints reflect settings",
+  "With %s creation shortcuts, default Ctrl+N reaches shells without footer hints",
   async (mode) => {
     // Disable creation commands entirely or remap to other terminal keys.
     const keymap = expectOk(
@@ -442,16 +444,15 @@ test.each(["disabled", "rebound"] as const)(
       app.mockInput.pressKey("n", { ctrl: true });
       await app.renderOnce();
 
-      // Defaults return to native input and hints show actual keys only.
+      // Native input retains unbound keys; configured app commands stay out of the footer.
       expect(app.inputs).toContain("0e");
       expect(app.created).toHaveLength(1);
 
       const footer = app.captureCharFrame().trimEnd().split("\n").at(-1)!;
       expect(footer).not.toContain("<C-n>");
-      if (mode === "disabled") {
-        expect(footer).not.toContain("New terminal");
-      } else {
-        expect(footer).toContain("<M-n> New terminal");
+      expect(footer).not.toContain("New terminal");
+      expect(footer).not.toContain("<M-n>");
+      if (mode === "rebound") {
         app.mockInput.pressKey("n", { meta: true });
         await app.visible("Shell shell-2");
         expect(app.created).toHaveLength(2);
@@ -502,7 +503,7 @@ test.each(["arrows", "vim", "control"] as const)(
       expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain(
         "h/l Terminal",
       );
-      expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain(
+      expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain(
         "<leader>c New terminal",
       );
 
@@ -780,7 +781,7 @@ test("Number shortcuts select current-worktree Terminal order without creating m
     app.leader("1");
     await app.renderOnce();
     expect(app.renderer.root.findDescendantById("shell-terminal")).toBe(terminal);
-    app.renderer.root.findDescendantById("footer-help")!.focus();
+    app.renderer.root.findDescendantById("terminal-view")!.focus();
     app.leader("2");
     await app.visible("Shell shell-2");
     app.leader("9");
@@ -899,7 +900,10 @@ test("Shell-exited tabs select neighbors and final exits leave empty views witho
     expect(app.closed).toEqual([]);
     expect(app.view.workViewPreferences.terminalSelection?.["demo:main"]).toBeUndefined();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("terminal-view");
-    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).toContain("<leader>c New terminal");
+    expect(app.captureCharFrame().trimEnd().split("\n").at(-1)).not.toContain(
+      "<leader>c New terminal",
+    );
+    expect(app.captureCharFrame()).toContain("<leader>c");
 
     // Create defaults only on later empty-view reentry, never immediately on exit.
     await app.showView("a");

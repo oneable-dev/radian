@@ -483,7 +483,7 @@ export class AgentPanel {
   }
 
   get focusTargets(): Renderable[] {
-    if (!this.root.visible || !this.worktree) {
+    if (!this.root.visible) {
       return [];
     }
 
@@ -610,7 +610,7 @@ export class AgentPanel {
       visible && session && (this.actions.onPrompt || this.transcriptOptions.readOnly),
     );
     // Only empty content needs a fallback target; active pane ancestors must not intercept input clicks.
-    this.root.focusable = visible && !!worktree && !this.active;
+    this.root.focusable = visible && !this.active;
     this.completion.prepare(sessionId, worktree?.path, openIds, {
       files: !isChatCollection(worktree),
     });
@@ -640,7 +640,7 @@ export class AgentPanel {
       this.prompt.focus();
     }
     if (!this.active && (this.prompt.focused || transcriptFocused)) {
-      if (visible && worktree) {
+      if (visible) {
         this.root.focus();
       } else {
         this.focusSidebar();

@@ -489,14 +489,14 @@ test("Snapshot reordering preserves ID selection and instances while navigation 
 });
 
 test("Compact Workspace retains browsing and Enter activation without default confirmation hints", async () => {
-  // Keeping only Help instead of default navigation hints preserves worktree semantics.
+  // Removing footer hints must preserve worktree browsing and explicit activation.
   const app = await mount();
   try {
     app.resize(60, 12);
     await app.render();
     await app.openWorkspaces();
     expect(app.captureCharFrame().split("\n")[11]).not.toContain("<CR>");
-    expect(app.captureCharFrame().split("\n")[11]).toContain("<F1>");
+    expect(app.captureCharFrame().split("\n")[11]).not.toContain("<F1>");
     app.mockInput.pressKey("j");
     await app.render();
     expect(app.selection.worktree?.id).toBe("demo:main");

@@ -305,7 +305,7 @@ test.each([120, 60])(
 test("Message history opens empty and honors user overrides without consuming ordinary exclamation input", async () => {
   // The existing named command is configurable; no colon command line owns application text.
   const keymap = expectOk(
-    parseKeymap({ leader: "ctrl+b", bindings: { "notice.details": ["<leader> m"] } }),
+    parseKeymap({ leader: "ctrl+b", bindings: { "notice.details": ["<leader> z"] } }),
   );
   const app = await mount({ keymap });
   try {
@@ -313,7 +313,7 @@ test("Message history opens empty and honors user overrides without consuming or
     await app.mockInput.typeText("!");
     expect(prompt.value).toBe("retained draft!");
     app.mockInput.pressKey("b", { ctrl: true });
-    app.mockInput.pressKey("m");
+    app.mockInput.pressKey("z");
     await app.render();
 
     expect(app.captureCharFrame()).toContain("No messages yet");

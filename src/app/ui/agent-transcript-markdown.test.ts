@@ -224,7 +224,7 @@ test("Enter preserves Markdown presentation and height while copying visible lin
         .join("\n");
     const before = markdownFrame();
 
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("<CR> Text");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("<CR> Text");
 
     // Entering reading mode neither swaps buffers nor exposes Markdown syntax.
     app.mockInput.pressEnter();

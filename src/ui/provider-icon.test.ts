@@ -7,7 +7,8 @@ import {
   type TerminalCapabilities,
   type CliRendererErrorEvent,
 } from "@opentui/core";
-import { createTestRenderer } from "@opentui/core/testing";
+import { createTestRenderer, setRendererCapabilities } from "@opentui/core/testing";
+import { Footer } from "./footer.ts";
 import { ProviderIcon } from "./provider-icon.ts";
 import { icons } from "../icons.ts";
 import { uiTheme } from "./theme.ts";
@@ -55,6 +56,92 @@ const capabilities: TerminalCapabilities = {
   image_protocol: "kitty",
   terminal: { name: "test", version: "1", from_xtversion: false },
 };
+
+test.each(["glyph", "kitty", "sixel"] as const)(
+  "Footer %s logos share the footer background across palettes and explicit surface overrides",
+  async (protocol) => {
+    // Quota logos must blend into their owning footer, not the old session panel surface.
+    const app = await createTestRenderer({ width: 120, height: 4 });
+    const footer = new Footer(app.renderer);
+    app.renderer.root.add(footer.root);
+    footer.setUsage({}, ["openai", "anthropic"]);
+    const paints = new Map<number, Uint8Array>();
+    const draw = spyOn(OptimizedBuffer.prototype, "drawImage").mockImplementation((image, x) => {
+      paints.set(x, image.raw().data.slice());
+      return true;
+    });
+    if (protocol !== "glyph") {
+      setRendererCapabilities(app.renderer, {
+        kitty_graphics: protocol === "kitty",
+        sixel: protocol === "sixel",
+        image_protocol: protocol,
+      });
+      Object.defineProperty(app.renderer, "resolution", {
+        configurable: true,
+        get: () => ({ width: 1200, height: 80 }),
+      });
+    }
+    try {
+      for (const light of [false, true]) {
+        const palette = {
+          palette: [],
+          defaultForeground: light ? "#202020" : "#ECECEC",
+          defaultBackground: light ? "#FAFAF6" : "#141414",
+          cursorColor: null,
+          mouseForeground: null,
+          mouseBackground: null,
+          tekForeground: null,
+          tekBackground: null,
+          highlightForeground: null,
+          highlightBackground: null,
+        };
+        for (const custom of [false, true]) {
+          // Recolor existing logos so cached image pixels must also follow live footer theme changes.
+          const theme = uiTheme(app.renderer);
+          theme.configure(palette, {
+            styles: custom
+              ? {
+                  "footer.identity": { bg: "#29465B" },
+                  "branding.provider": { bg: "#9F2E3A", fg: "#DDEEFF" },
+                }
+              : {},
+          });
+          paints.clear();
+          await app.renderOnce();
+          await app.renderOnce();
+
+          // Both fallback cells and opaque raster padding must match the neighboring footer cells.
+          const expected = theme.styles["footer.identity"].bg!.toInts();
+          const frame = app.captureSpans();
+          for (const provider of ["openai", "anthropic"]) {
+            const icon = app.renderer.root.findDescendantById(`footer-provider-icon-${provider}`)!;
+            expect(icon.visible).toBe(true);
+            for (const x of [icon.x - 1, icon.x, icon.x + 1, icon.x + 2]) {
+              let column = 0;
+              const span = frame.lines[icon.y]!.spans.find((span) => {
+                column += span.width;
+                return x < column;
+              })!;
+              expect(span.bg.toInts()).toEqual(expected);
+            }
+            if (protocol !== "glyph") {
+              const pixels = paints.get(icon.x)!;
+              expect(pixels).toBeDefined();
+              expect(Array.from(pixels.slice(0, 4))).toEqual(expected);
+            }
+          }
+          if (protocol === "glyph") {
+            expect(draw).not.toHaveBeenCalled();
+          }
+        }
+      }
+    } finally {
+      draw.mockRestore();
+      Reflect.deleteProperty(app.renderer, "resolution");
+      await app.dispose();
+    }
+  },
+);
 
 test("Ordinary terminals reserve two cells and draw bold Nerd Font logos instead of unsupported graphics", async () => {
   const app = await mount();

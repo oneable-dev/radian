@@ -400,7 +400,7 @@ test("Browser failures report errors without retrying or interrupting terminal i
   }
 });
 
-test("Remapped terminal link commands replace gx and update configured hints", async () => {
+test("Remapped terminal link commands replace gx without adding footer hints", async () => {
   // Only shared keymap commands may own reading-mode shortcuts.
   const keymap = expectOk(
     parseKeymap({
@@ -419,9 +419,10 @@ test("Remapped terminal link commands replace gx and update configured hints", a
     await app.waitFor(() => app.opened.length === 1);
     await app.render();
 
-    // User overrides are reflected in both behavior and the contextual footer.
-    expect(app.captureCharFrame()).toContain("o Open link");
-    expect(app.captureCharFrame()).not.toContain("gx Open link");
+    // User overrides change behavior without adding command hints to the global footer.
+    const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
+    expect(footer).not.toContain("o Open link");
+    expect(footer).not.toContain("gx Open link");
     expect(app.inputs).toEqual([]);
   } finally {
     await app.close();

@@ -368,7 +368,8 @@ test("Compact scope displays avoid model/meters while preserving drafts, input f
       expect(text).toContain(` ${icons.branch} `);
       expect(scope.y).toBe(app.get("app-footer").y);
       expect(app.line("session-status-line")).toContain("64%");
-      expect(app.line("session-status-line")).toContain("18% used");
+      expect(app.line("session-status-line")).not.toContain("18% used");
+      expect(app.line("footer-bar")).toContain("18% used");
       expect(status.height).toBe(3);
       expect(status.y + status.height).toBeLessThanOrEqual(app.get("app-footer").y);
       expect(app.renderer.currentFocusedRenderable).toBe(prompt);

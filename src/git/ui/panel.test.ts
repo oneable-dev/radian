@@ -3325,7 +3325,7 @@ test("r refreshes without headers/buttons and spinners show at least 500ms witho
     expect(spinner.visible).toBe(true);
     expect(spinner.y).toBe(list.y);
     expect(glyph()).toBe("⠋");
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain("r Refresh");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("r Refresh");
     clock.advance(80);
     await app.renderOnce();
     expect(glyph()).toBe("⠙");
@@ -3714,7 +3714,7 @@ test.each([false, true])(
           expect(background(input.x, input.y)).toEqual(popup);
           expect(background(input.field.x + 1, input.y)).toEqual(popup);
           expect(input.field.border).toBe(true);
-          expect(input.field.title).toBe(" Ask ");
+          expect(input.field.title).toBe(" Ask · Workspace layout ");
           expect(input.value).toBe("Ask draft\nSecond line");
           expect(input.cursorOffset).toBe(4);
         }
@@ -3857,13 +3857,16 @@ test("Ask uses a centered borderless compact-width surface containing only the p
       [field.y]!.slice(field.x, field.x + field.width);
     expect(field.border).toBe(true);
     expect(field.borderStyle).toBe("rounded");
-    expect(field.title).toBe(" Ask ");
+    const title = "Ask · Workspace layout";
+    expect(field.title).toBe(` ${title} `);
     expect(top).toStartWith("╭");
     expect(top).toEndWith("╮");
-    expect(Math.abs(top.indexOf("Ask") + 1.5 - field.width / 2)).toBeLessThanOrEqual(1);
+    expect(Math.abs(top.indexOf(title) + title.length / 2 - field.width / 2)).toBeLessThanOrEqual(
+      1,
+    );
     expect(app.renderer.root.findDescendantById("git-prompt-prompt")).toBeUndefined();
     expect(app.captureCharFrame()).not.toContain("Ask Agent · selected Git context");
-    expect(app.captureCharFrame()).toContain("Session:");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("Session:");
     expect(app.renderer.currentFocusedRenderable?.id).toBe("git-prompt");
     expect(app.requests).toEqual([]);
     expect(app.creations).toEqual([]);
@@ -4134,7 +4137,7 @@ test("Filtered diff Esc closes only diffs first and clears ref filters on the ne
   }
 });
 
-test("Main starts in tabless Commits and opens Refs/Reflog through footer shortcuts", async () => {
+test("Main starts in tabless Commits and opens Refs/Reflog through hint-free commands", async () => {
   // Opening modals preserves main commit selection and screen identity.
   const app = await mount();
   try {
@@ -4142,8 +4145,8 @@ test("Main starts in tabless Commits and opens Refs/Reflog through footer shortc
     expect(app.get("git-history").y).toBe(app.get("git-view").y);
 
     const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
-    expect(footer).toContain("b Refs");
-    expect(footer).toContain("<C-r> Reflog");
+    expect(footer).not.toContain("b Refs");
+    expect(footer).not.toContain("<C-r> Reflog");
 
     await app.chooseCommit();
     await app.openReflog();
@@ -4406,7 +4409,7 @@ test("Commit details provide reading/drag copying without y or a actions", async
     expect(footer).not.toContain("Copy");
     expect(footer).not.toContain("<Tab> Pane");
     expect(footer).not.toContain("<Esc> Back");
-    expect(footer).toContain("Help");
+    expect(footer).not.toContain("Help");
 
     const { x, y } = app.positionIn("git-details", "Author: Ada");
     await app.mockMouse.drag(x + 8, y, x + 10, y);
@@ -4706,7 +4709,8 @@ test.each([false, true])(
       expect(app.renderer.currentFocusedRenderable).toBe(input);
 
       const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
-      expect(footer).toContain(`${overridden ? "<M-s>" : "<C-s>"} Session:`);
+      expect(footer).not.toContain(`${overridden ? "<M-s>" : "<C-s>"} Session:`);
+      expect(input.field.title).toBe(" Ask · Session navigation ");
       expect(app.requests).toEqual([]);
       expect(app.creations).toEqual([]);
       app.mockInput.pressEnter();
@@ -4780,7 +4784,10 @@ test("Target commands defer session creation until submission and rejection pres
     }
 
     expect(app.creations).toEqual([]);
-    expect(app.captureCharFrame()).toContain("New session");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain(
+      "New session",
+    );
+    expect((app.get("git-prompt") as PromptInput).field.title).toBe(" Ask · New session ");
 
     app.get("git-prompt").focus();
     await app.mockInput.typeText("keep this ay");

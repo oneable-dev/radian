@@ -1194,7 +1194,9 @@ test("Ctrl+N/P selects candidates, Tab only completes, and Enter immediately sub
   try {
     await app.type("/");
     expect(app.captureCharFrame()).not.toContain("<C-n> Next");
-    expect(app.captureCharFrame()).toContain("<Tab> Insert");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain(
+      "<Tab> Insert",
+    );
     expect(app.captureCharFrame()).not.toContain("<CR> Queue");
     expect(app.captureCharFrame()).not.toContain("<Tab>/<CR>");
     app.mockInput.pressKey("n", { ctrl: true });

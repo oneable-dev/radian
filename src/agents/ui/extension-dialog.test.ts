@@ -403,7 +403,7 @@ test("Confirmation requires explicit activation and respects configured navigati
     app.mockInput.pressEnter();
     await app.render();
     expect(app.answers).toEqual([]);
-    expect(app.captureCharFrame()).toContain("<C-s>");
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain("<C-s>");
     expect(app.captureCharFrame()).not.toContain("<Down>");
 
     app.mockInput.pressKey("j", { ctrl: true });

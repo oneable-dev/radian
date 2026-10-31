@@ -380,7 +380,7 @@ test("History shortcuts honor remapping and disabling and Help shows the configu
     app.mockInput.pressKey("p", { meta: true });
     await app.render();
     expect(app.input.value).toBe("accepted");
-    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).toContain(
+    expect(app.captureCharFrame().split("\n")[app.renderer.height - 1]).not.toContain(
       "<M-p> Input history",
     );
 

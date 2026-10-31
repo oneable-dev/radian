@@ -229,7 +229,7 @@ is shared across windows and must not be duplicated when another UI selects the 
 New conversations use **Ctrl+Space, then c**; moving away does not stop earlier work.
 Selecting another worktree does not create or reassign Chat conversations. **Ctrl+Space, then m**
 returns to the same Chat conversation and draft from any workspace. The global workspace command
-**Ctrl+Space, then b** and its footer hint remain available in Chat; explicitly choosing a worktree
+**Ctrl+Space, then b** remains available in Chat; explicitly choosing a worktree
 opens that worktree's remembered project view.
 
 Chat treats `@` as ordinary text: no file completion trigger, file index, recursive watcher, or
@@ -1036,15 +1036,19 @@ control their own storage and logging; an extension can explicitly persist or ec
 ### Agent input status
 
 A passive row below and outside the prompt box, with one blank row above and below it, shows the
-selected model, effort and current `fast` setting, followed by **context remaining** and **account usage**.
-Workspace identity lives in the common footer instead of consuming this row's width. Known resource
-percentages take precedence in constrained space.
+selected model, effort and current `fast` setting on the left, with **context remaining** aligned
+at the right edge. MCP status remains beside the model settings. Workspace identity and **account
+usage** live in the common footer instead of consuming this row's width. Known context percentages
+take precedence in constrained space.
 Model, effort, fast and context have outline-robot, brain, lightning and database icons respectively.
-Both meters use the same block-bar style. Context explicitly reports the percentage `left`.
-The account meter pairs its provider logo with lowercase `chatgpt`, `openai` or `claude` when space permits;
+The session context and every connected provider in the footer use the same block-bar style, identified only by their
+icons or logos, without `context`, `chatgpt`, `openai` or `claude` text labels. Context explicitly
+reports the percentage `left`. Each provider shows its own usage even when the selected model
+uses a different provider; multiple saved accounts for one provider appear once.
 `18% used 1h 20m` means consumption followed by time until reset, without a middle-dot separator.
-Reset times use `5d 23h`, `1h 20m` or `18m`. The compact meter selects the longest returned
-quota window; all returned windows remain available in the IPC snapshot. There is no refresh button.
+Reset times use `5d 23h`, `1h 20m` or `18m`. Each compact provider meter selects its longest
+returned overall quota window; model-specific allowances are not substituted for an overall limit.
+All returned windows remain available in the IPC snapshot. There is no refresh button.
 
 Filled bar cells fade from the terminal's accent toward the panel color; empty cells stay subdued.
 Context labels and known values use the same foreground as account usage. Model names use the theme's
@@ -1070,8 +1074,9 @@ the composer, completion candidates and padded telemetry remain adjacent inside 
 Constrained windows retain usable input and conversation space before adding boundary gaps or
 prompt padding. The lower telemetry keeps its one-row gutters. A temporary
 zero-height conversation viewport is hidden rather than painting over adjacent controls, and
-closing completion restores its position. Narrow panels shorten bars and omit settings or the
-countdown before dropping either resource percentage. Theme changes preserve the current draft and focus.
+closing completion restores its position. Narrow session panels shorten bars and omit settings before
+dropping context values. The footer shortens account meters and omits reset countdowns as space shrinks.
+Theme changes preserve the current draft and focus.
 
 Provider logos reserve two columns. On terminals reporting Kitty/Sixel graphics and pixel resolution,
 OpenTUI renders a font-derived, theme-tinted image with approximately 1.5x the ordinary glyph width,
@@ -1106,33 +1111,47 @@ it as a paid model prompt. Finish existing jobs and explicitly restart the runti
 Displaying usage, context or `fast` state never enables priority by itself.
 
 Account usage has a provider-neutral model and runtime monitor under `src/usage/`; provider-specific
-authentication and HTTP stay in `src/usage/providers/`. The initial source supports **OpenAI/Codex
-subscription OAuth only**, reusing Pi's resolved login. OpenAI API keys and other providers report
-unavailable until a matching source is implemented. No third-party extension or Codex CLI is required.
-The source uses the undocumented ChatGPT `backend-api/wham/usage` endpoint also used by Codex, so its
-format and availability are not guaranteed. Usage lookup itself is read-only and sends no model prompt.
+authentication and HTTP stay in `src/usage/providers/`. Sources support **OpenAI/Codex and Claude
+subscription OAuth**, reusing Pi's resolved login. API keys and providers without a matching
+subscription source report unavailable. No third-party extension or separate CLI is required.
+OpenAI uses the undocumented ChatGPT `backend-api/wham/usage` endpoint; Claude uses
+`https://api.anthropic.com/api/oauth/usage`, normalizing its overall five-hour and seven-day windows.
+These account endpoints are not stable public APIs; their availability and format are not guaranteed.
+Usage lookup itself is read-only and sends no model prompt. Credentials are never sent to another
+provider's endpoint, and token refresh is never used to bypass request limits.
+For each provider, quota uses the worktree's selected account, otherwise its existing default login,
+otherwise its first saved account. This passive fallback does not select an account for model requests.
 
 A session starts its first lookup without waiting for a prompt. Reconnection, provider selection and
 final `agent_settled` events request fresh usage; short bursts and simultaneous sessions share work.
 While any TUI is attached, the runtime normally polls every 60 seconds and at returned reset deadlines.
-Failures retry with exponential backoff (60, 120, 240 seconds, capped at 5 minutes), with up to 10% jitter
-within that cap. A longer `Retry-After` takes precedence, and successful lookups reset the backoff.
-A successful `/reload` also requests fresh usage immediately, bypassing local backoff and cached results.
-Server-provided `Retry-After` deadlines and in-flight request sharing still apply; a failed manual lookup
-continues the existing failure count rather than resetting it.
+Claude quota requests have an additional five-minute minimum interval, including manual refresh, to
+avoid exhausting its account endpoint's request limit. Failures retry with exponential backoff
+(60, 120, 240 seconds, capped at 5 minutes), with up to 10% jitter within that cap.
+A longer `Retry-After` takes precedence, and successful lookups reset the backoff. Claude's 429
+responses without a usable `Retry-After` retain a conservative five-minute cooldown.
+A successful `/reload` requests fresh usage, bypassing local backoff and ordinary cached results.
+Provider minimum intervals, server-provided `Retry-After` deadlines and in-flight request sharing
+still apply; a failed manual lookup continues the existing failure count rather than resetting it.
 Retry deadlines remain scheduled even when a regular poll falls inside the waiting period.
 Account identity is checked during each lookup; external login changes are picked up on the next lookup.
-Each worktree has its own SDK model runtime and usage monitor. Sessions in that worktree share
-account-keyed lookups; separate worktrees do not share usage caches. Explicit account selection
-invalidates usage immediately, and late responses from the previous account cannot republish its quota.
+Each worktree has its own SDK model runtime, account selection and usage subscriptions. All monitors
+in the daemon share private account-keyed quota requests, cached results and cooldowns, so opening
+another worktree cannot bypass a provider's minimum interval or `Retry-After` deadline. Changing the
+current model does not unsubscribe other providers. Account selection, addition, removal and discovery
+of changed default connections invalidate the affected view; late responses from a previous account
+cannot republish its quota.
+Named Claude accounts retain their private cache identity across normal OAuth token rotation.
 Detaching all TUIs stops periodic polling. Shutdown aborts lookups and invalidates late responses.
 
 The countdown is calculated locally and ticks every minute or at its reset deadline, without HTTP requests.
 Resetting a window triggers another lookup, never an invented 0%/100%. While recovering from a failed
 lookup, the last successful, unexpired account bar stays visible in muted gray with a gray spinner;
-its percentage, unit and countdown stay hidden throughout backoff and retries. The first lookup also
-shows the spinner, without inventing a bar when no successful value exists. Success immediately restores
-the current percentage and normal bar colors. Hidden views and static history snapshots do not animate.
+its percentage, unit and countdown stay hidden throughout backoff and retries. Each provider's
+spinner stays beside that provider's meter, without hiding another provider's successful values.
+The first lookup also shows a spinner, without inventing a bar when no successful value exists.
+Success immediately restores the current percentage and normal bar colors. Hidden views and static
+history snapshots do not animate.
 Missing or unsupported usage shows the provider icon and **-**, without a bar or fake countdown.
 Typed failure codes and the last successful timestamp remain in the snapshot for diagnostics.
 Credentials and private account/cache identifiers are never sent to the TUI or saved in its preferences. Restoring history always uses live usage rather than saved quotas.
@@ -1187,7 +1206,7 @@ horizontal bars with exact values:
 
 Tab/Shift+Tab moves between filters, chart metric, resource tabs and the read-only body. Tab strips
 support Ctrl+N/P and h/l; the body supports Ctrl+N/P, j/k, Home/End and Ctrl+D/U half-page scrolling.
-Changed bindings appear in the footer; routine default navigation is kept in Help. Use r or Ctrl+R to
+Configured bindings are listed in Help, not the footer. Use r or Ctrl+R to
 refresh both live resources and saved statistics. History lookups run on open, filter changes and
 explicit refresh, not on every rendered frame; live sampling never changes focus or scroll.
 
@@ -1206,8 +1225,8 @@ is finished to enable this feature; opening the dashboard never restarts it auto
 Git opens directly into **Commits**, with history on the left and a permanent right sidebar containing
 **Commit details** above **Changed files**. Below 100 columns the sidebar stacks below history.
 There are no Commits/Reflog/Refs tabs. **b** opens the searchable Refs modal; **Ctrl+R** opens searchable Reflog with a
-read-only target-commit preview. **r** remains Refresh. All bindings can be overridden and appear in the
-footer. Workspace navigation stays in its shared popup; Git does not duplicate worktree navigation or
+read-only target-commit preview. **r** remains Refresh. All bindings can be overridden and appear in
+Help, not the footer. Workspace navigation stays in its shared popup; Git does not duplicate worktree navigation or
 provide submodules.
 
 Refs searches local branches, remote-tracking branches and tags together, grouped by kind rather
@@ -1292,7 +1311,7 @@ so its background ends at the field's bounds instead of filling a fixed-height b
 title, without a query prompt or result count; there is no outer border or separate title row.
 The field and native editor both use `ui.popup` backgrounds in focused and unfocused states, including
 live theme overrides; the inline Agent composer keeps its separate `prompt.input` surface.
-Its empty placeholder identifies the frozen context, while the footer shows the target session. The default is the last selected session in that worktree. **Ctrl+S** (`git.change-session`, configurable) cycles through
+Its empty placeholder identifies the frozen context, while the input-field title shows the target session. The default is the last selected session in that worktree. **Ctrl+S** (`git.change-session`, configurable) cycles through
 that worktree's sessions and **New session** without modifying the prompt or creating a session.
 Enter submits through the same runtime path as Agent input, including SDK steering when busy;
 New session creates one only on submission. Esc cancels. There are no session-change, Send or Cancel
@@ -1642,21 +1661,16 @@ The work pane and navigation popups share one full-width, single-row footer. The
 (`CHAT`, `AGENT`, `EDITOR`, `GIT` or `TERMINAL`) occupies a solid accent-colored rectangle on the left; branding,
 version text and the former gradient are omitted. The view label has exactly one space on each side.
 In project views, the selected worktree and branch follow as plain text with no individual backgrounds,
-separated by `·` and using the existing folder and branch icons. Chat omits this workspace context
-while retaining the workspace shortcut hint. Workspace details are no longer duplicated
-in Agent telemetry. Detached worktrees show `detached HEAD`; long names truncate by terminal cells.
-The view stays visible when focus moves to another control or popup. Context and configured shortcut
-hints occupy the right side. Enabled shortcut descriptions use normal text color, not muted text;
-mode text uses explicit RGB with at least 4.5:1 contrast against its default accent background.
-The `footer.mode`, `footer.worktree` and `footer.branch` style groups
-follow terminal palettes and can be overridden independently. Keys are highlighted separately from their
-descriptions. Tree, search, History, buttons and prompt contexts update on actual focus/state changes;
-unrelated/global shortcuts are not appended.
-The footer prioritizes app-specific actions and Help. Routine default navigation, open/close, focus,
-scrolling, draft/search clearing (`<C-c>`) and Vim selection hints stay in full Help rather than occupying the footer; changed bindings
-remain visible. Send/Run/Queue, newline and Agent interrupt hints are omitted even when rebound.
-Native Editor normal-mode and Terminal interrupt hints are also omitted. These presentation rules
-never disable the underlying bindings or remove them from application Help.
+separated by `·` and using the existing folder and branch icons. Chat omits workspace context.
+Workspace details are no longer duplicated in Agent telemetry. Detached worktrees show `detached HEAD`;
+long names truncate by terminal cells. The view stays visible when focus moves to another control or popup.
+Connected provider logos, quota percentages and reset countdowns occupy the right side, using live
+telemetry for the current Chat or worktree account scope. They remain visible across work views and
+popups. Session context remains in each session's own metadata line, not the global footer.
+Mode text uses explicit RGB with at least 4.5:1 contrast against its default accent background.
+The `footer.mode`, `footer.worktree` and `footer.branch` style groups follow terminal palettes and can
+be overridden independently. No shortcut hints or Help button appear in the footer, including user
+overrides and popup-specific actions. Configured commands remain available and are listed in Help.
 Application bindings such as `<leader>b`, `<leader>[` and `Tab` still work outside Neovim input focus;
 the configured leader detach command works in every input context. See the input ownership rules above.
 
@@ -1664,8 +1678,9 @@ The status-icon legend and routine live-service banner are not shown. Warnings, 
 action successes use the top-right notification overlay, never a separate footer row. Informational
 notices are discarded, including from Messages. Tab shutdown counts do not generate messages or toasts.
 Notification arrival and expiry do not resize the work panels or interrupt keyboard focus.
-Identity and shortcut text remain read-only. A dedicated Help entry opens a centered popup without
-changing the original draft or selection; closing it restores focus. **F1** opens application help
+Identity and account metrics remain read-only and do not participate in focus traversal. The Help
+command opens a centered popup without changing the original draft or selection; closing it restores
+focus. **F1** opens application help
 in app controls; the conversation retains its existing F1 reader help. **Leader, then ?** opens the
 application popup from any work view, including embedded PTYs, without intercepting their native F1.
 The popup lists the current context first, then common application bindings, including user overrides.
@@ -1698,10 +1713,9 @@ Toasts are temporarily hidden while Messages or a read-only details/help dialog 
 obscure the text being inspected; their normal expiry timers continue independently.
 Accepted model/tool failures otherwise remain in their conversation rather than generating per-tool alerts.
 
-The footer text stays one line on narrow terminals. Identity stays on the left; complete shortcut/label
-pairs fit in the owner's supplied order and trailing pairs are omitted with an ellipsis. Resize
-restores them when space permits. The help entry remains discoverable even when trailing context
-hints do not fit (shown as F1 or ? at narrow widths). Active completion uses the configurable
+The footer stays one line on narrow terminals. Identity stays on the left; account meters shed reset
+times and bars, then shorten to percentages or icons. Overflow providers are summarized as `+N`.
+Resize restores details without changing focus or drafts. Active completion uses the configurable
 `completion.next`, `completion.previous`, `completion.accept` and `completion.dismiss` commands.
 Default Tab focus traversal excludes `prompt-completion`; overriding Tab globally requires rebinding
 or disabling the conflicting completion acceptance binding. Input editing and Neovim/shell input
@@ -2116,7 +2130,7 @@ Wide screens show the list and read-only conversation preview side by side. Belo
 Ctrl+O reveals and focuses the preview, and toggling back returns to search. Tab/Shift+Tab includes
 the preview even in compact layouts, revealing each target region before focusing it. PageUp/PageDown
 scroll the preview. Preview reuses the Agent session
-panel, including the Prompt composer, run-status row and model/context/usage line, as well as compact
+panel, including the Prompt composer, run-status row and model/context line, as well as compact
 inline invocations, Markdown prose, error styling and initially folded tool sections. Thinking remains
 visible just as in the live transcript. The Prompt is visibly read-only: typing and paste do not edit
 it, read the OS clipboard or send a request. Session-management controls are hidden.
@@ -2124,11 +2138,11 @@ The transcript retains at most the 15 newest sections of the saved current branc
 turns, in chronological order, and initially scrolls to the latest content. Completion metadata stays
 on its original section rather than moving to a new unanswered prompt; explicit skills remain name-only.
 Closed sessions reuse their preserved snapshot, including execution state, subagent summaries,
-model, context, Fast and account usage. If a listed session has since reopened, Preview can read its
-current snapshot without creating another writer. The header shows the snapshot's saved time, and
-closed-session usage/countdowns are rendered as of that time, not as
-current account allowance. These values are display-only: SDK resume still resolves current telemetry
-and never restores a historical quota or enables Fast from the preview. Only records without a snapshot
+model, context and Fast settings. If a listed session has since reopened, Preview can read its
+current snapshot without creating another writer. The search-field activity reflects preview loading.
+Saved account quotas and reset countdowns are not shown in the preview; the global footer retains
+live account usage for the current scope. Preview values are display-only: SDK resume still resolves
+current telemetry and never restores a historical quota or enables Fast from the preview. Only records without a snapshot
 fall back to JSONL, where unavailable metadata remains unknown.
 Small previews compact composer/status padding to preserve conversation space.
 This does not open a writable SDK session, load extensions or execute tools.
@@ -2299,8 +2313,8 @@ bindings are bounded and cleared on reload. Workflow inputs remain unavailable b
 Pi extension redacts them; task labels and redacted prompt markers are never used as input captions.
 No terminal output or lifecycle files are scraped. Fast settings
 remain session-local and are not propagated to children. Viewport following is independent of
-execution state and does not add a footer label. Model/context/account usage remains on the separate
-lower telemetry row.
+execution state and does not add a footer label. Model settings and context remain on the separate
+lower telemetry row; account usage stays in the global footer.
 
 The SDK adapter normalizes events into display snapshots. `agent_end` alone is not completion:
 automatic retries keep the run working, and `agent_settled` plus the final outcome determine
