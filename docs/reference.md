@@ -221,7 +221,7 @@ commands, Skills, and attachments as Agent; it is not a filesystem or process sa
 inherit the launching project's instructions or settings. CHAT account/model defaults are separate
 from Agent selections, while provider credentials are reused.
 
-Chat displays one conversation without a session strip. **Ctrl+Space, then h** searches other Chat
+Chat displays one conversation without a session strip. **`/history`** in the Chat prompt searches other Chat
 conversations, excluding the conversation displayed in that attached UI and excluding it from the
 candidate count. Browsing or previewing does not switch conversations. Enter activates an existing
 conversation or resumes its saved history; Esc returns without switching. Conversation execution
@@ -842,8 +842,8 @@ The Agent prompt completes and executes these host commands instead of sending t
   The additive `model-selection` and `model-effort` service capabilities are required; older services
   report an explicit upgrade notice and are never automatically restarted. The command takes no
   arguments or images.
-- **`/history`** opens the saved-session History popup for the **active worktree**, just like
-  **Ctrl+Space → h**. It preserves the current conversation, running work and transcript reading
+- **`/history`** opens the saved-session History popup for the **active worktree**.
+  It preserves the current conversation, running work and transcript reading
   position. No model prompt is sent; **Esc** closes the popup and returns focus to the input.
   The command takes no arguments or images.
 - **`/new`** creates a fresh session in a **new tab in the same worktree**, using the same creation
@@ -2089,7 +2089,9 @@ technical layers; neither feature depends on the other's implementation.
 ### Saved session history
 
 History is a searchable popup, not a sidebar tab or a session-toolbar button. Use **`/history`** in
-the Agent prompt, or **Ctrl+Space → h** (`history.show`, configurable) from any work view.
+the Chat or Agent prompt. When no conversation or session is selected, create one with `<leader>c`
+first to access its prompt. History has no default global shortcut; `history.show` remains available
+for explicit user keybindings.
 It uses the shared `large` preset (up to 240 columns by 64 rows), clamped to 95% of terminal width
 and 90% of terminal height.
 Its scope is the active worktree, not the workspace popup's candidate cursor. The list uses SDK conversation

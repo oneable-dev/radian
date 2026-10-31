@@ -55,7 +55,7 @@ popup, so switching projects does not take space away from your editor or termin
 
 | View         | What you can do                                                                                          |
 | ------------ | -------------------------------------------------------------------------------------------------------- |
-| **Chat**     | Ask questions and run tools without opening a workspace. Search other conversations with `<leader>h`.    |
+| **Chat**     | Ask questions and run tools without opening a workspace. Search other conversations with `/history`.     |
 | **Agent**    | Run worktree-scoped Pi sessions, read tool output, switch models, and resume saved conversations.        |
 | **Editor**   | Use your own Neovim, with its buffers, cursor, and editing state retained while the runtime stays alive. |
 | **Git**      | Browse commits, refs, reflog, and working-tree changes in a read-only interface.                         |
@@ -118,7 +118,7 @@ next key.
 Use `<leader>e`, `<leader>g`, and `<leader>t` to move between editing, reviewing, and
 shell work. Press `<leader>a` for Agent or `<leader>m` for Chat. These select views
 directly, not modes; pressing `<leader>m` again stays in Chat. Chat has no session
-strip: `<leader>h` searches other Chat conversations, excluding the one displayed.
+strip: `/history` searches other Chat conversations, excluding the one displayed.
 Agent keeps its worktree-local session tabs and saved History. Chat treats `@` as
 ordinary text and does not prepare a file index; Agent retains `@` file completion.
 Both views support commands, skills, explicit attachments, and tools.
@@ -154,19 +154,21 @@ jobs first. A stopped runtime does not preserve live Neovim buffers or shell pro
 These are defaults; commands can be remapped or disabled. `<leader>` is `<C-Space>`
 unless you configure another sequence.
 
-| Keys                                | Action                                                                  |
-| ----------------------------------- | ----------------------------------------------------------------------- |
-| `<leader>m` / `a` / `e` / `g` / `t` | Select Chat / Agent / Editor / Git / Terminal directly.                 |
-| `<leader>b`                         | Toggle workspace search; `/` focuses search from the results.           |
-| `<leader>c`                         | Create an agent session or terminal in the current view.                |
-| `<leader>n` / `<leader>p`           | Next / previous tab in Agent or Terminal, wrapping at either end.       |
-| `<leader>u`                         | Show full-screen usage; `<Esc>` returns to the previous work view.      |
-| `<leader>1` … `<leader>9`           | Select an agent session or terminal tab by position.                    |
-| `<leader>h`                         | Find other Chat conversations, or saved History for the Agent worktree. |
-| `<leader>s`                         | Monitor agent sessions.                                                 |
-| `<leader>[`                         | Read and select output in Chat, Agent, or Terminal.                     |
-| `<leader>d`                         | Detach the interface; keep the runtime running.                         |
-| `<leader>?`                         | Open keyboard help.                                                     |
+| Keys                                | Action                                                             |
+| ----------------------------------- | ------------------------------------------------------------------ |
+| `<leader>m` / `a` / `e` / `g` / `t` | Select Chat / Agent / Editor / Git / Terminal directly.            |
+| `<leader>b`                         | Toggle workspace search; `/` focuses search from the results.      |
+| `<leader>c`                         | Create an agent session or terminal in the current view.           |
+| `<leader>n` / `<leader>p`           | Next / previous tab in Agent or Terminal, wrapping at either end.  |
+| `<leader>u`                         | Show full-screen usage; `<Esc>` returns to the previous work view. |
+| `<leader>1` … `<leader>9`           | Select an agent session or terminal tab by position.               |
+| `<leader>s`                         | Monitor agent sessions.                                            |
+| `<leader>[`                         | Read and select output in Chat, Agent, or Terminal.                |
+| `<leader>d`                         | Detach the interface; keep the runtime running.                    |
+| `<leader>?`                         | Open keyboard help.                                                |
+
+Run `/history` in the Chat or Agent prompt to browse saved conversations. History has
+no default global shortcut; `history.show` remains available for custom keybindings.
 
 In Usage, `i` opens measurement details and history coverage warnings. Workspace CPU/RAM
 covers Radian's editor and terminal process trees; shared Agent execution stays in Runtime.

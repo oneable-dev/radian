@@ -10,6 +10,8 @@ import { err, ok } from "../../result.ts";
 import { EditorError } from "../../errors.ts";
 import type { EditorActions } from "../../editor/ui/panel.ts";
 import type { EditorFrame, WorkViewPreferences } from "../../runtime/protocol.ts";
+import { parseKeymap } from "../../keybindings/config.ts";
+import { expectOk } from "../../testing/results.ts";
 
 async function mount(actions: Partial<WorkbenchActions> = {}) {
   const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
@@ -511,16 +513,19 @@ test("Missing restored Editor processes report explicit failure without automati
   }
 });
 
-test("History above Editor returns to the same input/connection on Esc without forwarding PTY keys", async () => {
+test("A custom History binding above Editor restores its input/connection without forwarding PTY keys", async () => {
+  // Editor owns native input, so History is opened through an explicitly configured app command.
   const editor = editorFixture();
-  const app = await mount({ editor: editor.actions });
+  const app = await mount({
+    editor: editor.actions,
+    keymap: expectOk(parseKeymap({ bindings: { "history.show": ["alt+h"] } })),
+  });
   try {
     await app.showView("e");
     await app.visible("Editor buffer");
 
     const input = app.renderer.currentFocusedRenderable;
-    app.mockInput.pressKey(" ", { ctrl: true });
-    app.mockInput.pressKey("h");
+    app.mockInput.pressKey("h", { meta: true });
     await app.renderOnce();
     expect(app.renderer.currentFocusedRenderable?.id).toBe("history-search");
     await app.mockInput.typeText("hjkl");

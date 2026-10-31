@@ -1,4 +1,4 @@
-import { openWorkspaceSearch, pressLeader } from "../../testing/keys.ts";
+import { openWorkspaceSearch, pressLeader, submitPromptCommand } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
 import type { TextRenderable } from "@opentui/core";
@@ -66,8 +66,7 @@ async function mount(
       selection.replaceSnapshot(selection.snapshot);
     },
     async openHistory() {
-      app.mockInput.pressKey(" ", { ctrl: true });
-      app.mockInput.pressKey("h");
+      submitPromptCommand(app, "/history");
       await app.renderOnce();
     },
     async visible(text: string) {

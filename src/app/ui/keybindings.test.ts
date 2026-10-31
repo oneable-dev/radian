@@ -1,4 +1,4 @@
-import { openWorkspaceSearch } from "../../testing/keys.ts";
+import { openWorkspaceSearch, submitPromptCommand } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
 import { parseKeymap } from "../../keybindings/config.ts";
@@ -12,9 +12,15 @@ test("Workspace j/k browses and Enter switches while identical input characters 
   const app = await createTestRenderer({ width: 120, height: 24, kittyKeyboard: true });
   const selection = new WorkspaceSelection(demoWorkspace());
   const opened: string[] = [];
+  const sent: string[] = [];
   const view = new Workbench(app.renderer, selection, {
     onNewSession: () => {},
     onCloseSession: () => {},
+    onPrompt: (_id, text) => {
+      sent.push(text);
+
+      return ok(undefined);
+    },
     onListHistory: async (worktreeId) =>
       ok(
         ["first", "second"].map((id) => ({
@@ -56,14 +62,14 @@ test("Workspace j/k browses and Enter switches while identical input characters 
     app.mockInput.pressEscape();
     await app.renderOnce();
 
-    app.mockInput.pressKey(" ", { ctrl: true });
-    app.mockInput.pressKey("h");
+    submitPromptCommand(app, "/history");
     await app.waitForFrame((frame) => frame.includes("Saved second"));
     app.renderer.root.findDescendantById("history-list")!.focus();
     app.mockInput.pressKey("j");
     app.mockInput.pressEnter();
     await app.waitFor(() => opened.length > 0);
     expect(opened).toEqual(["second"]);
+    expect(sent).toEqual([]);
   } finally {
     view.dispose();
     await app.dispose();

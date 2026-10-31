@@ -1,4 +1,4 @@
-import { openWorkspaceSearch, pressLeader } from "../../testing/keys.ts";
+import { openWorkspaceSearch, pressLeader, submitPromptCommand } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
 import { demoWorkspace } from "../../workspace/demo.ts";
@@ -7,21 +7,32 @@ import { WorkspaceSelection } from "../workspace-selection.ts";
 import { workspaceIcons } from "./workspace-status.ts";
 import { icons, spinnerFrames } from "../../icons.ts";
 import { Workbench } from "./workbench.ts";
+import { ok } from "../../result.ts";
 
 async function mount(
   repositories: readonly Repository[] = demoWorkspace(),
-  options: { kittyKeyboard?: boolean; clock?: ManualClock } = {},
+  options: { kittyKeyboard?: boolean; clock?: ManualClock; promptCommands?: boolean } = {},
 ) {
+  const { promptCommands = false, ...rendererOptions } = options;
   // CSI-u makes Escape unambiguous; a separate legacy-clock test covers its timeout.
   const setup = await createTestRenderer({
     width: 120,
     height: 24,
     kittyKeyboard: true,
-    ...options,
+    ...rendererOptions,
   });
   const selection = new WorkspaceSelection(repositories);
   const requests: string[] = [];
   const view = new Workbench(setup.renderer, selection, {
+    ...(promptCommands
+      ? {
+          onPrompt: (_id: string, text: string) => {
+            requests.push(text);
+
+            return ok(undefined);
+          },
+        }
+      : {}),
     onNewSession: (id) => {
       requests.push(id);
     },
@@ -53,8 +64,7 @@ async function mount(
       await setup.renderOnce();
     },
     async openHistory() {
-      setup.mockInput.pressKey(" ", { ctrl: true });
-      setup.mockInput.pressKey("h");
+      submitPromptCommand(setup, "/history");
       await setup.renderOnce();
     },
     async clickText(text: string): Promise<void> {
@@ -203,8 +213,8 @@ test("Empty-worktree creation sends requests without manipulating selection or o
 });
 
 test("History explains unsupported previews while preserving selection", async () => {
-  // Workspace A stays selected while the modal presents an unavailable history provider.
-  const app = await mount();
+  // A prompt-enabled session can open History even without a history provider.
+  const app = await mount(demoWorkspace(), { promptCommands: true });
   try {
     // Opening history overlays navigation without changing workspace state.
     await app.openHistory();
@@ -212,6 +222,7 @@ test("History explains unsupported previews while preserving selection", async (
     // No history or resume operation is implied by the placeholder.
     expect(app.captureCharFrame()).toContain("Session history is unavailable in this preview.");
     expect(app.selection.sessionId).toBe("a1");
+    expect(app.requests).toEqual([]);
   } finally {
     await app.close();
   }
@@ -304,7 +315,7 @@ test("Kind icons stay left while aggregated parent/child status appears in right
 
 test("Failures behind History update after closing regardless of selection", async () => {
   // B is selected while A1's working child is tracked in the display snapshot.
-  const app = await mount();
+  const app = await mount(demoWorkspace(), { promptCommands: true });
   try {
     await app.clickText(`${icons.folder} radian-ui`);
     await app.openHistory();

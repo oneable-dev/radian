@@ -105,6 +105,25 @@ async function mount(completion = false) {
   };
 }
 
+test("The former History shortcut no longer opens a popup or starts discovery", async () => {
+  // The Agent prompt has no user-defined History shortcut.
+  const app = await mount();
+  try {
+    // Press the old global sequence without submitting any prompt command.
+    app.mockInput.pressKey(" ", { ctrl: true });
+    app.mockInput.pressKey("h");
+    await app.render();
+
+    // History remains prompt-owned rather than intercepting a global shortcut.
+    expect(app.popup.visible).toBe(false);
+    expect(app.lookups).toEqual([]);
+    expect(app.sent).toEqual([]);
+    expect(app.renderer.currentFocusedRenderable).toBe(app.input);
+  } finally {
+    await app.close();
+  }
+});
+
 test("history opens only a popup while preserving active conversations and reading positions, then Esc restores input", async () => {
   // Opening history while reading older output must not scroll active conversations to the bottom.
   const app = await mount();

@@ -9,6 +9,7 @@ import type { CompletionProvider } from "../../agents/completion-cache.ts";
 import { filterCatalog } from "../../agents/completion.ts";
 import { PromptInput } from "../../ui/prompt-input.ts";
 import { SearchInput } from "../../ui/search-input.ts";
+import { submitPromptCommand } from "../../testing/keys.ts";
 import { ok } from "../../result.ts";
 import { parseKeymap } from "../../keybindings/config.ts";
 import { expectOk } from "../../testing/results.ts";
@@ -106,6 +107,10 @@ async function mount(options: Partial<WorkbenchActions> = {}, repositories = dem
     selected,
     render,
     leader,
+    async openHistory() {
+      submitPromptCommand(app, "/history");
+      await render();
+    },
     async close() {
       view.dispose();
       await app.dispose();
@@ -204,8 +209,7 @@ test("CHAT remains usable without any repository or selected worktree", async ()
     expect(app.view.currentView).toBe("chat");
     expect(app.renderer.root.findDescendantById("session-prompt")!.visible).toBe(true);
     expect(app.captureCharFrame()).toContain("CHAT");
-    app.leader("h");
-    await app.render();
+    await app.openHistory();
     expect(app.captureCharFrame()).toContain("Conversation 2");
   } finally {
     await app.close();
@@ -249,8 +253,7 @@ test("CHAT history excludes the current canonical conversation from candidates a
   // The selected live conversation has a canonical ID different from its UI session ID.
   const app = await mount();
   try {
-    app.leader("h");
-    await app.render();
+    await app.openHistory();
     const frame = app.captureCharFrame();
     expect(frame).toContain("Conversation 2");
     expect(frame).not.toContain("Conversation 1");
@@ -262,8 +265,7 @@ test("CHAT history excludes the current canonical conversation from candidates a
     app.mockInput.pressEscape();
     await app.render();
     expect(app.view.chatSessionId).toBe("chat-1");
-    app.leader("h");
-    await app.render();
+    await app.openHistory();
     app.mockInput.pressEnter();
     await app.render();
     expect(app.resumed).toEqual([`${CHAT_SCOPE_ID}:canonical-2`]);
@@ -275,8 +277,11 @@ test("CHAT history excludes the current canonical conversation from candidates a
 });
 
 test("CHAT history includes every conversation without a selection and shows empty when only current exists", async () => {
-  // An empty CHAT selection does not implicitly take the first runtime session.
-  const none = await mount({ initialChatSessionId: null });
+  // An explicit shortcut can browse without a prompt or implicitly selecting a conversation.
+  const none = await mount({
+    initialChatSessionId: null,
+    keymap: expectOk(parseKeymap({ bindings: { "history.show": ["<leader> h"] } })),
+  });
   try {
     none.leader("h");
     await none.render();
@@ -290,8 +295,7 @@ test("CHAT history includes every conversation without a selection and shows emp
 
   const onlyCurrent = await mount({ onListHistory: async () => ok([items[0]!]) });
   try {
-    onlyCurrent.leader("h");
-    await onlyCurrent.render();
+    await onlyCurrent.openHistory();
     expect(onlyCurrent.captureCharFrame()).toContain("No other conversations");
     expect(onlyCurrent.captureCharFrame()).toContain("0/0");
   } finally {
@@ -303,8 +307,7 @@ test("CHAT history reacts to canonical identity changes without mutating shared 
   // Replacing the canonical identity of the displayed executor should update exclusion immediately.
   const app = await mount();
   try {
-    app.leader("h");
-    await app.render();
+    await app.openHistory();
     app.state.set("chat-1", "canonical-2");
     app.view.refreshPreloadedData();
     await app.render();

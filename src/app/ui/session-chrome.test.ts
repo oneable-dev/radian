@@ -93,12 +93,6 @@ async function mount(empty = false, keymap?: Keymap) {
 
     return truncateCells(app.captureCharFrame().split("\n")[node.y]!.slice(node.x), node.width, "");
   };
-  const history = async () => {
-    app.mockInput.pressKey(" ", { ctrl: true });
-    app.mockInput.pressKey("h");
-    await render();
-  };
-
   await render();
 
   return {
@@ -111,7 +105,6 @@ async function mount(empty = false, keymap?: Keymap) {
     get,
     render,
     line,
-    history,
     async close() {
       view.dispose();
       await app.dispose();
@@ -187,8 +180,12 @@ test("Scope displays active worktrees, not browsing cursors, and reflects switch
   }
 });
 
-test("Creation commands and global History shortcuts remain available without buttons", async () => {
-  const app = await mount();
+test("Creation commands and a custom History binding remain available without buttons or losing drafts", async () => {
+  // Opening History through a configured command must not replace the unfinished prompt.
+  const app = await mount(
+    false,
+    expectOk(parseKeymap({ bindings: { "history.show": ["alt+h"] } })),
+  );
   try {
     app.mockInput.pressKey(" ", { ctrl: true });
     app.mockInput.pressKey("c");
@@ -198,7 +195,8 @@ test("Creation commands and global History shortcuts remain available without bu
     await app.render();
 
     const prompt = app.get("session-prompt");
-    await app.history();
+    app.mockInput.pressKey("h", { meta: true });
+    await app.render();
     expect(app.get("session-history").visible).toBe(true);
     expect(app.lookups).toEqual(["demo:main"]);
     app.mockInput.pressEscape();
@@ -211,8 +209,9 @@ test("Creation commands and global History shortcuts remain available without bu
   }
 });
 
-test("Empty Agent views retain a content focus target for creation without focusing tabs", async () => {
-  const app = await mount(true);
+test("Empty Agent views retain creation focus and support a custom History binding without a prompt", async () => {
+  // No session is created by this fixture, so only a configured app command can open History.
+  const app = await mount(true, expectOk(parseKeymap({ bindings: { "history.show": ["alt+h"] } })));
   try {
     const content = app.get("agent-view");
     const list = app.get("agent-session-list");
@@ -231,7 +230,8 @@ test("Empty Agent views retain a content focus target for creation without focus
     app.mockInput.pressKey("c");
     await app.render();
     expect(app.created).toEqual(["demo:main"]);
-    await app.history();
+    app.mockInput.pressKey("h", { meta: true });
+    await app.render();
     expect(app.get("session-history").visible).toBe(true);
     expect(app.lookups).toEqual(["demo:main"]);
   } finally {

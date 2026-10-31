@@ -1,4 +1,4 @@
-import { openWorkspaceSearch } from "../../testing/keys.ts";
+import { openWorkspaceSearch, submitPromptCommand } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { InputRenderable, ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
@@ -173,7 +173,7 @@ test("While History is open, other popup commands preserve lists, scroll, and se
     },
   });
   try {
-    app.leader("h");
+    submitPromptCommand(app, "/history");
     await app.render();
 
     const list = app.get("history-list") as ScrollBoxRenderable;
@@ -214,7 +214,7 @@ test("Popup toggles and reconnection never query closed History", async () => {
 
     expect(lookups).toBe(0);
     expect(app.get("history-loading").visible).toBe(false);
-    app.leader("h");
+    submitPromptCommand(app, "/history");
     await app.render();
     expect(lookups).toBe(1);
   } finally {
@@ -227,7 +227,7 @@ test("Late History responses neither reopen closed popups nor change selection",
   const pending = Promise.withResolvers<ReturnType<typeof ok<never[]>>>();
   const app = await mount({ onListHistory: () => pending.promise });
   try {
-    app.leader("h");
+    submitPromptCommand(app, "/history");
     await app.render();
     app.mockInput.pressEscape();
     await app.render();

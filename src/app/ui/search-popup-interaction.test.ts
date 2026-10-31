@@ -10,6 +10,7 @@ import type { AccountsCatalog } from "../../accounts/model.ts";
 import type { ModelCatalog } from "../../agents/model-selection.ts";
 import type { SessionExtensionUi } from "../../agents/extension-ui.ts";
 import type { GitSnapshot } from "../../git/model.ts";
+import { submitPromptCommand } from "../../testing/keys.ts";
 
 const surfaces = [
   "workspace",
@@ -226,8 +227,10 @@ async function mount(surface: Surface, width = 140, pendingLoad = false) {
   await render();
 
   const open = async () => {
-    if (surface === "workspace" || surface === "monitor" || surface === "history") {
-      leader(surface === "workspace" ? "b" : surface === "monitor" ? "s" : "h");
+    if (surface === "workspace" || surface === "monitor") {
+      leader(surface === "workspace" ? "b" : "s");
+    } else if (surface === "history") {
+      submitPromptCommand(app, "/history");
     } else if (surface === "model" || surface === "accounts") {
       const prompt = get("session-prompt") as InputRenderable;
       prompt.focus();

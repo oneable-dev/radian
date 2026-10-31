@@ -281,7 +281,7 @@ export const defaultBindings = (platform: NodeJS.Platform = process.platform) =>
     "monitor.last": [key("end", "monitor")],
     "monitor.half-page-up": [key("ctrl+u", "monitor"), key("ctrl+u", "monitor-search")],
     "monitor.half-page-down": [key("ctrl+d", "monitor"), key("ctrl+d", "monitor-search")],
-    "history.show": [key("<leader> h")],
+    "history.show": [],
     "history.dismiss": [key("escape", "history"), key("escape", "history-search")],
     "history.search": [key("/", "history")],
     "history.preview": [key("ctrl+o", "history"), key("ctrl+o", "history-search")],

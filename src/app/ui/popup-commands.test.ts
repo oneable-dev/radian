@@ -8,10 +8,12 @@ import { ok } from "../../result.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
 import { WorkspaceSelection } from "../workspace-selection.ts";
 import { Workbench } from "./workbench.ts";
+import { parseKeymap } from "../../keybindings/config.ts";
+import { expectOk } from "../../testing/results.ts";
 
 const surfaces = [
   { name: "Workspace", panel: "workspace-sidebar", leader: "b" },
-  { name: "History", panel: "history-dialog", leader: "h" },
+  { name: "History (custom binding)", panel: "history-dialog", customBinding: "h" },
   { name: "Monitor", panel: "monitor-dialog", leader: "s" },
   { name: "Usage", panel: "dashboard-panel", leader: "u" },
   { name: "Model", panel: "model-dialog", command: "/model" },
@@ -41,6 +43,10 @@ test.each(surfaces)(
     });
     const sent: string[] = [];
     const view = new Workbench(app.renderer, new WorkspaceSelection(demoWorkspace()), {
+      // A custom History command leaves the unfinished prompt untouched while opening the popup.
+      ...("customBinding" in surface
+        ? { keymap: expectOk(parseKeymap({ bindings: { "history.show": ["alt+h"] } })) }
+        : {}),
       onNewSession() {},
       onCloseSession() {},
       onPrompt: (_id, text) => {
@@ -116,6 +122,8 @@ test.each(surfaces)(
       if ("command" in surface) {
         input.value = surface.command;
         app.mockInput.pressEnter();
+      } else if ("customBinding" in surface) {
+        app.mockInput.pressKey(surface.customBinding, { meta: true });
       } else if ("leader" in surface) {
         app.mockInput.pressKey(" ", { ctrl: true });
         app.mockInput.pressKey(surface.leader);
@@ -126,6 +134,9 @@ test.each(surfaces)(
       await render();
 
       const draft = input.draft;
+      if ("customBinding" in surface) {
+        expect(input.value).toBe("Retained draft");
+      }
 
       // Resize and Tab direction changes navigate content, search, and state choices instead of buttons.
       for (const [width, height] of [

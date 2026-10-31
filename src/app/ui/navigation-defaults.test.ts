@@ -6,6 +6,7 @@ import { WorkspaceSelection } from "../workspace-selection.ts";
 import { demoWorkspace } from "../../workspace/demo.ts";
 import { modelCommand } from "../../agents/model-selection.ts";
 import { ok } from "../../result.ts";
+import { submitPromptCommand } from "../../testing/keys.ts";
 
 type Surface = "history" | "monitor" | "model";
 
@@ -46,7 +47,7 @@ async function mount(surface: Surface) {
   const view = new Workbench(app.renderer, selection, {
     onNewSession() {},
     onCloseSession() {},
-    initialDrafts: { a1: "KEEP_DRAFT" },
+    initialDrafts: { a1: "KEEP_DRAFT", a3: "KEEP_BACKGROUND_DRAFT" },
     onPrompt: (_id, text) => {
       submitted.push(text);
 
@@ -121,9 +122,11 @@ async function mount(surface: Surface) {
     await render();
     app.mockInput.pressEnter();
     await render();
+  } else if (surface === "history") {
+    submitPromptCommand(app, "/history");
   } else {
     app.mockInput.pressKey(" ", { ctrl: true });
-    app.mockInput.pressKey(surface === "history" ? "h" : "s");
+    app.mockInput.pressKey("s");
   }
 
   await render();
@@ -185,7 +188,9 @@ test.each(navigationCases)(
       expect(app.selection.sessionId).toBe("a1");
       expect(app.resumed).toEqual([]);
       expect(app.models).toEqual([]);
-      expect(app.view.promptDrafts.a1).toBe(surface === "model" ? undefined : "KEEP_DRAFT");
+      // Slash commands consume only their submitted prompt, not another session's unfinished draft.
+      expect(app.view.promptDrafts.a1).toBe(surface === "monitor" ? "KEEP_DRAFT" : undefined);
+      expect(app.view.promptDrafts.a3).toBe("KEEP_BACKGROUND_DRAFT");
 
       const footer = app.captureCharFrame().split("\n")[app.renderer.height - 1]!;
       expect(footer).not.toMatch(/[↑↓←]/u);

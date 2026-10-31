@@ -8,7 +8,7 @@ import { HistoryPreviewCache } from "../history-preview-cache.ts";
 import type { HistoryPreview } from "../history-preview.ts";
 import type { TranscriptSection } from "../transcript.ts";
 import { ok } from "../../result.ts";
-import { pressLeader } from "../../testing/keys.ts";
+import { submitPromptCommand } from "../../testing/keys.ts";
 
 const descendants = (node: Renderable): Renderable[] => [
   node,
@@ -87,6 +87,7 @@ async function mount(preloaded: boolean, snapshot: boolean) {
   const view = new Workbench(app.renderer, new WorkspaceSelection(demoWorkspace()), {
     onNewSession() {},
     onCloseSession() {},
+    onPrompt: () => ok(undefined),
     getSessionDetails: () => ({
       conversationId: "live",
       status: "complete",
@@ -130,7 +131,7 @@ async function mount(preloaded: boolean, snapshot: boolean) {
     preview: node,
     render,
     async open() {
-      pressLeader(app, "h");
+      submitPromptCommand(app, "/history");
       await render();
     },
     async move(direction: "next" | "previous") {

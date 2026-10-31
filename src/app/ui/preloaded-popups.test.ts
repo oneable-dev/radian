@@ -9,7 +9,6 @@ import type { ModelCatalog } from "../../agents/model-selection.ts";
 import type { AccountsCatalog } from "../../accounts/model.ts";
 import type { HistoryItem } from "../../agents/history.ts";
 import { ok } from "../../result.ts";
-import { pressLeader } from "../../testing/keys.ts";
 
 const flush = async () => {
   for (let i = 0; i < 30; i++) {
@@ -207,8 +206,7 @@ test("Prepared History and complete previews survive closure without rediscovery
   const app = await mount();
   try {
     for (let i = 0; i < 2; i++) {
-      pressLeader(app, "h");
-      await app.render();
+      await app.command("/history");
       expect(app.captureCharFrame()).toContain("Saved first");
       expect(app.captureCharFrame()).toContain("Preloaded answer first");
       expect(app.get("history-loading").visible).toBe(false);
@@ -229,8 +227,7 @@ test("History opens its preloaded newest body without loading after background c
   try {
     expect(app.requests.previews).toBe(4);
 
-    pressLeader(app, "h");
-    await app.render();
+    await app.command("/history");
 
     // Opening the default selection must use its prepared body rather than start a fifth read.
     expect(app.captureCharFrame()).toContain("Preloaded answer first");
@@ -262,8 +259,7 @@ test("Incoming account and history snapshots preserve search caret, focus, and s
     app.mockInput.pressEscape();
     await app.render();
 
-    pressLeader(app, "h");
-    await app.render();
+    await app.command("/history");
     await app.mockInput.typeText("Saved");
     app.mockInput.pressKey("n", { ctrl: true });
     await app.render();

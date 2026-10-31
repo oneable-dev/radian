@@ -21,6 +21,23 @@ test("Default leader is Ctrl+Space and Ctrl+C never quits the app", () => {
   expect(map.bound("ctrl+b", "prompt")).toBe(false);
 });
 
+test("History has no default shortcut while explicit user mappings remain available", () => {
+  // History opens from the prompt unless a user deliberately configures a shortcut.
+  const defaults = defaultKeymap();
+  const custom = expectOk(parseKeymap({ bindings: { "history.show": ["<leader> h"] } }));
+
+  // Removing the default must free the sequence in both app-owned and native input contexts.
+  for (const context of ["prompt", "transcript", "editor", "terminal", "none"] as const) {
+    expect(defaults.hints("history.show", context)).toBe("");
+    expect(custom.hints("history.show", context)).toBe("<leader>h");
+  }
+
+  expect(defaults.bindings.some((binding) => binding.command === "history.show")).toBe(false);
+  expect(defaults.bindings.some((binding) => binding.keys.join(" ") === "ctrl+space h")).toBe(
+    false,
+  );
+});
+
 test("Reader defaults omit transcript search without removing popup search commands", () => {
   // Transcript readers no longer own search keys, while searchable popups keep their command map.
   const map = defaultKeymap();

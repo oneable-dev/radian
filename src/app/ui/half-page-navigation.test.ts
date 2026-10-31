@@ -1,4 +1,4 @@
-import { openWorkspaceSearch } from "../../testing/keys.ts";
+import { openWorkspaceSearch, submitPromptCommand } from "../../testing/keys.ts";
 import { expect, test } from "bun:test";
 import { InputRenderable, ScrollBoxRenderable, parseKeypress } from "@opentui/core";
 import { createTestRenderer, ManualClock } from "@opentui/core/testing";
@@ -10,13 +10,15 @@ import { ok } from "../../result.ts";
 import { uiTheme } from "../../ui/theme.ts";
 import { SearchInput } from "../../ui/search-input.ts";
 import { horizontalInset } from "../../ui/spacing.ts";
+import { parseKeymap } from "../../keybindings/config.ts";
+import { expectOk } from "../../testing/results.ts";
 
 type Surface = "workspace" | "history" | "monitor" | "model";
 
 const surfaces = ["workspace", "history", "monitor", "model"] as const;
 const count = 40;
 
-async function mount(surface: Surface) {
+async function mount(surface: Surface, options: { customHistoryBinding?: boolean } = {}) {
   const clock = new ManualClock();
   const app = await createTestRenderer({
     width: 140,
@@ -52,6 +54,9 @@ async function mount(surface: Surface) {
   const detached: string[] = [];
   const body = Array.from({ length: 100 }, (_, index) => `Preview line ${index}`).join("\n");
   const view = new Workbench(app.renderer, selection, {
+    ...(options.customHistoryBinding
+      ? { keymap: expectOk(parseKeymap({ bindings: { "history.show": ["alt+h"] } })) }
+      : {}),
     onNewSession() {},
     onCloseSession: (_tree, id) => {
       closed.push(id);
@@ -143,9 +148,15 @@ async function mount(surface: Surface) {
     await render();
   } else if (surface === "workspace") {
     openWorkspaceSearch(app);
+  } else if (surface === "history") {
+    if (options.customHistoryBinding) {
+      app.mockInput.pressKey("h", { meta: true });
+    } else {
+      submitPromptCommand(app, "/history");
+    }
   } else {
     app.mockInput.pressKey(" ", { ctrl: true });
-    app.mockInput.pressKey(surface === "history" ? "h" : "s");
+    app.mockInput.pressKey("s");
   }
 
   await render();
@@ -201,9 +212,11 @@ test.each(surfaces)(
         await app.render();
       } else if (surface === "workspace") {
         openWorkspaceSearch(app);
+      } else if (surface === "history") {
+        submitPromptCommand(app, "/history");
       } else {
         app.mockInput.pressKey(" ", { ctrl: true });
-        app.mockInput.pressKey(surface === "history" ? "h" : "s");
+        app.mockInput.pressKey("s");
       }
 
       await app.render();
@@ -311,10 +324,10 @@ test.each(surfaces)(
   },
 );
 
-test("History preview panes fill their height without headings in split and compact layouts", async () => {
-  // Preview-only panes must preserve list-local search and independent conversation state.
+test("History preview panes opened by a custom binding fill layouts and preserve the Agent draft", async () => {
+  // A configured command opens previews without replacing the unfinished Agent draft with slash input.
   const surface = "history";
-  const app = await mount(surface);
+  const app = await mount(surface, { customHistoryBinding: true });
   try {
     await app.mockInput.typeText("candidate");
     app.mockInput.pressArrow("left");
